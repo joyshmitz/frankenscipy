@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use fsci_runtime::RuntimeMode;
+use fsci_runtime::{
+    MatrixConditionState, RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio,
+};
 use nalgebra::{DMatrix, DVector, Dyn, LU, linalg::SVD};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +129,7 @@ pub enum LinalgWarning {
 pub struct SolveResult {
     pub x: Vec<f64>,
     pub warning: Option<LinalgWarning>,
+    pub backward_error: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -293,6 +296,42 @@ pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError
         });
     }
 
+    match options.assume_a.unwrap_or(MatrixAssumption::General) {
+        MatrixAssumption::General
+        | MatrixAssumption::Symmetric
+        | MatrixAssumption::Hermitian
+        | MatrixAssumption::PositiveDefinite => inv_general(a, rows),
+        _ => inv_column_by_column(a, rows, cols, options),
+    }
+}
+
+/// Single LU factorization + solve against identity. O(n³) instead of O(n⁴).
+fn inv_general(a: &[Vec<f64>], n: usize) -> Result<InvResult, LinalgError> {
+    let matrix = dmatrix_from_rows(a)?;
+    let lu: LU<f64, Dyn, Dyn> = matrix.lu();
+    let rcond = fast_rcond_from_lu(&lu, n);
+
+    // Reject near-singular matrices that LU may not catch exactly
+    if rcond < f64::EPSILON {
+        return Err(LinalgError::SingularMatrix);
+    }
+
+    let identity = DMatrix::identity(n, n);
+    let inv_matrix = lu.solve(&identity).ok_or(LinalgError::SingularMatrix)?;
+
+    Ok(InvResult {
+        inverse: rows_from_dmatrix(&inv_matrix),
+        warning: rcond_warning(rcond),
+    })
+}
+
+/// Fallback for diagonal/triangular assumptions: solve column by column.
+fn inv_column_by_column(
+    a: &[Vec<f64>],
+    rows: usize,
+    cols: usize,
+    options: InvOptions,
+) -> Result<InvResult, LinalgError> {
     let mut warning = None;
     let mut inverse = vec![vec![0.0; cols]; rows];
     for col in 0..cols {
@@ -316,7 +355,6 @@ pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError
             inverse[row_idx][col] = *value;
         }
     }
-
     Ok(InvResult { inverse, warning })
 }
 
@@ -355,7 +393,8 @@ pub fn lstsq(a: &[Vec<f64>], b: &[f64], options: LstsqOptions) -> Result<LstsqRe
 
     let pinv = pseudo_inverse_from_svd(&svd, threshold)?;
     let x = pinv * rhs.clone();
-    let residuals = if rows > cols {
+    // Only compute residuals when rows > cols AND full column rank (matches scipy behavior)
+    let residuals = if rows > cols && rank == cols {
         let residual = rhs - matrix * x.clone();
         vec![residual.dot(&residual)]
     } else {
@@ -396,42 +435,247 @@ pub fn pinv(a: &[Vec<f64>], options: PinvOptions) -> Result<PinvResult, LinalgEr
     })
 }
 
+/// O(n) reciprocal condition estimate from LU diagonal — conservative lower bound
+/// on the true rcond. Avoids the O(n³) SVD that was previously used.
+fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, n: usize) -> f64 {
+    if n == 0 {
+        return 1.0;
+    }
+    let u = lu.u();
+    let mut max_diag: f64 = 0.0;
+    let mut min_diag = f64::INFINITY;
+    for i in 0..n {
+        let d = u[(i, i)].abs();
+        max_diag = max_diag.max(d);
+        if d > 0.0 {
+            min_diag = min_diag.min(d);
+        }
+    }
+    if max_diag == 0.0 {
+        return 0.0;
+    }
+    min_diag / max_diag
+}
+
+/// Classify rcond into a MatrixConditionState for CASP portfolio decisions.
+fn classify_condition(rcond: f64) -> MatrixConditionState {
+    if rcond > 1e-4 {
+        MatrixConditionState::WellConditioned
+    } else if rcond > 1e-8 {
+        MatrixConditionState::ModerateCondition
+    } else if rcond > 1e-14 {
+        MatrixConditionState::IllConditioned
+    } else {
+        MatrixConditionState::NearSingular
+    }
+}
+
+/// Compute backward error: ||Ax - b|| / (||A|| × ||x|| + ||b||).
+/// Returns 0.0 when the denominator is zero.
+fn compute_backward_error(matrix: &DMatrix<f64>, x: &DVector<f64>, rhs: &DVector<f64>) -> f64 {
+    let residual = matrix * x - rhs;
+    let denom = matrix.norm() * x.norm() + rhs.norm();
+    if denom > 0.0 {
+        residual.norm() / denom
+    } else {
+        0.0
+    }
+}
+
+fn rcond_warning(rcond: f64) -> Option<LinalgWarning> {
+    if rcond < 1e-12 {
+        Some(LinalgWarning::IllConditioned {
+            reciprocal_condition: rcond,
+        })
+    } else {
+        None
+    }
+}
+
 fn solve_general(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError> {
     let matrix = dmatrix_from_rows(a)?;
     let rhs = DVector::from_column_slice(b);
     let lu: LU<f64, Dyn, Dyn> = matrix.clone().lu();
     let x = lu.solve(&rhs).ok_or(LinalgError::SingularMatrix)?;
-
-    let warning = if a.iter().flatten().all(|value| value.is_finite()) {
-        let svd = SVD::new(matrix, false, false);
-        let max_s = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
-        let min_s = svd
-            .singular_values
-            .iter()
-            .copied()
-            .filter(|s| *s > 0.0)
-            .fold(f64::INFINITY, f64::min);
-
-        if min_s.is_finite() && max_s > 0.0 {
-            let rcond = min_s / max_s;
-            if rcond < 1e-12 {
-                Some(LinalgWarning::IllConditioned {
-                    reciprocal_condition: rcond,
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let n = a.len();
+    let rcond = fast_rcond_from_lu(&lu, n);
+    let backward_err = compute_backward_error(&matrix, &x, &rhs);
 
     Ok(SolveResult {
         x: x.iter().copied().collect(),
-        warning,
+        warning: rcond_warning(rcond),
+        backward_error: Some(backward_err),
     })
+}
+
+fn solve_qr(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError> {
+    let matrix = dmatrix_from_rows(a)?;
+    let rhs = DVector::from_column_slice(b);
+    let qr = matrix.clone().qr();
+    let x = qr.solve(&rhs).ok_or(LinalgError::SingularMatrix)?;
+    let backward_err = compute_backward_error(&matrix, &x, &rhs);
+
+    Ok(SolveResult {
+        x: x.iter().copied().collect(),
+        warning: None,
+        backward_error: Some(backward_err),
+    })
+}
+
+fn solve_svd_fallback(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError> {
+    let matrix = dmatrix_from_rows(a)?;
+    let rhs = DVector::from_column_slice(b);
+    let svd = SVD::new(matrix.clone(), true, true);
+    let x = svd
+        .solve(&rhs, f64::EPSILON)
+        .map_err(|_| LinalgError::SingularMatrix)?;
+    let max_s = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let min_s = svd
+        .singular_values
+        .iter()
+        .copied()
+        .filter(|s| *s > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    let rcond = if min_s.is_finite() && max_s > 0.0 {
+        min_s / max_s
+    } else {
+        0.0
+    };
+    let backward_err = compute_backward_error(&matrix, &x, &rhs);
+
+    Ok(SolveResult {
+        x: x.iter().copied().collect(),
+        warning: rcond_warning(rcond),
+        backward_error: Some(backward_err),
+    })
+}
+
+/// Solve with CASP: condition-aware solver portfolio selects optimal solver.
+/// The portfolio is updated with evidence from this solve call.
+pub fn solve_with_casp(
+    a: &[Vec<f64>],
+    b: &[f64],
+    options: SolveOptions,
+    portfolio: &mut SolverPortfolio,
+) -> Result<SolveResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if b.len() != rows {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (rows, cols),
+            b_len: b.len(),
+        });
+    }
+    validate_finite_matrix_and_vector(a, b, options.mode, options.check_finite)?;
+
+    let effective_a = if options.transposed {
+        transpose(a)
+    } else {
+        a.to_vec()
+    };
+
+    // Quick LU for condition estimation (O(n³) but needed anyway for LU path)
+    let matrix = dmatrix_from_rows(&effective_a)?;
+    let lu: LU<f64, Dyn, Dyn> = matrix.clone().lu();
+    let rcond = fast_rcond_from_lu(&lu, rows);
+    let condition_state = classify_condition(rcond);
+
+    // Query portfolio for optimal action via expected-loss minimization
+    let (action, posterior, expected_losses, chosen_loss) =
+        portfolio.select_action(&condition_state);
+
+    // Dispatch to chosen solver
+    let result = match action {
+        SolverAction::DirectLU => {
+            let rhs = DVector::from_column_slice(b);
+            let x = lu.solve(&rhs).ok_or(LinalgError::SingularMatrix)?;
+            let backward_err = compute_backward_error(&matrix, &x, &rhs);
+            Ok(SolveResult {
+                x: x.iter().copied().collect(),
+                warning: rcond_warning(rcond),
+                backward_error: Some(backward_err),
+            })
+        }
+        SolverAction::PivotedQR => solve_qr(&effective_a, b),
+        SolverAction::SVDFallback => solve_svd_fallback(&effective_a, b),
+        SolverAction::DiagonalFastPath => solve_diagonal(&effective_a, b),
+        SolverAction::TriangularFastPath => solve_triangular_internal(
+            &effective_a,
+            b,
+            TriangularTranspose::NoTranspose,
+            false,
+            false,
+        ),
+    };
+
+    // Record evidence regardless of outcome
+    let fallback_active = !matches!(action, SolverAction::DirectLU);
+    portfolio.record_evidence(SolverEvidenceEntry {
+        component: "solver_portfolio",
+        matrix_shape: (rows, cols),
+        rcond_estimate: rcond,
+        chosen_action: action,
+        posterior: posterior.to_vec(),
+        expected_losses: expected_losses.to_vec(),
+        chosen_expected_loss: chosen_loss,
+        fallback_active,
+    });
+
+    result
+}
+
+/// Estimate spectral condition number via power iteration.
+/// Cost: O(n² × iterations) vs O(n³) for full SVD.
+/// Returns the reciprocal condition number (σ_min / σ_max).
+pub fn randomized_rcond_estimate(
+    matrix: &DMatrix<f64>,
+    lu: &LU<f64, Dyn, Dyn>,
+    iterations: usize,
+) -> f64 {
+    let n = matrix.nrows();
+    if n == 0 {
+        return 1.0;
+    }
+
+    // Power iteration for largest singular value: converge on σ_max
+    let mut v = DVector::from_element(n, 1.0 / (n as f64).sqrt());
+    for _ in 0..iterations {
+        let av = matrix * &v;
+        v = matrix.transpose() * av;
+        let norm = v.norm();
+        if norm == 0.0 {
+            return 0.0;
+        }
+        v /= norm;
+    }
+    let sigma_max = (matrix * &v).norm();
+    if sigma_max == 0.0 {
+        return 0.0;
+    }
+
+    // Inverse power iteration for smallest singular value using LU
+    let mut w = DVector::from_element(n, 1.0 / (n as f64).sqrt());
+    for _ in 0..iterations {
+        match lu.solve(&w) {
+            Some(solved) => {
+                let norm = solved.norm();
+                if norm == 0.0 {
+                    return 0.0;
+                }
+                w = solved / norm;
+            }
+            None => return 0.0,
+        }
+    }
+    let sigma_min_inv = lu.solve(&w).map_or(f64::INFINITY, |s| s.norm());
+    if sigma_min_inv == 0.0 || !sigma_min_inv.is_finite() {
+        return 0.0;
+    }
+    let sigma_min = 1.0 / sigma_min_inv;
+
+    sigma_min / sigma_max
 }
 
 fn solve_diagonal(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError> {
@@ -462,7 +706,11 @@ fn solve_diagonal(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError>
         None
     };
 
-    Ok(SolveResult { x, warning })
+    Ok(SolveResult {
+        x,
+        warning,
+        backward_error: None,
+    })
 }
 
 fn solve_triangular_internal(
@@ -507,7 +755,11 @@ fn solve_triangular_internal(
         }
     }
 
-    Ok(SolveResult { x, warning: None })
+    Ok(SolveResult {
+        x,
+        warning: None,
+        backward_error: None,
+    })
 }
 
 fn dense_from_banded(nlower: usize, nupper: usize, ab: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
@@ -782,5 +1034,163 @@ mod tests {
             hardened.expect_err("hardened mode should fail-closed"),
             LinalgError::NonFiniteInput
         );
+    }
+
+    #[test]
+    fn solve_general_backward_error_is_small() {
+        let a = vec![vec![3.0, 2.0], vec![1.0, 2.0]];
+        let b = vec![5.0, 5.0];
+        let result = solve(&a, &b, SolveOptions::default()).expect("solve must work");
+        assert!(
+            result.backward_error.unwrap() < 1e-14,
+            "backward error should be near machine epsilon"
+        );
+    }
+
+    #[test]
+    fn inv_general_single_lu_matches_column_by_column() {
+        let a = vec![
+            vec![4.0, 7.0, 2.0],
+            vec![3.0, 6.0, 1.0],
+            vec![2.0, 5.0, 3.0],
+        ];
+        let result = inv(&a, InvOptions::default()).expect("inv must work");
+        // Verify A * A^{-1} ≈ I
+        for (i, a_row) in a.iter().enumerate() {
+            for j in 0..a.len() {
+                let sum: f64 = a_row
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &a_ik)| a_ik * result.inverse[k][j])
+                    .sum();
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (sum - expected).abs() < 1e-10,
+                    "A * inv(A) should be identity: [{i}][{j}] = {sum}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fast_rcond_from_lu_well_conditioned() {
+        let matrix = DMatrix::from_row_slice(2, 2, &[3.0, 2.0, 1.0, 2.0]);
+        let lu = matrix.lu();
+        let rcond = fast_rcond_from_lu(&lu, 2);
+        assert!(
+            rcond > 0.1,
+            "well-conditioned matrix should have high rcond, got {rcond}"
+        );
+    }
+
+    #[test]
+    fn fast_rcond_from_lu_ill_conditioned() {
+        let matrix = DMatrix::from_row_slice(2, 2, &[1.0, 0.0, 0.0, 1e-15]);
+        let lu = matrix.lu();
+        let rcond = fast_rcond_from_lu(&lu, 2);
+        assert!(
+            rcond < 1e-12,
+            "ill-conditioned matrix should have low rcond, got {rcond}"
+        );
+    }
+
+    #[test]
+    fn solve_with_casp_well_conditioned_uses_lu() {
+        let a = vec![vec![3.0, 2.0], vec![1.0, 2.0]];
+        let b = vec![5.0, 5.0];
+        let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
+        let result = solve_with_casp(&a, &b, SolveOptions::default(), &mut portfolio)
+            .expect("solve must work");
+        assert_close_slice(&result.x, &[0.0, 2.5], 1e-12, 1e-12);
+        assert_eq!(portfolio.evidence_len(), 1);
+    }
+
+    #[test]
+    fn solve_qr_matches_lu() {
+        let a = vec![vec![3.0, 2.0], vec![1.0, 2.0]];
+        let b = vec![5.0, 5.0];
+        let lu_result = solve_general(&a, &b).expect("LU solve works");
+        let qr_result = solve_qr(&a, &b).expect("QR solve works");
+        assert_close_slice(&qr_result.x, &lu_result.x, 1e-12, 1e-12);
+    }
+
+    #[test]
+    fn solve_svd_fallback_matches_lu() {
+        let a = vec![vec![3.0, 2.0], vec![1.0, 2.0]];
+        let b = vec![5.0, 5.0];
+        let lu_result = solve_general(&a, &b).expect("LU solve works");
+        let svd_result = solve_svd_fallback(&a, &b).expect("SVD solve works");
+        assert_close_slice(&svd_result.x, &lu_result.x, 1e-12, 1e-12);
+    }
+
+    #[test]
+    fn randomized_rcond_estimate_well_conditioned() {
+        let matrix = DMatrix::from_row_slice(3, 3, &[4.0, 1.0, 0.0, 1.0, 3.0, 1.0, 0.0, 1.0, 2.0]);
+        let lu = matrix.clone().lu();
+        let rcond = randomized_rcond_estimate(&matrix, &lu, 5);
+        assert!(
+            rcond > 0.1,
+            "well-conditioned matrix rcond estimate should be high, got {rcond}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_invertible_2x2() -> impl Strategy<Value = Vec<Vec<f64>>> {
+        (
+            -10.0..10.0_f64,
+            -10.0..10.0_f64,
+            -10.0..10.0_f64,
+            -10.0..10.0_f64,
+        )
+            .prop_filter("non-singular", |(a, b, c, d)| (a * d - b * c).abs() > 0.01)
+            .prop_map(|(a, b, c, d)| vec![vec![a, b], vec![c, d]])
+    }
+
+    fn arb_vec2() -> impl Strategy<Value = Vec<f64>> {
+        prop::collection::vec(-10.0..10.0_f64, 2..=2)
+    }
+
+    proptest! {
+        #[test]
+        fn roundtrip_solve(a in arb_invertible_2x2(), b in arb_vec2()) {
+            let result = solve(&a, &b, SolveOptions::default()).expect("solve works");
+            // Verify A * x ≈ b
+            for (i, (a_row, &b_i)) in a.iter().zip(b.iter()).enumerate() {
+                let row_sum: f64 = a_row.iter().zip(result.x.iter()).map(|(a_ij, x_j)| a_ij * x_j).sum();
+                prop_assert!((row_sum - b_i).abs() < 1e-8,
+                    "A*x should equal b: row {i}: {row_sum} vs {b_i}");
+            }
+        }
+
+        #[test]
+        fn inverse_roundtrip(a in arb_invertible_2x2()) {
+            let inv_result = inv(&a, InvOptions::default()).expect("inv works");
+            // Verify A * inv(A) ≈ I
+            for (i, a_row) in a.iter().enumerate() {
+                for j in 0..a.len() {
+                    let sum: f64 = a_row.iter().enumerate()
+                        .map(|(k, &a_ik)| a_ik * inv_result.inverse[k][j])
+                        .sum();
+                    let expected = if i == j { 1.0 } else { 0.0 };
+                    prop_assert!((sum - expected).abs() < 1e-8,
+                        "A * inv(A) should be I: [{i}][{j}] = {sum}");
+                }
+            }
+        }
+
+        #[test]
+        fn det_inverse_consistency(a in arb_invertible_2x2()) {
+            let d = det(&a, RuntimeMode::Strict, true).expect("det works");
+            let inv_result = inv(&a, InvOptions::default()).expect("inv works");
+            let d_inv = det(&inv_result.inverse, RuntimeMode::Strict, true).expect("det(inv) works");
+            // det(A) * det(inv(A)) ≈ 1
+            prop_assert!((d * d_inv - 1.0).abs() < 1e-6,
+                "det(A) * det(inv(A)) should be 1: {} * {} = {}", d, d_inv, d * d_inv);
+        }
     }
 }

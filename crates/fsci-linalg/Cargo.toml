@@ -9,3 +9,11 @@ workspace = true
 [dependencies]
 fsci-runtime = { workspace = true }
 nalgebra = "0.33.2"
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "linalg_bench"
+harness = false
