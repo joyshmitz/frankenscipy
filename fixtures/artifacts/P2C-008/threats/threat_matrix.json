@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "packet_id": "FSCI-P2C-008",
+  "scope": "packet",
+  "generated_at": "2026-02-14T21:54:00Z",
+  "threats": [
+    {
+      "threat_id": "THREAT-001",
+      "subsystem": "fsci-runtime::PolicyController",
+      "category": "numerical_instability",
+      "severity": "critical",
+      "likelihood": "possible",
+      "description": "Softmax posterior underflow: when all logits are very negative (e.g., extreme positive signals clamped to 1.0), exp() values approach zero. If all exps underflow to 0.0, the denominator becomes 0.0 and posterior computation fails. Current mitigation: max-subtraction in softmax prevents this for typical inputs, and a fallback returns [1.0, 0.0, 0.0] when denominator is exactly zero.",
+      "mitigation": "Max-subtraction stabilization already implemented. Fallback to [1.0, 0.0, 0.0] when denominator is zero. Consider adding log-domain computation for extreme cases.",
+      "test_reference": "P2C-008/threats/test_softmax_underflow.json",
+      "strict_mode_response": "Softmax returns [1.0, 0.0, 0.0] fallback when all exps underflow. Decision proceeds with Compatible as dominant state.",
+      "hardened_mode_response": "Same as Strict. Future: emit structured warning when fallback activates, and validate that resulting decision is FailClosed for safety.",
+      "required_artifact": "P2C-008/threats/softmax_underflow.report.json"
+    },
+    {
+      "threat_id": "THREAT-002",
+      "subsystem": "fsci-runtime::PolicyController",
+      "category": "numerical_instability",
+      "severity": "high",
+      "likelihood": "possible",
+      "description": "Log-probability overflow: when logit differences exceed ~709 (log of f64::MAX), exp() overflows to Infinity. The softmax denominator becomes Infinity and division produces NaN posterior. Max-subtraction prevents this for the maximum logit, but if the maximum logit is itself extreme (>700), subtracted values may still overflow.",
+      "mitigation": "Max-subtraction prevents overflow for the relative differences. Since logits are bounded by signal clamping (all signals in [0,1]), maximum possible logit magnitude is ~6.5 (from the linear model), well within safe exp() range.",
+      "test_reference": "P2C-008/threats/test_logit_overflow.json",
+      "strict_mode_response": "No overflow possible given clamped signal ranges. Logit range is approximately [-5.4, 2.8].",
+      "hardened_mode_response": "Same as Strict. The bounded signal model inherently prevents overflow.",
+      "required_artifact": "P2C-008/threats/logit_overflow.report.json"
+    },
+    {
+      "threat_id": "THREAT-003",
+      "subsystem": "fsci-runtime::PolicyController",
+      "category": "malformed_input",
+      "severity": "critical",
+      "likelihood": "possible",
+      "description": "Evidence poisoning via crafted signal sequences: an attacker controlling input signals could send a sequence designed to bias the apparent risk profile. However, since the PolicyController is stateless per-decision (ledger records but does not influence future decisions), evidence poisoning cannot change future decisions. The threat is limited to corrupting the audit trail.",
+      "mitigation": "PolicyController decisions are purely a function of current signals and mode. The ledger is append-only audit trail with no feedback loop. Evidence poisoning can only corrupt forensic analysis, not runtime decisions.",
+      "test_reference": "P2C-008/threats/test_evidence_poisoning.json",
+      "strict_mode_response": "Decisions unaffected by ledger contents. Each decide() is independent.",
+      "hardened_mode_response": "Future: add ledger integrity checks (hash chain) to detect evidence tampering in audit trail.",
+      "required_artifact": "P2C-008/threats/evidence_poisoning.report.json"
+    },
+    {
+      "threat_id": "THREAT-004",
+      "subsystem": "fsci-runtime::PolicyController",
+      "category": "malformed_input",
+      "severity": "high",
+      "likelihood": "likely",
+      "description": "NaN signal injection: passing NaN as condition_number_log10, metadata_incompatibility_score, or input_anomaly_score produces NaN logits via the clamp() function (NaN.clamp() returns NaN in Rust). NaN propagates through softmax producing NaN posterior, NaN expected losses, and an unpredictable action selection (comparisons with NaN return false).",
+      "mitigation": "Add NaN/Inf signal validation in DecisionSignals::new() or at the start of decide(). In Hardened mode, reject non-finite signals with an error.",
+      "test_reference": "P2C-008/threats/test_nan_signal_injection.json",
+      "strict_mode_response": "Currently: NaN propagates silently. Should mirror any upstream behavior or document as undefined.",
+      "hardened_mode_response": "Should reject non-finite signals and return FailClosed action with diagnostic reason string.",
+      "required_artifact": "P2C-008/threats/nan_signal_injection.report.json"
+    },
+    {
+      "threat_id": "THREAT-005",
+      "subsystem": "fsci-runtime::PolicyEvidenceLedger",
+      "category": "malformed_input",
+      "severity": "medium",
+      "likelihood": "unlikely",
+      "description": "Ledger deserialization with corrupted data: if a serialized ledger (via serde) contains malformed entries (e.g., non-normalized posteriors, invalid actions), deserialization succeeds but invariants are violated. The ledger stores whatever is deserialized without validation.",
+      "mitigation": "Add post-deserialization validation: check that all posteriors sum to ~1.0, all actions are valid variants, and all logits are finite.",
+      "test_reference": "P2C-008/threats/test_ledger_corruption.json",
+      "strict_mode_response": "Accept deserialized data as-is (matches typical serde behavior). Corruption only affects audit trail.",
+      "hardened_mode_response": "Validate deserialized entries and reject corrupted ones with warning.",
+      "required_artifact": "P2C-008/threats/ledger_corruption.report.json"
+    },
+    {
+      "threat_id": "THREAT-006",
+      "subsystem": "fsci-runtime::SolverPortfolio",
+      "category": "numerical_instability",
+      "severity": "high",
+      "likelihood": "possible",
+      "description": "Loss matrix conditioning: the default 5x4 loss matrix has condition-dependent expected losses. For hard-classified (one-hot) posteriors, expected loss equals a single matrix entry. If the loss matrix were modified to have very similar values, tie-breaking becomes sensitive to floating-point ordering. The current tie-break rule (prefer higher index = safer) mitigates this.",
+      "mitigation": "Tie-breaking at 1e-12 threshold with preference for safer action. Loss matrix values are well-separated by design (minimum gap is 2.0 between adjacent losses in the same column).",
+      "test_reference": "P2C-008/threats/test_loss_matrix_ties.json",
+      "strict_mode_response": "Tie-break toward safer action (higher index). Well-separated loss values prevent ties in practice.",
+      "hardened_mode_response": "Same as Strict. Consider warning if minimum loss gap < 1.0 in custom loss matrices.",
+      "required_artifact": "P2C-008/threats/loss_matrix_ties.report.json"
+    },
+    {
+      "threat_id": "THREAT-007",
+      "subsystem": "fsci-runtime::ConformalCalibrator",
+      "category": "malformed_input",
+      "severity": "high",
+      "likelihood": "possible",
+      "description": "Calibrator manipulation: an attacker who can influence backward error observations could inject systematically high scores to trigger premature SVD fallback, or inject systematically low scores to suppress fallback when it should activate. The bounded sliding window limits the blast radius to the window size.",
+      "mitigation": "Bounded sliding window (capacity=200 by default) limits the influence of any single observation. Minimum 10 observations before fallback can trigger. The alpha + epsilon threshold (0.07) requires >7% violation rate to trigger.",
+      "test_reference": "P2C-008/threats/test_calibrator_manipulation.json",
+      "strict_mode_response": "Calibrator operates as designed. Window bounds limit exposure. False SVD fallback is safe (higher cost, not incorrect).",
+      "hardened_mode_response": "Future: detect anomalous score distributions (e.g., bimodal scores suggesting injection) and flag for review.",
+      "required_artifact": "P2C-008/threats/calibrator_manipulation.report.json"
+    },
+    {
+      "threat_id": "THREAT-008",
+      "subsystem": "fsci-runtime::ConformalCalibrator",
+      "category": "numerical_instability",
+      "severity": "medium",
+      "likelihood": "unlikely",
+      "description": "Violation count underflow on eviction: when evicting an old score from the window, the violation count is decremented using saturating subtraction. If the violation threshold is changed between observe() calls (via set_violation_threshold()), the count may not accurately reflect the current window's violations, since old scores were classified under the previous threshold.",
+      "mitigation": "Use saturating_sub() to prevent underflow. Accept that threshold changes mid-stream may cause temporary inaccuracy that self-corrects as the window rotates.",
+      "test_reference": "P2C-008/threats/test_violation_count_integrity.json",
+      "strict_mode_response": "Saturating subtraction prevents panic. Temporary inaccuracy is bounded by window size.",
+      "hardened_mode_response": "Future: recount violations from scratch when threshold changes, or disallow threshold changes after first observation.",
+      "required_artifact": "P2C-008/threats/violation_count_integrity.report.json"
+    },
+    {
+      "threat_id": "THREAT-009",
+      "subsystem": "fsci-runtime::SolverPortfolio",
+      "category": "resource_exhaustion",
+      "severity": "medium",
+      "likelihood": "unlikely",
+      "description": "Evidence vector O(n) removal: SolverPortfolio uses Vec::remove(0) for FIFO eviction, which is O(n) where n = evidence_capacity. For large capacities (>10000), this becomes a performance concern and potential DoS vector if capacity is set very high.",
+      "mitigation": "Cap evidence_capacity at a reasonable maximum (e.g., 10000) or migrate to VecDeque for O(1) eviction. Current minimum is 1 via .max(1).",
+      "test_reference": "P2C-008/threats/test_evidence_vec_performance.json",
+      "strict_mode_response": "O(n) eviction. No maximum capacity enforcement beyond .max(1).",
+      "hardened_mode_response": "Should enforce maximum capacity ceiling and/or migrate to VecDeque. Bounded response time is a Hardened-mode invariant.",
+      "required_artifact": "P2C-008/threats/evidence_vec_performance.report.json"
+    },
+    {
+      "threat_id": "THREAT-010",
+      "subsystem": "fsci-runtime::PolicyController",
+      "category": "compatibility_drift",
+      "severity": "low",
+      "likelihood": "certain",
+      "description": "No SciPy equivalent exists for CASP. The entire PolicyController, SolverPortfolio, and ConformalCalibrator subsystems are FrankenSciPy innovations. Compatibility testing cannot use differential oracle against SciPy. Instead, correctness is established via internal invariant verification and mathematical property tests.",
+      "mitigation": "Substitute SciPy oracle with mathematical invariant verification: posterior normalization, expected loss computation correctness, monotonicity of calibrator response. Use hand-computed reference values as golden fixtures.",
+      "test_reference": "P2C-008/threats/test_no_scipy_oracle.json",
+      "strict_mode_response": "Verify against hand-computed reference values and mathematical invariants.",
+      "hardened_mode_response": "Same as Strict, plus metamorphic testing (e.g., scaling all signals preserves relative ordering of actions).",
+      "required_artifact": "P2C-008/threats/no_scipy_oracle.report.json"
+    }
+  ],
+  "fail_closed_policies": [
+    {
+      "input_class": "High metadata incompatibility (score >= 0.8)",
+      "policy": "reject",
+      "strict_mode_action": "FailClosed with reason: metadata incompatibility cost (200 in Strict) dominates expected loss for Allow when IncompatibleMetadata posterior is high.",
+      "hardened_mode_action": "FailClosed with reason: metadata incompatibility cost (180 in Hardened) dominates expected loss. Same logic as Strict with different loss magnitudes.",
+      "override_mechanism": "No override available. Loss matrix structure guarantees FailClosed for dominant IncompatibleMetadata posterior."
+    },
+    {
+      "input_class": "Non-finite signal values (NaN or Infinity in DecisionSignals)",
+      "policy": "reject_with_diagnostics",
+      "strict_mode_action": "Currently undefined: NaN propagates silently through clamp/softmax producing unpredictable action selection. Remediation needed.",
+      "hardened_mode_action": "Should reject non-finite signals and return FailClosed with diagnostic reason string identifying which signals are non-finite.",
+      "override_mechanism": "No override. Non-finite signals are always invalid and must be rejected in Hardened mode."
+    },
+    {
+      "input_class": "Conformal calibrator miscoverage exceeds alpha + epsilon threshold",
+      "policy": "reject",
+      "strict_mode_action": "SolverPortfolio overrides solver selection to SVDFallback when should_fallback() returns true, regardless of expected-loss argmin.",
+      "hardened_mode_action": "Same as Strict: SVDFallback override. Future: emit structured alert when calibrator triggers fallback.",
+      "override_mechanism": "Adjust alpha or epsilon parameters at ConformalCalibrator construction. Requires minimum 10 observations before fallback can activate."
+    }
+  ]
+}

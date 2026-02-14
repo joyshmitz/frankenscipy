@@ -1,0 +1,313 @@
+{
+  "schema_version": "1.0.0",
+  "packet_id": "P2C-008",
+  "generated_at": "2026-02-14T21:50:00Z",
+  "source_file": "crates/fsci-runtime/src/lib.rs",
+  "title": "CASP Runtime Behavioral Anchor Map",
+
+  "policy_controller": {
+    "description": "Bayesian risk-state decision engine that selects Allow/FullValidate/FailClosed actions based on posterior probability over risk states, using an asymmetric loss matrix.",
+    "constructor": "PolicyController::new(mode: RuntimeMode, ledger_capacity: usize)",
+    "state_machine": {
+      "risk_states": [
+        {
+          "name": "Compatible",
+          "index": 0,
+          "description": "Input conditions are normal; standard processing is safe."
+        },
+        {
+          "name": "IllConditioned",
+          "index": 1,
+          "description": "Matrix or problem has elevated condition number; validation recommended."
+        },
+        {
+          "name": "IncompatibleMetadata",
+          "index": 2,
+          "description": "Input metadata signals incompatibility; fail-closed is safest."
+        }
+      ],
+      "actions": [
+        {
+          "name": "Allow",
+          "index": 0,
+          "description": "Proceed with default solver path."
+        },
+        {
+          "name": "FullValidate",
+          "index": 1,
+          "description": "Run full validation pipeline before proceeding."
+        },
+        {
+          "name": "FailClosed",
+          "index": 2,
+          "description": "Reject the operation; return error to caller."
+        }
+      ],
+      "transitions": "No explicit state transitions; the controller is stateless per-decision. Each call to decide() computes posterior from signals independently. The ledger records history but does not influence future decisions."
+    },
+    "decision_flow": {
+      "step_1_signal_collection": {
+        "description": "Caller provides DecisionSignals with three features.",
+        "signals": [
+          {
+            "name": "condition_number_log10",
+            "type": "f64",
+            "range": "[0.0, +inf)",
+            "clamped_to": "[0.0, 1.0] via division by 16.0",
+            "semantics": "Log10 of matrix condition number. Higher = more ill-conditioned."
+          },
+          {
+            "name": "metadata_incompatibility_score",
+            "type": "f64",
+            "range": "[0.0, 1.0]",
+            "semantics": "Degree of metadata mismatch. Higher = more incompatible."
+          },
+          {
+            "name": "input_anomaly_score",
+            "type": "f64",
+            "range": "[0.0, 1.0]",
+            "semantics": "Anomaly detection score for input values. Higher = more anomalous."
+          }
+        ]
+      },
+      "step_2_logit_computation": {
+        "description": "Log-odds model tuned for fail-closed behavior under metadata incompatibility.",
+        "equations": {
+          "compatible": "2.8 - 0.8 * cond - 3.2 * metadata - 2.4 * anomaly",
+          "ill_conditioned": "-0.4 + 1.4 * cond + 0.6 * anomaly - 0.8 * metadata",
+          "incompatible": "-2.0 + 3.5 * metadata + 0.7 * anomaly"
+        },
+        "notes": [
+          "cond is clamped to [0,1] via (condition_number_log10 / 16.0).clamp(0.0, 1.0)",
+          "metadata and anomaly are clamped to [0,1]",
+          "Compatible has strong positive bias (2.8) that degrades with all three signals",
+          "IncompatibleMetadata has strong negative bias (-2.0) that activates primarily via metadata signal (3.5 weight)"
+        ]
+      },
+      "step_3_posterior_update": {
+        "description": "Softmax normalization converts logits to probability distribution.",
+        "function": "softmax(logits: [f64; 3]) -> [f64; 3]",
+        "invariants": [
+          "All probabilities are non-negative",
+          "Sum equals 1.0 within floating-point tolerance (1e-9)",
+          "Uses max-subtraction for numerical stability",
+          "Falls back to [1.0, 0.0, 0.0] if denominator is zero"
+        ]
+      },
+      "step_4_expected_loss": {
+        "description": "Compute expected loss for each action by multiplying loss matrix row by posterior.",
+        "formula": "E[L(action)] = sum_s L(action, state) * P(state | signals)"
+      },
+      "step_5_action_selection": {
+        "description": "Select action with minimum expected loss.",
+        "tie_breaking": "On ties (within 1e-12), prefer safer action (higher index: FailClosed > FullValidate > Allow)."
+      },
+      "step_6_evidence_recording": {
+        "description": "Every decision is recorded in the bounded evidence ledger.",
+        "recorded_fields": ["mode", "signals", "logits", "posterior", "expected_losses", "action", "top_state", "reason"]
+      }
+    }
+  },
+
+  "asymmetric_loss_matrix": {
+    "description": "Asymmetric cost matrix encoding that false-negative errors (allowing unsafe operations) are far more costly than false-positive errors (unnecessary validation).",
+    "dimensions": "3 actions x 3 risk states",
+    "strict_mode": {
+      "matrix": [
+        {"action": "Allow",        "compatible": 0.0,  "ill_conditioned": 65.0,  "incompatible_metadata": 200.0},
+        {"action": "FullValidate",  "compatible": 8.0,  "ill_conditioned": 4.0,   "incompatible_metadata": 80.0},
+        {"action": "FailClosed",    "compatible": 40.0, "ill_conditioned": 25.0,  "incompatible_metadata": 1.0}
+      ],
+      "key_asymmetries": [
+        "Allow + IncompatibleMetadata = 200 (catastrophic: allowing incompatible operation)",
+        "FailClosed + Compatible = 40 (moderate: unnecessary rejection of good input)",
+        "FullValidate + Compatible = 8 (low: minor overhead for extra validation)",
+        "Allow + Compatible = 0 (zero cost: correct fast path)",
+        "FailClosed + IncompatibleMetadata = 1 (near-zero: correct rejection)"
+      ]
+    },
+    "hardened_mode": {
+      "matrix": [
+        {"action": "Allow",        "compatible": 0.0,  "ill_conditioned": 50.0,  "incompatible_metadata": 180.0},
+        {"action": "FullValidate",  "compatible": 5.0,  "ill_conditioned": 3.0,   "incompatible_metadata": 60.0},
+        {"action": "FailClosed",    "compatible": 55.0, "ill_conditioned": 30.0,  "incompatible_metadata": 1.0}
+      ],
+      "differences_from_strict": [
+        "Allow + IllConditioned: 50 vs 65 (hardened is slightly more tolerant of ill-conditioning for Allow)",
+        "FullValidate + Compatible: 5 vs 8 (hardened has lower validation overhead)",
+        "FailClosed + Compatible: 55 vs 40 (hardened penalizes false-closed more, since Hardened mode already provides extra safety)"
+      ]
+    }
+  },
+
+  "evidence_ledger": {
+    "description": "Bounded FIFO evidence buffer recording all policy decisions for audit trail.",
+    "type": "PolicyEvidenceLedger",
+    "capacity_semantics": {
+      "minimum": 1,
+      "enforcement": "capacity.max(1) in constructor",
+      "truncation": "When at capacity, oldest entry (front of VecDeque) is removed before new entry is added.",
+      "ordering": "FIFO (first-in, first-out). Most recent entry is at back."
+    },
+    "entry_schema": {
+      "mode": "RuntimeMode (Strict | Hardened)",
+      "signals": "DecisionSignals { condition_number_log10, metadata_incompatibility_score, input_anomaly_score }",
+      "logits": "[f64; 3] - raw log-odds before softmax",
+      "posterior": "[f64; 3] - normalized probability over risk states",
+      "expected_losses": "[f64; 3] - expected loss per action",
+      "action": "PolicyAction (Allow | FullValidate | FailClosed)",
+      "top_state": "RiskState with highest posterior probability",
+      "reason": "Human-readable decision trace string"
+    },
+    "access_patterns": [
+      "latest() -> Option<&DecisionEvidenceEntry> - most recent decision",
+      "len() -> usize - current entry count",
+      "is_empty() -> bool"
+    ]
+  },
+
+  "solver_portfolio_casp": {
+    "description": "Condition-Aware Solver Portfolio: expected-loss minimization engine selecting optimal linear algebra solver based on matrix condition state.",
+    "loss_matrix": {
+      "dimensions": "5 actions x 4 condition states",
+      "actions": ["DirectLU", "PivotedQR", "SVDFallback", "DiagonalFastPath", "TriangularFastPath"],
+      "states": ["WellConditioned", "ModerateCondition", "IllConditioned", "NearSingular"],
+      "values": [
+        {"action": "DirectLU",           "well": 1.0,  "moderate": 5.0,  "ill": 40.0,  "near_singular": 120.0},
+        {"action": "PivotedQR",          "well": 3.0,  "moderate": 1.0,  "ill": 8.0,   "near_singular": 45.0},
+        {"action": "SVDFallback",        "well": 15.0, "moderate": 10.0, "ill": 1.0,   "near_singular": 1.0},
+        {"action": "DiagonalFastPath",   "well": 0.0,  "moderate": 0.0,  "ill": 0.0,   "near_singular": 100.0},
+        {"action": "TriangularFastPath", "well": 0.0,  "moderate": 0.0,  "ill": 0.0,   "near_singular": 100.0}
+      ],
+      "selection_rule": "a* = argmin_a SUM_s L(a,s) * P(s|evidence); only general solvers (LU, QR, SVD) participate in argmin",
+      "fast_paths": "DiagonalFastPath and TriangularFastPath have zero cost for non-singular matrices but catastrophic cost (100) for NearSingular. They are NOT selected via argmin; they are caller-selected based on structural detection."
+    },
+    "conformal_calibrator": {
+      "description": "Monitors backward error nonconformity scores to detect solver drift.",
+      "alpha": 0.05,
+      "capacity": 200,
+      "violation_threshold": 1e-8,
+      "fallback_rule": "If empirical_miscoverage > alpha + epsilon (epsilon=0.02), force SVDFallback regardless of expected loss.",
+      "minimum_data": "At least 10 observations required before fallback can trigger.",
+      "bounded_window": "Oldest scores evicted when capacity reached; violation counts adjusted accordingly (saturating subtraction)."
+    },
+    "evidence_capacity_semantics": {
+      "minimum": 1,
+      "enforcement": "evidence_capacity.max(1) in constructor",
+      "truncation": "Vec::remove(0) when at capacity (shifts all elements; O(n))"
+    }
+  },
+
+  "behavioral_anchors": {
+    "normal_pathways": [
+      {
+        "id": "N1",
+        "scenario": "Well-conditioned input with no metadata issues",
+        "signals": {"condition_number_log10": 2.0, "metadata_incompatibility_score": 0.0, "input_anomaly_score": 0.0},
+        "expected_action": "Allow",
+        "expected_top_state": "Compatible",
+        "rationale": "Low condition number, no incompatibility -> Compatible state dominates -> Allow has lowest expected loss"
+      },
+      {
+        "id": "N2",
+        "scenario": "Moderate condition number with clean metadata",
+        "signals": {"condition_number_log10": 10.0, "metadata_incompatibility_score": 0.0, "input_anomaly_score": 0.1},
+        "expected_action": "Allow",
+        "expected_top_state": "Compatible",
+        "rationale": "Condition number normalizes to 0.625; Compatible logit still positive -> Allow"
+      }
+    ],
+    "edge_pathways": [
+      {
+        "id": "E1",
+        "scenario": "High condition number with mild metadata concern",
+        "signals": {"condition_number_log10": 12.0, "metadata_incompatibility_score": 0.25, "input_anomaly_score": 0.3},
+        "expected_action": "FullValidate",
+        "expected_top_state": "IllConditioned",
+        "rationale": "High cond pushes ill-conditioned logit up; moderate metadata keeps incompatible low -> FullValidate minimizes expected loss"
+      },
+      {
+        "id": "E2",
+        "scenario": "Zero condition with maximum metadata incompatibility",
+        "signals": {"condition_number_log10": 0.0, "metadata_incompatibility_score": 1.0, "input_anomaly_score": 0.0},
+        "expected_action": "FailClosed",
+        "expected_top_state": "IncompatibleMetadata",
+        "rationale": "metadata=1.0 drives incompatible logit to +1.5 and compatible logit to -0.4 -> IncompatibleMetadata dominates -> FailClosed"
+      }
+    ],
+    "adversarial_pathways": [
+      {
+        "id": "A1",
+        "scenario": "All signals at maximum",
+        "signals": {"condition_number_log10": 16.0, "metadata_incompatibility_score": 1.0, "input_anomaly_score": 1.0},
+        "expected_action": "FailClosed",
+        "expected_top_state": "IncompatibleMetadata",
+        "rationale": "All danger signals maxed out -> metadata dominance ensures FailClosed"
+      },
+      {
+        "id": "A2",
+        "scenario": "Extreme condition number (>16 gets clamped)",
+        "signals": {"condition_number_log10": 100.0, "metadata_incompatibility_score": 0.0, "input_anomaly_score": 0.0},
+        "expected_action": "Allow",
+        "expected_top_state": "IllConditioned",
+        "rationale": "cond gets clamped to 1.0; without metadata, Compatible still dominates but IllConditioned has notable probability"
+      },
+      {
+        "id": "A3",
+        "scenario": "Negative signal values (clamped to 0)",
+        "signals": {"condition_number_log10": -5.0, "metadata_incompatibility_score": -1.0, "input_anomaly_score": -1.0},
+        "expected_action": "Allow",
+        "expected_top_state": "Compatible",
+        "rationale": "All signals clamped to 0 -> equivalent to perfect conditions -> Allow"
+      },
+      {
+        "id": "A4",
+        "scenario": "NaN signals",
+        "signals": {"condition_number_log10": "NaN", "metadata_incompatibility_score": 0.0, "input_anomaly_score": 0.0},
+        "expected_behavior": "NaN propagates through clamp() producing NaN logits; softmax may produce NaN posterior; behavior is undefined but non-panicking",
+        "risk_note": "Current implementation does not validate signal finiteness. Hardened mode should add signal validation."
+      }
+    ],
+    "casp_solver_selection": [
+      {
+        "id": "S1",
+        "condition_state": "WellConditioned",
+        "expected_action": "DirectLU",
+        "expected_loss": 1.0,
+        "rationale": "P(WellConditioned)=1.0 -> E[L(LU)]=1, E[L(QR)]=3, E[L(SVD)]=15 -> LU wins"
+      },
+      {
+        "id": "S2",
+        "condition_state": "ModerateCondition",
+        "expected_action": "PivotedQR",
+        "expected_loss": 1.0,
+        "rationale": "P(Moderate)=1.0 -> E[L(QR)]=1, E[L(LU)]=5, E[L(SVD)]=10 -> QR wins"
+      },
+      {
+        "id": "S3",
+        "condition_state": "IllConditioned",
+        "expected_action": "SVDFallback",
+        "expected_loss": 1.0,
+        "rationale": "P(Ill)=1.0 -> E[L(SVD)]=1, E[L(QR)]=8, E[L(LU)]=40 -> SVD wins"
+      },
+      {
+        "id": "S4",
+        "condition_state": "NearSingular",
+        "expected_action": "SVDFallback",
+        "expected_loss": 1.0,
+        "rationale": "P(NearSingular)=1.0 -> E[L(SVD)]=1, E[L(QR)]=45, E[L(LU)]=120 -> SVD wins"
+      }
+    ]
+  },
+
+  "mode_enforcement": {
+    "strict": {
+      "description": "Matches SciPy behavior as closely as possible. Clamping semantics match SciPy exactly.",
+      "loss_matrix_bias": "Lower FailClosed+Compatible cost (40) means more willing to reject to protect safety."
+    },
+    "hardened": {
+      "description": "Extra safety layer beyond SciPy behavior. Adds finite-check rejection and tighter validation.",
+      "loss_matrix_bias": "Higher FailClosed+Compatible cost (55) means slightly less eager to reject good inputs, since Hardened mode already provides extra safety guarantees."
+    }
+  }
+}

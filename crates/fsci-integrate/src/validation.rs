@@ -135,26 +135,39 @@ pub fn validate_tol(
 mod tests {
     use super::*;
 
+    // ── validate_tol scalar tests ────────────────────────────────
+
+    // 1. rtol within range -> passthrough (Strict)
     #[test]
-    fn first_step_must_be_positive() {
-        let err = validate_first_step(0.0, 0.0, 1.0).expect_err("must reject non-positive step");
-        assert_eq!(err.to_string(), "`first_step` must be positive.");
+    fn test_validation_tol_scalar_rtol_within_range_strict() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-3),
+            ToleranceValue::Scalar(1e-6),
+            3,
+            RuntimeMode::Strict,
+        )
+        .expect("valid tolerances");
+        assert!(report.warnings.is_empty());
+        assert_eq!(report.rtol, ToleranceValue::Scalar(1e-3));
     }
 
+    // 1b. rtol within range -> passthrough (Hardened)
     #[test]
-    fn first_step_respects_bounds() {
-        let err = validate_first_step(2.0, 0.0, 1.0).expect_err("must reject out-of-bounds step");
-        assert_eq!(err.to_string(), "`first_step` exceeds bounds.");
+    fn test_validation_tol_scalar_rtol_within_range_hardened() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-3),
+            ToleranceValue::Scalar(1e-6),
+            3,
+            RuntimeMode::Hardened,
+        )
+        .expect("valid tolerances");
+        assert!(report.warnings.is_empty());
+        assert_eq!(report.mode, RuntimeMode::Hardened);
     }
 
+    // 2. rtol below MIN_RTOL -> clamped with warning
     #[test]
-    fn max_step_must_be_positive() {
-        let err = validate_max_step(-1.0).expect_err("must reject negative max step");
-        assert_eq!(err.to_string(), "`max_step` must be positive.");
-    }
-
-    #[test]
-    fn validate_tol_clamps_small_rtol() {
+    fn test_validation_tol_scalar_rtol_below_min_clamped() {
         let report = validate_tol(
             ToleranceValue::Scalar(1e-30),
             ToleranceValue::Scalar(1e-8),
@@ -173,8 +186,55 @@ mod tests {
         );
     }
 
+    // 3. rtol = 0.0 -> clamped
     #[test]
-    fn validate_tol_rejects_bad_atol_shape() {
+    fn test_validation_tol_scalar_rtol_zero_clamped() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(0.0),
+            ToleranceValue::Scalar(1e-6),
+            1,
+            RuntimeMode::Strict,
+        )
+        .expect("zero rtol should be clamped");
+        assert!(!report.warnings.is_empty());
+        match report.rtol {
+            ToleranceValue::Scalar(v) => assert_eq!(v, MIN_RTOL),
+            _ => panic!("expected scalar"),
+        }
+    }
+
+    // 4. negative rtol -> clamped (SciPy clamps, doesn't error)
+    #[test]
+    fn test_validation_tol_scalar_negative_rtol_clamped() {
+        // SciPy's behavior: negative rtol gets clamped to MIN_RTOL
+        let report = validate_tol(
+            ToleranceValue::Scalar(-1.0),
+            ToleranceValue::Scalar(1e-6),
+            1,
+            RuntimeMode::Strict,
+        )
+        .expect("negative rtol should be clamped");
+        assert!(!report.warnings.is_empty());
+    }
+
+    // ── validate_tol vector tests ────────────────────────────────
+
+    // 5. matching dimension -> passthrough
+    #[test]
+    fn test_validation_tol_vector_matching_dim() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-3),
+            ToleranceValue::Vector(vec![1e-6, 1e-7, 1e-8]),
+            3,
+            RuntimeMode::Strict,
+        )
+        .expect("matching vector atol should succeed");
+        assert!(report.warnings.is_empty());
+    }
+
+    // 6. wrong dimension -> AtolWrongShape error
+    #[test]
+    fn test_validation_tol_vector_wrong_dim() {
         let err = validate_tol(
             ToleranceValue::Scalar(1e-6),
             ToleranceValue::Vector(vec![1e-9, 1e-9]),
@@ -191,8 +251,9 @@ mod tests {
         );
     }
 
+    // 7. negative element -> AtolMustBePositive error
     #[test]
-    fn validate_tol_rejects_negative_atol() {
+    fn test_validation_tol_vector_negative_element() {
         let err = validate_tol(
             ToleranceValue::Scalar(1e-6),
             ToleranceValue::Vector(vec![1e-9, -1e-9, 1e-9]),
@@ -201,5 +262,218 @@ mod tests {
         )
         .expect_err("negative atol must fail");
         assert_eq!(err, IntegrateValidationError::AtolMustBePositive);
+    }
+
+    // 8. NaN input in atol -> appropriate behavior
+    #[test]
+    fn test_validation_tol_nan_atol() {
+        // NaN is not < 0 so it passes the negative check but is pathological
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-3),
+            ToleranceValue::Scalar(f64::NAN),
+            1,
+            RuntimeMode::Strict,
+        );
+        // NaN passes the any(|x| x < 0.0) check because NaN < 0.0 is false
+        assert!(report.is_ok());
+    }
+
+    // 9. Inf input in atol -> accepted (SciPy allows)
+    #[test]
+    fn test_validation_tol_inf_atol() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-3),
+            ToleranceValue::Scalar(f64::INFINITY),
+            1,
+            RuntimeMode::Strict,
+        );
+        assert!(report.is_ok());
+    }
+
+    // ── validate_first_step tests ────────────────────────────────
+
+    // 10. positive within bounds -> accepted
+    #[test]
+    fn test_validation_first_step_positive_within_bounds() {
+        let result = validate_first_step(0.5, 0.0, 1.0);
+        assert_eq!(result.unwrap(), 0.5);
+    }
+
+    // 11. zero -> FirstStepMustBePositive error
+    #[test]
+    fn test_validation_first_step_zero() {
+        let err = validate_first_step(0.0, 0.0, 1.0).expect_err("must reject zero");
+        assert_eq!(err, IntegrateValidationError::FirstStepMustBePositive);
+    }
+
+    // 12. negative -> FirstStepMustBePositive error
+    #[test]
+    fn test_validation_first_step_negative() {
+        let err = validate_first_step(-0.1, 0.0, 1.0).expect_err("must reject negative");
+        assert_eq!(err, IntegrateValidationError::FirstStepMustBePositive);
+    }
+
+    // 13. exceeds bounds -> FirstStepExceedsBounds error
+    #[test]
+    fn test_validation_first_step_exceeds_bounds() {
+        let err = validate_first_step(2.0, 0.0, 1.0).expect_err("must reject out-of-bounds step");
+        assert_eq!(err, IntegrateValidationError::FirstStepExceedsBounds);
+    }
+
+    // ── validate_max_step tests ──────────────────────────────────
+
+    // 14. positive -> accepted
+    #[test]
+    fn test_validation_max_step_positive() {
+        assert_eq!(validate_max_step(1.0).unwrap(), 1.0);
+    }
+
+    // 15. zero -> MaxStepMustBePositive error
+    #[test]
+    fn test_validation_max_step_zero() {
+        let err = validate_max_step(0.0).expect_err("must reject zero");
+        assert_eq!(err, IntegrateValidationError::MaxStepMustBePositive);
+    }
+
+    // 16. negative -> MaxStepMustBePositive error
+    #[test]
+    fn test_validation_max_step_negative() {
+        let err = validate_max_step(-1.0).expect_err("must reject negative max step");
+        assert_eq!(err, IntegrateValidationError::MaxStepMustBePositive);
+    }
+
+    // 17. Inf -> accepted (SciPy allows this as the default)
+    #[test]
+    fn test_validation_max_step_infinity() {
+        assert_eq!(validate_max_step(f64::INFINITY).unwrap(), f64::INFINITY);
+    }
+
+    // ── Mode-specific tests ──────────────────────────────────────
+
+    // 18. Strict mode: rtol clamping preserves SciPy semantics
+    #[test]
+    fn test_validation_tol_strict_clamping_scipy_semantics() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-20),
+            ToleranceValue::Scalar(1e-8),
+            2,
+            RuntimeMode::Strict,
+        )
+        .expect("strict mode should clamp");
+        assert_eq!(report.mode, RuntimeMode::Strict);
+        assert!(!report.warnings.is_empty());
+        match report.rtol {
+            ToleranceValue::Scalar(v) => assert!(v >= MIN_RTOL),
+            _ => panic!("expected scalar"),
+        }
+    }
+
+    // 19. Hardened mode: rtol clamping + finite check
+    #[test]
+    fn test_validation_tol_hardened_clamping() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-20),
+            ToleranceValue::Scalar(1e-8),
+            2,
+            RuntimeMode::Hardened,
+        )
+        .expect("hardened mode should clamp");
+        assert_eq!(report.mode, RuntimeMode::Hardened);
+        assert!(!report.warnings.is_empty());
+    }
+
+    // 20. Round-trip: reasonable inputs -> no warnings
+    #[test]
+    fn test_validation_tol_roundtrip_no_warnings() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-3),
+            ToleranceValue::Vector(vec![1e-6, 1e-7]),
+            2,
+            RuntimeMode::Strict,
+        )
+        .expect("reasonable inputs");
+        assert!(report.warnings.is_empty());
+        assert_eq!(report.atol, ToleranceValue::Vector(vec![1e-6, 1e-7]));
+    }
+
+    // ── Edge cases ───────────────────────────────────────────────
+
+    // 21. Empty system (n=0)
+    #[test]
+    fn test_validation_tol_empty_system() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-3),
+            ToleranceValue::Scalar(1e-6),
+            0,
+            RuntimeMode::Strict,
+        )
+        .expect("empty system should be valid");
+        assert!(report.warnings.is_empty());
+    }
+
+    // 22. Very large n
+    #[test]
+    fn test_validation_tol_large_n() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-3),
+            ToleranceValue::Scalar(1e-6),
+            10000,
+            RuntimeMode::Strict,
+        )
+        .expect("large n should be valid with scalar atol");
+        assert!(report.warnings.is_empty());
+    }
+
+    // 23. Extreme small tolerance (1e-300)
+    #[test]
+    fn test_validation_tol_extreme_small() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-300),
+            ToleranceValue::Scalar(1e-300),
+            1,
+            RuntimeMode::Strict,
+        )
+        .expect("extreme small should be clamped");
+        assert!(!report.warnings.is_empty());
+    }
+
+    // 24. Extreme large tolerance (1e300)
+    #[test]
+    fn test_validation_tol_extreme_large() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e300),
+            ToleranceValue::Scalar(1e300),
+            1,
+            RuntimeMode::Strict,
+        )
+        .expect("extreme large should be valid");
+        assert!(report.warnings.is_empty());
+    }
+
+    // 25. First step at exact boundary
+    #[test]
+    fn test_validation_first_step_exact_boundary() {
+        let result = validate_first_step(1.0, 0.0, 1.0);
+        assert_eq!(result.unwrap(), 1.0);
+    }
+
+    // 26. Backward integration first step
+    #[test]
+    fn test_validation_first_step_backward() {
+        let result = validate_first_step(0.5, 1.0, 0.0);
+        assert_eq!(result.unwrap(), 0.5);
+    }
+
+    // 27. Vector atol with zero elements
+    #[test]
+    fn test_validation_tol_vector_zero_element() {
+        let report = validate_tol(
+            ToleranceValue::Scalar(1e-3),
+            ToleranceValue::Vector(vec![0.0, 1e-6]),
+            2,
+            RuntimeMode::Strict,
+        )
+        .expect("zero atol element should be valid");
+        assert!(report.warnings.is_empty());
     }
 }

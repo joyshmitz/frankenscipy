@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-02-14",
+  "machine": "ubuntu-dev",
+  "benchmarks": {
+    "fsci-runtime": {
+      "policy_decide_strict": { "p50_ns": 396, "unit": "ns/iter" },
+      "policy_decide_hardened": { "p50_ns": 399, "unit": "ns/iter" },
+      "solver_select_WellConditioned": { "p50_ns": 17, "unit": "ns/iter" },
+      "solver_select_ModerateCondition": { "p50_ns": 17, "unit": "ns/iter" },
+      "solver_select_IllConditioned": { "p50_ns": 14, "unit": "ns/iter" },
+      "solver_select_NearSingular": { "p50_ns": 14, "unit": "ns/iter" },
+      "calibrator_observe_200": { "p50_ns": 775, "unit": "ns/iter" }
+    },
+    "fsci-integrate": {
+      "solve_ivp_exponential_rk45": { "p50_ns": 12959, "unit": "ns/iter" },
+      "solve_ivp_lorenz_rk45": { "p50_ns": 20701, "unit": "ns/iter" },
+      "validate_tol_scalar": { "p50_ns": 14, "unit": "ns/iter" },
+      "validate_tol_vector_100": { "p50_ns": 67, "unit": "ns/iter" }
+    },
+    "fsci-linalg": {
+      "solve_4x4": { "p50_ns": 6645, "unit": "ns/iter" },
+      "solve_16x16": { "p50_ns": 11518, "unit": "ns/iter" },
+      "solve_64x64": { "p50_ns": 54880, "unit": "ns/iter" },
+      "inv_4x4": { "p50_ns": 6647, "unit": "ns/iter" },
+      "inv_16x16": { "p50_ns": 16613, "unit": "ns/iter" },
+      "inv_64x64": { "p50_ns": 141048, "unit": "ns/iter" }
+    }
+  }
+}

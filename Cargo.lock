@@ -3,6 +3,19 @@
 version = 4
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.3.4",
+ "once_cell",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -42,6 +55,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "arc-swap"
+version = "1.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f3647c145568cec02c42054e07bdf9a5a698e15b466fb2341bfc393cd24aa5"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -542,8 +564,10 @@ version = "0.1.0"
 name = "fsci-integrate"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "fsci-runtime",
  "proptest",
+ "serde_json",
 ]
 
 [[package]]
@@ -566,6 +590,7 @@ version = "0.1.0"
 name = "fsci-runtime"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "proptest",
  "serde",
  "serde_json",
@@ -609,6 +634,8 @@ dependencies = [
 name = "ftui-core"
 version = "0.1.1"
 dependencies = [
+ "ahash",
+ "arc-swap",
  "bitflags 2.10.0",
  "crossterm",
  "signal-hook 0.4.3",
@@ -635,6 +662,7 @@ dependencies = [
 name = "ftui-render"
 version = "0.1.1"
 dependencies = [
+ "ahash",
  "bitflags 2.10.0",
  "bumpalo",
  "ftui-core",
@@ -665,6 +693,8 @@ dependencies = [
 name = "ftui-style"
 version = "0.1.1"
 dependencies = [
+ "ahash",
+ "arc-swap",
  "ftui-render",
  "tracing",
 ]
@@ -689,6 +719,7 @@ dependencies = [
 name = "ftui-widgets"
 version = "0.1.1"
 dependencies = [
+ "ahash",
  "bitflags 2.10.0",
  "ftui-core",
  "ftui-layout",

@@ -1669,14 +1669,231 @@ fn probe_oracle_availability(config: &DifferentialOracleConfig) -> OracleStatus 
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Packet Runner Registry (§bd-3jh.19.10)
+// ═══════════════════════════════════════════════════════════════════
+
+/// Known packet families across the FrankenSciPy conformance surface.
+///
+/// Each variant maps to one P2C ticket and its associated fixture format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PacketFamily {
+    /// P2C-001: Integration tolerance validation
+    ValidateTol,
+    /// P2C-002: Dense linear algebra (solve, inv, det, lstsq, pinv)
+    LinalgCore,
+    /// P2C-003: Sparse matrix operations
+    SparseOps,
+    /// P2C-004: FFT routines
+    Fft,
+    /// P2C-005: Special functions
+    Special,
+    /// P2C-006: Optimization routines
+    Optimize,
+    /// P2C-007: Array API compatibility
+    ArrayApi,
+    /// P2C-008: CASP runtime (PolicyController, SolverPortfolio, ConformalCalibrator)
+    RuntimeCasp,
+}
+
+impl PacketFamily {
+    /// All known packet families for enumeration.
+    pub const ALL: [Self; 8] = [
+        Self::ValidateTol,
+        Self::LinalgCore,
+        Self::SparseOps,
+        Self::Fft,
+        Self::Special,
+        Self::Optimize,
+        Self::ArrayApi,
+        Self::RuntimeCasp,
+    ];
+
+    /// Canonical packet ID for this family (e.g., "FSCI-P2C-001").
+    #[must_use]
+    pub const fn packet_id(&self) -> &'static str {
+        match self {
+            Self::ValidateTol => "FSCI-P2C-001",
+            Self::LinalgCore => "FSCI-P2C-002",
+            Self::SparseOps => "FSCI-P2C-003",
+            Self::Fft => "FSCI-P2C-004",
+            Self::Special => "FSCI-P2C-005",
+            Self::Optimize => "FSCI-P2C-006",
+            Self::ArrayApi => "FSCI-P2C-007",
+            Self::RuntimeCasp => "FSCI-P2C-008",
+        }
+    }
+
+    /// Short name used in fixture file naming (e.g., "validate_tol").
+    #[must_use]
+    pub const fn family_name(&self) -> &'static str {
+        match self {
+            Self::ValidateTol => "validate_tol",
+            Self::LinalgCore => "linalg_core",
+            Self::SparseOps => "sparse_ops",
+            Self::Fft => "fft",
+            Self::Special => "special",
+            Self::Optimize => "optimize",
+            Self::ArrayApi => "array_api",
+            Self::RuntimeCasp => "runtime_casp",
+        }
+    }
+
+    /// Detect family from a fixture family string.
+    #[must_use]
+    pub fn from_family_str(s: &str) -> Option<Self> {
+        if s.contains("validate_tol") {
+            Some(Self::ValidateTol)
+        } else if s.contains("linalg") {
+            Some(Self::LinalgCore)
+        } else if s.contains("sparse") {
+            Some(Self::SparseOps)
+        } else if s.contains("fft") {
+            Some(Self::Fft)
+        } else if s.contains("special") {
+            Some(Self::Special)
+        } else if s.contains("optim") {
+            Some(Self::Optimize)
+        } else if s.contains("array_api") {
+            Some(Self::ArrayApi)
+        } else if s.contains("runtime") || s.contains("casp") {
+            Some(Self::RuntimeCasp)
+        } else {
+            None
+        }
+    }
+
+    /// Whether this family has a working runner implementation.
+    #[must_use]
+    pub const fn has_runner(&self) -> bool {
+        matches!(self, Self::ValidateTol | Self::LinalgCore)
+    }
+
+    /// Canonical fixture filename for this family.
+    #[must_use]
+    pub fn fixture_filename(&self) -> String {
+        format!("{}_{}.json", self.packet_id(), self.family_name())
+    }
+}
+
+/// Aggregate parity report merging results from multiple packet families.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateParityReport {
+    /// Timestamp of aggregation.
+    pub generated_unix_ms: u128,
+    /// Per-packet summaries.
+    pub packets: Vec<PacketSummary>,
+    /// Total cases across all packets.
+    pub total_cases: usize,
+    /// Total passed across all packets.
+    pub total_passed: usize,
+    /// Total failed across all packets.
+    pub total_failed: usize,
+}
+
+/// Aggregate individual packet reports into a cross-packet parity report.
+#[must_use]
+pub fn aggregate_packet_reports(reports: &[PacketReport]) -> AggregateParityReport {
+    let packets: Vec<PacketSummary> = reports.iter().map(packet_summary).collect();
+    let total_cases: usize = packets.iter().map(|p| p.total_cases).sum();
+    let total_passed: usize = packets.iter().map(|p| p.passed_cases).sum();
+    let total_failed: usize = packets.iter().map(|p| p.failed_cases).sum();
+
+    AggregateParityReport {
+        generated_unix_ms: now_unix_ms(),
+        packets,
+        total_cases,
+        total_passed,
+        total_failed,
+    }
+}
+
+/// Ensure the canonical artifact directory layout exists for a packet.
+///
+/// Creates: `{fixture_root}/artifacts/{packet_id}/{subdir}` for each
+/// required subdirectory (anchor, contracts, threats).
+pub fn ensure_artifact_layout(
+    config: &HarnessConfig,
+    packet_id: &str,
+) -> Result<PathBuf, HarnessError> {
+    let base = config.artifact_dir_for(packet_id);
+    for subdir in &["anchor", "contracts", "threats"] {
+        let dir = base.join(subdir);
+        if !dir.exists() {
+            fs::create_dir_all(&dir)
+                .map_err(|source| HarnessError::ArtifactIo { path: dir, source })?;
+        }
+    }
+    Ok(base)
+}
+
+/// Discover all fixture files in the fixture root and return their paths
+/// grouped by detected packet family.
+pub fn discover_fixtures(
+    config: &HarnessConfig,
+) -> Result<Vec<(PacketFamily, PathBuf)>, HarnessError> {
+    let mut results = Vec::new();
+    let entries = fs::read_dir(&config.fixture_root).map_err(|source| HarnessError::FixtureIo {
+        path: config.fixture_root.clone(),
+        source,
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|source| HarnessError::FixtureIo {
+            path: config.fixture_root.clone(),
+            source,
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(OsStr::to_str) != Some("json") {
+            continue;
+        }
+        let name = path.file_stem().and_then(OsStr::to_str).unwrap_or_default();
+        // Skip non-fixture files (smoke_case, etc.)
+        if !name.starts_with("FSCI-P2C-") {
+            continue;
+        }
+        // Try to detect family from filename
+        if let Some(family) = PacketFamily::from_family_str(name) {
+            results.push((family, path));
+        }
+    }
+
+    results.sort_by(|a, b| a.0.packet_id().cmp(b.0.packet_id()));
+    Ok(results)
+}
+
+/// Run all discoverable fixtures and produce an aggregate report.
+pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, HarnessError> {
+    let fixtures = discover_fixtures(config)?;
+    let mut reports = Vec::new();
+
+    for (family, path) in &fixtures {
+        if !family.has_runner() {
+            continue;
+        }
+        let fixture_name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
+        let report = match family {
+            PacketFamily::ValidateTol => run_validate_tol_packet(config, fixture_name)?,
+            PacketFamily::LinalgCore => run_linalg_packet(config, fixture_name)?,
+            _ => continue,
+        };
+        reports.push(report);
+    }
+
+    Ok(aggregate_packet_reports(&reports))
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "dashboard")]
     use super::style_for_case_result;
     use super::{
-        ConformanceReport, DifferentialOracleConfig, HarnessConfig, LinalgPacketFixture,
-        OracleStatus, PythonOracleConfig, load_oracle_capture, run_differential_test,
-        run_linalg_packet, run_smoke, run_validate_tol_packet, write_parity_artifacts,
+        AggregateParityReport, ConformanceReport, DifferentialOracleConfig, HarnessConfig,
+        LinalgPacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
+        aggregate_packet_reports, discover_fixtures, ensure_artifact_layout, load_oracle_capture,
+        run_differential_test, run_linalg_packet, run_smoke, run_validate_tol_packet,
+        write_parity_artifacts,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1959,5 +2176,158 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert_eq!(parsed.packet_id, report.packet_id);
         assert_eq!(parsed.pass_count, report.pass_count);
         assert_eq!(parsed.per_case_results.len(), report.per_case_results.len());
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Packet runner registry tests (§bd-3jh.19.10)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn packet_family_all_has_8_entries() {
+        assert_eq!(PacketFamily::ALL.len(), 8);
+    }
+
+    #[test]
+    fn packet_family_ids_are_unique() {
+        let mut ids: Vec<&str> = PacketFamily::ALL.iter().map(|f| f.packet_id()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), PacketFamily::ALL.len());
+    }
+
+    #[test]
+    fn packet_family_names_are_unique() {
+        let mut names: Vec<&str> = PacketFamily::ALL.iter().map(|f| f.family_name()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), PacketFamily::ALL.len());
+    }
+
+    #[test]
+    fn packet_family_from_family_str_roundtrip() {
+        for family in PacketFamily::ALL {
+            let detected = PacketFamily::from_family_str(family.family_name());
+            assert_eq!(
+                detected,
+                Some(family),
+                "from_family_str should roundtrip for {}",
+                family.family_name()
+            );
+        }
+    }
+
+    #[test]
+    fn packet_family_from_family_str_unknown() {
+        assert_eq!(PacketFamily::from_family_str("completely_unknown"), None);
+    }
+
+    #[test]
+    fn discover_fixtures_finds_existing() {
+        let config = HarnessConfig::default_paths();
+        let fixtures = discover_fixtures(&config).expect("discover fixtures");
+        assert!(
+            fixtures.len() >= 2,
+            "should find at least P2C-001 and P2C-002 fixtures"
+        );
+        let families: Vec<PacketFamily> = fixtures.iter().map(|(f, _)| *f).collect();
+        assert!(families.contains(&PacketFamily::ValidateTol));
+        assert!(families.contains(&PacketFamily::LinalgCore));
+    }
+
+    #[test]
+    fn ensure_artifact_layout_creates_dirs() {
+        let unique = format!("fsci-layout-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(root.join("fixtures")).expect("create root");
+        let config = HarnessConfig {
+            oracle_root: PathBuf::new(),
+            fixture_root: root.join("fixtures"),
+            strict_mode: true,
+        };
+
+        let base = ensure_artifact_layout(&config, "P2C-008").expect("create layout");
+        assert!(base.join("anchor").exists());
+        assert!(base.join("contracts").exists());
+        assert!(base.join("threats").exists());
+
+        // Idempotent: calling again should succeed
+        ensure_artifact_layout(&config, "P2C-008").expect("idempotent layout");
+    }
+
+    #[test]
+    fn aggregate_report_sums_correctly() {
+        let make_cases = |n: usize, pass: bool| -> Vec<super::CaseResult> {
+            (0..n)
+                .map(|i| super::CaseResult {
+                    case_id: format!("case_{i}"),
+                    passed: pass,
+                    message: String::new(),
+                })
+                .collect()
+        };
+
+        let mut cases_1 = make_cases(10, true);
+        cases_1.extend(make_cases(2, false));
+        let mut cases_2 = make_cases(20, true);
+        cases_2.extend(make_cases(1, false));
+
+        let reports = vec![
+            super::PacketReport {
+                packet_id: "FSCI-P2C-001".to_owned(),
+                family: "validate_tol".to_owned(),
+                case_results: cases_1,
+                passed_cases: 10,
+                failed_cases: 2,
+                generated_unix_ms: 0,
+            },
+            super::PacketReport {
+                packet_id: "FSCI-P2C-002".to_owned(),
+                family: "linalg_core".to_owned(),
+                case_results: cases_2,
+                passed_cases: 20,
+                failed_cases: 1,
+                generated_unix_ms: 0,
+            },
+        ];
+
+        let agg = aggregate_packet_reports(&reports);
+        assert_eq!(agg.total_cases, 33);
+        assert_eq!(agg.total_passed, 30);
+        assert_eq!(agg.total_failed, 3);
+        assert_eq!(agg.packets.len(), 2);
+    }
+
+    #[test]
+    fn aggregate_report_serializes() {
+        let agg = AggregateParityReport {
+            generated_unix_ms: 1234567890,
+            packets: vec![],
+            total_cases: 0,
+            total_passed: 0,
+            total_failed: 0,
+        };
+        let json = serde_json::to_string(&agg).expect("serialize");
+        let parsed: AggregateParityReport = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.generated_unix_ms, 1234567890);
+    }
+
+    #[test]
+    fn packet_family_fixture_filename() {
+        assert_eq!(
+            PacketFamily::ValidateTol.fixture_filename(),
+            "FSCI-P2C-001_validate_tol.json"
+        );
+        assert_eq!(
+            PacketFamily::RuntimeCasp.fixture_filename(),
+            "FSCI-P2C-008_runtime_casp.json"
+        );
+    }
+
+    #[test]
+    fn packet_family_has_runner() {
+        assert!(PacketFamily::ValidateTol.has_runner());
+        assert!(PacketFamily::LinalgCore.has_runner());
+        assert!(!PacketFamily::SparseOps.has_runner());
+        assert!(!PacketFamily::RuntimeCasp.has_runner());
     }
 }

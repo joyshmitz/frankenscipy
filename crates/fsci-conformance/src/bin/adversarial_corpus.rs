@@ -83,11 +83,12 @@ fn payload_for(packet_family: &str, class: &str, index: usize) -> Value {
             "atol": [special_float_token(index + 1), 1e-12_f64, 0.0_f64],
             "n": (index % 7) + 1
         }),
-        ("P2C-001", "extreme_dimensions") => json!({
-            "n": [0_u64, 1_u64, 2_u64, 1024_u64, 65535_u64][index % 5],
-            "vector_len": [0_u64, 1_u64, 3_u64, 32_u64, 4096_u64][index % 5],
-            "mode_hint": if index % 2 == 0 { "strict" } else { "hardened" }
-        }),
+        ("P2C-001", "extreme_dimensions") => {
+            let n = [0_u64, 1, 2, 1024, 65535][index % 5];
+            let vector_len = [0_u64, 1, 3, 32, 4096][index % 5];
+            let mode_hint = if index.is_multiple_of(2) { "strict" } else { "hardened" };
+            json!({ "n": n, "vector_len": vector_len, "mode_hint": mode_hint })
+        }
         ("P2C-001", "empty_inputs") => json!({
             "rtol": 1e-6_f64,
             "atol": [],
@@ -104,42 +105,38 @@ fn payload_for(packet_family: &str, class: &str, index: usize) -> Value {
             "matrix": [["NaN", 1.0_f64], [2.0_f64, special_float_token(index)]],
             "rhs": [1.0_f64, special_float_token(index + 1)]
         }),
-        ("P2C-002", "extreme_dimensions") => json!({
-            "rows": [0_u64, 1_u64, 2_u64, 512_u64, 4096_u64][index % 5],
-            "cols": [0_u64, 1_u64, 2_u64, 512_u64, 4096_u64][(index + 2) % 5],
-            "bandwidth_hint": [0_u64, 1_u64, 2_u64, 128_u64][index % 4]
-        }),
-        ("P2C-002", "empty_inputs") => json!({
-            "matrix": [],
-            "rhs": [],
-            "operation_hint": ["solve", "inv", "det", "lstsq"][index % 4]
-        }),
-        ("P2C-002", "max_size") => json!({
-            "rows": 10_000_u64,
-            "cols": 10_000_u64,
-            "nnz_hint": 100_000_000_u64,
-            "value_scale": [1e300_f64, 1e-300_f64][index % 2]
-        }),
+        ("P2C-002", "extreme_dimensions") => {
+            let rows = [0_u64, 1, 2, 512, 4096][index % 5];
+            let cols = [0_u64, 1, 2, 512, 4096][(index + 2) % 5];
+            let bw = [0_u64, 1, 2, 128][index % 4];
+            json!({ "rows": rows, "cols": cols, "bandwidth_hint": bw })
+        }
+        ("P2C-002", "empty_inputs") => {
+            let op = ["solve", "inv", "det", "lstsq"][index % 4];
+            json!({ "matrix": [], "rhs": [], "operation_hint": op })
+        }
+        ("P2C-002", "max_size") => {
+            let scale = [1e300_f64, 1e-300][index % 2];
+            json!({ "rows": 10_000_u64, "cols": 10_000_u64, "nnz_hint": 100_000_000_u64, "value_scale": scale })
+        }
         ("P2C-003", "nan_inf") => json!({
             "objective_value": special_float_token(index),
             "gradient_value": special_float_token(index + 1),
             "x0": [0.0_f64, 1.0_f64, special_float_token(index + 2)]
         }),
-        ("P2C-003", "extreme_dimensions") => json!({
-            "parameter_count": [0_u64, 1_u64, 2_u64, 128_u64, 8192_u64][index % 5],
-            "iteration_budget": [0_u64, 1_u64, 10_u64, 100_u64, 1_000_000_u64][index % 5]
-        }),
-        ("P2C-003", "empty_inputs") => json!({
-            "objective": "empty",
-            "bounds": [],
-            "constraints": [],
-            "method": ["BFGS", "CG", "Powell", "brentq", "bisect"][index % 5]
-        }),
-        ("P2C-003", "max_size") => json!({
-            "parameter_count": 1_000_000_u64,
-            "value_scale": [1e308_f64, 1e-308_f64][index % 2],
-            "storage_hint": "chunked"
-        }),
+        ("P2C-003", "extreme_dimensions") => {
+            let pc = [0_u64, 1, 2, 128, 8192][index % 5];
+            let ib = [0_u64, 1, 10, 100, 1_000_000][index % 5];
+            json!({ "parameter_count": pc, "iteration_budget": ib })
+        }
+        ("P2C-003", "empty_inputs") => {
+            let method = ["BFGS", "CG", "Powell", "brentq", "bisect"][index % 5];
+            json!({ "objective": "empty", "bounds": [], "constraints": [], "method": method })
+        }
+        ("P2C-003", "max_size") => {
+            let scale = [1e308_f64, 1e-308][index % 2];
+            json!({ "parameter_count": 1_000_000_u64, "value_scale": scale, "storage_hint": "chunked" })
+        }
         _ => json!({"unsupported": true}),
     }
 }

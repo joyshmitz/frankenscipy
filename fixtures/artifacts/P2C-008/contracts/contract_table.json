@@ -1,0 +1,289 @@
+{
+  "schema_version": 1,
+  "packet_id": "FSCI-P2C-008",
+  "domain": "conformance",
+  "generated_at": "2026-02-14T21:52:00Z",
+  "contracts": [
+    {
+      "function_name": "fsci_runtime::PolicyController::new",
+      "inputs": [
+        {
+          "name": "mode",
+          "type_desc": "RuntimeMode (Strict | Hardened)",
+          "required": true,
+          "constraints": "Must be a valid RuntimeMode variant."
+        },
+        {
+          "name": "ledger_capacity",
+          "type_desc": "usize",
+          "required": true,
+          "constraints": "Minimum effective capacity is 1 (enforced via .max(1))."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "controller",
+          "type_desc": "PolicyController",
+          "semantics": "Fresh controller with empty evidence ledger and specified mode."
+        }
+      ],
+      "error_conditions": [],
+      "tolerance_policy": {
+        "comparison_mode": "not_applicable"
+      },
+      "strict_mode_behavior": "Creates controller with Strict loss matrix. Ledger starts empty.",
+      "hardened_mode_behavior": "Creates controller with Hardened loss matrix. Ledger starts empty.",
+      "invariants": [
+        "ledger().len() == 0 after construction",
+        "mode() == specified mode",
+        "ledger().capacity() >= 1"
+      ]
+    },
+    {
+      "function_name": "fsci_runtime::PolicyController::decide",
+      "inputs": [
+        {
+          "name": "signals",
+          "type_desc": "DecisionSignals { condition_number_log10: f64, metadata_incompatibility_score: f64, input_anomaly_score: f64 }",
+          "required": true,
+          "constraints": "All signal components are clamped to [0, 1] internally (condition via /16.0). No finiteness check in Strict mode."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "decision",
+          "type_desc": "PolicyDecision { mode, action, top_state, posterior, expected_losses, reason }",
+          "semantics": "Optimal action via expected-loss minimization over asymmetric loss matrix."
+        }
+      ],
+      "error_conditions": [],
+      "tolerance_policy": {
+        "comparison_mode": "mixed",
+        "default_atol": 1e-9,
+        "default_rtol": 0.0,
+        "notes": "Posterior must sum to 1.0 within 1e-9 absolute tolerance. Tie-breaking at 1e-12 threshold."
+      },
+      "strict_mode_behavior": "Deterministic: same signals always produce same action. Uses Strict loss matrix [0,65,200; 8,4,80; 40,25,1]. Tie-breaks toward safer action (FailClosed > FullValidate > Allow).",
+      "hardened_mode_behavior": "Deterministic: same signals always produce same action. Uses Hardened loss matrix [0,50,180; 5,3,60; 55,30,1]. Tie-breaks toward safer action. Future: should add signal finiteness validation.",
+      "invariants": [
+        "posterior.iter().sum() == 1.0 within 1e-9",
+        "All posterior elements >= 0.0",
+        "Decision is deterministic given same signals and mode",
+        "Ledger length increases by 1 (or stays at capacity if full)",
+        "action == argmin(expected_losses) with tie-break to higher index"
+      ]
+    },
+    {
+      "function_name": "fsci_runtime::PolicyEvidenceLedger::new",
+      "inputs": [
+        {
+          "name": "capacity",
+          "type_desc": "usize",
+          "required": true,
+          "constraints": "Effective minimum is 1 (enforced via .max(1))."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "ledger",
+          "type_desc": "PolicyEvidenceLedger",
+          "semantics": "Empty bounded FIFO ledger for decision evidence."
+        }
+      ],
+      "error_conditions": [],
+      "tolerance_policy": {
+        "comparison_mode": "not_applicable"
+      },
+      "strict_mode_behavior": "Creates empty ledger with specified capacity. Mode-independent construction.",
+      "hardened_mode_behavior": "Creates empty ledger with specified capacity. Mode-independent construction.",
+      "invariants": [
+        "len() == 0 after construction",
+        "is_empty() == true after construction",
+        "capacity() >= 1"
+      ]
+    },
+    {
+      "function_name": "fsci_runtime::PolicyEvidenceLedger::record",
+      "inputs": [
+        {
+          "name": "entry",
+          "type_desc": "DecisionEvidenceEntry",
+          "required": true,
+          "constraints": "Must be a valid evidence entry with all required fields."
+        }
+      ],
+      "outputs": [],
+      "error_conditions": [],
+      "tolerance_policy": {
+        "comparison_mode": "not_applicable"
+      },
+      "strict_mode_behavior": "Appends entry. If at capacity, evicts oldest entry (FIFO front) before appending.",
+      "hardened_mode_behavior": "Same as Strict. Bounded response time: O(1) amortized for VecDeque pop_front + push_back.",
+      "invariants": [
+        "len() <= capacity() always",
+        "After record(): latest() returns the just-recorded entry",
+        "FIFO ordering preserved: entries at front are oldest",
+        "Eviction removes oldest entry, not newest"
+      ]
+    },
+    {
+      "function_name": "fsci_runtime::DecisionSignals::new",
+      "inputs": [
+        {
+          "name": "condition_number_log10",
+          "type_desc": "f64",
+          "required": true,
+          "constraints": "Semantically [0, +inf). Internally clamped to [0, 1] via /16.0."
+        },
+        {
+          "name": "metadata_incompatibility_score",
+          "type_desc": "f64",
+          "required": true,
+          "constraints": "Semantically [0, 1]. Internally clamped to [0, 1]."
+        },
+        {
+          "name": "input_anomaly_score",
+          "type_desc": "f64",
+          "required": true,
+          "constraints": "Semantically [0, 1]. Internally clamped to [0, 1]."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "signals",
+          "type_desc": "DecisionSignals",
+          "semantics": "Immutable signal triple for policy decision."
+        }
+      ],
+      "error_conditions": [],
+      "tolerance_policy": {
+        "comparison_mode": "not_applicable"
+      },
+      "strict_mode_behavior": "Stores raw signal values. Clamping happens during logit computation, not construction.",
+      "hardened_mode_behavior": "Same as Strict. Future enhancement: reject NaN/Inf signals at construction time.",
+      "invariants": [
+        "Signal values are stored as-provided (no mutation at construction)"
+      ]
+    },
+    {
+      "function_name": "fsci_runtime::SolverPortfolio::select_action",
+      "inputs": [
+        {
+          "name": "condition",
+          "type_desc": "&MatrixConditionState (WellConditioned | ModerateCondition | IllConditioned | NearSingular)",
+          "required": true,
+          "constraints": "Must be one of the four valid condition states."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "action",
+          "type_desc": "SolverAction",
+          "semantics": "Optimal solver action from {DirectLU, PivotedQR, SVDFallback}."
+        },
+        {
+          "name": "posterior",
+          "type_desc": "[f64; 4]",
+          "semantics": "Posterior probability over condition states (hard-classified, one-hot)."
+        },
+        {
+          "name": "expected_losses",
+          "type_desc": "[f64; 5]",
+          "semantics": "Expected loss per solver action."
+        },
+        {
+          "name": "chosen_loss",
+          "type_desc": "f64",
+          "semantics": "Expected loss of the chosen action."
+        }
+      ],
+      "error_conditions": [],
+      "tolerance_policy": {
+        "comparison_mode": "exact",
+        "notes": "Condition state is hard-classified (one-hot posterior), so expected losses are exact loss matrix lookups."
+      },
+      "backend_semantics": "Only general solvers (LU, QR, SVD) participate in argmin. DiagonalFastPath and TriangularFastPath are caller-selected based on structural detection.",
+      "strict_mode_behavior": "WellConditioned->DirectLU, Moderate->PivotedQR, IllConditioned->SVDFallback, NearSingular->SVDFallback. Conformal calibrator may override to SVDFallback if miscoverage > alpha + epsilon.",
+      "hardened_mode_behavior": "Same solver selection logic as Strict. Mode stored but not currently used in selection (future: mode-dependent loss matrix).",
+      "invariants": [
+        "Selection is deterministic for same condition state and calibrator state",
+        "WellConditioned always selects DirectLU (loss 1 < 3 < 15)",
+        "ModerateCondition always selects PivotedQR (loss 1 < 5 < 10)",
+        "IllConditioned always selects SVDFallback (loss 1 < 8 < 40)",
+        "NearSingular always selects SVDFallback (loss 1 < 45 < 120)",
+        "Conformal fallback overrides to SVDFallback when should_fallback() is true"
+      ]
+    },
+    {
+      "function_name": "fsci_runtime::SolverPortfolio::record_evidence",
+      "inputs": [
+        {
+          "name": "entry",
+          "type_desc": "SolverEvidenceEntry",
+          "required": true,
+          "constraints": "Must have valid component, matrix_shape, and action fields."
+        }
+      ],
+      "outputs": [],
+      "error_conditions": [],
+      "tolerance_policy": {
+        "comparison_mode": "not_applicable"
+      },
+      "strict_mode_behavior": "Appends entry. If at capacity, removes oldest entry (Vec::remove(0), O(n)).",
+      "hardened_mode_behavior": "Same as Strict. Note: Vec::remove(0) is O(n); for high-throughput, consider VecDeque.",
+      "invariants": [
+        "evidence_len() <= evidence_capacity always",
+        "Most recent entry is at the end of the evidence vector"
+      ],
+      "performance_sentinel": "O(n) worst case per record due to Vec::remove(0). Consider VecDeque migration for capacity > 1000."
+    },
+    {
+      "function_name": "fsci_runtime::ConformalCalibrator::observe",
+      "inputs": [
+        {
+          "name": "score",
+          "type_desc": "f64",
+          "required": true,
+          "constraints": "Nonconformity score (e.g., backward error). Non-negative expected but not enforced."
+        }
+      ],
+      "outputs": [],
+      "error_conditions": [],
+      "tolerance_policy": {
+        "comparison_mode": "not_applicable"
+      },
+      "strict_mode_behavior": "Records score in bounded VecDeque. Evicts oldest if at capacity, adjusting violation count. Increments total_predictions.",
+      "hardened_mode_behavior": "Same as Strict.",
+      "invariants": [
+        "scores.len() <= capacity after observe()",
+        "total_predictions monotonically increases",
+        "coverage_violations uses saturating subtraction on eviction (never underflows)",
+        "Violation threshold comparison: score > violation_threshold (strict >)"
+      ]
+    },
+    {
+      "function_name": "fsci_runtime::ConformalCalibrator::should_fallback",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "fallback",
+          "type_desc": "bool",
+          "semantics": "True if empirical miscoverage exceeds alpha + epsilon, triggering SVD fallback."
+        }
+      ],
+      "error_conditions": [],
+      "tolerance_policy": {
+        "comparison_mode": "absolute",
+        "default_atol": 0.02,
+        "notes": "Epsilon band is 0.02. Fallback triggers when empirical_miscoverage > alpha + 0.02."
+      },
+      "strict_mode_behavior": "Returns false if fewer than 10 observations. Otherwise, empirical_miscoverage = violations / window_size > alpha + 0.02.",
+      "hardened_mode_behavior": "Same as Strict.",
+      "invariants": [
+        "Always returns false when scores.len() < 10",
+        "Monotone: adding more violation scores can only increase or maintain miscoverage rate",
+        "Alpha is clamped to [0.001, 0.5] at construction"
+      ]
+    }
+  ]
+}
