@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -438,6 +439,100 @@ fn threat_matrix_rejects_additional_properties() {
     assert!(
         errors.iter().any(|e| e.contains("unexpected_field")),
         "should reject additional properties: {errors:?}"
+    );
+}
+
+#[test]
+fn p2c001_threat_matrix_artifact_is_schema_aligned_and_complete() {
+    let schema = load_schema("threat_matrix.schema.json");
+    let artifact_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/artifacts/P2C-001/threats/threat_matrix.json");
+
+    let raw = fs::read_to_string(&artifact_path).unwrap_or_else(|error| {
+        panic!(
+            "failed to read P2C-001 threat artifact {}: {error}",
+            artifact_path.display()
+        );
+    });
+    let artifact: Value = serde_json::from_str(&raw).unwrap_or_else(|error| {
+        panic!(
+            "failed to parse P2C-001 threat artifact {}: {error}",
+            artifact_path.display()
+        );
+    });
+
+    let errors = validate_sample_against_schema(&schema, &artifact, "p2c001_threat_matrix");
+    assert!(
+        errors.is_empty(),
+        "P2C-001 threat artifact violates schema contract: {errors:?}"
+    );
+
+    assert_eq!(artifact["packet_id"], "FSCI-P2C-001");
+    assert_eq!(artifact["scope"], "packet");
+
+    let threats = artifact["threats"]
+        .as_array()
+        .expect("threats must be an array");
+    assert!(
+        threats.len() >= 8,
+        "threat matrix must include >=8 entries, found {}",
+        threats.len()
+    );
+
+    let mut categories = BTreeSet::new();
+    for threat in threats {
+        let category = threat["category"]
+            .as_str()
+            .expect("threat.category must be a string");
+        categories.insert(category.to_owned());
+        assert!(
+            threat["severity"].is_string(),
+            "threat.severity must be present"
+        );
+        assert!(
+            threat["likelihood"].is_string(),
+            "threat.likelihood must be present"
+        );
+        assert!(
+            threat["mitigation"]
+                .as_str()
+                .is_some_and(|value| value.len() >= 5),
+            "threat.mitigation must be non-trivial"
+        );
+        assert!(
+            threat["test_reference"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "threat.test_reference must be present"
+        );
+    }
+
+    let expected_categories = BTreeSet::from([
+        String::from("compatibility_drift"),
+        String::from("malformed_input"),
+        String::from("numerical_instability"),
+        String::from("resource_exhaustion"),
+    ]);
+    assert_eq!(
+        categories, expected_categories,
+        "threat matrix must cover all four required categories"
+    );
+
+    assert_eq!(
+        artifact["compatibility_envelope"]["scipy_version_min"],
+        "1.12.0"
+    );
+    assert_eq!(
+        artifact["compatibility_envelope"]["scipy_version_max"],
+        "1.17.0"
+    );
+
+    let policies = artifact["fail_closed_policies"]
+        .as_array()
+        .expect("fail_closed_policies must be an array");
+    assert!(
+        policies.len() >= 4,
+        "fail_closed_policies should include explicit handling for unknown classes"
     );
 }
 

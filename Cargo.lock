@@ -574,6 +574,11 @@ dependencies = [
 [[package]]
 name = "fsci-sparse"
 version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+ "nalgebra",
+ "thiserror",
+]
 
 [[package]]
 name = "fsci-special"

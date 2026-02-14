@@ -1,0 +1,58 @@
+[package]
+name = "frankenscipy-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1.4.2", features = ["derive"] }
+fsci-integrate = { path = "../crates/fsci-integrate" }
+fsci-linalg = { path = "../crates/fsci-linalg" }
+fsci-opt = { path = "../crates/fsci-opt" }
+fsci-runtime = { path = "../crates/fsci-runtime" }
+libfuzzer-sys = "0.4.10"
+
+[[bin]]
+name = "p2c001_validate_tol"
+path = "fuzz_targets/p2c001_validate_tol.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c001_step_bounds"
+path = "fuzz_targets/p2c001_step_bounds.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c002_solve"
+path = "fuzz_targets/p2c002_solve.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c002_factorizations"
+path = "fuzz_targets/p2c002_factorizations.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c003_add"
+path = "fuzz_targets/p2c003_add.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c003_add_properties"
+path = "fuzz_targets/p2c003_add_properties.rs"
+test = false
+doc = false
+bench = false

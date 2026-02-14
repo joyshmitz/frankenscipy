@@ -11,6 +11,9 @@ dashboard = ["dep:ftui"]
 name = "conformance_dashboard"
 required-features = ["dashboard"]
 
+[[bin]]
+name = "e2e_orchestrator"
+
 [lints]
 workspace = true
 

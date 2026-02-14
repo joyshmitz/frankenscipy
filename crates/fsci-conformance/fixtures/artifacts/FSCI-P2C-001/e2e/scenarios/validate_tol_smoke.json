@@ -1,0 +1,16 @@
+{
+  "scenario_id": "fsci-p2c-001-validate-tol-smoke",
+  "seed": 1001,
+  "steps": [
+    {
+      "step_name": "ensure_parity_report_present",
+      "kind": "check_path_exists",
+      "path": "FSCI-P2C-001/parity_report.json"
+    },
+    {
+      "step_name": "run_validate_tol_differential_fixture",
+      "kind": "run_differential_fixture",
+      "fixture": "FSCI-P2C-001_validate_tol.json"
+    }
+  ]
+}

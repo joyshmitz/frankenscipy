@@ -25,3 +25,20 @@ Optional oracle artifacts:
 
 - `oracle_capture.json` when SciPy capture succeeds.
 - `oracle_capture.error.txt` when oracle capture is configured as optional and fails.
+
+## E2E Scenarios
+
+Packet-aware E2E scenarios are discovered from:
+
+- `artifacts/FSCI-P2C-*/e2e/scenarios/*.json`
+
+Each run writes forensic logs to:
+
+- `artifacts/FSCI-P2C-*/e2e/runs/{run_id}/{scenario_id}/events.jsonl`
+- `artifacts/FSCI-P2C-*/e2e/runs/{run_id}/{scenario_id}/summary.json`
+
+Run the orchestrator:
+
+```bash
+cargo run -p fsci-conformance --bin e2e_orchestrator -- --packet FSCI-P2C-001
+```

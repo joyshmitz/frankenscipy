@@ -3,4 +3,10 @@ name = "fsci-sparse"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
+fsci-runtime = { workspace = true }
+nalgebra = { version = "0.33.2", features = ["sparse"] }
+thiserror = { workspace = true }

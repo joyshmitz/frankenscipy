@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod dashboard;
+pub mod e2e;
 
 use asupersync::raptorq::systematic::SystematicEncoder;
 use blake3::hash;
