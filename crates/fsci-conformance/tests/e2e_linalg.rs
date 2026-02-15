@@ -10,16 +10,14 @@
 //! Each scenario emits a forensic log bundle to
 //! `fixtures/artifacts/FSCI-P2C-002/e2e/`.
 
-use blake3::hash as blake3_hash;
 use fsci_linalg::{
-    InvOptions, LinalgError, LstsqOptions, PinvOptions, SolveOptions, SolveResult,
-    TriangularSolveOptions, det, inv, lstsq, pinv, solve, solve_triangular,
+    InvOptions, LinalgError, LstsqOptions, PinvOptions, SolveOptions, det, inv, lstsq, pinv, solve,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::time::Instant;
 
 // ───────────────────────── Forensic log types ─────────────────────────
 
@@ -78,15 +76,8 @@ struct OverallResult {
 
 // ───────────────────────── Helpers ─────────────────────────
 
-fn now_unix_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis())
-}
-
 fn e2e_output_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/artifacts/FSCI-P2C-002/e2e")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/artifacts/FSCI-P2C-002/e2e")
 }
 
 fn make_env() -> EnvironmentInfo {
@@ -101,9 +92,7 @@ fn make_env() -> EnvironmentInfo {
 }
 
 fn replay_cmd(scenario_id: &str) -> String {
-    format!(
-        "cargo test -p fsci-conformance --test e2e_linalg -- {scenario_id} --nocapture"
-    )
+    format!("cargo test -p fsci-conformance --test e2e_linalg -- {scenario_id} --nocapture")
 }
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
@@ -112,8 +101,7 @@ fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
         .unwrap_or_else(|e| panic!("failed to create e2e dir {}: {e}", dir.display()));
     let path = dir.join(format!("{scenario_id}.json"));
     let json = serde_json::to_vec_pretty(bundle).expect("serialize bundle");
-    fs::write(&path, &json)
-        .unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
+    fs::write(&path, &json).unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
 }
 
 fn mat_mul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
@@ -289,10 +277,13 @@ fn e2e_p2c002_01_full_solve_pipeline() {
         "3x3 general, b=[10,15,16]",
         "strict",
         || {
-            let res = solve(&a, &b, SolveOptions::default())
-                .map_err(|e| format!("solve failed: {e}"))?;
+            let res =
+                solve(&a, &b, SolveOptions::default()).map_err(|e| format!("solve failed: {e}"))?;
             solution = res.x.clone();
-            Ok(format!("x={solution:?}, backward_err={:?}", res.backward_error))
+            Ok(format!(
+                "x={solution:?}, backward_err={:?}",
+                res.backward_error
+            ))
         },
     );
 
@@ -347,8 +338,8 @@ fn e2e_p2c002_02_decomposition_chain() {
     // Step 1: Solve
     let mut solution = Vec::new();
     r.record_step("solve", "solve(A, b)", "3x3 general", "strict", || {
-        let res = solve(&a, &b, SolveOptions::default())
-            .map_err(|e| format!("solve failed: {e}"))?;
+        let res =
+            solve(&a, &b, SolveOptions::default()).map_err(|e| format!("solve failed: {e}"))?;
         solution = res.x.clone();
         let warning = res.warning.is_some();
         Ok(format!("x={solution:?}, ill_conditioned={warning}"))
@@ -373,8 +364,7 @@ fn e2e_p2c002_02_decomposition_chain() {
     // Step 3: Compute inverse
     let mut inverse = Vec::new();
     r.record_step("compute_inv", "inv(A)", "3x3 general", "strict", || {
-        let res =
-            inv(&a, InvOptions::default()).map_err(|e| format!("inv failed: {e}"))?;
+        let res = inv(&a, InvOptions::default()).map_err(|e| format!("inv failed: {e}"))?;
         inverse = res.inverse.clone();
         Ok(format!("inv computed, warning={:?}", res.warning.is_some()))
     });
@@ -392,9 +382,7 @@ fn e2e_p2c002_02_decomposition_chain() {
             if max_diff < 1e-10 {
                 Ok(format!("A @ inv(A) = I verified, max_diff={max_diff:.2e}"))
             } else {
-                Err(format!(
-                    "A @ inv(A) != I, max_diff={max_diff:.2e}"
-                ))
+                Err(format!("A @ inv(A) != I, max_diff={max_diff:.2e}"))
             }
         },
     );
@@ -424,8 +412,8 @@ fn e2e_p2c002_03_lstsq_workflow() {
         "4x2 overdetermined",
         "strict",
         || {
-            let res = lstsq(&a, &b, LstsqOptions::default())
-                .map_err(|e| format!("lstsq failed: {e}"))?;
+            let res =
+                lstsq(&a, &b, LstsqOptions::default()).map_err(|e| format!("lstsq failed: {e}"))?;
             lstsq_x = res.x.clone();
             Ok(format!(
                 "x={:?}, rank={}, residuals={:?}, sv={:?}",
@@ -442,8 +430,7 @@ fn e2e_p2c002_03_lstsq_workflow() {
         "strict",
         || {
             let ax = mat_vec_mul(&a, &lstsq_x);
-            let residual_norm: f64 =
-                ax.iter().zip(&b).map(|(ai, bi)| (ai - bi).powi(2)).sum();
+            let residual_norm: f64 = ax.iter().zip(&b).map(|(ai, bi)| (ai - bi).powi(2)).sum();
             Ok(format!("residual_norm={residual_norm:.6e}"))
         },
     );
@@ -455,8 +442,8 @@ fn e2e_p2c002_03_lstsq_workflow() {
         "cross-check lstsq vs pinv",
         "strict",
         || {
-            let pinv_res = pinv(&a, PinvOptions::default())
-                .map_err(|e| format!("pinv failed: {e}"))?;
+            let pinv_res =
+                pinv(&a, PinvOptions::default()).map_err(|e| format!("pinv failed: {e}"))?;
             // pinv(A) is 2x4, b is 4x1 -> result is 2x1
             let pinv_x: Vec<f64> = pinv_res
                 .pseudo_inverse
@@ -465,13 +452,9 @@ fn e2e_p2c002_03_lstsq_workflow() {
                 .collect();
             let max_diff = max_abs_diff_vec(&pinv_x, &lstsq_x);
             if max_diff < 1e-8 {
-                Ok(format!(
-                    "pinv(A)@b matches lstsq, max_diff={max_diff:.2e}"
-                ))
+                Ok(format!("pinv(A)@b matches lstsq, max_diff={max_diff:.2e}"))
             } else {
-                Err(format!(
-                    "pinv(A)@b != lstsq, max_diff={max_diff:.2e}"
-                ))
+                Err(format!("pinv(A)@b != lstsq, max_diff={max_diff:.2e}"))
             }
         },
     );
@@ -513,14 +496,9 @@ fn e2e_p2c002_04_multi_rhs_solve() {
                 let ax = mat_vec_mul(a_ref, &res.x);
                 let max_diff = max_abs_diff_vec(&ax, &b_clone);
                 if max_diff < 1e-10 {
-                    Ok(format!(
-                        "x={:?}, residual={max_diff:.2e}",
-                        res.x
-                    ))
+                    Ok(format!("x={:?}, residual={max_diff:.2e}", res.x))
                 } else {
-                    Err(format!(
-                        "residual too large: {max_diff:.2e}"
-                    ))
+                    Err(format!("residual too large: {max_diff:.2e}"))
                 }
             },
         );
@@ -547,14 +525,12 @@ fn e2e_p2c002_05_singular_matrix_recovery() {
         "solve(A_singular, b)",
         "2x2 singular",
         "strict",
-        || {
-            match solve(&a, &b, SolveOptions::default()) {
-                Err(LinalgError::SingularMatrix) => {
-                    Ok("correctly caught SingularMatrix error".to_owned())
-                }
-                Err(e) => Err(format!("unexpected error: {e}")),
-                Ok(_) => Err("solve should have failed on singular matrix".to_owned()),
+        || match solve(&a, &b, SolveOptions::default()) {
+            Err(LinalgError::SingularMatrix) => {
+                Ok("correctly caught SingularMatrix error".to_owned())
             }
+            Err(e) => Err(format!("unexpected error: {e}")),
+            Ok(_) => Err("solve should have failed on singular matrix".to_owned()),
         },
     );
 
@@ -574,10 +550,7 @@ fn e2e_p2c002_05_singular_matrix_recovery() {
                     res.rank
                 ));
             }
-            Ok(format!(
-                "lstsq succeeded: x={:?}, rank={}",
-                res.x, res.rank
-            ))
+            Ok(format!("lstsq succeeded: x={:?}, rank={}", res.x, res.rank))
         },
     );
 
@@ -602,9 +575,7 @@ fn e2e_p2c002_05_singular_matrix_recovery() {
                     "solution lies in column space: Ax={ax:?}, ratio={ratio:.6}"
                 ))
             } else {
-                Err(format!(
-                    "solution not in column space: Ax={ax:?}"
-                ))
+                Err(format!("solution not in column space: Ax={ax:?}"))
             }
         },
     );
@@ -629,13 +600,10 @@ fn e2e_p2c002_06_ill_conditioning_detection() {
         "2x2 ill-conditioned (rcond ~ 1e-13)",
         "strict",
         || {
-            let res = solve(&a, &b, SolveOptions::default())
-                .map_err(|e| format!("solve failed: {e}"))?;
+            let res =
+                solve(&a, &b, SolveOptions::default()).map_err(|e| format!("solve failed: {e}"))?;
             if res.warning.is_some() {
-                Ok(format!(
-                    "ill-conditioning warning detected: x={:?}",
-                    res.x
-                ))
+                Ok(format!("ill-conditioning warning detected: x={:?}", res.x))
             } else {
                 Err("expected ill-conditioning warning but got none".to_owned())
             }
@@ -653,7 +621,10 @@ fn e2e_p2c002_06_ill_conditioning_detection() {
             let expected = vec![1.0, 1.0];
             let max_diff = max_abs_diff_vec(&res.x, &expected);
             if max_diff < 1e-6 {
-                Ok(format!("solution accurate: x={:?}, diff={max_diff:.2e}", res.x))
+                Ok(format!(
+                    "solution accurate: x={:?}, diff={max_diff:.2e}",
+                    res.x
+                ))
             } else {
                 Err(format!(
                     "solution inaccurate: x={:?}, expected={expected:?}, diff={max_diff:.2e}",
@@ -707,10 +678,7 @@ fn e2e_p2c002_07_mode_switch() {
                 ..SolveOptions::default()
             };
             match solve(&a, &b, opts) {
-                Ok(res) => Ok(format!(
-                    "strict accepted NaN input: x={:?}",
-                    res.x
-                )),
+                Ok(res) => Ok(format!("strict accepted NaN input: x={:?}", res.x)),
                 Err(e) => Err(format!("strict unexpectedly rejected: {e}")),
             }
         },
@@ -775,12 +743,18 @@ fn e2e_p2c002_08_solve_vs_inv() {
     let mut solve_x = Vec::new();
     let mut inv_x = Vec::new();
 
-    r.record_step("solve_direct", "solve(A, b)", "3x3 SPD-like", "strict", || {
-        let res = solve(&a, &b, SolveOptions::default())
-            .map_err(|e| format!("solve failed: {e}"))?;
-        solve_x = res.x.clone();
-        Ok(format!("solve_x={solve_x:?}"))
-    });
+    r.record_step(
+        "solve_direct",
+        "solve(A, b)",
+        "3x3 SPD-like",
+        "strict",
+        || {
+            let res =
+                solve(&a, &b, SolveOptions::default()).map_err(|e| format!("solve failed: {e}"))?;
+            solve_x = res.x.clone();
+            Ok(format!("solve_x={solve_x:?}"))
+        },
+    );
 
     r.record_step(
         "inv_then_multiply",
@@ -788,8 +762,7 @@ fn e2e_p2c002_08_solve_vs_inv() {
         "compute via inverse",
         "strict",
         || {
-            let res =
-                inv(&a, InvOptions::default()).map_err(|e| format!("inv failed: {e}"))?;
+            let res = inv(&a, InvOptions::default()).map_err(|e| format!("inv failed: {e}"))?;
             inv_x = res
                 .inverse
                 .iter()
@@ -807,13 +780,9 @@ fn e2e_p2c002_08_solve_vs_inv() {
         || {
             let max_diff = max_abs_diff_vec(&solve_x, &inv_x);
             if max_diff < 1e-10 {
-                Ok(format!(
-                    "solve and inv@b agree: max_diff={max_diff:.2e}"
-                ))
+                Ok(format!("solve and inv@b agree: max_diff={max_diff:.2e}"))
             } else {
-                Err(format!(
-                    "solve and inv@b disagree: max_diff={max_diff:.2e}"
-                ))
+                Err(format!("solve and inv@b disagree: max_diff={max_diff:.2e}"))
             }
         },
     );
@@ -826,34 +795,41 @@ fn e2e_p2c002_08_solve_vs_inv() {
 #[test]
 fn e2e_p2c002_09_lstsq_vs_pinv() {
     let mut r = ScenarioRunner::new("p2c002_09_lstsq_vs_pinv");
-    let a = vec![
-        vec![1.0, 1.0],
-        vec![1.0, 2.0],
-        vec![1.0, 3.0],
-    ];
+    let a = vec![vec![1.0, 1.0], vec![1.0, 2.0], vec![1.0, 3.0]];
     let b = vec![1.0, 2.0, 2.0];
     r.set_matrix_meta((3, 2), "strict");
 
     let mut lstsq_x = Vec::new();
     let mut pinv_x = Vec::new();
 
-    r.record_step("lstsq_solve", "lstsq(A, b)", "3x2 overdetermined", "strict", || {
-        let res = lstsq(&a, &b, LstsqOptions::default())
-            .map_err(|e| format!("lstsq failed: {e}"))?;
-        lstsq_x = res.x.clone();
-        Ok(format!("lstsq_x={lstsq_x:?}, rank={}", res.rank))
-    });
+    r.record_step(
+        "lstsq_solve",
+        "lstsq(A, b)",
+        "3x2 overdetermined",
+        "strict",
+        || {
+            let res =
+                lstsq(&a, &b, LstsqOptions::default()).map_err(|e| format!("lstsq failed: {e}"))?;
+            lstsq_x = res.x.clone();
+            Ok(format!("lstsq_x={lstsq_x:?}, rank={}", res.rank))
+        },
+    );
 
-    r.record_step("pinv_solve", "pinv(A) @ b", "via pseudo-inverse", "strict", || {
-        let res = pinv(&a, PinvOptions::default())
-            .map_err(|e| format!("pinv failed: {e}"))?;
-        pinv_x = res
-            .pseudo_inverse
-            .iter()
-            .map(|row| row.iter().zip(&b).map(|(p, bi)| p * bi).sum())
-            .collect();
-        Ok(format!("pinv_x={pinv_x:?}, rank={}", res.rank))
-    });
+    r.record_step(
+        "pinv_solve",
+        "pinv(A) @ b",
+        "via pseudo-inverse",
+        "strict",
+        || {
+            let res = pinv(&a, PinvOptions::default()).map_err(|e| format!("pinv failed: {e}"))?;
+            pinv_x = res
+                .pseudo_inverse
+                .iter()
+                .map(|row| row.iter().zip(&b).map(|(p, bi)| p * bi).sum())
+                .collect();
+            Ok(format!("pinv_x={pinv_x:?}, rank={}", res.rank))
+        },
+    );
 
     r.record_step(
         "compare_lstsq_pinv",
@@ -863,13 +839,9 @@ fn e2e_p2c002_09_lstsq_vs_pinv() {
         || {
             let max_diff = max_abs_diff_vec(&lstsq_x, &pinv_x);
             if max_diff < 1e-10 {
-                Ok(format!(
-                    "lstsq and pinv agree: max_diff={max_diff:.2e}"
-                ))
+                Ok(format!("lstsq and pinv agree: max_diff={max_diff:.2e}"))
             } else {
-                Err(format!(
-                    "lstsq and pinv disagree: max_diff={max_diff:.2e}"
-                ))
+                Err(format!("lstsq and pinv disagree: max_diff={max_diff:.2e}"))
             }
         },
     );
@@ -893,8 +865,7 @@ fn e2e_p2c002_10_det_chain() {
     let mut det_inv_a = 0.0;
 
     r.record_step("compute_det_a", "det(A)", "3x3 general", "strict", || {
-        det_a = det(&a, RuntimeMode::Strict, true)
-            .map_err(|e| format!("det(A) failed: {e}"))?;
+        det_a = det(&a, RuntimeMode::Strict, true).map_err(|e| format!("det(A) failed: {e}"))?;
         Ok(format!("det(A)={det_a}"))
     });
 
@@ -904,8 +875,8 @@ fn e2e_p2c002_10_det_chain() {
         "determinant of inverse",
         "strict",
         || {
-            let inv_res = inv(&a, InvOptions::default())
-                .map_err(|e| format!("inv(A) failed: {e}"))?;
+            let inv_res =
+                inv(&a, InvOptions::default()).map_err(|e| format!("inv(A) failed: {e}"))?;
             det_inv_a = det(&inv_res.inverse, RuntimeMode::Strict, true)
                 .map_err(|e| format!("det(inv(A)) failed: {e}"))?;
             Ok(format!("det(inv(A))={det_inv_a}"))
@@ -921,9 +892,7 @@ fn e2e_p2c002_10_det_chain() {
             let product = det_a * det_inv_a;
             let diff = (product - 1.0).abs();
             if diff < 1e-6 {
-                Ok(format!(
-                    "det(A)*det(inv(A))={product:.12}, diff={diff:.2e}"
-                ))
+                Ok(format!("det(A)*det(inv(A))={product:.12}, diff={diff:.2e}"))
             } else {
                 Err(format!(
                     "identity violated: product={product}, diff={diff:.2e}"
@@ -970,14 +939,10 @@ fn e2e_p2c002_11_large_solve_500x500() {
             let elapsed_ms = start.elapsed().as_millis();
             let max_diff = max_abs_diff_vec(&res.x, &x_expected);
             if elapsed_ms > 5000 {
-                return Err(format!(
-                    "500x500 solve took {elapsed_ms}ms (limit: 5000ms)"
-                ));
+                return Err(format!("500x500 solve took {elapsed_ms}ms (limit: 5000ms)"));
             }
             if max_diff > 1e-6 {
-                return Err(format!(
-                    "500x500 solve inaccurate: max_diff={max_diff:.2e}"
-                ));
+                return Err(format!("500x500 solve inaccurate: max_diff={max_diff:.2e}"));
             }
             Ok(format!(
                 "completed in {elapsed_ms}ms, max_diff={max_diff:.2e}"

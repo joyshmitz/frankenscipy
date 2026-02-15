@@ -86,7 +86,11 @@ fn payload_for(packet_family: &str, class: &str, index: usize) -> Value {
         ("P2C-001", "extreme_dimensions") => {
             let n = [0_u64, 1, 2, 1024, 65535][index % 5];
             let vector_len = [0_u64, 1, 3, 32, 4096][index % 5];
-            let mode_hint = if index.is_multiple_of(2) { "strict" } else { "hardened" };
+            let mode_hint = if index.is_multiple_of(2) {
+                "strict"
+            } else {
+                "hardened"
+            };
             json!({ "n": n, "vector_len": vector_len, "mode_hint": mode_hint })
         }
         ("P2C-001", "empty_inputs") => json!({

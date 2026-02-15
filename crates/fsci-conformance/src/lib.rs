@@ -1128,7 +1128,7 @@ fn build_packet_report(
     }
 }
 
-fn generate_raptorq_sidecar(payload: &[u8]) -> Result<RaptorQSidecar, HarnessError> {
+pub fn generate_raptorq_sidecar(payload: &[u8]) -> Result<RaptorQSidecar, HarnessError> {
     let symbol_size = 128usize;
     let source_symbols = chunk_payload(payload, symbol_size);
     let k = source_symbols.len();
@@ -1155,7 +1155,7 @@ fn generate_raptorq_sidecar(payload: &[u8]) -> Result<RaptorQSidecar, HarnessErr
     })
 }
 
-fn chunk_payload(payload: &[u8], symbol_size: usize) -> Vec<Vec<u8>> {
+pub fn chunk_payload(payload: &[u8], symbol_size: usize) -> Vec<Vec<u8>> {
     if payload.is_empty() {
         return vec![vec![0u8; symbol_size]];
     }

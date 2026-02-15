@@ -4,9 +4,8 @@
 //! Oracle values are hand-computed or derived from matrix algebra identities.
 
 use fsci_linalg::{
-    det, inv, lstsq, pinv, solve, solve_banded, solve_triangular,
-    InvOptions, LstsqOptions, PinvOptions, SolveOptions,
-    TriangularSolveOptions,
+    InvOptions, LstsqOptions, PinvOptions, SolveOptions, TriangularSolveOptions, det, inv, lstsq,
+    pinv, solve, solve_banded, solve_triangular,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -103,7 +102,11 @@ fn diff_solve_2x2() {
 #[test]
 fn diff_solve_3x3() {
     // A = [[1,0,0],[0,2,0],[0,0,3]], b = [1,4,9] → x = [1,2,3]
-    let a = vec![vec![1.0, 0.0, 0.0], vec![0.0, 2.0, 0.0], vec![0.0, 0.0, 3.0]];
+    let a = vec![
+        vec![1.0, 0.0, 0.0],
+        vec![0.0, 2.0, 0.0],
+        vec![0.0, 0.0, 3.0],
+    ];
     let b = vec![1.0, 4.0, 9.0];
     let result = solve(&a, &b, SolveOptions::default()).unwrap();
     assert_vec_close(&result.x, &[1.0, 2.0, 3.0]);
@@ -114,9 +117,16 @@ fn diff_solve_3x3() {
 fn diff_solve_triangular_lower_3x3() {
     // L = [[2,0,0],[1,3,0],[4,2,5]], x = [1,2,2]
     // b = L @ x = [2, 1+6, 4+4+10] = [2, 7, 18]
-    let a = vec![vec![2.0, 0.0, 0.0], vec![1.0, 3.0, 0.0], vec![4.0, 2.0, 5.0]];
+    let a = vec![
+        vec![2.0, 0.0, 0.0],
+        vec![1.0, 3.0, 0.0],
+        vec![4.0, 2.0, 5.0],
+    ];
     let b = vec![2.0, 7.0, 18.0];
-    let opts = TriangularSolveOptions { lower: true, ..Default::default() };
+    let opts = TriangularSolveOptions {
+        lower: true,
+        ..Default::default()
+    };
     let result = solve_triangular(&a, &b, opts).unwrap();
     assert_vec_close(&result.x, &[1.0, 2.0, 2.0]);
 }
@@ -125,13 +135,20 @@ fn diff_solve_triangular_lower_3x3() {
 #[test]
 fn diff_solve_triangular_upper_3x3() {
     // U = [[2,1,3],[0,4,2],[0,0,5]], b = [17,14,10] → x = [1,1,2]
-    let a = vec![vec![2.0, 1.0, 3.0], vec![0.0, 4.0, 2.0], vec![0.0, 0.0, 5.0]];
+    let a = vec![
+        vec![2.0, 1.0, 3.0],
+        vec![0.0, 4.0, 2.0],
+        vec![0.0, 0.0, 5.0],
+    ];
     let _b = [17.0, 14.0, 10.0];
     // Verify: U @ [1,1,2] = [2+1+6, 0+4+4, 0+0+10] = [9,8,10]... let me recompute
     // Actually: U @ [1,1,2] = [2*1+1*1+3*2, 0*1+4*1+2*2, 0*1+0*1+5*2] = [9,8,10]
     // So b should be [9,8,10]
     let b = vec![9.0, 8.0, 10.0];
-    let opts = TriangularSolveOptions { lower: false, ..Default::default() };
+    let opts = TriangularSolveOptions {
+        lower: false,
+        ..Default::default()
+    };
     let result = solve_triangular(&a, &b, opts).unwrap();
     assert_vec_close(&result.x, &[1.0, 1.0, 2.0]);
 }
@@ -164,9 +181,20 @@ fn diff_inv_2x2() {
 // D7: inv 3x3 diagonal
 #[test]
 fn diff_inv_3x3_diag() {
-    let a = vec![vec![2.0, 0.0, 0.0], vec![0.0, 4.0, 0.0], vec![0.0, 0.0, 5.0]];
+    let a = vec![
+        vec![2.0, 0.0, 0.0],
+        vec![0.0, 4.0, 0.0],
+        vec![0.0, 0.0, 5.0],
+    ];
     let result = inv(&a, InvOptions::default()).unwrap();
-    assert_mat_close(&result.inverse, &[vec![0.5, 0.0, 0.0], vec![0.0, 0.25, 0.0], vec![0.0, 0.0, 0.2]]);
+    assert_mat_close(
+        &result.inverse,
+        &[
+            vec![0.5, 0.0, 0.0],
+            vec![0.0, 0.25, 0.0],
+            vec![0.0, 0.0, 0.2],
+        ],
+    );
 }
 
 // D8: det 2x2
@@ -182,7 +210,11 @@ fn diff_det_2x2() {
 #[test]
 fn diff_det_3x3() {
     // det([[1,2,3],[4,5,6],[7,8,10]]) = 1*(50-48) - 2*(40-42) + 3*(32-35) = 2+4-9 = -3
-    let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0], vec![7.0, 8.0, 10.0]];
+    let a = vec![
+        vec![1.0, 2.0, 3.0],
+        vec![4.0, 5.0, 6.0],
+        vec![7.0, 8.0, 10.0],
+    ];
     let d = det(&a, RuntimeMode::Strict, true).unwrap();
     assert_close(d, -3.0);
 }
@@ -259,7 +291,11 @@ fn diff_det_identity() {
 // D16: det diagonal = product
 #[test]
 fn diff_det_diagonal() {
-    let a = vec![vec![2.0, 0.0, 0.0], vec![0.0, 3.0, 0.0], vec![0.0, 0.0, 5.0]];
+    let a = vec![
+        vec![2.0, 0.0, 0.0],
+        vec![0.0, 3.0, 0.0],
+        vec![0.0, 0.0, 5.0],
+    ];
     let d = det(&a, RuntimeMode::Strict, true).unwrap();
     assert_close(d, 30.0);
 }
@@ -285,7 +321,11 @@ fn meta_solve_linearity() {
 // M2: inv(A) @ A == I
 #[test]
 fn meta_inv_identity() {
-    let a = vec![vec![2.0, 1.0, 0.0], vec![1.0, 3.0, 1.0], vec![0.0, 1.0, 4.0]];
+    let a = vec![
+        vec![2.0, 1.0, 0.0],
+        vec![1.0, 3.0, 1.0],
+        vec![0.0, 1.0, 4.0],
+    ];
     let a_inv = inv(&a, InvOptions::default()).unwrap().inverse;
     let product = matmul(&a_inv, &a);
     assert_mat_close(&product, &identity(3));
@@ -294,8 +334,16 @@ fn meta_inv_identity() {
 // M3: det(A^T) == det(A) — transpose via index swap
 #[test]
 fn meta_det_transpose_invariance() {
-    let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0], vec![7.0, 8.0, 10.0]];
-    let at = vec![vec![1.0, 4.0, 7.0], vec![2.0, 5.0, 8.0], vec![3.0, 6.0, 10.0]];
+    let a = vec![
+        vec![1.0, 2.0, 3.0],
+        vec![4.0, 5.0, 6.0],
+        vec![7.0, 8.0, 10.0],
+    ];
+    let at = vec![
+        vec![1.0, 4.0, 7.0],
+        vec![2.0, 5.0, 8.0],
+        vec![3.0, 6.0, 10.0],
+    ];
     let da = det(&a, RuntimeMode::Strict, true).unwrap();
     let dat = det(&at, RuntimeMode::Strict, true).unwrap();
     assert_close(da, dat);
@@ -326,7 +374,11 @@ fn meta_lstsq_recovery() {
 // M6: solve(A, b) roundtrip: A @ solve(A, b) == b
 #[test]
 fn meta_solve_roundtrip() {
-    let a = vec![vec![4.0, 1.0, 2.0], vec![1.0, 5.0, 1.0], vec![2.0, 1.0, 6.0]];
+    let a = vec![
+        vec![4.0, 1.0, 2.0],
+        vec![1.0, 5.0, 1.0],
+        vec![2.0, 1.0, 6.0],
+    ];
     let b = vec![7.0, 8.0, 9.0];
     let x = solve(&a, &b, SolveOptions::default()).unwrap().x;
     let b_recon = matvec(&a, &x);
@@ -338,7 +390,10 @@ fn meta_solve_roundtrip() {
 fn meta_det_scaling() {
     let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
     let c = 3.0;
-    let ca: Vec<Vec<f64>> = a.iter().map(|row| row.iter().map(|v| v * c).collect()).collect();
+    let ca: Vec<Vec<f64>> = a
+        .iter()
+        .map(|row| row.iter().map(|v| v * c).collect())
+        .collect();
     let da = det(&a, RuntimeMode::Strict, true).unwrap();
     let dca = det(&ca, RuntimeMode::Strict, true).unwrap();
     let n = a.len() as f64;
@@ -363,7 +418,10 @@ fn adv_singular_solve() {
 fn adv_nan_in_matrix() {
     let a = vec![vec![1.0, f64::NAN], vec![0.0, 1.0]];
     let b = vec![1.0, 1.0];
-    let opts = SolveOptions { check_finite: true, ..Default::default() };
+    let opts = SolveOptions {
+        check_finite: true,
+        ..Default::default()
+    };
     let result = solve(&a, &b, opts);
     assert!(result.is_err());
 }
@@ -373,7 +431,10 @@ fn adv_nan_in_matrix() {
 fn adv_inf_in_matrix() {
     let a = vec![vec![1.0, f64::INFINITY], vec![0.0, 1.0]];
     let b = vec![1.0, 1.0];
-    let opts = SolveOptions { check_finite: true, ..Default::default() };
+    let opts = SolveOptions {
+        check_finite: true,
+        ..Default::default()
+    };
     let result = solve(&a, &b, opts);
     assert!(result.is_err());
 }
