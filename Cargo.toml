@@ -31,7 +31,7 @@ fsci-runtime = { path = "crates/fsci-runtime" }
 fsci-sparse = { path = "crates/fsci-sparse" }
 fsci-special = { path = "crates/fsci-special" }
 asupersync = { version = "0.2.0", path = "/dp/asupersync", default-features = false, features = ["test-internals"] }
-ftui = { path = "/dp/frankentui/crates/ftui", default-features = false }
+ftui = { version = "0.2.0", path = "/dp/frankentui/crates/ftui", default-features = false }
 blake3 = "1.8.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
