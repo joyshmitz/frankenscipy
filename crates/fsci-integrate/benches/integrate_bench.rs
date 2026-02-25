@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use fsci_integrate::{SolveIvpOptions, SolverKind, solve_ivp, validate_tol, ToleranceValue};
+use fsci_integrate::{SolveIvpOptions, SolverKind, ToleranceValue, solve_ivp, validate_tol};
 use fsci_runtime::RuntimeMode;
 
 /// Exponential decay: y' = -y, y(0) = 1.
@@ -59,23 +59,32 @@ fn bench_solve_ivp_lorenz(c: &mut Criterion) {
 
 fn bench_validate_tol(c: &mut Criterion) {
     c.bench_function("validate_tol_scalar", |b| {
-        b.iter(|| validate_tol(
-            ToleranceValue::Scalar(1e-6),
-            ToleranceValue::Scalar(1e-9),
-            100,
-            RuntimeMode::Strict,
-        ));
+        b.iter(|| {
+            validate_tol(
+                ToleranceValue::Scalar(1e-6),
+                ToleranceValue::Scalar(1e-9),
+                100,
+                RuntimeMode::Strict,
+            )
+        });
     });
     let atol_vec = vec![1e-8; 100];
     c.bench_function("validate_tol_vector_100", |b| {
-        b.iter(|| validate_tol(
-            ToleranceValue::Scalar(1e-6),
-            ToleranceValue::Vector(atol_vec.clone()),
-            100,
-            RuntimeMode::Strict,
-        ));
+        b.iter(|| {
+            validate_tol(
+                ToleranceValue::Scalar(1e-6),
+                ToleranceValue::Vector(atol_vec.clone()),
+                100,
+                RuntimeMode::Strict,
+            )
+        });
     });
 }
 
-criterion_group!(benches, bench_solve_ivp_exponential, bench_solve_ivp_lorenz, bench_validate_tol);
+criterion_group!(
+    benches,
+    bench_solve_ivp_exponential,
+    bench_solve_ivp_lorenz,
+    bench_validate_tol
+);
 criterion_main!(benches);

@@ -1,7 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_runtime::{
-    ConformalCalibrator, DecisionSignals, MatrixConditionState,
-    PolicyController, RuntimeMode, SolverPortfolio,
+    ConformalCalibrator, DecisionSignals, MatrixConditionState, PolicyController, RuntimeMode,
+    SolverPortfolio,
 };
 
 fn bench_policy_decide(c: &mut Criterion) {
@@ -37,5 +37,10 @@ fn bench_calibrator_observe(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_policy_decide, bench_solver_select_action, bench_calibrator_observe);
+criterion_group!(
+    benches,
+    bench_policy_decide,
+    bench_solver_select_action,
+    bench_calibrator_observe
+);
 criterion_main!(benches);

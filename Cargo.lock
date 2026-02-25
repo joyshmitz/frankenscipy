@@ -573,6 +573,9 @@ dependencies = [
 [[package]]
 name = "fsci-fft"
 version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+]
 
 [[package]]
 name = "fsci-integrate"

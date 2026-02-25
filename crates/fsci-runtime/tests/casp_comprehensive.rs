@@ -3,12 +3,10 @@
 //! >=300 unit test cases + >=8 property tests with structured JSON logging.
 
 use fsci_runtime::{
-    assert_close, assert_close_slice, within_tolerance, casp_now_unix_ms,
-    ConformalCalibrator, DecisionEvidenceEntry, DecisionSignals,
-    MatrixConditionState, PolicyAction, PolicyController, PolicyDecision,
-    PolicyEvidenceLedger, RiskState, RuntimeMode, SignalSequence,
-    SolverAction, SolverEvidenceEntry, SolverPortfolio,
-    TestLogEntry, TestLogLevel, TestResult,
+    ConformalCalibrator, DecisionEvidenceEntry, DecisionSignals, MatrixConditionState,
+    PolicyAction, PolicyController, PolicyDecision, PolicyEvidenceLedger, RiskState, RuntimeMode,
+    SignalSequence, SolverAction, SolverEvidenceEntry, SolverPortfolio, TestLogEntry, TestLogLevel,
+    TestResult, assert_close, assert_close_slice, casp_now_unix_ms, within_tolerance,
 };
 use proptest::prelude::*;
 
@@ -664,17 +662,94 @@ macro_rules! ctrl_signal_test {
     };
 }
 
-ctrl_signal_test!(ctrl_strict_c0_m0_a0, RuntimeMode::Strict, 0.0, 0.0, 0.0, PolicyAction::Allow);
-ctrl_signal_test!(ctrl_strict_c2_m0_a0, RuntimeMode::Strict, 2.0, 0.0, 0.0, PolicyAction::Allow);
-ctrl_signal_test!(ctrl_strict_c0_m1_a0, RuntimeMode::Strict, 0.0, 1.0, 0.0, PolicyAction::FailClosed);
-ctrl_signal_test!(ctrl_strict_c0_m0_a1, RuntimeMode::Strict, 0.0, 0.0, 1.0, PolicyAction::FullValidate);
-ctrl_signal_test!(ctrl_strict_c8_m1_a02, RuntimeMode::Strict, 8.0, 1.0, 0.2, PolicyAction::FailClosed);
-ctrl_signal_test!(ctrl_hard_c0_m0_a0, RuntimeMode::Hardened, 0.0, 0.0, 0.0, PolicyAction::Allow);
-ctrl_signal_test!(ctrl_hard_c2_m0_a0, RuntimeMode::Hardened, 2.0, 0.0, 0.0, PolicyAction::Allow);
-ctrl_signal_test!(ctrl_hard_c0_m1_a0, RuntimeMode::Hardened, 0.0, 1.0, 0.0, PolicyAction::FailClosed);
-ctrl_signal_test!(ctrl_hard_c8_m1_a02, RuntimeMode::Hardened, 8.0, 1.0, 0.2, PolicyAction::FailClosed);
-ctrl_signal_test!(ctrl_strict_c16_m0_a0, RuntimeMode::Strict, 16.0, 0.0, 0.0, PolicyAction::FullValidate);
-ctrl_signal_test!(ctrl_hard_c16_m0_a0, RuntimeMode::Hardened, 16.0, 0.0, 0.0, PolicyAction::FullValidate);
+ctrl_signal_test!(
+    ctrl_strict_c0_m0_a0,
+    RuntimeMode::Strict,
+    0.0,
+    0.0,
+    0.0,
+    PolicyAction::Allow
+);
+ctrl_signal_test!(
+    ctrl_strict_c2_m0_a0,
+    RuntimeMode::Strict,
+    2.0,
+    0.0,
+    0.0,
+    PolicyAction::Allow
+);
+ctrl_signal_test!(
+    ctrl_strict_c0_m1_a0,
+    RuntimeMode::Strict,
+    0.0,
+    1.0,
+    0.0,
+    PolicyAction::FailClosed
+);
+ctrl_signal_test!(
+    ctrl_strict_c0_m0_a1,
+    RuntimeMode::Strict,
+    0.0,
+    0.0,
+    1.0,
+    PolicyAction::FullValidate
+);
+ctrl_signal_test!(
+    ctrl_strict_c8_m1_a02,
+    RuntimeMode::Strict,
+    8.0,
+    1.0,
+    0.2,
+    PolicyAction::FailClosed
+);
+ctrl_signal_test!(
+    ctrl_hard_c0_m0_a0,
+    RuntimeMode::Hardened,
+    0.0,
+    0.0,
+    0.0,
+    PolicyAction::Allow
+);
+ctrl_signal_test!(
+    ctrl_hard_c2_m0_a0,
+    RuntimeMode::Hardened,
+    2.0,
+    0.0,
+    0.0,
+    PolicyAction::Allow
+);
+ctrl_signal_test!(
+    ctrl_hard_c0_m1_a0,
+    RuntimeMode::Hardened,
+    0.0,
+    1.0,
+    0.0,
+    PolicyAction::FailClosed
+);
+ctrl_signal_test!(
+    ctrl_hard_c8_m1_a02,
+    RuntimeMode::Hardened,
+    8.0,
+    1.0,
+    0.2,
+    PolicyAction::FailClosed
+);
+ctrl_signal_test!(
+    ctrl_strict_c16_m0_a0,
+    RuntimeMode::Strict,
+    16.0,
+    0.0,
+    0.0,
+    PolicyAction::FullValidate
+);
+ctrl_signal_test!(
+    ctrl_hard_c16_m0_a0,
+    RuntimeMode::Hardened,
+    16.0,
+    0.0,
+    0.0,
+    PolicyAction::FullValidate
+);
 
 // Boundary: mid-range metadata
 #[test]
@@ -1295,19 +1370,29 @@ fn portfolio_clone() {
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn mcs_all_count() { assert_eq!(MatrixConditionState::ALL.len(), 4); }
+fn mcs_all_count() {
+    assert_eq!(MatrixConditionState::ALL.len(), 4);
+}
 
 #[test]
-fn mcs_index_well() { assert_eq!(MatrixConditionState::WellConditioned.index(), 0); }
+fn mcs_index_well() {
+    assert_eq!(MatrixConditionState::WellConditioned.index(), 0);
+}
 
 #[test]
-fn mcs_index_moderate() { assert_eq!(MatrixConditionState::ModerateCondition.index(), 1); }
+fn mcs_index_moderate() {
+    assert_eq!(MatrixConditionState::ModerateCondition.index(), 1);
+}
 
 #[test]
-fn mcs_index_ill() { assert_eq!(MatrixConditionState::IllConditioned.index(), 2); }
+fn mcs_index_ill() {
+    assert_eq!(MatrixConditionState::IllConditioned.index(), 2);
+}
 
 #[test]
-fn mcs_index_near_singular() { assert_eq!(MatrixConditionState::NearSingular.index(), 3); }
+fn mcs_index_near_singular() {
+    assert_eq!(MatrixConditionState::NearSingular.index(), 3);
+}
 
 #[test]
 fn mcs_serde_roundtrip() {
@@ -1320,26 +1405,41 @@ fn mcs_serde_roundtrip() {
 
 #[test]
 fn mcs_debug() {
-    assert_eq!(format!("{:?}", MatrixConditionState::WellConditioned), "WellConditioned");
+    assert_eq!(
+        format!("{:?}", MatrixConditionState::WellConditioned),
+        "WellConditioned"
+    );
 }
 
 #[test]
-fn sa_all_count() { assert_eq!(SolverAction::ALL.len(), 5); }
+fn sa_all_count() {
+    assert_eq!(SolverAction::ALL.len(), 5);
+}
 
 #[test]
-fn sa_index_lu() { assert_eq!(SolverAction::DirectLU.index(), 0); }
+fn sa_index_lu() {
+    assert_eq!(SolverAction::DirectLU.index(), 0);
+}
 
 #[test]
-fn sa_index_qr() { assert_eq!(SolverAction::PivotedQR.index(), 1); }
+fn sa_index_qr() {
+    assert_eq!(SolverAction::PivotedQR.index(), 1);
+}
 
 #[test]
-fn sa_index_svd() { assert_eq!(SolverAction::SVDFallback.index(), 2); }
+fn sa_index_svd() {
+    assert_eq!(SolverAction::SVDFallback.index(), 2);
+}
 
 #[test]
-fn sa_index_diag() { assert_eq!(SolverAction::DiagonalFastPath.index(), 3); }
+fn sa_index_diag() {
+    assert_eq!(SolverAction::DiagonalFastPath.index(), 3);
+}
 
 #[test]
-fn sa_index_tri() { assert_eq!(SolverAction::TriangularFastPath.index(), 4); }
+fn sa_index_tri() {
+    assert_eq!(SolverAction::TriangularFastPath.index(), 4);
+}
 
 #[test]
 fn sa_serde_roundtrip() {
@@ -1646,7 +1746,10 @@ fn adv_gradual_escalation() {
             saw_failclosed = true;
         }
     }
-    assert!(saw_failclosed, "must eventually fail-closed as metadata rises");
+    assert!(
+        saw_failclosed,
+        "must eventually fail-closed as metadata rises"
+    );
 }
 
 #[test]
@@ -1660,7 +1763,10 @@ fn adv_gradual_cond_escalation() {
             saw_validate = true;
         }
     }
-    assert!(saw_validate, "must eventually full-validate as condition rises");
+    assert!(
+        saw_validate,
+        "must eventually full-validate as condition rises"
+    );
 }
 
 #[test]
@@ -1802,9 +1908,13 @@ fn adv_calibrator_recovery() {
 // ═══════════════════════════════════════════════════════════════════
 
 fn log_decision(test_id: &str, d: &PolicyDecision) -> String {
-    let entry = TestLogEntry::new(test_id, "fsci_runtime::policy", format!("action={:?}", d.action))
-        .with_result(TestResult::Pass)
-        .with_mode(d.mode);
+    let entry = TestLogEntry::new(
+        test_id,
+        "fsci_runtime::policy",
+        format!("action={:?}", d.action),
+    )
+    .with_result(TestResult::Pass)
+    .with_mode(d.mode);
     entry.to_json_line()
 }
 
@@ -2092,11 +2202,11 @@ fn golden_portfolio_well_cond_losses() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
     let (_, _, losses, _) = p.select_action(&MatrixConditionState::WellConditioned);
     // posterior=[1,0,0,0], losses = column 0 of loss matrix
-    assert_close(losses[0], 1.0, 1e-12, 0.0);  // DirectLU
-    assert_close(losses[1], 3.0, 1e-12, 0.0);  // PivotedQR
+    assert_close(losses[0], 1.0, 1e-12, 0.0); // DirectLU
+    assert_close(losses[1], 3.0, 1e-12, 0.0); // PivotedQR
     assert_close(losses[2], 15.0, 1e-12, 0.0); // SVDFallback
-    assert_close(losses[3], 0.0, 1e-12, 0.0);  // DiagonalFastPath
-    assert_close(losses[4], 0.0, 1e-12, 0.0);  // TriangularFastPath
+    assert_close(losses[3], 0.0, 1e-12, 0.0); // DiagonalFastPath
+    assert_close(losses[4], 0.0, 1e-12, 0.0); // TriangularFastPath
 }
 
 #[test]

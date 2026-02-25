@@ -11,17 +11,19 @@
 //! All tests produce structured JSON log lines.
 
 use fsci_runtime::{
-    assert_close_slice, DecisionSignals,
-    MatrixConditionState, PolicyAction, PolicyController,
-    RiskState, RuntimeMode, SignalSequence,
-    SolverAction, SolverPortfolio, TestLogEntry, TestResult,
+    DecisionSignals, MatrixConditionState, PolicyAction, PolicyController, RiskState, RuntimeMode,
+    SignalSequence, SolverAction, SolverPortfolio, TestLogEntry, TestResult, assert_close_slice,
 };
 
 // ── Structured log helper ────────────────────────────────────────
 
 fn log_differential(test_id: &str, input_summary: &str, expected: &str, actual: &str, pass: bool) {
     let entry = TestLogEntry::new(test_id, "fsci_runtime::differential", input_summary)
-        .with_result(if pass { TestResult::Pass } else { TestResult::Fail });
+        .with_result(if pass {
+            TestResult::Pass
+        } else {
+            TestResult::Fail
+        });
     let json = entry.to_json_line();
     // Parse to inject extra fields
     let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -33,8 +35,12 @@ fn log_differential(test_id: &str, input_summary: &str, expected: &str, actual: 
 }
 
 fn log_metamorphic(test_id: &str, relation: &str, pass: bool) {
-    let entry = TestLogEntry::new(test_id, "fsci_runtime::metamorphic", relation)
-        .with_result(if pass { TestResult::Pass } else { TestResult::Fail });
+    let entry =
+        TestLogEntry::new(test_id, "fsci_runtime::metamorphic", relation).with_result(if pass {
+            TestResult::Pass
+        } else {
+            TestResult::Fail
+        });
     let json = entry.to_json_line();
     let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
     v["category"] = serde_json::Value::String("metamorphic".into());
@@ -43,8 +49,12 @@ fn log_metamorphic(test_id: &str, relation: &str, pass: bool) {
 }
 
 fn log_adversarial(test_id: &str, scenario: &str, expected_behavior: &str, pass: bool) {
-    let entry = TestLogEntry::new(test_id, "fsci_runtime::adversarial", scenario)
-        .with_result(if pass { TestResult::Pass } else { TestResult::Fail });
+    let entry =
+        TestLogEntry::new(test_id, "fsci_runtime::adversarial", scenario).with_result(if pass {
+            TestResult::Pass
+        } else {
+            TestResult::Fail
+        });
     let json = entry.to_json_line();
     let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
     v["category"] = serde_json::Value::String("adversarial".into());
@@ -97,7 +107,11 @@ fn oracle_expected_losses(mode: RuntimeMode, posterior: [f64; 3]) -> [f64; 3] {
 
 /// Select action with minimum expected loss (tie-break: higher index).
 fn oracle_select_action(losses: [f64; 3]) -> PolicyAction {
-    let actions = [PolicyAction::Allow, PolicyAction::FullValidate, PolicyAction::FailClosed];
+    let actions = [
+        PolicyAction::Allow,
+        PolicyAction::FullValidate,
+        PolicyAction::FailClosed,
+    ];
     let mut best_idx = 0;
     let mut best_loss = losses[0];
     for (idx, &loss) in losses.iter().enumerate().skip(1) {
@@ -112,7 +126,12 @@ fn oracle_select_action(losses: [f64; 3]) -> PolicyAction {
 }
 
 /// Full oracle: signals → action.
-fn oracle_decide(mode: RuntimeMode, cond: f64, meta: f64, anomaly: f64) -> (PolicyAction, [f64; 3], [f64; 3]) {
+fn oracle_decide(
+    mode: RuntimeMode,
+    cond: f64,
+    meta: f64,
+    anomaly: f64,
+) -> (PolicyAction, [f64; 3], [f64; 3]) {
     let logits = oracle_logits(cond, meta, anomaly);
     let posterior = oracle_softmax(logits);
     let losses = oracle_expected_losses(mode, posterior);
@@ -174,8 +193,20 @@ diff_test!(diff_hard_high_anom, RuntimeMode::Hardened, 0.0, 0.0, 1.0);
 // D11-D15: Mixed signals
 diff_test!(diff_strict_mid_all, RuntimeMode::Strict, 8.0, 0.5, 0.5);
 diff_test!(diff_hard_mid_all, RuntimeMode::Hardened, 8.0, 0.5, 0.5);
-diff_test!(diff_strict_low_cond_high_meta, RuntimeMode::Strict, 1.0, 0.9, 0.1);
-diff_test!(diff_hard_high_cond_mid_meta, RuntimeMode::Hardened, 12.0, 0.4, 0.3);
+diff_test!(
+    diff_strict_low_cond_high_meta,
+    RuntimeMode::Strict,
+    1.0,
+    0.9,
+    0.1
+);
+diff_test!(
+    diff_hard_high_cond_mid_meta,
+    RuntimeMode::Hardened,
+    12.0,
+    0.4,
+    0.3
+);
 diff_test!(diff_strict_extreme, RuntimeMode::Strict, 100.0, 1.0, 1.0);
 
 // D16-D18: Additional edge cases
@@ -223,7 +254,11 @@ fn meta_mode_preserves_posterior() {
     let ds = strict.decide(s);
     let dh = hard.decide(s);
     assert_close_slice(&ds.posterior, &dh.posterior, TOL, TOL);
-    log_metamorphic("meta_mode_preserves_posterior", "posterior(Strict, s) == posterior(Hardened, s)", true);
+    log_metamorphic(
+        "meta_mode_preserves_posterior",
+        "posterior(Strict, s) == posterior(Hardened, s)",
+        true,
+    );
 }
 
 // M4: Decision independence from ledger history.
@@ -242,7 +277,11 @@ fn meta_decision_independent_of_history() {
     let d2 = c2.decide(s);
     assert_eq!(d1.action, d2.action);
     assert_close_slice(&d1.posterior, &d2.posterior, TOL, TOL);
-    log_metamorphic("meta_decision_independent_of_history", "decide(s, history1) == decide(s, history2)", true);
+    log_metamorphic(
+        "meta_decision_independent_of_history",
+        "decide(s, history1) == decide(s, history2)",
+        true,
+    );
 }
 
 // M5: Monotone metadata incompatibility.
@@ -262,7 +301,11 @@ fn meta_monotone_metadata_incompatibility() {
         );
         prev_p_incompat = d.posterior[2];
     }
-    log_metamorphic("meta_monotone_metadata_incompatibility", "meta↑ => P(Incompat)↑", true);
+    log_metamorphic(
+        "meta_monotone_metadata_incompatibility",
+        "meta↑ => P(Incompat)↑",
+        true,
+    );
 }
 
 // M6: Monotone condition number → ill-conditioned posterior.
@@ -281,7 +324,11 @@ fn meta_monotone_condition_number() {
         );
         prev_p_ill = d.posterior[1];
     }
-    log_metamorphic("meta_monotone_condition_number", "cond↑ => P(IllCond)↑", true);
+    log_metamorphic(
+        "meta_monotone_condition_number",
+        "cond↑ => P(IllCond)↑",
+        true,
+    );
 }
 
 // M7: Solver portfolio selection stability under condition state.
@@ -293,9 +340,16 @@ fn meta_solver_selection_stability() {
     for state in &MatrixConditionState::ALL {
         let (a1, _, _, _) = p.select_action(state);
         let (a2, _, _, _) = p.select_action(state);
-        assert_eq!(a1, a2, "solver selection must be deterministic for {state:?}");
+        assert_eq!(
+            a1, a2,
+            "solver selection must be deterministic for {state:?}"
+        );
     }
-    log_metamorphic("meta_solver_selection_stability", "select(s) == select(s) for all states", true);
+    log_metamorphic(
+        "meta_solver_selection_stability",
+        "select(s) == select(s) for all states",
+        true,
+    );
 }
 
 // M8: Ledger capacity does not affect decision output.
@@ -308,7 +362,11 @@ fn meta_ledger_capacity_irrelevant() {
     let d2 = c2.decide(s);
     assert_eq!(d1.action, d2.action);
     assert_close_slice(&d1.posterior, &d2.posterior, TOL, TOL);
-    log_metamorphic("meta_ledger_capacity_irrelevant", "decide(s, cap=1) == decide(s, cap=1000)", true);
+    log_metamorphic(
+        "meta_ledger_capacity_irrelevant",
+        "decide(s, cap=1) == decide(s, cap=1000)",
+        true,
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -404,7 +462,11 @@ fn adv_nan_injection_no_panic() {
 #[test]
 fn adv_inf_injection_no_panic() {
     let mut ctrl = PolicyController::new(RuntimeMode::Strict, 16);
-    let d = ctrl.decide(DecisionSignals::new(f64::INFINITY, f64::INFINITY, f64::INFINITY));
+    let d = ctrl.decide(DecisionSignals::new(
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::INFINITY,
+    ));
     assert_eq!(ctrl.ledger().len(), 1);
     assert!(
         d.action == PolicyAction::Allow
@@ -423,7 +485,11 @@ fn adv_inf_injection_no_panic() {
 #[test]
 fn adv_neg_inf_injection_no_panic() {
     let mut ctrl = PolicyController::new(RuntimeMode::Strict, 16);
-    let d = ctrl.decide(DecisionSignals::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
+    let d = ctrl.decide(DecisionSignals::new(
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ));
     assert_eq!(ctrl.ledger().len(), 1);
     assert!(
         d.action == PolicyAction::Allow

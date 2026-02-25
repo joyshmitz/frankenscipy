@@ -7,8 +7,8 @@
 //! tolerance.
 
 use fsci_integrate::{
-    IntegrateValidationError, ToleranceValue, ToleranceWarning,
-    validate_first_step, validate_max_step, validate_tol, MIN_RTOL,
+    IntegrateValidationError, MIN_RTOL, ToleranceValue, ToleranceWarning, validate_first_step,
+    validate_max_step, validate_tol,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -50,14 +50,8 @@ fn diff_fixture_vector_passthrough() {
     .expect("should succeed");
 
     // Oracle: everything passes through unchanged, no warnings
-    assert_eq!(
-        result.rtol,
-        ToleranceValue::Vector(vec![1e-6, 2e-6, 3e-6])
-    );
-    assert_eq!(
-        result.atol,
-        ToleranceValue::Vector(vec![1e-9, 2e-9, 3e-9])
-    );
+    assert_eq!(result.rtol, ToleranceValue::Vector(vec![1e-6, 2e-6, 3e-6]));
+    assert_eq!(result.atol, ToleranceValue::Vector(vec![1e-9, 2e-9, 3e-9]));
     assert!(result.warnings.is_empty());
     assert_eq!(result.mode, RuntimeMode::Hardened);
 }
@@ -399,7 +393,10 @@ fn meta_validate_tol_idempotence() {
     // Metamorphic: output is a fixpoint — no further clamping needed
     assert_eq!(r1.rtol, r2.rtol, "rtol should be stable");
     assert_eq!(r1.atol, r2.atol, "atol should be stable");
-    assert!(r2.warnings.is_empty(), "second pass should produce no warnings");
+    assert!(
+        r2.warnings.is_empty(),
+        "second pass should produce no warnings"
+    );
 }
 
 // MR6: error kind preserved under mode change
@@ -423,7 +420,10 @@ fn meta_error_kind_mode_independent() {
     )
     .expect_err("wrong shape");
 
-    assert_eq!(err_strict, err_hardened, "error kind should be mode-independent");
+    assert_eq!(
+        err_strict, err_hardened,
+        "error kind should be mode-independent"
+    );
 
     // Negative atol
     let err_strict2 = validate_tol(
@@ -451,7 +451,11 @@ fn meta_first_step_direction_symmetry() {
     let step = 3.0;
     let fwd = validate_first_step(step, 0.0, 10.0);
     let bwd = validate_first_step(step, 10.0, 0.0);
-    assert_eq!(fwd.is_ok(), bwd.is_ok(), "direction should not affect validity");
+    assert_eq!(
+        fwd.is_ok(),
+        bwd.is_ok(),
+        "direction should not affect validity"
+    );
     assert_eq!(fwd.unwrap(), bwd.unwrap());
 }
 
@@ -476,7 +480,10 @@ fn meta_rtol_clamping_convergence() {
     .expect("r2");
 
     // Both are below MIN_RTOL → both clamped to the same value
-    assert_eq!(r1.rtol, r2.rtol, "all sub-minimum rtols converge to MIN_RTOL");
+    assert_eq!(
+        r1.rtol, r2.rtol,
+        "all sub-minimum rtols converge to MIN_RTOL"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -567,7 +574,10 @@ fn adv_first_step_nan() {
     // the guard and the bounds check (NaN > 1.0 is also false).
     // This matches SciPy's permissive NaN handling.
     let result = validate_first_step(f64::NAN, 0.0, 1.0);
-    assert!(result.is_ok(), "NaN step passes guards due to IEEE 754 semantics");
+    assert!(
+        result.is_ok(),
+        "NaN step passes guards due to IEEE 754 semantics"
+    );
     assert!(result.unwrap().is_nan());
 }
 
@@ -585,7 +595,10 @@ fn adv_max_step_nan() {
     // NaN <= 0.0 is false, so NaN passes the guard.
     // Matches SciPy's permissive NaN handling.
     let result = validate_max_step(f64::NAN);
-    assert!(result.is_ok(), "NaN max_step passes guard due to IEEE 754 semantics");
+    assert!(
+        result.is_ok(),
+        "NaN max_step passes guard due to IEEE 754 semantics"
+    );
     assert!(result.unwrap().is_nan());
 }
 
