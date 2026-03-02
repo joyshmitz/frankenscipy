@@ -630,6 +630,9 @@ dependencies = [
 [[package]]
 name = "fsci-special"
 version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+]
 
 [[package]]
 name = "ftui"
