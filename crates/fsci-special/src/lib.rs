@@ -24,25 +24,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn packet_function_boundaries_are_exposed() {
+    fn scalar_kernels_follow_primary_contract_points() {
+        let one = SpecialTensor::RealScalar(1.0);
+        let two = SpecialTensor::RealScalar(2.0);
+        let zero = SpecialTensor::RealScalar(0.0);
+
+        let gamma_one = gamma(&one, RuntimeMode::Strict).expect("gamma(1) should evaluate");
+        assert_real_scalar_close(gamma_one, 1.0, 1e-12);
+
+        let beta_half = beta(&one, &two, RuntimeMode::Strict).expect("beta(1,2) should evaluate");
+        assert_real_scalar_close(beta_half, 0.5, 1e-12);
+
+        let erf_zero = erf(&zero, RuntimeMode::Strict).expect("erf(0) should evaluate");
+        assert_real_scalar_close(erf_zero, 0.0, 1e-12);
+
+        let erfc_zero = erfc(&zero, RuntimeMode::Strict).expect("erfc(0) should evaluate");
+        assert_real_scalar_close(erfc_zero, 1.0, 1e-12);
+
+        let inv_zero = erfinv(&zero, RuntimeMode::Strict).expect("erfinv(0) should evaluate");
+        assert_real_scalar_close(inv_zero, 0.0, 1e-12);
+    }
+
+    #[test]
+    fn hardened_mode_rejects_domain_violations() {
+        let out_of_domain = SpecialTensor::RealScalar(1.1);
+        let pole = SpecialTensor::RealScalar(-2.0);
+
+        let strict_inv = erfinv(&out_of_domain, RuntimeMode::Strict).expect("strict returns NaN");
+        assert_real_scalar_nan(strict_inv);
+
+        let hardened_inv =
+            erfinv(&out_of_domain, RuntimeMode::Hardened).expect_err("hardened rejects domain");
+        assert_eq!(hardened_inv.kind, SpecialErrorKind::DomainError);
+
+        let strict_gamma = gamma(&pole, RuntimeMode::Strict).expect("strict returns NaN");
+        assert_real_scalar_nan(strict_gamma);
+
+        let hardened_gamma =
+            gamma(&pole, RuntimeMode::Hardened).expect_err("hardened rejects pole");
+        assert_eq!(hardened_gamma.kind, SpecialErrorKind::PoleInput);
+    }
+
+    #[test]
+    fn pending_families_remain_explicitly_unimplemented() {
         let scalar = SpecialTensor::RealScalar(1.0);
-        let expected = SpecialErrorKind::NotYetImplemented;
-
-        let gamma_err = gamma(&scalar, RuntimeMode::Strict).expect_err("skeleton placeholder");
-        assert_eq!(gamma_err.kind, expected);
-
-        let beta_err = beta(&scalar, &scalar, RuntimeMode::Strict).expect_err("placeholder");
-        assert_eq!(beta_err.kind, expected);
 
         let bessel_err = jv(&scalar, &scalar, RuntimeMode::Strict).expect_err("placeholder");
-        assert_eq!(bessel_err.kind, expected);
-
-        let erf_err = erf(&scalar, RuntimeMode::Strict).expect_err("placeholder");
-        assert_eq!(erf_err.kind, expected);
+        assert_eq!(bessel_err.kind, SpecialErrorKind::NotYetImplemented);
 
         let hyper_err = hyp2f1(&scalar, &scalar, &scalar, &scalar, RuntimeMode::Strict)
             .expect_err("placeholder");
-        assert_eq!(hyper_err.kind, expected);
+        assert_eq!(hyper_err.kind, SpecialErrorKind::NotYetImplemented);
     }
 
     #[test]
@@ -72,5 +104,24 @@ mod tests {
                 .iter()
                 .any(|entry| entry.function == "hyp2f1")
         );
+    }
+
+    fn assert_real_scalar_close(actual: SpecialTensor, expected: f64, tol: f64) {
+        match actual {
+            SpecialTensor::RealScalar(value) => {
+                assert!(
+                    (value - expected).abs() <= tol,
+                    "expected {expected}, got {value}"
+                );
+            }
+            _ => panic!("expected real scalar output"),
+        }
+    }
+
+    fn assert_real_scalar_nan(actual: SpecialTensor) {
+        match actual {
+            SpecialTensor::RealScalar(value) => assert!(value.is_nan(), "expected NaN"),
+            _ => panic!("expected real scalar output"),
+        }
     }
 }
