@@ -388,9 +388,9 @@ mod tests {
             push_test_log(test_log_json(
                 "error-erf-plus-erfc",
                 "erf_erfc_identity",
-                &format!("x={x}"),
+                format!("x={x}"),
                 "1",
-                &format!("{lhs:.16e}"),
+                format!("{lhs:.16e}"),
                 2.0e-7,
                 mode,
                 seed,
@@ -423,8 +423,8 @@ mod tests {
             push_test_log(test_log_json(
                 "gamma-integer-factorial",
                 "gamma",
-                &format!("x={n}"),
-                &format!("{expected}"),
+                format!("x={n}"),
+                format!("{expected}"),
                 scalar_to_string(&actual),
                 1e-9,
                 mode,
@@ -492,7 +492,7 @@ mod tests {
             "gammainc+gammaincc",
             "a=2,x=1",
             "1",
-            &format!("{complement:.16e}"),
+            format!("{complement:.16e}"),
             2.0e-12,
             mode,
             seed,
@@ -517,7 +517,7 @@ mod tests {
             "beta",
             "a=0.5,b=2 vs a=2,b=0.5",
             "equal",
-            &format!(
+            format!(
                 "lhs={},rhs={}",
                 scalar_to_string(&beta_left),
                 scalar_to_string(&beta_right)
@@ -621,9 +621,9 @@ mod tests {
             push_test_log(test_log_json(
                 "bessel-asymptotic-envelope",
                 "j0,y0",
-                &format!("x={x}"),
-                &format!("{rhs:.16e}"),
-                &format!("{lhs:.16e}"),
+                format!("x={x}"),
+                format!("{rhs:.16e}"),
+                format!("{lhs:.16e}"),
                 3.5e-3,
                 mode,
                 seed,
@@ -652,9 +652,9 @@ mod tests {
             push_test_log(test_log_json(
                 "prop-erf-plus-erfc",
                 "erf+erfc",
-                &format!("x={x}"),
+                format!("x={x}"),
                 "1",
-                &format!("{lhs:.16e}"),
+                format!("{lhs:.16e}"),
                 2.0e-7,
                 mode,
                 seed,
@@ -686,9 +686,9 @@ mod tests {
             push_test_log(test_log_json(
                 "prop-gamma-recurrence",
                 "gamma",
-                &format!("x={x}"),
-                &format!("{rhs:.16e}"),
-                &format!("{g_x1:.16e}"),
+                format!("x={x}"),
+                format!("{rhs:.16e}"),
+                format!("{g_x1:.16e}"),
                 2.5e-9,
                 mode,
                 seed,
@@ -714,7 +714,7 @@ mod tests {
                 push_test_log(test_log_json(
                     "prop-beta-symmetry",
                     "beta",
-                    &format!("a={a},b={b}"),
+                    format!("a={a},b={b}"),
                     scalar_to_string(&rhs),
                     scalar_to_string(&lhs),
                     1.0e-10,
@@ -746,9 +746,9 @@ mod tests {
             push_test_log(test_log_json(
                 "prop-erfinv-erf",
                 "erfinv(erf(x))",
-                &format!("x={x}"),
-                &format!("{x:.16e}"),
-                &format!("{back:.16e}"),
+                format!("x={x}"),
+                format!("{x:.16e}"),
+                format!("{back:.16e}"),
                 2.0e-6,
                 mode,
                 seed,
@@ -778,9 +778,9 @@ mod tests {
                 push_test_log(test_log_json(
                     "prop-gammainc-complement",
                     "gammainc+gammaincc",
-                    &format!("a={a},x={x}"),
+                    format!("a={a},x={x}"),
                     "1",
-                    &format!("{sum:.16e}"),
+                    format!("{sum:.16e}"),
                     3.0e-12,
                     mode,
                     seed,
@@ -906,6 +906,7 @@ mod tests {
         Vec::new()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn test_log_json(
         test_id: impl Into<String>,
         function: impl Into<String>,
