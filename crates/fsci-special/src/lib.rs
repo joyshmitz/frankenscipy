@@ -793,6 +793,295 @@ mod tests {
     }
 
     #[test]
+    fn unit_vector_broadcast_and_shape_edge_cases() {
+        let _guard = trace_test_guard();
+        clear_test_logs();
+        let seed = 17_200_u64;
+        let mode = RuntimeMode::Strict;
+
+        let vec_input = SpecialTensor::RealVec(vec![-1.0, 0.0, 1.0]);
+        let erf_vec = erf(&vec_input, mode).expect("erf vec");
+        let erfc_vec = erfc(&vec_input, mode).expect("erfc vec");
+        let (erf_vals, erfc_vals) = match (&erf_vec, &erfc_vec) {
+            (SpecialTensor::RealVec(lhs), SpecialTensor::RealVec(rhs)) => (lhs, rhs),
+            _ => panic!("expected vector outputs"),
+        };
+        assert_eq!(erf_vals.len(), 3);
+        assert_eq!(erfc_vals.len(), 3);
+        for (idx, (lhs, rhs)) in erf_vals.iter().zip(erfc_vals.iter()).enumerate() {
+            let sum = lhs + rhs;
+            assert!(
+                (sum - 1.0).abs() <= 3.0e-7,
+                "vector erf+erfc identity failed at idx={idx}: {sum}"
+            );
+            push_test_log(test_log_json(
+                "unit-erf-erfc-vector",
+                "erf,erfc",
+                format!("idx={idx},x={}", [-1.0_f64, 0.0, 1.0][idx]),
+                "1",
+                format!("{sum:.16e}"),
+                3.0e-7,
+                mode,
+                seed,
+                "pass",
+            ));
+        }
+
+        let beta_vec = beta(
+            &SpecialTensor::RealVec(vec![1.0, 2.0, 3.0]),
+            &SpecialTensor::RealScalar(2.0),
+            mode,
+        )
+        .expect("beta vector+scalar");
+        let beta_vals = match beta_vec {
+            SpecialTensor::RealVec(values) => values,
+            _ => panic!("expected vector output"),
+        };
+        assert_eq!(beta_vals.len(), 3);
+        assert!((beta_vals[0] - 0.5).abs() <= 1e-12);
+        assert!((beta_vals[1] - (1.0 / 6.0)).abs() <= 1e-12);
+        assert!((beta_vals[2] - (1.0 / 12.0)).abs() <= 1e-12);
+        push_test_log(test_log_json(
+            "unit-beta-vector-scalar",
+            "beta",
+            "a=[1,2,3],b=2",
+            "[0.5,0.1666...,0.0833...]",
+            format!(
+                "[{:.16e},{:.16e},{:.16e}]",
+                beta_vals[0], beta_vals[1], beta_vals[2]
+            ),
+            1e-12,
+            mode,
+            seed,
+            "pass",
+        ));
+
+        let mismatch = beta(
+            &SpecialTensor::RealVec(vec![1.0, 2.0]),
+            &SpecialTensor::RealVec(vec![1.0]),
+            RuntimeMode::Hardened,
+        )
+        .expect_err("mismatched vectors should fail");
+        assert_eq!(mismatch.kind, SpecialErrorKind::DomainError);
+        push_test_log(test_log_json(
+            "unit-beta-mismatch-domain",
+            "beta",
+            "a_len=2,b_len=1,hardened",
+            "DomainError",
+            format!("{:?}", mismatch.kind),
+            0.0,
+            RuntimeMode::Hardened,
+            seed,
+            "pass",
+        ));
+
+        let j0_vec = j0(&SpecialTensor::RealVec(vec![0.0, 1.0, 2.0]), mode).expect("j0 vec");
+        let j0_vals = match j0_vec {
+            SpecialTensor::RealVec(values) => values,
+            _ => panic!("expected vector output"),
+        };
+        assert_eq!(j0_vals.len(), 3);
+        assert!((j0_vals[0] - 1.0).abs() <= 1e-8);
+        push_test_log(test_log_json(
+            "unit-j0-vector",
+            "j0",
+            "x=[0,1,2]",
+            "len=3",
+            format!(
+                "[{:.16e},{:.16e},{:.16e}]",
+                j0_vals[0], j0_vals[1], j0_vals[2]
+            ),
+            1e-8,
+            mode,
+            seed,
+            "pass",
+        ));
+
+        assert_logs_follow_schema(&take_test_logs());
+    }
+
+    #[test]
+    fn unit_domain_boundary_matrix_strict_vs_hardened() {
+        let _guard = trace_test_guard();
+        clear_test_logs();
+        let seed = 17_201_u64;
+
+        let erfinv_left =
+            erfinv(&SpecialTensor::RealScalar(-1.0), RuntimeMode::Strict).expect("erfinv(-1)");
+        let erfinv_right =
+            erfinv(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict).expect("erfinv(1)");
+        match erfinv_left {
+            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_negative()),
+            _ => panic!("expected scalar"),
+        }
+        match erfinv_right {
+            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_positive()),
+            _ => panic!("expected scalar"),
+        }
+
+        let erfcinv_zero =
+            erfcinv(&SpecialTensor::RealScalar(0.0), RuntimeMode::Strict).expect("erfcinv(0)");
+        let erfcinv_two =
+            erfcinv(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict).expect("erfcinv(2)");
+        match erfcinv_zero {
+            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_positive()),
+            _ => panic!("expected scalar"),
+        }
+        match erfcinv_two {
+            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_negative()),
+            _ => panic!("expected scalar"),
+        }
+
+        let strict_bad_order = jn(
+            &SpecialTensor::RealScalar(0.5),
+            &SpecialTensor::RealScalar(1.0),
+            RuntimeMode::Strict,
+        )
+        .expect("strict returns NaN for non-integer order");
+        assert_real_scalar_nan(strict_bad_order);
+        let hardened_bad_order = jn(
+            &SpecialTensor::RealScalar(0.5),
+            &SpecialTensor::RealScalar(1.0),
+            RuntimeMode::Hardened,
+        )
+        .expect_err("hardened rejects non-integer order");
+        assert_eq!(hardened_bad_order.kind, SpecialErrorKind::DomainError);
+
+        let strict_bad_gamma = gammaincc(
+            &SpecialTensor::RealScalar(-1.0),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .expect("strict returns NaN for invalid shape");
+        assert_real_scalar_nan(strict_bad_gamma);
+        let hardened_bad_gamma = gammaincc(
+            &SpecialTensor::RealScalar(-1.0),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Hardened,
+        )
+        .expect_err("hardened rejects invalid shape");
+        assert_eq!(hardened_bad_gamma.kind, SpecialErrorKind::DomainError);
+
+        push_test_log(test_log_json(
+            "unit-boundary-policy-matrix",
+            "erfinv/erfcinv/jn/gammaincc",
+            "boundary + malformed domain set",
+            "strict nonfinite fallback / hardened domain error",
+            "validated",
+            0.0,
+            RuntimeMode::Strict,
+            seed,
+            "pass",
+        ));
+        assert_logs_follow_schema(&take_test_logs());
+    }
+
+    #[test]
+    fn property_erfcinv_erfc_roundtrip_grid() {
+        let _guard = trace_test_guard();
+        clear_test_logs();
+        let seed = 17_300_u64;
+        let mode = RuntimeMode::Strict;
+
+        for i in 1..=120 {
+            let y = (i as f64) / 60.0;
+            let inv = erfcinv(&SpecialTensor::RealScalar(y), mode).expect("erfcinv(y)");
+            let back = erfc(&inv, mode).expect("erfc(erfcinv(y))");
+            let back_v = scalar_value(&back);
+            assert!(
+                (back_v - y).abs() <= 4.0e-6,
+                "erfcinv/erfc roundtrip mismatch y={y}: {back_v}"
+            );
+            push_test_log(test_log_json(
+                "prop-erfcinv-erfc-roundtrip",
+                "erfc(erfcinv(y))",
+                format!("y={y:.16e}"),
+                format!("{y:.16e}"),
+                format!("{back_v:.16e}"),
+                4.0e-6,
+                mode,
+                seed,
+                "pass",
+            ));
+        }
+
+        assert_logs_follow_schema(&take_test_logs());
+    }
+
+    #[test]
+    fn property_bessel_envelope_large_x_grid() {
+        let _guard = trace_test_guard();
+        clear_test_logs();
+        let seed = 17_301_u64;
+        let mode = RuntimeMode::Strict;
+
+        for k in 0..200 {
+            let x = 20.0 + 0.5 * k as f64;
+            let j0_v = j0(&SpecialTensor::RealScalar(x), mode).expect("j0");
+            let y0_v = y0(&SpecialTensor::RealScalar(x), mode).expect("y0");
+            let lhs = scalar_value(&j0_v).powi(2) + scalar_value(&y0_v).powi(2);
+            let rhs = 2.0 / (std::f64::consts::PI * x);
+            assert!(
+                (lhs - rhs).abs() <= 3.5e-3,
+                "bessel envelope mismatch at x={x}: lhs={lhs} rhs={rhs}"
+            );
+            push_test_log(test_log_json(
+                "prop-bessel-envelope",
+                "j0^2+y0^2",
+                format!("x={x:.16e}"),
+                format!("{rhs:.16e}"),
+                format!("{lhs:.16e}"),
+                3.5e-3,
+                mode,
+                seed,
+                "pass",
+            ));
+        }
+
+        assert_logs_follow_schema(&take_test_logs());
+    }
+
+    #[test]
+    fn property_jn_three_term_recurrence_grid() {
+        let _guard = trace_test_guard();
+        clear_test_logs();
+        let seed = 17_302_u64;
+        let mode = RuntimeMode::Strict;
+
+        for n in 1..=8 {
+            for step in 1..=120 {
+                let x = 0.5 + 0.05 * step as f64;
+                let n_tensor = SpecialTensor::RealScalar(n as f64);
+                let n_prev_tensor = SpecialTensor::RealScalar((n - 1) as f64);
+                let n_next_tensor = SpecialTensor::RealScalar((n + 1) as f64);
+                let x_tensor = SpecialTensor::RealScalar(x);
+
+                let jn_v = scalar_value(&jn(&n_tensor, &x_tensor, mode).expect("jn"));
+                let jn_prev = scalar_value(&jn(&n_prev_tensor, &x_tensor, mode).expect("jn-1"));
+                let jn_next = scalar_value(&jn(&n_next_tensor, &x_tensor, mode).expect("jn+1"));
+                let rhs = (2.0 * n as f64 / x) * jn_v - jn_prev;
+                assert!(
+                    (jn_next - rhs).abs() <= 2.0e-6,
+                    "jn recurrence mismatch n={n} x={x}: lhs={jn_next} rhs={rhs}"
+                );
+                push_test_log(test_log_json(
+                    "prop-jn-recurrence",
+                    "J_{n+1}=(2n/x)J_n-J_{n-1}",
+                    format!("n={n},x={x:.16e}"),
+                    format!("{rhs:.16e}"),
+                    format!("{jn_next:.16e}"),
+                    2.0e-6,
+                    mode,
+                    seed,
+                    "pass",
+                ));
+            }
+        }
+
+        assert_logs_follow_schema(&take_test_logs());
+    }
+
+    #[test]
     fn pending_families_remain_explicitly_unimplemented() {
         let scalar = SpecialTensor::RealScalar(1.0);
 

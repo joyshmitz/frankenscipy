@@ -554,6 +554,9 @@ dependencies = [
 [[package]]
 name = "fsci-arrayapi"
 version = "0.1.0"
+dependencies = [
+ "nalgebra",
+]
 
 [[package]]
 name = "fsci-conformance"
@@ -565,6 +568,7 @@ dependencies = [
  "fsci-linalg",
  "fsci-opt",
  "fsci-runtime",
+ "fsci-special",
  "ftui",
  "serde",
  "serde_json",

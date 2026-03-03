@@ -1,0 +1,393 @@
+{
+  "packet_id": "FSCI-P2C-006",
+  "family": "special_core",
+  "cases": [
+    {
+      "case_id": "diff_gamma_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::gamma"
+      }
+    },
+    {
+      "case_id": "diff_gamma_half",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [0.5],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.772453850905516,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::gamma"
+      }
+    },
+    {
+      "case_id": "diff_gammaln_five",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gammaln",
+      "args": [5.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.1780538303479458,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::gammaln"
+      }
+    },
+    {
+      "case_id": "diff_gammainc_a2_x1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gammainc",
+      "args": [2.0, 1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.26424111765711533,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::gamma"
+      }
+    },
+    {
+      "case_id": "diff_gammaincc_a2_x1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gammaincc",
+      "args": [2.0, 1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.7357588823428847,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::gamma"
+      }
+    },
+    {
+      "case_id": "diff_erf_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "erf",
+      "args": [1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8427007929497149,
+        "atol": 2e-7,
+        "rtol": 2e-7,
+        "contract_ref": "fsci_special::erf"
+      }
+    },
+    {
+      "case_id": "diff_erfc_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "erfc",
+      "args": [1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.15729920705028513,
+        "atol": 2e-7,
+        "rtol": 2e-7,
+        "contract_ref": "fsci_special::erfc"
+      }
+    },
+    {
+      "case_id": "diff_erfinv_half",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "erfinv",
+      "args": [0.5],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.4769362762044699,
+        "atol": 4e-6,
+        "rtol": 4e-6,
+        "contract_ref": "fsci_special::erfinv"
+      }
+    },
+    {
+      "case_id": "diff_erfcinv_half",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "erfcinv",
+      "args": [0.5],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.4769362762044699,
+        "atol": 4e-6,
+        "rtol": 4e-6
+      }
+    },
+    {
+      "case_id": "diff_beta_2_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "beta",
+      "args": [2.0, 3.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.08333333333333333,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::beta"
+      }
+    },
+    {
+      "case_id": "diff_betaln_2_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "betaln",
+      "args": [2.0, 3.0],
+      "expected": {
+        "kind": "scalar",
+        "value": -2.4849066497880004,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::betaln"
+      }
+    },
+    {
+      "case_id": "diff_betainc_2_3_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "betainc",
+      "args": [2.0, 3.0, 0.5],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.6875,
+        "atol": 2e-11,
+        "rtol": 2e-11,
+        "contract_ref": "fsci_special::beta"
+      }
+    },
+    {
+      "case_id": "diff_j0_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "j0",
+      "args": [1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.7651976865579666,
+        "atol": 5e-4,
+        "rtol": 5e-4
+      }
+    },
+    {
+      "case_id": "diff_j1_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "j1",
+      "args": [1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.4400505857449335,
+        "atol": 5e-4,
+        "rtol": 5e-4
+      }
+    },
+    {
+      "case_id": "diff_y0_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "y0",
+      "args": [1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.08825696421567697,
+        "atol": 8e-3,
+        "rtol": 8e-3
+      }
+    },
+
+    {
+      "case_id": "meta_erf_plus_erfc_neg2",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "function": "rel_erf_erfc_identity",
+      "args": [-2.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 3e-7,
+        "rtol": 3e-7
+      }
+    },
+    {
+      "case_id": "meta_erf_plus_erfc_pos0p3",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "function": "rel_erf_erfc_identity",
+      "args": [0.3],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 3e-7,
+        "rtol": 3e-7
+      }
+    },
+    {
+      "case_id": "meta_gamma_recurrence_x2p5",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "function": "rel_gamma_recurrence",
+      "args": [2.5],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gamma"
+      }
+    },
+    {
+      "case_id": "meta_beta_symmetry_0p75_2p5",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "function": "rel_beta_symmetry",
+      "args": [0.75, 2.5],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 2e-12,
+        "rtol": 2e-12,
+        "contract_ref": "fsci_special::beta"
+      }
+    },
+    {
+      "case_id": "meta_gammainc_complement_2p5_1p7",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "function": "rel_gammainc_complement",
+      "args": [2.5, 1.7],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 2e-12,
+        "rtol": 2e-12
+      }
+    },
+    {
+      "case_id": "meta_jn_recurrence_n3_x2p5",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "function": "rel_jn_recurrence",
+      "args": [3.0, 2.5],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 3e-6,
+        "rtol": 3e-6
+      }
+    },
+
+    {
+      "case_id": "adv_gamma_pole_strict_nan",
+      "category": "adversarial",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [-2.0],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "adv_gamma_pole_hardened_error",
+      "category": "adversarial",
+      "mode": "Hardened",
+      "function": "gamma",
+      "args": [-2.0],
+      "expected": {
+        "kind": "error_kind",
+        "error": "PoleInput"
+      }
+    },
+    {
+      "case_id": "adv_erfinv_oob_strict_nan",
+      "category": "adversarial",
+      "mode": "Strict",
+      "function": "erfinv",
+      "args": [1.2],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "adv_erfinv_oob_hardened_error",
+      "category": "adversarial",
+      "mode": "Hardened",
+      "function": "erfinv",
+      "args": [1.2],
+      "expected": {
+        "kind": "error_kind",
+        "error": "DomainError"
+      }
+    },
+    {
+      "case_id": "adv_erfcinv_oob_hardened_error",
+      "category": "adversarial",
+      "mode": "Hardened",
+      "function": "erfcinv",
+      "args": [3.0],
+      "expected": {
+        "kind": "error_kind",
+        "error": "DomainError"
+      }
+    },
+    {
+      "case_id": "adv_beta_overflow_strict_inf",
+      "category": "adversarial",
+      "mode": "Strict",
+      "function": "beta",
+      "args": [1e-308, 1e-308],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "adv_beta_overflow_hardened_error",
+      "category": "adversarial",
+      "mode": "Hardened",
+      "function": "beta",
+      "args": [1e-308, 1e-308],
+      "expected": {
+        "kind": "error_kind",
+        "error": "OverflowRisk"
+      }
+    },
+    {
+      "case_id": "adv_y0_negative_hardened_error",
+      "category": "adversarial",
+      "mode": "Hardened",
+      "function": "y0",
+      "args": [-1.0],
+      "expected": {
+        "kind": "error_kind",
+        "error": "DomainError"
+      }
+    },
+    {
+      "case_id": "adv_jn_noninteger_hardened_error",
+      "category": "adversarial",
+      "mode": "Hardened",
+      "function": "jn",
+      "args": [0.5, 1.0],
+      "expected": {
+        "kind": "error_kind",
+        "error": "DomainError"
+      }
+    }
+  ]
+}

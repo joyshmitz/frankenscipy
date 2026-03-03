@@ -16,6 +16,14 @@ use fsci_opt::{
     RootMethod, RootOptions, minimize, root_scalar,
 };
 use fsci_runtime::RuntimeMode;
+use fsci_special::{
+    SpecialError as FsciSpecialError, SpecialErrorKind as FsciSpecialErrorKind,
+    SpecialTensor as FsciSpecialTensor, beta as special_beta, betainc as special_betainc,
+    betaln as special_betaln, erf as special_erf, erfc as special_erfc, erfcinv as special_erfcinv,
+    erfinv as special_erfinv, gamma as special_gamma, gammainc as special_gammainc,
+    gammaincc as special_gammaincc, gammaln as special_gammaln, j0 as special_j0, j1 as special_j1,
+    jn as special_jn, y0 as special_y0, y1 as special_y1, yn as special_yn,
+};
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};
 use serde::{Deserialize, Serialize};
@@ -475,6 +483,92 @@ pub struct OptimizePacketFixture {
     pub packet_id: String,
     pub family: String,
     pub cases: Vec<OptimizeCase>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpecialCaseFunction {
+    Gamma,
+    Gammaln,
+    Gammainc,
+    Gammaincc,
+    Erf,
+    Erfc,
+    Erfinv,
+    Erfcinv,
+    Beta,
+    Betaln,
+    Betainc,
+    J0,
+    J1,
+    Jn,
+    Y0,
+    Y1,
+    Yn,
+    RelErfErfcIdentity,
+    RelGammaRecurrence,
+    RelBetaSymmetry,
+    RelGammaincComplement,
+    RelJnRecurrence,
+    RelErfinvComposition,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpecialValueClass {
+    Finite,
+    Nan,
+    PosInf,
+    NegInf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SpecialExpectedOutcome {
+    Scalar {
+        value: f64,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    Class {
+        class: SpecialValueClass,
+    },
+    ErrorKind {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpecialCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: RuntimeMode,
+    pub function: SpecialCaseFunction,
+    #[serde(default)]
+    pub args: Vec<f64>,
+    pub expected: SpecialExpectedOutcome,
+}
+
+impl SpecialCase {
+    fn case_id(&self) -> &str {
+        &self.case_id
+    }
+
+    #[cfg(test)]
+    fn category(&self) -> &str {
+        &self.category
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpecialPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<SpecialCase>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1605,12 +1699,24 @@ struct ContractTable {
 }
 
 static OPTIMIZE_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
+static SPECIAL_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
 
 fn load_optimize_contract_table() -> Option<&'static ContractTable> {
     OPTIMIZE_CONTRACT_TABLE
         .get_or_init(|| {
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("fixtures/artifacts/P2C-003/contracts/contract_table.json");
+            let raw = fs::read_to_string(path).ok()?;
+            serde_json::from_str::<ContractTable>(&raw).ok()
+        })
+        .as_ref()
+}
+
+fn load_special_contract_table() -> Option<&'static ContractTable> {
+    SPECIAL_CONTRACT_TABLE
+        .get_or_init(|| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/artifacts/P2C-006/contracts/contract_table.json");
             let raw = fs::read_to_string(path).ok()?;
             serde_json::from_str::<ContractTable>(&raw).ok()
         })
@@ -1632,6 +1738,48 @@ fn resolve_contract_tolerance(
 
     if let Some(contract_ref) = contract_ref
         && let Some(table) = load_optimize_contract_table()
+        && let Some(entry) = table
+            .contracts
+            .iter()
+            .find(|candidate| candidate.function_name == contract_ref)
+    {
+        return ToleranceUsed {
+            atol: explicit_atol
+                .or(entry.tolerance_policy.default_atol)
+                .unwrap_or(1.0e-9),
+            rtol: explicit_rtol
+                .or(entry.tolerance_policy.default_rtol)
+                .unwrap_or(1.0e-6),
+            comparison_mode: entry
+                .tolerance_policy
+                .comparison_mode
+                .clone()
+                .unwrap_or_else(|| "mixed".to_owned()),
+        };
+    }
+
+    ToleranceUsed {
+        atol: explicit_atol.unwrap_or(1.0e-9),
+        rtol: explicit_rtol.unwrap_or(1.0e-6),
+        comparison_mode: "mixed".to_owned(),
+    }
+}
+
+fn resolve_special_contract_tolerance(
+    contract_ref: Option<&str>,
+    explicit_atol: Option<f64>,
+    explicit_rtol: Option<f64>,
+) -> ToleranceUsed {
+    if let (Some(atol), Some(rtol)) = (explicit_atol, explicit_rtol) {
+        return ToleranceUsed {
+            atol,
+            rtol,
+            comparison_mode: "mixed".to_owned(),
+        };
+    }
+
+    if let Some(contract_ref) = contract_ref
+        && let Some(table) = load_special_contract_table()
         && let Some(entry) = table
             .contracts
             .iter()
@@ -1842,6 +1990,8 @@ pub fn run_differential_test(
         run_differential_validate_tol(fixture_path, &raw, oracle_config)
     } else if family.contains("linalg") {
         run_differential_linalg(fixture_path, &raw, oracle_config)
+    } else if family.contains("special") {
+        run_differential_special(fixture_path, &raw, oracle_config)
     } else if family.contains("optim") {
         run_differential_optimize(fixture_path, &raw, oracle_config)
     } else {
@@ -2027,6 +2177,413 @@ fn run_differential_optimize(
         per_case_results,
         generated_unix_ms: now_unix_ms(),
     })
+}
+
+fn run_differential_special(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: SpecialPacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+
+    for case in &fixture.cases {
+        let observed = execute_special_case(case);
+        let (passed, message, max_diff, tolerance_used) =
+            compare_special_case_differential(case, &observed);
+
+        per_case_results.push(DifferentialCaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+            max_diff,
+            tolerance_used,
+            oracle_status: oracle_status.clone(),
+        });
+    }
+
+    let pass_count = per_case_results.iter().filter(|r| r.passed).count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
+    let mode = case.mode;
+    let args = &case.args;
+    match case.function {
+        SpecialCaseFunction::Gamma => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("gamma", mode));
+            }
+            special_scalar_from_tensor(
+                special_gamma(&special_scalar(args[0]), mode)?,
+                "gamma",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Gammaln => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("gammaln", mode));
+            }
+            special_scalar_from_tensor(
+                special_gammaln(&special_scalar(args[0]), mode)?,
+                "gammaln",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Gammainc => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("gammainc", mode));
+            }
+            special_scalar_from_tensor(
+                special_gammainc(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "gammainc",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Gammaincc => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("gammaincc", mode));
+            }
+            special_scalar_from_tensor(
+                special_gammaincc(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "gammaincc",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Erf => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("erf", mode));
+            }
+            special_scalar_from_tensor(special_erf(&special_scalar(args[0]), mode)?, "erf", mode)
+        }
+        SpecialCaseFunction::Erfc => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("erfc", mode));
+            }
+            special_scalar_from_tensor(special_erfc(&special_scalar(args[0]), mode)?, "erfc", mode)
+        }
+        SpecialCaseFunction::Erfinv => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("erfinv", mode));
+            }
+            special_scalar_from_tensor(
+                special_erfinv(&special_scalar(args[0]), mode)?,
+                "erfinv",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Erfcinv => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("erfcinv", mode));
+            }
+            special_scalar_from_tensor(
+                special_erfcinv(&special_scalar(args[0]), mode)?,
+                "erfcinv",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Beta => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("beta", mode));
+            }
+            special_scalar_from_tensor(
+                special_beta(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "beta",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Betaln => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("betaln", mode));
+            }
+            special_scalar_from_tensor(
+                special_betaln(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "betaln",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Betainc => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("betainc", mode));
+            }
+            special_scalar_from_tensor(
+                special_betainc(
+                    &special_scalar(args[0]),
+                    &special_scalar(args[1]),
+                    &special_scalar(args[2]),
+                    mode,
+                )?,
+                "betainc",
+                mode,
+            )
+        }
+        SpecialCaseFunction::J0 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("j0", mode));
+            }
+            special_scalar_from_tensor(special_j0(&special_scalar(args[0]), mode)?, "j0", mode)
+        }
+        SpecialCaseFunction::J1 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("j1", mode));
+            }
+            special_scalar_from_tensor(special_j1(&special_scalar(args[0]), mode)?, "j1", mode)
+        }
+        SpecialCaseFunction::Jn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("jn", mode));
+            }
+            special_scalar_from_tensor(
+                special_jn(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "jn",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Y0 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("y0", mode));
+            }
+            special_scalar_from_tensor(special_y0(&special_scalar(args[0]), mode)?, "y0", mode)
+        }
+        SpecialCaseFunction::Y1 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("y1", mode));
+            }
+            special_scalar_from_tensor(special_y1(&special_scalar(args[0]), mode)?, "y1", mode)
+        }
+        SpecialCaseFunction::Yn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("yn", mode));
+            }
+            special_scalar_from_tensor(
+                special_yn(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "yn",
+                mode,
+            )
+        }
+        SpecialCaseFunction::RelErfErfcIdentity => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("rel_erf_erfc_identity", mode));
+            }
+            let x = args[0];
+            let erf_v =
+                special_scalar_from_tensor(special_erf(&special_scalar(x), mode)?, "erf", mode)?;
+            let erfc_v =
+                special_scalar_from_tensor(special_erfc(&special_scalar(x), mode)?, "erfc", mode)?;
+            Ok(erf_v + erfc_v)
+        }
+        SpecialCaseFunction::RelGammaRecurrence => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("rel_gamma_recurrence", mode));
+            }
+            let x = args[0];
+            let gx = special_scalar_from_tensor(
+                special_gamma(&special_scalar(x), mode)?,
+                "gamma",
+                mode,
+            )?;
+            let gx1 = special_scalar_from_tensor(
+                special_gamma(&special_scalar(x + 1.0), mode)?,
+                "gamma",
+                mode,
+            )?;
+            Ok(gx1 - x * gx)
+        }
+        SpecialCaseFunction::RelBetaSymmetry => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("rel_beta_symmetry", mode));
+            }
+            let a = args[0];
+            let b = args[1];
+            let lhs = special_scalar_from_tensor(
+                special_beta(&special_scalar(a), &special_scalar(b), mode)?,
+                "beta",
+                mode,
+            )?;
+            let rhs = special_scalar_from_tensor(
+                special_beta(&special_scalar(b), &special_scalar(a), mode)?,
+                "beta",
+                mode,
+            )?;
+            Ok(lhs - rhs)
+        }
+        SpecialCaseFunction::RelGammaincComplement => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error(
+                    "rel_gammainc_complement",
+                    mode,
+                ));
+            }
+            let a = args[0];
+            let x = args[1];
+            let p = special_scalar_from_tensor(
+                special_gammainc(&special_scalar(a), &special_scalar(x), mode)?,
+                "gammainc",
+                mode,
+            )?;
+            let q = special_scalar_from_tensor(
+                special_gammaincc(&special_scalar(a), &special_scalar(x), mode)?,
+                "gammaincc",
+                mode,
+            )?;
+            Ok(p + q)
+        }
+        SpecialCaseFunction::RelJnRecurrence => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("rel_jn_recurrence", mode));
+            }
+            let n = args[0];
+            let x = args[1];
+            let jn_prev = special_scalar_from_tensor(
+                special_jn(&special_scalar(n - 1.0), &special_scalar(x), mode)?,
+                "jn",
+                mode,
+            )?;
+            let jn_curr = special_scalar_from_tensor(
+                special_jn(&special_scalar(n), &special_scalar(x), mode)?,
+                "jn",
+                mode,
+            )?;
+            let jn_next = special_scalar_from_tensor(
+                special_jn(&special_scalar(n + 1.0), &special_scalar(x), mode)?,
+                "jn",
+                mode,
+            )?;
+            Ok(jn_next - ((2.0 * n / x) * jn_curr - jn_prev))
+        }
+        SpecialCaseFunction::RelErfinvComposition => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error(
+                    "rel_erfinv_composition",
+                    mode,
+                ));
+            }
+            let x = args[0];
+            let erf_x =
+                special_scalar_from_tensor(special_erf(&special_scalar(x), mode)?, "erf", mode)?;
+            special_scalar_from_tensor(
+                special_erfinv(&special_scalar(erf_x), mode)?,
+                "erfinv",
+                mode,
+            )
+        }
+    }
+}
+
+fn special_scalar(value: f64) -> FsciSpecialTensor {
+    FsciSpecialTensor::RealScalar(value)
+}
+
+fn special_scalar_from_tensor(
+    tensor: FsciSpecialTensor,
+    function: &'static str,
+    mode: RuntimeMode,
+) -> Result<f64, FsciSpecialError> {
+    match tensor {
+        FsciSpecialTensor::RealScalar(value) => Ok(value),
+        _ => Err(FsciSpecialError {
+            function,
+            kind: FsciSpecialErrorKind::NotYetImplemented,
+            mode,
+            detail: "expected scalar output in conformance fixture",
+        }),
+    }
+}
+
+fn special_invalid_fixture_error(function: &'static str, mode: RuntimeMode) -> FsciSpecialError {
+    FsciSpecialError {
+        function,
+        kind: FsciSpecialErrorKind::DomainError,
+        mode,
+        detail: "invalid fixture arity for special case",
+    }
+}
+
+fn compare_special_case_differential(
+    case: &SpecialCase,
+    observed: &Result<f64, FsciSpecialError>,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    match (&case.expected, observed) {
+        (
+            SpecialExpectedOutcome::Scalar {
+                value,
+                atol,
+                rtol,
+                contract_ref,
+            },
+            Ok(actual),
+        ) => {
+            let tolerance =
+                resolve_special_contract_tolerance(contract_ref.as_deref(), *atol, *rtol);
+            let diff = (*actual - *value).abs();
+            let pass = allclose_scalar(*actual, *value, tolerance.atol, tolerance.rtol);
+            let msg = if pass {
+                format!("special scalar matched (diff={diff:.2e})")
+            } else {
+                format!(
+                    "special scalar mismatch: expected={value:.16e}, got={actual:.16e}, diff={diff:.2e}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(diff), Some(tolerance))
+        }
+        (SpecialExpectedOutcome::Class { class }, Ok(actual)) => {
+            let observed_class = classify_special_value(*actual);
+            let pass = observed_class == *class;
+            let msg = if pass {
+                format!("value class matched ({observed_class:?})")
+            } else {
+                format!("value class mismatch: expected={class:?}, got={observed_class:?}")
+            };
+            (pass, msg, None, None)
+        }
+        (SpecialExpectedOutcome::ErrorKind { error }, Err(actual)) => {
+            let observed_kind = format!("{:?}", actual.kind);
+            let pass = observed_kind == *error;
+            let msg = if pass {
+                format!("error kind matched ({observed_kind})")
+            } else {
+                format!("error kind mismatch: expected={error}, got={observed_kind}")
+            };
+            (pass, msg, None, None)
+        }
+        (expected, observed) => (
+            false,
+            format!("shape mismatch: expected {expected:?}, got {observed:?}"),
+            None,
+            None,
+        ),
+    }
+}
+
+fn classify_special_value(value: f64) -> SpecialValueClass {
+    if value.is_nan() {
+        return SpecialValueClass::Nan;
+    }
+    if value == f64::INFINITY {
+        return SpecialValueClass::PosInf;
+    }
+    if value == f64::NEG_INFINITY {
+        return SpecialValueClass::NegInf;
+    }
+    SpecialValueClass::Finite
 }
 
 /// Compare a linalg case and return (passed, message, max_diff, tolerance_used).
@@ -2469,9 +3026,9 @@ mod tests {
     use super::{
         AggregateParityReport, ConformanceReport, DifferentialOracleConfig, HarnessConfig,
         LinalgPacketFixture, OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
-        aggregate_packet_reports, discover_fixtures, ensure_artifact_layout, load_oracle_capture,
-        run_differential_test, run_linalg_packet, run_optimize_packet, run_smoke,
-        run_validate_tol_packet, write_parity_artifacts,
+        SpecialPacketFixture, aggregate_packet_reports, discover_fixtures, ensure_artifact_layout,
+        load_oracle_capture, run_differential_test, run_linalg_packet, run_optimize_packet,
+        run_smoke, run_validate_tol_packet, write_parity_artifacts,
     };
     use serde::Serialize;
     use std::fs;
@@ -2702,6 +3259,32 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         }
     }
 
+    fn special_case_input_summary(case: &super::SpecialCase) -> String {
+        format!(
+            "function={:?} mode={:?} args={:?}",
+            case.function, case.mode, case.args
+        )
+    }
+
+    fn special_case_expected_summary(expected: &super::SpecialExpectedOutcome) -> String {
+        match expected {
+            super::SpecialExpectedOutcome::Scalar {
+                value,
+                atol,
+                rtol,
+                contract_ref,
+            } => format!(
+                "scalar value={value:.16e} atol={atol:?} rtol={rtol:?} contract_ref={contract_ref:?}"
+            ),
+            super::SpecialExpectedOutcome::Class { class } => {
+                format!("class={class:?}")
+            }
+            super::SpecialExpectedOutcome::ErrorKind { error } => {
+                format!("error_kind={error}")
+            }
+        }
+    }
+
     #[test]
     fn differential_test_validate_tol_fixture() {
         let fixture_path = HarnessConfig::default_paths()
@@ -2870,6 +3453,108 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let output_path = output_dir.join("structured_case_logs.json");
         let payload = serde_json::to_vec_pretty(&logs).expect("serialize optimize logs");
         fs::write(&output_path, payload).expect("write optimize structured logs");
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn differential_test_special_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-006_special_core.json");
+        let oracle = default_test_oracle();
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("differential special runs");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-006");
+        assert_eq!(report.family, "special_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 29);
+    }
+
+    #[test]
+    fn differential_special_quota_and_structured_logs() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-006_special_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read special fixture");
+        let fixture: SpecialPacketFixture =
+            serde_json::from_str(&raw).expect("parse special fixture");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle).expect("special differential");
+
+        let mut by_case = std::collections::BTreeMap::new();
+        for case in &fixture.cases {
+            by_case.insert(case.case_id().to_owned(), case);
+        }
+
+        let mut differential_count = 0usize;
+        let mut metamorphic_count = 0usize;
+        let mut adversarial_count = 0usize;
+        let mut logs = Vec::with_capacity(report.per_case_results.len());
+
+        for case_result in &report.per_case_results {
+            let case = by_case
+                .get(&case_result.case_id)
+                .expect("every report case should exist in fixture");
+            match case.category() {
+                "differential" => differential_count += 1,
+                "metamorphic" => metamorphic_count += 1,
+                "adversarial" => adversarial_count += 1,
+                other => panic!("unexpected category: {other}"),
+            }
+
+            let log = StructuredCaseLog {
+                test_id: case_result.case_id.clone(),
+                category: case.category().to_owned(),
+                input_summary: special_case_input_summary(case),
+                expected: special_case_expected_summary(&case.expected),
+                actual: case_result.message.clone(),
+                diff: case_result.max_diff,
+                tolerance: case_result.tolerance_used.clone(),
+                pass: case_result.passed,
+            };
+
+            let payload =
+                serde_json::to_string(&log).expect("structured conformance log should serialize");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&payload).expect("structured log should parse");
+            assert!(parsed.get("test_id").is_some());
+            assert!(parsed.get("category").is_some());
+            assert!(parsed.get("input_summary").is_some());
+            assert!(parsed.get("expected").is_some());
+            assert!(parsed.get("actual").is_some());
+            assert!(parsed.get("diff").is_some());
+            assert!(parsed.get("tolerance").is_some());
+            assert!(parsed.get("pass").is_some());
+            logs.push(log);
+        }
+
+        assert!(
+            differential_count >= 15,
+            "expected >=15 differential cases, got {differential_count}"
+        );
+        assert!(
+            metamorphic_count >= 6,
+            "expected >=6 metamorphic cases, got {metamorphic_count}"
+        );
+        assert!(
+            adversarial_count >= 8,
+            "expected >=8 adversarial cases, got {adversarial_count}"
+        );
+        assert_eq!(report.fail_count, 0);
+
+        let output_dir = HarnessConfig::default_paths()
+            .artifact_dir_for("P2C-006")
+            .join("differential");
+        fs::create_dir_all(&output_dir).expect("create special differential artifact directory");
+        let output_path = output_dir.join("structured_case_logs.json");
+        let payload = serde_json::to_vec_pretty(&logs).expect("serialize special logs");
+        fs::write(&output_path, payload).expect("write special structured logs");
         assert!(output_path.exists());
     }
 

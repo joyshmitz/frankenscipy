@@ -105,3 +105,12 @@ pub fn linspace<B: ArrayApiBackend>(
         request.dtype,
     )
 }
+
+pub fn from_slice<B: ArrayApiBackend>(
+    backend: &B,
+    values: &[ScalarValue],
+    request: &CreationRequest,
+) -> ArrayApiResult<B::Array> {
+    validate_shape(&request.shape)?;
+    backend.array_from_slice(values, &request.shape, request.dtype, request.order)
+}

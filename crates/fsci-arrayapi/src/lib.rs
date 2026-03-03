@@ -9,15 +9,17 @@ pub mod indexing;
 pub mod integration;
 pub mod types;
 
-pub use backend::ArrayApiBackend;
+pub use backend::{
+    ArrayApiArray, ArrayApiBackend, CoreArray, CoreArrayBackend, DTypeDispatchLog, ShapeMismatchLog,
+};
 pub use broadcast::{broadcast_shapes, promote_and_broadcast};
 pub use creation::{
-    ArangeRequest, CreationRequest, FullRequest, LinspaceRequest, arange, empty, full, linspace,
-    ones, zeros,
+    ArangeRequest, CreationRequest, FullRequest, LinspaceRequest, arange, empty, from_slice, full,
+    linspace, ones, zeros,
 };
 pub use dtype::{default_float_dtype, result_type};
 pub use error::{ArrayApiError, ArrayApiErrorKind, ArrayApiResult};
-pub use indexing::{IndexRequest, IndexingMode, getitem};
+pub use indexing::{IndexRequest, IndexingMode, getitem, reshape, transpose};
 pub use integration::{INTEGRATION_SEAMS, NALGEBRA_DMATRIX_INTEGRATION_POINTS};
 pub use types::{DType, ExecutionMode, IndexExpr, MemoryOrder, ScalarValue, Shape, SliceSpec};
 
