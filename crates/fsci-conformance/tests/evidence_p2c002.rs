@@ -223,7 +223,7 @@ fn check_solve_banded_parity(n: usize) -> ParityGate {
     let dense_r = solve(&dense, &b, SolveOptions::default()).unwrap();
     let mut max_abs = 0.0_f64;
     let mut max_rel = 0.0_f64;
-    for (i, (&bi, &di)) in banded.x.iter().zip(&dense_r.x).enumerate() {
+    for (&bi, &di) in banded.x.iter().zip(&dense_r.x) {
         let abs_diff = (bi - di).abs();
         max_abs = max_abs.max(abs_diff);
         if di.abs() > 1e-15 {
@@ -329,7 +329,7 @@ fn check_pinv_parity(n: usize) -> ParityGate {
         .collect();
     let mut max_abs = 0.0_f64;
     let mut max_rel = 0.0_f64;
-    for (i, (&pi, &li)) in pinv_x.iter().zip(&lstsq_r.x).enumerate() {
+    for (&pi, &li) in pinv_x.iter().zip(&lstsq_r.x) {
         let abs_diff = (pi - li).abs();
         max_abs = max_abs.max(abs_diff);
         if li.abs() > 1e-15 {
@@ -556,18 +556,18 @@ fn evidence_p2c002_final_pack() {
     let sidecar = generate_raptorq_sidecar(bundle_json.as_bytes()).ok();
 
     // Write individual artifacts
-    let write = |name: &str, data: &impl Serialize| {
+    fn write_json<T: Serialize>(dir: &Path, name: &str, data: &T) {
         let json = serde_json::to_string_pretty(data).unwrap();
-        std::fs::write(evidence_dir.join(name), &json).unwrap();
-    };
+        std::fs::write(dir.join(name), &json).unwrap();
+    }
 
-    write("fixture_manifest.json", &bundle.manifest);
-    write("parity_gates.json", &bundle.parity_gates);
-    write("risk_notes.json", &bundle.risk_notes);
-    write("parity_report.json", &bundle.parity_report);
+    write_json(&evidence_dir, "fixture_manifest.json", &bundle.manifest);
+    write_json(&evidence_dir, "parity_gates.json", &bundle.parity_gates);
+    write_json(&evidence_dir, "risk_notes.json", &bundle.risk_notes);
+    write_json(&evidence_dir, "parity_report.json", &bundle.parity_report);
 
     if let Some(ref sc) = sidecar {
-        write("evidence_bundle.raptorq.json", sc);
+        write_json(&evidence_dir, "evidence_bundle.raptorq.json", sc);
     }
 
     // Write the full bundle

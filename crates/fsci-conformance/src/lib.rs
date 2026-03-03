@@ -11,6 +11,10 @@ use fsci_linalg::{
     SolveOptions, TriangularSolveOptions, TriangularTranspose, det, inv, lstsq, pinv, solve,
     solve_banded, solve_triangular,
 };
+use fsci_opt::{
+    ConvergenceStatus as OptConvergenceStatus, MinimizeOptions, OptError, OptimizeMethod,
+    RootMethod, RootOptions, minimize, root_scalar,
+};
 use fsci_runtime::RuntimeMode;
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};
@@ -20,6 +24,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -76,6 +81,8 @@ pub enum HarnessError {
     RaptorQ(String),
     #[error("linalg execution failed: {0}")]
     Linalg(#[from] LinalgError),
+    #[error("optimize execution failed: {0}")]
+    Optimize(#[from] OptError),
     #[error("failed to launch python oracle `{python_bin}`: {source}")]
     PythonLaunch {
         python_bin: String,
@@ -342,6 +349,135 @@ pub struct LinalgPacketFixture {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OptimizeMinObjective {
+    Rosenbrock2,
+    Ackley2,
+    Rastrigin2,
+    Sphere2,
+    ShiftedQuadratic,
+    TranslatedQuadratic,
+    ScaledQuadratic,
+    RotatedQuadratic,
+    L1Nonsmooth,
+    FlatQuartic,
+    NanBranch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OptimizeRootObjective {
+    CubicMinusTwo,
+    CosMinusX,
+    SinMinusHalf,
+    LinearShift03,
+    NanBranch,
+    StepDiscontinuous,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OptimizeExpectedOutcome {
+    MinimizePoint {
+        x: Vec<f64>,
+        fun: f64,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+        #[serde(default)]
+        require_success: Option<bool>,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    RootValue {
+        root: f64,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+        #[serde(default)]
+        require_converged: Option<bool>,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    MinimizeStatus {
+        status: OptConvergenceStatus,
+        success: bool,
+    },
+    RootStatus {
+        status: OptConvergenceStatus,
+        converged: bool,
+    },
+    Error {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum OptimizeCase {
+    Minimize {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        method: OptimizeMethod,
+        objective: OptimizeMinObjective,
+        x0: Vec<f64>,
+        #[serde(default)]
+        tol: Option<f64>,
+        #[serde(default)]
+        maxiter: Option<usize>,
+        #[serde(default)]
+        maxfev: Option<usize>,
+        expected: OptimizeExpectedOutcome,
+    },
+    Root {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        method: RootMethod,
+        objective: OptimizeRootObjective,
+        bracket: [f64; 2],
+        #[serde(default)]
+        xtol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+        #[serde(default)]
+        maxiter: Option<usize>,
+        expected: OptimizeExpectedOutcome,
+    },
+}
+
+impl OptimizeCase {
+    fn case_id(&self) -> &str {
+        match self {
+            Self::Minimize { case_id, .. } | Self::Root { case_id, .. } => case_id,
+        }
+    }
+
+    #[cfg(test)]
+    fn category(&self) -> &str {
+        match self {
+            Self::Minimize { category, .. } | Self::Root { category, .. } => category,
+        }
+    }
+
+    fn expected(&self) -> &OptimizeExpectedOutcome {
+        match self {
+            Self::Minimize { expected, .. } | Self::Root { expected, .. } => expected,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OptimizePacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<OptimizeCase>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CaseResult {
     pub case_id: String,
     pub passed: bool,
@@ -448,6 +584,21 @@ enum LinalgObservedOutcome {
     Pinv {
         values: Vec<Vec<f64>>,
         rank: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum OptimizeObservedOutcome {
+    Minimize {
+        x: Vec<f64>,
+        fun: Option<f64>,
+        success: bool,
+        status: OptConvergenceStatus,
+    },
+    Root {
+        root: f64,
+        converged: bool,
+        status: OptConvergenceStatus,
     },
 }
 
@@ -564,6 +715,40 @@ pub fn run_linalg_packet(
     for case in &fixture.cases {
         let observed = execute_linalg_case(case);
         let (passed, message) = compare_linalg_case(case.expected(), &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+pub fn run_optimize_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: OptimizePacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_optimize_case(case);
+        let (passed, message, _, _) =
+            compare_optimize_case_differential(case.expected(), &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
             passed,
@@ -964,6 +1149,279 @@ fn execute_linalg_case(case: &LinalgCase) -> Result<LinalgObservedOutcome, Linal
     }
 }
 
+fn execute_optimize_case(case: &OptimizeCase) -> Result<OptimizeObservedOutcome, OptError> {
+    match case {
+        OptimizeCase::Minimize {
+            mode,
+            method,
+            objective,
+            x0,
+            tol,
+            maxiter,
+            maxfev,
+            ..
+        } => {
+            let objective = objective.clone();
+            let result = minimize(
+                |x| evaluate_minimize_objective(&objective, x),
+                x0,
+                MinimizeOptions {
+                    method: Some(*method),
+                    tol: *tol,
+                    maxiter: *maxiter,
+                    maxfev: *maxfev,
+                    mode: *mode,
+                    ..MinimizeOptions::default()
+                },
+            )?;
+            Ok(OptimizeObservedOutcome::Minimize {
+                x: result.x,
+                fun: result.fun,
+                success: result.success,
+                status: result.status,
+            })
+        }
+        OptimizeCase::Root {
+            mode,
+            method,
+            objective,
+            bracket,
+            xtol,
+            rtol,
+            maxiter,
+            ..
+        } => {
+            let objective = objective.clone();
+            let options = RootOptions {
+                method: Some(*method),
+                xtol: xtol.unwrap_or(RootOptions::default().xtol),
+                rtol: rtol.unwrap_or(RootOptions::default().rtol),
+                maxiter: maxiter.unwrap_or(RootOptions::default().maxiter),
+                mode: *mode,
+                ..RootOptions::default()
+            };
+            let result = root_scalar(
+                |x| evaluate_root_objective(&objective, x),
+                Some((bracket[0], bracket[1])),
+                None,
+                None,
+                options,
+            )?;
+            Ok(OptimizeObservedOutcome::Root {
+                root: result.root,
+                converged: result.converged,
+                status: result.status,
+            })
+        }
+    }
+}
+
+fn evaluate_minimize_objective(objective: &OptimizeMinObjective, x: &[f64]) -> f64 {
+    let x0 = x.first().copied().unwrap_or(0.0);
+    let x1 = x.get(1).copied().unwrap_or(0.0);
+    match objective {
+        OptimizeMinObjective::Rosenbrock2 => {
+            let a = 1.0 - x0;
+            let b = x1 - x0 * x0;
+            a * a + 100.0 * b * b
+        }
+        OptimizeMinObjective::Ackley2 => {
+            let s1 = 0.5 * (x0 * x0 + x1 * x1);
+            let s2 = 0.5
+                * ((2.0 * std::f64::consts::PI * x0).cos()
+                    + (2.0 * std::f64::consts::PI * x1).cos());
+            -20.0 * (-0.2 * s1.sqrt()).exp() - s2.exp() + std::f64::consts::E + 20.0
+        }
+        OptimizeMinObjective::Rastrigin2 => {
+            20.0 + (x0 * x0 - 10.0 * (2.0 * std::f64::consts::PI * x0).cos())
+                + (x1 * x1 - 10.0 * (2.0 * std::f64::consts::PI * x1).cos())
+        }
+        OptimizeMinObjective::Sphere2 => x0 * x0 + x1 * x1,
+        OptimizeMinObjective::ShiftedQuadratic => {
+            let dx = x0 - 1.0;
+            let dy = x1 + 2.0;
+            dx * dx + 4.0 * dy * dy
+        }
+        OptimizeMinObjective::TranslatedQuadratic => {
+            let dx = x0 - 4.0;
+            let dy = x1 + 3.0;
+            dx * dx + 2.0 * dy * dy
+        }
+        OptimizeMinObjective::ScaledQuadratic => {
+            10.0 * evaluate_minimize_objective(&OptimizeMinObjective::ShiftedQuadratic, x)
+        }
+        OptimizeMinObjective::RotatedQuadratic => {
+            let cx = x0 - 1.0;
+            let cy = x1 + 2.0;
+            let theta = std::f64::consts::FRAC_PI_6;
+            let xr = theta.cos() * cx - theta.sin() * cy;
+            let yr = theta.sin() * cx + theta.cos() * cy;
+            xr * xr + 4.0 * yr * yr
+        }
+        OptimizeMinObjective::L1Nonsmooth => x0.abs() + x1.abs(),
+        OptimizeMinObjective::FlatQuartic => 1.0e-4 * (x0.powi(4) + x1.powi(4)),
+        OptimizeMinObjective::NanBranch => {
+            if x0 < 0.0 {
+                f64::NAN
+            } else {
+                x0 * x0 + x1 * x1
+            }
+        }
+    }
+}
+
+fn evaluate_root_objective(objective: &OptimizeRootObjective, x: f64) -> f64 {
+    match objective {
+        OptimizeRootObjective::CubicMinusTwo => x * x * x - 2.0,
+        OptimizeRootObjective::CosMinusX => x.cos() - x,
+        OptimizeRootObjective::SinMinusHalf => x.sin() - 0.5,
+        OptimizeRootObjective::LinearShift03 => x - 0.3,
+        OptimizeRootObjective::NanBranch => {
+            if x > 0.8 {
+                f64::NAN
+            } else {
+                x - 0.2
+            }
+        }
+        OptimizeRootObjective::StepDiscontinuous => {
+            if x < 0.3 {
+                -1.0
+            } else {
+                1.0
+            }
+        }
+    }
+}
+
+fn compare_optimize_case_differential(
+    expected: &OptimizeExpectedOutcome,
+    observed: &Result<OptimizeObservedOutcome, OptError>,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    match (expected, observed) {
+        (
+            OptimizeExpectedOutcome::MinimizePoint {
+                x,
+                fun,
+                atol,
+                rtol,
+                require_success,
+                contract_ref,
+            },
+            Ok(OptimizeObservedOutcome::Minimize {
+                x: got_x,
+                fun: got_fun,
+                success,
+                ..
+            }),
+        ) => {
+            let tolerance = resolve_contract_tolerance(contract_ref.as_deref(), *atol, *rtol);
+            let Some(got_fun) = *got_fun else {
+                return (
+                    false,
+                    "minimize output missing objective value".to_owned(),
+                    None,
+                    Some(tolerance),
+                );
+            };
+            let x_diff = if got_x.len() == x.len() {
+                max_diff_vec(got_x, x)
+            } else {
+                f64::INFINITY
+            };
+            let fun_diff = (got_fun - *fun).abs();
+            let pass = allclose_vec(got_x, x, tolerance.atol, tolerance.rtol)
+                && allclose_scalar(got_fun, *fun, tolerance.atol, tolerance.rtol)
+                && (!require_success.unwrap_or(true) || *success);
+            let msg = if pass {
+                format!(
+                    "minimize matched (x_diff={x_diff:.2e}, fun_diff={fun_diff:.2e}, success={success})"
+                )
+            } else {
+                format!(
+                    "minimize mismatch: expected_x={x:?}, got_x={got_x:?}, expected_fun={fun:.8e}, got_fun={got_fun:.8e}, success={success}"
+                )
+            };
+            (pass, msg, Some(x_diff.max(fun_diff)), Some(tolerance))
+        }
+        (
+            OptimizeExpectedOutcome::RootValue {
+                root,
+                atol,
+                rtol,
+                require_converged,
+                contract_ref,
+            },
+            Ok(OptimizeObservedOutcome::Root {
+                root: got,
+                converged,
+                ..
+            }),
+        ) => {
+            let tolerance = resolve_contract_tolerance(contract_ref.as_deref(), *atol, *rtol);
+            let diff = (*got - *root).abs();
+            let pass = allclose_scalar(*got, *root, tolerance.atol, tolerance.rtol)
+                && (!require_converged.unwrap_or(true) || *converged);
+            let msg = if pass {
+                format!("root matched (diff={diff:.2e}, converged={converged})")
+            } else {
+                format!("root mismatch: expected={root:.8e}, got={got:.8e}, converged={converged}")
+            };
+            (pass, msg, Some(diff), Some(tolerance))
+        }
+        (
+            OptimizeExpectedOutcome::MinimizeStatus { status, success },
+            Ok(OptimizeObservedOutcome::Minimize {
+                status: got_status,
+                success: got_success,
+                ..
+            }),
+        ) => {
+            let pass = *status == *got_status && *success == *got_success;
+            let msg = if pass {
+                "minimize status matched".to_owned()
+            } else {
+                format!(
+                    "minimize status mismatch: expected status={status:?}, success={success}; got status={got_status:?}, success={got_success}"
+                )
+            };
+            (pass, msg, None, None)
+        }
+        (
+            OptimizeExpectedOutcome::RootStatus { status, converged },
+            Ok(OptimizeObservedOutcome::Root {
+                status: got_status,
+                converged: got_converged,
+                ..
+            }),
+        ) => {
+            let pass = *status == *got_status && *converged == *got_converged;
+            let msg = if pass {
+                "root status matched".to_owned()
+            } else {
+                format!(
+                    "root status mismatch: expected status={status:?}, converged={converged}; got status={got_status:?}, converged={got_converged}"
+                )
+            };
+            (pass, msg, None, None)
+        }
+        (OptimizeExpectedOutcome::Error { error }, Err(actual)) => {
+            let pass = error == &actual.to_string();
+            let msg = if pass {
+                "error matched".to_owned()
+            } else {
+                format!("error mismatch: expected=`{error}`, got=`{actual}`")
+            };
+            (pass, msg, None, None)
+        }
+        (expected, observed) => (
+            false,
+            format!("shape mismatch: expected {expected:?}, got {observed:?}"),
+            None,
+            None,
+        ),
+    }
+}
+
 fn compare_linalg_case(
     expected: &LinalgExpectedOutcome,
     observed: &Result<LinalgObservedOutcome, LinalgError>,
@@ -1125,6 +1583,79 @@ fn build_packet_report(
         passed_cases,
         failed_cases,
         generated_unix_ms: now_unix_ms(),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ContractTolerancePolicy {
+    comparison_mode: Option<String>,
+    default_atol: Option<f64>,
+    default_rtol: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ContractEntry {
+    function_name: String,
+    tolerance_policy: ContractTolerancePolicy,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ContractTable {
+    contracts: Vec<ContractEntry>,
+}
+
+static OPTIMIZE_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
+
+fn load_optimize_contract_table() -> Option<&'static ContractTable> {
+    OPTIMIZE_CONTRACT_TABLE
+        .get_or_init(|| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/artifacts/P2C-003/contracts/contract_table.json");
+            let raw = fs::read_to_string(path).ok()?;
+            serde_json::from_str::<ContractTable>(&raw).ok()
+        })
+        .as_ref()
+}
+
+fn resolve_contract_tolerance(
+    contract_ref: Option<&str>,
+    explicit_atol: Option<f64>,
+    explicit_rtol: Option<f64>,
+) -> ToleranceUsed {
+    if let (Some(atol), Some(rtol)) = (explicit_atol, explicit_rtol) {
+        return ToleranceUsed {
+            atol,
+            rtol,
+            comparison_mode: "mixed".to_owned(),
+        };
+    }
+
+    if let Some(contract_ref) = contract_ref
+        && let Some(table) = load_optimize_contract_table()
+        && let Some(entry) = table
+            .contracts
+            .iter()
+            .find(|candidate| candidate.function_name == contract_ref)
+    {
+        return ToleranceUsed {
+            atol: explicit_atol
+                .or(entry.tolerance_policy.default_atol)
+                .unwrap_or(1.0e-9),
+            rtol: explicit_rtol
+                .or(entry.tolerance_policy.default_rtol)
+                .unwrap_or(1.0e-6),
+            comparison_mode: entry
+                .tolerance_policy
+                .comparison_mode
+                .clone()
+                .unwrap_or_else(|| "mixed".to_owned()),
+        };
+    }
+
+    ToleranceUsed {
+        atol: explicit_atol.unwrap_or(1.0e-9),
+        rtol: explicit_rtol.unwrap_or(1.0e-6),
+        comparison_mode: "mixed".to_owned(),
     }
 }
 
@@ -1311,6 +1842,8 @@ pub fn run_differential_test(
         run_differential_validate_tol(fixture_path, &raw, oracle_config)
     } else if family.contains("linalg") {
         run_differential_linalg(fixture_path, &raw, oracle_config)
+    } else if family.contains("optim") {
+        run_differential_optimize(fixture_path, &raw, oracle_config)
     } else {
         Err(HarnessError::FixtureParse {
             path: fixture_path.to_path_buf(),
@@ -1426,6 +1959,50 @@ fn run_differential_linalg(
         let observed = execute_linalg_case(case);
         let (passed, message, max_diff, tolerance_used) =
             compare_linalg_case_differential(case.expected(), &observed);
+
+        per_case_results.push(DifferentialCaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+            max_diff,
+            tolerance_used,
+            oracle_status: oracle_status.clone(),
+        });
+    }
+
+    let pass_count = per_case_results.iter().filter(|r| r.passed).count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+fn run_differential_optimize(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: OptimizePacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+
+    for case in &fixture.cases {
+        let observed = execute_optimize_case(case);
+        let (passed, message, max_diff, tolerance_used) =
+            compare_optimize_case_differential(case.expected(), &observed);
 
         per_case_results.push(DifferentialCaseResult {
             case_id: case.case_id().to_owned(),
@@ -1767,7 +2344,7 @@ impl PacketFamily {
     /// Whether this family has a working runner implementation.
     #[must_use]
     pub const fn has_runner(&self) -> bool {
-        matches!(self, Self::ValidateTol | Self::LinalgCore)
+        matches!(self, Self::ValidateTol | Self::LinalgCore | Self::Optimize)
     }
 
     /// Canonical fixture filename for this family.
@@ -1876,6 +2453,7 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
         let report = match family {
             PacketFamily::ValidateTol => run_validate_tol_packet(config, fixture_name)?,
             PacketFamily::LinalgCore => run_linalg_packet(config, fixture_name)?,
+            PacketFamily::Optimize => run_optimize_packet(config, fixture_name)?,
             _ => continue,
         };
         reports.push(report);
@@ -1890,11 +2468,12 @@ mod tests {
     use super::style_for_case_result;
     use super::{
         AggregateParityReport, ConformanceReport, DifferentialOracleConfig, HarnessConfig,
-        LinalgPacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
+        LinalgPacketFixture, OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
         aggregate_packet_reports, discover_fixtures, ensure_artifact_layout, load_oracle_capture,
-        run_differential_test, run_linalg_packet, run_smoke, run_validate_tol_packet,
-        write_parity_artifacts,
+        run_differential_test, run_linalg_packet, run_optimize_packet, run_smoke,
+        run_validate_tol_packet, write_parity_artifacts,
     };
+    use serde::Serialize;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -2074,6 +2653,55 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         }
     }
 
+    #[derive(Debug, Serialize)]
+    struct StructuredCaseLog {
+        test_id: String,
+        category: String,
+        input_summary: String,
+        expected: String,
+        actual: String,
+        diff: Option<f64>,
+        tolerance: Option<super::ToleranceUsed>,
+        pass: bool,
+    }
+
+    fn optimize_case_input_summary(case: &super::OptimizeCase) -> String {
+        match case {
+            super::OptimizeCase::Minimize {
+                method,
+                objective,
+                x0,
+                ..
+            } => format!("operation=minimize method={method:?} objective={objective:?} x0={x0:?}"),
+            super::OptimizeCase::Root {
+                method,
+                objective,
+                bracket,
+                ..
+            } => format!(
+                "operation=root method={method:?} objective={objective:?} bracket={bracket:?}"
+            ),
+        }
+    }
+
+    fn optimize_case_expected_summary(expected: &super::OptimizeExpectedOutcome) -> String {
+        match expected {
+            super::OptimizeExpectedOutcome::MinimizePoint { x, fun, .. } => {
+                format!("minimize_point x={x:?} fun={fun:.6e}")
+            }
+            super::OptimizeExpectedOutcome::RootValue { root, .. } => {
+                format!("root_value root={root:.6e}")
+            }
+            super::OptimizeExpectedOutcome::MinimizeStatus { status, success } => {
+                format!("minimize_status status={status:?} success={success}")
+            }
+            super::OptimizeExpectedOutcome::RootStatus { status, converged } => {
+                format!("root_status status={status:?} converged={converged}")
+            }
+            super::OptimizeExpectedOutcome::Error { error } => format!("error={error}"),
+        }
+    }
+
     #[test]
     fn differential_test_validate_tol_fixture() {
         let fixture_path = HarnessConfig::default_paths()
@@ -2123,6 +2751,126 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 );
             }
         }
+    }
+
+    #[test]
+    fn optimize_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_optimize_packet(&cfg, "FSCI-P2C-003_optimize_core.json")
+            .expect("optimize packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 29,
+            "expected full optimize fixture execution"
+        );
+    }
+
+    #[test]
+    fn differential_test_optimize_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-003_optimize_core.json");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle)
+            .expect("differential optimize should succeed");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-003");
+        assert_eq!(report.family, "optimize_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 29);
+    }
+
+    #[test]
+    fn differential_optimize_quota_and_structured_logs() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-003_optimize_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read optimize fixture");
+        let fixture: OptimizePacketFixture =
+            serde_json::from_str(&raw).expect("parse optimize fixture");
+        let oracle = default_test_oracle();
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("optimize differential runs");
+
+        let mut by_case = std::collections::BTreeMap::new();
+        for case in &fixture.cases {
+            by_case.insert(case.case_id().to_owned(), case);
+        }
+
+        let mut differential_count = 0usize;
+        let mut metamorphic_count = 0usize;
+        let mut adversarial_count = 0usize;
+        let mut logs = Vec::with_capacity(report.per_case_results.len());
+
+        for case_result in &report.per_case_results {
+            let case = by_case
+                .get(&case_result.case_id)
+                .expect("every report case should exist in fixture");
+            match case.category() {
+                "differential" => differential_count += 1,
+                "metamorphic" => metamorphic_count += 1,
+                "adversarial" => adversarial_count += 1,
+                other => panic!("unexpected category: {other}"),
+            }
+
+            let log = StructuredCaseLog {
+                test_id: case_result.case_id.clone(),
+                category: case.category().to_owned(),
+                input_summary: optimize_case_input_summary(case),
+                expected: optimize_case_expected_summary(case.expected()),
+                actual: case_result.message.clone(),
+                diff: case_result.max_diff,
+                tolerance: case_result.tolerance_used.clone(),
+                pass: case_result.passed,
+            };
+
+            let payload =
+                serde_json::to_string(&log).expect("structured conformance log should serialize");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&payload).expect("structured log should parse");
+            assert!(parsed.get("test_id").is_some());
+            assert!(parsed.get("category").is_some());
+            assert!(parsed.get("input_summary").is_some());
+            assert!(parsed.get("expected").is_some());
+            assert!(parsed.get("actual").is_some());
+            assert!(parsed.get("diff").is_some());
+            assert!(parsed.get("tolerance").is_some());
+            assert!(parsed.get("pass").is_some());
+            logs.push(log);
+        }
+
+        assert!(
+            differential_count >= 15,
+            "expected >=15 differential cases, got {differential_count}"
+        );
+        assert!(
+            metamorphic_count >= 6,
+            "expected >=6 metamorphic cases, got {metamorphic_count}"
+        );
+        assert!(
+            adversarial_count >= 8,
+            "expected >=8 adversarial cases, got {adversarial_count}"
+        );
+        assert_eq!(report.fail_count, 0);
+
+        let output_dir = HarnessConfig::default_paths()
+            .artifact_dir_for("P2C-003")
+            .join("differential");
+        fs::create_dir_all(&output_dir).expect("create optimize differential artifact directory");
+        let output_path = output_dir.join("structured_case_logs.json");
+        let payload = serde_json::to_vec_pretty(&logs).expect("serialize optimize logs");
+        fs::write(&output_path, payload).expect("write optimize structured logs");
+        assert!(output_path.exists());
     }
 
     #[test]
@@ -2226,12 +2974,13 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let config = HarnessConfig::default_paths();
         let fixtures = discover_fixtures(&config).expect("discover fixtures");
         assert!(
-            fixtures.len() >= 2,
-            "should find at least P2C-001 and P2C-002 fixtures"
+            fixtures.len() >= 3,
+            "should find at least P2C-001, P2C-002, and P2C-003 fixtures"
         );
         let families: Vec<PacketFamily> = fixtures.iter().map(|(f, _)| *f).collect();
         assert!(families.contains(&PacketFamily::ValidateTol));
         assert!(families.contains(&PacketFamily::LinalgCore));
+        assert!(families.contains(&PacketFamily::Optimize));
     }
 
     #[test]
@@ -2327,6 +3076,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     fn packet_family_has_runner() {
         assert!(PacketFamily::ValidateTol.has_runner());
         assert!(PacketFamily::LinalgCore.has_runner());
+        assert!(PacketFamily::Optimize.has_runner());
         assert!(!PacketFamily::SparseOps.has_runner());
         assert!(!PacketFamily::RuntimeCasp.has_runner());
     }

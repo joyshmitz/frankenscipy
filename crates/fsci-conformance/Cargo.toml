@@ -22,6 +22,7 @@ asupersync = { workspace = true }
 blake3 = { workspace = true }
 fsci-integrate = { workspace = true }
 fsci-linalg = { workspace = true }
+fsci-opt = { workspace = true }
 fsci-runtime = { workspace = true }
 ftui = { workspace = true, features = ["runtime", "crossterm"], optional = true }
 serde = { workspace = true }

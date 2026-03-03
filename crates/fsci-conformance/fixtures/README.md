@@ -13,6 +13,10 @@ This folder stores normalized oracle-vs-target fixtures for fsci-conformance.
   - `det`
   - `lstsq`
   - `pinv`
+- `FSCI-P2C-003_optimize_core.json`: optimize/root differential + metamorphic +
+  adversarial conformance cases for:
+  - `minimize` (`BFGS`, `CG`, `Powell`) on Rosenbrock/Ackley/Rastrigin + invariance quadratics
+  - `root_scalar` (`brentq`, `brenth`, `bisect`, `ridder`) with scalar root contracts
 - `artifacts/`: generated parity reports, RaptorQ sidecars, and decode-proof logs.
 
 Expected per-packet durable artifacts:
@@ -36,6 +40,8 @@ Each run writes forensic logs to:
 
 - `artifacts/FSCI-P2C-*/e2e/runs/{run_id}/{scenario_id}/events.jsonl`
 - `artifacts/FSCI-P2C-*/e2e/runs/{run_id}/{scenario_id}/summary.json`
+- `artifacts/P2C-003/e2e/runs/*.json` (optimize E2E forensic bundles emitted by
+  `tests/e2e_optimize.rs`)
 
 Run the orchestrator:
 

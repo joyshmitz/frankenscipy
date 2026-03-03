@@ -563,6 +563,7 @@ dependencies = [
  "blake3",
  "fsci-integrate",
  "fsci-linalg",
+ "fsci-opt",
  "fsci-runtime",
  "ftui",
  "serde",
