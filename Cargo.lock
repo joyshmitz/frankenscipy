@@ -604,6 +604,7 @@ name = "fsci-opt"
 version = "0.1.0"
 dependencies = [
  "fsci-runtime",
+ "proptest",
  "serde",
  "serde_json",
 ]

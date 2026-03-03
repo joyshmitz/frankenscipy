@@ -876,15 +876,211 @@ fn add_matrices(lhs: &[Vec<f64>], rhs: &[Vec<f64>]) -> Vec<Vec<f64>> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use fsci_runtime::RuntimeMode;
+    use proptest::prelude::*;
+    use serde::Serialize;
 
     use crate::{
-        ConvergenceStatus, MinimizeOptions, OptimizeMethod, bfgs, cg_pr_plus, minimize, powell,
-        take_optimize_traces,
+        ConvergenceStatus, MinimizeOptions, OptimizeMethod, OptimizeResult, bfgs, cg_pr_plus,
+        minimize, powell, take_optimize_traces,
     };
+
+    #[derive(Debug, Serialize)]
+    struct TestLogEntry<'a> {
+        test_id: &'a str,
+        optimizer: &'a str,
+        problem: &'a str,
+        n_dim: usize,
+        mode: &'a str,
+        converged: bool,
+        nfev: usize,
+        final_f: Option<f64>,
+        seed: u64,
+        timestamp_ms: u64,
+    }
+
+    fn test_log_sink() -> &'static Mutex<Vec<String>> {
+        static TEST_LOGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+        TEST_LOGS.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    fn callback_points() -> &'static Mutex<Vec<Vec<f64>>> {
+        static CALLBACK_POINTS: OnceLock<Mutex<Vec<Vec<f64>>>> = OnceLock::new();
+        CALLBACK_POINTS.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    fn now_unix_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64)
+    }
+
+    fn mode_name(mode: RuntimeMode) -> &'static str {
+        match mode {
+            RuntimeMode::Strict => "strict",
+            RuntimeMode::Hardened => "hardened",
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_test_log(
+        test_id: &str,
+        optimizer: &str,
+        problem: &str,
+        n_dim: usize,
+        mode: RuntimeMode,
+        result: &OptimizeResult,
+        seed: u64,
+    ) {
+        let entry = TestLogEntry {
+            test_id,
+            optimizer,
+            problem,
+            n_dim,
+            mode: mode_name(mode),
+            converged: result.success,
+            nfev: result.nfev,
+            final_f: result.fun,
+            seed,
+            timestamp_ms: now_unix_ms(),
+        };
+        let payload = serde_json::to_string(&entry).expect("serialize test log");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload).expect("re-parse serialized log payload");
+        assert!(parsed.get("test_id").is_some());
+        assert!(parsed.get("optimizer").is_some());
+        assert!(parsed.get("timestamp_ms").is_some());
+        test_log_sink().lock().expect("log sink lock").push(payload);
+    }
 
     fn sphere(x: &[f64]) -> f64 {
         x.iter().map(|value| value * value).sum()
+    }
+
+    fn rosenbrock(x: &[f64]) -> f64 {
+        let x0 = x[0];
+        let x1 = x[1];
+        (1.0 - x0).powi(2) + 100.0 * (x1 - x0 * x0).powi(2)
+    }
+
+    fn himmelblau(x: &[f64]) -> f64 {
+        let x0 = x[0];
+        let x1 = x[1];
+        (x0 * x0 + x1 - 11.0).powi(2) + (x0 + x1 * x1 - 7.0).powi(2)
+    }
+
+    fn flat_quartic(x: &[f64]) -> f64 {
+        (x[0] - 1.0).powi(4) + (x[1] + 2.0).powi(4)
+    }
+
+    fn step_plateau(x: &[f64]) -> f64 {
+        if x[0] >= 0.5 { 1.0 } else { 0.0 }
+    }
+
+    fn nonconvex_saddle(x: &[f64]) -> f64 {
+        x[0] * x[0] - x[1] * x[1] + 0.1 * x[1].powi(4)
+    }
+
+    fn abs_sum(x: &[f64]) -> f64 {
+        x.iter().map(|v| v.abs()).sum()
+    }
+
+    fn one_dim_quadratic(x: &[f64]) -> f64 {
+        (x[0] - 1.5).powi(2) + 1.0
+    }
+
+    fn zero_function(_: &[f64]) -> f64 {
+        0.0
+    }
+
+    fn callback_record_and_stop(x: &[f64]) -> bool {
+        callback_points()
+            .lock()
+            .expect("callback points lock")
+            .push(x.to_vec());
+        false
+    }
+
+    #[test]
+    fn optimize_result_success_fields_are_populated() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(1.0e-8),
+            maxiter: Some(200),
+            maxfev: Some(20_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(sphere, &[2.0, -3.0], options).expect("minimize executes");
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.status, ConvergenceStatus::Success);
+        assert!(result.fun.is_some());
+        assert!(result.nfev >= 1);
+        assert!(result.x.iter().all(|value| value.abs() < 1.0e-4));
+        push_test_log(
+            "optimize-result-success-fields",
+            "bfgs",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            101,
+        );
+    }
+
+    #[test]
+    fn optimize_result_reports_max_iterations_exceeded() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(1.0e-14),
+            maxiter: Some(1),
+            maxfev: Some(20_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(rosenbrock, &[-1.2, 1.0], options).expect("minimize executes");
+        assert!(!result.success);
+        assert_eq!(result.status, ConvergenceStatus::MaxIterations);
+        assert!(result.message.contains("maximum iterations"));
+        push_test_log(
+            "optimize-result-maxiter",
+            "bfgs",
+            "rosenbrock",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            102,
+        );
+    }
+
+    #[test]
+    fn optimize_result_reports_line_search_failure() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(1.0e-12),
+            maxiter: Some(50),
+            maxfev: Some(20_000),
+            gradient_eps: 1.0e-6,
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result =
+            minimize(step_plateau, &[0.499_999], options).expect("minimize returns a result");
+        assert!(!result.success);
+        assert_eq!(result.status, ConvergenceStatus::PrecisionLoss);
+        assert!(result.message.contains("line search failed"));
+        push_test_log(
+            "optimize-result-linesearch-failure",
+            "bfgs",
+            "step-plateau",
+            1,
+            RuntimeMode::Strict,
+            &result,
+            103,
+        );
     }
 
     #[test]
@@ -902,6 +1098,210 @@ mod tests {
         assert_eq!(result.status, ConvergenceStatus::Success);
         assert!(result.fun.expect("objective") < 1.0e-8);
         assert!(result.x.iter().all(|value| value.abs() < 1.0e-4));
+        push_test_log(
+            "bfgs-quadratic",
+            "bfgs",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            104,
+        );
+    }
+
+    #[test]
+    fn bfgs_converges_on_rosenbrock() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(1.0e-7),
+            maxiter: Some(800),
+            maxfev: Some(80_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = bfgs(&rosenbrock, &[-1.2, 1.0], options).expect("bfgs executes");
+        assert!(result.fun.expect("objective") < 1.0e-6);
+        assert!((result.x[0] - 1.0).abs() < 1.0e-2);
+        assert!((result.x[1] - 1.0).abs() < 1.0e-2);
+        push_test_log(
+            "bfgs-rosenbrock",
+            "bfgs",
+            "rosenbrock",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            105,
+        );
+    }
+
+    #[test]
+    fn bfgs_finds_local_minimum_on_nonconvex_surface() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(1.0e-7),
+            maxiter: Some(800),
+            maxfev: Some(80_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = bfgs(&himmelblau, &[0.0, 0.0], options).expect("bfgs executes");
+        assert!(result.fun.expect("objective") < 1.0e-5);
+        push_test_log(
+            "bfgs-nonconvex-local-min",
+            "bfgs",
+            "himmelblau",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            106,
+        );
+    }
+
+    #[test]
+    fn bfgs_zero_gradient_at_start_converges_immediately() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(1.0e-8),
+            maxiter: Some(200),
+            maxfev: Some(20_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = bfgs(&sphere, &[0.0, 0.0], options).expect("bfgs executes");
+        assert!(result.success);
+        assert_eq!(result.nit, 0);
+        push_test_log(
+            "bfgs-zero-gradient-start",
+            "bfgs",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            107,
+        );
+    }
+
+    #[test]
+    fn bfgs_handles_very_flat_function() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(1.0e-7),
+            maxiter: Some(800),
+            maxfev: Some(80_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let initial = flat_quartic(&[0.5, -1.5]);
+        let result = bfgs(&flat_quartic, &[0.5, -1.5], options).expect("bfgs executes");
+        assert!(result.fun.expect("objective") <= initial);
+        push_test_log(
+            "bfgs-flat-function",
+            "bfgs",
+            "flat-quartic",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            108,
+        );
+    }
+
+    #[test]
+    fn bfgs_hardened_mode_rejects_nan_gradient_path() {
+        let objective = |x: &[f64]| {
+            if x[0] < 0.0 { f64::NAN } else { x[0] * x[0] }
+        };
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            mode: RuntimeMode::Hardened,
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(objective, &[0.0], options).expect("returns an OptimizeResult");
+        assert!(!result.success);
+        assert_eq!(result.status, ConvergenceStatus::NanEncountered);
+        push_test_log(
+            "bfgs-hardened-nan-gradient",
+            "bfgs",
+            "nan-gradient",
+            1,
+            RuntimeMode::Hardened,
+            &result,
+            109,
+        );
+    }
+
+    #[test]
+    fn bfgs_callback_receives_intermediate_points() {
+        callback_points().lock().expect("callback lock").clear();
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            callback: Some(callback_record_and_stop),
+            maxiter: Some(40),
+            maxfev: Some(10_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = bfgs(&sphere, &[2.5, -1.5], options).expect("bfgs executes");
+        let points = callback_points().lock().expect("callback lock");
+        assert!(!points.is_empty());
+        assert_eq!(points[0], vec![2.5, -1.5]);
+        assert_eq!(result.status, ConvergenceStatus::CallbackStop);
+        push_test_log(
+            "bfgs-callback-points",
+            "bfgs",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            110,
+        );
+    }
+
+    #[test]
+    fn bfgs_gradient_tolerance_threshold_stops_early() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(10.0),
+            maxiter: Some(40),
+            maxfev: Some(10_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = bfgs(&sphere, &[0.1, -0.1], options).expect("bfgs executes");
+        assert!(result.success);
+        assert_eq!(result.nit, 0);
+        push_test_log(
+            "bfgs-gtol-threshold",
+            "bfgs",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            111,
+        );
+    }
+
+    #[test]
+    fn cg_quadratic_converges_with_small_iterations() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::ConjugateGradient),
+            tol: Some(1.0e-8),
+            maxiter: Some(80),
+            maxfev: Some(20_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = cg_pr_plus(&sphere, &[4.0, -1.5], options).expect("cg executes");
+        assert!(result.success, "{}", result.message);
+        assert!(result.nit <= 20);
+        push_test_log(
+            "cg-quadratic",
+            "cg_pr_plus",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            112,
+        );
     }
 
     #[test]
@@ -917,6 +1317,118 @@ mod tests {
         let result = cg_pr_plus(&sphere, &[4.0, -1.5], options).expect("cg executes");
         assert!(result.success, "{}", result.message);
         assert!(result.fun.expect("objective") < 1.0e-8);
+        push_test_log(
+            "cg-sphere-reference",
+            "cg_pr_plus",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            113,
+        );
+    }
+
+    #[test]
+    fn cg_rosenbrock_reduces_objective() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::ConjugateGradient),
+            tol: Some(1.0e-7),
+            maxiter: Some(600),
+            maxfev: Some(80_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let initial = rosenbrock(&[-1.2, 1.0]);
+        let result = cg_pr_plus(&rosenbrock, &[-1.2, 1.0], options).expect("cg executes");
+        assert!(result.fun.expect("objective") < initial);
+        push_test_log(
+            "cg-rosenbrock",
+            "cg_pr_plus",
+            "rosenbrock",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            114,
+        );
+    }
+
+    #[test]
+    fn cg_high_dimensional_problem_converges() {
+        let diag_quadratic = |x: &[f64]| {
+            x.iter()
+                .enumerate()
+                .map(|(idx, value)| (idx as f64 + 1.0) * value * value)
+                .sum::<f64>()
+        };
+        let x0 = vec![1.0; 50];
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::ConjugateGradient),
+            tol: Some(1.0e-6),
+            maxiter: Some(600),
+            maxfev: Some(200_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = cg_pr_plus(&diag_quadratic, &x0, options).expect("cg executes");
+        assert!(result.fun.expect("objective") < 1.0e-6);
+        push_test_log(
+            "cg-high-dimensional",
+            "cg_pr_plus",
+            "diag-quadratic",
+            50,
+            RuntimeMode::Strict,
+            &result,
+            115,
+        );
+    }
+
+    #[test]
+    fn cg_handles_nonconvex_surface_without_invalid_status() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::ConjugateGradient),
+            tol: Some(1.0e-6),
+            maxiter: Some(200),
+            maxfev: Some(100_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let initial = nonconvex_saddle(&[1.0, 1.0]);
+        let result = cg_pr_plus(&nonconvex_saddle, &[1.0, 1.0], options).expect("cg executes");
+        assert!(result.fun.expect("objective") <= initial + 1.0e-6);
+        assert_ne!(result.status, ConvergenceStatus::InvalidInput);
+        push_test_log(
+            "cg-nonconvex",
+            "cg_pr_plus",
+            "saddle",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            116,
+        );
+    }
+
+    #[test]
+    fn cg_zero_function_trivial_convergence() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::ConjugateGradient),
+            tol: Some(1.0e-8),
+            maxiter: Some(40),
+            maxfev: Some(10_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = cg_pr_plus(&zero_function, &[10.0, -10.0], options).expect("cg executes");
+        assert!(result.success);
+        assert_eq!(result.nit, 0);
+        push_test_log(
+            "cg-zero-function",
+            "cg_pr_plus",
+            "constant-zero",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            117,
+        );
     }
 
     #[test]
@@ -932,6 +1444,111 @@ mod tests {
         let initial = sphere(&[3.0, -2.0]);
         let result = powell(&sphere, &[3.0, -2.0], options).expect("powell executes");
         assert!(result.fun.expect("objective") < initial);
+        push_test_log(
+            "powell-reduces-objective",
+            "powell",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            118,
+        );
+    }
+
+    #[test]
+    fn powell_quadratic_converges_near_exact_minimum() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Powell),
+            tol: Some(1.0e-6),
+            maxiter: Some(120),
+            maxfev: Some(80_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = powell(&sphere, &[2.0, -2.0], options).expect("powell executes");
+        assert!(result.fun.expect("objective") < 1.0e-5);
+        push_test_log(
+            "powell-quadratic",
+            "powell",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            119,
+        );
+    }
+
+    #[test]
+    fn powell_nonsmooth_objective_best_effort() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Powell),
+            tol: Some(1.0e-6),
+            maxiter: Some(120),
+            maxfev: Some(80_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let initial = abs_sum(&[3.0, -4.0]);
+        let result = powell(&abs_sum, &[3.0, -4.0], options).expect("powell executes");
+        assert!(result.fun.expect("objective") <= initial);
+        push_test_log(
+            "powell-nonsmooth",
+            "powell",
+            "absolute-sum",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            120,
+        );
+    }
+
+    #[test]
+    fn powell_one_dimensional_path_reduces_objective() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Powell),
+            tol: Some(1.0e-8),
+            maxiter: Some(100),
+            maxfev: Some(50_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let initial = one_dim_quadratic(&[-3.0]);
+        let result = powell(&one_dim_quadratic, &[-3.0], options).expect("powell executes");
+        assert!(result.fun.expect("objective") < initial);
+        push_test_log(
+            "powell-one-dimensional",
+            "powell",
+            "one-dim-quadratic",
+            1,
+            RuntimeMode::Strict,
+            &result,
+            121,
+        );
+    }
+
+    #[test]
+    fn powell_constant_function_terminates_quickly() {
+        let constant = |_x: &[f64]| 5.0;
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Powell),
+            tol: Some(1.0e-8),
+            maxiter: Some(100),
+            maxfev: Some(50_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = powell(&constant, &[3.0, -1.0], options).expect("powell executes");
+        assert!(result.success);
+        assert!(result.nit <= 1);
+        push_test_log(
+            "powell-constant-function",
+            "powell",
+            "constant",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            122,
+        );
     }
 
     #[test]
@@ -946,6 +1563,15 @@ mod tests {
         };
         let result = minimize(sphere, &[1.0, -1.0], options).expect("minimize executes");
         assert!(result.success, "{}", result.message);
+        push_test_log(
+            "dispatch-selected-method",
+            "minimize",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            123,
+        );
     }
 
     #[test]
@@ -959,6 +1585,15 @@ mod tests {
             .expect("execution should return an OptimizeResult");
         assert!(!result.success);
         assert_eq!(result.status, ConvergenceStatus::NanEncountered);
+        push_test_log(
+            "hardened-non-finite",
+            "minimize",
+            "nan-objective",
+            2,
+            RuntimeMode::Hardened,
+            &result,
+            124,
+        );
     }
 
     #[test]
@@ -976,5 +1611,199 @@ mod tests {
         assert!(!traces.is_empty());
         assert!(traces.iter().any(|entry| entry.event == "iteration"));
         assert!(traces.iter().any(|entry| entry.event == "completion"));
+        let completion = traces
+            .iter()
+            .find(|entry| entry.event == "completion")
+            .expect("completion trace exists");
+        let result = OptimizeResult {
+            x: completion.final_x.clone().unwrap_or_default(),
+            fun: completion.final_f,
+            success: completion
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("Success")),
+            status: ConvergenceStatus::Success,
+            message: completion.reason.clone().unwrap_or_default(),
+            nfev: completion.total_nfev,
+            njev: 0,
+            nhev: 0,
+            nit: completion.iter_num,
+            jac: None,
+            hess_inv: None,
+            maxcv: None,
+        };
+        push_test_log(
+            "trace-log-schema",
+            "bfgs",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            125,
+        );
+    }
+
+    #[test]
+    fn invalid_gradient_epsilon_is_rejected() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            gradient_eps: 0.0,
+            ..MinimizeOptions::default()
+        };
+        let err = bfgs(&sphere, &[1.0, 1.0], options).expect_err("invalid options should fail");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn evaluation_budget_exceeded_maps_to_max_evaluations() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            maxfev: Some(1),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(sphere, &[1.0, 1.0], options).expect("execution returns result");
+        assert_eq!(result.status, ConvergenceStatus::MaxEvaluations);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 500,
+            failure_persistence: None,
+            .. ProptestConfig::default()
+        })]
+
+        #[test]
+        fn property_minimize_improves_objective(
+            x0 in proptest::array::uniform2(-4.0f64..4.0f64),
+            method_pick in 0u8..3u8,
+        ) {
+            let method = match method_pick % 3 {
+                0 => OptimizeMethod::Bfgs,
+                1 => OptimizeMethod::ConjugateGradient,
+                _ => OptimizeMethod::Powell,
+            };
+            let options = MinimizeOptions {
+                method: Some(method),
+                tol: Some(1.0e-6),
+                maxiter: Some(40),
+                maxfev: Some(20_000),
+                mode: RuntimeMode::Strict,
+                ..MinimizeOptions::default()
+            };
+            let result = minimize(sphere, &x0, options).expect("minimize executes");
+            prop_assert!(result.fun.is_some());
+            let final_f = result.fun.unwrap_or(f64::INFINITY);
+            prop_assert!(final_f <= sphere(&x0) + 1.0e-8);
+            push_test_log(
+                "property-minimize-improves-objective",
+                "minimize",
+                "sphere",
+                2,
+                RuntimeMode::Strict,
+                &result,
+                201,
+            );
+        }
+
+        #[test]
+        fn property_nfev_is_non_zero_for_non_trivial_runs(
+            x0 in proptest::array::uniform2(-3.0f64..3.0f64),
+        ) {
+            let norm = (x0[0] * x0[0] + x0[1] * x0[1]).sqrt();
+            prop_assume!(norm > 1.0e-4);
+            let options = MinimizeOptions {
+                method: Some(OptimizeMethod::Bfgs),
+                tol: Some(1.0e-9),
+                maxiter: Some(5),
+                maxfev: Some(5_000),
+                mode: RuntimeMode::Strict,
+                ..MinimizeOptions::default()
+            };
+            let result = bfgs(&sphere, &x0, options).expect("bfgs executes");
+            prop_assert!(result.nfev >= 1);
+            push_test_log(
+                "property-nfev-non-zero",
+                "bfgs",
+                "sphere",
+                2,
+                RuntimeMode::Strict,
+                &result,
+                202,
+            );
+        }
+
+        #[test]
+        fn property_bfgs_hessian_inverse_is_symmetric_positive_diagonal(
+            x0 in proptest::array::uniform2(-2.5f64..2.5f64),
+        ) {
+            let norm = (x0[0] * x0[0] + x0[1] * x0[1]).sqrt();
+            prop_assume!(norm > 0.2);
+            let options = MinimizeOptions {
+                method: Some(OptimizeMethod::Bfgs),
+                tol: Some(1.0e-6),
+                maxiter: Some(40),
+                maxfev: Some(40_000),
+                mode: RuntimeMode::Strict,
+                ..MinimizeOptions::default()
+            };
+            let result = bfgs(&sphere, &x0, options).expect("bfgs executes");
+            let h_inv = result.hess_inv.as_ref().expect("hessian inverse is present");
+            prop_assert_eq!(h_inv.len(), 2);
+            prop_assert!((h_inv[0][1] - h_inv[1][0]).abs() <= 1.0e-6);
+            prop_assert!(h_inv[0][0] > 0.0);
+            prop_assert!(h_inv[1][1] > 0.0);
+            push_test_log(
+                "property-bfgs-hinv-spd",
+                "bfgs",
+                "sphere",
+                2,
+                RuntimeMode::Strict,
+                &result,
+                203,
+            );
+        }
+
+        #[test]
+        fn property_cg_first_iteration_is_descent(
+            x0 in proptest::array::uniform2(-4.0f64..4.0f64),
+        ) {
+            let norm = (x0[0] * x0[0] + x0[1] * x0[1]).sqrt();
+            prop_assume!(norm > 0.2);
+            let _ = take_optimize_traces();
+            let options = MinimizeOptions {
+                method: Some(OptimizeMethod::ConjugateGradient),
+                tol: Some(1.0e-6),
+                maxiter: Some(40),
+                maxfev: Some(40_000),
+                fixture_id: Some("property-cg-descent"),
+                mode: RuntimeMode::Strict,
+                ..MinimizeOptions::default()
+            };
+            let initial = sphere(&x0);
+            let result = cg_pr_plus(&sphere, &x0, options).expect("cg executes");
+            let traces = take_optimize_traces();
+            let first_iteration = traces
+                .iter()
+                .find(|entry| {
+                    entry.event == "iteration"
+                        && entry.method == OptimizeMethod::ConjugateGradient
+                        && entry.fixture_id.as_deref() == Some("property-cg-descent")
+                });
+            if let Some(first) = first_iteration {
+                prop_assert!(first.grad_norm.unwrap_or(f64::INFINITY).is_finite());
+                let first_f = first.f_val.unwrap_or(f64::INFINITY);
+                let final_f = result.fun.unwrap_or(f64::INFINITY);
+                prop_assert!(first_f <= initial + 1.0e-6 || final_f <= initial + 1.0e-8);
+            }
+            push_test_log(
+                "property-cg-descent",
+                "cg_pr_plus",
+                "sphere",
+                2,
+                RuntimeMode::Strict,
+                &result,
+                204,
+            );
+        }
     }
 }

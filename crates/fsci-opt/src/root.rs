@@ -516,12 +516,91 @@ where
 
 #[cfg(test)]
 mod tests {
-    use fsci_runtime::RuntimeMode;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    use crate::{ConvergenceStatus, RootMethod, RootOptions, bisect, brentq, root_scalar};
+    use fsci_runtime::RuntimeMode;
+    use proptest::prelude::*;
+    use serde::Serialize;
+
+    use crate::{
+        ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, ridder, root_scalar,
+    };
+
+    #[derive(Debug, Serialize)]
+    struct TestLogEntry<'a> {
+        test_id: &'a str,
+        optimizer: &'a str,
+        problem: &'a str,
+        n_dim: usize,
+        mode: &'a str,
+        converged: bool,
+        nfev: usize,
+        final_f: Option<f64>,
+        seed: u64,
+        timestamp_ms: u64,
+    }
+
+    fn test_log_sink() -> &'static Mutex<Vec<String>> {
+        static TEST_LOGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+        TEST_LOGS.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    fn now_unix_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64)
+    }
+
+    fn mode_name(mode: RuntimeMode) -> &'static str {
+        match mode {
+            RuntimeMode::Strict => "strict",
+            RuntimeMode::Hardened => "hardened",
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_test_log(
+        test_id: &str,
+        optimizer: &str,
+        problem: &str,
+        mode: RuntimeMode,
+        converged: bool,
+        nfev: usize,
+        final_f: Option<f64>,
+        seed: u64,
+    ) {
+        let entry = TestLogEntry {
+            test_id,
+            optimizer,
+            problem,
+            n_dim: 1,
+            mode: mode_name(mode),
+            converged,
+            nfev,
+            final_f,
+            seed,
+            timestamp_ms: now_unix_ms(),
+        };
+        let payload = serde_json::to_string(&entry).expect("serialize test log");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload).expect("re-parse serialized log payload");
+        assert!(parsed.get("test_id").is_some());
+        assert!(parsed.get("optimizer").is_some());
+        assert!(parsed.get("timestamp_ms").is_some());
+        test_log_sink().lock().expect("log sink lock").push(payload);
+    }
 
     fn cubic(x: f64) -> f64 {
         x * x * x - 2.0
+    }
+
+    fn monotone_linear(x: f64) -> f64 {
+        x - 3.0
+    }
+
+    fn discontinuous_step(x: f64) -> f64 {
+        if x < 0.5 { -1.0 } else { 1.0 }
     }
 
     #[test]
@@ -538,6 +617,16 @@ mod tests {
         assert!(result.converged, "{}", result.message);
         assert_eq!(result.status, ConvergenceStatus::Success);
         assert!((result.root - 2f64.cbrt()).abs() < 1.0e-8);
+        push_test_log(
+            "bisect-monotone-root",
+            "bisect",
+            "cubic",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(cubic(result.root)),
+            301,
+        );
     }
 
     #[test]
@@ -553,6 +642,88 @@ mod tests {
         let result = brentq(cubic, (0.0, 2.0), options).expect("brentq executes");
         assert!(result.converged, "{}", result.message);
         assert!((result.root - 2f64.cbrt()).abs() < 1.0e-10);
+        push_test_log(
+            "brentq-polynomial-root",
+            "brentq",
+            "cubic",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(cubic(result.root)),
+            302,
+        );
+    }
+
+    #[test]
+    fn brentq_accepts_root_at_bracket_endpoint() {
+        let options = RootOptions {
+            method: Some(RootMethod::Brentq),
+            xtol: 1.0e-12,
+            rtol: 1.0e-12,
+            maxiter: 100,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let result =
+            brentq(|x| x - 1.0, (1.0, 2.0), options).expect("brentq should accept endpoint root");
+        assert!(result.converged);
+        assert!((result.root - 1.0).abs() <= f64::EPSILON);
+        push_test_log(
+            "brentq-endpoint-root",
+            "brentq",
+            "linear",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(result.root - 1.0),
+            303,
+        );
+    }
+
+    #[test]
+    fn brentq_rejects_missing_sign_change() {
+        let options = RootOptions {
+            method: Some(RootMethod::Brentq),
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let err = brentq(cubic, (2.0, 3.0), options).expect_err("must fail without sign change");
+        assert!(matches!(err, crate::OptError::SignChangeRequired { .. }));
+        push_test_log(
+            "brentq-sign-change-error",
+            "brentq",
+            "cubic",
+            RuntimeMode::Strict,
+            false,
+            0,
+            None,
+            304,
+        );
+    }
+
+    #[test]
+    fn brenth_matches_brentq_on_same_problem() {
+        let options = RootOptions {
+            method: Some(RootMethod::Brenth),
+            xtol: 1.0e-12,
+            rtol: 1.0e-12,
+            maxiter: 150,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let brentq_result = brentq(cubic, (0.0, 2.0), options).expect("brentq executes");
+        let brenth_result = brenth(cubic, (0.0, 2.0), options).expect("brenth executes");
+        assert!((brenth_result.root - brentq_result.root).abs() < 1.0e-10);
+        push_test_log(
+            "brenth-matches-brentq",
+            "brenth",
+            "cubic",
+            RuntimeMode::Strict,
+            brenth_result.converged,
+            brenth_result.function_calls,
+            Some(cubic(brenth_result.root)),
+            305,
+        );
     }
 
     #[test]
@@ -569,6 +740,16 @@ mod tests {
             .expect("root_scalar executes");
         assert!(result.converged);
         assert_eq!(result.method, RootMethod::Brentq);
+        push_test_log(
+            "root-scalar-default-method",
+            "root_scalar",
+            "cubic",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(cubic(result.root)),
+            306,
+        );
     }
 
     #[test]
@@ -580,5 +761,350 @@ mod tests {
         };
         let err = bisect(cubic, (2.0, 3.0), options).expect_err("must fail without sign change");
         assert!(matches!(err, crate::OptError::SignChangeRequired { .. }));
+        push_test_log(
+            "bisect-sign-change-error",
+            "bisect",
+            "cubic",
+            RuntimeMode::Strict,
+            false,
+            0,
+            None,
+            307,
+        );
+    }
+
+    #[test]
+    fn bisect_respects_tolerance_convergence() {
+        let options = RootOptions {
+            method: Some(RootMethod::Bisect),
+            xtol: 1.0e-6,
+            rtol: 1.0e-6,
+            maxiter: 80,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let result = bisect(monotone_linear, (0.0, 5.0), options).expect("bisect executes");
+        assert!(result.converged);
+        assert!((result.root - 3.0).abs() < 5.0e-6);
+        push_test_log(
+            "bisect-tolerance-convergence",
+            "bisect",
+            "linear",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(monotone_linear(result.root)),
+            308,
+        );
+    }
+
+    #[test]
+    fn brentq_handles_discontinuous_function_with_defined_output() {
+        let options = RootOptions {
+            method: Some(RootMethod::Brentq),
+            xtol: 1.0e-8,
+            rtol: 1.0e-8,
+            maxiter: 120,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let result = brentq(discontinuous_step, (0.0, 1.0), options).expect("brentq executes");
+        assert!(result.root.is_finite());
+        assert!((0.0..=1.0).contains(&result.root));
+        push_test_log(
+            "brentq-discontinuous-defined",
+            "brentq",
+            "step-discontinuity",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(discontinuous_step(result.root)),
+            309,
+        );
+    }
+
+    #[test]
+    fn bracketing_methods_agree_on_root_within_tolerance() {
+        let options = RootOptions {
+            xtol: 1.0e-10,
+            rtol: 1.0e-10,
+            maxiter: 200,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let bis = bisect(
+            cubic,
+            (0.0, 2.0),
+            RootOptions {
+                method: Some(RootMethod::Bisect),
+                ..options
+            },
+        )
+        .expect("bisect executes");
+        let brq = brentq(
+            cubic,
+            (0.0, 2.0),
+            RootOptions {
+                method: Some(RootMethod::Brentq),
+                ..options
+            },
+        )
+        .expect("brentq executes");
+        let rid = ridder(
+            cubic,
+            (0.0, 2.0),
+            RootOptions {
+                method: Some(RootMethod::Ridder),
+                ..options
+            },
+        )
+        .expect("ridder executes");
+        assert!((bis.root - brq.root).abs() < 1.0e-7);
+        assert!((rid.root - brq.root).abs() < 1.0e-7);
+        push_test_log(
+            "root-method-agreement",
+            "all",
+            "cubic",
+            RuntimeMode::Strict,
+            true,
+            bis.function_calls + brq.function_calls + rid.function_calls,
+            Some(cubic(brq.root)),
+            310,
+        );
+    }
+
+    #[test]
+    fn tight_bracket_converges_quickly() {
+        let root = 2f64.cbrt();
+        let options = RootOptions {
+            method: Some(RootMethod::Brentq),
+            xtol: 1.0e-14,
+            rtol: 1.0e-14,
+            maxiter: 100,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let result =
+            brentq(cubic, (root - 1.0e-4, root + 1.0e-4), options).expect("brentq executes");
+        assert!(result.converged);
+        assert!(result.iterations <= 10);
+        push_test_log(
+            "tight-bracket-fast",
+            "brentq",
+            "cubic",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(cubic(result.root)),
+            311,
+        );
+    }
+
+    #[test]
+    fn wide_bracket_still_converges() {
+        let options = RootOptions {
+            method: Some(RootMethod::Brentq),
+            xtol: 1.0e-10,
+            rtol: 1.0e-10,
+            maxiter: 250,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let result = brentq(cubic, (-1000.0, 1000.0), options).expect("brentq executes");
+        assert!(result.converged);
+        assert!((result.root - 2f64.cbrt()).abs() < 1.0e-7);
+        push_test_log(
+            "wide-bracket-converges",
+            "brentq",
+            "cubic",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(cubic(result.root)),
+            312,
+        );
+    }
+
+    #[test]
+    fn ridder_finds_root_for_cubic() {
+        let options = RootOptions {
+            method: Some(RootMethod::Ridder),
+            xtol: 1.0e-10,
+            rtol: 1.0e-10,
+            maxiter: 120,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let result = ridder(cubic, (0.0, 2.0), options).expect("ridder executes");
+        assert!(result.converged);
+        assert!((result.root - 2f64.cbrt()).abs() < 1.0e-7);
+        push_test_log(
+            "ridder-cubic-root",
+            "ridder",
+            "cubic",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(cubic(result.root)),
+            313,
+        );
+    }
+
+    #[test]
+    fn root_scalar_without_bracket_returns_error_for_ridder_selection() {
+        let options = RootOptions {
+            method: None,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let err = root_scalar(cubic, None, Some(0.0), Some(1.0), options)
+            .expect_err("ridder path still requires a bracket");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+        push_test_log(
+            "root-scalar-missing-bracket",
+            "root_scalar",
+            "cubic",
+            RuntimeMode::Strict,
+            false,
+            0,
+            None,
+            314,
+        );
+    }
+
+    #[test]
+    fn root_scalar_without_inputs_reports_selection_error() {
+        let options = RootOptions {
+            method: None,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let err =
+            root_scalar(cubic, None, None, None, options).expect_err("must reject missing inputs");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+        push_test_log(
+            "root-scalar-selection-error",
+            "root_scalar",
+            "cubic",
+            RuntimeMode::Strict,
+            false,
+            0,
+            None,
+            315,
+        );
+    }
+
+    #[test]
+    fn hardened_mode_rejects_non_finite_function_values() {
+        let options = RootOptions {
+            method: Some(RootMethod::Bisect),
+            mode: RuntimeMode::Hardened,
+            ..RootOptions::default()
+        };
+        let err = bisect(
+            |x| if x > 0.8 { f64::NAN } else { x - 0.2 },
+            (0.1, 0.9),
+            options,
+        )
+        .expect_err("hardened mode should reject non-finite values");
+        assert!(matches!(err, crate::OptError::NonFiniteInput { .. }));
+        push_test_log(
+            "root-hardened-non-finite",
+            "bisect",
+            "nan-branch",
+            RuntimeMode::Hardened,
+            false,
+            0,
+            None,
+            316,
+        );
+    }
+
+    #[test]
+    fn strict_mode_non_finite_function_values_map_to_invalid_argument() {
+        let options = RootOptions {
+            method: Some(RootMethod::Bisect),
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let err = bisect(
+            |x| if x > 0.8 { f64::NAN } else { x - 0.2 },
+            (0.1, 0.9),
+            options,
+        )
+        .expect_err("strict mode should map non-finite values to invalid argument");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+        push_test_log(
+            "root-strict-non-finite",
+            "bisect",
+            "nan-branch",
+            RuntimeMode::Strict,
+            false,
+            0,
+            None,
+            317,
+        );
+    }
+
+    #[test]
+    fn bisect_reports_max_iterations_when_budget_is_too_low() {
+        let options = RootOptions {
+            method: Some(RootMethod::Bisect),
+            xtol: 1.0e-18,
+            rtol: 1.0e-18,
+            maxiter: 1,
+            mode: RuntimeMode::Strict,
+            ..RootOptions::default()
+        };
+        let result = bisect(|x| x - 0.3, (0.0, 1.0), options).expect("bisect executes");
+        assert!(!result.converged);
+        assert_eq!(result.status, ConvergenceStatus::MaxIterations);
+        push_test_log(
+            "bisect-maxiter-budget",
+            "bisect",
+            "linear",
+            RuntimeMode::Strict,
+            result.converged,
+            result.function_calls,
+            Some(result.root - 0.3),
+            318,
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 500,
+            failure_persistence: None,
+            .. ProptestConfig::default()
+        })]
+
+        #[test]
+        fn property_brentq_returns_small_residual_for_valid_bracket(
+            target in -50.0f64..50.0f64,
+        ) {
+            let f = |x: f64| x - target;
+            let options = RootOptions {
+                method: Some(RootMethod::Brentq),
+                xtol: 1.0e-10,
+                rtol: 1.0e-10,
+                maxiter: 80,
+                mode: RuntimeMode::Strict,
+                ..RootOptions::default()
+            };
+            let bracket = (target - 1.0, target + 1.0);
+            let result = brentq(f, bracket, options).expect("brentq executes");
+            prop_assert!(result.converged);
+            prop_assert!(f(result.root).abs() <= 2.0 * options.xtol);
+            push_test_log(
+                "property-brentq-small-residual",
+                "brentq",
+                "linear-shift",
+                RuntimeMode::Strict,
+                result.converged,
+                result.function_calls,
+                Some(f(result.root)),
+                401,
+            );
+        }
     }
 }
