@@ -5,7 +5,7 @@ use fsci_runtime::RuntimeMode;
 use crate::gamma;
 use crate::types::{
     DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, not_yet_implemented,
+    SpecialTensor, not_yet_implemented, record_special_trace,
 };
 
 pub const BETA_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -104,6 +104,15 @@ where
             .map(SpecialTensor::RealVec),
         (SpecialTensor::RealVec(lhs), SpecialTensor::RealVec(rhs)) => {
             if lhs.len() != rhs.len() {
+                record_special_trace(
+                    function,
+                    mode,
+                    "domain_error",
+                    format!("lhs_len={},rhs_len={}", lhs.len(), rhs.len()),
+                    "fail_closed",
+                    "vector inputs must have matching lengths",
+                    false,
+                );
                 return Err(SpecialError {
                     function,
                     kind: SpecialErrorKind::DomainError,
@@ -124,12 +133,23 @@ where
         | (_, SpecialTensor::ComplexVec(_)) => {
             not_yet_implemented(function, mode, "complex-valued path pending")
         }
-        _ => Err(SpecialError {
-            function,
-            kind: SpecialErrorKind::DomainError,
-            mode,
-            detail: "empty tensor is not a valid special-function input",
-        }),
+        _ => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid special-function input",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid special-function input",
+            })
+        }
     }
 }
 
@@ -188,17 +208,73 @@ where
         | (_, _, SpecialTensor::ComplexVec(_)) => {
             not_yet_implemented(function, mode, "complex-valued path pending")
         }
-        _ => Err(SpecialError {
-            function,
-            kind: SpecialErrorKind::DomainError,
-            mode,
-            detail: "unsupported broadcast pattern for ternary inputs",
-        }),
+        _ => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "unsupported_broadcast_pattern",
+                "fail_closed",
+                "unsupported broadcast pattern for ternary inputs",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "unsupported broadcast pattern for ternary inputs",
+            })
+        }
     }
 }
 
 fn beta_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     let log_value = betaln_scalar(a, b, mode)?;
+    const LN_MAX: f64 = 709.782_712_893_384;
+    const LN_MIN: f64 = -745.133_219_101_941_1;
+
+    if log_value > LN_MAX {
+        if matches!(mode, RuntimeMode::Hardened) {
+            record_special_trace(
+                "beta",
+                mode,
+                "overflow_risk",
+                format!("a={a},b={b},log_beta={log_value}"),
+                "fail_closed",
+                "beta overflow risk",
+                true,
+            );
+            return Err(SpecialError {
+                function: "beta",
+                kind: SpecialErrorKind::OverflowRisk,
+                mode,
+                detail: "beta overflow risk",
+            });
+        }
+        record_special_trace(
+            "beta",
+            mode,
+            "overflow_risk",
+            format!("a={a},b={b},log_beta={log_value}"),
+            "returned_inf",
+            "strict overflow fallback",
+            true,
+        );
+        return Ok(f64::INFINITY);
+    }
+    if log_value < LN_MIN {
+        record_special_trace(
+            "beta",
+            mode,
+            "underflow_risk",
+            format!("a={a},b={b},log_beta={log_value}"),
+            "returned_zero",
+            "underflow-safe clamp to zero",
+            true,
+        );
+        return Ok(0.0);
+    }
+
     Ok(log_value.exp())
 }
 
@@ -207,6 +283,15 @@ fn betaln_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialError>
         return Ok(f64::NAN);
     }
     if matches!(mode, RuntimeMode::Hardened) && (a <= 0.0 || b <= 0.0) {
+        record_special_trace(
+            "betaln",
+            mode,
+            "domain_error",
+            format!("a={a},b={b}"),
+            "fail_closed",
+            "betaln principal domain requires positive parameters",
+            false,
+        );
         return Err(SpecialError {
             function: "betaln",
             kind: SpecialErrorKind::DomainError,
@@ -215,6 +300,15 @@ fn betaln_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialError>
         });
     }
     if a <= 0.0 || b <= 0.0 {
+        record_special_trace(
+            "betaln",
+            mode,
+            "domain_error",
+            format!("a={a},b={b}"),
+            "returned_nan",
+            "strict domain fallback",
+            false,
+        );
         return Ok(f64::NAN);
     }
 
@@ -230,13 +324,35 @@ fn betainc_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, Spec
     }
     if !(0.0..=1.0).contains(&x) {
         return match mode {
-            RuntimeMode::Strict => Ok(f64::NAN),
-            RuntimeMode::Hardened => Err(SpecialError {
-                function: "betainc",
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "betainc domain requires x in [0, 1]",
-            }),
+            RuntimeMode::Strict => {
+                record_special_trace(
+                    "betainc",
+                    mode,
+                    "domain_error",
+                    format!("a={a},b={b},x={x}"),
+                    "returned_nan",
+                    "strict domain fallback",
+                    false,
+                );
+                Ok(f64::NAN)
+            }
+            RuntimeMode::Hardened => {
+                record_special_trace(
+                    "betainc",
+                    mode,
+                    "domain_error",
+                    format!("a={a},b={b},x={x}"),
+                    "fail_closed",
+                    "betainc domain requires x in [0, 1]",
+                    false,
+                );
+                Err(SpecialError {
+                    function: "betainc",
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "betainc domain requires x in [0, 1]",
+                })
+            }
         };
     }
     if x == 0.0 {
@@ -247,13 +363,35 @@ fn betainc_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, Spec
     }
     if a <= 0.0 || b <= 0.0 {
         return match mode {
-            RuntimeMode::Strict => Ok(f64::NAN),
-            RuntimeMode::Hardened => Err(SpecialError {
-                function: "betainc",
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "betainc requires positive shape parameters",
-            }),
+            RuntimeMode::Strict => {
+                record_special_trace(
+                    "betainc",
+                    mode,
+                    "domain_error",
+                    format!("a={a},b={b},x={x}"),
+                    "returned_nan",
+                    "strict domain fallback",
+                    false,
+                );
+                Ok(f64::NAN)
+            }
+            RuntimeMode::Hardened => {
+                record_special_trace(
+                    "betainc",
+                    mode,
+                    "domain_error",
+                    format!("a={a},b={b},x={x}"),
+                    "fail_closed",
+                    "betainc requires positive shape parameters",
+                    false,
+                );
+                Err(SpecialError {
+                    function: "betainc",
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "betainc requires positive shape parameters",
+                })
+            }
         };
     }
 

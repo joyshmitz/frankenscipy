@@ -6,7 +6,7 @@ use fsci_runtime::RuntimeMode;
 
 use crate::types::{
     DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, not_yet_implemented,
+    SpecialTensor, not_yet_implemented, record_special_trace,
 };
 
 pub const GAMMA_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -41,6 +41,34 @@ pub const GAMMA_DISPATCH_PLAN: &[DispatchPlan] = &[
             },
         ],
         notes: "Keep +inf pole parity with SciPy and avoid direct exp(gammaln) overflow back-conversions.",
+    },
+    DispatchPlan {
+        function: "gammainc",
+        steps: &[
+            DispatchStep {
+                regime: KernelRegime::Series,
+                when: "x < a + 1 via stable lower-tail expansion",
+            },
+            DispatchStep {
+                regime: KernelRegime::ContinuedFraction,
+                when: "x >= a + 1 via stable upper-tail continued fraction",
+            },
+        ],
+        notes: "Regularized lower incomplete gamma P(a, x); strict mode preserves NaN domain fallback.",
+    },
+    DispatchPlan {
+        function: "gammaincc",
+        steps: &[
+            DispatchStep {
+                regime: KernelRegime::Series,
+                when: "complement from lower-tail expansion",
+            },
+            DispatchStep {
+                regime: KernelRegime::ContinuedFraction,
+                when: "direct upper-tail continued fraction for stability",
+            },
+        ],
+        notes: "Regularized upper incomplete gamma Q(a, x)=1-P(a, x); hardened mode fail-closes malformed domains.",
     },
     DispatchPlan {
         function: "digamma",
@@ -109,6 +137,18 @@ pub fn digamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real_input("digamma", z, mode, |x| digamma_scalar(x, mode))
 }
 
+pub fn gammainc(a: &SpecialTensor, x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("gammainc", a, x, mode, |shape, arg| {
+        gammainc_scalar(shape, arg, mode)
+    })
+}
+
+pub fn gammaincc(a: &SpecialTensor, x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("gammaincc", a, x, mode, |shape, arg| {
+        gammaincc_scalar(shape, arg, mode)
+    })
+}
+
 pub fn polygamma(n: usize, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     match n {
         0 => digamma(z, mode),
@@ -123,6 +163,83 @@ pub fn polygamma(n: usize, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResul
 
 pub fn rgamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real_input("rgamma", z, mode, |x| rgamma_scalar(x, mode))
+}
+
+fn map_real_binary<F>(
+    function: &'static str,
+    lhs: &SpecialTensor,
+    rhs: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+) -> SpecialResult
+where
+    F: Fn(f64, f64) -> Result<f64, SpecialError>,
+{
+    match (lhs, rhs) {
+        (SpecialTensor::RealScalar(left), SpecialTensor::RealScalar(right)) => {
+            kernel(*left, *right).map(SpecialTensor::RealScalar)
+        }
+        (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => left
+            .iter()
+            .copied()
+            .map(|value| kernel(value, *right))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => right
+            .iter()
+            .copied()
+            .map(|value| kernel(*left, value))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
+            if left.len() != right.len() {
+                record_special_trace(
+                    function,
+                    mode,
+                    "domain_error",
+                    format!("lhs_len={},rhs_len={}", left.len(), right.len()),
+                    "fail_closed",
+                    "vector inputs must have matching lengths",
+                    false,
+                );
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            left.iter()
+                .copied()
+                .zip(right.iter().copied())
+                .map(|(l, r)| kernel(l, r))
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::ComplexScalar(_), _)
+        | (SpecialTensor::ComplexVec(_), _)
+        | (_, SpecialTensor::ComplexScalar(_))
+        | (_, SpecialTensor::ComplexVec(_)) => {
+            not_yet_implemented(function, mode, "complex-valued path pending")
+        }
+        _ => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid special-function input",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid special-function input",
+            })
+        }
+    }
 }
 
 fn map_real_input<F>(
@@ -145,17 +262,37 @@ where
         SpecialTensor::ComplexScalar(_) | SpecialTensor::ComplexVec(_) => {
             not_yet_implemented(function, mode, "complex-valued path pending")
         }
-        SpecialTensor::Empty => Err(SpecialError {
-            function,
-            kind: SpecialErrorKind::DomainError,
-            mode,
-            detail: "empty tensor is not a valid special-function input",
-        }),
+        SpecialTensor::Empty => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid special-function input",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid special-function input",
+            })
+        }
     }
 }
 
 fn gamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if matches!(mode, RuntimeMode::Hardened) && is_negative_integer_pole(x) {
+        record_special_trace(
+            "gamma",
+            mode,
+            "pole_input",
+            format!("input={x}"),
+            "fail_closed",
+            "gamma pole at nonpositive integer",
+            false,
+        );
         return Err(SpecialError {
             function: "gamma",
             kind: SpecialErrorKind::PoleInput,
@@ -163,11 +300,32 @@ fn gamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
             detail: "gamma pole at nonpositive integer",
         });
     }
-    Ok(gamma_core(x))
+    let value = gamma_core(x);
+    if !value.is_finite() {
+        record_special_trace(
+            "gamma",
+            mode,
+            "non_finite_output",
+            format!("input={x}"),
+            "returned_non_finite",
+            format!("output={value}"),
+            false,
+        );
+    }
+    Ok(value)
 }
 
 fn gammaln_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if matches!(mode, RuntimeMode::Hardened) && is_negative_integer_pole(x) {
+        record_special_trace(
+            "gammaln",
+            mode,
+            "pole_input",
+            format!("input={x}"),
+            "fail_closed",
+            "gammaln pole at nonpositive integer",
+            false,
+        );
         return Err(SpecialError {
             function: "gammaln",
             kind: SpecialErrorKind::PoleInput,
@@ -176,11 +334,32 @@ fn gammaln_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         });
     }
     let value = gamma_core(x);
-    Ok(value.abs().ln())
+    let output = value.abs().ln();
+    if !output.is_finite() {
+        record_special_trace(
+            "gammaln",
+            mode,
+            "non_finite_output",
+            format!("input={x}"),
+            "returned_non_finite",
+            format!("output={output}"),
+            false,
+        );
+    }
+    Ok(output)
 }
 
 fn digamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if matches!(mode, RuntimeMode::Hardened) && is_negative_integer_pole(x) {
+        record_special_trace(
+            "digamma",
+            mode,
+            "pole_input",
+            format!("input={x}"),
+            "fail_closed",
+            "digamma pole at nonpositive integer",
+            false,
+        );
         return Err(SpecialError {
             function: "digamma",
             kind: SpecialErrorKind::PoleInput,
@@ -188,11 +367,32 @@ fn digamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
             detail: "digamma pole at nonpositive integer",
         });
     }
-    Ok(digamma_core(x))
+    let value = digamma_core(x);
+    if !value.is_finite() {
+        record_special_trace(
+            "digamma",
+            mode,
+            "non_finite_output",
+            format!("input={x}"),
+            "returned_non_finite",
+            format!("output={value}"),
+            false,
+        );
+    }
+    Ok(value)
 }
 
 fn trigamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if matches!(mode, RuntimeMode::Hardened) && is_negative_integer_pole(x) {
+        record_special_trace(
+            "polygamma",
+            mode,
+            "pole_input",
+            format!("input={x}"),
+            "fail_closed",
+            "trigamma pole at nonpositive integer",
+            false,
+        );
         return Err(SpecialError {
             function: "polygamma",
             kind: SpecialErrorKind::PoleInput,
@@ -200,12 +400,192 @@ fn trigamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
             detail: "trigamma pole at nonpositive integer",
         });
     }
-    Ok(trigamma_core(x))
+    let value = trigamma_core(x);
+    if !value.is_finite() {
+        record_special_trace(
+            "polygamma",
+            mode,
+            "non_finite_output",
+            format!("input={x}"),
+            "returned_non_finite",
+            format!("output={value}"),
+            false,
+        );
+    }
+    Ok(value)
 }
 
 fn rgamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     let gamma_value = gamma_scalar(x, mode)?;
-    Ok(1.0 / gamma_value)
+    let value = 1.0 / gamma_value;
+    if !value.is_finite() {
+        record_special_trace(
+            "rgamma",
+            mode,
+            "non_finite_output",
+            format!("input={x}"),
+            "returned_non_finite",
+            format!("output={value}"),
+            false,
+        );
+    }
+    Ok(value)
+}
+
+fn gammainc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    validate_incomplete_gamma_domain("gammainc", a, x, mode)?;
+    let (p, _) = regularized_gamma_pair(a, x, mode)?;
+    Ok(p)
+}
+
+fn gammaincc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    validate_incomplete_gamma_domain("gammaincc", a, x, mode)?;
+    let (_, q) = regularized_gamma_pair(a, x, mode)?;
+    Ok(q)
+}
+
+fn validate_incomplete_gamma_domain(
+    function: &'static str,
+    a: f64,
+    x: f64,
+    mode: RuntimeMode,
+) -> Result<(), SpecialError> {
+    if a.is_nan() || x.is_nan() {
+        return Ok(());
+    }
+    if !a.is_finite() || a <= 0.0 || x < 0.0 {
+        return match mode {
+            RuntimeMode::Strict => {
+                record_special_trace(
+                    function,
+                    mode,
+                    "domain_error",
+                    format!("a={a},x={x}"),
+                    "returned_nan",
+                    "strict domain fallback",
+                    false,
+                );
+                Ok(())
+            }
+            RuntimeMode::Hardened => {
+                record_special_trace(
+                    function,
+                    mode,
+                    "domain_error",
+                    format!("a={a},x={x}"),
+                    "fail_closed",
+                    "regularized incomplete gamma requires finite a>0 and x>=0",
+                    false,
+                );
+                Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "regularized incomplete gamma requires finite a>0 and x>=0",
+                })
+            }
+        };
+    }
+    Ok(())
+}
+
+fn regularized_gamma_pair(a: f64, x: f64, mode: RuntimeMode) -> Result<(f64, f64), SpecialError> {
+    if a.is_nan() || x.is_nan() {
+        return Ok((f64::NAN, f64::NAN));
+    }
+    if !a.is_finite() || a <= 0.0 || x < 0.0 {
+        return Ok((f64::NAN, f64::NAN));
+    }
+    if x == 0.0 {
+        return Ok((0.0, 1.0));
+    }
+    if x.is_infinite() {
+        return Ok((1.0, 0.0));
+    }
+
+    const EPS: f64 = 1.0e-14;
+    const MAX_ITERS: usize = 200;
+    const FPMIN: f64 = 1.0e-300;
+
+    let lg = gammaln_scalar(a, RuntimeMode::Strict)?;
+    let prefactor = (-x + a * x.ln() - lg).exp();
+    let (p, q) = if x < a + 1.0 {
+        let mut ap = a;
+        let mut term = 1.0 / a;
+        let mut sum = term;
+        for _ in 0..MAX_ITERS {
+            ap += 1.0;
+            term *= x / ap;
+            sum += term;
+            if term.abs() <= sum.abs() * EPS {
+                break;
+            }
+        }
+        let lower = prefactor * sum;
+        let p_value = clamp_unit_interval(lower);
+        let q_value = clamp_unit_interval(1.0 - p_value);
+        (p_value, q_value)
+    } else {
+        let mut b = x + 1.0 - a;
+        let mut c = 1.0 / FPMIN;
+        let mut d = 1.0 / b;
+        let mut h = d;
+        for i in 1..=MAX_ITERS {
+            let i_f = i as f64;
+            let an = -i_f * (i_f - a);
+            b += 2.0;
+            d = an * d + b;
+            if d.abs() < FPMIN {
+                d = FPMIN;
+            }
+            c = b + an / c;
+            if c.abs() < FPMIN {
+                c = FPMIN;
+            }
+            d = 1.0 / d;
+            let delta = d * c;
+            h *= delta;
+            if (delta - 1.0).abs() <= EPS {
+                break;
+            }
+        }
+        let upper = prefactor * h;
+        let q_value = clamp_unit_interval(upper);
+        let p_value = clamp_unit_interval(1.0 - q_value);
+        (p_value, q_value)
+    };
+
+    if !p.is_finite() {
+        record_special_trace(
+            "gammainc",
+            mode,
+            "non_finite_output",
+            format!("a={a},x={x}"),
+            "returned_non_finite",
+            format!("output={p}"),
+            false,
+        );
+    }
+    if !q.is_finite() {
+        record_special_trace(
+            "gammaincc",
+            mode,
+            "non_finite_output",
+            format!("a={a},x={x}"),
+            "returned_non_finite",
+            format!("output={q}"),
+            false,
+        );
+    }
+
+    Ok((p, q))
+}
+
+fn clamp_unit_interval(value: f64) -> f64 {
+    if value.is_nan() {
+        return f64::NAN;
+    }
+    value.clamp(0.0, 1.0)
 }
 
 fn gamma_core(x: f64) -> f64 {

@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 use std::fmt;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use fsci_runtime::RuntimeMode;
 
@@ -76,6 +78,74 @@ impl std::error::Error for SpecialError {}
 
 pub type SpecialResult = Result<SpecialTensor, SpecialError>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecialTraceEntry {
+    pub timestamp_ms: u128,
+    pub function: &'static str,
+    pub mode: RuntimeMode,
+    pub category: &'static str,
+    pub input_summary: String,
+    pub action_taken: &'static str,
+    pub result_summary: String,
+    pub clamped: bool,
+}
+
+impl SpecialTraceEntry {
+    #[must_use]
+    pub fn to_json_line(&self) -> String {
+        format!(
+            "{{\"timestamp_ms\":{},\"function\":\"{}\",\"mode\":\"{:?}\",\"category\":\"{}\",\"input_summary\":\"{}\",\"action_taken\":\"{}\",\"result_summary\":\"{}\",\"clamped\":{}}}",
+            self.timestamp_ms,
+            self.function,
+            self.mode,
+            self.category,
+            escape_json(&self.input_summary),
+            self.action_taken,
+            escape_json(&self.result_summary),
+            self.clamped
+        )
+    }
+}
+
+static TRACE_LOG: OnceLock<Mutex<Vec<SpecialTraceEntry>>> = OnceLock::new();
+
+fn trace_log() -> &'static Mutex<Vec<SpecialTraceEntry>> {
+    TRACE_LOG.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[must_use]
+pub fn take_special_traces() -> Vec<SpecialTraceEntry> {
+    if let Ok(mut log) = trace_log().lock() {
+        let mut out = Vec::with_capacity(log.len());
+        std::mem::swap(&mut *log, &mut out);
+        return out;
+    }
+    Vec::new()
+}
+
+pub fn record_special_trace(
+    function: &'static str,
+    mode: RuntimeMode,
+    category: &'static str,
+    input_summary: impl Into<String>,
+    action_taken: &'static str,
+    result_summary: impl Into<String>,
+    clamped: bool,
+) {
+    if let Ok(mut log) = trace_log().lock() {
+        log.push(SpecialTraceEntry {
+            timestamp_ms: now_unix_ms(),
+            function,
+            mode,
+            category,
+            input_summary: input_summary.into(),
+            action_taken,
+            result_summary: result_summary.into(),
+            clamped,
+        });
+    }
+}
+
 pub fn not_yet_implemented(
     function: &'static str,
     mode: RuntimeMode,
@@ -87,4 +157,17 @@ pub fn not_yet_implemented(
         mode,
         detail,
     })
+}
+
+fn now_unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis())
+}
+
+fn escape_json(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }

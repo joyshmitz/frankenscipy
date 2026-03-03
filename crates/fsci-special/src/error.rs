@@ -6,7 +6,7 @@ use fsci_runtime::RuntimeMode;
 
 use crate::types::{
     DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, not_yet_implemented,
+    SpecialTensor, not_yet_implemented, record_special_trace,
 };
 
 pub const ERROR_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -109,12 +109,23 @@ where
         SpecialTensor::ComplexScalar(_) | SpecialTensor::ComplexVec(_) => {
             not_yet_implemented(function, mode, "complex-valued path pending")
         }
-        SpecialTensor::Empty => Err(SpecialError {
-            function,
-            kind: SpecialErrorKind::DomainError,
-            mode,
-            detail: "empty tensor is not a valid special-function input",
-        }),
+        SpecialTensor::Empty => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid special-function input",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid special-function input",
+            })
+        }
     }
 }
 
@@ -150,6 +161,9 @@ fn erfc_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
+    if x == 0.0 {
+        return 1.0;
+    }
     if x == f64::INFINITY {
         return 0.0;
     }
@@ -183,13 +197,35 @@ fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     }
     if y.abs() > 1.0 {
         return match mode {
-            RuntimeMode::Strict => Ok(f64::NAN),
-            RuntimeMode::Hardened => Err(SpecialError {
-                function: "erfinv",
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "erfinv domain is [-1, 1]",
-            }),
+            RuntimeMode::Strict => {
+                record_special_trace(
+                    "erfinv",
+                    mode,
+                    "domain_error",
+                    format!("input={y}"),
+                    "returned_nan",
+                    "out-of-domain strict fallback",
+                    false,
+                );
+                Ok(f64::NAN)
+            }
+            RuntimeMode::Hardened => {
+                record_special_trace(
+                    "erfinv",
+                    mode,
+                    "domain_error",
+                    format!("input={y}"),
+                    "fail_closed",
+                    "erfinv domain is [-1, 1]",
+                    false,
+                );
+                Err(SpecialError {
+                    function: "erfinv",
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "erfinv domain is [-1, 1]",
+                })
+            }
         };
     }
     if y == 0.0 {
@@ -227,13 +263,35 @@ fn erfcinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     }
     if !(0.0..=2.0).contains(&y) {
         return match mode {
-            RuntimeMode::Strict => Ok(f64::NAN),
-            RuntimeMode::Hardened => Err(SpecialError {
-                function: "erfcinv",
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "erfcinv domain is [0, 2]",
-            }),
+            RuntimeMode::Strict => {
+                record_special_trace(
+                    "erfcinv",
+                    mode,
+                    "domain_error",
+                    format!("input={y}"),
+                    "returned_nan",
+                    "out-of-domain strict fallback",
+                    false,
+                );
+                Ok(f64::NAN)
+            }
+            RuntimeMode::Hardened => {
+                record_special_trace(
+                    "erfcinv",
+                    mode,
+                    "domain_error",
+                    format!("input={y}"),
+                    "fail_closed",
+                    "erfcinv domain is [0, 2]",
+                    false,
+                );
+                Err(SpecialError {
+                    function: "erfcinv",
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "erfcinv domain is [0, 2]",
+                })
+            }
         };
     }
 
