@@ -1,0 +1,555 @@
+{
+  "packet_id": "FSCI-P2C-007",
+  "family": "array_api_core",
+  "cases": [
+    {
+      "operation": "zeros",
+      "case_id": "diff_zeros_scalar_f64",
+      "category": "differential",
+      "mode": "Strict",
+      "shape": [],
+      "dtype": "float64",
+      "expected": {
+        "kind": "array",
+        "shape": [],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 0.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::creation::zeros"
+      }
+    },
+    {
+      "operation": "zeros",
+      "case_id": "diff_zeros_2x2_f32",
+      "category": "differential",
+      "mode": "Strict",
+      "shape": [2, 2],
+      "dtype": "float32",
+      "expected": {
+        "kind": "array",
+        "shape": [2, 2],
+        "dtype": "float32",
+        "values": [
+          { "kind": "f64", "value": 0.0 },
+          { "kind": "f64", "value": 0.0 },
+          { "kind": "f64", "value": 0.0 },
+          { "kind": "f64", "value": 0.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::creation::zeros"
+      }
+    },
+    {
+      "operation": "ones",
+      "case_id": "diff_ones_len3_f32",
+      "category": "differential",
+      "mode": "Strict",
+      "shape": [3],
+      "dtype": "float32",
+      "expected": {
+        "kind": "array",
+        "shape": [3],
+        "dtype": "float32",
+        "values": [
+          { "kind": "f64", "value": 1.0 },
+          { "kind": "f64", "value": 1.0 },
+          { "kind": "f64", "value": 1.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::creation::ones"
+      }
+    },
+    {
+      "operation": "full",
+      "case_id": "diff_full_complex128",
+      "category": "differential",
+      "mode": "Strict",
+      "shape": [2],
+      "fill_value": { "kind": "complex_f64", "re": 1.5, "im": -2.0 },
+      "dtype": "complex128",
+      "expected": {
+        "kind": "array",
+        "shape": [2],
+        "dtype": "complex128",
+        "values": [
+          { "kind": "complex_f64", "re": 1.5, "im": -2.0 },
+          { "kind": "complex_f64", "re": 1.5, "im": -2.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::creation::full"
+      }
+    },
+    {
+      "operation": "arange",
+      "case_id": "diff_arange_ascending",
+      "category": "differential",
+      "mode": "Strict",
+      "start": { "kind": "i64", "value": 0 },
+      "stop": { "kind": "i64", "value": 5 },
+      "step": { "kind": "i64", "value": 1 },
+      "dtype": "float64",
+      "expected": {
+        "kind": "array",
+        "shape": [5],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 0.0 },
+          { "kind": "f64", "value": 1.0 },
+          { "kind": "f64", "value": 2.0 },
+          { "kind": "f64", "value": 3.0 },
+          { "kind": "f64", "value": 4.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::creation::arange"
+      }
+    },
+    {
+      "operation": "arange",
+      "case_id": "diff_arange_descending",
+      "category": "differential",
+      "mode": "Strict",
+      "start": { "kind": "i64", "value": 5 },
+      "stop": { "kind": "i64", "value": -1 },
+      "step": { "kind": "i64", "value": -2 },
+      "dtype": "float64",
+      "expected": {
+        "kind": "array",
+        "shape": [3],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 5.0 },
+          { "kind": "f64", "value": 3.0 },
+          { "kind": "f64", "value": 1.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::creation::arange"
+      }
+    },
+    {
+      "operation": "linspace",
+      "case_id": "diff_linspace_endpoint_true",
+      "category": "differential",
+      "mode": "Strict",
+      "start": { "kind": "f64", "value": 0.0 },
+      "stop": { "kind": "f64", "value": 1.0 },
+      "num": 5,
+      "endpoint": true,
+      "dtype": "float64",
+      "expected": {
+        "kind": "array",
+        "shape": [5],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 0.0 },
+          { "kind": "f64", "value": 0.25 },
+          { "kind": "f64", "value": 0.5 },
+          { "kind": "f64", "value": 0.75 },
+          { "kind": "f64", "value": 1.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::creation::linspace"
+      }
+    },
+    {
+      "operation": "linspace",
+      "case_id": "diff_linspace_endpoint_false",
+      "category": "differential",
+      "mode": "Strict",
+      "start": { "kind": "f64", "value": 0.0 },
+      "stop": { "kind": "f64", "value": 1.0 },
+      "num": 4,
+      "endpoint": false,
+      "dtype": "float64",
+      "expected": {
+        "kind": "array",
+        "shape": [4],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 0.0 },
+          { "kind": "f64", "value": 0.25 },
+          { "kind": "f64", "value": 0.5 },
+          { "kind": "f64", "value": 0.75 }
+        ],
+        "contract_ref": "fsci_arrayapi::creation::linspace"
+      }
+    },
+    {
+      "operation": "broadcast_shapes",
+      "case_id": "diff_broadcast_shapes_basic",
+      "category": "differential",
+      "mode": "Strict",
+      "shapes": [[2, 1], [1, 3]],
+      "expected": {
+        "kind": "shape",
+        "dims": [2, 3],
+        "contract_ref": "fsci_arrayapi::dtype::promote_and_broadcast"
+      }
+    },
+    {
+      "operation": "result_type",
+      "case_id": "diff_result_type_complex_promotion",
+      "category": "differential",
+      "mode": "Strict",
+      "dtypes": ["float32", "complex64"],
+      "force_floating": false,
+      "expected": {
+        "kind": "dtype",
+        "dtype": "complex64",
+        "contract_ref": "fsci_arrayapi::dtype::result_type"
+      }
+    },
+    {
+      "operation": "from_slice",
+      "case_id": "diff_from_slice_matrix",
+      "category": "differential",
+      "mode": "Strict",
+      "values": [
+        { "kind": "f64", "value": 1.0 },
+        { "kind": "f64", "value": 2.0 },
+        { "kind": "f64", "value": 3.0 },
+        { "kind": "f64", "value": 4.0 }
+      ],
+      "shape": [2, 2],
+      "dtype": "float64",
+      "expected": {
+        "kind": "array",
+        "shape": [2, 2],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 1.0 },
+          { "kind": "f64", "value": 2.0 },
+          { "kind": "f64", "value": 3.0 },
+          { "kind": "f64", "value": 4.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::conversion::asarray"
+      }
+    },
+    {
+      "operation": "getitem",
+      "case_id": "diff_getitem_basic_slice",
+      "category": "differential",
+      "mode": "Strict",
+      "source_values": [
+        { "kind": "f64", "value": 10.0 },
+        { "kind": "f64", "value": 20.0 },
+        { "kind": "f64", "value": 30.0 },
+        { "kind": "f64", "value": 40.0 }
+      ],
+      "source_shape": [4],
+      "source_dtype": "float64",
+      "indexing_mode": "basic",
+      "index": {
+        "kind": "basic",
+        "slices": [
+          { "start": 1, "stop": 3, "step": 1 }
+        ]
+      },
+      "expected": {
+        "kind": "array",
+        "shape": [2],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 20.0 },
+          { "kind": "f64", "value": 30.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::indexing::getitem"
+      }
+    },
+    {
+      "operation": "getitem",
+      "case_id": "diff_getitem_advanced_negative",
+      "category": "differential",
+      "mode": "Strict",
+      "source_values": [
+        { "kind": "f64", "value": 10.0 },
+        { "kind": "f64", "value": 20.0 },
+        { "kind": "f64", "value": 30.0 },
+        { "kind": "f64", "value": 40.0 }
+      ],
+      "source_shape": [4],
+      "source_dtype": "float64",
+      "indexing_mode": "advanced",
+      "index": {
+        "kind": "advanced",
+        "indices": [[-1, 0]]
+      },
+      "expected": {
+        "kind": "array",
+        "shape": [2],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 40.0 },
+          { "kind": "f64", "value": 10.0 }
+        ],
+        "contract_ref": "fsci_arrayapi::indexing::getitem"
+      }
+    },
+    {
+      "operation": "reshape",
+      "case_id": "diff_reshape_2x3_to_3x2",
+      "category": "differential",
+      "mode": "Strict",
+      "source_values": [
+        { "kind": "f64", "value": 1.0 },
+        { "kind": "f64", "value": 2.0 },
+        { "kind": "f64", "value": 3.0 },
+        { "kind": "f64", "value": 4.0 },
+        { "kind": "f64", "value": 5.0 },
+        { "kind": "f64", "value": 6.0 }
+      ],
+      "source_shape": [2, 3],
+      "source_dtype": "float64",
+      "new_shape": [3, 2],
+      "expected": {
+        "kind": "array",
+        "shape": [3, 2],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 1.0 },
+          { "kind": "f64", "value": 2.0 },
+          { "kind": "f64", "value": 3.0 },
+          { "kind": "f64", "value": 4.0 },
+          { "kind": "f64", "value": 5.0 },
+          { "kind": "f64", "value": 6.0 }
+        ]
+      }
+    },
+    {
+      "operation": "transpose",
+      "case_id": "diff_transpose_2x3",
+      "category": "differential",
+      "mode": "Strict",
+      "source_values": [
+        { "kind": "f64", "value": 1.0 },
+        { "kind": "f64", "value": 2.0 },
+        { "kind": "f64", "value": 3.0 },
+        { "kind": "f64", "value": 4.0 },
+        { "kind": "f64", "value": 5.0 },
+        { "kind": "f64", "value": 6.0 }
+      ],
+      "source_shape": [2, 3],
+      "source_dtype": "float64",
+      "expected": {
+        "kind": "array",
+        "shape": [3, 2],
+        "dtype": "float64",
+        "values": [
+          { "kind": "f64", "value": 1.0 },
+          { "kind": "f64", "value": 4.0 },
+          { "kind": "f64", "value": 2.0 },
+          { "kind": "f64", "value": 5.0 },
+          { "kind": "f64", "value": 3.0 },
+          { "kind": "f64", "value": 6.0 }
+        ]
+      }
+    },
+
+    {
+      "operation": "relation_broadcast_commutative",
+      "case_id": "meta_broadcast_commutative_dense",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "left_shape": [2, 1],
+      "right_shape": [1, 3],
+      "expected": {
+        "kind": "bool",
+        "value": true
+      }
+    },
+    {
+      "operation": "relation_broadcast_commutative",
+      "case_id": "meta_broadcast_commutative_zero_dim",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "left_shape": [0, 1],
+      "right_shape": [1, 4],
+      "expected": {
+        "kind": "bool",
+        "value": true
+      }
+    },
+    {
+      "operation": "relation_result_type_symmetry",
+      "case_id": "meta_result_type_symmetry_f32_c64",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "left_dtype": "float32",
+      "right_dtype": "complex64",
+      "force_floating": false,
+      "expected": {
+        "kind": "bool",
+        "value": true
+      }
+    },
+    {
+      "operation": "relation_result_type_symmetry",
+      "case_id": "meta_result_type_symmetry_f64_c128",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "left_dtype": "float64",
+      "right_dtype": "complex128",
+      "force_floating": false,
+      "expected": {
+        "kind": "bool",
+        "value": true
+      }
+    },
+    {
+      "operation": "relation_index_roundtrip",
+      "case_id": "meta_index_roundtrip_mid",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "values": [
+        { "kind": "f64", "value": 3.0 },
+        { "kind": "f64", "value": 6.0 },
+        { "kind": "f64", "value": 9.0 },
+        { "kind": "f64", "value": 12.0 }
+      ],
+      "dtype": "float64",
+      "index": 2,
+      "expected": {
+        "kind": "bool",
+        "value": true
+      }
+    },
+    {
+      "operation": "relation_index_roundtrip",
+      "case_id": "meta_index_roundtrip_negative",
+      "category": "metamorphic",
+      "mode": "Strict",
+      "values": [
+        { "kind": "f64", "value": 5.0 },
+        { "kind": "f64", "value": 6.0 },
+        { "kind": "f64", "value": 7.0 }
+      ],
+      "dtype": "float64",
+      "index": -1,
+      "expected": {
+        "kind": "bool",
+        "value": true
+      }
+    },
+
+    {
+      "operation": "arange",
+      "case_id": "adv_arange_zero_step_i64",
+      "category": "adversarial",
+      "mode": "Strict",
+      "start": { "kind": "i64", "value": 0 },
+      "stop": { "kind": "i64", "value": 3 },
+      "step": { "kind": "i64", "value": 0 },
+      "dtype": "float64",
+      "expected": {
+        "kind": "error_kind",
+        "error": "InvalidStep"
+      }
+    },
+    {
+      "operation": "arange",
+      "case_id": "adv_arange_zero_step_complex",
+      "category": "adversarial",
+      "mode": "Strict",
+      "start": { "kind": "f64", "value": 0.0 },
+      "stop": { "kind": "f64", "value": 3.0 },
+      "step": { "kind": "complex_f64", "re": 0.0, "im": 0.0 },
+      "dtype": "float64",
+      "expected": {
+        "kind": "error_kind",
+        "error": "InvalidStep"
+      }
+    },
+    {
+      "operation": "result_type",
+      "case_id": "adv_result_type_integral_without_force",
+      "category": "adversarial",
+      "mode": "Strict",
+      "dtypes": ["int64"],
+      "force_floating": false,
+      "expected": {
+        "kind": "error_kind",
+        "error": "UnsupportedDtype"
+      }
+    },
+    {
+      "operation": "from_slice",
+      "case_id": "adv_from_slice_len_mismatch",
+      "category": "adversarial",
+      "mode": "Strict",
+      "values": [
+        { "kind": "f64", "value": 1.0 },
+        { "kind": "f64", "value": 2.0 },
+        { "kind": "f64", "value": 3.0 }
+      ],
+      "shape": [2, 2],
+      "dtype": "float64",
+      "expected": {
+        "kind": "error_kind",
+        "error": "InvalidShape"
+      }
+    },
+    {
+      "operation": "getitem",
+      "case_id": "adv_getitem_mode_mismatch",
+      "category": "adversarial",
+      "mode": "Strict",
+      "source_values": [
+        { "kind": "f64", "value": 1.0 },
+        { "kind": "f64", "value": 2.0 },
+        { "kind": "f64", "value": 3.0 }
+      ],
+      "source_shape": [3],
+      "source_dtype": "float64",
+      "indexing_mode": "basic",
+      "index": {
+        "kind": "advanced",
+        "indices": [[0]]
+      },
+      "expected": {
+        "kind": "error_kind",
+        "error": "InvalidIndex"
+      }
+    },
+    {
+      "operation": "reshape",
+      "case_id": "adv_reshape_size_mismatch",
+      "category": "adversarial",
+      "mode": "Strict",
+      "source_values": [
+        { "kind": "f64", "value": 1.0 },
+        { "kind": "f64", "value": 2.0 },
+        { "kind": "f64", "value": 3.0 },
+        { "kind": "f64", "value": 4.0 }
+      ],
+      "source_shape": [4],
+      "source_dtype": "float64",
+      "new_shape": [3, 2],
+      "expected": {
+        "kind": "error_kind",
+        "error": "InvalidShape"
+      }
+    },
+    {
+      "operation": "transpose",
+      "case_id": "adv_transpose_rank1",
+      "category": "adversarial",
+      "mode": "Strict",
+      "source_values": [
+        { "kind": "f64", "value": 1.0 },
+        { "kind": "f64", "value": 2.0 },
+        { "kind": "f64", "value": 3.0 }
+      ],
+      "source_shape": [3],
+      "source_dtype": "float64",
+      "expected": {
+        "kind": "error_kind",
+        "error": "InvalidShape"
+      }
+    },
+    {
+      "operation": "broadcast_shapes",
+      "case_id": "adv_broadcast_incompatible",
+      "category": "adversarial",
+      "mode": "Strict",
+      "shapes": [[2, 3], [3, 2]],
+      "expected": {
+        "kind": "error_kind",
+        "error": "BroadcastIncompatible"
+      }
+    }
+  ]
+}

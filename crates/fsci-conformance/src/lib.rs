@@ -5,6 +5,20 @@ pub mod e2e;
 
 use asupersync::raptorq::systematic::SystematicEncoder;
 use blake3::hash;
+use fsci_arrayapi::{
+    ArangeRequest as ArrayApiArangeRequest, ArrayApiArray as FsciArrayApiArray,
+    CoreArray as FsciArrayApiCoreArray, CoreArrayBackend as FsciArrayApiCoreArrayBackend,
+    CreationRequest as ArrayApiCreationRequest, DType as FsciArrayApiDType,
+    ExecutionMode as FsciArrayApiExecutionMode, FullRequest as ArrayApiFullRequest,
+    IndexExpr as FsciArrayApiIndexExpr, IndexRequest as ArrayApiIndexRequest,
+    IndexingMode as FsciArrayApiIndexingMode, LinspaceRequest as ArrayApiLinspaceRequest,
+    MemoryOrder as FsciArrayApiMemoryOrder, ScalarValue as FsciArrayApiScalarValue,
+    Shape as FsciArrayApiShape, SliceSpec as FsciArrayApiSliceSpec, arange as arrayapi_arange,
+    broadcast_shapes as arrayapi_broadcast_shapes, from_slice as arrayapi_from_slice,
+    full as arrayapi_full, getitem as arrayapi_getitem, linspace as arrayapi_linspace,
+    ones as arrayapi_ones, reshape as arrayapi_reshape, result_type as arrayapi_result_type,
+    transpose as arrayapi_transpose, zeros as arrayapi_zeros,
+};
 use fsci_integrate::{ToleranceValue, validate_tol};
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
@@ -569,6 +583,311 @@ pub struct SpecialPacketFixture {
     pub packet_id: String,
     pub family: String,
     pub cases: Vec<SpecialCase>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrayApiFixtureDType {
+    Bool,
+    Int64,
+    UInt64,
+    Float32,
+    Float64,
+    Complex64,
+    Complex128,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ArrayApiFixtureScalar {
+    Bool { value: bool },
+    I64 { value: i64 },
+    U64 { value: u64 },
+    F64 { value: f64 },
+    ComplexF64 { re: f64, im: f64 },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrayApiFixtureIndexingMode {
+    Basic,
+    Advanced,
+    BooleanMask,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArrayApiFixtureSliceSpec {
+    pub start: Option<isize>,
+    pub stop: Option<isize>,
+    pub step: isize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ArrayApiFixtureIndexExpr {
+    Basic {
+        slices: Vec<ArrayApiFixtureSliceSpec>,
+    },
+    Advanced {
+        indices: Vec<Vec<isize>>,
+    },
+    BooleanMask {
+        mask_shape: Vec<usize>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ArrayApiExpectedOutcome {
+    Array {
+        shape: Vec<usize>,
+        dtype: ArrayApiFixtureDType,
+        values: Vec<ArrayApiFixtureScalar>,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    Shape {
+        dims: Vec<usize>,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    Dtype {
+        dtype: ArrayApiFixtureDType,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    Bool {
+        value: bool,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    ErrorKind {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum ArrayApiCase {
+    Zeros {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        shape: Vec<usize>,
+        dtype: ArrayApiFixtureDType,
+        expected: ArrayApiExpectedOutcome,
+    },
+    Ones {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        shape: Vec<usize>,
+        dtype: ArrayApiFixtureDType,
+        expected: ArrayApiExpectedOutcome,
+    },
+    Full {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        shape: Vec<usize>,
+        fill_value: ArrayApiFixtureScalar,
+        dtype: ArrayApiFixtureDType,
+        expected: ArrayApiExpectedOutcome,
+    },
+    Arange {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        start: ArrayApiFixtureScalar,
+        stop: ArrayApiFixtureScalar,
+        step: ArrayApiFixtureScalar,
+        #[serde(default)]
+        dtype: Option<ArrayApiFixtureDType>,
+        expected: ArrayApiExpectedOutcome,
+    },
+    Linspace {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        start: ArrayApiFixtureScalar,
+        stop: ArrayApiFixtureScalar,
+        num: usize,
+        endpoint: bool,
+        #[serde(default)]
+        dtype: Option<ArrayApiFixtureDType>,
+        expected: ArrayApiExpectedOutcome,
+    },
+    BroadcastShapes {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        shapes: Vec<Vec<usize>>,
+        expected: ArrayApiExpectedOutcome,
+    },
+    ResultType {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        dtypes: Vec<ArrayApiFixtureDType>,
+        #[serde(default)]
+        force_floating: bool,
+        expected: ArrayApiExpectedOutcome,
+    },
+    FromSlice {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        values: Vec<ArrayApiFixtureScalar>,
+        shape: Vec<usize>,
+        dtype: ArrayApiFixtureDType,
+        expected: ArrayApiExpectedOutcome,
+    },
+    Getitem {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        source_values: Vec<ArrayApiFixtureScalar>,
+        source_shape: Vec<usize>,
+        source_dtype: ArrayApiFixtureDType,
+        indexing_mode: ArrayApiFixtureIndexingMode,
+        index: ArrayApiFixtureIndexExpr,
+        expected: ArrayApiExpectedOutcome,
+    },
+    Reshape {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        source_values: Vec<ArrayApiFixtureScalar>,
+        source_shape: Vec<usize>,
+        source_dtype: ArrayApiFixtureDType,
+        new_shape: Vec<usize>,
+        expected: ArrayApiExpectedOutcome,
+    },
+    Transpose {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        source_values: Vec<ArrayApiFixtureScalar>,
+        source_shape: Vec<usize>,
+        source_dtype: ArrayApiFixtureDType,
+        expected: ArrayApiExpectedOutcome,
+    },
+    RelationBroadcastCommutative {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        left_shape: Vec<usize>,
+        right_shape: Vec<usize>,
+        expected: ArrayApiExpectedOutcome,
+    },
+    RelationResultTypeSymmetry {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        left_dtype: ArrayApiFixtureDType,
+        right_dtype: ArrayApiFixtureDType,
+        #[serde(default)]
+        force_floating: bool,
+        expected: ArrayApiExpectedOutcome,
+    },
+    RelationIndexRoundtrip {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        values: Vec<ArrayApiFixtureScalar>,
+        dtype: ArrayApiFixtureDType,
+        index: isize,
+        expected: ArrayApiExpectedOutcome,
+    },
+}
+
+impl ArrayApiCase {
+    fn case_id(&self) -> &str {
+        match self {
+            Self::Zeros { case_id, .. }
+            | Self::Ones { case_id, .. }
+            | Self::Full { case_id, .. }
+            | Self::Arange { case_id, .. }
+            | Self::Linspace { case_id, .. }
+            | Self::BroadcastShapes { case_id, .. }
+            | Self::ResultType { case_id, .. }
+            | Self::FromSlice { case_id, .. }
+            | Self::Getitem { case_id, .. }
+            | Self::Reshape { case_id, .. }
+            | Self::Transpose { case_id, .. }
+            | Self::RelationBroadcastCommutative { case_id, .. }
+            | Self::RelationResultTypeSymmetry { case_id, .. }
+            | Self::RelationIndexRoundtrip { case_id, .. } => case_id,
+        }
+    }
+
+    #[cfg(test)]
+    fn category(&self) -> &str {
+        match self {
+            Self::Zeros { category, .. }
+            | Self::Ones { category, .. }
+            | Self::Full { category, .. }
+            | Self::Arange { category, .. }
+            | Self::Linspace { category, .. }
+            | Self::BroadcastShapes { category, .. }
+            | Self::ResultType { category, .. }
+            | Self::FromSlice { category, .. }
+            | Self::Getitem { category, .. }
+            | Self::Reshape { category, .. }
+            | Self::Transpose { category, .. }
+            | Self::RelationBroadcastCommutative { category, .. }
+            | Self::RelationResultTypeSymmetry { category, .. }
+            | Self::RelationIndexRoundtrip { category, .. } => category,
+        }
+    }
+
+    fn expected(&self) -> &ArrayApiExpectedOutcome {
+        match self {
+            Self::Zeros { expected, .. }
+            | Self::Ones { expected, .. }
+            | Self::Full { expected, .. }
+            | Self::Arange { expected, .. }
+            | Self::Linspace { expected, .. }
+            | Self::BroadcastShapes { expected, .. }
+            | Self::ResultType { expected, .. }
+            | Self::FromSlice { expected, .. }
+            | Self::Getitem { expected, .. }
+            | Self::Reshape { expected, .. }
+            | Self::Transpose { expected, .. }
+            | Self::RelationBroadcastCommutative { expected, .. }
+            | Self::RelationResultTypeSymmetry { expected, .. }
+            | Self::RelationIndexRoundtrip { expected, .. } => expected,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ArrayApiPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<ArrayApiCase>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ArrayApiObservedOutcome {
+    Array {
+        shape: Vec<usize>,
+        dtype: ArrayApiFixtureDType,
+        values: Vec<ArrayApiFixtureScalar>,
+    },
+    Shape {
+        dims: Vec<usize>,
+    },
+    Dtype {
+        dtype: ArrayApiFixtureDType,
+    },
+    Bool {
+        value: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1700,6 +2019,7 @@ struct ContractTable {
 
 static OPTIMIZE_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
 static SPECIAL_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
+static ARRAY_API_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
 
 fn load_optimize_contract_table() -> Option<&'static ContractTable> {
     OPTIMIZE_CONTRACT_TABLE
@@ -1717,6 +2037,17 @@ fn load_special_contract_table() -> Option<&'static ContractTable> {
         .get_or_init(|| {
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("fixtures/artifacts/P2C-006/contracts/contract_table.json");
+            let raw = fs::read_to_string(path).ok()?;
+            serde_json::from_str::<ContractTable>(&raw).ok()
+        })
+        .as_ref()
+}
+
+fn load_array_api_contract_table() -> Option<&'static ContractTable> {
+    ARRAY_API_CONTRACT_TABLE
+        .get_or_init(|| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/artifacts/P2C-007/contracts/contract_table.json");
             let raw = fs::read_to_string(path).ok()?;
             serde_json::from_str::<ContractTable>(&raw).ok()
         })
@@ -1804,6 +2135,49 @@ fn resolve_special_contract_tolerance(
         atol: explicit_atol.unwrap_or(1.0e-9),
         rtol: explicit_rtol.unwrap_or(1.0e-6),
         comparison_mode: "mixed".to_owned(),
+    }
+}
+
+fn resolve_array_api_contract_tolerance(
+    contract_ref: Option<&str>,
+    explicit_atol: Option<f64>,
+    explicit_rtol: Option<f64>,
+) -> ToleranceUsed {
+    if let (Some(atol), Some(rtol)) = (explicit_atol, explicit_rtol) {
+        return ToleranceUsed {
+            atol,
+            rtol,
+            comparison_mode: "mixed".to_owned(),
+        };
+    }
+
+    if let Some(contract_ref) = contract_ref
+        && let Some(table) = load_array_api_contract_table()
+        && let Some(entry) = table
+            .contracts
+            .iter()
+            .find(|candidate| candidate.function_name == contract_ref)
+    {
+        let comparison_mode = entry
+            .tolerance_policy
+            .comparison_mode
+            .clone()
+            .unwrap_or_else(|| "exact".to_owned());
+        return ToleranceUsed {
+            atol: explicit_atol
+                .or(entry.tolerance_policy.default_atol)
+                .unwrap_or(0.0),
+            rtol: explicit_rtol
+                .or(entry.tolerance_policy.default_rtol)
+                .unwrap_or(0.0),
+            comparison_mode,
+        };
+    }
+
+    ToleranceUsed {
+        atol: explicit_atol.unwrap_or(0.0),
+        rtol: explicit_rtol.unwrap_or(0.0),
+        comparison_mode: "exact".to_owned(),
     }
 }
 
@@ -1990,6 +2364,8 @@ pub fn run_differential_test(
         run_differential_validate_tol(fixture_path, &raw, oracle_config)
     } else if family.contains("linalg") {
         run_differential_linalg(fixture_path, &raw, oracle_config)
+    } else if family.contains("array_api") {
+        run_differential_array_api(fixture_path, &raw, oracle_config)
     } else if family.contains("special") {
         run_differential_special(fixture_path, &raw, oracle_config)
     } else if family.contains("optim") {
@@ -2135,6 +2511,49 @@ fn run_differential_linalg(
     })
 }
 
+fn run_differential_array_api(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: ArrayApiPacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+
+    for case in &fixture.cases {
+        let observed = execute_array_api_case(case);
+        let (passed, message, max_diff, tolerance_used) =
+            compare_array_api_case_differential(case, &observed);
+        per_case_results.push(DifferentialCaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+            max_diff,
+            tolerance_used,
+            oracle_status: oracle_status.clone(),
+        });
+    }
+
+    let pass_count = per_case_results.iter().filter(|r| r.passed).count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
 fn run_differential_optimize(
     fixture_path: &Path,
     raw: &str,
@@ -2221,6 +2640,595 @@ fn run_differential_special(
         per_case_results,
         generated_unix_ms: now_unix_ms(),
     })
+}
+
+fn execute_array_api_case(case: &ArrayApiCase) -> Result<ArrayApiObservedOutcome, String> {
+    let mode = array_api_exec_mode(match case {
+        ArrayApiCase::Zeros { mode, .. }
+        | ArrayApiCase::Ones { mode, .. }
+        | ArrayApiCase::Full { mode, .. }
+        | ArrayApiCase::Arange { mode, .. }
+        | ArrayApiCase::Linspace { mode, .. }
+        | ArrayApiCase::BroadcastShapes { mode, .. }
+        | ArrayApiCase::ResultType { mode, .. }
+        | ArrayApiCase::FromSlice { mode, .. }
+        | ArrayApiCase::Getitem { mode, .. }
+        | ArrayApiCase::Reshape { mode, .. }
+        | ArrayApiCase::Transpose { mode, .. }
+        | ArrayApiCase::RelationBroadcastCommutative { mode, .. }
+        | ArrayApiCase::RelationResultTypeSymmetry { mode, .. }
+        | ArrayApiCase::RelationIndexRoundtrip { mode, .. } => *mode,
+    });
+    let backend = FsciArrayApiCoreArrayBackend::new(mode);
+
+    match case {
+        ArrayApiCase::Zeros {
+            shape,
+            dtype,
+            expected: _,
+            ..
+        } => {
+            let request = ArrayApiCreationRequest {
+                shape: FsciArrayApiShape::new(shape.clone()),
+                dtype: fixture_dtype_to_runtime(*dtype),
+                order: FsciArrayApiMemoryOrder::C,
+            };
+            let array = arrayapi_zeros(&backend, &request).map_err(array_api_error_kind)?;
+            Ok(observed_array(&array))
+        }
+        ArrayApiCase::Ones {
+            shape,
+            dtype,
+            expected: _,
+            ..
+        } => {
+            let request = ArrayApiCreationRequest {
+                shape: FsciArrayApiShape::new(shape.clone()),
+                dtype: fixture_dtype_to_runtime(*dtype),
+                order: FsciArrayApiMemoryOrder::C,
+            };
+            let array = arrayapi_ones(&backend, &request).map_err(array_api_error_kind)?;
+            Ok(observed_array(&array))
+        }
+        ArrayApiCase::Full {
+            shape,
+            fill_value,
+            dtype,
+            expected: _,
+            ..
+        } => {
+            let request = ArrayApiFullRequest {
+                fill_value: fixture_scalar_to_runtime(*fill_value),
+                dtype: fixture_dtype_to_runtime(*dtype),
+                order: FsciArrayApiMemoryOrder::C,
+            };
+            let array = arrayapi_full(&backend, &FsciArrayApiShape::new(shape.clone()), &request)
+                .map_err(array_api_error_kind)?;
+            Ok(observed_array(&array))
+        }
+        ArrayApiCase::Arange {
+            start,
+            stop,
+            step,
+            dtype,
+            expected: _,
+            ..
+        } => {
+            let request = ArrayApiArangeRequest {
+                start: fixture_scalar_to_runtime(*start),
+                stop: fixture_scalar_to_runtime(*stop),
+                step: fixture_scalar_to_runtime(*step),
+                dtype: dtype.map(fixture_dtype_to_runtime),
+            };
+            let array = arrayapi_arange(&backend, &request).map_err(array_api_error_kind)?;
+            Ok(observed_array(&array))
+        }
+        ArrayApiCase::Linspace {
+            start,
+            stop,
+            num,
+            endpoint,
+            dtype,
+            expected: _,
+            ..
+        } => {
+            let request = ArrayApiLinspaceRequest {
+                start: fixture_scalar_to_runtime(*start),
+                stop: fixture_scalar_to_runtime(*stop),
+                num: *num,
+                endpoint: *endpoint,
+                dtype: dtype.map(fixture_dtype_to_runtime),
+            };
+            let array = arrayapi_linspace(&backend, &request).map_err(array_api_error_kind)?;
+            Ok(observed_array(&array))
+        }
+        ArrayApiCase::BroadcastShapes {
+            shapes,
+            expected: _,
+            ..
+        } => {
+            let runtime_shapes = shapes
+                .iter()
+                .map(|shape| FsciArrayApiShape::new(shape.clone()))
+                .collect::<Vec<_>>();
+            let out = arrayapi_broadcast_shapes(&runtime_shapes).map_err(array_api_error_kind)?;
+            Ok(ArrayApiObservedOutcome::Shape { dims: out.dims })
+        }
+        ArrayApiCase::ResultType {
+            dtypes,
+            force_floating,
+            expected: _,
+            ..
+        } => {
+            let runtime_dtypes = dtypes
+                .iter()
+                .map(|dtype| fixture_dtype_to_runtime(*dtype))
+                .collect::<Vec<_>>();
+            let dtype = arrayapi_result_type(&backend, &runtime_dtypes, *force_floating)
+                .map_err(array_api_error_kind)?;
+            Ok(ArrayApiObservedOutcome::Dtype {
+                dtype: runtime_dtype_to_fixture(dtype),
+            })
+        }
+        ArrayApiCase::FromSlice {
+            values,
+            shape,
+            dtype,
+            expected: _,
+            ..
+        } => {
+            let request = ArrayApiCreationRequest {
+                shape: FsciArrayApiShape::new(shape.clone()),
+                dtype: fixture_dtype_to_runtime(*dtype),
+                order: FsciArrayApiMemoryOrder::C,
+            };
+            let runtime_values = values
+                .iter()
+                .map(|value| fixture_scalar_to_runtime(*value))
+                .collect::<Vec<_>>();
+            let array = arrayapi_from_slice(&backend, &runtime_values, &request)
+                .map_err(array_api_error_kind)?;
+            Ok(observed_array(&array))
+        }
+        ArrayApiCase::Getitem {
+            source_values,
+            source_shape,
+            source_dtype,
+            indexing_mode,
+            index,
+            expected: _,
+            ..
+        } => {
+            let source = array_api_source_array(
+                &backend,
+                source_values,
+                source_shape,
+                *source_dtype,
+                FsciArrayApiMemoryOrder::C,
+            )?;
+            let request = ArrayApiIndexRequest {
+                mode: fixture_indexing_mode_to_runtime(*indexing_mode),
+                index: fixture_index_to_runtime(index),
+            };
+            let array =
+                arrayapi_getitem(&backend, &source, &request).map_err(array_api_error_kind)?;
+            Ok(observed_array(&array))
+        }
+        ArrayApiCase::Reshape {
+            source_values,
+            source_shape,
+            source_dtype,
+            new_shape,
+            expected: _,
+            ..
+        } => {
+            let source = array_api_source_array(
+                &backend,
+                source_values,
+                source_shape,
+                *source_dtype,
+                FsciArrayApiMemoryOrder::C,
+            )?;
+            let array = arrayapi_reshape(
+                &backend,
+                &source,
+                &FsciArrayApiShape::new(new_shape.clone()),
+            )
+            .map_err(array_api_error_kind)?;
+            Ok(observed_array(&array))
+        }
+        ArrayApiCase::Transpose {
+            source_values,
+            source_shape,
+            source_dtype,
+            expected: _,
+            ..
+        } => {
+            let source = array_api_source_array(
+                &backend,
+                source_values,
+                source_shape,
+                *source_dtype,
+                FsciArrayApiMemoryOrder::C,
+            )?;
+            let array = arrayapi_transpose(&backend, &source).map_err(array_api_error_kind)?;
+            Ok(observed_array(&array))
+        }
+        ArrayApiCase::RelationBroadcastCommutative {
+            left_shape,
+            right_shape,
+            expected: _,
+            ..
+        } => {
+            let left = FsciArrayApiShape::new(left_shape.clone());
+            let right = FsciArrayApiShape::new(right_shape.clone());
+            let lr = arrayapi_broadcast_shapes(&[left.clone(), right.clone()]);
+            let rl = arrayapi_broadcast_shapes(&[right, left]);
+            let pass = match (lr, rl) {
+                (Ok(lhs), Ok(rhs)) => lhs == rhs,
+                (Err(_), Err(_)) => true,
+                _ => false,
+            };
+            Ok(ArrayApiObservedOutcome::Bool { value: pass })
+        }
+        ArrayApiCase::RelationResultTypeSymmetry {
+            left_dtype,
+            right_dtype,
+            force_floating,
+            expected: _,
+            ..
+        } => {
+            let left = fixture_dtype_to_runtime(*left_dtype);
+            let right = fixture_dtype_to_runtime(*right_dtype);
+            let forward = arrayapi_result_type(&backend, &[left, right], *force_floating);
+            let reverse = arrayapi_result_type(&backend, &[right, left], *force_floating);
+            let pass = match (forward, reverse) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            };
+            Ok(ArrayApiObservedOutcome::Bool { value: pass })
+        }
+        ArrayApiCase::RelationIndexRoundtrip {
+            values,
+            dtype,
+            index,
+            expected: _,
+            ..
+        } => {
+            let len = values.len();
+            let source = array_api_source_array(
+                &backend,
+                values,
+                &[len],
+                *dtype,
+                FsciArrayApiMemoryOrder::C,
+            )?;
+            let request = ArrayApiIndexRequest {
+                mode: FsciArrayApiIndexingMode::Advanced,
+                index: FsciArrayApiIndexExpr::Advanced {
+                    indices: vec![vec![*index]],
+                },
+            };
+            let selected =
+                arrayapi_getitem(&backend, &source, &request).map_err(array_api_error_kind)?;
+            let normalized = if *index < 0 {
+                (len as isize + *index) as usize
+            } else {
+                *index as usize
+            };
+            let expected_value = fixture_scalar_to_runtime(values[normalized]);
+            let pass = selected.size() == 1
+                && selected
+                    .values()
+                    .first()
+                    .is_some_and(|value| *value == expected_value);
+            Ok(ArrayApiObservedOutcome::Bool { value: pass })
+        }
+    }
+}
+
+fn compare_array_api_case_differential(
+    case: &ArrayApiCase,
+    observed: &Result<ArrayApiObservedOutcome, String>,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    match (case.expected(), observed) {
+        (
+            ArrayApiExpectedOutcome::Array {
+                shape,
+                dtype,
+                values,
+                atol,
+                rtol,
+                contract_ref,
+            },
+            Ok(ArrayApiObservedOutcome::Array {
+                shape: got_shape,
+                dtype: got_dtype,
+                values: got_values,
+            }),
+        ) => {
+            let tolerance =
+                resolve_array_api_contract_tolerance(contract_ref.as_deref(), *atol, *rtol);
+            let shape_pass = got_shape == shape;
+            let dtype_pass = got_dtype == dtype;
+            let values_pass = got_values.len() == values.len()
+                && got_values
+                    .iter()
+                    .zip(values.iter())
+                    .all(|(actual, expected)| {
+                        fixture_scalar_allclose(actual, expected, tolerance.atol, tolerance.rtol)
+                    });
+            let pass = shape_pass && dtype_pass && values_pass;
+            let max_diff = fixture_max_diff_seq(got_values, values);
+            let msg = if pass {
+                format!(
+                    "array matched shape={shape:?} dtype={dtype:?} (max_diff={:.2e})",
+                    max_diff
+                )
+            } else {
+                format!(
+                    "array mismatch: expected shape={shape:?} dtype={dtype:?}, got shape={got_shape:?} dtype={got_dtype:?}"
+                )
+            };
+            (pass, msg, Some(max_diff), Some(tolerance))
+        }
+        (
+            ArrayApiExpectedOutcome::Shape { dims, contract_ref },
+            Ok(ArrayApiObservedOutcome::Shape { dims: got }),
+        ) => {
+            let pass = got == dims;
+            let msg = if pass {
+                format!("shape matched {dims:?}")
+            } else {
+                format!("shape mismatch: expected {dims:?}, got {got:?}")
+            };
+            let tolerance = contract_ref
+                .as_deref()
+                .map(|value| resolve_array_api_contract_tolerance(Some(value), None, None));
+            (pass, msg, None, tolerance)
+        }
+        (
+            ArrayApiExpectedOutcome::Dtype {
+                dtype,
+                contract_ref,
+            },
+            Ok(ArrayApiObservedOutcome::Dtype { dtype: got }),
+        ) => {
+            let pass = got == dtype;
+            let msg = if pass {
+                format!("dtype matched {dtype:?}")
+            } else {
+                format!("dtype mismatch: expected {dtype:?}, got {got:?}")
+            };
+            let tolerance = contract_ref
+                .as_deref()
+                .map(|value| resolve_array_api_contract_tolerance(Some(value), None, None));
+            (pass, msg, None, tolerance)
+        }
+        (
+            ArrayApiExpectedOutcome::Bool {
+                value,
+                contract_ref,
+            },
+            Ok(ArrayApiObservedOutcome::Bool { value: got }),
+        ) => {
+            let pass = got == value;
+            let msg = if pass {
+                format!("relation matched ({value})")
+            } else {
+                format!("relation mismatch: expected={value}, got={got}")
+            };
+            let tolerance = contract_ref
+                .as_deref()
+                .map(|value| resolve_array_api_contract_tolerance(Some(value), None, None));
+            (pass, msg, None, tolerance)
+        }
+        (ArrayApiExpectedOutcome::ErrorKind { error }, Err(observed_kind)) => {
+            let pass = observed_kind == error;
+            let msg = if pass {
+                format!("error kind matched ({observed_kind})")
+            } else {
+                format!("error kind mismatch: expected={error}, got={observed_kind}")
+            };
+            (pass, msg, None, None)
+        }
+        (expected, observed) => (
+            false,
+            format!("shape mismatch: expected {expected:?}, got {observed:?}"),
+            None,
+            None,
+        ),
+    }
+}
+
+fn array_api_source_array(
+    backend: &FsciArrayApiCoreArrayBackend,
+    values: &[ArrayApiFixtureScalar],
+    shape: &[usize],
+    dtype: ArrayApiFixtureDType,
+    order: FsciArrayApiMemoryOrder,
+) -> Result<FsciArrayApiCoreArray, String> {
+    let request = ArrayApiCreationRequest {
+        shape: FsciArrayApiShape::new(shape.to_vec()),
+        dtype: fixture_dtype_to_runtime(dtype),
+        order,
+    };
+    let runtime_values = values
+        .iter()
+        .map(|value| fixture_scalar_to_runtime(*value))
+        .collect::<Vec<_>>();
+    arrayapi_from_slice(backend, &runtime_values, &request).map_err(array_api_error_kind)
+}
+
+fn observed_array(array: &FsciArrayApiCoreArray) -> ArrayApiObservedOutcome {
+    ArrayApiObservedOutcome::Array {
+        shape: array.shape().dims.clone(),
+        dtype: runtime_dtype_to_fixture(array.dtype()),
+        values: array
+            .values()
+            .iter()
+            .map(|value| runtime_scalar_to_fixture(*value))
+            .collect(),
+    }
+}
+
+fn array_api_exec_mode(mode: RuntimeMode) -> FsciArrayApiExecutionMode {
+    match mode {
+        RuntimeMode::Strict => FsciArrayApiExecutionMode::Strict,
+        RuntimeMode::Hardened => FsciArrayApiExecutionMode::Hardened,
+    }
+}
+
+fn fixture_dtype_to_runtime(dtype: ArrayApiFixtureDType) -> FsciArrayApiDType {
+    match dtype {
+        ArrayApiFixtureDType::Bool => FsciArrayApiDType::Bool,
+        ArrayApiFixtureDType::Int64 => FsciArrayApiDType::Int64,
+        ArrayApiFixtureDType::UInt64 => FsciArrayApiDType::UInt64,
+        ArrayApiFixtureDType::Float32 => FsciArrayApiDType::Float32,
+        ArrayApiFixtureDType::Float64 => FsciArrayApiDType::Float64,
+        ArrayApiFixtureDType::Complex64 => FsciArrayApiDType::Complex64,
+        ArrayApiFixtureDType::Complex128 => FsciArrayApiDType::Complex128,
+    }
+}
+
+fn runtime_dtype_to_fixture(dtype: FsciArrayApiDType) -> ArrayApiFixtureDType {
+    match dtype {
+        FsciArrayApiDType::Bool => ArrayApiFixtureDType::Bool,
+        FsciArrayApiDType::Int64 => ArrayApiFixtureDType::Int64,
+        FsciArrayApiDType::UInt64 => ArrayApiFixtureDType::UInt64,
+        FsciArrayApiDType::Float32 => ArrayApiFixtureDType::Float32,
+        FsciArrayApiDType::Float64 => ArrayApiFixtureDType::Float64,
+        FsciArrayApiDType::Complex64 => ArrayApiFixtureDType::Complex64,
+        FsciArrayApiDType::Complex128 => ArrayApiFixtureDType::Complex128,
+        FsciArrayApiDType::Int8
+        | FsciArrayApiDType::Int16
+        | FsciArrayApiDType::Int32
+        | FsciArrayApiDType::UInt8
+        | FsciArrayApiDType::UInt16
+        | FsciArrayApiDType::UInt32 => ArrayApiFixtureDType::Int64,
+    }
+}
+
+fn fixture_scalar_to_runtime(value: ArrayApiFixtureScalar) -> FsciArrayApiScalarValue {
+    match value {
+        ArrayApiFixtureScalar::Bool { value } => FsciArrayApiScalarValue::Bool(value),
+        ArrayApiFixtureScalar::I64 { value } => FsciArrayApiScalarValue::I64(value),
+        ArrayApiFixtureScalar::U64 { value } => FsciArrayApiScalarValue::U64(value),
+        ArrayApiFixtureScalar::F64 { value } => FsciArrayApiScalarValue::F64(value),
+        ArrayApiFixtureScalar::ComplexF64 { re, im } => {
+            FsciArrayApiScalarValue::ComplexF64 { re, im }
+        }
+    }
+}
+
+fn runtime_scalar_to_fixture(value: FsciArrayApiScalarValue) -> ArrayApiFixtureScalar {
+    match value {
+        FsciArrayApiScalarValue::Bool(value) => ArrayApiFixtureScalar::Bool { value },
+        FsciArrayApiScalarValue::I64(value) => ArrayApiFixtureScalar::I64 { value },
+        FsciArrayApiScalarValue::U64(value) => ArrayApiFixtureScalar::U64 { value },
+        FsciArrayApiScalarValue::F64(value) => ArrayApiFixtureScalar::F64 { value },
+        FsciArrayApiScalarValue::ComplexF64 { re, im } => {
+            ArrayApiFixtureScalar::ComplexF64 { re, im }
+        }
+    }
+}
+
+fn fixture_indexing_mode_to_runtime(mode: ArrayApiFixtureIndexingMode) -> FsciArrayApiIndexingMode {
+    match mode {
+        ArrayApiFixtureIndexingMode::Basic => FsciArrayApiIndexingMode::Basic,
+        ArrayApiFixtureIndexingMode::Advanced => FsciArrayApiIndexingMode::Advanced,
+        ArrayApiFixtureIndexingMode::BooleanMask => FsciArrayApiIndexingMode::BooleanMask,
+    }
+}
+
+fn fixture_index_to_runtime(index: &ArrayApiFixtureIndexExpr) -> FsciArrayApiIndexExpr {
+    match index {
+        ArrayApiFixtureIndexExpr::Basic { slices } => FsciArrayApiIndexExpr::Basic {
+            slices: slices
+                .iter()
+                .map(|slice| FsciArrayApiSliceSpec {
+                    start: slice.start,
+                    stop: slice.stop,
+                    step: slice.step,
+                })
+                .collect(),
+        },
+        ArrayApiFixtureIndexExpr::Advanced { indices } => FsciArrayApiIndexExpr::Advanced {
+            indices: indices.clone(),
+        },
+        ArrayApiFixtureIndexExpr::BooleanMask { mask_shape } => {
+            FsciArrayApiIndexExpr::BooleanMask {
+                mask_shape: FsciArrayApiShape::new(mask_shape.clone()),
+            }
+        }
+    }
+}
+
+fn array_api_error_kind(error: fsci_arrayapi::ArrayApiError) -> String {
+    format!("{:?}", error.kind)
+}
+
+fn fixture_scalar_diff(actual: &ArrayApiFixtureScalar, expected: &ArrayApiFixtureScalar) -> f64 {
+    match (actual, expected) {
+        (ArrayApiFixtureScalar::Bool { value: a }, ArrayApiFixtureScalar::Bool { value: e }) => {
+            if a == e { 0.0 } else { 1.0 }
+        }
+        (ArrayApiFixtureScalar::I64 { value: a }, ArrayApiFixtureScalar::I64 { value: e }) => {
+            (*a as f64 - *e as f64).abs()
+        }
+        (ArrayApiFixtureScalar::U64 { value: a }, ArrayApiFixtureScalar::U64 { value: e }) => {
+            (*a as f64 - *e as f64).abs()
+        }
+        (ArrayApiFixtureScalar::F64 { value: a }, ArrayApiFixtureScalar::F64 { value: e }) => {
+            (*a - *e).abs()
+        }
+        (
+            ArrayApiFixtureScalar::ComplexF64 { re: ar, im: ai },
+            ArrayApiFixtureScalar::ComplexF64 { re: er, im: ei },
+        ) => (ar - er).abs().max((ai - ei).abs()),
+        _ => f64::INFINITY,
+    }
+}
+
+fn fixture_scalar_allclose(
+    actual: &ArrayApiFixtureScalar,
+    expected: &ArrayApiFixtureScalar,
+    atol: f64,
+    rtol: f64,
+) -> bool {
+    match (actual, expected) {
+        (ArrayApiFixtureScalar::Bool { value: a }, ArrayApiFixtureScalar::Bool { value: e }) => {
+            a == e
+        }
+        (ArrayApiFixtureScalar::I64 { value: a }, ArrayApiFixtureScalar::I64 { value: e }) => {
+            a == e
+        }
+        (ArrayApiFixtureScalar::U64 { value: a }, ArrayApiFixtureScalar::U64 { value: e }) => {
+            a == e
+        }
+        (ArrayApiFixtureScalar::F64 { value: a }, ArrayApiFixtureScalar::F64 { value: e }) => {
+            allclose_scalar(*a, *e, atol, rtol)
+        }
+        (
+            ArrayApiFixtureScalar::ComplexF64 { re: ar, im: ai },
+            ArrayApiFixtureScalar::ComplexF64 { re: er, im: ei },
+        ) => allclose_scalar(*ar, *er, atol, rtol) && allclose_scalar(*ai, *ei, atol, rtol),
+        _ => false,
+    }
+}
+
+fn fixture_max_diff_seq(
+    actual: &[ArrayApiFixtureScalar],
+    expected: &[ArrayApiFixtureScalar],
+) -> f64 {
+    if actual.len() != expected.len() {
+        return f64::INFINITY;
+    }
+    actual
+        .iter()
+        .zip(expected.iter())
+        .map(|(a, e)| fixture_scalar_diff(a, e))
+        .fold(0.0_f64, f64::max)
 }
 
 fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
@@ -3024,11 +4032,11 @@ mod tests {
     #[cfg(feature = "dashboard")]
     use super::style_for_case_result;
     use super::{
-        AggregateParityReport, ConformanceReport, DifferentialOracleConfig, HarnessConfig,
-        LinalgPacketFixture, OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
-        SpecialPacketFixture, aggregate_packet_reports, discover_fixtures, ensure_artifact_layout,
-        load_oracle_capture, run_differential_test, run_linalg_packet, run_optimize_packet,
-        run_smoke, run_validate_tol_packet, write_parity_artifacts,
+        AggregateParityReport, ArrayApiPacketFixture, ConformanceReport, DifferentialOracleConfig,
+        HarnessConfig, LinalgPacketFixture, OptimizePacketFixture, OracleStatus, PacketFamily,
+        PythonOracleConfig, SpecialPacketFixture, aggregate_packet_reports, discover_fixtures,
+        ensure_artifact_layout, load_oracle_capture, run_differential_test, run_linalg_packet,
+        run_optimize_packet, run_smoke, run_validate_tol_packet, write_parity_artifacts,
     };
     use serde::Serialize;
     use std::fs;
@@ -3283,6 +4291,14 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 format!("error_kind={error}")
             }
         }
+    }
+
+    fn array_api_case_input_summary(case: &super::ArrayApiCase) -> String {
+        format!("{case:?}")
+    }
+
+    fn array_api_case_expected_summary(expected: &super::ArrayApiExpectedOutcome) -> String {
+        format!("{expected:?}")
     }
 
     #[test]
@@ -3555,6 +4571,108 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let output_path = output_dir.join("structured_case_logs.json");
         let payload = serde_json::to_vec_pretty(&logs).expect("serialize special logs");
         fs::write(&output_path, payload).expect("write special structured logs");
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn differential_test_array_api_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-007_arrayapi_core.json");
+        let oracle = default_test_oracle();
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("differential array_api runs");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-007");
+        assert_eq!(report.family, "array_api_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 29);
+    }
+
+    #[test]
+    fn differential_array_api_quota_and_structured_logs() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-007_arrayapi_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read array api fixture");
+        let fixture: ArrayApiPacketFixture =
+            serde_json::from_str(&raw).expect("parse array api fixture");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle).expect("array api differential");
+
+        let mut by_case = std::collections::BTreeMap::new();
+        for case in &fixture.cases {
+            by_case.insert(case.case_id().to_owned(), case);
+        }
+
+        let mut differential_count = 0usize;
+        let mut metamorphic_count = 0usize;
+        let mut adversarial_count = 0usize;
+        let mut logs = Vec::with_capacity(report.per_case_results.len());
+
+        for case_result in &report.per_case_results {
+            let case = by_case
+                .get(&case_result.case_id)
+                .expect("every report case should exist in fixture");
+            match case.category() {
+                "differential" => differential_count += 1,
+                "metamorphic" => metamorphic_count += 1,
+                "adversarial" => adversarial_count += 1,
+                other => panic!("unexpected category: {other}"),
+            }
+
+            let log = StructuredCaseLog {
+                test_id: case_result.case_id.clone(),
+                category: case.category().to_owned(),
+                input_summary: array_api_case_input_summary(case),
+                expected: array_api_case_expected_summary(case.expected()),
+                actual: case_result.message.clone(),
+                diff: case_result.max_diff,
+                tolerance: case_result.tolerance_used.clone(),
+                pass: case_result.passed,
+            };
+
+            let payload =
+                serde_json::to_string(&log).expect("structured conformance log should serialize");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&payload).expect("structured log should parse");
+            assert!(parsed.get("test_id").is_some());
+            assert!(parsed.get("category").is_some());
+            assert!(parsed.get("input_summary").is_some());
+            assert!(parsed.get("expected").is_some());
+            assert!(parsed.get("actual").is_some());
+            assert!(parsed.get("diff").is_some());
+            assert!(parsed.get("tolerance").is_some());
+            assert!(parsed.get("pass").is_some());
+            logs.push(log);
+        }
+
+        assert!(
+            differential_count >= 15,
+            "expected >=15 differential cases, got {differential_count}"
+        );
+        assert!(
+            metamorphic_count >= 6,
+            "expected >=6 metamorphic cases, got {metamorphic_count}"
+        );
+        assert!(
+            adversarial_count >= 8,
+            "expected >=8 adversarial cases, got {adversarial_count}"
+        );
+        assert_eq!(report.fail_count, 0);
+
+        let output_dir = HarnessConfig::default_paths()
+            .artifact_dir_for("P2C-007")
+            .join("differential");
+        fs::create_dir_all(&output_dir).expect("create array_api differential artifact directory");
+        let output_path = output_dir.join("structured_case_logs.json");
+        let payload = serde_json::to_vec_pretty(&logs).expect("serialize array api logs");
+        fs::write(&output_path, payload).expect("write array_api structured logs");
         assert!(output_path.exists());
     }
 
