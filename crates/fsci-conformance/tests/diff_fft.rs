@@ -92,13 +92,12 @@ fn naive_dft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
     }
     let sign = if inverse { 1.0 } else { -1.0 };
     let mut output = vec![(0.0, 0.0); n];
-    for k in 0..n {
+    for (k, out) in output.iter_mut().enumerate() {
         let mut re = 0.0;
         let mut im = 0.0;
         for (t, &(vr, vi)) in input.iter().enumerate() {
             let angle = sign * 2.0 * PI * (k as f64) * (t as f64) / (n as f64);
             let (s, c) = angle.sin_cos();
-            // (vr + i*vi) * (c + i*s) = (vr*c - vi*s) + i*(vr*s + vi*c)
             re += vr * c - vi * s;
             im += vr * s + vi * c;
         }
@@ -106,7 +105,7 @@ fn naive_dft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
             re /= n as f64;
             im /= n as f64;
         }
-        output[k] = (re, im);
+        *out = (re, im);
     }
     output
 }
@@ -411,7 +410,7 @@ fn diff_016_fftfreq_odd_vs_oracle() {
     let n = 7;
     let d = 1.0;
     let result = fftfreq(n, d).unwrap();
-    let split = (n + 1) / 2; // ceil(n/2) = 4
+    let split = n.div_ceil(2);
     let expected: Vec<f64> = (0..n)
         .map(|k| {
             if k < split { k as f64 / (n as f64 * d) }
