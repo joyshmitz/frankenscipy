@@ -555,6 +555,7 @@ dependencies = [
 name = "fsci-arrayapi"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "nalgebra",
  "proptest",
  "serde",
