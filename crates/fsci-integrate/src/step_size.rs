@@ -22,15 +22,6 @@ pub struct InitialStepRequest<'a> {
     pub mode: RuntimeMode,
 }
 
-/// Compute RMS norm: ||x|| / sqrt(n).
-fn rms_norm(x: &[f64]) -> f64 {
-    if x.is_empty() {
-        return 0.0;
-    }
-    let sum_sq: f64 = x.iter().map(|v| v * v).sum();
-    (sum_sq / x.len() as f64).sqrt()
-}
-
 /// Empirically select a good initial step size.
 ///
 /// Implements the algorithm from Hairer, Norsett & Wanner,
@@ -81,36 +72,48 @@ where
         return Ok(0.0);
     }
 
-    // Compute scale = atol + |y0| * rtol
-    let scale: Vec<f64> = match &request.atol {
-        ToleranceValue::Scalar(atol) => request
-            .y0
-            .iter()
-            .map(|y| atol + y.abs() * request.rtol)
-            .collect(),
-        ToleranceValue::Vector(atol_vec) => request
-            .y0
-            .iter()
-            .zip(atol_vec.iter())
-            .map(|(y, a)| a + y.abs() * request.rtol)
-            .collect(),
+    // Compute scale = atol + |y0| * rtol and d0 = norm(y0 / scale).
+    // This keeps the same formula as before, but avoids building temporary
+    // scaled vectors solely for RMS computation.
+    let mut scale = Vec::with_capacity(n);
+    let mut scaled_y0_sum_sq = 0.0_f64;
+    match &request.atol {
+        ToleranceValue::Scalar(atol) => {
+            for &y in request.y0 {
+                let s = atol + y.abs() * request.rtol;
+                scale.push(s);
+                let scaled = y / s;
+                scaled_y0_sum_sq += scaled * scaled;
+            }
+        }
+        ToleranceValue::Vector(atol_vec) => {
+            for (&y, &a) in request.y0.iter().zip(atol_vec.iter()) {
+                let s = a + y.abs() * request.rtol;
+                scale.push(s);
+                let scaled = y / s;
+                scaled_y0_sum_sq += scaled * scaled;
+            }
+        }
+    }
+    let d0 = if scale.is_empty() {
+        0.0
+    } else {
+        (scaled_y0_sum_sq / scale.len() as f64).sqrt()
     };
 
-    // d0 = norm(y0 / scale), d1 = norm(f0 / scale)
-    let scaled_y0: Vec<f64> = request
-        .y0
-        .iter()
-        .zip(scale.iter())
-        .map(|(y, s)| y / s)
-        .collect();
-    let scaled_f0: Vec<f64> = request
-        .f0
-        .iter()
-        .zip(scale.iter())
-        .map(|(f, s)| f / s)
-        .collect();
-    let d0 = rms_norm(&scaled_y0);
-    let d1 = rms_norm(&scaled_f0);
+    // d1 = norm(f0 / scale)
+    let mut scaled_f0_sum_sq = 0.0_f64;
+    let mut scaled_f0_len = 0usize;
+    for (&f, &s) in request.f0.iter().zip(scale.iter()) {
+        let scaled = f / s;
+        scaled_f0_sum_sq += scaled * scaled;
+        scaled_f0_len += 1;
+    }
+    let d1 = if scaled_f0_len == 0 {
+        0.0
+    } else {
+        (scaled_f0_sum_sq / scaled_f0_len as f64).sqrt()
+    };
 
     // Initial guess h0
     let h0 = if d0 < 1e-5 || d1 < 1e-5 {
@@ -132,13 +135,18 @@ where
     let f1 = fun(request.t0 + h0 * request.direction, &y1);
 
     // d2 = norm((f1 - f0) / scale) / h0
-    let diff_scaled: Vec<f64> = f1
-        .iter()
-        .zip(request.f0.iter())
-        .zip(scale.iter())
-        .map(|((f1v, f0v), s)| (f1v - f0v) / s)
-        .collect();
-    let d2 = rms_norm(&diff_scaled) / h0;
+    let mut diff_scaled_sum_sq = 0.0_f64;
+    let mut diff_scaled_len = 0usize;
+    for ((&f1v, &f0v), &s) in f1.iter().zip(request.f0.iter()).zip(scale.iter()) {
+        let diff = (f1v - f0v) / s;
+        diff_scaled_sum_sq += diff * diff;
+        diff_scaled_len += 1;
+    }
+    let d2 = if diff_scaled_len == 0 {
+        0.0
+    } else {
+        (diff_scaled_sum_sq / diff_scaled_len as f64).sqrt() / h0
+    };
 
     // Compute h1
     let h1 = if d1 <= 1e-15 && d2 <= 1e-15 {
