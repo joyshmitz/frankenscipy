@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_hash": "9d3255eba37b18273a8a24ab2b4f78c04dbce31fe98a0845db41fff40bb91a58",
+  "symbol_size": 128,
+  "source_symbols": 36,
+  "repair_symbols": 7,
+  "repair_symbol_hashes": [
+    "6017dbec34e80a5e45c6ef5830328bd3be6fedb121618a3bf5ed6b852e3ccd63",
+    "d26bd952e5232ffd887c1b3ea35889b47156203b3f87f636b1fb321f17336174",
+    "78adb8525e9379d467a105aef1acfcbeb28a795b90ec4db795c734d101d47a4e",
+    "d06fd376672fda6294aabe83a0b61e144ccb2299883e72845d127f4ca45c1d50",
+    "9fc095778f6ad9c5d825e03c95111eee67ad9cb600628599c9efc6543b566887",
+    "f0cab14e6adf4dc290f3d0409aa89f1ec62d80782068eda112c80aa17c807246",
+    "e5016bc2d0c4d434f596dd55c88cbeb368579be121124b8e606aa536e300fc58"
+  ]
+}
