@@ -1,0 +1,55 @@
+# FrankenSciPy Quality Gates Configuration
+# bd-3jh.22: Coverage/Flake Budgets + Reliability Gates
+#
+# SLO definitions for test quality, coverage, and reliability.
+# Used by the quality_monitor module in fsci-conformance.
+
+[coverage]
+# Minimum line coverage percentage per crate.
+# Measured via cargo-tarpaulin or llvm-cov.
+default_line_coverage = 80
+default_branch_coverage = 60
+
+[coverage.per_crate]
+fsci-runtime = { line = 85, branch = 70 }
+fsci-linalg = { line = 80, branch = 60 }
+fsci-sparse = { line = 80, branch = 60 }
+fsci-integrate = { line = 80, branch = 60 }
+fsci-opt = { line = 80, branch = 60 }
+fsci-fft = { line = 75, branch = 55 }
+fsci-special = { line = 80, branch = 60 }
+fsci-arrayapi = { line = 80, branch = 60 }
+fsci-conformance = { line = 70, branch = 50 }
+
+[flake]
+# Maximum flake rate: fraction of test runs that produce non-deterministic failures.
+# <0.1% means no more than 1 flaky failure per 1000 test runs.
+max_flake_rate = 0.001
+# Number of re-runs to classify a failure as flaky vs real.
+rerun_count = 3
+# If a test fails on all reruns, it is a real failure.
+# If it passes on any rerun, it is classified as flaky.
+
+[runtime]
+# Maximum wall-clock time budgets per test suite tier (in seconds).
+unit_suite_max_seconds = 120
+e2e_suite_max_seconds = 600
+benchmark_suite_max_seconds = 300
+# Per-test timeout (seconds). Tests exceeding this are killed.
+per_test_timeout_seconds = 30
+
+[runtime.per_crate]
+# Override per-crate if some suites are expected to be slower.
+fsci-conformance = { unit_max_seconds = 180, e2e_max_seconds = 600 }
+
+[severity]
+# How to treat SLO violations.
+# "warn" = emit warning, "fail" = exit non-zero.
+coverage_violation = "warn"
+flake_violation = "warn"
+runtime_violation = "fail"
+# Critical SLO breach: always fail regardless of above setting.
+# Coverage below this is always a failure.
+critical_coverage_floor = 50
+# Runtime over this multiple of budget is always a failure.
+critical_runtime_multiplier = 3.0

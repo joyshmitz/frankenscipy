@@ -15,8 +15,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use fsci_integrate::{
-    InitialStepRequest, RkSolver, RkSolverConfig, SolveIvpOptions, SolverKind, ToleranceValue,
-    RK45_TABLEAU, RK23_TABLEAU,
+    SolveIvpOptions, SolverKind, ToleranceValue,
     solve_ivp, validate_first_step, validate_max_step, validate_tol,
 };
 use fsci_runtime::RuntimeMode;
@@ -851,7 +850,7 @@ fn e2e_008_large_system() {
     // Step 1: Validate tolerances with large vector
     let t = Instant::now();
     let atol_vec: Vec<f64> = vec![1e-6; n];
-    let vtol = validate_tol(
+    let _vtol = validate_tol(
         ToleranceValue::Scalar(1e-3),
         ToleranceValue::Vector(atol_vec),
         n,

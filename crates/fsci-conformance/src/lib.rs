@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 
+pub mod ci_gates;
 pub mod dashboard;
 pub mod e2e;
+pub mod forensics;
+pub mod quality_gates;
 
 use asupersync::raptorq::systematic::SystematicEncoder;
 use blake3::hash;

@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use fsci_runtime::{
-    ConformalCalibrator, DecisionSignals, MatrixConditionState, PolicyController,
-    PolicyEvidenceLedger, RuntimeMode, SignalSequence, SolverAction, SolverPortfolio,
+    ConformalCalibrator, DecisionSignals, MatrixConditionState, PolicyAction, PolicyController,
+    RuntimeMode, SignalSequence, SolverAction, SolverPortfolio,
 };
 use serde::Serialize;
 
@@ -142,12 +142,12 @@ fn e2e_001_policy_well_conditioned() {
     let t = Instant::now();
     let signals = DecisionSignals::new(2.0, 0.0, 0.0);
     let decision = ctrl.decide(signals);
-    let pass = decision.action == 0; // Allow
+    let pass = decision.action == PolicyAction::Allow;
     if !pass { all_pass = false; }
     steps.push(make_step(
         2, "benign_decision", "decide",
         "cond=2.0, meta=0.0, anom=0.0",
-        &format!("action={}, top_state={}, reason={}", decision.action, decision.top_state, decision.reason),
+        &format!("action={:?}, top_state={:?}, reason={}", decision.action, decision.top_state, decision.reason),
         t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
     ));
 
@@ -204,12 +204,12 @@ fn e2e_002_policy_ill_conditioned() {
     let t = Instant::now();
     let signals = DecisionSignals::new(16.0, 0.0, 0.0);
     let decision = ctrl.decide(signals);
-    let pass = decision.action >= 1; // FullValidate or FailClosed
+    let pass = matches!(decision.action, PolicyAction::FullValidate | PolicyAction::FailClosed);
     if !pass { all_pass = false; }
     steps.push(make_step(
         1, "high_cond_decision", "decide",
         "cond=16.0, meta=0.0, anom=0.0",
-        &format!("action={}, top_state={}", decision.action, decision.top_state),
+        &format!("action={:?}, top_state={:?}", decision.action, decision.top_state),
         t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
     ));
 
@@ -221,7 +221,7 @@ fn e2e_002_policy_ill_conditioned() {
     steps.push(make_step(
         2, "high_meta_decision", "decide",
         "cond=0.0, meta=1.0, anom=0.0",
-        &format!("action={}, top_state={}, posterior={:?}", decision.action, decision.top_state, decision.posterior),
+        &format!("action={:?}, top_state={:?}, posterior={:?}", decision.action, decision.top_state, decision.posterior),
         t.elapsed().as_nanos(), "ok",
     ));
 
@@ -229,12 +229,12 @@ fn e2e_002_policy_ill_conditioned() {
     let t = Instant::now();
     let signals = DecisionSignals::new(16.0, 1.0, 1.0);
     let decision = ctrl.decide(signals);
-    let pass = decision.action == 2; // FailClosed
+    let pass = decision.action == PolicyAction::FailClosed;
     if !pass { all_pass = false; }
     steps.push(make_step(
         3, "all_high_decision", "decide",
         "cond=16.0, meta=1.0, anom=1.0",
-        &format!("action={}, reason={}", decision.action, decision.reason),
+        &format!("action={:?}, reason={}", decision.action, decision.reason),
         t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
     ));
 
@@ -266,7 +266,7 @@ fn e2e_003_solver_portfolio_selection() {
 
     for (i, state) in MatrixConditionState::ALL.iter().enumerate() {
         let t = Instant::now();
-        let (action, posterior, expected_losses, chosen_loss) = portfolio.select_action(state);
+        let (action, posterior, _expected_losses, chosen_loss) = portfolio.select_action(state);
         let posterior_sum: f64 = posterior.iter().sum();
         let pass = (posterior_sum - 1.0).abs() < 1e-9;
         if !pass { all_pass = false; }
@@ -386,11 +386,11 @@ fn e2e_005_mode_switch_behavior() {
     // Step 1: Strict mode decision
     let t = Instant::now();
     let mut strict_ctrl = PolicyController::new(RuntimeMode::Strict, 64);
-    let strict_dec = strict_ctrl.decide(signals.clone());
+    let strict_dec = strict_ctrl.decide(signals);
     steps.push(make_step(
         1, "strict_decision", "decide",
         "mode=Strict, cond=8, meta=0.3, anom=0.2",
-        &format!("action={}, reason={}", strict_dec.action, strict_dec.reason),
+        &format!("action={:?}, reason={}", strict_dec.action, strict_dec.reason),
         t.elapsed().as_nanos(), "ok",
     ));
 
@@ -401,7 +401,7 @@ fn e2e_005_mode_switch_behavior() {
     steps.push(make_step(
         2, "hardened_decision", "decide",
         "mode=Hardened, cond=8, meta=0.3, anom=0.2",
-        &format!("action={}, reason={}", hardened_dec.action, hardened_dec.reason),
+        &format!("action={:?}, reason={}", hardened_dec.action, hardened_dec.reason),
         t.elapsed().as_nanos(), "ok",
     ));
 
@@ -545,7 +545,7 @@ fn e2e_007_signal_replay_stateless() {
     let mut ctrl = PolicyController::new(RuntimeMode::Strict, 64);
     let mut decisions = Vec::new();
     for signal in seq.iter() {
-        decisions.push(ctrl.decide(signal.clone()));
+        decisions.push(ctrl.decide(*signal));
     }
     // First and third should have same action (both benign)
     let pass = decisions[0].action == decisions[2].action && decisions[0].action == decisions[3].action;
@@ -553,7 +553,7 @@ fn e2e_007_signal_replay_stateless() {
     steps.push(make_step(
         2, "replay_verify", "decide",
         "replay 4 signals",
-        &format!("actions=[{},{},{},{}]", decisions[0].action, decisions[1].action, decisions[2].action, decisions[3].action),
+        &format!("actions=[{:?},{:?},{:?},{:?}]", decisions[0].action, decisions[1].action, decisions[2].action, decisions[3].action),
         t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
     ));
 
@@ -564,7 +564,7 @@ fn e2e_007_signal_replay_stateless() {
     steps.push(make_step(
         3, "adversarial_differs", "check",
         "adversarial action != benign action",
-        &format!("benign_action={}, adversarial_action={}", decisions[0].action, decisions[1].action),
+        &format!("benign_action={:?}, adversarial_action={:?}", decisions[0].action, decisions[1].action),
         t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
     ));
 
@@ -604,10 +604,9 @@ fn e2e_008_rapid_decisions() {
         let anom = if i % 100 == 0 { 0.5 } else { 0.0 };
         let dec = ctrl.decide(DecisionSignals::new(cond, meta, anom));
         match dec.action {
-            0 => allow_count += 1,
-            1 => validate_count += 1,
-            2 => fail_count += 1,
-            _ => {}
+            PolicyAction::Allow => allow_count += 1,
+            PolicyAction::FullValidate => validate_count += 1,
+            PolicyAction::FailClosed => fail_count += 1,
         }
     }
     let total = allow_count + validate_count + fail_count;
@@ -642,7 +641,7 @@ fn e2e_008_rapid_decisions() {
     steps.push(make_step(
         3, "determinism_check", "check",
         "same signal → same action",
-        &format!("action1={}, action2={}, match={pass}", dec1.action, dec2.action),
+        &format!("action1={:?}, action2={:?}, match={pass}", dec1.action, dec2.action),
         t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
     ));
 

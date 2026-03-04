@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! bd-3jh.20: [FOUNDATION] User Workflow Scenario Corpus + Golden Journeys
 //!
-//! 12+ golden journey scenarios covering all 8 packets, written from user perspective.
+//! 14 golden journey scenarios covering all 8 packets, written from user perspective.
 //! Each journey exercises a realistic end-to-end workflow and emits fixture snapshots
 //! at `fixtures/artifacts/golden_journeys/`.
 
@@ -9,21 +9,26 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use fsci_fft::{FftOptions, Normalization, fft, ifft, rfft, irfft};
+use fsci_fft::{FftOptions, fft, ifft, rfft, irfft};
 use fsci_integrate::{SolveIvpOptions, SolverKind, ToleranceValue, solve_ivp};
 use fsci_linalg::{
     InvOptions, LstsqOptions, PinvOptions, SolveOptions, det, inv, lstsq, pinv, solve,
 };
 use fsci_opt::{
-    MinimizeOptions, OptimizeMethod, RootMethod, RootOptions,
-    bfgs, bisect, brentq, cg_pr_plus, powell,
+    MinimizeOptions, OptimizeMethod, RootOptions,
+    bfgs, bisect, brentq, cg_pr_plus,
 };
 use fsci_runtime::{
-    ConformalCalibrator, DecisionSignals, MatrixConditionState, PolicyAction, PolicyController,
+    DecisionSignals, MatrixConditionState, PolicyAction, PolicyController,
     RuntimeMode, SolverPortfolio,
 };
-use fsci_sparse::{CsrMatrix, FormatConvertible, Shape2D, diags, eye, random, scale_csr, spmv_csr};
-use fsci_special::{SpecialTensor, beta, erf, erfc, gamma, gammaln, j0, rgamma};
+use fsci_arrayapi::{
+    ArangeRequest, ArrayApiArray, CoreArrayBackend, CreationRequest, LinspaceRequest,
+    Shape, DType, ExecutionMode, MemoryOrder, ScalarValue,
+    arange, broadcast_shapes, linspace, ones, reshape, transpose, zeros,
+};
+use fsci_sparse::{FormatConvertible, Shape2D, eye, random, scale_csr, spmv_csr};
+use fsci_special::{SpecialTensor, erf, erfc, gamma, gammaln, rgamma};
 use serde::Serialize;
 
 type Complex64 = (f64, f64);
@@ -92,12 +97,9 @@ fn journey_01_linalg_pipeline() {
     assert!(result.x.len() == 4);
 
     // Verify residual: ||Ax - b|| < tol
-    let mut residual = vec![0.0; 4];
-    for i in 0..4 {
-        for j in 0..4 {
-            residual[i] += a[i][j] * result.x[j];
-        }
-        residual[i] -= b[i];
+    let mut residual = [0.0; 4];
+    for (i, (row, bi)) in a.iter().zip(&b).enumerate() {
+        residual[i] = row.iter().zip(&result.x).map(|(aij, xj)| aij * xj).sum::<f64>() - bi;
     }
     let max_residual: f64 = residual.iter().map(|r| r.abs()).fold(0.0_f64, f64::max);
     assert!(max_residual < 1e-10, "residual too large: {max_residual}");
@@ -258,7 +260,7 @@ fn journey_05_sparse_operations() {
     assert!(max_err < 1e-15, "identity spmv error: {max_err}");
 
     // Create random sparse (COO) → convert to CSR → scale
-    let a = random(Shape2D(n, n), 0.05, 42).expect("random").to_csr().expect("to_csr");
+    let a = random(Shape2D { rows: n, cols: n }, 0.05, 42).expect("random").to_csr().expect("to_csr");
     let _scaled = scale_csr(&a, 2.0).expect("scale");
 
     // Convert to CSC and back
@@ -414,10 +416,8 @@ fn journey_09_lstsq_pinv() {
     let pi = pinv(&a, PinvOptions::default()).expect("pinv");
     // pinv(A) * b should give similar result to lstsq
     let mut pinv_x = vec![0.0; 2];
-    for i in 0..2 {
-        for j in 0..4 {
-            pinv_x[i] += pi.pseudo_inverse[i][j] * b[j];
-        }
+    for (i, row) in pi.pseudo_inverse.iter().enumerate().take(2) {
+        pinv_x[i] = row.iter().zip(&b).map(|(pij, bj)| pij * bj).sum::<f64>();
     }
     let diff: f64 = ls.x.iter().zip(&pinv_x).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
     assert!(diff < 1e-8, "lstsq vs pinv@b diff: {diff}");
@@ -480,16 +480,16 @@ fn journey_10_real_fft() {
 fn journey_11_error_recovery() {
     let start = Instant::now();
 
-    // Bad tolerance → catch error → fix → succeed
+    // Bad atol vector length → catch error → fix → succeed
     let bad = fsci_integrate::validate_tol(
-        ToleranceValue::Vector(vec![1e-6]),
-        ToleranceValue::Scalar(1e-9),
-        3, // mismatch: vector len 1 for n=3
+        ToleranceValue::Scalar(1e-6),
+        ToleranceValue::Vector(vec![1e-9]), // mismatch: atol vector len 1 for n=3
+        3,
         RuntimeMode::Strict,
     );
-    assert!(bad.is_err(), "should reject mismatched vector");
+    assert!(bad.is_err(), "should reject mismatched atol vector");
 
-    // Fix and retry
+    // Fix and retry with correct scalar
     let good = fsci_integrate::validate_tol(
         ToleranceValue::Scalar(1e-6),
         ToleranceValue::Scalar(1e-9),
@@ -570,6 +570,182 @@ fn journey_12_cross_packet_integration() {
             "gamma_vals": gamma_vals,
             "fft_err": fft_err,
             "casp_action": decision.action,
+        }),
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Journey 13: Array API pipeline (P2C-007)
+// ═══════════════════════════════════════════════════════════════════
+
+/// User creates arrays → linspace → reshape → transpose → broadcast check
+#[test]
+fn journey_13_array_api_pipeline() {
+    let start = Instant::now();
+    let backend = CoreArrayBackend::new(ExecutionMode::Strict);
+
+    // Create zeros and ones arrays
+    let z = zeros(
+        &backend,
+        &CreationRequest {
+            shape: Shape::new(vec![3, 4]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        },
+    )
+    .expect("zeros");
+    assert_eq!(z.shape(), &Shape::new(vec![3, 4]));
+
+    let o = ones(
+        &backend,
+        &CreationRequest {
+            shape: Shape::new(vec![3, 4]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        },
+    )
+    .expect("ones");
+    assert_eq!(o.size(), 12);
+
+    // linspace
+    let lin = linspace(
+        &backend,
+        &LinspaceRequest {
+            start: ScalarValue::F64(0.0),
+            stop: ScalarValue::F64(1.0),
+            num: 10,
+            endpoint: true,
+            dtype: Some(DType::Float64),
+        },
+    )
+    .expect("linspace");
+    assert_eq!(lin.shape(), &Shape::new(vec![10]));
+
+    // arange
+    let ar = arange(
+        &backend,
+        &ArangeRequest {
+            start: ScalarValue::F64(0.0),
+            stop: ScalarValue::F64(12.0),
+            step: ScalarValue::F64(1.0),
+            dtype: Some(DType::Float64),
+        },
+    )
+    .expect("arange");
+
+    // reshape 12 → 3×4
+    let reshaped = reshape(&backend, &ar, &Shape::new(vec![3, 4])).expect("reshape");
+    assert_eq!(reshaped.shape(), &Shape::new(vec![3, 4]));
+
+    // transpose → 4×3
+    let transposed = transpose(&backend, &reshaped).expect("transpose");
+    assert_eq!(transposed.shape(), &Shape::new(vec![4, 3]));
+
+    // broadcast_shapes
+    let bcast = broadcast_shapes(&[Shape::new(vec![3, 1]), Shape::new(vec![1, 4])]);
+    assert_eq!(bcast.expect("broadcast").dims, vec![3, 4]);
+
+    // incompatible broadcast
+    let bad = broadcast_shapes(&[Shape::new(vec![3, 2]), Shape::new(vec![4, 2])]);
+    assert!(bad.is_err(), "incompatible shapes should fail");
+
+    write_journey(&JourneyResult {
+        journey_id: "gj_13_array_api_pipeline".into(),
+        description: "zeros/ones → linspace → arange → reshape → transpose → broadcast".into(),
+        category: "basic_usage".into(),
+        packet: "P2C-007".into(),
+        steps: 7,
+        all_pass: true,
+        duration_ns: start.elapsed().as_nanos(),
+        snapshot: serde_json::json!({
+            "zeros_shape": [3, 4],
+            "linspace_len": 10,
+            "transposed_shape": [4, 3],
+            "broadcast_result": [3, 4],
+        }),
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Journey 14: SciPy migration workflow (cross-packet, migration)
+// ═══════════════════════════════════════════════════════════════════
+
+/// User migrating from SciPy: typical scipy.linalg + scipy.optimize + scipy.special workflow
+/// rewritten in FrankenSciPy, demonstrating API equivalence
+#[test]
+fn journey_14_scipy_migration() {
+    let start = Instant::now();
+    let mode = RuntimeMode::Strict;
+
+    // Step 1 (replaces scipy.linalg.solve): solve Ax = b
+    let a = vec![
+        vec![4.0, -2.0, 1.0],
+        vec![-2.0, 4.0, -2.0],
+        vec![1.0, -2.0, 4.0],
+    ];
+    let b = vec![1.0, 2.0, 3.0];
+    let sol = solve(&a, &b, SolveOptions { mode, ..Default::default() }).expect("solve");
+    assert_eq!(sol.x.len(), 3);
+
+    // Step 2 (replaces scipy.linalg.inv): compute inverse
+    let a_inv = inv(&a, InvOptions { mode, ..Default::default() }).expect("inv");
+    // A * A^-1 should ≈ I
+    for (i, row_a) in a.iter().enumerate() {
+        for j in 0..3 {
+            let val: f64 = row_a
+                .iter()
+                .zip(&a_inv.inverse)
+                .map(|(aik, inv_row)| aik * inv_row[j])
+                .sum();
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (val - expected).abs() < 1e-10,
+                "A*inv(A)[{i},{j}] = {val}, expected {expected}"
+            );
+        }
+    }
+
+    // Step 3 (replaces scipy.optimize.brentq): find where gamma(x) = 2
+    let root = brentq(
+        |x: f64| real_val(&gamma(&scalar(x), mode).unwrap()) - 2.0,
+        (1.0, 4.0),
+        RootOptions::default(),
+    )
+    .expect("brentq gamma=2");
+    assert!(root.converged);
+    let gamma_at_root = real_val(&gamma(&scalar(root.root), mode).unwrap());
+    assert!((gamma_at_root - 2.0).abs() < 1e-8, "gamma(root) should ≈ 2");
+
+    // Step 4 (replaces scipy.special.erf / erfc): verify identity
+    let e_val = real_val(&erf(&scalar(root.root), mode).unwrap());
+    let ec_val = real_val(&erfc(&scalar(root.root), mode).unwrap());
+    assert!((e_val + ec_val - 1.0).abs() < 1e-12);
+
+    // Step 5 (replaces scipy.optimize.minimize): minimize Rosenbrock-like
+    let rosenbrock_2d = |x: &[f64]| -> f64 {
+        (1.0 - x[0]).powi(2) + 100.0 * (x[1] - x[0] * x[0]).powi(2)
+    };
+    let opt = bfgs(&rosenbrock_2d, &[0.0, 0.0], MinimizeOptions {
+        tol: Some(1e-6),
+        maxiter: Some(500),
+        ..Default::default()
+    })
+    .expect("bfgs rosenbrock");
+    assert!(opt.success, "BFGS should converge on Rosenbrock");
+    assert!((opt.x[0] - 1.0).abs() < 0.1 && (opt.x[1] - 1.0).abs() < 0.1);
+
+    write_journey(&JourneyResult {
+        journey_id: "gj_14_scipy_migration".into(),
+        description: "SciPy migration: linalg.solve → inv → optimize.brentq → special.erf → minimize".into(),
+        category: "migration".into(),
+        packet: "cross-packet".into(),
+        steps: 5,
+        all_pass: true,
+        duration_ns: start.elapsed().as_nanos(),
+        snapshot: serde_json::json!({
+            "solve_x": sol.x,
+            "gamma_root": root.root,
+            "rosenbrock_min": opt.x,
         }),
     });
 }

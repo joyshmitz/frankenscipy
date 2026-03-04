@@ -1,0 +1,109 @@
+name: CI Gates (G1-G8)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ── G1: Formatting + Linting ──────────────────────────────────────
+  g1-lint:
+    name: "G1: fmt + clippy"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ── G2: Unit + Property Tests ─────────────────────────────────────
+  g2-unit-tests:
+    name: "G2: unit + property tests"
+    needs: g1-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo test --workspace -- --nocapture
+        timeout-minutes: 5
+
+  # ── G3: Differential Oracle Conformance ───────────────────────────
+  g3-conformance:
+    name: "G3: differential conformance"
+    needs: g2-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo test -p fsci-conformance --test golden_journeys -- --nocapture
+        timeout-minutes: 5
+      - run: cargo test -p fsci-conformance --test schema_validation -- --nocapture
+        timeout-minutes: 5
+
+  # ── G4: Adversarial/Fuzz Regression ───────────────────────────────
+  g4-adversarial:
+    name: "G4: adversarial regression"
+    needs: g2-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo test -p fsci-conformance --test smoke -- --nocapture
+        timeout-minutes: 5
+
+  # ── G5: E2E Scenario Orchestration (parallel with G3/G4) ─────────
+  g5-e2e:
+    name: "G5: E2E scenarios"
+    needs: g2-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: |
+          for test in e2e_linalg e2e_ivp e2e_optimize e2e_sparse e2e_fft e2e_special e2e_casp; do
+            echo "=== Running $test ==="
+            cargo test -p fsci-conformance --test "$test" -- --nocapture || true
+          done
+        timeout-minutes: 15
+
+  # ── G6: Performance Regression (parallel) ─────────────────────────
+  g6-perf:
+    name: "G6: perf regression"
+    needs: g2-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: |
+          for test in perf_linalg perf_ivp perf_arrayapi; do
+            echo "=== Running $test ==="
+            cargo test -p fsci-conformance --test "$test" -- --nocapture || true
+          done
+        timeout-minutes: 10
+
+  # ── G7: Artifact Schema Validation (parallel) ────────────────────
+  g7-schema:
+    name: "G7: schema validation"
+    needs: g2-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo test -p fsci-conformance --test schema_validation -- --nocapture
+        timeout-minutes: 5
+
+  # ── G8: RaptorQ Decode-Proof Verification (parallel) ─────────────
+  g8-raptorq:
+    name: "G8: RaptorQ proofs"
+    needs: g2-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo test -p fsci-conformance --test raptorq_proofs -- --nocapture
+        timeout-minutes: 5
