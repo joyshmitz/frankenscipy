@@ -36,3 +36,39 @@ impl Display for ArrayApiError {
 impl Error for ArrayApiError {}
 
 pub type ArrayApiResult<T> = Result<T, ArrayApiError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn array_api_error_exposes_kind_and_display_message() {
+        let err = ArrayApiError::new(
+            ArrayApiErrorKind::InvalidIndex,
+            "index expression does not match requested indexing mode",
+        );
+        assert_eq!(err.kind, ArrayApiErrorKind::InvalidIndex);
+        assert_eq!(
+            err.to_string(),
+            "index expression does not match requested indexing mode"
+        );
+    }
+
+    #[test]
+    fn array_api_result_alias_behaves_like_result() {
+        fn pass() -> ArrayApiResult<usize> {
+            Ok(7)
+        }
+
+        fn fail() -> ArrayApiResult<usize> {
+            Err(ArrayApiError::new(
+                ArrayApiErrorKind::Overflow,
+                "shape element count overflow",
+            ))
+        }
+
+        assert_eq!(pass().expect("success value should pass through"), 7);
+        let err = fail().expect_err("error variant should pass through");
+        assert_eq!(err.kind, ArrayApiErrorKind::Overflow);
+    }
+}

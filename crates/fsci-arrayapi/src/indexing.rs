@@ -44,3 +44,127 @@ pub fn reshape<B: ArrayApiBackend>(
 pub fn transpose<B: ArrayApiBackend>(backend: &B, array: &B::Array) -> ArrayApiResult<B::Array> {
     backend.transpose(array)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{ArrayApiArray, ArrayApiBackend, CoreArrayBackend};
+    use crate::types::{DType, ExecutionMode, MemoryOrder, ScalarValue, SliceSpec};
+
+    fn strict_backend() -> CoreArrayBackend {
+        CoreArrayBackend::new(ExecutionMode::Strict)
+    }
+
+    #[test]
+    fn getitem_rejects_mode_index_mismatches() {
+        let backend = strict_backend();
+        let array = backend
+            .array_from_slice(
+                &[
+                    ScalarValue::F64(0.0),
+                    ScalarValue::F64(1.0),
+                    ScalarValue::F64(2.0),
+                ],
+                &Shape::new(vec![3]),
+                DType::Float64,
+                MemoryOrder::C,
+            )
+            .expect("array should build");
+
+        let request = IndexRequest {
+            mode: IndexingMode::Basic,
+            index: IndexExpr::Advanced {
+                indices: vec![vec![0]],
+            },
+        };
+        let err = getitem(&backend, &array, &request).expect_err("mode mismatch must fail");
+        assert_eq!(err.kind, ArrayApiErrorKind::InvalidIndex);
+    }
+
+    #[test]
+    fn getitem_reshape_and_transpose_cover_success_paths() {
+        let backend = strict_backend();
+        let array = backend
+            .array_from_slice(
+                &[
+                    ScalarValue::F64(1.0),
+                    ScalarValue::F64(2.0),
+                    ScalarValue::F64(3.0),
+                    ScalarValue::F64(4.0),
+                    ScalarValue::F64(5.0),
+                    ScalarValue::F64(6.0),
+                ],
+                &Shape::new(vec![2, 3]),
+                DType::Float64,
+                MemoryOrder::C,
+            )
+            .expect("array should build");
+
+        let request = IndexRequest {
+            mode: IndexingMode::Basic,
+            index: IndexExpr::Basic {
+                slices: vec![
+                    SliceSpec {
+                        start: Some(0),
+                        stop: Some(2),
+                        step: 1,
+                    },
+                    SliceSpec {
+                        start: Some(1),
+                        stop: Some(3),
+                        step: 1,
+                    },
+                ],
+            },
+        };
+        let sliced = getitem(&backend, &array, &request).expect("basic indexing should succeed");
+        assert_eq!(sliced.shape(), &Shape::new(vec![2, 2]));
+
+        let transposed = transpose(&backend, &array).expect("transpose should succeed");
+        assert_eq!(transposed.shape(), &Shape::new(vec![3, 2]));
+
+        let reshaped = reshape(&backend, &array, &Shape::new(vec![3, 2]))
+            .expect("reshape with equal element count should succeed");
+        assert_eq!(reshaped.shape(), &Shape::new(vec![3, 2]));
+    }
+
+    #[test]
+    fn getitem_boolean_mask_and_transpose_error_paths_are_reported() {
+        let backend = strict_backend();
+        let one_d = backend
+            .array_from_slice(
+                &[
+                    ScalarValue::F64(1.0),
+                    ScalarValue::F64(2.0),
+                    ScalarValue::F64(3.0),
+                ],
+                &Shape::new(vec![3]),
+                DType::Float64,
+                MemoryOrder::C,
+            )
+            .expect("array should build");
+
+        let matching_mask = IndexRequest {
+            mode: IndexingMode::BooleanMask,
+            index: IndexExpr::BooleanMask {
+                mask_shape: Shape::new(vec![3]),
+            },
+        };
+        let selected =
+            getitem(&backend, &one_d, &matching_mask).expect("matching mask shape should pass");
+        assert_eq!(selected.shape(), &Shape::new(vec![3]));
+
+        let mismatch_mask = IndexRequest {
+            mode: IndexingMode::BooleanMask,
+            index: IndexExpr::BooleanMask {
+                mask_shape: Shape::new(vec![2]),
+            },
+        };
+        let err =
+            getitem(&backend, &one_d, &mismatch_mask).expect_err("mask shape mismatch should fail");
+        assert_eq!(err.kind, ArrayApiErrorKind::InvalidShape);
+
+        let transpose_err = transpose(&backend, &one_d).expect_err("rank-1 transpose should fail");
+        assert_eq!(transpose_err.kind, ArrayApiErrorKind::InvalidShape);
+    }
+}

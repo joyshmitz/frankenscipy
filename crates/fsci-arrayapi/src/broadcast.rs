@@ -61,3 +61,97 @@ pub fn promote_and_broadcast<B: ArrayApiBackend>(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{ArrayApiArray, ArrayApiBackend, CoreArrayBackend};
+    use crate::types::{DType, ExecutionMode, MemoryOrder, ScalarValue};
+
+    #[test]
+    fn broadcast_shapes_covers_scalar_compatible_and_incompatible_inputs() {
+        assert_eq!(
+            broadcast_shapes(&[]).expect("empty shape list should broadcast to scalar"),
+            Shape::scalar()
+        );
+        assert_eq!(
+            broadcast_shapes(&[Shape::new(vec![2, 1]), Shape::new(vec![1, 3])])
+                .expect("compatible shapes should broadcast"),
+            Shape::new(vec![2, 3])
+        );
+
+        let err = broadcast_shapes(&[Shape::new(vec![2, 3]), Shape::new(vec![3, 2])])
+            .expect_err("incompatible shapes should fail");
+        assert_eq!(err.kind, ArrayApiErrorKind::BroadcastIncompatible);
+    }
+
+    #[test]
+    fn promote_and_broadcast_promotes_dtype_and_targets_common_shape() {
+        let backend = CoreArrayBackend::new(ExecutionMode::Strict);
+        let left = backend
+            .array_from_slice(
+                &[ScalarValue::F64(1.0), ScalarValue::F64(2.0)],
+                &Shape::new(vec![2, 1]),
+                DType::Float32,
+                MemoryOrder::C,
+            )
+            .expect("left array should build");
+        let right = backend
+            .array_from_slice(
+                &[
+                    ScalarValue::ComplexF64 { re: 3.0, im: 1.0 },
+                    ScalarValue::ComplexF64 { re: 4.0, im: -2.0 },
+                ],
+                &Shape::new(vec![1, 2]),
+                DType::Complex128,
+                MemoryOrder::C,
+            )
+            .expect("right array should build");
+
+        let result =
+            promote_and_broadcast(&backend, &[&left, &right], false).expect("promotion succeeds");
+        assert_eq!(result.len(), 2);
+        for array in result {
+            assert_eq!(array.shape(), &Shape::new(vec![2, 2]));
+            assert_eq!(array.dtype(), DType::Complex128);
+            assert_eq!(array.size(), 4);
+        }
+    }
+
+    #[test]
+    fn promote_and_broadcast_propagates_shape_mismatch_errors() {
+        let backend = CoreArrayBackend::new(ExecutionMode::Strict);
+        let left = backend
+            .array_from_slice(
+                &[
+                    ScalarValue::F64(1.0),
+                    ScalarValue::F64(2.0),
+                    ScalarValue::F64(3.0),
+                    ScalarValue::F64(4.0),
+                ],
+                &Shape::new(vec![2, 2]),
+                DType::Float64,
+                MemoryOrder::C,
+            )
+            .expect("left array should build");
+        let right = backend
+            .array_from_slice(
+                &[
+                    ScalarValue::F64(5.0),
+                    ScalarValue::F64(6.0),
+                    ScalarValue::F64(7.0),
+                    ScalarValue::F64(8.0),
+                    ScalarValue::F64(9.0),
+                    ScalarValue::F64(10.0),
+                ],
+                &Shape::new(vec![2, 3]),
+                DType::Float64,
+                MemoryOrder::C,
+            )
+            .expect("right array should build");
+
+        let err = promote_and_broadcast(&backend, &[&left, &right], false)
+            .expect_err("shape mismatch should bubble up");
+        assert_eq!(err.kind, ArrayApiErrorKind::BroadcastIncompatible);
+    }
+}

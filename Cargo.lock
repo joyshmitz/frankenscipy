@@ -556,6 +556,9 @@ name = "fsci-arrayapi"
 version = "0.1.0"
 dependencies = [
  "nalgebra",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -564,6 +567,7 @@ version = "0.1.0"
 dependencies = [
  "asupersync",
  "blake3",
+ "fsci-arrayapi",
  "fsci-integrate",
  "fsci-linalg",
  "fsci-opt",

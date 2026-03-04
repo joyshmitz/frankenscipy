@@ -947,8 +947,15 @@ fn ravel_index(coords: &[usize], dims: &[usize]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::creation::{CreationRequest, from_slice, full, zeros};
+    use crate::broadcast::broadcast_shapes;
+    use crate::creation::{
+        ArangeRequest, CreationRequest, FullRequest, LinspaceRequest, arange, empty, from_slice,
+        full, linspace, ones, zeros,
+    };
     use crate::indexing::{IndexRequest, IndexingMode, getitem, reshape, transpose};
+    use proptest::prelude::*;
+    use serde::Serialize;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn strict_backend() -> CoreArrayBackend {
         CoreArrayBackend::new(ExecutionMode::Strict)
@@ -1103,5 +1110,438 @@ mod tests {
         };
         let ok = full(&backend, &Shape::new(vec![1]), &full_request);
         assert!(ok.is_ok());
+    }
+
+    #[derive(Debug, Serialize)]
+    struct StructuredTestLog {
+        test_id: String,
+        operation: String,
+        shape: Vec<usize>,
+        dtype: String,
+        pass: bool,
+        seed: u64,
+        timestamp_ms: u128,
+    }
+
+    fn now_unix_ms() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic from unix epoch")
+            .as_millis()
+    }
+
+    fn emit_structured_log(log: &StructuredTestLog) {
+        println!(
+            "{}",
+            serde_json::to_string(log).expect("structured log should serialize")
+        );
+    }
+
+    fn scoped_dtypes() -> [DType; 4] {
+        [
+            DType::Float32,
+            DType::Float64,
+            DType::Complex64,
+            DType::Complex128,
+        ]
+    }
+
+    fn scoped_orders() -> [MemoryOrder; 4] {
+        [
+            MemoryOrder::C,
+            MemoryOrder::F,
+            MemoryOrder::A,
+            MemoryOrder::K,
+        ]
+    }
+
+    fn scalar_is_zero(value: ScalarValue) -> bool {
+        match value {
+            ScalarValue::Bool(flag) => !flag,
+            ScalarValue::I64(v) => v == 0,
+            ScalarValue::U64(v) => v == 0,
+            ScalarValue::F64(v) => v == 0.0,
+            ScalarValue::ComplexF64 { re, im } => re == 0.0 && im == 0.0,
+        }
+    }
+
+    #[test]
+    fn generated_unit_matrix_with_structured_logs() {
+        let strict = strict_backend();
+        let hardened = hardened_backend();
+        let shapes = vec![
+            Shape::scalar(),
+            Shape::new(vec![0]),
+            Shape::new(vec![1]),
+            Shape::new(vec![2]),
+            Shape::new(vec![3]),
+            Shape::new(vec![2, 2]),
+            Shape::new(vec![2, 3]),
+            Shape::new(vec![1, 4]),
+        ];
+        let seed = 18_500_u64;
+        let mut total = 0usize;
+        let mut passed = 0usize;
+        let mut case_counter = 0usize;
+
+        let mut record = |operation: &str, shape: &[usize], dtype: DType, pass: bool| {
+            case_counter += 1;
+            total += 1;
+            if pass {
+                passed += 1;
+            }
+            emit_structured_log(&StructuredTestLog {
+                test_id: format!("matrix-{case_counter:04}"),
+                operation: operation.to_owned(),
+                shape: shape.to_vec(),
+                dtype: format!("{dtype:?}"),
+                pass,
+                seed,
+                timestamp_ms: now_unix_ms(),
+            });
+        };
+
+        for shape in &shapes {
+            for dtype in scoped_dtypes() {
+                for order in scoped_orders() {
+                    let request = CreationRequest {
+                        shape: shape.clone(),
+                        dtype,
+                        order,
+                    };
+
+                    let zeros_result = zeros(&strict, &request);
+                    let zeros_pass = zeros_result
+                        .as_ref()
+                        .is_ok_and(|array| array.shape() == shape && array.dtype() == dtype);
+                    record("zeros", &shape.dims, dtype, zeros_pass);
+
+                    let ones_result = ones(&strict, &request);
+                    let ones_pass = ones_result
+                        .as_ref()
+                        .is_ok_and(|array| array.shape() == shape && array.dtype() == dtype);
+                    record("ones", &shape.dims, dtype, ones_pass);
+
+                    let empty_result = empty(&strict, &request);
+                    let empty_pass = empty_result
+                        .as_ref()
+                        .is_ok_and(|array| array.shape() == shape && array.dtype() == dtype);
+                    record("empty", &shape.dims, dtype, empty_pass);
+
+                    let full_request = FullRequest {
+                        fill_value: ScalarValue::F64(2.5),
+                        dtype,
+                        order,
+                    };
+                    let full_result = full(&strict, shape, &full_request);
+                    let full_pass = full_result
+                        .as_ref()
+                        .is_ok_and(|array| array.shape() == shape && array.dtype() == dtype);
+                    record("full", &shape.dims, dtype, full_pass);
+                }
+            }
+        }
+
+        for stop in [0_i64, 1, 2, 3, 7, 15] {
+            for (start, step) in [(0_i64, 1_i64), (0, 2), (15, -1), (15, -2)] {
+                for dtype in scoped_dtypes() {
+                    let request = ArangeRequest {
+                        start: ScalarValue::I64(start),
+                        stop: ScalarValue::I64(stop),
+                        step: ScalarValue::I64(step),
+                        dtype: Some(dtype),
+                    };
+                    let result = arange(&strict, &request);
+                    let expected_len = if step > 0 && start < stop {
+                        ((stop - start) as usize).div_ceil(step as usize)
+                    } else if step < 0 && start > stop {
+                        ((start - stop) as usize).div_ceil(step.unsigned_abs() as usize)
+                    } else {
+                        0
+                    };
+                    let pass = result
+                        .as_ref()
+                        .is_ok_and(|array| array.size() == expected_len && array.dtype() == dtype);
+                    record("arange", &[expected_len], dtype, pass);
+                }
+            }
+        }
+
+        for num in [0usize, 1, 2, 5, 10, 17] {
+            for endpoint in [false, true] {
+                for dtype in scoped_dtypes() {
+                    let request = LinspaceRequest {
+                        start: ScalarValue::F64(-3.5),
+                        stop: ScalarValue::F64(7.25),
+                        num,
+                        endpoint,
+                        dtype: Some(dtype),
+                    };
+                    let result = linspace(&strict, &request);
+                    let pass = result
+                        .as_ref()
+                        .is_ok_and(|array| array.size() == num && array.dtype() == dtype);
+                    record("linspace", &[num], dtype, pass);
+                }
+            }
+        }
+
+        let index_values: Vec<ScalarValue> = (0..10).map(|v| ScalarValue::F64(v as f64)).collect();
+        let index_request = CreationRequest {
+            shape: Shape::new(vec![10]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        };
+        let strict_index_array = from_slice(&strict, &index_values, &index_request)
+            .expect("strict index array should build");
+        let hardened_index_array = from_slice(&hardened, &index_values, &index_request)
+            .expect("hardened index array should build");
+        for start in [-12_isize, -1, 0, 3, 10, 12] {
+            for stop in [-12_isize, -1, 0, 5, 10, 12] {
+                let request = IndexRequest {
+                    mode: IndexingMode::Basic,
+                    index: IndexExpr::Basic {
+                        slices: vec![SliceSpec {
+                            start: Some(start),
+                            stop: Some(stop),
+                            step: 1,
+                        }],
+                    },
+                };
+
+                let strict_pass = getitem(&strict, &strict_index_array, &request).is_ok();
+                record("index_basic_strict", &[10], DType::Float64, strict_pass);
+
+                let hardened_expected = (-10..=10).contains(&start) && (-10..=10).contains(&stop);
+                let hardened_pass = getitem(&hardened, &hardened_index_array, &request).is_ok()
+                    == hardened_expected;
+                record("index_basic_hardened", &[10], DType::Float64, hardened_pass);
+            }
+        }
+
+        let broadcast_cases = [
+            (vec![2, 3], vec![1, 3], true),
+            (vec![4, 1], vec![1, 5], true),
+            (vec![0], vec![0], true),
+            (vec![], vec![3, 2], true),
+            (vec![2, 3], vec![3, 2], false),
+            (vec![2, 1, 4], vec![3, 4], true),
+            (vec![2, 1, 4], vec![2, 2], false),
+            (vec![1], vec![1, 1, 1], true),
+            (vec![5], vec![2, 5], true),
+            (vec![2, 0], vec![1, 0], true),
+        ];
+        for (left, right, expected_ok) in broadcast_cases {
+            let result = broadcast_shapes(&[Shape::new(left.clone()), Shape::new(right.clone())]);
+            let pass = result.is_ok() == expected_ok;
+            record("broadcast_shapes", &left, DType::Float64, pass);
+        }
+
+        for left in scoped_dtypes() {
+            for right in scoped_dtypes() {
+                let forward = strict.result_type(&[left, right], false);
+                let reverse = strict.result_type(&[right, left], false);
+                let pass = match (forward, reverse) {
+                    (Ok(a), Ok(b)) => a == b,
+                    _ => false,
+                };
+                record("dtype_promotion_commutative", &[2], left, pass);
+            }
+        }
+
+        assert!(
+            total >= 500,
+            "expected at least 500 generated unit cases, got {total}"
+        );
+        let pass_ratio = (passed as f64) / (total as f64);
+        assert!(
+            pass_ratio >= 0.95,
+            "expected >=95% matrix pass ratio, got {:.2}%",
+            pass_ratio * 100.0
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 1000, .. ProptestConfig::default() })]
+
+        #[test]
+        fn prop_zeros_are_zero_float32(dims in proptest::collection::vec(0usize..4, 0..3)) {
+            let backend = strict_backend();
+            let request = CreationRequest {
+                shape: Shape::new(dims),
+                dtype: DType::Float32,
+                order: MemoryOrder::C,
+            };
+            let array = zeros(&backend, &request).expect("zeros should succeed");
+            prop_assert!(array.values().iter().all(|value| scalar_is_zero(*value)));
+        }
+
+        #[test]
+        fn prop_zeros_are_zero_float64(dims in proptest::collection::vec(0usize..4, 0..3)) {
+            let backend = strict_backend();
+            let request = CreationRequest {
+                shape: Shape::new(dims),
+                dtype: DType::Float64,
+                order: MemoryOrder::C,
+            };
+            let array = zeros(&backend, &request).expect("zeros should succeed");
+            prop_assert!(array.values().iter().all(|value| scalar_is_zero(*value)));
+        }
+
+        #[test]
+        fn prop_zeros_are_zero_complex64(dims in proptest::collection::vec(0usize..4, 0..3)) {
+            let backend = strict_backend();
+            let request = CreationRequest {
+                shape: Shape::new(dims),
+                dtype: DType::Complex64,
+                order: MemoryOrder::C,
+            };
+            let array = zeros(&backend, &request).expect("zeros should succeed");
+            prop_assert!(array.values().iter().all(|value| scalar_is_zero(*value)));
+        }
+
+        #[test]
+        fn prop_zeros_are_zero_complex128(dims in proptest::collection::vec(0usize..4, 0..3)) {
+            let backend = strict_backend();
+            let request = CreationRequest {
+                shape: Shape::new(dims),
+                dtype: DType::Complex128,
+                order: MemoryOrder::C,
+            };
+            let array = zeros(&backend, &request).expect("zeros should succeed");
+            prop_assert!(array.values().iter().all(|value| scalar_is_zero(*value)));
+        }
+
+        #[test]
+        fn prop_arange_len_matches_n(n in 0usize..256) {
+            let backend = strict_backend();
+            let request = ArangeRequest {
+                start: ScalarValue::I64(0),
+                stop: ScalarValue::I64(n as i64),
+                step: ScalarValue::I64(1),
+                dtype: Some(DType::Float64),
+            };
+            let array = arange(&backend, &request).expect("arange should succeed");
+            prop_assert_eq!(array.size(), n);
+        }
+
+        #[test]
+        fn prop_arange_len_matches_descending_n(n in 0usize..256) {
+            let backend = strict_backend();
+            let request = ArangeRequest {
+                start: ScalarValue::I64(n as i64),
+                stop: ScalarValue::I64(0),
+                step: ScalarValue::I64(-1),
+                dtype: Some(DType::Float64),
+            };
+            let array = arange(&backend, &request).expect("descending arange should succeed");
+            prop_assert_eq!(array.size(), n);
+        }
+
+        #[test]
+        fn prop_broadcast_shape_is_commutative(
+            left_dims in proptest::collection::vec(0usize..4, 0..3),
+            right_dims in proptest::collection::vec(0usize..4, 0..3)
+        ) {
+            let left = Shape::new(left_dims);
+            let right = Shape::new(right_dims);
+            let lr = broadcast_shapes(&[left.clone(), right.clone()]);
+            let rl = broadcast_shapes(&[right, left]);
+            prop_assert_eq!(lr.is_ok(), rl.is_ok());
+            if let (Ok(lhs), Ok(rhs)) = (lr, rl) {
+                prop_assert_eq!(lhs, rhs);
+            }
+        }
+
+        #[test]
+        fn prop_dtype_promotion_is_commutative(
+            left_idx in 0usize..4,
+            right_idx in 0usize..4
+        ) {
+            let backend = strict_backend();
+            let dtypes = scoped_dtypes();
+            let left = dtypes[left_idx];
+            let right = dtypes[right_idx];
+            let forward = backend.result_type(&[left, right], false).expect("forward promotion");
+            let reverse = backend.result_type(&[right, left], false).expect("reverse promotion");
+            prop_assert_eq!(forward, reverse);
+        }
+
+        #[test]
+        fn prop_reshape_preserves_size(n in 0usize..128) {
+            let backend = strict_backend();
+            let values: Vec<ScalarValue> = (0..n).map(|value| ScalarValue::F64(value as f64)).collect();
+            let source = CreationRequest {
+                shape: Shape::new(vec![n]),
+                dtype: DType::Float64,
+                order: MemoryOrder::C,
+            };
+            let array = from_slice(&backend, &values, &source).expect("from_slice should succeed");
+            let reshaped = reshape(&backend, &array, &Shape::new(vec![1, n])).expect("reshape should succeed");
+            prop_assert_eq!(reshaped.size(), array.size());
+        }
+
+        #[test]
+        fn prop_transpose_roundtrip_preserves_values(rows in 0usize..6, cols in 0usize..6) {
+            let backend = strict_backend();
+            let count = rows.saturating_mul(cols);
+            let values: Vec<ScalarValue> = (0..count).map(|value| ScalarValue::F64(value as f64)).collect();
+            let request = CreationRequest {
+                shape: Shape::new(vec![rows, cols]),
+                dtype: DType::Float64,
+                order: MemoryOrder::C,
+            };
+            let array = from_slice(&backend, &values, &request).expect("from_slice should succeed");
+            let transposed = transpose(&backend, &array).expect("transpose should succeed");
+            let restored = transpose(&backend, &transposed).expect("transpose should succeed");
+            prop_assert_eq!(restored.shape(), array.shape());
+            prop_assert_eq!(restored.values(), array.values());
+        }
+
+        #[test]
+        fn prop_hardened_slice_rejects_far_bounds(len in 1usize..32, offset in 1isize..16) {
+            let backend = hardened_backend();
+            let values: Vec<ScalarValue> = (0..len).map(|value| ScalarValue::F64(value as f64)).collect();
+            let request = CreationRequest {
+                shape: Shape::new(vec![len]),
+                dtype: DType::Float64,
+                order: MemoryOrder::C,
+            };
+            let array = from_slice(&backend, &values, &request).expect("from_slice should succeed");
+            let index = IndexRequest {
+                mode: IndexingMode::Basic,
+                index: IndexExpr::Basic {
+                    slices: vec![SliceSpec {
+                        start: Some((len as isize) + offset),
+                        stop: Some((len as isize) + offset + 1),
+                        step: 1,
+                    }],
+                },
+            };
+            let err = getitem(&backend, &array, &index).expect_err("hardened should reject far bounds");
+            prop_assert_eq!(err.kind, ArrayApiErrorKind::InvalidIndex);
+        }
+
+        #[test]
+        fn prop_advanced_index_returns_selected_value(len in 1usize..64, idx_seed in 0usize..64) {
+            let backend = strict_backend();
+            let values: Vec<ScalarValue> = (0..len).map(|value| ScalarValue::F64(value as f64)).collect();
+            let request = CreationRequest {
+                shape: Shape::new(vec![len]),
+                dtype: DType::Float64,
+                order: MemoryOrder::C,
+            };
+            let array = from_slice(&backend, &values, &request).expect("from_slice should succeed");
+            let idx = idx_seed % len;
+            let index = IndexRequest {
+                mode: IndexingMode::Advanced,
+                index: IndexExpr::Advanced {
+                    indices: vec![vec![idx as isize]],
+                },
+            };
+            let selected = getitem(&backend, &array, &index).expect("advanced index should succeed");
+            prop_assert_eq!(selected.size(), 1);
+            prop_assert_eq!(selected.values()[0], ScalarValue::F64(idx as f64));
+        }
     }
 }
