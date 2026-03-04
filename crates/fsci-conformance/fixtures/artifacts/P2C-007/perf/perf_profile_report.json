@@ -1,0 +1,235 @@
+{
+  "generated_at": "unix:1772585253",
+  "optimization_name": "incremental row-major coordinate advancement",
+  "hotspot_function": "CoreArrayBackend::broadcast_to",
+  "benchmark_rows": [
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 10,
+      "output_elements": 20,
+      "dtype": "Float32",
+      "before_p95_ns": 4487,
+      "after_p95_ns": 2204,
+      "before_median_ns": 3255,
+      "after_median_ns": 1452,
+      "p95_improvement_ns": 2283,
+      "alloc_count_delta": -38
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 100,
+      "output_elements": 200,
+      "dtype": "Float32",
+      "before_p95_ns": 34722,
+      "after_p95_ns": 18479,
+      "before_median_ns": 20961,
+      "after_median_ns": 16204,
+      "p95_improvement_ns": 16243,
+      "alloc_count_delta": -398
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 1000,
+      "output_elements": 2000,
+      "dtype": "Float32",
+      "before_p95_ns": 345750,
+      "after_p95_ns": 193131,
+      "before_median_ns": 252320,
+      "after_median_ns": 162453,
+      "p95_improvement_ns": 152619,
+      "alloc_count_delta": -3998
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 10000,
+      "output_elements": 20000,
+      "dtype": "Float32",
+      "before_p95_ns": 3482287,
+      "after_p95_ns": 1594218,
+      "before_median_ns": 2956235,
+      "after_median_ns": 1137019,
+      "p95_improvement_ns": 1888069,
+      "alloc_count_delta": -39998
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 10,
+      "output_elements": 20,
+      "dtype": "Float64",
+      "before_p95_ns": 4988,
+      "after_p95_ns": 1492,
+      "before_median_ns": 2143,
+      "after_median_ns": 1442,
+      "p95_improvement_ns": 3496,
+      "alloc_count_delta": -38
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 100,
+      "output_elements": 200,
+      "dtype": "Float64",
+      "before_p95_ns": 20741,
+      "after_p95_ns": 16515,
+      "before_median_ns": 20651,
+      "after_median_ns": 11007,
+      "p95_improvement_ns": 4226,
+      "alloc_count_delta": -398
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 1000,
+      "output_elements": 2000,
+      "dtype": "Float64",
+      "before_p95_ns": 297998,
+      "after_p95_ns": 180571,
+      "before_median_ns": 214894,
+      "after_median_ns": 158908,
+      "p95_improvement_ns": 117427,
+      "alloc_count_delta": -3998
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 10000,
+      "output_elements": 20000,
+      "dtype": "Float64",
+      "before_p95_ns": 2732359,
+      "after_p95_ns": 1345182,
+      "before_median_ns": 2166859,
+      "after_median_ns": 1118261,
+      "p95_improvement_ns": 1387177,
+      "alloc_count_delta": -39998
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 10,
+      "output_elements": 20,
+      "dtype": "Complex128",
+      "before_p95_ns": 2133,
+      "after_p95_ns": 1462,
+      "before_median_ns": 2103,
+      "after_median_ns": 1422,
+      "p95_improvement_ns": 671,
+      "alloc_count_delta": -38
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 100,
+      "output_elements": 200,
+      "dtype": "Complex128",
+      "before_p95_ns": 35483,
+      "after_p95_ns": 17027,
+      "before_median_ns": 20631,
+      "after_median_ns": 15563,
+      "p95_improvement_ns": 18456,
+      "alloc_count_delta": -398
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 1000,
+      "output_elements": 2000,
+      "dtype": "Complex128",
+      "before_p95_ns": 310055,
+      "after_p95_ns": 134352,
+      "before_median_ns": 242914,
+      "after_median_ns": 118037,
+      "p95_improvement_ns": 175703,
+      "alloc_count_delta": -3998
+    },
+    {
+      "hotspot_function": "CoreArrayBackend::broadcast_to",
+      "array_size": 10000,
+      "output_elements": 20000,
+      "dtype": "Complex128",
+      "before_p95_ns": 3637470,
+      "after_p95_ns": 1140695,
+      "before_median_ns": 3467655,
+      "after_median_ns": 1054676,
+      "p95_improvement_ns": 2496775,
+      "alloc_count_delta": -39998
+    }
+  ],
+  "isomorphism_check": {
+    "all_cases_pass": true,
+    "details": [
+      {
+        "array_size": 10,
+        "dtype": "Float32",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 100,
+        "dtype": "Float32",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 1000,
+        "dtype": "Float32",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 10000,
+        "dtype": "Float32",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 10,
+        "dtype": "Float64",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 100,
+        "dtype": "Float64",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 1000,
+        "dtype": "Float64",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 10000,
+        "dtype": "Float64",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 10,
+        "dtype": "Complex128",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 100,
+        "dtype": "Complex128",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 1000,
+        "dtype": "Complex128",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      },
+      {
+        "array_size": 10000,
+        "dtype": "Complex128",
+        "passes": true,
+        "note": "legacy and optimized outputs are byte-identical"
+      }
+    ]
+  },
+  "methodology": [
+    "warmup_iters=5",
+    "bench_iters=30",
+    "before=legacy per-element unravel/ravel + per-iteration coordinate Vec allocations",
+    "after=CoreArrayBackend::broadcast_to with precomputed strides and in-place coordinate advancement",
+    "alloc_count_delta is an algorithmic estimate (after - before), not allocator-instrumented"
+  ]
+}

@@ -45,6 +45,8 @@ crates/fsci-conformance/fixtures/artifacts/P2C-007/*
 crates/fsci-conformance/fixtures/artifacts/P2C-007/e2e/*
 !crates/fsci-conformance/fixtures/artifacts/P2C-007/e2e/scenarios/
 !crates/fsci-conformance/fixtures/artifacts/P2C-007/e2e/scenarios/*.json
+!crates/fsci-conformance/fixtures/artifacts/P2C-007/perf/
+!crates/fsci-conformance/fixtures/artifacts/P2C-007/perf/perf_profile_report.json
 crates/fsci-conformance/fixtures/artifacts/P2C-007/anchor/
 crates/fsci-conformance/fixtures/artifacts/P2C-007/contracts/
 crates/fsci-conformance/fixtures/artifacts/P2C-007/threats/
