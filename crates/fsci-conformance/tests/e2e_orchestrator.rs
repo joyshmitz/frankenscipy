@@ -28,6 +28,21 @@ fn write_file(path: &Path, contents: &str) {
     });
 }
 
+fn copy_file(src: &Path, dst: &Path) {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).unwrap_or_else(|error| {
+            panic!("failed to create {}: {error}", parent.display());
+        });
+    }
+    fs::copy(src, dst).unwrap_or_else(|error| {
+        panic!(
+            "failed to copy {} -> {}: {error}",
+            src.display(),
+            dst.display()
+        );
+    });
+}
+
 fn collect_named_files(root: &Path, file_name: &str, out: &mut Vec<PathBuf>) {
     if !root.exists() {
         return;
@@ -46,6 +61,137 @@ fn collect_named_files(root: &Path, file_name: &str, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+#[test]
+fn e2e_orchestrator_runs_arrayapi_packet_with_minimum_scenarios() {
+    let temp_root = unique_temp_dir("arrayapi");
+    let artifact_root = temp_root.join("artifacts");
+    let packet_dir = artifact_root.join("P2C-007");
+    let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let source_packet_dir = fixture_root.join("artifacts/P2C-007");
+    let source_scenarios_dir = source_packet_dir.join("e2e/scenarios");
+    let target_scenarios_dir = packet_dir.join("e2e/scenarios");
+
+    assert!(
+        source_scenarios_dir.exists(),
+        "expected source scenarios at {}",
+        source_scenarios_dir.display()
+    );
+
+    copy_file(
+        &source_packet_dir.join("anchor/behavior_ledger.json"),
+        &packet_dir.join("anchor/behavior_ledger.json"),
+    );
+    copy_file(
+        &source_packet_dir.join("contracts/contract_table.json"),
+        &packet_dir.join("contracts/contract_table.json"),
+    );
+    copy_file(
+        &source_packet_dir.join("threats/threat_matrix.json"),
+        &packet_dir.join("threats/threat_matrix.json"),
+    );
+
+    let scenario_entries = fs::read_dir(&source_scenarios_dir).unwrap_or_else(|error| {
+        panic!(
+            "failed to read source scenarios {}: {error}",
+            source_scenarios_dir.display()
+        );
+    });
+    let mut copied_scenarios = 0_usize;
+    for entry in scenario_entries {
+        let entry = entry.unwrap_or_else(|error| {
+            panic!(
+                "failed to read source scenario entry in {}: {error}",
+                source_scenarios_dir.display()
+            );
+        });
+        let source = entry.path();
+        let is_json = source
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"));
+        if !is_json {
+            continue;
+        }
+        let file_name = source
+            .file_name()
+            .expect("scenario file should have file name");
+        let target = target_scenarios_dir.join(file_name);
+        copy_file(&source, &target);
+        copied_scenarios += 1;
+    }
+
+    assert!(
+        copied_scenarios >= 8,
+        "expected at least 8 copied scenarios, got {copied_scenarios}"
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_e2e_orchestrator"))
+        .arg("--artifact-root")
+        .arg(&artifact_root)
+        .arg("--fixture-root")
+        .arg(&fixture_root)
+        .arg("--packet")
+        .arg("P2C-007")
+        .output()
+        .expect("failed to execute e2e_orchestrator");
+
+    assert!(
+        output.status.success(),
+        "expected success for arrayapi packet run; stdout={}; stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut summary_files = Vec::new();
+    collect_named_files(
+        &packet_dir.join("e2e/runs"),
+        "summary.json",
+        &mut summary_files,
+    );
+    assert!(
+        summary_files.len() >= 8,
+        "expected >= 8 summary bundles, got {}",
+        summary_files.len()
+    );
+
+    let mut event_files = Vec::new();
+    collect_named_files(
+        &packet_dir.join("e2e/runs"),
+        "events.jsonl",
+        &mut event_files,
+    );
+    assert_eq!(
+        event_files.len(),
+        summary_files.len(),
+        "events/summary bundle count mismatch"
+    );
+
+    for summary_file in &summary_files {
+        let raw = fs::read_to_string(summary_file).unwrap_or_else(|error| {
+            panic!("failed to read {}: {error}", summary_file.display());
+        });
+        let json: Value = serde_json::from_str(&raw).unwrap_or_else(|error| {
+            panic!("failed to parse {}: {error}", summary_file.display());
+        });
+        assert_eq!(json["packet_id"], "P2C-007");
+        assert_eq!(json["passed"], true);
+        assert!(json["replay_command"].is_string());
+    }
+
+    let events_raw = fs::read_to_string(&event_files[0]).expect("failed to read events log");
+    let first: Value = serde_json::from_str(
+        events_raw
+            .lines()
+            .next()
+            .expect("missing first events line"),
+    )
+    .expect("failed to parse first events line");
+    assert!(first["scenario_id"].is_string());
+    assert_eq!(first["step_name"], "setup");
+    assert!(first["environment"]["seed"].is_number());
+    assert!(first["environment"]["input_hashes"].is_array());
 }
 
 #[test]

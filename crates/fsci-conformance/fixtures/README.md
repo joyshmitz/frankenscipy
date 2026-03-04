@@ -34,7 +34,7 @@ Optional oracle artifacts:
 
 Packet-aware E2E scenarios are discovered from:
 
-- `artifacts/FSCI-P2C-*/e2e/scenarios/*.json`
+- `artifacts/*/e2e/scenarios/*.json`
 
 Each run writes forensic logs to:
 

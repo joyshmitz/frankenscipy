@@ -195,12 +195,12 @@ pub fn discover_scenarios(
             continue;
         }
 
-        let e2e_dir = packet_dir.join("e2e");
-        if !e2e_dir.exists() || !e2e_dir.is_dir() {
+        let scenario_dir = packet_dir.join("e2e").join("scenarios");
+        if !scenario_dir.exists() || !scenario_dir.is_dir() {
             continue;
         }
 
-        for scenario_path in discover_json_files(&e2e_dir)? {
+        for scenario_path in discover_json_files(&scenario_dir)? {
             let raw = fs::read_to_string(&scenario_path).map_err(|source| {
                 E2eOrchestratorError::ScenarioRead {
                     path: scenario_path.clone(),
