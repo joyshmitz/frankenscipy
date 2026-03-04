@@ -528,20 +528,24 @@ impl ArrayApiBackend for CoreArrayBackend {
 
         let out_rank = shape.rank();
         let in_rank = array.shape.rank();
+        let in_strides = row_major_strides(&array.shape.dims);
+        let mut out_coords = vec![0usize; out_rank];
         let mut values = Vec::with_capacity(output_size);
         for linear in 0..output_size {
-            let out_coords = unravel_index(linear, &shape.dims);
-            let mut in_coords = vec![0usize; in_rank];
+            let mut in_linear = 0usize;
             for (in_dim_idx, in_dim) in array.shape.dims.iter().enumerate() {
                 let out_dim_idx = out_rank - in_rank + in_dim_idx;
-                in_coords[in_dim_idx] = if *in_dim == 1 {
+                let coord = if *in_dim == 1 {
                     0
                 } else {
                     out_coords[out_dim_idx]
                 };
+                in_linear += coord * in_strides[in_dim_idx];
             }
-            let in_linear = ravel_index(&in_coords, &array.shape.dims);
             values.push(array.values[in_linear]);
+            if linear + 1 < output_size {
+                advance_row_major_coords(&mut out_coords, &shape.dims);
+            }
         }
 
         Ok(CoreArray {
@@ -917,31 +921,25 @@ fn advanced_getitem(
     })
 }
 
-fn unravel_index(mut index: usize, dims: &[usize]) -> Vec<usize> {
-    if dims.is_empty() {
-        return Vec::new();
-    }
-    let mut coords = vec![0usize; dims.len()];
-    for pos in (0..dims.len()).rev() {
-        let dim = dims[pos];
-        if dim == 0 {
-            coords[pos] = 0;
-        } else {
-            coords[pos] = index % dim;
-            index /= dim;
-        }
-    }
-    coords
-}
-
-fn ravel_index(coords: &[usize], dims: &[usize]) -> usize {
+fn row_major_strides(dims: &[usize]) -> Vec<usize> {
+    let mut strides = vec![0usize; dims.len()];
     let mut stride = 1usize;
-    let mut index = 0usize;
     for pos in (0..dims.len()).rev() {
-        index += coords[pos] * stride;
+        strides[pos] = stride;
         stride = stride.saturating_mul(dims[pos].max(1));
     }
-    index
+    strides
+}
+
+fn advance_row_major_coords(coords: &mut [usize], dims: &[usize]) {
+    debug_assert_eq!(coords.len(), dims.len());
+    for axis in (0..coords.len()).rev() {
+        coords[axis] += 1;
+        if coords[axis] < dims[axis] {
+            break;
+        }
+        coords[axis] = 0;
+    }
 }
 
 #[cfg(test)]
