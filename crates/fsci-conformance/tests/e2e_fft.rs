@@ -186,7 +186,7 @@ fn e2e_001_lowpass_filter_pipeline() {
     }
     steps.push(make_step(
         3, "lowpass_filter", "filter", &format!("cutoff={cutoff}Hz"),
-        &format!("zeroed high-freq bins"),
+        "zeroed high-freq bins",
         t_start.elapsed().as_nanos(), "ok",
     ));
 

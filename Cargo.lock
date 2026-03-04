@@ -586,6 +586,7 @@ dependencies = [
 name = "fsci-fft"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "fsci-runtime",
  "proptest",
  "serde_json",
@@ -617,6 +618,7 @@ dependencies = [
 name = "fsci-opt"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "fsci-runtime",
  "proptest",
  "serde",
@@ -637,6 +639,7 @@ dependencies = [
 name = "fsci-sparse"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "fsci-runtime",
  "nalgebra",
  "proptest",
@@ -648,6 +651,7 @@ dependencies = [
 name = "fsci-special"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "fsci-runtime",
 ]
 

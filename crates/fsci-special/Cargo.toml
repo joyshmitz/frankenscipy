@@ -5,3 +5,10 @@ edition = "2024"
 
 [dependencies]
 fsci-runtime = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "special_bench"
+harness = false
