@@ -573,6 +573,7 @@ dependencies = [
  "fsci-linalg",
  "fsci-opt",
  "fsci-runtime",
+ "fsci-sparse",
  "fsci-special",
  "ftui",
  "serde",
@@ -585,6 +586,8 @@ name = "fsci-fft"
 version = "0.1.0"
 dependencies = [
  "fsci-runtime",
+ "proptest",
+ "serde_json",
 ]
 
 [[package]]

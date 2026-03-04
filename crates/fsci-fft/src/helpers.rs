@@ -87,4 +87,54 @@ mod tests {
         assert_eq!(shifted, vec![2, 3, 4, 0, 1]);
         assert_eq!(ifftshift_1d(&shifted), data);
     }
+
+    #[test]
+    fn fftfreq_odd_length_matches_expected() {
+        let freqs = fftfreq(5, 1.0).expect("fftfreq odd");
+        let expected = vec![0.0, 0.2, 0.4, -0.4, -0.2];
+        assert_eq!(freqs.len(), expected.len());
+        for (a, b) in freqs.iter().zip(&expected) {
+            assert!((a - b).abs() < 1e-12, "{a} != {b}");
+        }
+    }
+
+    #[test]
+    fn rfftfreq_even_length_matches_expected() {
+        let freqs = rfftfreq(8, 1.0).expect("rfftfreq even");
+        let expected = vec![0.0, 0.125, 0.25, 0.375, 0.5];
+        assert_eq!(freqs.len(), expected.len());
+        for (a, b) in freqs.iter().zip(&expected) {
+            assert!((a - b).abs() < 1e-12, "{a} != {b}");
+        }
+    }
+
+    #[test]
+    fn fftfreq_rejects_zero_n() {
+        assert!(fftfreq(0, 1.0).is_err());
+    }
+
+    #[test]
+    fn fftfreq_rejects_non_positive_spacing() {
+        assert!(fftfreq(4, 0.0).is_err());
+        assert!(fftfreq(4, -1.0).is_err());
+        assert!(fftfreq(4, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn fftshift_even_length() {
+        let data = vec![0, 1, 2, 3, 4, 5];
+        let shifted = fftshift_1d(&data);
+        assert_eq!(shifted, vec![3, 4, 5, 0, 1, 2]);
+    }
+
+    #[test]
+    fn fftshift_length_1() {
+        assert_eq!(fftshift_1d(&[42]), vec![42]);
+    }
+
+    #[test]
+    fn fftshift_empty() {
+        let empty: Vec<i32> = vec![];
+        assert_eq!(fftshift_1d(&empty), empty);
+    }
 }

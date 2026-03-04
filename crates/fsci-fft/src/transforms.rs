@@ -755,6 +755,207 @@ mod tests {
     }
 
     #[test]
+    fn fft_impulse_produces_constant_spectrum() {
+        // DFT of impulse [1,0,0,0] = [1,1,1,1]
+        let input = vec![(1.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)];
+        let spectrum = fft(&input, &FftOptions::default()).expect("fft impulse");
+        for &val in &spectrum {
+            assert_close_complex(val, (1.0, 0.0), 1e-9);
+        }
+    }
+
+    #[test]
+    fn fft_constant_produces_impulse_spectrum() {
+        // DFT of constant [1,1,1,1] = [4,0,0,0]
+        let input = vec![(1.0, 0.0); 4];
+        let spectrum = fft(&input, &FftOptions::default()).expect("fft constant");
+        assert_close_complex(spectrum[0], (4.0, 0.0), 1e-9);
+        for &val in &spectrum[1..] {
+            assert_close_complex(val, (0.0, 0.0), 1e-9);
+        }
+    }
+
+    #[test]
+    fn fft_length_1_is_identity() {
+        let input = vec![(3.5, -1.2)];
+        let result = fft(&input, &FftOptions::default()).expect("fft len 1");
+        assert_close_complex(result[0], input[0], 1e-12);
+    }
+
+    #[test]
+    fn fft_length_2_manual_check() {
+        // DFT of [a, b] = [a+b, a-b]
+        let input = vec![(3.0, 0.0), (1.0, 0.0)];
+        let result = fft(&input, &FftOptions::default()).expect("fft len 2");
+        assert_close_complex(result[0], (4.0, 0.0), 1e-9);
+        assert_close_complex(result[1], (2.0, 0.0), 1e-9);
+    }
+
+    #[test]
+    fn fft_non_power_of_2_roundtrip() {
+        let input: Vec<_> = (0..7).map(|i| (i as f64, 0.0)).collect();
+        let spectrum = fft(&input, &FftOptions::default()).expect("fft n=7");
+        let recovered = ifft(&spectrum, &FftOptions::default()).expect("ifft n=7");
+        for (&a, &b) in recovered.iter().zip(&input) {
+            assert_close_complex(a, b, 1e-9);
+        }
+    }
+
+    #[test]
+    fn fft_power_of_2_roundtrip() {
+        let input: Vec<_> = (0..16).map(|i| ((i as f64).sin(), (i as f64).cos())).collect();
+        let spectrum = fft(&input, &FftOptions::default()).expect("fft n=16");
+        let recovered = ifft(&spectrum, &FftOptions::default()).expect("ifft n=16");
+        for (&a, &b) in recovered.iter().zip(&input) {
+            assert_close_complex(a, b, 1e-9);
+        }
+    }
+
+    #[test]
+    fn fft_known_sine_wave() {
+        // sin(2π·k/N) for k=1 has DFT peak at bin 1 and N-1
+        let n = 8;
+        let input: Vec<_> = (0..n)
+            .map(|k| ((2.0 * std::f64::consts::PI * k as f64 / n as f64).sin(), 0.0))
+            .collect();
+        let spectrum = fft(&input, &FftOptions::default()).expect("fft sine");
+        // bin 0 should be ~0, bin 1 should have large imaginary part
+        assert_close(spectrum[0].0, 0.0, 1e-9);
+        assert!(spectrum[1].0.abs() < 1e-9);
+        assert!(spectrum[1].1.abs() > 1.0); // non-trivial imaginary at bin 1
+    }
+
+    #[test]
+    fn rfft_roundtrip_even_length() {
+        let input = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let opts = FftOptions::default();
+        let spectrum = rfft(&input, &opts).expect("rfft");
+        let recovered = irfft(&spectrum, Some(6), &opts).expect("irfft");
+        for (a, b) in recovered.iter().zip(&input) {
+            assert_close(*a, *b, 1e-9);
+        }
+    }
+
+    #[test]
+    fn rfft_roundtrip_odd_length() {
+        let input = vec![1.0, -2.0, 3.0, -4.0, 5.0];
+        let opts = FftOptions::default();
+        let spectrum = rfft(&input, &opts).expect("rfft");
+        let recovered = irfft(&spectrum, Some(5), &opts).expect("irfft");
+        for (a, b) in recovered.iter().zip(&input) {
+            assert_close(*a, *b, 1e-9);
+        }
+    }
+
+    #[test]
+    fn rfft_hermitian_symmetry() {
+        let input = vec![1.0, 2.0, 3.0, 4.0];
+        let spectrum = rfft(&input, &FftOptions::default()).expect("rfft");
+        // For real input, X[0] is real-valued
+        assert_close(spectrum[0].1, 0.0, 1e-9);
+        // X[N/2] (last element for even N) is real-valued
+        assert_close(spectrum[spectrum.len() - 1].1, 0.0, 1e-9);
+    }
+
+    #[test]
+    fn rfft_real_sine_wave() {
+        let n = 16;
+        let input: Vec<f64> = (0..n)
+            .map(|k| (2.0 * std::f64::consts::PI * k as f64 / n as f64).sin())
+            .collect();
+        let spectrum = rfft(&input, &FftOptions::default()).expect("rfft sine");
+        assert_eq!(spectrum.len(), n / 2 + 1);
+        // DC component should be ~0
+        assert_close(spectrum[0].0, 0.0, 1e-9);
+    }
+
+    #[test]
+    fn fft2_impulse_2d() {
+        // 2D impulse at (0,0): all spectral bins should be 1
+        let input = vec![(1.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)];
+        let spectrum = fft2(&input, (2, 2), &FftOptions::default()).expect("fft2 impulse");
+        for &val in &spectrum {
+            assert_close_complex(val, (1.0, 0.0), 1e-9);
+        }
+    }
+
+    #[test]
+    fn fft2_non_square() {
+        let input: Vec<_> = (0..6).map(|i| (i as f64, 0.0)).collect();
+        let opts = FftOptions::default();
+        let spectrum = fft2(&input, (2, 3), &opts).expect("fft2 2x3");
+        let recovered = ifft2(&spectrum, (2, 3), &opts).expect("ifft2 2x3");
+        for (&a, &b) in recovered.iter().zip(&input) {
+            assert_close_complex(a, b, 1e-9);
+        }
+    }
+
+    #[test]
+    fn fft2_separable_product() {
+        // f(x,y) = a(x) * b(y) => F(u,v) = A(u) * B(v)
+        let a = vec![(1.0, 0.0), (2.0, 0.0)];
+        let b = vec![(3.0, 0.0), (-1.0, 0.0)];
+        let opts = FftOptions::default();
+        let mut input = Vec::with_capacity(4);
+        for ax in &a {
+            for bx in &b {
+                input.push((ax.0 * bx.0, 0.0));
+            }
+        }
+        let result_2d = fft2(&input, (2, 2), &opts).expect("fft2");
+        let fa = fft(&a, &opts).expect("fft a");
+        let fb = fft(&b, &opts).expect("fft b");
+        for i in 0..2 {
+            for j in 0..2 {
+                let expected = complex_mul_test(fa[i], fb[j]);
+                assert_close_complex(result_2d[i * 2 + j], expected, 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn normalization_forward_scales_forward_pass() {
+        let input = vec![(1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)];
+        let opts_backward = FftOptions::default();
+        let opts_forward = FftOptions::default().with_normalization(Normalization::Forward);
+        let backward = fft(&input, &opts_backward).expect("backward");
+        let forward = fft(&input, &opts_forward).expect("forward");
+        let n = input.len() as f64;
+        for (&bv, &fv) in backward.iter().zip(&forward) {
+            assert_close_complex(fv, (bv.0 / n, bv.1 / n), 1e-9);
+        }
+    }
+
+    #[test]
+    fn normalization_ortho_is_symmetric() {
+        let input = vec![(1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)];
+        let opts = FftOptions::default().with_normalization(Normalization::Ortho);
+        let spectrum = fft(&input, &opts).expect("fft ortho");
+        let recovered = ifft(&spectrum, &opts).expect("ifft ortho");
+        for (&a, &b) in recovered.iter().zip(&input) {
+            assert_close_complex(a, b, 1e-9);
+        }
+    }
+
+    #[test]
+    fn check_finite_rejects_nan_complex() {
+        let opts = FftOptions::default().with_check_finite(true);
+        let err = fft(&[(1.0, f64::NAN)], &opts).expect_err("NaN should be rejected");
+        assert_eq!(err, FftError::NonFiniteInput);
+    }
+
+    #[test]
+    fn check_finite_rejects_inf_real() {
+        let opts = FftOptions::default().with_check_finite(true);
+        let err = rfft(&[1.0, f64::INFINITY], &opts).expect_err("Inf should be rejected");
+        assert_eq!(err, FftError::NonFiniteInput);
+    }
+
+    fn complex_mul_test(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+    }
+
+    #[test]
     fn repeated_calls_emit_plan_cache_hits_in_trace() {
         clear_shared_plan_cache();
         let _ = take_transform_traces();

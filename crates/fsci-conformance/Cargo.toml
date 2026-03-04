@@ -25,6 +25,7 @@ fsci-integrate = { workspace = true }
 fsci-linalg = { workspace = true }
 fsci-opt = { workspace = true }
 fsci-runtime = { workspace = true }
+fsci-sparse = { workspace = true }
 fsci-special = { workspace = true }
 ftui = { workspace = true, features = ["runtime", "crossterm"], optional = true }
 serde = { workspace = true }
