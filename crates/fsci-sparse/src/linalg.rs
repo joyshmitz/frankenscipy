@@ -222,8 +222,10 @@ mod tests {
     #[test]
     fn spsolve_skips_non_finite_check_when_disabled() {
         let a = square_csr();
-        let mut options = SolveOptions::default();
-        options.check_finite = false;
+        let options = SolveOptions {
+            check_finite: false,
+            ..SolveOptions::default()
+        };
         let err = spsolve(&a, &[f64::NAN, 1.0], options).expect_err("unsupported expected");
         assert!(matches!(err, SparseError::Unsupported { .. }));
     }
@@ -231,8 +233,10 @@ mod tests {
     #[test]
     fn spsolve_hardened_rejects_empty_structural_row() {
         let a = csr_with_empty_row();
-        let mut options = SolveOptions::default();
-        options.mode = RuntimeMode::Hardened;
+        let options = SolveOptions {
+            mode: RuntimeMode::Hardened,
+            ..SolveOptions::default()
+        };
         let err = spsolve(&a, &[1.0, 0.0], options).expect_err("empty row singular");
         assert!(matches!(err, SparseError::SingularMatrix { .. }));
     }
@@ -240,8 +244,10 @@ mod tests {
     #[test]
     fn spsolve_strict_empty_structural_row_is_not_immediate_error() {
         let a = csr_with_empty_row();
-        let mut options = SolveOptions::default();
-        options.mode = RuntimeMode::Strict;
+        let options = SolveOptions {
+            mode: RuntimeMode::Strict,
+            ..SolveOptions::default()
+        };
         let err = spsolve(&a, &[1.0, 0.0], options).expect_err("backend pending");
         assert!(matches!(err, SparseError::Unsupported { .. }));
     }
