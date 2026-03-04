@@ -47,7 +47,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use proptest::prelude::*;
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     use super::transforms::{Complex64, FftOptions, fft, ifft, rfft, irfft};
     use super::{Normalization, TransformKind};

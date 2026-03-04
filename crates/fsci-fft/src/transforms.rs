@@ -960,7 +960,9 @@ mod tests {
         clear_shared_plan_cache();
         let _ = take_transform_traces();
 
-        let input = (0..17usize)
+        // Use n=37 (prime, outside proptest ranges 1..=32) to avoid
+        // parallel test cache collisions.
+        let input = (0..37usize)
             .map(|i| (i as f64, (i % 3) as f64 - 1.0))
             .collect::<Vec<_>>();
         let opts = FftOptions::default();
