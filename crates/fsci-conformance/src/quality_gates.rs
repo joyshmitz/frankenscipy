@@ -318,19 +318,14 @@ pub fn run_quality_gates(
             violations.push(SloViolation {
                 category: String::from("flake"),
                 target: check.test_name.clone(),
-                message: format!(
-                    "flaky: {}/{} runs failed",
-                    check.failures, check.total_runs
-                ),
+                message: format!("flaky: {}/{} runs failed", check.failures, check.total_runs),
                 action: config.severity.flake_violation,
                 critical: false,
             });
         }
     }
 
-    let overall_pass = violations
-        .iter()
-        .all(|v| v.action != ViolationAction::Fail);
+    let overall_pass = violations.iter().all(|v| v.action != ViolationAction::Fail);
 
     QualityGateReport {
         coverage_checks,

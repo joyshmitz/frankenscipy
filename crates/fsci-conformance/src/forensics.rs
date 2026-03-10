@@ -131,14 +131,8 @@ impl NumericDiffView {
             })
             .collect();
 
-        let max_abs_diff = entries
-            .iter()
-            .map(|e| e.abs_diff)
-            .fold(0.0_f64, f64::max);
-        let max_rel_diff = entries
-            .iter()
-            .map(|e| e.rel_diff)
-            .fold(0.0_f64, f64::max);
+        let max_abs_diff = entries.iter().map(|e| e.abs_diff).fold(0.0_f64, f64::max);
+        let max_rel_diff = entries.iter().map(|e| e.rel_diff).fold(0.0_f64, f64::max);
         let failed_count = entries.iter().filter(|e| !e.pass).count();
 
         Self {
@@ -280,8 +274,7 @@ pub fn summarize_failure(params: &FailureSummaryParams<'_>) -> FailureSummary {
         artifact_dir,
     } = params;
     let category = classify_failure(message, *max_diff, *tolerance);
-    let description =
-        build_human_description(operation, &category, *max_diff, *tolerance, message);
+    let description = build_human_description(operation, &category, *max_diff, *tolerance, message);
     let replay_cmd = build_replay_cmd(packet_id, test_id);
     let timestamp_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -372,9 +365,7 @@ fn build_human_description(
             )
         }
         FailureCategory::ErrorMismatch => {
-            format!(
-                "{operation}() produced a different error than expected. {original_message}"
-            )
+            format!("{operation}() produced a different error than expected. {original_message}")
         }
         FailureCategory::ShapeMismatch => {
             format!(
@@ -464,10 +455,7 @@ fn scan_artifact_dir(
         if path.is_dir() {
             scan_artifact_dir(root, &path, entries, total_artifacts, total_bytes)?;
         } else if path.extension().is_some_and(|ext| ext == "json") {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_path_buf();
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             *total_artifacts += 1;
             *total_bytes += size;
@@ -484,20 +472,18 @@ fn scan_artifact_dir(
                     .map(|data| blake3::hash(&data).to_hex().to_string());
 
                 let entry_key = format!("{packet_id}/{test_id}");
-                let idx_entry = entries.entry(entry_key.clone()).or_insert_with(|| {
-                    ArtifactIndexEntry {
-                        test_id: test_id.clone(),
-                        packet_id: packet_id.clone(),
-                        artifact_dir: path
-                            .parent()
-                            .unwrap_or(dir)
-                            .to_path_buf(),
-                        files: Vec::new(),
-                        replay_cmd: build_replay_cmd(&packet_id, &test_id),
-                        passed: true,
-                        failure_category: None,
-                    }
-                });
+                let idx_entry =
+                    entries
+                        .entry(entry_key.clone())
+                        .or_insert_with(|| ArtifactIndexEntry {
+                            test_id: test_id.clone(),
+                            packet_id: packet_id.clone(),
+                            artifact_dir: path.parent().unwrap_or(dir).to_path_buf(),
+                            files: Vec::new(),
+                            replay_cmd: build_replay_cmd(&packet_id, &test_id),
+                            passed: true,
+                            failure_category: None,
+                        });
 
                 idx_entry.files.push(ArtifactFile {
                     relative_path: rel,
@@ -513,16 +499,14 @@ fn scan_artifact_dir(
 
 /// Extract packet ID from a relative path like "P2C-002/e2e/scenario.json".
 fn extract_packet_from_path(rel: &Path) -> Option<String> {
-    rel.components()
-        .next()
-        .and_then(|c| {
-            let s = c.as_os_str().to_string_lossy().to_string();
-            if s.starts_with("P2C-") || s.starts_with("FSCI-P2C-") {
-                Some(s)
-            } else {
-                None
-            }
-        })
+    rel.components().next().and_then(|c| {
+        let s = c.as_os_str().to_string_lossy().to_string();
+        if s.starts_with("P2C-") || s.starts_with("FSCI-P2C-") {
+            Some(s)
+        } else {
+            None
+        }
+    })
 }
 
 /// Infer the purpose of an artifact file from its path.
@@ -604,8 +588,11 @@ mod tests {
 
     #[test]
     fn failure_category_classifies_error_mismatch() {
-        let cat =
-            classify_failure("error mismatch: expected LinalgError, got success", None, None);
+        let cat = classify_failure(
+            "error mismatch: expected LinalgError, got success",
+            None,
+            None,
+        );
         assert_eq!(cat, FailureCategory::ErrorMismatch);
     }
 

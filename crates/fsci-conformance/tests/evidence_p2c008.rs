@@ -100,8 +100,8 @@ fn check_policy_low_risk(mode: RuntimeMode) -> ParityGate {
     let signals = DecisionSignals::new(0.5, 0.0, 0.0);
     let decision = ctrl.decide(signals);
 
-    let pass = decision.action == PolicyAction::Allow
-        && decision.top_state == RiskState::Compatible;
+    let pass =
+        decision.action == PolicyAction::Allow && decision.top_state == RiskState::Compatible;
 
     ParityGate {
         fixture_id: format!("policy_low_risk_{mode:?}"),
@@ -226,7 +226,10 @@ fn check_mode_consistency() -> ParityGate {
     }
 
     if detail.is_empty() {
-        detail = format!("All {} signal triples: Hardened >= Strict", test_signals.len());
+        detail = format!(
+            "All {} signal triples: Hardened >= Strict",
+            test_signals.len()
+        );
     }
 
     ParityGate {
@@ -255,17 +258,14 @@ fn check_portfolio_well_conditioned() -> ParityGate {
         subsystem: "solver_portfolio",
         pass,
         description: "WellConditioned → DirectLU (min expected loss)".into(),
-        detail: format!(
-            "action={action:?}, losses={losses:?}, chosen={chosen_loss:.2}"
-        ),
+        detail: format!("action={action:?}, losses={losses:?}, chosen={chosen_loss:.2}"),
     }
 }
 
 /// Verify that moderate-condition state selects PivotedQR.
 fn check_portfolio_moderate() -> ParityGate {
     let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (action, _, losses, _) =
-        portfolio.select_action(&MatrixConditionState::ModerateCondition);
+    let (action, _, losses, _) = portfolio.select_action(&MatrixConditionState::ModerateCondition);
 
     let pass = action == SolverAction::PivotedQR;
 
@@ -281,13 +281,10 @@ fn check_portfolio_moderate() -> ParityGate {
 /// Verify that ill-conditioned and near-singular states select SVDFallback.
 fn check_portfolio_ill_conditioned() -> ParityGate {
     let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (action_ill, _, _, _) =
-        portfolio.select_action(&MatrixConditionState::IllConditioned);
-    let (action_near, _, _, _) =
-        portfolio.select_action(&MatrixConditionState::NearSingular);
+    let (action_ill, _, _, _) = portfolio.select_action(&MatrixConditionState::IllConditioned);
+    let (action_near, _, _, _) = portfolio.select_action(&MatrixConditionState::NearSingular);
 
-    let pass =
-        action_ill == SolverAction::SVDFallback && action_near == SolverAction::SVDFallback;
+    let pass = action_ill == SolverAction::SVDFallback && action_near == SolverAction::SVDFallback;
 
     ParityGate {
         fixture_id: "portfolio_ill_and_near_singular".into(),
@@ -312,7 +309,12 @@ fn check_portfolio_all_states_valid() -> ParityGate {
         let valid_action = SolverAction::ALL.contains(&action);
         let chosen_matches = (chosen - losses[action.index()]).abs() < 1e-15;
 
-        if !finite_losses || !finite_posterior || !posterior_sums_to_one || !valid_action || !chosen_matches {
+        if !finite_losses
+            || !finite_posterior
+            || !posterior_sums_to_one
+            || !valid_action
+            || !chosen_matches
+        {
             all_ok = false;
             detail = format!(
                 "State {state:?}: finite_losses={finite_losses}, posterior_sum={}, valid={valid_action}, chosen_matches={chosen_matches}",
@@ -475,8 +477,7 @@ fn check_portfolio_conformal_override() -> ParityGate {
 
     // Even for WellConditioned (which normally selects DirectLU),
     // the conformal override should force SVDFallback
-    let (action, _, _, _) =
-        portfolio.select_action(&MatrixConditionState::WellConditioned);
+    let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::WellConditioned);
 
     let pass = action == SolverAction::SVDFallback;
 
@@ -524,9 +525,8 @@ fn check_ledger_latest_entry() -> ParityGate {
     let decision = ctrl.decide(signals);
 
     let latest = ctrl.ledger().latest();
-    let pass = latest.is_some_and(|entry| {
-        entry.action == decision.action && entry.mode == RuntimeMode::Strict
-    });
+    let pass = latest
+        .is_some_and(|entry| entry.action == decision.action && entry.mode == RuntimeMode::Strict);
 
     ParityGate {
         fixture_id: "ledger_latest_entry".into(),
@@ -687,7 +687,8 @@ fn evidence_p2c008_final_pack() {
             FixtureEntry {
                 fixture_id: "mode_consistency_hardened_ge_strict".into(),
                 subsystem: "policy_controller",
-                description: "Hardened mode at least as strict as Strict for all test signals".into(),
+                description: "Hardened mode at least as strict as Strict for all test signals"
+                    .into(),
                 signal_triple: None,
                 matrix_condition: None,
                 mode: "both",
@@ -973,10 +974,7 @@ fn evidence_p2c008_final_pack() {
         final_bundle.parity_gates.gates.len()
     );
     for s in &final_bundle.parity_report.operation_summaries {
-        eprintln!(
-            "  {}: {}/{} pass",
-            s.subsystem, s.passed, s.total_gates
-        );
+        eprintln!("  {}: {}/{} pass", s.subsystem, s.passed, s.total_gates);
     }
     for g in &final_bundle.parity_gates.gates {
         if !g.pass {

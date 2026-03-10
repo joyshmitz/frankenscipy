@@ -89,7 +89,10 @@ fn make_complex(n: usize) -> Vec<Complex64> {
     (0..n)
         .map(|i| {
             let t = i as f64 / n as f64;
-            ((2.0 * std::f64::consts::PI * t).sin(), (4.0 * std::f64::consts::PI * t).cos())
+            (
+                (2.0 * std::f64::consts::PI * t).sin(),
+                (4.0 * std::f64::consts::PI * t).cos(),
+            )
         })
         .collect()
 }
@@ -164,8 +167,7 @@ fn check_parseval_energy(n: usize) -> ParityGate {
     let input = make_complex(n);
     let spectrum = fft(&input, &opts()).expect("fft");
     let energy_time: f64 = input.iter().map(|c| c.0 * c.0 + c.1 * c.1).sum();
-    let energy_freq: f64 =
-        spectrum.iter().map(|c| c.0 * c.0 + c.1 * c.1).sum::<f64>() / n as f64;
+    let energy_freq: f64 = spectrum.iter().map(|c| c.0 * c.0 + c.1 * c.1).sum::<f64>() / n as f64;
     let rel_err = (energy_time - energy_freq).abs() / energy_time.max(1e-30);
     ParityGate {
         fixture_id: format!("parseval_n{n}"),
@@ -291,7 +293,11 @@ fn evidence_p2c005_final_pack() {
     let operation_summaries: Vec<_> = ops
         .iter()
         .map(|&op| {
-            let matched: Vec<_> = parity_gates.gates.iter().filter(|g| g.operation == op).collect();
+            let matched: Vec<_> = parity_gates
+                .gates
+                .iter()
+                .filter(|g| g.operation == op)
+                .collect();
             OperationParitySummary {
                 operation: op,
                 total_fixtures: matched.len(),
@@ -379,9 +385,15 @@ fn evidence_p2c005_final_pack() {
 
     for g in &evidence.parity_gates.gates {
         if g.pass {
-            eprintln!("  PASS: {} {} — max_abs={:.2e}", g.operation, g.fixture_id, g.max_abs_diff);
+            eprintln!(
+                "  PASS: {} {} — max_abs={:.2e}",
+                g.operation, g.fixture_id, g.max_abs_diff
+            );
         } else {
-            eprintln!("  FAIL: {} {} — max_abs={:.2e}", g.operation, g.fixture_id, g.max_abs_diff);
+            eprintln!(
+                "  FAIL: {} {} — max_abs={:.2e}",
+                g.operation, g.fixture_id, g.max_abs_diff
+            );
         }
     }
     assert!(all_pass, "All parity gates must pass");
@@ -393,5 +405,12 @@ fn evidence_p2c005_final_pack() {
             s.operation, s.passed, s.total_fixtures, s.max_abs_diff_across_all
         );
     }
-    eprintln!("  RaptorQ sidecar: {}", if evidence.sidecar.is_some() { "generated" } else { "skipped" });
+    eprintln!(
+        "  RaptorQ sidecar: {}",
+        if evidence.sidecar.is_some() {
+            "generated"
+        } else {
+            "skipped"
+        }
+    );
 }

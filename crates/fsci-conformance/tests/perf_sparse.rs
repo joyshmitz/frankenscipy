@@ -358,11 +358,7 @@ fn perf_p2c004_full_profile() {
     // format roundtrip isomorphism: csr -> csc -> csr preserves data
     {
         let csr = make_random_csr(100, 0.05);
-        let roundtrip = csr
-            .to_csc()
-            .expect("csr->csc")
-            .to_csr()
-            .expect("csc->csr");
+        let roundtrip = csr.to_csc().expect("csr->csc").to_csr().expect("csc->csr");
         let v = make_vector(100);
         let orig = spmv_csr(&csr, &v).expect("spmv orig");
         let rt = spmv_csr(&roundtrip, &v).expect("spmv roundtrip");

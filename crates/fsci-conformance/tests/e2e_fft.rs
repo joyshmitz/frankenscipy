@@ -15,8 +15,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use fsci_fft::{
-    Complex64, FftError, FftOptions, Normalization,
-    fft, fft2, fftfreq, ifft, ifft2, irfft, rfft,
+    Complex64, FftError, FftOptions, Normalization, fft, fft2, fftfreq, ifft, ifft2, irfft, rfft,
 };
 use serde::Serialize;
 
@@ -159,18 +158,26 @@ fn e2e_001_lowpass_filter_pipeline() {
         })
         .collect();
     steps.push(make_step(
-        1, "generate_signal", "create", &format!("n={n}, freqs=[3,20]Hz"),
+        1,
+        "generate_signal",
+        "create",
+        &format!("n={n}, freqs=[3,20]Hz"),
         &format!("signal len={}", signal.len()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: rfft
     let t_start = Instant::now();
     let spectrum = rfft(&signal, &opts).expect("rfft");
     steps.push(make_step(
-        2, "rfft", "transform", &format!("real signal n={n}"),
+        2,
+        "rfft",
+        "transform",
+        &format!("real signal n={n}"),
         &format!("spectrum len={}", spectrum.len()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 3: Low-pass filter (zero bins above cutoff)
@@ -185,18 +192,26 @@ fn e2e_001_lowpass_filter_pipeline() {
         }
     }
     steps.push(make_step(
-        3, "lowpass_filter", "filter", &format!("cutoff={cutoff}Hz"),
+        3,
+        "lowpass_filter",
+        "filter",
+        &format!("cutoff={cutoff}Hz"),
         "zeroed high-freq bins",
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 4: irfft
     let t_start = Instant::now();
     let recovered = irfft(&filtered, Some(n), &opts).expect("irfft");
     steps.push(make_step(
-        4, "irfft", "inverse_transform", &format!("spectrum len={}", filtered.len()),
+        4,
+        "irfft",
+        "inverse_transform",
+        &format!("spectrum len={}", filtered.len()),
         &format!("signal len={}", recovered.len()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 5: Verify: only 3Hz component should remain
@@ -207,9 +222,13 @@ fn e2e_001_lowpass_filter_pipeline() {
     let diff = max_abs_diff_real(&recovered, &expected);
     let pass = diff < 0.6; // Filter is not brick-wall, so allow some leakage
     steps.push(make_step(
-        5, "verify_output", "compare", &format!("expected 3Hz-only, diff={diff:.4e}"),
+        5,
+        "verify_output",
+        "compare",
+        &format!("expected 3Hz-only, diff={diff:.4e}"),
         &format!("pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -243,15 +262,23 @@ fn e2e_002_fft_ifft_normalization_sweep() {
         })
         .collect();
     steps.push(make_step(
-        1, "generate_signal", "create", &format!("complex signal n={n}"),
+        1,
+        "generate_signal",
+        "create",
+        &format!("complex signal n={n}"),
         &format!("len={}", input.len()),
-        0, "ok",
+        0,
+        "ok",
     ));
 
     let mut all_pass = true;
-    for (step_offset, norm) in [Normalization::Backward, Normalization::Forward, Normalization::Ortho]
-        .iter()
-        .enumerate()
+    for (step_offset, norm) in [
+        Normalization::Backward,
+        Normalization::Forward,
+        Normalization::Ortho,
+    ]
+    .iter()
+    .enumerate()
     {
         let opts = FftOptions::default().with_normalization(*norm);
         let norm_name = format!("{norm:?}");
@@ -259,22 +286,30 @@ fn e2e_002_fft_ifft_normalization_sweep() {
         let t_start = Instant::now();
         let spectrum = fft(&input, &opts).expect("fft");
         steps.push(make_step(
-            2 + step_offset * 2, &format!("fft_{norm_name}"), "transform",
+            2 + step_offset * 2,
+            &format!("fft_{norm_name}"),
+            "transform",
             &format!("norm={norm_name}"),
             &format!("spectrum len={}", spectrum.len()),
-            t_start.elapsed().as_nanos(), "ok",
+            t_start.elapsed().as_nanos(),
+            "ok",
         ));
 
         let t_start = Instant::now();
         let recovered = ifft(&spectrum, &opts).expect("ifft");
         let diff = max_abs_diff_complex(&recovered, &input);
         let pass = diff < TOL;
-        if !pass { all_pass = false; }
+        if !pass {
+            all_pass = false;
+        }
         steps.push(make_step(
-            3 + step_offset * 2, &format!("ifft_{norm_name}_verify"), "compare",
+            3 + step_offset * 2,
+            &format!("ifft_{norm_name}_verify"),
+            "compare",
             &format!("diff={diff:.4e}"),
             &format!("pass={pass}"),
-            t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+            t_start.elapsed().as_nanos(),
+            if pass { "ok" } else { "fail" },
         ));
     }
 
@@ -311,22 +346,33 @@ fn e2e_003_fft2_spectral_filter() {
         .map(|idx| {
             let r = (idx / cols) as f64;
             let c = (idx % cols) as f64;
-            ((2.0 * PI * r / rows as f64).sin() + (2.0 * PI * c / cols as f64).cos(), 0.0)
+            (
+                (2.0 * PI * r / rows as f64).sin() + (2.0 * PI * c / cols as f64).cos(),
+                0.0,
+            )
         })
         .collect();
     steps.push(make_step(
-        1, "generate_2d_signal", "create", &format!("{rows}x{cols} spatial signal"),
+        1,
+        "generate_2d_signal",
+        "create",
+        &format!("{rows}x{cols} spatial signal"),
         &format!("len={n}"),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: fft2
     let t_start = Instant::now();
     let spectrum = fft2(&input, (rows, cols), &opts).expect("fft2");
     steps.push(make_step(
-        2, "fft2", "transform", &format!("shape=({rows},{cols})"),
+        2,
+        "fft2",
+        "transform",
+        &format!("shape=({rows},{cols})"),
         &format!("spectrum len={}", spectrum.len()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 3: ifft2 roundtrip
@@ -335,10 +381,13 @@ fn e2e_003_fft2_spectral_filter() {
     let diff = max_abs_diff_complex(&recovered, &input);
     let pass = diff < TOL;
     steps.push(make_step(
-        3, "ifft2_roundtrip", "inverse_transform+verify",
+        3,
+        "ifft2_roundtrip",
+        "inverse_transform+verify",
         &format!("diff={diff:.4e}"),
         &format!("pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -377,9 +426,17 @@ fn e2e_004_nan_recovery() {
     let result = fft(&bad_input, &opts_strict);
     let is_err = result.is_err();
     steps.push(make_step(
-        1, "submit_nan_input", "fft", "input contains NaN",
+        1,
+        "submit_nan_input",
+        "fft",
+        "input contains NaN",
         &format!("error={is_err}"),
-        t_start.elapsed().as_nanos(), if is_err { "expected_error" } else { "unexpected_ok" },
+        t_start.elapsed().as_nanos(),
+        if is_err {
+            "expected_error"
+        } else {
+            "unexpected_ok"
+        },
     ));
 
     // Step 3: Correct input by replacing NaN with 0
@@ -394,9 +451,13 @@ fn e2e_004_nan_recovery() {
         })
         .collect();
     steps.push(make_step(
-        2, "correct_input", "sanitize", "replace NaN with 0",
+        2,
+        "correct_input",
+        "sanitize",
+        "replace NaN with 0",
         &format!("corrected len={}", corrected.len()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 4: Retry with corrected input
@@ -404,9 +465,13 @@ fn e2e_004_nan_recovery() {
     let result = fft(&corrected, &opts_strict);
     let pass = result.is_ok();
     steps.push(make_step(
-        3, "retry_fft", "fft", &format!("corrected input n={}", corrected.len()),
+        3,
+        "retry_fft",
+        "fft",
+        &format!("corrected input n={}", corrected.len()),
         &format!("success={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let overall_pass = is_err && pass;
@@ -419,7 +484,11 @@ fn e2e_004_nan_recovery() {
             status: if overall_pass { "pass" } else { "fail" }.to_string(),
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
-            error_chain: if !overall_pass { Some("NaN recovery flow failed".to_string()) } else { None },
+            error_chain: if !overall_pass {
+                Some("NaN recovery flow failed".to_string())
+            } else {
+                None
+            },
         },
     };
     write_bundle(scenario_id, &bundle);
@@ -439,9 +508,13 @@ fn e2e_005_empty_input_recovery() {
     let result = fft(&[], &opts);
     let is_err = matches!(result, Err(FftError::InvalidShape { .. }));
     steps.push(make_step(
-        1, "submit_empty", "fft", "empty input",
+        1,
+        "submit_empty",
+        "fft",
+        "empty input",
         &format!("got_invalid_shape={is_err}"),
-        t_start.elapsed().as_nanos(), "expected_error",
+        t_start.elapsed().as_nanos(),
+        "expected_error",
     ));
 
     // Step 2: Construct valid input
@@ -450,9 +523,13 @@ fn e2e_005_empty_input_recovery() {
     let result = fft(&valid, &opts);
     let pass = result.is_ok();
     steps.push(make_step(
-        2, "retry_with_data", "fft", &format!("valid input n={}", valid.len()),
+        2,
+        "retry_with_data",
+        "fft",
+        &format!("valid input n={}", valid.len()),
         &format!("success={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let overall_pass = is_err && pass;
@@ -485,9 +562,13 @@ fn e2e_006_irfft_length_mismatch_recovery() {
     let t_start = Instant::now();
     let spectrum = rfft(&signal, &opts).expect("rfft");
     steps.push(make_step(
-        1, "rfft", "transform", "real signal n=16",
+        1,
+        "rfft",
+        "transform",
+        "real signal n=16",
         &format!("spectrum len={}", spectrum.len()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: Try irfft with wrong output_len
@@ -495,9 +576,13 @@ fn e2e_006_irfft_length_mismatch_recovery() {
     let result = irfft(&spectrum, Some(20), &opts);
     let is_err = matches!(result, Err(FftError::LengthMismatch { .. }));
     steps.push(make_step(
-        2, "irfft_wrong_len", "inverse_transform", "output_len=20 (wrong)",
+        2,
+        "irfft_wrong_len",
+        "inverse_transform",
+        "output_len=20 (wrong)",
         &format!("got_mismatch={is_err}"),
-        t_start.elapsed().as_nanos(), "expected_error",
+        t_start.elapsed().as_nanos(),
+        "expected_error",
     ));
 
     // Step 3: Fix: use correct output_len
@@ -506,10 +591,13 @@ fn e2e_006_irfft_length_mismatch_recovery() {
     let diff = max_abs_diff_real(&recovered, &signal);
     let pass = diff < TOL;
     steps.push(make_step(
-        3, "irfft_correct_len", "inverse_transform+verify",
+        3,
+        "irfft_correct_len",
+        "inverse_transform+verify",
         &format!("output_len=16, diff={diff:.4e}"),
         &format!("pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let overall_pass = is_err && pass;
@@ -549,9 +637,13 @@ fn e2e_007_degenerate_length_1() {
     let diff = max_abs_diff_complex(&recovered, &input);
     let pass_complex = diff < TOL;
     steps.push(make_step(
-        1, "fft_ifft_n1", "roundtrip", "complex n=1",
+        1,
+        "fft_ifft_n1",
+        "roundtrip",
+        "complex n=1",
         &format!("diff={diff:.4e}, pass={pass_complex}"),
-        t_start.elapsed().as_nanos(), if pass_complex { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass_complex { "ok" } else { "fail" },
     ));
 
     // Real fft length 1
@@ -561,9 +653,13 @@ fn e2e_007_degenerate_length_1() {
     assert_eq!(real_spectrum.len(), 1); // n/2+1 = 1
     let pass_real = (real_spectrum[0].0 - 42.0).abs() < TOL;
     steps.push(make_step(
-        2, "rfft_n1", "transform+verify", "real n=1",
+        2,
+        "rfft_n1",
+        "transform+verify",
+        "real n=1",
         &format!("spectrum[0]={:?}, pass={pass_real}", real_spectrum[0]),
-        t_start.elapsed().as_nanos(), if pass_real { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass_real { "ok" } else { "fail" },
     ));
 
     let overall_pass = pass_complex && pass_real;
@@ -600,17 +696,25 @@ fn e2e_008_large_prime_size() {
         })
         .collect();
     steps.push(make_step(
-        1, "generate_signal", "create", &format!("complex signal n={n} (prime)"),
+        1,
+        "generate_signal",
+        "create",
+        &format!("complex signal n={n} (prime)"),
         &format!("len={n}"),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     let t_start = Instant::now();
     let spectrum = fft(&input, &opts).expect("fft");
     steps.push(make_step(
-        2, "fft", "transform", &format!("n={n}"),
+        2,
+        "fft",
+        "transform",
+        &format!("n={n}"),
         &format!("spectrum len={}", spectrum.len()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     let t_start = Instant::now();
@@ -618,9 +722,13 @@ fn e2e_008_large_prime_size() {
     let diff = max_abs_diff_complex(&recovered, &input);
     let pass = diff < TOL;
     steps.push(make_step(
-        3, "ifft_roundtrip", "inverse+verify", &format!("diff={diff:.4e}"),
+        3,
+        "ifft_roundtrip",
+        "inverse+verify",
+        &format!("diff={diff:.4e}"),
         &format!("pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Verify Parseval's theorem
@@ -630,9 +738,16 @@ fn e2e_008_large_prime_size() {
     let parseval_diff = (time_energy - freq_energy / n as f64).abs();
     let parseval_pass = parseval_diff < TOL * n as f64;
     steps.push(make_step(
-        4, "parseval_check", "verify", &format!("time_E={time_energy:.4}, freq_E/n={:.4}", freq_energy / n as f64),
+        4,
+        "parseval_check",
+        "verify",
+        &format!(
+            "time_E={time_energy:.4}, freq_E/n={:.4}",
+            freq_energy / n as f64
+        ),
         &format!("diff={parseval_diff:.4e}, pass={parseval_pass}"),
-        t_start.elapsed().as_nanos(), if parseval_pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if parseval_pass { "ok" } else { "fail" },
     ));
 
     let overall_pass = pass && parseval_pass;
@@ -667,24 +782,33 @@ fn e2e_009_constant_dc_signal() {
     let input: Vec<Complex64> = vec![(dc_value, 0.0); n];
     let spectrum = fft(&input, &opts).expect("fft");
     steps.push(make_step(
-        1, "fft_constant", "transform", &format!("constant={dc_value}, n={n}"),
+        1,
+        "fft_constant",
+        "transform",
+        &format!("constant={dc_value}, n={n}"),
         &format!("DC bin={:?}", spectrum[0]),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Verify DC bin
     let t_start = Instant::now();
     let dc_expected = (n as f64 * dc_value, 0.0);
-    let dc_diff = ((spectrum[0].0 - dc_expected.0).abs()).max((spectrum[0].1 - dc_expected.1).abs());
+    let dc_diff =
+        ((spectrum[0].0 - dc_expected.0).abs()).max((spectrum[0].1 - dc_expected.1).abs());
     let non_dc_max: f64 = spectrum[1..]
         .iter()
         .map(|c| complex_mag_sq(*c).sqrt())
         .fold(0.0_f64, f64::max);
     let pass = dc_diff < TOL && non_dc_max < TOL;
     steps.push(make_step(
-        2, "verify_spectrum", "check", &format!("dc_diff={dc_diff:.4e}, non_dc_max={non_dc_max:.4e}"),
+        2,
+        "verify_spectrum",
+        "check",
+        &format!("dc_diff={dc_diff:.4e}, non_dc_max={non_dc_max:.4e}"),
         &format!("pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -727,9 +851,13 @@ fn e2e_010_rapid_sequential_transforms() {
         }
     }
     steps.push(make_step(
-        1, "rapid_roundtrips", "fft+ifft", &format!("{iterations} iterations, sizes 8-15"),
+        1,
+        "rapid_roundtrips",
+        "fft+ifft",
+        &format!("{iterations} iterations, sizes 8-15"),
         &format!("all_pass={all_pass}"),
-        t_start.elapsed().as_nanos(), if all_pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if all_pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -745,5 +873,8 @@ fn e2e_010_rapid_sequential_transforms() {
         },
     };
     write_bundle(scenario_id, &bundle);
-    assert!(all_pass, "rapid sequential transforms: state leakage detected");
+    assert!(
+        all_pass,
+        "rapid sequential transforms: state leakage detected"
+    );
 }

@@ -11,12 +11,9 @@
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, Shape2D, SparseError,
-    add_csr, sub_csr, scale_csr, scale_coo, scale_csc,
-    spmv_coo, spmv_csr, spmv_csc,
-    coo_to_csr_with_mode, csr_to_csc_with_mode,
-    eye, diags, random, FormatConvertible,
-    spsolve, SolveOptions,
+    CooMatrix, CsrMatrix, FormatConvertible, Shape2D, SolveOptions, SparseError, add_csr,
+    coo_to_csr_with_mode, csr_to_csc_with_mode, diags, eye, random, scale_coo, scale_csc,
+    scale_csr, spmv_coo, spmv_csc, spmv_csr, spsolve, sub_csr,
 };
 use serde::Serialize;
 use std::fs;
@@ -140,7 +137,17 @@ fn make_test_coo(rows: usize, cols: usize, triplets: &[(usize, usize, f64)]) -> 
 #[test]
 fn diff_001_spmv_csr_vs_dense_3x3() {
     let start = Instant::now();
-    let coo = make_test_coo(3, 3, &[(0, 0, 2.0), (0, 2, -1.0), (1, 1, 3.0), (2, 0, 1.5), (2, 2, 4.0)]);
+    let coo = make_test_coo(
+        3,
+        3,
+        &[
+            (0, 0, 2.0),
+            (0, 2, -1.0),
+            (1, 1, 3.0),
+            (2, 0, 1.5),
+            (2, 2, 4.0),
+        ],
+    );
     let csr = coo.to_csr().expect("csr");
     let x = vec![1.0, -2.0, 3.0];
     let sparse_result = spmv_csr(&csr, &x).expect("spmv_csr");
@@ -153,7 +160,9 @@ fn diff_001_spmv_csr_vs_dense_3x3() {
         input_summary: "3x3 sparse, 5 nnz, x=[1,-2,3]".into(),
         expected: format!("{dense_result:?}"),
         actual: format!("{sparse_result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -163,7 +172,17 @@ fn diff_001_spmv_csr_vs_dense_3x3() {
 #[test]
 fn diff_002_spmv_csc_vs_dense_3x3() {
     let start = Instant::now();
-    let coo = make_test_coo(3, 3, &[(0, 0, 2.0), (0, 2, -1.0), (1, 1, 3.0), (2, 0, 1.5), (2, 2, 4.0)]);
+    let coo = make_test_coo(
+        3,
+        3,
+        &[
+            (0, 0, 2.0),
+            (0, 2, -1.0),
+            (1, 1, 3.0),
+            (2, 0, 1.5),
+            (2, 2, 4.0),
+        ],
+    );
     let csc = coo.to_csc().expect("csc");
     let x = vec![1.0, -2.0, 3.0];
     let sparse_result = spmv_csc(&csc, &x).expect("spmv_csc");
@@ -176,7 +195,9 @@ fn diff_002_spmv_csc_vs_dense_3x3() {
         input_summary: "3x3 sparse via CSC, 5 nnz".into(),
         expected: format!("{dense_result:?}"),
         actual: format!("{sparse_result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -186,7 +207,17 @@ fn diff_002_spmv_csc_vs_dense_3x3() {
 #[test]
 fn diff_003_spmv_coo_vs_dense_3x3() {
     let start = Instant::now();
-    let coo = make_test_coo(3, 3, &[(0, 0, 2.0), (0, 2, -1.0), (1, 1, 3.0), (2, 0, 1.5), (2, 2, 4.0)]);
+    let coo = make_test_coo(
+        3,
+        3,
+        &[
+            (0, 0, 2.0),
+            (0, 2, -1.0),
+            (1, 1, 3.0),
+            (2, 0, 1.5),
+            (2, 2, 4.0),
+        ],
+    );
     let x = vec![1.0, -2.0, 3.0];
     let sparse_result = spmv_coo(&coo, &x).expect("spmv_coo");
     let dense_result = dense_matvec(&dense_from_coo(&coo), &x);
@@ -198,7 +229,9 @@ fn diff_003_spmv_coo_vs_dense_3x3() {
         input_summary: "3x3 sparse via COO, 5 nnz".into(),
         expected: format!("{dense_result:?}"),
         actual: format!("{sparse_result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -223,7 +256,9 @@ fn diff_004_add_csr_vs_dense() {
         input_summary: "3x3 A+B, 3 nnz each".into(),
         expected: format!("{expected:?}"),
         actual: format!("{sparse_dense:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -248,7 +283,9 @@ fn diff_005_sub_csr_vs_dense() {
         input_summary: "2x4 A-B".into(),
         expected: format!("{expected:?}"),
         actual: format!("{sparse_dense:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -272,7 +309,9 @@ fn diff_006_scale_csr_vs_dense() {
         input_summary: format!("3x2 scale by {alpha}"),
         expected: format!("{expected:?}"),
         actual: format!("{sparse_dense:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -293,7 +332,9 @@ fn diff_007_eye_identity_vs_dense() {
         input_summary: "5x5 identity * x".into(),
         expected: format!("{x:?}"),
         actual: format!("{result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -304,7 +345,11 @@ fn diff_007_eye_identity_vs_dense() {
 fn diff_008_diags_tridiagonal_vs_dense() {
     let start = Instant::now();
     let csr = diags(
-        &[vec![-1.0, -1.0, -1.0], vec![2.0, 2.0, 2.0, 2.0], vec![-1.0, -1.0, -1.0]],
+        &[
+            vec![-1.0, -1.0, -1.0],
+            vec![2.0, 2.0, 2.0, 2.0],
+            vec![-1.0, -1.0, -1.0],
+        ],
         &[-1, 0, 1],
         Some(Shape2D::new(4, 4)),
     )
@@ -325,7 +370,9 @@ fn diff_008_diags_tridiagonal_vs_dense() {
         input_summary: "4x4 tridiag [-1,2,-1] * x".into(),
         expected: format!("{expected:?}"),
         actual: format!("{result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -335,15 +382,26 @@ fn diff_008_diags_tridiagonal_vs_dense() {
 #[test]
 fn diff_009_coo_to_csr_to_csc_roundtrip_vs_dense() {
     let start = Instant::now();
-    let coo = make_test_coo(4, 4, &[
-        (0, 1, 1.0), (1, 0, -2.0), (1, 3, 3.5),
-        (2, 2, 4.0), (3, 1, -1.0), (3, 3, 2.0),
-    ]);
+    let coo = make_test_coo(
+        4,
+        4,
+        &[
+            (0, 1, 1.0),
+            (1, 0, -2.0),
+            (1, 3, 3.5),
+            (2, 2, 4.0),
+            (3, 1, -1.0),
+            (3, 3, 2.0),
+        ],
+    );
     let original_dense = dense_from_coo(&coo);
     let roundtrip = coo
-        .to_csr().expect("csr")
-        .to_csc().expect("csc")
-        .to_coo().expect("coo");
+        .to_csr()
+        .expect("csr")
+        .to_csc()
+        .expect("csc")
+        .to_coo()
+        .expect("coo");
     let roundtrip_dense = dense_from_coo(&roundtrip);
     let diff = max_abs_diff_matrix(&original_dense, &roundtrip_dense);
     let pass = diff <= TOL;
@@ -353,7 +411,9 @@ fn diff_009_coo_to_csr_to_csc_roundtrip_vs_dense() {
         input_summary: "4x4 COO->CSR->CSC->COO roundtrip".into(),
         expected: format!("{original_dense:?}"),
         actual: format!("{roundtrip_dense:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -363,12 +423,19 @@ fn diff_009_coo_to_csr_to_csc_roundtrip_vs_dense() {
 #[test]
 fn diff_010_spmv_rectangular_4x6_vs_dense() {
     let start = Instant::now();
-    let coo = make_test_coo(4, 6, &[
-        (0, 0, 1.0), (0, 5, -1.0),
-        (1, 2, 2.0), (1, 3, 3.0),
-        (2, 1, -4.0),
-        (3, 4, 5.0), (3, 5, -2.0),
-    ]);
+    let coo = make_test_coo(
+        4,
+        6,
+        &[
+            (0, 0, 1.0),
+            (0, 5, -1.0),
+            (1, 2, 2.0),
+            (1, 3, 3.0),
+            (2, 1, -4.0),
+            (3, 4, 5.0),
+            (3, 5, -2.0),
+        ],
+    );
     let csr = coo.to_csr().expect("csr");
     let x = vec![1.0, 2.0, 3.0, -1.0, 0.5, 4.0];
     let sparse_result = spmv_csr(&csr, &x).expect("spmv");
@@ -381,7 +448,9 @@ fn diff_010_spmv_rectangular_4x6_vs_dense() {
         input_summary: "4x6 rectangular spmv".into(),
         expected: format!("{expected:?}"),
         actual: format!("{sparse_result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -397,7 +466,8 @@ fn diff_011_spmv_duplicate_entries_sum() {
         vec![0, 0, 1],
         vec![0, 0, 1],
         true,
-    ).expect("coo with dups");
+    )
+    .expect("coo with dups");
     let csr = coo.to_csr().expect("csr");
     let x = vec![2.0, 3.0];
     let sparse_result = spmv_csr(&csr, &x).expect("spmv");
@@ -411,7 +481,9 @@ fn diff_011_spmv_duplicate_entries_sum() {
         input_summary: "2x2 with duplicate entries summed".into(),
         expected: format!("{expected:?}"),
         actual: format!("{sparse_result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -436,7 +508,9 @@ fn diff_012_random_deterministic_spmv() {
         input_summary: "8x8 random(seed=42) deterministic pair".into(),
         expected: format!("{r1:?}"),
         actual: format!("{r2:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -446,10 +520,17 @@ fn diff_012_random_deterministic_spmv() {
 #[test]
 fn diff_013_csc_spmv_tall_matrix() {
     let start = Instant::now();
-    let coo = make_test_coo(5, 2, &[
-        (0, 0, 1.0), (1, 1, 2.0), (2, 0, -1.0),
-        (3, 1, 3.0), (4, 0, 0.5),
-    ]);
+    let coo = make_test_coo(
+        5,
+        2,
+        &[
+            (0, 0, 1.0),
+            (1, 1, 2.0),
+            (2, 0, -1.0),
+            (3, 1, 3.0),
+            (4, 0, 0.5),
+        ],
+    );
     let csc = coo.to_csc().expect("csc");
     let x = vec![2.0, -1.0];
     let sparse_result = spmv_csc(&csc, &x).expect("spmv");
@@ -462,7 +543,9 @@ fn diff_013_csc_spmv_tall_matrix() {
         input_summary: "5x2 tall CSC spmv".into(),
         expected: format!("{expected:?}"),
         actual: format!("{sparse_result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -486,7 +569,9 @@ fn diff_014_mode_strict_conversion_preserves_values() {
         input_summary: "3x3 strict COO->CSR->CSC roundtrip".into(),
         expected: format!("{original_dense:?}"),
         actual: format!("{result_dense:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -501,8 +586,18 @@ fn diff_015_scale_coo_and_csc_match_csr() {
     let scaled_coo_dense = dense_from_coo(&scale_coo(&coo, alpha).expect("coo scale"));
     let csr = coo.to_csr().expect("csr");
     let csc = coo.to_csc().expect("csc");
-    let scaled_csr_dense = dense_from_coo(&scale_csr(&csr, alpha).expect("csr scale").to_coo().expect("coo"));
-    let scaled_csc_dense = dense_from_coo(&scale_csc(&csc, alpha).expect("csc scale").to_coo().expect("coo"));
+    let scaled_csr_dense = dense_from_coo(
+        &scale_csr(&csr, alpha)
+            .expect("csr scale")
+            .to_coo()
+            .expect("coo"),
+    );
+    let scaled_csc_dense = dense_from_coo(
+        &scale_csc(&csc, alpha)
+            .expect("csc scale")
+            .to_coo()
+            .expect("coo"),
+    );
     let diff1 = max_abs_diff_matrix(&scaled_coo_dense, &scaled_csr_dense);
     let diff2 = max_abs_diff_matrix(&scaled_coo_dense, &scaled_csc_dense);
     let diff = diff1.max(diff2);
@@ -513,7 +608,9 @@ fn diff_015_scale_coo_and_csc_match_csr() {
         input_summary: format!("3x3 scale({alpha}) COO vs CSR vs CSC"),
         expected: format!("{scaled_coo_dense:?}"),
         actual: format!("csr_diff={diff1}, csc_diff={diff2}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -536,7 +633,9 @@ fn diff_016_spmv_wide_matrix_6x2() {
         input_summary: "2x6 wide spmv".into(),
         expected: format!("{expected:?}"),
         actual: format!("{sparse_result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -558,7 +657,11 @@ fn meta_001_scaling_invariance_spmv() {
     let x = vec![1.0, 2.0, -3.0];
 
     let lhs = spmv_csr(&scale_csr(&csr, alpha).expect("scale"), &x).expect("spmv(αA, x)");
-    let rhs: Vec<f64> = spmv_csr(&csr, &x).expect("spmv(A,x)").iter().map(|v| v * alpha).collect();
+    let rhs: Vec<f64> = spmv_csr(&csr, &x)
+        .expect("spmv(A,x)")
+        .iter()
+        .map(|v| v * alpha)
+        .collect();
     let diff = max_abs_diff_vec(&lhs, &rhs);
     let pass = diff <= TOL;
     emit_log(&DiffTestLog {
@@ -567,7 +670,9 @@ fn meta_001_scaling_invariance_spmv() {
         input_summary: "spmv(αA,x) == α·spmv(A,x)".into(),
         expected: format!("{rhs:?}"),
         actual: format!("{lhs:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -578,8 +683,12 @@ fn meta_001_scaling_invariance_spmv() {
 fn meta_002_addition_commutativity() {
     // A + B == B + A
     let start = Instant::now();
-    let a = make_test_coo(3, 3, &[(0, 0, 1.0), (1, 2, -2.0)]).to_csr().expect("a");
-    let b = make_test_coo(3, 3, &[(0, 2, 3.0), (2, 1, 4.0)]).to_csr().expect("b");
+    let a = make_test_coo(3, 3, &[(0, 0, 1.0), (1, 2, -2.0)])
+        .to_csr()
+        .expect("a");
+    let b = make_test_coo(3, 3, &[(0, 2, 3.0), (2, 1, 4.0)])
+        .to_csr()
+        .expect("b");
     let ab = dense_from_coo(&add_csr(&a, &b).expect("a+b").to_coo().expect("coo"));
     let ba = dense_from_coo(&add_csr(&b, &a).expect("b+a").to_coo().expect("coo"));
     let diff = max_abs_diff_matrix(&ab, &ba);
@@ -590,7 +699,9 @@ fn meta_002_addition_commutativity() {
         input_summary: "A+B == B+A".into(),
         expected: format!("{ab:?}"),
         actual: format!("{ba:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -617,7 +728,9 @@ fn meta_003_additive_identity() {
         input_summary: "A + 0 == A".into(),
         expected: format!("{expected:?}"),
         actual: format!("{result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -628,7 +741,9 @@ fn meta_003_additive_identity() {
 fn meta_004_additive_inverse() {
     // A + (-A) == 0
     let start = Instant::now();
-    let a = make_test_coo(3, 3, &[(0, 0, 5.0), (1, 2, -3.0), (2, 1, 7.0)]).to_csr().expect("a");
+    let a = make_test_coo(3, 3, &[(0, 0, 5.0), (1, 2, -3.0), (2, 1, 7.0)])
+        .to_csr()
+        .expect("a");
     let neg_a = scale_csr(&a, -1.0).expect("neg");
     let result_coo = add_csr(&a, &neg_a).expect("a+(-a)").to_coo().expect("coo");
     let result = dense_from_coo(&result_coo);
@@ -641,7 +756,9 @@ fn meta_004_additive_inverse() {
         input_summary: "A + (-A) == 0".into(),
         expected: format!("{zeros:?}"),
         actual: format!("{result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -652,10 +769,20 @@ fn meta_004_additive_inverse() {
 fn meta_005_subtraction_self_is_zero() {
     // A - A == 0
     let start = Instant::now();
-    let a = make_test_coo(4, 4, &[
-        (0, 0, 1.0), (1, 1, 2.0), (2, 2, 3.0), (3, 3, 4.0),
-        (0, 3, -1.5), (2, 0, 0.5),
-    ]).to_csr().expect("a");
+    let a = make_test_coo(
+        4,
+        4,
+        &[
+            (0, 0, 1.0),
+            (1, 1, 2.0),
+            (2, 2, 3.0),
+            (3, 3, 4.0),
+            (0, 3, -1.5),
+            (2, 0, 0.5),
+        ],
+    )
+    .to_csr()
+    .expect("a");
     let result = dense_from_coo(&sub_csr(&a, &a).expect("a-a").to_coo().expect("coo"));
     let zeros = vec![vec![0.0; 4]; 4];
     let diff = max_abs_diff_matrix(&result, &zeros);
@@ -666,7 +793,9 @@ fn meta_005_subtraction_self_is_zero() {
         input_summary: "A - A == 0".into(),
         expected: format!("{zeros:?}"),
         actual: format!("{result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -684,10 +813,22 @@ fn meta_006_spmv_linearity() {
     let alpha = 2.0;
     let beta = -1.5;
 
-    let combined: Vec<f64> = x.iter().zip(y.iter()).map(|(a, b)| alpha * a + beta * b).collect();
+    let combined: Vec<f64> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(a, b)| alpha * a + beta * b)
+        .collect();
     let lhs = spmv_csr(&csr, &combined).expect("A(αx+βy)");
-    let ax: Vec<f64> = spmv_csr(&csr, &x).expect("Ax").iter().map(|v| v * alpha).collect();
-    let ay: Vec<f64> = spmv_csr(&csr, &y).expect("Ay").iter().map(|v| v * beta).collect();
+    let ax: Vec<f64> = spmv_csr(&csr, &x)
+        .expect("Ax")
+        .iter()
+        .map(|v| v * alpha)
+        .collect();
+    let ay: Vec<f64> = spmv_csr(&csr, &y)
+        .expect("Ay")
+        .iter()
+        .map(|v| v * beta)
+        .collect();
     let rhs: Vec<f64> = ax.iter().zip(ay.iter()).map(|(a, b)| a + b).collect();
     let diff = max_abs_diff_vec(&lhs, &rhs);
     let pass = diff <= TOL;
@@ -697,7 +838,9 @@ fn meta_006_spmv_linearity() {
         input_summary: "A(αx+βy) == α·Ax + β·Ay".into(),
         expected: format!("{rhs:?}"),
         actual: format!("{lhs:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -712,8 +855,8 @@ fn meta_006_spmv_linearity() {
 #[test]
 fn adv_001_zero_nnz_matrix_spmv() {
     let start = Instant::now();
-    let empty = CooMatrix::from_triplets(Shape2D::new(4, 4), vec![], vec![], vec![], false)
-        .expect("empty");
+    let empty =
+        CooMatrix::from_triplets(Shape2D::new(4, 4), vec![], vec![], vec![], false).expect("empty");
     let csr = empty.to_csr().expect("csr");
     let x = vec![1.0, 2.0, 3.0, 4.0];
     let result = spmv_csr(&csr, &x).expect("spmv");
@@ -726,7 +869,9 @@ fn adv_001_zero_nnz_matrix_spmv() {
         input_summary: "4x4 zero-nnz matrix spmv".into(),
         expected: format!("{expected:?}"),
         actual: format!("{result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -743,7 +888,8 @@ fn adv_002_hardened_mode_rejects_unsorted_csr() {
         vec![2, 0, 1],
         vec![0, 2, 3],
         false,
-    ).expect("unsorted csr");
+    )
+    .expect("unsorted csr");
     let err = csr_to_csc_with_mode(&csr, RuntimeMode::Hardened, "adv-002");
     let pass = err.is_err();
     let error_desc = match &err {
@@ -756,7 +902,9 @@ fn adv_002_hardened_mode_rejects_unsorted_csr() {
         input_summary: "unsorted CSR in hardened mode".into(),
         expected: "SparseError::InvalidSparseStructure".into(),
         actual: error_desc,
-        diff: 0.0, tolerance: 0.0, pass,
+        diff: 0.0,
+        tolerance: 0.0,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -776,7 +924,9 @@ fn adv_003_spsolve_non_square_is_rejected() {
         input_summary: "spsolve with 2x3 non-square matrix".into(),
         expected: "SparseError::InvalidShape".into(),
         actual: format!("{err:?}"),
-        diff: 0.0, tolerance: 0.0, pass,
+        diff: 0.0,
+        tolerance: 0.0,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -796,7 +946,9 @@ fn adv_004_nan_in_rhs_rejected_by_spsolve() {
         input_summary: "spsolve with NaN in rhs".into(),
         expected: "SparseError::NonFiniteInput".into(),
         actual: format!("{err:?}"),
-        diff: 0.0, tolerance: 0.0, pass,
+        diff: 0.0,
+        tolerance: 0.0,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -821,7 +973,9 @@ fn adv_005_extreme_fill_dense_like_sparse() {
         input_summary: format!("{n}x{n} density=1.0 (full fill-in)"),
         expected: format!("len={}", expected.len()),
         actual: format!("max_diff={diff}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -838,7 +992,8 @@ fn adv_006_coo_duplicate_handling_all_same_position() {
         vec![0, 0, 0, 0, 0],
         vec![0, 0, 0, 0, 0],
         true,
-    ).expect("all dups");
+    )
+    .expect("all dups");
     let expected_val = 15.0; // 1+2+3+4+5
     let csr = coo.to_csr().expect("csr");
     let result = spmv_csr(&csr, &[1.0, 0.0]).expect("spmv");
@@ -850,7 +1005,9 @@ fn adv_006_coo_duplicate_handling_all_same_position() {
         input_summary: "5 entries all at (0,0), sum=15".into(),
         expected: format!("[{expected_val}, 0.0]"),
         actual: format!("{result:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -861,13 +1018,9 @@ fn adv_006_coo_duplicate_handling_all_same_position() {
 fn adv_007_hardened_rejects_empty_structural_row_spsolve() {
     let start = Instant::now();
     // Row 1 has no entries -> structurally singular
-    let csr = CsrMatrix::from_components(
-        Shape2D::new(2, 2),
-        vec![1.0],
-        vec![0],
-        vec![0, 1, 1],
-        true,
-    ).expect("csr with empty row");
+    let csr =
+        CsrMatrix::from_components(Shape2D::new(2, 2), vec![1.0], vec![0], vec![0, 1, 1], true)
+            .expect("csr with empty row");
     let options = SolveOptions {
         mode: RuntimeMode::Hardened,
         ..SolveOptions::default()
@@ -880,7 +1033,9 @@ fn adv_007_hardened_rejects_empty_structural_row_spsolve() {
         input_summary: "spsolve with empty structural row in hardened mode".into(),
         expected: "SparseError::SingularMatrix".into(),
         actual: format!("{err:?}"),
-        diff: 0.0, tolerance: 0.0, pass,
+        diff: 0.0,
+        tolerance: 0.0,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -908,7 +1063,9 @@ fn adv_008_boundary_single_element_matrix_all_formats() {
         input_summary: "1x1 matrix [42] * [2] across all formats".into(),
         expected: format!("{expected:?}"),
         actual: format!("coo={r_coo:?} csr={r_csr:?} csc={r_csc:?}"),
-        diff, tolerance: TOL, pass,
+        diff,
+        tolerance: TOL,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -918,13 +1075,7 @@ fn adv_008_boundary_single_element_matrix_all_formats() {
 #[test]
 fn adv_009_index_out_of_bounds_rejected() {
     let start = Instant::now();
-    let err = CooMatrix::from_triplets(
-        Shape2D::new(2, 2),
-        vec![1.0],
-        vec![5],
-        vec![0],
-        false,
-    );
+    let err = CooMatrix::from_triplets(Shape2D::new(2, 2), vec![1.0], vec![5], vec![0], false);
     let pass = matches!(err, Err(SparseError::IndexOutOfBounds { .. }));
     emit_log(&DiffTestLog {
         test_id: "adv_009_index_oob_rejected".into(),
@@ -932,7 +1083,9 @@ fn adv_009_index_out_of_bounds_rejected() {
         input_summary: "COO with row index 5 in 2x2 matrix".into(),
         expected: "SparseError::IndexOutOfBounds".into(),
         actual: format!("{err:?}"),
-        diff: 0.0, tolerance: 0.0, pass,
+        diff: 0.0,
+        tolerance: 0.0,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });
@@ -952,7 +1105,9 @@ fn adv_010_vector_length_mismatch_rejected() {
         input_summary: "spmv with 3x3 matrix and length-2 vector".into(),
         expected: "SparseError::IncompatibleShape".into(),
         actual: format!("{err:?}"),
-        diff: 0.0, tolerance: 0.0, pass,
+        diff: 0.0,
+        tolerance: 0.0,
+        pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
     });

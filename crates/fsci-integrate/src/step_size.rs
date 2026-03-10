@@ -50,20 +50,10 @@ where
     // Hardened mode: validate inputs are finite.
     if request.mode == RuntimeMode::Hardened {
         if !request.y0.iter().all(|v| v.is_finite()) {
-            eprintln!(
-                "{{\"function\":\"select_initial_step\",\"event\":\"non_finite_y0\",\"mode\":\"Hardened\"}}"
-            );
-            return Err(IntegrateValidationError::NotYetImplemented {
-                function: "select_initial_step: non-finite y0 in Hardened mode",
-            });
+            return Err(IntegrateValidationError::NonFiniteY0);
         }
         if !request.f0.iter().all(|v| v.is_finite()) {
-            eprintln!(
-                "{{\"function\":\"select_initial_step\",\"event\":\"non_finite_f0\",\"mode\":\"Hardened\"}}"
-            );
-            return Err(IntegrateValidationError::NotYetImplemented {
-                function: "select_initial_step: non-finite f0 in Hardened mode",
-            });
+            return Err(IntegrateValidationError::NonFiniteF0);
         }
     }
 
@@ -304,5 +294,51 @@ mod tests {
         };
         let h = select_initial_step(&mut |_t, _y| vec![1e-8], &request).unwrap();
         assert!(h > 0.0);
+    }
+
+    #[test]
+    fn select_initial_step_hardened_rejects_non_finite_y0() {
+        let request = InitialStepRequest {
+            t0: 0.0,
+            y0: &[f64::NAN],
+            t_bound: 1.0,
+            max_step: f64::INFINITY,
+            f0: &[1.0],
+            direction: 1.0,
+            order: 4.0,
+            rtol: 1e-3,
+            atol: ToleranceValue::Scalar(1e-6),
+            mode: RuntimeMode::Hardened,
+        };
+
+        let err = select_initial_step(
+            &mut |_t, _y| panic!("hardened validation should fail before RHS evaluation"),
+            &request,
+        )
+        .expect_err("non-finite y0 must fail in Hardened mode");
+        assert_eq!(err, IntegrateValidationError::NonFiniteY0);
+    }
+
+    #[test]
+    fn select_initial_step_hardened_rejects_non_finite_f0() {
+        let request = InitialStepRequest {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 1.0,
+            max_step: f64::INFINITY,
+            f0: &[f64::INFINITY],
+            direction: 1.0,
+            order: 4.0,
+            rtol: 1e-3,
+            atol: ToleranceValue::Scalar(1e-6),
+            mode: RuntimeMode::Hardened,
+        };
+
+        let err = select_initial_step(
+            &mut |_t, _y| panic!("hardened validation should fail before RHS evaluation"),
+            &request,
+        )
+        .expect_err("non-finite f0 must fail in Hardened mode");
+        assert_eq!(err, IntegrateValidationError::NonFiniteF0);
     }
 }

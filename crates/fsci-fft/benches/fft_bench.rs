@@ -92,8 +92,8 @@ fn bench_irfft(c: &mut Criterion) {
             |b, (spectrum, n)| {
                 let opts = default_opts();
                 b.iter(|| {
-                    let out =
-                        irfft(black_box(spectrum), black_box(Some(*n)), black_box(&opts)).expect("irfft");
+                    let out = irfft(black_box(spectrum), black_box(Some(*n)), black_box(&opts))
+                        .expect("irfft");
                     black_box(out.len());
                 });
             },
@@ -127,5 +127,12 @@ fn bench_fft2(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_fft, bench_ifft, bench_rfft, bench_irfft, bench_fft2);
+criterion_group!(
+    benches,
+    bench_fft,
+    bench_ifft,
+    bench_rfft,
+    bench_irfft,
+    bench_fft2
+);
 criterion_main!(benches);

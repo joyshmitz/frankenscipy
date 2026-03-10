@@ -803,7 +803,9 @@ mod tests {
 
     #[test]
     fn fft_power_of_2_roundtrip() {
-        let input: Vec<_> = (0..16).map(|i| ((i as f64).sin(), (i as f64).cos())).collect();
+        let input: Vec<_> = (0..16)
+            .map(|i| ((i as f64).sin(), (i as f64).cos()))
+            .collect();
         let spectrum = fft(&input, &FftOptions::default()).expect("fft n=16");
         let recovered = ifft(&spectrum, &FftOptions::default()).expect("ifft n=16");
         for (&a, &b) in recovered.iter().zip(&input) {
@@ -816,7 +818,12 @@ mod tests {
         // sin(2π·k/N) for k=1 has DFT peak at bin 1 and N-1
         let n = 8;
         let input: Vec<_> = (0..n)
-            .map(|k| ((2.0 * std::f64::consts::PI * k as f64 / n as f64).sin(), 0.0))
+            .map(|k| {
+                (
+                    (2.0 * std::f64::consts::PI * k as f64 / n as f64).sin(),
+                    0.0,
+                )
+            })
             .collect();
         let spectrum = fft(&input, &FftOptions::default()).expect("fft sine");
         // bin 0 should be ~0, bin 1 should have large imaginary part

@@ -16,9 +16,8 @@ use std::time::Instant;
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialError, SpecialErrorKind, SpecialTensor,
-    beta, erf, erfc, erfinv, gamma, gammainc, gammaincc, gammaln, rgamma,
-    j0, j1,
+    SpecialError, SpecialErrorKind, SpecialTensor, beta, erf, erfc, erfinv, gamma, gammainc,
+    gammaincc, gammaln, j0, j1, rgamma,
 };
 use serde::Serialize;
 
@@ -151,10 +150,17 @@ fn e2e_001_gamma_identity_chain() {
     let result = gamma(&scalar(1.0), mode).expect("gamma(1)");
     let val = real_val(&result);
     let pass = (val - 1.0).abs() < TOL;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "gamma_1", "gamma", "x=1.0", &format!("result={val}, expected=1.0"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        1,
+        "gamma_1",
+        "gamma",
+        "x=1.0",
+        &format!("result={val}, expected=1.0"),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // gamma(5) = 4! = 24
@@ -162,10 +168,17 @@ fn e2e_001_gamma_identity_chain() {
     let result = gamma(&scalar(5.0), mode).expect("gamma(5)");
     let val = real_val(&result);
     let pass = (val - 24.0).abs() < TOL;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "gamma_5", "gamma", "x=5.0", &format!("result={val}, expected=24.0"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        2,
+        "gamma_5",
+        "gamma",
+        "x=5.0",
+        &format!("result={val}, expected=24.0"),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // gamma(1/2) = sqrt(pi)
@@ -174,10 +187,17 @@ fn e2e_001_gamma_identity_chain() {
     let val = real_val(&result);
     let expected = PI.sqrt();
     let pass = (val - expected).abs() < 1e-8;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "gamma_half", "gamma", "x=0.5", &format!("result={val:.6}, expected={expected:.6}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        3,
+        "gamma_half",
+        "gamma",
+        "x=0.5",
+        &format!("result={val:.6}, expected={expected:.6}"),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // gammaln(5) = ln(24)
@@ -186,10 +206,17 @@ fn e2e_001_gamma_identity_chain() {
     let val = real_val(&result);
     let expected = 24.0_f64.ln();
     let pass = (val - expected).abs() < TOL;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "gammaln_5", "gammaln", "x=5.0", &format!("result={val:.6}, expected={expected:.6}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        4,
+        "gammaln_5",
+        "gammaln",
+        "x=5.0",
+        &format!("result={val:.6}, expected={expected:.6}"),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -222,10 +249,17 @@ fn e2e_002_error_function_chain() {
     let result = erf(&scalar(0.0), mode).expect("erf(0)");
     let val = real_val(&result);
     let pass = val.abs() < TOL;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "erf_zero", "erf", "x=0.0", &format!("result={val}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        1,
+        "erf_zero",
+        "erf",
+        "x=0.0",
+        &format!("result={val}"),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // erf(x) + erfc(x) = 1 for x = 1.5
@@ -235,11 +269,17 @@ fn e2e_002_error_function_chain() {
     let erfc_val = real_val(&erfc(&scalar(x), mode).expect("erfc(1.5)"));
     let sum = erf_val + erfc_val;
     let pass = (sum - 1.0).abs() < TOL;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "erf_erfc_sum", "erf+erfc", &format!("x={x}"),
+        2,
+        "erf_erfc_sum",
+        "erf+erfc",
+        &format!("x={x}"),
         &format!("erf={erf_val:.6}+erfc={erfc_val:.6}={sum:.6}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // erfinv(erf(0.5)) ≈ 0.5
@@ -247,11 +287,17 @@ fn e2e_002_error_function_chain() {
     let erf_05 = real_val(&erf(&scalar(0.5), mode).expect("erf(0.5)"));
     let roundtrip = real_val(&erfinv(&scalar(erf_05), mode).expect("erfinv"));
     let pass = (roundtrip - 0.5).abs() < 1e-6;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "erfinv_roundtrip", "erfinv(erf(x))", "x=0.5",
+        3,
+        "erfinv_roundtrip",
+        "erfinv(erf(x))",
+        "x=0.5",
         &format!("erf(0.5)={erf_05:.6}, erfinv={roundtrip:.6}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -285,8 +331,13 @@ fn e2e_003_beta_gamma_relation() {
     let t_start = Instant::now();
     let beta_val = real_val(&beta(&scalar(a), &scalar(b), mode).expect("beta"));
     steps.push(make_step(
-        1, "beta", "beta", &format!("a={a}, b={b}"), &format!("beta={beta_val:.6}"),
-        t_start.elapsed().as_nanos(), "ok",
+        1,
+        "beta",
+        "beta",
+        &format!("a={a}, b={b}"),
+        &format!("beta={beta_val:.6}"),
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // gamma(a) * gamma(b) / gamma(a+b)
@@ -298,10 +349,13 @@ fn e2e_003_beta_gamma_relation() {
     let diff = (beta_val - expected).abs();
     let pass = diff < TOL;
     steps.push(make_step(
-        2, "verify_relation", "gamma+compare",
+        2,
+        "verify_relation",
+        "gamma+compare",
         &format!("ga={ga:.4}, gb={gb:.4}, gab={gab:.4}"),
         &format!("expected={expected:.6}, diff={diff:.4e}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -342,9 +396,17 @@ fn e2e_004_gamma_pole_recovery() {
         Err(_) => true,
     };
     steps.push(make_step(
-        1, "gamma_pole_strict", "gamma", "x=-2.0, strict",
+        1,
+        "gamma_pole_strict",
+        "gamma",
+        "x=-2.0, strict",
         &format!("nan_or_inf={is_nan_or_inf}"),
-        t_start.elapsed().as_nanos(), if is_nan_or_inf { "expected_behavior" } else { "unexpected" },
+        t_start.elapsed().as_nanos(),
+        if is_nan_or_inf {
+            "expected_behavior"
+        } else {
+            "unexpected"
+        },
     ));
 
     // Step 2: gamma(-2) in hardened mode → should return error
@@ -352,9 +414,17 @@ fn e2e_004_gamma_pole_recovery() {
     let result = gamma(&scalar(-2.0), RuntimeMode::Hardened);
     let is_err = result.is_err();
     steps.push(make_step(
-        2, "gamma_pole_hardened", "gamma", "x=-2.0, hardened",
+        2,
+        "gamma_pole_hardened",
+        "gamma",
+        "x=-2.0, hardened",
         &format!("error={is_err}"),
-        t_start.elapsed().as_nanos(), if is_err { "expected_error" } else { "unexpected_ok" },
+        t_start.elapsed().as_nanos(),
+        if is_err {
+            "expected_error"
+        } else {
+            "unexpected_ok"
+        },
     ));
 
     // Step 3: Recover by using non-pole value
@@ -363,9 +433,13 @@ fn e2e_004_gamma_pole_recovery() {
     let val = real_val(&result);
     let pass = (val - 2.0).abs() < TOL;
     steps.push(make_step(
-        3, "gamma_recovery", "gamma", "x=3.0 (non-pole)",
+        3,
+        "gamma_recovery",
+        "gamma",
+        "x=3.0 (non-pole)",
         &format!("result={val}, expected=2.0, pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let overall_pass = is_nan_or_inf && is_err && pass;
@@ -400,19 +474,41 @@ fn e2e_005_erfinv_domain_recovery() {
         Err(_) => true,
     };
     steps.push(make_step(
-        1, "erfinv_oob_strict", "erfinv", "x=1.5 (out of [-1,1])",
+        1,
+        "erfinv_oob_strict",
+        "erfinv",
+        "x=1.5 (out of [-1,1])",
         &format!("nan_or_error={is_nan}"),
-        t_start.elapsed().as_nanos(), if is_nan { "expected_behavior" } else { "unexpected" },
+        t_start.elapsed().as_nanos(),
+        if is_nan {
+            "expected_behavior"
+        } else {
+            "unexpected"
+        },
     ));
 
     // Step 2: Hardened mode → explicit error
     let t_start = Instant::now();
     let result = erfinv(&scalar(1.5), RuntimeMode::Hardened);
-    let is_err = matches!(result, Err(SpecialError { kind: SpecialErrorKind::DomainError, .. }));
+    let is_err = matches!(
+        result,
+        Err(SpecialError {
+            kind: SpecialErrorKind::DomainError,
+            ..
+        })
+    );
     steps.push(make_step(
-        2, "erfinv_oob_hardened", "erfinv", "x=1.5, hardened",
+        2,
+        "erfinv_oob_hardened",
+        "erfinv",
+        "x=1.5, hardened",
         &format!("domain_error={is_err}"),
-        t_start.elapsed().as_nanos(), if is_err { "expected_error" } else { "unexpected" },
+        t_start.elapsed().as_nanos(),
+        if is_err {
+            "expected_error"
+        } else {
+            "unexpected"
+        },
     ));
 
     // Step 3: Valid input succeeds
@@ -421,9 +517,13 @@ fn e2e_005_erfinv_domain_recovery() {
     let val = real_val(&result);
     let pass = val.is_finite();
     steps.push(make_step(
-        3, "erfinv_valid", "erfinv", "x=0.5 (valid)",
+        3,
+        "erfinv_valid",
+        "erfinv",
+        "x=0.5 (valid)",
         &format!("result={val:.6}, finite={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let overall_pass = is_nan && is_err && pass;
@@ -458,9 +558,13 @@ fn e2e_006_mode_switch_behavior() {
         Err(_) => false,
     };
     steps.push(make_step(
-        1, "strict_domain", "erfinv", "x=1.1, strict",
+        1,
+        "strict_domain",
+        "erfinv",
+        "x=1.1, strict",
         &format!("returns_nan={strict_nan}"),
-        t_start.elapsed().as_nanos(), if strict_nan { "ok" } else { "unexpected" },
+        t_start.elapsed().as_nanos(),
+        if strict_nan { "ok" } else { "unexpected" },
     ));
 
     // Same input in hardened → error
@@ -468,9 +572,13 @@ fn e2e_006_mode_switch_behavior() {
     let hardened_result = erfinv(&scalar(1.1), RuntimeMode::Hardened);
     let hardened_err = hardened_result.is_err();
     steps.push(make_step(
-        2, "hardened_domain", "erfinv", "x=1.1, hardened",
+        2,
+        "hardened_domain",
+        "erfinv",
+        "x=1.1, hardened",
         &format!("returns_error={hardened_err}"),
-        t_start.elapsed().as_nanos(), if hardened_err { "ok" } else { "unexpected" },
+        t_start.elapsed().as_nanos(),
+        if hardened_err { "ok" } else { "unexpected" },
     ));
 
     let pass = strict_nan && hardened_err;
@@ -508,8 +616,13 @@ fn e2e_007_bessel_zero_boundary() {
     let val = real_val(&result);
     let pass_j0 = (val - 1.0).abs() < 1e-8;
     steps.push(make_step(
-        1, "j0_zero", "j0", "x=0", &format!("result={val}, expected=1.0"),
-        t_start.elapsed().as_nanos(), if pass_j0 { "ok" } else { "fail" },
+        1,
+        "j0_zero",
+        "j0",
+        "x=0",
+        &format!("result={val}, expected=1.0"),
+        t_start.elapsed().as_nanos(),
+        if pass_j0 { "ok" } else { "fail" },
     ));
 
     // J1(0) = 0
@@ -518,8 +631,13 @@ fn e2e_007_bessel_zero_boundary() {
     let val = real_val(&result);
     let pass_j1 = val.abs() < 1e-8;
     steps.push(make_step(
-        2, "j1_zero", "j1", "x=0", &format!("result={val}, expected=0.0"),
-        t_start.elapsed().as_nanos(), if pass_j1 { "ok" } else { "fail" },
+        2,
+        "j1_zero",
+        "j1",
+        "x=0",
+        &format!("result={val}, expected=0.0"),
+        t_start.elapsed().as_nanos(),
+        if pass_j1 { "ok" } else { "fail" },
     ));
 
     let overall_pass = pass_j0 && pass_j1;
@@ -554,11 +672,17 @@ fn e2e_008_gamma_rgamma_identity() {
         let rg = real_val(&rgamma(&scalar(x), mode).expect("rgamma"));
         let product = g * rg;
         let pass = (product - 1.0).abs() < 1e-8;
-        if !pass { all_pass = false; }
+        if !pass {
+            all_pass = false;
+        }
         steps.push(make_step(
-            steps.len() + 1, &format!("gamma_rgamma_x{x}"), "gamma*rgamma",
-            &format!("x={x}"), &format!("product={product:.6}, pass={pass}"),
-            t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+            steps.len() + 1,
+            &format!("gamma_rgamma_x{x}"),
+            "gamma*rgamma",
+            &format!("x={x}"),
+            &format!("product={product:.6}, pass={pass}"),
+            t_start.elapsed().as_nanos(),
+            if pass { "ok" } else { "fail" },
         ));
     }
 
@@ -593,11 +717,17 @@ fn e2e_009_incomplete_gamma_complement() {
         let incc = real_val(&gammaincc(&scalar(a), &scalar(x), mode).expect("gammaincc"));
         let sum = inc + incc;
         let pass = (sum - 1.0).abs() < 1e-8;
-        if !pass { all_pass = false; }
+        if !pass {
+            all_pass = false;
+        }
         steps.push(make_step(
-            steps.len() + 1, &format!("gammainc_a{a}_x{x}"), "gammainc+gammaincc",
-            &format!("a={a}, x={x}"), &format!("sum={sum:.6}, pass={pass}"),
-            t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+            steps.len() + 1,
+            &format!("gammainc_a{a}_x{x}"),
+            "gammainc+gammaincc",
+            &format!("a={a}, x={x}"),
+            &format!("sum={sum:.6}, pass={pass}"),
+            t_start.elapsed().as_nanos(),
+            if pass { "ok" } else { "fail" },
         ));
     }
 
@@ -639,10 +769,13 @@ fn e2e_010_rapid_sequential() {
         }
     }
     steps.push(make_step(
-        1, "rapid_gamma_gammaln", "gamma+gammaln",
+        1,
+        "rapid_gamma_gammaln",
+        "gamma+gammaln",
         &format!("{iterations} iterations, x=0.5..10.4"),
         &format!("all_pass={all_pass}"),
-        t_start.elapsed().as_nanos(), if all_pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if all_pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {

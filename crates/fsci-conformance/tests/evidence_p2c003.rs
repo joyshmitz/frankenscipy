@@ -9,8 +9,8 @@
 use blake3::hash;
 use fsci_conformance::{RaptorQSidecar, generate_raptorq_sidecar};
 use fsci_opt::{
-    ConvergenceStatus, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions,
-    bfgs, bisect, brentq, brenth, cg_pr_plus, powell, ridder,
+    ConvergenceStatus, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, bfgs, bisect,
+    brenth, brentq, cg_pr_plus, powell, ridder,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -152,7 +152,11 @@ fn check_bfgs_quadratic(dim: usize) -> ParityGate {
 fn check_bfgs_rosenbrock() -> ParityGate {
     let x0 = vec![0.0, 0.0];
     let result = bfgs(&rosenbrock, &x0, minimize_opts(OptimizeMethod::Bfgs)).unwrap();
-    let err_x = result.x.iter().map(|xi| (xi - 1.0).abs()).fold(0.0_f64, f64::max);
+    let err_x = result
+        .x
+        .iter()
+        .map(|xi| (xi - 1.0).abs())
+        .fold(0.0_f64, f64::max);
     let pass = matches!(result.status, ConvergenceStatus::Success) && err_x < 0.1;
     ParityGate {
         fixture_id: "bfgs_rosenbrock_2d".into(),
@@ -166,7 +170,12 @@ fn check_bfgs_rosenbrock() -> ParityGate {
 
 fn check_cg_quadratic(dim: usize) -> ParityGate {
     let x0: Vec<f64> = vec![1.0; dim];
-    let result = cg_pr_plus(&quadratic, &x0, minimize_opts(OptimizeMethod::ConjugateGradient)).unwrap();
+    let result = cg_pr_plus(
+        &quadratic,
+        &x0,
+        minimize_opts(OptimizeMethod::ConjugateGradient),
+    )
+    .unwrap();
     let max_abs = result.x.iter().map(|xi| xi.abs()).fold(0.0_f64, f64::max);
     ParityGate {
         fixture_id: format!("cg_quadratic_dim{dim}"),
@@ -279,12 +288,21 @@ fn check_root_methods_agree() -> ParityGate {
 fn check_minimize_methods_agree() -> ParityGate {
     let x0 = vec![2.0, 3.0];
     let bfgs_r = bfgs(&quadratic, &x0, minimize_opts(OptimizeMethod::Bfgs)).unwrap();
-    let cg_r = cg_pr_plus(&quadratic, &x0, minimize_opts(OptimizeMethod::ConjugateGradient)).unwrap();
+    let cg_r = cg_pr_plus(
+        &quadratic,
+        &x0,
+        minimize_opts(OptimizeMethod::ConjugateGradient),
+    )
+    .unwrap();
     let pw_r = powell(&quadratic, &x0, minimize_opts(OptimizeMethod::Powell)).unwrap();
-    let max_f_diff = [bfgs_r.fun.unwrap_or(0.0), cg_r.fun.unwrap_or(0.0), pw_r.fun.unwrap_or(0.0)]
-        .windows(2)
-        .map(|w| (w[0] - w[1]).abs())
-        .fold(0.0_f64, f64::max);
+    let max_f_diff = [
+        bfgs_r.fun.unwrap_or(0.0),
+        cg_r.fun.unwrap_or(0.0),
+        pw_r.fun.unwrap_or(0.0),
+    ]
+    .windows(2)
+    .map(|w| (w[0] - w[1]).abs())
+    .fold(0.0_f64, f64::max);
     let all_near_zero = bfgs_r.fun.unwrap_or(1.0) < 1e-3
         && cg_r.fun.unwrap_or(1.0) < 1e-3
         && pw_r.fun.unwrap_or(1.0) < 1e-3;
@@ -307,19 +325,84 @@ fn evidence_p2c003_final_pack() {
     std::fs::create_dir_all(&evidence_dir).expect("evidence directory");
 
     let fixture_entries = vec![
-        FixtureEntry { fixture_id: "bfgs_quadratic_dim2".into(), size: 2, input_type: "minimize", operations: vec!["bfgs"] },
-        FixtureEntry { fixture_id: "bfgs_quadratic_dim5".into(), size: 5, input_type: "minimize", operations: vec!["bfgs"] },
-        FixtureEntry { fixture_id: "bfgs_quadratic_dim10".into(), size: 10, input_type: "minimize", operations: vec!["bfgs"] },
-        FixtureEntry { fixture_id: "bfgs_rosenbrock_2d".into(), size: 2, input_type: "minimize", operations: vec!["bfgs"] },
-        FixtureEntry { fixture_id: "cg_quadratic_dim2".into(), size: 2, input_type: "minimize", operations: vec!["cg"] },
-        FixtureEntry { fixture_id: "cg_quadratic_dim5".into(), size: 5, input_type: "minimize", operations: vec!["cg"] },
-        FixtureEntry { fixture_id: "powell_quadratic_dim2".into(), size: 2, input_type: "minimize", operations: vec!["powell"] },
-        FixtureEntry { fixture_id: "powell_quadratic_dim5".into(), size: 5, input_type: "minimize", operations: vec!["powell"] },
-        FixtureEntry { fixture_id: "brentq_cubic".into(), size: 1, input_type: "root_finding", operations: vec!["brentq"] },
-        FixtureEntry { fixture_id: "brenth_cubic".into(), size: 1, input_type: "root_finding", operations: vec!["brenth"] },
-        FixtureEntry { fixture_id: "bisect_cubic".into(), size: 1, input_type: "root_finding", operations: vec!["bisect"] },
-        FixtureEntry { fixture_id: "ridder_cubic".into(), size: 1, input_type: "root_finding", operations: vec!["ridder"] },
-        FixtureEntry { fixture_id: "brentq_sin_pi".into(), size: 1, input_type: "root_finding", operations: vec!["brentq"] },
+        FixtureEntry {
+            fixture_id: "bfgs_quadratic_dim2".into(),
+            size: 2,
+            input_type: "minimize",
+            operations: vec!["bfgs"],
+        },
+        FixtureEntry {
+            fixture_id: "bfgs_quadratic_dim5".into(),
+            size: 5,
+            input_type: "minimize",
+            operations: vec!["bfgs"],
+        },
+        FixtureEntry {
+            fixture_id: "bfgs_quadratic_dim10".into(),
+            size: 10,
+            input_type: "minimize",
+            operations: vec!["bfgs"],
+        },
+        FixtureEntry {
+            fixture_id: "bfgs_rosenbrock_2d".into(),
+            size: 2,
+            input_type: "minimize",
+            operations: vec!["bfgs"],
+        },
+        FixtureEntry {
+            fixture_id: "cg_quadratic_dim2".into(),
+            size: 2,
+            input_type: "minimize",
+            operations: vec!["cg"],
+        },
+        FixtureEntry {
+            fixture_id: "cg_quadratic_dim5".into(),
+            size: 5,
+            input_type: "minimize",
+            operations: vec!["cg"],
+        },
+        FixtureEntry {
+            fixture_id: "powell_quadratic_dim2".into(),
+            size: 2,
+            input_type: "minimize",
+            operations: vec!["powell"],
+        },
+        FixtureEntry {
+            fixture_id: "powell_quadratic_dim5".into(),
+            size: 5,
+            input_type: "minimize",
+            operations: vec!["powell"],
+        },
+        FixtureEntry {
+            fixture_id: "brentq_cubic".into(),
+            size: 1,
+            input_type: "root_finding",
+            operations: vec!["brentq"],
+        },
+        FixtureEntry {
+            fixture_id: "brenth_cubic".into(),
+            size: 1,
+            input_type: "root_finding",
+            operations: vec!["brenth"],
+        },
+        FixtureEntry {
+            fixture_id: "bisect_cubic".into(),
+            size: 1,
+            input_type: "root_finding",
+            operations: vec!["bisect"],
+        },
+        FixtureEntry {
+            fixture_id: "ridder_cubic".into(),
+            size: 1,
+            input_type: "root_finding",
+            operations: vec!["ridder"],
+        },
+        FixtureEntry {
+            fixture_id: "brentq_sin_pi".into(),
+            size: 1,
+            input_type: "root_finding",
+            operations: vec!["brentq"],
+        },
     ];
 
     let manifest = FixtureManifest {
@@ -355,13 +438,24 @@ fn evidence_p2c003_final_pack() {
     };
 
     let ops = [
-        "bfgs", "cg", "powell", "brentq", "brenth", "bisect", "ridder",
-        "root_agreement", "minimize_agreement",
+        "bfgs",
+        "cg",
+        "powell",
+        "brentq",
+        "brenth",
+        "bisect",
+        "ridder",
+        "root_agreement",
+        "minimize_agreement",
     ];
     let operation_summaries: Vec<_> = ops
         .iter()
         .map(|&op| {
-            let matched: Vec<_> = parity_gates.gates.iter().filter(|g| g.operation == op).collect();
+            let matched: Vec<_> = parity_gates
+                .gates
+                .iter()
+                .filter(|g| g.operation == op)
+                .collect();
             OperationParitySummary {
                 operation: op,
                 total_fixtures: matched.len(),
@@ -449,9 +543,15 @@ fn evidence_p2c003_final_pack() {
 
     for g in &evidence.parity_gates.gates {
         if g.pass {
-            eprintln!("  PASS: {} {} — max_abs={:.2e}", g.operation, g.fixture_id, g.max_abs_diff);
+            eprintln!(
+                "  PASS: {} {} — max_abs={:.2e}",
+                g.operation, g.fixture_id, g.max_abs_diff
+            );
         } else {
-            eprintln!("  FAIL: {} {} — max_abs={:.2e}", g.operation, g.fixture_id, g.max_abs_diff);
+            eprintln!(
+                "  FAIL: {} {} — max_abs={:.2e}",
+                g.operation, g.fixture_id, g.max_abs_diff
+            );
         }
     }
     assert!(all_pass, "All parity gates must pass");
@@ -463,5 +563,12 @@ fn evidence_p2c003_final_pack() {
             s.operation, s.passed, s.total_fixtures, s.max_abs_diff_across_all
         );
     }
-    eprintln!("  RaptorQ sidecar: {}", if evidence.sidecar.is_some() { "generated" } else { "skipped" });
+    eprintln!(
+        "  RaptorQ sidecar: {}",
+        if evidence.sidecar.is_some() {
+            "generated"
+        } else {
+            "skipped"
+        }
+    );
 }

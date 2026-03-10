@@ -121,7 +121,11 @@ fn perf_p2c008_casp_profile() {
             operation: "policy_decide".into(),
             input_desc: "strict_benign".into(),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
@@ -137,7 +141,11 @@ fn perf_p2c008_casp_profile() {
             operation: "policy_decide".into(),
             input_desc: "strict_high_risk".into(),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
@@ -153,7 +161,11 @@ fn perf_p2c008_casp_profile() {
             operation: "policy_decide".into(),
             input_desc: "hardened_benign".into(),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
@@ -169,7 +181,11 @@ fn perf_p2c008_casp_profile() {
             operation: "solver_select".into(),
             input_desc: format!("{state:?}"),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
@@ -187,7 +203,11 @@ fn perf_p2c008_casp_profile() {
             operation: "calibrator_observe".into(),
             input_desc: format!("{count}_observations"),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
@@ -205,7 +225,11 @@ fn perf_p2c008_casp_profile() {
             operation: "calibrator_fallback_check".into(),
             input_desc: "100_obs".into(),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
@@ -219,7 +243,11 @@ fn perf_p2c008_casp_profile() {
             operation: "signal_create".into(),
             input_desc: "new(8.0,0.5,0.3)".into(),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
@@ -236,14 +264,22 @@ fn perf_p2c008_casp_profile() {
             operation: "portfolio_serialize".into(),
             input_desc: "jsonl_2entries".into(),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
     // ── Hotspot ranking ──────────────────────────────────────────────
     let representative_ops = [
-        "policy_decide", "solver_select", "calibrator_observe",
-        "calibrator_fallback_check", "signal_create", "portfolio_serialize",
+        "policy_decide",
+        "solver_select",
+        "calibrator_observe",
+        "calibrator_fallback_check",
+        "signal_create",
+        "portfolio_serialize",
     ];
     let mut reps: Vec<&OperationBenchmark> = Vec::new();
     for op in &representative_ops {
@@ -262,7 +298,11 @@ fn perf_p2c008_casp_profile() {
             operation: b.operation.clone(),
             input_desc: b.input_desc.clone(),
             median_ns: b.median_ns,
-            fraction_of_total: if total_ns > 0 { b.median_ns as f64 / total_ns as f64 } else { 0.0 },
+            fraction_of_total: if total_ns > 0 {
+                b.median_ns as f64 / total_ns as f64
+            } else {
+                0.0
+            },
         })
         .collect();
 
@@ -341,7 +381,11 @@ fn perf_p2c008_casp_profile() {
         iso_details.push(IsomorphismDetail {
             operation: "signal_finiteness".into(),
             passes: pass,
-            note: format!("finite(1,0.5,0.3)={}, finite(NaN,0,0)={}", s1.is_finite(), s2.is_finite()),
+            note: format!(
+                "finite(1,0.5,0.3)={}, finite(NaN,0,0)={}",
+                s1.is_finite(),
+                s2.is_finite()
+            ),
         });
     }
 
@@ -393,7 +437,11 @@ fn perf_p2c008_casp_profile() {
     for h in report.hotspot_ranking.iter().take(3) {
         eprintln!(
             "  #{}: {} ({}) — {:.0}ns ({:.1}%)",
-            h.rank, h.operation, h.input_desc, h.median_ns as f64, h.fraction_of_total * 100.0,
+            h.rank,
+            h.operation,
+            h.input_desc,
+            h.median_ns as f64,
+            h.fraction_of_total * 100.0,
         );
     }
     eprintln!();

@@ -54,6 +54,10 @@ pub enum IntegrateValidationError {
     MaxStepMustBePositive,
     AtolWrongShape { expected: usize, actual: usize },
     AtolMustBePositive,
+    NonFiniteY0,
+    NonFiniteF0,
+    TEvalOutOfSpan,
+    TEvalNotSorted,
     NotYetImplemented { function: &'static str },
 }
 
@@ -65,6 +69,10 @@ impl std::fmt::Display for IntegrateValidationError {
             Self::MaxStepMustBePositive => write!(f, "`max_step` must be positive."),
             Self::AtolWrongShape { .. } => write!(f, "`atol` has wrong shape."),
             Self::AtolMustBePositive => write!(f, "`atol` must be positive."),
+            Self::NonFiniteY0 => write!(f, "`y0` must be finite in Hardened mode."),
+            Self::NonFiniteF0 => write!(f, "`f0` must be finite in Hardened mode."),
+            Self::TEvalOutOfSpan => write!(f, "Values in `t_eval` are not within `t_span`."),
+            Self::TEvalNotSorted => write!(f, "Values in `t_eval` are not properly sorted."),
             Self::NotYetImplemented { function } => {
                 write!(f, "`{function}` is planned but not implemented yet.")
             }

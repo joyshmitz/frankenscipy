@@ -9,23 +9,20 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use fsci_fft::{FftOptions, fft, ifft, rfft, irfft};
+use fsci_arrayapi::{
+    ArangeRequest, ArrayApiArray, CoreArrayBackend, CreationRequest, DType, ExecutionMode,
+    LinspaceRequest, MemoryOrder, ScalarValue, Shape, arange, broadcast_shapes, linspace, ones,
+    reshape, transpose, zeros,
+};
+use fsci_fft::{FftOptions, fft, ifft, irfft, rfft};
 use fsci_integrate::{SolveIvpOptions, SolverKind, ToleranceValue, solve_ivp};
 use fsci_linalg::{
     InvOptions, LstsqOptions, PinvOptions, SolveOptions, det, inv, lstsq, pinv, solve,
 };
-use fsci_opt::{
-    MinimizeOptions, OptimizeMethod, RootOptions,
-    bfgs, bisect, brentq, cg_pr_plus,
-};
+use fsci_opt::{MinimizeOptions, OptimizeMethod, RootOptions, bfgs, bisect, brentq, cg_pr_plus};
 use fsci_runtime::{
-    DecisionSignals, MatrixConditionState, PolicyAction, PolicyController,
-    RuntimeMode, SolverPortfolio,
-};
-use fsci_arrayapi::{
-    ArangeRequest, ArrayApiArray, CoreArrayBackend, CreationRequest, LinspaceRequest,
-    Shape, DType, ExecutionMode, MemoryOrder, ScalarValue,
-    arange, broadcast_shapes, linspace, ones, reshape, transpose, zeros,
+    DecisionSignals, MatrixConditionState, PolicyAction, PolicyController, RuntimeMode,
+    SolverPortfolio,
 };
 use fsci_sparse::{FormatConvertible, Shape2D, eye, random, scale_csr, spmv_csr};
 use fsci_special::{SpecialTensor, erf, erfc, gamma, gammaln, rgamma};
@@ -99,7 +96,12 @@ fn journey_01_linalg_pipeline() {
     // Verify residual: ||Ax - b|| < tol
     let mut residual = [0.0; 4];
     for (i, (row, bi)) in a.iter().zip(&b).enumerate() {
-        residual[i] = row.iter().zip(&result.x).map(|(aij, xj)| aij * xj).sum::<f64>() - bi;
+        residual[i] = row
+            .iter()
+            .zip(&result.x)
+            .map(|(aij, xj)| aij * xj)
+            .sum::<f64>()
+            - bi;
     }
     let max_residual: f64 = residual.iter().map(|r| r.abs()).fold(0.0_f64, f64::max);
     assert!(max_residual < 1e-10, "residual too large: {max_residual}");
@@ -129,22 +131,40 @@ fn journey_02_optimization_workflow() {
     let x0 = vec![3.0, -2.0, 1.0];
 
     // Minimize with BFGS
-    let bfgs_result = bfgs(&quadratic, &x0, MinimizeOptions {
-        method: Some(OptimizeMethod::Bfgs),
-        ..Default::default()
-    }).expect("bfgs");
+    let bfgs_result = bfgs(
+        &quadratic,
+        &x0,
+        MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            ..Default::default()
+        },
+    )
+    .expect("bfgs");
     assert!(bfgs_result.success, "BFGS should converge");
 
     // Compare with CG
-    let cg_result = cg_pr_plus(&quadratic, &x0, MinimizeOptions {
-        method: Some(OptimizeMethod::ConjugateGradient),
-        ..Default::default()
-    }).expect("cg");
+    let cg_result = cg_pr_plus(
+        &quadratic,
+        &x0,
+        MinimizeOptions {
+            method: Some(OptimizeMethod::ConjugateGradient),
+            ..Default::default()
+        },
+    )
+    .expect("cg");
     assert!(cg_result.success, "CG should converge");
 
     // Both should find minimum near origin
-    let bfgs_err: f64 = bfgs_result.x.iter().map(|xi| xi.abs()).fold(0.0_f64, f64::max);
-    let cg_err: f64 = cg_result.x.iter().map(|xi| xi.abs()).fold(0.0_f64, f64::max);
+    let bfgs_err: f64 = bfgs_result
+        .x
+        .iter()
+        .map(|xi| xi.abs())
+        .fold(0.0_f64, f64::max);
+    let cg_err: f64 = cg_result
+        .x
+        .iter()
+        .map(|xi| xi.abs())
+        .fold(0.0_f64, f64::max);
     assert!(bfgs_err < 1e-3 && cg_err < 1e-3, "both near zero");
 
     write_journey(&JourneyResult {
@@ -169,14 +189,18 @@ fn journey_03_ivp_pipeline() {
     let start = Instant::now();
 
     let mut decay = |_t: f64, y: &[f64]| -> Vec<f64> { vec![-y[0]] };
-    let result = solve_ivp(&mut decay, &SolveIvpOptions {
-        t_span: (0.0, 5.0),
-        y0: &[1.0],
-        method: SolverKind::Rk45,
-        rtol: 1e-8,
-        atol: ToleranceValue::Scalar(1e-10),
-        ..Default::default()
-    }).expect("solve_ivp");
+    let result = solve_ivp(
+        &mut decay,
+        &SolveIvpOptions {
+            t_span: (0.0, 5.0),
+            y0: &[1.0],
+            method: SolverKind::Rk45,
+            rtol: 1e-8,
+            atol: ToleranceValue::Scalar(1e-10),
+            ..Default::default()
+        },
+    )
+    .expect("solve_ivp");
 
     assert!(result.success);
     let y_final = result.y.last().unwrap()[0];
@@ -256,11 +280,18 @@ fn journey_05_sparse_operations() {
 
     // spmv with identity should give same vector
     let y = spmv_csr(&identity, &x).expect("spmv");
-    let max_err: f64 = x.iter().zip(&y).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
+    let max_err: f64 = x
+        .iter()
+        .zip(&y)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
     assert!(max_err < 1e-15, "identity spmv error: {max_err}");
 
     // Create random sparse (COO) → convert to CSR → scale
-    let a = random(Shape2D { rows: n, cols: n }, 0.05, 42).expect("random").to_csr().expect("to_csr");
+    let a = random(Shape2D { rows: n, cols: n }, 0.05, 42)
+        .expect("random")
+        .to_csr()
+        .expect("to_csr");
     let _scaled = scale_csr(&a, 2.0).expect("scale");
 
     // Convert to CSC and back
@@ -338,7 +369,10 @@ fn journey_07_casp_pipeline() {
     // Risky decision
     let d2 = ctrl.decide(DecisionSignals::new(16.0, 0.8, 0.5));
     assert!(
-        matches!(d2.action, PolicyAction::FullValidate | PolicyAction::FailClosed),
+        matches!(
+            d2.action,
+            PolicyAction::FullValidate | PolicyAction::FailClosed
+        ),
         "risky → FullValidate or FailClosed"
     );
 
@@ -419,7 +453,11 @@ fn journey_09_lstsq_pinv() {
     for (i, row) in pi.pseudo_inverse.iter().enumerate().take(2) {
         pinv_x[i] = row.iter().zip(&b).map(|(pij, bj)| pij * bj).sum::<f64>();
     }
-    let diff: f64 = ls.x.iter().zip(&pinv_x).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
+    let diff: f64 =
+        ls.x.iter()
+            .zip(&pinv_x)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max);
     assert!(diff < 1e-8, "lstsq vs pinv@b diff: {diff}");
 
     write_journey(&JourneyResult {
@@ -456,7 +494,11 @@ fn journey_10_real_fft() {
     assert_eq!(spectrum.len(), n / 2 + 1);
 
     let recovered = irfft(&spectrum, Some(n), &opts).expect("irfft");
-    let max_err: f64 = signal.iter().zip(&recovered).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
+    let max_err: f64 = signal
+        .iter()
+        .zip(&recovered)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
     assert!(max_err < 1e-10, "rfft-irfft roundtrip error: {max_err}");
 
     write_journey(&JourneyResult {
@@ -530,15 +572,20 @@ fn journey_12_cross_packet_integration() {
 
     // Step 1: Generate test data with special functions
     let x_vals: Vec<f64> = (1..=5).map(|i| i as f64 * 0.5).collect();
-    let gamma_vals: Vec<f64> = x_vals.iter()
+    let gamma_vals: Vec<f64> = x_vals
+        .iter()
         .map(|&x| real_val(&gamma(&scalar(x), mode).unwrap()))
         .collect();
 
     // Step 2: Solve linear system using gamma values
     let n = 4;
-    let a: Vec<Vec<f64>> = (0..n).map(|i| {
-        (0..n).map(|j| if i == j { gamma_vals[i] } else { 0.1 }).collect()
-    }).collect();
+    let a: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            (0..n)
+                .map(|j| if i == j { gamma_vals[i] } else { 0.1 })
+                .collect()
+        })
+        .collect();
     let b: Vec<f64> = vec![1.0; n];
     let sol = solve(&a, &b, solve_opts()).expect("solve with gamma diagonal");
 
@@ -546,7 +593,9 @@ fn journey_12_cross_packet_integration() {
     let fft_input: Vec<Complex64> = sol.x.iter().map(|&v| (v, 0.0)).collect();
     let spectrum = fft(&fft_input, &FftOptions::default()).expect("fft");
     let recovered = ifft(&spectrum, &FftOptions::default()).expect("ifft");
-    let fft_err: f64 = fft_input.iter().zip(&recovered)
+    let fft_err: f64 = fft_input
+        .iter()
+        .zip(&recovered)
         .map(|(a, b)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt())
         .fold(0.0_f64, f64::max);
     assert!(fft_err < 1e-10);
@@ -684,11 +733,26 @@ fn journey_14_scipy_migration() {
         vec![1.0, -2.0, 4.0],
     ];
     let b = vec![1.0, 2.0, 3.0];
-    let sol = solve(&a, &b, SolveOptions { mode, ..Default::default() }).expect("solve");
+    let sol = solve(
+        &a,
+        &b,
+        SolveOptions {
+            mode,
+            ..Default::default()
+        },
+    )
+    .expect("solve");
     assert_eq!(sol.x.len(), 3);
 
     // Step 2 (replaces scipy.linalg.inv): compute inverse
-    let a_inv = inv(&a, InvOptions { mode, ..Default::default() }).expect("inv");
+    let a_inv = inv(
+        &a,
+        InvOptions {
+            mode,
+            ..Default::default()
+        },
+    )
+    .expect("inv");
     // A * A^-1 should ≈ I
     for (i, row_a) in a.iter().enumerate() {
         for j in 0..3 {
@@ -722,21 +786,25 @@ fn journey_14_scipy_migration() {
     assert!((e_val + ec_val - 1.0).abs() < 1e-12);
 
     // Step 5 (replaces scipy.optimize.minimize): minimize Rosenbrock-like
-    let rosenbrock_2d = |x: &[f64]| -> f64 {
-        (1.0 - x[0]).powi(2) + 100.0 * (x[1] - x[0] * x[0]).powi(2)
-    };
-    let opt = bfgs(&rosenbrock_2d, &[0.0, 0.0], MinimizeOptions {
-        tol: Some(1e-6),
-        maxiter: Some(500),
-        ..Default::default()
-    })
+    let rosenbrock_2d =
+        |x: &[f64]| -> f64 { (1.0 - x[0]).powi(2) + 100.0 * (x[1] - x[0] * x[0]).powi(2) };
+    let opt = bfgs(
+        &rosenbrock_2d,
+        &[0.0, 0.0],
+        MinimizeOptions {
+            tol: Some(1e-6),
+            maxiter: Some(500),
+            ..Default::default()
+        },
+    )
     .expect("bfgs rosenbrock");
     assert!(opt.success, "BFGS should converge on Rosenbrock");
     assert!((opt.x[0] - 1.0).abs() < 0.1 && (opt.x[1] - 1.0).abs() < 0.1);
 
     write_journey(&JourneyResult {
         journey_id: "gj_14_scipy_migration".into(),
-        description: "SciPy migration: linalg.solve → inv → optimize.brentq → special.erf → minimize".into(),
+        description:
+            "SciPy migration: linalg.solve → inv → optimize.brentq → special.erf → minimize".into(),
         category: "migration".into(),
         packet: "cross-packet".into(),
         steps: 5,

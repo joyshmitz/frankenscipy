@@ -68,16 +68,14 @@ impl GateId {
                 "cargo test -p fsci-conformance --test golden_journeys -- --nocapture",
                 "cargo test -p fsci-conformance --test schema_validation -- --nocapture",
             ],
-            Self::G4Adversarial => {
-                &["cargo test -p fsci-conformance --test smoke -- --nocapture"]
-            }
+            Self::G4Adversarial => &["cargo test -p fsci-conformance --test smoke -- --nocapture"],
             Self::G5E2e => &["cargo test -p fsci-conformance --test e2e_linalg -- --nocapture"],
             Self::G6Performance => {
                 &["cargo test -p fsci-conformance --test perf_linalg -- --nocapture"]
             }
-            Self::G7Schema => &[
-                "cargo test -p fsci-conformance --test schema_validation -- --nocapture",
-            ],
+            Self::G7Schema => {
+                &["cargo test -p fsci-conformance --test schema_validation -- --nocapture"]
+            }
             Self::G8RaptorQ => {
                 &["cargo test -p fsci-conformance --test raptorq_proofs -- --nocapture"]
             }
@@ -162,10 +160,7 @@ pub fn build_gate_result(
     };
 
     let replay_command = if !passed {
-        gate_id
-            .commands()
-            .first()
-            .map(|cmd| (*cmd).to_string())
+        gate_id.commands().first().map(|cmd| (*cmd).to_string())
     } else {
         None
     };
@@ -227,9 +222,7 @@ mod tests {
         // G1 has no deps
         assert!(GateId::G1Lint.dependencies().is_empty());
         // G2 depends on G1
-        assert!(GateId::G2UnitTests
-            .dependencies()
-            .contains(&GateId::G1Lint));
+        assert!(GateId::G2UnitTests.dependencies().contains(&GateId::G1Lint));
         // G3-G8 depend on G2
         for gate in &GateId::ALL[2..] {
             assert!(
@@ -306,10 +299,7 @@ mod tests {
     #[test]
     fn all_gates_have_commands() {
         for gate in &GateId::ALL {
-            assert!(
-                !gate.commands().is_empty(),
-                "{gate} has no commands"
-            );
+            assert!(!gate.commands().is_empty(), "{gate} has no commands");
         }
     }
 }

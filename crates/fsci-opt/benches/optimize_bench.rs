@@ -5,8 +5,8 @@
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_opt::{
-    MinimizeOptions, OptimizeMethod, RootOptions, RootMethod,
-    bfgs, bisect, brentq, brenth, cg_pr_plus, powell, ridder,
+    MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, bfgs, bisect, brenth, brentq,
+    cg_pr_plus, powell, ridder,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -54,16 +54,24 @@ fn bench_bfgs(c: &mut Criterion) {
     let mut group = c.benchmark_group("bfgs");
     for &dim in &[2usize, 5, 10] {
         let x0: Vec<f64> = vec![0.0; dim];
-        group.bench_with_input(BenchmarkId::new("rosenbrock", dim), &(x0.clone()), |b, x0| {
-            b.iter(|| {
-                let _ = bfgs(&rosenbrock, x0, opts(OptimizeMethod::Bfgs));
-            });
-        });
-        group.bench_with_input(BenchmarkId::new("quadratic", dim), &(x0.clone()), |b, x0| {
-            b.iter(|| {
-                let _ = bfgs(&quadratic, x0, opts(OptimizeMethod::Bfgs));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("rosenbrock", dim),
+            &(x0.clone()),
+            |b, x0| {
+                b.iter(|| {
+                    let _ = bfgs(&rosenbrock, x0, opts(OptimizeMethod::Bfgs));
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("quadratic", dim),
+            &(x0.clone()),
+            |b, x0| {
+                b.iter(|| {
+                    let _ = bfgs(&quadratic, x0, opts(OptimizeMethod::Bfgs));
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -72,16 +80,24 @@ fn bench_cg(c: &mut Criterion) {
     let mut group = c.benchmark_group("cg");
     for &dim in &[2usize, 5, 10] {
         let x0: Vec<f64> = vec![0.0; dim];
-        group.bench_with_input(BenchmarkId::new("rosenbrock", dim), &(x0.clone()), |b, x0| {
-            b.iter(|| {
-                let _ = cg_pr_plus(&rosenbrock, x0, opts(OptimizeMethod::ConjugateGradient));
-            });
-        });
-        group.bench_with_input(BenchmarkId::new("quadratic", dim), &(x0.clone()), |b, x0| {
-            b.iter(|| {
-                let _ = cg_pr_plus(&quadratic, x0, opts(OptimizeMethod::ConjugateGradient));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("rosenbrock", dim),
+            &(x0.clone()),
+            |b, x0| {
+                b.iter(|| {
+                    let _ = cg_pr_plus(&rosenbrock, x0, opts(OptimizeMethod::ConjugateGradient));
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("quadratic", dim),
+            &(x0.clone()),
+            |b, x0| {
+                b.iter(|| {
+                    let _ = cg_pr_plus(&quadratic, x0, opts(OptimizeMethod::ConjugateGradient));
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -90,16 +106,24 @@ fn bench_powell(c: &mut Criterion) {
     let mut group = c.benchmark_group("powell");
     for &dim in &[2usize, 5, 10] {
         let x0: Vec<f64> = vec![0.0; dim];
-        group.bench_with_input(BenchmarkId::new("rosenbrock", dim), &(x0.clone()), |b, x0| {
-            b.iter(|| {
-                let _ = powell(&rosenbrock, x0, opts(OptimizeMethod::Powell));
-            });
-        });
-        group.bench_with_input(BenchmarkId::new("quadratic", dim), &(x0.clone()), |b, x0| {
-            b.iter(|| {
-                let _ = powell(&quadratic, x0, opts(OptimizeMethod::Powell));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("rosenbrock", dim),
+            &(x0.clone()),
+            |b, x0| {
+                b.iter(|| {
+                    let _ = powell(&rosenbrock, x0, opts(OptimizeMethod::Powell));
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("quadratic", dim),
+            &(x0.clone()),
+            |b, x0| {
+                b.iter(|| {
+                    let _ = powell(&quadratic, x0, opts(OptimizeMethod::Powell));
+                });
+            },
+        );
     }
     group.finish();
 }

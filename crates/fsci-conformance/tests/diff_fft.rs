@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_fft::{
-    Complex64, FftError, FftOptions, Normalization,
-    fft, fft2, fftn, fftfreq, fftshift_1d, ifft, ifft2, ifftshift_1d, irfft, rfft, rfftfreq,
+    Complex64, FftError, FftOptions, Normalization, fft, fft2, fftfreq, fftn, fftshift_1d, ifft,
+    ifft2, ifftshift_1d, irfft, rfft, rfftfreq,
 };
 use serde::Serialize;
 
@@ -171,7 +171,13 @@ fn diff_001_fft_power_of_2() {
     let result = fft(&input, &opts).unwrap();
     let expected = naive_dft(&input, false);
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_001_fft_pow2", "differential", "complex signal n=8", diff, TOL);
+    run_diff_test(
+        "diff_001_fft_pow2",
+        "differential",
+        "complex signal n=8",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -181,7 +187,13 @@ fn diff_002_fft_non_power_of_2() {
     let result = fft(&input, &opts).unwrap();
     let expected = naive_dft(&input, false);
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_002_fft_npow2", "differential", "complex signal n=13", diff, TOL);
+    run_diff_test(
+        "diff_002_fft_npow2",
+        "differential",
+        "complex signal n=13",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -191,7 +203,13 @@ fn diff_003_fft_prime_size() {
     let result = fft(&input, &opts).unwrap();
     let expected = naive_dft(&input, false);
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_003_fft_prime", "differential", "complex signal n=23 (prime)", diff, TOL);
+    run_diff_test(
+        "diff_003_fft_prime",
+        "differential",
+        "complex signal n=23 (prime)",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -201,7 +219,13 @@ fn diff_004_ifft_roundtrip() {
     let spectrum = fft(&input, &opts).unwrap();
     let recovered = ifft(&spectrum, &opts).unwrap();
     let diff = max_abs_diff_complex(&recovered, &input);
-    run_diff_test("diff_004_ifft_roundtrip", "differential", "ifft(fft(x)) n=16", diff, TOL);
+    run_diff_test(
+        "diff_004_ifft_roundtrip",
+        "differential",
+        "ifft(fft(x)) n=16",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -211,7 +235,13 @@ fn diff_005_rfft_vs_oracle() {
     let result = rfft(&input, &opts).unwrap();
     let expected = naive_rfft(&input);
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_005_rfft_oracle", "differential", "real signal n=16 rfft", diff, TOL);
+    run_diff_test(
+        "diff_005_rfft_oracle",
+        "differential",
+        "real signal n=16 rfft",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -221,7 +251,13 @@ fn diff_006_rfft_odd_length() {
     let result = rfft(&input, &opts).unwrap();
     let expected = naive_rfft(&input);
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_006_rfft_odd", "differential", "real signal n=11 rfft", diff, TOL);
+    run_diff_test(
+        "diff_006_rfft_odd",
+        "differential",
+        "real signal n=11 rfft",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -231,7 +267,13 @@ fn diff_007_irfft_roundtrip() {
     let spectrum = rfft(&input, &opts).unwrap();
     let recovered = irfft(&spectrum, Some(16), &opts).unwrap();
     let diff = max_abs_diff_real(&recovered, &input);
-    run_diff_test("diff_007_irfft_roundtrip", "differential", "irfft(rfft(x)) n=16", diff, TOL);
+    run_diff_test(
+        "diff_007_irfft_roundtrip",
+        "differential",
+        "irfft(rfft(x)) n=16",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -239,7 +281,12 @@ fn diff_008_fft2_vs_oracle() {
     let rows = 4;
     let cols = 4;
     let input: Vec<Complex64> = (0..rows * cols)
-        .map(|i| (((i * 7 + 3) % 13) as f64 - 6.0, ((i * 5 + 1) % 11) as f64 - 5.0))
+        .map(|i| {
+            (
+                ((i * 7 + 3) % 13) as f64 - 6.0,
+                ((i * 5 + 1) % 11) as f64 - 5.0,
+            )
+        })
         .collect();
     let opts = FftOptions::default();
     let result = fft2(&input, (rows, cols), &opts).unwrap();
@@ -263,7 +310,13 @@ fn diff_008_fft2_vs_oracle() {
         }
     }
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_008_fft2_oracle", "differential", "4x4 complex fft2", diff, TOL);
+    run_diff_test(
+        "diff_008_fft2_oracle",
+        "differential",
+        "4x4 complex fft2",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -292,7 +345,13 @@ fn diff_009_fft2_non_square() {
         }
     }
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_009_fft2_nonsq", "differential", "3x5 complex fft2", diff, TOL);
+    run_diff_test(
+        "diff_009_fft2_nonsq",
+        "differential",
+        "3x5 complex fft2",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -304,7 +363,13 @@ fn diff_010_ifft2_roundtrip() {
     let spectrum = fft2(&input, (rows, cols), &opts).unwrap();
     let recovered = ifft2(&spectrum, (rows, cols), &opts).unwrap();
     let diff = max_abs_diff_complex(&recovered, &input);
-    run_diff_test("diff_010_ifft2_roundtrip", "differential", "ifft2(fft2(x)) 4x6", diff, TOL);
+    run_diff_test(
+        "diff_010_ifft2_roundtrip",
+        "differential",
+        "ifft2(fft2(x)) 4x6",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -330,7 +395,9 @@ fn diff_011_fftn_3d_oracle() {
     // Axis 1: length 3, stride=2, repeats=2
     for outer in 0..2 {
         for offset in 0..2 {
-            let v: Vec<Complex64> = (0..3).map(|i| expected[outer * 6 + i * 2 + offset]).collect();
+            let v: Vec<Complex64> = (0..3)
+                .map(|i| expected[outer * 6 + i * 2 + offset])
+                .collect();
             let ft = naive_dft(&v, false);
             for (i, &val) in ft.iter().enumerate() {
                 expected[outer * 6 + i * 2 + offset] = val;
@@ -346,7 +413,13 @@ fn diff_011_fftn_3d_oracle() {
         }
     }
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_011_fftn_3d", "differential", "2x3x2 complex fftn", diff, TOL);
+    run_diff_test(
+        "diff_011_fftn_3d",
+        "differential",
+        "2x3x2 complex fftn",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -361,7 +434,13 @@ fn diff_012_normalization_forward_vs_oracle() {
         .map(|&(re, im)| (re / n, im / n))
         .collect();
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_012_norm_forward", "differential", "forward norm n=8", diff, TOL);
+    run_diff_test(
+        "diff_012_norm_forward",
+        "differential",
+        "forward norm n=8",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -376,7 +455,13 @@ fn diff_013_normalization_ortho_vs_oracle() {
         .map(|&(re, im)| (re * scale, im * scale))
         .collect();
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("diff_013_norm_ortho", "differential", "ortho norm n=8", diff, TOL);
+    run_diff_test(
+        "diff_013_norm_ortho",
+        "differential",
+        "ortho norm n=8",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -387,12 +472,21 @@ fn diff_014_fftfreq_even_vs_oracle() {
     // Oracle: k/(n*d) for k=0..n/2-1, then (k-n)/(n*d) for k=n/2..n-1
     let expected: Vec<f64> = (0..n)
         .map(|k| {
-            if k < n / 2 { k as f64 / (n as f64 * d) }
-            else { (k as f64 - n as f64) / (n as f64 * d) }
+            if k < n / 2 {
+                k as f64 / (n as f64 * d)
+            } else {
+                (k as f64 - n as f64) / (n as f64 * d)
+            }
         })
         .collect();
     let diff = max_abs_diff_real(&result, &expected);
-    run_diff_test("diff_014_fftfreq_even", "differential", "fftfreq n=8 d=0.5", diff, 1e-15);
+    run_diff_test(
+        "diff_014_fftfreq_even",
+        "differential",
+        "fftfreq n=8 d=0.5",
+        diff,
+        1e-15,
+    );
 }
 
 #[test]
@@ -402,7 +496,13 @@ fn diff_015_rfftfreq_vs_oracle() {
     let result = rfftfreq(n, d).unwrap();
     let expected: Vec<f64> = (0..=n / 2).map(|k| k as f64 / (n as f64 * d)).collect();
     let diff = max_abs_diff_real(&result, &expected);
-    run_diff_test("diff_015_rfftfreq", "differential", "rfftfreq n=10 d=0.25", diff, 1e-15);
+    run_diff_test(
+        "diff_015_rfftfreq",
+        "differential",
+        "rfftfreq n=10 d=0.25",
+        diff,
+        1e-15,
+    );
 }
 
 #[test]
@@ -413,12 +513,21 @@ fn diff_016_fftfreq_odd_vs_oracle() {
     let split = n.div_ceil(2);
     let expected: Vec<f64> = (0..n)
         .map(|k| {
-            if k < split { k as f64 / (n as f64 * d) }
-            else { (k as f64 - n as f64) / (n as f64 * d) }
+            if k < split {
+                k as f64 / (n as f64 * d)
+            } else {
+                (k as f64 - n as f64) / (n as f64 * d)
+            }
         })
         .collect();
     let diff = max_abs_diff_real(&result, &expected);
-    run_diff_test("diff_016_fftfreq_odd", "differential", "fftfreq n=7 d=1.0", diff, 1e-15);
+    run_diff_test(
+        "diff_016_fftfreq_odd",
+        "differential",
+        "fftfreq n=7 d=1.0",
+        diff,
+        1e-15,
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -434,14 +543,24 @@ fn meta_001_parseval_energy_conservation() {
     let freq_energy: f64 = spectrum.iter().map(|c| complex_mag_sq(*c)).sum();
     let n = input.len() as f64;
     let diff = (time_energy - freq_energy / n).abs();
-    run_diff_test("meta_001_parseval", "metamorphic", "Parseval energy n=16", diff, TOL);
+    run_diff_test(
+        "meta_001_parseval",
+        "metamorphic",
+        "Parseval energy n=16",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
 fn meta_002_linearity() {
     let n = 12;
-    let a: Vec<Complex64> = (0..n).map(|i| ((i as f64) * 0.5, -(i as f64) * 0.3)).collect();
-    let b: Vec<Complex64> = (0..n).map(|i| ((i as f64) * 0.2 - 1.0, (i as f64) * 0.1)).collect();
+    let a: Vec<Complex64> = (0..n)
+        .map(|i| ((i as f64) * 0.5, -(i as f64) * 0.3))
+        .collect();
+    let b: Vec<Complex64> = (0..n)
+        .map(|i| ((i as f64) * 0.2 - 1.0, (i as f64) * 0.1))
+        .collect();
     let alpha = 2.5;
     let beta = -1.3;
 
@@ -465,7 +584,13 @@ fn meta_002_linearity() {
         .collect();
 
     let diff = max_abs_diff_complex(&fc, &expected);
-    run_diff_test("meta_002_linearity", "metamorphic", "F(a*x+b*y) = a*F(x)+b*F(y)", diff, TOL);
+    run_diff_test(
+        "meta_002_linearity",
+        "metamorphic",
+        "F(a*x+b*y) = a*F(x)+b*F(y)",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -499,10 +624,7 @@ fn meta_003_circular_shift_magnitude_preservation() {
 
 #[test]
 fn meta_004_conjugate_symmetry_real_input() {
-    let input: Vec<Complex64> = test_signal_real(16)
-        .iter()
-        .map(|&x| (x, 0.0))
-        .collect();
+    let input: Vec<Complex64> = test_signal_real(16).iter().map(|&x| (x, 0.0)).collect();
     let opts = FftOptions::default();
     let spectrum = fft(&input, &opts).unwrap();
     let n = spectrum.len();
@@ -597,7 +719,13 @@ fn adv_001_size_1_fft() {
     let opts = FftOptions::default();
     let result = fft(&input, &opts).unwrap();
     let diff = max_abs_diff_complex(&result, &input);
-    run_diff_test("adv_001_size1", "adversarial", "fft of length-1 is identity", diff, TOL);
+    run_diff_test(
+        "adv_001_size1",
+        "adversarial",
+        "fft of length-1 is identity",
+        diff,
+        TOL,
+    );
 }
 
 #[test]
@@ -780,5 +908,11 @@ fn adv_010_all_zeros_input() {
     let result = fft(&input, &opts).unwrap();
     let expected = vec![(0.0, 0.0); 8];
     let diff = max_abs_diff_complex(&result, &expected);
-    run_diff_test("adv_010_zeros", "adversarial", "fft of all-zeros = all-zeros", diff, 0.0);
+    run_diff_test(
+        "adv_010_zeros",
+        "adversarial",
+        "fft of all-zeros = all-zeros",
+        diff,
+        0.0,
+    );
 }

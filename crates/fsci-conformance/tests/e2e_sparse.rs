@@ -15,9 +15,8 @@ use std::time::Instant;
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, FormatConvertible, Shape2D, SolveOptions, SparseError,
-    add_csr, csr_to_csc_with_mode, diags, eye,
-    scale_csr, spmv_csr, spsolve, sub_csr,
+    CooMatrix, CsrMatrix, FormatConvertible, Shape2D, SolveOptions, SparseError, add_csr,
+    csr_to_csc_with_mode, diags, eye, scale_csr, spmv_csr, spsolve, sub_csr,
 };
 use serde::Serialize;
 
@@ -104,17 +103,29 @@ fn make_tridiag(n: usize, sub: f64, main: f64, sup: f64) -> CsrMatrix {
     let sub_diag = vec![sub; n.saturating_sub(1)];
     let main_diag = vec![main; n];
     let sup_diag = vec![sup; n.saturating_sub(1)];
-    diags(&[sub_diag, main_diag, sup_diag], &[-1, 0, 1], Some(Shape2D::new(n, n)))
-        .expect("tridiag")
+    diags(
+        &[sub_diag, main_diag, sup_diag],
+        &[-1, 0, 1],
+        Some(Shape2D::new(n, n)),
+    )
+    .expect("tridiag")
 }
 
 /// Build a bidiagonal matrix (main + one off-diagonal).
 fn make_bidiag(n: usize, main: f64, off: f64, offset: isize) -> CsrMatrix {
     let main_diag = vec![main; n];
-    let off_len = if offset.unsigned_abs() < n { n - offset.unsigned_abs() } else { 0 };
+    let off_len = if offset.unsigned_abs() < n {
+        n - offset.unsigned_abs()
+    } else {
+        0
+    };
     let off_diag = vec![off; off_len];
-    diags(&[main_diag, off_diag], &[0, offset], Some(Shape2D::new(n, n)))
-        .expect("bidiag")
+    diags(
+        &[main_diag, off_diag],
+        &[0, offset],
+        Some(Shape2D::new(n, n)),
+    )
+    .expect("bidiag")
 }
 
 fn make_step(
@@ -172,20 +183,27 @@ fn e2e_001_tridiagonal_format_roundtrip() {
     let t_start = Instant::now();
     let tri = make_tridiag(n, -1.0, 2.0, -1.0);
     steps.push(make_step(
-        1, "construct_tridiag", "diags",
+        1,
+        "construct_tridiag",
+        "diags",
         &format!("n={n}, diags=[-1,2,-1]"),
         &format!("csr nnz={}", tri.nnz()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: CSR → CSC
     let t_start = Instant::now();
-    let (csc, _log1) = csr_to_csc_with_mode(&tri, RuntimeMode::Strict, "e2e-conv-1")
-        .expect("csr->csc");
+    let (csc, _log1) =
+        csr_to_csc_with_mode(&tri, RuntimeMode::Strict, "e2e-conv-1").expect("csr->csc");
     steps.push(make_step(
-        2, "csr_to_csc", "convert", &format!("csr nnz={}", tri.nnz()),
+        2,
+        "csr_to_csc",
+        "convert",
+        &format!("csr nnz={}", tri.nnz()),
         &format!("csc nnz={}", csc.nnz()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 3: CSC → COO → CSR → verify
@@ -200,10 +218,13 @@ fn e2e_001_tridiagonal_format_roundtrip() {
     }
     let pass = max_diff < TOL;
     steps.push(make_step(
-        3, "roundtrip_verify", "compare",
+        3,
+        "roundtrip_verify",
+        "compare",
         &format!("max_diff={max_diff:.4e}"),
         &format!("pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -235,20 +256,26 @@ fn e2e_002_spmv_verify_dense() {
     let a = make_tridiag(n, -1.0, 3.0, -1.0);
     let v: Vec<f64> = (0..n).map(|i| (i as f64) + 1.0).collect();
     steps.push(make_step(
-        1, "build_system", "diags+vector",
+        1,
+        "build_system",
+        "diags+vector",
         &format!("n={n}, diag=[-1,3,-1]"),
         &format!("A nnz={}, v len={}", a.nnz(), v.len()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: spmv
     let t_start = Instant::now();
     let result = spmv_csr(&a, &v).expect("spmv");
     steps.push(make_step(
-        2, "spmv", "spmv_csr",
+        2,
+        "spmv",
+        "spmv_csr",
         "A*v",
         &format!("result len={}", result.len()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 3: Compare with dense matvec
@@ -261,10 +288,13 @@ fn e2e_002_spmv_verify_dense() {
     let diff = max_abs_diff_vec(&result, &expected);
     let pass = diff < TOL;
     steps.push(make_step(
-        3, "verify_dense", "compare",
+        3,
+        "verify_dense",
+        "compare",
         &format!("diff={diff:.4e}"),
         &format!("pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -296,30 +326,39 @@ fn e2e_003_arithmetic_pipeline() {
     let a = make_bidiag(n, 2.0, -1.0, 1);
     let b = make_bidiag(n, 1.0, 1.0, -1);
     steps.push(make_step(
-        1, "build_matrices", "diags",
+        1,
+        "build_matrices",
+        "diags",
         &format!("n={n}"),
         &format!("A nnz={}, B nnz={}", a.nnz(), b.nnz()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: C = A + B
     let t_start = Instant::now();
     let c = add_csr(&a, &b).expect("A+B");
     steps.push(make_step(
-        2, "add", "add_csr",
+        2,
+        "add",
+        "add_csr",
         "A+B",
         &format!("C nnz={}", c.nnz()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 3: D = A - B
     let t_start = Instant::now();
     let d = sub_csr(&a, &b).expect("A-B");
     steps.push(make_step(
-        3, "subtract", "sub_csr",
+        3,
+        "subtract",
+        "sub_csr",
         "A-B",
         &format!("D nnz={}", d.nnz()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 4: Verify (A+B) + (A-B) = 2*A via spmv
@@ -332,10 +371,13 @@ fn e2e_003_arithmetic_pipeline() {
     let diff = max_abs_diff_vec(&lhs, &rhs);
     let pass = diff < TOL;
     steps.push(make_step(
-        4, "verify_arithmetic", "spmv+compare",
+        4,
+        "verify_arithmetic",
+        "spmv+compare",
         &format!("(A+B)+(A-B) vs 2A, diff={diff:.4e}"),
         &format!("pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -382,10 +424,17 @@ fn e2e_004_nonsquare_solve_recovery() {
     let result = spsolve(&rect, &b, opts);
     let is_err = matches!(result, Err(SparseError::InvalidShape { .. }));
     steps.push(make_step(
-        1, "solve_nonsquare", "spsolve",
+        1,
+        "solve_nonsquare",
+        "spsolve",
         "3x4 non-square matrix",
         &format!("got_invalid_shape={is_err}"),
-        t_start.elapsed().as_nanos(), if is_err { "expected_error" } else { "unexpected_ok" },
+        t_start.elapsed().as_nanos(),
+        if is_err {
+            "expected_error"
+        } else {
+            "unexpected_ok"
+        },
     ));
 
     // Step 2: Fall back to spmv which works on non-square
@@ -394,10 +443,13 @@ fn e2e_004_nonsquare_solve_recovery() {
     let result = spmv_csr(&rect, &v);
     let pass = result.is_ok();
     steps.push(make_step(
-        2, "fallback_spmv", "spmv_csr",
+        2,
+        "fallback_spmv",
+        "spmv_csr",
         "3x4 matrix, vector len=4",
         &format!("success={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let overall_pass = is_err && pass;
@@ -435,10 +487,13 @@ fn e2e_005_mode_switch_recovery() {
     )
     .expect("unsorted csr");
     steps.push(make_step(
-        1, "build_unsorted", "from_components",
+        1,
+        "build_unsorted",
+        "from_components",
         "2x3 unsorted CSR",
         &format!("sorted={}", unsorted.canonical_meta().sorted_indices),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: Hardened conversion → error
@@ -446,10 +501,17 @@ fn e2e_005_mode_switch_recovery() {
     let result = csr_to_csc_with_mode(&unsorted, RuntimeMode::Hardened, "e2e-hard");
     let is_err = result.is_err();
     steps.push(make_step(
-        2, "hardened_convert", "csr_to_csc",
+        2,
+        "hardened_convert",
+        "csr_to_csc",
         "hardened mode, unsorted input",
         &format!("error={is_err}"),
-        t_start.elapsed().as_nanos(), if is_err { "expected_error" } else { "unexpected_ok" },
+        t_start.elapsed().as_nanos(),
+        if is_err {
+            "expected_error"
+        } else {
+            "unexpected_ok"
+        },
     ));
 
     // Step 3: Strict mode → success
@@ -458,10 +520,13 @@ fn e2e_005_mode_switch_recovery() {
         .expect("strict csr->csc");
     let pass = csc.nnz() == unsorted.nnz();
     steps.push(make_step(
-        3, "strict_convert", "csr_to_csc",
+        3,
+        "strict_convert",
+        "csr_to_csc",
         "strict mode, same unsorted input",
         &format!("success={pass}, nnz={}", csc.nnz()),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let overall_pass = is_err && pass;
@@ -495,10 +560,17 @@ fn e2e_006_spmv_mismatch_recovery() {
     let result = spmv_csr(&a, &[1.0, 2.0]); // expects 4
     let is_err = matches!(result, Err(SparseError::IncompatibleShape { .. }));
     steps.push(make_step(
-        1, "spmv_wrong_len", "spmv_csr",
+        1,
+        "spmv_wrong_len",
+        "spmv_csr",
         "4x4 matrix, vector len=2",
         &format!("error={is_err}"),
-        t_start.elapsed().as_nanos(), if is_err { "expected_error" } else { "unexpected_ok" },
+        t_start.elapsed().as_nanos(),
+        if is_err {
+            "expected_error"
+        } else {
+            "unexpected_ok"
+        },
     ));
 
     // Step 2: Correct vector length
@@ -508,10 +580,13 @@ fn e2e_006_spmv_mismatch_recovery() {
     let diff = max_abs_diff_vec(&result, &v);
     let pass = diff < TOL;
     steps.push(make_step(
-        2, "spmv_correct", "spmv_csr",
+        2,
+        "spmv_correct",
+        "spmv_csr",
         "4x4 identity, vector len=4",
         &format!("diff={diff:.4e}, pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let overall_pass = is_err && pass;
@@ -549,10 +624,13 @@ fn e2e_007_zero_nnz_operations() {
         .to_csr()
         .expect("zero csr");
     steps.push(make_step(
-        1, "build_zero", "from_triplets",
+        1,
+        "build_zero",
+        "from_triplets",
         &format!("{n}x{n} zero matrix"),
         &format!("nnz={}", zero.nnz()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // spmv with zero matrix
@@ -563,10 +641,13 @@ fn e2e_007_zero_nnz_operations() {
     let diff = max_abs_diff_vec(&result, &expected);
     let pass_spmv = diff < TOL;
     steps.push(make_step(
-        2, "spmv_zero", "spmv_csr",
+        2,
+        "spmv_zero",
+        "spmv_csr",
         "zero * v",
         &format!("all_zero={pass_spmv}"),
-        t_start.elapsed().as_nanos(), if pass_spmv { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass_spmv { "ok" } else { "fail" },
     ));
 
     // add zero + identity
@@ -577,10 +658,13 @@ fn e2e_007_zero_nnz_operations() {
     let diff = max_abs_diff_vec(&result, &v);
     let pass_add = diff < TOL;
     steps.push(make_step(
-        3, "add_zero_identity", "add_csr+spmv",
+        3,
+        "add_zero_identity",
+        "add_csr+spmv",
         "0+I = I",
         &format!("pass={pass_add}"),
-        t_start.elapsed().as_nanos(), if pass_add { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass_add { "ok" } else { "fail" },
     ));
 
     let overall_pass = pass_spmv && pass_add;
@@ -611,18 +695,20 @@ fn e2e_008_single_element() {
     let coo = CooMatrix::from_triplets(Shape2D::new(1, 1), vec![7.0], vec![0], vec![0], false)
         .expect("1x1 coo");
     let csr = coo.to_csr().expect("csr");
-    let (csc, _) = csr_to_csc_with_mode(&csr, RuntimeMode::Strict, "e2e-1x1")
-        .expect("csc");
+    let (csc, _) = csr_to_csc_with_mode(&csr, RuntimeMode::Strict, "e2e-1x1").expect("csc");
     let back = csc.to_coo().expect("coo").to_csr().expect("csr");
     let dense_orig = dense_from_csr(&csr);
     let dense_back = dense_from_csr(&back);
     let diff = max_abs_diff_vec(&dense_orig[0], &dense_back[0]);
     let pass_rt = diff < TOL;
     steps.push(make_step(
-        1, "roundtrip_1x1", "convert",
+        1,
+        "roundtrip_1x1",
+        "convert",
         "1x1 matrix val=7",
         &format!("pass={pass_rt}"),
-        t_start.elapsed().as_nanos(), if pass_rt { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass_rt { "ok" } else { "fail" },
     ));
 
     // spmv: 7 * [2.0] = [14.0]
@@ -630,10 +716,13 @@ fn e2e_008_single_element() {
     let result = spmv_csr(&csr, &[2.0]).expect("spmv");
     let pass_solve = (result[0] - 14.0).abs() < TOL;
     steps.push(make_step(
-        2, "spmv_1x1", "spmv_csr",
+        2,
+        "spmv_1x1",
+        "spmv_csr",
         "7 * [2] = [14]",
         &format!("result={}, pass={pass_solve}", result[0]),
-        t_start.elapsed().as_nanos(), if pass_solve { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass_solve { "ok" } else { "fail" },
     ));
 
     let overall_pass = pass_rt && pass_solve;
@@ -677,10 +766,13 @@ fn e2e_009_dense_fill_pattern() {
         .expect("dense-as-sparse coo");
     let csr = coo.to_csr().expect("csr");
     steps.push(make_step(
-        1, "build_dense_sparse", "from_triplets",
+        1,
+        "build_dense_sparse",
+        "from_triplets",
         &format!("{n}x{n} fully dense as sparse"),
         &format!("nnz={}", csr.nnz()),
-        t_start.elapsed().as_nanos(), "ok",
+        t_start.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Verify spmv against dense matvec
@@ -695,10 +787,13 @@ fn e2e_009_dense_fill_pattern() {
     let diff = max_abs_diff_vec(&sparse_result, &expected);
     let pass = diff < TOL;
     steps.push(make_step(
-        2, "spmv_verify", "spmv_csr+dense",
+        2,
+        "spmv_verify",
+        "spmv_csr+dense",
         &format!("diff={diff:.4e}"),
         &format!("pass={pass}"),
-        t_start.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -743,10 +838,13 @@ fn e2e_010_rapid_sequential() {
         }
     }
     steps.push(make_step(
-        1, "rapid_spmv", "spmv+verify",
+        1,
+        "rapid_spmv",
+        "spmv+verify",
         &format!("{iterations} iterations, sizes 3-7"),
         &format!("all_pass={all_pass}"),
-        t_start.elapsed().as_nanos(), if all_pass { "ok" } else { "fail" },
+        t_start.elapsed().as_nanos(),
+        if all_pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {

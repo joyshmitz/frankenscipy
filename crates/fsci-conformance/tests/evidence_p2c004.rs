@@ -137,11 +137,7 @@ fn check_spmv_identity(n: usize) -> ParityGate {
 fn check_format_roundtrip(n: usize, density: f64) -> ParityGate {
     let csr = make_random_csr(n, density, 0xBEEF);
     let nnz = csr.nnz();
-    let roundtrip = csr
-        .to_csc()
-        .expect("csr->csc")
-        .to_csr()
-        .expect("csc->csr");
+    let roundtrip = csr.to_csc().expect("csr->csc").to_csr().expect("csc->csr");
     let v = make_vector(n);
     let orig = spmv_csr(&csr, &v).expect("spmv orig");
     let rt = spmv_csr(&roundtrip, &v).expect("spmv roundtrip");
@@ -211,12 +207,7 @@ fn check_diags_tridiag(n: usize) -> ParityGate {
     let sub = vec![-1.0; n.saturating_sub(1)];
     let main_d = vec![2.0; n];
     let sup = vec![-1.0; n.saturating_sub(1)];
-    let csr = diags(
-        &[sub, main_d, sup],
-        &[-1, 0, 1],
-        Some(Shape2D::new(n, n)),
-    )
-    .expect("tridiag");
+    let csr = diags(&[sub, main_d, sup], &[-1, 0, 1], Some(Shape2D::new(n, n))).expect("tridiag");
     // Verify diagonal dominance: main diag = 2, off-diag = -1
     let v = vec![1.0; n];
     let result = spmv_csr(&csr, &v).expect("spmv tridiag");
@@ -305,11 +296,21 @@ fn evidence_p2c004_final_pack() {
     };
 
     // Operation summaries
-    let ops = ["spmv_csr", "format_conversion", "add_csr", "scale_csr", "diags"];
+    let ops = [
+        "spmv_csr",
+        "format_conversion",
+        "add_csr",
+        "scale_csr",
+        "diags",
+    ];
     let operation_summaries: Vec<_> = ops
         .iter()
         .map(|&op| {
-            let matched: Vec<_> = parity_gates.gates.iter().filter(|g| g.operation == op).collect();
+            let matched: Vec<_> = parity_gates
+                .gates
+                .iter()
+                .filter(|g| g.operation == op)
+                .collect();
             OperationParitySummary {
                 operation: op,
                 total_fixtures: matched.len(),
@@ -388,18 +389,20 @@ fn evidence_p2c004_final_pack() {
 
     // Write blake3 hash of bundle
     let bundle_hash = hash(json.as_bytes()).to_hex().to_string();
-    std::fs::write(
-        evidence_dir.join("evidence_bundle.blake3"),
-        &bundle_hash,
-    )
-    .unwrap();
+    std::fs::write(evidence_dir.join("evidence_bundle.blake3"), &bundle_hash).unwrap();
 
     // Assertions
     for g in &evidence.parity_gates.gates {
         if g.pass {
-            eprintln!("  PASS: {} {} — max_abs={:.2e}", g.operation, g.fixture_id, g.max_abs_diff);
+            eprintln!(
+                "  PASS: {} {} — max_abs={:.2e}",
+                g.operation, g.fixture_id, g.max_abs_diff
+            );
         } else {
-            eprintln!("  FAIL: {} {} — max_abs={:.2e}", g.operation, g.fixture_id, g.max_abs_diff);
+            eprintln!(
+                "  FAIL: {} {} — max_abs={:.2e}",
+                g.operation, g.fixture_id, g.max_abs_diff
+            );
         }
     }
     assert!(all_pass, "All parity gates must pass");
@@ -411,6 +414,13 @@ fn evidence_p2c004_final_pack() {
             s.operation, s.passed, s.total_fixtures, s.max_abs_diff_across_all
         );
     }
-    eprintln!("  RaptorQ sidecar: {}", if evidence.sidecar.is_some() { "generated" } else { "skipped" });
+    eprintln!(
+        "  RaptorQ sidecar: {}",
+        if evidence.sidecar.is_some() {
+            "generated"
+        } else {
+            "skipped"
+        }
+    );
     eprintln!("  Artifacts: {evidence_dir:?}");
 }

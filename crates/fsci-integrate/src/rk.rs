@@ -355,6 +355,11 @@ impl RkSolver {
         self.t_old
     }
 
+    /// Previous state vector (after at least one successful step).
+    pub fn y_old(&self) -> Option<&[f64]> {
+        self.y_old.as_deref()
+    }
+
     /// Number of function evaluations.
     pub fn nfev(&self) -> usize {
         self.nfev

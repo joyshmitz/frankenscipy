@@ -24,12 +24,16 @@ fn bench_gamma(c: &mut Criterion) {
 
     for &x in GAMMA_INPUTS {
         let input = scalar(x);
-        group.bench_with_input(BenchmarkId::new("gamma", format!("{x}")), &input, |b, input| {
-            b.iter(|| {
-                let out = gamma(black_box(input), RuntimeMode::Strict).expect("gamma");
-                black_box(real_val(&out));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("gamma", format!("{x}")),
+            &input,
+            |b, input| {
+                b.iter(|| {
+                    let out = gamma(black_box(input), RuntimeMode::Strict).expect("gamma");
+                    black_box(real_val(&out));
+                });
+            },
+        );
     }
 
     group.finish();
@@ -87,8 +91,8 @@ fn bench_gammainc(c: &mut Criterion) {
             &(sa, sx),
             |b, (sa, sx)| {
                 b.iter(|| {
-                    let out =
-                        gammainc(black_box(sa), black_box(sx), RuntimeMode::Strict).expect("gammainc");
+                    let out = gammainc(black_box(sa), black_box(sx), RuntimeMode::Strict)
+                        .expect("gammainc");
                     black_box(real_val(&out));
                 });
             },
@@ -103,12 +107,16 @@ fn bench_erf(c: &mut Criterion) {
 
     for &x in ERF_INPUTS {
         let input = scalar(x);
-        group.bench_with_input(BenchmarkId::new("erf", format!("{x}")), &input, |b, input| {
-            b.iter(|| {
-                let out = erf(black_box(input), RuntimeMode::Strict).expect("erf");
-                black_box(real_val(&out));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("erf", format!("{x}")),
+            &input,
+            |b, input| {
+                b.iter(|| {
+                    let out = erf(black_box(input), RuntimeMode::Strict).expect("erf");
+                    black_box(real_val(&out));
+                });
+            },
+        );
     }
 
     group.finish();
@@ -119,12 +127,16 @@ fn bench_erfc(c: &mut Criterion) {
 
     for &x in ERF_INPUTS {
         let input = scalar(x);
-        group.bench_with_input(BenchmarkId::new("erfc", format!("{x}")), &input, |b, input| {
-            b.iter(|| {
-                let out = erfc(black_box(input), RuntimeMode::Strict).expect("erfc");
-                black_box(real_val(&out));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("erfc", format!("{x}")),
+            &input,
+            |b, input| {
+                b.iter(|| {
+                    let out = erfc(black_box(input), RuntimeMode::Strict).expect("erfc");
+                    black_box(real_val(&out));
+                });
+            },
+        );
     }
 
     group.finish();
@@ -163,7 +175,8 @@ fn bench_beta(c: &mut Criterion) {
             &(sa, sb),
             |b, (sa, sb)| {
                 b.iter(|| {
-                    let out = beta(black_box(sa), black_box(sb), RuntimeMode::Strict).expect("beta");
+                    let out =
+                        beta(black_box(sa), black_box(sb), RuntimeMode::Strict).expect("beta");
                     black_box(real_val(&out));
                 });
             },
@@ -178,19 +191,27 @@ fn bench_bessel_j(c: &mut Criterion) {
 
     for &x in BESSEL_INPUTS {
         let input = scalar(x);
-        group.bench_with_input(BenchmarkId::new("j0", format!("{x}")), &input, |b, input| {
-            b.iter(|| {
-                let out = j0(black_box(input), RuntimeMode::Strict).expect("j0");
-                black_box(real_val(&out));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("j0", format!("{x}")),
+            &input,
+            |b, input| {
+                b.iter(|| {
+                    let out = j0(black_box(input), RuntimeMode::Strict).expect("j0");
+                    black_box(real_val(&out));
+                });
+            },
+        );
 
-        group.bench_with_input(BenchmarkId::new("j1", format!("{x}")), &input, |b, input| {
-            b.iter(|| {
-                let out = j1(black_box(input), RuntimeMode::Strict).expect("j1");
-                black_box(real_val(&out));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("j1", format!("{x}")),
+            &input,
+            |b, input| {
+                b.iter(|| {
+                    let out = j1(black_box(input), RuntimeMode::Strict).expect("j1");
+                    black_box(real_val(&out));
+                });
+            },
+        );
     }
 
     group.finish();
@@ -201,12 +222,16 @@ fn bench_bessel_y0(c: &mut Criterion) {
 
     for &x in &[0.1, 1.0, 5.0, 10.0, 20.0] {
         let input = scalar(x);
-        group.bench_with_input(BenchmarkId::new("y0", format!("{x}")), &input, |b, input| {
-            b.iter(|| {
-                let out = y0(black_box(input), RuntimeMode::Strict).expect("y0");
-                black_box(real_val(&out));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("y0", format!("{x}")),
+            &input,
+            |b, input| {
+                b.iter(|| {
+                    let out = y0(black_box(input), RuntimeMode::Strict).expect("y0");
+                    black_box(real_val(&out));
+                });
+            },
+        );
     }
 
     group.finish();

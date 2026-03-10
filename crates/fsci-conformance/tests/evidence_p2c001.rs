@@ -9,8 +9,8 @@
 use blake3::hash;
 use fsci_conformance::{RaptorQSidecar, generate_raptorq_sidecar};
 use fsci_integrate::{
-    SolveIvpOptions, SolverKind, ToleranceValue,
-    solve_ivp, validate_first_step, validate_max_step, validate_tol,
+    SolveIvpOptions, SolverKind, ToleranceValue, solve_ivp, validate_first_step, validate_max_step,
+    validate_tol,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -378,16 +378,66 @@ fn evidence_p2c001_final_pack() {
 
     // Fixture manifest
     let fixture_entries = vec![
-        FixtureEntry { fixture_id: "validate_tol_scalar".into(), size: 3, input_type: "scalar_tol", operations: vec!["validate_tol"] },
-        FixtureEntry { fixture_id: "validate_tol_clamping".into(), size: 1, input_type: "clamping_edge", operations: vec!["validate_tol"] },
-        FixtureEntry { fixture_id: "validate_first_step".into(), size: 3, input_type: "step_validation", operations: vec!["validate_first_step"] },
-        FixtureEntry { fixture_id: "validate_max_step".into(), size: 3, input_type: "step_validation", operations: vec!["validate_max_step"] },
-        FixtureEntry { fixture_id: "exponential_decay_rk45".into(), size: 1, input_type: "ode_system", operations: vec!["solve_ivp_rk45"] },
-        FixtureEntry { fixture_id: "exponential_decay_rk23".into(), size: 1, input_type: "ode_system", operations: vec!["solve_ivp_rk23"] },
-        FixtureEntry { fixture_id: "harmonic_oscillator_rk45".into(), size: 2, input_type: "ode_system", operations: vec!["solve_ivp_rk45"] },
-        FixtureEntry { fixture_id: "lotka_volterra_positive".into(), size: 2, input_type: "ode_system", operations: vec!["solve_ivp_rk45"] },
-        FixtureEntry { fixture_id: "rk45_vs_rk23".into(), size: 1, input_type: "solver_comparison", operations: vec!["solver_agreement"] },
-        FixtureEntry { fixture_id: "strict_vs_hardened".into(), size: 1, input_type: "mode_comparison", operations: vec!["mode_invariance"] },
+        FixtureEntry {
+            fixture_id: "validate_tol_scalar".into(),
+            size: 3,
+            input_type: "scalar_tol",
+            operations: vec!["validate_tol"],
+        },
+        FixtureEntry {
+            fixture_id: "validate_tol_clamping".into(),
+            size: 1,
+            input_type: "clamping_edge",
+            operations: vec!["validate_tol"],
+        },
+        FixtureEntry {
+            fixture_id: "validate_first_step".into(),
+            size: 3,
+            input_type: "step_validation",
+            operations: vec!["validate_first_step"],
+        },
+        FixtureEntry {
+            fixture_id: "validate_max_step".into(),
+            size: 3,
+            input_type: "step_validation",
+            operations: vec!["validate_max_step"],
+        },
+        FixtureEntry {
+            fixture_id: "exponential_decay_rk45".into(),
+            size: 1,
+            input_type: "ode_system",
+            operations: vec!["solve_ivp_rk45"],
+        },
+        FixtureEntry {
+            fixture_id: "exponential_decay_rk23".into(),
+            size: 1,
+            input_type: "ode_system",
+            operations: vec!["solve_ivp_rk23"],
+        },
+        FixtureEntry {
+            fixture_id: "harmonic_oscillator_rk45".into(),
+            size: 2,
+            input_type: "ode_system",
+            operations: vec!["solve_ivp_rk45"],
+        },
+        FixtureEntry {
+            fixture_id: "lotka_volterra_positive".into(),
+            size: 2,
+            input_type: "ode_system",
+            operations: vec!["solve_ivp_rk45"],
+        },
+        FixtureEntry {
+            fixture_id: "rk45_vs_rk23".into(),
+            size: 1,
+            input_type: "solver_comparison",
+            operations: vec!["solver_agreement"],
+        },
+        FixtureEntry {
+            fixture_id: "strict_vs_hardened".into(),
+            size: 1,
+            input_type: "mode_comparison",
+            operations: vec!["mode_invariance"],
+        },
     ];
 
     let manifest = FixtureManifest {
@@ -419,13 +469,22 @@ fn evidence_p2c001_final_pack() {
 
     // Operation summaries
     let ops = [
-        "validate_tol", "validate_first_step", "validate_max_step",
-        "solve_ivp_rk45", "solve_ivp_rk23", "solver_agreement", "mode_invariance",
+        "validate_tol",
+        "validate_first_step",
+        "validate_max_step",
+        "solve_ivp_rk45",
+        "solve_ivp_rk23",
+        "solver_agreement",
+        "mode_invariance",
     ];
     let operation_summaries: Vec<_> = ops
         .iter()
         .map(|&op| {
-            let matched: Vec<_> = parity_gates.gates.iter().filter(|g| g.operation == op).collect();
+            let matched: Vec<_> = parity_gates
+                .gates
+                .iter()
+                .filter(|g| g.operation == op)
+                .collect();
             OperationParitySummary {
                 operation: op,
                 total_fixtures: matched.len(),
@@ -513,9 +572,15 @@ fn evidence_p2c001_final_pack() {
 
     for g in &evidence.parity_gates.gates {
         if g.pass {
-            eprintln!("  PASS: {} {} — max_abs={:.2e}", g.operation, g.fixture_id, g.max_abs_diff);
+            eprintln!(
+                "  PASS: {} {} — max_abs={:.2e}",
+                g.operation, g.fixture_id, g.max_abs_diff
+            );
         } else {
-            eprintln!("  FAIL: {} {} — max_abs={:.2e}", g.operation, g.fixture_id, g.max_abs_diff);
+            eprintln!(
+                "  FAIL: {} {} — max_abs={:.2e}",
+                g.operation, g.fixture_id, g.max_abs_diff
+            );
         }
     }
     assert!(all_pass, "All parity gates must pass");
@@ -527,5 +592,12 @@ fn evidence_p2c001_final_pack() {
             s.operation, s.passed, s.total_fixtures, s.max_abs_diff_across_all
         );
     }
-    eprintln!("  RaptorQ sidecar: {}", if evidence.sidecar.is_some() { "generated" } else { "skipped" });
+    eprintln!(
+        "  RaptorQ sidecar: {}",
+        if evidence.sidecar.is_some() {
+            "generated"
+        } else {
+            "skipped"
+        }
+    );
 }

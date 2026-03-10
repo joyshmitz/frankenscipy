@@ -132,10 +132,13 @@ fn e2e_001_policy_well_conditioned() {
     let t = Instant::now();
     let mut ctrl = PolicyController::new(RuntimeMode::Strict, 64);
     steps.push(make_step(
-        1, "create_controller", "init",
+        1,
+        "create_controller",
+        "init",
         "mode=Strict, capacity=64",
         &format!("mode={:?}", ctrl.mode()),
-        t.elapsed().as_nanos(), "ok",
+        t.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: Benign signal → expect Allow
@@ -143,35 +146,53 @@ fn e2e_001_policy_well_conditioned() {
     let signals = DecisionSignals::new(2.0, 0.0, 0.0);
     let decision = ctrl.decide(signals);
     let pass = decision.action == PolicyAction::Allow;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "benign_decision", "decide",
+        2,
+        "benign_decision",
+        "decide",
         "cond=2.0, meta=0.0, anom=0.0",
-        &format!("action={:?}, top_state={:?}, reason={}", decision.action, decision.top_state, decision.reason),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "action={:?}, top_state={:?}, reason={}",
+            decision.action, decision.top_state, decision.reason
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Verify posterior normalization
     let t = Instant::now();
     let sum: f64 = decision.posterior.iter().sum();
     let pass = (sum - 1.0).abs() < 1e-9;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "posterior_normalized", "check",
+        3,
+        "posterior_normalized",
+        "check",
         &format!("posterior={:?}", decision.posterior),
         &format!("sum={sum:.12}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: Verify ledger recorded
     let t = Instant::now();
     let pass = ctrl.ledger().len() == 1;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "ledger_recorded", "check",
+        4,
+        "ledger_recorded",
+        "check",
         "ledger.len()",
         &format!("len={}", ctrl.ledger().len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -180,7 +201,11 @@ fn e2e_001_policy_well_conditioned() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -204,13 +229,24 @@ fn e2e_002_policy_ill_conditioned() {
     let t = Instant::now();
     let signals = DecisionSignals::new(16.0, 0.0, 0.0);
     let decision = ctrl.decide(signals);
-    let pass = matches!(decision.action, PolicyAction::FullValidate | PolicyAction::FailClosed);
-    if !pass { all_pass = false; }
+    let pass = matches!(
+        decision.action,
+        PolicyAction::FullValidate | PolicyAction::FailClosed
+    );
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "high_cond_decision", "decide",
+        1,
+        "high_cond_decision",
+        "decide",
         "cond=16.0, meta=0.0, anom=0.0",
-        &format!("action={:?}, top_state={:?}", decision.action, decision.top_state),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "action={:?}, top_state={:?}",
+            decision.action, decision.top_state
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: High metadata incompatibility
@@ -219,10 +255,16 @@ fn e2e_002_policy_ill_conditioned() {
     let decision = ctrl.decide(signals);
     // High metadata should push toward IncompatibleMetadata
     steps.push(make_step(
-        2, "high_meta_decision", "decide",
+        2,
+        "high_meta_decision",
+        "decide",
         "cond=0.0, meta=1.0, anom=0.0",
-        &format!("action={:?}, top_state={:?}, posterior={:?}", decision.action, decision.top_state, decision.posterior),
-        t.elapsed().as_nanos(), "ok",
+        &format!(
+            "action={:?}, top_state={:?}, posterior={:?}",
+            decision.action, decision.top_state, decision.posterior
+        ),
+        t.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 3: All-high signal → expect FailClosed
@@ -230,12 +272,17 @@ fn e2e_002_policy_ill_conditioned() {
     let signals = DecisionSignals::new(16.0, 1.0, 1.0);
     let decision = ctrl.decide(signals);
     let pass = decision.action == PolicyAction::FailClosed;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "all_high_decision", "decide",
+        3,
+        "all_high_decision",
+        "decide",
         "cond=16.0, meta=1.0, anom=1.0",
         &format!("action={:?}, reason={}", decision.action, decision.reason),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -244,7 +291,11 @@ fn e2e_002_policy_ill_conditioned() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -269,12 +320,19 @@ fn e2e_003_solver_portfolio_selection() {
         let (action, posterior, _expected_losses, chosen_loss) = portfolio.select_action(state);
         let posterior_sum: f64 = posterior.iter().sum();
         let pass = (posterior_sum - 1.0).abs() < 1e-9;
-        if !pass { all_pass = false; }
+        if !pass {
+            all_pass = false;
+        }
         steps.push(make_step(
-            i + 1, &format!("select_{state:?}"), "select_action",
+            i + 1,
+            &format!("select_{state:?}"),
+            "select_action",
             &format!("state={state:?}"),
-            &format!("action={action:?}, chosen_loss={chosen_loss:.2}, posterior_sum={posterior_sum:.12}"),
-            t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+            &format!(
+                "action={action:?}, chosen_loss={chosen_loss:.2}, posterior_sum={posterior_sum:.12}"
+            ),
+            t.elapsed().as_nanos(),
+            if pass { "ok" } else { "fail" },
         ));
     }
 
@@ -282,13 +340,19 @@ fn e2e_003_solver_portfolio_selection() {
     let t = Instant::now();
     let (well_action, _, _, _) = portfolio.select_action(&MatrixConditionState::WellConditioned);
     let (ill_action, _, _, _) = portfolio.select_action(&MatrixConditionState::IllConditioned);
-    let pass = matches!(well_action, SolverAction::DirectLU) && matches!(ill_action, SolverAction::SVDFallback);
-    if !pass { all_pass = false; }
+    let pass = matches!(well_action, SolverAction::DirectLU)
+        && matches!(ill_action, SolverAction::SVDFallback);
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        5, "verify_expected_selections", "check",
+        5,
+        "verify_expected_selections",
+        "check",
         "well→DirectLU, ill→SVDFallback",
         &format!("well={well_action:?}, ill={ill_action:?}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -297,7 +361,11 @@ fn e2e_003_solver_portfolio_selection() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -320,10 +388,13 @@ fn e2e_004_ledger_bounded_fifo() {
     let t = Instant::now();
     let mut ctrl = PolicyController::new(RuntimeMode::Strict, capacity);
     steps.push(make_step(
-        1, "create_small_ledger", "init",
+        1,
+        "create_small_ledger",
+        "init",
         &format!("capacity={capacity}"),
         &format!("ledger.capacity={}", ctrl.ledger().capacity()),
-        t.elapsed().as_nanos(), "ok",
+        t.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: Record 20 entries
@@ -334,12 +405,17 @@ fn e2e_004_ledger_bounded_fifo() {
     }
     let len = ctrl.ledger().len();
     let pass = len <= capacity;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "record_20_entries", "decide",
+        2,
+        "record_20_entries",
+        "decide",
         "20 decisions with varying cond",
         &format!("ledger.len={len}, capacity={capacity}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Verify latest entry is from the most recent decision
@@ -347,10 +423,13 @@ fn e2e_004_ledger_bounded_fifo() {
     let latest = ctrl.ledger().latest().expect("latest entry");
     let pass = true; // If we got here, latest exists
     steps.push(make_step(
-        3, "verify_latest", "check",
+        3,
+        "verify_latest",
+        "check",
         "latest entry should exist",
         &format!("has_latest={pass}, mode={:?}", latest.mode),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -359,7 +438,11 @@ fn e2e_004_ledger_bounded_fifo() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -388,10 +471,16 @@ fn e2e_005_mode_switch_behavior() {
     let mut strict_ctrl = PolicyController::new(RuntimeMode::Strict, 64);
     let strict_dec = strict_ctrl.decide(signals);
     steps.push(make_step(
-        1, "strict_decision", "decide",
+        1,
+        "strict_decision",
+        "decide",
         "mode=Strict, cond=8, meta=0.3, anom=0.2",
-        &format!("action={:?}, reason={}", strict_dec.action, strict_dec.reason),
-        t.elapsed().as_nanos(), "ok",
+        &format!(
+            "action={:?}, reason={}",
+            strict_dec.action, strict_dec.reason
+        ),
+        t.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: Hardened mode decision
@@ -399,10 +488,16 @@ fn e2e_005_mode_switch_behavior() {
     let mut hardened_ctrl = PolicyController::new(RuntimeMode::Hardened, 64);
     let hardened_dec = hardened_ctrl.decide(signals);
     steps.push(make_step(
-        2, "hardened_decision", "decide",
+        2,
+        "hardened_decision",
+        "decide",
         "mode=Hardened, cond=8, meta=0.3, anom=0.2",
-        &format!("action={:?}, reason={}", hardened_dec.action, hardened_dec.reason),
-        t.elapsed().as_nanos(), "ok",
+        &format!(
+            "action={:?}, reason={}",
+            hardened_dec.action, hardened_dec.reason
+        ),
+        t.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 3: Both posteriors should be normalized
@@ -410,12 +505,17 @@ fn e2e_005_mode_switch_behavior() {
     let strict_sum: f64 = strict_dec.posterior.iter().sum();
     let hardened_sum: f64 = hardened_dec.posterior.iter().sum();
     let pass = (strict_sum - 1.0).abs() < 1e-9 && (hardened_sum - 1.0).abs() < 1e-9;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "posteriors_normalized", "check",
+        3,
+        "posteriors_normalized",
+        "check",
         "both posteriors sum to 1",
         &format!("strict_sum={strict_sum:.12}, hardened_sum={hardened_sum:.12}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: Different loss matrices produce different expected losses
@@ -423,13 +523,19 @@ fn e2e_005_mode_switch_behavior() {
     let strict_losses = &strict_dec.expected_losses;
     let hardened_losses = &hardened_dec.expected_losses;
     // They may or may not differ depending on the signal; just verify both are finite
-    let pass = strict_losses.iter().all(|l| l.is_finite()) && hardened_losses.iter().all(|l| l.is_finite());
-    if !pass { all_pass = false; }
+    let pass = strict_losses.iter().all(|l| l.is_finite())
+        && hardened_losses.iter().all(|l| l.is_finite());
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "losses_finite", "check",
+        4,
+        "losses_finite",
+        "check",
         "all expected losses finite",
         &format!("strict_losses={strict_losses:?}, hardened_losses={hardened_losses:?}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -438,7 +544,11 @@ fn e2e_005_mode_switch_behavior() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -460,10 +570,13 @@ fn e2e_006_calibrator_fallback() {
     let t = Instant::now();
     let mut calibrator = ConformalCalibrator::new(0.05, 200);
     steps.push(make_step(
-        1, "create_calibrator", "init",
+        1,
+        "create_calibrator",
+        "init",
         "alpha=0.05, capacity=200",
         &format!("alpha={}", calibrator.alpha()),
-        t.elapsed().as_nanos(), "ok",
+        t.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: Feed good scores (below threshold)
@@ -473,12 +586,20 @@ fn e2e_006_calibrator_fallback() {
     }
     let fallback = calibrator.should_fallback();
     let pass = !fallback; // should not trigger fallback yet
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "good_scores", "observe",
+        2,
+        "good_scores",
+        "observe",
         "50 scores < 1e-8",
-        &format!("should_fallback={fallback}, miscoverage={:.4}", calibrator.empirical_miscoverage()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "should_fallback={fallback}, miscoverage={:.4}",
+            calibrator.empirical_miscoverage()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Feed many bad scores (above threshold)
@@ -488,12 +609,20 @@ fn e2e_006_calibrator_fallback() {
     }
     let fallback = calibrator.should_fallback();
     let pass = fallback; // should now trigger fallback
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "bad_scores_trigger", "observe",
+        3,
+        "bad_scores_trigger",
+        "observe",
         "50 scores = 1.0 (bad)",
-        &format!("should_fallback={fallback}, miscoverage={:.4}", calibrator.empirical_miscoverage()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "should_fallback={fallback}, miscoverage={:.4}",
+            calibrator.empirical_miscoverage()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -502,7 +631,11 @@ fn e2e_006_calibrator_fallback() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -532,12 +665,17 @@ fn e2e_007_signal_replay_stateless() {
     seq.push(DecisionSignals::new(2.0, 0.0, 0.0)); // benign again
     seq.push(DecisionSignals::new(2.0, 0.0, 0.0)); // benign again
     let pass = seq.len() == 4;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "build_sequence", "create",
+        1,
+        "build_sequence",
+        "create",
         "4 signals: benign, adversarial, benign, benign",
         &format!("len={}", seq.len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: Replay and verify decisions are independent
@@ -548,24 +686,41 @@ fn e2e_007_signal_replay_stateless() {
         decisions.push(ctrl.decide(*signal));
     }
     // First and third should have same action (both benign)
-    let pass = decisions[0].action == decisions[2].action && decisions[0].action == decisions[3].action;
-    if !pass { all_pass = false; }
+    let pass =
+        decisions[0].action == decisions[2].action && decisions[0].action == decisions[3].action;
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "replay_verify", "decide",
+        2,
+        "replay_verify",
+        "decide",
         "replay 4 signals",
-        &format!("actions=[{:?},{:?},{:?},{:?}]", decisions[0].action, decisions[1].action, decisions[2].action, decisions[3].action),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "actions=[{:?},{:?},{:?},{:?}]",
+            decisions[0].action, decisions[1].action, decisions[2].action, decisions[3].action
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Adversarial signal should differ from benign
     let t = Instant::now();
     let pass = decisions[1].action != decisions[0].action;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "adversarial_differs", "check",
+        3,
+        "adversarial_differs",
+        "check",
         "adversarial action != benign action",
-        &format!("benign_action={:?}, adversarial_action={:?}", decisions[0].action, decisions[1].action),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "benign_action={:?}, adversarial_action={:?}",
+            decisions[0].action, decisions[1].action
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -574,7 +729,11 @@ fn e2e_007_signal_replay_stateless() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -611,23 +770,35 @@ fn e2e_008_rapid_decisions() {
     }
     let total = allow_count + validate_count + fail_count;
     let pass = total == 1000;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "rapid_1000_decisions", "batch_decide",
+        1,
+        "rapid_1000_decisions",
+        "batch_decide",
         "1000 decisions with varying signals",
-        &format!("allow={allow_count}, validate={validate_count}, fail={fail_count}, total={total}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "allow={allow_count}, validate={validate_count}, fail={fail_count}, total={total}"
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: Ledger bounded
     let t = Instant::now();
     let pass = ctrl.ledger().len() <= 100;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "ledger_bounded", "check",
+        2,
+        "ledger_bounded",
+        "check",
         "ledger.len() <= capacity",
         &format!("len={}, capacity=100", ctrl.ledger().len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Determinism check — same input gives same output
@@ -637,12 +808,20 @@ fn e2e_008_rapid_decisions() {
     let mut ctrl3 = PolicyController::new(RuntimeMode::Strict, 100);
     let dec2 = ctrl3.decide(DecisionSignals::new(5.0, 0.1, 0.05));
     let pass = dec1.action == dec2.action && dec1.top_state == dec2.top_state;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "determinism_check", "check",
+        3,
+        "determinism_check",
+        "check",
         "same signal → same action",
-        &format!("action1={:?}, action2={:?}, match={pass}", dec1.action, dec2.action),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "action1={:?}, action2={:?}, match={pass}",
+            dec1.action, dec2.action
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -651,7 +830,11 @@ fn e2e_008_rapid_decisions() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,

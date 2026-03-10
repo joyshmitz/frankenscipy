@@ -6,8 +6,8 @@ use fsci_sparse::{
 
 /// Matrix configurations: (rows/cols, density).
 const CONFIGS: &[(usize, f64)] = &[
-    (100, 0.05),    // 100×100, 5%
-    (1_000, 0.01),  // 1000×1000, 1%
+    (100, 0.05),     // 100×100, 5%
+    (1_000, 0.01),   // 1000×1000, 1%
     (10_000, 0.001), // 10000×10000, 0.1%
 ];
 
@@ -51,7 +51,10 @@ fn bench_spmv(c: &mut Criterion) {
         let csr = make_random_csr(n, density);
         let vec = make_vector(n);
         group.bench_with_input(
-            BenchmarkId::new(format!("{n}x{n}_d{}_nnz{}", (density * 100.0) as u32, csr.nnz()), n),
+            BenchmarkId::new(
+                format!("{n}x{n}_d{}_nnz{}", (density * 100.0) as u32, csr.nnz()),
+                n,
+            ),
             &(csr, vec),
             |b, (csr, vec)| {
                 b.iter(|| {

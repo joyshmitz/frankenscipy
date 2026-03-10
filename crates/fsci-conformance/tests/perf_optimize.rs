@@ -6,8 +6,8 @@
 //! Covers BFGS, CG, Powell, brentq, brenth, bisect, ridder.
 
 use fsci_opt::{
-    ConvergenceStatus, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions,
-    bfgs, bisect, brentq, brenth, cg_pr_plus, powell, ridder,
+    ConvergenceStatus, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, bfgs, bisect,
+    brenth, brentq, cg_pr_plus, powell, ridder,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -16,7 +16,8 @@ use std::time::Instant;
 const WARMUP_ITERS: usize = 3;
 const BENCH_ITERS: usize = 30;
 
-type RootSolverFn = fn(fn(f64) -> f64, (f64, f64), RootOptions) -> Result<fsci_opt::RootResult, fsci_opt::OptError>;
+type RootSolverFn =
+    fn(fn(f64) -> f64, (f64, f64), RootOptions) -> Result<fsci_opt::RootResult, fsci_opt::OptError>;
 
 // ── Data structures ────────────────────────────────────────────────────
 
@@ -163,7 +164,11 @@ fn perf_p2c003_optimize_profile() {
             operation: "bfgs".into(),
             input_desc: format!("rosenbrock_dim{dim}"),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
 
         // BFGS on quadratic
@@ -175,19 +180,31 @@ fn perf_p2c003_optimize_profile() {
             operation: "bfgs".into(),
             input_desc: format!("quadratic_dim{dim}"),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
 
         // CG on Rosenbrock
         let timings = time_operation(|| {
-            let _ = cg_pr_plus(&rosenbrock, &x0, minimize_opts(OptimizeMethod::ConjugateGradient));
+            let _ = cg_pr_plus(
+                &rosenbrock,
+                &x0,
+                minimize_opts(OptimizeMethod::ConjugateGradient),
+            );
         });
         let (median, p95, min_v, max_v, mean) = compute_stats(&timings);
         benchmarks.push(OperationBenchmark {
             operation: "cg".into(),
             input_desc: format!("rosenbrock_dim{dim}"),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
 
         // Powell on Rosenbrock
@@ -199,7 +216,11 @@ fn perf_p2c003_optimize_profile() {
             operation: "powell".into(),
             input_desc: format!("rosenbrock_dim{dim}"),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
@@ -223,7 +244,11 @@ fn perf_p2c003_optimize_profile() {
             operation: name.to_string(),
             input_desc: "cubic_[1,3]".into(),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
 
         // sin
@@ -235,7 +260,11 @@ fn perf_p2c003_optimize_profile() {
             operation: name.to_string(),
             input_desc: "sin_[3,4]".into(),
             iterations: BENCH_ITERS,
-            median_ns: median, p95_ns: p95, min_ns: min_v, max_ns: max_v, mean_ns: mean,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
         });
     }
 
@@ -260,7 +289,11 @@ fn perf_p2c003_optimize_profile() {
             operation: b.operation.clone(),
             input_desc: b.input_desc.clone(),
             median_ns: b.median_ns,
-            fraction_of_total: if total_ns > 0 { b.median_ns as f64 / total_ns as f64 } else { 0.0 },
+            fraction_of_total: if total_ns > 0 {
+                b.median_ns as f64 / total_ns as f64
+            } else {
+                0.0
+            },
         })
         .collect();
 
@@ -289,19 +322,32 @@ fn perf_p2c003_optimize_profile() {
 
     // BFGS finds minimum of quadratic at origin
     {
-        let result = bfgs(&quadratic, &[1.0, 2.0, 3.0], minimize_opts(OptimizeMethod::Bfgs)).unwrap();
+        let result = bfgs(
+            &quadratic,
+            &[1.0, 2.0, 3.0],
+            minimize_opts(OptimizeMethod::Bfgs),
+        )
+        .unwrap();
         let at_origin = result.x.iter().all(|&xi| xi.abs() < 1e-4);
         let pass = result.success && at_origin;
         iso_details.push(IsomorphismDetail {
             operation: "bfgs_quadratic_minimum".into(),
             passes: pass,
-            note: format!("x={:?}, f={:?}, success={}", result.x, result.fun, result.success),
+            note: format!(
+                "x={:?}, f={:?}, success={}",
+                result.x, result.fun, result.success
+            ),
         });
     }
 
     // CG finds minimum of quadratic at origin
     {
-        let result = cg_pr_plus(&quadratic, &[1.0, 2.0], minimize_opts(OptimizeMethod::ConjugateGradient)).unwrap();
+        let result = cg_pr_plus(
+            &quadratic,
+            &[1.0, 2.0],
+            minimize_opts(OptimizeMethod::ConjugateGradient),
+        )
+        .unwrap();
         let at_origin = result.x.iter().all(|&xi| xi.abs() < 1e-3);
         let pass = result.success && at_origin;
         iso_details.push(IsomorphismDetail {
@@ -313,7 +359,12 @@ fn perf_p2c003_optimize_profile() {
 
     // Powell finds minimum of quadratic
     {
-        let result = powell(&quadratic, &[1.0, 2.0], minimize_opts(OptimizeMethod::Powell)).unwrap();
+        let result = powell(
+            &quadratic,
+            &[1.0, 2.0],
+            minimize_opts(OptimizeMethod::Powell),
+        )
+        .unwrap();
         let at_origin = result.x.iter().all(|&xi| xi.abs() < 1e-3);
         let pass = result.success && at_origin;
         iso_details.push(IsomorphismDetail {
@@ -344,7 +395,10 @@ fn perf_p2c003_optimize_profile() {
         iso_details.push(IsomorphismDetail {
             operation: "brentq_bisect_agreement".into(),
             passes: pass,
-            note: format!("brentq={:.10}, bisect={:.10}, diff={diff:.2e}", bq.root, bs.root),
+            note: format!(
+                "brentq={:.10}, bisect={:.10}, diff={diff:.2e}",
+                bq.root, bs.root
+            ),
         });
     }
 
@@ -362,12 +416,23 @@ fn perf_p2c003_optimize_profile() {
 
     // BFGS on Rosenbrock converges (may not always find exact minimum but should converge)
     {
-        let result = bfgs(&rosenbrock, &[0.0, 0.0], minimize_opts(OptimizeMethod::Bfgs)).unwrap();
-        let pass = matches!(result.status, ConvergenceStatus::Success | ConvergenceStatus::MaxIterations);
+        let result = bfgs(
+            &rosenbrock,
+            &[0.0, 0.0],
+            minimize_opts(OptimizeMethod::Bfgs),
+        )
+        .unwrap();
+        let pass = matches!(
+            result.status,
+            ConvergenceStatus::Success | ConvergenceStatus::MaxIterations
+        );
         iso_details.push(IsomorphismDetail {
             operation: "bfgs_rosenbrock_converges".into(),
             passes: pass,
-            note: format!("status={:?}, nfev={}, nit={}", result.status, result.nfev, result.nit),
+            note: format!(
+                "status={:?}, nfev={}, nit={}",
+                result.status, result.nfev, result.nit
+            ),
         });
     }
 
@@ -405,7 +470,11 @@ fn perf_p2c003_optimize_profile() {
     for h in report.hotspot_ranking.iter().take(3) {
         eprintln!(
             "  #{}: {} ({}) — {:.0}ns ({:.1}%)",
-            h.rank, h.operation, h.input_desc, h.median_ns as f64, h.fraction_of_total * 100.0,
+            h.rank,
+            h.operation,
+            h.input_desc,
+            h.median_ns as f64,
+            h.fraction_of_total * 100.0,
         );
     }
     eprintln!();

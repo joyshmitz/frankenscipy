@@ -9,8 +9,7 @@ use blake3::hash;
 use fsci_conformance::{RaptorQSidecar, generate_raptorq_sidecar};
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialTensor, beta, erf, erfc, erfinv, gamma, gammainc, gammaincc, j0, j1, rgamma,
-    y0,
+    SpecialTensor, beta, erf, erfc, erfinv, gamma, gammainc, gammaincc, j0, j1, rgamma, y0,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -346,11 +345,17 @@ fn evidence_p2c006_final_pack() {
     };
 
     // Operation summaries
-    let ops = ["gamma", "erf_erfc", "erfinv", "gammainc", "beta", "bessel", "rgamma"];
+    let ops = [
+        "gamma", "erf_erfc", "erfinv", "gammainc", "beta", "bessel", "rgamma",
+    ];
     let operation_summaries: Vec<_> = ops
         .iter()
         .map(|&op| {
-            let matched: Vec<_> = parity_gates.gates.iter().filter(|g| g.operation == op).collect();
+            let matched: Vec<_> = parity_gates
+                .gates
+                .iter()
+                .filter(|g| g.operation == op)
+                .collect();
             OperationParitySummary {
                 operation: op,
                 total_fixtures: matched.len(),
@@ -452,5 +457,12 @@ fn evidence_p2c006_final_pack() {
             s.operation, s.passed, s.total_fixtures, s.max_abs_diff_across_all
         );
     }
-    eprintln!("  RaptorQ sidecar: {}", if evidence.sidecar.is_some() { "generated" } else { "skipped" });
+    eprintln!(
+        "  RaptorQ sidecar: {}",
+        if evidence.sidecar.is_some() {
+            "generated"
+        } else {
+            "skipped"
+        }
+    );
 }

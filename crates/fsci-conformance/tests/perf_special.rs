@@ -7,8 +7,7 @@
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialTensor, beta, erf, erfc, erfinv, gamma, gammainc, gammaincc, gammaln, j0, j1, rgamma,
-    y0,
+    SpecialTensor, beta, erf, erfc, erfinv, gamma, gammainc, gammaincc, gammaln, j0, j1, rgamma, y0,
 };
 use serde::Serialize;
 use std::time::Instant;
@@ -242,8 +241,7 @@ fn perf_p2c006_full_profile() {
     // ── Hotspot ranking ────────────────────────────────────────────────────────
     // Pick one representative input per operation, rank by median
     let representative_ops = [
-        "gamma", "gammaln", "rgamma", "erf", "erfc", "erfinv", "j0", "j1", "y0", "gammainc",
-        "beta",
+        "gamma", "gammaln", "rgamma", "erf", "erfc", "erfinv", "j0", "j1", "y0", "gammainc", "beta",
     ];
     let mut reps: Vec<&OperationBenchmark> = Vec::new();
     for op in &representative_ops {

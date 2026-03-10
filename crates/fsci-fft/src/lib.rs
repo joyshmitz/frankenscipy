@@ -49,9 +49,9 @@ mod tests {
     use proptest::prelude::*;
     use serde_json::json;
 
-    use super::transforms::{Complex64, FftOptions, fft, ifft, rfft, irfft};
-    use super::{Normalization, TransformKind};
     use super::helpers::fftfreq;
+    use super::transforms::{Complex64, FftOptions, fft, ifft, irfft, rfft};
+    use super::{Normalization, TransformKind};
 
     const PROPTEST_CASES: u32 = 512;
     const FFT_TOL: f64 = 1e-9;
@@ -84,8 +84,16 @@ mod tests {
             "result": "pass"
         });
         for field in [
-            "test_id", "transform", "n", "dtype", "backend",
-            "mode", "seed", "timestamp_ms", "max_error", "result",
+            "test_id",
+            "transform",
+            "n",
+            "dtype",
+            "backend",
+            "mode",
+            "seed",
+            "timestamp_ms",
+            "max_error",
+            "result",
         ] {
             assert!(log.get(field).is_some(), "missing field: {field}");
         }

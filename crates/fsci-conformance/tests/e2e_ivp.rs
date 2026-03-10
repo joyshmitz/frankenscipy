@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use fsci_integrate::{
-    SolveIvpOptions, SolverKind, ToleranceValue,
-    solve_ivp, validate_first_step, validate_max_step, validate_tol,
+    SolveIvpOptions, SolverKind, ToleranceValue, solve_ivp, validate_first_step, validate_max_step,
+    validate_tol,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -165,55 +165,81 @@ fn e2e_001_full_ivp_workflow() {
     )
     .expect("validate_tol");
     steps.push(make_step(
-        1, "validate_tol", "validate",
+        1,
+        "validate_tol",
+        "validate",
         "rtol=1e-3, atol=1e-6, n=1",
         &format!("warnings={}", vtol.warnings.len()),
-        t.elapsed().as_nanos(), "ok",
+        t.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: Validate first step
     let t = Instant::now();
     let fs = validate_first_step(0.01, 0.0, 10.0).expect("validate_first_step");
     let pass = fs == 0.01;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "validate_first_step", "validate",
+        2,
+        "validate_first_step",
+        "validate",
         "first_step=0.01, t0=0.0, t_bound=10.0",
         &format!("result={fs}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Validate max step
     let t = Instant::now();
     let ms = validate_max_step(1.0).expect("validate_max_step");
     let pass = ms == 1.0;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "validate_max_step", "validate",
+        3,
+        "validate_max_step",
+        "validate",
         "max_step=1.0",
         &format!("result={ms}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: Solve IVP (exponential decay)
     let t = Instant::now();
     let mut fun = exponential_decay;
-    let result = solve_ivp(&mut fun, &SolveIvpOptions {
-        t_span: (0.0, 5.0),
-        y0: &[1.0],
-        method: SolverKind::Rk45,
-        rtol: 1e-8,
-        atol: ToleranceValue::Scalar(1e-10),
-        ..Default::default()
-    })
+    let result = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 5.0),
+            y0: &[1.0],
+            method: SolverKind::Rk45,
+            rtol: 1e-8,
+            atol: ToleranceValue::Scalar(1e-10),
+            ..Default::default()
+        },
+    )
     .expect("solve_ivp");
     let pass = result.success;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "solve_ivp", "solve",
+        4,
+        "solve_ivp",
+        "solve",
         "dy/dt=-y, t=[0,5], y0=1",
-        &format!("success={}, nfev={}, t_len={}", result.success, result.nfev, result.t.len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "success={}, nfev={}, t_len={}",
+            result.success,
+            result.nfev,
+            result.t.len()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 5: Verify solution accuracy
@@ -223,12 +249,17 @@ fn e2e_001_full_ivp_workflow() {
     let expected = (-t_final).exp();
     let rel_err = (y_final - expected).abs() / expected;
     let pass = rel_err < 1e-6;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        5, "verify_solution", "check",
+        5,
+        "verify_solution",
+        "check",
         &format!("y({t_final:.2})={y_final:.8e}"),
         &format!("expected={expected:.8e}, rel_err={rel_err:.2e}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -237,7 +268,11 @@ fn e2e_001_full_ivp_workflow() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -262,14 +297,20 @@ fn e2e_002_tolerance_cascade() {
         ToleranceValue::Scalar(1e-9),
         3,
         RuntimeMode::Strict,
-    ).expect("scalar validate");
+    )
+    .expect("scalar validate");
     let pass = vtol.warnings.is_empty();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "scalar_tol", "validate",
+        1,
+        "scalar_tol",
+        "validate",
         "rtol=1e-6, atol=1e-9, n=3",
         &format!("warnings={}", vtol.warnings.len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: Vector tolerances
@@ -279,34 +320,49 @@ fn e2e_002_tolerance_cascade() {
         ToleranceValue::Vector(vec![1e-8, 1e-9, 1e-10]),
         3,
         RuntimeMode::Strict,
-    ).expect("vector validate");
+    )
+    .expect("vector validate");
     let pass = vtol.warnings.is_empty();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "vector_atol", "validate",
+        2,
+        "vector_atol",
+        "validate",
         "rtol=1e-6, atol=[1e-8, 1e-9, 1e-10], n=3",
         &format!("warnings={}", vtol.warnings.len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Solve with vector tolerances (harmonic oscillator)
     let t = Instant::now();
     let mut fun = harmonic_oscillator;
-    let result = solve_ivp(&mut fun, &SolveIvpOptions {
-        t_span: (0.0, 2.0 * PI),
-        y0: &[1.0, 0.0],
-        method: SolverKind::Rk45,
-        rtol: 1e-8,
-        atol: ToleranceValue::Vector(vec![1e-10, 1e-10]),
-        ..Default::default()
-    }).expect("solve_ivp harmonic");
+    let result = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 2.0 * PI),
+            y0: &[1.0, 0.0],
+            method: SolverKind::Rk45,
+            rtol: 1e-8,
+            atol: ToleranceValue::Vector(vec![1e-10, 1e-10]),
+            ..Default::default()
+        },
+    )
+    .expect("solve_ivp harmonic");
     let pass = result.success;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "solve_harmonic", "solve",
+        3,
+        "solve_harmonic",
+        "solve",
         "harmonic oscillator, t=[0,2pi], y0=[1,0]",
         &format!("success={}, nfev={}", result.success, result.nfev),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: Verify periodicity (y(2pi) ≈ y(0))
@@ -315,12 +371,17 @@ fn e2e_002_tolerance_cascade() {
     let err_x = (y_final[0] - 1.0).abs();
     let err_v = y_final[1].abs();
     let pass = err_x < 1e-3 && err_v < 1e-3;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "verify_periodicity", "check",
+        4,
+        "verify_periodicity",
+        "check",
         "y(2pi) ≈ [1, 0]",
         &format!("err_x={err_x:.2e}, err_v={err_v:.2e}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -329,7 +390,11 @@ fn e2e_002_tolerance_cascade() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -354,70 +419,103 @@ fn e2e_003_multi_step_validation() {
         ToleranceValue::Scalar(1e-7),
         2,
         RuntimeMode::Strict,
-    ).expect("validate_tol");
+    )
+    .expect("validate_tol");
     steps.push(make_step(
-        1, "validate_tol", "validate",
+        1,
+        "validate_tol",
+        "validate",
         "rtol=1e-4, atol=1e-7, n=2",
         &format!("ok, warnings={}", vtol.warnings.len()),
-        t.elapsed().as_nanos(), "ok",
+        t.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: validate_first_step
     let t = Instant::now();
     let fs = validate_first_step(0.001, 0.0, 100.0).expect("validate_first_step");
     let pass = (fs - 0.001).abs() < f64::EPSILON;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "validate_first_step", "validate",
+        2,
+        "validate_first_step",
+        "validate",
         "first_step=0.001, t0=0.0, t_bound=100.0",
         &format!("result={fs}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: validate_max_step
     let t = Instant::now();
     let ms = validate_max_step(10.0).expect("validate_max_step");
     let pass = (ms - 10.0).abs() < f64::EPSILON;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "validate_max_step", "validate",
+        3,
+        "validate_max_step",
+        "validate",
         "max_step=10.0",
         &format!("result={ms}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: Full solve using validated params
     let t = Instant::now();
     let mut fun = lotka_volterra;
-    let result = solve_ivp(&mut fun, &SolveIvpOptions {
-        t_span: (0.0, 10.0),
-        y0: &[1.0, 0.5],
-        method: SolverKind::Rk45,
-        rtol: 1e-4,
-        atol: ToleranceValue::Scalar(1e-7),
-        first_step: Some(0.001),
-        max_step: 10.0,
-        ..Default::default()
-    }).expect("solve_ivp lotka-volterra");
+    let result = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 10.0),
+            y0: &[1.0, 0.5],
+            method: SolverKind::Rk45,
+            rtol: 1e-4,
+            atol: ToleranceValue::Scalar(1e-7),
+            first_step: Some(0.001),
+            max_step: 10.0,
+            ..Default::default()
+        },
+    )
+    .expect("solve_ivp lotka-volterra");
     let pass = result.success;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "solve_lotka_volterra", "solve",
+        4,
+        "solve_lotka_volterra",
+        "solve",
         "Lotka-Volterra, t=[0,10], y0=[1,0.5]",
-        &format!("success={}, nfev={}, t_len={}", result.success, result.nfev, result.t.len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "success={}, nfev={}, t_len={}",
+            result.success,
+            result.nfev,
+            result.t.len()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 5: Check solutions remain positive (biological constraint)
     let t = Instant::now();
     let all_positive = result.y.iter().all(|yi| yi.iter().all(|&v| v > 0.0));
     let pass = all_positive;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        5, "verify_positive", "check",
+        5,
+        "verify_positive",
+        "check",
         "all y > 0 (biological constraint)",
         &format!("all_positive={all_positive}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -426,7 +524,11 @@ fn e2e_003_multi_step_validation() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -457,24 +559,34 @@ fn e2e_004_invalid_tolerance_recovery() {
         RuntimeMode::Strict,
     );
     let pass = bad_result.is_err();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "submit_bad_atol", "validate",
+        1,
+        "submit_bad_atol",
+        "validate",
         "atol vec len=2 for n=3",
         &format!("is_err={}", bad_result.is_err()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: Catch error and inspect
     let t = Instant::now();
     let err_msg = format!("{:?}", bad_result.unwrap_err());
     let pass = err_msg.contains("WrongShape") || err_msg.contains("AtolWrongShape");
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "catch_error", "inspect",
+        2,
+        "catch_error",
+        "inspect",
         "error from step 1",
         &format!("err={err_msg}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Correct and retry
@@ -486,36 +598,51 @@ fn e2e_004_invalid_tolerance_recovery() {
         RuntimeMode::Strict,
     );
     let pass = good_result.is_ok();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "correct_and_retry", "validate",
+        3,
+        "correct_and_retry",
+        "validate",
         "atol vec len=3 for n=3",
         &format!("is_ok={}", good_result.is_ok()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: Submit bad first_step (negative)
     let t = Instant::now();
     let bad_fs = validate_first_step(-0.01, 0.0, 10.0);
     let pass = bad_fs.is_err();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "bad_first_step", "validate",
+        4,
+        "bad_first_step",
+        "validate",
         "first_step=-0.01",
         &format!("is_err={}", bad_fs.is_err()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 5: Correct first_step
     let t = Instant::now();
     let good_fs = validate_first_step(0.01, 0.0, 10.0);
     let pass = good_fs.is_ok();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        5, "correct_first_step", "validate",
+        5,
+        "correct_first_step",
+        "validate",
         "first_step=0.01",
         &format!("is_ok={}", good_fs.is_ok()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -524,7 +651,11 @@ fn e2e_004_invalid_tolerance_recovery() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -549,12 +680,16 @@ fn e2e_005_mode_switch() {
         ToleranceValue::Scalar(1e-8),
         2,
         RuntimeMode::Strict,
-    ).expect("strict validate");
+    )
+    .expect("strict validate");
     steps.push(make_step(
-        1, "strict_validate", "validate",
+        1,
+        "strict_validate",
+        "validate",
         "mode=Strict, rtol=1e-4",
         &format!("ok, mode={:?}", strict_result.mode),
-        t.elapsed().as_nanos(), "ok",
+        t.elapsed().as_nanos(),
+        "ok",
     ));
 
     // Step 2: Validate in Hardened mode
@@ -564,52 +699,76 @@ fn e2e_005_mode_switch() {
         ToleranceValue::Scalar(1e-8),
         2,
         RuntimeMode::Hardened,
-    ).expect("hardened validate");
+    )
+    .expect("hardened validate");
     let pass = matches!(hardened_result.mode, RuntimeMode::Hardened);
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "hardened_validate", "validate",
+        2,
+        "hardened_validate",
+        "validate",
         "mode=Hardened, rtol=1e-4",
         &format!("ok, mode={:?}", hardened_result.mode),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Solve in Strict mode
     let t = Instant::now();
     let mut fun = exponential_decay;
-    let strict_sol = solve_ivp(&mut fun, &SolveIvpOptions {
-        t_span: (0.0, 2.0),
-        y0: &[1.0],
-        method: SolverKind::Rk45,
-        mode: RuntimeMode::Strict,
-        ..Default::default()
-    }).expect("strict solve");
+    let strict_sol = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 2.0),
+            y0: &[1.0],
+            method: SolverKind::Rk45,
+            mode: RuntimeMode::Strict,
+            ..Default::default()
+        },
+    )
+    .expect("strict solve");
     let pass = strict_sol.success;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "strict_solve", "solve",
+        3,
+        "strict_solve",
+        "solve",
         "mode=Strict, exponential decay",
         &format!("nfev={}", strict_sol.nfev),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: Solve in Hardened mode
     let t = Instant::now();
     let mut fun = exponential_decay;
-    let hardened_sol = solve_ivp(&mut fun, &SolveIvpOptions {
-        t_span: (0.0, 2.0),
-        y0: &[1.0],
-        method: SolverKind::Rk45,
-        mode: RuntimeMode::Hardened,
-        ..Default::default()
-    }).expect("hardened solve");
+    let hardened_sol = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 2.0),
+            y0: &[1.0],
+            method: SolverKind::Rk45,
+            mode: RuntimeMode::Hardened,
+            ..Default::default()
+        },
+    )
+    .expect("hardened solve");
     let pass = hardened_sol.success;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "hardened_solve", "solve",
+        4,
+        "hardened_solve",
+        "solve",
         "mode=Hardened, exponential decay",
         &format!("nfev={}", hardened_sol.nfev),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 5: Verify solutions agree
@@ -618,12 +777,17 @@ fn e2e_005_mode_switch() {
     let y_hardened = hardened_sol.y.last().unwrap()[0];
     let diff = (y_strict - y_hardened).abs();
     let pass = diff < 1e-6;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        5, "compare_modes", "check",
+        5,
+        "compare_modes",
+        "check",
         "strict vs hardened final y",
         &format!("diff={diff:.2e}, strict={y_strict:.8e}, hardened={y_hardened:.8e}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -632,7 +796,11 @@ fn e2e_005_mode_switch() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -658,14 +826,20 @@ fn e2e_006_boundary_tolerance() {
         ToleranceValue::Scalar(1e-15),
         1,
         RuntimeMode::Strict,
-    ).expect("validate at MIN_RTOL");
+    )
+    .expect("validate at MIN_RTOL");
     let pass = vtol.warnings.is_empty();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "exact_min_rtol", "validate",
+        1,
+        "exact_min_rtol",
+        "validate",
         &format!("rtol=MIN_RTOL={min_rtol:.2e}"),
         &format!("warnings={}", vtol.warnings.len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: Below MIN_RTOL — should clamp with warning
@@ -676,14 +850,20 @@ fn e2e_006_boundary_tolerance() {
         ToleranceValue::Scalar(1e-15),
         1,
         RuntimeMode::Strict,
-    ).expect("validate below MIN_RTOL");
+    )
+    .expect("validate below MIN_RTOL");
     let pass = vtol.warnings.len() == 1; // Should have RtolClamped warning
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "below_min_rtol", "validate",
+        2,
+        "below_min_rtol",
+        "validate",
         &format!("rtol={too_small:.2e} (below MIN_RTOL)"),
         &format!("warnings={}", vtol.warnings.len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Zero atol should fail
@@ -695,35 +875,49 @@ fn e2e_006_boundary_tolerance() {
         RuntimeMode::Strict,
     );
     let pass = zero_atol.is_err();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "negative_atol", "validate",
+        3,
+        "negative_atol",
+        "validate",
         "atol=-1.0",
         &format!("is_err={}", zero_atol.is_err()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: Solve with tight tolerances
     let t = Instant::now();
     let mut fun = exponential_decay;
-    let result = solve_ivp(&mut fun, &SolveIvpOptions {
-        t_span: (0.0, 1.0),
-        y0: &[1.0],
-        method: SolverKind::Rk45,
-        rtol: min_rtol,
-        atol: ToleranceValue::Scalar(1e-15),
-        ..Default::default()
-    }).expect("solve at tight tol");
+    let result = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 1.0),
+            y0: &[1.0],
+            method: SolverKind::Rk45,
+            rtol: min_rtol,
+            atol: ToleranceValue::Scalar(1e-15),
+            ..Default::default()
+        },
+    )
+    .expect("solve at tight tol");
     let y_final = result.y.last().unwrap()[0];
     let expected = (-1.0_f64).exp();
     let err = (y_final - expected).abs();
     let pass = result.success && err < 1e-10;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "solve_tight_tol", "solve",
+        4,
+        "solve_tight_tol",
+        "solve",
         &format!("rtol=MIN_RTOL={min_rtol:.2e}"),
         &format!("err={err:.2e}, nfev={}", result.nfev),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -732,7 +926,11 @@ fn e2e_006_boundary_tolerance() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -773,12 +971,17 @@ fn e2e_007_rapid_sequential_validations() {
         }
     }
     let pass = pass_count == 1000 && fail_count == 0;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "rapid_validate", "batch_validate",
+        1,
+        "rapid_validate",
+        "batch_validate",
         "1000 sequential validate_tol calls",
         &format!("pass={pass_count}, fail={fail_count}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: 1000 sequential validate_first_step calls
@@ -791,12 +994,17 @@ fn e2e_007_rapid_sequential_validations() {
         }
     }
     let pass = pass_count == 1000;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "rapid_first_step", "batch_validate",
+        2,
+        "rapid_first_step",
+        "batch_validate",
         "1000 sequential validate_first_step calls",
         &format!("pass={pass_count}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Verify no state leakage — results should be deterministic
@@ -806,20 +1014,27 @@ fn e2e_007_rapid_sequential_validations() {
         ToleranceValue::Scalar(1e-8),
         4,
         RuntimeMode::Strict,
-    ).expect("v1");
+    )
+    .expect("v1");
     let v2 = validate_tol(
         ToleranceValue::Scalar(1e-5),
         ToleranceValue::Scalar(1e-8),
         4,
         RuntimeMode::Strict,
-    ).expect("v2");
+    )
+    .expect("v2");
     let pass = v1.warnings.len() == v2.warnings.len();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "determinism_check", "validate",
+        3,
+        "determinism_check",
+        "validate",
         "same inputs twice",
         &format!("warnings_match={pass}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -828,7 +1043,11 @@ fn e2e_007_rapid_sequential_validations() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -855,55 +1074,82 @@ fn e2e_008_large_system() {
         ToleranceValue::Vector(atol_vec),
         n,
         RuntimeMode::Strict,
-    ).expect("validate large system");
+    )
+    .expect("validate large system");
     let dur = t.elapsed();
     let pass = dur.as_millis() < 100;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "validate_large_tol", "validate",
+        1,
+        "validate_large_tol",
+        "validate",
         &format!("n={n}, vector atol"),
         &format!("ok, duration_ms={}", dur.as_millis()),
-        dur.as_nanos(), if pass { "ok" } else { "fail" },
+        dur.as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: Solve large linear system dy/dt = -alpha * y
     let t = Instant::now();
     let y0: Vec<f64> = (0..n).map(|i| 1.0 + 0.001 * i as f64).collect();
-    let mut fun = |_t: f64, y: &[f64]| -> Vec<f64> {
-        y.iter().map(|&yi| -0.1 * yi).collect()
-    };
-    let result = solve_ivp(&mut fun, &SolveIvpOptions {
-        t_span: (0.0, 1.0),
-        y0: &y0,
-        method: SolverKind::Rk23, // RK23 for speed on large system
-        rtol: 1e-3,
-        atol: ToleranceValue::Scalar(1e-6),
-        ..Default::default()
-    }).expect("solve large system");
+    let mut fun = |_t: f64, y: &[f64]| -> Vec<f64> { y.iter().map(|&yi| -0.1 * yi).collect() };
+    let result = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 1.0),
+            y0: &y0,
+            method: SolverKind::Rk23, // RK23 for speed on large system
+            rtol: 1e-3,
+            atol: ToleranceValue::Scalar(1e-6),
+            ..Default::default()
+        },
+    )
+    .expect("solve large system");
     let dur = t.elapsed();
     let pass = result.success && dur.as_secs() < 30;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "solve_large_system", "solve",
+        2,
+        "solve_large_system",
+        "solve",
         &format!("n={n}, dy/dt=-0.1*y, t=[0,1]"),
-        &format!("success={}, nfev={}, duration_ms={}", result.success, result.nfev, dur.as_millis()),
-        dur.as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "success={}, nfev={}, duration_ms={}",
+            result.success,
+            result.nfev,
+            dur.as_millis()
+        ),
+        dur.as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Verify solution accuracy for large system
     let t = Instant::now();
     let y_final = result.y.last().unwrap();
-    let max_err: f64 = y_final.iter().enumerate().map(|(i, &yi)| {
-        let expected = (1.0 + 0.001 * i as f64) * (-0.1_f64).exp();
-        (yi - expected).abs()
-    }).fold(0.0_f64, f64::max);
+    let max_err: f64 = y_final
+        .iter()
+        .enumerate()
+        .map(|(i, &yi)| {
+            let expected = (1.0 + 0.001 * i as f64) * (-0.1_f64).exp();
+            (yi - expected).abs()
+        })
+        .fold(0.0_f64, f64::max);
     let pass = max_err < 1e-4;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "verify_accuracy", "check",
+        3,
+        "verify_accuracy",
+        "check",
         &format!("n={n} components"),
         &format!("max_err={max_err:.2e}"),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -912,7 +1158,11 @@ fn e2e_008_large_system() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -933,41 +1183,59 @@ fn e2e_009_rk23_vs_rk45() {
     // Step 1: Solve with RK45
     let t = Instant::now();
     let mut fun = exponential_decay;
-    let rk45 = solve_ivp(&mut fun, &SolveIvpOptions {
-        t_span: (0.0, 5.0),
-        y0: &[1.0],
-        method: SolverKind::Rk45,
-        rtol: 1e-6,
-        atol: ToleranceValue::Scalar(1e-9),
-        ..Default::default()
-    }).expect("rk45 solve");
+    let rk45 = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 5.0),
+            y0: &[1.0],
+            method: SolverKind::Rk45,
+            rtol: 1e-6,
+            atol: ToleranceValue::Scalar(1e-9),
+            ..Default::default()
+        },
+    )
+    .expect("rk45 solve");
     let pass = rk45.success;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "solve_rk45", "solve",
+        1,
+        "solve_rk45",
+        "solve",
         "RK45, exponential decay",
         &format!("nfev={}, t_len={}", rk45.nfev, rk45.t.len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: Solve with RK23
     let t = Instant::now();
     let mut fun = exponential_decay;
-    let rk23 = solve_ivp(&mut fun, &SolveIvpOptions {
-        t_span: (0.0, 5.0),
-        y0: &[1.0],
-        method: SolverKind::Rk23,
-        rtol: 1e-6,
-        atol: ToleranceValue::Scalar(1e-9),
-        ..Default::default()
-    }).expect("rk23 solve");
+    let rk23 = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 5.0),
+            y0: &[1.0],
+            method: SolverKind::Rk23,
+            rtol: 1e-6,
+            atol: ToleranceValue::Scalar(1e-9),
+            ..Default::default()
+        },
+    )
+    .expect("rk23 solve");
     let pass = rk23.success;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "solve_rk23", "solve",
+        2,
+        "solve_rk23",
+        "solve",
         "RK23, exponential decay",
         &format!("nfev={}, t_len={}", rk23.nfev, rk23.t.len()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: Compare final solutions
@@ -978,23 +1246,36 @@ fn e2e_009_rk23_vs_rk45() {
     let err45 = (y45 - expected).abs();
     let err23 = (y23 - expected).abs();
     let pass = err45 < 1e-6 && err23 < 1e-6;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "compare_solutions", "check",
+        3,
+        "compare_solutions",
+        "check",
         "RK45 vs RK23 at t=5",
-        &format!("err45={err45:.2e}, err23={err23:.2e}, diff={:.2e}", (y45-y23).abs()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        &format!(
+            "err45={err45:.2e}, err23={err23:.2e}, diff={:.2e}",
+            (y45 - y23).abs()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: RK45 should use fewer evaluations (higher order)
     let t = Instant::now();
     let pass = rk45.nfev < rk23.nfev;
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "efficiency_check", "check",
+        4,
+        "efficiency_check",
+        "check",
         "RK45 fewer evals than RK23",
         &format!("rk45_nfev={}, rk23_nfev={}", rk45.nfev, rk23.nfev),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -1003,7 +1284,11 @@ fn e2e_009_rk23_vs_rk45() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,
@@ -1025,48 +1310,68 @@ fn e2e_010_first_step_exceeds_interval() {
     let t = Instant::now();
     let result = validate_first_step(20.0, 0.0, 10.0);
     let pass = result.is_err();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        1, "first_step_too_large", "validate",
+        1,
+        "first_step_too_large",
+        "validate",
         "first_step=20.0, interval=[0,10]",
         &format!("is_err={}", result.is_err()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 2: first_step exactly at boundary should succeed
     let t = Instant::now();
     let result = validate_first_step(10.0, 0.0, 10.0);
     let pass = result.is_ok();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        2, "first_step_exact_boundary", "validate",
+        2,
+        "first_step_exact_boundary",
+        "validate",
         "first_step=10.0, interval=[0,10]",
         &format!("is_ok={}", result.is_ok()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 3: max_step = 0 should error
     let t = Instant::now();
     let result = validate_max_step(0.0);
     let pass = result.is_err();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        3, "max_step_zero", "validate",
+        3,
+        "max_step_zero",
+        "validate",
         "max_step=0.0",
         &format!("is_err={}", result.is_err()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     // Step 4: Negative max_step should error
     let t = Instant::now();
     let result = validate_max_step(-1.0);
     let pass = result.is_err();
-    if !pass { all_pass = false; }
+    if !pass {
+        all_pass = false;
+    }
     steps.push(make_step(
-        4, "max_step_negative", "validate",
+        4,
+        "max_step_negative",
+        "validate",
         "max_step=-1.0",
         &format!("is_err={}", result.is_err()),
-        t.elapsed().as_nanos(), if pass { "ok" } else { "fail" },
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
     ));
 
     let bundle = ForensicLogBundle {
@@ -1075,7 +1380,11 @@ fn e2e_010_first_step_exceeds_interval() {
         artifacts: vec![],
         environment: make_env(),
         overall: OverallResult {
-            status: if all_pass { "pass".into() } else { "fail".into() },
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
             total_duration_ns: overall_start.elapsed().as_nanos(),
             replay_command: replay_cmd(scenario_id),
             error_chain: None,

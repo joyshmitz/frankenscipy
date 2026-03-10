@@ -7,8 +7,8 @@
 //! tolerance.
 
 use fsci_integrate::{
-    IntegrateValidationError, MIN_RTOL, ToleranceValue, ToleranceWarning, validate_first_step,
-    validate_max_step, validate_tol,
+    InitialStepRequest, IntegrateValidationError, MIN_RTOL, ToleranceValue, ToleranceWarning,
+    select_initial_step, validate_first_step, validate_max_step, validate_tol,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -244,6 +244,58 @@ fn diff_empty_system() {
     )
     .expect("empty system should succeed");
     assert!(result.warnings.is_empty());
+}
+
+// -- Hand-computed oracle: Hardened select_initial_step rejects non-finite y0 --
+#[test]
+fn diff_select_initial_step_hardened_rejects_non_finite_y0() {
+    let request = InitialStepRequest {
+        t0: 0.0,
+        y0: &[f64::NAN],
+        t_bound: 1.0,
+        max_step: f64::INFINITY,
+        f0: &[1.0],
+        direction: 1.0,
+        order: 4.0,
+        rtol: 1e-3,
+        atol: ToleranceValue::Scalar(1e-6),
+        mode: RuntimeMode::Hardened,
+    };
+
+    let err = select_initial_step(
+        &mut |_t, _y| panic!("hardened validation should fail before RHS evaluation"),
+        &request,
+    )
+    .expect_err("non-finite y0 should fail");
+
+    assert_eq!(err, IntegrateValidationError::NonFiniteY0);
+    assert_eq!(err.to_string(), "`y0` must be finite in Hardened mode.");
+}
+
+// -- Hand-computed oracle: Hardened select_initial_step rejects non-finite f0 --
+#[test]
+fn diff_select_initial_step_hardened_rejects_non_finite_f0() {
+    let request = InitialStepRequest {
+        t0: 0.0,
+        y0: &[1.0],
+        t_bound: 1.0,
+        max_step: f64::INFINITY,
+        f0: &[f64::NEG_INFINITY],
+        direction: 1.0,
+        order: 4.0,
+        rtol: 1e-3,
+        atol: ToleranceValue::Scalar(1e-6),
+        mode: RuntimeMode::Hardened,
+    };
+
+    let err = select_initial_step(
+        &mut |_t, _y| panic!("hardened validation should fail before RHS evaluation"),
+        &request,
+    )
+    .expect_err("non-finite f0 should fail");
+
+    assert_eq!(err, IntegrateValidationError::NonFiniteF0);
+    assert_eq!(err.to_string(), "`f0` must be finite in Hardened mode.");
 }
 
 // ═══════════════════════════════════════════════════════════════════
