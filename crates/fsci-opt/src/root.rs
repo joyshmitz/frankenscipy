@@ -52,9 +52,14 @@ where
         method
     } else if bracket.is_some() {
         RootMethod::Brentq
-    } else if x0.is_some() && x1.is_some() {
-        RootMethod::Ridder
     } else {
+        if x0.is_some() || x1.is_some() {
+            return Err(OptError::NotImplemented {
+                detail: String::from(
+                    "root_scalar initial guesses are not supported yet; provide a bracket or explicit bracketing method",
+                ),
+            });
+        }
         return Err(OptError::InvalidArgument {
             detail: String::from(
                 "unable to select a root solver: provide bracket or explicit method",
@@ -951,15 +956,20 @@ mod tests {
     }
 
     #[test]
-    fn root_scalar_without_bracket_returns_error_for_ridder_selection() {
+    fn root_scalar_without_bracket_rejects_unsupported_initial_guesses() {
         let options = RootOptions {
             method: None,
             mode: RuntimeMode::Strict,
             ..RootOptions::default()
         };
         let err = root_scalar(cubic, None, Some(0.0), Some(1.0), options)
-            .expect_err("ridder path still requires a bracket");
-        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+            .expect_err("initial guesses are not silently mapped onto Ridder");
+        assert!(matches!(err, crate::OptError::NotImplemented { .. }));
+        assert!(
+            err.to_string()
+                .contains("initial guesses are not supported yet"),
+            "{err}"
+        );
         push_test_log(
             "root-scalar-missing-bracket",
             "root_scalar",
