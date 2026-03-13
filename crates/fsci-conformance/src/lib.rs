@@ -588,6 +588,217 @@ pub struct SpecialPacketFixture {
     pub cases: Vec<SpecialCase>,
 }
 
+// ---------- Sparse packet fixture types ----------
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SparseOperation {
+    Spmv,
+    Spsolve,
+    FormatRoundtrip,
+    Add,
+    Scale,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SparseInputFormat {
+    Coo,
+    Csr,
+    Csc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SparseExpectedOutcome {
+    Vector {
+        values: Vec<f64>,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+    },
+    Scalar {
+        value: f64,
+        #[serde(default)]
+        atol: Option<f64>,
+    },
+    Shape {
+        rows: usize,
+        cols: usize,
+        nnz: usize,
+    },
+    Error {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SparseCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: RuntimeMode,
+    pub operation: SparseOperation,
+    pub format: SparseInputFormat,
+    pub rows: usize,
+    pub cols: usize,
+    pub data: Vec<f64>,
+    pub row_indices: Vec<usize>,
+    pub col_indices: Vec<usize>,
+    #[serde(default)]
+    pub rhs: Option<Vec<f64>>,
+    #[serde(default)]
+    pub scalar: Option<f64>,
+    pub expected: SparseExpectedOutcome,
+}
+
+impl SparseCase {
+    fn case_id(&self) -> &str {
+        &self.case_id
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SparsePacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<SparseCase>,
+}
+
+// ── FFT fixture types ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FftTransformKind {
+    Fft,
+    Ifft,
+    Rfft,
+    Irfft,
+    Fft2,
+    Ifft2,
+    Fftn,
+    Fftfreq,
+    Rfftfreq,
+    Fftshift,
+    Ifftshift,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FftNormalization {
+    Forward,
+    Backward,
+    Ortho,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FftExpectedOutcome {
+    ComplexVector {
+        values: Vec<[f64; 2]>,
+        atol: Option<f64>,
+        rtol: Option<f64>,
+    },
+    RealVector {
+        values: Vec<f64>,
+        atol: Option<f64>,
+        rtol: Option<f64>,
+    },
+    Error {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FftCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: RuntimeMode,
+    pub transform: FftTransformKind,
+    pub normalization: Option<FftNormalization>,
+    /// Real input (for rfft, irfft output, fftfreq, rfftfreq, fftshift, ifftshift)
+    pub real_input: Option<Vec<f64>>,
+    /// Complex input as [[re, im], ...] (for fft, ifft, irfft input)
+    pub complex_input: Option<Vec<[f64; 2]>>,
+    /// For irfft: desired output length
+    pub output_len: Option<usize>,
+    /// For fftfreq/rfftfreq: sample spacing
+    pub sample_spacing: Option<f64>,
+    /// For 2D/ND transforms: shape
+    pub shape: Option<Vec<usize>>,
+    pub expected: FftExpectedOutcome,
+}
+
+impl FftCase {
+    fn case_id(&self) -> &str {
+        &self.case_id
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FftPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<FftCase>,
+}
+
+// ── CASP Runtime fixture types ───────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaspTestKind {
+    PolicyDecision,
+    SolverSelection,
+    CalibratorDrift,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CaspExpectedOutcome {
+    PolicyAction {
+        action: String,
+    },
+    SolverAction {
+        action: String,
+    },
+    CalibratorFallback {
+        should_fallback: bool,
+    },
+    Error {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaspCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: RuntimeMode,
+    pub test_kind: CaspTestKind,
+    /// For policy decisions: condition_signal, metadata_signal, anomaly_signal
+    pub condition_signal: Option<f64>,
+    pub metadata_signal: Option<f64>,
+    pub anomaly_signal: Option<f64>,
+    /// For solver selection: matrix condition state
+    pub condition_state: Option<String>,
+    /// For calibrator: sequence of backward error observations
+    pub observations: Option<Vec<f64>>,
+    pub expected: CaspExpectedOutcome,
+}
+
+impl CaspCase {
+    fn case_id(&self) -> &str {
+        &self.case_id
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaspPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<CaspCase>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ArrayApiFixtureDType {
@@ -1177,6 +1388,697 @@ pub fn run_optimize_packet(
         fixture.family,
         case_results,
     ))
+}
+
+pub fn run_special_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: SpecialPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_special_case(case);
+        let (passed, message, _, _) = compare_special_case_differential(case, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+pub fn run_array_api_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: ArrayApiPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_array_api_case(case);
+        let (passed, message, _, _) = compare_array_api_case_differential(case, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+pub fn run_sparse_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: SparsePacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_sparse_case(case);
+        let (passed, message) = compare_sparse_outcome(&case.expected, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+#[derive(Debug)]
+enum SparseObserved {
+    Vector(Vec<f64>),
+    Shape { rows: usize, cols: usize, nnz: usize },
+    Error(String),
+}
+
+fn execute_sparse_case(case: &SparseCase) -> SparseObserved {
+    use fsci_sparse::{CooMatrix, FormatConvertible, Shape2D, SolveOptions};
+
+    let shape = Shape2D::new(case.rows, case.cols);
+
+    let coo = match CooMatrix::from_triplets(
+        shape,
+        case.data.clone(),
+        case.row_indices.clone(),
+        case.col_indices.clone(),
+        true,
+    ) {
+        Ok(m) => m,
+        Err(e) => return SparseObserved::Error(format!("{e}")),
+    };
+
+    match case.operation {
+        SparseOperation::Spmv => {
+            let rhs = match &case.rhs {
+                Some(v) => v.as_slice(),
+                None => return SparseObserved::Error("spmv requires rhs".to_owned()),
+            };
+            match case.format {
+                SparseInputFormat::Coo => match fsci_sparse::spmv_coo(&coo, rhs) {
+                    Ok(v) => SparseObserved::Vector(v),
+                    Err(e) => SparseObserved::Error(format!("{e}")),
+                },
+                SparseInputFormat::Csr => {
+                    let csr = match coo.to_csr() {
+                        Ok(c) => c,
+                        Err(e) => return SparseObserved::Error(format!("{e}")),
+                    };
+                    match fsci_sparse::spmv_csr(&csr, rhs) {
+                        Ok(v) => SparseObserved::Vector(v),
+                        Err(e) => SparseObserved::Error(format!("{e}")),
+                    }
+                }
+                SparseInputFormat::Csc => {
+                    let csc = match coo.to_csc() {
+                        Ok(c) => c,
+                        Err(e) => return SparseObserved::Error(format!("{e}")),
+                    };
+                    match fsci_sparse::spmv_csc(&csc, rhs) {
+                        Ok(v) => SparseObserved::Vector(v),
+                        Err(e) => SparseObserved::Error(format!("{e}")),
+                    }
+                }
+            }
+        }
+        SparseOperation::Spsolve => {
+            let rhs = match &case.rhs {
+                Some(v) => v.as_slice(),
+                None => return SparseObserved::Error("spsolve requires rhs".to_owned()),
+            };
+            let csr = match coo.to_csr() {
+                Ok(c) => c,
+                Err(e) => return SparseObserved::Error(format!("{e}")),
+            };
+            match fsci_sparse::spsolve(&csr, rhs, SolveOptions::default()) {
+                Ok(result) => SparseObserved::Vector(result.solution),
+                Err(e) => SparseObserved::Error(format!("{e}")),
+            }
+        }
+        SparseOperation::FormatRoundtrip => {
+            let csr = match coo.to_csr() {
+                Ok(c) => c,
+                Err(e) => return SparseObserved::Error(format!("{e}")),
+            };
+            let csc = match csr.to_csc() {
+                Ok(c) => c,
+                Err(e) => return SparseObserved::Error(format!("{e}")),
+            };
+            // Verify CSC→CSR roundtrip preserves structure
+            let csr2 = match csc.to_csr() {
+                Ok(c) => c,
+                Err(e) => return SparseObserved::Error(format!("{e}")),
+            };
+            SparseObserved::Shape {
+                rows: csr2.shape().rows,
+                cols: csr2.shape().cols,
+                nnz: csr2.nnz(),
+            }
+        }
+        SparseOperation::Add => {
+            let csr_a = match coo.to_csr() {
+                Ok(c) => c,
+                Err(e) => return SparseObserved::Error(format!("{e}")),
+            };
+            match fsci_sparse::add_csr(&csr_a, &csr_a) {
+                Ok(result) => {
+                    let rhs = match &case.rhs {
+                        Some(v) => v.as_slice(),
+                        None => {
+                            return SparseObserved::Shape {
+                                rows: result.shape().rows,
+                                cols: result.shape().cols,
+                                nnz: result.nnz(),
+                            }
+                        }
+                    };
+                    match fsci_sparse::spmv_csr(&result, rhs) {
+                        Ok(v) => SparseObserved::Vector(v),
+                        Err(e) => SparseObserved::Error(format!("{e}")),
+                    }
+                }
+                Err(e) => SparseObserved::Error(format!("{e}")),
+            }
+        }
+        SparseOperation::Scale => {
+            let csr = match coo.to_csr() {
+                Ok(c) => c,
+                Err(e) => return SparseObserved::Error(format!("{e}")),
+            };
+            let scalar = case.scalar.unwrap_or(1.0);
+            match fsci_sparse::scale_csr(&csr, scalar) {
+                Ok(result) => {
+                    let rhs = match &case.rhs {
+                        Some(v) => v.as_slice(),
+                        None => {
+                            return SparseObserved::Shape {
+                                rows: result.shape().rows,
+                                cols: result.shape().cols,
+                                nnz: result.nnz(),
+                            }
+                        }
+                    };
+                    match fsci_sparse::spmv_csr(&result, rhs) {
+                        Ok(v) => SparseObserved::Vector(v),
+                        Err(e) => SparseObserved::Error(format!("{e}")),
+                    }
+                }
+                Err(e) => SparseObserved::Error(format!("{e}")),
+            }
+        }
+    }
+}
+
+fn compare_sparse_outcome(expected: &SparseExpectedOutcome, observed: &SparseObserved) -> (bool, String) {
+    match (expected, observed) {
+        (
+            SparseExpectedOutcome::Vector { values, atol, rtol },
+            SparseObserved::Vector(got),
+        ) => {
+            let a = atol.unwrap_or(1.0e-10);
+            let r = rtol.unwrap_or(1.0e-8);
+            if got.len() != values.len() {
+                return (
+                    false,
+                    format!("vector length mismatch: expected {} got {}", values.len(), got.len()),
+                );
+            }
+            let max_diff = got
+                .iter()
+                .zip(values.iter())
+                .map(|(g, e)| (g - e).abs())
+                .fold(0.0_f64, f64::max);
+            let pass = got.iter().zip(values.iter()).all(|(g, e)| allclose_scalar(*g, *e, a, r));
+            if pass {
+                (true, format!("vector matched (max_diff={max_diff:.2e})"))
+            } else {
+                (false, format!("vector mismatch: max_diff={max_diff:.2e}, atol={a:.2e}, rtol={r:.2e}"))
+            }
+        }
+        (
+            SparseExpectedOutcome::Shape { rows, cols, nnz },
+            SparseObserved::Shape { rows: gr, cols: gc, nnz: gn },
+        ) => {
+            let pass = *rows == *gr && *cols == *gc && *nnz == *gn;
+            if pass {
+                (true, format!("shape matched ({gr}x{gc}, nnz={gn})"))
+            } else {
+                (false, format!("shape mismatch: expected {rows}x{cols} nnz={nnz}, got {gr}x{gc} nnz={gn}"))
+            }
+        }
+        (SparseExpectedOutcome::Error { error }, SparseObserved::Error(got)) => {
+            let pass = got.contains(error.as_str());
+            if pass {
+                (true, format!("error matched: {got}"))
+            } else {
+                (false, format!("error mismatch: expected '{error}', got '{got}'"))
+            }
+        }
+        (SparseExpectedOutcome::Error { error }, _) => {
+            (false, format!("expected error '{error}' but got success"))
+        }
+        (_, SparseObserved::Error(e)) => {
+            (false, format!("unexpected error: {e}"))
+        }
+        _ => {
+            (false, "outcome type mismatch".to_owned())
+        }
+    }
+}
+
+// ── FFT packet runner ────────────────────────────────────────────────
+
+pub fn run_fft_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: FftPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_fft_case(case);
+        let (passed, message) = compare_fft_outcome(&case.expected, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+#[derive(Debug)]
+enum FftObserved {
+    ComplexVector(Vec<[f64; 2]>),
+    RealVector(Vec<f64>),
+    Error(String),
+}
+
+fn execute_fft_case(case: &FftCase) -> FftObserved {
+    use fsci_fft::{FftOptions, Normalization};
+
+    let mut opts = FftOptions::default().with_mode(case.mode);
+    if let Some(norm) = &case.normalization {
+        opts = opts.with_normalization(match norm {
+            FftNormalization::Forward => Normalization::Forward,
+            FftNormalization::Backward => Normalization::Backward,
+            FftNormalization::Ortho => Normalization::Ortho,
+        });
+    }
+
+    match case.transform {
+        FftTransformKind::Fft => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("fft requires complex_input".to_owned()),
+            };
+            match fsci_fft::fft(&input, &opts) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Ifft => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("ifft requires complex_input".to_owned()),
+            };
+            match fsci_fft::ifft(&input, &opts) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Rfft => {
+            let input = match &case.real_input {
+                Some(v) => v.as_slice(),
+                None => return FftObserved::Error("rfft requires real_input".to_owned()),
+            };
+            match fsci_fft::rfft(input, &opts) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Irfft => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("irfft requires complex_input".to_owned()),
+            };
+            match fsci_fft::irfft(&input, case.output_len, &opts) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Fftfreq => {
+            let n = case.real_input.as_ref().map_or(0, |v| v.len());
+            let spacing = case.sample_spacing.unwrap_or(1.0);
+            match fsci_fft::fftfreq(n, spacing) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Rfftfreq => {
+            let n = case.real_input.as_ref().map_or(0, |v| v.len());
+            let spacing = case.sample_spacing.unwrap_or(1.0);
+            match fsci_fft::rfftfreq(n, spacing) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Fftshift => {
+            let input = match &case.real_input {
+                Some(v) => v.clone(),
+                None => return FftObserved::Error("fftshift requires real_input".to_owned()),
+            };
+            FftObserved::RealVector(fsci_fft::fftshift_1d(&input))
+        }
+        FftTransformKind::Ifftshift => {
+            let input = match &case.real_input {
+                Some(v) => v.clone(),
+                None => return FftObserved::Error("ifftshift requires real_input".to_owned()),
+            };
+            FftObserved::RealVector(fsci_fft::ifftshift_1d(&input))
+        }
+        FftTransformKind::Fft2 | FftTransformKind::Ifft2 | FftTransformKind::Fftn => {
+            // Multi-dimensional transforms: require complex_input and shape
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("nd transforms require complex_input".to_owned()),
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("nd transforms require shape".to_owned()),
+            };
+            let result = match case.transform {
+                FftTransformKind::Fft2 => {
+                    if shape.len() != 2 {
+                        return FftObserved::Error("fft2 requires 2D shape".to_owned());
+                    }
+                    fsci_fft::fft2(&input, (shape[0], shape[1]), &opts)
+                }
+                FftTransformKind::Ifft2 => {
+                    if shape.len() != 2 {
+                        return FftObserved::Error("ifft2 requires 2D shape".to_owned());
+                    }
+                    fsci_fft::ifft2(&input, (shape[0], shape[1]), &opts)
+                }
+                FftTransformKind::Fftn => fsci_fft::fftn(&input, &shape, &opts),
+                _ => unreachable!(),
+            };
+            match result {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+    }
+}
+
+fn compare_fft_outcome(expected: &FftExpectedOutcome, observed: &FftObserved) -> (bool, String) {
+    match (expected, observed) {
+        (
+            FftExpectedOutcome::ComplexVector { values, atol, rtol },
+            FftObserved::ComplexVector(got),
+        ) => {
+            let a = atol.unwrap_or(1.0e-10);
+            let r = rtol.unwrap_or(1.0e-8);
+            if got.len() != values.len() {
+                return (
+                    false,
+                    format!("complex vector length mismatch: expected {} got {}", values.len(), got.len()),
+                );
+            }
+            let max_diff = got
+                .iter()
+                .zip(values.iter())
+                .map(|(g, e)| {
+                    let dr = (g[0] - e[0]).abs();
+                    let di = (g[1] - e[1]).abs();
+                    dr.max(di)
+                })
+                .fold(0.0_f64, f64::max);
+            let pass = got.iter().zip(values.iter()).all(|(g, e)| {
+                allclose_scalar(g[0], e[0], a, r) && allclose_scalar(g[1], e[1], a, r)
+            });
+            if pass {
+                (true, format!("complex vector matched (max_diff={max_diff:.2e})"))
+            } else {
+                (false, format!("complex vector mismatch: max_diff={max_diff:.2e}, atol={a:.2e}, rtol={r:.2e}"))
+            }
+        }
+        (
+            FftExpectedOutcome::RealVector { values, atol, rtol },
+            FftObserved::RealVector(got),
+        ) => {
+            let a = atol.unwrap_or(1.0e-10);
+            let r = rtol.unwrap_or(1.0e-8);
+            if got.len() != values.len() {
+                return (
+                    false,
+                    format!("real vector length mismatch: expected {} got {}", values.len(), got.len()),
+                );
+            }
+            let max_diff = got
+                .iter()
+                .zip(values.iter())
+                .map(|(g, e)| (g - e).abs())
+                .fold(0.0_f64, f64::max);
+            let pass = got.iter().zip(values.iter()).all(|(g, e)| allclose_scalar(*g, *e, a, r));
+            if pass {
+                (true, format!("real vector matched (max_diff={max_diff:.2e})"))
+            } else {
+                (false, format!("real vector mismatch: max_diff={max_diff:.2e}, atol={a:.2e}, rtol={r:.2e}"))
+            }
+        }
+        (FftExpectedOutcome::Error { error }, FftObserved::Error(got)) => {
+            let pass = got.contains(error.as_str());
+            if pass {
+                (true, format!("error matched: {got}"))
+            } else {
+                (false, format!("error mismatch: expected '{error}', got '{got}'"))
+            }
+        }
+        (FftExpectedOutcome::Error { error }, _) => {
+            (false, format!("expected error '{error}' but got success"))
+        }
+        (_, FftObserved::Error(e)) => {
+            (false, format!("unexpected error: {e}"))
+        }
+        _ => {
+            (false, "outcome type mismatch".to_owned())
+        }
+    }
+}
+
+// ── CASP Runtime packet runner ───────────────────────────────────────
+
+pub fn run_casp_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: CaspPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_casp_case(case);
+        let (passed, message) = compare_casp_outcome(&case.expected, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+#[derive(Debug)]
+enum CaspObserved {
+    PolicyAction(String),
+    SolverAction(String),
+    CalibratorFallback(bool),
+    Error(String),
+}
+
+fn parse_condition_state(s: &str) -> Option<fsci_runtime::MatrixConditionState> {
+    match s {
+        "well_conditioned" => Some(fsci_runtime::MatrixConditionState::WellConditioned),
+        "moderate_condition" => Some(fsci_runtime::MatrixConditionState::ModerateCondition),
+        "ill_conditioned" => Some(fsci_runtime::MatrixConditionState::IllConditioned),
+        "near_singular" => Some(fsci_runtime::MatrixConditionState::NearSingular),
+        _ => None,
+    }
+}
+
+fn policy_action_name(action: &fsci_runtime::PolicyAction) -> &'static str {
+    match action {
+        fsci_runtime::PolicyAction::Allow => "allow",
+        fsci_runtime::PolicyAction::FullValidate => "full_validate",
+        fsci_runtime::PolicyAction::FailClosed => "fail_closed",
+    }
+}
+
+fn solver_action_name(action: &fsci_runtime::SolverAction) -> &'static str {
+    match action {
+        fsci_runtime::SolverAction::DirectLU => "direct_lu",
+        fsci_runtime::SolverAction::PivotedQR => "pivoted_qr",
+        fsci_runtime::SolverAction::SVDFallback => "svd_fallback",
+        fsci_runtime::SolverAction::DiagonalFastPath => "diagonal_fast_path",
+        fsci_runtime::SolverAction::TriangularFastPath => "triangular_fast_path",
+    }
+}
+
+fn execute_casp_case(case: &CaspCase) -> CaspObserved {
+    match case.test_kind {
+        CaspTestKind::PolicyDecision => {
+            let cond = case.condition_signal.unwrap_or(0.0);
+            let meta = case.metadata_signal.unwrap_or(0.0);
+            let anom = case.anomaly_signal.unwrap_or(0.0);
+
+            let signals = fsci_runtime::DecisionSignals::new(cond, meta, anom);
+            let mut controller = fsci_runtime::PolicyController::new(case.mode, 64);
+            let decision = controller.decide(signals);
+            CaspObserved::PolicyAction(policy_action_name(&decision.action).to_owned())
+        }
+        CaspTestKind::SolverSelection => {
+            let state_str = match &case.condition_state {
+                Some(s) => s.as_str(),
+                None => return CaspObserved::Error("solver_selection requires condition_state".to_owned()),
+            };
+            let state = match parse_condition_state(state_str) {
+                Some(s) => s,
+                None => return CaspObserved::Error(format!("unknown condition state: {state_str}")),
+            };
+            let portfolio = fsci_runtime::SolverPortfolio::new(case.mode, 64);
+            let (action, _posterior, _losses, _loss) = portfolio.select_action(&state);
+            CaspObserved::SolverAction(solver_action_name(&action).to_owned())
+        }
+        CaspTestKind::CalibratorDrift => {
+            let observations = match &case.observations {
+                Some(obs) => obs.clone(),
+                None => return CaspObserved::Error("calibrator_drift requires observations".to_owned()),
+            };
+            let mut calibrator = fsci_runtime::ConformalCalibrator::new(0.05, 200);
+            for obs in &observations {
+                calibrator.observe(*obs);
+            }
+            CaspObserved::CalibratorFallback(calibrator.should_fallback())
+        }
+    }
+}
+
+fn compare_casp_outcome(expected: &CaspExpectedOutcome, observed: &CaspObserved) -> (bool, String) {
+    match (expected, observed) {
+        (CaspExpectedOutcome::PolicyAction { action }, CaspObserved::PolicyAction(got)) => {
+            let pass = action == got;
+            if pass {
+                (true, format!("policy action matched: {got}"))
+            } else {
+                (false, format!("policy action mismatch: expected '{action}', got '{got}'"))
+            }
+        }
+        (CaspExpectedOutcome::SolverAction { action }, CaspObserved::SolverAction(got)) => {
+            let pass = action == got;
+            if pass {
+                (true, format!("solver action matched: {got}"))
+            } else {
+                (false, format!("solver action mismatch: expected '{action}', got '{got}'"))
+            }
+        }
+        (CaspExpectedOutcome::CalibratorFallback { should_fallback }, CaspObserved::CalibratorFallback(got)) => {
+            let pass = *should_fallback == *got;
+            if pass {
+                (true, format!("calibrator fallback matched: {got}"))
+            } else {
+                (false, format!("calibrator fallback mismatch: expected {should_fallback}, got {got}"))
+            }
+        }
+        (CaspExpectedOutcome::Error { error }, CaspObserved::Error(got)) => {
+            let pass = got.contains(error.as_str());
+            if pass {
+                (true, format!("error matched: {got}"))
+            } else {
+                (false, format!("error mismatch: expected '{error}', got '{got}'"))
+            }
+        }
+        (CaspExpectedOutcome::Error { error }, _) => {
+            (false, format!("expected error '{error}' but got success"))
+        }
+        (_, CaspObserved::Error(e)) => {
+            (false, format!("unexpected error: {e}"))
+        }
+        _ => {
+            (false, "outcome type mismatch".to_owned())
+        }
+    }
 }
 
 pub fn run_linalg_packet_with_oracle_capture(
@@ -3828,14 +4730,14 @@ pub enum PacketFamily {
     ValidateTol,
     /// P2C-002: Dense linear algebra (solve, inv, det, lstsq, pinv)
     LinalgCore,
-    /// P2C-003: Sparse matrix operations
-    SparseOps,
-    /// P2C-004: FFT routines
-    Fft,
-    /// P2C-005: Special functions
-    Special,
-    /// P2C-006: Optimization routines
+    /// P2C-003: Optimization and root-finding routines
     Optimize,
+    /// P2C-004: Sparse matrix operations
+    SparseOps,
+    /// P2C-005: FFT routines
+    Fft,
+    /// P2C-006: Special functions
+    Special,
     /// P2C-007: Array API compatibility
     ArrayApi,
     /// P2C-008: CASP runtime (PolicyController, SolverPortfolio, ConformalCalibrator)
@@ -3847,10 +4749,10 @@ impl PacketFamily {
     pub const ALL: [Self; 8] = [
         Self::ValidateTol,
         Self::LinalgCore,
+        Self::Optimize,
         Self::SparseOps,
         Self::Fft,
         Self::Special,
-        Self::Optimize,
         Self::ArrayApi,
         Self::RuntimeCasp,
     ];
@@ -3861,10 +4763,10 @@ impl PacketFamily {
         match self {
             Self::ValidateTol => "FSCI-P2C-001",
             Self::LinalgCore => "FSCI-P2C-002",
-            Self::SparseOps => "FSCI-P2C-003",
-            Self::Fft => "FSCI-P2C-004",
-            Self::Special => "FSCI-P2C-005",
-            Self::Optimize => "FSCI-P2C-006",
+            Self::Optimize => "FSCI-P2C-003",
+            Self::SparseOps => "FSCI-P2C-004",
+            Self::Fft => "FSCI-P2C-005",
+            Self::Special => "FSCI-P2C-006",
             Self::ArrayApi => "FSCI-P2C-007",
             Self::RuntimeCasp => "FSCI-P2C-008",
         }
@@ -3876,10 +4778,10 @@ impl PacketFamily {
         match self {
             Self::ValidateTol => "validate_tol",
             Self::LinalgCore => "linalg_core",
+            Self::Optimize => "optimize",
             Self::SparseOps => "sparse_ops",
             Self::Fft => "fft",
             Self::Special => "special",
-            Self::Optimize => "optimize",
             Self::ArrayApi => "array_api",
             Self::RuntimeCasp => "runtime_casp",
         }
@@ -3912,7 +4814,17 @@ impl PacketFamily {
     /// Whether this family has a working runner implementation.
     #[must_use]
     pub const fn has_runner(&self) -> bool {
-        matches!(self, Self::ValidateTol | Self::LinalgCore | Self::Optimize)
+        matches!(
+            self,
+            Self::ValidateTol
+                | Self::LinalgCore
+                | Self::Optimize
+                | Self::SparseOps
+                | Self::Fft
+                | Self::Special
+                | Self::ArrayApi
+                | Self::RuntimeCasp
+        )
     }
 
     /// Canonical fixture filename for this family.
@@ -4022,7 +4934,11 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
             PacketFamily::ValidateTol => run_validate_tol_packet(config, fixture_name)?,
             PacketFamily::LinalgCore => run_linalg_packet(config, fixture_name)?,
             PacketFamily::Optimize => run_optimize_packet(config, fixture_name)?,
-            _ => continue,
+            PacketFamily::SparseOps => run_sparse_packet(config, fixture_name)?,
+            PacketFamily::Fft => run_fft_packet(config, fixture_name)?,
+            PacketFamily::Special => run_special_packet(config, fixture_name)?,
+            PacketFamily::ArrayApi => run_array_api_packet(config, fixture_name)?,
+            PacketFamily::RuntimeCasp => run_casp_packet(config, fixture_name)?,
         };
         reports.push(report);
     }
@@ -4038,8 +4954,9 @@ mod tests {
         AggregateParityReport, ArrayApiPacketFixture, ConformanceReport, DifferentialOracleConfig,
         HarnessConfig, LinalgPacketFixture, OptimizePacketFixture, OracleStatus, PacketFamily,
         PythonOracleConfig, SpecialPacketFixture, aggregate_packet_reports, discover_fixtures,
-        ensure_artifact_layout, load_oracle_capture, run_differential_test, run_linalg_packet,
-        run_optimize_packet, run_smoke, run_validate_tol_packet, write_parity_artifacts,
+        ensure_artifact_layout, load_oracle_capture, run_array_api_packet, run_differential_test,
+        run_casp_packet, run_fft_packet, run_linalg_packet, run_optimize_packet, run_smoke,
+        run_sparse_packet, run_special_packet, run_validate_tol_packet, write_parity_artifacts,
     };
     use serde::Serialize;
     use std::fs;
@@ -4370,6 +5287,127 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             report.passed_cases >= 29,
             "expected full optimize fixture execution"
         );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("optimize parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn special_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_special_packet(&cfg, "FSCI-P2C-006_special_core.json")
+            .expect("special packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one special function test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("special parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn array_api_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_array_api_packet(&cfg, "FSCI-P2C-007_arrayapi_core.json")
+            .expect("array_api packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one array_api test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("array_api parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn sparse_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_sparse_packet(&cfg, "FSCI-P2C-004_sparse_ops.json")
+            .expect("sparse packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one sparse test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("sparse parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn fft_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_fft_packet(&cfg, "FSCI-P2C-005_fft_core.json")
+            .expect("fft packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one fft test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("fft parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn casp_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_casp_packet(&cfg, "FSCI-P2C-008_runtime_casp.json")
+            .expect("casp packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one casp test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("casp parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
     }
 
     #[test]
@@ -4883,7 +5921,10 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(PacketFamily::ValidateTol.has_runner());
         assert!(PacketFamily::LinalgCore.has_runner());
         assert!(PacketFamily::Optimize.has_runner());
-        assert!(!PacketFamily::SparseOps.has_runner());
-        assert!(!PacketFamily::RuntimeCasp.has_runner());
+        assert!(PacketFamily::SparseOps.has_runner());
+        assert!(PacketFamily::Fft.has_runner());
+        assert!(PacketFamily::Special.has_runner());
+        assert!(PacketFamily::ArrayApi.has_runner());
+        assert!(PacketFamily::RuntimeCasp.has_runner());
     }
 }
