@@ -1,0 +1,231 @@
+{
+  "packet_id": "FSCI-P2C-008",
+  "family": "runtime_casp",
+  "cases": [
+    {
+      "case_id": "policy_low_risk_strict",
+      "category": "policy_decision",
+      "mode": "Strict",
+      "test_kind": "policy_decision",
+      "condition_signal": 0.0,
+      "metadata_signal": 0.0,
+      "anomaly_signal": 0.0,
+      "condition_state": null,
+      "observations": null,
+      "expected": {
+        "kind": "policy_action",
+        "action": "allow"
+      }
+    },
+    {
+      "case_id": "policy_high_metadata_strict",
+      "category": "policy_decision",
+      "mode": "Strict",
+      "test_kind": "policy_decision",
+      "condition_signal": 0.0,
+      "metadata_signal": 1.0,
+      "anomaly_signal": 0.0,
+      "condition_state": null,
+      "observations": null,
+      "expected": {
+        "kind": "policy_action",
+        "action": "fail_closed"
+      }
+    },
+    {
+      "case_id": "policy_high_metadata_hardened",
+      "category": "policy_decision",
+      "mode": "Hardened",
+      "test_kind": "policy_decision",
+      "condition_signal": 0.0,
+      "metadata_signal": 1.0,
+      "anomaly_signal": 0.0,
+      "condition_state": null,
+      "observations": null,
+      "expected": {
+        "kind": "policy_action",
+        "action": "fail_closed"
+      }
+    },
+    {
+      "case_id": "policy_moderate_condition_strict",
+      "category": "policy_decision",
+      "mode": "Strict",
+      "test_kind": "policy_decision",
+      "condition_signal": 8.0,
+      "metadata_signal": 0.0,
+      "anomaly_signal": 0.0,
+      "condition_state": null,
+      "observations": null,
+      "expected": {
+        "kind": "policy_action",
+        "action": "full_validate"
+      }
+    },
+    {
+      "case_id": "policy_high_anomaly_strict",
+      "category": "policy_decision",
+      "mode": "Strict",
+      "test_kind": "policy_decision",
+      "condition_signal": 0.0,
+      "metadata_signal": 0.0,
+      "anomaly_signal": 1.0,
+      "condition_state": null,
+      "observations": null,
+      "expected": {
+        "kind": "policy_action",
+        "action": "full_validate"
+      }
+    },
+    {
+      "case_id": "policy_all_bad_signals_strict",
+      "category": "policy_decision",
+      "mode": "Strict",
+      "test_kind": "policy_decision",
+      "condition_signal": 16.0,
+      "metadata_signal": 1.0,
+      "anomaly_signal": 1.0,
+      "condition_state": null,
+      "observations": null,
+      "expected": {
+        "kind": "policy_action",
+        "action": "fail_closed"
+      }
+    },
+    {
+      "case_id": "solver_well_conditioned",
+      "category": "solver_selection",
+      "mode": "Strict",
+      "test_kind": "solver_selection",
+      "condition_signal": null,
+      "metadata_signal": null,
+      "anomaly_signal": null,
+      "condition_state": "well_conditioned",
+      "observations": null,
+      "expected": {
+        "kind": "solver_action",
+        "action": "direct_lu"
+      }
+    },
+    {
+      "case_id": "solver_moderate_condition",
+      "category": "solver_selection",
+      "mode": "Strict",
+      "test_kind": "solver_selection",
+      "condition_signal": null,
+      "metadata_signal": null,
+      "anomaly_signal": null,
+      "condition_state": "moderate_condition",
+      "observations": null,
+      "expected": {
+        "kind": "solver_action",
+        "action": "pivoted_qr"
+      }
+    },
+    {
+      "case_id": "solver_ill_conditioned",
+      "category": "solver_selection",
+      "mode": "Strict",
+      "test_kind": "solver_selection",
+      "condition_signal": null,
+      "metadata_signal": null,
+      "anomaly_signal": null,
+      "condition_state": "ill_conditioned",
+      "observations": null,
+      "expected": {
+        "kind": "solver_action",
+        "action": "svd_fallback"
+      }
+    },
+    {
+      "case_id": "solver_near_singular",
+      "category": "solver_selection",
+      "mode": "Strict",
+      "test_kind": "solver_selection",
+      "condition_signal": null,
+      "metadata_signal": null,
+      "anomaly_signal": null,
+      "condition_state": "near_singular",
+      "observations": null,
+      "expected": {
+        "kind": "solver_action",
+        "action": "svd_fallback"
+      }
+    },
+    {
+      "case_id": "solver_well_conditioned_hardened",
+      "category": "solver_selection",
+      "mode": "Hardened",
+      "test_kind": "solver_selection",
+      "condition_signal": null,
+      "metadata_signal": null,
+      "anomaly_signal": null,
+      "condition_state": "well_conditioned",
+      "observations": null,
+      "expected": {
+        "kind": "solver_action",
+        "action": "direct_lu"
+      }
+    },
+    {
+      "case_id": "calibrator_no_observations",
+      "category": "calibrator_drift",
+      "mode": "Strict",
+      "test_kind": "calibrator_drift",
+      "condition_signal": null,
+      "metadata_signal": null,
+      "anomaly_signal": null,
+      "condition_state": null,
+      "observations": [],
+      "expected": {
+        "kind": "calibrator_fallback",
+        "should_fallback": false
+      }
+    },
+    {
+      "case_id": "calibrator_all_good",
+      "category": "calibrator_drift",
+      "mode": "Strict",
+      "test_kind": "calibrator_drift",
+      "condition_signal": null,
+      "metadata_signal": null,
+      "anomaly_signal": null,
+      "condition_state": null,
+      "observations": [1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15],
+      "expected": {
+        "kind": "calibrator_fallback",
+        "should_fallback": false
+      }
+    },
+    {
+      "case_id": "calibrator_high_violations",
+      "category": "calibrator_drift",
+      "mode": "Strict",
+      "test_kind": "calibrator_drift",
+      "condition_signal": null,
+      "metadata_signal": null,
+      "anomaly_signal": null,
+      "condition_state": null,
+      "observations": [1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1e-15, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      "expected": {
+        "kind": "calibrator_fallback",
+        "should_fallback": true
+      }
+    },
+    {
+      "case_id": "calibrator_few_observations",
+      "category": "calibrator_drift",
+      "mode": "Strict",
+      "test_kind": "calibrator_drift",
+      "condition_signal": null,
+      "metadata_signal": null,
+      "anomaly_signal": null,
+      "condition_state": null,
+      "observations": [1.0, 1.0, 1.0, 1.0, 1.0],
+      "expected": {
+        "kind": "calibrator_fallback",
+        "should_fallback": false
+      }
+    }
+  ]
+}
