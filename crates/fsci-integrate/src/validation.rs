@@ -59,6 +59,8 @@ pub enum IntegrateValidationError {
     TEvalOutOfSpan,
     TEvalNotSorted,
     NotYetImplemented { function: &'static str },
+    QuadInvalidBounds { detail: String },
+    QuadInvalidTolerance { detail: String },
 }
 
 impl std::fmt::Display for IntegrateValidationError {
@@ -76,6 +78,8 @@ impl std::fmt::Display for IntegrateValidationError {
             Self::NotYetImplemented { function } => {
                 write!(f, "`{function}` is planned but not implemented yet.")
             }
+            Self::QuadInvalidBounds { detail } => write!(f, "{detail}"),
+            Self::QuadInvalidTolerance { detail } => write!(f, "{detail}"),
         }
     }
 }
