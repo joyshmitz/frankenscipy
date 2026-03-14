@@ -870,4 +870,140 @@ mod tests {
         let encoded = serde_json::to_string(&value).expect("log json serialization");
         serde_json::from_str(&encoded).expect("log json parse")
     }
+
+    // ── ILU(0) preconditioner tests ─────────────────────────────────
+
+    #[test]
+    fn spilu_diagonal_matrix() {
+        // ILU(0) of a diagonal matrix should give L=I, U=diag
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![2.0, 5.0, 3.0],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            false,
+        )
+        .expect("diagonal coo");
+        let csc = coo.to_csc().expect("coo->csc");
+        let ilu = spilu(&csc, IluOptions::default()).expect("spilu diagonal");
+        assert_eq!(ilu.shape, (3, 3));
+
+        // Solve: diag * x = [4, 10, 9] => x = [2, 2, 3]
+        let x = ilu.solve(&[4.0, 10.0, 9.0]).expect("ilu solve");
+        assert!((x[0] - 2.0).abs() < 1e-10, "x[0]={}", x[0]);
+        assert!((x[1] - 2.0).abs() < 1e-10, "x[1]={}", x[1]);
+        assert!((x[2] - 3.0).abs() < 1e-10, "x[2]={}", x[2]);
+    }
+
+    #[test]
+    fn spilu_tridiagonal_solve() {
+        // Tridiagonal: [-1, 2, -1] on diagonals
+        let n = 5;
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        let mut data = Vec::new();
+        for i in 0..n {
+            rows.push(i);
+            cols.push(i);
+            data.push(2.0);
+            if i > 0 {
+                rows.push(i);
+                cols.push(i - 1);
+                data.push(-1.0);
+            }
+            if i + 1 < n {
+                rows.push(i);
+                cols.push(i + 1);
+                data.push(-1.0);
+            }
+        }
+        let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+            .expect("tridiagonal coo");
+        let csc = coo.to_csc().expect("coo->csc");
+        let ilu = spilu(&csc, IluOptions::default()).expect("spilu tridiagonal");
+
+        // For a tridiagonal matrix, ILU(0) = exact LU (no fill-in discarded)
+        let b = vec![1.0; n];
+        let x = ilu.solve(&b).expect("ilu solve");
+
+        // Verify Ax ≈ b
+        let csr = coo.to_csr().expect("coo->csr");
+        let ax = spmv_csr(&csr, &x).expect("matvec");
+        for i in 0..n {
+            assert!(
+                (ax[i] - b[i]).abs() < 1e-10,
+                "residual at {i}: ax={}, b={}",
+                ax[i],
+                b[i]
+            );
+        }
+    }
+
+    #[test]
+    fn spilu_as_preconditioner_for_cg() {
+        // Use ILU as preconditioner: solve M^-1 * A * x = M^-1 * b
+        // where M = LU from ILU(0)
+        let n = 4;
+        // SPD matrix: diag(10, 10, 10, 10) + off-diag(-1)
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        let mut data = Vec::new();
+        for i in 0..n {
+            rows.push(i);
+            cols.push(i);
+            data.push(10.0);
+            if i > 0 {
+                rows.push(i);
+                cols.push(i - 1);
+                data.push(-1.0);
+                rows.push(i - 1);
+                cols.push(i);
+                data.push(-1.0);
+            }
+        }
+        let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+            .expect("spd coo");
+        let csc = coo.to_csc().expect("coo->csc");
+        let ilu = spilu(&csc, IluOptions::default()).expect("spilu");
+
+        // Verify ILU factorization produces valid L and U
+        assert_eq!(ilu.shape, (n, n));
+
+        let b = vec![1.0, 2.0, 3.0, 4.0];
+        let x = ilu.solve(&b).expect("ilu solve");
+
+        // Verify approximate solution quality
+        let csr = coo.to_csr().expect("coo->csr");
+        let ax = spmv_csr(&csr, &x).expect("matvec");
+        let residual: f64 = ax.iter().zip(b.iter()).map(|(a, bi)| (a - bi).powi(2)).sum::<f64>().sqrt();
+        let b_norm: f64 = b.iter().map(|v| v * v).sum::<f64>().sqrt();
+        assert!(
+            residual / b_norm < 0.1,
+            "ILU solve residual too large: {residual}/{b_norm}"
+        );
+    }
+
+    #[test]
+    fn spilu_empty_matrix() {
+        let coo = CooMatrix::from_triplets(Shape2D::new(0, 0), vec![], vec![], vec![], false)
+            .expect("empty coo");
+        let csc = coo.to_csc().expect("coo->csc");
+        let ilu = spilu(&csc, IluOptions::default()).expect("spilu empty");
+        assert_eq!(ilu.shape, (0, 0));
+    }
+
+    #[test]
+    fn spilu_non_square_rejected() {
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(2, 3),
+            vec![1.0],
+            vec![0],
+            vec![1],
+            false,
+        )
+        .expect("non-square coo");
+        let csc = coo.to_csc().expect("coo->csc");
+        let err = spilu(&csc, IluOptions::default()).expect_err("non-square");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
 }

@@ -154,9 +154,10 @@ where
     let tableau = match options.method {
         SolverKind::Rk45 => &RK45_TABLEAU,
         SolverKind::Rk23 => &RK23_TABLEAU,
+        SolverKind::Dop853 => &crate::rk::DOP853_TABLEAU,
         _ => {
             return Err(IntegrateValidationError::NotYetImplemented {
-                function: "solve_ivp: only RK45 and RK23 are currently implemented",
+                function: "solve_ivp: only RK45, RK23, and DOP853 are currently implemented",
             });
         }
     };
@@ -511,6 +512,59 @@ mod tests {
         assert!(
             (v_final - v0).abs() < 0.1,
             "Lotka-Volterra invariant should be approximately conserved: V0={v0}, Vf={v_final}"
+        );
+    }
+
+    #[test]
+    fn solve_ivp_dop853_exponential_decay() {
+        let result = solve_ivp(
+            &mut |_t, y| vec![-y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[1.0],
+                method: SolverKind::Dop853,
+                rtol: 1e-10,
+                atol: ToleranceValue::Scalar(1e-12),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("DOP853 should succeed");
+        assert!(result.success, "DOP853 should converge");
+        let y_final = result.y.last().unwrap()[0];
+        let expected = (-1.0_f64).exp();
+        assert!(
+            (y_final - expected).abs() < 1e-8,
+            "DOP853 y(1)={y_final}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn solve_ivp_dop853_harmonic_oscillator() {
+        // dx/dt = v, dv/dt = -x => x(t) = cos(t), v(t) = -sin(t)
+        let result = solve_ivp(
+            &mut |_t, y| vec![y[1], -y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 2.0 * std::f64::consts::PI),
+                y0: &[1.0, 0.0],
+                method: SolverKind::Dop853,
+                rtol: 1e-10,
+                atol: ToleranceValue::Scalar(1e-12),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("DOP853 harmonic should succeed");
+        assert!(result.success);
+        let y_final = result.y.last().unwrap();
+        // After one full period, should return to (1, 0)
+        assert!(
+            (y_final[0] - 1.0).abs() < 1e-6,
+            "x(2π)={}, expected 1.0",
+            y_final[0]
+        );
+        assert!(
+            y_final[1].abs() < 1e-6,
+            "v(2π)={}, expected 0.0",
+            y_final[1]
         );
     }
 }

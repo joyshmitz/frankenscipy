@@ -2,6 +2,7 @@ use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
 use crate::formats::{CscMatrix, CsrMatrix, SparseError, SparseResult};
+use crate::ops::FormatConvertible;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SparseBackend {
@@ -89,11 +90,77 @@ pub struct SparseLuFactorization {
     lu_internal: LU<f64, Dyn, Dyn>,
 }
 
+/// ILU(0) factorization result.
+///
+/// Stores L (unit lower triangular) and U (upper triangular) in CSR format,
+/// maintaining the same sparsity pattern as the original matrix.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SparseIluFactorization {
     pub shape: (usize, usize),
     pub backend_used: SparseBackend,
     pub ordering_used: PermutationOrdering,
+    /// L factor data (unit lower triangular, stored in CSR row-by-row).
+    /// L diagonal entries are implicitly 1.0.
+    l_data: Vec<f64>,
+    l_indices: Vec<usize>,
+    l_indptr: Vec<usize>,
+    /// U factor data (upper triangular, stored in CSR row-by-row).
+    u_data: Vec<f64>,
+    u_indices: Vec<usize>,
+    u_indptr: Vec<usize>,
+    n: usize,
+}
+
+impl SparseIluFactorization {
+    /// Solve L*U*x = b using forward/backward substitution.
+    pub fn solve(&self, b: &[f64]) -> SparseResult<Vec<f64>> {
+        if b.len() != self.n {
+            return Err(SparseError::IncompatibleShape {
+                message: format!("rhs length {} != matrix size {}", b.len(), self.n),
+            });
+        }
+
+        // Forward substitution: L*y = b (L is unit lower triangular)
+        let mut y = b.to_vec();
+        for i in 0..self.n {
+            for idx in self.l_indptr[i]..self.l_indptr[i + 1] {
+                let j = self.l_indices[idx];
+                if j < i {
+                    y[i] -= self.l_data[idx] * y[j];
+                }
+            }
+        }
+
+        // Backward substitution: U*x = y
+        let mut x = y;
+        for i in (0..self.n).rev() {
+            for idx in self.u_indptr[i]..self.u_indptr[i + 1] {
+                let j = self.u_indices[idx];
+                if j > i {
+                    x[i] -= self.u_data[idx] * x[j];
+                }
+            }
+            // Divide by diagonal of U
+            let diag = self.get_u_diagonal(i);
+            if diag.abs() < f64::EPSILON * 100.0 {
+                return Err(SparseError::SingularMatrix {
+                    message: format!("zero diagonal in U at row {i}"),
+                });
+            }
+            x[i] /= diag;
+        }
+
+        Ok(x)
+    }
+
+    fn get_u_diagonal(&self, i: usize) -> f64 {
+        for idx in self.u_indptr[i]..self.u_indptr[i + 1] {
+            if self.u_indices[idx] == i {
+                return self.u_data[idx];
+            }
+        }
+        0.0
+    }
 }
 
 pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<SolveResult> {
@@ -185,6 +252,12 @@ pub fn splu_solve(factorization: &SparseLuFactorization, b: &[f64]) -> SparseRes
     Ok(x.iter().copied().collect())
 }
 
+/// ILU(0) incomplete LU factorization.
+///
+/// Computes L and U factors maintaining the sparsity pattern of A.
+/// Matches `scipy.sparse.linalg.spilu(A, drop_tol=0)` behavior.
+///
+/// Input is CSC but internally converts to CSR for row-based ILU(0).
 pub fn spilu(a: &CscMatrix, options: IluOptions) -> SparseResult<SparseIluFactorization> {
     let shape = a.shape();
     if !shape.is_square() {
@@ -198,9 +271,145 @@ pub fn spilu(a: &CscMatrix, options: IluOptions) -> SparseResult<SparseIluFactor
         });
     }
 
-    Err(SparseError::Unsupported {
-        feature: "spilu backend wiring skeleton landed; numeric factorization pending".to_string(),
+    let n = shape.rows;
+    if n == 0 {
+        return Ok(SparseIluFactorization {
+            shape: (0, 0),
+            backend_used: SparseBackend::Auto,
+            ordering_used: options.ordering,
+            l_data: Vec::new(),
+            l_indices: Vec::new(),
+            l_indptr: vec![0],
+            u_data: Vec::new(),
+            u_indices: Vec::new(),
+            u_indptr: vec![0],
+            n: 0,
+        });
+    }
+
+    // Convert to CSR for row-based factorization
+    let csr = a.to_csr()?;
+    let indptr = csr.indptr();
+    let indices = csr.indices();
+    let data = csr.data();
+
+    // Work on a dense-ish representation for the factorization:
+    // For each row, track L entries (j < i) and U entries (j >= i)
+    // using the original sparsity pattern.
+    let mut lu_data = data.to_vec(); // mutable copy of values
+    let lu_indices = indices;
+    let lu_indptr = indptr;
+
+    // IKJ variant of ILU(0): for each row i, for each nonzero a[i,k] with k < i,
+    // compute multiplier a[i,k] /= a[k,k], then for each nonzero a[k,j] with j > k,
+    // if (i,j) is in the sparsity pattern, subtract multiplier * a[k,j].
+    for i in 0..n {
+        for idx_ik in lu_indptr[i]..lu_indptr[i + 1] {
+            let k = lu_indices[idx_ik];
+            if k >= i {
+                break; // only process lower triangle (k < i)
+            }
+
+            // Find diagonal a[k,k]
+            let diag_k = find_value_in_row(&lu_data, lu_indices, lu_indptr, k, k);
+            if diag_k.abs() < f64::EPSILON * 100.0 {
+                return Err(SparseError::SingularMatrix {
+                    message: format!("zero pivot at row {k} during ILU(0)"),
+                });
+            }
+
+            // Compute multiplier: a[i,k] /= a[k,k]
+            lu_data[idx_ik] /= diag_k;
+            let multiplier = lu_data[idx_ik];
+
+            // For each nonzero in row k with column j > k
+            for idx_kj in lu_indptr[k]..lu_indptr[k + 1] {
+                let j = lu_indices[idx_kj];
+                if j <= k {
+                    continue;
+                }
+                let a_kj = lu_data[idx_kj];
+
+                // If (i, j) exists in the sparsity pattern, subtract
+                if let Some(idx_ij) = find_index_in_row(lu_indices, lu_indptr, i, j) {
+                    lu_data[idx_ij] -= multiplier * a_kj;
+                }
+                // ILU(0): if (i,j) is NOT in pattern, we drop the fill-in
+            }
+        }
+    }
+
+    // Extract L and U from the modified data
+    let mut l_data = Vec::new();
+    let mut l_indices = Vec::new();
+    let mut l_indptr = vec![0usize];
+    let mut u_data = Vec::new();
+    let mut u_indices = Vec::new();
+    let mut u_indptr = vec![0usize];
+
+    for i in 0..n {
+        // L entries: j < i (with implicit 1 on diagonal)
+        for idx in lu_indptr[i]..lu_indptr[i + 1] {
+            let j = lu_indices[idx];
+            if j < i {
+                l_data.push(lu_data[idx]);
+                l_indices.push(j);
+            }
+        }
+        // Add implicit diagonal
+        l_data.push(1.0);
+        l_indices.push(i);
+        l_indptr.push(l_data.len());
+
+        // U entries: j >= i
+        for idx in lu_indptr[i]..lu_indptr[i + 1] {
+            let j = lu_indices[idx];
+            if j >= i {
+                u_data.push(lu_data[idx]);
+                u_indices.push(j);
+            }
+        }
+        u_indptr.push(u_data.len());
+    }
+
+    Ok(SparseIluFactorization {
+        shape: (n, n),
+        backend_used: SparseBackend::Auto,
+        ordering_used: options.ordering,
+        l_data,
+        l_indices,
+        l_indptr,
+        u_data,
+        u_indices,
+        u_indptr,
+        n,
     })
+}
+
+/// Find the value at position (row, col) in CSR data.
+fn find_value_in_row(
+    data: &[f64],
+    indices: &[usize],
+    indptr: &[usize],
+    row: usize,
+    col: usize,
+) -> f64 {
+    let range = indptr[row]..indptr[row + 1];
+    indices[range.clone()]
+        .iter()
+        .zip(data[range].iter())
+        .find(|(j, _)| **j == col)
+        .map_or(0.0, |(_, v)| *v)
+}
+
+/// Find the index into data/indices arrays for position (row, col).
+fn find_index_in_row(
+    indices: &[usize],
+    indptr: &[usize],
+    row: usize,
+    col: usize,
+) -> Option<usize> {
+    (indptr[row]..indptr[row + 1]).find(|&idx| indices[idx] == col)
 }
 
 /// Options for iterative solvers (CG, GMRES, etc.).
@@ -817,11 +1026,11 @@ mod tests {
     }
 
     #[test]
-    fn spilu_valid_input_still_unsupported() {
-        // ILU is still a skeleton - incomplete factorization needs dedicated algorithm
+    fn spilu_valid_input_succeeds() {
+        // ILU(0) now implemented — verify it produces a factorization
         let a = square_csc();
-        let err = spilu(&a, IluOptions::default()).expect_err("backend pending");
-        assert!(matches!(err, SparseError::Unsupported { .. }));
+        let ilu = spilu(&a, IluOptions::default()).expect("spilu should succeed");
+        assert_eq!(ilu.shape, (a.shape().rows, a.shape().cols));
     }
 
     #[test]
