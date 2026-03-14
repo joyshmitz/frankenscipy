@@ -11,6 +11,7 @@ pub enum OptimizeMethod {
     ConjugateGradient,
     Powell,
     NelderMead,
+    LBfgsB,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

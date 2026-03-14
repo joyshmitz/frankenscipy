@@ -28,6 +28,7 @@ where
         OptimizeMethod::ConjugateGradient => cg_pr_plus(&fun, x0, options),
         OptimizeMethod::Powell => powell(&fun, x0, options),
         OptimizeMethod::NelderMead => nelder_mead(&fun, x0, options),
+        OptimizeMethod::LBfgsB => lbfgsb(&fun, x0, options, None),
     }
 }
 
@@ -763,6 +764,344 @@ where
         })?;
     }
     Ok(())
+}
+
+/// Bound constraint: (lower, upper) for each variable.
+/// `None` means unbounded in that direction.
+pub type Bound = (Option<f64>, Option<f64>);
+
+/// L-BFGS-B: Limited-memory BFGS with box constraints.
+///
+/// Matches `scipy.optimize.minimize(f, x0, method='L-BFGS-B', bounds=...)`.
+/// Uses two-loop recursion with limited memory (m=10 corrections).
+pub fn lbfgsb<F>(
+    fun: &F,
+    x0: &[f64],
+    options: MinimizeOptions,
+    bounds: Option<&[Bound]>,
+) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    validate_minimize_options(options)?;
+
+    let n = x0.len();
+    let tol = options.tol.unwrap_or(1.0e-6).max(1.0e-12);
+    let maxiter = options.maxiter.unwrap_or((200 * n).max(100));
+    let maxfev = options.maxfev.unwrap_or((2000 * n).max(400));
+    let m = 10; // number of correction pairs stored
+    let mut objective = Objective::new(fun, options.mode, maxfev);
+
+    // Project x0 onto bounds
+    let mut x = x0.to_vec();
+    if let Some(bounds) = bounds {
+        project_onto_bounds(&mut x, bounds);
+    }
+
+    let mut f = match objective.eval(&x) {
+        Ok(value) => value,
+        Err(err) => return Ok(result_from_error(x0, 0, 0, 0, err)),
+    };
+
+    let mut njev = 0usize;
+    let mut grad = match finite_diff_gradient(&mut objective, &x, options.gradient_eps) {
+        Ok(value) => {
+            njev += 1;
+            value
+        }
+        Err(err) => return Ok(result_from_error(&x, 0, objective.nfev, njev, err)),
+    };
+
+    // L-BFGS correction history
+    let mut s_history: Vec<Vec<f64>> = Vec::with_capacity(m);
+    let mut y_history: Vec<Vec<f64>> = Vec::with_capacity(m);
+    let mut rho_history: Vec<f64> = Vec::with_capacity(m);
+
+    let mut nit = 0usize;
+
+    for iteration in 0..maxiter {
+        nit = iteration + 1;
+
+        // Project gradient for bound-constrained case
+        let projected_grad = if let Some(bounds) = bounds {
+            projected_gradient(&x, &grad, bounds)
+        } else {
+            grad.clone()
+        };
+
+        let grad_norm = l2_norm(&projected_grad);
+        if grad_norm <= tol {
+            let result = OptimizeResult {
+                x: x.clone(),
+                fun: Some(f),
+                success: true,
+                status: ConvergenceStatus::Success,
+                message: String::from("optimization converged (L-BFGS-B gradient norm <= tol)"),
+                nfev: objective.nfev,
+                njev,
+                nhev: 0,
+                nit,
+                jac: Some(grad.clone()),
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::LBfgsB, options, iteration, &result);
+            return Ok(result);
+        }
+
+        if let Some(callback) = options.callback
+            && !callback(&x)
+        {
+            let result = OptimizeResult {
+                x: x.clone(),
+                fun: Some(f),
+                success: false,
+                status: ConvergenceStatus::CallbackStop,
+                message: String::from("callback requested stop"),
+                nfev: objective.nfev,
+                njev,
+                nhev: 0,
+                nit,
+                jac: Some(grad.clone()),
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::LBfgsB, options, iteration, &result);
+            return Ok(result);
+        }
+
+        // Two-loop recursion for L-BFGS direction
+        let direction = lbfgs_two_loop(&grad, &s_history, &y_history, &rho_history);
+
+        // Negate for descent direction
+        let direction: Vec<f64> = direction.iter().map(|&d| -d).collect();
+
+        // Line search with bound projection
+        let mut alpha = 1.0;
+        let directional_deriv = dot(&grad, &direction);
+        if directional_deriv >= 0.0 {
+            // Not a descent direction — reset history and use steepest descent
+            s_history.clear();
+            y_history.clear();
+            rho_history.clear();
+            let direction: Vec<f64> = grad.iter().map(|&g| -g).collect();
+            alpha = 1.0 / l2_norm(&direction).max(1.0);
+            let candidate_x = add_scaled(&x, &direction, alpha);
+            let mut projected_candidate = candidate_x;
+            if let Some(bounds) = bounds {
+                project_onto_bounds(&mut projected_candidate, bounds);
+            }
+            match objective.eval(&projected_candidate) {
+                Ok(fv) => {
+                    let s = sub_vectors(&projected_candidate, &x);
+                    let x_old = x.clone();
+                    x = projected_candidate;
+                    f = fv;
+                    let new_grad =
+                        match finite_diff_gradient(&mut objective, &x, options.gradient_eps) {
+                            Ok(g) => {
+                                njev += 1;
+                                g
+                            }
+                            Err(err) => {
+                                return Ok(result_from_error(&x, nit, objective.nfev, njev, err));
+                            }
+                        };
+                    let y = sub_vectors(&new_grad, &grad);
+                    let sy = dot(&s, &y);
+                    if sy > 1e-10 {
+                        push_lbfgs_history(
+                            &mut s_history,
+                            &mut y_history,
+                            &mut rho_history,
+                            s,
+                            y,
+                            sy,
+                            m,
+                        );
+                    }
+                    grad = new_grad;
+                    let _ = x_old;
+                }
+                Err(err) => return Ok(result_from_error(&x, nit, objective.nfev, njev, err)),
+            }
+            continue;
+        }
+
+        // Armijo backtracking with bound projection
+        let c1 = 1e-4;
+        let mut step_accepted = false;
+        for _ in 0..24 {
+            let mut candidate_x = add_scaled(&x, &direction, alpha);
+            if let Some(bounds) = bounds {
+                project_onto_bounds(&mut candidate_x, bounds);
+            }
+            match objective.eval(&candidate_x) {
+                Ok(fv) => {
+                    if fv <= f + c1 * alpha * directional_deriv {
+                        let s = sub_vectors(&candidate_x, &x);
+                        x = candidate_x;
+                        f = fv;
+                        let new_grad =
+                            match finite_diff_gradient(&mut objective, &x, options.gradient_eps) {
+                                Ok(g) => {
+                                    njev += 1;
+                                    g
+                                }
+                                Err(err) => {
+                                    return Ok(result_from_error(
+                                        &x,
+                                        nit,
+                                        objective.nfev,
+                                        njev,
+                                        err,
+                                    ));
+                                }
+                            };
+                        let y = sub_vectors(&new_grad, &grad);
+                        let sy = dot(&s, &y);
+                        if sy > 1e-10 {
+                            push_lbfgs_history(
+                                &mut s_history,
+                                &mut y_history,
+                                &mut rho_history,
+                                s,
+                                y,
+                                sy,
+                                m,
+                            );
+                        }
+                        grad = new_grad;
+                        step_accepted = true;
+                        break;
+                    }
+                }
+                Err(err) => return Ok(result_from_error(&x, nit, objective.nfev, njev, err)),
+            }
+            alpha *= 0.5;
+            if alpha < 1e-12 {
+                break;
+            }
+        }
+
+        if !step_accepted {
+            break;
+        }
+
+        log_iteration(
+            OptimizeMethod::LBfgsB,
+            options,
+            iteration,
+            f,
+            grad_norm,
+            alpha,
+            objective.nfev,
+        );
+    }
+
+    let result = OptimizeResult {
+        x: x.clone(),
+        fun: Some(f),
+        success: false,
+        status: ConvergenceStatus::MaxIterations,
+        message: format!("maximum iterations reached ({maxiter})"),
+        nfev: objective.nfev,
+        njev,
+        nhev: 0,
+        nit,
+        jac: Some(grad),
+        hess_inv: None,
+        maxcv: None,
+    };
+    log_completion(OptimizeMethod::LBfgsB, options, nit, &result);
+    Ok(result)
+}
+
+/// Project x onto box constraints.
+fn project_onto_bounds(x: &mut [f64], bounds: &[Bound]) {
+    for (xi, bound) in x.iter_mut().zip(bounds.iter()) {
+        if let Some(lo) = bound.0 {
+            *xi = xi.max(lo);
+        }
+        if let Some(hi) = bound.1 {
+            *xi = xi.min(hi);
+        }
+    }
+}
+
+/// Compute projected gradient: zero out components at active bounds.
+fn projected_gradient(x: &[f64], grad: &[f64], bounds: &[Bound]) -> Vec<f64> {
+    let mut pg = grad.to_vec();
+    for (i, (xi, bound)) in x.iter().zip(bounds.iter()).enumerate() {
+        if let Some(lo) = bound.0
+            && (*xi - lo).abs() < 1e-14
+            && pg[i] > 0.0
+        {
+            pg[i] = 0.0;
+        }
+        if let Some(hi) = bound.1
+            && (*xi - hi).abs() < 1e-14
+            && pg[i] < 0.0
+        {
+            pg[i] = 0.0;
+        }
+    }
+    pg
+}
+
+/// L-BFGS two-loop recursion to compute H*g.
+fn lbfgs_two_loop(
+    grad: &[f64],
+    s_hist: &[Vec<f64>],
+    y_hist: &[Vec<f64>],
+    rho_hist: &[f64],
+) -> Vec<f64> {
+    let k = s_hist.len();
+    if k == 0 {
+        return grad.to_vec();
+    }
+
+    let mut q = grad.to_vec();
+    let mut alpha_cache = vec![0.0; k];
+
+    // Forward loop
+    for i in (0..k).rev() {
+        alpha_cache[i] = rho_hist[i] * dot(&s_hist[i], &q);
+        q = add_scaled(&q, &y_hist[i], -alpha_cache[i]);
+    }
+
+    // Initial Hessian scaling: H0 = (s^T y / y^T y) * I
+    let sy = dot(&s_hist[k - 1], &y_hist[k - 1]);
+    let yy = dot(&y_hist[k - 1], &y_hist[k - 1]);
+    let gamma = if yy > 1e-15 { sy / yy } else { 1.0 };
+    let mut r = scale_vector(&q, gamma);
+
+    // Backward loop
+    for i in 0..k {
+        let beta = rho_hist[i] * dot(&y_hist[i], &r);
+        r = add_scaled(&r, &s_hist[i], alpha_cache[i] - beta);
+    }
+
+    r
+}
+
+fn push_lbfgs_history(
+    s_hist: &mut Vec<Vec<f64>>,
+    y_hist: &mut Vec<Vec<f64>>,
+    rho_hist: &mut Vec<f64>,
+    s: Vec<f64>,
+    y: Vec<f64>,
+    sy: f64,
+    max_m: usize,
+) {
+    if s_hist.len() >= max_m {
+        s_hist.remove(0);
+        y_hist.remove(0);
+        rho_hist.remove(0);
+    }
+    s_hist.push(s);
+    y_hist.push(y);
+    rho_hist.push(1.0 / sy);
 }
 
 pub fn take_optimize_traces() -> Vec<OptimizeTraceEntry> {
@@ -2530,6 +2869,84 @@ mod tests {
         assert!(
             !nm_traces.is_empty(),
             "nelder-mead should emit trace entries"
+        );
+    }
+
+    // ── L-BFGS-B tests ─────────────────────────────────────────────
+
+    #[test]
+    fn lbfgsb_unconstrained_sphere() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::LBfgsB),
+            tol: Some(1e-8),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(sphere, &[2.0, -3.0], options).expect("minimize");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(result.x.iter().all(|v| v.abs() < 1e-4), "x={:?}", result.x);
+    }
+
+    #[test]
+    fn lbfgsb_with_bounds() {
+        use crate::minimize::lbfgsb;
+        // Minimize (x-3)^2 + (y-3)^2 with bounds x in [0, 2], y in [0, 2]
+        // Optimum should be at (2, 2)
+        let f = |x: &[f64]| (x[0] - 3.0).powi(2) + (x[1] - 3.0).powi(2);
+        let bounds = vec![(Some(0.0), Some(2.0)), (Some(0.0), Some(2.0))];
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::LBfgsB),
+            tol: Some(1e-8),
+            ..MinimizeOptions::default()
+        };
+        let result = lbfgsb(&f, &[0.0, 0.0], options, Some(&bounds)).expect("lbfgsb");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 2.0).abs() < 0.01,
+            "x[0] should be at upper bound 2, got {}",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 2.0).abs() < 0.01,
+            "x[1] should be at upper bound 2, got {}",
+            result.x[1]
+        );
+    }
+
+    #[test]
+    fn lbfgsb_lower_bound_only() {
+        use crate::minimize::lbfgsb;
+        // Minimize (x+5)^2 with lower bound x >= 0. Optimum at x=0.
+        let f = |x: &[f64]| (x[0] + 5.0).powi(2);
+        let bounds = vec![(Some(0.0), None)];
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::LBfgsB),
+            tol: Some(1e-8),
+            ..MinimizeOptions::default()
+        };
+        let result = lbfgsb(&f, &[10.0], options, Some(&bounds)).expect("lbfgsb");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(
+            result.x[0].abs() < 0.01,
+            "x should be at lower bound 0, got {}",
+            result.x[0]
+        );
+    }
+
+    #[test]
+    fn lbfgsb_rosenbrock_unconstrained() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::LBfgsB),
+            tol: Some(1e-6),
+            maxiter: Some(2000),
+            maxfev: Some(20_000),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(rosenbrock, &[0.0, 0.0], options).expect("minimize");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 1.0).abs() < 0.01 && (result.x[1] - 1.0).abs() < 0.01,
+            "x={:?}",
+            result.x
         );
     }
 }
