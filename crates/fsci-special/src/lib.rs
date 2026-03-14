@@ -14,7 +14,7 @@ pub use beta::{BETA_DISPATCH_PLAN, beta, betainc, betaln};
 pub use error::{ERROR_DISPATCH_PLAN, erf, erfc, erfcinv, erfinv};
 pub use gamma::{
     GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, perm,
-    polygamma, rgamma,
+    polygamma, rgamma, zeta,
 };
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
 pub use types::{
@@ -1343,5 +1343,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Zeta function tests ─────────────────────────────────────────
+
+    #[test]
+    fn zeta_known_values() {
+        // ζ(2) = π²/6
+        let z2 = zeta(2.0);
+        let expected = std::f64::consts::PI * std::f64::consts::PI / 6.0;
+        assert!(
+            (z2 - expected).abs() < 1e-3,
+            "zeta(2) = {z2}, expected {expected}"
+        );
+
+        // ζ(4) = π⁴/90
+        let z4 = zeta(4.0);
+        let expected4 = std::f64::consts::PI.powi(4) / 90.0;
+        assert!(
+            (z4 - expected4).abs() < 1e-4,
+            "zeta(4) = {z4}, expected {expected4}"
+        );
+    }
+
+    #[test]
+    fn zeta_at_zero() {
+        assert!((zeta(0.0) - (-0.5)).abs() < 1e-12, "zeta(0) = -1/2");
+    }
+
+    #[test]
+    fn zeta_pole_at_one() {
+        assert!(zeta(1.0).is_infinite());
+    }
+
+    #[test]
+    fn zeta_negative_even_integers() {
+        // ζ(-2n) = 0 for positive integers n (trivial zeros)
+        assert!(zeta(-2.0).abs() < 1e-6, "zeta(-2) = {}", zeta(-2.0));
+        assert!(zeta(-4.0).abs() < 1e-4, "zeta(-4) = {}", zeta(-4.0));
+    }
+
+    #[test]
+    fn zeta_nan_passthrough() {
+        assert!(zeta(f64::NAN).is_nan());
     }
 }
