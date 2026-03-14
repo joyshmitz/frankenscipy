@@ -8,6 +8,7 @@ members = [
   "crates/fsci-sparse",
   "crates/fsci-fft",
   "crates/fsci-special",
+  "crates/fsci-stats",
   "crates/fsci-arrayapi",
   "crates/fsci-conformance",
   "crates/fsci-runtime",
@@ -32,6 +33,7 @@ fsci-opt = { path = "crates/fsci-opt" }
 fsci-runtime = { path = "crates/fsci-runtime" }
 fsci-sparse = { path = "crates/fsci-sparse" }
 fsci-special = { path = "crates/fsci-special" }
+fsci-stats = { path = "crates/fsci-stats" }
 asupersync = { version = "0.2.5", default-features = false, features = ["test-internals"] }
 ftui = { version = "0.2.1", default-features = false }
 blake3 = "1.8.2"

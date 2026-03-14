@@ -1,0 +1,15 @@
+[package]
+name = "fsci-stats"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+fsci-runtime = { workspace = true }
+fsci-special = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
