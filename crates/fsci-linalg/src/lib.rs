@@ -3,6 +3,7 @@
 use fsci_runtime::{
     MatrixConditionState, RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio,
 };
+use nalgebra::linalg::Cholesky;
 use nalgebra::{DMatrix, DVector, Dyn, LU, linalg::SVD};
 use serde::Serialize;
 
@@ -188,6 +189,135 @@ pub struct LstsqResult {
 pub struct PinvResult {
     pub pseudo_inverse: Vec<Vec<f64>>,
     pub rank: usize,
+}
+
+/// Result of LU decomposition with partial pivoting.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LuResult {
+    /// Permutation matrix P (row-major).
+    pub p: Vec<Vec<f64>>,
+    /// Lower triangular factor L (unit diagonal).
+    pub l: Vec<Vec<f64>>,
+    /// Upper triangular factor U.
+    pub u: Vec<Vec<f64>>,
+}
+
+/// Compact LU factorization for use with `lu_solve`.
+#[derive(Debug, Clone)]
+pub struct LuFactorResult {
+    /// The internal nalgebra LU object.
+    lu_internal: LU<f64, Dyn, Dyn>,
+    /// Matrix dimension.
+    n: usize,
+}
+
+/// Result of QR decomposition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QrResult {
+    /// Orthogonal factor Q (m×m or m×min(m,n) for economy mode).
+    pub q: Vec<Vec<f64>>,
+    /// Upper triangular factor R.
+    pub r: Vec<Vec<f64>>,
+}
+
+/// Result of SVD decomposition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SvdResult {
+    /// Left singular vectors U (m×k where k=min(m,n)).
+    pub u: Vec<Vec<f64>>,
+    /// Singular values σ in descending order.
+    pub s: Vec<f64>,
+    /// Right singular vectors Vᵀ (k×n where k=min(m,n)).
+    pub vt: Vec<Vec<f64>>,
+}
+
+/// Result of Cholesky decomposition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CholeskyResult {
+    /// Lower triangular factor L such that A = LLᵀ (or upper if requested).
+    pub factor: Vec<Vec<f64>>,
+}
+
+/// Compact Cholesky factorization for use with `cho_solve`.
+#[derive(Debug, Clone)]
+pub struct ChoFactorResult {
+    /// The internal nalgebra Cholesky object.
+    chol_internal: Cholesky<f64, Dyn>,
+    /// Matrix dimension.
+    n: usize,
+}
+
+impl ChoFactorResult {
+    /// Matrix dimension of the factored matrix.
+    pub fn dimension(&self) -> usize {
+        self.n
+    }
+}
+
+/// Result of eigenvalue decomposition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EigResult {
+    /// Eigenvalues as (real, imaginary) pairs.
+    pub eigenvalues_re: Vec<f64>,
+    pub eigenvalues_im: Vec<f64>,
+    /// Right eigenvectors as columns (row-major storage).
+    pub eigenvectors: Vec<Vec<f64>>,
+}
+
+/// Result of symmetric eigenvalue decomposition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EighResult {
+    /// Real eigenvalues in ascending order.
+    pub eigenvalues: Vec<f64>,
+    /// Orthogonal eigenvectors as columns (row-major storage).
+    pub eigenvectors: Vec<Vec<f64>>,
+}
+
+/// Result of Schur decomposition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SchurResult {
+    /// Unitary/orthogonal matrix Z (Schur vectors).
+    pub z: Vec<Vec<f64>>,
+    /// Upper quasi-triangular Schur form T (real Schur form).
+    pub t: Vec<Vec<f64>>,
+}
+
+/// Result of Hessenberg decomposition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HessenbergResult {
+    /// Orthogonal matrix Q.
+    pub q: Vec<Vec<f64>>,
+    /// Upper Hessenberg matrix H.
+    pub h: Vec<Vec<f64>>,
+}
+
+/// Options for decomposition operations.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DecompOptions {
+    pub mode: RuntimeMode,
+    pub check_finite: bool,
+}
+
+impl Default for DecompOptions {
+    fn default() -> Self {
+        Self {
+            mode: RuntimeMode::Strict,
+            check_finite: true,
+        }
+    }
+}
+
+/// Norm type selection matching SciPy conventions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NormKind {
+    /// Frobenius norm (matrix) or L2 norm (vector).
+    Fro,
+    /// Spectral norm (largest singular value for matrix, max abs for vector).
+    Spectral,
+    /// 1-norm (max column sum for matrix, sum of abs for vector).
+    One,
+    /// Infinity norm (max row sum for matrix, max abs for vector).
+    Inf,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -881,6 +1011,672 @@ pub fn randomized_rcond_estimate(
     let sigma_min = 1.0 / sigma_min_inv;
 
     sigma_min / sigma_max
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Matrix Decompositions — Public API
+// ══════════════════════════════════════════════════════════════════════
+
+/// LU decomposition with partial pivoting: PA = LU.
+///
+/// Returns permutation matrix P, unit lower triangular L, and upper triangular U.
+/// Matches `scipy.linalg.lu(a)`.
+pub fn lu(a: &[Vec<f64>], options: DecompOptions) -> Result<LuResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(LuResult {
+            p: Vec::new(),
+            l: Vec::new(),
+            u: Vec::new(),
+        });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let lu_decomp: LU<f64, Dyn, Dyn> = matrix.lu();
+
+    // Extract L, U directly; build P from the permutation sequence
+    let l_mat = lu_decomp.l();
+    let u_mat = lu_decomp.u();
+    // Build permutation matrix by applying the permutation to identity
+    let mut p_mat = DMatrix::<f64>::identity(rows, rows);
+    lu_decomp.p().permute_rows(&mut p_mat);
+
+    emit_trace(LinalgTrace {
+        operation: "lu",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(LuResult {
+        p: rows_from_dmatrix(&p_mat),
+        l: rows_from_dmatrix(&l_mat),
+        u: rows_from_dmatrix(&u_mat),
+    })
+}
+
+/// Compact LU factorization for subsequent solves via `lu_solve`.
+///
+/// Matches `scipy.linalg.lu_factor(a)`.
+pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    let matrix = dmatrix_from_rows(a)?;
+    let lu_decomp: LU<f64, Dyn, Dyn> = matrix.lu();
+
+    emit_trace(LinalgTrace {
+        operation: "lu_factor",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(LuFactorResult {
+        lu_internal: lu_decomp,
+        n: rows,
+    })
+}
+
+/// Solve a linear system using a precomputed LU factorization.
+///
+/// Matches `scipy.linalg.lu_solve(lu_and_piv, b)`.
+pub fn lu_solve(lu_factor: &LuFactorResult, b: &[f64]) -> Result<SolveResult, LinalgError> {
+    if b.len() != lu_factor.n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (lu_factor.n, lu_factor.n),
+            b_len: b.len(),
+        });
+    }
+
+    let rhs = DVector::from_column_slice(b);
+    let x = lu_factor
+        .lu_internal
+        .solve(&rhs)
+        .ok_or(LinalgError::SingularMatrix)?;
+
+    let rcond = fast_rcond_from_lu(&lu_factor.lu_internal, lu_factor.n);
+
+    emit_trace(LinalgTrace {
+        operation: "lu_solve",
+        matrix_size: (lu_factor.n, lu_factor.n),
+        mode: RuntimeMode::Strict,
+        rcond: Some(rcond),
+        warning: None,
+        error: None,
+    });
+
+    Ok(SolveResult {
+        x: x.iter().copied().collect(),
+        warning: rcond_warning(rcond),
+        backward_error: None,
+    })
+}
+
+/// QR decomposition: A = QR.
+///
+/// Returns orthogonal Q and upper triangular R.
+/// Matches `scipy.linalg.qr(a)`.
+pub fn qr(a: &[Vec<f64>], options: DecompOptions) -> Result<QrResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 || cols == 0 {
+        return Ok(QrResult {
+            q: Vec::new(),
+            r: Vec::new(),
+        });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let qr_decomp = matrix.qr();
+    let q_mat = qr_decomp.q();
+    let r_mat = qr_decomp.r();
+
+    emit_trace(LinalgTrace {
+        operation: "qr",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(QrResult {
+        q: rows_from_dmatrix(&q_mat),
+        r: rows_from_dmatrix(&r_mat),
+    })
+}
+
+/// Singular Value Decomposition: A = U Σ Vᵀ.
+///
+/// Returns left singular vectors U, singular values σ, and right singular vectors Vᵀ.
+/// Matches `scipy.linalg.svd(a)`.
+pub fn svd(a: &[Vec<f64>], options: DecompOptions) -> Result<SvdResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 || cols == 0 {
+        return Ok(SvdResult {
+            u: Vec::new(),
+            s: Vec::new(),
+            vt: Vec::new(),
+        });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let svd_decomp = SVD::new(matrix, true, true);
+
+    let u_mat = svd_decomp
+        .u
+        .as_ref()
+        .ok_or(LinalgError::ConvergenceFailure {
+            detail: "SVD failed to compute U".into(),
+        })?;
+    let vt_mat = svd_decomp
+        .v_t
+        .as_ref()
+        .ok_or(LinalgError::ConvergenceFailure {
+            detail: "SVD failed to compute Vt".into(),
+        })?;
+    let s: Vec<f64> = svd_decomp.singular_values.iter().copied().collect();
+
+    emit_trace(LinalgTrace {
+        operation: "svd",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(SvdResult {
+        u: rows_from_dmatrix(u_mat),
+        s,
+        vt: rows_from_dmatrix(vt_mat),
+    })
+}
+
+/// Compute singular values only (without U and Vᵀ).
+///
+/// Matches `scipy.linalg.svdvals(a)`.
+pub fn svdvals(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 || cols == 0 {
+        return Ok(Vec::new());
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let svd_decomp = SVD::new(matrix, false, false);
+    let s: Vec<f64> = svd_decomp.singular_values.iter().copied().collect();
+
+    emit_trace(LinalgTrace {
+        operation: "svdvals",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(s)
+}
+
+/// Cholesky decomposition for symmetric positive-definite matrices: A = LLᵀ.
+///
+/// If `lower` is true (default), returns L such that A = LLᵀ.
+/// If `lower` is false, returns U such that A = UᵀU.
+/// Matches `scipy.linalg.cholesky(a, lower=True)`.
+pub fn cholesky(
+    a: &[Vec<f64>],
+    lower: bool,
+    options: DecompOptions,
+) -> Result<CholeskyResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(CholeskyResult { factor: Vec::new() });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let chol = Cholesky::new(matrix).ok_or(LinalgError::InvalidArgument {
+        detail: "matrix is not positive definite".into(),
+    })?;
+
+    let factor = if lower {
+        chol.l()
+    } else {
+        chol.l().transpose()
+    };
+
+    emit_trace(LinalgTrace {
+        operation: "cholesky",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(CholeskyResult {
+        factor: rows_from_dmatrix(&factor),
+    })
+}
+
+/// Compact Cholesky factorization for subsequent solves via `cho_solve`.
+///
+/// Always uses the lower triangular factor internally.
+/// Matches `scipy.linalg.cho_factor(a)`.
+pub fn cho_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<ChoFactorResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    let matrix = dmatrix_from_rows(a)?;
+    let chol = Cholesky::new(matrix).ok_or(LinalgError::InvalidArgument {
+        detail: "matrix is not positive definite".into(),
+    })?;
+
+    emit_trace(LinalgTrace {
+        operation: "cho_factor",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(ChoFactorResult {
+        chol_internal: chol,
+        n: rows,
+    })
+}
+
+/// Solve a linear system using a precomputed Cholesky factorization.
+///
+/// Matches `scipy.linalg.cho_solve((c, lower), b)`.
+pub fn cho_solve(cho: &ChoFactorResult, b: &[f64]) -> Result<SolveResult, LinalgError> {
+    if b.len() != cho.n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (cho.n, cho.n),
+            b_len: b.len(),
+        });
+    }
+
+    let rhs = DVector::from_column_slice(b);
+    let x = cho.chol_internal.solve(&rhs);
+
+    emit_trace(LinalgTrace {
+        operation: "cho_solve",
+        matrix_size: (cho.n, cho.n),
+        mode: RuntimeMode::Strict,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(SolveResult {
+        x: x.iter().copied().collect(),
+        warning: None,
+        backward_error: None,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Eigenvalue Decompositions — Public API
+// ══════════════════════════════════════════════════════════════════════
+
+/// Eigenvalue decomposition for general (possibly non-symmetric) matrices.
+///
+/// Returns eigenvalues as (real, imaginary) pairs and right eigenvectors.
+/// For real matrices with complex eigenvalues, complex conjugate pairs appear
+/// consecutively. Matches `scipy.linalg.eig(a)`.
+pub fn eig(a: &[Vec<f64>], options: DecompOptions) -> Result<EigResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(EigResult {
+            eigenvalues_re: Vec::new(),
+            eigenvalues_im: Vec::new(),
+            eigenvectors: Vec::new(),
+        });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+
+    // Use Schur decomposition: A = Q T Q^T, eigenvalues on diagonal of T
+    // For real matrices, Schur form has 1×1 blocks (real eigenvalues) and
+    // 2×2 blocks (complex conjugate pairs) on the diagonal.
+    let schur = matrix.clone().schur();
+    let (q_mat, t_mat) = schur.unpack();
+
+    let mut eigenvalues_re = Vec::with_capacity(rows);
+    let mut eigenvalues_im = Vec::with_capacity(rows);
+
+    let mut i = 0;
+    while i < rows {
+        if i + 1 < rows && t_mat[(i + 1, i)].abs() > f64::EPSILON * 100.0 {
+            // 2×2 block: complex conjugate pair
+            let a11 = t_mat[(i, i)];
+            let a12 = t_mat[(i, i + 1)];
+            let a21 = t_mat[(i + 1, i)];
+            let a22 = t_mat[(i + 1, i + 1)];
+            let trace = a11 + a22;
+            let det_block = a11 * a22 - a12 * a21;
+            let disc = trace * trace - 4.0 * det_block;
+            let re = trace / 2.0;
+            let im = (-disc).sqrt() / 2.0;
+            eigenvalues_re.push(re);
+            eigenvalues_im.push(im);
+            eigenvalues_re.push(re);
+            eigenvalues_im.push(-im);
+            i += 2;
+        } else {
+            eigenvalues_re.push(t_mat[(i, i)]);
+            eigenvalues_im.push(0.0);
+            i += 1;
+        }
+    }
+
+    emit_trace(LinalgTrace {
+        operation: "eig",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(EigResult {
+        eigenvalues_re,
+        eigenvalues_im,
+        eigenvectors: rows_from_dmatrix(&q_mat),
+    })
+}
+
+/// Compute eigenvalues only for a general matrix.
+///
+/// Returns eigenvalues as (real_parts, imaginary_parts).
+/// Matches `scipy.linalg.eigvals(a)`.
+pub fn eigvals(
+    a: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<(Vec<f64>, Vec<f64>), LinalgError> {
+    let result = eig(a, options)?;
+    Ok((result.eigenvalues_re, result.eigenvalues_im))
+}
+
+/// Eigenvalue decomposition for symmetric/Hermitian matrices.
+///
+/// Eigenvalues are returned in ascending order. Eigenvectors form an
+/// orthogonal matrix. Matches `scipy.linalg.eigh(a)`.
+pub fn eigh(a: &[Vec<f64>], options: DecompOptions) -> Result<EighResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(EighResult {
+            eigenvalues: Vec::new(),
+            eigenvectors: Vec::new(),
+        });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let sym = matrix.symmetric_eigen();
+
+    // nalgebra returns eigenvalues in arbitrary order; sort ascending
+    let mut pairs: Vec<(f64, Vec<f64>)> = sym
+        .eigenvalues
+        .iter()
+        .enumerate()
+        .map(|(j, &val)| {
+            let col: Vec<f64> = (0..rows).map(|i| sym.eigenvectors[(i, j)]).collect();
+            (val, col)
+        })
+        .collect();
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let eigenvalues: Vec<f64> = pairs.iter().map(|(v, _)| *v).collect();
+    // Reconstruct eigenvector matrix from sorted columns
+    let mut eigenvectors = vec![vec![0.0; cols]; rows];
+    for (col_idx, (_, col_data)) in pairs.iter().enumerate() {
+        for (row_idx, &val) in col_data.iter().enumerate() {
+            eigenvectors[row_idx][col_idx] = val;
+        }
+    }
+
+    emit_trace(LinalgTrace {
+        operation: "eigh",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(EighResult {
+        eigenvalues,
+        eigenvectors,
+    })
+}
+
+/// Compute eigenvalues only for a symmetric/Hermitian matrix.
+///
+/// Returns real eigenvalues in ascending order.
+/// Matches `scipy.linalg.eigvalsh(a)`.
+pub fn eigvalsh(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, LinalgError> {
+    let result = eigh(a, options)?;
+    Ok(result.eigenvalues)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Schur and Hessenberg Decompositions — Public API
+// ══════════════════════════════════════════════════════════════════════
+
+/// Schur decomposition: A = Z T Zᴴ.
+///
+/// Returns the orthogonal Schur vectors Z and the upper quasi-triangular
+/// Schur form T (real Schur form for real matrices).
+/// Matches `scipy.linalg.schur(a)`.
+pub fn schur(a: &[Vec<f64>], options: DecompOptions) -> Result<SchurResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(SchurResult {
+            z: Vec::new(),
+            t: Vec::new(),
+        });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let schur_decomp = matrix.schur();
+    let (q_mat, t_mat) = schur_decomp.unpack();
+
+    emit_trace(LinalgTrace {
+        operation: "schur",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(SchurResult {
+        z: rows_from_dmatrix(&q_mat),
+        t: rows_from_dmatrix(&t_mat),
+    })
+}
+
+/// Hessenberg decomposition: A = Q H Qᵀ.
+///
+/// Returns the orthogonal matrix Q and the upper Hessenberg matrix H.
+/// Matches `scipy.linalg.hessenberg(a, calc_q=True)`.
+pub fn hessenberg(a: &[Vec<f64>], options: DecompOptions) -> Result<HessenbergResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(HessenbergResult {
+            q: Vec::new(),
+            h: Vec::new(),
+        });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let hess = matrix.hessenberg();
+    let q_mat = hess.q();
+    let h_mat = hess.unpack_h();
+
+    emit_trace(LinalgTrace {
+        operation: "hessenberg",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(HessenbergResult {
+        q: rows_from_dmatrix(&q_mat),
+        h: rows_from_dmatrix(&h_mat),
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Norms and Rank — Public API
+// ══════════════════════════════════════════════════════════════════════
+
+/// Compute matrix or vector norm.
+///
+/// Matches `scipy.linalg.norm(a, ord)`.
+pub fn norm(a: &[Vec<f64>], kind: NormKind, options: DecompOptions) -> Result<f64, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 || cols == 0 {
+        return Ok(0.0);
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+
+    let result = match kind {
+        NormKind::Fro => {
+            // Frobenius norm: sqrt(sum of squares)
+            matrix.norm()
+        }
+        NormKind::Spectral => {
+            // Spectral norm: largest singular value
+            let svd_decomp = SVD::new(matrix, false, false);
+            svd_decomp
+                .singular_values
+                .iter()
+                .copied()
+                .fold(0.0_f64, f64::max)
+        }
+        NormKind::One => {
+            // 1-norm: max column sum of absolute values
+            (0..cols)
+                .map(|j| (0..rows).map(|i| matrix[(i, j)].abs()).sum::<f64>())
+                .fold(0.0_f64, f64::max)
+        }
+        NormKind::Inf => {
+            // Infinity norm: max row sum of absolute values
+            (0..rows)
+                .map(|i| (0..cols).map(|j| matrix[(i, j)].abs()).sum::<f64>())
+                .fold(0.0_f64, f64::max)
+        }
+    };
+
+    emit_trace(LinalgTrace {
+        operation: "norm",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(result)
+}
+
+/// Compute the numerical rank of a matrix using SVD.
+///
+/// A singular value is considered zero if it is less than `tol`.
+/// If `tol` is None, uses `max(m,n) * eps * max(singular_values)`.
+pub fn matrix_rank(
+    a: &[Vec<f64>],
+    tol: Option<f64>,
+    options: DecompOptions,
+) -> Result<usize, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 || cols == 0 {
+        return Ok(0);
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let svd_decomp = SVD::new(matrix, false, false);
+    let singular_values = &svd_decomp.singular_values;
+    let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let threshold = tol.unwrap_or_else(|| (rows.max(cols) as f64) * f64::EPSILON * max_s);
+    let rank = singular_values.iter().filter(|s| **s > threshold).count();
+
+    emit_trace(LinalgTrace {
+        operation: "matrix_rank",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(rank)
 }
 
 fn solve_diagonal(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError> {
@@ -1795,6 +2591,603 @@ mod tests {
             }
         }
         assert_close_matrix(&a_ap_a, &a, 1e-10, 1e-10);
+    }
+
+    // ── LU decomposition tests ──────────────────────────────────────
+
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn lu_decomposition_pa_equals_lu() {
+        let a = vec![
+            vec![2.0, 1.0, 1.0],
+            vec![4.0, 3.0, 3.0],
+            vec![8.0, 7.0, 9.0],
+        ];
+        let result = lu(&a, DecompOptions::default()).expect("lu works");
+        // Verify P*A = L*U
+        let n = a.len();
+        for (i, (p_row, l_row)) in result.p.iter().zip(result.l.iter()).enumerate() {
+            for j in 0..n {
+                let pa: f64 = (0..n).map(|k| p_row[k] * a[k][j]).sum();
+                let lu_val: f64 = (0..n).map(|k| l_row[k] * result.u[k][j]).sum();
+                assert!(
+                    (pa - lu_val).abs() < 1e-10,
+                    "PA != LU at [{i}][{j}]: {pa} vs {lu_val}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lu_l_is_unit_lower_triangular() {
+        let a = vec![vec![4.0, 3.0], vec![6.0, 3.0]];
+        let result = lu(&a, DecompOptions::default()).expect("lu works");
+        // L diagonal should be 1.0
+        for i in 0..2 {
+            assert!(
+                (result.l[i][i] - 1.0).abs() < 1e-14,
+                "L diagonal should be 1"
+            );
+        }
+        // L upper triangle should be 0.0
+        assert!(result.l[0][1].abs() < 1e-14, "L should be lower triangular");
+    }
+
+    #[test]
+    fn lu_u_is_upper_triangular() {
+        let a = vec![vec![4.0, 3.0], vec![6.0, 3.0]];
+        let result = lu(&a, DecompOptions::default()).expect("lu works");
+        assert!(result.u[1][0].abs() < 1e-14, "U should be upper triangular");
+    }
+
+    #[test]
+    fn lu_empty_matrix() {
+        let a: Vec<Vec<f64>> = vec![];
+        let result = lu(&a, DecompOptions::default()).expect("lu of empty");
+        assert!(result.p.is_empty());
+        assert!(result.l.is_empty());
+        assert!(result.u.is_empty());
+    }
+
+    #[test]
+    fn lu_factor_and_solve_roundtrip() {
+        let a = vec![vec![3.0, 2.0], vec![1.0, 2.0]];
+        let b = vec![5.0, 5.0];
+        let factor = lu_factor(&a, DecompOptions::default()).expect("lu_factor works");
+        let result = lu_solve(&factor, &b).expect("lu_solve works");
+        assert_close_slice(&result.x, &[0.0, 2.5], 1e-12, 1e-12);
+    }
+
+    #[test]
+    fn lu_solve_incompatible_shapes() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let factor = lu_factor(&a, DecompOptions::default()).expect("lu_factor works");
+        let err = lu_solve(&factor, &[1.0, 2.0, 3.0]).unwrap_err();
+        assert!(matches!(err, LinalgError::IncompatibleShapes { .. }));
+    }
+
+    // ── QR decomposition tests ──────────────────────────────────────
+
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn qr_decomposition_a_equals_qr() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
+        let result = qr(&a, DecompOptions::default()).expect("qr works");
+        let cols = a[0].len();
+        // Verify A = Q*R
+        for (i, (a_row, q_row)) in a.iter().zip(result.q.iter()).enumerate() {
+            for j in 0..cols {
+                let qr_val: f64 = (0..result.r.len()).map(|k| q_row[k] * result.r[k][j]).sum();
+                assert!(
+                    (a_row[j] - qr_val).abs() < 1e-10,
+                    "A != QR at [{i}][{j}]: {} vs {qr_val}",
+                    a_row[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn qr_q_is_orthogonal() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = qr(&a, DecompOptions::default()).expect("qr works");
+        let n = result.q.len();
+        // Q^T * Q should be identity
+        for i in 0..n {
+            for j in i..n {
+                let dot: f64 = result.q.iter().map(|row| row[i] * row[j]).sum();
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (dot - expected).abs() < 1e-10,
+                    "Q not orthogonal at [{i}][{j}]: {dot} vs {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn qr_empty_matrix() {
+        let a: Vec<Vec<f64>> = vec![];
+        let result = qr(&a, DecompOptions::default()).expect("qr of empty");
+        assert!(result.q.is_empty());
+        assert!(result.r.is_empty());
+    }
+
+    // ── SVD tests ───────────────────────────────────────────────────
+
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn svd_decomposition_a_equals_usv() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
+        let result = svd(&a, DecompOptions::default()).expect("svd works");
+        let cols = a[0].len();
+        let k = result.s.len();
+        // Reconstruct A from U * diag(S) * Vt
+        for (i, (a_row, u_row)) in a.iter().zip(result.u.iter()).enumerate() {
+            for j in 0..cols {
+                let val: f64 = (0..k)
+                    .map(|l| u_row[l] * result.s[l] * result.vt[l][j])
+                    .sum();
+                assert!(
+                    (a_row[j] - val).abs() < 1e-10,
+                    "A != U*S*Vt at [{i}][{j}]: {} vs {val}",
+                    a_row[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn svd_singular_values_non_negative_and_descending() {
+        let a = vec![vec![3.0, 2.0, 2.0], vec![2.0, 3.0, -2.0]];
+        let result = svd(&a, DecompOptions::default()).expect("svd works");
+        for s in &result.s {
+            assert!(*s >= 0.0, "singular value should be non-negative: {s}");
+        }
+        for w in result.s.windows(2) {
+            assert!(w[0] >= w[1], "singular values should be descending");
+        }
+    }
+
+    #[test]
+    fn svdvals_matches_svd() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let full_result = svd(&a, DecompOptions::default()).expect("svd works");
+        let vals = svdvals(&a, DecompOptions::default()).expect("svdvals works");
+        assert_close_slice(&vals, &full_result.s, 1e-14, 1e-14);
+    }
+
+    #[test]
+    fn svd_empty_matrix() {
+        let a: Vec<Vec<f64>> = vec![];
+        let result = svd(&a, DecompOptions::default()).expect("svd of empty");
+        assert!(result.u.is_empty());
+        assert!(result.s.is_empty());
+        assert!(result.vt.is_empty());
+    }
+
+    // ── Cholesky tests ──────────────────────────────────────────────
+
+    #[test]
+    fn cholesky_lower_factor_reconstructs_a() {
+        let a = vec![
+            vec![4.0, 2.0, 0.0],
+            vec![2.0, 5.0, 2.0],
+            vec![0.0, 2.0, 6.0],
+        ];
+        let result = cholesky(&a, true, DecompOptions::default()).expect("cholesky works");
+        let n = a.len();
+        // Verify L * L^T = A
+        for (i, (a_row, l_row)) in a.iter().zip(result.factor.iter()).enumerate() {
+            for (j, &a_ij) in a_row.iter().enumerate() {
+                let val: f64 = (0..n).map(|k| l_row[k] * result.factor[j][k]).sum();
+                assert!(
+                    (a_ij - val).abs() < 1e-10,
+                    "L*L^T != A at [{i}][{j}]: {a_ij} vs {val}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cholesky_upper_factor() {
+        let a = vec![vec![4.0, 2.0], vec![2.0, 5.0]];
+        let result = cholesky(&a, false, DecompOptions::default()).expect("cholesky upper works");
+        // Verify U^T * U = A
+        for (i, a_row) in a.iter().enumerate() {
+            for (j, &a_ij) in a_row.iter().enumerate() {
+                let val: f64 = result.factor.iter().map(|row| row[i] * row[j]).sum();
+                assert!(
+                    (a_ij - val).abs() < 1e-10,
+                    "U^T*U != A at [{i}][{j}]: {a_ij} vs {val}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cholesky_not_positive_definite() {
+        let a = vec![vec![1.0, 2.0], vec![2.0, 1.0]]; // not PD
+        let err = cholesky(&a, true, DecompOptions::default()).unwrap_err();
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn cho_factor_and_solve() {
+        let a = vec![vec![4.0, 2.0], vec![2.0, 5.0]];
+        let b = vec![8.0, 7.0];
+        let factor = cho_factor(&a, DecompOptions::default()).expect("cho_factor works");
+        let result = cho_solve(&factor, &b).expect("cho_solve works");
+        // Verify A * x = b
+        for (i, row) in a.iter().enumerate() {
+            let dot: f64 = row.iter().zip(&result.x).map(|(a, x)| a * x).sum();
+            assert!(
+                (dot - b[i]).abs() < 1e-10,
+                "A*x != b at row {i}: {dot} vs {}",
+                b[i]
+            );
+        }
+    }
+
+    #[test]
+    fn cholesky_identity() {
+        let a = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let result = cholesky(&a, true, DecompOptions::default()).expect("cholesky of I");
+        assert_close_matrix(&result.factor, &a, 1e-14, 1e-14);
+    }
+
+    // ── Eigenvalue decomposition tests ──────────────────────────────
+
+    #[test]
+    fn eigh_symmetric_eigenvalues_ascending() {
+        let a = vec![vec![2.0, 1.0], vec![1.0, 3.0]];
+        let result = eigh(&a, DecompOptions::default()).expect("eigh works");
+        // Eigenvalues should be ascending
+        for w in result.eigenvalues.windows(2) {
+            assert!(w[0] <= w[1], "eigenvalues should be ascending");
+        }
+        // Known eigenvalues for this matrix: (5 ± sqrt(5)) / 2
+        let expected_1 = (5.0 - 5.0_f64.sqrt()) / 2.0;
+        let expected_2 = (5.0 + 5.0_f64.sqrt()) / 2.0;
+        assert!(
+            (result.eigenvalues[0] - expected_1).abs() < 1e-10,
+            "eigenvalue 0: {} vs {expected_1}",
+            result.eigenvalues[0]
+        );
+        assert!(
+            (result.eigenvalues[1] - expected_2).abs() < 1e-10,
+            "eigenvalue 1: {} vs {expected_2}",
+            result.eigenvalues[1]
+        );
+    }
+
+    #[test]
+    fn eigh_eigenvectors_orthogonal() {
+        let a = vec![
+            vec![4.0, 1.0, 0.0],
+            vec![1.0, 3.0, 1.0],
+            vec![0.0, 1.0, 2.0],
+        ];
+        let result = eigh(&a, DecompOptions::default()).expect("eigh works");
+        let n = a.len();
+        // V^T * V should be identity
+        for i in 0..n {
+            for j in i..n {
+                let dot: f64 = result.eigenvectors.iter().map(|row| row[i] * row[j]).sum();
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (dot - expected).abs() < 1e-10,
+                    "eigenvectors not orthogonal at [{i}][{j}]: {dot} vs {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eigh_av_equals_v_lambda() {
+        let a = vec![vec![4.0, 1.0], vec![1.0, 3.0]];
+        let result = eigh(&a, DecompOptions::default()).expect("eigh works");
+        let n = a.len();
+        // For each eigenvalue/eigenvector pair: A*v = lambda*v
+        for col in 0..n {
+            let lambda = result.eigenvalues[col];
+            for (i, a_row) in a.iter().enumerate() {
+                let av: f64 = (0..n).map(|k| a_row[k] * result.eigenvectors[k][col]).sum();
+                let lv = lambda * result.eigenvectors[i][col];
+                assert!(
+                    (av - lv).abs() < 1e-10,
+                    "A*v != lambda*v at eigenvector {col}, row {i}: {av} vs {lv}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eigvalsh_matches_eigh() {
+        let a = vec![vec![5.0, 2.0], vec![2.0, 3.0]];
+        let full_result = eigh(&a, DecompOptions::default()).expect("eigh works");
+        let vals = eigvalsh(&a, DecompOptions::default()).expect("eigvalsh works");
+        assert_close_slice(&vals, &full_result.eigenvalues, 1e-14, 1e-14);
+    }
+
+    #[test]
+    fn eig_general_eigenvalues() {
+        let a = vec![vec![0.0, -1.0], vec![1.0, 0.0]]; // rotation 90 deg
+        let result = eig(&a, DecompOptions::default()).expect("eig works");
+        // Eigenvalues should be ±i (purely imaginary)
+        assert_eq!(result.eigenvalues_re.len(), 2);
+        for re in &result.eigenvalues_re {
+            assert!(re.abs() < 1e-10, "real part should be ~0, got {re}");
+        }
+        let mut im_sorted: Vec<f64> = result.eigenvalues_im.clone();
+        im_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(
+            (im_sorted[0] - (-1.0)).abs() < 1e-10,
+            "imaginary part should be -1"
+        );
+        assert!(
+            (im_sorted[1] - 1.0).abs() < 1e-10,
+            "imaginary part should be +1"
+        );
+    }
+
+    #[test]
+    fn eig_real_eigenvalues_symmetric() {
+        let a = vec![vec![2.0, 1.0], vec![1.0, 2.0]];
+        let result = eig(&a, DecompOptions::default()).expect("eig works");
+        // Symmetric -> all eigenvalues real
+        for im in &result.eigenvalues_im {
+            assert!(im.abs() < 1e-10, "symmetric eigenvalues should be real");
+        }
+        let mut re_sorted: Vec<f64> = result.eigenvalues_re.clone();
+        re_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((re_sorted[0] - 1.0).abs() < 1e-10);
+        assert!((re_sorted[1] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn eigvals_matches_eig() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let full_result = eig(&a, DecompOptions::default()).expect("eig works");
+        let (re, im) = eigvals(&a, DecompOptions::default()).expect("eigvals works");
+        assert_close_slice(&re, &full_result.eigenvalues_re, 1e-14, 1e-14);
+        assert_close_slice(&im, &full_result.eigenvalues_im, 1e-14, 1e-14);
+    }
+
+    #[test]
+    fn eig_empty_matrix() {
+        let a: Vec<Vec<f64>> = vec![];
+        let result = eig(&a, DecompOptions::default()).expect("eig of empty");
+        assert!(result.eigenvalues_re.is_empty());
+    }
+
+    #[test]
+    fn eigh_identity_eigenvalues() {
+        let a = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let result = eigh(&a, DecompOptions::default()).expect("eigh of I");
+        for &val in &result.eigenvalues {
+            assert!((val - 1.0).abs() < 1e-14, "eigenvalue of I should be 1");
+        }
+    }
+
+    // ── Schur decomposition tests ────────────────────────────────────
+
+    #[test]
+    fn schur_a_equals_ztzt() {
+        let a = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 0.0],
+        ];
+        let result = schur(&a, DecompOptions::default()).expect("schur works");
+        let n = a.len();
+        // Verify A = Z * T * Z^T
+        for (i, a_row) in a.iter().enumerate() {
+            for (j, &a_ij) in a_row.iter().enumerate() {
+                let mut val = 0.0;
+                for k in 0..n {
+                    for l in 0..n {
+                        val += result.z[i][k] * result.t[k][l] * result.z[j][l];
+                    }
+                }
+                assert!(
+                    (a_ij - val).abs() < 1e-10,
+                    "A != Z*T*Z^T at [{i}][{j}]: {a_ij} vs {val}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schur_z_is_orthogonal() {
+        let a = vec![vec![4.0, 1.0], vec![2.0, 3.0]];
+        let result = schur(&a, DecompOptions::default()).expect("schur works");
+        let n = result.z.len();
+        for i in 0..n {
+            for j in i..n {
+                let dot: f64 = result.z.iter().map(|row| row[i] * row[j]).sum();
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (dot - expected).abs() < 1e-10,
+                    "Z not orthogonal at [{i}][{j}]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schur_t_is_quasi_upper_triangular() {
+        let a = vec![vec![4.0, 1.0], vec![2.0, 3.0]];
+        let result = schur(&a, DecompOptions::default()).expect("schur works");
+        // For 2x2, T should be upper triangular or have a 2x2 block
+        // In general, elements below the first sub-diagonal should be zero
+        let n = result.t.len();
+        for i in 2..n {
+            for j in 0..i.saturating_sub(1) {
+                assert!(
+                    result.t[i][j].abs() < 1e-10,
+                    "T[{i}][{j}] should be zero: {}",
+                    result.t[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schur_empty_matrix() {
+        let a: Vec<Vec<f64>> = vec![];
+        let result = schur(&a, DecompOptions::default()).expect("schur of empty");
+        assert!(result.z.is_empty());
+        assert!(result.t.is_empty());
+    }
+
+    // ── Hessenberg decomposition tests ──────────────────────────────
+
+    #[test]
+    fn hessenberg_a_equals_qhqt() {
+        let a = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 0.0],
+        ];
+        let result = hessenberg(&a, DecompOptions::default()).expect("hessenberg works");
+        let n = a.len();
+        // Verify A = Q * H * Q^T
+        for (i, a_row) in a.iter().enumerate() {
+            for (j, &a_ij) in a_row.iter().enumerate() {
+                let mut val = 0.0;
+                for k in 0..n {
+                    for l in 0..n {
+                        val += result.q[i][k] * result.h[k][l] * result.q[j][l];
+                    }
+                }
+                assert!(
+                    (a_ij - val).abs() < 1e-10,
+                    "A != Q*H*Q^T at [{i}][{j}]: {a_ij} vs {val}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hessenberg_h_is_upper_hessenberg() {
+        let a = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 0.0],
+        ];
+        let result = hessenberg(&a, DecompOptions::default()).expect("hessenberg works");
+        let n = result.h.len();
+        // Elements below the first sub-diagonal should be zero
+        for i in 2..n {
+            for j in 0..i.saturating_sub(1) {
+                assert!(
+                    result.h[i][j].abs() < 1e-10,
+                    "H[{i}][{j}] should be zero: {}",
+                    result.h[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hessenberg_q_is_orthogonal() {
+        let a = vec![
+            vec![4.0, 1.0, 0.0],
+            vec![2.0, 3.0, 1.0],
+            vec![0.0, 1.0, 2.0],
+        ];
+        let result = hessenberg(&a, DecompOptions::default()).expect("hessenberg works");
+        let n = result.q.len();
+        for i in 0..n {
+            for j in i..n {
+                let dot: f64 = result.q.iter().map(|row| row[i] * row[j]).sum();
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (dot - expected).abs() < 1e-10,
+                    "Q not orthogonal at [{i}][{j}]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hessenberg_empty_matrix() {
+        let a: Vec<Vec<f64>> = vec![];
+        let result = hessenberg(&a, DecompOptions::default()).expect("hessenberg of empty");
+        assert!(result.q.is_empty());
+        assert!(result.h.is_empty());
+    }
+
+    // ── Norm and rank tests ─────────────────────────────────────────
+
+    #[test]
+    fn norm_frobenius_identity() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let n = norm(&a, NormKind::Fro, DecompOptions::default()).expect("norm works");
+        assert!((n - 2.0_f64.sqrt()).abs() < 1e-14);
+    }
+
+    #[test]
+    fn norm_spectral_diagonal() {
+        let a = vec![vec![3.0, 0.0], vec![0.0, 5.0]];
+        let n = norm(&a, NormKind::Spectral, DecompOptions::default()).expect("norm works");
+        assert!(
+            (n - 5.0).abs() < 1e-10,
+            "spectral norm should be 5, got {n}"
+        );
+    }
+
+    #[test]
+    fn norm_one_norm() {
+        let a = vec![vec![1.0, -7.0], vec![-2.0, 3.0]];
+        let n = norm(&a, NormKind::One, DecompOptions::default()).expect("norm works");
+        // Max column sum: col0 = 1+2=3, col1 = 7+3=10
+        assert!((n - 10.0).abs() < 1e-14, "1-norm should be 10, got {n}");
+    }
+
+    #[test]
+    fn norm_inf_norm() {
+        let a = vec![vec![1.0, -7.0], vec![-2.0, 3.0]];
+        let n = norm(&a, NormKind::Inf, DecompOptions::default()).expect("norm works");
+        // Max row sum: row0 = 1+7=8, row1 = 2+3=5
+        assert!((n - 8.0).abs() < 1e-14, "inf-norm should be 8, got {n}");
+    }
+
+    #[test]
+    fn matrix_rank_full_rank() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let r = matrix_rank(&a, None, DecompOptions::default()).expect("rank works");
+        assert_eq!(r, 2);
+    }
+
+    #[test]
+    fn matrix_rank_rank_deficient() {
+        let a = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
+        let r = matrix_rank(&a, None, DecompOptions::default()).expect("rank works");
+        assert_eq!(r, 1);
+    }
+
+    #[test]
+    fn matrix_rank_zero_matrix() {
+        let a = vec![vec![0.0, 0.0], vec![0.0, 0.0]];
+        let r = matrix_rank(&a, None, DecompOptions::default()).expect("rank works");
+        assert_eq!(r, 0);
+    }
+
+    #[test]
+    fn matrix_rank_rectangular() {
+        let a = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]];
+        let r = matrix_rank(&a, None, DecompOptions::default()).expect("rank works");
+        assert_eq!(r, 2);
     }
 }
 

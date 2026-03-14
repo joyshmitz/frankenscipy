@@ -3,14 +3,15 @@ pub mod formats;
 pub mod linalg;
 pub mod ops;
 
-pub use construct::{diags, eye, random};
+pub use construct::{block_diag, bmat, diags, eye, kron, random};
 pub use formats::{
     CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, NalgebraBridge, Shape2D,
     SparseError, SparseFormat, SparseResult,
 };
 pub use linalg::{
-    IluOptions, LuOptions, PermutationOrdering, SolveOptions, SolveResult, SparseBackend,
-    SparseIluFactorization, SparseLuFactorization, spilu, splu, spsolve,
+    IluOptions, IterativeSolveOptions, IterativeSolveResult, LuOptions, PermutationOrdering,
+    SolveOptions, SolveResult, SparseBackend, SparseIluFactorization, SparseLuFactorization, cg,
+    spilu, splu, splu_solve, spsolve,
 };
 pub use ops::{
     ConversionLogEntry, FormatConvertible, add_coo, add_csc, add_csr, coo_to_csr_with_mode,

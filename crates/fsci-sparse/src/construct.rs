@@ -117,6 +117,184 @@ fn infer_shape(diagonals: &[Vec<f64>], offsets: &[isize]) -> SparseResult<Shape2
     Ok(Shape2D::new(rows, cols))
 }
 
+/// Construct a block diagonal sparse matrix from a list of sparse matrices.
+///
+/// Matches `scipy.sparse.block_diag(mats)`.
+pub fn block_diag(matrices: &[&CsrMatrix]) -> SparseResult<CsrMatrix> {
+    if matrices.is_empty() {
+        return eye(0);
+    }
+
+    let total_rows: usize = matrices.iter().map(|m| m.shape().rows).sum();
+    let total_cols: usize = matrices.iter().map(|m| m.shape().cols).sum();
+    let shape = Shape2D::new(total_rows, total_cols);
+
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut data = Vec::new();
+    let mut row_offset = 0;
+    let mut col_offset = 0;
+
+    for &mat in matrices {
+        let s = mat.shape();
+        let indptr = mat.indptr();
+        let indices = mat.indices();
+        let mat_data = mat.data();
+        for i in 0..s.rows {
+            for idx in indptr[i]..indptr[i + 1] {
+                rows.push(row_offset + i);
+                cols.push(col_offset + indices[idx]);
+                data.push(mat_data[idx]);
+            }
+        }
+        row_offset += s.rows;
+        col_offset += s.cols;
+    }
+
+    let coo = CooMatrix::from_triplets(shape, data, rows, cols, false)?;
+    coo.to_csr()
+}
+
+/// Construct a sparse matrix from a block layout of sparse matrices.
+///
+/// `blocks` is a row-major grid where `None` entries represent zero blocks.
+/// All blocks in the same row must have the same number of rows,
+/// and all blocks in the same column must have the same number of columns.
+/// Matches `scipy.sparse.bmat(blocks)`.
+pub fn bmat(blocks: &[Vec<Option<&CsrMatrix>>]) -> SparseResult<CsrMatrix> {
+    if blocks.is_empty() {
+        return eye(0);
+    }
+
+    let n_block_rows = blocks.len();
+    let n_block_cols = blocks[0].len();
+    for row in blocks {
+        if row.len() != n_block_cols {
+            return Err(SparseError::InvalidArgument {
+                message: "all block rows must have the same number of columns".to_string(),
+            });
+        }
+    }
+
+    // Determine row heights and column widths
+    let mut row_heights = vec![0usize; n_block_rows];
+    let mut col_widths = vec![0usize; n_block_cols];
+
+    for (i, row) in blocks.iter().enumerate() {
+        for (j, block) in row.iter().enumerate() {
+            if let Some(mat) = block {
+                let s = mat.shape();
+                if row_heights[i] == 0 {
+                    row_heights[i] = s.rows;
+                } else if row_heights[i] != s.rows {
+                    return Err(SparseError::IncompatibleShape {
+                        message: format!(
+                            "block row {i}: height mismatch {} vs {}",
+                            row_heights[i], s.rows
+                        ),
+                    });
+                }
+                if col_widths[j] == 0 {
+                    col_widths[j] = s.cols;
+                } else if col_widths[j] != s.cols {
+                    return Err(SparseError::IncompatibleShape {
+                        message: format!(
+                            "block col {j}: width mismatch {} vs {}",
+                            col_widths[j], s.cols
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    let total_rows: usize = row_heights.iter().sum();
+    let total_cols: usize = col_widths.iter().sum();
+    let shape = Shape2D::new(total_rows, total_cols);
+
+    let mut all_rows = Vec::new();
+    let mut all_cols = Vec::new();
+    let mut all_data = Vec::new();
+
+    let mut row_offset = 0;
+    for (i, block_row) in blocks.iter().enumerate() {
+        let mut col_offset = 0;
+        for (j, block) in block_row.iter().enumerate() {
+            if let Some(mat) = block {
+                let indptr = mat.indptr();
+                let indices = mat.indices();
+                let mat_data = mat.data();
+                for r in 0..mat.shape().rows {
+                    for idx in indptr[r]..indptr[r + 1] {
+                        all_rows.push(row_offset + r);
+                        all_cols.push(col_offset + indices[idx]);
+                        all_data.push(mat_data[idx]);
+                    }
+                }
+            }
+            col_offset += col_widths[j];
+        }
+        row_offset += row_heights[i];
+    }
+
+    let coo = CooMatrix::from_triplets(shape, all_data, all_rows, all_cols, false)?;
+    coo.to_csr()
+}
+
+/// Kronecker product of two sparse matrices.
+///
+/// For A (m×n) and B (p×q), produces an (m*p × n*q) matrix.
+/// Matches `scipy.sparse.kron(A, B)`.
+pub fn kron(a: &CsrMatrix, b: &CsrMatrix) -> SparseResult<CsrMatrix> {
+    let a_shape = a.shape();
+    let b_shape = b.shape();
+    let out_rows =
+        a_shape
+            .rows
+            .checked_mul(b_shape.rows)
+            .ok_or_else(|| SparseError::IndexOverflow {
+                message: "kron output rows overflow".to_string(),
+            })?;
+    let out_cols =
+        a_shape
+            .cols
+            .checked_mul(b_shape.cols)
+            .ok_or_else(|| SparseError::IndexOverflow {
+                message: "kron output cols overflow".to_string(),
+            })?;
+    let shape = Shape2D::new(out_rows, out_cols);
+
+    let a_indptr = a.indptr();
+    let a_indices = a.indices();
+    let a_data = a.data();
+    let b_indptr = b.indptr();
+    let b_indices = b.indices();
+    let b_data = b.data();
+
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut data = Vec::new();
+
+    for ai in 0..a_shape.rows {
+        for a_idx in a_indptr[ai]..a_indptr[ai + 1] {
+            let aj = a_indices[a_idx];
+            let a_val = a_data[a_idx];
+            for bi in 0..b_shape.rows {
+                for b_idx in b_indptr[bi]..b_indptr[bi + 1] {
+                    let bj = b_indices[b_idx];
+                    let b_val = b_data[b_idx];
+                    rows.push(ai * b_shape.rows + bi);
+                    cols.push(aj * b_shape.cols + bj);
+                    data.push(a_val * b_val);
+                }
+            }
+        }
+    }
+
+    let coo = CooMatrix::from_triplets(shape, data, rows, cols, false)?;
+    coo.to_csr()
+}
+
 fn xorshift64(mut x: u64) -> u64 {
     x ^= x << 13;
     x ^= x >> 7;
@@ -257,6 +435,165 @@ mod tests {
     fn xorshift_changes_nonzero_values() {
         assert_eq!(xorshift64(0), 0);
         assert_ne!(xorshift64(1), 1);
+    }
+
+    // ── block_diag tests ─────────────────────────────────────────────
+
+    #[test]
+    fn block_diag_two_matrices() {
+        let a = eye(2).expect("eye(2)");
+        let b = diags(&[vec![3.0, 4.0]], &[0], None).expect("diags");
+        let result = block_diag(&[&a, &b]).expect("block_diag");
+        assert_eq!(result.shape(), Shape2D::new(4, 4));
+        let dense = dense_from_csr(&result);
+        assert_eq!(
+            dense,
+            vec![
+                vec![1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0, 0.0],
+                vec![0.0, 0.0, 3.0, 0.0],
+                vec![0.0, 0.0, 0.0, 4.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn block_diag_empty() {
+        let result = block_diag(&[]).expect("block_diag empty");
+        assert_eq!(result.shape(), Shape2D::new(0, 0));
+    }
+
+    #[test]
+    fn block_diag_single() {
+        let a = eye(3).expect("eye(3)");
+        let result = block_diag(&[&a]).expect("block_diag single");
+        assert_eq!(result.shape(), Shape2D::new(3, 3));
+        assert_eq!(result.nnz(), 3);
+    }
+
+    // ── bmat tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn bmat_2x2_grid() {
+        let a = eye(2).expect("eye(2)");
+        let b = diags(&[vec![5.0, 6.0]], &[0], None).expect("diags");
+        let result = bmat(&[vec![Some(&a), None], vec![None, Some(&b)]]).expect("bmat");
+        assert_eq!(result.shape(), Shape2D::new(4, 4));
+        let dense = dense_from_csr(&result);
+        assert_eq!(
+            dense,
+            vec![
+                vec![1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0, 0.0],
+                vec![0.0, 0.0, 5.0, 0.0],
+                vec![0.0, 0.0, 0.0, 6.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn bmat_with_off_diagonal_blocks() {
+        let a = eye(2).expect("eye(2)");
+        let result = bmat(&[vec![Some(&a), Some(&a)], vec![Some(&a), Some(&a)]]).expect("bmat");
+        assert_eq!(result.shape(), Shape2D::new(4, 4));
+        let dense = dense_from_csr(&result);
+        assert_eq!(
+            dense,
+            vec![
+                vec![1.0, 0.0, 1.0, 0.0],
+                vec![0.0, 1.0, 0.0, 1.0],
+                vec![1.0, 0.0, 1.0, 0.0],
+                vec![0.0, 1.0, 0.0, 1.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn bmat_empty() {
+        let result = bmat(&[]).expect("bmat empty");
+        assert_eq!(result.shape(), Shape2D::new(0, 0));
+    }
+
+    #[test]
+    fn bmat_ragged_block_rows_rejected() {
+        let a = eye(2).expect("eye(2)");
+        let err = bmat(&[vec![Some(&a), Some(&a)], vec![Some(&a)]]).expect_err("ragged");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+    }
+
+    // ── kron tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn kron_identity_times_identity() {
+        let i2 = eye(2).expect("eye(2)");
+        let result = kron(&i2, &i2).expect("kron");
+        assert_eq!(result.shape(), Shape2D::new(4, 4));
+        // I2 ⊗ I2 = I4
+        let dense = dense_from_csr(&result);
+        for (i, row) in dense.iter().enumerate() {
+            for (j, &val) in row.iter().enumerate() {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!((val - expected).abs() < 1e-14, "kron I2⊗I2 at [{i}][{j}]");
+            }
+        }
+    }
+
+    #[test]
+    fn kron_scalar_times_matrix() {
+        // scalar [[2]] ⊗ [[1, 0], [0, 3]] = [[2, 0], [0, 6]]
+        let scalar =
+            CooMatrix::from_triplets(Shape2D::new(1, 1), vec![2.0], vec![0], vec![0], false)
+                .expect("coo")
+                .to_csr()
+                .expect("csr");
+        let b = diags(&[vec![1.0, 3.0]], &[0], None).expect("diags");
+        let result = kron(&scalar, &b).expect("kron");
+        assert_eq!(result.shape(), Shape2D::new(2, 2));
+        let dense = dense_from_csr(&result);
+        assert_eq!(dense, vec![vec![2.0, 0.0], vec![0.0, 6.0]]);
+    }
+
+    #[test]
+    fn kron_known_result() {
+        // [[1, 2], [3, 4]] ⊗ [[0, 5], [6, 7]]
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let b = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![5.0, 6.0, 7.0],
+            vec![0, 1, 1],
+            vec![1, 0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let result = kron(&a, &b).expect("kron");
+        assert_eq!(result.shape(), Shape2D::new(4, 4));
+        let dense = dense_from_csr(&result);
+        // Expected: [[0, 5, 0, 10], [6, 7, 12, 14], [0, 15, 0, 20], [18, 21, 24, 28]]
+        let expected = [
+            [0.0, 5.0, 0.0, 10.0],
+            [6.0, 7.0, 12.0, 14.0],
+            [0.0, 15.0, 0.0, 20.0],
+            [18.0, 21.0, 24.0, 28.0],
+        ];
+        for (i, (d_row, e_row)) in dense.iter().zip(expected.iter()).enumerate() {
+            for (j, (&d_val, &e_val)) in d_row.iter().zip(e_row.iter()).enumerate() {
+                assert!(
+                    (d_val - e_val).abs() < 1e-12,
+                    "kron at [{i}][{j}]: {d_val} vs {e_val}"
+                );
+            }
+        }
     }
 
     fn dense_from_csr(csr: &CsrMatrix) -> Vec<Vec<f64>> {
