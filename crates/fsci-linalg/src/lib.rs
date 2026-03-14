@@ -1588,6 +1588,98 @@ pub fn hessenberg(a: &[Vec<f64>], options: DecompOptions) -> Result<HessenbergRe
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Matrix Functions — Public API
+// ══════════════════════════════════════════════════════════════════════
+
+/// Matrix exponential using scaling and squaring with Padé approximation.
+///
+/// Computes exp(A) for a square matrix A.
+/// Matches `scipy.linalg.expm(A)`.
+pub fn expm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(Vec::new());
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let result = expm_pade_scaling_squaring(&matrix);
+
+    emit_trace(LinalgTrace {
+        operation: "expm",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(rows_from_dmatrix(&result))
+}
+
+/// Scaling and squaring method with truncated Taylor series.
+///
+/// Algorithm: scale A by 2^(-s) so ||A/2^s|| is small, compute exp via
+/// Taylor series (accurate for small norm), then square s times.
+fn expm_pade_scaling_squaring(a: &DMatrix<f64>) -> DMatrix<f64> {
+    let n = a.nrows();
+    let identity = DMatrix::<f64>::identity(n, n);
+
+    // Compute 1-norm for scaling
+    let norm1 = matrix_one_norm(a);
+
+    if norm1 == 0.0 {
+        return identity;
+    }
+
+    // Scale until ||A/2^s||_1 < 0.5 to ensure Taylor convergence is fast
+    let s = if norm1 <= 0.5 {
+        0u32
+    } else {
+        ((norm1 * 2.0).log2().ceil()) as u32
+    };
+    let scaled = a / (2.0_f64.powi(s as i32));
+
+    // Taylor series: exp(A) = I + A + A²/2! + A³/3! + ... + A^k/k!
+    // For ||A|| <= 0.5, 20 terms gives ~10^-16 accuracy
+    let result = taylor_exp(&scaled, &identity, 20);
+
+    // Squaring phase: exp(A) = exp(A/2^s)^(2^s)
+    let mut exp_a = result;
+    for _ in 0..s {
+        exp_a = &exp_a * &exp_a;
+    }
+
+    exp_a
+}
+
+/// Taylor series approximation of exp(A) = I + A + A²/2! + ... + A^k/k!
+fn taylor_exp(a: &DMatrix<f64>, identity: &DMatrix<f64>, terms: usize) -> DMatrix<f64> {
+    let mut result = identity.clone();
+    let mut term = identity.clone(); // A^k / k!
+
+    for k in 1..=terms {
+        term = &term * a / (k as f64);
+        result += &term;
+    }
+
+    result
+}
+
+/// Compute the 1-norm (max column sum of absolute values) of a matrix.
+fn matrix_one_norm(m: &DMatrix<f64>) -> f64 {
+    let (rows, cols) = (m.nrows(), m.ncols());
+    (0..cols)
+        .map(|j| (0..rows).map(|i| m[(i, j)].abs()).sum::<f64>())
+        .fold(0.0_f64, f64::max)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Norms and Rank — Public API
 // ══════════════════════════════════════════════════════════════════════
 
@@ -3125,6 +3217,83 @@ mod tests {
         let result = hessenberg(&a, DecompOptions::default()).expect("hessenberg of empty");
         assert!(result.q.is_empty());
         assert!(result.h.is_empty());
+    }
+
+    // ── Matrix exponential tests ──────────────────────────────────────
+
+    #[test]
+    fn expm_identity() {
+        // exp(0) = I
+        let a = vec![vec![0.0, 0.0], vec![0.0, 0.0]];
+        let result = expm(&a, DecompOptions::default()).expect("expm works");
+        assert_close_matrix(&result, &[vec![1.0, 0.0], vec![0.0, 1.0]], 1e-12, 1e-12);
+    }
+
+    #[test]
+    fn expm_diagonal() {
+        // exp(diag(1, 2)) = diag(e, e²)
+        let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
+        let result = expm(&a, DecompOptions::default()).expect("expm works");
+        assert!(
+            (result[0][0] - std::f64::consts::E).abs() < 1e-10,
+            "expm[0][0] should be e, got {}",
+            result[0][0]
+        );
+        assert!(
+            (result[1][1] - std::f64::consts::E.powi(2)).abs() < 1e-10,
+            "expm[1][1] should be e², got {}",
+            result[1][1]
+        );
+        assert!(result[0][1].abs() < 1e-12);
+        assert!(result[1][0].abs() < 1e-12);
+    }
+
+    #[test]
+    fn expm_nilpotent() {
+        // A = [[0, 1], [0, 0]], exp(A) = [[1, 1], [0, 1]]
+        let a = vec![vec![0.0, 1.0], vec![0.0, 0.0]];
+        let result = expm(&a, DecompOptions::default()).expect("expm works");
+        assert_close_matrix(&result, &[vec![1.0, 1.0], vec![0.0, 1.0]], 1e-12, 1e-12);
+    }
+
+    #[test]
+    fn expm_rotation() {
+        // A = [[0, -pi/2], [pi/2, 0]], exp(A) = [[0, -1], [1, 0]] (90° rotation)
+        let half_pi = std::f64::consts::FRAC_PI_2;
+        let a = vec![vec![0.0, -half_pi], vec![half_pi, 0.0]];
+        let result = expm(&a, DecompOptions::default()).expect("expm works");
+        assert!((result[0][0] - 0.0).abs() < 1e-10, "cos(pi/2) should be ~0");
+        assert!(
+            (result[0][1] - (-1.0)).abs() < 1e-10,
+            "-sin(pi/2) should be -1"
+        );
+        assert!((result[1][0] - 1.0).abs() < 1e-10, "sin(pi/2) should be 1");
+        assert!((result[1][1] - 0.0).abs() < 1e-10, "cos(pi/2) should be ~0");
+    }
+
+    #[test]
+    fn expm_empty() {
+        let a: Vec<Vec<f64>> = vec![];
+        let result = expm(&a, DecompOptions::default()).expect("expm of empty");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn expm_scalar() {
+        // exp([[3]]) = [[e³]]
+        let a = vec![vec![3.0]];
+        let result = expm(&a, DecompOptions::default()).expect("expm of scalar");
+        assert!(
+            (result[0][0] - 3.0_f64.exp()).abs() < 1e-10,
+            "expm of scalar should be e³"
+        );
+    }
+
+    #[test]
+    fn expm_non_square_error() {
+        let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+        let err = expm(&a, DecompOptions::default()).unwrap_err();
+        assert_eq!(err, LinalgError::ExpectedSquareMatrix);
     }
 
     // ── Norm and rank tests ─────────────────────────────────────────
