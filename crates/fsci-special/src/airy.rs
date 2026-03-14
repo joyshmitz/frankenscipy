@@ -216,7 +216,7 @@ fn airy_asymptotic(x: f64, _mode: RuntimeMode) -> Result<AiryResult, SpecialErro
 
         let (c_cos, c_sin) = oscillatory_coefficients(zeta);
 
-        let phase = zeta - PI / 4.0;
+        let phase = zeta + PI / 4.0;
         let cos_phase = phase.cos();
         let sin_phase = phase.sin();
 

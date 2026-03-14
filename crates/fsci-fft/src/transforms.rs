@@ -148,18 +148,18 @@ fn bluestein_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
         chirp.push((angle.cos(), angle.sin()));
     }
 
-    // Sequence a: input[k] * conj(chirp[k]), zero-padded to length m
+    // Sequence a: input[k] * chirp[k], zero-padded to length m
     let mut a = vec![(0.0, 0.0); m];
     for k in 0..n {
-        a[k] = complex_mul(input[k], complex_conj(chirp[k]));
+        a[k] = complex_mul(input[k], chirp[k]);
     }
 
-    // Sequence b: chirp[k] for k=0..n-1, then chirp[n-k] for k=m-n+1..m-1, zero-padded
+    // Sequence b: conj(chirp[k]) for k=0..n-1, wrapped for circular convolution
     let mut b = vec![(0.0, 0.0); m];
-    b[0] = chirp[0];
+    b[0] = complex_conj(chirp[0]);
     for k in 1..n {
-        b[k] = chirp[k];
-        b[m - k] = chirp[k];
+        b[k] = complex_conj(chirp[k]);
+        b[m - k] = complex_conj(chirp[k]);
     }
 
     // Convolution via FFT: C = IFFT(FFT(a) * FFT(b))
@@ -171,12 +171,12 @@ fn bluestein_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
     }
     let conv = cooley_tukey_radix2(&fc, true);
 
-    // Extract result: output[k] = conj(chirp[k]) * conv[k] / m
+    // Extract result: output[k] = chirp[k] * conv[k] / m
     let inv_m = 1.0 / m as f64;
     let mut output = Vec::with_capacity(n);
     for k in 0..n {
         let val = complex_scale(conv[k], inv_m);
-        output.push(complex_mul(complex_conj(chirp[k]), val));
+        output.push(complex_mul(chirp[k], val));
     }
 
     output

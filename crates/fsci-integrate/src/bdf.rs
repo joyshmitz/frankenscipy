@@ -178,6 +178,13 @@ impl BdfSolver {
     {
         let max_retries = 10;
 
+        // Evaluate f at current state once (reused across retries)
+        let f_curr = fun(self.t, &self.y);
+        self.nfev += 1;
+
+        let gamma = BDF_GAMMA[self.order - 1];
+        let error_const = BDF_ERROR_CONST[self.order - 1];
+
         for _ in 0..max_retries {
             let t_new = self.t + self.h;
 
@@ -194,12 +201,7 @@ impl BdfSolver {
                 (t_new, self.h)
             };
 
-            let gamma = BDF_GAMMA[self.order - 1];
-            let error_const = BDF_ERROR_CONST[self.order - 1];
-
             // Predict: explicit Euler from current state
-            let f_curr = fun(self.t, &self.y);
-            self.nfev += 1;
             let y_predict: Vec<f64> = self
                 .y
                 .iter()

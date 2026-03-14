@@ -894,7 +894,6 @@ where
             match objective.eval(&projected_candidate) {
                 Ok(fv) => {
                     let s = sub_vectors(&projected_candidate, &x);
-                    let x_old = x.clone();
                     x = projected_candidate;
                     f = fv;
                     let new_grad =
@@ -921,7 +920,6 @@ where
                         );
                     }
                     grad = new_grad;
-                    let _ = x_old;
                 }
                 Err(err) => return Ok(result_from_error(&x, nit, objective.nfev, njev, err)),
             }
