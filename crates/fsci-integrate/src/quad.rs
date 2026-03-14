@@ -498,6 +498,67 @@ pub fn simpson_uniform(
     }
 }
 
+/// Cumulatively integrate y using the trapezoidal rule.
+///
+/// Matches `scipy.integrate.cumulative_trapezoid(y, x)`.
+/// Returns a vector of length n-1 where result[i] = ∫₀ⁱ⁺¹ y dx.
+pub fn cumulative_trapezoid(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateValidationError> {
+    if y.len() != x.len() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: format!(
+                "y and x must have the same length (y={}, x={})",
+                y.len(),
+                x.len()
+            ),
+        });
+    }
+    if y.len() < 2 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "need at least 2 points for cumulative trapezoid".to_string(),
+        });
+    }
+
+    let n = y.len();
+    let mut result = Vec::with_capacity(n - 1);
+    let mut cumsum = 0.0;
+    for i in 0..n - 1 {
+        let dx = x[i + 1] - x[i];
+        cumsum += 0.5 * dx * (y[i] + y[i + 1]);
+        result.push(cumsum);
+    }
+
+    Ok(result)
+}
+
+/// Cumulatively integrate y with uniform spacing using the trapezoidal rule.
+///
+/// Matches `scipy.integrate.cumulative_trapezoid(y, dx=dx)`.
+pub fn cumulative_trapezoid_uniform(
+    y: &[f64],
+    dx: f64,
+) -> Result<Vec<f64>, IntegrateValidationError> {
+    if y.len() < 2 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "need at least 2 points for cumulative trapezoid".to_string(),
+        });
+    }
+    if !dx.is_finite() || dx <= 0.0 {
+        return Err(IntegrateValidationError::QuadInvalidTolerance {
+            detail: "dx must be finite and positive".to_string(),
+        });
+    }
+
+    let n = y.len();
+    let mut result = Vec::with_capacity(n - 1);
+    let mut cumsum = 0.0;
+    for i in 0..n - 1 {
+        cumsum += 0.5 * dx * (y[i] + y[i + 1]);
+        result.push(cumsum);
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -953,6 +1014,58 @@ mod tests {
     #[test]
     fn simpson_too_few_points_error() {
         let err = simpson(&[1.0], &[0.0]).expect_err("too few points");
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
+    }
+
+    // ── cumulative_trapezoid tests ──────────────────────────────────
+
+    #[test]
+    fn cumtrapz_linear() {
+        // y = x on [0, 1, 2, 3] => cumulative integrals: 0.5, 2.0, 4.5
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 2.0, 3.0];
+        let result = cumulative_trapezoid(&y, &x).expect("cumtrapz");
+        assert_eq!(result.len(), 3);
+        assert!((result[0] - 0.5).abs() < 1e-12);
+        assert!((result[1] - 2.0).abs() < 1e-12);
+        assert!((result[2] - 4.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cumtrapz_constant() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![5.0; 4];
+        let result = cumulative_trapezoid(&y, &x).expect("cumtrapz");
+        assert!((result[0] - 5.0).abs() < 1e-12);
+        assert!((result[1] - 10.0).abs() < 1e-12);
+        assert!((result[2] - 15.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cumtrapz_uniform() {
+        let y = vec![0.0, 1.0, 4.0, 9.0]; // x²-ish
+        let result = cumulative_trapezoid_uniform(&y, 1.0).expect("cumtrapz_uniform");
+        assert_eq!(result.len(), 3);
+        assert!((result[0] - 0.5).abs() < 1e-12);
+        assert!((result[1] - 3.0).abs() < 1e-12);
+        assert!((result[2] - 9.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cumtrapz_length_mismatch() {
+        let err = cumulative_trapezoid(&[1.0, 2.0], &[0.0]).expect_err("mismatch");
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
+    }
+
+    #[test]
+    fn cumtrapz_too_few_points() {
+        let err = cumulative_trapezoid(&[1.0], &[0.0]).expect_err("too few");
         assert!(matches!(
             err,
             IntegrateValidationError::QuadInvalidBounds { .. }

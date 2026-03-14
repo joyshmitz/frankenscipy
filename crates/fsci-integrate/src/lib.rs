@@ -11,8 +11,9 @@ pub mod validation;
 pub use api::{EventFn, OdeSolution, SolveIvpOptions, SolveIvpResult, SolverKind, solve_ivp};
 pub use bdf::{BdfSolver, BdfSolverConfig};
 pub use quad::{
-    CompositeQuadResult, DblquadOptions, DblquadResult, QuadOptions, QuadResult, dblquad, quad,
-    simpson, simpson_uniform, trapezoid, trapezoid_uniform,
+    CompositeQuadResult, DblquadOptions, DblquadResult, QuadOptions, QuadResult,
+    cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, quad, simpson, simpson_uniform,
+    trapezoid, trapezoid_uniform,
 };
 pub use rk::{ButcherTableau, RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig};
 pub use solver::{OdeSolver, OdeSolverState, StepFailure, StepOutcome};

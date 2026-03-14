@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/fsci-integrate",
+  "crates/fsci-interpolate",
   "crates/fsci-linalg",
   "crates/fsci-opt",
   "crates/fsci-sparse",
@@ -25,6 +26,7 @@ fsci-arrayapi = { path = "crates/fsci-arrayapi" }
 fsci-conformance = { path = "crates/fsci-conformance" }
 fsci-fft = { path = "crates/fsci-fft" }
 fsci-integrate = { path = "crates/fsci-integrate" }
+fsci-interpolate = { path = "crates/fsci-interpolate" }
 fsci-linalg = { path = "crates/fsci-linalg" }
 fsci-opt = { path = "crates/fsci-opt" }
 fsci-runtime = { path = "crates/fsci-runtime" }
