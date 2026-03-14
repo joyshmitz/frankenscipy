@@ -263,7 +263,7 @@
       }
     },
     {
-      "case_id": "spsolve_unsupported_stub",
+      "case_id": "spsolve_identity_2x2",
       "category": "spsolve",
       "mode": "Strict",
       "operation": "spsolve",
@@ -276,8 +276,10 @@
       "rhs": [1.0, 2.0],
       "scalar": null,
       "expected": {
-        "kind": "error",
-        "error": "unsupported operation"
+        "kind": "vector",
+        "values": [1.0, 2.0],
+        "atol": 1e-12,
+        "rtol": 1e-10
       }
     },
     {

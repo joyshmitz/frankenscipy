@@ -874,6 +874,187 @@ fn add_matrices(lhs: &[Vec<f64>], rhs: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .collect()
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Scalar Minimization — Public API
+// ══════════════════════════════════════════════════════════════════════
+
+/// Options for scalar (1-D) minimization.
+#[derive(Debug, Clone, Copy)]
+pub struct MinimizeScalarOptions {
+    /// Convergence tolerance on x.
+    pub tol: f64,
+    /// Maximum number of iterations.
+    pub maxiter: usize,
+}
+
+impl Default for MinimizeScalarOptions {
+    fn default() -> Self {
+        Self {
+            tol: 1.48e-8, // matches SciPy's default
+            maxiter: 500,
+        }
+    }
+}
+
+/// Result of scalar minimization.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MinimizeScalarResult {
+    /// The solution (minimizer).
+    pub x: f64,
+    /// Function value at the minimizer.
+    pub fun: f64,
+    /// Whether the optimizer converged.
+    pub success: bool,
+    /// Number of function evaluations.
+    pub nfev: usize,
+    /// Number of iterations.
+    pub nit: usize,
+}
+
+/// Minimize a scalar function using Brent's method.
+///
+/// Finds a local minimum of `f` within the bracket `(a, b)`.
+/// Optionally, an interior point `xatol` can be provided.
+/// Matches `scipy.optimize.minimize_scalar(f, bracket=(a, b), method='brent')`.
+pub fn minimize_scalar<F>(
+    f: F,
+    bracket: (f64, f64),
+    options: MinimizeScalarOptions,
+) -> Result<MinimizeScalarResult, OptError>
+where
+    F: Fn(f64) -> f64,
+{
+    let (mut a, mut b) = bracket;
+    if !a.is_finite() || !b.is_finite() {
+        return Err(OptError::NonFiniteInput {
+            detail: "bracket bounds must be finite".to_string(),
+        });
+    }
+    if a > b {
+        std::mem::swap(&mut a, &mut b);
+    }
+    if (a - b).abs() < f64::EPSILON {
+        return Err(OptError::InvalidBounds {
+            detail: "bracket bounds must not be equal".to_string(),
+        });
+    }
+
+    // Brent's method with golden section and parabolic interpolation
+    let golden_ratio = 0.5 * (3.0 - 5.0_f64.sqrt()); // ~0.381966
+
+    let mut x = a + golden_ratio * (b - a);
+    let mut w = x;
+    let mut v = x;
+    let mut fx = f(x);
+    let mut fw = fx;
+    let mut fv = fx;
+    let mut nfev = 1;
+
+    let mut d = 0.0_f64;
+    let mut e = 0.0_f64;
+
+    for nit in 0..options.maxiter {
+        let midpoint = 0.5 * (a + b);
+        let tol1 = options.tol * x.abs() + 1e-10;
+        let tol2 = 2.0 * tol1;
+
+        // Convergence check
+        if (x - midpoint).abs() <= (tol2 - 0.5 * (b - a)) {
+            return Ok(MinimizeScalarResult {
+                x,
+                fun: fx,
+                success: true,
+                nfev,
+                nit,
+            });
+        }
+
+        // Try parabolic interpolation
+        let mut use_golden = true;
+
+        if e.abs() > tol1 {
+            // Parabolic fit through (v, fv), (w, fw), (x, fx)
+            let r = (x - w) * (fx - fv);
+            let q = (x - v) * (fx - fw);
+            let mut p = (x - v) * q - (x - w) * r;
+            let mut q_val = 2.0 * (q - r);
+
+            if q_val > 0.0 {
+                p = -p;
+            } else {
+                q_val = -q_val;
+            }
+
+            if p.abs() < (0.5 * q_val * e).abs() && p > q_val * (a - x) && p < q_val * (b - x) {
+                // Accept parabolic step
+                d = p / q_val;
+                let u_test = x + d;
+                if (u_test - a) < tol2 || (b - u_test) < tol2 {
+                    d = if x < midpoint { tol1 } else { -tol1 };
+                }
+                use_golden = false;
+            }
+        }
+
+        if use_golden {
+            // Golden section step
+            e = if x < midpoint { b - x } else { a - x };
+            d = golden_ratio * e;
+        } else {
+            e = d;
+        }
+
+        // Evaluate at new point
+        let u = if d.abs() >= tol1 {
+            x + d
+        } else if d > 0.0 {
+            x + tol1
+        } else {
+            x - tol1
+        };
+        let fu = f(u);
+        nfev += 1;
+
+        // Update bracket
+        if fu <= fx {
+            if u < x {
+                b = x;
+            } else {
+                a = x;
+            }
+            v = w;
+            fv = fw;
+            w = x;
+            fw = fx;
+            x = u;
+            fx = fu;
+        } else {
+            if u < x {
+                a = u;
+            } else {
+                b = u;
+            }
+            if fu <= fw || (w - x).abs() < f64::EPSILON {
+                v = w;
+                fv = fw;
+                w = u;
+                fw = fu;
+            } else if fu <= fv || (v - x).abs() < f64::EPSILON || (v - w).abs() < f64::EPSILON {
+                v = u;
+                fv = fu;
+            }
+        }
+    }
+
+    Ok(MinimizeScalarResult {
+        x,
+        fun: fx,
+        success: false,
+        nfev,
+        nit: options.maxiter,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};
@@ -884,8 +1065,8 @@ mod tests {
     use serde::Serialize;
 
     use crate::{
-        ConvergenceStatus, MinimizeOptions, OptimizeMethod, OptimizeResult, bfgs, cg_pr_plus,
-        minimize, powell, take_optimize_traces,
+        ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptError, OptimizeMethod,
+        OptimizeResult, bfgs, cg_pr_plus, minimize, minimize_scalar, powell, take_optimize_traces,
     };
 
     #[derive(Debug, Serialize)]
@@ -1805,5 +1986,81 @@ mod tests {
                 204,
             );
         }
+    }
+
+    // ── minimize_scalar tests ───────────────────────────────────────
+
+    #[test]
+    fn minimize_scalar_quadratic() {
+        // f(x) = (x - 3)^2, minimum at x = 3
+        let result = minimize_scalar(
+            |x| (x - 3.0).powi(2),
+            (0.0, 10.0),
+            MinimizeScalarOptions::default(),
+        )
+        .expect("minimize_scalar works");
+        assert!(result.success, "should converge");
+        assert!(
+            (result.x - 3.0).abs() < 1e-6,
+            "minimizer should be near 3, got {}",
+            result.x
+        );
+        assert!(result.fun < 1e-10, "minimum value should be near 0");
+    }
+
+    #[test]
+    fn minimize_scalar_cos() {
+        // f(x) = cos(x), minimum at x = pi in [2, 4]
+        let result = minimize_scalar(f64::cos, (2.0, 4.0), MinimizeScalarOptions::default())
+            .expect("minimize_scalar works");
+        assert!(result.success);
+        assert!(
+            (result.x - std::f64::consts::PI).abs() < 1e-6,
+            "minimizer should be near pi, got {}",
+            result.x
+        );
+        assert!(
+            (result.fun - (-1.0)).abs() < 1e-10,
+            "min value should be -1"
+        );
+    }
+
+    #[test]
+    fn minimize_scalar_linear_converges() {
+        // f(x) = x, monotone, should find the left endpoint
+        let result = minimize_scalar(|x| x, (0.0, 10.0), MinimizeScalarOptions::default())
+            .expect("minimize_scalar works");
+        assert!(result.x < 1.0, "should be near 0, got {}", result.x);
+    }
+
+    #[test]
+    fn minimize_scalar_equal_bounds_error() {
+        let err = minimize_scalar(|x| x * x, (5.0, 5.0), MinimizeScalarOptions::default())
+            .expect_err("equal bounds");
+        assert!(matches!(err, OptError::InvalidBounds { .. }));
+    }
+
+    #[test]
+    fn minimize_scalar_nan_bounds_error() {
+        let err = minimize_scalar(|x| x * x, (f64::NAN, 5.0), MinimizeScalarOptions::default())
+            .expect_err("nan bounds");
+        assert!(matches!(err, OptError::NonFiniteInput { .. }));
+    }
+
+    #[test]
+    fn minimize_scalar_reversed_bracket() {
+        // (10, 0) should be auto-swapped to (0, 10)
+        let result = minimize_scalar(
+            |x| (x - 3.0).powi(2),
+            (10.0, 0.0),
+            MinimizeScalarOptions::default(),
+        )
+        .expect("minimize_scalar works");
+        assert!(result.success);
+        assert!(
+            (result.x - 3.0).abs() < 1e-6,
+            "minimizer should be near 3, got {}",
+            result.x
+        );
     }
 }

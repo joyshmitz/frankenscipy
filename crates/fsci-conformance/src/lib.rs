@@ -755,18 +755,10 @@ pub enum CaspTestKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CaspExpectedOutcome {
-    PolicyAction {
-        action: String,
-    },
-    SolverAction {
-        action: String,
-    },
-    CalibratorFallback {
-        should_fallback: bool,
-    },
-    Error {
-        error: String,
-    },
+    PolicyAction { action: String },
+    SolverAction { action: String },
+    CalibratorFallback { should_fallback: bool },
+    Error { error: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1492,7 +1484,11 @@ pub fn run_sparse_packet(
 #[derive(Debug)]
 enum SparseObserved {
     Vector(Vec<f64>),
-    Shape { rows: usize, cols: usize, nnz: usize },
+    Shape {
+        rows: usize,
+        cols: usize,
+        nnz: usize,
+    },
     Error(String),
 }
 
@@ -1593,7 +1589,7 @@ fn execute_sparse_case(case: &SparseCase) -> SparseObserved {
                                 rows: result.shape().rows,
                                 cols: result.shape().cols,
                                 nnz: result.nnz(),
-                            }
+                            };
                         }
                     };
                     match fsci_sparse::spmv_csr(&result, rhs) {
@@ -1619,7 +1615,7 @@ fn execute_sparse_case(case: &SparseCase) -> SparseObserved {
                                 rows: result.shape().rows,
                                 cols: result.shape().cols,
                                 nnz: result.nnz(),
-                            }
+                            };
                         }
                     };
                     match fsci_sparse::spmv_csr(&result, rhs) {
@@ -1633,18 +1629,22 @@ fn execute_sparse_case(case: &SparseCase) -> SparseObserved {
     }
 }
 
-fn compare_sparse_outcome(expected: &SparseExpectedOutcome, observed: &SparseObserved) -> (bool, String) {
+fn compare_sparse_outcome(
+    expected: &SparseExpectedOutcome,
+    observed: &SparseObserved,
+) -> (bool, String) {
     match (expected, observed) {
-        (
-            SparseExpectedOutcome::Vector { values, atol, rtol },
-            SparseObserved::Vector(got),
-        ) => {
+        (SparseExpectedOutcome::Vector { values, atol, rtol }, SparseObserved::Vector(got)) => {
             let a = atol.unwrap_or(1.0e-10);
             let r = rtol.unwrap_or(1.0e-8);
             if got.len() != values.len() {
                 return (
                     false,
-                    format!("vector length mismatch: expected {} got {}", values.len(), got.len()),
+                    format!(
+                        "vector length mismatch: expected {} got {}",
+                        values.len(),
+                        got.len()
+                    ),
                 );
             }
             let max_diff = got
@@ -1652,22 +1652,37 @@ fn compare_sparse_outcome(expected: &SparseExpectedOutcome, observed: &SparseObs
                 .zip(values.iter())
                 .map(|(g, e)| (g - e).abs())
                 .fold(0.0_f64, f64::max);
-            let pass = got.iter().zip(values.iter()).all(|(g, e)| allclose_scalar(*g, *e, a, r));
+            let pass = got
+                .iter()
+                .zip(values.iter())
+                .all(|(g, e)| allclose_scalar(*g, *e, a, r));
             if pass {
                 (true, format!("vector matched (max_diff={max_diff:.2e})"))
             } else {
-                (false, format!("vector mismatch: max_diff={max_diff:.2e}, atol={a:.2e}, rtol={r:.2e}"))
+                (
+                    false,
+                    format!("vector mismatch: max_diff={max_diff:.2e}, atol={a:.2e}, rtol={r:.2e}"),
+                )
             }
         }
         (
             SparseExpectedOutcome::Shape { rows, cols, nnz },
-            SparseObserved::Shape { rows: gr, cols: gc, nnz: gn },
+            SparseObserved::Shape {
+                rows: gr,
+                cols: gc,
+                nnz: gn,
+            },
         ) => {
             let pass = *rows == *gr && *cols == *gc && *nnz == *gn;
             if pass {
                 (true, format!("shape matched ({gr}x{gc}, nnz={gn})"))
             } else {
-                (false, format!("shape mismatch: expected {rows}x{cols} nnz={nnz}, got {gr}x{gc} nnz={gn}"))
+                (
+                    false,
+                    format!(
+                        "shape mismatch: expected {rows}x{cols} nnz={nnz}, got {gr}x{gc} nnz={gn}"
+                    ),
+                )
             }
         }
         (SparseExpectedOutcome::Error { error }, SparseObserved::Error(got)) => {
@@ -1675,18 +1690,17 @@ fn compare_sparse_outcome(expected: &SparseExpectedOutcome, observed: &SparseObs
             if pass {
                 (true, format!("error matched: {got}"))
             } else {
-                (false, format!("error mismatch: expected '{error}', got '{got}'"))
+                (
+                    false,
+                    format!("error mismatch: expected '{error}', got '{got}'"),
+                )
             }
         }
         (SparseExpectedOutcome::Error { error }, _) => {
             (false, format!("expected error '{error}' but got success"))
         }
-        (_, SparseObserved::Error(e)) => {
-            (false, format!("unexpected error: {e}"))
-        }
-        _ => {
-            (false, "outcome type mismatch".to_owned())
-        }
+        (_, SparseObserved::Error(e)) => (false, format!("unexpected error: {e}")),
+        _ => (false, "outcome type mismatch".to_owned()),
     }
 }
 
@@ -1819,7 +1833,9 @@ fn execute_fft_case(case: &FftCase) -> FftObserved {
             // Multi-dimensional transforms: require complex_input and shape
             let input: Vec<(f64, f64)> = match &case.complex_input {
                 Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
-                None => return FftObserved::Error("nd transforms require complex_input".to_owned()),
+                None => {
+                    return FftObserved::Error("nd transforms require complex_input".to_owned());
+                }
             };
             let shape = match &case.shape {
                 Some(s) => s.clone(),
@@ -1860,7 +1876,11 @@ fn compare_fft_outcome(expected: &FftExpectedOutcome, observed: &FftObserved) ->
             if got.len() != values.len() {
                 return (
                     false,
-                    format!("complex vector length mismatch: expected {} got {}", values.len(), got.len()),
+                    format!(
+                        "complex vector length mismatch: expected {} got {}",
+                        values.len(),
+                        got.len()
+                    ),
                 );
             }
             let max_diff = got
@@ -1876,21 +1896,30 @@ fn compare_fft_outcome(expected: &FftExpectedOutcome, observed: &FftObserved) ->
                 allclose_scalar(g[0], e[0], a, r) && allclose_scalar(g[1], e[1], a, r)
             });
             if pass {
-                (true, format!("complex vector matched (max_diff={max_diff:.2e})"))
+                (
+                    true,
+                    format!("complex vector matched (max_diff={max_diff:.2e})"),
+                )
             } else {
-                (false, format!("complex vector mismatch: max_diff={max_diff:.2e}, atol={a:.2e}, rtol={r:.2e}"))
+                (
+                    false,
+                    format!(
+                        "complex vector mismatch: max_diff={max_diff:.2e}, atol={a:.2e}, rtol={r:.2e}"
+                    ),
+                )
             }
         }
-        (
-            FftExpectedOutcome::RealVector { values, atol, rtol },
-            FftObserved::RealVector(got),
-        ) => {
+        (FftExpectedOutcome::RealVector { values, atol, rtol }, FftObserved::RealVector(got)) => {
             let a = atol.unwrap_or(1.0e-10);
             let r = rtol.unwrap_or(1.0e-8);
             if got.len() != values.len() {
                 return (
                     false,
-                    format!("real vector length mismatch: expected {} got {}", values.len(), got.len()),
+                    format!(
+                        "real vector length mismatch: expected {} got {}",
+                        values.len(),
+                        got.len()
+                    ),
                 );
             }
             let max_diff = got
@@ -1898,11 +1927,22 @@ fn compare_fft_outcome(expected: &FftExpectedOutcome, observed: &FftObserved) ->
                 .zip(values.iter())
                 .map(|(g, e)| (g - e).abs())
                 .fold(0.0_f64, f64::max);
-            let pass = got.iter().zip(values.iter()).all(|(g, e)| allclose_scalar(*g, *e, a, r));
+            let pass = got
+                .iter()
+                .zip(values.iter())
+                .all(|(g, e)| allclose_scalar(*g, *e, a, r));
             if pass {
-                (true, format!("real vector matched (max_diff={max_diff:.2e})"))
+                (
+                    true,
+                    format!("real vector matched (max_diff={max_diff:.2e})"),
+                )
             } else {
-                (false, format!("real vector mismatch: max_diff={max_diff:.2e}, atol={a:.2e}, rtol={r:.2e}"))
+                (
+                    false,
+                    format!(
+                        "real vector mismatch: max_diff={max_diff:.2e}, atol={a:.2e}, rtol={r:.2e}"
+                    ),
+                )
             }
         }
         (FftExpectedOutcome::Error { error }, FftObserved::Error(got)) => {
@@ -1910,18 +1950,17 @@ fn compare_fft_outcome(expected: &FftExpectedOutcome, observed: &FftObserved) ->
             if pass {
                 (true, format!("error matched: {got}"))
             } else {
-                (false, format!("error mismatch: expected '{error}', got '{got}'"))
+                (
+                    false,
+                    format!("error mismatch: expected '{error}', got '{got}'"),
+                )
             }
         }
         (FftExpectedOutcome::Error { error }, _) => {
             (false, format!("expected error '{error}' but got success"))
         }
-        (_, FftObserved::Error(e)) => {
-            (false, format!("unexpected error: {e}"))
-        }
-        _ => {
-            (false, "outcome type mismatch".to_owned())
-        }
+        (_, FftObserved::Error(e)) => (false, format!("unexpected error: {e}")),
+        _ => (false, "outcome type mismatch".to_owned()),
     }
 }
 
@@ -2011,11 +2050,17 @@ fn execute_casp_case(case: &CaspCase) -> CaspObserved {
         CaspTestKind::SolverSelection => {
             let state_str = match &case.condition_state {
                 Some(s) => s.as_str(),
-                None => return CaspObserved::Error("solver_selection requires condition_state".to_owned()),
+                None => {
+                    return CaspObserved::Error(
+                        "solver_selection requires condition_state".to_owned(),
+                    );
+                }
             };
             let state = match parse_condition_state(state_str) {
                 Some(s) => s,
-                None => return CaspObserved::Error(format!("unknown condition state: {state_str}")),
+                None => {
+                    return CaspObserved::Error(format!("unknown condition state: {state_str}"));
+                }
             };
             let portfolio = fsci_runtime::SolverPortfolio::new(case.mode, 64);
             let (action, _posterior, _losses, _loss) = portfolio.select_action(&state);
@@ -2024,7 +2069,11 @@ fn execute_casp_case(case: &CaspCase) -> CaspObserved {
         CaspTestKind::CalibratorDrift => {
             let observations = match &case.observations {
                 Some(obs) => obs.clone(),
-                None => return CaspObserved::Error("calibrator_drift requires observations".to_owned()),
+                None => {
+                    return CaspObserved::Error(
+                        "calibrator_drift requires observations".to_owned(),
+                    );
+                }
             };
             let mut calibrator = fsci_runtime::ConformalCalibrator::new(0.05, 200);
             for obs in &observations {
@@ -2042,7 +2091,10 @@ fn compare_casp_outcome(expected: &CaspExpectedOutcome, observed: &CaspObserved)
             if pass {
                 (true, format!("policy action matched: {got}"))
             } else {
-                (false, format!("policy action mismatch: expected '{action}', got '{got}'"))
+                (
+                    false,
+                    format!("policy action mismatch: expected '{action}', got '{got}'"),
+                )
             }
         }
         (CaspExpectedOutcome::SolverAction { action }, CaspObserved::SolverAction(got)) => {
@@ -2050,15 +2102,24 @@ fn compare_casp_outcome(expected: &CaspExpectedOutcome, observed: &CaspObserved)
             if pass {
                 (true, format!("solver action matched: {got}"))
             } else {
-                (false, format!("solver action mismatch: expected '{action}', got '{got}'"))
+                (
+                    false,
+                    format!("solver action mismatch: expected '{action}', got '{got}'"),
+                )
             }
         }
-        (CaspExpectedOutcome::CalibratorFallback { should_fallback }, CaspObserved::CalibratorFallback(got)) => {
+        (
+            CaspExpectedOutcome::CalibratorFallback { should_fallback },
+            CaspObserved::CalibratorFallback(got),
+        ) => {
             let pass = *should_fallback == *got;
             if pass {
                 (true, format!("calibrator fallback matched: {got}"))
             } else {
-                (false, format!("calibrator fallback mismatch: expected {should_fallback}, got {got}"))
+                (
+                    false,
+                    format!("calibrator fallback mismatch: expected {should_fallback}, got {got}"),
+                )
             }
         }
         (CaspExpectedOutcome::Error { error }, CaspObserved::Error(got)) => {
@@ -2066,18 +2127,17 @@ fn compare_casp_outcome(expected: &CaspExpectedOutcome, observed: &CaspObserved)
             if pass {
                 (true, format!("error matched: {got}"))
             } else {
-                (false, format!("error mismatch: expected '{error}', got '{got}'"))
+                (
+                    false,
+                    format!("error mismatch: expected '{error}', got '{got}'"),
+                )
             }
         }
         (CaspExpectedOutcome::Error { error }, _) => {
             (false, format!("expected error '{error}' but got success"))
         }
-        (_, CaspObserved::Error(e)) => {
-            (false, format!("unexpected error: {e}"))
-        }
-        _ => {
-            (false, "outcome type mismatch".to_owned())
-        }
+        (_, CaspObserved::Error(e)) => (false, format!("unexpected error: {e}")),
+        _ => (false, "outcome type mismatch".to_owned()),
     }
 }
 
@@ -4954,8 +5014,8 @@ mod tests {
         AggregateParityReport, ArrayApiPacketFixture, ConformanceReport, DifferentialOracleConfig,
         HarnessConfig, LinalgPacketFixture, OptimizePacketFixture, OracleStatus, PacketFamily,
         PythonOracleConfig, SpecialPacketFixture, aggregate_packet_reports, discover_fixtures,
-        ensure_artifact_layout, load_oracle_capture, run_array_api_packet, run_differential_test,
-        run_casp_packet, run_fft_packet, run_linalg_packet, run_optimize_packet, run_smoke,
+        ensure_artifact_layout, load_oracle_capture, run_array_api_packet, run_casp_packet,
+        run_differential_test, run_fft_packet, run_linalg_packet, run_optimize_packet, run_smoke,
         run_sparse_packet, run_special_packet, run_validate_tol_packet, write_parity_artifacts,
     };
     use serde::Serialize;
@@ -5357,8 +5417,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             "expected at least one sparse test case"
         );
 
-        let artifacts = write_parity_artifacts(&cfg, &report)
-            .expect("sparse parity artifacts must be written");
+        let artifacts =
+            write_parity_artifacts(&cfg, &report).expect("sparse parity artifacts must be written");
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());
@@ -5380,8 +5440,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             "expected at least one fft test case"
         );
 
-        let artifacts = write_parity_artifacts(&cfg, &report)
-            .expect("fft parity artifacts must be written");
+        let artifacts =
+            write_parity_artifacts(&cfg, &report).expect("fft parity artifacts must be written");
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());
@@ -5403,8 +5463,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             "expected at least one casp test case"
         );
 
-        let artifacts = write_parity_artifacts(&cfg, &report)
-            .expect("casp parity artifacts must be written");
+        let artifacts =
+            write_parity_artifacts(&cfg, &report).expect("casp parity artifacts must be written");
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());

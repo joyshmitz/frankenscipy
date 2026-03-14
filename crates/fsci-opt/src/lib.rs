@@ -6,7 +6,10 @@ pub mod root;
 pub mod types;
 
 pub use linesearch::{LineSearchResult, WolfeParams, line_search_wolfe1, line_search_wolfe2};
-pub use minimize::{bfgs, cg_pr_plus, minimize, powell, take_optimize_traces};
+pub use minimize::{
+    MinimizeScalarOptions, MinimizeScalarResult, bfgs, cg_pr_plus, minimize, minimize_scalar,
+    powell, take_optimize_traces,
+};
 pub use root::{RootResult, bisect, brenth, brentq, ridder, root_scalar};
 pub use types::{
     ConvergenceStatus, MinimizeOptions, OptError, OptimizeMethod, OptimizeResult, RootMethod,
