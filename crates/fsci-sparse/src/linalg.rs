@@ -366,6 +366,259 @@ fn csr_matvec(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
     result
 }
 
+/// GMRES (Generalized Minimal Residual) solver for general (non-symmetric) sparse systems.
+///
+/// Solves Ax = b for general square A using restarted GMRES with Arnoldi iteration.
+/// Matches `scipy.sparse.linalg.gmres(A, b)`.
+pub fn gmres(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: IterativeSolveOptions,
+) -> SparseResult<IterativeSolveResult> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "GMRES requires a square matrix".to_string(),
+        });
+    }
+    let n = shape.rows;
+    if b.len() != n {
+        return Err(SparseError::IncompatibleShape {
+            message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+    if options.check_finite
+        && (a.data().iter().any(|v| !v.is_finite()) || b.iter().any(|v| !v.is_finite()))
+    {
+        return Err(SparseError::NonFiniteInput {
+            message: "matrix/rhs contains NaN or Inf".to_string(),
+        });
+    }
+
+    let max_iter = options.max_iter.unwrap_or(n * 10);
+    let restart = n.min(30); // Krylov subspace dimension before restart
+
+    let mut x: Vec<f64> = match x0 {
+        Some(initial) => {
+            if initial.len() != n {
+                return Err(SparseError::IncompatibleShape {
+                    message: "initial guess length must match matrix rows".to_string(),
+                });
+            }
+            initial.to_vec()
+        }
+        None => vec![0.0; n],
+    };
+
+    let b_norm = vec_norm(b);
+    if b_norm == 0.0 {
+        return Ok(IterativeSolveResult {
+            solution: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+        });
+    }
+
+    let mut total_iter = 0;
+
+    // Outer restart loop
+    for _ in 0..(max_iter / restart.max(1) + 1) {
+        let (converged, iters) = gmres_inner(
+            a,
+            b,
+            &mut x,
+            b_norm,
+            restart,
+            options.tol,
+            max_iter - total_iter,
+        )?;
+        total_iter += iters;
+
+        if converged || total_iter >= max_iter {
+            let ax = csr_matvec(a, &x);
+            let r_norm = vec_norm_diff(&ax, b) / b_norm;
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged,
+                iterations: total_iter,
+                residual_norm: r_norm,
+            });
+        }
+    }
+
+    let ax = csr_matvec(a, &x);
+    let r_norm = vec_norm_diff(&ax, b) / b_norm;
+    Ok(IterativeSolveResult {
+        solution: x,
+        converged: false,
+        iterations: total_iter,
+        residual_norm: r_norm,
+    })
+}
+
+/// Inner GMRES iteration (one restart cycle).
+/// Returns (converged, iterations_used).
+fn gmres_inner(
+    a: &CsrMatrix,
+    b: &[f64],
+    x: &mut [f64],
+    b_norm: f64,
+    restart: usize,
+    tol: f64,
+    max_iter: usize,
+) -> SparseResult<(bool, usize)> {
+    let n = x.len();
+    let m = restart.min(max_iter);
+
+    // r = b - A*x
+    let ax = csr_matvec(a, x);
+    let r: Vec<f64> = b.iter().zip(ax.iter()).map(|(bi, axi)| bi - axi).collect();
+    let r_norm = vec_norm(&r);
+
+    if r_norm / b_norm < tol {
+        return Ok((true, 0));
+    }
+
+    // Arnoldi process with modified Gram-Schmidt
+    let mut v: Vec<Vec<f64>> = Vec::with_capacity(m + 1);
+    v.push(r.iter().map(|&ri| ri / r_norm).collect());
+
+    // Upper Hessenberg matrix H (stored as (m+1) x m)
+    let mut h = vec![vec![0.0; m]; m + 1];
+
+    // Givens rotation components
+    let mut cs = vec![0.0; m];
+    let mut sn = vec![0.0; m];
+    let mut g = vec![0.0; m + 1];
+    g[0] = r_norm;
+
+    let mut iters = 0;
+
+    for j in 0..m {
+        iters = j + 1;
+
+        // w = A * v_j
+        let w = csr_matvec(a, &v[j]);
+        let mut wj = w;
+
+        // Modified Gram-Schmidt orthogonalization
+        for i in 0..=j {
+            h[i][j] = dot_product(&wj, &v[i]);
+            for k in 0..n {
+                wj[k] -= h[i][j] * v[i][k];
+            }
+        }
+
+        h[j + 1][j] = vec_norm(&wj);
+
+        if h[j + 1][j].abs() < f64::EPSILON * 100.0 {
+            // Lucky breakdown — solution is in the current Krylov subspace
+            // Apply previous Givens rotations to column j
+            apply_givens_to_column(&mut h, &cs, &sn, j);
+            // Solve the triangular system and update x
+            update_solution(x, &v, &h, &g, j + 1);
+            return Ok((true, iters));
+        }
+
+        // Normalize
+        let inv_h = 1.0 / h[j + 1][j];
+        v.push(wj.iter().map(|&wi| wi * inv_h).collect());
+
+        // Apply previous Givens rotations to column j of H
+        apply_givens_to_column(&mut h, &cs, &sn, j);
+
+        // Compute new Givens rotation for row j
+        let (c, s) = givens_rotation(h[j][j], h[j + 1][j]);
+        cs[j] = c;
+        sn[j] = s;
+
+        // Apply new rotation to H and g
+        h[j][j] = c * h[j][j] + s * h[j + 1][j];
+        h[j + 1][j] = 0.0;
+
+        let g_j = g[j];
+        g[j] = c * g_j;
+        g[j + 1] = -s * g_j;
+
+        let residual = g[j + 1].abs() / b_norm;
+        if residual < tol {
+            update_solution(x, &v, &h, &g, j + 1);
+            return Ok((true, iters));
+        }
+    }
+
+    // Update solution with current approximation
+    update_solution(x, &v, &h, &g, m);
+    Ok((false, iters))
+}
+
+/// Apply previous Givens rotations to column j of H.
+fn apply_givens_to_column(h: &mut [Vec<f64>], cs: &[f64], sn: &[f64], j: usize) {
+    for i in 0..j {
+        let temp = cs[i] * h[i][j] + sn[i] * h[i + 1][j];
+        h[i + 1][j] = -sn[i] * h[i][j] + cs[i] * h[i + 1][j];
+        h[i][j] = temp;
+    }
+}
+
+/// Compute Givens rotation coefficients.
+fn givens_rotation(a: f64, b: f64) -> (f64, f64) {
+    if b == 0.0 {
+        (1.0, 0.0)
+    } else if b.abs() > a.abs() {
+        let tau = a / b;
+        let s = 1.0 / (1.0 + tau * tau).sqrt();
+        (s * tau, s)
+    } else {
+        let tau = b / a;
+        let c = 1.0 / (1.0 + tau * tau).sqrt();
+        (c, c * tau)
+    }
+}
+
+/// Solve the upper triangular system H*y = g, then update x += V*y.
+fn update_solution(x: &mut [f64], v: &[Vec<f64>], h: &[Vec<f64>], g: &[f64], k: usize) {
+    // Back-substitution: solve H[0..k, 0..k] y = g[0..k]
+    let mut y = vec![0.0; k];
+    for i in (0..k).rev() {
+        y[i] = g[i];
+        for j in (i + 1)..k {
+            y[i] -= h[i][j] * y[j];
+        }
+        if h[i][i].abs() > f64::EPSILON * 100.0 {
+            y[i] /= h[i][i];
+        }
+    }
+
+    // x += V * y
+    for (j, &yj) in y.iter().enumerate() {
+        for (i, xi) in x.iter_mut().enumerate() {
+            *xi += yj * v[j][i];
+        }
+    }
+}
+
+/// Euclidean norm of a vector.
+fn vec_norm(v: &[f64]) -> f64 {
+    v.iter().map(|x| x * x).sum::<f64>().sqrt()
+}
+
+/// Euclidean norm of (a - b).
+fn vec_norm_diff(a: &[f64], b: &[f64]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(ai, bi)| (ai - bi).powi(2))
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// Dot product of two vectors.
+fn dot_product(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(ai, bi)| ai * bi).sum()
+}
+
 /// Convert a CSR matrix to dense row-major storage.
 fn csr_to_dense(a: &CsrMatrix) -> Vec<f64> {
     let shape = a.shape();
@@ -843,5 +1096,137 @@ mod tests {
         let result = cg(&a, &b, None, IterativeSolveOptions::default()).expect("cg works");
         assert!(result.converged);
         assert_close_slice(&result.solution, &[2.0, 2.0], 1e-10);
+    }
+
+    // ── GMRES iterative solver tests ────────────────────────────────
+
+    fn nonsymmetric_csr_3x3() -> CsrMatrix {
+        // Non-symmetric: [[4, 1, 0], [0, 3, 1], [0, 0, 2]]
+        CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![4.0, 1.0, 3.0, 1.0, 2.0],
+            vec![0, 0, 1, 1, 2],
+            vec![0, 1, 1, 2, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr")
+    }
+
+    #[test]
+    fn gmres_identity_system() {
+        let a = identity_csr(4);
+        let b = vec![1.0, 2.0, 3.0, 4.0];
+        let result = gmres(&a, &b, None, IterativeSolveOptions::default()).expect("gmres works");
+        assert!(result.converged);
+        assert_close_slice(&result.solution, &b, 1e-10);
+    }
+
+    #[test]
+    fn gmres_nonsymmetric_system() {
+        let a = nonsymmetric_csr_3x3();
+        let b = vec![5.0, 7.0, 4.0];
+        let result = gmres(&a, &b, None, IterativeSolveOptions::default()).expect("gmres works");
+        assert!(result.converged, "GMRES should converge");
+        // Verify A*x ≈ b
+        let ax = csr_matvec(&a, &result.solution);
+        assert_close_slice(&ax, &b, 1e-5);
+    }
+
+    #[test]
+    fn gmres_diagonal_system() {
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![3.0, 7.0],
+            vec![0, 1],
+            vec![0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let b = vec![9.0, 14.0];
+        let result = gmres(&a, &b, None, IterativeSolveOptions::default()).expect("gmres works");
+        assert!(result.converged);
+        assert_close_slice(&result.solution, &[3.0, 2.0], 1e-10);
+    }
+
+    #[test]
+    fn gmres_zero_rhs() {
+        let a = nonsymmetric_csr_3x3();
+        let b = vec![0.0, 0.0, 0.0];
+        let result = gmres(&a, &b, None, IterativeSolveOptions::default()).expect("gmres works");
+        assert!(result.converged);
+        assert_eq!(result.iterations, 0);
+        assert_close_slice(&result.solution, &[0.0, 0.0, 0.0], 1e-14);
+    }
+
+    #[test]
+    fn gmres_with_initial_guess() {
+        let a = nonsymmetric_csr_3x3();
+        let b = vec![5.0, 7.0, 4.0];
+        let x0 = vec![1.0, 1.0, 1.0];
+        let result =
+            gmres(&a, &b, Some(&x0), IterativeSolveOptions::default()).expect("gmres works");
+        assert!(result.converged);
+        let ax = csr_matvec(&a, &result.solution);
+        assert_close_slice(&ax, &b, 1e-5);
+    }
+
+    #[test]
+    fn gmres_rejects_non_square() {
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0],
+            vec![0, 1],
+            vec![1, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let err =
+            gmres(&a, &[1.0, 2.0], None, IterativeSolveOptions::default()).expect_err("non-sq");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn gmres_rejects_rhs_mismatch() {
+        let a = nonsymmetric_csr_3x3();
+        let err =
+            gmres(&a, &[1.0, 2.0], None, IterativeSolveOptions::default()).expect_err("mismatch");
+        assert!(matches!(err, SparseError::IncompatibleShape { .. }));
+    }
+
+    #[test]
+    fn gmres_spd_system_matches_cg() {
+        // GMRES should work on SPD systems too
+        let a = spd_csr_3x3();
+        let b = vec![5.0, 5.0, 3.0];
+        let cg_result = cg(&a, &b, None, IterativeSolveOptions::default()).expect("cg works");
+        let gmres_result =
+            gmres(&a, &b, None, IterativeSolveOptions::default()).expect("gmres works");
+        assert!(gmres_result.converged);
+        assert_close_slice(&gmres_result.solution, &cg_result.solution, 1e-6);
+    }
+
+    #[test]
+    fn gmres_general_dense_system() {
+        // [[1, 2, 3], [4, 5, 6], [7, 8, 10]] x = [14, 32, 53] => x = [1, 2, 3]
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0],
+            vec![0, 0, 0, 1, 1, 1, 2, 2, 2],
+            vec![0, 1, 2, 0, 1, 2, 0, 1, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let b = vec![14.0, 32.0, 53.0];
+        let result = gmres(&a, &b, None, IterativeSolveOptions::default()).expect("gmres works");
+        assert!(result.converged);
+        assert_close_slice(&result.solution, &[1.0, 2.0, 3.0], 1e-6);
     }
 }

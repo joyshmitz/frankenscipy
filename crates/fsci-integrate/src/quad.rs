@@ -210,6 +210,107 @@ where
     (result_kronrod, error)
 }
 
+/// Options for double integration.
+#[derive(Debug, Clone, Copy)]
+pub struct DblquadOptions {
+    /// Absolute error tolerance for the outer integral.
+    pub epsabs: f64,
+    /// Relative error tolerance for the outer integral.
+    pub epsrel: f64,
+    /// Maximum subdivisions for each 1-D quadrature.
+    pub limit: usize,
+}
+
+impl Default for DblquadOptions {
+    fn default() -> Self {
+        Self {
+            epsabs: 1.49e-8,
+            epsrel: 1.49e-8,
+            limit: 50,
+        }
+    }
+}
+
+/// Result of double integration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DblquadResult {
+    /// Estimated value of the double integral.
+    pub integral: f64,
+    /// Estimated absolute error.
+    pub error: f64,
+    /// Whether the requested accuracy was achieved.
+    pub converged: bool,
+}
+
+/// Numerically compute a double integral ∫∫ f(y, x) dy dx.
+///
+/// Integrates `f(y, x)` over the region where `x` ranges from `a` to `b`,
+/// and for each `x`, `y` ranges from `gfun(x)` to `hfun(x)`.
+///
+/// Matches `scipy.integrate.dblquad(f, a, b, gfun, hfun)`.
+pub fn dblquad<F, GL, GH>(
+    f: F,
+    a: f64,
+    b: f64,
+    gfun: GL,
+    hfun: GH,
+    options: DblquadOptions,
+) -> Result<DblquadResult, IntegrateValidationError>
+where
+    F: Fn(f64, f64) -> f64,
+    GL: Fn(f64) -> f64,
+    GH: Fn(f64) -> f64,
+{
+    if !a.is_finite() || !b.is_finite() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "outer integration bounds must be finite".to_string(),
+        });
+    }
+
+    if (a - b).abs() < f64::EPSILON {
+        return Ok(DblquadResult {
+            integral: 0.0,
+            error: 0.0,
+            converged: true,
+        });
+    }
+
+    let inner_opts = QuadOptions {
+        epsabs: options.epsabs,
+        epsrel: options.epsrel,
+        limit: options.limit,
+    };
+
+    // Outer integral over x, inner integral over y for each x
+    let outer_result = quad(
+        |x| {
+            let y_lo = gfun(x);
+            let y_hi = hfun(x);
+            if (y_lo - y_hi).abs() < f64::EPSILON {
+                return 0.0;
+            }
+            // Inner integral of f(y, x) over y ∈ [gfun(x), hfun(x)]
+            match quad(|y| f(y, x), y_lo, y_hi, inner_opts) {
+                Ok(r) => r.integral,
+                Err(_) => f64::NAN,
+            }
+        },
+        a,
+        b,
+        QuadOptions {
+            epsabs: options.epsabs,
+            epsrel: options.epsrel,
+            limit: options.limit,
+        },
+    )?;
+
+    Ok(DblquadResult {
+        integral: outer_result.integral,
+        error: outer_result.error,
+        converged: outer_result.converged,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +472,117 @@ mod tests {
             "integral should be atan(100)={expected}, got {}",
             result.integral
         );
+    }
+
+    // ── dblquad tests ───────────────────────────────────────────────
+
+    #[test]
+    fn dblquad_constant() {
+        // ∫₀¹ ∫₀¹ 1 dy dx = 1
+        let result = dblquad(
+            |_y, _x| 1.0,
+            0.0,
+            1.0,
+            |_| 0.0,
+            |_| 1.0,
+            DblquadOptions::default(),
+        )
+        .expect("dblquad works");
+        assert!(result.converged);
+        assert!(
+            (result.integral - 1.0).abs() < 1e-10,
+            "should be 1, got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn dblquad_xy() {
+        // ∫₀¹ ∫₀¹ x*y dy dx = 1/4
+        let result = dblquad(
+            |y, x| x * y,
+            0.0,
+            1.0,
+            |_| 0.0,
+            |_| 1.0,
+            DblquadOptions::default(),
+        )
+        .expect("dblquad works");
+        assert!(result.converged);
+        assert!(
+            (result.integral - 0.25).abs() < 1e-10,
+            "should be 0.25, got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn dblquad_triangular_region() {
+        // ∫₀¹ ∫₀ˣ 1 dy dx = ∫₀¹ x dx = 1/2
+        let result = dblquad(
+            |_y, _x| 1.0,
+            0.0,
+            1.0,
+            |_| 0.0,
+            |x| x,
+            DblquadOptions::default(),
+        )
+        .expect("dblquad works");
+        assert!(result.converged);
+        assert!(
+            (result.integral - 0.5).abs() < 1e-10,
+            "should be 0.5, got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn dblquad_disk_area() {
+        // ∫₋₁¹ ∫₋√(1-x²)^√(1-x²) 1 dy dx = π (area of unit disk)
+        let result = dblquad(
+            |_y, _x| 1.0,
+            -1.0,
+            1.0,
+            |x| -(1.0 - x * x).sqrt(),
+            |x| (1.0 - x * x).sqrt(),
+            DblquadOptions::default(),
+        )
+        .expect("dblquad works");
+        assert!(
+            (result.integral - std::f64::consts::PI).abs() < 1e-6,
+            "should be pi, got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn dblquad_equal_bounds() {
+        let result = dblquad(
+            |y, x| x * y,
+            3.0,
+            3.0,
+            |_| 0.0,
+            |_| 1.0,
+            DblquadOptions::default(),
+        )
+        .expect("dblquad equal bounds");
+        assert_eq!(result.integral, 0.0);
+    }
+
+    #[test]
+    fn dblquad_nonfinite_bounds_error() {
+        let err = dblquad(
+            |y, x| x * y,
+            f64::INFINITY,
+            1.0,
+            |_| 0.0,
+            |_| 1.0,
+            DblquadOptions::default(),
+        )
+        .expect_err("nonfinite");
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
     }
 }

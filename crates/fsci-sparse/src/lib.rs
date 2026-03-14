@@ -11,7 +11,7 @@ pub use formats::{
 pub use linalg::{
     IluOptions, IterativeSolveOptions, IterativeSolveResult, LuOptions, PermutationOrdering,
     SolveOptions, SolveResult, SparseBackend, SparseIluFactorization, SparseLuFactorization, cg,
-    spilu, splu, splu_solve, spsolve,
+    gmres, spilu, splu, splu_solve, spsolve,
 };
 pub use ops::{
     ConversionLogEntry, FormatConvertible, add_coo, add_csc, add_csr, coo_to_csr_with_mode,
