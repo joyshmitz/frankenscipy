@@ -604,6 +604,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fsci-interpolate"
+version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+ "proptest",
+]
+
+[[package]]
 name = "fsci-linalg"
 version = "0.1.0"
 dependencies = [
@@ -654,6 +662,15 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "fsci-runtime",
+]
+
+[[package]]
+name = "fsci-stats"
+version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+ "fsci-special",
+ "proptest",
 ]
 
 [[package]]
