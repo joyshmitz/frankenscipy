@@ -15,7 +15,9 @@ pub use quad::{
     cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, quad, simpson, simpson_uniform,
     trapezoid, trapezoid_uniform,
 };
-pub use rk::{ButcherTableau, DOP853_TABLEAU, RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig};
+pub use rk::{
+    ButcherTableau, DOP853_TABLEAU, RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig,
+};
 pub use solver::{OdeSolver, OdeSolverState, StepFailure, StepOutcome};
 pub use step_size::{InitialStepRequest, StepRhsFn, select_initial_step};
 pub use validation::{

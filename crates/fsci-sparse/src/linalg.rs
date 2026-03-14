@@ -403,12 +403,7 @@ fn find_value_in_row(
 }
 
 /// Find the index into data/indices arrays for position (row, col).
-fn find_index_in_row(
-    indices: &[usize],
-    indptr: &[usize],
-    row: usize,
-    col: usize,
-) -> Option<usize> {
+fn find_index_in_row(indices: &[usize], indptr: &[usize], row: usize, col: usize) -> Option<usize> {
     (indptr[row]..indptr[row + 1]).find(|&idx| indices[idx] == col)
 }
 
