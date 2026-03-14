@@ -27,6 +27,7 @@ where
         OptimizeMethod::Bfgs => bfgs(&fun, x0, options),
         OptimizeMethod::ConjugateGradient => cg_pr_plus(&fun, x0, options),
         OptimizeMethod::Powell => powell(&fun, x0, options),
+        OptimizeMethod::NelderMead => nelder_mead(&fun, x0, options),
     }
 }
 
@@ -468,7 +469,302 @@ where
     Ok(result)
 }
 
-#[must_use]
+/// Nelder-Mead simplex (downhill simplex) method for derivative-free optimization.
+///
+/// Matches `scipy.optimize.minimize(f, x0, method='Nelder-Mead')`.
+/// Uses adaptive parameters when n >= 2 (matching SciPy's `adaptive=True` default for n>=2).
+pub fn nelder_mead<F>(
+    fun: &F,
+    x0: &[f64],
+    options: MinimizeOptions,
+) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    // Nelder-Mead doesn't use gradient_eps, but we still validate other options
+    if let Some(maxiter) = options.maxiter
+        && maxiter == 0
+    {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("maxiter must be >= 1"),
+        });
+    }
+    if let Some(maxfev) = options.maxfev
+        && maxfev == 0
+    {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("maxfev must be >= 1"),
+        });
+    }
+
+    let n = x0.len();
+    let tol = options.tol.unwrap_or(1.0e-8);
+    let xatol = tol;
+    let fatol = tol;
+    let maxiter = options.maxiter.unwrap_or(200 * n);
+    let maxfev = options.maxfev.unwrap_or(200 * n);
+    let mut objective = Objective::new(fun, options.mode, maxfev);
+
+    // Adaptive parameters (SciPy convention for n >= 2)
+    let (rho, chi, psi, sigma) = if n >= 2 {
+        let dim = n as f64;
+        (
+            1.0,
+            1.0 + 2.0 / dim,
+            0.75 - 1.0 / (2.0 * dim),
+            1.0 - 1.0 / dim,
+        )
+    } else {
+        (1.0, 2.0, 0.5, 0.5) // standard parameters
+    };
+
+    // Build initial simplex: n+1 vertices
+    let mut simplex: Vec<Vec<f64>> = Vec::with_capacity(n + 1);
+    simplex.push(x0.to_vec());
+
+    for j in 0..n {
+        let mut vertex = x0.to_vec();
+        let h = if x0[j].abs() > 1e-12 {
+            0.05 * x0[j]
+        } else {
+            0.00025
+        };
+        vertex[j] += h;
+        simplex.push(vertex);
+    }
+
+    // Evaluate at all vertices
+    let mut f_values: Vec<f64> = Vec::with_capacity(n + 1);
+    for vertex in &simplex {
+        let fval = match objective.eval(vertex) {
+            Ok(v) => v,
+            Err(err) => return Ok(result_from_error(x0, 0, objective.nfev, 0, err)),
+        };
+        f_values.push(fval);
+    }
+
+    let mut nit = 0usize;
+
+    for iteration in 0..maxiter {
+        nit = iteration + 1;
+
+        // Sort simplex by function values
+        let mut indices: Vec<usize> = (0..=n).collect();
+        indices.sort_by(|&a, &b| {
+            f_values[a]
+                .partial_cmp(&f_values[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let sorted_simplex: Vec<Vec<f64>> = indices.iter().map(|&i| simplex[i].clone()).collect();
+        let sorted_f: Vec<f64> = indices.iter().map(|&i| f_values[i]).collect();
+        simplex = sorted_simplex;
+        f_values = sorted_f;
+
+        // Check convergence: range of function values and simplex diameter
+        let f_range = f_values[n] - f_values[0];
+        let mut max_delta = 0.0_f64;
+        for vertex in simplex.iter().skip(1) {
+            let delta: f64 = vertex
+                .iter()
+                .zip(simplex[0].iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f64, f64::max);
+            max_delta = max_delta.max(delta);
+        }
+
+        if f_range <= fatol && max_delta <= xatol {
+            let result = OptimizeResult {
+                x: simplex[0].clone(),
+                fun: Some(f_values[0]),
+                success: true,
+                status: ConvergenceStatus::Success,
+                message: String::from("optimization converged (Nelder-Mead)"),
+                nfev: objective.nfev,
+                njev: 0,
+                nhev: 0,
+                nit,
+                jac: None,
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::NelderMead, options, iteration, &result);
+            return Ok(result);
+        }
+
+        if let Some(callback) = options.callback
+            && !callback(&simplex[0])
+        {
+            let result = OptimizeResult {
+                x: simplex[0].clone(),
+                fun: Some(f_values[0]),
+                success: false,
+                status: ConvergenceStatus::CallbackStop,
+                message: String::from("callback requested stop"),
+                nfev: objective.nfev,
+                njev: 0,
+                nhev: 0,
+                nit,
+                jac: None,
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::NelderMead, options, iteration, &result);
+            return Ok(result);
+        }
+
+        // Centroid of best n vertices (exclude worst)
+        let mut centroid = vec![0.0; n];
+        for vertex in simplex.iter().take(n) {
+            for (j, c) in centroid.iter_mut().enumerate() {
+                *c += vertex[j];
+            }
+        }
+        for c in &mut centroid {
+            *c /= n as f64;
+        }
+
+        // Reflection: x_r = centroid + rho * (centroid - worst)
+        let worst = &simplex[n];
+        let x_r: Vec<f64> = centroid
+            .iter()
+            .zip(worst.iter())
+            .map(|(c, w)| c + rho * (c - w))
+            .collect();
+        let f_r = match objective.eval(&x_r) {
+            Ok(v) => v,
+            Err(err) => return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err)),
+        };
+
+        if f_r < f_values[0] {
+            // Expansion: x_e = centroid + chi * (x_r - centroid)
+            let x_e: Vec<f64> = centroid
+                .iter()
+                .zip(x_r.iter())
+                .map(|(c, r)| c + chi * (r - c))
+                .collect();
+            let f_e = match objective.eval(&x_e) {
+                Ok(v) => v,
+                Err(err) => return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err)),
+            };
+            if f_e < f_r {
+                simplex[n] = x_e;
+                f_values[n] = f_e;
+            } else {
+                simplex[n] = x_r;
+                f_values[n] = f_r;
+            }
+        } else if f_r < f_values[n - 1] {
+            // Accept reflection
+            simplex[n] = x_r;
+            f_values[n] = f_r;
+        } else {
+            // Contraction
+            if f_r < f_values[n] {
+                // Outside contraction: x_c = centroid + psi * (x_r - centroid)
+                let x_c: Vec<f64> = centroid
+                    .iter()
+                    .zip(x_r.iter())
+                    .map(|(c, r)| c + psi * (r - c))
+                    .collect();
+                let f_c = match objective.eval(&x_c) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err));
+                    }
+                };
+                if f_c <= f_r {
+                    simplex[n] = x_c;
+                    f_values[n] = f_c;
+                } else {
+                    // Shrink
+                    nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n)?;
+                }
+            } else {
+                // Inside contraction: x_cc = centroid - psi * (centroid - worst)
+                let x_cc: Vec<f64> = centroid
+                    .iter()
+                    .zip(worst.iter())
+                    .map(|(c, w)| c - psi * (c - w))
+                    .collect();
+                let f_cc = match objective.eval(&x_cc) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err));
+                    }
+                };
+                if f_cc < f_values[n] {
+                    simplex[n] = x_cc;
+                    f_values[n] = f_cc;
+                } else {
+                    // Shrink
+                    nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n)?;
+                }
+            }
+        }
+
+        log_iteration(
+            OptimizeMethod::NelderMead,
+            options,
+            iteration,
+            f_values[0],
+            0.0,
+            0.0,
+            objective.nfev,
+        );
+    }
+
+    // Max iterations reached
+    let mut indices: Vec<usize> = (0..=n).collect();
+    indices.sort_by(|&a, &b| {
+        f_values[a]
+            .partial_cmp(&f_values[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let best_idx = indices[0];
+
+    let result = OptimizeResult {
+        x: simplex[best_idx].clone(),
+        fun: Some(f_values[best_idx]),
+        success: false,
+        status: ConvergenceStatus::MaxIterations,
+        message: format!("maximum iterations reached ({maxiter})"),
+        nfev: objective.nfev,
+        njev: 0,
+        nhev: 0,
+        nit,
+        jac: None,
+        hess_inv: None,
+        maxcv: None,
+    };
+    log_completion(OptimizeMethod::NelderMead, options, nit, &result);
+    Ok(result)
+}
+
+fn nelder_mead_shrink<F>(
+    simplex: &mut [Vec<f64>],
+    f_values: &mut [f64],
+    sigma: f64,
+    objective: &mut Objective<'_, F>,
+    n: usize,
+) -> Result<(), OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let best = simplex[0].clone();
+    for i in 1..=n {
+        for j in 0..n {
+            simplex[i][j] = best[j] + sigma * (simplex[i][j] - best[j]);
+        }
+        f_values[i] = objective.eval(&simplex[i]).map_err(|e| match e {
+            OptError::EvaluationBudgetExceeded { detail } => {
+                OptError::EvaluationBudgetExceeded { detail }
+            }
+            other => other,
+        })?;
+    }
+    Ok(())
+}
+
 pub fn take_optimize_traces() -> Vec<OptimizeTraceEntry> {
     match trace_log().lock() {
         Ok(mut guard) => std::mem::take(&mut *guard),
@@ -2061,6 +2357,179 @@ mod tests {
             (result.x - 3.0).abs() < 1e-6,
             "minimizer should be near 3, got {}",
             result.x
+        );
+    }
+
+    // ── Nelder-Mead tests ───────────────────────────────────────────
+
+    #[test]
+    fn nelder_mead_sphere_converges() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            tol: Some(1e-8),
+            maxiter: Some(1000),
+            maxfev: Some(5000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(sphere, &[2.0, -3.0], options).expect("minimize executes");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(result.x.iter().all(|v| v.abs() < 1e-4), "x={:?}", result.x);
+        assert!(result.fun.unwrap() < 1e-8);
+        push_test_log(
+            "nelder-mead-sphere",
+            "nelder_mead",
+            "sphere",
+            2,
+            RuntimeMode::Strict,
+            &result,
+            200,
+        );
+    }
+
+    #[test]
+    fn nelder_mead_rosenbrock() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            tol: Some(1e-8),
+            maxiter: Some(5000),
+            maxfev: Some(20_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(rosenbrock, &[-1.0, 1.0], options).expect("minimize executes");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 1.0).abs() < 1e-3 && (result.x[1] - 1.0).abs() < 1e-3,
+            "x={:?}",
+            result.x
+        );
+    }
+
+    #[test]
+    fn nelder_mead_1d() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            tol: Some(1e-10),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(one_dim_quadratic, &[5.0], options).expect("minimize executes");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 1.5).abs() < 1e-4,
+            "minimizer should be near 1.5, got {}",
+            result.x[0]
+        );
+    }
+
+    #[test]
+    fn nelder_mead_flat_function() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            maxiter: Some(500),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(zero_function, &[1.0, 2.0], options).expect("minimize executes");
+        // Should converge since f is constant everywhere
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.fun, Some(0.0));
+    }
+
+    #[test]
+    fn nelder_mead_max_iter_reached() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            maxiter: Some(2),
+            maxfev: Some(10_000),
+            tol: Some(1e-15),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(rosenbrock, &[5.0, 5.0], options).expect("minimize executes");
+        assert!(!result.success);
+        assert_eq!(result.status, ConvergenceStatus::MaxIterations);
+    }
+
+    #[test]
+    fn nelder_mead_callback_stops() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            callback: Some(callback_record_and_stop),
+            ..MinimizeOptions::default()
+        };
+        callback_points().lock().unwrap().clear();
+        let result = minimize(sphere, &[2.0, -3.0], options).expect("minimize executes");
+        assert!(!result.success);
+        assert_eq!(result.status, ConvergenceStatus::CallbackStop);
+    }
+
+    #[test]
+    fn nelder_mead_empty_x0_rejected() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            ..MinimizeOptions::default()
+        };
+        let err = minimize(sphere, &[], options).expect_err("should reject empty");
+        assert!(matches!(err, OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn nelder_mead_nonfinite_x0_rejected() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            ..MinimizeOptions::default()
+        };
+        let err = minimize(sphere, &[f64::NAN, 1.0], options).expect_err("should reject NaN");
+        assert!(matches!(err, OptError::NonFiniteInput { .. }));
+    }
+
+    #[test]
+    fn nelder_mead_himmelblau() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            tol: Some(1e-8),
+            maxiter: Some(2000),
+            maxfev: Some(10_000),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(himmelblau, &[0.0, 0.0], options).expect("minimize executes");
+        assert!(result.success, "should converge: {}", result.message);
+        // Himmelblau has 4 minima, all with f=0
+        assert!(result.fun.unwrap() < 1e-6, "f={:?}", result.fun);
+    }
+
+    #[test]
+    fn nelder_mead_higher_dim() {
+        // 5-D sphere
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            tol: Some(1e-6),
+            maxiter: Some(5000),
+            maxfev: Some(50_000),
+            ..MinimizeOptions::default()
+        };
+        let result =
+            minimize(sphere, &[1.0, -2.0, 3.0, -4.0, 5.0], options).expect("minimize executes");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(result.x.iter().all(|v| v.abs() < 1e-3), "x={:?}", result.x);
+    }
+
+    #[test]
+    fn nelder_mead_traces_are_emitted() {
+        let _ = take_optimize_traces(); // clear
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NelderMead),
+            maxiter: Some(10),
+            ..MinimizeOptions::default()
+        };
+        let _ = minimize(sphere, &[1.0, 1.0], options);
+        let traces = take_optimize_traces();
+        let nm_traces: Vec<_> = traces
+            .iter()
+            .filter(|t| t.method == OptimizeMethod::NelderMead)
+            .collect();
+        assert!(
+            !nm_traces.is_empty(),
+            "nelder-mead should emit trace entries"
         );
     }
 }

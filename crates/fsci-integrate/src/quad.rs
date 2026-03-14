@@ -311,6 +311,193 @@ where
     })
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Composite Quadrature Rules — trapezoid and Simpson
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of composite quadrature (trapezoid / Simpson).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompositeQuadResult {
+    /// Estimated value of the integral.
+    pub integral: f64,
+}
+
+/// Integrate sampled data using the composite trapezoidal rule.
+///
+/// Matches `scipy.integrate.trapezoid(y, x)` (formerly `trapz`).
+///
+/// `y` contains the function values and `x` contains the corresponding
+/// sample points. Both slices must have the same length (>= 2).
+pub fn trapezoid(y: &[f64], x: &[f64]) -> Result<CompositeQuadResult, IntegrateValidationError> {
+    if y.len() != x.len() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: format!(
+                "y and x must have the same length (y={}, x={})",
+                y.len(),
+                x.len()
+            ),
+        });
+    }
+    if y.len() < 2 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "need at least 2 points for trapezoidal rule".to_string(),
+        });
+    }
+
+    let mut integral = 0.0;
+    for i in 0..y.len() - 1 {
+        let dx = x[i + 1] - x[i];
+        integral += 0.5 * dx * (y[i] + y[i + 1]);
+    }
+
+    Ok(CompositeQuadResult { integral })
+}
+
+/// Integrate sampled data using the composite trapezoidal rule with uniform spacing.
+///
+/// Matches `scipy.integrate.trapezoid(y, dx=dx)`.
+pub fn trapezoid_uniform(
+    y: &[f64],
+    dx: f64,
+) -> Result<CompositeQuadResult, IntegrateValidationError> {
+    if y.len() < 2 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "need at least 2 points for trapezoidal rule".to_string(),
+        });
+    }
+    if !dx.is_finite() || dx <= 0.0 {
+        return Err(IntegrateValidationError::QuadInvalidTolerance {
+            detail: "dx must be finite and positive".to_string(),
+        });
+    }
+
+    let mut integral = 0.5 * (y[0] + y[y.len() - 1]);
+    for yi in y.iter().take(y.len() - 1).skip(1) {
+        integral += yi;
+    }
+    integral *= dx;
+
+    Ok(CompositeQuadResult { integral })
+}
+
+/// Integrate sampled data using Simpson's rule.
+///
+/// Matches `scipy.integrate.simpson(y, x=x)`.
+///
+/// For an even number of intervals (odd number of points), uses composite
+/// Simpson's 1/3 rule. For an odd number of intervals (even number of points),
+/// uses Simpson's 1/3 rule on the first n-1 panels and a trapezoidal correction
+/// on the last panel (matching SciPy's default behavior).
+pub fn simpson(y: &[f64], x: &[f64]) -> Result<CompositeQuadResult, IntegrateValidationError> {
+    if y.len() != x.len() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: format!(
+                "y and x must have the same length (y={}, x={})",
+                y.len(),
+                x.len()
+            ),
+        });
+    }
+    if y.len() < 2 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "need at least 2 points for Simpson's rule".to_string(),
+        });
+    }
+    if y.len() == 2 {
+        // Fall back to trapezoidal
+        return trapezoid(y, x);
+    }
+
+    let n = y.len();
+
+    if n % 2 == 1 {
+        // Odd number of points = even number of intervals.
+        // Use composite Simpson's 1/3 rule directly.
+        let integral = simpson_nonuniform_odd(y, x);
+        Ok(CompositeQuadResult { integral })
+    } else {
+        // Even number of points = odd number of intervals.
+        // Apply Simpson's 1/3 on first n-1 points, trapezoid on last panel.
+        let integral_simp = simpson_nonuniform_odd(&y[..n - 1], &x[..n - 1]);
+        let last_trap = 0.5 * (x[n - 1] - x[n - 2]) * (y[n - 2] + y[n - 1]);
+        Ok(CompositeQuadResult {
+            integral: integral_simp + last_trap,
+        })
+    }
+}
+
+/// Simpson's 1/3 rule for non-uniform spacing with an odd number of points.
+fn simpson_nonuniform_odd(y: &[f64], x: &[f64]) -> f64 {
+    let n = y.len();
+    debug_assert!(n >= 3 && n % 2 == 1);
+    let mut integral = 0.0;
+    let mut i = 0;
+    while i + 2 < n {
+        let h0 = x[i + 1] - x[i];
+        let h1 = x[i + 2] - x[i + 1];
+        let h_sum = h0 + h1;
+        let h_prod = h0 * h1;
+        // Non-uniform Simpson's rule for a pair of panels
+        integral += (h_sum / 6.0)
+            * ((2.0 - h1 / h0) * y[i]
+                + (h_sum * h_sum / h_prod) * y[i + 1]
+                + (2.0 - h0 / h1) * y[i + 2]);
+        i += 2;
+    }
+    integral
+}
+
+/// Integrate sampled data using Simpson's rule with uniform spacing.
+///
+/// Matches `scipy.integrate.simpson(y, dx=dx)`.
+pub fn simpson_uniform(
+    y: &[f64],
+    dx: f64,
+) -> Result<CompositeQuadResult, IntegrateValidationError> {
+    if y.len() < 2 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "need at least 2 points for Simpson's rule".to_string(),
+        });
+    }
+    if !dx.is_finite() || dx <= 0.0 {
+        return Err(IntegrateValidationError::QuadInvalidTolerance {
+            detail: "dx must be finite and positive".to_string(),
+        });
+    }
+    if y.len() == 2 {
+        return trapezoid_uniform(y, dx);
+    }
+
+    let n = y.len();
+
+    if n % 2 == 1 {
+        // Odd number of points — composite Simpson's 1/3 directly
+        let mut integral = y[0] + y[n - 1];
+        for i in (1..n - 1).step_by(2) {
+            integral += 4.0 * y[i];
+        }
+        for i in (2..n - 1).step_by(2) {
+            integral += 2.0 * y[i];
+        }
+        integral *= dx / 3.0;
+        Ok(CompositeQuadResult { integral })
+    } else {
+        // Even number of points — Simpson's on first n-1, trapezoid on last
+        let m = n - 1; // odd number of points
+        let mut integral = y[0] + y[m - 1];
+        for i in (1..m - 1).step_by(2) {
+            integral += 4.0 * y[i];
+        }
+        for i in (2..m - 1).step_by(2) {
+            integral += 2.0 * y[i];
+        }
+        integral *= dx / 3.0;
+        // Add last trapezoid panel
+        integral += 0.5 * dx * (y[n - 2] + y[n - 1]);
+        Ok(CompositeQuadResult { integral })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -580,6 +767,192 @@ mod tests {
             DblquadOptions::default(),
         )
         .expect_err("nonfinite");
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
+    }
+
+    // ── trapezoid tests ─────────────────────────────────────────────
+
+    #[test]
+    fn trapezoid_constant() {
+        // ∫₀¹ 5 dx = 5
+        let x = vec![0.0, 0.25, 0.5, 0.75, 1.0];
+        let y = vec![5.0; 5];
+        let result = trapezoid(&y, &x).expect("trapezoid works");
+        assert!(
+            (result.integral - 5.0).abs() < 1e-12,
+            "got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn trapezoid_linear() {
+        // ∫₀¹ x dx = 0.5 (exact for trapezoidal on linear functions)
+        let n = 100;
+        let x: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let y: Vec<f64> = x.to_vec();
+        let result = trapezoid(&y, &x).expect("trapezoid works");
+        assert!(
+            (result.integral - 0.5).abs() < 1e-12,
+            "got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn trapezoid_quadratic() {
+        // ∫₀¹ x² dx = 1/3
+        let n = 1000;
+        let x: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let y: Vec<f64> = x.iter().map(|xi| xi * xi).collect();
+        let result = trapezoid(&y, &x).expect("trapezoid works");
+        assert!(
+            (result.integral - 1.0 / 3.0).abs() < 1e-6,
+            "got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn trapezoid_uniform_constant() {
+        let y = vec![3.0; 11];
+        let result = trapezoid_uniform(&y, 0.1).expect("trapezoid_uniform works");
+        assert!(
+            (result.integral - 3.0).abs() < 1e-12,
+            "got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn trapezoid_length_mismatch_error() {
+        let err = trapezoid(&[1.0, 2.0], &[0.0]).expect_err("length mismatch");
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
+    }
+
+    #[test]
+    fn trapezoid_too_few_points_error() {
+        let err = trapezoid(&[1.0], &[0.0]).expect_err("too few points");
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
+    }
+
+    // ── simpson tests ───────────────────────────────────────────────
+
+    #[test]
+    fn simpson_constant() {
+        let x = vec![0.0, 0.5, 1.0];
+        let y = vec![7.0; 3];
+        let result = simpson(&y, &x).expect("simpson works");
+        assert!(
+            (result.integral - 7.0).abs() < 1e-12,
+            "got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn simpson_quadratic_exact() {
+        // Simpson's rule is exact for polynomials up to degree 3
+        // ∫₀¹ x² dx = 1/3
+        let x = vec![0.0, 0.5, 1.0];
+        let y: Vec<f64> = x.iter().map(|xi| xi * xi).collect();
+        let result = simpson(&y, &x).expect("simpson works");
+        assert!(
+            (result.integral - 1.0 / 3.0).abs() < 1e-12,
+            "should be exact for quadratic, got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn simpson_cubic_exact() {
+        // ∫₀¹ x³ dx = 1/4, exact for Simpson's rule
+        let x = vec![0.0, 0.5, 1.0];
+        let y: Vec<f64> = x.iter().map(|xi| xi * xi * xi).collect();
+        let result = simpson(&y, &x).expect("simpson works");
+        assert!(
+            (result.integral - 0.25).abs() < 1e-12,
+            "should be exact for cubic, got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn simpson_sin_many_points() {
+        // ∫₀^π sin(x) dx = 2
+        let n = 101; // odd number of points
+        let x: Vec<f64> = (0..n)
+            .map(|i| std::f64::consts::PI * i as f64 / (n - 1) as f64)
+            .collect();
+        let y: Vec<f64> = x.iter().map(|xi| xi.sin()).collect();
+        let result = simpson(&y, &x).expect("simpson works");
+        assert!(
+            (result.integral - 2.0).abs() < 1e-6,
+            "got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn simpson_even_points() {
+        // Even number of points — uses trapezoid correction on last panel
+        let n = 100;
+        let x: Vec<f64> = (0..n)
+            .map(|i| std::f64::consts::PI * i as f64 / (n - 1) as f64)
+            .collect();
+        let y: Vec<f64> = x.iter().map(|xi| xi.sin()).collect();
+        let result = simpson(&y, &x).expect("simpson with even points");
+        assert!(
+            (result.integral - 2.0).abs() < 1e-4,
+            "got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn simpson_uniform_quadratic() {
+        // ∫₀¹ x² dx = 1/3 with uniform spacing
+        let n = 5; // odd
+        let dx = 1.0 / (n - 1) as f64;
+        let y: Vec<f64> = (0..n)
+            .map(|i| {
+                let xi = i as f64 * dx;
+                xi * xi
+            })
+            .collect();
+        let result = simpson_uniform(&y, dx).expect("simpson_uniform works");
+        assert!(
+            (result.integral - 1.0 / 3.0).abs() < 1e-10,
+            "got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn simpson_two_points_fallback() {
+        // Only 2 points — falls back to trapezoidal
+        let x = vec![0.0, 1.0];
+        let y = vec![0.0, 2.0];
+        let result = simpson(&y, &x).expect("simpson 2 points");
+        assert!(
+            (result.integral - 1.0).abs() < 1e-12,
+            "got {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn simpson_too_few_points_error() {
+        let err = simpson(&[1.0], &[0.0]).expect_err("too few points");
         assert!(matches!(
             err,
             IntegrateValidationError::QuadInvalidBounds { .. }

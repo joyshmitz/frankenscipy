@@ -703,3 +703,131 @@ fn trigamma_core(x: f64) -> f64 {
 fn is_negative_integer_pole(x: f64) -> bool {
     x.is_finite() && x < 0.0 && x.fract() == 0.0
 }
+
+/// Log-gamma function computed directly via Stirling series.
+/// Avoids the overflow that gamma_core hits for large arguments.
+/// Only valid for x > 0.
+fn lngamma_positive(x: f64) -> f64 {
+    if x <= 0.0 {
+        return f64::NAN;
+    }
+    if x < 8.0 {
+        // Shift upward using recurrence: lnΓ(x) = lnΓ(x+n) - ln(x(x+1)...(x+n-1))
+        let mut shifted = x;
+        let mut correction = 0.0;
+        while shifted < 8.0 {
+            correction += shifted.ln();
+            shifted += 1.0;
+        }
+        stirling_lngamma(shifted) - correction
+    } else {
+        stirling_lngamma(x)
+    }
+}
+
+/// Stirling series for lnΓ(x), valid for large x.
+fn stirling_lngamma(x: f64) -> f64 {
+    let half_ln_2pi = 0.5 * (2.0 * PI).ln();
+    let inv = 1.0 / x;
+    let inv2 = inv * inv;
+    // Bernoulli number series: lnΓ(x) ≈ (x-0.5)*ln(x) - x + 0.5*ln(2π)
+    //   + 1/(12x) - 1/(360x³) + 1/(1260x⁵) - 1/(1680x⁷)
+    (x - 0.5) * x.ln() - x
+        + half_ln_2pi
+        + inv * (1.0 / 12.0 - inv2 * (1.0 / 360.0 - inv2 * (1.0 / 1260.0 - inv2 / 1680.0)))
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Combinatorial Functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Compute n! (factorial).
+///
+/// Matches `scipy.special.factorial(n, exact=True)`.
+/// Returns f64 to handle large factorials (overflows to infinity).
+pub fn factorial(n: u64) -> f64 {
+    // Use lookup table for small values, gamma for large
+    if n <= 20 {
+        FACTORIALS[n as usize]
+    } else {
+        // n! = gamma(n+1)
+        gamma_core((n + 1) as f64)
+    }
+}
+
+const FACTORIALS: [f64; 21] = [
+    1.0,
+    1.0,
+    2.0,
+    6.0,
+    24.0,
+    120.0,
+    720.0,
+    5_040.0,
+    40_320.0,
+    362_880.0,
+    3_628_800.0,
+    39_916_800.0,
+    479_001_600.0,
+    6_227_020_800.0,
+    87_178_291_200.0,
+    1_307_674_368_000.0,
+    20_922_789_888_000.0,
+    355_687_428_096_000.0,
+    6_402_373_705_728_000.0,
+    121_645_100_408_832_000.0,
+    2_432_902_008_176_640_000.0,
+];
+
+/// Compute the binomial coefficient C(n, k) = n! / (k! * (n-k)!).
+///
+/// Matches `scipy.special.comb(n, k, exact=True)` for nonneg integer inputs.
+/// Returns 0 for invalid inputs (k > n or negative-equivalent).
+pub fn comb(n: u64, k: u64) -> f64 {
+    if k > n {
+        return 0.0;
+    }
+    if k == 0 || k == n {
+        return 1.0;
+    }
+    // Use symmetry: C(n, k) = C(n, n-k) to minimize multiplications
+    let k = k.min(n - k);
+    if k <= 20 && n <= 170 {
+        // Direct computation to avoid floating-point drift
+        let mut result = 1.0_f64;
+        for i in 0..k {
+            result *= (n - i) as f64;
+            result /= (i + 1) as f64;
+        }
+        result
+    } else {
+        // Use log-gamma for large values: ln(C(n,k)) = lnΓ(n+1) - lnΓ(k+1) - lnΓ(n-k+1)
+        let lnc = lngamma_positive((n + 1) as f64)
+            - lngamma_positive((k + 1) as f64)
+            - lngamma_positive((n - k + 1) as f64);
+        lnc.exp()
+    }
+}
+
+/// Compute the number of k-permutations of n: P(n, k) = n! / (n-k)!.
+///
+/// Matches `scipy.special.perm(n, k, exact=True)` for nonneg integer inputs.
+/// Returns 0 for invalid inputs (k > n).
+pub fn perm(n: u64, k: u64) -> f64 {
+    if k > n {
+        return 0.0;
+    }
+    if k == 0 {
+        return 1.0;
+    }
+    if k <= 20 && n <= 170 {
+        let mut result = 1.0_f64;
+        for i in 0..k {
+            result *= (n - i) as f64;
+        }
+        result
+    } else {
+        let lnp = lngamma_positive((n + 1) as f64) - lngamma_positive((n - k + 1) as f64);
+        lnp.exp()
+    }
+}

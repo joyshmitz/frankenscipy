@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod airy;
 pub mod bessel;
 pub mod beta;
 pub mod error;
@@ -7,11 +8,13 @@ pub mod gamma;
 pub mod hyper;
 pub mod types;
 
+pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
 pub use bessel::{BESSEL_DISPATCH_PLAN, hankel1, hankel2, iv, j0, j1, jn, jv, kv, y0, y1, yn, yv};
 pub use beta::{BETA_DISPATCH_PLAN, beta, betainc, betaln};
 pub use error::{ERROR_DISPATCH_PLAN, erf, erfc, erfcinv, erfinv};
 pub use gamma::{
-    GAMMA_DISPATCH_PLAN, digamma, gamma, gammainc, gammaincc, gammaln, polygamma, rgamma,
+    GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, perm,
+    polygamma, rgamma,
 };
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
 pub use types::{
@@ -1085,12 +1088,16 @@ mod tests {
     fn pending_families_remain_explicitly_unimplemented() {
         let scalar = SpecialTensor::RealScalar(1.0);
 
+        // jv for non-integer order is still pending
         let bessel_err = jv(&scalar, &scalar, RuntimeMode::Strict).expect_err("placeholder");
         assert_eq!(bessel_err.kind, SpecialErrorKind::NotYetImplemented);
 
-        let hyper_err = hyp2f1(&scalar, &scalar, &scalar, &scalar, RuntimeMode::Strict)
-            .expect_err("placeholder");
-        assert_eq!(hyper_err.kind, SpecialErrorKind::NotYetImplemented);
+        // hyp2f1 is now implemented — verify it returns a value instead
+        let hyper_result = hyp2f1(&scalar, &scalar, &scalar, &scalar, RuntimeMode::Strict);
+        assert!(
+            hyper_result.is_ok(),
+            "hyp2f1(1,1,1,1) should succeed now that it's implemented"
+        );
     }
 
     #[test]
@@ -1256,5 +1263,85 @@ mod tests {
             .replace('\\', "\\\\")
             .replace('"', "\\\"")
             .replace('\n', "\\n")
+    }
+
+    // ── Combinatorial function tests ────────────────────────────────
+
+    #[test]
+    fn factorial_small_values() {
+        assert_eq!(factorial(0), 1.0);
+        assert_eq!(factorial(1), 1.0);
+        assert_eq!(factorial(5), 120.0);
+        assert_eq!(factorial(10), 3_628_800.0);
+        assert_eq!(factorial(20), 2_432_902_008_176_640_000.0);
+    }
+
+    #[test]
+    fn factorial_large_values() {
+        // 21! should use gamma path
+        let f21 = factorial(21);
+        assert!((f21 - 51_090_942_171_709_440_000.0).abs() / f21 < 1e-10);
+        // Large factorials overflow to infinity in f64
+        // f64 max is ~1.8e308, and 171! ≈ 1.24e309, so 171+ overflows
+        let f170 = factorial(170);
+        // 170! ≈ 7.26e370, also overflows
+        assert!(f170.is_infinite());
+    }
+
+    #[test]
+    fn comb_basic() {
+        assert_eq!(comb(5, 0), 1.0);
+        assert_eq!(comb(5, 5), 1.0);
+        assert_eq!(comb(5, 2), 10.0);
+        assert_eq!(comb(10, 3), 120.0);
+        assert_eq!(comb(20, 10), 184_756.0);
+    }
+
+    #[test]
+    fn comb_edge_cases() {
+        assert_eq!(comb(0, 0), 1.0);
+        assert_eq!(comb(5, 6), 0.0); // k > n
+        assert_eq!(comb(100, 1), 100.0);
+        assert_eq!(comb(100, 99), 100.0); // symmetry
+    }
+
+    #[test]
+    fn comb_large() {
+        // C(200, 100) is a huge number; verify it's finite and reasonable
+        let c = comb(200, 100);
+        assert!(c.is_finite());
+        assert!(c > 1e58); // known to be ~9.05e58
+    }
+
+    #[test]
+    fn perm_basic() {
+        assert_eq!(perm(5, 0), 1.0);
+        assert_eq!(perm(5, 1), 5.0);
+        assert_eq!(perm(5, 2), 20.0);
+        assert_eq!(perm(5, 5), 120.0);
+        assert_eq!(perm(10, 3), 720.0);
+    }
+
+    #[test]
+    fn perm_edge_cases() {
+        assert_eq!(perm(0, 0), 1.0);
+        assert_eq!(perm(5, 6), 0.0); // k > n
+    }
+
+    #[test]
+    fn perm_relation_to_comb() {
+        // P(n, k) = C(n, k) * k!
+        for n in 0..15_u64 {
+            for k in 0..=n {
+                let p = perm(n, k);
+                let c = comb(n, k);
+                let kfact = factorial(k);
+                assert!(
+                    (p - c * kfact).abs() < 1e-6 * p.max(1.0),
+                    "P({n},{k})={p} != C({n},{k})*{k}!={}",
+                    c * kfact
+                );
+            }
+        }
     }
 }

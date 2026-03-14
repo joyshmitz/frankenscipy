@@ -10,6 +10,7 @@ pub enum OptimizeMethod {
     Bfgs,
     ConjugateGradient,
     Powell,
+    NelderMead,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

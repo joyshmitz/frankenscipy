@@ -238,6 +238,15 @@ pub struct CholeskyResult {
     pub factor: Vec<Vec<f64>>,
 }
 
+/// Result of LDL decomposition: A = L * D * Lᵀ.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LdlResult {
+    /// Unit lower triangular factor L.
+    pub l: Vec<Vec<f64>>,
+    /// Diagonal entries of D.
+    pub d: Vec<f64>,
+}
+
 /// Compact Cholesky factorization for use with `cho_solve`.
 #[derive(Debug, Clone)]
 pub struct ChoFactorResult {
@@ -1347,6 +1356,98 @@ pub fn cho_solve(cho: &ChoFactorResult, b: &[f64]) -> Result<SolveResult, Linalg
         warning: None,
         backward_error: None,
     })
+}
+
+/// LDL decomposition for symmetric indefinite matrices.
+///
+/// Factors A = L * D * Lᵀ where L is unit lower triangular and D is diagonal.
+/// Unlike Cholesky, this works for symmetric matrices that are not positive definite.
+/// Matches `scipy.linalg.ldl(a)` for the real symmetric case.
+pub fn ldl(a: &[Vec<f64>], options: DecompOptions) -> Result<LdlResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    let n = rows;
+    if n == 0 {
+        return Ok(LdlResult {
+            l: Vec::new(),
+            d: Vec::new(),
+        });
+    }
+
+    // Symmetric check in hardened mode
+    if matches!(options.mode, RuntimeMode::Hardened) {
+        for (i, row_i) in a.iter().enumerate() {
+            for (j, &aij) in row_i.iter().enumerate().skip(i + 1) {
+                let aji = a[j][i];
+                if (aij - aji).abs() > 1e-12 * (aij.abs() + aji.abs() + 1.0) {
+                    return Err(LinalgError::InvalidArgument {
+                        detail: format!(
+                            "matrix is not symmetric: a[{i}][{j}]={aij} != a[{j}][{i}]={aji}"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    // Aasen / Bunch-Kaufman-style 1×1 pivoting LDL factorization
+    // (no permutation for simplicity — matches basic scipy.linalg.ldl behavior)
+    let mut l_mat = vec![vec![0.0; n]; n];
+    let mut d_vec = vec![0.0; n];
+
+    // Copy lower triangle of A
+    let mut work = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..=i {
+            work[i][j] = a[i][j];
+        }
+    }
+
+    for j in 0..n {
+        // Compute d[j]
+        let mut sum = work[j][j];
+        for k in 0..j {
+            sum -= l_mat[j][k] * l_mat[j][k] * d_vec[k];
+        }
+        d_vec[j] = sum;
+
+        // Set diagonal of L to 1
+        l_mat[j][j] = 1.0;
+
+        if d_vec[j].abs() < f64::EPSILON * 1e3 {
+            // Near-zero diagonal: skip to avoid division by zero
+            // The matrix has a near-zero eigenvalue
+            for row in l_mat.iter_mut().skip(j + 1) {
+                row[j] = 0.0;
+            }
+            continue;
+        }
+
+        // Compute column j of L below diagonal
+        for i in (j + 1)..n {
+            let mut sum = work[i][j];
+            for k in 0..j {
+                sum -= l_mat[i][k] * l_mat[j][k] * d_vec[k];
+            }
+            l_mat[i][j] = sum / d_vec[j];
+        }
+    }
+
+    emit_trace(LinalgTrace {
+        operation: "ldl",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(LdlResult { l: l_mat, d: d_vec })
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3491,5 +3592,104 @@ mod proptest_tests {
             prop_assert!(rcond >= 0.0, "rcond should be >= 0, got {rcond}");
             prop_assert!(rcond <= 1.0, "rcond should be <= 1, got {rcond}");
         }
+    }
+
+    // ── LDL decomposition tests ─────────────────────────────────────
+
+    fn verify_ldl_reconstruction(a: &[Vec<f64>], result: &LdlResult) {
+        let n = result.d.len();
+        for (i, row_a) in a.iter().enumerate().take(n) {
+            for (j, &aij) in row_a.iter().enumerate().take(n) {
+                let sum: f64 = (0..n)
+                    .map(|k| result.l[i][k] * result.d[k] * result.l[j][k])
+                    .sum();
+                assert!(
+                    (sum - aij).abs() < 1e-10,
+                    "LDLᵀ[{i}][{j}]={sum} != A[{i}][{j}]={aij}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ldl_identity() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let result = ldl(&a, DecompOptions::default()).expect("ldl works");
+        // L should be identity, D should be [1, 1]
+        assert_eq!(result.l, vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        assert_eq!(result.d, vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn ldl_positive_definite() {
+        // A = [[4, 2], [2, 3]]
+        let a = vec![vec![4.0, 2.0], vec![2.0, 3.0]];
+        let result = ldl(&a, DecompOptions::default()).expect("ldl works");
+        verify_ldl_reconstruction(&a, &result);
+    }
+
+    #[test]
+    fn ldl_symmetric_indefinite() {
+        // A = [[1, 2], [2, -3]] — symmetric but not positive definite
+        let a = vec![vec![1.0, 2.0], vec![2.0, -3.0]];
+        let result = ldl(&a, DecompOptions::default()).expect("ldl works");
+        verify_ldl_reconstruction(&a, &result);
+        // D should have a negative element (indefinite)
+        assert!(
+            result.d.iter().any(|&v| v < 0.0),
+            "D should have negative entry for indefinite matrix"
+        );
+    }
+
+    #[test]
+    fn ldl_3x3() {
+        let a = vec![
+            vec![4.0, 1.0, 2.0],
+            vec![1.0, 5.0, 3.0],
+            vec![2.0, 3.0, 6.0],
+        ];
+        let result = ldl(&a, DecompOptions::default()).expect("ldl works");
+        verify_ldl_reconstruction(&a, &result);
+        // L should be unit lower triangular
+        for (i, row) in result.l.iter().enumerate() {
+            assert_eq!(row[i], 1.0, "L diagonal should be 1");
+            for &val in row.iter().skip(i + 1) {
+                assert_eq!(val, 0.0, "L upper triangle should be 0");
+            }
+        }
+    }
+
+    #[test]
+    fn ldl_empty_matrix() {
+        let a: Vec<Vec<f64>> = Vec::new();
+        let result = ldl(&a, DecompOptions::default()).expect("ldl empty");
+        assert!(result.l.is_empty());
+        assert!(result.d.is_empty());
+    }
+
+    #[test]
+    fn ldl_1x1() {
+        let a = vec![vec![7.0]];
+        let result = ldl(&a, DecompOptions::default()).expect("ldl 1x1");
+        assert_eq!(result.l, vec![vec![1.0]]);
+        assert_eq!(result.d, vec![7.0]);
+    }
+
+    #[test]
+    fn ldl_non_square_rejected() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
+        let err = ldl(&a, DecompOptions::default()).expect_err("non-square");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
+    #[test]
+    fn ldl_hardened_rejects_asymmetric() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]]; // not symmetric
+        let options = DecompOptions {
+            mode: RuntimeMode::Hardened,
+            check_finite: true,
+        };
+        let err = ldl(&a, options).expect_err("asymmetric in hardened");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
     }
 }
