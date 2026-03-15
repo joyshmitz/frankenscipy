@@ -484,6 +484,76 @@ pub fn fftn(
     run_complex_nd(TransformKind::Fftn, input, shape, options, false)
 }
 
+/// Discrete Cosine Transform (Type II).
+///
+/// Matches `scipy.fft.dct(x, type=2)`.
+/// DCT-II: X[k] = 2 * sum_{n=0}^{N-1} x[n] * cos(π*(2n+1)*k / (2N))
+///
+/// Computed via FFT of a reordered and mirrored sequence.
+pub fn dct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+
+    // Compute DCT-II via FFT of a mirrored 2N-length sequence
+    let mut extended = vec![(0.0, 0.0); 2 * n];
+    for i in 0..n {
+        extended[i] = (input[i], 0.0);
+    }
+    for i in 0..n {
+        extended[2 * n - 1 - i] = (input[i], 0.0);
+    }
+
+    let backend = resolve_backend(options.backend);
+    let spectrum = backend.transform_1d_unscaled(&extended, false);
+
+    // Extract DCT coefficients: X[k] = Re(spectrum[k] * exp(-i*π*k/(2N)))
+    let mut result = Vec::with_capacity(n);
+    for (k, &sk) in spectrum.iter().enumerate().take(n) {
+        let angle = -PI * k as f64 / (2.0 * n as f64);
+        let twiddle = (angle.cos(), angle.sin());
+        let val = complex_mul(sk, twiddle);
+        result.push(val.0); // take real part
+    }
+
+    Ok(result)
+}
+
+/// Inverse Discrete Cosine Transform (Type III, the inverse of DCT-II).
+///
+/// Matches `scipy.fft.idct(x, type=2)`.
+pub fn idct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+
+    // DCT-III: x[n] = X[0]/(2N) + (1/N) * sum_{k=1}^{N-1} X[k] * cos(π*k*(2n+1)/(2N))
+    // Compute via inverse of the DCT-II process
+    let backend = resolve_backend(options.backend);
+
+    // Prepare: multiply by twiddle and create Hermitian-symmetric spectrum
+    let mut spectrum = vec![(0.0, 0.0); 2 * n];
+    for k in 0..n {
+        let angle = PI * k as f64 / (2.0 * n as f64);
+        let twiddle = (angle.cos(), angle.sin());
+        spectrum[k] = complex_mul((input[k], 0.0), twiddle);
+    }
+    // Hermitian symmetry for real output
+    for k in 1..n {
+        spectrum[2 * n - k] = complex_conj(spectrum[k]);
+    }
+
+    let time_domain = backend.transform_1d_unscaled(&spectrum, true);
+
+    // Extract: take first N values, scale by 1/(2N)
+    let scale = 1.0 / (2.0 * n as f64);
+    let result: Vec<f64> = time_domain.iter().take(n).map(|v| v.0 * scale).collect();
+
+    Ok(result)
+}
+
 fn run_complex_1d(
     kind: TransformKind,
     input: &[Complex64],

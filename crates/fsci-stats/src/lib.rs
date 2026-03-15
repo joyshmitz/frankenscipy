@@ -691,6 +691,16 @@ fn regularized_incomplete_beta(a: f64, b: f64, x: f64) -> f64 {
     if x >= 1.0 {
         return 1.0;
     }
+    // Special cases with closed-form solutions
+    if (a - 1.0).abs() < 1e-14 && (b - 1.0).abs() < 1e-14 {
+        return x; // Beta(1,1) = Uniform(0,1)
+    }
+    if (a - 1.0).abs() < 1e-14 {
+        return 1.0 - (1.0 - x).powf(b); // I_x(1, b) = 1 - (1-x)^b
+    }
+    if (b - 1.0).abs() < 1e-14 {
+        return x.powf(a); // I_x(a, 1) = x^a
+    }
     // Use symmetry: if x > (a+1)/(a+b+2), compute 1 - I_{1-x}(b, a)
     if x > (a + 1.0) / (a + b + 2.0) {
         return 1.0 - regularized_incomplete_beta(b, a, 1.0 - x);

@@ -12,6 +12,7 @@ pub enum OptimizeMethod {
     Powell,
     NelderMead,
     LBfgsB,
+    NewtonCg,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

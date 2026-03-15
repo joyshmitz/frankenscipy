@@ -8,7 +8,7 @@ pub mod types;
 pub use linesearch::{LineSearchResult, WolfeParams, line_search_wolfe1, line_search_wolfe2};
 pub use minimize::{
     Bound, MinimizeScalarOptions, MinimizeScalarResult, bfgs, cg_pr_plus, lbfgsb, minimize,
-    minimize_scalar, nelder_mead, powell, take_optimize_traces,
+    minimize_scalar, nelder_mead, newton_cg, powell, take_optimize_traces,
 };
 pub use root::{RootResult, bisect, brenth, brentq, ridder, root_scalar};
 pub use types::{

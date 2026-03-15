@@ -29,6 +29,7 @@ where
         OptimizeMethod::Powell => powell(&fun, x0, options),
         OptimizeMethod::NelderMead => nelder_mead(&fun, x0, options),
         OptimizeMethod::LBfgsB => lbfgsb(&fun, x0, options, None),
+        OptimizeMethod::NewtonCg => newton_cg(&fun, x0, options),
     }
 }
 
@@ -1100,6 +1101,256 @@ fn push_lbfgs_history(
     s_hist.push(s);
     y_hist.push(y);
     rho_hist.push(1.0 / sy);
+}
+
+/// Newton-CG method: Newton's method with CG inner solver for the Newton equation.
+///
+/// Matches `scipy.optimize.minimize(f, x0, method='Newton-CG')`.
+/// Uses finite-difference Hessian-vector products and CG to approximately
+/// solve H*d = -g at each outer iteration.
+pub fn newton_cg<F>(
+    fun: &F,
+    x0: &[f64],
+    options: MinimizeOptions,
+) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    validate_minimize_options(options)?;
+
+    let n = x0.len();
+    let tol = options.tol.unwrap_or(1.0e-6).max(1.0e-12);
+    let maxiter = options.maxiter.unwrap_or((200 * n).max(100));
+    let maxfev = options.maxfev.unwrap_or((2000 * n).max(400));
+    let eps = options.gradient_eps;
+    let mut objective = Objective::new(fun, options.mode, maxfev);
+
+    let mut x = x0.to_vec();
+    let mut f = match objective.eval(&x) {
+        Ok(v) => v,
+        Err(err) => return Ok(result_from_error(x0, 0, 0, 0, err)),
+    };
+    let mut njev = 0usize;
+    let mut grad = match finite_diff_gradient(&mut objective, &x, eps) {
+        Ok(v) => {
+            njev += 1;
+            v
+        }
+        Err(err) => return Ok(result_from_error(&x, 0, objective.nfev, 0, err)),
+    };
+
+    for iteration in 0..maxiter {
+        let grad_norm = l2_norm(&grad);
+        if grad_norm <= tol {
+            let result = OptimizeResult {
+                x: x.clone(),
+                fun: Some(f),
+                success: true,
+                status: ConvergenceStatus::Success,
+                message: String::from("optimization converged (Newton-CG)"),
+                nfev: objective.nfev,
+                njev,
+                nhev: 0,
+                nit: iteration,
+                jac: Some(grad.clone()),
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::NewtonCg, options, iteration, &result);
+            return Ok(result);
+        }
+
+        if let Some(callback) = options.callback
+            && !callback(&x)
+        {
+            let result = OptimizeResult {
+                x: x.clone(),
+                fun: Some(f),
+                success: false,
+                status: ConvergenceStatus::CallbackStop,
+                message: String::from("callback requested stop"),
+                nfev: objective.nfev,
+                njev,
+                nhev: 0,
+                nit: iteration,
+                jac: Some(grad.clone()),
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::NewtonCg, options, iteration, &result);
+            return Ok(result);
+        }
+
+        // Inner CG loop to solve H*d = -g approximately
+        // Using Hessian-vector products via finite differences: H*v ≈ (∇f(x+εv) - ∇f(x)) / ε
+        let cg_tol = grad_norm.min(0.5); // Eisenstat-Walker forcing term
+        let direction = cg_newton_direction(&mut objective, &x, &grad, eps, cg_tol, n)?;
+        njev += 1; // Hessian-vector products counted
+
+        // Line search along direction
+        let directional_deriv = dot(&grad, &direction);
+        if directional_deriv >= 0.0 {
+            // Not a descent direction — use steepest descent
+            let neg_grad: Vec<f64> = grad.iter().map(|&g| -g).collect();
+            let alpha = 1.0 / grad_norm.max(1.0);
+            let candidate = add_scaled(&x, &neg_grad, alpha);
+            match objective.eval(&candidate) {
+                Ok(fv) => {
+                    x = candidate;
+                    f = fv;
+                }
+                Err(err) => {
+                    return Ok(result_from_error(&x, iteration, objective.nfev, njev, err));
+                }
+            }
+        } else {
+            // Armijo backtracking
+            let c1 = 1e-4;
+            let mut alpha = 1.0;
+            let mut accepted = false;
+            for _ in 0..24 {
+                let candidate = add_scaled(&x, &direction, alpha);
+                match objective.eval(&candidate) {
+                    Ok(fv) => {
+                        if fv <= f + c1 * alpha * directional_deriv {
+                            x = candidate;
+                            f = fv;
+                            accepted = true;
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        return Ok(result_from_error(&x, iteration, objective.nfev, njev, err));
+                    }
+                }
+                alpha *= 0.5;
+                if alpha < 1e-12 {
+                    break;
+                }
+            }
+            if !accepted {
+                break;
+            }
+        }
+
+        // Update gradient
+        grad = match finite_diff_gradient(&mut objective, &x, eps) {
+            Ok(v) => {
+                njev += 1;
+                v
+            }
+            Err(err) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, err)),
+        };
+
+        log_iteration(
+            OptimizeMethod::NewtonCg,
+            options,
+            iteration,
+            f,
+            l2_norm(&grad),
+            1.0,
+            objective.nfev,
+        );
+    }
+
+    let result = OptimizeResult {
+        x,
+        fun: Some(f),
+        success: false,
+        status: ConvergenceStatus::MaxIterations,
+        message: format!("maximum iterations reached ({maxiter})"),
+        nfev: objective.nfev,
+        njev,
+        nhev: 0,
+        nit: maxiter,
+        jac: Some(grad),
+        hess_inv: None,
+        maxcv: None,
+    };
+    log_completion(OptimizeMethod::NewtonCg, options, maxiter, &result);
+    Ok(result)
+}
+
+/// Inner CG solver for Newton equation H*d = -g.
+/// Uses Hessian-vector products via finite differences.
+fn cg_newton_direction<F>(
+    objective: &mut Objective<'_, F>,
+    x: &[f64],
+    grad: &[f64],
+    eps: f64,
+    tol: f64,
+    n: usize,
+) -> Result<Vec<f64>, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    // CG to solve H*d = -g
+    let neg_g: Vec<f64> = grad.iter().map(|&g| -g).collect();
+    let mut d = vec![0.0; n];
+    let mut r = neg_g.clone(); // r = -g - H*d = -g (since d=0)
+    let mut p = r.clone();
+    let mut rs = dot(&r, &r);
+
+    let max_cg_iter = n.min(20);
+    let target = tol * tol * dot(grad, grad);
+
+    for _ in 0..max_cg_iter {
+        if rs < target {
+            break;
+        }
+
+        // Hessian-vector product: H*p ≈ (∇f(x + ε*p) - ∇f(x)) / ε
+        let hp = hessian_vector_product(objective, x, grad, &p, eps)?;
+
+        let p_hp = dot(&p, &hp);
+        if p_hp <= 0.0 {
+            // Negative curvature — use current d if nonzero, else use steepest descent
+            if dot(&d, &d) > 0.0 {
+                return Ok(d);
+            }
+            return Ok(neg_g);
+        }
+
+        let alpha = rs / p_hp;
+        for i in 0..n {
+            d[i] += alpha * p[i];
+            r[i] -= alpha * hp[i];
+        }
+
+        let rs_new = dot(&r, &r);
+        let beta = rs_new / rs;
+        for i in 0..n {
+            p[i] = r[i] + beta * p[i];
+        }
+        rs = rs_new;
+    }
+
+    Ok(d)
+}
+
+/// Compute Hessian-vector product H*v via finite differences of gradient.
+fn hessian_vector_product<F>(
+    objective: &mut Objective<'_, F>,
+    x: &[f64],
+    grad_at_x: &[f64],
+    v: &[f64],
+    eps: f64,
+) -> Result<Vec<f64>, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let v_norm = l2_norm(v);
+    if v_norm < f64::EPSILON {
+        return Ok(vec![0.0; x.len()]);
+    }
+    let step = eps * (1.0 + l2_norm(x)) / v_norm;
+    let x_pert = add_scaled(x, v, step);
+    let grad_pert = finite_diff_gradient(objective, &x_pert, eps)?;
+    let mut hv = Vec::with_capacity(x.len());
+    for (gp, g) in grad_pert.iter().zip(grad_at_x.iter()) {
+        hv.push((gp - g) / step);
+    }
+    Ok(hv)
 }
 
 pub fn take_optimize_traces() -> Vec<OptimizeTraceEntry> {
@@ -2945,6 +3196,54 @@ mod tests {
             (result.x[0] - 1.0).abs() < 0.01 && (result.x[1] - 1.0).abs() < 0.01,
             "x={:?}",
             result.x
+        );
+    }
+
+    // ── Newton-CG tests ─────────────────────────────────────────────
+
+    #[test]
+    fn newton_cg_sphere_converges() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NewtonCg),
+            tol: Some(1e-8),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(sphere, &[2.0, -3.0], options).expect("minimize");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(result.x.iter().all(|v| v.abs() < 1e-3), "x={:?}", result.x);
+    }
+
+    #[test]
+    fn newton_cg_rosenbrock() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NewtonCg),
+            tol: Some(1e-6),
+            maxiter: Some(500),
+            maxfev: Some(50_000),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(rosenbrock, &[0.0, 0.0], options).expect("minimize");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 1.0).abs() < 0.05 && (result.x[1] - 1.0).abs() < 0.05,
+            "x={:?}",
+            result.x
+        );
+    }
+
+    #[test]
+    fn newton_cg_1d_quadratic() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NewtonCg),
+            tol: Some(1e-10),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(one_dim_quadratic, &[5.0], options).expect("minimize");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 1.5).abs() < 1e-4,
+            "minimizer should be 1.5, got {}",
+            result.x[0]
         );
     }
 }

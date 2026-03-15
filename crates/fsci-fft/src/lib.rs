@@ -17,8 +17,8 @@ pub use plan::{
     PlanMetadata, PlanningStrategy,
 };
 pub use transforms::{
-    BackendKind, Complex64, FftError, FftOptions, TransformTrace, WorkerPolicy, fft, fft2, fftn,
-    ifft, ifft2, irfft, rfft, take_transform_traces,
+    BackendKind, Complex64, FftError, FftOptions, TransformTrace, WorkerPolicy, dct, fft, fft2,
+    fftn, idct, ifft, ifft2, irfft, rfft, take_transform_traces,
 };
 
 /// FFT normalization modes matching SciPy/PocketFFT conventions.
@@ -50,7 +50,7 @@ mod tests {
     use serde_json::json;
 
     use super::helpers::fftfreq;
-    use super::transforms::{Complex64, FftOptions, fft, ifft, irfft, rfft};
+    use super::transforms::{Complex64, FftOptions, dct, fft, idct, ifft, irfft, rfft};
     use super::{Normalization, TransformKind};
 
     const PROPTEST_CASES: u32 = 512;
@@ -186,5 +186,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── DCT tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn dct_constant_input() {
+        // DCT of constant [1,1,1,1]: DC component should be N*2 = 8, others should be ~0
+        let input = vec![1.0; 4];
+        let result = dct(&input, &FftOptions::default()).expect("dct");
+        assert_eq!(result.len(), 4);
+        assert!((result[0] - 8.0).abs() < 1e-9, "DC = {}", result[0]);
+        for (k, &val) in result.iter().enumerate().skip(1) {
+            assert!(val.abs() < 1e-9, "AC[{k}] = {val}");
+        }
+    }
+
+    #[test]
+    fn dct_impulse() {
+        // DCT of [1, 0, 0, 0] should be [2*cos(0), 2*cos(π/8), 2*cos(2π/8), 2*cos(3π/8)]
+        let input = vec![1.0, 0.0, 0.0, 0.0];
+        let result = dct(&input, &FftOptions::default()).expect("dct");
+        assert_eq!(result.len(), 4);
+        for (k, &val) in result.iter().enumerate() {
+            let expected = 2.0 * (std::f64::consts::PI * k as f64 / 8.0).cos();
+            assert!(
+                (val - expected).abs() < 1e-9,
+                "DCT[{k}] = {val}, expected {expected}",
+            );
+        }
+    }
+
+    #[test]
+    fn dct_idct_roundtrip() {
+        let input = vec![1.0, -2.0, 3.0, -4.0, 5.0];
+        let opts = FftOptions::default();
+        let spectrum = dct(&input, &opts).expect("dct");
+        let recovered = idct(&spectrum, &opts).expect("idct");
+        for (a, b) in recovered.iter().zip(&input) {
+            assert!((a - b).abs() < 1e-8, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn dct_length_1() {
+        let result = dct(&[5.0], &FftOptions::default()).expect("dct len 1");
+        assert!((result[0] - 10.0).abs() < 1e-9, "DCT[0] = {}", result[0]);
     }
 }
