@@ -107,7 +107,6 @@ where
     }
 
     let mut y0 = y_guess.to_vec();
-    let eps = 1e-7; // finite difference step for Jacobian
 
     for iteration in 0..options.max_iter {
         // Solve IVP with current y0
@@ -131,13 +130,15 @@ where
         // Compute Jacobian of bc w.r.t. y0 using finite differences
         let mut jac = vec![vec![0.0; n]; n];
         for j in 0..n {
+            // Scale perturbation by parameter magnitude for numerical stability
+            let eps_j = 1e-7 * (1.0 + y0[j].abs());
             let mut y0_pert = y0.clone();
-            y0_pert[j] += eps;
+            y0_pert[j] += eps_j;
             let ivp_pert = solve_ivp_internal(f, t_span, &y0_pert, options.rtol, options.atol)?;
             let yb_pert = ivp_pert.y.last().unwrap();
             let residual_pert = bc(&y0_pert, yb_pert);
             for i in 0..n {
-                jac[i][j] = (residual_pert[i] - residual[i]) / eps;
+                jac[i][j] = (residual_pert[i] - residual[i]) / eps_j;
             }
         }
 

@@ -267,50 +267,72 @@ fn solve_spline_natural(n: usize, h: &[f64], y: &[f64]) -> Vec<f64> {
 }
 
 /// Not-a-knot BC: third derivative continuous at x[1] and x[n-2].
-/// This means c[0] is determined by c[1], and c[n-1] by c[n-2].
+///
+/// Uses substitution: express c[0] and c[n-1] via the not-a-knot relations,
+/// then substitute into the interior equations to get a consistent (n-2)×(n-2) system.
 fn solve_spline_not_a_knot(n: usize, h: &[f64], y: &[f64]) -> Vec<f64> {
-    // Full n×n system for c[0..n-1]
-    let mut diag = vec![0.0; n];
-    let mut sub = vec![0.0; n];
-    let mut sup = vec![0.0; n];
-    let mut rhs = vec![0.0; n];
+    // Not-a-knot relations:
+    //   d[0] = d[1] => c[0] = (1 + h[0]/h[1])*c[1] - (h[0]/h[1])*c[2]
+    //   d[n-3] = d[n-2] => c[n-1] = (1 + h[n-2]/h[n-3])*c[n-2] - (h[n-2]/h[n-3])*c[n-3]
+    //
+    // Substitute into the interior tridiagonal system for c[1]..c[n-2].
 
-    // Not-a-knot at left: d[0] = d[1] => (c[1]-c[0])/(3*h[0]) = (c[2]-c[1])/(3*h[1])
-    // => h[1]*(c[1]-c[0]) = h[0]*(c[2]-c[1])
-    // => -h[1]*c[0] + (h[0]+h[1])*c[1] - h[0]*c[2] = 0
-    diag[0] = -h[1];
-    sup[0] = h[0] + h[1];
-    rhs[0] = 0.0;
-    // We need row 0 to reference c[0], c[1], c[2]. Using a trick:
-    // Store: diag[0]*c[0] + sup[0]*c[1] = rhs[0] but we also need c[2].
-    // For a proper tridiagonal, we use: the not-a-knot condition rearranged.
-    // Actually, let me use a simpler approach: set c[0] from c[1] after solving the interior.
+    let inner = n - 2; // solve for c[1]..c[n-2]
+    let r01 = h[0] / h[1]; // ratio for left BC
 
-    // Interior rows (i = 1..n-2): standard tridiagonal
-    for i in 1..n - 1 {
-        sub[i] = h[i - 1];
-        diag[i] = 2.0 * (h[i - 1] + h[i]);
-        sup[i] = h[i];
-        rhs[i] = 3.0 * ((y[i + 1] - y[i]) / h[i] - (y[i] - y[i - 1]) / h[i - 1]);
+    let mut diag = vec![0.0; inner];
+    let mut sub = vec![0.0; inner];
+    let mut sup = vec![0.0; inner];
+    let mut rhs = vec![0.0; inner];
+
+    for idx in 0..inner {
+        let i = idx + 1; // global index
+        sub[idx] = h[i - 1];
+        diag[idx] = 2.0 * (h[i - 1] + h[i]);
+        sup[idx] = h[i];
+        rhs[idx] = 3.0 * ((y[i + 1] - y[i]) / h[i] - (y[i] - y[i - 1]) / h[i - 1]);
     }
 
-    // Not-a-knot at right: d[n-2] = d[n-3]
-    // Similar condition at the right end
-    diag[n - 1] = h[n - 3] + h[n - 2];
-    sub[n - 1] = -h[n - 2];
-    rhs[n - 1] = 0.0;
+    // Row 0 (i=1): absorb c[0] = (1+r01)*c[1] - r01*c[2]
+    // Original: h[0]*c[0] + 2(h[0]+h[1])*c[1] + h[1]*c[2] = rhs[0]
+    // Substitute c[0]:
+    //   h[0]*((1+r01)*c[1] - r01*c[2]) + 2(h[0]+h[1])*c[1] + h[1]*c[2] = rhs[0]
+    //   (h[0]*(1+r01) + 2(h[0]+h[1]))*c[1] + (h[1] - h[0]*r01)*c[2] = rhs[0]
+    diag[0] = h[0] * (1.0 + r01) + 2.0 * (h[0] + h[1]);
+    sup[0] = h[1] - h[0] * r01;
+    // sub[0] is unused (no c[-1])
 
-    // Simplification: solve interior (1..n-2) with natural-like BCs,
-    // then compute c[0] and c[n-1] from not-a-knot conditions.
-    let mut c = solve_spline_natural(n, h, y);
-
-    // Apply not-a-knot: c[0] such that d[0] = d[1]
-    // d[i] = (c[i+1] - c[i]) / (3*h[i])
-    // d[0] = d[1] => (c[1]-c[0])/h[0] = (c[2]-c[1])/h[1]
-    if n >= 4 {
-        c[0] = c[1] - h[0] / h[1] * (c[2] - c[1]);
-        c[n - 1] = c[n - 2] - h[n - 2] / h[n - 3] * (c[n - 3] - c[n - 2]);
+    // Row inner-1 (i=n-2): absorb c[n-1]
+    if n >= 5 {
+        let rn = h[n - 2] / h[n - 3]; // ratio for right BC
+        // c[n-1] = (1+rn)*c[n-2] - rn*c[n-3]
+        // Original: h[n-3]*c[n-3] + 2(h[n-3]+h[n-2])*c[n-2] + h[n-2]*c[n-1] = rhs[last]
+        // Substitute:
+        //   h[n-3]*c[n-3] + 2(h[n-3]+h[n-2])*c[n-2] + h[n-2]*((1+rn)*c[n-2] - rn*c[n-3]) = rhs
+        //   (h[n-3] - h[n-2]*rn)*c[n-3] + (2(h[n-3]+h[n-2]) + h[n-2]*(1+rn))*c[n-2] = rhs
+        let last = inner - 1;
+        sub[last] = h[n - 3] - h[n - 2] * rn;
+        diag[last] = 2.0 * (h[n - 3] + h[n - 2]) + h[n - 2] * (1.0 + rn);
+        // sup[last] is unused (no c[n])
+    } else {
+        // n=4: inner=2, both boundary rows are modified
+        let rn = h[n - 2] / h[n - 3];
+        let last = inner - 1;
+        sub[last] = h[n - 3] - h[n - 2] * rn;
+        diag[last] = 2.0 * (h[n - 3] + h[n - 2]) + h[n - 2] * (1.0 + rn);
     }
+
+    thomas_solve(&sub, &mut diag, &sup, &mut rhs);
+
+    // Build full c array
+    let mut c = vec![0.0; n];
+    for (idx, &ci) in rhs.iter().enumerate() {
+        c[idx + 1] = ci;
+    }
+    // Apply not-a-knot relations
+    c[0] = (1.0 + r01) * c[1] - r01 * c[2];
+    let rn = h[n - 2] / h[n - 3];
+    c[n - 1] = (1.0 + rn) * c[n - 2] - rn * c[n - 3];
 
     c
 }
