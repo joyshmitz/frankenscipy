@@ -620,16 +620,26 @@ pub fn hilbert(input: &[f64], options: &FftOptions) -> Result<Vec<Complex64>, Ff
     let mut spectrum = backend.transform_1d_unscaled(&complex_input, false);
 
     // Create step function h[k]:
-    // h[0] = 1, h[N/2] = 1 (if N even)
-    // h[1..N/2] = 2
-    // h[N/2+1..N] = 0
-    // Then analytic = IFFT(FFT(x) * h)
+    // Even N: h[0]=1, h[1..N/2]=2, h[N/2]=1, h[N/2+1..N]=0
+    // Odd N:  h[0]=1, h[1..(N+1)/2]=2, h[(N+1)/2..N]=0
     if n > 1 {
-        for sk in spectrum.iter_mut().take(n / 2).skip(1) {
-            *sk = complex_scale(*sk, 2.0);
-        }
-        for sk in spectrum.iter_mut().skip(n / 2 + 1) {
-            *sk = (0.0, 0.0);
+        if n % 2 == 0 {
+            // Even: bins 1..N/2 doubled, Nyquist (N/2) unchanged, rest zeroed
+            for sk in spectrum.iter_mut().take(n / 2).skip(1) {
+                *sk = complex_scale(*sk, 2.0);
+            }
+            for sk in spectrum.iter_mut().skip(n / 2 + 1) {
+                *sk = (0.0, 0.0);
+            }
+        } else {
+            // Odd: bins 1..(N+1)/2 doubled (no Nyquist), rest zeroed
+            let half_pos = (n + 1) / 2;
+            for sk in spectrum.iter_mut().take(half_pos).skip(1) {
+                *sk = complex_scale(*sk, 2.0);
+            }
+            for sk in spectrum.iter_mut().skip(half_pos) {
+                *sk = (0.0, 0.0);
+            }
         }
     }
 
