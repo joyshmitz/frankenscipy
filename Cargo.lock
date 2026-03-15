@@ -645,6 +645,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fsci-signal"
+version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+ "proptest",
+]
+
+[[package]]
 name = "fsci-sparse"
 version = "0.1.0"
 dependencies = [
