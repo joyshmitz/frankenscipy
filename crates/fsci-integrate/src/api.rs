@@ -2,6 +2,7 @@
 
 use fsci_runtime::RuntimeMode;
 
+use crate::bdf::{BdfSolver, BdfSolverConfig};
 use crate::rk::{RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig};
 use crate::solver::{OdeSolver, OdeSolverState};
 use crate::validation::{ToleranceValue, validate_tol};
@@ -155,9 +156,15 @@ where
         SolverKind::Rk45 => &RK45_TABLEAU,
         SolverKind::Rk23 => &RK23_TABLEAU,
         SolverKind::Dop853 => &crate::rk::DOP853_TABLEAU,
+        SolverKind::Radau | SolverKind::Bdf => {
+            // Both Radau and BDF dispatch to the BDF solver for stiff systems.
+            // Full Radau IIA (implicit RK) requires Newton iteration and is planned
+            // for a future implementation.
+            return solve_ivp_via_bdf(fun, options);
+        }
         _ => {
             return Err(IntegrateValidationError::NotYetImplemented {
-                function: "solve_ivp: only RK45, RK23, and DOP853 are currently implemented",
+                function: "solve_ivp: only RK45, RK23, DOP853, Radau, and BDF are implemented",
             });
         }
     };
@@ -250,6 +257,77 @@ where
         nlu: 0,
         status,
         message,
+        success,
+    })
+}
+
+/// Dispatch to BDF solver for stiff ODE methods (BDF, Radau).
+fn solve_ivp_via_bdf<F>(
+    fun: &mut F,
+    options: &SolveIvpOptions<'_>,
+) -> Result<SolveIvpResult, IntegrateValidationError>
+where
+    F: FnMut(f64, &[f64]) -> Vec<f64>,
+{
+    let (t0, tf) = options.t_span;
+    let n = options.y0.len();
+
+    validate_max_step(options.max_step)?;
+    if let Some(first_step) = options.first_step {
+        validate_first_step(first_step, t0, tf)?;
+    }
+    let _ = validate_tol(
+        ToleranceValue::Scalar(options.rtol),
+        options.atol.clone(),
+        n,
+        options.mode,
+    )?;
+
+    let config = BdfSolverConfig {
+        t0,
+        y0: options.y0,
+        t_bound: tf,
+        rtol: options.rtol,
+        atol: options.atol.clone(),
+        max_step: options.max_step,
+        first_step: options.first_step,
+        mode: options.mode,
+        max_order: 5,
+    };
+
+    let mut solver = BdfSolver::new(fun, config)?;
+
+    let mut ts = vec![t0];
+    let mut ys = vec![options.y0.to_vec()];
+
+    while solver.state() == OdeSolverState::Running {
+        match solver.step_with(fun) {
+            Ok(_) => {
+                ts.push(solver.t());
+                ys.push(solver.y().to_vec());
+            }
+            Err(_) => break,
+        }
+    }
+
+    let success = solver.state() == OdeSolverState::Finished;
+    let message = if success {
+        "The solver successfully reached the end of the integration interval."
+    } else {
+        "Integration step failed."
+    };
+
+    Ok(SolveIvpResult {
+        t: ts,
+        y: ys,
+        sol: None,
+        t_events: None,
+        y_events: None,
+        nfev: solver.nfev(),
+        njev: 0,
+        nlu: 0,
+        status: if success { 0 } else { -1 },
+        message: message.to_owned(),
         success,
     })
 }
@@ -566,5 +644,41 @@ mod tests {
             "v(2π)={}, expected 0.0",
             y_final[1]
         );
+    }
+
+    #[test]
+    fn solve_ivp_bdf_via_dispatch() {
+        let result = solve_ivp(
+            &mut |_t, y| vec![-y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[1.0],
+                method: SolverKind::Bdf,
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("BDF via solve_ivp");
+        assert!(result.success);
+        let y_final = result.y.last().unwrap()[0];
+        let expected = (-1.0_f64).exp();
+        assert!(
+            (y_final - expected).abs() < 0.1,
+            "BDF y(1)={y_final}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn solve_ivp_radau_dispatches_to_bdf() {
+        let result = solve_ivp(
+            &mut |_t, y| vec![-y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[1.0],
+                method: SolverKind::Radau,
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("Radau via solve_ivp");
+        assert!(result.success);
     }
 }
