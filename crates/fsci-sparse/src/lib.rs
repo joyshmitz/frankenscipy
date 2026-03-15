@@ -9,9 +9,9 @@ pub use formats::{
     SparseError, SparseFormat, SparseResult,
 };
 pub use linalg::{
-    IluOptions, IterativeSolveOptions, IterativeSolveResult, LuOptions, PermutationOrdering,
-    SolveOptions, SolveResult, SparseBackend, SparseIluFactorization, SparseLuFactorization, cg,
-    gmres, pcg, spilu, splu, splu_solve, spsolve,
+    EigsOptions, EigsResult, IluOptions, IterativeSolveOptions, IterativeSolveResult, LuOptions,
+    PermutationOrdering, SolveOptions, SolveResult, SparseBackend, SparseIluFactorization,
+    SparseLuFactorization, cg, eigsh, gmres, pcg, spilu, splu, splu_solve, spsolve,
 };
 pub use ops::{
     ConversionLogEntry, FormatConvertible, add_coo, add_csc, add_csr, coo_to_csr_with_mode,
@@ -1053,6 +1053,81 @@ mod tests {
             .sum::<f64>()
             .sqrt();
         assert!(err / b_norm < 1e-5, "PCG solution error: {err}/{b_norm}");
+    }
+
+    // ── Sparse eigenvalue tests ───────────────────────────────────
+
+    #[test]
+    fn eigsh_identity_largest() {
+        // Find just the largest eigenvalue of identity (= 1)
+        let identity = eye(4).expect("identity");
+        let result = eigsh(&identity, 1, EigsOptions::default()).expect("eigsh");
+        assert!(result.converged, "should converge");
+        assert!(
+            (result.eigenvalues[0] - 1.0).abs() < 1e-6,
+            "ev = {}",
+            result.eigenvalues[0]
+        );
+    }
+
+    #[test]
+    fn eigsh_diagonal_largest() {
+        // Diagonal matrix with eigenvalues 1, 2, 3, 4
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(4, 4),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 1, 2, 3],
+            vec![0, 1, 2, 3],
+            false,
+        )
+        .expect("diagonal coo");
+        let csr = coo.to_csr().expect("csr");
+        let result = eigsh(&csr, 1, EigsOptions::default()).expect("eigsh");
+        assert!(result.converged);
+        // Largest eigenvalue should be 4
+        assert!(
+            (result.eigenvalues[0] - 4.0).abs() < 1e-6,
+            "largest eigenvalue = {}, expected 4.0",
+            result.eigenvalues[0]
+        );
+    }
+
+    #[test]
+    fn eigsh_two_largest() {
+        // Diagonal with eigenvalues 1, 3, 5
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![1.0, 3.0, 5.0],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            false,
+        )
+        .expect("coo");
+        let csr = coo.to_csr().expect("csr");
+        let result = eigsh(&csr, 2, EigsOptions::default()).expect("eigsh");
+        assert!(result.converged);
+        // Should find 5 and 3 (in some order)
+        let mut evs = result.eigenvalues.clone();
+        evs.sort_by(|a, b| b.partial_cmp(a).unwrap());
+        assert!(
+            (evs[0] - 5.0).abs() < 1e-4,
+            "largest = {}, expected 5.0",
+            evs[0]
+        );
+        assert!(
+            (evs[1] - 3.0).abs() < 1e-4,
+            "second = {}, expected 3.0",
+            evs[1]
+        );
+    }
+
+    #[test]
+    fn eigsh_non_square_rejected() {
+        let coo = CooMatrix::from_triplets(Shape2D::new(2, 3), vec![1.0], vec![0], vec![1], false)
+            .expect("coo");
+        let csr = coo.to_csr().expect("csr");
+        let err = eigsh(&csr, 1, EigsOptions::default()).expect_err("non-square");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
     }
 
     #[test]

@@ -1545,3 +1545,133 @@ mod tests {
         assert_close_slice(&result.solution, &[1.0, 2.0, 3.0], 1e-6);
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Sparse Eigenvalue Solver — Public API
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of sparse eigenvalue computation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EigsResult {
+    /// Eigenvalues (real parts).
+    pub eigenvalues: Vec<f64>,
+    /// Eigenvectors as columns (row-major: eigenvectors[i] is the i-th eigenvector).
+    pub eigenvectors: Vec<Vec<f64>>,
+    /// Number of matrix-vector products performed.
+    pub nmatvec: usize,
+    /// Whether all requested eigenvalues converged.
+    pub converged: bool,
+}
+
+/// Options for sparse eigenvalue computation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EigsOptions {
+    /// Tolerance for convergence.
+    pub tol: f64,
+    /// Maximum iterations.
+    pub max_iter: usize,
+}
+
+impl Default for EigsOptions {
+    fn default() -> Self {
+        Self {
+            tol: 1e-10,
+            max_iter: 1000,
+        }
+    }
+}
+
+/// Compute the `k` largest eigenvalues/eigenvectors of a sparse symmetric matrix.
+///
+/// Uses power iteration with deflation for multiple eigenvalues.
+/// Matches `scipy.sparse.linalg.eigsh(A, k=k, which='LM')` for symmetric A.
+pub fn eigsh(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsResult> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "eigsh requires a square matrix".to_string(),
+        });
+    }
+    let n = shape.rows;
+    if k == 0 || k > n {
+        return Err(SparseError::InvalidArgument {
+            message: format!("k={k} must be in [1, {n}]"),
+        });
+    }
+
+    let mut eigenvalues = Vec::with_capacity(k);
+    let mut eigenvectors: Vec<Vec<f64>> = Vec::with_capacity(k);
+    let mut total_matvec = 0;
+
+    for _eig_idx in 0..k {
+        // Power iteration for the largest eigenvalue of A - sum(λ_i v_i v_i^T)
+        let mut v = vec![1.0 / (n as f64).sqrt(); n];
+        // Normalize initial vector
+        let v_norm = vec_norm(&v);
+        if v_norm > 0.0 {
+            for vi in &mut v {
+                *vi /= v_norm;
+            }
+        }
+
+        let mut lambda = 0.0;
+        let mut converged_this = false;
+
+        for _iter in 0..options.max_iter {
+            // w = A * v
+            let mut w = csr_matvec(a, &v);
+            total_matvec += 1;
+
+            // Deflate: project out components along previously found eigenvectors
+            // w = w - Σ (v_i^T w) v_i * λ_i (Wielandt deflation variant)
+            // Simpler: just orthogonalize w against previous eigenvectors
+            for prev_vec in &eigenvectors {
+                let proj: f64 = w.iter().zip(prev_vec.iter()).map(|(a, b)| a * b).sum();
+                for (wi, &pi) in w.iter_mut().zip(prev_vec.iter()) {
+                    *wi -= proj * pi;
+                }
+            }
+
+            // Rayleigh quotient: λ = v^T w
+            let new_lambda: f64 = v.iter().zip(w.iter()).map(|(a, b)| a * b).sum();
+
+            // Normalize w -> v
+            let w_norm = vec_norm(&w);
+            if w_norm < f64::EPSILON * 100.0 {
+                break;
+            }
+            for wi in &mut w {
+                *wi /= w_norm;
+            }
+
+            if (new_lambda - lambda).abs() < options.tol * new_lambda.abs().max(1.0) {
+                converged_this = true;
+                lambda = new_lambda;
+                v = w;
+                break;
+            }
+
+            lambda = new_lambda;
+            v = w;
+        }
+
+        eigenvalues.push(lambda);
+        eigenvectors.push(v);
+
+        if !converged_this {
+            return Ok(EigsResult {
+                eigenvalues,
+                eigenvectors,
+                nmatvec: total_matvec,
+                converged: false,
+            });
+        }
+    }
+
+    Ok(EigsResult {
+        eigenvalues,
+        eigenvectors,
+        nmatvec: total_matvec,
+        converged: true,
+    })
+}
