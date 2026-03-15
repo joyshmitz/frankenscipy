@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod bdf;
+pub mod bvp;
 pub mod quad;
 pub mod rk;
 pub mod solver;
@@ -10,6 +11,7 @@ pub mod validation;
 
 pub use api::{EventFn, OdeSolution, SolveIvpOptions, SolveIvpResult, SolverKind, solve_ivp};
 pub use bdf::{BdfSolver, BdfSolverConfig};
+pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
 pub use quad::{
     CompositeQuadResult, DblquadOptions, DblquadResult, QuadOptions, QuadResult,
     cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, quad, simpson, simpson_uniform,
