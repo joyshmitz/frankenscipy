@@ -79,10 +79,6 @@ pub fn savgol_coeffs(
             for c in 0..order {
                 ata[r][c] += powers[r] * powers[c];
             }
-            // b[i] contributes to atb only through the row corresponding to this x_i
-            // For savgol_coeffs, we want the polynomial coefficient at x=0 that
-            // gives the deriv-th derivative, so we solve for all coefficients
-            // and then extract. Actually, we directly compute the filter weights.
         }
     }
 

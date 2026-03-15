@@ -1184,8 +1184,8 @@ where
         // Inner CG loop to solve H*d = -g approximately
         // Using Hessian-vector products via finite differences: H*v ≈ (∇f(x+εv) - ∇f(x)) / ε
         let cg_tol = grad_norm.min(0.5); // Eisenstat-Walker forcing term
-        let direction = cg_newton_direction(&mut objective, &x, &grad, eps, cg_tol, n)?;
-        njev += 1; // Hessian-vector products counted
+        let (direction, nhvp) = cg_newton_direction(&mut objective, &x, &grad, eps, cg_tol, n)?;
+        njev += nhvp; // each HVP requires one gradient evaluation
 
         // Line search along direction
         let directional_deriv = dot(&grad, &direction);
@@ -1273,6 +1273,7 @@ where
 
 /// Inner CG solver for Newton equation H*d = -g.
 /// Uses Hessian-vector products via finite differences.
+/// Returns (direction, number_of_hvps).
 fn cg_newton_direction<F>(
     objective: &mut Objective<'_, F>,
     x: &[f64],
@@ -1280,7 +1281,7 @@ fn cg_newton_direction<F>(
     eps: f64,
     tol: f64,
     n: usize,
-) -> Result<Vec<f64>, OptError>
+) -> Result<(Vec<f64>, usize), OptError>
 where
     F: Fn(&[f64]) -> f64,
 {
@@ -1290,6 +1291,7 @@ where
     let mut r = neg_g.clone(); // r = -g - H*d = -g (since d=0)
     let mut p = r.clone();
     let mut rs = dot(&r, &r);
+    let mut nhvp = 0usize;
 
     let max_cg_iter = n.min(20);
     let target = tol * tol * dot(grad, grad);
@@ -1301,14 +1303,15 @@ where
 
         // Hessian-vector product: H*p ≈ (∇f(x + ε*p) - ∇f(x)) / ε
         let hp = hessian_vector_product(objective, x, grad, &p, eps)?;
+        nhvp += 1;
 
         let p_hp = dot(&p, &hp);
         if p_hp <= 0.0 {
             // Negative curvature — use current d if nonzero, else use steepest descent
             if dot(&d, &d) > 0.0 {
-                return Ok(d);
+                return Ok((d, nhvp));
             }
-            return Ok(neg_g);
+            return Ok((neg_g, nhvp));
         }
 
         let alpha = rs / p_hp;
@@ -1325,7 +1328,7 @@ where
         rs = rs_new;
     }
 
-    Ok(d)
+    Ok((d, nhvp))
 }
 
 /// Compute Hessian-vector product H*v via finite differences of gradient.
