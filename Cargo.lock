@@ -666,6 +666,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fsci-spatial"
+version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+ "proptest",
+]
+
+[[package]]
 name = "fsci-special"
 version = "0.1.0"
 dependencies = [
