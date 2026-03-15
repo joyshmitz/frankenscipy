@@ -582,6 +582,138 @@ impl ContinuousDistribution for GammaDist {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Weibull Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Weibull (minimum) distribution with shape `c` and scale `scale`.
+///
+/// Matches `scipy.stats.weibull_min(c, scale=scale)`.
+/// PDF: f(x) = (c/scale) * (x/scale)^(c-1) * exp(-(x/scale)^c)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Weibull {
+    pub c: f64,
+    pub scale: f64,
+}
+
+impl Weibull {
+    #[must_use]
+    pub fn new(c: f64, scale: f64) -> Self {
+        assert!(c > 0.0, "shape c must be positive, got {c}");
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { c, scale }
+    }
+
+    /// Inverse CDF (analytic).
+    pub fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        self.scale * (-(1.0 - q).ln()).powf(1.0 / self.c)
+    }
+}
+
+impl ContinuousDistribution for Weibull {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        if x == 0.0 {
+            return if self.c == 1.0 {
+                1.0 / self.scale
+            } else if self.c > 1.0 {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+        }
+        let z = x / self.scale;
+        (self.c / self.scale) * z.powf(self.c - 1.0) * (-z.powf(self.c)).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        1.0 - (-(x / self.scale).powf(self.c)).exp()
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 1.0;
+        }
+        (-(x / self.scale).powf(self.c)).exp()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        Weibull::ppf(self, q)
+    }
+
+    fn mean(&self) -> f64 {
+        self.scale * ln_gamma(1.0 + 1.0 / self.c).exp()
+    }
+
+    fn var(&self) -> f64 {
+        let g1 = ln_gamma(1.0 + 1.0 / self.c).exp();
+        let g2 = ln_gamma(1.0 + 2.0 / self.c).exp();
+        self.scale * self.scale * (g2 - g1 * g1)
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Lognormal Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Lognormal distribution: X = exp(μ + σZ) where Z ~ N(0,1).
+///
+/// Matches `scipy.stats.lognorm(s, scale=exp(mu))` where s=σ.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Lognormal {
+    /// Shape parameter σ (standard deviation of the underlying normal).
+    pub s: f64,
+    /// Scale parameter (= exp(μ)).
+    pub scale: f64,
+}
+
+impl Lognormal {
+    #[must_use]
+    pub fn new(s: f64, scale: f64) -> Self {
+        assert!(s > 0.0, "s must be positive, got {s}");
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { s, scale }
+    }
+}
+
+impl ContinuousDistribution for Lognormal {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let z = (x / self.scale).ln() / self.s;
+        (-0.5 * z * z).exp() / (x * self.s * (2.0 * PI).sqrt())
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let z = (x / self.scale).ln() / self.s;
+        0.5 * (1.0 + erf_approx(z * FRAC_1_SQRT_2))
+    }
+
+    fn mean(&self) -> f64 {
+        self.scale * (0.5 * self.s * self.s).exp()
+    }
+
+    fn var(&self) -> f64 {
+        let s2 = self.s * self.s;
+        self.scale * self.scale * s2.exp() * (s2.exp() - 1.0)
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Poisson Distribution (discrete, but commonly needed)
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1360,5 +1492,72 @@ mod tests {
             prev = c;
         }
         assert!((prev - 1.0).abs() < 1e-4, "CDF(large k) ≈ 1.0");
+    }
+
+    // ── Weibull distribution ────────────────────────────────────────
+
+    #[test]
+    fn weibull_exponential_special_case() {
+        // Weibull(c=1, scale=λ) = Exponential(1/λ)
+        let w = Weibull::new(1.0, 2.0);
+        let e = Exponential::from_scale(2.0);
+        assert_close(w.pdf(1.0), e.pdf(1.0), 1e-10, "Weibull(1) = Exp");
+        assert_close(w.cdf(1.0), e.cdf(1.0), 1e-10, "Weibull(1) cdf");
+    }
+
+    #[test]
+    fn weibull_ppf_roundtrip() {
+        let w = Weibull::new(2.0, 3.0);
+        let q = 0.75;
+        let x = w.ppf(q);
+        assert_close(w.cdf(x), q, 1e-10, "Weibull ppf roundtrip");
+    }
+
+    #[test]
+    fn weibull_sf_plus_cdf() {
+        let w = Weibull::new(1.5, 1.0);
+        for x in [0.5, 1.0, 2.0, 5.0] {
+            assert_close(w.sf(x) + w.cdf(x), 1.0, 1e-12, &format!("sf+cdf at {x}"));
+        }
+    }
+
+    #[test]
+    fn weibull_pdf_positive_only() {
+        let w = Weibull::new(2.0, 1.0);
+        assert_eq!(w.pdf(-1.0), 0.0);
+        assert!(w.pdf(1.0) > 0.0);
+    }
+
+    // ── Lognormal distribution ──────────────────────────────────────
+
+    #[test]
+    fn lognormal_pdf_positive_only() {
+        let ln = Lognormal::new(1.0, 1.0);
+        assert_eq!(ln.pdf(-1.0), 0.0);
+        assert_eq!(ln.pdf(0.0), 0.0);
+        assert!(ln.pdf(1.0) > 0.0);
+    }
+
+    #[test]
+    fn lognormal_cdf_bounds() {
+        let ln = Lognormal::new(0.5, 1.0);
+        assert_eq!(ln.cdf(0.0), 0.0);
+        // CDF at large x should approach 1
+        assert!(ln.cdf(100.0) > 0.99);
+    }
+
+    #[test]
+    fn lognormal_mean() {
+        // For s=σ, scale=exp(μ): mean = exp(μ + σ²/2) = scale * exp(σ²/2)
+        let ln = Lognormal::new(1.0, 1.0);
+        let expected = (0.5_f64).exp(); // exp(0 + 1/2)
+        assert_close(ln.mean(), expected, 1e-10, "lognormal mean");
+    }
+
+    #[test]
+    fn lognormal_cdf_at_scale() {
+        // CDF(scale) = CDF of standard lognorm at 1 = Φ(0) = 0.5
+        let ln = Lognormal::new(1.0, 5.0);
+        assert_close(ln.cdf(5.0), 0.5, 1e-4, "lognormal cdf at scale");
     }
 }

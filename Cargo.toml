@@ -8,6 +8,7 @@ members = [
   "crates/fsci-sparse",
   "crates/fsci-fft",
   "crates/fsci-signal",
+  "crates/fsci-spatial",
   "crates/fsci-special",
   "crates/fsci-stats",
   "crates/fsci-arrayapi",
@@ -34,6 +35,7 @@ fsci-opt = { path = "crates/fsci-opt" }
 fsci-runtime = { path = "crates/fsci-runtime" }
 fsci-sparse = { path = "crates/fsci-sparse" }
 fsci-signal = { path = "crates/fsci-signal" }
+fsci-spatial = { path = "crates/fsci-spatial" }
 fsci-special = { path = "crates/fsci-special" }
 fsci-stats = { path = "crates/fsci-stats" }
 asupersync = { version = "0.2.5", default-features = false, features = ["test-internals"] }

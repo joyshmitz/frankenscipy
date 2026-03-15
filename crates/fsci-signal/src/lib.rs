@@ -414,6 +414,184 @@ pub fn fftconvolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>,
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Peak Detection
+// ══════════════════════════════════════════════════════════════════════
+
+/// Options for peak detection.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct FindPeaksOptions {
+    /// Minimum height of peaks.
+    pub height: Option<f64>,
+    /// Minimum horizontal distance between peaks (in samples).
+    pub distance: Option<usize>,
+    /// Minimum prominence of peaks.
+    pub prominence: Option<f64>,
+    /// Minimum width of peaks (in samples).
+    pub width: Option<f64>,
+}
+
+/// Result of peak detection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FindPeaksResult {
+    /// Indices of detected peaks.
+    pub peaks: Vec<usize>,
+    /// Heights of detected peaks (if height filter was used).
+    pub peak_heights: Vec<f64>,
+    /// Prominences of detected peaks (if prominence filter was used).
+    pub prominences: Vec<f64>,
+}
+
+/// Find peaks in a 1-D signal.
+///
+/// Matches `scipy.signal.find_peaks(x, height, distance, prominence, width)`.
+///
+/// A sample is a peak if it is strictly greater than its immediate neighbors.
+pub fn find_peaks(x: &[f64], options: FindPeaksOptions) -> FindPeaksResult {
+    if x.len() < 3 {
+        return FindPeaksResult {
+            peaks: Vec::new(),
+            peak_heights: Vec::new(),
+            prominences: Vec::new(),
+        };
+    }
+
+    // Step 1: find all local maxima (strictly greater than both neighbors)
+    let mut peaks: Vec<usize> = Vec::new();
+    for i in 1..x.len() - 1 {
+        if x[i] > x[i - 1] && x[i] > x[i + 1] {
+            peaks.push(i);
+        }
+    }
+
+    // Step 2: filter by height
+    if let Some(min_height) = options.height {
+        peaks.retain(|&i| x[i] >= min_height);
+    }
+
+    // Step 3: compute prominences (needed for prominence and width filters)
+    let prominences: Vec<f64> = peaks.iter().map(|&pk| compute_prominence(x, pk)).collect();
+
+    // Step 4: filter by prominence
+    if let Some(min_prom) = options.prominence {
+        let mut keep = Vec::new();
+        for (idx, &pk) in peaks.iter().enumerate() {
+            if prominences[idx] >= min_prom {
+                keep.push((pk, prominences[idx]));
+            }
+        }
+        peaks = keep.iter().map(|&(pk, _)| pk).collect();
+        let proms: Vec<f64> = keep.iter().map(|&(_, p)| p).collect();
+        // Rebuild prominences for kept peaks
+        let peak_heights: Vec<f64> = peaks.iter().map(|&i| x[i]).collect();
+
+        // Step 5: filter by distance (keep highest peak within each distance window)
+        if let Some(min_dist) = options.distance {
+            let filtered = filter_by_distance(&peaks, &peak_heights, min_dist);
+            let final_proms: Vec<f64> = filtered
+                .iter()
+                .map(|&pk| proms[peaks.iter().position(|&p| p == pk).unwrap_or(0)])
+                .collect();
+            let final_heights: Vec<f64> = filtered.iter().map(|&i| x[i]).collect();
+            return FindPeaksResult {
+                peaks: filtered,
+                peak_heights: final_heights,
+                prominences: final_proms,
+            };
+        }
+
+        return FindPeaksResult {
+            peaks,
+            peak_heights,
+            prominences: proms,
+        };
+    }
+
+    let peak_heights: Vec<f64> = peaks.iter().map(|&i| x[i]).collect();
+
+    // Step 5: filter by distance
+    if let Some(min_dist) = options.distance {
+        let filtered = filter_by_distance(&peaks, &peak_heights, min_dist);
+        let final_heights: Vec<f64> = filtered.iter().map(|&i| x[i]).collect();
+        let final_proms: Vec<f64> = filtered
+            .iter()
+            .map(|&pk| compute_prominence(x, pk))
+            .collect();
+        return FindPeaksResult {
+            peaks: filtered,
+            peak_heights: final_heights,
+            prominences: final_proms,
+        };
+    }
+
+    FindPeaksResult {
+        peaks,
+        peak_heights,
+        prominences,
+    }
+}
+
+/// Compute the prominence of a peak.
+/// Prominence = peak height - max(left base, right base).
+fn compute_prominence(x: &[f64], peak_idx: usize) -> f64 {
+    let peak_val = x[peak_idx];
+
+    // Search left for the lowest point before reaching a higher peak or the edge
+    let mut left_min = peak_val;
+    for &xi in x[..peak_idx].iter().rev() {
+        left_min = left_min.min(xi);
+        if xi > peak_val {
+            break;
+        }
+    }
+
+    // Search right
+    let mut right_min = peak_val;
+    for &xi in &x[peak_idx + 1..] {
+        right_min = right_min.min(xi);
+        if xi > peak_val {
+            break;
+        }
+    }
+
+    peak_val - left_min.max(right_min)
+}
+
+/// Filter peaks by minimum distance, keeping the highest peak in each window.
+fn filter_by_distance(peaks: &[usize], heights: &[f64], min_dist: usize) -> Vec<usize> {
+    if peaks.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort peaks by height (descending) for greedy selection
+    let mut indexed: Vec<(usize, f64)> = peaks
+        .iter()
+        .zip(heights.iter())
+        .map(|(&p, &h)| (p, h))
+        .collect();
+    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut selected = Vec::new();
+    let mut excluded = vec![false; peaks.len()];
+
+    for &(pk, _) in &indexed {
+        let orig_idx = peaks.iter().position(|&p| p == pk).unwrap();
+        if excluded[orig_idx] {
+            continue;
+        }
+        selected.push(pk);
+        // Exclude all peaks within min_dist
+        for (j, &other_pk) in peaks.iter().enumerate() {
+            if !excluded[j] && other_pk != pk && other_pk.abs_diff(pk) < min_dist {
+                excluded[j] = true;
+            }
+        }
+    }
+
+    selected.sort_unstable();
+    selected
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,5 +839,96 @@ mod tests {
     fn convolve_empty_rejected() {
         let err = convolve(&[], &[1.0], ConvolveMode::Full).expect_err("empty");
         assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    // ── find_peaks tests ────────────────────────────────────────────
+
+    #[test]
+    fn find_peaks_simple() {
+        let x = [0.0, 1.0, 0.0, 2.0, 0.0, 1.5, 0.0];
+        let result = find_peaks(&x, FindPeaksOptions::default());
+        assert_eq!(result.peaks, vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn find_peaks_with_height() {
+        let x = [0.0, 1.0, 0.0, 2.0, 0.0, 0.5, 0.0];
+        let result = find_peaks(
+            &x,
+            FindPeaksOptions {
+                height: Some(1.5),
+                ..FindPeaksOptions::default()
+            },
+        );
+        assert_eq!(result.peaks, vec![3]); // only the peak at 2.0
+    }
+
+    #[test]
+    fn find_peaks_with_distance() {
+        let x = [0.0, 1.0, 0.0, 0.8, 0.0, 2.0, 0.0];
+        let result = find_peaks(
+            &x,
+            FindPeaksOptions {
+                distance: Some(3),
+                ..FindPeaksOptions::default()
+            },
+        );
+        // Distance=3: peaks at 1 and 3 are too close (dist=2), keep highest (1.0 at idx 1)
+        // Peak at 5 (2.0) is far enough from both
+        assert!(result.peaks.contains(&5));
+    }
+
+    #[test]
+    fn find_peaks_with_prominence() {
+        let x = [0.0, 3.0, 2.5, 2.8, 0.0]; // peak at 1 (prom=3), peak at 3 (prom=0.3)
+        let result = find_peaks(
+            &x,
+            FindPeaksOptions {
+                prominence: Some(1.0),
+                ..FindPeaksOptions::default()
+            },
+        );
+        assert_eq!(result.peaks, vec![1]); // only the prominent peak
+    }
+
+    #[test]
+    fn find_peaks_sine_wave() {
+        let n = 100;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 3.0 * i as f64 / n as f64).sin())
+            .collect();
+        let result = find_peaks(&x, FindPeaksOptions::default());
+        // 3 full cycles should have ~3 peaks
+        assert!(
+            result.peaks.len() >= 2 && result.peaks.len() <= 4,
+            "expected ~3 peaks, got {}",
+            result.peaks.len()
+        );
+    }
+
+    #[test]
+    fn find_peaks_too_short() {
+        assert!(
+            find_peaks(&[1.0, 2.0], FindPeaksOptions::default())
+                .peaks
+                .is_empty()
+        );
+        assert!(
+            find_peaks(&[1.0], FindPeaksOptions::default())
+                .peaks
+                .is_empty()
+        );
+        assert!(
+            find_peaks(&[], FindPeaksOptions::default())
+                .peaks
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn find_peaks_flat_signal() {
+        let x = [5.0; 10];
+        let result = find_peaks(&x, FindPeaksOptions::default());
+        assert!(result.peaks.is_empty(), "flat signal has no peaks");
     }
 }
