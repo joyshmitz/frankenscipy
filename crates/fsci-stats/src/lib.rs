@@ -22,6 +22,17 @@ pub trait ContinuousDistribution {
     fn sf(&self, x: f64) -> f64 {
         1.0 - self.cdf(x)
     }
+    /// Percent point function (inverse CDF) via bisection.
+    /// Override for distributions with analytic inverses.
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        ppf_bisection(|x| self.cdf(x), q, self.mean(), self.std())
+    }
     /// Mean of the distribution.
     fn mean(&self) -> f64;
     /// Variance of the distribution.
@@ -30,6 +41,41 @@ pub trait ContinuousDistribution {
     fn std(&self) -> f64 {
         self.var().sqrt()
     }
+}
+
+/// Generic inverse CDF via bisection search.
+fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
+    // Initial bracket: start around mean ± 10*std
+    let half_width = if std.is_finite() && std > 0.0 {
+        10.0 * std
+    } else {
+        100.0
+    };
+    let center = if mean.is_finite() { mean } else { 0.0 };
+    let mut lo = center - half_width;
+    let mut hi = center + half_width;
+
+    // Expand bracket if needed
+    while cdf(lo) > q {
+        lo -= half_width;
+    }
+    while cdf(hi) < q {
+        hi += half_width;
+    }
+
+    // Bisection
+    for _ in 0..100 {
+        let mid = 0.5 * (lo + hi);
+        if (hi - lo).abs() < 1e-12 * mid.abs().max(1.0) {
+            return mid;
+        }
+        if cdf(mid) < q {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -91,6 +137,11 @@ impl ContinuousDistribution for Normal {
     fn cdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         0.5 * (1.0 + erf_approx(z * FRAC_1_SQRT_2))
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        // Use the specialized rational approximation
+        Normal::ppf(self, q)
     }
 
     fn mean(&self) -> f64 {
@@ -340,6 +391,10 @@ impl ContinuousDistribution for Exponential {
         } else {
             (-self.lambda * x).exp()
         }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        Exponential::ppf(self, q)
     }
 
     fn mean(&self) -> f64 {
@@ -1246,6 +1301,53 @@ mod tests {
         let p = Poisson::new(7.5);
         assert_eq!(p.mean(), 7.5);
         assert_eq!(p.var(), 7.5);
+    }
+
+    // ── ppf (trait-level inverse CDF) ─────────────────────────────
+
+    #[test]
+    fn chi2_ppf_via_trait() {
+        let c = ChiSquared::new(5.0);
+        let q = 0.5;
+        let x = c.ppf(q);
+        // Verify: CDF(ppf(q)) ≈ q
+        let cdf_at_x = c.cdf(x);
+        assert!(
+            (cdf_at_x - q).abs() < 1e-4,
+            "chi2 ppf roundtrip: cdf(ppf(0.5)) = {cdf_at_x}, expected 0.5"
+        );
+    }
+
+    #[test]
+    fn student_t_ppf_via_trait() {
+        let t = StudentT::new(10.0);
+        // ppf(0.5) should be 0 (symmetric distribution)
+        let x = t.ppf(0.5);
+        assert!(x.abs() < 0.01, "t ppf(0.5) = {x}, expected ~0");
+    }
+
+    #[test]
+    fn f_dist_ppf_via_trait() {
+        let f = FDistribution::new(5.0, 10.0);
+        let q = 0.95;
+        let x = f.ppf(q);
+        let cdf_at_x = f.cdf(x);
+        assert!(
+            (cdf_at_x - q).abs() < 1e-3,
+            "F ppf roundtrip: cdf(ppf(0.95)) = {cdf_at_x}, expected 0.95"
+        );
+    }
+
+    #[test]
+    fn gamma_ppf_via_trait() {
+        let g = GammaDist::new(3.0, 2.0);
+        let q = 0.5;
+        let x = g.ppf(q);
+        let cdf_at_x = g.cdf(x);
+        assert!(
+            (cdf_at_x - q).abs() < 1e-4,
+            "Gamma ppf roundtrip: cdf(ppf(0.5)) = {cdf_at_x}, expected 0.5"
+        );
     }
 
     #[test]

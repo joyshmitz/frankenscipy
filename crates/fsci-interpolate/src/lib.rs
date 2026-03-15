@@ -400,6 +400,152 @@ fn thomas_solve(sub: &[f64], diag: &mut [f64], sup: &[f64], rhs: &mut [f64]) {
     }
 }
 
+/// PCHIP (Piecewise Cubic Hermite Interpolating Polynomial) interpolator.
+///
+/// Matches `scipy.interpolate.PchipInterpolator(x, y)`.
+/// Preserves monotonicity of the data — no overshoots or oscillations.
+#[derive(Debug)]
+pub struct PchipInterpolator {
+    x: Vec<f64>,
+    coeffs: Vec<[f64; 4]>,
+}
+
+impl PchipInterpolator {
+    /// Create a PCHIP interpolator from data points.
+    pub fn new(x: &[f64], y: &[f64]) -> Result<Self, InterpError> {
+        if x.len() != y.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: x.len(),
+                y_len: y.len(),
+            });
+        }
+        if x.len() < 2 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 2,
+                actual: x.len(),
+            });
+        }
+        if x.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(InterpError::UnsortedX);
+        }
+
+        let n = x.len();
+        let m = n - 1;
+
+        // Compute slopes
+        let h: Vec<f64> = (0..m).map(|i| x[i + 1] - x[i]).collect();
+        let delta: Vec<f64> = (0..m).map(|i| (y[i + 1] - y[i]) / h[i]).collect();
+
+        // Compute PCHIP derivatives at each point
+        let mut d = vec![0.0; n];
+
+        if n == 2 {
+            d[0] = delta[0];
+            d[1] = delta[0];
+        } else {
+            // Interior points: weighted harmonic mean of adjacent slopes
+            for i in 1..m {
+                if delta[i - 1].signum() != delta[i].signum()
+                    || delta[i - 1] == 0.0
+                    || delta[i] == 0.0
+                {
+                    d[i] = 0.0; // sign change or zero slope → flat
+                } else {
+                    // Weighted harmonic mean (Fritsch-Carlson)
+                    let w1 = 2.0 * h[i] + h[i - 1];
+                    let w2 = h[i] + 2.0 * h[i - 1];
+                    d[i] = (w1 + w2) / (w1 / delta[i - 1] + w2 / delta[i]);
+                }
+            }
+
+            // Endpoints: one-sided shape-preserving formula
+            d[0] = pchip_end_slope(&h, &delta, true);
+            d[n - 1] = pchip_end_slope(&h, &delta, false);
+        }
+
+        // Build Hermite cubic coefficients for each interval
+        let mut coeffs = Vec::with_capacity(m);
+        for i in 0..m {
+            let hi = h[i];
+            let a = y[i];
+            let b = d[i];
+            let c = (3.0 * delta[i] - 2.0 * d[i] - d[i + 1]) / hi;
+            let dd = (d[i] + d[i + 1] - 2.0 * delta[i]) / (hi * hi);
+            coeffs.push([a, b, c, dd]);
+        }
+
+        Ok(Self {
+            x: x.to_vec(),
+            coeffs,
+        })
+    }
+
+    /// Evaluate at a single point.
+    pub fn eval(&self, x_new: f64) -> f64 {
+        let n = self.x.len();
+        if x_new <= self.x[0] {
+            return self.eval_at_interval(0, x_new);
+        }
+        if x_new >= self.x[n - 1] {
+            return self.eval_at_interval(n - 2, x_new);
+        }
+        let i = self.find_interval(x_new);
+        self.eval_at_interval(i, x_new)
+    }
+
+    /// Evaluate at multiple points.
+    pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
+        x_new.iter().map(|&xi| self.eval(xi)).collect()
+    }
+
+    fn eval_at_interval(&self, i: usize, x_new: f64) -> f64 {
+        let dx = x_new - self.x[i];
+        let [a, b, c, d] = self.coeffs[i];
+        a + dx * (b + dx * (c + dx * d))
+    }
+
+    fn find_interval(&self, x_new: f64) -> usize {
+        let n = self.x.len();
+        let mut lo = 0;
+        let mut hi = n - 1;
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if self.x[mid] <= x_new {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+}
+
+/// Endpoint slope for PCHIP using one-sided shape-preserving formula.
+fn pchip_end_slope(h: &[f64], delta: &[f64], is_left: bool) -> f64 {
+    let m = delta.len();
+    if m < 2 {
+        return delta[0];
+    }
+
+    let (d1, d2, h1, h2) = if is_left {
+        (delta[0], delta[1], h[0], h[1])
+    } else {
+        (delta[m - 1], delta[m - 2], h[m - 1], h[m - 2])
+    };
+
+    // Bessel's formula with monotonicity correction
+    let mut d = ((2.0 * h1 + h2) * d1 - h1 * d2) / (h1 + h2);
+
+    // Enforce monotonicity: if sign differs from d1, set to 0
+    if d.signum() != d1.signum() {
+        d = 0.0;
+    } else if d1.signum() != d2.signum() && d.abs() > 3.0 * d1.abs() {
+        d = 3.0 * d1;
+    }
+
+    d
+}
+
 /// Convenience function: 1D linear interpolation at multiple points.
 ///
 /// Matches `numpy.interp(x_new, x, y)`.
@@ -633,5 +779,79 @@ mod tests {
             (val - expected).abs() < 0.05,
             "clamped at 0.75: {val}, expected {expected}"
         );
+    }
+
+    // ── PCHIP tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn pchip_at_knots() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 1.0, 4.0, 9.0, 16.0]; // x²
+        let pchip = PchipInterpolator::new(&x, &y).expect("pchip");
+        for i in 0..5 {
+            let val = pchip.eval(x[i]);
+            assert!(
+                (val - y[i]).abs() < 1e-10,
+                "pchip at knot {i}: {val} != {}",
+                y[i]
+            );
+        }
+    }
+
+    #[test]
+    fn pchip_monotone_preserving() {
+        // Monotonically increasing data should produce monotone interpolation
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 0.1, 0.5, 0.9, 1.0];
+        let pchip = PchipInterpolator::new(&x, &y).expect("pchip");
+        let mut prev = -1.0;
+        for i in 0..40 {
+            let t = i as f64 * 0.1;
+            let val = pchip.eval(t);
+            assert!(
+                val >= prev - 1e-10,
+                "PCHIP should be monotone: val={val} < prev={prev} at t={t}"
+            );
+            prev = val;
+        }
+    }
+
+    #[test]
+    fn pchip_no_overshoot() {
+        // Data with a step: PCHIP should not overshoot
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 0.0, 1.0, 1.0, 1.0];
+        let pchip = PchipInterpolator::new(&x, &y).expect("pchip");
+        for i in 0..40 {
+            let t = i as f64 * 0.1;
+            let val = pchip.eval(t);
+            assert!(
+                (-0.01..=1.01).contains(&val),
+                "PCHIP should not overshoot: val={val} at t={t}"
+            );
+        }
+    }
+
+    #[test]
+    fn pchip_two_points() {
+        let x = vec![0.0, 1.0];
+        let y = vec![0.0, 1.0];
+        let pchip = PchipInterpolator::new(&x, &y).expect("pchip 2pts");
+        assert!((pchip.eval(0.5) - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn pchip_eval_many() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 0.0, -1.0];
+        let pchip = PchipInterpolator::new(&x, &y).expect("pchip");
+        let result = pchip.eval_many(&[0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(result.len(), 4);
+        for (i, (&r, &expected)) in result.iter().zip(y.iter()).enumerate() {
+            assert!(
+                (r - expected).abs() < 1e-10,
+                "eval_many[{i}] = {r}, expected {expected}"
+            );
+        }
     }
 }
