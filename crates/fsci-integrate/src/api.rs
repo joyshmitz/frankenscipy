@@ -556,7 +556,7 @@ mod tests {
             &SolveIvpOptions {
                 t_span: (0.0, 1.0),
                 y0: &[1.0],
-                method: SolverKind::Radau,
+                method: SolverKind::Lsoda,
                 ..SolveIvpOptions::default()
             },
         );

@@ -202,7 +202,11 @@ fn real_fft_specialized(input: &[f64], backend: &dyn FftBackend) -> Vec<Complex6
     let mut result = Vec::with_capacity(half + 1);
     for k in 0..=half {
         let zk = if k < half { z[k] } else { z[0] };
-        let zn_k = if k == 0 || k == half { z[0] } else { z[half - k] };
+        let zn_k = if k == 0 || k == half {
+            z[0]
+        } else {
+            z[half - k]
+        };
         let zn_k_conj = complex_conj(zn_k);
 
         let even = (0.5 * (zk.0 + zn_k_conj.0), 0.5 * (zk.1 + zn_k_conj.1));
@@ -597,6 +601,47 @@ pub fn idct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
     let result: Vec<f64> = time_domain.iter().take(n).map(|v| v.0 * scale).collect();
 
     Ok(result)
+}
+
+/// Compute the analytic signal using the Hilbert transform.
+///
+/// Matches `scipy.signal.hilbert(x)`. Returns the analytic signal
+/// whose real part is the original signal and imaginary part is the
+/// Hilbert transform.
+pub fn hilbert(input: &[f64], options: &FftOptions) -> Result<Vec<Complex64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+
+    // FFT the real input
+    let complex_input: Vec<Complex64> = input.iter().map(|&x| (x, 0.0)).collect();
+    let backend = resolve_backend(options.backend);
+    let mut spectrum = backend.transform_1d_unscaled(&complex_input, false);
+
+    // Create step function h[k]:
+    // h[0] = 1, h[N/2] = 1 (if N even)
+    // h[1..N/2] = 2
+    // h[N/2+1..N] = 0
+    // Then analytic = IFFT(FFT(x) * h)
+    if n > 1 {
+        for sk in spectrum.iter_mut().take(n / 2).skip(1) {
+            *sk = complex_scale(*sk, 2.0);
+        }
+        for sk in spectrum.iter_mut().skip(n / 2 + 1) {
+            *sk = (0.0, 0.0);
+        }
+    }
+
+    // IFFT to get analytic signal
+    let mut analytic = backend.transform_1d_unscaled(&spectrum, true);
+    // Apply 1/N normalization (Backward mode)
+    let inv_n = 1.0 / n as f64;
+    for v in &mut analytic {
+        *v = complex_scale(*v, inv_n);
+    }
+
+    Ok(analytic)
 }
 
 fn run_complex_1d(

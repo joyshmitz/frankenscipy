@@ -12,6 +12,7 @@ pub use linalg::{
     EigsOptions, EigsResult, IluOptions, IterativeSolveOptions, IterativeSolveResult, LuOptions,
     PermutationOrdering, SolveOptions, SolveResult, SparseBackend, SparseIluFactorization,
     SparseLuFactorization, cg, eigsh, gmres, pcg, spilu, splu, splu_solve, spsolve,
+    spsolve_triangular,
 };
 pub use ops::{
     ConversionLogEntry, FormatConvertible, add_coo, add_csc, add_csr, coo_to_csr_with_mode,
@@ -1053,6 +1054,46 @@ mod tests {
             .sum::<f64>()
             .sqrt();
         assert!(err / b_norm < 1e-5, "PCG solution error: {err}/{b_norm}");
+    }
+
+    // ── Sparse triangular solve tests ─────────────────────────────
+
+    #[test]
+    fn spsolve_triangular_lower() {
+        // Lower triangular: [[2, 0], [3, 4]]
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![2.0, 3.0, 4.0],
+            vec![0, 1, 1],
+            vec![0, 0, 1],
+            false,
+        )
+        .expect("lower tri");
+        let csr = coo.to_csr().expect("csr");
+        let x = spsolve_triangular(&csr, &[6.0, 11.0], true).expect("solve");
+        // 2*x0 = 6 => x0 = 3
+        // 3*x0 + 4*x1 = 11 => 9 + 4*x1 = 11 => x1 = 0.5
+        assert!((x[0] - 3.0).abs() < 1e-10);
+        assert!((x[1] - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn spsolve_triangular_upper() {
+        // Upper triangular: [[2, 3], [0, 4]]
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![2.0, 3.0, 4.0],
+            vec![0, 0, 1],
+            vec![0, 1, 1],
+            false,
+        )
+        .expect("upper tri");
+        let csr = coo.to_csr().expect("csr");
+        let x = spsolve_triangular(&csr, &[11.0, 8.0], false).expect("solve");
+        // 4*x1 = 8 => x1 = 2
+        // 2*x0 + 3*x1 = 11 => 2*x0 + 6 = 11 => x0 = 2.5
+        assert!((x[0] - 2.5).abs() < 1e-10);
+        assert!((x[1] - 2.0).abs() < 1e-10);
     }
 
     // ── Sparse eigenvalue tests ───────────────────────────────────

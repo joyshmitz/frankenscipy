@@ -18,7 +18,7 @@ pub use plan::{
 };
 pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, TransformTrace, WorkerPolicy, dct, fft, fft2,
-    fftn, idct, ifft, ifft2, irfft, rfft, take_transform_traces,
+    fftn, hilbert, idct, ifft, ifft2, irfft, rfft, take_transform_traces,
 };
 
 /// FFT normalization modes matching SciPy/PocketFFT conventions.
@@ -50,7 +50,7 @@ mod tests {
     use serde_json::json;
 
     use super::helpers::fftfreq;
-    use super::transforms::{Complex64, FftOptions, dct, fft, idct, ifft, irfft, rfft};
+    use super::transforms::{Complex64, FftOptions, dct, fft, hilbert, idct, ifft, irfft, rfft};
     use super::{Normalization, TransformKind};
 
     const PROPTEST_CASES: u32 = 512;
@@ -232,5 +232,56 @@ mod tests {
     fn dct_length_1() {
         let result = dct(&[5.0], &FftOptions::default()).expect("dct len 1");
         assert!((result[0] - 10.0).abs() < 1e-9, "DCT[0] = {}", result[0]);
+    }
+
+    // ── Hilbert transform tests ─────────────────────────────────────
+
+    #[test]
+    fn hilbert_real_part_preserved() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0];
+        let analytic = hilbert(&x, &FftOptions::default()).expect("hilbert");
+        assert_eq!(analytic.len(), x.len());
+        for (i, (&(re, _), &xi)) in analytic.iter().zip(x.iter()).enumerate() {
+            assert!(
+                (re - xi).abs() < 1e-9,
+                "real part[{i}] = {re}, expected {xi}"
+            );
+        }
+    }
+
+    #[test]
+    fn hilbert_cosine_gives_sine() {
+        // Hilbert transform of cos(t) = sin(t) (for interior points, away from edges)
+        let n = 64;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 2.0 * i as f64 / n as f64).cos())
+            .collect();
+        let analytic = hilbert(&x, &FftOptions::default()).expect("hilbert");
+        // The imaginary part should approximate sin(2*2π*i/n) for interior points
+        for (i, &(_, im)) in analytic.iter().enumerate().skip(4).take(n - 8) {
+            let expected_sin = (2.0 * std::f64::consts::PI * 2.0 * i as f64 / n as f64).sin();
+            assert!(
+                (im - expected_sin).abs() < 0.1,
+                "hilbert imag[{i}] = {im}, expected ~{expected_sin}",
+            );
+        }
+    }
+
+    #[test]
+    fn hilbert_envelope() {
+        // Envelope = |analytic signal| should be ~1 for a pure cosine
+        let n = 64;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 3.0 * i as f64 / n as f64).cos())
+            .collect();
+        let analytic = hilbert(&x, &FftOptions::default()).expect("hilbert");
+        // Interior envelope should be close to 1
+        for (i, &(re, im)) in analytic.iter().enumerate().skip(4).take(n - 8) {
+            let envelope = (re * re + im * im).sqrt();
+            assert!(
+                (envelope - 1.0).abs() < 0.15,
+                "envelope[{i}] = {envelope}, expected ~1.0"
+            );
+        }
     }
 }

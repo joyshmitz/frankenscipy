@@ -1581,6 +1581,72 @@ impl Default for EigsOptions {
     }
 }
 
+/// Solve a sparse triangular system Ax = b.
+///
+/// Matches `scipy.sparse.linalg.spsolve_triangular(A, b, lower)`.
+/// Performs forward substitution (lower=true) or backward substitution (lower=false).
+pub fn spsolve_triangular(a: &CsrMatrix, b: &[f64], lower: bool) -> SparseResult<Vec<f64>> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "spsolve_triangular requires a square matrix".to_string(),
+        });
+    }
+    let n = shape.rows;
+    if b.len() != n {
+        return Err(SparseError::IncompatibleShape {
+            message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+
+    let indptr = a.indptr();
+    let indices = a.indices();
+    let data = a.data();
+    let mut x = b.to_vec();
+
+    if lower {
+        // Forward substitution
+        for i in 0..n {
+            let mut diag = 0.0;
+            for idx in indptr[i]..indptr[i + 1] {
+                let j = indices[idx];
+                if j < i {
+                    x[i] -= data[idx] * x[j];
+                } else if j == i {
+                    diag = data[idx];
+                }
+            }
+            if diag.abs() < f64::EPSILON * 100.0 {
+                return Err(SparseError::SingularMatrix {
+                    message: format!("zero diagonal at row {i}"),
+                });
+            }
+            x[i] /= diag;
+        }
+    } else {
+        // Backward substitution
+        for i in (0..n).rev() {
+            let mut diag = 0.0;
+            for idx in indptr[i]..indptr[i + 1] {
+                let j = indices[idx];
+                if j > i {
+                    x[i] -= data[idx] * x[j];
+                } else if j == i {
+                    diag = data[idx];
+                }
+            }
+            if diag.abs() < f64::EPSILON * 100.0 {
+                return Err(SparseError::SingularMatrix {
+                    message: format!("zero diagonal at row {i}"),
+                });
+            }
+            x[i] /= diag;
+        }
+    }
+
+    Ok(x)
+}
+
 /// Compute the `k` largest eigenvalues/eigenvectors of a sparse symmetric matrix.
 ///
 /// Uses power iteration with deflation for multiple eigenvalues.
