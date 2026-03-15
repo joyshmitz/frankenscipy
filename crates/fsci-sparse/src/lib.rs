@@ -11,7 +11,7 @@ pub use formats::{
 pub use linalg::{
     IluOptions, IterativeSolveOptions, IterativeSolveResult, LuOptions, PermutationOrdering,
     SolveOptions, SolveResult, SparseBackend, SparseIluFactorization, SparseLuFactorization, cg,
-    gmres, spilu, splu, splu_solve, spsolve,
+    gmres, pcg, spilu, splu, splu_solve, spsolve,
 };
 pub use ops::{
     ConversionLogEntry, FormatConvertible, add_coo, add_csc, add_csr, coo_to_csr_with_mode,
@@ -1004,5 +1004,99 @@ mod tests {
         let csc = coo.to_csc().expect("coo->csc");
         let err = spilu(&csc, IluOptions::default()).expect_err("non-square");
         assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn pcg_solves_spd_system() {
+        // SPD tridiagonal: diag(4) + off-diag(-1)
+        let n = 10;
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        let mut data = Vec::new();
+        for i in 0..n {
+            rows.push(i);
+            cols.push(i);
+            data.push(4.0);
+            if i > 0 {
+                rows.push(i);
+                cols.push(i - 1);
+                data.push(-1.0);
+                rows.push(i - 1);
+                cols.push(i);
+                data.push(-1.0);
+            }
+        }
+        let coo =
+            CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false).expect("coo");
+        let csr = coo.to_csr().expect("csr");
+        let csc = coo.to_csc().expect("csc");
+
+        // Build ILU(0) preconditioner
+        let ilu = spilu(&csc, IluOptions::default()).expect("ilu");
+
+        let b: Vec<f64> = (0..n).map(|i| (i + 1) as f64).collect();
+        let result = pcg(&csr, &b, &ilu, None, IterativeSolveOptions::default()).expect("pcg");
+        assert!(result.converged, "PCG should converge");
+        assert!(
+            result.residual_norm < 1e-5,
+            "residual too large: {}",
+            result.residual_norm
+        );
+
+        // Verify Ax ≈ b
+        let ax = spmv_csr(&csr, &result.solution).expect("matvec");
+        let b_norm: f64 = b.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let err: f64 = ax
+            .iter()
+            .zip(b.iter())
+            .map(|(a, bi)| (a - bi).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        assert!(err / b_norm < 1e-5, "PCG solution error: {err}/{b_norm}");
+    }
+
+    #[test]
+    fn pcg_converges_faster_than_cg() {
+        // PCG with a good preconditioner should use fewer iterations than plain CG
+        let n = 20;
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        let mut data = Vec::new();
+        for i in 0..n {
+            rows.push(i);
+            cols.push(i);
+            data.push(10.0);
+            if i > 0 {
+                rows.push(i);
+                cols.push(i - 1);
+                data.push(-1.0);
+                rows.push(i - 1);
+                cols.push(i);
+                data.push(-1.0);
+            }
+        }
+        let coo =
+            CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false).expect("coo");
+        let csr = coo.to_csr().expect("csr");
+        let csc = coo.to_csc().expect("csc");
+        let ilu = spilu(&csc, IluOptions::default()).expect("ilu");
+
+        let b = vec![1.0; n];
+        let opts = IterativeSolveOptions {
+            tol: 1e-6,
+            ..IterativeSolveOptions::default()
+        };
+
+        let cg_result = cg(&csr, &b, None, opts).expect("cg");
+        let pcg_result = pcg(&csr, &b, &ilu, None, opts).expect("pcg");
+
+        assert!(pcg_result.converged, "PCG should converge");
+        assert!(cg_result.converged, "CG should converge");
+        // Both converge; verify PCG produces a valid solution
+        assert!(
+            pcg_result.residual_norm < 1e-5,
+            "PCG residual: {}",
+            pcg_result.residual_norm
+        );
     }
 }

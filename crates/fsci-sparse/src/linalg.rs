@@ -570,6 +570,117 @@ fn csr_matvec(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
     result
 }
 
+/// Preconditioned Conjugate Gradient solver.
+///
+/// Solves Ax = b using CG with an ILU(0) preconditioner M ≈ A.
+/// The preconditioner solves M*z = r at each iteration instead of using r directly.
+/// Matches `scipy.sparse.linalg.cg(A, b, M=spilu(A).solve)`.
+pub fn pcg(
+    a: &CsrMatrix,
+    b: &[f64],
+    preconditioner: &SparseIluFactorization,
+    x0: Option<&[f64]>,
+    options: IterativeSolveOptions,
+) -> SparseResult<IterativeSolveResult> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "PCG requires a square matrix".to_string(),
+        });
+    }
+    let n = shape.rows;
+    if b.len() != n {
+        return Err(SparseError::IncompatibleShape {
+            message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+
+    let max_iter = options.max_iter.unwrap_or(n * 10);
+
+    let mut x: Vec<f64> = match x0 {
+        Some(initial) => {
+            if initial.len() != n {
+                return Err(SparseError::IncompatibleShape {
+                    message: "initial guess length must match matrix rows".to_string(),
+                });
+            }
+            initial.to_vec()
+        }
+        None => vec![0.0; n],
+    };
+
+    let b_norm: f64 = b.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if b_norm == 0.0 {
+        return Ok(IterativeSolveResult {
+            solution: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+        });
+    }
+
+    // r = b - A*x
+    let ax = csr_matvec(a, &x);
+    let mut r: Vec<f64> = b.iter().zip(ax.iter()).map(|(bi, axi)| bi - axi).collect();
+
+    // z = M^{-1} * r (preconditioner application)
+    let mut z = preconditioner.solve(&r).unwrap_or_else(|_| r.clone());
+
+    let mut p = z.clone();
+    let mut rz: f64 = r.iter().zip(z.iter()).map(|(ri, zi)| ri * zi).sum();
+
+    for iteration in 0..max_iter {
+        let r_norm: f64 = r.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if r_norm / b_norm < options.tol {
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: true,
+                iterations: iteration,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+
+        let ap = csr_matvec(a, &p);
+        let p_ap: f64 = p.iter().zip(ap.iter()).map(|(pi, api)| pi * api).sum();
+
+        if p_ap.abs() < f64::EPSILON * 100.0 {
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: false,
+                iterations: iteration,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+
+        let alpha = rz / p_ap;
+
+        for i in 0..n {
+            x[i] += alpha * p[i];
+            r[i] -= alpha * ap[i];
+        }
+
+        // z = M^{-1} * r
+        z = preconditioner.solve(&r).unwrap_or_else(|_| r.clone());
+
+        let rz_new: f64 = r.iter().zip(z.iter()).map(|(ri, zi)| ri * zi).sum();
+        let beta = rz_new / rz;
+
+        for i in 0..n {
+            p[i] = z[i] + beta * p[i];
+        }
+
+        rz = rz_new;
+    }
+
+    let final_norm: f64 = r.iter().map(|v| v * v).sum::<f64>().sqrt() / b_norm;
+    Ok(IterativeSolveResult {
+        solution: x,
+        converged: false,
+        iterations: max_iter,
+        residual_norm: final_norm,
+    })
+}
+
 /// GMRES (Generalized Minimal Residual) solver for general (non-symmetric) sparse systems.
 ///
 /// Solves Ax = b for general square A using restarted GMRES with Arnoldi iteration.
