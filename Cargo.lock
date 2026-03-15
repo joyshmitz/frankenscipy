@@ -688,6 +688,7 @@ dependencies = [
  "fsci-runtime",
  "fsci-special",
  "proptest",
+ "rand",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 fsci-runtime = { workspace = true }
 fsci-special = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

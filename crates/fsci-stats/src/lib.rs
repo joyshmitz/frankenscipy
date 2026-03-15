@@ -12,6 +12,8 @@
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
+use rand::Rng;
+
 /// Trait for continuous probability distributions.
 pub trait ContinuousDistribution {
     /// Probability density function.
@@ -40,6 +42,16 @@ pub trait ContinuousDistribution {
     /// Standard deviation.
     fn std(&self) -> f64 {
         self.var().sqrt()
+    }
+
+    /// Generate `n` random variates via inverse transform sampling.
+    fn rvs(&self, n: usize, rng: &mut impl Rng) -> Vec<f64> {
+        (0..n)
+            .map(|_| {
+                let u: f64 = rng.random();
+                self.ppf(u)
+            })
+            .collect()
     }
 }
 
@@ -1033,6 +1045,300 @@ fn beta_cf(a: f64, b: f64, x: f64) -> f64 {
     f
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Cauchy Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Cauchy distribution (Lorentzian) with location `loc` and scale `scale`.
+///
+/// Matches `scipy.stats.cauchy(loc, scale)`.
+/// PDF: f(x) = 1 / (π * scale * (1 + ((x - loc)/scale)²))
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cauchy {
+    pub loc: f64,
+    pub scale: f64,
+}
+
+impl Default for Cauchy {
+    fn default() -> Self {
+        Self {
+            loc: 0.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl Cauchy {
+    #[must_use]
+    pub fn new(loc: f64, scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { loc, scale }
+    }
+}
+
+impl ContinuousDistribution for Cauchy {
+    fn pdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        1.0 / (PI * self.scale * (1.0 + z * z))
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        0.5 + z.atan() / PI
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        self.loc + self.scale * (PI * (q - 0.5)).tan()
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NAN // Cauchy has no finite mean
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN // Cauchy has no finite variance
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Laplace Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Laplace (double exponential) distribution.
+///
+/// Matches `scipy.stats.laplace(loc, scale)`.
+/// PDF: f(x) = exp(-|x - loc|/scale) / (2 * scale)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Laplace {
+    pub loc: f64,
+    pub scale: f64,
+}
+
+impl Default for Laplace {
+    fn default() -> Self {
+        Self {
+            loc: 0.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl Laplace {
+    #[must_use]
+    pub fn new(loc: f64, scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { loc, scale }
+    }
+}
+
+impl ContinuousDistribution for Laplace {
+    fn pdf(&self, x: f64) -> f64 {
+        let z = ((x - self.loc) / self.scale).abs();
+        (-z).exp() / (2.0 * self.scale)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        if z < 0.0 {
+            0.5 * z.exp()
+        } else {
+            1.0 - 0.5 * (-z).exp()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        if q < 0.5 {
+            self.loc + self.scale * (2.0 * q).ln()
+        } else {
+            self.loc - self.scale * (2.0 * (1.0 - q)).ln()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        self.loc
+    }
+
+    fn var(&self) -> f64 {
+        2.0 * self.scale * self.scale
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Triangular Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Triangular distribution on [left, right] with mode `mode`.
+///
+/// Matches `scipy.stats.triang(c, loc, scale)` where c=(mode-left)/(right-left).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Triangular {
+    pub left: f64,
+    pub mode: f64,
+    pub right: f64,
+}
+
+impl Triangular {
+    #[must_use]
+    pub fn new(left: f64, mode: f64, right: f64) -> Self {
+        assert!(left < mode, "left must be < mode");
+        assert!(mode <= right, "mode must be <= right");
+        Self { left, mode, right }
+    }
+}
+
+impl ContinuousDistribution for Triangular {
+    fn pdf(&self, x: f64) -> f64 {
+        let (a, c, b) = (self.left, self.mode, self.right);
+        if x < a || x > b {
+            0.0
+        } else if x < c {
+            2.0 * (x - a) / ((b - a) * (c - a))
+        } else if x == c {
+            2.0 / (b - a)
+        } else {
+            2.0 * (b - x) / ((b - a) * (b - c))
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let (a, c, b) = (self.left, self.mode, self.right);
+        if x <= a {
+            0.0
+        } else if x <= c {
+            (x - a).powi(2) / ((b - a) * (c - a))
+        } else if x < b {
+            1.0 - (b - x).powi(2) / ((b - a) * (b - c))
+        } else {
+            1.0
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return self.left;
+        }
+        if q >= 1.0 {
+            return self.right;
+        }
+        let (a, c, b) = (self.left, self.mode, self.right);
+        let fc = (c - a) / (b - a);
+        if q < fc {
+            a + (q * (b - a) * (c - a)).sqrt()
+        } else {
+            b - ((1.0 - q) * (b - a) * (b - c)).sqrt()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        (self.left + self.mode + self.right) / 3.0
+    }
+
+    fn var(&self) -> f64 {
+        let (a, c, b) = (self.left, self.mode, self.right);
+        (a * a + b * b + c * c - a * b - a * c - b * c) / 18.0
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Statistical Tests
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of a statistical test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TtestResult {
+    /// Test statistic.
+    pub statistic: f64,
+    /// Two-sided p-value.
+    pub pvalue: f64,
+    /// Degrees of freedom.
+    pub df: f64,
+}
+
+/// One-sample t-test: test whether the mean of a sample differs from `popmean`.
+///
+/// Matches `scipy.stats.ttest_1samp(a, popmean)`.
+pub fn ttest_1samp(data: &[f64], popmean: f64) -> TtestResult {
+    let n = data.len() as f64;
+    let mean: f64 = data.iter().sum::<f64>() / n;
+    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let se = (var / n).sqrt();
+    let t = (mean - popmean) / se;
+    let df = n - 1.0;
+    let tdist = StudentT::new(df);
+    let pvalue = 2.0 * tdist.sf(t.abs());
+    TtestResult {
+        statistic: t,
+        pvalue,
+        df,
+    }
+}
+
+/// Independent two-sample t-test (equal variance assumed).
+///
+/// Matches `scipy.stats.ttest_ind(a, b, equal_var=True)`.
+pub fn ttest_ind(a: &[f64], b: &[f64]) -> TtestResult {
+    let n1 = a.len() as f64;
+    let n2 = b.len() as f64;
+    let mean1: f64 = a.iter().sum::<f64>() / n1;
+    let mean2: f64 = b.iter().sum::<f64>() / n2;
+    let var1: f64 = a.iter().map(|&x| (x - mean1).powi(2)).sum::<f64>() / (n1 - 1.0);
+    let var2: f64 = b.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0);
+
+    let df = n1 + n2 - 2.0;
+    // Pooled variance
+    let sp2 = ((n1 - 1.0) * var1 + (n2 - 1.0) * var2) / df;
+    let se = (sp2 * (1.0 / n1 + 1.0 / n2)).sqrt();
+    let t = (mean1 - mean2) / se;
+
+    let tdist = StudentT::new(df);
+    let pvalue = 2.0 * tdist.sf(t.abs());
+    TtestResult {
+        statistic: t,
+        pvalue,
+        df,
+    }
+}
+
+/// Welch's t-test (unequal variance).
+///
+/// Matches `scipy.stats.ttest_ind(a, b, equal_var=False)`.
+pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
+    let n1 = a.len() as f64;
+    let n2 = b.len() as f64;
+    let mean1: f64 = a.iter().sum::<f64>() / n1;
+    let mean2: f64 = b.iter().sum::<f64>() / n2;
+    let var1: f64 = a.iter().map(|&x| (x - mean1).powi(2)).sum::<f64>() / (n1 - 1.0);
+    let var2: f64 = b.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0);
+
+    let se = (var1 / n1 + var2 / n2).sqrt();
+    let t = (mean1 - mean2) / se;
+
+    // Welch-Satterthwaite degrees of freedom
+    let vn1 = var1 / n1;
+    let vn2 = var2 / n2;
+    let df = (vn1 + vn2).powi(2) / (vn1.powi(2) / (n1 - 1.0) + vn2.powi(2) / (n2 - 1.0));
+
+    let tdist = StudentT::new(df);
+    let pvalue = 2.0 * tdist.sf(t.abs());
+    TtestResult {
+        statistic: t,
+        pvalue,
+        df,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1559,5 +1865,213 @@ mod tests {
         // CDF(scale) = CDF of standard lognorm at 1 = Φ(0) = 0.5
         let ln = Lognormal::new(1.0, 5.0);
         assert_close(ln.cdf(5.0), 0.5, 1e-4, "lognormal cdf at scale");
+    }
+
+    // ── Cauchy distribution ───────────────────────────────────────
+
+    #[test]
+    fn cauchy_pdf_at_loc() {
+        let c = Cauchy::default();
+        assert_close(c.pdf(0.0), 1.0 / PI, 1e-12, "Cauchy pdf(0)");
+    }
+
+    #[test]
+    fn cauchy_cdf_at_loc() {
+        let c = Cauchy::default();
+        assert_close(c.cdf(0.0), 0.5, 1e-12, "Cauchy cdf(0)");
+    }
+
+    #[test]
+    fn cauchy_cdf_known() {
+        let c = Cauchy::default();
+        // CDF(1) = 0.5 + atan(1)/π = 0.5 + 0.25 = 0.75
+        assert_close(c.cdf(1.0), 0.75, 1e-12, "Cauchy cdf(1)");
+    }
+
+    #[test]
+    fn cauchy_ppf_roundtrip() {
+        let c = Cauchy::new(2.0, 3.0);
+        for q in [0.1, 0.25, 0.5, 0.75, 0.9] {
+            let x = c.ppf(q);
+            assert_close(c.cdf(x), q, 1e-10, &format!("Cauchy ppf roundtrip at q={q}"));
+        }
+    }
+
+    #[test]
+    fn cauchy_mean_is_nan() {
+        let c = Cauchy::default();
+        assert!(c.mean().is_nan());
+        assert!(c.var().is_nan());
+    }
+
+    // ── Laplace distribution ──────────────────────────────────────
+
+    #[test]
+    fn laplace_pdf_at_loc() {
+        let l = Laplace::default();
+        assert_close(l.pdf(0.0), 0.5, 1e-12, "Laplace pdf(0) = 1/(2*1)");
+    }
+
+    #[test]
+    fn laplace_cdf_at_loc() {
+        let l = Laplace::default();
+        assert_close(l.cdf(0.0), 0.5, 1e-12, "Laplace cdf(0)");
+    }
+
+    #[test]
+    fn laplace_sf_plus_cdf() {
+        let l = Laplace::new(1.0, 2.0);
+        for x in [-3.0, 0.0, 1.0, 4.0] {
+            assert_close(l.sf(x) + l.cdf(x), 1.0, 1e-12, &format!("sf+cdf at {x}"));
+        }
+    }
+
+    #[test]
+    fn laplace_ppf_roundtrip() {
+        let l = Laplace::new(3.0, 2.0);
+        for q in [0.1, 0.25, 0.5, 0.75, 0.9] {
+            let x = l.ppf(q);
+            assert_close(l.cdf(x), q, 1e-10, &format!("Laplace ppf at q={q}"));
+        }
+    }
+
+    #[test]
+    fn laplace_mean_var() {
+        let l = Laplace::new(5.0, 3.0);
+        assert_close(l.mean(), 5.0, 1e-12, "Laplace mean");
+        assert_close(l.var(), 18.0, 1e-12, "Laplace var = 2*scale^2");
+    }
+
+    // ── Triangular distribution ───────────────────────────────────
+
+    #[test]
+    fn triangular_pdf_at_mode() {
+        let t = Triangular::new(0.0, 0.5, 1.0);
+        assert_close(t.pdf(0.5), 2.0, 1e-12, "Triangular pdf at mode");
+    }
+
+    #[test]
+    fn triangular_cdf_bounds() {
+        let t = Triangular::new(0.0, 0.5, 1.0);
+        assert_eq!(t.cdf(-1.0), 0.0);
+        assert_close(t.cdf(1.0), 1.0, 1e-12, "cdf at right");
+    }
+
+    #[test]
+    fn triangular_ppf_roundtrip() {
+        let t = Triangular::new(1.0, 3.0, 5.0);
+        for q in [0.1, 0.25, 0.5, 0.75, 0.9] {
+            let x = t.ppf(q);
+            assert_close(t.cdf(x), q, 1e-10, &format!("Triangular ppf at q={q}"));
+        }
+    }
+
+    #[test]
+    fn triangular_mean_var() {
+        let t = Triangular::new(0.0, 1.0, 2.0);
+        assert_close(t.mean(), 1.0, 1e-12, "mean = (a+b+c)/3");
+        // var = (a²+b²+c²-ab-ac-bc)/18 = (0+4+1-0-0-2)/18 = 3/18 = 1/6
+        assert_close(t.var(), 1.0 / 6.0, 1e-12, "Triangular var");
+    }
+
+    // ── Random variate sampling (rvs) ─────────────────────────────
+
+    #[test]
+    fn rvs_normal_sample_mean() {
+        let n = Normal::new(5.0, 1.0);
+        let mut rng = rand::rng();
+        let samples = n.rvs(10_000, &mut rng);
+        let mean: f64 = samples.iter().sum::<f64>() / samples.len() as f64;
+        assert!(
+            (mean - 5.0).abs() < 0.1,
+            "sample mean should be near 5.0, got {mean}"
+        );
+    }
+
+    #[test]
+    fn rvs_uniform_bounds() {
+        let u = Uniform::new(2.0, 3.0); // [2, 5]
+        let mut rng = rand::rng();
+        let samples = u.rvs(1000, &mut rng);
+        assert!(
+            samples.iter().all(|&x| (2.0..=5.0).contains(&x)),
+            "all samples should be in [2, 5]"
+        );
+    }
+
+    #[test]
+    fn rvs_exponential_positive() {
+        let e = Exponential::new(1.0);
+        let mut rng = rand::rng();
+        let samples = e.rvs(1000, &mut rng);
+        assert!(
+            samples.iter().all(|&x| x >= 0.0),
+            "exponential samples should be non-negative"
+        );
+    }
+
+    // ── Statistical tests ─────────────────────────────────────────
+
+    #[test]
+    fn ttest_1samp_zero_mean() {
+        // Sample from N(0, 1) — should not reject H0: μ = 0
+        let data: Vec<f64> = (0..100)
+            .map(|i| {
+                let x = (i as f64 - 50.0) / 50.0;
+                x * 0.1 // small values centered at 0
+            })
+            .collect();
+        let result = ttest_1samp(&data, 0.0);
+        assert!(
+            result.pvalue > 0.05,
+            "should not reject H0, p={}", result.pvalue
+        );
+        assert_close(result.df, 99.0, 1e-10, "df = n-1");
+    }
+
+    #[test]
+    fn ttest_1samp_shifted_mean() {
+        // Data clearly shifted from 0
+        let data: Vec<f64> = (0..100).map(|i| 10.0 + (i as f64) * 0.01).collect();
+        let result = ttest_1samp(&data, 0.0);
+        assert!(
+            result.pvalue < 0.001,
+            "should reject H0, p={}", result.pvalue
+        );
+    }
+
+    #[test]
+    fn ttest_ind_same_distribution() {
+        let a: Vec<f64> = (0..50).map(|i| (i as f64) * 0.02).collect();
+        let b: Vec<f64> = (0..50).map(|i| (i as f64) * 0.02 + 0.001).collect();
+        let result = ttest_ind(&a, &b);
+        assert!(
+            result.pvalue > 0.05,
+            "similar samples should not reject H0, p={}", result.pvalue
+        );
+    }
+
+    #[test]
+    fn ttest_ind_different_distributions() {
+        let a: Vec<f64> = (0..50).map(|i| (i as f64) * 0.01).collect();
+        let b: Vec<f64> = (0..50).map(|i| 10.0 + (i as f64) * 0.01).collect();
+        let result = ttest_ind(&a, &b);
+        assert!(
+            result.pvalue < 0.001,
+            "very different samples should reject H0, p={}", result.pvalue
+        );
+    }
+
+    #[test]
+    fn ttest_ind_welch_different_variances() {
+        let a: Vec<f64> = (0..100).map(|i| (i as f64) * 0.001).collect();
+        let b: Vec<f64> = (0..30).map(|i| 10.0 + (i as f64) * 0.1).collect();
+        let result = ttest_ind_welch(&a, &b);
+        assert!(
+            result.pvalue < 0.001,
+            "should reject H0 with Welch, p={}", result.pvalue
+        );
+        // Welch df should be less than n1+n2-2
+        assert!(result.df < 128.0, "Welch df should be adjusted");
     }
 }

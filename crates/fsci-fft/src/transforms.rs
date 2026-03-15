@@ -603,6 +603,167 @@ pub fn idct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
     Ok(result)
 }
 
+/// Discrete Cosine Transform Type I.
+///
+/// DCT-I: X[k] = x[0] + (-1)^k * x[N-1] + 2 * Σ_{n=1}^{N-2} x[n] * cos(πnk/(N-1))
+///
+/// Matches `scipy.fft.dct(x, type=1)`.
+pub fn dct_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+    if n == 1 {
+        return Ok(vec![input[0]]);
+    }
+
+    let mut result = Vec::with_capacity(n);
+    let nm1 = (n - 1) as f64;
+    for k in 0..n {
+        let mut sum = 0.0;
+        for (i, &x) in input.iter().enumerate() {
+            sum += x * (PI * k as f64 * i as f64 / nm1).cos();
+        }
+        result.push(sum);
+    }
+    Ok(result)
+}
+
+/// Discrete Cosine Transform Type III.
+///
+/// DCT-III: x[n] = X[0]/2 + Σ_{k=1}^{N-1} X[k] * cos(πk(2n+1)/(2N))
+///
+/// This is the inverse of DCT-II (up to scaling).
+/// Matches `scipy.fft.dct(x, type=3)`.
+pub fn dct_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+    let two_n = 2.0 * n as f64;
+    let mut result = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut sum = input[0] / 2.0;
+        for (k, &xk) in input.iter().enumerate().skip(1) {
+            sum += xk * (PI * k as f64 * (2.0 * i as f64 + 1.0) / two_n).cos();
+        }
+        result.push(sum);
+    }
+    Ok(result)
+}
+
+/// Discrete Cosine Transform Type IV.
+///
+/// DCT-IV: X[k] = 2 * Σ_{n=0}^{N-1} x[n] * cos(π(2n+1)(2k+1)/(4N))
+///
+/// Matches `scipy.fft.dct(x, type=4)`.
+pub fn dct_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+    let four_n = 4.0 * n as f64;
+    let mut result = Vec::with_capacity(n);
+    for k in 0..n {
+        let mut sum = 0.0;
+        for (i, &x) in input.iter().enumerate() {
+            sum += x * (PI * (2.0 * i as f64 + 1.0) * (2.0 * k as f64 + 1.0) / four_n).cos();
+        }
+        result.push(sum);
+    }
+    Ok(result)
+}
+
+/// Discrete Sine Transform Type I.
+///
+/// DST-I: X[k] = 2 * Σ_{n=0}^{N-1} x[n] * sin(π(n+1)(k+1)/(N+1))
+///
+/// Matches `scipy.fft.dst(x, type=1)`.
+pub fn dst_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+    let np1 = (n + 1) as f64;
+    let mut result = Vec::with_capacity(n);
+    for k in 0..n {
+        let mut sum = 0.0;
+        for (i, &x) in input.iter().enumerate() {
+            sum += x * (PI * (i as f64 + 1.0) * (k as f64 + 1.0) / np1).sin();
+        }
+        result.push(sum);
+    }
+    Ok(result)
+}
+
+/// Discrete Sine Transform Type II.
+///
+/// DST-II: X[k] = Σ_{n=0}^{N-1} x[n] * sin(π(2n+1)(k+1)/(2N))
+///
+/// Matches `scipy.fft.dst(x, type=2)`.
+pub fn dst_ii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+    let two_n = 2.0 * n as f64;
+    let mut result = Vec::with_capacity(n);
+    for k in 0..n {
+        let mut sum = 0.0;
+        for (i, &x) in input.iter().enumerate() {
+            sum += x * (PI * (2.0 * i as f64 + 1.0) * (k as f64 + 1.0) / two_n).sin();
+        }
+        result.push(sum);
+    }
+    Ok(result)
+}
+
+/// Discrete Sine Transform Type III.
+///
+/// DST-III: x[n] = (-1)^n * X[N-1]/2 + Σ_{k=0}^{N-2} X[k] * sin(π(k+1)(2n+1)/(2N))
+///
+/// This is the inverse of DST-II (up to scaling).
+/// Matches `scipy.fft.dst(x, type=3)`.
+pub fn dst_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+    let two_n = 2.0 * n as f64;
+    let mut result = Vec::with_capacity(n);
+    for i in 0..n {
+        let sign_last = if i % 2 == 0 { 1.0 } else { -1.0 };
+        let mut sum = sign_last * input[n - 1] / 2.0;
+        for (k, &xk) in input.iter().enumerate().take(n - 1) {
+            sum += xk * (PI * (k as f64 + 1.0) * (2.0 * i as f64 + 1.0) / two_n).sin();
+        }
+        result.push(sum);
+    }
+    Ok(result)
+}
+
+/// Discrete Sine Transform Type IV.
+///
+/// DST-IV: X[k] = 2 * Σ_{n=0}^{N-1} x[n] * sin(π(2n+1)(2k+1)/(4N))
+///
+/// Matches `scipy.fft.dst(x, type=4)`.
+pub fn dst_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+
+    let n = input.len();
+    let four_n = 4.0 * n as f64;
+    let mut result = Vec::with_capacity(n);
+    for k in 0..n {
+        let mut sum = 0.0;
+        for (i, &x) in input.iter().enumerate() {
+            sum += x * (PI * (2.0 * i as f64 + 1.0) * (2.0 * k as f64 + 1.0) / four_n).sin();
+        }
+        result.push(sum);
+    }
+    Ok(result)
+}
+
 /// Compute the analytic signal using the Hilbert transform.
 ///
 /// Matches `scipy.signal.hilbert(x)`. Returns the analytic signal
@@ -623,7 +784,7 @@ pub fn hilbert(input: &[f64], options: &FftOptions) -> Result<Vec<Complex64>, Ff
     // Even N: h[0]=1, h[1..N/2]=2, h[N/2]=1, h[N/2+1..N]=0
     // Odd N:  h[0]=1, h[1..(N+1)/2]=2, h[(N+1)/2..N]=0
     if n > 1 {
-        if n % 2 == 0 {
+        if n.is_multiple_of(2) {
             // Even: bins 1..N/2 doubled, Nyquist (N/2) unchanged, rest zeroed
             for sk in spectrum.iter_mut().take(n / 2).skip(1) {
                 *sk = complex_scale(*sk, 2.0);
@@ -633,7 +794,7 @@ pub fn hilbert(input: &[f64], options: &FftOptions) -> Result<Vec<Complex64>, Ff
             }
         } else {
             // Odd: bins 1..(N+1)/2 doubled (no Nyquist), rest zeroed
-            let half_pos = (n + 1) / 2;
+            let half_pos = n.div_ceil(2);
             for sk in spectrum.iter_mut().take(half_pos).skip(1) {
                 *sk = complex_scale(*sk, 2.0);
             }

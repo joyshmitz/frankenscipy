@@ -17,8 +17,9 @@ pub use plan::{
     PlanMetadata, PlanningStrategy,
 };
 pub use transforms::{
-    BackendKind, Complex64, FftError, FftOptions, TransformTrace, WorkerPolicy, dct, fft, fft2,
-    fftn, hilbert, idct, ifft, ifft2, irfft, rfft, take_transform_traces,
+    BackendKind, Complex64, FftError, FftOptions, TransformTrace, WorkerPolicy, dct, dct_i,
+    dct_iii, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, fft2, fftn, hilbert, idct, ifft, ifft2,
+    irfft, rfft, take_transform_traces,
 };
 
 /// FFT normalization modes matching SciPy/PocketFFT conventions.
@@ -49,8 +50,13 @@ mod tests {
     use proptest::prelude::*;
     use serde_json::json;
 
+    use std::f64::consts::PI;
+
     use super::helpers::fftfreq;
-    use super::transforms::{Complex64, FftOptions, dct, fft, hilbert, idct, ifft, irfft, rfft};
+    use super::transforms::{
+        Complex64, FftOptions, dct, dct_i, dct_iii, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft,
+        hilbert, idct, ifft, irfft, rfft,
+    };
     use super::{Normalization, TransformKind};
 
     const PROPTEST_CASES: u32 = 512;
@@ -232,6 +238,151 @@ mod tests {
     fn dct_length_1() {
         let result = dct(&[5.0], &FftOptions::default()).expect("dct len 1");
         assert!((result[0] - 10.0).abs() < 1e-9, "DCT[0] = {}", result[0]);
+    }
+
+    // ── DCT type variants ──────────────────────────────────────────
+
+    #[test]
+    fn dct_i_preserves_length() {
+        let input = vec![1.0, 2.0, 3.0, 2.0, 1.0];
+        let result = dct_i(&input, &FftOptions::default()).expect("dct_i");
+        assert_eq!(result.len(), 5);
+        assert!(result.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn dct_i_known_values() {
+        // DCT-I of [1, 0, 0] with N=3:
+        // X[k] = Σ x[n]*cos(πnk/2) = cos(0) = 1 for all k
+        let input = vec![1.0, 0.0, 0.0];
+        let result = dct_i(&input, &FftOptions::default()).expect("dct_i");
+        assert_eq!(result.len(), 3);
+        for (k, &val) in result.iter().enumerate() {
+            let mut expected = 0.0;
+            for (n, &x) in input.iter().enumerate() {
+                expected += x * (PI * n as f64 * k as f64 / 2.0).cos();
+            }
+            assert!(
+                (val - expected).abs() < 1e-9,
+                "DCT-I[{k}] = {val}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn dct_iii_inverts_dct_ii() {
+        let input = vec![1.0, -2.0, 3.0, -4.0, 5.0];
+        let opts = FftOptions::default();
+        let forward = dct(&input, &opts).expect("dct");
+        let inverse = dct_iii(&forward, &opts).expect("dct_iii");
+        // Find scale factor
+        let scale = inverse[0] / input[0];
+        assert!(scale > 0.0, "scale should be positive");
+        for (a, b) in inverse.iter().zip(&input) {
+            assert!(
+                (a / scale - b).abs() < 1e-8,
+                "DCT-III(DCT-II(x)): {a}/{scale} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn dct_iv_self_inverse() {
+        // DCT-IV is its own inverse (up to scaling by N/2)
+        let input = vec![1.0, 2.0, 3.0, 4.0];
+        let opts = FftOptions::default();
+        let forward = dct_iv(&input, &opts).expect("dct_iv");
+        let roundtrip = dct_iv(&forward, &opts).expect("dct_iv roundtrip");
+        let scale = input.len() as f64 / 2.0;
+        for (a, b) in roundtrip.iter().zip(&input) {
+            assert!(
+                (a / scale - b).abs() < 1e-9,
+                "DCT-IV roundtrip: {} vs {b}",
+                a / scale
+            );
+        }
+    }
+
+    // ── DST variants ──────────────────────────────────────────────
+
+    #[test]
+    fn dst_i_roundtrip_proportional() {
+        // DST-I applied twice gives back a scaled version of input
+        let input = vec![1.0, 2.0, 3.0, 4.0];
+        let opts = FftOptions::default();
+        let forward = dst_i(&input, &opts).expect("dst_i");
+        let roundtrip = dst_i(&forward, &opts).expect("dst_i roundtrip");
+        let scale = roundtrip[0] / input[0];
+        assert!(scale > 0.0, "scale should be positive");
+        for (a, b) in roundtrip.iter().zip(&input) {
+            assert!(
+                (a / scale - b).abs() < 1e-9,
+                "DST-I roundtrip: {a}/{scale} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn dst_ii_constant_input() {
+        // DST-II of constant should give specific pattern
+        let input = vec![1.0; 4];
+        let result = dst_ii(&input, &FftOptions::default()).expect("dst_ii");
+        assert_eq!(result.len(), 4);
+        // All values should be finite
+        assert!(result.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn dst_iii_inverts_dst_ii() {
+        let input = vec![1.0, -2.0, 3.0, -4.0, 5.0];
+        let opts = FftOptions::default();
+        let forward = dst_ii(&input, &opts).expect("dst_ii");
+        let inverse = dst_iii(&forward, &opts).expect("dst_iii");
+        // Find scale factor
+        let scale = inverse[0] / input[0];
+        assert!(scale > 0.0, "scale should be positive");
+        for (a, b) in inverse.iter().zip(&input) {
+            assert!(
+                (a / scale - b).abs() < 1e-8,
+                "DST-III(DST-II(x)): {a}/{scale} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn dst_iv_self_inverse() {
+        // DST-IV is its own inverse (up to scaling by N/2)
+        let input = vec![1.0, 2.0, 3.0, 4.0];
+        let opts = FftOptions::default();
+        let forward = dst_iv(&input, &opts).expect("dst_iv");
+        let roundtrip = dst_iv(&forward, &opts).expect("dst_iv roundtrip");
+        let scale = input.len() as f64 / 2.0;
+        for (a, b) in roundtrip.iter().zip(&input) {
+            assert!(
+                (a / scale - b).abs() < 1e-9,
+                "DST-IV roundtrip: {} vs {b}",
+                a / scale
+            );
+        }
+    }
+
+    #[test]
+    fn dst_i_known_values() {
+        // DST-I of [1, 1, 1, 1] with N=4, N+1=5
+        let input = vec![1.0, 1.0, 1.0, 1.0];
+        let result = dst_i(&input, &FftOptions::default()).expect("dst_i");
+        // X[k] = 2 * Σ x[n] * sin(π(n+1)(k+1)/5)
+        for (k, &val) in result.iter().enumerate() {
+            let mut expected = 0.0;
+            for (n, &x) in input.iter().enumerate() {
+                expected +=
+                    x * (PI * (n as f64 + 1.0) * (k as f64 + 1.0) / 5.0).sin();
+            }
+            assert!(
+                (val - expected).abs() < 1e-9,
+                "DST-I[{k}] = {val}, expected {expected}"
+            );
+        }
     }
 
     // ── Hilbert transform tests ─────────────────────────────────────

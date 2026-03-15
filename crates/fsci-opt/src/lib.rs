@@ -1,10 +1,15 @@
 #![forbid(unsafe_code)]
 
+pub mod curvefit;
 pub mod linesearch;
 pub mod minimize;
 pub mod root;
 pub mod types;
 
+pub use curvefit::{
+    CurveFitOptions, CurveFitResult, LeastSquaresOptions, LeastSquaresResult, curve_fit,
+    least_squares,
+};
 pub use linesearch::{LineSearchResult, WolfeParams, line_search_wolfe1, line_search_wolfe2};
 pub use minimize::{
     Bound, MinimizeScalarOptions, MinimizeScalarResult, bfgs, cg_pr_plus, lbfgsb, minimize,
