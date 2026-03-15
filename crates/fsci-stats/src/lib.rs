@@ -271,6 +271,87 @@ impl ContinuousDistribution for Uniform {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Exponential Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Exponential distribution with rate parameter `lambda` (= 1/scale).
+///
+/// Matches `scipy.stats.expon(scale=1/lambda)`.
+/// The PDF is: f(x) = lambda * exp(-lambda * x) for x >= 0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Exponential {
+    pub lambda: f64,
+}
+
+impl Default for Exponential {
+    fn default() -> Self {
+        Self { lambda: 1.0 }
+    }
+}
+
+impl Exponential {
+    #[must_use]
+    pub fn new(lambda: f64) -> Self {
+        assert!(lambda > 0.0, "lambda must be positive, got {lambda}");
+        Self { lambda }
+    }
+
+    /// Create from scale parameter (= 1/lambda), matching SciPy convention.
+    #[must_use]
+    pub fn from_scale(scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self {
+            lambda: 1.0 / scale,
+        }
+    }
+
+    /// Percent point function (inverse CDF).
+    pub fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        -(1.0 - q).ln() / self.lambda
+    }
+}
+
+impl ContinuousDistribution for Exponential {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.0
+        } else {
+            self.lambda * (-self.lambda * x).exp()
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.0
+        } else {
+            1.0 - (-self.lambda * x).exp()
+        }
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            1.0
+        } else {
+            (-self.lambda * x).exp()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        1.0 / self.lambda
+    }
+
+    fn var(&self) -> f64 {
+        1.0 / (self.lambda * self.lambda)
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Internal Helper Functions
 // ══════════════════════════════════════════════════════════════════════
 
@@ -711,5 +792,73 @@ mod tests {
     fn trait_std_is_sqrt_var() {
         let n = Normal::new(0.0, 3.0);
         assert_close(n.std(), 3.0, 1e-12, "std = sqrt(var)");
+    }
+
+    // ── Exponential distribution ────────────────────────────────────
+
+    #[test]
+    fn exponential_pdf_at_zero() {
+        let e = Exponential::new(2.0);
+        assert_close(e.pdf(0.0), 2.0, 1e-12, "expon pdf(0) = lambda");
+    }
+
+    #[test]
+    fn exponential_pdf_negative() {
+        let e = Exponential::default();
+        assert_eq!(e.pdf(-1.0), 0.0);
+    }
+
+    #[test]
+    fn exponential_cdf_known() {
+        let e = Exponential::new(1.0);
+        // CDF(1) = 1 - e^(-1) ≈ 0.6321
+        assert_close(e.cdf(1.0), 1.0 - (-1.0_f64).exp(), 1e-12, "expon cdf(1)");
+        assert_eq!(e.cdf(0.0), 0.0);
+        assert_eq!(e.cdf(-1.0), 0.0);
+    }
+
+    #[test]
+    fn exponential_sf_plus_cdf() {
+        let e = Exponential::new(3.0);
+        for x in [0.0, 0.5, 1.0, 2.0, 5.0] {
+            assert_close(
+                e.sf(x) + e.cdf(x),
+                1.0,
+                1e-12,
+                &format!("expon sf+cdf at {x}"),
+            );
+        }
+    }
+
+    #[test]
+    fn exponential_mean_var() {
+        let e = Exponential::new(0.5);
+        assert_close(e.mean(), 2.0, 1e-12, "mean = 1/lambda");
+        assert_close(e.var(), 4.0, 1e-12, "var = 1/lambda^2");
+    }
+
+    #[test]
+    fn exponential_ppf() {
+        let e = Exponential::new(1.0);
+        assert_close(e.ppf(0.0), 0.0, 1e-12, "ppf(0)");
+        assert_close(e.ppf(0.5), 2.0_f64.ln(), 1e-12, "ppf(0.5) = ln(2)");
+        assert!(e.ppf(1.0).is_infinite(), "ppf(1) = inf");
+    }
+
+    #[test]
+    fn exponential_from_scale() {
+        let e = Exponential::from_scale(2.0);
+        assert_close(e.lambda, 0.5, 1e-12, "lambda = 1/scale");
+        assert_close(e.mean(), 2.0, 1e-12, "mean = scale");
+    }
+
+    #[test]
+    fn exponential_memoryless_property() {
+        // P(X > s+t | X > s) = P(X > t)
+        let e = Exponential::new(1.5);
+        let s = 1.0;
+        let t = 2.0;
+        let conditional = e.sf(s + t) / e.sf(s);
+        assert_close(conditional, e.sf(t), 1e-12, "memoryless property");
     }
 }

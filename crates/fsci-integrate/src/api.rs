@@ -516,24 +516,55 @@ mod tests {
     }
 
     #[test]
-    fn solve_ivp_dop853_is_accepted() {
-        // Verify DOP853 is accepted as a valid method (no longer returns NotYetImplemented)
-        // Full numerical verification requires validated Butcher tableau coefficients.
+    fn solve_ivp_dop853_exponential_decay() {
+        // dy/dt = -y, y(0) = 1 => y(1) = exp(-1)
         let result = solve_ivp(
             &mut |_t, y| vec![-y[0]],
             &SolveIvpOptions {
-                t_span: (0.0, 0.01),
+                t_span: (0.0, 1.0),
                 y0: &[1.0],
                 method: SolverKind::Dop853,
-                rtol: 1e-3,
-                atol: ToleranceValue::Scalar(1e-6),
-                first_step: Some(0.001),
-                max_step: 0.01,
+                rtol: 1e-10,
+                atol: ToleranceValue::Scalar(1e-12),
                 ..SolveIvpOptions::default()
             },
+        )
+        .expect("DOP853 should succeed");
+        assert!(result.success, "DOP853 should converge: {}", result.message);
+        let y_final = result.y.last().unwrap()[0];
+        let expected = (-1.0_f64).exp();
+        assert!(
+            (y_final - expected).abs() < 1e-8,
+            "DOP853 y(1)={y_final}, expected {expected}"
         );
-        // DOP853 tableau is wired but coefficients need validation against
-        // reference implementation; for now just verify it doesn't error on dispatch.
-        assert!(result.is_ok(), "DOP853 should be dispatched without error");
+    }
+
+    #[test]
+    fn solve_ivp_dop853_harmonic_oscillator() {
+        // dx/dt = v, dv/dt = -x => x(2π) ≈ 1, v(2π) ≈ 0
+        let result = solve_ivp(
+            &mut |_t, y| vec![y[1], -y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 2.0 * std::f64::consts::PI),
+                y0: &[1.0, 0.0],
+                method: SolverKind::Dop853,
+                rtol: 1e-10,
+                atol: ToleranceValue::Scalar(1e-12),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("DOP853 harmonic should succeed");
+        assert!(result.success);
+        let y_final = result.y.last().unwrap();
+        assert!(
+            (y_final[0] - 1.0).abs() < 1e-6,
+            "x(2π)={}, expected 1.0",
+            y_final[0]
+        );
+        assert!(
+            y_final[1].abs() < 1e-6,
+            "v(2π)={}, expected 0.0",
+            y_final[1]
+        );
     }
 }
