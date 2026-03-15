@@ -183,6 +183,45 @@ fn bluestein_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
 }
 
 /// Reverse the lower `bits` bits of `x`.
+/// Specialized real FFT: pack N real values into N/2 complex, FFT, then unpack.
+/// Returns N/2 + 1 complex values (the non-redundant half of the spectrum).
+fn real_fft_specialized(input: &[f64], backend: &dyn FftBackend) -> Vec<Complex64> {
+    let n = input.len();
+    let half = n / 2;
+
+    // Pack: z[k] = x[2k] + i*x[2k+1]
+    let mut packed = Vec::with_capacity(half);
+    for k in 0..half {
+        packed.push((input[2 * k], input[2 * k + 1]));
+    }
+
+    // FFT of half-length complex sequence
+    let z = backend.transform_1d_unscaled(&packed, false);
+
+    // Unpack: X[k] = (Z[k] + conj(Z[N/2-k]))/2 - i*exp(-2πik/N)*(Z[k] - conj(Z[N/2-k]))/2
+    let mut result = Vec::with_capacity(half + 1);
+    for k in 0..=half {
+        let zk = if k < half { z[k] } else { z[0] };
+        let zn_k = if k == 0 || k == half { z[0] } else { z[half - k] };
+        let zn_k_conj = complex_conj(zn_k);
+
+        let even = (0.5 * (zk.0 + zn_k_conj.0), 0.5 * (zk.1 + zn_k_conj.1));
+        let odd = (0.5 * (zk.0 - zn_k_conj.0), 0.5 * (zk.1 - zn_k_conj.1));
+
+        // Twiddle: exp(-2πik/N)
+        let angle = -2.0 * PI * k as f64 / n as f64;
+        let twiddle = (angle.cos(), angle.sin());
+        let odd_tw = complex_mul(odd, twiddle);
+
+        // Multiply by -i: (a, b) -> (b, -a)
+        let odd_final = (odd_tw.1, -odd_tw.0);
+
+        result.push(complex_add(even, odd_final));
+    }
+
+    result
+}
+
 fn bit_reverse(x: usize, bits: usize) -> usize {
     let mut result = 0;
     let mut val = x;
@@ -377,14 +416,20 @@ pub fn rfft(input: &[f64], options: &FftOptions) -> Result<Vec<Complex64>, FftEr
     );
     let plan_cache_hit = touch_plan_cache(&key, input.len());
 
-    let complex_input: Vec<Complex64> = input.iter().map(|&x| (x, 0.0)).collect();
     let started = Instant::now();
-    let mut full = backend.transform_1d_unscaled(&complex_input, false);
-    apply_normalization(&mut full, options.normalization, input.len(), false);
-    let output = full
-        .into_iter()
-        .take(input.len() / 2 + 1)
-        .collect::<Vec<_>>();
+    let mut output = if input.len().is_power_of_two() && input.len() >= 4 {
+        // Specialized real FFT: pack pairs of real values as complex, do N/2 FFT,
+        // then unpack using symmetry properties.
+        real_fft_specialized(input, backend)
+    } else {
+        // Fallback: convert to complex and run full FFT
+        let complex_input: Vec<Complex64> = input.iter().map(|&x| (x, 0.0)).collect();
+        let full = backend.transform_1d_unscaled(&complex_input, false);
+        full.into_iter()
+            .take(input.len() / 2 + 1)
+            .collect::<Vec<_>>()
+    };
+    apply_normalization(&mut output, options.normalization, input.len(), false);
 
     record_trace(TransformTrace {
         operation_id: next_operation_id(),
