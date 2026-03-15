@@ -120,9 +120,7 @@ where
 
     if m < n {
         return Err(OptError::InvalidArgument {
-            detail: format!(
-                "number of residuals ({m}) must be >= number of parameters ({n})"
-            ),
+            detail: format!("number of residuals ({m}) must be >= number of parameters ({n})"),
         });
     }
 
@@ -374,12 +372,7 @@ fn l2_norm(v: &[f64]) -> f64 {
 }
 
 /// Compute finite-difference Jacobian (m x n) at point x with residuals r.
-fn finite_diff_jacobian<F>(
-    residuals: &F,
-    x: &[f64],
-    r0: &[f64],
-    eps: f64,
-) -> Vec<Vec<f64>>
+fn finite_diff_jacobian<F>(residuals: &F, x: &[f64], r0: &[f64], eps: f64) -> Vec<Vec<f64>>
 where
     F: Fn(&[f64]) -> Vec<f64>,
 {
@@ -450,12 +443,7 @@ fn max_diag_jtj(jac: &[Vec<f64>]) -> f64 {
 
 /// Solve (A + mu * I) * x = -b via Cholesky-like approach.
 /// Falls back to diagonal if matrix is singular.
-fn solve_damped_normal_equations(
-    jtj: &[Vec<f64>],
-    jtr: &[f64],
-    mu: f64,
-    n: usize,
-) -> Vec<f64> {
+fn solve_damped_normal_equations(jtj: &[Vec<f64>], jtr: &[f64], mu: f64, n: usize) -> Vec<f64> {
     // Build damped matrix
     let mut a = jtj.to_vec();
     for (i, row) in a.iter_mut().enumerate() {
@@ -468,9 +456,7 @@ fn solve_damped_normal_equations(
         step.iter().map(|v| -v).collect()
     } else {
         // Fallback: diagonal solve
-        (0..n)
-            .map(|i| -jtr[i] / (jtj[i][i] + mu))
-            .collect()
+        (0..n).map(|i| -jtr[i] / (jtj[i][i] + mu)).collect()
     }
 }
 
@@ -584,8 +570,16 @@ mod tests {
         let result = least_squares(residuals, &[1.0, 0.0], LeastSquaresOptions::default())
             .expect("should converge");
         assert!(result.success, "{}", result.message);
-        assert!((result.x[0] - 2.0).abs() < 0.1, "slope ~ 2.0, got {}", result.x[0]);
-        assert!((result.x[1] - 0.1).abs() < 0.2, "intercept ~ 0.1, got {}", result.x[1]);
+        assert!(
+            (result.x[0] - 2.0).abs() < 0.1,
+            "slope ~ 2.0, got {}",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 0.1).abs() < 0.2,
+            "intercept ~ 0.1, got {}",
+            result.x[1]
+        );
     }
 
     #[test]
@@ -669,10 +663,7 @@ mod tests {
     fn curve_fit_sinusoidal() {
         // Fit y = A * sin(omega * x + phi)
         let xdata: Vec<f64> = (0..50).map(|i| i as f64 * 0.1).collect();
-        let ydata: Vec<f64> = xdata
-            .iter()
-            .map(|&x| 2.5 * (1.5 * x + 0.3).sin())
-            .collect();
+        let ydata: Vec<f64> = xdata.iter().map(|&x| 2.5 * (1.5 * x + 0.3).sin()).collect();
 
         let model = |x: f64, p: &[f64]| p[0] * (p[1] * x + p[2]).sin();
 
@@ -731,13 +722,8 @@ mod tests {
     #[test]
     fn curve_fit_requires_p0() {
         let model = |_x: f64, _p: &[f64]| 0.0;
-        let err = curve_fit(
-            model,
-            &[1.0],
-            &[1.0],
-            CurveFitOptions::default(),
-        )
-        .expect_err("should require p0");
+        let err = curve_fit(model, &[1.0], &[1.0], CurveFitOptions::default())
+            .expect_err("should require p0");
         assert!(matches!(err, OptError::InvalidArgument { .. }));
     }
 
@@ -758,12 +744,8 @@ mod tests {
                 .collect()
         };
 
-        let result = least_squares(
-            residuals,
-            &[3.0, 0.0, 1.0],
-            LeastSquaresOptions::default(),
-        )
-        .expect("should converge");
+        let result = least_squares(residuals, &[3.0, 0.0, 1.0], LeastSquaresOptions::default())
+            .expect("should converge");
         assert!(result.success, "{}", result.message);
         assert!(
             (result.x[0] - 5.0).abs() < 0.1,

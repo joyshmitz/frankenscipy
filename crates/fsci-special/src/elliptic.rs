@@ -92,11 +92,7 @@ pub fn ellipe(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 /// F(φ, m) = ∫₀^φ dθ / sqrt(1 - m sin²θ)
 ///
 /// Uses Carlson's RF form via Gauss transformation.
-pub fn ellipkinc(
-    phi_tensor: &SpecialTensor,
-    m: f64,
-    mode: RuntimeMode,
-) -> SpecialResult {
+pub fn ellipkinc(phi_tensor: &SpecialTensor, m: f64, mode: RuntimeMode) -> SpecialResult {
     map_real("ellipkinc", phi_tensor, mode, |phi| {
         ellipkinc_scalar(phi, m, mode)
     })
@@ -105,11 +101,7 @@ pub fn ellipkinc(
 /// Incomplete elliptic integral of the second kind E(φ, m).
 ///
 /// E(φ, m) = ∫₀^φ sqrt(1 - m sin²θ) dθ
-pub fn ellipeinc(
-    phi_tensor: &SpecialTensor,
-    m: f64,
-    mode: RuntimeMode,
-) -> SpecialResult {
+pub fn ellipeinc(phi_tensor: &SpecialTensor, m: f64, mode: RuntimeMode) -> SpecialResult {
     map_real("ellipeinc", phi_tensor, mode, |phi| {
         ellipeinc_scalar(phi, m, mode)
     })
@@ -715,7 +707,10 @@ mod tests {
     fn expi_at_zero_is_neg_inf() {
         let x = SpecialTensor::RealScalar(0.0);
         let result = eval_scalar(expi(&x, RuntimeMode::Strict));
-        assert!(result.is_infinite() && result.is_sign_negative(), "Ei(0) = -inf");
+        assert!(
+            result.is_infinite() && result.is_sign_negative(),
+            "Ei(0) = -inf"
+        );
     }
 
     #[test]

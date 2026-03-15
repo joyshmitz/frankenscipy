@@ -375,8 +375,7 @@ mod tests {
         for (k, &val) in result.iter().enumerate() {
             let mut expected = 0.0;
             for (n, &x) in input.iter().enumerate() {
-                expected +=
-                    x * (PI * (n as f64 + 1.0) * (k as f64 + 1.0) / 5.0).sin();
+                expected += x * (PI * (n as f64 + 1.0) * (k as f64 + 1.0) / 5.0).sin();
             }
             assert!(
                 (val - expected).abs() < 1e-9,

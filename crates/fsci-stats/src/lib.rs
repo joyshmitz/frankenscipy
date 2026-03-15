@@ -1893,7 +1893,12 @@ mod tests {
         let c = Cauchy::new(2.0, 3.0);
         for q in [0.1, 0.25, 0.5, 0.75, 0.9] {
             let x = c.ppf(q);
-            assert_close(c.cdf(x), q, 1e-10, &format!("Cauchy ppf roundtrip at q={q}"));
+            assert_close(
+                c.cdf(x),
+                q,
+                1e-10,
+                &format!("Cauchy ppf roundtrip at q={q}"),
+            );
         }
     }
 
@@ -2024,7 +2029,8 @@ mod tests {
         let result = ttest_1samp(&data, 0.0);
         assert!(
             result.pvalue > 0.05,
-            "should not reject H0, p={}", result.pvalue
+            "should not reject H0, p={}",
+            result.pvalue
         );
         assert_close(result.df, 99.0, 1e-10, "df = n-1");
     }
@@ -2036,7 +2042,8 @@ mod tests {
         let result = ttest_1samp(&data, 0.0);
         assert!(
             result.pvalue < 0.001,
-            "should reject H0, p={}", result.pvalue
+            "should reject H0, p={}",
+            result.pvalue
         );
     }
 
@@ -2047,7 +2054,8 @@ mod tests {
         let result = ttest_ind(&a, &b);
         assert!(
             result.pvalue > 0.05,
-            "similar samples should not reject H0, p={}", result.pvalue
+            "similar samples should not reject H0, p={}",
+            result.pvalue
         );
     }
 
@@ -2058,7 +2066,8 @@ mod tests {
         let result = ttest_ind(&a, &b);
         assert!(
             result.pvalue < 0.001,
-            "very different samples should reject H0, p={}", result.pvalue
+            "very different samples should reject H0, p={}",
+            result.pvalue
         );
     }
 
@@ -2069,7 +2078,8 @@ mod tests {
         let result = ttest_ind_welch(&a, &b);
         assert!(
             result.pvalue < 0.001,
-            "should reject H0 with Welch, p={}", result.pvalue
+            "should reject H0 with Welch, p={}",
+            result.pvalue
         );
         // Welch df should be less than n1+n2-2
         assert!(result.df < 128.0, "Welch df should be adjusted");
