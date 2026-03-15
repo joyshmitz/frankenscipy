@@ -352,6 +352,128 @@ impl ContinuousDistribution for Exponential {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// F-Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// F-distribution with `dfn` (numerator) and `dfd` (denominator) degrees of freedom.
+///
+/// Matches `scipy.stats.f(dfn, dfd)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FDistribution {
+    pub dfn: f64,
+    pub dfd: f64,
+}
+
+impl FDistribution {
+    #[must_use]
+    pub fn new(dfn: f64, dfd: f64) -> Self {
+        assert!(dfn > 0.0, "dfn must be positive, got {dfn}");
+        assert!(dfd > 0.0, "dfd must be positive, got {dfd}");
+        Self { dfn, dfd }
+    }
+}
+
+impl ContinuousDistribution for FDistribution {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        let ln_pdf = 0.5 * d1 * (d1 / d2).ln() + (0.5 * d1 - 1.0) * x.ln()
+            - 0.5 * (d1 + d2) * (1.0 + d1 * x / d2).ln()
+            - ln_beta(0.5 * d1, 0.5 * d2);
+        ln_pdf.exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        let w = d1 * x / (d1 * x + d2);
+        regularized_incomplete_beta(0.5 * d1, 0.5 * d2, w)
+    }
+
+    fn mean(&self) -> f64 {
+        if self.dfd > 2.0 {
+            self.dfd / (self.dfd - 2.0)
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.dfd > 4.0 {
+            let d1 = self.dfn;
+            let d2 = self.dfd;
+            2.0 * d2 * d2 * (d1 + d2 - 2.0) / (d1 * (d2 - 2.0).powi(2) * (d2 - 4.0))
+        } else {
+            f64::NAN
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Beta Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Beta distribution with shape parameters `a` and `b`.
+///
+/// Matches `scipy.stats.beta(a, b)`.
+/// Supported on [0, 1].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BetaDist {
+    pub a: f64,
+    pub b: f64,
+}
+
+impl BetaDist {
+    #[must_use]
+    pub fn new(a: f64, b: f64) -> Self {
+        assert!(a > 0.0, "a must be positive, got {a}");
+        assert!(b > 0.0, "b must be positive, got {b}");
+        Self { a, b }
+    }
+}
+
+impl ContinuousDistribution for BetaDist {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 || x >= 1.0 {
+            return 0.0;
+        }
+        let ln_pdf =
+            (self.a - 1.0) * x.ln() + (self.b - 1.0) * (1.0 - x).ln() - ln_beta(self.a, self.b);
+        ln_pdf.exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if x >= 1.0 {
+            return 1.0;
+        }
+        regularized_incomplete_beta(self.a, self.b, x)
+    }
+
+    fn mean(&self) -> f64 {
+        self.a / (self.a + self.b)
+    }
+
+    fn var(&self) -> f64 {
+        let ab = self.a + self.b;
+        self.a * self.b / (ab * ab * (ab + 1.0))
+    }
+}
+
+/// Log of the Beta function: ln(B(a,b)) = ln(Γ(a)) + ln(Γ(b)) - ln(Γ(a+b))
+fn ln_beta(a: f64, b: f64) -> f64 {
+    ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Internal Helper Functions
 // ══════════════════════════════════════════════════════════════════════
 
@@ -860,5 +982,90 @@ mod tests {
         let t = 2.0;
         let conditional = e.sf(s + t) / e.sf(s);
         assert_close(conditional, e.sf(t), 1e-12, "memoryless property");
+    }
+
+    // ── F-distribution ──────────────────────────────────────────────
+
+    #[test]
+    fn f_dist_pdf_positive_only() {
+        let f = FDistribution::new(5.0, 10.0);
+        assert_eq!(f.pdf(-1.0), 0.0);
+        assert_eq!(f.pdf(0.0), 0.0);
+        assert!(f.pdf(1.0) > 0.0);
+    }
+
+    #[test]
+    fn f_dist_cdf_at_zero() {
+        let f = FDistribution::new(5.0, 10.0);
+        assert_eq!(f.cdf(0.0), 0.0);
+    }
+
+    #[test]
+    fn f_dist_cdf_monotone() {
+        let f = FDistribution::new(3.0, 7.0);
+        let c1 = f.cdf(0.5);
+        let c2 = f.cdf(1.0);
+        let c3 = f.cdf(2.0);
+        assert!(c1 < c2, "CDF should be monotone");
+        assert!(c2 < c3, "CDF should be monotone");
+        assert!(c3 < 1.0, "CDF < 1 for finite x");
+    }
+
+    #[test]
+    fn f_dist_mean() {
+        let f = FDistribution::new(5.0, 10.0);
+        // mean = dfd/(dfd-2) = 10/8 = 1.25
+        assert_close(f.mean(), 1.25, 1e-10, "F(5,10) mean");
+    }
+
+    #[test]
+    fn f_dist_sf_plus_cdf() {
+        let f = FDistribution::new(4.0, 8.0);
+        for x in [0.5, 1.0, 2.0, 5.0] {
+            assert_close(f.sf(x) + f.cdf(x), 1.0, 1e-6, &format!("F sf+cdf at {x}"));
+        }
+    }
+
+    // ── Beta distribution ───────────────────────────────────────────
+
+    #[test]
+    fn beta_dist_pdf_support() {
+        let b = BetaDist::new(2.0, 3.0);
+        assert_eq!(b.pdf(-0.1), 0.0);
+        assert_eq!(b.pdf(1.1), 0.0);
+        assert!(b.pdf(0.5) > 0.0);
+    }
+
+    #[test]
+    fn beta_dist_cdf_bounds() {
+        let b = BetaDist::new(2.0, 5.0);
+        assert_eq!(b.cdf(0.0), 0.0);
+        assert_eq!(b.cdf(1.0), 1.0);
+    }
+
+    #[test]
+    fn beta_dist_uniform_special_case() {
+        // Beta(1,1) = Uniform(0,1)
+        let b = BetaDist::new(1.0, 1.0);
+        assert_close(b.mean(), 0.5, 1e-10, "Beta(1,1) mean");
+        assert_close(b.var(), 1.0 / 12.0, 1e-10, "Beta(1,1) var");
+        assert_close(b.cdf(0.5), 0.5, 1e-4, "Beta(1,1) cdf(0.5)");
+    }
+
+    #[test]
+    fn beta_dist_mean_var() {
+        let b = BetaDist::new(2.0, 5.0);
+        // mean = a/(a+b) = 2/7
+        assert_close(b.mean(), 2.0 / 7.0, 1e-10, "Beta(2,5) mean");
+        // var = ab/((a+b)^2*(a+b+1)) = 10/(49*8) = 10/392
+        assert_close(b.var(), 10.0 / 392.0, 1e-10, "Beta(2,5) var");
+    }
+
+    #[test]
+    fn beta_dist_symmetry() {
+        // Beta(a,b) at x has same pdf as Beta(b,a) at 1-x
+        let b1 = BetaDist::new(2.0, 5.0);
+        let b2 = BetaDist::new(5.0, 2.0);
+        assert_close(b1.pdf(0.3), b2.pdf(0.7), 1e-10, "Beta symmetry");
     }
 }
