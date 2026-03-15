@@ -468,6 +468,114 @@ impl ContinuousDistribution for BetaDist {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Gamma Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Gamma distribution with shape `a` and rate `1/scale`.
+///
+/// Matches `scipy.stats.gamma(a, scale=scale)`.
+/// PDF: f(x) = x^(a-1) * exp(-x/scale) / (scale^a * Γ(a))
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GammaDist {
+    pub a: f64,
+    pub scale: f64,
+}
+
+impl GammaDist {
+    #[must_use]
+    pub fn new(a: f64, scale: f64) -> Self {
+        assert!(a > 0.0, "shape a must be positive, got {a}");
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { a, scale }
+    }
+}
+
+impl ContinuousDistribution for GammaDist {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        if x == 0.0 {
+            return if self.a == 1.0 {
+                1.0 / self.scale
+            } else if self.a > 1.0 {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+        }
+        let ln_pdf =
+            (self.a - 1.0) * x.ln() - x / self.scale - self.a * self.scale.ln() - ln_gamma(self.a);
+        ln_pdf.exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        lower_regularized_gamma(self.a, x / self.scale)
+    }
+
+    fn mean(&self) -> f64 {
+        self.a * self.scale
+    }
+
+    fn var(&self) -> f64 {
+        self.a * self.scale * self.scale
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Poisson Distribution (discrete, but commonly needed)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Poisson distribution with rate parameter `mu`.
+///
+/// Matches `scipy.stats.poisson(mu)`.
+/// PMF: P(k) = mu^k * exp(-mu) / k!
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Poisson {
+    pub mu: f64,
+}
+
+impl Poisson {
+    #[must_use]
+    pub fn new(mu: f64) -> Self {
+        assert!(mu > 0.0, "mu must be positive, got {mu}");
+        Self { mu }
+    }
+
+    /// Probability mass function.
+    pub fn pmf(&self, k: u64) -> f64 {
+        if self.mu == 0.0 {
+            return if k == 0 { 1.0 } else { 0.0 };
+        }
+        let ln_pmf = k as f64 * self.mu.ln() - self.mu - ln_gamma(k as f64 + 1.0);
+        ln_pmf.exp()
+    }
+
+    /// Cumulative distribution function.
+    pub fn cdf(&self, k: u64) -> f64 {
+        // Direct summation: P(X <= k) = sum_{i=0}^{k} pmf(i)
+        let mut sum = 0.0;
+        for i in 0..=k {
+            sum += self.pmf(i);
+        }
+        sum.min(1.0) // clamp for numerical safety
+    }
+
+    /// Mean of the distribution.
+    pub fn mean(&self) -> f64 {
+        self.mu
+    }
+
+    /// Variance of the distribution.
+    pub fn var(&self) -> f64 {
+        self.mu
+    }
+}
+
 /// Log of the Beta function: ln(B(a,b)) = ln(Γ(a)) + ln(Γ(b)) - ln(Γ(a+b))
 fn ln_beta(a: f64, b: f64) -> f64 {
     ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b)
@@ -1077,5 +1185,78 @@ mod tests {
         let b1 = BetaDist::new(2.0, 5.0);
         let b2 = BetaDist::new(5.0, 2.0);
         assert_close(b1.pdf(0.3), b2.pdf(0.7), 1e-10, "Beta symmetry");
+    }
+
+    // ── Gamma distribution ──────────────────────────────────────────
+
+    #[test]
+    fn gamma_dist_exponential_special_case() {
+        // Gamma(1, scale) = Exponential(1/scale)
+        let g = GammaDist::new(1.0, 2.0);
+        let e = Exponential::from_scale(2.0);
+        assert_close(g.pdf(1.0), e.pdf(1.0), 1e-10, "Gamma(1,2) = Exp(1/2)");
+        assert_close(g.cdf(1.0), e.cdf(1.0), 1e-6, "Gamma(1,2) cdf");
+    }
+
+    #[test]
+    fn gamma_dist_chi2_special_case() {
+        // Gamma(k/2, 2) = Chi2(k)
+        let g = GammaDist::new(3.0, 2.0); // Gamma(3, 2) = Chi2(6)
+        let c = ChiSquared::new(6.0);
+        assert_close(g.mean(), c.mean(), 1e-10, "Gamma mean = Chi2 mean");
+        assert_close(g.var(), c.var(), 1e-10, "Gamma var = Chi2 var");
+    }
+
+    #[test]
+    fn gamma_dist_pdf_positive_only() {
+        let g = GammaDist::new(2.0, 1.0);
+        assert_eq!(g.pdf(-1.0), 0.0);
+        assert!(g.pdf(1.0) > 0.0);
+    }
+
+    #[test]
+    fn gamma_dist_mean_var() {
+        let g = GammaDist::new(3.0, 2.0);
+        assert_close(g.mean(), 6.0, 1e-10, "Gamma(3,2) mean");
+        assert_close(g.var(), 12.0, 1e-10, "Gamma(3,2) var");
+    }
+
+    // ── Poisson distribution ────────────────────────────────────────
+
+    #[test]
+    fn poisson_pmf_known() {
+        let p = Poisson::new(3.0);
+        // P(0) = exp(-3) ≈ 0.04979
+        assert_close(p.pmf(0), (-3.0_f64).exp(), 1e-10, "P(0)");
+        // P(1) = 3*exp(-3) ≈ 0.14936
+        assert_close(p.pmf(1), 3.0 * (-3.0_f64).exp(), 1e-10, "P(1)");
+        // P(3) = 27/6 * exp(-3) ≈ 0.22404
+        assert_close(p.pmf(3), 4.5 * (-3.0_f64).exp(), 1e-10, "P(3)");
+    }
+
+    #[test]
+    fn poisson_pmf_sums_near_one() {
+        let p = Poisson::new(5.0);
+        let sum: f64 = (0..30).map(|k| p.pmf(k)).sum();
+        assert!((sum - 1.0).abs() < 1e-6, "PMF sum = {sum}, expected ~1.0");
+    }
+
+    #[test]
+    fn poisson_mean_var() {
+        let p = Poisson::new(7.5);
+        assert_eq!(p.mean(), 7.5);
+        assert_eq!(p.var(), 7.5);
+    }
+
+    #[test]
+    fn poisson_cdf_monotone() {
+        let p = Poisson::new(4.0);
+        let mut prev = 0.0;
+        for k in 0..20 {
+            let c = p.cdf(k);
+            assert!(c >= prev, "CDF should be monotone at k={k}");
+            prev = c;
+        }
+        assert!((prev - 1.0).abs() < 1e-4, "CDF(large k) ≈ 1.0");
     }
 }
