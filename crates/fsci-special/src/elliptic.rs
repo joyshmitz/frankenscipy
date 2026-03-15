@@ -192,11 +192,11 @@ fn ellipe_scalar(m: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         let c = 0.5 * (a - b);
         power *= 2.0;
         c2_sum += c * c * power;
+        a = a_new;
+        b = b_new;
         if c.abs() < 1.0e-15 {
             break;
         }
-        a = a_new;
-        b = b_new;
     }
 
     // E(m) = K(m) * (1 - sum(c_n^2 * 2^n) / 2)
@@ -262,16 +262,17 @@ fn lambertw_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     }
 
     // Initial guess
-    let mut w = if x <= std::f64::consts::E {
-        // Near 0: W(x) ≈ x for small x; refine for moderate x
-        // Better initial guess: use log for x >= 1
-        if x < 0.5 {
-            x * (1.0 - x)
-        } else {
-            // For x ~ [0.5, e]: use a simple estimate
-            let lx = (1.0 + x).ln();
-            lx * (1.0 - lx / (2.0 + lx))
-        }
+    let mut w = if x < 0.0 {
+        // For x in (-1/e, 0): W is in (-1, 0). Use a quadratic approximation near -1/e.
+        let p = (2.0 * (std::f64::consts::E * x + 1.0)).sqrt();
+        -1.0 + p - p * p / 3.0
+    } else if x < 0.5 {
+        // Near 0: W(x) ≈ x - x²
+        x * (1.0 - x)
+    } else if x <= std::f64::consts::E {
+        // Moderate x: use log-based estimate
+        let lx = (1.0 + x).ln();
+        lx * (1.0 - lx / (2.0 + lx))
     } else {
         // Large x: W(x) ≈ ln(x) - ln(ln(x))
         let lx = x.ln();

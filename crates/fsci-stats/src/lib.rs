@@ -1203,6 +1203,13 @@ impl ContinuousDistribution for Triangular {
         let (a, c, b) = (self.left, self.mode, self.right);
         if x < a || x > b {
             0.0
+        } else if c == b {
+            // Degenerate: right-skewed triangle (mode == right)
+            if x == b {
+                2.0 / (b - a)
+            } else {
+                2.0 * (x - a) / ((b - a) * (b - a))
+            }
         } else if x < c {
             2.0 * (x - a) / ((b - a) * (c - a))
         } else if x == c {
@@ -1216,6 +1223,13 @@ impl ContinuousDistribution for Triangular {
         let (a, c, b) = (self.left, self.mode, self.right);
         if x <= a {
             0.0
+        } else if c == b {
+            // Degenerate: mode == right
+            if x >= b {
+                1.0
+            } else {
+                (x - a).powi(2) / ((b - a) * (b - a))
+            }
         } else if x <= c {
             (x - a).powi(2) / ((b - a) * (c - a))
         } else if x < b {
@@ -1269,11 +1283,32 @@ pub struct TtestResult {
 /// One-sample t-test: test whether the mean of a sample differs from `popmean`.
 ///
 /// Matches `scipy.stats.ttest_1samp(a, popmean)`.
+/// Returns NaN statistic and p-value for samples with fewer than 2 elements.
 pub fn ttest_1samp(data: &[f64], popmean: f64) -> TtestResult {
     let n = data.len() as f64;
+    if data.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: n - 1.0,
+        };
+    }
     let mean: f64 = data.iter().sum::<f64>() / n;
     let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
     let se = (var / n).sqrt();
+    if se == 0.0 {
+        // All values identical: t is infinite or NaN depending on whether mean == popmean
+        let statistic = if (mean - popmean).abs() == 0.0 {
+            f64::NAN
+        } else {
+            (mean - popmean).signum() * f64::INFINITY
+        };
+        return TtestResult {
+            statistic,
+            pvalue: if statistic.is_nan() { f64::NAN } else { 0.0 },
+            df: n - 1.0,
+        };
+    }
     let t = (mean - popmean) / se;
     let df = n - 1.0;
     let tdist = StudentT::new(df);
@@ -1288,15 +1323,23 @@ pub fn ttest_1samp(data: &[f64], popmean: f64) -> TtestResult {
 /// Independent two-sample t-test (equal variance assumed).
 ///
 /// Matches `scipy.stats.ttest_ind(a, b, equal_var=True)`.
+/// Each sample must have at least 2 elements; returns NaN otherwise.
 pub fn ttest_ind(a: &[f64], b: &[f64]) -> TtestResult {
     let n1 = a.len() as f64;
     let n2 = b.len() as f64;
+    let df = n1 + n2 - 2.0;
+    if a.len() < 2 || b.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df,
+        };
+    }
     let mean1: f64 = a.iter().sum::<f64>() / n1;
     let mean2: f64 = b.iter().sum::<f64>() / n2;
     let var1: f64 = a.iter().map(|&x| (x - mean1).powi(2)).sum::<f64>() / (n1 - 1.0);
     let var2: f64 = b.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0);
 
-    let df = n1 + n2 - 2.0;
     // Pooled variance
     let sp2 = ((n1 - 1.0) * var1 + (n2 - 1.0) * var2) / df;
     let se = (sp2 * (1.0 / n1 + 1.0 / n2)).sqrt();
@@ -1314,7 +1357,15 @@ pub fn ttest_ind(a: &[f64], b: &[f64]) -> TtestResult {
 /// Welch's t-test (unequal variance).
 ///
 /// Matches `scipy.stats.ttest_ind(a, b, equal_var=False)`.
+/// Each sample must have at least 2 elements; returns NaN otherwise.
 pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
+    if a.len() < 2 || b.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
     let n1 = a.len() as f64;
     let n2 = b.len() as f64;
     let mean1: f64 = a.iter().sum::<f64>() / n1;
@@ -1977,6 +2028,33 @@ mod tests {
         assert_close(t.mean(), 1.0, 1e-12, "mean = (a+b+c)/3");
         // var = (a²+b²+c²-ab-ac-bc)/18 = (0+4+1-0-0-2)/18 = 3/18 = 1/6
         assert_close(t.var(), 1.0 / 6.0, 1e-12, "Triangular var");
+    }
+
+    #[test]
+    fn triangular_mode_equals_right() {
+        // Edge case: mode == right (right-skewed triangle)
+        let t = Triangular::new(0.0, 2.0, 2.0);
+        assert_close(t.pdf(1.0), 0.5, 1e-12, "pdf at x=1");
+        assert_close(t.pdf(2.0), 1.0, 1e-12, "pdf at mode=right");
+        assert_close(t.cdf(0.0), 0.0, 1e-12, "cdf at left");
+        assert_close(t.cdf(2.0), 1.0, 1e-12, "cdf at right");
+        assert_close(t.cdf(1.0), 0.25, 1e-12, "cdf at midpoint");
+    }
+
+    // ── t-test edge cases ─────────────────────────────────────────
+
+    #[test]
+    fn ttest_1samp_single_element_returns_nan() {
+        let result = ttest_1samp(&[5.0], 0.0);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
+    fn ttest_ind_single_element_returns_nan() {
+        let result = ttest_ind(&[1.0], &[2.0]);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
     }
 
     // ── Random variate sampling (rvs) ─────────────────────────────
