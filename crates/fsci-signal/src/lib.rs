@@ -1223,15 +1223,14 @@ fn poly_roots(coeffs: &[f64]) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
     Ok((eig_result.eigenvalues_re, eig_result.eigenvalues_im))
 }
 
-/// Build polynomial coefficients from complex roots (standard power form).
-/// Returns [1, c1, c2, ...] where p(x) = (x - r1)(x - r2)...
+/// Build polynomial coefficients in z^-1 convention from complex roots.
+/// Returns [1, c1, c2, ...] where P(z) = (1 - r1*z^-1)(1 - r2*z^-1)...
+/// This is the transfer function convention: b[0] + b[1]*z^-1 + b[2]*z^-2 + ...
 fn poly_from_complex_roots_full(roots_re: &[f64], roots_im: &[f64]) -> Vec<f64> {
     if roots_re.is_empty() {
         return vec![1.0];
     }
 
-    // Use the existing function but note it uses z^-1 convention
-    // We need standard polynomial convention for zpk2tf
     let n = roots_re.len();
     let mut used = vec![false; n];
     let mut poly = vec![1.0];
@@ -1242,7 +1241,7 @@ fn poly_from_complex_roots_full(roots_re: &[f64], roots_im: &[f64]) -> Vec<f64> 
         }
 
         if roots_im[i].abs() < 1e-14 {
-            // Real root: multiply by (1 - r*z^-1) for z^-1 convention
+            // Real root: multiply by (1 - r*z^-1)
             poly = poly_mul_binomial(&poly, -roots_re[i]);
             used[i] = true;
         } else {

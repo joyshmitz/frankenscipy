@@ -232,16 +232,28 @@ impl Bounds {
     }
 
     /// Check if a point is feasible (within all bounds).
+    /// Returns false if x has different length than bounds.
     #[must_use]
     pub fn is_feasible(&self, x: &[f64]) -> bool {
+        if x.len() != self.lb.len() {
+            return false;
+        }
         x.iter()
             .zip(self.lb.iter().zip(self.ub.iter()))
             .all(|(&xi, (&lo, &hi))| xi >= lo && xi <= hi)
     }
 
     /// Project a point onto the feasible set (clip to bounds).
+    /// Panics if x has different length than bounds.
     #[must_use]
     pub fn project(&self, x: &[f64]) -> Vec<f64> {
+        assert_eq!(
+            x.len(),
+            self.lb.len(),
+            "project: x length {} != bounds length {}",
+            x.len(),
+            self.lb.len()
+        );
         x.iter()
             .zip(self.lb.iter().zip(self.ub.iter()))
             .map(|(&xi, (&lo, &hi))| xi.clamp(lo, hi))
@@ -309,8 +321,21 @@ impl LinearConstraint {
         Ok(Self { a, lb, ub })
     }
 
-    /// Evaluate A @ x and check feasibility.
+    /// Number of variables (columns of A).
+    #[must_use]
+    pub fn n_vars(&self) -> usize {
+        self.a.first().map_or(0, Vec::len)
+    }
+
+    /// Evaluate A @ x. Panics if x length doesn't match columns of A.
     pub fn evaluate(&self, x: &[f64]) -> Vec<f64> {
+        let n = self.n_vars();
+        assert_eq!(
+            x.len(),
+            n,
+            "evaluate: x length {} != A column count {n}",
+            x.len()
+        );
         self.a
             .iter()
             .map(|row| row.iter().zip(x.iter()).map(|(&ai, &xi)| ai * xi).sum())
@@ -318,8 +343,12 @@ impl LinearConstraint {
     }
 
     /// Check if x satisfies all constraints.
+    /// Returns false if x has wrong dimension.
     #[must_use]
     pub fn is_feasible(&self, x: &[f64]) -> bool {
+        if x.len() != self.n_vars() {
+            return false;
+        }
         let ax = self.evaluate(x);
         ax.iter()
             .zip(self.lb.iter().zip(self.ub.iter()))
