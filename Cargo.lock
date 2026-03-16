@@ -649,6 +649,7 @@ name = "fsci-signal"
 version = "0.1.0"
 dependencies = [
  "fsci-fft",
+ "fsci-linalg",
  "fsci-runtime",
  "proptest",
 ]

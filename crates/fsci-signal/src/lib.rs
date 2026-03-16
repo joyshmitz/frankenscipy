@@ -913,10 +913,25 @@ pub fn tf2zpk(b: &[f64], a: &[f64]) -> Result<ZpkCoeffs, SignalError> {
         ));
     }
 
-    let gain = b[0] / a[0];
+    // Find leading non-zero coefficient of b (effective degree may differ from length)
+    let b_lead_idx = b.iter().position(|&v| v.abs() > 1e-30).unwrap_or(0);
+    let b_lead = if b_lead_idx < b.len() {
+        b[b_lead_idx]
+    } else {
+        return Ok(ZpkCoeffs {
+            zeros_re: vec![],
+            zeros_im: vec![],
+            poles_re: vec![],
+            poles_im: vec![],
+            gain: 0.0,
+        });
+    };
 
-    // Normalize: divide by leading coefficient
-    let b_norm: Vec<f64> = b.iter().map(|&v| v / b[0]).collect();
+    let gain = b_lead / a[0];
+
+    // Normalize: divide by leading non-zero coefficient
+    let b_effective = &b[b_lead_idx..];
+    let b_norm: Vec<f64> = b_effective.iter().map(|&v| v / b_lead).collect();
     let a_norm: Vec<f64> = a.iter().map(|&v| v / a[0]).collect();
 
     // Find roots via companion matrix eigenvalues
@@ -1111,11 +1126,25 @@ pub fn sos2zpk(sos: &[SosSection]) -> ZpkCoeffs {
         let sec_b = [section[0], section[1], section[2]];
         let sec_a = [section[3], section[4], section[5]];
 
-        gain *= sec_b[0] / sec_a[0];
+        if sec_a[0].abs() > 1e-30 {
+            gain *= if sec_b[0].abs() > 1e-30 {
+                sec_b[0] / sec_a[0]
+            } else {
+                0.0
+            };
+        }
 
-        // Normalize and find roots
-        let b_norm: Vec<f64> = sec_b.iter().map(|&v| v / sec_b[0]).collect();
-        let a_norm: Vec<f64> = sec_a.iter().map(|&v| v / sec_a[0]).collect();
+        // Normalize and find roots (skip if leading coeff is zero)
+        let b_norm: Vec<f64> = if sec_b[0].abs() > 1e-30 {
+            sec_b.iter().map(|&v| v / sec_b[0]).collect()
+        } else {
+            continue; // degenerate section, skip
+        };
+        let a_norm: Vec<f64> = if sec_a[0].abs() > 1e-30 {
+            sec_a.iter().map(|&v| v / sec_a[0]).collect()
+        } else {
+            continue;
+        };
 
         // Trim trailing zeros for root finding
         let b_trim = trim_trailing_zeros(&b_norm);
