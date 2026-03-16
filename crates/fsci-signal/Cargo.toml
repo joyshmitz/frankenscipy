@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 fsci-fft = { workspace = true }
+fsci-linalg = { workspace = true }
 fsci-runtime = { workspace = true }
 
 [dev-dependencies]

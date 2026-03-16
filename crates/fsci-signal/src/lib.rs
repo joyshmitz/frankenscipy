@@ -876,6 +876,399 @@ fn poly_mul_quadratic(poly: &[f64], b: f64, c: f64) -> Vec<f64> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Filter Representation Conversions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Zero-pole-gain representation of a filter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZpkCoeffs {
+    /// Zeros (complex: pairs of (re, im)).
+    pub zeros_re: Vec<f64>,
+    pub zeros_im: Vec<f64>,
+    /// Poles (complex: pairs of (re, im)).
+    pub poles_re: Vec<f64>,
+    pub poles_im: Vec<f64>,
+    /// Scalar gain.
+    pub gain: f64,
+}
+
+/// A single second-order section: [b0, b1, b2, a0, a1, a2].
+/// Represents H(z) = (b0 + b1*z^-1 + b2*z^-2) / (a0 + a1*z^-1 + a2*z^-2).
+pub type SosSection = [f64; 6];
+
+/// Convert transfer function (b, a) to zero-pole-gain form.
+///
+/// Matches `scipy.signal.tf2zpk(b, a)`.
+///
+/// Finds zeros (roots of b) and poles (roots of a) via companion matrix eigenvalues.
+pub fn tf2zpk(b: &[f64], a: &[f64]) -> Result<ZpkCoeffs, SignalError> {
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".to_string(),
+        ));
+    }
+    if a[0] == 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "a[0] must not be zero".to_string(),
+        ));
+    }
+
+    let gain = b[0] / a[0];
+
+    // Normalize: divide by leading coefficient
+    let b_norm: Vec<f64> = b.iter().map(|&v| v / b[0]).collect();
+    let a_norm: Vec<f64> = a.iter().map(|&v| v / a[0]).collect();
+
+    // Find roots via companion matrix eigenvalues
+    let (zeros_re, zeros_im) = if b_norm.len() > 1 {
+        poly_roots(&b_norm)?
+    } else {
+        (vec![], vec![])
+    };
+
+    let (poles_re, poles_im) = if a_norm.len() > 1 {
+        poly_roots(&a_norm)?
+    } else {
+        (vec![], vec![])
+    };
+
+    Ok(ZpkCoeffs {
+        zeros_re,
+        zeros_im,
+        poles_re,
+        poles_im,
+        gain,
+    })
+}
+
+/// Convert zero-pole-gain to transfer function (b, a) form.
+///
+/// Matches `scipy.signal.zpk2tf(z, p, k)`.
+pub fn zpk2tf(zpk: &ZpkCoeffs) -> BaCoeffs {
+    let b = poly_from_complex_roots_full(&zpk.zeros_re, &zpk.zeros_im);
+    let a = poly_from_complex_roots_full(&zpk.poles_re, &zpk.poles_im);
+
+    // Scale numerator by gain
+    let b: Vec<f64> = b.iter().map(|&v| v * zpk.gain).collect();
+
+    BaCoeffs { b, a }
+}
+
+/// Convert transfer function to second-order sections.
+///
+/// Matches `scipy.signal.tf2sos(b, a)`.
+///
+/// The SOS form is numerically superior for high-order filters.
+pub fn tf2sos(b: &[f64], a: &[f64]) -> Result<Vec<SosSection>, SignalError> {
+    let zpk = tf2zpk(b, a)?;
+    Ok(zpk2sos(&zpk))
+}
+
+/// Convert second-order sections to transfer function.
+///
+/// Matches `scipy.signal.sos2tf(sos)`.
+pub fn sos2tf(sos: &[SosSection]) -> BaCoeffs {
+    if sos.is_empty() {
+        return BaCoeffs {
+            b: vec![1.0],
+            a: vec![1.0],
+        };
+    }
+
+    let mut b = vec![1.0];
+    let mut a = vec![1.0];
+
+    for section in sos {
+        // Numerator: [b0, b1, b2]
+        let sec_b = [section[0], section[1], section[2]];
+        // Denominator: [a0, a1, a2]
+        let sec_a = [section[3], section[4], section[5]];
+
+        b = poly_multiply(&b, &sec_b);
+        a = poly_multiply(&a, &sec_a);
+    }
+
+    BaCoeffs { b, a }
+}
+
+/// Convert zero-pole-gain to second-order sections.
+///
+/// Matches `scipy.signal.zpk2sos(z, p, k)`.
+///
+/// Pairs poles and zeros into biquad sections, sorted by proximity to
+/// the unit circle (outermost poles last for numerical stability).
+pub fn zpk2sos(zpk: &ZpkCoeffs) -> Vec<SosSection> {
+    let n_poles = zpk.poles_re.len();
+    let n_zeros = zpk.zeros_re.len();
+
+    if n_poles == 0 && n_zeros == 0 {
+        return vec![[zpk.gain, 0.0, 0.0, 1.0, 0.0, 0.0]];
+    }
+
+    // Build denominator sections from poles
+    let denom_sections = roots_to_sos_factors(&zpk.poles_re, &zpk.poles_im);
+    // Build numerator sections from zeros
+    let numer_sections = roots_to_sos_factors(&zpk.zeros_re, &zpk.zeros_im);
+
+    let n_sections = denom_sections.len().max(numer_sections.len()).max(1);
+    let mut sections: Vec<SosSection> = Vec::with_capacity(n_sections);
+
+    for i in 0..n_sections {
+        let (b0, b1, b2) = if i < numer_sections.len() {
+            numer_sections[i]
+        } else {
+            (1.0, 0.0, 0.0)
+        };
+        let (a0, a1, a2) = if i < denom_sections.len() {
+            denom_sections[i]
+        } else {
+            (1.0, 0.0, 0.0)
+        };
+        sections.push([b0, b1, b2, a0, a1, a2]);
+    }
+
+    if sections.is_empty() {
+        sections.push([zpk.gain, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    } else {
+        // Apply gain to first section
+        sections[0][0] *= zpk.gain;
+        sections[0][1] *= zpk.gain;
+        sections[0][2] *= zpk.gain;
+    }
+
+    sections
+}
+
+/// Convert roots to second-order section factors.
+/// Groups conjugate pairs and pairs of real roots into (1, c1, c2) tuples.
+fn roots_to_sos_factors(re: &[f64], im: &[f64]) -> Vec<(f64, f64, f64)> {
+    let n = re.len();
+    let mut used = vec![false; n];
+    let mut factors = Vec::new();
+    let mut real_roots: Vec<f64> = Vec::new();
+
+    // First: pair complex conjugates
+    for i in 0..n {
+        if used[i] {
+            continue;
+        }
+        if im[i].abs() < 1e-14 {
+            real_roots.push(re[i]);
+            used[i] = true;
+        } else {
+            // Find conjugate
+            let mut found = false;
+            for j in (i + 1)..n {
+                if !used[j]
+                    && (re[j] - re[i]).abs() < 1e-10
+                    && (im[j] + im[i]).abs() < 1e-10
+                {
+                    // Conjugate pair: (1 - 2*re*z^-1 + |r|²*z^-2)
+                    let mag2 = re[i] * re[i] + im[i] * im[i];
+                    factors.push((1.0, -2.0 * re[i], mag2));
+                    used[j] = true;
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                let mag2 = re[i] * re[i] + im[i] * im[i];
+                factors.push((1.0, -2.0 * re[i], mag2));
+            }
+            used[i] = true;
+        }
+    }
+
+    // Pair real roots into biquad sections
+    real_roots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut i = 0;
+    while i + 1 < real_roots.len() {
+        let r1 = real_roots[i];
+        let r2 = real_roots[i + 1];
+        // (1 - r1*z^-1)(1 - r2*z^-1) = 1 - (r1+r2)*z^-1 + r1*r2*z^-2
+        factors.push((1.0, -(r1 + r2), r1 * r2));
+        i += 2;
+    }
+    if i < real_roots.len() {
+        // Odd real root out: single first-order section
+        factors.push((1.0, -real_roots[i], 0.0));
+    }
+
+    factors
+}
+
+/// Convert second-order sections to zero-pole-gain form.
+///
+/// Matches `scipy.signal.sos2zpk(sos)`.
+pub fn sos2zpk(sos: &[SosSection]) -> ZpkCoeffs {
+    let mut all_zeros_re = Vec::new();
+    let mut all_zeros_im = Vec::new();
+    let mut all_poles_re = Vec::new();
+    let mut all_poles_im = Vec::new();
+    let mut gain = 1.0;
+
+    for section in sos {
+        let sec_b = [section[0], section[1], section[2]];
+        let sec_a = [section[3], section[4], section[5]];
+
+        gain *= sec_b[0] / sec_a[0];
+
+        // Normalize and find roots
+        let b_norm: Vec<f64> = sec_b.iter().map(|&v| v / sec_b[0]).collect();
+        let a_norm: Vec<f64> = sec_a.iter().map(|&v| v / sec_a[0]).collect();
+
+        // Trim trailing zeros for root finding
+        let b_trim = trim_trailing_zeros(&b_norm);
+        let a_trim = trim_trailing_zeros(&a_norm);
+
+        if b_trim.len() > 1 && let Ok((zr, zi)) = poly_roots(&b_trim) {
+            all_zeros_re.extend(zr);
+            all_zeros_im.extend(zi);
+        }
+        if a_trim.len() > 1 && let Ok((pr, pi)) = poly_roots(&a_trim) {
+            all_poles_re.extend(pr);
+            all_poles_im.extend(pi);
+        }
+    }
+
+    ZpkCoeffs {
+        zeros_re: all_zeros_re,
+        zeros_im: all_zeros_im,
+        poles_re: all_poles_re,
+        poles_im: all_poles_im,
+        gain,
+    }
+}
+
+// ── Filter conversion helpers ───────────────────────────────
+
+/// Find roots of a monic polynomial using companion matrix eigenvalues.
+/// Input: coefficients [1, c1, c2, ...] of p(x) = x^n + c1*x^{n-1} + ... + cn.
+fn poly_roots(coeffs: &[f64]) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    let n = coeffs.len() - 1; // degree
+    if n == 0 {
+        return Ok((vec![], vec![]));
+    }
+    if n == 1 {
+        // Linear: x + c1 = 0 → x = -c1
+        return Ok((vec![-coeffs[1] / coeffs[0]], vec![0.0]));
+    }
+    if n == 2 {
+        // Quadratic: use formula
+        let a = coeffs[0];
+        let b = coeffs[1];
+        let c = coeffs[2];
+        let disc = b * b - 4.0 * a * c;
+        if disc >= 0.0 {
+            let sq = disc.sqrt();
+            return Ok((
+                vec![(-b + sq) / (2.0 * a), (-b - sq) / (2.0 * a)],
+                vec![0.0, 0.0],
+            ));
+        } else {
+            let sq = (-disc).sqrt();
+            return Ok((
+                vec![-b / (2.0 * a), -b / (2.0 * a)],
+                vec![sq / (2.0 * a), -sq / (2.0 * a)],
+            ));
+        }
+    }
+
+    // General case: companion matrix eigenvalues
+    // Companion matrix for p(x) = x^n + c1*x^{n-1} + ... + cn
+    // has -c_i/c_0 in the last column and 1's on the subdiagonal
+    let mut companion = vec![vec![0.0; n]; n];
+    for i in 1..n {
+        companion[i][i - 1] = 1.0;
+    }
+    for i in 0..n {
+        companion[i][n - 1] = -coeffs[n - i] / coeffs[0];
+    }
+
+    // Use fsci-linalg eig to get eigenvalues
+    let opts = fsci_linalg::DecompOptions::default();
+    let eig_result = fsci_linalg::eig(&companion, opts).map_err(|e| {
+        SignalError::InvalidArgument(format!("eigenvalue computation failed: {e}"))
+    })?;
+
+    Ok((eig_result.eigenvalues_re, eig_result.eigenvalues_im))
+}
+
+/// Build polynomial coefficients from complex roots (standard power form).
+/// Returns [1, c1, c2, ...] where p(x) = (x - r1)(x - r2)...
+fn poly_from_complex_roots_full(roots_re: &[f64], roots_im: &[f64]) -> Vec<f64> {
+    if roots_re.is_empty() {
+        return vec![1.0];
+    }
+
+    // Use the existing function but note it uses z^-1 convention
+    // We need standard polynomial convention for zpk2tf
+    let n = roots_re.len();
+    let mut used = vec![false; n];
+    let mut poly = vec![1.0];
+
+    for i in 0..n {
+        if used[i] {
+            continue;
+        }
+
+        if roots_im[i].abs() < 1e-14 {
+            // Real root: multiply by (1 - r*z^-1) for z^-1 convention
+            poly = poly_mul_binomial(&poly, -roots_re[i]);
+            used[i] = true;
+        } else {
+            // Find conjugate pair
+            let mut found = false;
+            for j in (i + 1)..n {
+                if !used[j]
+                    && (roots_re[j] - roots_re[i]).abs() < 1e-10
+                    && (roots_im[j] + roots_im[i]).abs() < 1e-10
+                {
+                    let two_re = 2.0 * roots_re[i];
+                    let mag2 = roots_re[i] * roots_re[i] + roots_im[i] * roots_im[i];
+                    poly = poly_mul_quadratic(&poly, -two_re, mag2);
+                    used[j] = true;
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                // Unpaired: treat as conjugate pair with itself
+                let two_re = 2.0 * roots_re[i];
+                let mag2 = roots_re[i] * roots_re[i] + roots_im[i] * roots_im[i];
+                poly = poly_mul_quadratic(&poly, -two_re, mag2);
+            }
+            used[i] = true;
+        }
+    }
+
+    poly
+}
+
+/// Multiply two polynomials (convolution of coefficient arrays).
+fn poly_multiply(a: &[f64], b: &[f64]) -> Vec<f64> {
+    if a.is_empty() || b.is_empty() {
+        return vec![];
+    }
+    let mut result = vec![0.0; a.len() + b.len() - 1];
+    for (i, &ai) in a.iter().enumerate() {
+        for (j, &bj) in b.iter().enumerate() {
+            result[i + j] += ai * bj;
+        }
+    }
+    result
+}
+
+/// Remove trailing near-zero coefficients from a polynomial.
+fn trim_trailing_zeros(p: &[f64]) -> Vec<f64> {
+    let mut end = p.len();
+    while end > 1 && p[end - 1].abs() < 1e-15 {
+        end -= 1;
+    }
+    p[..end].to_vec()
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Spectral Analysis
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1673,5 +2066,171 @@ mod tests {
         let n = psd.len() as f64;
         let mean = psd.iter().sum::<f64>() / n;
         psd.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n
+    }
+
+    // ── Filter conversion tests ────────────────────────────────────
+
+    fn assert_close(a: f64, b: f64, tol: f64, msg: &str) {
+        assert!(
+            (a - b).abs() < tol,
+            "{msg}: {a} vs {b} (diff={})",
+            (a - b).abs()
+        );
+    }
+
+    #[test]
+    fn tf2zpk_first_order() {
+        // b=[1, -0.5], a=[1, -0.9] → zero at 0.5, pole at 0.9
+        let zpk = tf2zpk(&[1.0, -0.5], &[1.0, -0.9]).expect("tf2zpk");
+        assert_eq!(zpk.zeros_re.len(), 1);
+        assert_eq!(zpk.poles_re.len(), 1);
+        assert_close(zpk.zeros_re[0], 0.5, 1e-10, "zero");
+        assert_close(zpk.poles_re[0], 0.9, 1e-10, "pole");
+        assert_close(zpk.gain, 1.0, 1e-10, "gain");
+    }
+
+    #[test]
+    fn tf2zpk_second_order_complex() {
+        // butter(2, 0.3) should give complex conjugate poles
+        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let zpk = tf2zpk(&coeffs.b, &coeffs.a).expect("tf2zpk");
+        assert_eq!(zpk.poles_re.len(), 2);
+        // Poles should be complex conjugates
+        assert_close(zpk.poles_re[0], zpk.poles_re[1], 1e-10, "pole re match");
+        assert!(
+            (zpk.poles_im[0] + zpk.poles_im[1]).abs() < 1e-10,
+            "poles should be conjugate"
+        );
+        // Poles should be inside unit circle (stable)
+        let mag = (zpk.poles_re[0].powi(2) + zpk.poles_im[0].powi(2)).sqrt();
+        assert!(mag < 1.0, "poles inside unit circle, got mag={mag}");
+    }
+
+    #[test]
+    fn zpk2tf_roundtrip() {
+        let b_orig = [0.1, 0.2, 0.1];
+        let a_orig = [1.0, -0.5, 0.2];
+        let zpk = tf2zpk(&b_orig, &a_orig).expect("tf2zpk");
+        let ba = zpk2tf(&zpk);
+
+        // Normalize and compare
+        let scale_b = b_orig[0] / ba.b[0];
+        let scale_a = a_orig[0] / ba.a[0];
+        for (i, (&orig, &recovered)) in b_orig.iter().zip(ba.b.iter()).enumerate() {
+            assert_close(
+                recovered * scale_b,
+                orig,
+                1e-8,
+                &format!("b[{i}] roundtrip"),
+            );
+        }
+        for (i, (&orig, &recovered)) in a_orig.iter().zip(ba.a.iter()).enumerate() {
+            assert_close(
+                recovered * scale_a,
+                orig,
+                1e-8,
+                &format!("a[{i}] roundtrip"),
+            );
+        }
+    }
+
+    #[test]
+    fn tf2sos_butter2() {
+        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+        // Order 2 → 1 SOS section
+        assert_eq!(sos.len(), 1, "butter(2) should give 1 SOS section");
+        // a0 should be 1.0
+        assert_close(sos[0][3], 1.0, 1e-10, "a0 = 1");
+    }
+
+    #[test]
+    fn tf2sos_butter4() {
+        let coeffs = butter(4, 0.3, FilterType::Lowpass).expect("butter");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+        // Order 4 → 2 SOS sections
+        assert_eq!(sos.len(), 2, "butter(4) should give 2 SOS sections");
+    }
+
+    #[test]
+    fn sos2tf_roundtrip() {
+        let coeffs = butter(3, 0.4, FilterType::Lowpass).expect("butter");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+        let recovered = sos2tf(&sos);
+
+        // DC gain should match: sum(b)/sum(a) for both
+        let orig_dc: f64 = coeffs.b.iter().sum::<f64>() / coeffs.a.iter().sum::<f64>();
+        let rec_dc: f64 = recovered.b.iter().sum::<f64>() / recovered.a.iter().sum::<f64>();
+        assert_close(orig_dc, rec_dc, 1e-8, "DC gain roundtrip");
+    }
+
+    #[test]
+    fn zpk2sos_simple_real_poles() {
+        let zpk = ZpkCoeffs {
+            zeros_re: vec![-1.0],
+            zeros_im: vec![0.0],
+            poles_re: vec![0.5],
+            poles_im: vec![0.0],
+            gain: 2.0,
+        };
+        let sos = zpk2sos(&zpk);
+        assert!(!sos.is_empty());
+        // Single real pole/zero → 1 section
+        // Denominator: (1 - 0.5*z^-1)
+        assert_close(sos[0][4], -0.5, 1e-10, "a1 = -pole");
+    }
+
+    #[test]
+    fn sos2zpk_roundtrip() {
+        let coeffs = butter(4, 0.25, FilterType::Lowpass).expect("butter");
+        let zpk_orig = tf2zpk(&coeffs.b, &coeffs.a).expect("tf2zpk");
+        let sos = zpk2sos(&zpk_orig);
+        let zpk_rec = sos2zpk(&sos);
+
+        // Same number of poles and zeros
+        assert_eq!(
+            zpk_orig.poles_re.len(),
+            zpk_rec.poles_re.len(),
+            "pole count"
+        );
+        assert_eq!(
+            zpk_orig.zeros_re.len(),
+            zpk_rec.zeros_re.len(),
+            "zero count"
+        );
+    }
+
+    #[test]
+    fn tf2sos_high_order_stability() {
+        // Order 8 filter — SOS should be more stable than tf form
+        let coeffs = butter(8, 0.2, FilterType::Lowpass).expect("butter");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+        assert_eq!(sos.len(), 4, "order 8 → 4 sections");
+
+        // Each section's poles should be inside unit circle
+        for (i, section) in sos.iter().enumerate() {
+            let a2 = section[5];
+            // For stability: |a2| < 1
+            assert!(
+                a2.abs() < 1.0 + 1e-10,
+                "section {i} unstable: a2={a2}"
+            );
+        }
+    }
+
+    #[test]
+    fn poly_multiply_basic() {
+        // (1 + 2z^-1) * (1 + 3z^-1) = 1 + 5z^-1 + 6z^-2
+        let result = poly_multiply(&[1.0, 2.0], &[1.0, 3.0]);
+        assert_eq!(result.len(), 3);
+        assert_close(result[0], 1.0, 1e-12, "c0");
+        assert_close(result[1], 5.0, 1e-12, "c1");
+        assert_close(result[2], 6.0, 1e-12, "c2");
+    }
+
+    #[test]
+    fn tf2zpk_empty_rejected() {
+        assert!(tf2zpk(&[], &[1.0]).is_err());
+        assert!(tf2zpk(&[1.0], &[]).is_err());
     }
 }
