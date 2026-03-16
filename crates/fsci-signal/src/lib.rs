@@ -875,6 +875,169 @@ fn poly_mul_quadratic(poly: &[f64], b: f64, c: f64) -> Vec<f64> {
     result
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Spectral Analysis
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of a spectral density estimation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpectralResult {
+    /// Frequency bins.
+    pub frequencies: Vec<f64>,
+    /// Power spectral density estimates.
+    pub psd: Vec<f64>,
+}
+
+/// Estimate power spectral density using a periodogram.
+///
+/// Matches `scipy.signal.periodogram(x, fs, window, scaling='density')`.
+///
+/// # Arguments
+/// * `x` — Input signal
+/// * `fs` — Sampling frequency (Hz)
+/// * `window` — Window function applied to the signal (None = boxcar/rectangular)
+pub fn periodogram(
+    x: &[f64],
+    fs: f64,
+    window: Option<&[f64]>,
+) -> Result<SpectralResult, SignalError> {
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+    let n = x.len();
+
+    // Apply window
+    let windowed: Vec<f64> = match window {
+        Some(w) => {
+            if w.len() != n {
+                return Err(SignalError::InvalidArgument(format!(
+                    "window length ({}) must match signal length ({n})",
+                    w.len()
+                )));
+            }
+            x.iter().zip(w.iter()).map(|(&xi, &wi)| xi * wi).collect()
+        }
+        None => x.to_vec(),
+    };
+
+    // Window power for normalization
+    let win_power: f64 = match window {
+        Some(w) => w.iter().map(|&wi| wi * wi).sum::<f64>() / n as f64,
+        None => 1.0,
+    };
+
+    // Compute FFT
+    let opts = fsci_fft::FftOptions::default();
+    let spectrum = fsci_fft::rfft(&windowed, &opts).map_err(|e| {
+        SignalError::InvalidArgument(format!("FFT failed: {e}"))
+    })?;
+
+    // One-sided PSD: |X[k]|² / (fs * N * win_power)
+    let scale = 1.0 / (fs * n as f64 * win_power);
+    let n_freqs = spectrum.len();
+    let mut psd = Vec::with_capacity(n_freqs);
+    for (k, &(re, im)) in spectrum.iter().enumerate() {
+        let mag2 = re * re + im * im;
+        // Double all bins except DC and Nyquist for one-sided spectrum
+        let factor = if k == 0 || (n.is_multiple_of(2) && k == n_freqs - 1) {
+            1.0
+        } else {
+            2.0
+        };
+        psd.push(mag2 * scale * factor);
+    }
+
+    // Frequency bins
+    let freq_step = fs / n as f64;
+    let frequencies: Vec<f64> = (0..n_freqs).map(|k| k as f64 * freq_step).collect();
+
+    Ok(SpectralResult { frequencies, psd })
+}
+
+/// Estimate power spectral density using Welch's method.
+///
+/// Matches `scipy.signal.welch(x, fs, nperseg, noverlap)`.
+///
+/// Divides the signal into overlapping segments, windows each, computes
+/// periodograms, and averages them.
+///
+/// # Arguments
+/// * `x` — Input signal
+/// * `fs` — Sampling frequency (Hz)
+/// * `nperseg` — Length of each segment (default: 256)
+/// * `noverlap` — Number of overlapping samples (default: nperseg/2)
+pub fn welch(
+    x: &[f64],
+    fs: f64,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+) -> Result<SpectralResult, SignalError> {
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+
+    let nperseg = nperseg.unwrap_or_else(|| x.len().min(256));
+    if nperseg == 0 {
+        return Err(SignalError::InvalidArgument(
+            "nperseg must be > 0".to_string(),
+        ));
+    }
+    if nperseg > x.len() {
+        return Err(SignalError::InvalidArgument(format!(
+            "nperseg ({nperseg}) must be <= signal length ({})",
+            x.len()
+        )));
+    }
+
+    let noverlap = noverlap.unwrap_or(nperseg / 2);
+    if noverlap >= nperseg {
+        return Err(SignalError::InvalidArgument(
+            "noverlap must be < nperseg".to_string(),
+        ));
+    }
+
+    let step = nperseg - noverlap;
+    let window = hann(nperseg);
+
+    // Segment the signal and compute periodograms
+    let n_freqs = nperseg / 2 + 1;
+    let mut avg_psd = vec![0.0; n_freqs];
+    let mut n_segments = 0usize;
+
+    let mut start = 0;
+    while start + nperseg <= x.len() {
+        let segment = &x[start..start + nperseg];
+        let seg_result = periodogram(segment, fs, Some(&window))?;
+
+        for (avg, &val) in avg_psd.iter_mut().zip(seg_result.psd.iter()) {
+            *avg += val;
+        }
+        n_segments += 1;
+        start += step;
+    }
+
+    if n_segments == 0 {
+        return Err(SignalError::InvalidArgument(
+            "signal too short for any segment".to_string(),
+        ));
+    }
+
+    // Average
+    for val in &mut avg_psd {
+        *val /= n_segments as f64;
+    }
+
+    // Frequency bins
+    let freq_step = fs / nperseg as f64;
+    let frequencies: Vec<f64> = (0..n_freqs).map(|k| k as f64 * freq_step).collect();
+
+    Ok(SpectralResult { frequencies, psd: avg_psd })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1392,5 +1555,123 @@ mod tests {
     #[test]
     fn filtfilt_short_input_rejected() {
         assert!(filtfilt(&[1.0], &[1.0], &[1.0, 2.0]).is_err());
+    }
+
+    // ── Periodogram tests ──────────────────────────────────────────
+
+    #[test]
+    fn periodogram_single_frequency() {
+        // Pure sine wave at 10 Hz, sampled at 100 Hz
+        let fs = 100.0;
+        let freq = 10.0;
+        let n = 256;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * freq * i as f64 / fs).sin())
+            .collect();
+
+        let result = periodogram(&x, fs, None).expect("periodogram");
+        assert_eq!(result.frequencies.len(), result.psd.len());
+        assert!(!result.psd.is_empty());
+
+        // Peak should be near 10 Hz
+        let peak_idx = result
+            .psd
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+        let peak_freq = result.frequencies[peak_idx];
+        assert!(
+            (peak_freq - freq).abs() < 1.0,
+            "peak at {peak_freq} Hz, expected ~{freq} Hz"
+        );
+    }
+
+    #[test]
+    fn periodogram_with_hann_window() {
+        let fs = 100.0;
+        let n = 128;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 5.0 * i as f64 / fs).sin())
+            .collect();
+        let window = hann(n);
+        let result = periodogram(&x, fs, Some(&window)).expect("periodogram");
+        assert_eq!(result.psd.len(), n / 2 + 1);
+        assert!(result.psd.iter().all(|v| v.is_finite() && *v >= 0.0));
+    }
+
+    #[test]
+    fn periodogram_empty_rejected() {
+        assert!(periodogram(&[], 1.0, None).is_err());
+    }
+
+    // ── Welch tests ────────────────────────────────────────────────
+
+    #[test]
+    fn welch_basic() {
+        let fs = 1000.0;
+        let n = 1024;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 50.0 * i as f64 / fs).sin())
+            .collect();
+
+        let result = welch(&x, fs, Some(256), None).expect("welch");
+        assert!(!result.frequencies.is_empty());
+        assert_eq!(result.frequencies.len(), result.psd.len());
+
+        // Peak should be near 50 Hz
+        let peak_idx = result
+            .psd
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+        let peak_freq = result.frequencies[peak_idx];
+        assert!(
+            (peak_freq - 50.0).abs() < 5.0,
+            "peak at {peak_freq} Hz, expected ~50 Hz"
+        );
+    }
+
+    #[test]
+    fn welch_reduces_variance() {
+        // Welch with more averaging should have smoother PSD than periodogram
+        let fs = 100.0;
+        let n = 1024;
+        let x: Vec<f64> = (0..n)
+            .map(|i| {
+                (2.0 * std::f64::consts::PI * 10.0 * i as f64 / fs).sin()
+                    + if i % 3 == 0 { 0.5 } else { -0.5 } // noise
+            })
+            .collect();
+
+        let psd_raw = periodogram(&x, fs, None).expect("periodogram");
+        let psd_welch = welch(&x, fs, Some(128), None).expect("welch");
+
+        // Welch PSD should be smoother (lower variance)
+        let raw_var = variance_of_psd(&psd_raw.psd);
+        let welch_var = variance_of_psd(&psd_welch.psd);
+        assert!(
+            welch_var < raw_var,
+            "Welch should be smoother: var={welch_var} < {raw_var}"
+        );
+    }
+
+    #[test]
+    fn welch_empty_rejected() {
+        assert!(welch(&[], 1.0, None, None).is_err());
+    }
+
+    #[test]
+    fn welch_nperseg_too_large() {
+        assert!(welch(&[1.0, 2.0, 3.0], 1.0, Some(10), None).is_err());
+    }
+
+    fn variance_of_psd(psd: &[f64]) -> f64 {
+        let n = psd.len() as f64;
+        let mean = psd.iter().sum::<f64>() / n;
+        psd.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n
     }
 }

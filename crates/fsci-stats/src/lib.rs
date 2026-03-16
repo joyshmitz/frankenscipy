@@ -1390,6 +1390,237 @@ pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Correlation and Regression
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of linear regression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinregressResult {
+    /// Slope of the regression line.
+    pub slope: f64,
+    /// Intercept of the regression line.
+    pub intercept: f64,
+    /// Pearson correlation coefficient (r-value).
+    pub rvalue: f64,
+    /// Two-sided p-value for the hypothesis test that the slope is zero.
+    pub pvalue: f64,
+    /// Standard error of the estimated slope.
+    pub stderr: f64,
+    /// Standard error of the estimated intercept.
+    pub intercept_stderr: f64,
+}
+
+/// Calculate a linear least-squares regression for two sets of measurements.
+///
+/// Matches `scipy.stats.linregress(x, y)`.
+///
+/// Returns slope, intercept, r-value, p-value, and standard errors.
+pub fn linregress(x: &[f64], y: &[f64]) -> LinregressResult {
+    let n = x.len() as f64;
+    if x.len() < 2 || x.len() != y.len() {
+        return LinregressResult {
+            slope: f64::NAN,
+            intercept: f64::NAN,
+            rvalue: f64::NAN,
+            pvalue: f64::NAN,
+            stderr: f64::NAN,
+            intercept_stderr: f64::NAN,
+        };
+    }
+
+    let xmean: f64 = x.iter().sum::<f64>() / n;
+    let ymean: f64 = y.iter().sum::<f64>() / n;
+
+    // Sums of squares and cross-products
+    let mut ssxm = 0.0; // Σ(x - xmean)²
+    let mut ssym = 0.0; // Σ(y - ymean)²
+    let mut ssxym = 0.0; // Σ(x - xmean)(y - ymean)
+    for (&xi, &yi) in x.iter().zip(y.iter()) {
+        let dx = xi - xmean;
+        let dy = yi - ymean;
+        ssxm += dx * dx;
+        ssym += dy * dy;
+        ssxym += dx * dy;
+    }
+
+    if ssxm == 0.0 {
+        // All x values identical — slope undefined
+        return LinregressResult {
+            slope: f64::NAN,
+            intercept: f64::NAN,
+            rvalue: f64::NAN,
+            pvalue: f64::NAN,
+            stderr: f64::NAN,
+            intercept_stderr: f64::NAN,
+        };
+    }
+
+    let slope = ssxym / ssxm;
+    let intercept = ymean - slope * xmean;
+
+    // Correlation coefficient
+    let rvalue = if ssym == 0.0 {
+        // All y values identical — perfect fit if slope is 0
+        if slope == 0.0 {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        ssxym / (ssxm * ssym).sqrt()
+    };
+
+    // p-value: test H0: slope = 0 using t-distribution
+    let df = n - 2.0;
+    let (pvalue, stderr, intercept_stderr) = if df > 0.0 {
+        // Residual sum of squares
+        let r2 = rvalue * rvalue;
+        let sse = ssym * (1.0 - r2);
+        let mse = sse / df;
+        let se_slope = (mse / ssxm).sqrt();
+        let se_intercept = (mse * (1.0 / n + xmean * xmean / ssxm)).sqrt();
+
+        let t_stat = if se_slope > 0.0 {
+            slope / se_slope
+        } else {
+            f64::INFINITY
+        };
+
+        let pval = if df >= 1.0 && se_slope > 0.0 {
+            let tdist = StudentT::new(df);
+            2.0 * tdist.sf(t_stat.abs())
+        } else {
+            0.0
+        };
+        (pval, se_slope, se_intercept)
+    } else {
+        (f64::NAN, f64::NAN, f64::NAN)
+    };
+
+    LinregressResult {
+        slope,
+        intercept,
+        rvalue,
+        pvalue,
+        stderr,
+        intercept_stderr,
+    }
+}
+
+/// Result of a correlation test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrelationResult {
+    /// Correlation coefficient.
+    pub statistic: f64,
+    /// Two-sided p-value.
+    pub pvalue: f64,
+}
+
+/// Calculate the Pearson correlation coefficient and p-value.
+///
+/// Matches `scipy.stats.pearsonr(x, y)`.
+///
+/// Tests for non-correlation: H0: ρ = 0 (no linear relationship).
+pub fn pearsonr(x: &[f64], y: &[f64]) -> CorrelationResult {
+    let n = x.len();
+    if n < 2 || n != y.len() {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+    let nf = n as f64;
+
+    let xmean: f64 = x.iter().sum::<f64>() / nf;
+    let ymean: f64 = y.iter().sum::<f64>() / nf;
+
+    let mut ssxm = 0.0;
+    let mut ssym = 0.0;
+    let mut ssxym = 0.0;
+    for (&xi, &yi) in x.iter().zip(y.iter()) {
+        let dx = xi - xmean;
+        let dy = yi - ymean;
+        ssxm += dx * dx;
+        ssym += dy * dy;
+        ssxym += dx * dy;
+    }
+
+    let denom = (ssxm * ssym).sqrt();
+    if denom == 0.0 {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let r = ssxym / denom;
+    // Clamp to [-1, 1] for numerical safety
+    let r = r.clamp(-1.0, 1.0);
+
+    // p-value via t-distribution: t = r * sqrt((n-2)/(1-r²))
+    let df = nf - 2.0;
+    let pvalue = if df > 0.0 && r.abs() < 1.0 {
+        let t = r * (df / (1.0 - r * r)).sqrt();
+        let tdist = StudentT::new(df);
+        2.0 * tdist.sf(t.abs())
+    } else if r.abs() >= 1.0 {
+        0.0 // Perfect correlation
+    } else {
+        f64::NAN
+    };
+
+    CorrelationResult {
+        statistic: r,
+        pvalue,
+    }
+}
+
+/// Calculate the Spearman rank-order correlation coefficient and p-value.
+///
+/// Matches `scipy.stats.spearmanr(a, b)`.
+///
+/// Uses the Pearson correlation of the rank-transformed data.
+pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
+    let n = x.len();
+    if n < 3 || n != y.len() {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let rank_x = rankdata(x);
+    let rank_y = rankdata(y);
+
+    pearsonr(&rank_x, &rank_y)
+}
+
+/// Compute ranks with average tie-breaking.
+fn rankdata(data: &[f64]) -> Vec<f64> {
+    let n = data.len();
+    // Create (value, original_index) pairs and sort by value
+    let mut indexed: Vec<(f64, usize)> = data.iter().copied().enumerate().map(|(i, v)| (v, i)).collect();
+    indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut ranks = vec![0.0; n];
+    let mut i = 0;
+    while i < n {
+        // Find the end of the tie group
+        let mut j = i + 1;
+        while j < n && (indexed[j].0 - indexed[i].0).abs() < 1.0e-15 {
+            j += 1;
+        }
+        // Average rank for the tie group (ranks are 1-based)
+        let avg_rank = (i + 1 + j) as f64 / 2.0;
+        for item in &indexed[i..j] {
+            ranks[item.1] = avg_rank;
+        }
+        i = j;
+    }
+    ranks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2161,5 +2392,154 @@ mod tests {
         );
         // Welch df should be less than n1+n2-2
         assert!(result.df < 128.0, "Welch df should be adjusted");
+    }
+
+    // ── Linear regression ─────────────────────────────────────────
+
+    #[test]
+    fn linregress_perfect_line() {
+        // y = 2x + 3 exactly
+        let x: Vec<f64> = (0..10).map(|i| i as f64).collect();
+        let y: Vec<f64> = x.iter().map(|&xi| 2.0 * xi + 3.0).collect();
+        let result = linregress(&x, &y);
+        assert_close(result.slope, 2.0, 1e-10, "slope");
+        assert_close(result.intercept, 3.0, 1e-10, "intercept");
+        assert_close(result.rvalue, 1.0, 1e-10, "r-value");
+        assert!(
+            result.stderr < 1e-10,
+            "stderr should be ~0, got {}",
+            result.stderr
+        );
+    }
+
+    #[test]
+    fn linregress_negative_slope() {
+        let x: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let y: Vec<f64> = x.iter().map(|&xi| -1.5 * xi + 10.0).collect();
+        let result = linregress(&x, &y);
+        assert_close(result.slope, -1.5, 1e-10, "slope");
+        assert_close(result.intercept, 10.0, 1e-10, "intercept");
+        assert_close(result.rvalue, -1.0, 1e-10, "r-value (negative)");
+    }
+
+    #[test]
+    fn linregress_with_noise() {
+        // y ≈ 3x + 1 with small deterministic perturbation
+        let x: Vec<f64> = (0..50).map(|i| i as f64 * 0.1).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| 3.0 * xi + 1.0 + if i % 2 == 0 { 0.01 } else { -0.01 })
+            .collect();
+        let result = linregress(&x, &y);
+        assert!(
+            (result.slope - 3.0).abs() < 0.01,
+            "slope ~ 3.0, got {}",
+            result.slope
+        );
+        assert!(result.rvalue > 0.999, "high r for low noise");
+        assert!(result.pvalue < 1e-10, "very significant");
+    }
+
+    #[test]
+    fn linregress_too_few_points() {
+        let result = linregress(&[1.0], &[2.0]);
+        assert!(result.slope.is_nan());
+    }
+
+    #[test]
+    fn linregress_constant_x() {
+        let result = linregress(&[5.0, 5.0, 5.0], &[1.0, 2.0, 3.0]);
+        assert!(result.slope.is_nan(), "constant x => undefined slope");
+    }
+
+    // ── Pearson correlation ───────────────────────────────────────
+
+    #[test]
+    fn pearsonr_perfect_positive() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = [2.0, 4.0, 6.0, 8.0, 10.0];
+        let result = pearsonr(&x, &y);
+        assert_close(result.statistic, 1.0, 1e-10, "r = 1 for perfect positive");
+        assert!(result.pvalue < 1e-10, "very significant");
+    }
+
+    #[test]
+    fn pearsonr_perfect_negative() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = [10.0, 8.0, 6.0, 4.0, 2.0];
+        let result = pearsonr(&x, &y);
+        assert_close(result.statistic, -1.0, 1e-10, "r = -1");
+    }
+
+    #[test]
+    fn pearsonr_uncorrelated() {
+        // Orthogonal data
+        let x = [1.0, 0.0, -1.0, 0.0];
+        let y = [0.0, 1.0, 0.0, -1.0];
+        let result = pearsonr(&x, &y);
+        assert_close(result.statistic, 0.0, 1e-10, "r = 0 for orthogonal");
+    }
+
+    #[test]
+    fn pearsonr_too_few_points() {
+        let result = pearsonr(&[1.0], &[2.0]);
+        assert!(result.statistic.is_nan());
+    }
+
+    // ── Spearman correlation ──────────────────────────────────────
+
+    #[test]
+    fn spearmanr_monotonic() {
+        // Perfect monotonic (not necessarily linear)
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = [1.0, 4.0, 9.0, 16.0, 25.0]; // y = x² (monotonic)
+        let result = spearmanr(&x, &y);
+        assert_close(result.statistic, 1.0, 1e-10, "rs = 1 for monotonic");
+    }
+
+    #[test]
+    fn spearmanr_anti_monotonic() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = [25.0, 16.0, 9.0, 4.0, 1.0];
+        let result = spearmanr(&x, &y);
+        assert_close(result.statistic, -1.0, 1e-10, "rs = -1 for anti-monotonic");
+    }
+
+    #[test]
+    fn spearmanr_with_ties() {
+        let x = [1.0, 2.0, 2.0, 3.0];
+        let y = [1.0, 2.0, 3.0, 4.0];
+        let result = spearmanr(&x, &y);
+        assert!(
+            result.statistic > 0.8,
+            "should be strongly positive, got {}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn spearmanr_too_few() {
+        let result = spearmanr(&[1.0, 2.0], &[3.0, 4.0]);
+        assert!(result.statistic.is_nan(), "need at least 3 for spearmanr");
+    }
+
+    // ── rankdata helper ───────────────────────────────────────────
+
+    #[test]
+    fn rankdata_no_ties() {
+        let ranks = rankdata(&[3.0, 1.0, 2.0]);
+        assert_close(ranks[0], 3.0, 1e-12, "rank of 3.0");
+        assert_close(ranks[1], 1.0, 1e-12, "rank of 1.0");
+        assert_close(ranks[2], 2.0, 1e-12, "rank of 2.0");
+    }
+
+    #[test]
+    fn rankdata_with_ties() {
+        let ranks = rankdata(&[1.0, 2.0, 2.0, 4.0]);
+        assert_close(ranks[0], 1.0, 1e-12, "rank of 1.0");
+        assert_close(ranks[1], 2.5, 1e-12, "rank of 2.0 (tied)");
+        assert_close(ranks[2], 2.5, 1e-12, "rank of 2.0 (tied)");
+        assert_close(ranks[3], 4.0, 1e-12, "rank of 4.0");
     }
 }

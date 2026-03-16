@@ -62,6 +62,171 @@ pub fn chebyshev(a: &[f64], b: &[f64]) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 
+/// Cosine distance: 1 - cosine_similarity(a, b).
+pub fn cosine(a: &[f64], b: &[f64]) -> f64 {
+    let dot: f64 = a.iter().zip(b.iter()).map(|(ai, bi)| ai * bi).sum();
+    let norm_a: f64 = a.iter().map(|ai| ai * ai).sum::<f64>().sqrt();
+    let norm_b: f64 = b.iter().map(|bi| bi * bi).sum::<f64>().sqrt();
+    let denom = norm_a * norm_b;
+    if denom == 0.0 {
+        return 0.0;
+    }
+    1.0 - dot / denom
+}
+
+/// Minkowski distance of order `p`.
+pub fn minkowski(a: &[f64], b: &[f64], p: f64) -> f64 {
+    if p == f64::INFINITY {
+        return chebyshev(a, b);
+    }
+    if p == 1.0 {
+        return cityblock(a, b);
+    }
+    if p == 2.0 {
+        return euclidean(a, b);
+    }
+    a.iter()
+        .zip(b.iter())
+        .map(|(ai, bi)| (ai - bi).abs().powf(p))
+        .sum::<f64>()
+        .powf(1.0 / p)
+}
+
+/// Correlation distance: 1 - pearson_r(a, b).
+///
+/// Treats a and b as samples and computes 1 minus the Pearson correlation.
+pub fn correlation(a: &[f64], b: &[f64]) -> f64 {
+    let n = a.len() as f64;
+    if a.len() < 2 {
+        return 0.0;
+    }
+    let mean_a: f64 = a.iter().sum::<f64>() / n;
+    let mean_b: f64 = b.iter().sum::<f64>() / n;
+    let mut ssab = 0.0;
+    let mut ssa = 0.0;
+    let mut ssb = 0.0;
+    for (&ai, &bi) in a.iter().zip(b.iter()) {
+        let da = ai - mean_a;
+        let db = bi - mean_b;
+        ssab += da * db;
+        ssa += da * da;
+        ssb += db * db;
+    }
+    let denom = (ssa * ssb).sqrt();
+    if denom == 0.0 {
+        return 0.0;
+    }
+    1.0 - ssab / denom
+}
+
+/// Distance metric identifiers for use with `pdist` and `cdist_metric`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistanceMetric {
+    Euclidean,
+    SqEuclidean,
+    Cityblock,
+    Chebyshev,
+    Cosine,
+    Correlation,
+}
+
+/// Compute the distance between two points using the specified metric.
+pub fn metric_distance(a: &[f64], b: &[f64], metric: DistanceMetric) -> f64 {
+    match metric {
+        DistanceMetric::Euclidean => euclidean(a, b),
+        DistanceMetric::SqEuclidean => sqeuclidean(a, b),
+        DistanceMetric::Cityblock => cityblock(a, b),
+        DistanceMetric::Chebyshev => chebyshev(a, b),
+        DistanceMetric::Cosine => cosine(a, b),
+        DistanceMetric::Correlation => correlation(a, b),
+    }
+}
+
+/// Compute pairwise distances between observations in condensed form.
+///
+/// Matches `scipy.spatial.distance.pdist(X, metric)`.
+///
+/// Returns a condensed distance vector of length n*(n-1)/2, containing
+/// the upper-triangular entries in row order.
+pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, SpatialError> {
+    let n = x.len();
+    if n < 2 {
+        return Err(SpatialError::InvalidArgument(
+            "pdist requires at least 2 observations".to_string(),
+        ));
+    }
+    let dim = x[0].len();
+    for row in x.iter() {
+        if row.len() != dim {
+            return Err(SpatialError::DimensionMismatch {
+                expected: dim,
+                actual: row.len(),
+            });
+        }
+    }
+
+    let mut result = Vec::with_capacity(n * (n - 1) / 2);
+    for i in 0..n {
+        for j in (i + 1)..n {
+            result.push(metric_distance(&x[i], &x[j], metric));
+        }
+    }
+    Ok(result)
+}
+
+/// Convert a condensed distance vector to a square distance matrix.
+///
+/// Matches `scipy.spatial.distance.squareform(y)` where y is condensed.
+///
+/// Input: condensed vector of length n*(n-1)/2.
+/// Output: symmetric n×n matrix with zeros on diagonal.
+pub fn squareform_to_matrix(condensed: &[f64]) -> Result<Vec<Vec<f64>>, SpatialError> {
+    // Solve n*(n-1)/2 = len for n
+    let len = condensed.len();
+    let n = ((1.0 + (1.0 + 8.0 * len as f64).sqrt()) / 2.0).round() as usize;
+    if n * (n - 1) / 2 != len {
+        return Err(SpatialError::InvalidArgument(format!(
+            "condensed vector length {len} does not correspond to a valid square matrix"
+        )));
+    }
+
+    let mut matrix = vec![vec![0.0; n]; n];
+    let mut idx = 0;
+    #[allow(clippy::needless_range_loop)]
+    for row in 0..n {
+        for col in (row + 1)..n {
+            let val = condensed[idx];
+            matrix[row][col] = val;
+            matrix[col][row] = val;
+            idx += 1;
+        }
+    }
+    Ok(matrix)
+}
+
+/// Convert a square distance matrix to condensed form.
+///
+/// Matches `scipy.spatial.distance.squareform(X)` where X is a matrix.
+///
+/// Input: symmetric n×n distance matrix.
+/// Output: condensed vector of length n*(n-1)/2.
+pub fn squareform_to_condensed(matrix: &[Vec<f64>]) -> Result<Vec<f64>, SpatialError> {
+    let n = matrix.len();
+    if n < 2 {
+        return Err(SpatialError::InvalidArgument(
+            "matrix must be at least 2×2".to_string(),
+        ));
+    }
+
+    let mut condensed = Vec::with_capacity(n * (n - 1) / 2);
+    for (i, row) in matrix.iter().enumerate() {
+        for &val in &row[i + 1..] {
+            condensed.push(val);
+        }
+    }
+    Ok(condensed)
+}
+
 /// Compute pairwise Euclidean distance matrix.
 ///
 /// Matches `scipy.spatial.distance.cdist(XA, XB, 'euclidean')`.
@@ -78,9 +243,31 @@ pub fn cdist(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, SpatialE
         });
     }
 
+    cdist_metric(xa, xb, DistanceMetric::Euclidean)
+}
+
+/// Compute pairwise distance matrix with a specified metric.
+///
+/// Matches `scipy.spatial.distance.cdist(XA, XB, metric)`.
+pub fn cdist_metric(
+    xa: &[Vec<f64>],
+    xb: &[Vec<f64>],
+    metric: DistanceMetric,
+) -> Result<Vec<Vec<f64>>, SpatialError> {
+    if xa.is_empty() || xb.is_empty() {
+        return Err(SpatialError::EmptyData);
+    }
+    let dim = xa[0].len();
+    if xb[0].len() != dim {
+        return Err(SpatialError::DimensionMismatch {
+            expected: dim,
+            actual: xb[0].len(),
+        });
+    }
+
     let result: Vec<Vec<f64>> = xa
         .iter()
-        .map(|a| xb.iter().map(|b| euclidean(a, b)).collect())
+        .map(|a| xb.iter().map(|b| metric_distance(a, b, metric)).collect())
         .collect();
     Ok(result)
 }
@@ -388,6 +575,125 @@ mod tests {
         let tree = KDTree::new(&data).expect("kdtree");
         let (idx, _) = tree.query(&[0.0, 0.0]).expect("query");
         assert_eq!(idx, 0);
+    }
+
+    // ── New distance metrics ───────────────────────────────────
+
+    #[test]
+    fn cosine_distance_orthogonal() {
+        // Orthogonal vectors: cosine distance = 1
+        assert!((cosine(&[1.0, 0.0], &[0.0, 1.0]) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cosine_distance_identical() {
+        // Same direction: cosine distance = 0
+        assert!((cosine(&[1.0, 2.0], &[2.0, 4.0])).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cosine_distance_opposite() {
+        // Opposite direction: cosine distance = 2
+        assert!((cosine(&[1.0, 0.0], &[-1.0, 0.0]) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn minkowski_p1_is_cityblock() {
+        let a = [1.0, 2.0, 3.0];
+        let b = [4.0, 0.0, 1.0];
+        assert!((minkowski(&a, &b, 1.0) - cityblock(&a, &b)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn minkowski_p2_is_euclidean() {
+        let a = [1.0, 2.0, 3.0];
+        let b = [4.0, 0.0, 1.0];
+        assert!((minkowski(&a, &b, 2.0) - euclidean(&a, &b)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn minkowski_pinf_is_chebyshev() {
+        let a = [1.0, 2.0, 3.0];
+        let b = [4.0, 0.0, 1.0];
+        assert!((minkowski(&a, &b, f64::INFINITY) - chebyshev(&a, &b)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn correlation_distance_perfect() {
+        // Perfectly correlated: distance = 0
+        let a = [1.0, 2.0, 3.0, 4.0];
+        let b = [2.0, 4.0, 6.0, 8.0];
+        assert!(correlation(&a, &b).abs() < 1e-12);
+    }
+
+    #[test]
+    fn correlation_distance_anticorrelated() {
+        // Anti-correlated: distance = 2
+        let a = [1.0, 2.0, 3.0, 4.0];
+        let b = [8.0, 6.0, 4.0, 2.0];
+        assert!((correlation(&a, &b) - 2.0).abs() < 1e-12);
+    }
+
+    // ── pdist and squareform ──────────────────────────────────
+
+    #[test]
+    fn pdist_euclidean_three_points() {
+        let x = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let d = pdist(&x, DistanceMetric::Euclidean).expect("pdist");
+        // 3 points -> 3 distances: (0,1), (0,2), (1,2)
+        assert_eq!(d.len(), 3);
+        assert!((d[0] - 1.0).abs() < 1e-12); // dist(0,1)
+        assert!((d[1] - 1.0).abs() < 1e-12); // dist(0,2)
+        assert!((d[2] - 2.0_f64.sqrt()).abs() < 1e-12); // dist(1,2)
+    }
+
+    #[test]
+    fn pdist_cityblock() {
+        let x = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 0.0]];
+        let d = pdist(&x, DistanceMetric::Cityblock).expect("pdist");
+        assert_eq!(d.len(), 3);
+        assert!((d[0] - 2.0).abs() < 1e-12); // |1|+|1|
+        assert!((d[1] - 2.0).abs() < 1e-12); // |2|+|0|
+        assert!((d[2] - 2.0).abs() < 1e-12); // |1|+|1|
+    }
+
+    #[test]
+    fn squareform_roundtrip() {
+        let x = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let condensed = pdist(&x, DistanceMetric::Euclidean).expect("pdist");
+        let matrix = squareform_to_matrix(&condensed).expect("to_matrix");
+        assert_eq!(matrix.len(), 3);
+        assert_eq!(matrix[0].len(), 3);
+        // Diagonal is zero
+        assert!((matrix[0][0]).abs() < 1e-12);
+        assert!((matrix[1][1]).abs() < 1e-12);
+        assert!((matrix[2][2]).abs() < 1e-12);
+        // Symmetric
+        assert!((matrix[0][1] - matrix[1][0]).abs() < 1e-12);
+        // Roundtrip back to condensed
+        let condensed2 = squareform_to_condensed(&matrix).expect("to_condensed");
+        for (a, b) in condensed.iter().zip(condensed2.iter()) {
+            assert!((a - b).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn squareform_invalid_length() {
+        assert!(squareform_to_matrix(&[1.0, 2.0]).is_err());
+    }
+
+    #[test]
+    fn pdist_too_few_points() {
+        assert!(pdist(&[vec![1.0]], DistanceMetric::Euclidean).is_err());
+    }
+
+    #[test]
+    fn cdist_metric_cosine() {
+        let xa = vec![vec![1.0, 0.0]];
+        let xb = vec![vec![0.0, 1.0], vec![1.0, 0.0]];
+        let d = cdist_metric(&xa, &xb, DistanceMetric::Cosine).expect("cdist cosine");
+        assert!((d[0][0] - 1.0).abs() < 1e-12); // orthogonal
+        assert!((d[0][1]).abs() < 1e-12); // identical direction
     }
 
     #[test]
