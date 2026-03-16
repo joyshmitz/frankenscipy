@@ -1621,6 +1621,269 @@ fn rankdata(data: &[f64]) -> Vec<f64> {
     ranks
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Summary Statistics
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of `describe`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescribeResult {
+    /// Number of observations.
+    pub nobs: usize,
+    /// Minimum and maximum values.
+    pub minmax: (f64, f64),
+    /// Arithmetic mean.
+    pub mean: f64,
+    /// Unbiased variance (ddof=1).
+    pub variance: f64,
+    /// Sample skewness (Fisher's definition).
+    pub skewness: f64,
+    /// Sample excess kurtosis (Fisher's definition).
+    pub kurtosis: f64,
+}
+
+/// Compute several descriptive statistics of a data set.
+///
+/// Matches `scipy.stats.describe(a)`.
+pub fn describe(data: &[f64]) -> DescribeResult {
+    let n = data.len();
+    if n < 2 {
+        return DescribeResult {
+            nobs: n,
+            minmax: if n == 1 {
+                (data[0], data[0])
+            } else {
+                (f64::NAN, f64::NAN)
+            },
+            mean: if n == 1 { data[0] } else { f64::NAN },
+            variance: f64::NAN,
+            skewness: f64::NAN,
+            kurtosis: f64::NAN,
+        };
+    }
+
+    let nf = n as f64;
+    let mean_val = data.iter().sum::<f64>() / nf;
+    let min_val = data.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_val = data.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+    let mut m2 = 0.0;
+    let mut m3 = 0.0;
+    let mut m4 = 0.0;
+    for &x in data {
+        let d = x - mean_val;
+        let d2 = d * d;
+        m2 += d2;
+        m3 += d2 * d;
+        m4 += d2 * d2;
+    }
+
+    let variance_val = m2 / (nf - 1.0);
+    let skewness_val = skew_from_moments(nf, m2, m3);
+    let kurtosis_val = kurtosis_from_moments(nf, m2, m4);
+
+    DescribeResult {
+        nobs: n,
+        minmax: (min_val, max_val),
+        mean: mean_val,
+        variance: variance_val,
+        skewness: skewness_val,
+        kurtosis: kurtosis_val,
+    }
+}
+
+/// Compute the sample skewness (Fisher's definition, bias=True).
+///
+/// Matches `scipy.stats.skew(a, bias=True)`.
+/// skew = m3 / m2^(3/2) where m_k are central moments.
+pub fn skew(data: &[f64]) -> f64 {
+    let n = data.len();
+    if n < 3 {
+        return f64::NAN;
+    }
+    let nf = n as f64;
+    let mean_val = data.iter().sum::<f64>() / nf;
+    let mut m2 = 0.0;
+    let mut m3 = 0.0;
+    for &x in data {
+        let d = x - mean_val;
+        let d2 = d * d;
+        m2 += d2;
+        m3 += d2 * d;
+    }
+    skew_from_moments(nf, m2, m3)
+}
+
+/// Compute the sample excess kurtosis (Fisher's definition, bias=True).
+///
+/// Matches `scipy.stats.kurtosis(a, fisher=True, bias=True)`.
+/// kurtosis = m4 / m2^2 - 3 where m_k are central moments.
+pub fn kurtosis(data: &[f64]) -> f64 {
+    let n = data.len();
+    if n < 4 {
+        return f64::NAN;
+    }
+    let nf = n as f64;
+    let mean_val = data.iter().sum::<f64>() / nf;
+    let mut m2 = 0.0;
+    let mut m4 = 0.0;
+    for &x in data {
+        let d = x - mean_val;
+        let d2 = d * d;
+        m2 += d2;
+        m4 += d2 * d2;
+    }
+    kurtosis_from_moments(nf, m2, m4)
+}
+
+/// Compute the mode (most frequent value) of a data set.
+///
+/// For continuous data, returns the smallest value among those with the
+/// highest frequency. Returns NaN for empty input.
+pub fn mode(data: &[f64]) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut best_val = sorted[0];
+    let mut best_count = 1usize;
+    let mut current_val = sorted[0];
+    let mut current_count = 1usize;
+
+    for &v in &sorted[1..] {
+        if (v - current_val).abs() < 1.0e-15 {
+            current_count += 1;
+        } else {
+            if current_count > best_count {
+                best_count = current_count;
+                best_val = current_val;
+            }
+            current_val = v;
+            current_count = 1;
+        }
+    }
+    if current_count > best_count {
+        best_val = current_val;
+    }
+    best_val
+}
+
+/// Compute the k-th central moment of a data set.
+///
+/// Matches `scipy.stats.moment(a, moment=k)`.
+pub fn moment(data: &[f64], k: u32) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    if k == 0 {
+        return 1.0;
+    }
+    let n = data.len() as f64;
+    let mean_val = data.iter().sum::<f64>() / n;
+    data.iter()
+        .map(|&x| (x - mean_val).powi(k as i32))
+        .sum::<f64>()
+        / n
+}
+
+/// Standard error of the mean.
+///
+/// Matches `scipy.stats.sem(a)`.
+pub fn sem(data: &[f64]) -> f64 {
+    let n = data.len();
+    if n < 2 {
+        return f64::NAN;
+    }
+    let nf = n as f64;
+    let mean_val = data.iter().sum::<f64>() / nf;
+    let var: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / (nf - 1.0);
+    (var / nf).sqrt()
+}
+
+/// Interquartile range (IQR = Q3 - Q1).
+///
+/// Matches `scipy.stats.iqr(a)`.
+pub fn iqr(data: &[f64]) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    quantile_sorted(&sorted, 0.75) - quantile_sorted(&sorted, 0.25)
+}
+
+/// Coefficient of variation (std / mean).
+///
+/// Matches `scipy.stats.variation(a)`.
+pub fn variation(data: &[f64]) -> f64 {
+    if data.len() < 2 {
+        return f64::NAN;
+    }
+    let n = data.len() as f64;
+    let mean_val = data.iter().sum::<f64>() / n;
+    if mean_val == 0.0 {
+        return f64::NAN;
+    }
+    let var: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / (n - 1.0);
+    var.sqrt() / mean_val
+}
+
+/// Compute z-scores: (x - mean) / std.
+///
+/// Matches `scipy.stats.zscore(a)`.
+pub fn zscore(data: &[f64]) -> Vec<f64> {
+    if data.len() < 2 {
+        return vec![f64::NAN; data.len()];
+    }
+    let n = data.len() as f64;
+    let mean_val = data.iter().sum::<f64>() / n;
+    let std_val = (data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
+    if std_val == 0.0 {
+        return vec![0.0; data.len()];
+    }
+    data.iter().map(|&x| (x - mean_val) / std_val).collect()
+}
+
+// Internal helpers for skewness and kurtosis
+fn skew_from_moments(n: f64, m2: f64, m3: f64) -> f64 {
+    if m2 == 0.0 {
+        return 0.0;
+    }
+    let m2_n = m2 / n;
+    let m3_n = m3 / n;
+    m3_n / m2_n.powf(1.5)
+}
+
+fn kurtosis_from_moments(n: f64, m2: f64, m4: f64) -> f64 {
+    if m2 == 0.0 {
+        return -3.0; // Degenerate: all values identical
+    }
+    let m2_n = m2 / n;
+    let m4_n = m4 / n;
+    m4_n / (m2_n * m2_n) - 3.0
+}
+
+fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
+    let n = sorted.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    if n == 1 {
+        return sorted[0];
+    }
+    let pos = q * (n - 1) as f64;
+    let lo = pos.floor() as usize;
+    let hi = pos.ceil() as usize;
+    let frac = pos - lo as f64;
+    if lo == hi {
+        sorted[lo]
+    } else {
+        sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2541,5 +2804,139 @@ mod tests {
         assert_close(ranks[1], 2.5, 1e-12, "rank of 2.0 (tied)");
         assert_close(ranks[2], 2.5, 1e-12, "rank of 2.0 (tied)");
         assert_close(ranks[3], 4.0, 1e-12, "rank of 4.0");
+    }
+
+    // ── Summary statistics ────────────────────────────────────────
+
+    #[test]
+    fn describe_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = describe(&data);
+        assert_eq!(result.nobs, 5);
+        assert_close(result.mean, 3.0, 1e-12, "mean");
+        assert_eq!(result.minmax, (1.0, 5.0));
+        assert_close(result.variance, 2.5, 1e-12, "var");
+    }
+
+    #[test]
+    fn describe_single_element() {
+        let result = describe(&[42.0]);
+        assert_eq!(result.nobs, 1);
+        assert_close(result.mean, 42.0, 1e-12, "mean");
+        assert!(result.variance.is_nan());
+    }
+
+    #[test]
+    fn skew_symmetric() {
+        // Symmetric data has skewness = 0
+        let data = [-2.0, -1.0, 0.0, 1.0, 2.0];
+        assert!(skew(&data).abs() < 1e-10, "symmetric => skew=0");
+    }
+
+    #[test]
+    fn skew_right_skewed() {
+        // Right-skewed: many small, few large
+        let data = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0];
+        assert!(skew(&data) > 0.0, "right skew should be positive");
+    }
+
+    #[test]
+    fn kurtosis_normal_like() {
+        // For normal-like data, excess kurtosis ≈ 0
+        // Use a simple uniform-ish spread
+        let data: Vec<f64> = (-50..=50).map(|i| i as f64).collect();
+        let k = kurtosis(&data);
+        // Uniform distribution has excess kurtosis = -1.2
+        assert!(k < 0.0 && k > -2.0, "uniform-like kurtosis ~ -1.2, got {k}");
+    }
+
+    #[test]
+    fn kurtosis_heavy_tails() {
+        // Heavy-tailed: many near center, few extremes
+        let mut data = vec![0.0; 100];
+        data.push(100.0);
+        data.push(-100.0);
+        assert!(kurtosis(&data) > 0.0, "heavy tails => positive kurtosis");
+    }
+
+    #[test]
+    fn mode_basic() {
+        let data = [1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0];
+        assert_close(mode(&data), 3.0, 1e-12, "mode is 3.0");
+    }
+
+    #[test]
+    fn mode_all_unique() {
+        // All unique: returns smallest (first encountered)
+        let data = [3.0, 1.0, 2.0];
+        let m = mode(&data);
+        assert!(m.is_finite(), "mode should be finite for non-empty data");
+    }
+
+    #[test]
+    fn moment_zeroth() {
+        assert_close(moment(&[1.0, 2.0, 3.0], 0), 1.0, 1e-12, "0th moment = 1");
+    }
+
+    #[test]
+    fn moment_first() {
+        // 1st central moment is always 0
+        assert_close(
+            moment(&[1.0, 2.0, 3.0, 4.0], 1),
+            0.0,
+            1e-12,
+            "1st central moment = 0",
+        );
+    }
+
+    #[test]
+    fn moment_second_is_variance() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let m2 = moment(&data, 2);
+        // Population variance = 2.0 (not sample variance 2.5)
+        assert_close(m2, 2.0, 1e-12, "2nd moment = population variance");
+    }
+
+    #[test]
+    fn sem_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        // SE = sqrt(var/n) = sqrt(2.5/5) = sqrt(0.5) ≈ 0.7071
+        let se = sem(&data);
+        assert_close(se, (2.5 / 5.0_f64).sqrt(), 1e-10, "SEM");
+    }
+
+    #[test]
+    fn iqr_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let q = iqr(&data);
+        // Q1 = 2.75, Q3 = 6.25, IQR = 3.5
+        assert_close(q, 3.5, 1e-10, "IQR");
+    }
+
+    #[test]
+    fn variation_basic() {
+        let data = [10.0, 20.0, 30.0, 40.0, 50.0];
+        let cv = variation(&data);
+        // mean = 30, std = sqrt(250) ≈ 15.81, cv ≈ 0.527
+        assert!(cv > 0.4 && cv < 0.6, "CV ~ 0.53, got {cv}");
+    }
+
+    #[test]
+    fn zscore_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let z = zscore(&data);
+        assert_eq!(z.len(), 5);
+        // Mean of z-scores should be 0
+        let z_mean: f64 = z.iter().sum::<f64>() / z.len() as f64;
+        assert!(z_mean.abs() < 1e-10, "z-score mean should be 0");
+        // Std of z-scores should be ~1 (using ddof=1 normalization)
+        let z_var: f64 = z.iter().map(|&zi| zi * zi).sum::<f64>() / (z.len() - 1) as f64;
+        assert_close(z_var.sqrt(), 1.0, 1e-10, "z-score std should be 1");
+    }
+
+    #[test]
+    fn zscore_constant() {
+        let z = zscore(&[5.0, 5.0, 5.0]);
+        assert!(z.iter().all(|&v| v == 0.0), "constant data => all zeros");
     }
 }

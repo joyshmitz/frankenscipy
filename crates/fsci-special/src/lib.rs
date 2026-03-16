@@ -3,6 +3,7 @@
 pub mod airy;
 pub mod bessel;
 pub mod beta;
+pub mod convenience;
 pub mod elliptic;
 pub mod error;
 pub mod gamma;
@@ -12,6 +13,9 @@ pub mod types;
 pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
 pub use bessel::{BESSEL_DISPATCH_PLAN, hankel1, hankel2, iv, j0, j1, jn, jv, kv, y0, y1, yn, yv};
 pub use beta::{BETA_DISPATCH_PLAN, beta, betainc, betaln};
+pub use convenience::{
+    CONVENIENCE_DISPATCH_PLAN, entr, expit, logit, logsumexp, rel_entr, sinc, xlogy, xlog1py,
+};
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipk, ellipkinc, exp1, expi, lambertw,
 };

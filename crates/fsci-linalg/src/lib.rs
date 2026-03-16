@@ -1781,6 +1781,267 @@ fn matrix_one_norm(m: &DMatrix<f64>) -> f64 {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Matrix Functions — logm, sqrtm, matrix_power
+// ══════════════════════════════════════════════════════════════════════
+
+/// Matrix logarithm.
+///
+/// Matches `scipy.linalg.logm(A)`.
+///
+/// Computes logm via eigendecomposition: if A = V D V^{-1}, then
+/// logm(A) = V diag(log(d_i)) V^{-1}.
+///
+/// Requires all eigenvalues to be positive real.
+pub fn logm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(Vec::new());
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let n = rows;
+
+    // Use Schur decomposition for better numerical stability
+    // For real matrices with positive eigenvalues, we can use eigendecomposition
+    let eig = matrix.clone().symmetric_eigen();
+    let eigenvalues = &eig.eigenvalues;
+
+    // Check all eigenvalues are positive
+    for (i, &ev) in eigenvalues.iter().enumerate() {
+        if ev <= 0.0 {
+            emit_trace(LinalgTrace {
+                operation: "logm",
+                matrix_size: (n, n),
+                mode: options.mode,
+                rcond: None,
+                warning: Some(format!("non-positive eigenvalue {ev} at index {i}")),
+                error: None,
+            });
+            // For non-positive eigenvalues, use the general (non-symmetric) path
+            return logm_general(&matrix, n, options);
+        }
+    }
+
+    // logm = V * diag(log(eigenvalues)) * V^T
+    let v = &eig.eigenvectors;
+    let mut log_diag = DMatrix::<f64>::zeros(n, n);
+    for i in 0..n {
+        log_diag[(i, i)] = eigenvalues[i].ln();
+    }
+
+    let result = v * log_diag * v.transpose();
+
+    emit_trace(LinalgTrace {
+        operation: "logm",
+        matrix_size: (n, n),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(rows_from_dmatrix(&result))
+}
+
+/// General logm via eigendecomposition (for non-symmetric matrices).
+fn logm_general(
+    matrix: &DMatrix<f64>,
+    n: usize,
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    // Use Schur decomposition: A = Q T Q^T where T is quasi-upper-triangular
+    let schur = matrix.clone().schur();
+    let (q, t) = schur.unpack();
+
+    // Compute log of the quasi-triangular matrix
+    let mut log_t = DMatrix::<f64>::zeros(n, n);
+    for i in 0..n {
+        if t[(i, i)] > 0.0 {
+            log_t[(i, i)] = t[(i, i)].ln();
+        } else {
+            // Non-positive diagonal: return NaN for this element
+            log_t[(i, i)] = f64::NAN;
+        }
+    }
+
+    // Compute off-diagonal of log(T) using Parlett's recurrence
+    for j in 1..n {
+        for i in (0..j).rev() {
+            let di = log_t[(i, i)];
+            let dj = log_t[(j, j)];
+            let mut sum = t[(i, j)];
+            for k in (i + 1)..j {
+                sum -= log_t[(i, k)] * log_t[(k, j)];
+            }
+            if (t[(i, i)] - t[(j, j)]).abs() > 1e-15 {
+                log_t[(i, j)] = sum * (dj - di) / (t[(j, j)] - t[(i, i)]);
+            } else {
+                log_t[(i, j)] = sum / t[(i, i)];
+            }
+        }
+    }
+
+    let result = &q * log_t * q.transpose();
+
+    emit_trace(LinalgTrace {
+        operation: "logm",
+        matrix_size: (n, n),
+        mode: options.mode,
+        rcond: None,
+        warning: Some("used general (non-symmetric) path".to_string()),
+        error: None,
+    });
+
+    Ok(rows_from_dmatrix(&result))
+}
+
+/// Matrix square root.
+///
+/// Matches `scipy.linalg.sqrtm(A)`.
+///
+/// Computes sqrtm via eigendecomposition: if A = V D V^{-1}, then
+/// sqrtm(A) = V diag(sqrt(d_i)) V^{-1}.
+pub fn sqrtm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(Vec::new());
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let n = rows;
+
+    // Try symmetric path first
+    let eig = matrix.clone().symmetric_eigen();
+    let eigenvalues = &eig.eigenvalues;
+
+    // Check eigenvalues are non-negative
+    let all_nonneg = eigenvalues.iter().all(|&ev| ev >= -1e-14);
+
+    if all_nonneg {
+        let v = &eig.eigenvectors;
+        let mut sqrt_diag = DMatrix::<f64>::zeros(n, n);
+        for i in 0..n {
+            sqrt_diag[(i, i)] = eigenvalues[i].max(0.0).sqrt();
+        }
+        let result = v * sqrt_diag * v.transpose();
+
+        emit_trace(LinalgTrace {
+            operation: "sqrtm",
+            matrix_size: (n, n),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+
+        Ok(rows_from_dmatrix(&result))
+    } else {
+        // For matrices with negative eigenvalues, sqrtm produces complex results.
+        // Return NaN to indicate this.
+        emit_trace(LinalgTrace {
+            operation: "sqrtm",
+            matrix_size: (n, n),
+            mode: options.mode,
+            rcond: None,
+            warning: Some("matrix has negative eigenvalues; real sqrtm undefined".to_string()),
+            error: None,
+        });
+        let nan_matrix = vec![vec![f64::NAN; n]; n];
+        Ok(nan_matrix)
+    }
+}
+
+/// Integer matrix power: A^n.
+///
+/// Matches `numpy.linalg.matrix_power(A, n)`.
+///
+/// - n > 0: repeated multiplication (binary exponentiation)
+/// - n == 0: identity matrix
+/// - n < 0: (A^{-1})^{|n|}
+pub fn matrix_power(
+    a: &[Vec<f64>],
+    power: i32,
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(Vec::new());
+    }
+
+    let n = rows;
+
+    if power == 0 {
+        // A^0 = I
+        let mut identity = vec![vec![0.0; n]; n];
+        for (i, row) in identity.iter_mut().enumerate() {
+            row[i] = 1.0;
+        }
+        return Ok(identity);
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+
+    let base = if power < 0 {
+        // Need inverse
+        let lu = matrix.clone().lu();
+        match lu.try_inverse() {
+            Some(inv) => inv,
+            None => {
+                return Err(LinalgError::SingularMatrix);
+            }
+        }
+    } else {
+        matrix
+    };
+
+    let abs_power = power.unsigned_abs();
+
+    // Binary exponentiation
+    let mut result = DMatrix::<f64>::identity(n, n);
+    let mut current = base;
+    let mut p = abs_power;
+
+    while p > 0 {
+        if p & 1 == 1 {
+            result = &result * &current;
+        }
+        p >>= 1;
+        if p > 0 {
+            current = &current * &current;
+        }
+    }
+
+    emit_trace(LinalgTrace {
+        operation: "matrix_power",
+        matrix_size: (n, n),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(rows_from_dmatrix(&result))
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Norms and Rank — Public API
 // ══════════════════════════════════════════════════════════════════════
 
