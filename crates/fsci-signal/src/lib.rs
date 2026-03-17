@@ -914,18 +914,27 @@ pub fn tf2zpk(b: &[f64], a: &[f64]) -> Result<ZpkCoeffs, SignalError> {
     }
 
     // Find leading non-zero coefficient of b (effective degree may differ from length)
-    let b_lead_idx = b.iter().position(|&v| v.abs() > 1e-30).unwrap_or(0);
-    let b_lead = if b_lead_idx < b.len() {
-        b[b_lead_idx]
-    } else {
-        return Ok(ZpkCoeffs {
-            zeros_re: vec![],
-            zeros_im: vec![],
-            poles_re: vec![],
-            poles_im: vec![],
-            gain: 0.0,
-        });
+    let b_lead_idx = match b.iter().position(|&v| v.abs() > 1e-30) {
+        Some(idx) => idx,
+        None => {
+            // All coefficients are essentially zero — zero polynomial
+            // Find poles from a but no zeros, gain = 0
+            let a_norm: Vec<f64> = a.iter().map(|&v| v / a[0]).collect();
+            let (poles_re, poles_im) = if a_norm.len() > 1 {
+                poly_roots(&a_norm)?
+            } else {
+                (vec![], vec![])
+            };
+            return Ok(ZpkCoeffs {
+                zeros_re: vec![],
+                zeros_im: vec![],
+                poles_re,
+                poles_im,
+                gain: 0.0,
+            });
+        }
     };
+    let b_lead = b[b_lead_idx];
 
     let gain = b_lead / a[0];
 
