@@ -803,6 +803,131 @@ pub fn filtfilt(b: &[f64], a: &[f64], x: &[f64]) -> Result<Vec<f64>, SignalError
     Ok(reversed)
 }
 
+/// Apply a digital filter in SOS (second-order sections) form.
+///
+/// Matches `scipy.signal.sosfilt(sos, x)`.
+///
+/// Each section is a biquad [b0, b1, b2, a0, a1, a2] applied in cascade
+/// using Direct Form II transposed. This is numerically superior to
+/// lfilter for high-order filters.
+pub fn sosfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalError> {
+    if sos.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "sos must not be empty".to_string(),
+        ));
+    }
+
+    let mut signal = x.to_vec();
+
+    for section in sos {
+        let b = [section[0], section[1], section[2]];
+        let a0 = section[3];
+        let a1 = section[4];
+        let a2 = section[5];
+
+        if a0.abs() < 1e-30 {
+            return Err(SignalError::InvalidArgument(
+                "SOS section a[0] must not be zero".to_string(),
+            ));
+        }
+
+        // Normalize by a0
+        let b0 = b[0] / a0;
+        let b1 = b[1] / a0;
+        let b2 = b[2] / a0;
+        let a1n = a1 / a0;
+        let a2n = a2 / a0;
+
+        // Direct Form II transposed for this biquad section
+        let mut d1 = 0.0;
+        let mut d2 = 0.0;
+
+        for sample in &mut signal {
+            let xi = *sample;
+            let yi = b0 * xi + d1;
+            d1 = b1 * xi - a1n * yi + d2;
+            d2 = b2 * xi - a2n * yi;
+            *sample = yi;
+        }
+    }
+
+    Ok(signal)
+}
+
+/// Apply SOS filter forward and backward for zero-phase filtering.
+///
+/// Matches `scipy.signal.sosfiltfilt(sos, x)`.
+///
+/// Results in zero phase distortion and doubled filter order.
+/// More numerically stable than filtfilt for high-order filters.
+pub fn sosfiltfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalError> {
+    if x.len() < 3 {
+        return Err(SignalError::InvalidArgument(
+            "input must have length >= 3 for sosfiltfilt".to_string(),
+        ));
+    }
+
+    // Forward pass
+    let forward = sosfilt(sos, x)?;
+
+    // Reverse
+    let mut reversed: Vec<f64> = forward.into_iter().rev().collect();
+
+    // Backward pass
+    reversed = sosfilt(sos, &reversed)?;
+
+    // Reverse again
+    reversed.reverse();
+    Ok(reversed)
+}
+
+/// Compute initial conditions for SOS filter for step response steady-state.
+///
+/// Matches `scipy.signal.sosfilt_zi(sos)`.
+///
+/// Returns initial delay values such that filtering a constant signal
+/// produces a constant output (no transient). Each section gets 2 initial
+/// conditions [d1, d2].
+pub fn sosfilt_zi(sos: &[SosSection]) -> Result<Vec<[f64; 2]>, SignalError> {
+    if sos.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "sos must not be empty".to_string(),
+        ));
+    }
+
+    let mut zi = Vec::with_capacity(sos.len());
+
+    for section in sos {
+        let a0 = section[3];
+        if a0.abs() < 1e-30 {
+            return Err(SignalError::InvalidArgument(
+                "SOS section a[0] must not be zero".to_string(),
+            ));
+        }
+        let b0 = section[0] / a0;
+        let b1 = section[1] / a0;
+        let b2 = section[2] / a0;
+        let a1 = section[4] / a0;
+        let a2 = section[5] / a0;
+
+        // For steady-state with input=1, output=gain of section at DC:
+        // gain = (b0+b1+b2) / (1+a1+a2)
+        // Initial conditions satisfy: d1 = b1 - a1*gain + d2, d2 = b2 - a2*gain
+        // Solving: d2 = b2 - a2*gain, d1 = (b1 - a1*gain) + d2
+        let dc_denom = 1.0 + a1 + a2;
+        if dc_denom.abs() < 1e-30 {
+            zi.push([0.0, 0.0]);
+            continue;
+        }
+        let gain = (b0 + b1 + b2) / dc_denom;
+        let d2 = b2 - a2 * gain;
+        let d1 = b1 - a1 * gain + d2;
+        zi.push([d1, d2]);
+    }
+
+    Ok(zi)
+}
+
 // ── IIR helper functions ────────────────────────────────────────
 
 /// Build a real polynomial from complex conjugate roots.
@@ -2703,5 +2828,108 @@ mod tests {
     fn freqz_empty_rejected() {
         assert!(freqz(&[], &[1.0], None).is_err());
         assert!(freqz(&[1.0], &[], None).is_err());
+    }
+
+    // ── SOS filtering tests ────────────────────────────────────────
+
+    #[test]
+    fn sosfilt_matches_lfilter_low_order() {
+        // For low-order filter, sosfilt and lfilter should give same results
+        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+
+        let x: Vec<f64> = (0..100)
+            .map(|i| (2.0 * std::f64::consts::PI * 0.05 * i as f64).sin())
+            .collect();
+
+        let y_lfilter = lfilter(&coeffs.b, &coeffs.a, &x).expect("lfilter");
+        let y_sosfilt = sosfilt(&sos, &x).expect("sosfilt");
+
+        for (i, (&yl, &ys)) in y_lfilter.iter().zip(y_sosfilt.iter()).enumerate() {
+            assert!(
+                (yl - ys).abs() < 1e-8,
+                "sosfilt vs lfilter at sample {i}: {ys} vs {yl}",
+            );
+        }
+    }
+
+    #[test]
+    fn sosfilt_identity_passthrough() {
+        // SOS with unity gain sections: output = input
+        let sos = vec![[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]];
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = sosfilt(&sos, &x).expect("sosfilt identity");
+        for (i, (&xi, &yi)) in x.iter().zip(y.iter()).enumerate() {
+            assert!(
+                (xi - yi).abs() < 1e-12,
+                "passthrough at {i}: {yi} != {xi}",
+            );
+        }
+    }
+
+    #[test]
+    fn sosfilt_high_order_stable() {
+        // Order-8 Butterworth: sosfilt should remain stable
+        let coeffs = butter(8, 0.2, FilterType::Lowpass).expect("butter 8");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+
+        let x: Vec<f64> = (0..200)
+            .map(|i| (2.0 * std::f64::consts::PI * 0.05 * i as f64).sin())
+            .collect();
+
+        let y = sosfilt(&sos, &x).expect("sosfilt");
+        // Output should be finite (stable) and bounded
+        assert!(
+            y.iter().all(|v| v.is_finite()),
+            "sosfilt output should be finite for stable filter"
+        );
+        let max_abs = y.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+        assert!(
+            max_abs < 2.0,
+            "output should be bounded (max={max_abs})"
+        );
+    }
+
+    #[test]
+    fn sosfiltfilt_zero_phase() {
+        // sosfiltfilt should produce zero phase shift
+        let coeffs = butter(3, 0.3, FilterType::Lowpass).expect("butter");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+
+        let n = 200;
+        let freq = 0.05;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * freq * i as f64).sin())
+            .collect();
+
+        let y = sosfiltfilt(&sos, &x).expect("sosfiltfilt");
+        assert_eq!(y.len(), n);
+        assert!(y.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn sosfilt_zi_steady_state() {
+        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+        let zi = sosfilt_zi(&sos).expect("sosfilt_zi");
+        assert_eq!(zi.len(), sos.len());
+        // Each section should have finite initial conditions
+        for (i, zi_sec) in zi.iter().enumerate() {
+            assert!(
+                zi_sec[0].is_finite() && zi_sec[1].is_finite(),
+                "section {i} zi should be finite",
+            );
+        }
+    }
+
+    #[test]
+    fn sosfilt_empty_rejected() {
+        assert!(sosfilt(&[], &[1.0]).is_err());
+    }
+
+    #[test]
+    fn sosfiltfilt_short_rejected() {
+        let sos = vec![[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]];
+        assert!(sosfiltfilt(&sos, &[1.0, 2.0]).is_err());
     }
 }
