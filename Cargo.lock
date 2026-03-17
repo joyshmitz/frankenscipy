@@ -608,6 +608,7 @@ name = "fsci-interpolate"
 version = "0.1.0"
 dependencies = [
  "fsci-runtime",
+ "fsci-spatial",
  "proptest",
 ]
 
