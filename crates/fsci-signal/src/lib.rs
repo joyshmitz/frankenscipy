@@ -1306,6 +1306,317 @@ fn trim_trailing_zeros(p: &[f64]) -> Vec<f64> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Frequency Response Analysis
+// ══════════════════════════════════════════════════════════════════════
+
+/// Complex frequency response at a set of frequencies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreqzResult {
+    /// Angular frequencies (radians/sample for digital, rad/s for analog).
+    pub w: Vec<f64>,
+    /// Complex frequency response: magnitude at each frequency.
+    pub h_mag: Vec<f64>,
+    /// Phase response (radians) at each frequency.
+    pub h_phase: Vec<f64>,
+}
+
+/// Compute the frequency response of a digital filter.
+///
+/// Matches `scipy.signal.freqz(b, a, worN)`.
+///
+/// Evaluates H(e^{jω}) = B(e^{jω}) / A(e^{jω}) at `n_freqs` equally
+/// spaced frequencies from 0 to π.
+///
+/// # Arguments
+/// * `b` — Numerator coefficients
+/// * `a` — Denominator coefficients
+/// * `n_freqs` — Number of frequency points (default 512)
+pub fn freqz(b: &[f64], a: &[f64], n_freqs: Option<usize>) -> Result<FreqzResult, SignalError> {
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".to_string(),
+        ));
+    }
+
+    let n = n_freqs.unwrap_or(512);
+    if n == 0 {
+        return Err(SignalError::InvalidArgument(
+            "n_freqs must be > 0".to_string(),
+        ));
+    }
+
+    let mut w = Vec::with_capacity(n);
+    let mut h_mag = Vec::with_capacity(n);
+    let mut h_phase = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let omega = std::f64::consts::PI * i as f64 / (n - 1).max(1) as f64;
+        w.push(omega);
+
+        // Evaluate B(e^{jω}) and A(e^{jω}) using Horner's method
+        // B(z) = b[0] + b[1]*z^{-1} + b[2]*z^{-2} + ...
+        // At z = e^{jω}: z^{-k} = e^{-jkω} = cos(kω) - j*sin(kω)
+        let (b_re, b_im) = eval_poly_on_unit_circle(b, omega);
+        let (a_re, a_im) = eval_poly_on_unit_circle(a, omega);
+
+        // H = B / A (complex division)
+        let denom = a_re * a_re + a_im * a_im;
+        if denom < 1e-30 {
+            h_mag.push(f64::INFINITY);
+            h_phase.push(0.0);
+        } else {
+            let h_re = (b_re * a_re + b_im * a_im) / denom;
+            let h_im = (b_im * a_re - b_re * a_im) / denom;
+            h_mag.push((h_re * h_re + h_im * h_im).sqrt());
+            h_phase.push(h_im.atan2(h_re));
+        }
+    }
+
+    Ok(FreqzResult { w, h_mag, h_phase })
+}
+
+/// Compute the frequency response of a digital filter from SOS form.
+///
+/// Matches `scipy.signal.sosfreqz(sos, worN)`.
+///
+/// More numerically stable than freqz for high-order filters.
+pub fn freqz_sos(
+    sos: &[SosSection],
+    n_freqs: Option<usize>,
+) -> Result<FreqzResult, SignalError> {
+    if sos.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "sos must not be empty".to_string(),
+        ));
+    }
+
+    let n = n_freqs.unwrap_or(512);
+    if n == 0 {
+        return Err(SignalError::InvalidArgument(
+            "n_freqs must be > 0".to_string(),
+        ));
+    }
+
+    let mut w = Vec::with_capacity(n);
+    let mut h_mag = Vec::with_capacity(n);
+    let mut h_phase = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let omega = std::f64::consts::PI * i as f64 / (n - 1).max(1) as f64;
+        w.push(omega);
+
+        // Multiply frequency responses of each section
+        let mut total_re = 1.0;
+        let mut total_im = 0.0;
+
+        for section in sos {
+            let sec_b = &[section[0], section[1], section[2]];
+            let sec_a = &[section[3], section[4], section[5]];
+
+            let (b_re, b_im) = eval_poly_on_unit_circle(sec_b, omega);
+            let (a_re, a_im) = eval_poly_on_unit_circle(sec_a, omega);
+
+            let denom = a_re * a_re + a_im * a_im;
+            if denom < 1e-30 {
+                total_re = f64::INFINITY;
+                total_im = 0.0;
+                break;
+            }
+
+            let h_re = (b_re * a_re + b_im * a_im) / denom;
+            let h_im = (b_im * a_re - b_re * a_im) / denom;
+
+            // Complex multiply: total *= h
+            let new_re = total_re * h_re - total_im * h_im;
+            let new_im = total_re * h_im + total_im * h_re;
+            total_re = new_re;
+            total_im = new_im;
+        }
+
+        h_mag.push((total_re * total_re + total_im * total_im).sqrt());
+        h_phase.push(total_im.atan2(total_re));
+    }
+
+    Ok(FreqzResult { w, h_mag, h_phase })
+}
+
+/// Compute the frequency response of an analog filter.
+///
+/// Matches `scipy.signal.freqs(b, a, worN)`.
+///
+/// Evaluates H(jω) = B(jω) / A(jω) at specified angular frequencies.
+pub fn freqs(
+    b: &[f64],
+    a: &[f64],
+    w: &[f64],
+) -> Result<FreqzResult, SignalError> {
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".to_string(),
+        ));
+    }
+    if w.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "w must not be empty".to_string(),
+        ));
+    }
+
+    let mut h_mag = Vec::with_capacity(w.len());
+    let mut h_phase = Vec::with_capacity(w.len());
+
+    for &omega in w {
+        // Evaluate B(jω) and A(jω)
+        // B(s) = b[0]*s^n + b[1]*s^{n-1} + ... + b[n]
+        // At s = jω: (jω)^k = (jω)^k computed via complex arithmetic
+        let (b_re, b_im) = eval_analog_poly(b, omega);
+        let (a_re, a_im) = eval_analog_poly(a, omega);
+
+        let denom = a_re * a_re + a_im * a_im;
+        if denom < 1e-30 {
+            h_mag.push(f64::INFINITY);
+            h_phase.push(0.0);
+        } else {
+            let h_re = (b_re * a_re + b_im * a_im) / denom;
+            let h_im = (b_im * a_re - b_re * a_im) / denom;
+            h_mag.push((h_re * h_re + h_im * h_im).sqrt());
+            h_phase.push(h_im.atan2(h_re));
+        }
+    }
+
+    Ok(FreqzResult {
+        w: w.to_vec(),
+        h_mag,
+        h_phase,
+    })
+}
+
+/// Compute group delay of a digital filter.
+///
+/// Matches `scipy.signal.group_delay((b, a), w)`.
+///
+/// Group delay: τ_g(ω) = -dφ/dω where φ is the phase response.
+///
+/// Uses the analytic formula based on polynomial evaluation:
+///   τ_g(ω) = Re{ [B'(z)/B(z) - A'(z)/A(z)] } where z = e^{jω}
+/// and B'(z) = d/dω B(e^{jω}) (the derivative polynomial evaluated on the unit circle).
+pub fn group_delay(
+    b: &[f64],
+    a: &[f64],
+    n_freqs: Option<usize>,
+) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".to_string(),
+        ));
+    }
+
+    let n = n_freqs.unwrap_or(512);
+
+    // Derivative polynomial: if B(z) = Σ b[k] z^{-k}, then
+    // dB/dω = Σ (-jk) b[k] z^{-k}, so the "derivative coefficients" are
+    // b_deriv[k] = -k * b[k] and we multiply by j.
+    //
+    // Group delay = Re{ (B'·conj(B))/(|B|²) - (A'·conj(A))/(|A|²) }
+    // where B' = Σ (-jk) b[k] e^{-jkω}
+
+    let mut w_out = Vec::with_capacity(n);
+    let mut gd_out = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let omega = std::f64::consts::PI * i as f64 / (n - 1).max(1) as f64;
+        w_out.push(omega);
+
+        // Evaluate B(e^{jω}) and its derivative
+        let (b_re, b_im) = eval_poly_on_unit_circle(b, omega);
+        let b_mag2 = b_re * b_re + b_im * b_im;
+
+        // B'(e^{jω}) = Σ (-jk) b[k] e^{-jkω}
+        // Let D(e^{jω}) = Σ k*b[k] e^{-jkω} (without the -j factor)
+        // Then B' = -j * D, so B'·conj(B) = -j * D * conj(B)
+        // Re{B'·conj(B) / |B|²} = Re{-j(D_re + j*D_im)(B_re - j*B_im)} / |B|²
+        //   = Re{-j(D_re*B_re + D_im*B_im + j(D_im*B_re - D_re*B_im))} / |B|²
+        //   = (D_im*B_re - D_re*B_im) / |B|²  ... wait that's the imaginary part.
+        //   Actually: -j*(a+jb) = -ja + b = b - ja
+        //   So Re{-j * D * conj(B)} = Re{(D_re+jD_im)*(-j)*(B_re-jB_im)}
+        //     = Re{(-j)(D_re*B_re + D_im*B_im + j(D_im*B_re - D_re*B_im))}
+        //     = D_im*B_re - D_re*B_im + ... no, let me just compute directly.
+
+        // Actually simpler: τ_g = Re{z * H'(z)/H(z)} where H'=dH/dz (not dH/dω).
+        // But the standard formula is: τ_g(ω) = Re{Σ_k k*c[k]*e^{-jkω} / Σ_k c[k]*e^{-jkω}}
+        // for the numerator polynomial c=b, and subtract the same for c=a.
+
+        // For B: τ_B = Re{Σ k*b[k]*e^{-jkω} / B(e^{jω})}
+        let (db_re, db_im) = eval_weighted_poly_on_unit_circle(b, omega);
+        let gd_b = if b_mag2 > 1e-30 {
+            (db_re * b_re + db_im * b_im) / b_mag2
+        } else {
+            0.0
+        };
+
+        // For A: τ_A = Re{Σ k*a[k]*e^{-jkω} / A(e^{jω})}
+        let (a_re, a_im) = eval_poly_on_unit_circle(a, omega);
+        let a_mag2 = a_re * a_re + a_im * a_im;
+        let (da_re, da_im) = eval_weighted_poly_on_unit_circle(a, omega);
+        let gd_a = if a_mag2 > 1e-30 {
+            (da_re * a_re + da_im * a_im) / a_mag2
+        } else {
+            0.0
+        };
+
+        gd_out.push(gd_b - gd_a);
+    }
+
+    Ok((w_out, gd_out))
+}
+
+/// Evaluate Σ k*c[k]*e^{-jkω} (weighted polynomial for group delay).
+fn eval_weighted_poly_on_unit_circle(coeffs: &[f64], omega: f64) -> (f64, f64) {
+    let mut re = 0.0;
+    let mut im = 0.0;
+    for (k, &c) in coeffs.iter().enumerate() {
+        let angle = -(k as f64) * omega;
+        let weight = k as f64;
+        re += weight * c * angle.cos();
+        im += weight * c * angle.sin();
+    }
+    (re, im)
+}
+
+/// Evaluate polynomial in z^{-1} on the unit circle at angle ω.
+/// Returns (real_part, imag_part) of Σ c[k] * e^{-jkω}.
+fn eval_poly_on_unit_circle(coeffs: &[f64], omega: f64) -> (f64, f64) {
+    let mut re = 0.0;
+    let mut im = 0.0;
+    for (k, &c) in coeffs.iter().enumerate() {
+        let angle = -(k as f64) * omega;
+        re += c * angle.cos();
+        im += c * angle.sin();
+    }
+    (re, im)
+}
+
+/// Evaluate analog polynomial B(jω) = Σ b[k] * (jω)^{n-k}.
+/// Note: analog polynomials are in descending power order.
+fn eval_analog_poly(coeffs: &[f64], omega: f64) -> (f64, f64) {
+    let n = coeffs.len();
+    let mut re = 0.0;
+    let mut im = 0.0;
+    for (k, &c) in coeffs.iter().enumerate() {
+        let power = (n - 1 - k) as u32;
+        // (jω)^power: j^0=1, j^1=j, j^2=-1, j^3=-j, j^4=1, ...
+        let omega_pow = omega.powi(power as i32);
+        match power % 4 {
+            0 => re += c * omega_pow,        // j^0 = 1
+            1 => im += c * omega_pow,        // j^1 = j
+            2 => re -= c * omega_pow,        // j^2 = -1
+            3 => im -= c * omega_pow,        // j^3 = -j
+            _ => unreachable!(),
+        }
+    }
+    (re, im)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Spectral Analysis
 // ══════════════════════════════════════════════════════════════════════
 
@@ -2269,5 +2580,128 @@ mod tests {
     fn tf2zpk_empty_rejected() {
         assert!(tf2zpk(&[], &[1.0]).is_err());
         assert!(tf2zpk(&[1.0], &[]).is_err());
+    }
+
+    // ── Frequency response tests ───────────────────────────────────
+
+    #[test]
+    fn freqz_unity_gain() {
+        // H(z) = 1 (b=[1], a=[1]) → magnitude 1 everywhere
+        let result = freqz(&[1.0], &[1.0], Some(64)).expect("freqz");
+        assert_eq!(result.w.len(), 64);
+        assert_eq!(result.h_mag.len(), 64);
+        for (i, &mag) in result.h_mag.iter().enumerate() {
+            assert_close(mag, 1.0, 1e-12, &format!("unity mag at bin {i}"));
+        }
+    }
+
+    #[test]
+    fn freqz_butter_at_cutoff() {
+        // Butter(2, 0.3): at cutoff frequency, magnitude should be ≈ 1/√2 (-3dB)
+        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+
+        // Cutoff at ω = 0.3π
+        let cutoff_omega = 0.3 * std::f64::consts::PI;
+        // Find nearest frequency bin
+        let cutoff_idx = result
+            .w
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                ((**a) - cutoff_omega)
+                    .abs()
+                    .partial_cmp(&((**b) - cutoff_omega).abs())
+                    .unwrap()
+            })
+            .map(|(i, _)| i)
+            .unwrap();
+
+        let mag_at_cutoff = result.h_mag[cutoff_idx];
+        let inv_sqrt2 = 1.0 / 2.0_f64.sqrt();
+        assert!(
+            (mag_at_cutoff - inv_sqrt2).abs() < 0.05,
+            "mag at cutoff should be ~{inv_sqrt2}, got {mag_at_cutoff}"
+        );
+    }
+
+    #[test]
+    fn freqz_lowpass_dc_unity() {
+        // Lowpass filter: DC gain (ω=0) should be 1
+        let coeffs = butter(3, 0.4, FilterType::Lowpass).expect("butter");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(256)).expect("freqz");
+        assert_close(result.h_mag[0], 1.0, 1e-6, "DC gain = 1");
+    }
+
+    #[test]
+    fn freqz_highpass_nyquist_unity() {
+        // Highpass filter: Nyquist gain (ω=π) should be 1
+        let coeffs = butter(2, 0.3, FilterType::Highpass).expect("butter");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(256)).expect("freqz");
+        let last_idx = result.h_mag.len() - 1;
+        assert_close(result.h_mag[last_idx], 1.0, 1e-6, "Nyquist gain = 1");
+    }
+
+    #[test]
+    fn freqz_sos_matches_ba() {
+        // SOS and BA forms should give same frequency response
+        let coeffs = butter(4, 0.25, FilterType::Lowpass).expect("butter");
+        let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
+
+        let ba_result = freqz(&coeffs.b, &coeffs.a, Some(128)).expect("freqz ba");
+        let sos_result = freqz_sos(&sos, Some(128)).expect("freqz sos");
+
+        for i in 0..128 {
+            assert_close(
+                ba_result.h_mag[i],
+                sos_result.h_mag[i],
+                1e-4,
+                &format!("mag match at bin {i}"),
+            );
+        }
+    }
+
+    #[test]
+    fn freqz_monotone_lowpass() {
+        // Butterworth lowpass: magnitude should be monotonically decreasing
+        let coeffs = butter(4, 0.3, FilterType::Lowpass).expect("butter");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(256)).expect("freqz");
+        for i in 1..result.h_mag.len() {
+            assert!(
+                result.h_mag[i] <= result.h_mag[i - 1] + 1e-10,
+                "butter lowpass should be monotone decreasing: mag[{i}]={} > mag[{}]={}",
+                result.h_mag[i],
+                i - 1,
+                result.h_mag[i - 1]
+            );
+        }
+    }
+
+    #[test]
+    fn group_delay_fir_linear_phase() {
+        // A symmetric FIR filter has constant group delay = (N-1)/2
+        let b = vec![1.0, 2.0, 3.0, 2.0, 1.0]; // symmetric, N=5
+        let a = vec![1.0];
+        let result = freqz(&b, &a, Some(64)).expect("freqz for gd check");
+        let (w, gd) = group_delay(&b, &a, Some(64)).expect("group_delay");
+        assert_eq!(w.len(), 64);
+
+        // Expected group delay = (5-1)/2 = 2.0 samples
+        // Only check at frequencies where the filter has significant magnitude
+        // (group delay is undefined at filter nulls where |H|≈0)
+        for (i, (&gd_val, &mag)) in gd.iter().zip(result.h_mag.iter()).enumerate() {
+            if mag > 0.1 {
+                assert!(
+                    (gd_val - 2.0).abs() < 0.15,
+                    "group delay at bin {i} (mag={mag:.3}) should be ~2.0, got {gd_val}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn freqz_empty_rejected() {
+        assert!(freqz(&[], &[1.0], None).is_err());
+        assert!(freqz(&[1.0], &[], None).is_err());
     }
 }
