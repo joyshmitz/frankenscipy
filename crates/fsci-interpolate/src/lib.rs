@@ -561,6 +561,95 @@ pub fn interp1d_linear(x: &[f64], y: &[f64], x_new: &[f64]) -> Result<Vec<f64>, 
     interp.eval_many(x_new)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// N-D Scattered Data Interpolation
+// ══════════════════════════════════════════════════════════════════════
+
+/// Nearest-neighbor interpolator for scattered N-D data.
+///
+/// Matches `scipy.interpolate.NearestNDInterpolator(points, values)`.
+///
+/// Constructs a KDTree from the input points and returns the value of
+/// the nearest data point for each query.
+#[derive(Debug)]
+pub struct NearestNDInterpolator {
+    tree: fsci_spatial::KDTree,
+    values: Vec<f64>,
+}
+
+impl NearestNDInterpolator {
+    /// Create a nearest-neighbor interpolator from scattered data.
+    ///
+    /// # Arguments
+    /// * `points` — N-D data points, each as a Vec of coordinates
+    /// * `values` — Function values at each point (same length as points)
+    pub fn new(points: &[Vec<f64>], values: &[f64]) -> Result<Self, InterpError> {
+        if points.is_empty() {
+            return Err(InterpError::TooFewPoints {
+                minimum: 1,
+                actual: 0,
+            });
+        }
+        if points.len() != values.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: points.len(),
+                y_len: values.len(),
+            });
+        }
+        let tree = fsci_spatial::KDTree::new(points).map_err(|e| {
+            InterpError::InvalidArgument {
+                detail: format!("KDTree construction failed: {e}"),
+            }
+        })?;
+        Ok(Self {
+            tree,
+            values: values.to_vec(),
+        })
+    }
+
+    /// Evaluate the interpolator at a single query point.
+    pub fn eval(&self, query: &[f64]) -> Result<f64, InterpError> {
+        let (idx, _dist) = self.tree.query(query).map_err(|e| {
+            InterpError::InvalidArgument {
+                detail: format!("query failed: {e}"),
+            }
+        })?;
+        Ok(self.values[idx])
+    }
+
+    /// Evaluate the interpolator at multiple query points.
+    pub fn eval_many(&self, queries: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+        queries.iter().map(|q| self.eval(q)).collect()
+    }
+}
+
+/// Interpolation method for griddata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GriddataMethod {
+    /// Nearest-neighbor interpolation (always works, discontinuous).
+    Nearest,
+}
+
+/// Interpolate unstructured N-D data onto specified points.
+///
+/// Matches `scipy.interpolate.griddata(points, values, xi, method)`.
+///
+/// Currently supports method='nearest'. Linear and cubic methods require
+/// Delaunay triangulation (see LinearNDInterpolator bead).
+pub fn griddata(
+    points: &[Vec<f64>],
+    values: &[f64],
+    xi: &[Vec<f64>],
+    method: GriddataMethod,
+) -> Result<Vec<f64>, InterpError> {
+    match method {
+        GriddataMethod::Nearest => {
+            let interp = NearestNDInterpolator::new(points, values)?;
+            interp.eval_many(xi)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -851,6 +940,127 @@ mod tests {
             assert!(
                 (r - expected).abs() < 1e-10,
                 "eval_many[{i}] = {r}, expected {expected}"
+            );
+        }
+    }
+
+    // ── NearestNDInterpolator tests ───────────────────────────────
+
+    #[test]
+    fn nearest_nd_exact_at_data_points() {
+        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let values = vec![1.0, 2.0, 3.0];
+        let interp = NearestNDInterpolator::new(&points, &values).expect("nearestnd");
+
+        // Querying at exact data points should return exact values
+        for (i, pt) in points.iter().enumerate() {
+            let val = interp.eval(pt).expect("eval");
+            assert!(
+                (val - values[i]).abs() < 1e-12,
+                "at point {i}: got {val}, expected {}",
+                values[i]
+            );
+        }
+    }
+
+    #[test]
+    fn nearest_nd_between_points() {
+        let points = vec![vec![0.0], vec![10.0]];
+        let values = vec![100.0, 200.0];
+        let interp = NearestNDInterpolator::new(&points, &values).expect("nearestnd");
+
+        // Query near the first point
+        let val = interp.eval(&[1.0]).expect("eval near 0");
+        assert!(
+            (val - 100.0).abs() < 1e-12,
+            "closer to 0 → value 100, got {val}"
+        );
+
+        // Query near the second point
+        let val = interp.eval(&[8.0]).expect("eval near 10");
+        assert!(
+            (val - 200.0).abs() < 1e-12,
+            "closer to 10 → value 200, got {val}"
+        );
+    }
+
+    #[test]
+    fn nearest_nd_3d_data() {
+        let points = vec![
+            vec![0.0, 0.0, 0.0],
+            vec![1.0, 1.0, 1.0],
+            vec![2.0, 0.0, 0.0],
+        ];
+        let values = vec![10.0, 20.0, 30.0];
+        let interp = NearestNDInterpolator::new(&points, &values).expect("nearestnd 3d");
+
+        // Point closest to origin
+        let val = interp.eval(&[0.1, 0.1, 0.1]).expect("eval");
+        assert!((val - 10.0).abs() < 1e-12, "near origin → 10, got {val}");
+
+        // Point closest to (1,1,1)
+        let val = interp.eval(&[0.9, 0.9, 0.9]).expect("eval");
+        assert!((val - 20.0).abs() < 1e-12, "near (1,1,1) → 20, got {val}");
+    }
+
+    #[test]
+    fn nearest_nd_empty_rejected() {
+        let err = NearestNDInterpolator::new(&[], &[]).expect_err("empty");
+        assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn nearest_nd_length_mismatch() {
+        let err =
+            NearestNDInterpolator::new(&[vec![0.0]], &[1.0, 2.0]).expect_err("mismatch");
+        assert!(matches!(err, InterpError::LengthMismatch { .. }));
+    }
+
+    #[test]
+    fn griddata_nearest_basic() {
+        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
+        let values = vec![0.0, 1.0, 2.0, 3.0];
+        let xi = vec![vec![0.1, 0.1], vec![0.9, 0.9]];
+
+        let result = griddata(&points, &values, &xi, GriddataMethod::Nearest).expect("griddata");
+        assert_eq!(result.len(), 2);
+        // (0.1, 0.1) closest to (0,0) → value 0
+        assert!((result[0] - 0.0).abs() < 1e-12, "got {}", result[0]);
+        // (0.9, 0.9) closest to (1,1) → value 3
+        assert!((result[1] - 3.0).abs() < 1e-12, "got {}", result[1]);
+    }
+
+    #[test]
+    fn griddata_out_of_bounds_still_works() {
+        // Nearest interpolation works even far from data
+        let points = vec![vec![0.0], vec![1.0]];
+        let values = vec![10.0, 20.0];
+        let xi = vec![vec![-100.0], vec![100.0]];
+        let result = griddata(&points, &values, &xi, GriddataMethod::Nearest).expect("griddata");
+        assert!((result[0] - 10.0).abs() < 1e-12); // nearest to 0
+        assert!((result[1] - 20.0).abs() < 1e-12); // nearest to 1
+    }
+
+    #[test]
+    fn nearest_nd_large_dataset() {
+        // 100 random-ish 2D points with known function
+        let points: Vec<Vec<f64>> = (0..100)
+            .map(|i| {
+                let x = (i as f64 * 0.73) % 10.0;
+                let y = (i as f64 * 1.37) % 10.0;
+                vec![x, y]
+            })
+            .collect();
+        let values: Vec<f64> = points.iter().map(|p| p[0] + p[1]).collect();
+        let interp = NearestNDInterpolator::new(&points, &values).expect("nearestnd large");
+
+        // Query at exact data points should return exact values
+        for (i, pt) in points.iter().enumerate() {
+            let val = interp.eval(pt).expect("eval");
+            assert!(
+                (val - values[i]).abs() < 1e-10,
+                "point {i}: got {val}, expected {}",
+                values[i]
             );
         }
     }
