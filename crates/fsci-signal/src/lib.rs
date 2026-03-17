@@ -1651,26 +1651,13 @@ pub fn group_delay(
         let omega = std::f64::consts::PI * i as f64 / (n - 1).max(1) as f64;
         w_out.push(omega);
 
-        // Evaluate B(e^{jω}) and its derivative
+        // Evaluate B(e^{jω})
         let (b_re, b_im) = eval_poly_on_unit_circle(b, omega);
         let b_mag2 = b_re * b_re + b_im * b_im;
 
-        // B'(e^{jω}) = Σ (-jk) b[k] e^{-jkω}
-        // Let D(e^{jω}) = Σ k*b[k] e^{-jkω} (without the -j factor)
-        // Then B' = -j * D, so B'·conj(B) = -j * D * conj(B)
-        // Re{B'·conj(B) / |B|²} = Re{-j(D_re + j*D_im)(B_re - j*B_im)} / |B|²
-        //   = Re{-j(D_re*B_re + D_im*B_im + j(D_im*B_re - D_re*B_im))} / |B|²
-        //   = (D_im*B_re - D_re*B_im) / |B|²  ... wait that's the imaginary part.
-        //   Actually: -j*(a+jb) = -ja + b = b - ja
-        //   So Re{-j * D * conj(B)} = Re{(D_re+jD_im)*(-j)*(B_re-jB_im)}
-        //     = Re{(-j)(D_re*B_re + D_im*B_im + j(D_im*B_re - D_re*B_im))}
-        //     = D_im*B_re - D_re*B_im + ... no, let me just compute directly.
-
-        // Actually simpler: τ_g = Re{z * H'(z)/H(z)} where H'=dH/dz (not dH/dω).
-        // But the standard formula is: τ_g(ω) = Re{Σ_k k*c[k]*e^{-jkω} / Σ_k c[k]*e^{-jkω}}
-        // for the numerator polynomial c=b, and subtract the same for c=a.
-
-        // For B: τ_B = Re{Σ k*b[k]*e^{-jkω} / B(e^{jω})}
+        // Standard formula: τ_g(ω) = Re{D_B / B} - Re{D_A / A}
+        // where D_B(e^{jω}) = Σ_k k * b[k] * e^{-jkω}
+        // and Re{D/B} = (D_re*B_re + D_im*B_im) / |B|²
         let (db_re, db_im) = eval_weighted_poly_on_unit_circle(b, omega);
         let gd_b = if b_mag2 > 1e-30 {
             (db_re * b_re + db_im * b_im) / b_mag2
