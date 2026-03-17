@@ -1021,7 +1021,8 @@ impl DiscreteDistribution for Hypergeometric {
         let kf = k as f64;
 
         // Valid range: max(0, N+n-M) <= k <= min(n, N)
-        let k_min = if self.big_n + self.n > self.big_m {
+        // Use saturating_add to avoid u64 overflow
+        let k_min = if self.big_n.saturating_add(self.n) > self.big_m {
             (self.big_n + self.n - self.big_m) as f64
         } else {
             0.0
@@ -1048,6 +1049,9 @@ impl DiscreteDistribution for Hypergeometric {
 
     fn var(&self) -> f64 {
         let m = self.big_m as f64;
+        if m <= 1.0 {
+            return 0.0; // Degenerate: single-element population has no variance
+        }
         let n = self.n as f64;
         let big_n = self.big_n as f64;
         big_n * (n / m) * ((m - n) / m) * ((m - big_n) / (m - 1.0))
