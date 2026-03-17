@@ -8,6 +8,7 @@ pub mod elliptic;
 pub mod error;
 pub mod gamma;
 pub mod hyper;
+pub mod orthopoly;
 pub mod types;
 
 pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
@@ -20,6 +21,10 @@ pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipk, ellipkinc, exp1, expi, lambertw,
 };
 pub use error::{ERROR_DISPATCH_PLAN, erf, erfc, erfcinv, erfinv};
+pub use orthopoly::{
+    eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite, eval_hermitenorm,
+    eval_jacobi, eval_laguerre, eval_legendre,
+};
 pub use gamma::{
     GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, perm,
     polygamma, rgamma, zeta,
