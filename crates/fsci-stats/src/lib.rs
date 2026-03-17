@@ -775,6 +775,285 @@ impl Poisson {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Discrete Distribution Trait and Implementations
+// ══════════════════════════════════════════════════════════════════════
+
+/// Trait for discrete probability distributions.
+pub trait DiscreteDistribution {
+    /// Probability mass function.
+    fn pmf(&self, k: u64) -> f64;
+    /// Cumulative distribution function: P(X <= k).
+    fn cdf(&self, k: u64) -> f64 {
+        (0..=k).map(|i| self.pmf(i)).sum::<f64>().min(1.0)
+    }
+    /// Survival function: P(X > k) = 1 - cdf(k).
+    fn sf(&self, k: u64) -> f64 {
+        1.0 - self.cdf(k)
+    }
+    /// Mean of the distribution.
+    fn mean(&self) -> f64;
+    /// Variance of the distribution.
+    fn var(&self) -> f64;
+    /// Standard deviation.
+    fn std(&self) -> f64 {
+        self.var().sqrt()
+    }
+}
+
+impl DiscreteDistribution for Poisson {
+    fn pmf(&self, k: u64) -> f64 {
+        Poisson::pmf(self, k)
+    }
+    fn cdf(&self, k: u64) -> f64 {
+        Poisson::cdf(self, k)
+    }
+    fn mean(&self) -> f64 {
+        Poisson::mean(self)
+    }
+    fn var(&self) -> f64 {
+        Poisson::var(self)
+    }
+}
+
+/// Binomial distribution: number of successes in n independent Bernoulli trials.
+///
+/// Matches `scipy.stats.binom(n, p)`.
+/// PMF: P(k) = C(n,k) * p^k * (1-p)^(n-k)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Binomial {
+    pub n: u64,
+    pub p: f64,
+}
+
+impl Binomial {
+    #[must_use]
+    pub fn new(n: u64, p: f64) -> Self {
+        assert!((0.0..=1.0).contains(&p), "p must be in [0, 1], got {p}");
+        Self { n, p }
+    }
+}
+
+impl DiscreteDistribution for Binomial {
+    fn pmf(&self, k: u64) -> f64 {
+        if k > self.n {
+            return 0.0;
+        }
+        if self.p == 0.0 {
+            return if k == 0 { 1.0 } else { 0.0 };
+        }
+        if self.p == 1.0 {
+            return if k == self.n { 1.0 } else { 0.0 };
+        }
+        let ln_comb = ln_gamma(self.n as f64 + 1.0)
+            - ln_gamma(k as f64 + 1.0)
+            - ln_gamma((self.n - k) as f64 + 1.0);
+        let ln_pmf = ln_comb + k as f64 * self.p.ln() + (self.n - k) as f64 * (1.0 - self.p).ln();
+        ln_pmf.exp()
+    }
+
+    fn mean(&self) -> f64 {
+        self.n as f64 * self.p
+    }
+
+    fn var(&self) -> f64 {
+        self.n as f64 * self.p * (1.0 - self.p)
+    }
+}
+
+/// Bernoulli distribution: single trial with probability p.
+///
+/// Matches `scipy.stats.bernoulli(p)`.
+/// Special case of Binomial(1, p).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bernoulli {
+    pub p: f64,
+}
+
+impl Bernoulli {
+    #[must_use]
+    pub fn new(p: f64) -> Self {
+        assert!((0.0..=1.0).contains(&p), "p must be in [0, 1], got {p}");
+        Self { p }
+    }
+}
+
+impl DiscreteDistribution for Bernoulli {
+    fn pmf(&self, k: u64) -> f64 {
+        match k {
+            0 => 1.0 - self.p,
+            1 => self.p,
+            _ => 0.0,
+        }
+    }
+
+    fn cdf(&self, k: u64) -> f64 {
+        if k == 0 {
+            1.0 - self.p
+        } else {
+            1.0
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        self.p
+    }
+
+    fn var(&self) -> f64 {
+        self.p * (1.0 - self.p)
+    }
+}
+
+/// Geometric distribution: number of trials until first success.
+///
+/// Matches `scipy.stats.geom(p)`.
+/// PMF: P(k) = p * (1-p)^(k-1) for k = 1, 2, 3, ...
+/// Note: SciPy uses k >= 1 convention (first success on trial k).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Geometric {
+    pub p: f64,
+}
+
+impl Geometric {
+    #[must_use]
+    pub fn new(p: f64) -> Self {
+        assert!(p > 0.0 && p <= 1.0, "p must be in (0, 1], got {p}");
+        Self { p }
+    }
+}
+
+impl DiscreteDistribution for Geometric {
+    fn pmf(&self, k: u64) -> f64 {
+        if k == 0 {
+            return 0.0;
+        }
+        self.p * (1.0 - self.p).powi((k - 1) as i32)
+    }
+
+    fn cdf(&self, k: u64) -> f64 {
+        if k == 0 {
+            return 0.0;
+        }
+        1.0 - (1.0 - self.p).powi(k as i32)
+    }
+
+    fn mean(&self) -> f64 {
+        1.0 / self.p
+    }
+
+    fn var(&self) -> f64 {
+        (1.0 - self.p) / (self.p * self.p)
+    }
+}
+
+/// Negative binomial distribution: number of failures before n successes.
+///
+/// Matches `scipy.stats.nbinom(n, p)`.
+/// PMF: P(k) = C(k+n-1, k) * p^n * (1-p)^k for k = 0, 1, 2, ...
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NegBinomial {
+    /// Number of successes required.
+    pub n: f64,
+    /// Probability of success on each trial.
+    pub p: f64,
+}
+
+impl NegBinomial {
+    #[must_use]
+    pub fn new(n: f64, p: f64) -> Self {
+        assert!(n > 0.0, "n must be positive, got {n}");
+        assert!(p > 0.0 && p <= 1.0, "p must be in (0, 1], got {p}");
+        Self { n, p }
+    }
+}
+
+impl DiscreteDistribution for NegBinomial {
+    fn pmf(&self, k: u64) -> f64 {
+        let kf = k as f64;
+        // C(k+n-1, k) = Γ(k+n) / (Γ(k+1) * Γ(n))
+        let ln_comb = ln_gamma(kf + self.n) - ln_gamma(kf + 1.0) - ln_gamma(self.n);
+        let ln_pmf = ln_comb + self.n * self.p.ln() + kf * (1.0 - self.p).ln();
+        ln_pmf.exp()
+    }
+
+    fn mean(&self) -> f64 {
+        self.n * (1.0 - self.p) / self.p
+    }
+
+    fn var(&self) -> f64 {
+        self.n * (1.0 - self.p) / (self.p * self.p)
+    }
+}
+
+/// Hypergeometric distribution: draws without replacement.
+///
+/// Matches `scipy.stats.hypergeom(M, n, N)`.
+/// PMF: P(k) = C(n, k) * C(M-n, N-k) / C(M, N)
+///
+/// M = total population, n = success states in population, N = draws.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hypergeometric {
+    /// Total population size.
+    pub big_m: u64,
+    /// Number of success states in population.
+    pub n: u64,
+    /// Number of draws.
+    pub big_n: u64,
+}
+
+impl Hypergeometric {
+    #[must_use]
+    pub fn new(big_m: u64, n: u64, big_n: u64) -> Self {
+        assert!(n <= big_m, "n must be <= M, got n={n}, M={big_m}");
+        assert!(
+            big_n <= big_m,
+            "N must be <= M, got N={big_n}, M={big_m}"
+        );
+        Self { big_m, n, big_n }
+    }
+}
+
+impl DiscreteDistribution for Hypergeometric {
+    fn pmf(&self, k: u64) -> f64 {
+        let m = self.big_m as f64;
+        let n = self.n as f64;
+        let big_n = self.big_n as f64;
+        let kf = k as f64;
+
+        // Valid range: max(0, N+n-M) <= k <= min(n, N)
+        let k_min = if self.big_n + self.n > self.big_m {
+            (self.big_n + self.n - self.big_m) as f64
+        } else {
+            0.0
+        };
+        let k_max = n.min(big_n);
+        if kf < k_min || kf > k_max {
+            return 0.0;
+        }
+
+        // ln(C(n,k)) + ln(C(M-n, N-k)) - ln(C(M, N))
+        let ln_pmf = ln_gamma(n + 1.0) - ln_gamma(kf + 1.0) - ln_gamma(n - kf + 1.0)
+            + ln_gamma(m - n + 1.0)
+            - ln_gamma(big_n - kf + 1.0)
+            - ln_gamma(m - n - big_n + kf + 1.0)
+            - ln_gamma(m + 1.0)
+            + ln_gamma(big_n + 1.0)
+            + ln_gamma(m - big_n + 1.0);
+        ln_pmf.exp()
+    }
+
+    fn mean(&self) -> f64 {
+        self.big_n as f64 * self.n as f64 / self.big_m as f64
+    }
+
+    fn var(&self) -> f64 {
+        let m = self.big_m as f64;
+        let n = self.n as f64;
+        let big_n = self.big_n as f64;
+        big_n * (n / m) * ((m - n) / m) * ((m - big_n) / (m - 1.0))
+    }
+}
+
 /// Log of the Beta function: ln(B(a,b)) = ln(Γ(a)) + ln(Γ(b)) - ln(Γ(a+b))
 fn ln_beta(a: f64, b: f64) -> f64 {
     ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b)
@@ -2938,5 +3217,163 @@ mod tests {
     fn zscore_constant() {
         let z = zscore(&[5.0, 5.0, 5.0]);
         assert!(z.iter().all(|&v| v == 0.0), "constant data => all zeros");
+    }
+
+    // ── Discrete distributions ────────────────────────────────────
+
+    #[test]
+    fn binomial_pmf_sums_to_one() {
+        let b = Binomial::new(10, 0.3);
+        let sum: f64 = (0..=10).map(|k| b.pmf(k)).sum();
+        assert!((sum - 1.0).abs() < 1e-10, "PMF sum = {sum}");
+    }
+
+    #[test]
+    fn binomial_mean_var() {
+        let b = Binomial::new(20, 0.4);
+        assert_close(b.mean(), 8.0, 1e-12, "mean = np");
+        assert_close(b.var(), 4.8, 1e-12, "var = np(1-p)");
+    }
+
+    #[test]
+    fn binomial_p0_all_at_zero() {
+        let b = Binomial::new(5, 0.0);
+        assert_close(b.pmf(0), 1.0, 1e-15, "P(0) with p=0");
+        assert_close(b.pmf(1), 0.0, 1e-15, "P(1) with p=0");
+    }
+
+    #[test]
+    fn binomial_p1_all_at_n() {
+        let b = Binomial::new(5, 1.0);
+        assert_close(b.pmf(5), 1.0, 1e-15, "P(5) with p=1");
+        assert_close(b.pmf(4), 0.0, 1e-15, "P(4) with p=1");
+    }
+
+    #[test]
+    fn binomial_known_value() {
+        // C(5,2) * 0.5^2 * 0.5^3 = 10 * 0.03125 = 0.3125
+        let b = Binomial::new(5, 0.5);
+        assert_close(b.pmf(2), 0.3125, 1e-10, "Binom(5,0.5).pmf(2)");
+    }
+
+    #[test]
+    fn binomial_cdf_at_n() {
+        let b = Binomial::new(10, 0.3);
+        assert_close(b.cdf(10), 1.0, 1e-10, "CDF(n) = 1");
+    }
+
+    #[test]
+    fn bernoulli_basic() {
+        let b = Bernoulli::new(0.7);
+        assert_close(b.pmf(0), 0.3, 1e-15, "P(0)");
+        assert_close(b.pmf(1), 0.7, 1e-15, "P(1)");
+        assert_close(b.pmf(2), 0.0, 1e-15, "P(2)");
+        assert_close(b.mean(), 0.7, 1e-15, "mean");
+        assert_close(b.var(), 0.21, 1e-15, "var");
+    }
+
+    #[test]
+    fn bernoulli_cdf() {
+        let b = Bernoulli::new(0.4);
+        assert_close(b.cdf(0), 0.6, 1e-15, "CDF(0)");
+        assert_close(b.cdf(1), 1.0, 1e-15, "CDF(1)");
+    }
+
+    #[test]
+    fn geometric_pmf_sums_near_one() {
+        let g = Geometric::new(0.3);
+        let sum: f64 = (1..=100).map(|k| g.pmf(k)).sum();
+        assert!((sum - 1.0).abs() < 1e-6, "PMF sum = {sum}");
+    }
+
+    #[test]
+    fn geometric_mean_var() {
+        let g = Geometric::new(0.25);
+        assert_close(g.mean(), 4.0, 1e-12, "mean = 1/p");
+        assert_close(g.var(), 12.0, 1e-12, "var = (1-p)/p^2");
+    }
+
+    #[test]
+    fn geometric_cdf_known() {
+        let g = Geometric::new(0.5);
+        // P(X <= 1) = 0.5, P(X <= 2) = 0.75, P(X <= 3) = 0.875
+        assert_close(g.cdf(1), 0.5, 1e-12, "CDF(1)");
+        assert_close(g.cdf(2), 0.75, 1e-12, "CDF(2)");
+        assert_close(g.cdf(3), 0.875, 1e-12, "CDF(3)");
+    }
+
+    #[test]
+    fn geometric_pmf_at_zero() {
+        let g = Geometric::new(0.5);
+        assert_close(g.pmf(0), 0.0, 1e-15, "P(0) = 0 for geom");
+    }
+
+    #[test]
+    fn negbinomial_pmf_sums_near_one() {
+        let nb = NegBinomial::new(5.0, 0.4);
+        let sum: f64 = (0..=200).map(|k| nb.pmf(k)).sum();
+        assert!((sum - 1.0).abs() < 1e-6, "PMF sum = {sum}");
+    }
+
+    #[test]
+    fn negbinomial_mean_var() {
+        let nb = NegBinomial::new(3.0, 0.5);
+        // mean = n*(1-p)/p = 3*0.5/0.5 = 3
+        assert_close(nb.mean(), 3.0, 1e-12, "mean");
+        // var = n*(1-p)/p^2 = 3*0.5/0.25 = 6
+        assert_close(nb.var(), 6.0, 1e-12, "var");
+    }
+
+    #[test]
+    fn hypergeometric_pmf_sums_to_one() {
+        // M=20, n=7, N=12
+        let h = Hypergeometric::new(20, 7, 12);
+        let sum: f64 = (0..=7).map(|k| h.pmf(k)).sum();
+        assert!((sum - 1.0).abs() < 1e-10, "PMF sum = {sum}");
+    }
+
+    #[test]
+    fn hypergeometric_mean() {
+        let h = Hypergeometric::new(20, 7, 12);
+        // mean = N*n/M = 12*7/20 = 4.2
+        assert_close(h.mean(), 4.2, 1e-12, "mean");
+    }
+
+    #[test]
+    fn hypergeometric_known_value() {
+        // Drawing 5 cards from deck of 52, P(exactly 1 ace)
+        // C(4,1)*C(48,4)/C(52,5)
+        let h = Hypergeometric::new(52, 4, 5);
+        let p1 = h.pmf(1);
+        // Known value: 0.29947...
+        assert!(p1 > 0.29 && p1 < 0.31, "P(1 ace in 5 cards) ~ 0.299, got {p1}");
+    }
+
+    #[test]
+    fn hypergeometric_out_of_range() {
+        let h = Hypergeometric::new(10, 3, 5);
+        // k > n=3 is impossible
+        assert_close(h.pmf(4), 0.0, 1e-15, "k > n");
+        // k > N=5 is impossible
+        assert_close(h.pmf(6), 0.0, 1e-15, "k > N");
+    }
+
+    #[test]
+    fn poisson_implements_discrete_trait() {
+        let p = Poisson::new(3.0);
+        let d: &dyn DiscreteDistribution = &p;
+        assert_close(d.mean(), 3.0, 1e-12, "Poisson mean via trait");
+        assert_close(d.var(), 3.0, 1e-12, "Poisson var via trait");
+        let sum: f64 = (0..=30).map(|k| d.pmf(k)).sum();
+        assert!((sum - 1.0).abs() < 1e-6, "Poisson PMF sum via trait");
+    }
+
+    #[test]
+    fn discrete_sf_complement() {
+        let b = Binomial::new(10, 0.5);
+        for k in 0..=10 {
+            let sf_plus_cdf = b.sf(k) + b.cdf(k);
+            assert_close(sf_plus_cdf, 1.0, 1e-10, &format!("sf+cdf at k={k}"));
+        }
     }
 }
