@@ -271,6 +271,7 @@ where
 {
     let (t0, tf) = options.t_span;
     let n = options.y0.len();
+    let direction = if tf >= t0 { 1.0 } else { -1.0 };
 
     validate_max_step(options.max_step)?;
     if let Some(first_step) = options.first_step {
@@ -282,6 +283,9 @@ where
         n,
         options.mode,
     )?;
+    if let Some(t_eval) = options.t_eval {
+        validate_t_eval(t_eval, t0, tf)?;
+    }
 
     let config = BdfSolverConfig {
         t0,
@@ -297,14 +301,48 @@ where
 
     let mut solver = BdfSolver::new(fun, config)?;
 
-    let mut ts = vec![t0];
-    let mut ys = vec![options.y0.to_vec()];
+    let mut ts = Vec::new();
+    let mut ys = Vec::new();
+    let mut next_t_eval_index = 0usize;
+
+    if let Some(t_eval) = options.t_eval {
+        if matches!(t_eval.first(), Some(&first) if first == t0) {
+            ts.push(t0);
+            ys.push(options.y0.to_vec());
+            next_t_eval_index = 1;
+        }
+    } else {
+        ts.push(t0);
+        ys.push(options.y0.to_vec());
+    }
 
     while solver.state() == OdeSolverState::Running {
         match solver.step_with(fun) {
             Ok(_) => {
-                ts.push(solver.t());
-                ys.push(solver.y().to_vec());
+                let t = solver.t();
+                let y = solver.y().to_vec();
+
+                if let Some(t_eval) = options.t_eval {
+                    let t_old = solver.t_old().unwrap_or(t0);
+                    let y_old = solver.y_old().unwrap_or(options.y0);
+                    while let Some(&te) = t_eval.get(next_t_eval_index) {
+                        let in_range = if direction > 0.0 {
+                            te > t_old && te <= t
+                        } else {
+                            te < t_old && te >= t
+                        };
+                        if !in_range {
+                            break;
+                        }
+
+                        ts.push(te);
+                        ys.push(interpolate_state(y_old, &y, t_old, t, te));
+                        next_t_eval_index += 1;
+                    }
+                } else {
+                    ts.push(t);
+                    ys.push(y);
+                }
             }
             Err(_) => break,
         }
@@ -504,6 +542,56 @@ mod tests {
                 y[0]
             );
         }
+    }
+
+    #[test]
+    fn solve_ivp_bdf_t_eval_returns_requested_grid_only() {
+        let t_eval = [0.25, 0.5, 0.75, 1.0];
+        let result = solve_ivp(
+            &mut |_t, y| vec![-y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[1.0],
+                method: SolverKind::Bdf,
+                t_eval: Some(&t_eval),
+                rtol: 1e-6,
+                atol: ToleranceValue::Scalar(1e-8),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("BDF solve_ivp should succeed");
+
+        assert_eq!(result.t, t_eval);
+        assert_eq!(result.y.len(), t_eval.len());
+        for (&t, y) in result.t.iter().zip(result.y.iter()) {
+            let expected = (-t).exp();
+            assert!(
+                (y[0] - expected).abs() < 5e-2,
+                "BDF y({t}) = {}, expected ≈ {expected}",
+                y[0]
+            );
+        }
+    }
+
+    #[test]
+    fn solve_ivp_radau_t_eval_returns_requested_grid_only() {
+        let t_eval = [0.25, 0.5, 0.75, 1.0];
+        let result = solve_ivp(
+            &mut |_t, y| vec![-y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[1.0],
+                method: SolverKind::Radau,
+                t_eval: Some(&t_eval),
+                rtol: 1e-6,
+                atol: ToleranceValue::Scalar(1e-8),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("Radau-dispatch solve_ivp should succeed");
+
+        assert_eq!(result.t, t_eval);
+        assert_eq!(result.y.len(), t_eval.len());
     }
 
     #[test]

@@ -819,11 +819,17 @@ pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateVal
         let h0 = x[i + 1] - x[i];
         let h1 = x[i + 2] - x[i + 1];
         let h = h0 + h1;
-        // Simpson's rule for non-uniform spacing
-        let s = h / 6.0
-            * (y[i] * (2.0 - h1 / h0)
-                + y[i + 1] * h * h / (h0 * h1)
-                + y[i + 2] * (2.0 - h0 / h1));
+        // Guard against zero-width intervals (duplicate x values)
+        let s = if h0.abs() < f64::EPSILON || h1.abs() < f64::EPSILON {
+            // Fall back to trapezoidal for degenerate intervals
+            0.5 * h * (y[i] + y[i + 2])
+        } else {
+            // Simpson's rule for non-uniform spacing
+            h / 6.0
+                * (y[i] * (2.0 - h1 / h0)
+                    + y[i + 1] * h * h / (h0 * h1)
+                    + y[i + 2] * (2.0 - h0 / h1))
+        };
         cumsum += s;
         result.push(cumsum);
         i += 2;

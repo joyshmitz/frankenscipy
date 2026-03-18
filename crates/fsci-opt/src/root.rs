@@ -617,7 +617,7 @@ where
         // Line search: try full step, then halve.
         let mut alpha = 1.0;
         let mut best_x = x.clone();
-        let mut best_norm = norm_fx;
+        let best_norm = norm_fx;
         for _ in 0..10 {
             let trial: Vec<f64> = x.iter().zip(&dx).map(|(&xi, &di)| xi + alpha * di).collect();
             let ftrial = func(&trial);
@@ -625,7 +625,6 @@ where
             let trial_norm: f64 = ftrial.iter().map(|v| v * v).sum::<f64>().sqrt();
             if trial_norm < best_norm {
                 best_x = trial;
-                best_norm = trial_norm;
                 break;
             }
             alpha *= 0.5;

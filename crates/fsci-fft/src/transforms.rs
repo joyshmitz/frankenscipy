@@ -27,6 +27,8 @@ pub enum BackendKind {
 pub trait FftBackend {
     fn kind(&self) -> BackendKind;
     fn transform_1d_unscaled(&self, input: &[Complex64], inverse: bool) -> Vec<Complex64>;
+    /// Perform transform in-place on the `data` slice.
+    fn transform_1d_inplace(&self, data: &mut [Complex64], inverse: bool);
 }
 
 #[derive(Debug, Default)]
@@ -38,23 +40,28 @@ impl FftBackend for NaiveDftBackend {
     }
 
     fn transform_1d_unscaled(&self, input: &[Complex64], inverse: bool) -> Vec<Complex64> {
-        let n = input.len();
-        if n == 0 {
-            return Vec::new();
+        let mut output = input.to_vec();
+        self.transform_1d_inplace(&mut output, inverse);
+        output
+    }
+
+    fn transform_1d_inplace(&self, data: &mut [Complex64], inverse: bool) {
+        let n = data.len();
+        if n <= 1 {
+            return;
         }
 
+        let input_copy = data.to_vec();
         let sign = if inverse { 1.0 } else { -1.0 };
-        let mut output = vec![(0.0, 0.0); n];
-        for (k, out) in output.iter_mut().enumerate() {
+        for (k, out) in data.iter_mut().enumerate() {
             let mut acc = (0.0, 0.0);
-            for (t, &value) in input.iter().enumerate() {
+            for (t, &value) in input_copy.iter().enumerate() {
                 let angle = sign * 2.0 * PI * (k as f64) * (t as f64) / (n as f64);
                 let twiddle = (angle.cos(), angle.sin());
                 acc = complex_add(acc, complex_mul(value, twiddle));
             }
             *out = acc;
         }
-        output
     }
 }
 
@@ -71,15 +78,22 @@ impl FftBackend for CooleyTukeyBackend {
     }
 
     fn transform_1d_unscaled(&self, input: &[Complex64], inverse: bool) -> Vec<Complex64> {
-        let n = input.len();
+        let mut output = input.to_vec();
+        self.transform_1d_inplace(&mut output, inverse);
+        output
+    }
+
+    fn transform_1d_inplace(&self, data: &mut [Complex64], inverse: bool) {
+        let n = data.len();
         if n <= 1 {
-            return input.to_vec();
+            return;
         }
         if n.is_power_of_two() {
-            cooley_tukey_radix2(input, inverse)
+            cooley_tukey_radix2_inplace(data, inverse);
         } else {
             // For non-power-of-2: use Bluestein's algorithm (chirp-z transform)
-            bluestein_fft(input, inverse)
+            let result = bluestein_fft(data, inverse);
+            data.copy_from_slice(&result);
         }
     }
 }
@@ -88,15 +102,17 @@ static COOLEY_TUKEY_BACKEND: CooleyTukeyBackend = CooleyTukeyBackend;
 
 /// Radix-2 Cooley-Tukey FFT for power-of-2 lengths.
 /// Iterative (bottom-up) implementation for better cache behavior.
-fn cooley_tukey_radix2(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
-    let n = input.len();
+fn cooley_tukey_radix2_inplace(data: &mut [Complex64], inverse: bool) {
+    let n = data.len();
     debug_assert!(n.is_power_of_two());
 
     // Bit-reversal permutation
-    let mut data = vec![(0.0, 0.0); n];
     let log_n = n.trailing_zeros() as usize;
     for i in 0..n {
-        data[bit_reverse(i, log_n)] = input[i];
+        let j = bit_reverse(i, log_n);
+        if i < j {
+            data.swap(i, j);
+        }
     }
 
     // Butterfly stages
@@ -127,8 +143,6 @@ fn cooley_tukey_radix2(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
         }
         stage_len *= 2;
     }
-
-    data
 }
 
 /// Bluestein's algorithm for arbitrary-length FFT.

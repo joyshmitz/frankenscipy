@@ -456,14 +456,19 @@ pub fn linprog(
 
     // Simplex iterations for Phase I.
     let phase1_result = simplex_iterate(&mut tableau, &mut basis, maxiter, phase1_vars);
-    if phase1_result.is_err() {
+    if let Err(err_code) = phase1_result {
+        let (status, message) = if err_code == 3 {
+            (3, "Phase I problem is unbounded (should not happen)".to_string())
+        } else {
+            (1, "Phase I iteration limit exceeded".to_string())
+        };
         return Ok(LinprogResult {
             x: vec![0.0; n],
             fun: 0.0,
             slack: vec![0.0; m_ub],
             success: false,
-            status: 1,
-            message: "Phase I iteration limit exceeded".to_string(),
+            status,
+            message,
             nit: maxiter,
         });
     }
@@ -514,14 +519,19 @@ pub fn linprog(
     let phase2_result = simplex_iterate(&mut tableau2, &mut basis, maxiter, total_vars);
     let nit = phase1_result.unwrap_or(0) + phase2_result.unwrap_or(maxiter);
 
-    if phase2_result.is_err() {
+    if let Err(err_code) = phase2_result {
+        let (status, message) = if err_code == 3 {
+            (3, "Problem is unbounded".to_string())
+        } else {
+            (1, "Phase II iteration limit exceeded".to_string())
+        };
         return Ok(LinprogResult {
             x: vec![0.0; n],
             fun: 0.0,
             slack: vec![0.0; m_ub],
             success: false,
-            status: 1,
-            message: "Phase II iteration limit exceeded".to_string(),
+            status,
+            message,
             nit,
         });
     }
@@ -831,12 +841,31 @@ where
 }
 
 /// Select three distinct random indices from [0, n), all different from `exclude`.
+///
+/// Requires `n >= 4` (3 picks + 1 excluded). If n < 4, picks are allowed to
+/// overlap with `exclude` to avoid an infinite loop.
 fn select_three(rng: &mut impl Rng, n: usize, exclude: usize) -> (usize, usize, usize) {
     let mut indices = Vec::with_capacity(3);
+    let strict = n >= 4; // Can we guarantee 3 distinct indices != exclude?
+    let mut attempts = 0;
     while indices.len() < 3 {
         let idx = rng.random_range(0..n);
-        if idx != exclude && !indices.contains(&idx) {
+        let skip_exclude = strict && idx == exclude;
+        if !skip_exclude && !indices.contains(&idx) {
             indices.push(idx);
+        }
+        attempts += 1;
+        if attempts > 1000 {
+            // Fallback: fill remaining with sequential indices
+            for k in 0..n {
+                if indices.len() >= 3 {
+                    break;
+                }
+                if !indices.contains(&k) {
+                    indices.push(k);
+                }
+            }
+            break;
         }
     }
     (indices[0], indices[1], indices[2])
