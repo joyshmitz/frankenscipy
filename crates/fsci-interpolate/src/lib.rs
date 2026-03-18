@@ -134,6 +134,9 @@ impl Interp1d {
 
     /// Evaluate the interpolant at a single point.
     pub fn eval(&self, x_new: f64) -> Result<f64, InterpError> {
+        if x_new.is_nan() {
+            return Ok(f64::NAN);
+        }
         // Bounds checking
         if x_new < self.x[0] || x_new > *self.x.last().unwrap() {
             if self.options.bounds_error {
@@ -482,6 +485,9 @@ impl PchipInterpolator {
 
     /// Evaluate at a single point.
     pub fn eval(&self, x_new: f64) -> f64 {
+        if x_new.is_nan() {
+            return f64::NAN;
+        }
         let n = self.x.len();
         if x_new <= self.x[0] {
             return self.eval_at_interval(0, x_new);
@@ -607,6 +613,9 @@ impl CubicSplineStandalone {
 
     /// Evaluate the spline at a single point.
     pub fn eval(&self, x_new: f64) -> f64 {
+        if x_new.is_nan() {
+            return f64::NAN;
+        }
         let i = self.find_interval(x_new);
         let dx = x_new - self.x[i];
         let [a, b, c, d] = self.coeffs[i];
@@ -625,7 +634,6 @@ impl CubicSplineStandalone {
             0 => CubicSplineDerivative {
                 x: self.x.clone(),
                 coeffs: self.coeffs.clone(),
-                degree: 3,
             },
             1 => {
                 // S'(dx) = b + 2c*dx + 3d*dx^2
@@ -637,7 +645,6 @@ impl CubicSplineStandalone {
                 CubicSplineDerivative {
                     x: self.x.clone(),
                     coeffs: dc,
-                    degree: 2,
                 }
             }
             2 => {
@@ -650,13 +657,11 @@ impl CubicSplineStandalone {
                 CubicSplineDerivative {
                     x: self.x.clone(),
                     coeffs: dc,
-                    degree: 1,
                 }
             }
             _ => CubicSplineDerivative {
                 x: self.x.clone(),
                 coeffs: vec![[0.0; 4]; m],
-                degree: 0,
             },
         }
     }
@@ -720,12 +725,14 @@ impl CubicSplineStandalone {
 pub struct CubicSplineDerivative {
     x: Vec<f64>,
     coeffs: Vec<[f64; 4]>,
-    degree: usize,
 }
 
 impl CubicSplineDerivative {
     /// Evaluate the derivative at a point.
     pub fn eval(&self, x_new: f64) -> f64 {
+        if x_new.is_nan() {
+            return f64::NAN;
+        }
         let n = self.x.len();
         let i = {
             if x_new <= self.x[0] {
@@ -1545,6 +1552,9 @@ impl RegularGridInterpolator {
                 detail: format!("expected {ndim}-D query point, got {}-D", xi.len()),
             });
         }
+        if xi.iter().any(|value| value.is_nan()) {
+            return Ok(f64::NAN);
+        }
 
         // Check bounds.
         for (dim, &x) in xi.iter().enumerate() {
@@ -1719,6 +1729,19 @@ mod tests {
         assert_eq!(interp.eval(0.3).unwrap(), 10.0);
         assert_eq!(interp.eval(0.7).unwrap(), 20.0);
         assert_eq!(interp.eval(1.5).unwrap(), 20.0);
+    }
+
+    #[test]
+    fn interp1d_nan_query_returns_nan() {
+        let x = vec![0.0, 1.0, 2.0];
+        let y = vec![10.0, 20.0, 30.0];
+        let opts = Interp1dOptions {
+            kind: InterpKind::Nearest,
+            ..Interp1dOptions::default()
+        };
+        let interp = Interp1d::new(&x, &y, opts).expect("interp1d");
+        let val = interp.eval(f64::NAN).expect("nan query");
+        assert!(val.is_nan(), "expected NaN, got {val}");
     }
 
     #[test]
@@ -2720,6 +2743,18 @@ mod tests {
 
         let val = interp.eval(&[-1.0]).unwrap();
         assert!(val.is_nan(), "expected NaN for OOB, got {val}");
+    }
+
+    #[test]
+    fn regular_grid_nan_query_returns_nan() {
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0, 2.0, 3.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Nearest, true, None)
+                .expect("rgi");
+
+        let val = interp.eval(&[f64::NAN, 0.5]).expect("nan query");
+        assert!(val.is_nan(), "expected NaN, got {val}");
     }
 
     #[test]

@@ -603,6 +603,23 @@ pub enum FilterType {
     Lowpass,
     /// High-pass filter.
     Highpass,
+    /// Band-pass filter.
+    Bandpass,
+    /// Band-stop filter.
+    Bandstop,
+}
+
+/// Analog prototype family for IIR design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IirFamily {
+    /// Butterworth: maximally flat passband.
+    Butterworth,
+    /// Chebyshev Type I: equiripple passband.
+    Chebyshev1,
+    /// Chebyshev Type II: equiripple stopband.
+    Chebyshev2,
+    /// Bessel/Thomson: maximally flat group delay.
+    Bessel,
 }
 
 /// IIR filter coefficients in transfer function form (b, a).
@@ -622,111 +639,516 @@ pub struct BaCoeffs {
 ///
 /// # Arguments
 /// * `order` — Filter order (1, 2, 3, ...)
-/// * `wn` — Critical frequency (normalized, 0 < wn < 1 for digital)
-/// * `btype` — Filter type (lowpass or highpass)
+/// * `wn` — Critical frequencies (normalized, 0 < wn < 1 for digital).
+///   Use one value for lowpass/highpass and two values for bandpass/bandstop.
+/// * `btype` — Filter type.
 ///
 /// Returns (b, a) transfer function coefficients.
-pub fn butter(order: usize, wn: f64, btype: FilterType) -> Result<BaCoeffs, SignalError> {
+pub fn butter(order: usize, wn: &[f64], btype: FilterType) -> Result<BaCoeffs, SignalError> {
     if order == 0 {
         return Err(SignalError::InvalidArgument(
             "order must be >= 1".to_string(),
         ));
     }
-    if wn <= 0.0 || wn >= 1.0 {
-        return Err(SignalError::InvalidArgument(
-            "Wn must be in (0, 1) for digital filters".to_string(),
-        ));
-    }
+    validate_iir_wn(wn, btype)?;
 
-    // Prewarp: convert digital cutoff to analog cutoff
-    let warped = 2.0 * (std::f64::consts::PI * wn / 2.0).tan();
-
-    // Compute analog Butterworth prototype poles on unit circle in s-domain
-    let n = order;
-    let mut s_poles_re = Vec::with_capacity(n);
-    let mut s_poles_im = Vec::with_capacity(n);
-    for k in 0..n {
-        let theta = std::f64::consts::PI * (2.0 * k as f64 + n as f64 + 1.0) / (2.0 * n as f64);
-        // Scale poles by warped frequency
-        s_poles_re.push(warped * theta.cos());
-        s_poles_im.push(warped * theta.sin());
-    }
-
-    // For highpass: transform s -> warped^2 / s
-    if btype == FilterType::Highpass {
-        let w2 = warped * warped;
-        for k in 0..n {
-            let sr = s_poles_re[k];
-            let si = s_poles_im[k];
-            let mag2 = sr * sr + si * si;
-            s_poles_re[k] = w2 * sr / mag2;
-            s_poles_im[k] = -w2 * si / mag2;
-        }
-    }
-
-    // Bilinear transform: z = (1 + s/2) / (1 - s/2)
-    let mut z_poles_re = Vec::with_capacity(n);
-    let mut z_poles_im = Vec::with_capacity(n);
-    for k in 0..n {
-        let sr = s_poles_re[k] / 2.0;
-        let si = s_poles_im[k] / 2.0;
-        let num_re = 1.0 + sr;
-        let num_im = si;
-        let den_re = 1.0 - sr;
-        let den_im = -si;
-        let den_mag2 = den_re * den_re + den_im * den_im;
-        z_poles_re.push((num_re * den_re + num_im * den_im) / den_mag2);
-        z_poles_im.push((num_im * den_re - num_re * den_im) / den_mag2);
-    }
-
-    // Build denominator polynomial from poles
-    let a = poly_from_complex_roots(&z_poles_re, &z_poles_im);
-
-    // Build numerator: bilinear transform maps s=∞ zeros to z=-1 (lowpass)
-    // In z^{-1} notation: (1 + z^{-1}) for each lowpass zero, (1 - z^{-1}) for highpass
-    let zero_coeff = match btype {
-        FilterType::Lowpass => 1.0,   // factor (1 + z^{-1}), zero at z=-1
-        FilterType::Highpass => -1.0, // factor (1 - z^{-1}), zero at z=1
-    };
-    let mut b = vec![1.0];
-    for _ in 0..n {
-        b = poly_mul_binomial(&b, zero_coeff);
-    }
-
-    // Normalize: gain at DC (z=1) for lowpass, gain at Nyquist (z=-1) for highpass = 1
-    // In z^{-1} notation: H(z) = Σ b[k]*z^{-k} / Σ a[k]*z^{-k}
-    // At z=1: z^{-k} = 1 for all k, so H(1) = sum(b) / sum(a)
-    // At z=-1: z^{-k} = (-1)^k
-    let (b_at_z, a_at_z) = match btype {
-        FilterType::Lowpass => {
-            let bz: f64 = b.iter().sum();
-            let az: f64 = a.iter().sum();
-            (bz, az)
-        }
-        FilterType::Highpass => {
-            let bz: f64 = b
-                .iter()
-                .enumerate()
-                .map(|(i, &c)| c * if i % 2 == 0 { 1.0 } else { -1.0 })
-                .sum();
-            let az: f64 = a
-                .iter()
-                .enumerate()
-                .map(|(i, &c)| c * if i % 2 == 0 { 1.0 } else { -1.0 })
-                .sum();
-            (bz, az)
-        }
+    let (proto_poles_re, proto_poles_im) = butterworth_analog_poles(order);
+    let analog_zpk = ZpkCoeffs {
+        zeros_re: Vec::new(),
+        zeros_im: Vec::new(),
+        poles_re: proto_poles_re,
+        poles_im: proto_poles_im,
+        gain: 1.0,
     };
 
-    if b_at_z.abs() < 1.0e-30 {
+    design_digital_iir(analog_zpk, wn, btype)
+}
+
+/// Design a Chebyshev Type I IIR filter.
+pub fn cheby1(
+    order: usize,
+    rp: f64,
+    wn: &[f64],
+    btype: FilterType,
+) -> Result<BaCoeffs, SignalError> {
+    if order == 0 {
         return Err(SignalError::InvalidArgument(
-            "degenerate filter: numerator evaluates to zero at normalization frequency".to_string(),
+            "order must be >= 1".to_string(),
         ));
     }
-    let gain = a_at_z / b_at_z;
-    let b: Vec<f64> = b.iter().map(|&v| v * gain).collect();
+    if !rp.is_finite() || rp <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "rp must be finite and > 0 dB".to_string(),
+        ));
+    }
+    validate_iir_wn(wn, btype)?;
+    let epsilon = (10_f64.powf(rp / 10.0) - 1.0).sqrt();
+    let mu = (1.0 / epsilon).asinh() / order as f64;
+    let mut poles_re = Vec::with_capacity(order);
+    let mut poles_im = Vec::with_capacity(order);
+    for k in 0..order {
+        let theta = std::f64::consts::PI * (2.0 * k as f64 + 1.0) / (2.0 * order as f64);
+        poles_re.push(-mu.sinh() * theta.sin());
+        poles_im.push(mu.cosh() * theta.cos());
+    }
+    let analog_zpk = ZpkCoeffs {
+        zeros_re: Vec::new(),
+        zeros_im: Vec::new(),
+        poles_re,
+        poles_im,
+        gain: 1.0,
+    };
+    design_digital_iir(analog_zpk, wn, btype)
+}
 
-    Ok(BaCoeffs { b, a })
+/// Design a Chebyshev Type II IIR filter.
+pub fn cheby2(
+    order: usize,
+    rs: f64,
+    wn: &[f64],
+    btype: FilterType,
+) -> Result<BaCoeffs, SignalError> {
+    if order == 0 {
+        return Err(SignalError::InvalidArgument(
+            "order must be >= 1".to_string(),
+        ));
+    }
+    if !rs.is_finite() || rs <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "rs must be finite and > 0 dB".to_string(),
+        ));
+    }
+    validate_iir_wn(wn, btype)?;
+    let epsilon = 1.0 / (10_f64.powf(rs / 10.0) - 1.0).sqrt();
+    let mu = (1.0 / epsilon).asinh() / order as f64;
+    let mut zeros_re = Vec::with_capacity(order);
+    let mut zeros_im = Vec::with_capacity(order);
+    let mut poles_re = Vec::with_capacity(order);
+    let mut poles_im = Vec::with_capacity(order);
+    for k in 0..order {
+        let theta = std::f64::consts::PI * (2.0 * k as f64 + 1.0) / (2.0 * order as f64);
+        let zero_im = 1.0 / theta.cos();
+        zeros_re.push(0.0);
+        zeros_im.push(zero_im);
+
+        let proto_re = -mu.sinh() * theta.sin();
+        let proto_im = mu.cosh() * theta.cos();
+        let (pole_re, pole_im) = complex_div(1.0, 0.0, proto_re, proto_im);
+        poles_re.push(pole_re);
+        poles_im.push(pole_im);
+    }
+    let analog_zpk = ZpkCoeffs {
+        zeros_re,
+        zeros_im,
+        poles_re,
+        poles_im,
+        gain: 1.0,
+    };
+    design_digital_iir(analog_zpk, wn, btype)
+}
+
+/// Design a Bessel/Thomson IIR filter.
+pub fn bessel(order: usize, wn: &[f64], btype: FilterType) -> Result<BaCoeffs, SignalError> {
+    if order == 0 {
+        return Err(SignalError::InvalidArgument(
+            "order must be >= 1".to_string(),
+        ));
+    }
+    validate_iir_wn(wn, btype)?;
+
+    let coeffs = reverse_bessel_polynomial(order)?;
+    let (poles_re, poles_im) = poly_roots(&coeffs)?;
+    let analog_zpk = ZpkCoeffs {
+        zeros_re: Vec::new(),
+        zeros_im: Vec::new(),
+        poles_re,
+        poles_im,
+        gain: 1.0,
+    };
+    design_digital_iir(analog_zpk, wn, btype)
+}
+
+/// General IIR filter design dispatcher.
+pub fn iirfilter(
+    order: usize,
+    wn: &[f64],
+    btype: FilterType,
+    family: IirFamily,
+    rp: Option<f64>,
+    rs: Option<f64>,
+) -> Result<BaCoeffs, SignalError> {
+    match family {
+        IirFamily::Butterworth => butter(order, wn, btype),
+        IirFamily::Chebyshev1 => cheby1(
+            order,
+            rp.ok_or_else(|| {
+                SignalError::InvalidArgument("cheby1 requires passband ripple rp".to_string())
+            })?,
+            wn,
+            btype,
+        ),
+        IirFamily::Chebyshev2 => cheby2(
+            order,
+            rs.ok_or_else(|| {
+                SignalError::InvalidArgument("cheby2 requires stopband attenuation rs".to_string())
+            })?,
+            wn,
+            btype,
+        ),
+        IirFamily::Bessel => bessel(order, wn, btype),
+    }
+}
+
+fn design_digital_iir(
+    analog_zpk: ZpkCoeffs,
+    wn: &[f64],
+    btype: FilterType,
+) -> Result<BaCoeffs, SignalError> {
+    let warped: Vec<f64> = wn.iter().map(|&w| prewarp_digital_frequency(w)).collect();
+    let analog_zpk = match btype {
+        FilterType::Lowpass => lowpass_zpk(&analog_zpk, warped[0]),
+        FilterType::Highpass => highpass_zpk(&analog_zpk, warped[0]),
+        FilterType::Bandpass => bandpass_zpk(&analog_zpk, warped[0], warped[1]),
+        FilterType::Bandstop => bandstop_zpk(&analog_zpk, warped[0], warped[1]),
+    };
+
+    let digital_zpk = bilinear_zpk(&analog_zpk);
+    let mut ba = zpk2tf(&digital_zpk);
+    normalize_digital_ba(&mut ba, &warped, btype)?;
+    Ok(ba)
+}
+
+fn normalize_digital_ba(
+    ba: &mut BaCoeffs,
+    warped: &[f64],
+    btype: FilterType,
+) -> Result<(), SignalError> {
+    let normalize_at = match btype {
+        FilterType::Lowpass => 0.0,
+        FilterType::Highpass => std::f64::consts::PI,
+        FilterType::Bandpass => 2.0 * ((warped[0] * warped[1]).sqrt() / 2.0).atan(),
+        FilterType::Bandstop => 0.0,
+    };
+    let (b_re, b_im) = eval_poly_on_unit_circle(&ba.b, normalize_at);
+    let (a_re, a_im) = eval_poly_on_unit_circle(&ba.a, normalize_at);
+    let b_mag = (b_re * b_re + b_im * b_im).sqrt();
+    let a_mag = (a_re * a_re + a_im * a_im).sqrt();
+    if b_mag < 1.0e-30 || a_mag < 1.0e-30 {
+        return Err(SignalError::InvalidArgument(
+            "degenerate filter: could not normalize digital response".to_string(),
+        ));
+    }
+    let gain = a_mag / b_mag;
+    ba.b.iter_mut().for_each(|coeff| *coeff *= gain);
+    Ok(())
+}
+
+fn reverse_bessel_polynomial(order: usize) -> Result<Vec<f64>, SignalError> {
+    let Some(double_order) = order.checked_mul(2) else {
+        return Err(SignalError::InvalidArgument(
+            "order is too large for Bessel polynomial construction".to_string(),
+        ));
+    };
+    let mut ascending = Vec::with_capacity(order + 1);
+    for k in 0..=order {
+        let numerator = factorial_f64_checked(double_order - k)?;
+        let denominator = 2.0_f64.powi((order - k) as i32)
+            * factorial_f64_checked(order - k)?
+            * factorial_f64_checked(k)?;
+        ascending.push(numerator / denominator);
+    }
+    ascending.reverse();
+    Ok(ascending)
+}
+
+fn factorial_f64_checked(n: usize) -> Result<f64, SignalError> {
+    let mut acc = 1.0;
+    for value in 1..=n {
+        acc *= value as f64;
+        if !acc.is_finite() {
+            return Err(SignalError::InvalidArgument(
+                "order is too large for stable Bessel polynomial construction".to_string(),
+            ));
+        }
+    }
+    Ok(acc)
+}
+
+fn validate_iir_wn(wn: &[f64], btype: FilterType) -> Result<(), SignalError> {
+    let expected_len = match btype {
+        FilterType::Lowpass | FilterType::Highpass => 1,
+        FilterType::Bandpass | FilterType::Bandstop => 2,
+    };
+    if wn.len() != expected_len {
+        return Err(SignalError::InvalidArgument(format!(
+            "Wn must contain {expected_len} value(s) for {btype:?}"
+        )));
+    }
+    if wn
+        .iter()
+        .any(|&value| !value.is_finite() || value <= 0.0 || value >= 1.0)
+    {
+        return Err(SignalError::InvalidArgument(
+            "Wn values must be finite and in (0, 1) for digital filters".to_string(),
+        ));
+    }
+    if matches!(btype, FilterType::Bandpass | FilterType::Bandstop) && wn[0] >= wn[1] {
+        return Err(SignalError::InvalidArgument(
+            "band filters require Wn[0] < Wn[1]".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn prewarp_digital_frequency(wn: f64) -> f64 {
+    2.0 * (std::f64::consts::PI * wn / 2.0).tan()
+}
+
+fn butterworth_analog_poles(order: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut poles_re = Vec::with_capacity(order);
+    let mut poles_im = Vec::with_capacity(order);
+    for k in 0..order {
+        let theta =
+            std::f64::consts::PI * (2.0 * k as f64 + order as f64 + 1.0) / (2.0 * order as f64);
+        poles_re.push(theta.cos());
+        poles_im.push(theta.sin());
+    }
+    (poles_re, poles_im)
+}
+
+fn lowpass_zpk(zpk: &ZpkCoeffs, wo: f64) -> ZpkCoeffs {
+    let degree = zpk.poles_re.len().saturating_sub(zpk.zeros_re.len()) as i32;
+    ZpkCoeffs {
+        zeros_re: zpk.zeros_re.iter().map(|&zr| zr * wo).collect(),
+        zeros_im: zpk.zeros_im.iter().map(|&zi| zi * wo).collect(),
+        poles_re: zpk.poles_re.iter().map(|&pr| pr * wo).collect(),
+        poles_im: zpk.poles_im.iter().map(|&pi| pi * wo).collect(),
+        gain: zpk.gain * wo.powi(degree),
+    }
+}
+
+fn highpass_zpk(zpk: &ZpkCoeffs, wo: f64) -> ZpkCoeffs {
+    let degree = zpk.poles_re.len().saturating_sub(zpk.zeros_re.len());
+    let mut zeros_re = Vec::with_capacity(zpk.zeros_re.len() + degree);
+    let mut zeros_im = Vec::with_capacity(zpk.zeros_im.len() + degree);
+    for (&zr, &zi) in zpk.zeros_re.iter().zip(zpk.zeros_im.iter()) {
+        let (re, im) = complex_div(wo, 0.0, zr, zi);
+        zeros_re.push(re);
+        zeros_im.push(im);
+    }
+    zeros_re.extend(std::iter::repeat_n(0.0, degree));
+    zeros_im.extend(std::iter::repeat_n(0.0, degree));
+
+    let mut poles_re = Vec::with_capacity(zpk.poles_re.len());
+    let mut poles_im = Vec::with_capacity(zpk.poles_im.len());
+    for (&pr, &pi) in zpk.poles_re.iter().zip(zpk.poles_im.iter()) {
+        let (re, im) = complex_div(wo, 0.0, pr, pi);
+        poles_re.push(re);
+        poles_im.push(im);
+    }
+
+    ZpkCoeffs {
+        zeros_re,
+        zeros_im,
+        poles_re,
+        poles_im,
+        gain: zpk.gain,
+    }
+}
+
+fn bandpass_zpk(zpk: &ZpkCoeffs, w1: f64, w2: f64) -> ZpkCoeffs {
+    let bw = w2 - w1;
+    let wo = (w1 * w2).sqrt();
+    let degree = zpk.poles_re.len().saturating_sub(zpk.zeros_re.len());
+    let mut zeros_re = Vec::with_capacity(zpk.zeros_re.len() * 2 + degree);
+    let mut zeros_im = Vec::with_capacity(zpk.zeros_im.len() * 2 + degree);
+    let mut poles_re = Vec::with_capacity(zpk.poles_re.len() * 2);
+    let mut poles_im = Vec::with_capacity(zpk.poles_im.len() * 2);
+
+    for (&zr, &zi) in zpk.zeros_re.iter().zip(zpk.zeros_im.iter()) {
+        let (base_re, base_im) = complex_scale(zr, zi, bw / 2.0);
+        let (disc_re, disc_im) = complex_sub(
+            base_re * base_re - base_im * base_im,
+            2.0 * base_re * base_im,
+            wo * wo,
+            0.0,
+        );
+        let (root_re, root_im) = complex_sqrt(disc_re, disc_im);
+        zeros_re.push(base_re + root_re);
+        zeros_im.push(base_im + root_im);
+        zeros_re.push(base_re - root_re);
+        zeros_im.push(base_im - root_im);
+    }
+    zeros_re.extend(std::iter::repeat_n(0.0, degree));
+    zeros_im.extend(std::iter::repeat_n(0.0, degree));
+
+    for (&pr, &pi) in zpk.poles_re.iter().zip(zpk.poles_im.iter()) {
+        let (base_re, base_im) = complex_scale(pr, pi, bw / 2.0);
+        let (disc_re, disc_im) = complex_sub(
+            base_re * base_re - base_im * base_im,
+            2.0 * base_re * base_im,
+            wo * wo,
+            0.0,
+        );
+        let (root_re, root_im) = complex_sqrt(disc_re, disc_im);
+        poles_re.push(base_re + root_re);
+        poles_im.push(base_im + root_im);
+        poles_re.push(base_re - root_re);
+        poles_im.push(base_im - root_im);
+    }
+
+    ZpkCoeffs {
+        zeros_re,
+        zeros_im,
+        poles_re,
+        poles_im,
+        gain: zpk.gain * bw.powi(degree as i32),
+    }
+}
+
+fn bandstop_zpk(zpk: &ZpkCoeffs, w1: f64, w2: f64) -> ZpkCoeffs {
+    let bw = w2 - w1;
+    let wo = (w1 * w2).sqrt();
+    let degree = zpk.poles_re.len().saturating_sub(zpk.zeros_re.len());
+    let mut zeros_re = Vec::with_capacity(zpk.zeros_re.len() * 2 + 2 * degree);
+    let mut zeros_im = Vec::with_capacity(zpk.zeros_im.len() * 2 + 2 * degree);
+    let mut poles_re = Vec::with_capacity(zpk.poles_re.len() * 2);
+    let mut poles_im = Vec::with_capacity(zpk.poles_im.len() * 2);
+
+    for (&zr, &zi) in zpk.zeros_re.iter().zip(zpk.zeros_im.iter()) {
+        let (base_re, base_im) = complex_div(bw / 2.0, 0.0, zr, zi);
+        let (disc_re, disc_im) = complex_sub(
+            base_re * base_re - base_im * base_im,
+            2.0 * base_re * base_im,
+            wo * wo,
+            0.0,
+        );
+        let (root_re, root_im) = complex_sqrt(disc_re, disc_im);
+        zeros_re.push(base_re + root_re);
+        zeros_im.push(base_im + root_im);
+        zeros_re.push(base_re - root_re);
+        zeros_im.push(base_im - root_im);
+    }
+    for _ in 0..degree {
+        zeros_re.push(0.0);
+        zeros_im.push(wo);
+        zeros_re.push(0.0);
+        zeros_im.push(-wo);
+    }
+
+    for (&pr, &pi) in zpk.poles_re.iter().zip(zpk.poles_im.iter()) {
+        let (base_re, base_im) = complex_div(bw / 2.0, 0.0, pr, pi);
+        let (disc_re, disc_im) = complex_sub(
+            base_re * base_re - base_im * base_im,
+            2.0 * base_re * base_im,
+            wo * wo,
+            0.0,
+        );
+        let (root_re, root_im) = complex_sqrt(disc_re, disc_im);
+        poles_re.push(base_re + root_re);
+        poles_im.push(base_im + root_im);
+        poles_re.push(base_re - root_re);
+        poles_im.push(base_im - root_im);
+    }
+
+    ZpkCoeffs {
+        zeros_re,
+        zeros_im,
+        poles_re,
+        poles_im,
+        gain: zpk.gain,
+    }
+}
+
+fn bilinear_zpk(zpk: &ZpkCoeffs) -> ZpkCoeffs {
+    let fs2 = 2.0;
+    let degree = zpk.poles_re.len().saturating_sub(zpk.zeros_re.len());
+    let mut zeros_re = Vec::with_capacity(zpk.zeros_re.len() + degree);
+    let mut zeros_im = Vec::with_capacity(zpk.zeros_im.len() + degree);
+    let mut poles_re = Vec::with_capacity(zpk.poles_re.len());
+    let mut poles_im = Vec::with_capacity(zpk.poles_im.len());
+
+    for (&zr, &zi) in zpk.zeros_re.iter().zip(zpk.zeros_im.iter()) {
+        let (num_re, num_im) = complex_add(fs2, 0.0, zr, zi);
+        let (den_re, den_im) = complex_sub(fs2, 0.0, zr, zi);
+        let (re, im) = complex_div_complex(num_re, num_im, den_re, den_im);
+        zeros_re.push(re);
+        zeros_im.push(im);
+    }
+    zeros_re.extend(std::iter::repeat_n(-1.0, degree));
+    zeros_im.extend(std::iter::repeat_n(0.0, degree));
+
+    for (&pr, &pi) in zpk.poles_re.iter().zip(zpk.poles_im.iter()) {
+        let (num_re, num_im) = complex_add(fs2, 0.0, pr, pi);
+        let (den_re, den_im) = complex_sub(fs2, 0.0, pr, pi);
+        let (re, im) = complex_div_complex(num_re, num_im, den_re, den_im);
+        poles_re.push(re);
+        poles_im.push(im);
+    }
+
+    let mut gain_num_re = zpk.gain;
+    let mut gain_num_im = 0.0;
+    for (&zr, &zi) in zpk.zeros_re.iter().zip(zpk.zeros_im.iter()) {
+        let (re, im) = complex_sub(fs2, 0.0, zr, zi);
+        let (new_re, new_im) = complex_mul(gain_num_re, gain_num_im, re, im);
+        gain_num_re = new_re;
+        gain_num_im = new_im;
+    }
+    let mut gain_den_re = 1.0;
+    let mut gain_den_im = 0.0;
+    for (&pr, &pi) in zpk.poles_re.iter().zip(zpk.poles_im.iter()) {
+        let (re, im) = complex_sub(fs2, 0.0, pr, pi);
+        let (new_re, new_im) = complex_mul(gain_den_re, gain_den_im, re, im);
+        gain_den_re = new_re;
+        gain_den_im = new_im;
+    }
+    let (gain_re, _) = complex_div_complex(gain_num_re, gain_num_im, gain_den_re, gain_den_im);
+
+    ZpkCoeffs {
+        zeros_re,
+        zeros_im,
+        poles_re,
+        poles_im,
+        gain: gain_re,
+    }
+}
+
+fn complex_add(ar: f64, ai: f64, br: f64, bi: f64) -> (f64, f64) {
+    (ar + br, ai + bi)
+}
+
+fn complex_sub(ar: f64, ai: f64, br: f64, bi: f64) -> (f64, f64) {
+    (ar - br, ai - bi)
+}
+
+fn complex_mul(ar: f64, ai: f64, br: f64, bi: f64) -> (f64, f64) {
+    (ar * br - ai * bi, ar * bi + ai * br)
+}
+
+fn complex_scale(re: f64, im: f64, scalar: f64) -> (f64, f64) {
+    (re * scalar, im * scalar)
+}
+
+fn complex_div(ar: f64, ai: f64, br: f64, bi: f64) -> (f64, f64) {
+    complex_div_complex(ar, ai, br, bi)
+}
+
+fn complex_div_complex(ar: f64, ai: f64, br: f64, bi: f64) -> (f64, f64) {
+    let denom = br * br + bi * bi;
+    ((ar * br + ai * bi) / denom, (ai * br - ar * bi) / denom)
+}
+
+fn complex_sqrt(re: f64, im: f64) -> (f64, f64) {
+    if im == 0.0 {
+        if re >= 0.0 {
+            return (re.sqrt(), 0.0);
+        }
+        return (0.0, (-re).sqrt());
+    }
+    let r = (re * re + im * im).sqrt();
+    let real = ((r + re) / 2.0).sqrt();
+    let imag = ((r - re) / 2.0).sqrt().copysign(im);
+    (real, imag)
 }
 
 /// Apply a digital IIR filter using the Direct Form II transposed structure.
@@ -930,6 +1352,7 @@ pub fn sosfilt_zi(sos: &[SosSection]) -> Result<Vec<[f64; 2]>, SignalError> {
 
 // ── IIR helper functions ────────────────────────────────────────
 
+#[allow(dead_code)]
 /// Build a real polynomial from complex conjugate roots.
 /// Returns coefficients in descending power of z, then converts to z^-1 form.
 fn poly_from_complex_roots(roots_re: &[f64], roots_im: &[f64]) -> Vec<f64> {
@@ -1949,7 +2372,7 @@ pub fn firwin(
         bands.push(0.0);
     }
     bands.extend_from_slice(cutoff);
-    if pass_zero == (cutoff.len() % 2 == 0) {
+    if pass_zero == cutoff.len().is_multiple_of(2) {
         // End at 1 (Nyquist)
         bands.push(1.0);
     }
@@ -2933,7 +3356,7 @@ pub fn decimate(x: &[f64], q: usize) -> Result<Vec<f64>, SignalError> {
     // Design lowpass filter at cutoff = 1/q (normalized to Nyquist = 1).
     let cutoff = 1.0 / q as f64;
     let order = 8.min(q); // order 8 max, reduce for small q
-    let ba = butter(order, cutoff, FilterType::Lowpass)?;
+    let ba = butter(order, &[cutoff], FilterType::Lowpass)?;
 
     // Zero-phase filtering for no distortion.
     let filtered = filtfilt(&ba.b, &ba.a, x)?;
@@ -3297,7 +3720,7 @@ mod tests {
 
     #[test]
     fn butter_lowpass_order1() {
-        let coeffs = butter(1, 0.5, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(1, &[0.5], FilterType::Lowpass).expect("butter");
         assert_eq!(coeffs.b.len(), 2);
         assert_eq!(coeffs.a.len(), 2);
         assert!((coeffs.a[0] - 1.0).abs() < 1e-12, "a[0] should be 1.0");
@@ -3313,7 +3736,7 @@ mod tests {
 
     #[test]
     fn butter_lowpass_order2() {
-        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(2, &[0.3], FilterType::Lowpass).expect("butter");
         assert_eq!(coeffs.b.len(), 3);
         assert_eq!(coeffs.a.len(), 3);
         // DC gain = 1
@@ -3324,7 +3747,7 @@ mod tests {
 
     #[test]
     fn butter_highpass_nyquist_gain() {
-        let coeffs = butter(2, 0.3, FilterType::Highpass).expect("butter hp");
+        let coeffs = butter(2, &[0.3], FilterType::Highpass).expect("butter hp");
         // Nyquist gain should be 1: evaluate at z = -1
         let b_nyq: f64 = coeffs
             .b
@@ -3346,13 +3769,152 @@ mod tests {
 
     #[test]
     fn butter_invalid_order() {
-        assert!(butter(0, 0.5, FilterType::Lowpass).is_err());
+        assert!(butter(0, &[0.5], FilterType::Lowpass).is_err());
     }
 
     #[test]
     fn butter_invalid_wn() {
-        assert!(butter(2, 0.0, FilterType::Lowpass).is_err());
-        assert!(butter(2, 1.0, FilterType::Lowpass).is_err());
+        assert!(butter(2, &[0.0], FilterType::Lowpass).is_err());
+        assert!(butter(2, &[1.0], FilterType::Lowpass).is_err());
+        assert!(butter(2, &[0.2, 0.4], FilterType::Lowpass).is_err());
+        assert!(butter(2, &[0.4, 0.2], FilterType::Bandpass).is_err());
+    }
+
+    #[test]
+    fn butter_bandpass_order_doubles() {
+        let coeffs = butter(2, &[0.2, 0.4], FilterType::Bandpass).expect("butter bp");
+        assert_eq!(coeffs.b.len(), 5);
+        assert_eq!(coeffs.a.len(), 5);
+    }
+
+    #[test]
+    fn butter_bandpass_passes_midband_and_rejects_outside() {
+        let coeffs = butter(2, &[0.2, 0.4], FilterType::Bandpass).expect("butter bp");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        let omega_lo = 0.1 * std::f64::consts::PI;
+        let omega_mid = 0.3 * std::f64::consts::PI;
+        let omega_hi = 0.8 * std::f64::consts::PI;
+        let lo_idx = nearest_freq_index(&result.w, omega_lo);
+        let mid_idx = nearest_freq_index(&result.w, omega_mid);
+        let hi_idx = nearest_freq_index(&result.w, omega_hi);
+        assert!(
+            result.h_mag[mid_idx] > result.h_mag[lo_idx],
+            "bandpass should pass midband better than low stopband"
+        );
+        assert!(
+            result.h_mag[mid_idx] > result.h_mag[hi_idx],
+            "bandpass should pass midband better than high stopband"
+        );
+    }
+
+    #[test]
+    fn butter_bandstop_rejects_midband_and_passes_outside() {
+        let coeffs = butter(2, &[0.2, 0.4], FilterType::Bandstop).expect("butter bs");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        let omega_lo = 0.05 * std::f64::consts::PI;
+        let omega_mid = 0.3 * std::f64::consts::PI;
+        let omega_hi = 0.8 * std::f64::consts::PI;
+        let lo_idx = nearest_freq_index(&result.w, omega_lo);
+        let mid_idx = nearest_freq_index(&result.w, omega_mid);
+        let hi_idx = nearest_freq_index(&result.w, omega_hi);
+        assert!(
+            result.h_mag[mid_idx] < result.h_mag[lo_idx],
+            "bandstop should attenuate the stop band"
+        );
+        assert!(
+            result.h_mag[mid_idx] < result.h_mag[hi_idx],
+            "bandstop should attenuate the stop band"
+        );
+    }
+
+    #[test]
+    fn cheby1_lowpass_shows_passband_ripple() {
+        let coeffs = cheby1(4, 1.0, &[0.3], FilterType::Lowpass).expect("cheby1");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        let passband_end = nearest_freq_index(&result.w, 0.3 * std::f64::consts::PI);
+        let passband = &result.h_mag[..=passband_end];
+        let max_mag = passband.iter().copied().fold(0.0_f64, f64::max);
+        let min_mag = passband.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(
+            max_mag - min_mag > 0.01,
+            "Chebyshev-I passband should ripple, got range {}",
+            max_mag - min_mag
+        );
+        assert!(
+            max_mag <= 1.25 && min_mag >= 0.75,
+            "passband ripple should stay bounded, got min={min_mag}, max={max_mag}"
+        );
+    }
+
+    #[test]
+    fn cheby2_lowpass_rejects_stopband_more_than_passband() {
+        let coeffs = cheby2(4, 20.0, &[0.3], FilterType::Lowpass).expect("cheby2");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        let pass_idx = nearest_freq_index(&result.w, 0.1 * std::f64::consts::PI);
+        let stop_idx = nearest_freq_index(&result.w, 0.8 * std::f64::consts::PI);
+        assert!(
+            result.h_mag[stop_idx] < result.h_mag[pass_idx] * 0.2,
+            "Chebyshev-II should strongly attenuate the stopband"
+        );
+    }
+
+    #[test]
+    fn bessel_group_delay_is_flatter_than_butter() {
+        let bessel_coeffs = bessel(3, &[0.25], FilterType::Lowpass).expect("bessel");
+        let butter_coeffs = butter(3, &[0.25], FilterType::Lowpass).expect("butter");
+        let (_, gd_bessel) =
+            group_delay(&bessel_coeffs.b, &bessel_coeffs.a, Some(256)).expect("gd bessel");
+        let (_, gd_butter) =
+            group_delay(&butter_coeffs.b, &butter_coeffs.a, Some(256)).expect("gd butter");
+        let pass_end = 64;
+        let bessel_span = gd_span(&gd_bessel[..pass_end]);
+        let butter_span = gd_span(&gd_butter[..pass_end]);
+        assert!(
+            bessel_span < butter_span,
+            "Bessel passband delay should be flatter: {bessel_span} < {butter_span}"
+        );
+    }
+
+    #[test]
+    fn bessel_rejects_excessive_order() {
+        let err = bessel(90, &[0.25], FilterType::Lowpass).expect_err("large order should fail");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn iirfilter_dispatch_matches_butter() {
+        let direct = butter(3, &[0.25], FilterType::Lowpass).expect("butter");
+        let dispatch = iirfilter(
+            3,
+            &[0.25],
+            FilterType::Lowpass,
+            IirFamily::Butterworth,
+            None,
+            None,
+        )
+        .expect("iirfilter butter");
+        assert_eq!(direct.b.len(), dispatch.b.len());
+        assert_eq!(direct.a.len(), dispatch.a.len());
+        for (lhs, rhs) in direct.b.iter().zip(dispatch.b.iter()) {
+            assert!((lhs - rhs).abs() < 1e-10, "butter dispatcher mismatch in b");
+        }
+        for (lhs, rhs) in direct.a.iter().zip(dispatch.a.iter()) {
+            assert!((lhs - rhs).abs() < 1e-10, "butter dispatcher mismatch in a");
+        }
+    }
+
+    #[test]
+    fn iirfilter_dispatch_requires_family_params() {
+        let err = iirfilter(
+            3,
+            &[0.25],
+            FilterType::Lowpass,
+            IirFamily::Chebyshev1,
+            None,
+            None,
+        )
+        .expect_err("missing rp should fail");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
     }
 
     // ── lfilter tests ──────────────────────────────────────────────
@@ -3389,7 +3951,7 @@ mod tests {
 
     #[test]
     fn lfilter_with_butter() {
-        let coeffs = butter(2, 0.2, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(2, &[0.2], FilterType::Lowpass).expect("butter");
         let x: Vec<f64> = (0..100)
             .map(|i| (2.0 * std::f64::consts::PI * 0.05 * i as f64).sin())
             .collect();
@@ -3403,7 +3965,7 @@ mod tests {
     #[test]
     fn filtfilt_zero_phase() {
         // filtfilt should produce zero phase shift
-        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(2, &[0.3], FilterType::Lowpass).expect("butter");
         let n = 100;
         let freq = 0.05;
         let x: Vec<f64> = (0..n)
@@ -3433,7 +3995,7 @@ mod tests {
 
     #[test]
     fn filtfilt_attenuates_high_freq() {
-        let coeffs = butter(3, 0.1, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(3, &[0.1], FilterType::Lowpass).expect("butter");
         // Low frequency signal + high frequency noise
         let n = 200;
         let low: Vec<f64> = (0..n)
@@ -3493,7 +4055,7 @@ mod tests {
             .psd
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .max_by(|a, b| a.1.total_cmp(b.1))
             .map(|(i, _)| i)
             .unwrap();
         let peak_freq = result.frequencies[peak_idx];
@@ -3540,7 +4102,7 @@ mod tests {
             .psd
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .max_by(|a, b| a.1.total_cmp(b.1))
             .map(|(i, _)| i)
             .unwrap();
         let peak_freq = result.frequencies[peak_idx];
@@ -3590,6 +4152,12 @@ mod tests {
         psd.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n
     }
 
+    fn gd_span(values: &[f64]) -> f64 {
+        let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        max - min
+    }
+
     // ── Filter conversion tests ────────────────────────────────────
 
     fn assert_close(a: f64, b: f64, tol: f64, msg: &str) {
@@ -3598,6 +4166,19 @@ mod tests {
             "{msg}: {a} vs {b} (diff={})",
             (a - b).abs()
         );
+    }
+
+    fn nearest_freq_index(w: &[f64], omega: f64) -> usize {
+        w.iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                ((**a) - omega)
+                    .abs()
+                    .partial_cmp(&((**b) - omega).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(0)
     }
 
     #[test]
@@ -3614,7 +4195,7 @@ mod tests {
     #[test]
     fn tf2zpk_second_order_complex() {
         // butter(2, 0.3) should give complex conjugate poles
-        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(2, &[0.3], FilterType::Lowpass).expect("butter");
         let zpk = tf2zpk(&coeffs.b, &coeffs.a).expect("tf2zpk");
         assert_eq!(zpk.poles_re.len(), 2);
         // Poles should be complex conjugates
@@ -3658,7 +4239,7 @@ mod tests {
 
     #[test]
     fn tf2sos_butter2() {
-        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(2, &[0.3], FilterType::Lowpass).expect("butter");
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
         // Order 2 → 1 SOS section
         assert_eq!(sos.len(), 1, "butter(2) should give 1 SOS section");
@@ -3668,7 +4249,7 @@ mod tests {
 
     #[test]
     fn tf2sos_butter4() {
-        let coeffs = butter(4, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(4, &[0.3], FilterType::Lowpass).expect("butter");
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
         // Order 4 → 2 SOS sections
         assert_eq!(sos.len(), 2, "butter(4) should give 2 SOS sections");
@@ -3676,7 +4257,7 @@ mod tests {
 
     #[test]
     fn sos2tf_roundtrip() {
-        let coeffs = butter(3, 0.4, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(3, &[0.4], FilterType::Lowpass).expect("butter");
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
         let recovered = sos2tf(&sos);
 
@@ -3704,7 +4285,7 @@ mod tests {
 
     #[test]
     fn sos2zpk_roundtrip() {
-        let coeffs = butter(4, 0.25, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(4, &[0.25], FilterType::Lowpass).expect("butter");
         let zpk_orig = tf2zpk(&coeffs.b, &coeffs.a).expect("tf2zpk");
         let sos = zpk2sos(&zpk_orig);
         let zpk_rec = sos2zpk(&sos);
@@ -3725,7 +4306,7 @@ mod tests {
     #[test]
     fn tf2sos_high_order_stability() {
         // Order 8 filter — SOS should be more stable than tf form
-        let coeffs = butter(8, 0.2, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(8, &[0.2], FilterType::Lowpass).expect("butter");
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
         assert_eq!(sos.len(), 4, "order 8 → 4 sections");
 
@@ -3769,7 +4350,7 @@ mod tests {
     #[test]
     fn freqz_butter_at_cutoff() {
         // Butter(2, 0.3): at cutoff frequency, magnitude should be ≈ 1/√2 (-3dB)
-        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(2, &[0.3], FilterType::Lowpass).expect("butter");
         let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
 
         // Cutoff at ω = 0.3π
@@ -3799,7 +4380,7 @@ mod tests {
     #[test]
     fn freqz_lowpass_dc_unity() {
         // Lowpass filter: DC gain (ω=0) should be 1
-        let coeffs = butter(3, 0.4, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(3, &[0.4], FilterType::Lowpass).expect("butter");
         let result = freqz(&coeffs.b, &coeffs.a, Some(256)).expect("freqz");
         assert_close(result.h_mag[0], 1.0, 1e-6, "DC gain = 1");
     }
@@ -3807,7 +4388,7 @@ mod tests {
     #[test]
     fn freqz_highpass_nyquist_unity() {
         // Highpass filter: Nyquist gain (ω=π) should be 1
-        let coeffs = butter(2, 0.3, FilterType::Highpass).expect("butter");
+        let coeffs = butter(2, &[0.3], FilterType::Highpass).expect("butter");
         let result = freqz(&coeffs.b, &coeffs.a, Some(256)).expect("freqz");
         let last_idx = result.h_mag.len() - 1;
         assert_close(result.h_mag[last_idx], 1.0, 1e-6, "Nyquist gain = 1");
@@ -3816,7 +4397,7 @@ mod tests {
     #[test]
     fn freqz_sos_matches_ba() {
         // SOS and BA forms should give same frequency response
-        let coeffs = butter(4, 0.25, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(4, &[0.25], FilterType::Lowpass).expect("butter");
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
 
         let ba_result = freqz(&coeffs.b, &coeffs.a, Some(128)).expect("freqz ba");
@@ -3835,7 +4416,7 @@ mod tests {
     #[test]
     fn freqz_monotone_lowpass() {
         // Butterworth lowpass: magnitude should be monotonically decreasing
-        let coeffs = butter(4, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(4, &[0.3], FilterType::Lowpass).expect("butter");
         let result = freqz(&coeffs.b, &coeffs.a, Some(256)).expect("freqz");
         for i in 1..result.h_mag.len() {
             assert!(
@@ -3881,7 +4462,7 @@ mod tests {
     #[test]
     fn sosfilt_matches_lfilter_low_order() {
         // For low-order filter, sosfilt and lfilter should give same results
-        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(2, &[0.3], FilterType::Lowpass).expect("butter");
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
 
         let x: Vec<f64> = (0..100)
@@ -3913,7 +4494,7 @@ mod tests {
     #[test]
     fn sosfilt_high_order_stable() {
         // Order-8 Butterworth: sosfilt should remain stable
-        let coeffs = butter(8, 0.2, FilterType::Lowpass).expect("butter 8");
+        let coeffs = butter(8, &[0.2], FilterType::Lowpass).expect("butter 8");
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
 
         let x: Vec<f64> = (0..200)
@@ -3933,7 +4514,7 @@ mod tests {
     #[test]
     fn sosfiltfilt_zero_phase() {
         // sosfiltfilt should produce zero phase shift
-        let coeffs = butter(3, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(3, &[0.3], FilterType::Lowpass).expect("butter");
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
 
         let n = 200;
@@ -3949,7 +4530,7 @@ mod tests {
 
     #[test]
     fn sosfilt_zi_steady_state() {
-        let coeffs = butter(2, 0.3, FilterType::Lowpass).expect("butter");
+        let coeffs = butter(2, &[0.3], FilterType::Lowpass).expect("butter");
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
         let zi = sosfilt_zi(&sos).expect("sosfilt_zi");
         assert_eq!(zi.len(), sos.len());
