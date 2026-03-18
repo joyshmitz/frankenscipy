@@ -1743,7 +1743,7 @@ pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
 
     let fdist = FDistribution::new(df_between, df_within);
     let cdf_val = fdist.cdf(f_stat);
-    let pvalue = if !cdf_val.is_finite() || cdf_val > 1.0 || cdf_val < 0.0 {
+    let pvalue = if !cdf_val.is_finite() || !(0.0..=1.0).contains(&cdf_val) {
         if f_stat > 0.0 { 0.0 } else { 1.0 }
     } else {
         (1.0 - cdf_val).max(0.0)
@@ -1949,7 +1949,7 @@ pub fn kruskal(groups: &[&[f64]]) -> TtestResult {
     // P-value from chi-squared distribution
     let chi2 = ChiSquared::new(df);
     let cdf_val = chi2.cdf(h);
-    let pvalue = if !cdf_val.is_finite() || cdf_val > 1.0 || cdf_val < 0.0 {
+    let pvalue = if !cdf_val.is_finite() || !(0.0..=1.0).contains(&cdf_val) {
         // Numerical overflow in CDF — for large H, p is effectively 0
         if h > 0.0 { 0.0 } else { 1.0 }
     } else {
