@@ -1674,6 +1674,345 @@ pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Non-parametric Tests and ANOVA
+// ══════════════════════════════════════════════════════════════════════
+
+/// One-way ANOVA (Analysis of Variance).
+///
+/// Matches `scipy.stats.f_oneway(*groups)`.
+///
+/// Tests H0: all group means are equal.
+/// Assumes normality and equal variances within groups.
+pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
+    if groups.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let k = groups.len() as f64; // number of groups
+    let n_total: usize = groups.iter().map(|g| g.len()).sum();
+    let nf = n_total as f64;
+
+    if n_total <= groups.len() {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    // Grand mean
+    let grand_sum: f64 = groups.iter().flat_map(|g| g.iter()).sum();
+    let grand_mean = grand_sum / nf;
+
+    // Between-group sum of squares
+    let ss_between: f64 = groups
+        .iter()
+        .map(|g| {
+            let gi_mean: f64 = g.iter().sum::<f64>() / g.len() as f64;
+            g.len() as f64 * (gi_mean - grand_mean).powi(2)
+        })
+        .sum();
+
+    // Within-group sum of squares
+    let ss_within: f64 = groups
+        .iter()
+        .map(|g| {
+            let gi_mean: f64 = g.iter().sum::<f64>() / g.len() as f64;
+            g.iter().map(|&x| (x - gi_mean).powi(2)).sum::<f64>()
+        })
+        .sum();
+
+    let df_between = k - 1.0;
+    let df_within = nf - k;
+
+    if df_within <= 0.0 || ss_within == 0.0 {
+        return TtestResult {
+            statistic: f64::INFINITY,
+            pvalue: 0.0,
+            df: df_between,
+        };
+    }
+
+    let ms_between = ss_between / df_between;
+    let ms_within = ss_within / df_within;
+    let f_stat = ms_between / ms_within;
+
+    let fdist = FDistribution::new(df_between, df_within);
+    let cdf_val = fdist.cdf(f_stat);
+    let pvalue = if !cdf_val.is_finite() || cdf_val > 1.0 || cdf_val < 0.0 {
+        if f_stat > 0.0 { 0.0 } else { 1.0 }
+    } else {
+        (1.0 - cdf_val).max(0.0)
+    };
+
+    TtestResult {
+        statistic: f_stat,
+        pvalue,
+        df: df_between,
+    }
+}
+
+/// Mann-Whitney U test (rank-sum test for two independent samples).
+///
+/// Matches `scipy.stats.mannwhitneyu(x, y, alternative='two-sided')`.
+///
+/// Non-parametric test: H0: distributions of x and y are equal.
+/// Uses normal approximation for p-value (valid for n > 20).
+pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
+    if x.len() < 2 || y.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let n1 = x.len();
+    let n2 = y.len();
+    let n1f = n1 as f64;
+    let n2f = n2 as f64;
+
+    // Combine and rank all observations
+    let mut combined: Vec<(f64, usize)> = Vec::with_capacity(n1 + n2);
+    for &v in x {
+        combined.push((v, 0)); // group 0 = x
+    }
+    for &v in y {
+        combined.push((v, 1)); // group 1 = y
+    }
+
+    let values: Vec<f64> = combined.iter().map(|&(v, _)| v).collect();
+    let ranks = rankdata(&values);
+
+    // U statistic: sum of ranks of x - n1*(n1+1)/2
+    let rank_sum_x: f64 = ranks
+        .iter()
+        .zip(combined.iter())
+        .filter(|(_, (_, group))| *group == 0)
+        .map(|(r, _)| *r)
+        .sum();
+
+    let u1 = rank_sum_x - n1f * (n1f + 1.0) / 2.0;
+    let u2 = n1f * n2f - u1;
+    let u = u1.min(u2); // two-sided: use smaller U
+
+    // Normal approximation
+    let mu = n1f * n2f / 2.0;
+    let sigma = (n1f * n2f * (n1f + n2f + 1.0) / 12.0).sqrt();
+
+    if sigma == 0.0 {
+        return TtestResult {
+            statistic: u,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+
+    let z = (u - mu) / sigma;
+    let normal = Normal::standard();
+    let pvalue = 2.0 * normal.cdf(z.min(0.0)); // two-sided
+
+    TtestResult {
+        statistic: u,
+        pvalue,
+        df: f64::NAN,
+    }
+}
+
+/// Wilcoxon signed-rank test for paired samples.
+///
+/// Matches `scipy.stats.wilcoxon(x, y)`.
+///
+/// Non-parametric test: H0: median of x - y is zero.
+pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
+    if x.len() != y.len() || x.len() < 10 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    // Compute differences, discard zeros
+    let diffs: Vec<f64> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(&xi, &yi)| xi - yi)
+        .filter(|&d| d.abs() > 1e-15)
+        .collect();
+
+    let nr = diffs.len();
+    if nr < 2 {
+        return TtestResult {
+            statistic: 0.0,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+
+    // Rank the absolute differences
+    let abs_diffs: Vec<f64> = diffs.iter().map(|d| d.abs()).collect();
+    let ranks = rankdata(&abs_diffs);
+
+    // T+ = sum of ranks where difference is positive
+    let t_plus: f64 = ranks
+        .iter()
+        .zip(diffs.iter())
+        .filter(|(_, d)| **d > 0.0)
+        .map(|(r, _)| *r)
+        .sum();
+
+    let t_minus: f64 = ranks
+        .iter()
+        .zip(diffs.iter())
+        .filter(|(_, d)| **d < 0.0)
+        .map(|(r, _)| *r)
+        .sum();
+
+    let t_stat = t_plus.min(t_minus);
+    let nrf = nr as f64;
+
+    // Normal approximation
+    let mu = nrf * (nrf + 1.0) / 4.0;
+    let sigma = (nrf * (nrf + 1.0) * (2.0 * nrf + 1.0) / 24.0).sqrt();
+
+    if sigma == 0.0 {
+        return TtestResult {
+            statistic: t_stat,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+
+    let z = (t_stat - mu) / sigma;
+    let normal = Normal::standard();
+    let pvalue = 2.0 * normal.cdf(z.min(0.0));
+
+    TtestResult {
+        statistic: t_stat,
+        pvalue,
+        df: f64::NAN,
+    }
+}
+
+/// Kruskal-Wallis H-test for independent samples.
+///
+/// Matches `scipy.stats.kruskal(*groups)`.
+///
+/// Non-parametric alternative to one-way ANOVA.
+/// Tests H0: all groups come from the same distribution.
+pub fn kruskal(groups: &[&[f64]]) -> TtestResult {
+    if groups.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let n_total: usize = groups.iter().map(|g| g.len()).sum();
+    let nf = n_total as f64;
+
+    if n_total < 3 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    // Combine all observations and rank
+    let mut all_values: Vec<f64> = Vec::with_capacity(n_total);
+    let mut group_sizes: Vec<usize> = Vec::with_capacity(groups.len());
+    for &g in groups {
+        all_values.extend_from_slice(g);
+        group_sizes.push(g.len());
+    }
+    let ranks = rankdata(&all_values);
+
+    // Compute H statistic: H = (12/(N(N+1))) * Σ(R_i²/n_i) - 3(N+1)
+    let mut offset = 0;
+    let mut h_sum = 0.0;
+    for &ni in &group_sizes {
+        let rank_sum: f64 = ranks[offset..offset + ni].iter().sum();
+        h_sum += rank_sum * rank_sum / ni as f64;
+        offset += ni;
+    }
+
+    let h = 12.0 / (nf * (nf + 1.0)) * h_sum - 3.0 * (nf + 1.0);
+    let df = groups.len() as f64 - 1.0;
+
+    // P-value from chi-squared distribution
+    let chi2 = ChiSquared::new(df);
+    let cdf_val = chi2.cdf(h);
+    let pvalue = if !cdf_val.is_finite() || cdf_val > 1.0 || cdf_val < 0.0 {
+        // Numerical overflow in CDF — for large H, p is effectively 0
+        if h > 0.0 { 0.0 } else { 1.0 }
+    } else {
+        (1.0 - cdf_val).max(0.0)
+    };
+
+    TtestResult {
+        statistic: h,
+        pvalue,
+        df,
+    }
+}
+
+/// Wilcoxon rank-sum test for two independent samples.
+///
+/// Matches `scipy.stats.ranksums(x, y)`.
+///
+/// Similar to Mann-Whitney U but returns a z-statistic.
+pub fn ranksums(x: &[f64], y: &[f64]) -> TtestResult {
+    if x.len() < 2 || y.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let n1 = x.len() as f64;
+    let n2 = y.len() as f64;
+
+    // Combine and rank
+    let mut combined: Vec<f64> = Vec::with_capacity(x.len() + y.len());
+    combined.extend_from_slice(x);
+    combined.extend_from_slice(y);
+    let ranks = rankdata(&combined);
+
+    // Sum of ranks for first sample
+    let rank_sum_x: f64 = ranks[..x.len()].iter().sum();
+
+    // Expected rank sum under H0
+    let expected = n1 * (n1 + n2 + 1.0) / 2.0;
+    let sd = (n1 * n2 * (n1 + n2 + 1.0) / 12.0).sqrt();
+
+    if sd == 0.0 {
+        return TtestResult {
+            statistic: 0.0,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+
+    let z = (rank_sum_x - expected) / sd;
+    let normal = Normal::standard();
+    let pvalue = 2.0 * normal.cdf(-z.abs()); // two-sided
+
+    TtestResult {
+        statistic: z,
+        pvalue,
+        df: f64::NAN,
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Correlation and Regression
 // ══════════════════════════════════════════════════════════════════════
 
@@ -3379,5 +3718,154 @@ mod tests {
             let sf_plus_cdf = b.sf(k) + b.cdf(k);
             assert_close(sf_plus_cdf, 1.0, 1e-10, &format!("sf+cdf at k={k}"));
         }
+    }
+
+    // ── Non-parametric + ANOVA tests ──────────────────────────────
+
+    #[test]
+    fn f_oneway_same_means() {
+        let a: Vec<f64> = (0..30).map(|i| 10.0 + (i as f64) * 0.01).collect();
+        let b: Vec<f64> = (0..30).map(|i| 10.0 + (i as f64) * 0.01 + 0.001).collect();
+        let c: Vec<f64> = (0..30).map(|i| 10.0 + (i as f64) * 0.01 - 0.001).collect();
+        let result = f_oneway(&[&a, &b, &c]);
+        assert!(
+            result.pvalue > 0.05,
+            "similar groups should not reject H0, p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn f_oneway_different_means() {
+        let a: Vec<f64> = (0..30).map(|i| (i as f64) * 0.01).collect();
+        let b: Vec<f64> = (0..30).map(|i| 10.0 + (i as f64) * 0.01).collect();
+        let c: Vec<f64> = (0..30).map(|i| 20.0 + (i as f64) * 0.01).collect();
+        let result = f_oneway(&[&a, &b, &c]);
+        assert!(
+            result.pvalue < 0.001,
+            "different means should reject H0, p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn f_oneway_too_few_groups() {
+        let result = f_oneway(&[&[1.0, 2.0]]);
+        assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn mannwhitneyu_same_distribution() {
+        let x: Vec<f64> = (0..50).map(|i| (i as f64) * 0.02).collect();
+        let y: Vec<f64> = (0..50).map(|i| (i as f64) * 0.02 + 0.001).collect();
+        let result = mannwhitneyu(&x, &y);
+        assert!(
+            result.pvalue > 0.05,
+            "similar samples p={}, should not reject",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn mannwhitneyu_shifted() {
+        let x: Vec<f64> = (0..50).map(|i| (i as f64) * 0.1).collect();
+        let y: Vec<f64> = (0..50).map(|i| 100.0 + (i as f64) * 0.1).collect();
+        let result = mannwhitneyu(&x, &y);
+        assert!(
+            result.pvalue < 0.001,
+            "shifted samples p={}, should reject",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn wilcoxon_no_difference() {
+        // Paired data with alternating noise — should not reject
+        let x: Vec<f64> = (0..30).map(|i| (i as f64) * 0.1).collect();
+        // Alternating +/- noise: half positive, half negative differences
+        let y: Vec<f64> = x
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| v + if i % 2 == 0 { 0.01 } else { -0.01 })
+            .collect();
+        let result = wilcoxon(&x, &y);
+        assert!(
+            result.pvalue > 0.05,
+            "balanced noise p={}, should not reject",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn wilcoxon_systematic_shift() {
+        let x: Vec<f64> = (0..30).map(|i| (i as f64) * 0.1).collect();
+        let y: Vec<f64> = x.iter().map(|&v| v + 5.0).collect();
+        let result = wilcoxon(&x, &y);
+        assert!(
+            result.pvalue < 0.01,
+            "systematic shift p={}, should reject",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn kruskal_same_groups() {
+        let a: Vec<f64> = (0..40).map(|i| (i as f64) * 0.025).collect();
+        let b: Vec<f64> = (0..40).map(|i| (i as f64) * 0.025 + 0.001).collect();
+        let result = kruskal(&[&a, &b]);
+        assert!(
+            result.pvalue > 0.05,
+            "similar groups p={}, should not reject",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn kruskal_different_groups() {
+        let a: Vec<f64> = (0..30).map(|i| (i as f64) * 0.01).collect();
+        let b: Vec<f64> = (0..30).map(|i| 50.0 + (i as f64) * 0.01).collect();
+        let result = kruskal(&[&a, &b]);
+        // H statistic should be large (completely separated groups)
+        assert!(
+            result.statistic > 40.0,
+            "H should be large for separated groups, got {}",
+            result.statistic
+        );
+        // p-value should be very small
+        assert!(
+            result.pvalue < 0.001,
+            "different groups p={}, should reject",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn ranksums_same_distribution() {
+        let x: Vec<f64> = (0..40).map(|i| (i as f64) * 0.025).collect();
+        let y: Vec<f64> = (0..40).map(|i| (i as f64) * 0.025 + 0.0001).collect();
+        let result = ranksums(&x, &y);
+        assert!(
+            result.pvalue > 0.05,
+            "similar samples p={}, should not reject",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn ranksums_shifted() {
+        let x: Vec<f64> = (0..40).map(|i| (i as f64) * 0.1).collect();
+        let y: Vec<f64> = (0..40).map(|i| 100.0 + (i as f64) * 0.1).collect();
+        let result = ranksums(&x, &y);
+        assert!(
+            result.pvalue < 0.001,
+            "shifted samples p={}, should reject",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn mannwhitneyu_too_few() {
+        let result = mannwhitneyu(&[1.0], &[2.0]);
+        assert!(result.statistic.is_nan());
     }
 }
