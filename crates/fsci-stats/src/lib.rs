@@ -3258,11 +3258,7 @@ pub fn entropy(pk: &[f64], base: Option<f64>) -> f64 {
         .iter()
         .map(|&p| {
             let prob = p / total;
-            if prob > 0.0 {
-                -prob * prob.ln()
-            } else {
-                0.0
-            }
+            if prob > 0.0 { -prob * prob.ln() } else { 0.0 }
         })
         .sum();
 
@@ -3298,7 +3294,9 @@ pub fn boxcox(data: &[f64], lmbda: Option<f64>) -> Result<BoxCoxResult, String> 
     }
     for (i, &v) in data.iter().enumerate() {
         if v <= 0.0 {
-            return Err(format!("data[{i}] = {v}: Box-Cox requires all positive values"));
+            return Err(format!(
+                "data[{i}] = {v}: Box-Cox requires all positive values"
+            ));
         }
     }
 
@@ -3389,29 +3387,36 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
         for j in (i + 1)..n {
             let dx = x[i] - x[j];
             let dy = y[i] - y[j];
-            let product = dx * dy;
+            let x_tied = dx.abs() < f64::EPSILON;
+            let y_tied = dy.abs() < f64::EPSILON;
 
-            if product > 0.0 {
-                concordant += 1;
-            } else if product < 0.0 {
-                discordant += 1;
-            } else if dx.abs() < f64::EPSILON && dy.abs() >= f64::EPSILON {
+            if x_tied {
                 x_ties += 1;
-            } else if dy.abs() < f64::EPSILON && dx.abs() >= f64::EPSILON {
+            }
+            if y_tied {
                 y_ties += 1;
             }
-            // Both zero: neither concordant, discordant, nor single-axis tie
+
+            let product = dx * dy;
+            if !x_tied && !y_tied && product > 0.0 {
+                concordant += 1;
+            } else if !x_tied && !y_tied && product < 0.0 {
+                discordant += 1;
+            }
         }
     }
 
     let n_pairs = (n * (n - 1) / 2) as f64;
     let denom = ((n_pairs - x_ties as f64) * (n_pairs - y_ties as f64)).sqrt();
 
-    let tau = if denom > 0.0 {
-        (concordant - discordant) as f64 / denom
-    } else {
-        0.0
-    };
+    if denom == 0.0 {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let tau = (concordant - discordant) as f64 / denom;
 
     // Approximate p-value using normal approximation for large n.
     let n_f = n as f64;
@@ -5266,6 +5271,18 @@ mod tests {
             result.pvalue < 0.05,
             "strong correlation should have p < 0.05, got {}",
             result.pvalue
+        );
+    }
+
+    #[test]
+    fn kendalltau_constant_input_is_undefined() {
+        let x = vec![1.0, 1.0, 1.0, 1.0];
+        let y = vec![2.0, 2.0, 2.0, 2.0];
+        let result = kendalltau(&x, &y);
+        assert!(result.statistic.is_nan(), "tau should be NaN for all ties");
+        assert!(
+            result.pvalue.is_nan(),
+            "p-value should be NaN for undefined tau"
         );
     }
 }

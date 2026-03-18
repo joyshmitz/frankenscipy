@@ -158,7 +158,7 @@ fn bluestein_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
     // Chirp sequence: w[k] = exp(sign * i * π * k² / n)
     let mut chirp = Vec::with_capacity(n);
     for k in 0..n {
-        let angle = sign * PI * (k as f64) * (k as f64) / (n as f64);
+        let angle = sign * PI * (k as f64).powi(2) / (n as f64);
         chirp.push((angle.cos(), angle.sin()));
     }
 
@@ -177,19 +177,18 @@ fn bluestein_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
     }
 
     // Convolution via FFT: C = IFFT(FFT(a) * FFT(b))
-    let fa = cooley_tukey_radix2(&a, false);
-    let fb = cooley_tukey_radix2(&b, false);
-    let mut fc = vec![(0.0, 0.0); m];
+    cooley_tukey_radix2_inplace(&mut a, false);
+    cooley_tukey_radix2_inplace(&mut b, false);
     for i in 0..m {
-        fc[i] = complex_mul(fa[i], fb[i]);
+        a[i] = complex_mul(a[i], b[i]);
     }
-    let conv = cooley_tukey_radix2(&fc, true);
+    cooley_tukey_radix2_inplace(&mut a, true);
 
-    // Extract result: output[k] = chirp[k] * conv[k] / m
+    // Extract result: output[k] = chirp[k] * a[k] / m
     let inv_m = 1.0 / m as f64;
     let mut output = Vec::with_capacity(n);
     for k in 0..n {
-        let val = complex_scale(conv[k], inv_m);
+        let val = complex_scale(a[k], inv_m);
         output.push(complex_mul(chirp[k], val));
     }
 
@@ -241,13 +240,10 @@ fn real_fft_specialized(input: &[f64], backend: &dyn FftBackend) -> Vec<Complex6
 }
 
 fn bit_reverse(x: usize, bits: usize) -> usize {
-    let mut result = 0;
-    let mut val = x;
-    for _ in 0..bits {
-        result = (result << 1) | (val & 1);
-        val >>= 1;
+    if bits == 0 {
+        return 0;
     }
-    result
+    x.reverse_bits() >> (usize::BITS as usize - bits)
 }
 
 fn complex_sub(lhs: Complex64, rhs: Complex64) -> Complex64 {
@@ -473,7 +469,13 @@ pub fn irfft(
     validate_workers(options.workers)?;
     validate_finite_complex(input, options)?;
 
-    let n = output_len.unwrap_or_else(|| input.len().saturating_sub(1).saturating_mul(2));
+    let n = output_len.unwrap_or_else(|| {
+        if input.len() == 1 {
+            1
+        } else {
+            input.len().saturating_sub(1).saturating_mul(2)
+        }
+    });
     if n == 0 {
         return Err(FftError::InvalidShape {
             detail: "output_len cannot be zero",
@@ -631,16 +633,20 @@ pub fn dct_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> 
         return Ok(vec![input[0]]);
     }
 
-    let mut result = Vec::with_capacity(n);
-    let nm1 = (n - 1) as f64;
-    for k in 0..n {
-        let mut sum = 0.0;
-        for (i, &x) in input.iter().enumerate() {
-            sum += x * (PI * k as f64 * i as f64 / nm1).cos();
-        }
-        result.push(sum);
+    // DCT-I via FFT of length 2N-2
+    let m = 2 * n - 2;
+    let mut extended = vec![(0.0, 0.0); m];
+    for i in 0..n {
+        extended[i] = (input[i], 0.0);
     }
-    Ok(result)
+    for i in 1..n - 1 {
+        extended[m - i] = (input[i], 0.0);
+    }
+
+    let backend = resolve_backend(options.backend);
+    let spectrum = backend.transform_1d_unscaled(&extended, false);
+
+    Ok(spectrum.into_iter().take(n).map(|v| v.0).collect())
 }
 
 /// Discrete Cosine Transform Type III.
@@ -654,16 +660,9 @@ pub fn dct_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    let two_n = 2.0 * n as f64;
-    let mut result = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut sum = input[0] / 2.0;
-        for (k, &xk) in input.iter().enumerate().skip(1) {
-            sum += xk * (PI * k as f64 * (2.0 * i as f64 + 1.0) / two_n).cos();
-        }
-        result.push(sum);
-    }
-    Ok(result)
+    // DCT-III is scaled IDCT-II
+    let idct_result = idct(input, options)?;
+    Ok(idct_result.into_iter().map(|v| v * n as f64).collect())
 }
 
 /// Discrete Cosine Transform Type IV.
@@ -698,14 +697,20 @@ pub fn dst_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> 
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    let np1 = (n + 1) as f64;
+    // DST-I via FFT of length 2N+2
+    let m = 2 * n + 2;
+    let mut extended = vec![(0.0, 0.0); m];
+    for i in 0..n {
+        extended[i + 1] = (input[i], 0.0);
+        extended[m - i - 1] = (-input[i], 0.0);
+    }
+
+    let backend = resolve_backend(options.backend);
+    let spectrum = backend.transform_1d_unscaled(&extended, false);
+
     let mut result = Vec::with_capacity(n);
-    for k in 0..n {
-        let mut sum = 0.0;
-        for (i, &x) in input.iter().enumerate() {
-            sum += x * (PI * (i as f64 + 1.0) * (k as f64 + 1.0) / np1).sin();
-        }
-        result.push(sum);
+    for k in 1..=n {
+        result.push(-spectrum[k].1 * 0.5); // -Im part, scaled by 0.5 to match original behavior
     }
     Ok(result)
 }
@@ -918,8 +923,10 @@ fn transform_nd_unscaled(
     inverse: bool,
 ) -> Vec<Complex64> {
     let mut data = input.to_vec();
+    let max_axis_len = shape.iter().max().copied().unwrap_or(0);
+    let mut scratch = vec![(0.0, 0.0); max_axis_len];
     for axis in 0..shape.len() {
-        apply_axis_transform(backend, &mut data, shape, axis, inverse);
+        apply_axis_transform(backend, &mut data, shape, axis, inverse, &mut scratch);
     }
     data
 }
@@ -930,21 +937,22 @@ fn apply_axis_transform(
     shape: &[usize],
     axis: usize,
     inverse: bool,
+    scratch: &mut [Complex64],
 ) {
     let axis_len = shape[axis];
     let stride = shape[axis + 1..].iter().product::<usize>().max(1);
     let repeats = shape[..axis].iter().product::<usize>().max(1);
     let block = axis_len * stride;
 
-    let mut scratch = vec![(0.0, 0.0); axis_len];
+    let axis_scratch = &mut scratch[..axis_len];
     for outer in 0..repeats {
         let outer_base = outer * block;
         for offset in 0..stride {
-            for (index, slot) in scratch.iter_mut().enumerate() {
+            for (index, slot) in axis_scratch.iter_mut().enumerate() {
                 *slot = data[outer_base + index * stride + offset];
             }
-            let transformed = backend.transform_1d_unscaled(&scratch, inverse);
-            for (index, &value) in transformed.iter().enumerate() {
+            backend.transform_1d_inplace(axis_scratch, inverse);
+            for (index, &value) in axis_scratch.iter().enumerate() {
                 data[outer_base + index * stride + offset] = value;
             }
         }
@@ -1360,6 +1368,19 @@ mod tests {
     }
 
     #[test]
+    fn irfft_length_1() {
+        let input = vec![(5.0, 0.0)];
+        let signal = irfft(&input, Some(1), &FftOptions::default()).expect("irfft len 1");
+        assert_eq!(signal.len(), 1);
+        assert_close(signal[0], 5.0, 1e-12);
+
+        // Default length for input length 1 should also be 1
+        let signal_default = irfft(&input, None, &FftOptions::default()).expect("irfft default len 1");
+        assert_eq!(signal_default.len(), 1);
+        assert_close(signal_default[0], 5.0, 1e-12);
+    }
+
+    #[test]
     fn hardened_mode_rejects_non_finite_input() {
         let opts = FftOptions::default().with_mode(RuntimeMode::Hardened);
         let err = rfft(&[1.0, f64::NAN], &opts).expect_err("hardened mode should reject NaN");
@@ -1592,9 +1613,8 @@ mod tests {
         clear_shared_plan_cache();
         let _ = take_transform_traces();
 
-        // Use n=37 (prime, outside proptest ranges 1..=32) to avoid
-        // parallel test cache collisions.
-        let input = (0..37usize)
+        // Use n=137 (prime, large, unlikely to collide in parallel tests)
+        let input = (0..137usize)
             .map(|i| (i as f64, (i % 3) as f64 - 1.0))
             .collect::<Vec<_>>();
         let opts = FftOptions::default();
@@ -1603,14 +1623,14 @@ mod tests {
 
         let mut fft_traces = take_transform_traces()
             .into_iter()
-            .filter(|trace| trace.kind == TransformKind::Fft)
+            .filter(|trace| trace.kind == TransformKind::Fft && trace.n == 137)
             .collect::<Vec<_>>();
         fft_traces.sort_by(|lhs, rhs| lhs.operation_id.cmp(&rhs.operation_id));
 
-        assert!(fft_traces.len() >= 2);
+        assert!(fft_traces.len() >= 2, "Expected at least 2 traces for n=137, got {}", fft_traces.len());
         let last_two = &fft_traces[fft_traces.len() - 2..];
-        assert!(!last_two[0].plan_cache_hit);
-        assert!(last_two[1].plan_cache_hit);
+        assert!(!last_two[0].plan_cache_hit, "First call should be a cache miss");
+        assert!(last_two[1].plan_cache_hit, "Second call should be a cache hit");
         assert!(last_two[0].to_json_line().contains("\"operation_id\""));
     }
 

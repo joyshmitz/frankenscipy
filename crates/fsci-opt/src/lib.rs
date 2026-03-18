@@ -15,7 +15,9 @@ pub use minimize::{
     Bound, MinimizeScalarOptions, MinimizeScalarResult, bfgs, cg_pr_plus, lbfgsb, minimize,
     minimize_scalar, nelder_mead, newton_cg, powell, take_optimize_traces,
 };
-pub use root::{MultivariateRootResult, RootResult, bisect, brenth, brentq, fsolve, ridder, root_scalar};
+pub use root::{
+    MultivariateRootResult, RootResult, bisect, brenth, brentq, fsolve, ridder, root_scalar,
+};
 pub use types::{
     Bounds, ConvergenceStatus, LinearConstraint, MinimizeOptions, NonlinearConstraint, OptError,
     OptimizeMethod, OptimizeResult, RootMethod, RootOptions,
@@ -458,7 +460,10 @@ pub fn linprog(
     let phase1_result = simplex_iterate(&mut tableau, &mut basis, maxiter, phase1_vars);
     if let Err(err_code) = phase1_result {
         let (status, message) = if err_code == 3 {
-            (3, "Phase I problem is unbounded (should not happen)".to_string())
+            (
+                3,
+                "Phase I problem is unbounded (should not happen)".to_string(),
+            )
         } else {
             (1, "Phase I iteration limit exceeded".to_string())
         };
@@ -723,15 +728,61 @@ where
             detail: "bounds must not be empty".to_string(),
         });
     }
+    if opts.popsize == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "popsize must be at least 1".to_string(),
+        });
+    }
+    let pop_count = opts
+        .popsize
+        .checked_mul(ndim)
+        .ok_or_else(|| OptError::InvalidArgument {
+            detail: format!(
+                "population size overflow: popsize {} * ndim {ndim} exceeds usize",
+                opts.popsize
+            ),
+        })?;
+    if pop_count < 4 {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "population size must be at least 4, got {pop_count} (popsize={} * ndim={ndim})",
+                opts.popsize
+            ),
+        });
+    }
+    if !opts.tol.is_finite() || opts.tol < 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: format!("tol must be a finite non-negative value, got {}", opts.tol),
+        });
+    }
+    if !opts.mutation.is_finite() || opts.mutation < 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "mutation must be a finite non-negative value, got {}",
+                opts.mutation
+            ),
+        });
+    }
+    if !opts.recombination.is_finite() || !(0.0..=1.0).contains(&opts.recombination) {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "recombination must be finite and within [0, 1], got {}",
+                opts.recombination
+            ),
+        });
+    }
     for (i, &(lo, hi)) in bounds.iter().enumerate() {
+        if !lo.is_finite() || !hi.is_finite() {
+            return Err(OptError::InvalidBounds {
+                detail: format!("variable {i}: bounds must be finite, got ({lo}, {hi})"),
+            });
+        }
         if lo >= hi {
             return Err(OptError::InvalidBounds {
                 detail: format!("variable {i}: lower bound {lo} >= upper bound {hi}"),
             });
         }
     }
-
-    let pop_count = opts.popsize * ndim;
     let mut rng: rand::rngs::StdRng = match opts.seed {
         Some(s) => rand::SeedableRng::seed_from_u64(s),
         None => rand::SeedableRng::from_os_rng(),
@@ -923,6 +974,36 @@ where
             detail: "x0 must not be empty".to_string(),
         });
     }
+    if x0.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: "x0 must not contain NaN or Inf".to_string(),
+        });
+    }
+    if !opts.temperature.is_finite() || opts.temperature <= 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "temperature must be a positive finite value, got {}",
+                opts.temperature
+            ),
+        });
+    }
+    if !opts.stepsize.is_finite() || opts.stepsize <= 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "stepsize must be a positive finite value, got {}",
+                opts.stepsize
+            ),
+        });
+    }
+    if let Some(tol) = opts.minimizer_tol
+        && (!tol.is_finite() || tol <= 0.0)
+    {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "minimizer_tol must be a positive finite value when provided, got {tol}",
+            ),
+        });
+    }
 
     let mut rng: rand::rngs::StdRng = match opts.seed {
         Some(s) => rand::SeedableRng::seed_from_u64(s),
@@ -938,7 +1019,7 @@ where
 
     // Initial local minimization.
     let local_result =
-        crate::bfgs(&func, x0, minimize_opts.clone()).map_err(|e| OptError::InvalidArgument {
+        crate::bfgs(&func, x0, minimize_opts).map_err(|e| OptError::InvalidArgument {
             detail: format!("initial local minimization failed: {e}"),
         })?;
 
@@ -957,7 +1038,7 @@ where
             .collect();
 
         // Local minimization from perturbed point.
-        let local = crate::bfgs(&func, &x_perturbed, minimize_opts.clone());
+        let local = crate::bfgs(&func, &x_perturbed, minimize_opts);
         total_nit += 1;
 
         if let Ok(result) = local {
@@ -1451,6 +1532,38 @@ mod tests {
         assert!(result.nfev > 0, "should have function evaluations");
     }
 
+    #[test]
+    fn de_rejects_population_too_small() {
+        let sphere = |x: &[f64]| -> f64 { x.iter().map(|xi| xi * xi).sum() };
+        let bounds = vec![(-1.0, 1.0)];
+        let opts = DifferentialEvolutionOptions {
+            popsize: 3,
+            ..Default::default()
+        };
+        let err = differential_evolution(sphere, &bounds, opts).unwrap_err();
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn de_rejects_nonfinite_bounds() {
+        let sphere = |x: &[f64]| -> f64 { x.iter().map(|xi| xi * xi).sum() };
+        let bounds = vec![(f64::NAN, 1.0)];
+        let err = differential_evolution(sphere, &bounds, Default::default()).unwrap_err();
+        assert!(matches!(err, crate::OptError::InvalidBounds { .. }));
+    }
+
+    #[test]
+    fn de_rejects_population_size_overflow() {
+        let sphere = |x: &[f64]| -> f64 { x.iter().map(|xi| xi * xi).sum() };
+        let bounds = vec![(-1.0, 1.0), (-1.0, 1.0)];
+        let opts = DifferentialEvolutionOptions {
+            popsize: usize::MAX,
+            ..Default::default()
+        };
+        let err = differential_evolution(sphere, &bounds, opts).unwrap_err();
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
     // ── Basinhopping tests ─────────────────────────────────────────
 
     #[test]
@@ -1503,5 +1616,23 @@ mod tests {
         };
         let result = basinhopping(func, &[1.0], opts).unwrap();
         assert!(result.nfev > 0, "should track function evaluations");
+    }
+
+    #[test]
+    fn basinhopping_rejects_nonpositive_stepsize() {
+        let func = |x: &[f64]| -> f64 { x[0] * x[0] };
+        let opts = BasinhoppingOptions {
+            stepsize: 0.0,
+            ..Default::default()
+        };
+        let err = basinhopping(func, &[1.0], opts).unwrap_err();
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn basinhopping_rejects_nonfinite_initial_point() {
+        let func = |x: &[f64]| -> f64 { x[0] * x[0] };
+        let err = basinhopping(func, &[f64::INFINITY], Default::default()).unwrap_err();
+        assert!(matches!(err, crate::OptError::NonFiniteInput { .. }));
     }
 }

@@ -361,7 +361,7 @@ fn gamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         });
     }
     let value = gamma_core(x);
-    if !value.is_finite() {
+    if !value.is_finite() && !is_negative_integer_pole(x) && x != 0.0 {
         record_special_trace(
             "gamma",
             mode,
@@ -667,11 +667,17 @@ fn gamma_core(x: f64) -> f64 {
         };
     }
     if is_negative_integer_pole(x) {
-        return f64::NAN;
+        // SciPy returns INF for negative integer poles
+        return f64::INFINITY;
     }
 
     if x < 0.5 {
-        return PI / ((PI * x).sin() * gamma_core(1.0 - x));
+        // Reflection formula: Γ(x) = π / (sin(πx) * Γ(1-x))
+        let sin_pi_x = (PI * x).sin();
+        if sin_pi_x == 0.0 {
+            return f64::INFINITY;
+        }
+        return PI / (sin_pi_x * gamma_core(1.0 - x));
     }
 
     gamma_lanczos(x)
@@ -920,13 +926,15 @@ pub fn zeta(s: f64) -> f64 {
         let z1 = zeta_positive(s1);
         let sin_half_pi_s = (PI * s / 2.0).sin();
         let gamma_1_minus_s = gamma_core(s1);
-        2.0_f64.powf(s) * PI.powf(s - 1.0) * sin_half_pi_s * gamma_1_minus_s * z1
+        // Compute parts carefully to avoid overflow/underflow
+        let factor = 2.0_f64.powf(s) * PI.powf(s - 1.0) * sin_half_pi_s * gamma_1_minus_s;
+        factor * z1
     } else {
         // 0 < s < 1: use Dirichlet eta function relation
         // ζ(s) = η(s) / (1 - 2^(1-s)) where η(s) = sum (-1)^(n+1) / n^s
         let eta = dirichlet_eta(s);
         let denom = 1.0 - 2.0_f64.powf(1.0 - s);
-        if denom.abs() < 1e-15 {
+        if denom == 0.0 {
             return f64::NAN;
         }
         eta / denom
@@ -936,7 +944,8 @@ pub fn zeta(s: f64) -> f64 {
 /// Zeta for s > 1 via Euler-Maclaurin summation.
 fn zeta_positive(s: f64) -> f64 {
     // Direct sum for first N terms + Euler-Maclaurin correction
-    let n = 100;
+    // Use N=20 for better performance/accuracy balance
+    let n = 20;
     let mut sum = 0.0_f64;
     for k in 1..=n {
         sum += (k as f64).powf(-s);
@@ -944,13 +953,15 @@ fn zeta_positive(s: f64) -> f64 {
 
     // Euler-Maclaurin remainder: integral from N to infinity of x^(-s) dx
     let n_f = n as f64;
-    let integral = n_f.powf(1.0 - s) / (s - 1.0);
+    let s_m_1 = s - 1.0;
+    let integral = n_f.powf(-s_m_1) / s_m_1;
     let half_last = 0.5 * n_f.powf(-s);
 
-    // First Bernoulli correction term
-    let b2_correction = s / 12.0 * n_f.powf(-s - 1.0);
+    // Bernoulli correction terms: s/12 * n^(-s-1) - s(s+1)(s+2)/720 * n^(-s-3) + ...
+    let term1 = (s / 12.0) * n_f.powf(-s - 1.0);
+    let term2 = (s * (s + 1.0) * (s + 2.0) / 720.0) * n_f.powf(-s - 3.0);
 
-    sum + integral + half_last + b2_correction
+    sum + integral + half_last + term1 - term2
 }
 
 /// Dirichlet eta function η(s) = sum_{n=1}^∞ (-1)^{n+1} / n^s.

@@ -298,6 +298,9 @@ where
 }
 
 fn beta_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    // Symmetry beta(a,b)=beta(b,a)
+    let (a, b) = if a < b { (b, a) } else { (a, b) };
+
     let log_value = betaln_scalar(a, b, mode)?;
     const LN_MAX: f64 = 709.782_712_893_384;
     const LN_MIN: f64 = -745.133_219_101_941_1;
@@ -528,8 +531,8 @@ fn invert_monotone_unit_interval(cdf: impl Fn(f64) -> f64, target: f64) -> f64 {
     let mut lo = 0.0;
     let mut hi = 1.0;
 
-    for _ in 0..120 {
-        let mid = 0.5 * (lo + hi);
+    for _ in 0..100 {
+        let mid = lo + (hi - lo) * 0.5;
         let value = cdf(mid);
         if !value.is_finite() {
             hi = mid;
@@ -540,12 +543,12 @@ fn invert_monotone_unit_interval(cdf: impl Fn(f64) -> f64, target: f64) -> f64 {
         } else {
             hi = mid;
         }
-        if (hi - lo).abs() <= 1.0e-14 * mid.abs().max(1.0) {
+        if (hi - lo) < f64::EPSILON * 2.0 {
             break;
         }
     }
 
-    0.5 * (lo + hi)
+    lo + (hi - lo) * 0.5
 }
 
 fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {

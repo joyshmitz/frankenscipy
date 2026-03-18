@@ -619,7 +619,11 @@ where
         let mut best_x = x.clone();
         let best_norm = norm_fx;
         for _ in 0..10 {
-            let trial: Vec<f64> = x.iter().zip(&dx).map(|(&xi, &di)| xi + alpha * di).collect();
+            let trial: Vec<f64> = x
+                .iter()
+                .zip(&dx)
+                .map(|(&xi, &di)| xi + alpha * di)
+                .collect();
             let ftrial = func(&trial);
             nfev += 1;
             let trial_norm: f64 = ftrial.iter().map(|v| v * v).sum::<f64>().sqrt();
@@ -708,10 +712,10 @@ mod tests {
     use proptest::prelude::*;
     use serde::Serialize;
 
+    use super::fsolve;
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, ridder, root_scalar,
     };
-    use super::fsolve;
 
     #[derive(Debug, Serialize)]
     struct TestLogEntry<'a> {
@@ -1362,7 +1366,11 @@ mod tests {
         let f = |x: &[f64]| vec![x[0] * x[0] - 4.0, x[1] * x[1] - 9.0];
         let result = fsolve(f, &[1.9, 2.9]).expect("fsolve should converge");
         assert!(result.converged);
-        assert!(result.iterations < 20, "too many iterations: {}", result.iterations);
+        assert!(
+            result.iterations < 20,
+            "too many iterations: {}",
+            result.iterations
+        );
     }
 
     #[test]
@@ -1372,10 +1380,7 @@ mod tests {
         if result.converged {
             let residual = f(&result.x);
             let max_residual = residual.iter().map(|r| r.abs()).fold(0.0_f64, f64::max);
-            assert!(
-                max_residual < 1e-6,
-                "residual too large: {max_residual}"
-            );
+            assert!(max_residual < 1e-6, "residual too large: {max_residual}");
         }
     }
 }
