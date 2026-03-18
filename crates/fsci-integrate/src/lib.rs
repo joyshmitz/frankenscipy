@@ -14,8 +14,8 @@ pub use bdf::{BdfSolver, BdfSolverConfig};
 pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
 pub use quad::{
     CompositeQuadResult, DblquadOptions, DblquadResult, QuadOptions, QuadResult,
-    cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, quad, simpson, simpson_uniform,
-    trapezoid, trapezoid_uniform,
+    cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, quad, romb,
+    romb_func, simpson, simpson_uniform, tplquad, trapezoid, trapezoid_uniform,
 };
 pub use rk::{
     ButcherTableau, DOP853_TABLEAU, RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig,

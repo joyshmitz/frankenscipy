@@ -1132,6 +1132,15 @@ fn evidence_entry_eq() {
 // §7  SolverPortfolio (40 tests)
 // ═══════════════════════════════════════════════════════════════════
 
+fn state_to_rcond(state: &MatrixConditionState) -> f64 {
+    match state {
+        MatrixConditionState::WellConditioned => 1e-2,
+        MatrixConditionState::ModerateCondition => 1e-6,
+        MatrixConditionState::IllConditioned => 1e-11,
+        MatrixConditionState::NearSingular => 1e-16,
+    }
+}
+
 #[test]
 fn portfolio_new_strict() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
@@ -1148,77 +1157,77 @@ fn portfolio_new_hardened() {
 #[test]
 fn portfolio_lu_for_well_conditioned() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (a, _, _, _) = p.select_action(&MatrixConditionState::WellConditioned);
+    let (a, _, _, _) = p.select_action(1e-2, None);
     assert_eq!(a, SolverAction::DirectLU);
 }
 
 #[test]
 fn portfolio_qr_for_moderate() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (a, _, _, _) = p.select_action(&MatrixConditionState::ModerateCondition);
+    let (a, _, _, _) = p.select_action(1e-6, None);
     assert_eq!(a, SolverAction::PivotedQR);
 }
 
 #[test]
 fn portfolio_svd_for_ill() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (a, _, _, _) = p.select_action(&MatrixConditionState::IllConditioned);
+    let (a, _, _, _) = p.select_action(1e-11, None);
     assert_eq!(a, SolverAction::SVDFallback);
 }
 
 #[test]
 fn portfolio_svd_for_near_singular() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (a, _, _, _) = p.select_action(&MatrixConditionState::NearSingular);
+    let (a, _, _, _) = p.select_action(1e-16, None);
     assert_eq!(a, SolverAction::SVDFallback);
 }
 
 #[test]
 fn portfolio_hardened_lu_for_well() {
     let p = SolverPortfolio::new(RuntimeMode::Hardened, 64);
-    let (a, _, _, _) = p.select_action(&MatrixConditionState::WellConditioned);
+    let (a, _, _, _) = p.select_action(1e-2, None);
     assert_eq!(a, SolverAction::DirectLU);
 }
 
 #[test]
 fn portfolio_hardened_qr_for_moderate() {
     let p = SolverPortfolio::new(RuntimeMode::Hardened, 64);
-    let (a, _, _, _) = p.select_action(&MatrixConditionState::ModerateCondition);
+    let (a, _, _, _) = p.select_action(1e-6, None);
     assert_eq!(a, SolverAction::PivotedQR);
 }
 
 #[test]
 fn portfolio_posterior_well_conditioned() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (_, posterior, _, _) = p.select_action(&MatrixConditionState::WellConditioned);
+    let (_, posterior, _, _) = p.select_action(1e-2, None);
     assert_eq!(posterior, [1.0, 0.0, 0.0, 0.0]);
 }
 
 #[test]
 fn portfolio_posterior_moderate() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (_, posterior, _, _) = p.select_action(&MatrixConditionState::ModerateCondition);
+    let (_, posterior, _, _) = p.select_action(1e-6, None);
     assert_eq!(posterior, [0.0, 1.0, 0.0, 0.0]);
 }
 
 #[test]
 fn portfolio_posterior_ill() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (_, posterior, _, _) = p.select_action(&MatrixConditionState::IllConditioned);
+    let (_, posterior, _, _) = p.select_action(1e-11, None);
     assert_eq!(posterior, [0.0, 0.0, 1.0, 0.0]);
 }
 
 #[test]
 fn portfolio_posterior_near_singular() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (_, posterior, _, _) = p.select_action(&MatrixConditionState::NearSingular);
+    let (_, posterior, _, _) = p.select_action(1e-16, None);
     assert_eq!(posterior, [0.0, 0.0, 0.0, 1.0]);
 }
 
 #[test]
 fn portfolio_expected_losses_well() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (_, _, losses, _) = p.select_action(&MatrixConditionState::WellConditioned);
+    let (_, _, losses, _) = p.select_action(1e-2, None);
     // WellConditioned: posterior=[1,0,0,0], losses = first column of matrix
     assert_close(losses[0], 1.0, 1e-12, 0.0);
     assert_close(losses[1], 3.0, 1e-12, 0.0);
@@ -1229,7 +1238,7 @@ fn portfolio_expected_losses_well() {
 fn portfolio_chosen_loss_is_minimum() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
     for state in &MatrixConditionState::ALL {
-        let (action, _, losses, chosen_loss) = p.select_action(state);
+        let (action, _, losses, chosen_loss) = p.select_action(state_to_rcond(state), None);
         // chosen_loss should be losses[action.index()] for general solvers
         let idx = action.index();
         assert_close(chosen_loss, losses[idx], 1e-12, 0.0);
@@ -1341,7 +1350,7 @@ fn portfolio_calibrator_fallback_overrides() {
         p.observe_backward_error(1.0);
     }
     // Should now fallback
-    let (action, _, _, _) = p.select_action(&MatrixConditionState::WellConditioned);
+    let (action, _, _, _) = p.select_action(1e-2, None);
     assert_eq!(action, SolverAction::SVDFallback);
 }
 
@@ -1350,8 +1359,8 @@ fn portfolio_deterministic_selection() {
     let p1 = SolverPortfolio::new(RuntimeMode::Strict, 64);
     let p2 = SolverPortfolio::new(RuntimeMode::Strict, 64);
     for state in &MatrixConditionState::ALL {
-        let (a1, _, _, _) = p1.select_action(state);
-        let (a2, _, _, _) = p2.select_action(state);
+        let (a1, _, _, _) = p1.select_action(state_to_rcond(state), None);
+        let (a2, _, _, _) = p2.select_action(state_to_rcond(state), None);
         assert_eq!(a1, a2);
     }
 }
@@ -1360,8 +1369,8 @@ fn portfolio_deterministic_selection() {
 fn portfolio_clone() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
     let p2 = p.clone();
-    let (a1, _, _, _) = p.select_action(&MatrixConditionState::WellConditioned);
-    let (a2, _, _, _) = p2.select_action(&MatrixConditionState::WellConditioned);
+    let (a1, _, _, _) = p.select_action(1e-2, None);
+    let (a2, _, _, _) = p2.select_action(1e-2, None);
     assert_eq!(a1, a2);
 }
 
@@ -1868,7 +1877,7 @@ fn adv_portfolio_oscillation() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
     for i in 0..100 {
         let state = &MatrixConditionState::ALL[i % 4];
-        let (action, _, _, _) = p.select_action(state);
+        let (action, _, _, _) = p.select_action(state_to_rcond(state), None);
         match state {
             MatrixConditionState::WellConditioned => assert_eq!(action, SolverAction::DirectLU),
             MatrixConditionState::ModerateCondition => assert_eq!(action, SolverAction::PivotedQR),
@@ -2200,7 +2209,7 @@ fn golden_logit_incompatible_at_meta1() {
 #[test]
 fn golden_portfolio_well_cond_losses() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (_, _, losses, _) = p.select_action(&MatrixConditionState::WellConditioned);
+    let (_, _, losses, _) = p.select_action(1e-2, None);
     // posterior=[1,0,0,0], losses = column 0 of loss matrix
     assert_close(losses[0], 1.0, 1e-12, 0.0); // DirectLU
     assert_close(losses[1], 3.0, 1e-12, 0.0); // PivotedQR
@@ -2212,7 +2221,7 @@ fn golden_portfolio_well_cond_losses() {
 #[test]
 fn golden_portfolio_moderate_losses() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (_, _, losses, _) = p.select_action(&MatrixConditionState::ModerateCondition);
+    let (_, _, losses, _) = p.select_action(1e-6, None);
     assert_close(losses[0], 5.0, 1e-12, 0.0);
     assert_close(losses[1], 1.0, 1e-12, 0.0);
     assert_close(losses[2], 10.0, 1e-12, 0.0);
@@ -2221,7 +2230,7 @@ fn golden_portfolio_moderate_losses() {
 #[test]
 fn golden_portfolio_ill_losses() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (_, _, losses, _) = p.select_action(&MatrixConditionState::IllConditioned);
+    let (_, _, losses, _) = p.select_action(1e-11, None);
     assert_close(losses[0], 40.0, 1e-12, 0.0);
     assert_close(losses[1], 8.0, 1e-12, 0.0);
     assert_close(losses[2], 1.0, 1e-12, 0.0);
@@ -2230,7 +2239,7 @@ fn golden_portfolio_ill_losses() {
 #[test]
 fn golden_portfolio_near_singular_losses() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (_, _, losses, _) = p.select_action(&MatrixConditionState::NearSingular);
+    let (_, _, losses, _) = p.select_action(1e-16, None);
     assert_close(losses[0], 120.0, 1e-12, 0.0);
     assert_close(losses[1], 45.0, 1e-12, 0.0);
     assert_close(losses[2], 1.0, 1e-12, 0.0);
@@ -2342,7 +2351,7 @@ proptest! {
     ) {
         let state = MatrixConditionState::ALL[state_idx];
         let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
-        let (action, _, _, _) = p.select_action(&state);
+        let (action, _, _, _) = p.select_action(state_to_rcond(&state), None);
         prop_assert!(action.index() < 5);
     }
 

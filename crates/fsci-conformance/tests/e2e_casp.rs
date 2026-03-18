@@ -116,6 +116,15 @@ fn make_step(
     }
 }
 
+fn state_to_rcond(state: &MatrixConditionState) -> f64 {
+    match state {
+        MatrixConditionState::WellConditioned => 1e-2,
+        MatrixConditionState::ModerateCondition => 1e-6,
+        MatrixConditionState::IllConditioned => 1e-12,
+        MatrixConditionState::NearSingular => 1e-18,
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // HAPPY-PATH SCENARIOS (1-4)
 // ═══════════════════════════════════════════════════════════════════
@@ -317,7 +326,7 @@ fn e2e_003_solver_portfolio_selection() {
 
     for (i, state) in MatrixConditionState::ALL.iter().enumerate() {
         let t = Instant::now();
-        let (action, posterior, _expected_losses, chosen_loss) = portfolio.select_action(state);
+        let (action, posterior, _expected_losses, chosen_loss) = portfolio.select_action(state_to_rcond(state), None);
         let posterior_sum: f64 = posterior.iter().sum();
         let pass = (posterior_sum - 1.0).abs() < 1e-9;
         if !pass {
@@ -338,8 +347,8 @@ fn e2e_003_solver_portfolio_selection() {
 
     // Verify expected selections
     let t = Instant::now();
-    let (well_action, _, _, _) = portfolio.select_action(&MatrixConditionState::WellConditioned);
-    let (ill_action, _, _, _) = portfolio.select_action(&MatrixConditionState::IllConditioned);
+    let (well_action, _, _, _) = portfolio.select_action(1e-2, None);
+    let (ill_action, _, _, _) = portfolio.select_action(1e-12, None);
     let pass = matches!(well_action, SolverAction::DirectLU)
         && matches!(ill_action, SolverAction::SVDFallback);
     if !pass {

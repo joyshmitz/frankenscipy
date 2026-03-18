@@ -16,12 +16,21 @@ fn bench_policy_decide(c: &mut Criterion) {
     });
 }
 
+fn state_to_rcond(state: &MatrixConditionState) -> f64 {
+    match state {
+        MatrixConditionState::WellConditioned => 1e-2,
+        MatrixConditionState::ModerateCondition => 1e-6,
+        MatrixConditionState::IllConditioned => 1e-12,
+        MatrixConditionState::NearSingular => 1e-18,
+    }
+}
+
 fn bench_solver_select_action(c: &mut Criterion) {
     let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
     for state in &MatrixConditionState::ALL {
         let name = format!("solver_select_{state:?}");
         c.bench_function(&name, |b| {
-            b.iter(|| portfolio.select_action(state));
+            b.iter(|| portfolio.select_action(state_to_rcond(state), None));
         });
     }
 }

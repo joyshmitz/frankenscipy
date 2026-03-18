@@ -84,6 +84,15 @@ proptest! {
 // Property: CASP solver selection is consistent across repeated calls.
 // ═══════════════════════════════════════════════════════════════════
 
+fn state_to_rcond(state: &MatrixConditionState) -> f64 {
+    match state {
+        MatrixConditionState::WellConditioned => 1e-2,
+        MatrixConditionState::ModerateCondition => 1e-6,
+        MatrixConditionState::IllConditioned => 1e-12,
+        MatrixConditionState::NearSingular => 1e-18,
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(128))]
 
@@ -94,8 +103,8 @@ proptest! {
         let state = MatrixConditionState::ALL[state_idx];
         let p1 = SolverPortfolio::new(RuntimeMode::Strict, 64);
         let p2 = SolverPortfolio::new(RuntimeMode::Strict, 64);
-        let (a1, _, _, _) = p1.select_action(&state);
-        let (a2, _, _, _) = p2.select_action(&state);
+        let (a1, _, _, _) = p1.select_action(state_to_rcond(&state), None);
+        let (a2, _, _, _) = p2.select_action(state_to_rcond(&state), None);
         prop_assert_eq!(a1, a2, "same condition must select same solver");
     }
 }

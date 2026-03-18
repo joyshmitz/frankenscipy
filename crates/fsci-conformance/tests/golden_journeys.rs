@@ -21,7 +21,7 @@ use fsci_linalg::{
 };
 use fsci_opt::{MinimizeOptions, OptimizeMethod, RootOptions, bfgs, bisect, brentq, cg_pr_plus};
 use fsci_runtime::{
-    DecisionSignals, MatrixConditionState, PolicyAction, PolicyController, RuntimeMode,
+    DecisionSignals, PolicyAction, PolicyController, RuntimeMode,
     SolverPortfolio,
 };
 use fsci_sparse::{FormatConvertible, Shape2D, eye, random, scale_csr, spmv_csr};
@@ -381,7 +381,7 @@ fn journey_07_casp_pipeline() {
 
     // Portfolio selection
     let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::WellConditioned);
+    let (action, _, _, _) = portfolio.select_action(1e-2, None);
     assert!(matches!(action, fsci_runtime::SolverAction::DirectLU));
 
     write_journey(&JourneyResult {

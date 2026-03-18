@@ -92,6 +92,15 @@ struct EvidenceBundle {
     sidecar: Option<RaptorQSidecar>,
 }
 
+fn state_to_rcond(state: &MatrixConditionState) -> f64 {
+    match state {
+        MatrixConditionState::WellConditioned => 1e-2,
+        MatrixConditionState::ModerateCondition => 1e-6,
+        MatrixConditionState::IllConditioned => 1e-12,
+        MatrixConditionState::NearSingular => 1e-18,
+    }
+}
+
 // ── Policy decision parity checks ──────────────────────────────────────────────
 
 /// Verify that low-risk signals produce Allow action in both modes.
@@ -247,7 +256,7 @@ fn check_mode_consistency() -> ParityGate {
 fn check_portfolio_well_conditioned() -> ParityGate {
     let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
     let (action, posterior, losses, chosen_loss) =
-        portfolio.select_action(&MatrixConditionState::WellConditioned);
+        portfolio.select_action(1e-2, None);
 
     let pass = action == SolverAction::DirectLU
         && posterior[0] == 1.0
@@ -265,7 +274,7 @@ fn check_portfolio_well_conditioned() -> ParityGate {
 /// Verify that moderate-condition state selects PivotedQR.
 fn check_portfolio_moderate() -> ParityGate {
     let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (action, _, losses, _) = portfolio.select_action(&MatrixConditionState::ModerateCondition);
+    let (action, _, losses, _) = portfolio.select_action(1e-6, None);
 
     let pass = action == SolverAction::PivotedQR;
 
@@ -281,8 +290,8 @@ fn check_portfolio_moderate() -> ParityGate {
 /// Verify that ill-conditioned and near-singular states select SVDFallback.
 fn check_portfolio_ill_conditioned() -> ParityGate {
     let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (action_ill, _, _, _) = portfolio.select_action(&MatrixConditionState::IllConditioned);
-    let (action_near, _, _, _) = portfolio.select_action(&MatrixConditionState::NearSingular);
+    let (action_ill, _, _, _) = portfolio.select_action(1e-12, None);
+    let (action_near, _, _, _) = portfolio.select_action(1e-18, None);
 
     let pass = action_ill == SolverAction::SVDFallback && action_near == SolverAction::SVDFallback;
 
@@ -302,7 +311,7 @@ fn check_portfolio_all_states_valid() -> ParityGate {
     let mut detail = String::new();
 
     for state in &MatrixConditionState::ALL {
-        let (action, posterior, losses, chosen) = portfolio.select_action(state);
+        let (action, posterior, losses, chosen) = portfolio.select_action(state_to_rcond(state), None);
         let finite_losses = losses.iter().all(|l| l.is_finite());
         let finite_posterior = posterior.iter().all(|p| p.is_finite());
         let posterior_sums_to_one = (posterior.iter().sum::<f64>() - 1.0).abs() < 1e-10;
@@ -477,7 +486,7 @@ fn check_portfolio_conformal_override() -> ParityGate {
 
     // Even for WellConditioned (which normally selects DirectLU),
     // the conformal override should force SVDFallback
-    let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::WellConditioned);
+    let (action, _, _, _) = portfolio.select_action(1e-2, None);
 
     let pass = action == SolverAction::SVDFallback;
 
@@ -577,7 +586,7 @@ fn check_evidence_jsonl_serialization() -> ParityGate {
     let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
 
     for state in &MatrixConditionState::ALL {
-        let (action, posterior, losses, chosen_loss) = portfolio.select_action(state);
+        let (action, posterior, losses, chosen_loss) = portfolio.select_action(state_to_rcond(state), None);
         portfolio.record_evidence(fsci_runtime::SolverEvidenceEntry {
             component: "fsci_linalg",
             matrix_shape: (32, 32),

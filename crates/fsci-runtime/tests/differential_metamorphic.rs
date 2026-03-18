@@ -331,6 +331,15 @@ fn meta_monotone_condition_number() {
     );
 }
 
+fn state_to_rcond(state: &MatrixConditionState) -> f64 {
+    match state {
+        MatrixConditionState::WellConditioned => 1e-2,
+        MatrixConditionState::ModerateCondition => 1e-6,
+        MatrixConditionState::IllConditioned => 1e-12,
+        MatrixConditionState::NearSingular => 1e-18,
+    }
+}
+
 // M7: Solver portfolio selection stability under condition state.
 // For each condition state, the selected action should be stable across
 // multiple calls (no nondeterminism).
@@ -338,8 +347,8 @@ fn meta_monotone_condition_number() {
 fn meta_solver_selection_stability() {
     let p = SolverPortfolio::new(RuntimeMode::Strict, 64);
     for state in &MatrixConditionState::ALL {
-        let (a1, _, _, _) = p.select_action(state);
-        let (a2, _, _, _) = p.select_action(state);
+        let (a1, _, _, _) = p.select_action(state_to_rcond(state), None);
+        let (a2, _, _, _) = p.select_action(state_to_rcond(state), None);
         assert_eq!(
             a1, a2,
             "solver selection must be deterministic for {state:?}"
@@ -537,7 +546,7 @@ fn adv_calibrator_flood_and_recovery() {
         portfolio.observe_backward_error(1.0);
     }
     // With fallback active, solver should return SVDFallback
-    let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::WellConditioned);
+    let (action, _, _, _) = portfolio.select_action(1e-2, None);
     assert_eq!(action, SolverAction::SVDFallback);
     log_adversarial(
         "adv_calibrator_flood_and_recovery",

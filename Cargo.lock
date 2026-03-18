@@ -631,6 +631,7 @@ dependencies = [
  "criterion",
  "fsci-runtime",
  "proptest",
+ "rand",
  "serde",
  "serde_json",
 ]

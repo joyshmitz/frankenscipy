@@ -2063,7 +2063,13 @@ fn execute_casp_case(case: &CaspCase) -> CaspObserved {
                 }
             };
             let portfolio = fsci_runtime::SolverPortfolio::new(case.mode, 64);
-            let (action, _posterior, _losses, _loss) = portfolio.select_action(&state);
+            let rcond = match state {
+                fsci_runtime::MatrixConditionState::WellConditioned => 1e-2,
+                fsci_runtime::MatrixConditionState::ModerateCondition => 1e-6,
+                fsci_runtime::MatrixConditionState::IllConditioned => 1e-12,
+                fsci_runtime::MatrixConditionState::NearSingular => 1e-18,
+            };
+            let (action, _posterior, _losses, _loss) = portfolio.select_action(rcond, None);
             CaspObserved::SolverAction(solver_action_name(&action).to_owned())
         }
         CaspTestKind::CalibratorDrift => {

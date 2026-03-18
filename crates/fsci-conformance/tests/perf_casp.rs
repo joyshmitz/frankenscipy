@@ -101,6 +101,15 @@ fn chrono_lite_now() -> String {
     format!("unix:{secs}")
 }
 
+fn state_to_rcond(state: &MatrixConditionState) -> f64 {
+    match state {
+        MatrixConditionState::WellConditioned => 1e-2,
+        MatrixConditionState::ModerateCondition => 1e-6,
+        MatrixConditionState::IllConditioned => 1e-12,
+        MatrixConditionState::NearSingular => 1e-18,
+    }
+}
+
 // ── Main test ──────────────────────────────────────────────────────────
 
 #[test]
@@ -173,8 +182,9 @@ fn perf_p2c008_casp_profile() {
 
     for state in &MatrixConditionState::ALL {
         let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
+        let rcond = state_to_rcond(state);
         let timings = time_operation(|| {
-            let _ = portfolio.select_action(state);
+            let _ = portfolio.select_action(rcond, None);
         });
         let (median, p95, min_v, max_v, mean) = compute_stats(&timings);
         benchmarks.push(OperationBenchmark {
@@ -341,7 +351,7 @@ fn perf_p2c008_casp_profile() {
     // SolverPortfolio well-conditioned → DirectLU
     {
         let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-        let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::WellConditioned);
+        let (action, _, _, _) = portfolio.select_action(1e-2, None);
         let pass = matches!(action, SolverAction::DirectLU);
         iso_details.push(IsomorphismDetail {
             operation: "well_conditioned_directlu".into(),
@@ -353,7 +363,7 @@ fn perf_p2c008_casp_profile() {
     // IllConditioned → SVDFallback
     {
         let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-        let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::IllConditioned);
+        let (action, _, _, _) = portfolio.select_action(1e-12, None);
         let pass = matches!(action, SolverAction::SVDFallback);
         iso_details.push(IsomorphismDetail {
             operation: "ill_conditioned_svd".into(),
