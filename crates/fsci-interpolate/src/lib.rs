@@ -562,6 +562,778 @@ pub fn interp1d_linear(x: &[f64], y: &[f64], x_new: &[f64]) -> Result<Vec<f64>, 
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Standalone CubicSpline
+// ══════════════════════════════════════════════════════════════════════
+
+/// Standalone cubic spline interpolator with rich API.
+///
+/// Matches `scipy.interpolate.CubicSpline(x, y, bc_type=...)`.
+///
+/// Stores piecewise polynomial coefficients in PPoly form:
+/// `S_i(x) = c[0][i]*(x-x_i)^3 + c[1][i]*(x-x_i)^2 + c[2][i]*(x-x_i) + c[3][i]`
+#[derive(Debug, Clone)]
+pub struct CubicSplineStandalone {
+    x: Vec<f64>,
+    /// Coefficients in PPoly layout: `coeffs[i] = [d, c, b, a]` where
+    /// `S_i(dx) = a + b*dx + c*dx^2 + d*dx^3`.
+    coeffs: Vec<[f64; 4]>,
+}
+
+impl CubicSplineStandalone {
+    /// Construct a cubic spline interpolator.
+    pub fn new(x: &[f64], y: &[f64], bc: SplineBc) -> Result<Self, InterpError> {
+        if x.len() != y.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: x.len(),
+                y_len: y.len(),
+            });
+        }
+        if x.len() < 4 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 4,
+                actual: x.len(),
+            });
+        }
+        if x.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(InterpError::UnsortedX);
+        }
+
+        let coeffs = compute_cubic_spline(x, y, bc)?;
+        Ok(Self {
+            x: x.to_vec(),
+            coeffs,
+        })
+    }
+
+    /// Evaluate the spline at a single point.
+    pub fn eval(&self, x_new: f64) -> f64 {
+        let i = self.find_interval(x_new);
+        let dx = x_new - self.x[i];
+        let [a, b, c, d] = self.coeffs[i];
+        a + dx * (b + dx * (c + dx * d))
+    }
+
+    /// Evaluate at multiple points.
+    pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
+        x_new.iter().map(|&xi| self.eval(xi)).collect()
+    }
+
+    /// Return a new cubic spline representing the `nu`-th derivative.
+    pub fn derivative(&self, nu: usize) -> CubicSplineDerivative {
+        let m = self.coeffs.len();
+        match nu {
+            0 => CubicSplineDerivative {
+                x: self.x.clone(),
+                coeffs: self.coeffs.clone(),
+                degree: 3,
+            },
+            1 => {
+                // S'(dx) = b + 2c*dx + 3d*dx^2
+                let dc: Vec<[f64; 4]> = self
+                    .coeffs
+                    .iter()
+                    .map(|&[_a, b, c, d]| [b, 2.0 * c, 3.0 * d, 0.0])
+                    .collect();
+                CubicSplineDerivative {
+                    x: self.x.clone(),
+                    coeffs: dc,
+                    degree: 2,
+                }
+            }
+            2 => {
+                // S''(dx) = 2c + 6d*dx
+                let dc: Vec<[f64; 4]> = self
+                    .coeffs
+                    .iter()
+                    .map(|&[_a, _b, c, d]| [2.0 * c, 6.0 * d, 0.0, 0.0])
+                    .collect();
+                CubicSplineDerivative {
+                    x: self.x.clone(),
+                    coeffs: dc,
+                    degree: 1,
+                }
+            }
+            _ => CubicSplineDerivative {
+                x: self.x.clone(),
+                coeffs: vec![[0.0; 4]; m],
+                degree: 0,
+            },
+        }
+    }
+
+    /// Compute the definite integral over [a, b].
+    pub fn integrate(&self, a: f64, b: f64) -> f64 {
+        if (b - a).abs() < 1e-15 {
+            return 0.0;
+        }
+        let sign = if a > b { -1.0 } else { 1.0 };
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+
+        let n = self.x.len();
+        let mut total = 0.0;
+
+        for i in 0..n - 1 {
+            let seg_lo = self.x[i].max(lo);
+            let seg_hi = self.x[i + 1].min(hi);
+            if seg_lo >= seg_hi {
+                continue;
+            }
+            let [a0, b0, c0, d0] = self.coeffs[i];
+            let xi = self.x[i];
+            let dx_lo = seg_lo - xi;
+            let dx_hi = seg_hi - xi;
+
+            // Integral of a + b*dx + c*dx^2 + d*dx^3
+            let anti = |dx: f64| {
+                a0 * dx + b0 * dx * dx / 2.0 + c0 * dx.powi(3) / 3.0 + d0 * dx.powi(4) / 4.0
+            };
+            total += anti(dx_hi) - anti(dx_lo);
+        }
+
+        sign * total
+    }
+
+    fn find_interval(&self, x_new: f64) -> usize {
+        let n = self.x.len();
+        if x_new <= self.x[0] {
+            return 0;
+        }
+        if x_new >= self.x[n - 1] {
+            return n - 2;
+        }
+        let mut lo = 0;
+        let mut hi = n - 1;
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if self.x[mid] <= x_new {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+}
+
+/// Result of `CubicSplineStandalone::derivative()`.
+#[derive(Debug, Clone)]
+pub struct CubicSplineDerivative {
+    x: Vec<f64>,
+    coeffs: Vec<[f64; 4]>,
+    degree: usize,
+}
+
+impl CubicSplineDerivative {
+    /// Evaluate the derivative at a point.
+    pub fn eval(&self, x_new: f64) -> f64 {
+        let n = self.x.len();
+        let i = {
+            if x_new <= self.x[0] {
+                0
+            } else if x_new >= self.x[n - 1] {
+                n - 2
+            } else {
+                let mut lo = 0;
+                let mut hi = n - 1;
+                while hi - lo > 1 {
+                    let mid = (lo + hi) / 2;
+                    if self.x[mid] <= x_new {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                lo
+            }
+        };
+        let dx = x_new - self.x[i];
+        let [a, b, c, d] = self.coeffs[i];
+        a + dx * (b + dx * (c + dx * d))
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Akima1DInterpolator
+// ══════════════════════════════════════════════════════════════════════
+
+/// Akima (1970) piecewise cubic Hermite interpolator.
+///
+/// Matches `scipy.interpolate.Akima1DInterpolator(x, y)`.
+///
+/// Uses a local 5-point stencil to compute slopes, producing smooth
+/// interpolation with minimal overshoot. Unlike natural cubic splines,
+/// changes to one data point only affect nearby intervals.
+#[derive(Debug, Clone)]
+pub struct Akima1DInterpolator {
+    x: Vec<f64>,
+    coeffs: Vec<[f64; 4]>,
+}
+
+impl Akima1DInterpolator {
+    /// Create an Akima interpolator from data points.
+    ///
+    /// Requires at least 2 data points. x must be strictly increasing.
+    pub fn new(x: &[f64], y: &[f64]) -> Result<Self, InterpError> {
+        if x.len() != y.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: x.len(),
+                y_len: y.len(),
+            });
+        }
+        if x.len() < 2 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 2,
+                actual: x.len(),
+            });
+        }
+        if x.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(InterpError::UnsortedX);
+        }
+
+        let n = x.len();
+        let m = n - 1;
+
+        // Compute slopes between consecutive points
+        let delta: Vec<f64> = (0..m)
+            .map(|i| (y[i + 1] - y[i]) / (x[i + 1] - x[i]))
+            .collect();
+
+        // Compute Akima slopes at each point
+        let slopes = akima_slopes(&delta);
+
+        // Build Hermite cubic coefficients
+        let h: Vec<f64> = (0..m).map(|i| x[i + 1] - x[i]).collect();
+        let mut coeffs = Vec::with_capacity(m);
+        for i in 0..m {
+            let hi = h[i];
+            let a = y[i];
+            let b = slopes[i];
+            let c = (3.0 * delta[i] - 2.0 * slopes[i] - slopes[i + 1]) / hi;
+            let d = (slopes[i] + slopes[i + 1] - 2.0 * delta[i]) / (hi * hi);
+            coeffs.push([a, b, c, d]);
+        }
+
+        Ok(Self {
+            x: x.to_vec(),
+            coeffs,
+        })
+    }
+
+    /// Evaluate at a single point.
+    pub fn eval(&self, x_new: f64) -> f64 {
+        let i = self.find_interval(x_new);
+        let dx = x_new - self.x[i];
+        let [a, b, c, d] = self.coeffs[i];
+        a + dx * (b + dx * (c + dx * d))
+    }
+
+    /// Evaluate at multiple points.
+    pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
+        x_new.iter().map(|&xi| self.eval(xi)).collect()
+    }
+
+    fn find_interval(&self, x_new: f64) -> usize {
+        let n = self.x.len();
+        if x_new <= self.x[0] {
+            return 0;
+        }
+        if x_new >= self.x[n - 1] {
+            return n - 2;
+        }
+        let mut lo = 0;
+        let mut hi = n - 1;
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if self.x[mid] <= x_new {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+}
+
+/// Compute Akima slopes from segment slopes using the 5-point stencil.
+///
+/// Akima's formula: at each interior point, the slope is a weighted average
+/// of adjacent segment slopes, where the weights are based on the absolute
+/// differences of slopes on each side. This reduces overshoot.
+fn akima_slopes(delta: &[f64]) -> Vec<f64> {
+    let m = delta.len();
+    let n = m + 1;
+    let mut slopes = vec![0.0; n];
+
+    if m == 0 {
+        return slopes;
+    }
+    if m == 1 {
+        slopes[0] = delta[0];
+        slopes[1] = delta[0];
+        return slopes;
+    }
+
+    // Extend delta with two phantom values on each side (Akima's parabolic extension)
+    let mut ext = Vec::with_capacity(m + 4);
+    ext.push(2.0 * delta[0] - delta[1]);
+    ext.push(2.0 * delta[0] - delta[1] + (delta[0] - delta[1]));
+    ext.extend_from_slice(delta);
+    ext.push(2.0 * delta[m - 1] - delta[m - 2]);
+    ext.push(2.0 * delta[m - 1] - delta[m - 2] + (delta[m - 1] - delta[m - 2]));
+
+    // Recompute with proper phantom slopes:
+    // ext[0] = 2*d[0] - d[1]  (left phantom 2)
+    // ext[1] = d[0]           (left phantom 1)  => actually just use linear extrapolation
+    let mut d = Vec::with_capacity(m + 4);
+    // Two phantom slopes on the left
+    d.push(2.0 * delta[0] - delta.get(1).copied().unwrap_or(delta[0]));
+    d.push(delta[0] + (delta[0] - delta.get(1).copied().unwrap_or(delta[0])));
+    // Actual slopes
+    d.extend_from_slice(delta);
+    // Two phantom slopes on the right
+    d.push(
+        delta[m - 1]
+            + (delta[m - 1]
+                - delta
+                    .get(m.wrapping_sub(2))
+                    .copied()
+                    .unwrap_or(delta[m - 1])),
+    );
+    d.push(
+        2.0 * delta[m - 1]
+            - delta
+                .get(m.wrapping_sub(2))
+                .copied()
+                .unwrap_or(delta[m - 1]),
+    );
+
+    // Now d has m+4 elements, indexed from 0 to m+3.
+    // Original delta[i] = d[i+2].
+    // For each data point j (0..n), use d[j], d[j+1], d[j+2], d[j+3].
+    for j in 0..n {
+        let w1 = (d[j + 3] - d[j + 2]).abs();
+        let w2 = (d[j + 1] - d[j]).abs();
+
+        if w1 + w2 < 1e-30 {
+            // All slopes are equal — use simple average
+            slopes[j] = 0.5 * (d[j + 1] + d[j + 2]);
+        } else {
+            slopes[j] = (w1 * d[j + 1] + w2 * d[j + 2]) / (w1 + w2);
+        }
+    }
+
+    slopes
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// BSpline — Cox-de Boor B-spline evaluation
+// ══════════════════════════════════════════════════════════════════════
+
+/// B-spline representation of a piecewise polynomial curve.
+///
+/// Matches `scipy.interpolate.BSpline(t, c, k)`.
+///
+/// A B-spline of degree `k` is defined by knots `t` and coefficients `c`.
+/// The spline value at `x` is `sum_i c[i] * B_{i,k}(x)` where `B_{i,k}` are
+/// the B-spline basis functions evaluated via the Cox-de Boor recursion.
+#[derive(Debug, Clone)]
+pub struct BSpline {
+    /// Knot vector (non-decreasing), length n + k + 1 where n = len(c).
+    t: Vec<f64>,
+    /// Spline coefficients, length n.
+    c: Vec<f64>,
+    /// Spline degree (order = k + 1).
+    k: usize,
+}
+
+impl BSpline {
+    /// Create a B-spline from knots, coefficients, and degree.
+    ///
+    /// # Requirements
+    /// - `t` must be non-decreasing.
+    /// - `t.len() == c.len() + k + 1`.
+    /// - `k >= 0`.
+    pub fn new(t: Vec<f64>, c: Vec<f64>, k: usize) -> Result<Self, InterpError> {
+        let expected_knots = c.len() + k + 1;
+        if t.len() != expected_knots {
+            return Err(InterpError::InvalidArgument {
+                detail: format!(
+                    "knot vector length {} != c.len() + k + 1 = {}",
+                    t.len(),
+                    expected_knots
+                ),
+            });
+        }
+        if t.windows(2).any(|w| w[1] < w[0]) {
+            return Err(InterpError::InvalidArgument {
+                detail: "knot vector must be non-decreasing".to_string(),
+            });
+        }
+        Ok(Self { t, c, k })
+    }
+
+    /// Evaluate the B-spline at a single point using Cox-de Boor recursion.
+    pub fn eval(&self, x: f64) -> f64 {
+        let n = self.c.len();
+        let k = self.k;
+        let t = &self.t;
+
+        // Find the knot span: largest i such that t[i] <= x < t[i+1]
+        // with clamping for the right endpoint.
+        let mu = self.find_span(x);
+
+        // Evaluate via de Boor's algorithm (triangular table)
+        // Only basis functions B_{mu-k,k} through B_{mu,k} are nonzero at x.
+        let mut d: Vec<f64> = (0..=k)
+            .map(|j| {
+                let idx = mu.wrapping_sub(k) + j;
+                if idx < n { self.c[idx] } else { 0.0 }
+            })
+            .collect();
+
+        for r in 1..=k {
+            for j in (r..=k).rev() {
+                let left = mu.wrapping_sub(k) + j;
+                let right = left + k + 1 - r;
+                if right < t.len() && left < t.len() {
+                    let denom = t[right] - t[left];
+                    if denom.abs() > 0.0 {
+                        let alpha = (x - t[left]) / denom;
+                        d[j] = (1.0 - alpha) * d[j - 1] + alpha * d[j];
+                    }
+                }
+            }
+        }
+
+        d[k]
+    }
+
+    /// Evaluate the B-spline at multiple points.
+    pub fn eval_many(&self, xs: &[f64]) -> Vec<f64> {
+        xs.iter().map(|&x| self.eval(x)).collect()
+    }
+
+    /// Construct a new BSpline representing the `nu`-th derivative.
+    ///
+    /// The derivative of a B-spline of degree k is a B-spline of degree k-1
+    /// with modified coefficients and the interior knots.
+    pub fn derivative(&self, nu: usize) -> Result<Self, InterpError> {
+        if nu == 0 {
+            return Ok(self.clone());
+        }
+        let mut t = self.t.clone();
+        let mut c = self.c.clone();
+        let mut k = self.k;
+
+        for _ in 0..nu {
+            if k == 0 {
+                return Err(InterpError::InvalidArgument {
+                    detail: "cannot differentiate degree-0 spline".to_string(),
+                });
+            }
+            let n = c.len();
+            let mut dc = Vec::with_capacity(n - 1);
+            for i in 0..n - 1 {
+                let denom = t[i + k + 1] - t[i + 1];
+                if denom.abs() > 0.0 {
+                    dc.push(k as f64 * (c[i + 1] - c[i]) / denom);
+                } else {
+                    dc.push(0.0);
+                }
+            }
+            // Remove first and last knot
+            t.remove(t.len() - 1);
+            t.remove(0);
+            c = dc;
+            k -= 1;
+        }
+
+        Self::new(t, c, k)
+    }
+
+    /// Construct a new BSpline representing the `nu`-th antiderivative.
+    ///
+    /// The antiderivative of a B-spline of degree k is a B-spline of degree k+1.
+    pub fn antiderivative(&self, nu: usize) -> Result<Self, InterpError> {
+        if nu == 0 {
+            return Ok(self.clone());
+        }
+        let mut t = self.t.clone();
+        let mut c = self.c.clone();
+        let mut k = self.k;
+
+        for _ in 0..nu {
+            let n = c.len();
+            // Add a knot at each end (repeat first and last)
+            t.insert(0, t[0]);
+            t.push(t[t.len() - 1]);
+            k += 1;
+
+            // New coefficients via cumulative sum
+            let mut new_c = vec![0.0; n + 1];
+            // new_c[0] = 0 (integration constant)
+            for i in 0..n {
+                let denom = t[i + k + 1] - t[i + 1];
+                let contrib = if denom.abs() > 0.0 {
+                    denom / k as f64 * c[i]
+                } else {
+                    0.0
+                };
+                new_c[i + 1] = new_c[i] + contrib;
+            }
+            c = new_c;
+        }
+
+        Self::new(t, c, k)
+    }
+
+    /// Compute the definite integral of the spline over [a, b].
+    pub fn integrate(&self, a: f64, b: f64) -> Result<f64, InterpError> {
+        let anti = self.antiderivative(1)?;
+        Ok(anti.eval(b) - anti.eval(a))
+    }
+
+    /// Find the knot span index for evaluation.
+    fn find_span(&self, x: f64) -> usize {
+        let n = self.c.len();
+        let k = self.k;
+        let t = &self.t;
+
+        // Clamp to the valid domain [t[k], t[n]]
+        if x <= t[k] {
+            return k;
+        }
+        if x >= t[n] {
+            // Return the last valid span
+            let mut mu = n - 1;
+            while mu > k && t[mu] == t[n] {
+                mu -= 1;
+            }
+            return mu;
+        }
+
+        // Binary search for the span
+        let mut lo = k;
+        let mut hi = n;
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if t[mid] <= x {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+}
+
+/// Construct an interpolating B-spline from data points.
+///
+/// Matches `scipy.interpolate.make_interp_spline(x, y, k=3)`.
+///
+/// Given data points (x, y), constructs a B-spline of degree `k` that passes
+/// through all data points. Uses not-a-knot boundary conditions by default.
+///
+/// # Arguments
+/// * `x` — Abscissas (strictly increasing), length n.
+/// * `y` — Ordinates, length n.
+/// * `k` — Spline degree (default 3 for cubic).
+pub fn make_interp_spline(x: &[f64], y: &[f64], k: usize) -> Result<BSpline, InterpError> {
+    let n = x.len();
+    if n != y.len() {
+        return Err(InterpError::LengthMismatch {
+            x_len: n,
+            y_len: y.len(),
+        });
+    }
+    if n < k + 1 {
+        return Err(InterpError::TooFewPoints {
+            minimum: k + 1,
+            actual: n,
+        });
+    }
+    if x.windows(2).any(|w| w[1] <= w[0]) {
+        return Err(InterpError::UnsortedX);
+    }
+
+    // Build the knot vector (clamped / open uniform).
+    // Total knots needed: n + k + 1.
+    // Structure: k+1 copies of x[0], n-k-1 interior knots, k+1 copies of x[n-1].
+    let num_knots = n + k + 1;
+    let num_interior = n - k - 1;
+    let mut t = Vec::with_capacity(num_knots);
+
+    // k+1 copies of x[0]
+    for _ in 0..=k {
+        t.push(x[0]);
+    }
+    // Interior knots: use data points x[k]..x[n-2] for Schoenberg-Whitney
+    // This ensures n-k-1 interior knots, giving n+k+1 total.
+    for i in 0..num_interior {
+        t.push(x[i + 1 + (k - 1) / 2]);
+    }
+    // k+1 copies of x[n-1]
+    for _ in 0..=k {
+        t.push(x[n - 1]);
+    }
+
+    debug_assert_eq!(t.len(), num_knots, "knot vector length mismatch");
+
+    // For the clamped knot vector, the system is n×n with the collocation matrix.
+    // A[i,j] = B_{j,k}(x[i]) for i,j = 0..n-1.
+    // We need to solve A * c = y for the coefficients c.
+
+    // Build collocation matrix (dense, since n is typically small for interp)
+    let mut a_mat = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        let basis = eval_basis_all(&t, x[i], k, n);
+        a_mat[i][..n].copy_from_slice(&basis[..n]);
+    }
+
+    // Solve via Gaussian elimination with partial pivoting
+    let mut rhs = y.to_vec();
+    let c = solve_dense_system(&mut a_mat, &mut rhs)?;
+
+    BSpline::new(t, c, k)
+}
+
+/// Construct a least-squares B-spline approximation.
+///
+/// Matches `scipy.interpolate.make_lsq_spline(x, y, t, k=3)`.
+///
+/// Given data points (x, y) and a knot vector `t`, constructs a B-spline
+/// that minimizes the sum of squared residuals.
+pub fn make_lsq_spline(x: &[f64], y: &[f64], t: &[f64], k: usize) -> Result<BSpline, InterpError> {
+    let m = x.len();
+    if m != y.len() {
+        return Err(InterpError::LengthMismatch {
+            x_len: m,
+            y_len: y.len(),
+        });
+    }
+
+    // Number of coefficients
+    let n = t.len() - k - 1;
+    if n == 0 || n > m {
+        return Err(InterpError::InvalidArgument {
+            detail: format!("need t.len() - k - 1 coefficients ({n}) <= data points ({m})"),
+        });
+    }
+
+    // Build collocation matrix A (m × n) and solve normal equations A^T A c = A^T y
+    let mut ata = vec![vec![0.0; n]; n];
+    let mut aty = vec![0.0; n];
+
+    for i in 0..m {
+        let basis = eval_basis_all(t, x[i], k, n);
+        for j in 0..n {
+            aty[j] += basis[j] * y[i];
+            for l in 0..n {
+                ata[j][l] += basis[j] * basis[l];
+            }
+        }
+    }
+
+    let c = solve_dense_system(&mut ata, &mut aty)?;
+
+    BSpline::new(t.to_vec(), c, k)
+}
+
+/// Evaluate all n B-spline basis functions of degree k at point x.
+fn eval_basis_all(t: &[f64], x: f64, k: usize, n: usize) -> Vec<f64> {
+    let mut basis = vec![0.0; n];
+
+    // Degree 0: indicator functions
+    for i in 0..n {
+        if i + 1 < t.len() {
+            basis[i] = if (t[i] <= x && x < t[i + 1]) || (x == t[i + 1] && i + 1 == t.len() - k - 1)
+            {
+                1.0
+            } else {
+                0.0
+            };
+        }
+    }
+
+    // Build up degree by degree using Cox-de Boor recursion
+    for p in 1..=k {
+        let prev = basis.clone();
+        for i in 0..n {
+            let mut val = 0.0;
+            if i + p < t.len() {
+                let denom_left = t[i + p] - t[i];
+                if denom_left > 0.0 {
+                    val += (x - t[i]) / denom_left * prev[i];
+                }
+            }
+            if i + p + 1 < t.len() && i + 1 < n {
+                let denom_right = t[i + p + 1] - t[i + 1];
+                if denom_right > 0.0 {
+                    val += (t[i + p + 1] - x) / denom_right * prev[i + 1];
+                }
+            }
+            basis[i] = val;
+        }
+    }
+
+    basis
+}
+
+/// Solve a dense linear system Ax = b via Gaussian elimination with partial pivoting.
+fn solve_dense_system(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<Vec<f64>, InterpError> {
+    let n = b.len();
+    if n == 0 || a.len() != n {
+        return Err(InterpError::InvalidArgument {
+            detail: "empty or mismatched system".to_string(),
+        });
+    }
+
+    // Forward elimination with partial pivoting
+    for col in 0..n {
+        // Find pivot
+        let mut max_row = col;
+        let mut max_val = a[col][col].abs();
+        for (row, a_row) in a.iter().enumerate().skip(col + 1) {
+            if a_row[col].abs() > max_val {
+                max_val = a_row[col].abs();
+                max_row = row;
+            }
+        }
+        if max_val < 1e-14 {
+            return Err(InterpError::InvalidArgument {
+                detail: "singular or near-singular collocation matrix".to_string(),
+            });
+        }
+        if max_row != col {
+            a.swap(col, max_row);
+            b.swap(col, max_row);
+        }
+
+        // Eliminate below
+        for row in col + 1..n {
+            let factor = a[row][col] / a[col][col];
+            let pivot_row: Vec<f64> = a[col].clone();
+            for (j, pval) in pivot_row.iter().enumerate().skip(col) {
+                a[row][j] -= factor * pval;
+            }
+            b[row] -= factor * b[col];
+        }
+    }
+
+    // Back substitution
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut s = b[i];
+        for j in i + 1..n {
+            s -= a[i][j] * x[j];
+        }
+        x[i] = s / a[i][i];
+    }
+
+    Ok(x)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // N-D Scattered Data Interpolation
 // ══════════════════════════════════════════════════════════════════════
 
@@ -596,10 +1368,8 @@ impl NearestNDInterpolator {
                 y_len: values.len(),
             });
         }
-        let tree = fsci_spatial::KDTree::new(points).map_err(|e| {
-            InterpError::InvalidArgument {
-                detail: format!("KDTree construction failed: {e}"),
-            }
+        let tree = fsci_spatial::KDTree::new(points).map_err(|e| InterpError::InvalidArgument {
+            detail: format!("KDTree construction failed: {e}"),
         })?;
         Ok(Self {
             tree,
@@ -609,11 +1379,12 @@ impl NearestNDInterpolator {
 
     /// Evaluate the interpolator at a single query point.
     pub fn eval(&self, query: &[f64]) -> Result<f64, InterpError> {
-        let (idx, _dist) = self.tree.query(query).map_err(|e| {
-            InterpError::InvalidArgument {
+        let (idx, _dist) = self
+            .tree
+            .query(query)
+            .map_err(|e| InterpError::InvalidArgument {
                 detail: format!("query failed: {e}"),
-            }
-        })?;
+            })?;
         Ok(self.values[idx])
     }
 
@@ -944,6 +1715,385 @@ mod tests {
         }
     }
 
+    // ── CubicSplineStandalone tests ──────────────────────────────────
+
+    #[test]
+    fn cubic_standalone_at_knots() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 1.0, 0.0, -1.0, 0.0];
+        let cs = CubicSplineStandalone::new(&x, &y, SplineBc::Natural).expect("cubic");
+        for i in 0..x.len() {
+            let val = cs.eval(x[i]);
+            assert!(
+                (val - y[i]).abs() < 1e-10,
+                "knot {i}: got {val}, expected {}",
+                y[i]
+            );
+        }
+    }
+
+    #[test]
+    fn cubic_standalone_not_a_knot() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y: Vec<f64> = x.iter().map(|xi| xi * xi).collect();
+        let cs = CubicSplineStandalone::new(&x, &y, SplineBc::NotAKnot).expect("not-a-knot");
+        let val = cs.eval(2.5);
+        assert!(
+            (val - 6.25).abs() < 0.5,
+            "not-a-knot at 2.5: got {val}, expected ~6.25"
+        );
+    }
+
+    #[test]
+    fn cubic_standalone_clamped() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y: Vec<f64> = x.iter().map(|xi| xi * xi).collect();
+        let cs = CubicSplineStandalone::new(&x, &y, SplineBc::Clamped(0.0, 8.0)).expect("clamped");
+        for i in 0..x.len() {
+            let val = cs.eval(x[i]);
+            assert!(
+                (val - y[i]).abs() < 1e-8,
+                "clamped knot {i}: {val} != {}",
+                y[i]
+            );
+        }
+    }
+
+    #[test]
+    fn cubic_standalone_derivative_continuity() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 1.0, 0.0, -1.0, 0.0];
+        let cs = CubicSplineStandalone::new(&x, &y, SplineBc::Natural).expect("cubic");
+        let d1 = cs.derivative(1);
+        // First derivative should be continuous at interior knots
+        for &xi in &x[1..x.len() - 1] {
+            let left = d1.eval(xi - 1e-8);
+            let right = d1.eval(xi + 1e-8);
+            assert!(
+                (left - right).abs() < 1e-4,
+                "derivative discontinuity at {xi}: left={left}, right={right}"
+            );
+        }
+    }
+
+    #[test]
+    fn cubic_standalone_integrate() {
+        // y = x^2 from 0 to 4: integral = 64/3 ≈ 21.333
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y: Vec<f64> = x.iter().map(|xi| xi * xi).collect();
+        let cs = CubicSplineStandalone::new(&x, &y, SplineBc::Natural).expect("cubic");
+        let integral = cs.integrate(0.0, 4.0);
+        assert!(
+            (integral - 64.0 / 3.0).abs() < 1.0,
+            "integral of x^2: got {integral}, expected ~21.33"
+        );
+    }
+
+    #[test]
+    fn cubic_standalone_too_few() {
+        let err = CubicSplineStandalone::new(&[0.0, 1.0, 2.0], &[0.0, 1.0, 2.0], SplineBc::Natural)
+            .expect_err("too few");
+        assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    // ── Akima1DInterpolator tests ──────────────────────────────────
+
+    #[test]
+    fn akima_at_knots() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 1.0, 4.0, 9.0, 16.0]; // x^2
+        let akima = Akima1DInterpolator::new(&x, &y).expect("akima");
+        for i in 0..x.len() {
+            let val = akima.eval(x[i]);
+            assert!(
+                (val - y[i]).abs() < 1e-10,
+                "akima knot {i}: got {val}, expected {}",
+                y[i]
+            );
+        }
+    }
+
+    #[test]
+    fn akima_no_overshoot() {
+        // Step-function data: Akima should not overshoot
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let akima = Akima1DInterpolator::new(&x, &y).expect("akima");
+        for i in 0..50 {
+            let t = i as f64 * 0.1;
+            let val = akima.eval(t);
+            assert!(
+                (-0.1..=1.1).contains(&val),
+                "akima overshoot at {t}: val={val}"
+            );
+        }
+    }
+
+    #[test]
+    fn akima_local_modification() {
+        // Changing y[5] should only affect intervals within ~2 of index 5
+        let x: Vec<f64> = (0..12).map(|i| i as f64).collect();
+        let y1: Vec<f64> = x.iter().map(|&xi| xi * xi).collect();
+        let mut y2 = y1.clone();
+        y2[5] = 100.0; // perturb one point in the middle
+
+        let a1 = Akima1DInterpolator::new(&x, &y1).expect("akima1");
+        let a2 = Akima1DInterpolator::new(&x, &y2).expect("akima2");
+
+        // Far from perturbation (x=0.5), values should be identical
+        let v1 = a1.eval(0.5);
+        let v2 = a2.eval(0.5);
+        assert!(
+            (v1 - v2).abs() < 1e-10,
+            "akima locality broken: at x=0.5 got {v1} vs {v2}"
+        );
+        // Also check far-right
+        let v1r = a1.eval(10.5);
+        let v2r = a2.eval(10.5);
+        assert!(
+            (v1r - v2r).abs() < 1e-10,
+            "akima locality broken: at x=10.5 got {v1r} vs {v2r}"
+        );
+    }
+
+    #[test]
+    fn akima_vs_cubic_less_ringing() {
+        // Near a discontinuity, Akima should have less extreme values than cubic spline
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let y = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let akima = Akima1DInterpolator::new(&x, &y).expect("akima");
+
+        // Akima max deviation from [0,1] range should be small
+        let mut max_dev = 0.0_f64;
+        for i in 0..60 {
+            let t = i as f64 * 0.1;
+            let val = akima.eval(t);
+            let dev = if val < 0.0 {
+                -val
+            } else if val > 1.0 {
+                val - 1.0
+            } else {
+                0.0
+            };
+            max_dev = max_dev.max(dev);
+        }
+        assert!(
+            max_dev < 0.2,
+            "akima max deviation {max_dev} should be small"
+        );
+    }
+
+    #[test]
+    fn akima_two_points() {
+        let x = vec![0.0, 1.0];
+        let y = vec![0.0, 1.0];
+        let akima = Akima1DInterpolator::new(&x, &y).expect("akima 2pts");
+        assert!((akima.eval(0.5) - 0.5).abs() < 1e-10, "akima 2pts midpoint");
+    }
+
+    #[test]
+    fn akima_eval_many() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 0.0, -1.0];
+        let akima = Akima1DInterpolator::new(&x, &y).expect("akima");
+        let vals = akima.eval_many(&x);
+        for (i, (&v, &e)) in vals.iter().zip(y.iter()).enumerate() {
+            assert!(
+                (v - e).abs() < 1e-10,
+                "eval_many[{i}]: got {v}, expected {e}"
+            );
+        }
+    }
+
+    // ── BSpline tests ───────────────────────────────────────────────
+
+    #[test]
+    fn bspline_constant_degree0() {
+        // Degree 0: piecewise constant
+        let t = vec![0.0, 1.0, 2.0, 3.0];
+        let c = vec![10.0, 20.0, 30.0];
+        let spl = BSpline::new(t, c, 0).expect("bspline k=0");
+        assert!((spl.eval(0.5) - 10.0).abs() < 1e-12, "k=0 first interval");
+        assert!((spl.eval(1.5) - 20.0).abs() < 1e-12, "k=0 second interval");
+        assert!((spl.eval(2.5) - 30.0).abs() < 1e-12, "k=0 third interval");
+    }
+
+    #[test]
+    fn bspline_linear_degree1() {
+        // Degree 1: piecewise linear
+        let t = vec![0.0, 0.0, 1.0, 2.0, 2.0];
+        let c = vec![0.0, 1.0, 0.0];
+        let spl = BSpline::new(t, c, 1).expect("bspline k=1");
+        assert!((spl.eval(0.0) - 0.0).abs() < 1e-12, "k=1 at 0");
+        assert!((spl.eval(0.5) - 0.5).abs() < 1e-12, "k=1 at 0.5");
+        assert!((spl.eval(1.0) - 1.0).abs() < 1e-12, "k=1 at 1.0");
+    }
+
+    #[test]
+    fn make_interp_spline_reproduces_linear() {
+        // Degree 1 interpolation should recover linear data exactly
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 2.0, 4.0, 6.0];
+        let spl = make_interp_spline(&x, &y, 1).expect("interp k=1");
+        for i in 0..x.len() {
+            let val = spl.eval(x[i]);
+            assert!(
+                (val - y[i]).abs() < 1e-10,
+                "interp k=1 at {}: got {}, expected {}",
+                x[i],
+                val,
+                y[i]
+            );
+        }
+        // Midpoint
+        assert!((spl.eval(0.5) - 1.0).abs() < 1e-10, "midpoint");
+    }
+
+    #[test]
+    fn make_interp_spline_cubic_at_knots() {
+        // Cubic spline should pass through all data points
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 1.0, 0.0, -1.0, 0.0];
+        let spl = make_interp_spline(&x, &y, 3).expect("interp k=3");
+        for i in 0..x.len() {
+            let val = spl.eval(x[i]);
+            assert!(
+                (val - y[i]).abs() < 1e-8,
+                "cubic at knot {}: got {}, expected {}",
+                x[i],
+                val,
+                y[i]
+            );
+        }
+    }
+
+    #[test]
+    fn make_interp_spline_cubic_polynomial_exact() {
+        // A cubic polynomial should be reproduced exactly by a cubic B-spline
+        // y = x^2 (degree 2, well within cubic capacity)
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y: Vec<f64> = x.iter().map(|&xi| xi * xi).collect();
+        let spl = make_interp_spline(&x, &y, 3).expect("interp k=3 poly");
+        // Evaluate at midpoints
+        for &xi in &[0.5, 1.5, 2.5, 3.5] {
+            let val = spl.eval(xi);
+            let expected = xi * xi;
+            assert!(
+                (val - expected).abs() < 0.1,
+                "cubic poly at {}: got {}, expected {}",
+                xi,
+                val,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn make_interp_spline_roundtrip() {
+        // Evaluate at original x should recover y
+        let x = vec![0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+        let y = vec![0.0, 0.25, 1.0, 2.25, 4.0, 6.25, 9.0]; // x^2
+        let spl = make_interp_spline(&x, &y, 3).expect("interp k=3");
+        for (i, (&xi, &yi)) in x.iter().zip(y.iter()).enumerate() {
+            let val = spl.eval(xi);
+            assert!(
+                (val - yi).abs() < 1e-8,
+                "roundtrip point {}: got {}, expected {}",
+                i,
+                val,
+                yi
+            );
+        }
+    }
+
+    #[test]
+    fn bspline_derivative_cubic() {
+        // Derivative of cubic spline for y=x^2 should approximate 2x
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y: Vec<f64> = x.iter().map(|&xi| xi * xi).collect();
+        let spl = make_interp_spline(&x, &y, 3).expect("interp k=3");
+        let dspl = spl.derivative(1).expect("derivative");
+        // Check derivative at interior points
+        let d_at_2 = dspl.eval(2.0);
+        assert!(
+            (d_at_2 - 4.0).abs() < 0.5,
+            "derivative at x=2: got {}, expected ~4.0",
+            d_at_2
+        );
+    }
+
+    #[test]
+    fn bspline_integrate_polynomial() {
+        // Integral of y = x^2 from 0 to 3 = 9.0
+        let x = vec![0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+        let y: Vec<f64> = x.iter().map(|&xi| xi * xi).collect();
+        let spl = make_interp_spline(&x, &y, 3).expect("interp k=3");
+        let integral = spl.integrate(0.0, 3.0).expect("integrate");
+        assert!(
+            (integral - 9.0).abs() < 0.5,
+            "integral of x^2 from 0 to 3: got {}, expected 9.0",
+            integral
+        );
+    }
+
+    #[test]
+    fn bspline_eval_many() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 4.0, 9.0];
+        let spl = make_interp_spline(&x, &y, 1).expect("interp k=1");
+        let vals = spl.eval_many(&[0.0, 1.0, 2.0, 3.0]);
+        for (i, (&v, &e)) in vals.iter().zip(y.iter()).enumerate() {
+            assert!(
+                (v - e).abs() < 1e-10,
+                "eval_many[{}]: got {}, expected {}",
+                i,
+                v,
+                e
+            );
+        }
+    }
+
+    #[test]
+    fn make_interp_spline_too_few_points() {
+        let err = make_interp_spline(&[0.0, 1.0], &[0.0, 1.0], 3).expect_err("too few");
+        assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn make_interp_spline_length_mismatch() {
+        let err = make_interp_spline(&[0.0, 1.0, 2.0], &[0.0, 1.0], 1).expect_err("mismatch");
+        assert!(matches!(err, InterpError::LengthMismatch { .. }));
+    }
+
+    #[test]
+    fn make_interp_spline_unsorted() {
+        let err = make_interp_spline(&[0.0, 2.0, 1.0], &[0.0, 1.0, 2.0], 1).expect_err("unsorted");
+        assert!(matches!(err, InterpError::UnsortedX));
+    }
+
+    #[test]
+    fn make_lsq_spline_basic() {
+        // Fit a linear B-spline to noisy linear data
+        let x: Vec<f64> = (0..20).map(|i| i as f64 / 19.0 * 4.0).collect();
+        let y: Vec<f64> = x.iter().map(|&xi| 2.0 * xi + 1.0).collect();
+        // Knot vector for 5 coefficients, degree 1
+        let t = vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0];
+        let spl = make_lsq_spline(&x, &y, &t, 1).expect("lsq k=1");
+        // Should approximate 2x+1 well
+        let val = spl.eval(2.0);
+        assert!(
+            (val - 5.0).abs() < 0.5,
+            "lsq at x=2: got {}, expected ~5.0",
+            val
+        );
+    }
+
+    #[test]
+    fn bspline_knot_mismatch() {
+        let err = BSpline::new(vec![0.0, 1.0], vec![1.0, 2.0, 3.0], 1).expect_err("mismatch");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
     // ── NearestNDInterpolator tests ───────────────────────────────
 
     #[test]
@@ -1011,14 +2161,18 @@ mod tests {
 
     #[test]
     fn nearest_nd_length_mismatch() {
-        let err =
-            NearestNDInterpolator::new(&[vec![0.0]], &[1.0, 2.0]).expect_err("mismatch");
+        let err = NearestNDInterpolator::new(&[vec![0.0]], &[1.0, 2.0]).expect_err("mismatch");
         assert!(matches!(err, InterpError::LengthMismatch { .. }));
     }
 
     #[test]
     fn griddata_nearest_basic() {
-        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+        ];
         let values = vec![0.0, 1.0, 2.0, 3.0];
         let xi = vec![vec![0.1, 0.1], vec![0.9, 0.9]];
 

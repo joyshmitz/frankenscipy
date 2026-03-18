@@ -888,11 +888,7 @@ impl DiscreteDistribution for Bernoulli {
     }
 
     fn cdf(&self, k: u64) -> f64 {
-        if k == 0 {
-            1.0 - self.p
-        } else {
-            1.0
-        }
+        if k == 0 { 1.0 - self.p } else { 1.0 }
     }
 
     fn mean(&self) -> f64 {
@@ -1005,10 +1001,7 @@ impl Hypergeometric {
     #[must_use]
     pub fn new(big_m: u64, n: u64, big_n: u64) -> Self {
         assert!(n <= big_m, "n must be <= M, got n={n}, M={big_m}");
-        assert!(
-            big_n <= big_m,
-            "N must be <= M, got N={big_n}, M={big_m}"
-        );
+        assert!(big_n <= big_m, "N must be <= M, got N={big_n}, M={big_m}");
         Self { big_m, n, big_n }
     }
 }
@@ -2084,11 +2077,7 @@ pub fn linregress(x: &[f64], y: &[f64]) -> LinregressResult {
     // Correlation coefficient
     let rvalue = if ssym == 0.0 {
         // All y values identical — perfect fit if slope is 0
-        if slope == 0.0 {
-            1.0
-        } else {
-            0.0
-        }
+        if slope == 0.0 { 1.0 } else { 0.0 }
     } else {
         ssxym / (ssxm * ssym).sqrt()
     };
@@ -2222,7 +2211,12 @@ pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
 fn rankdata(data: &[f64]) -> Vec<f64> {
     let n = data.len();
     // Create (value, original_index) pairs and sort by value
-    let mut indexed: Vec<(f64, usize)> = data.iter().copied().enumerate().map(|(i, v)| (v, i)).collect();
+    let mut indexed: Vec<(f64, usize)> = data
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(i, v)| (v, i))
+        .collect();
     indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut ranks = vec![0.0; n];
@@ -2504,6 +2498,396 @@ fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
     } else {
         sorted[lo] * (1.0 - frac) + sorted[hi] * frac
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Goodness-of-Fit Tests
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of a goodness-of-fit test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GoodnessOfFitResult {
+    /// Test statistic.
+    pub statistic: f64,
+    /// p-value.
+    pub pvalue: f64,
+}
+
+/// Result of the Anderson-Darling test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AndersonResult {
+    /// Test statistic.
+    pub statistic: f64,
+    /// Critical values at significance levels [15%, 10%, 5%, 2.5%, 1%].
+    pub critical_values: [f64; 5],
+    /// Significance levels corresponding to critical values.
+    pub significance_level: [f64; 5],
+}
+
+/// One-sample Kolmogorov-Smirnov test.
+///
+/// Tests H0: data comes from the distribution specified by `cdf_func`.
+/// The CDF function maps x -> P(X <= x) for the reference distribution.
+///
+/// Matches `scipy.stats.ks_1samp(data, cdf_func)`.
+pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitResult {
+    let n = data.len();
+    if n == 0 {
+        return GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+    let nf = n as f64;
+
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // D = max_i { max(|i/n - F(x_i)|, |(i-1)/n - F(x_i)|) }
+    let mut d_stat = 0.0_f64;
+    for (i, &x) in sorted.iter().enumerate() {
+        let f_x = cdf_func(x);
+        let d_plus = ((i + 1) as f64 / nf - f_x).abs();
+        let d_minus = (f_x - i as f64 / nf).abs();
+        d_stat = d_stat.max(d_plus).max(d_minus);
+    }
+
+    let pvalue = kolmogorov_pvalue(d_stat, nf);
+
+    GoodnessOfFitResult {
+        statistic: d_stat,
+        pvalue,
+    }
+}
+
+/// Two-sample Kolmogorov-Smirnov test.
+///
+/// Tests H0: two samples come from the same continuous distribution.
+///
+/// Matches `scipy.stats.ks_2samp(data1, data2)`.
+pub fn ks_2samp(data1: &[f64], data2: &[f64]) -> GoodnessOfFitResult {
+    let n1 = data1.len();
+    let n2 = data2.len();
+    if n1 == 0 || n2 == 0 {
+        return GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let mut sorted1 = data1.to_vec();
+    let mut sorted2 = data2.to_vec();
+    sorted1.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted2.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Walk both sorted arrays, computing max |F1(x) - F2(x)|
+    let n1f = n1 as f64;
+    let n2f = n2 as f64;
+    let mut i = 0;
+    let mut j = 0;
+    let mut d_stat = 0.0_f64;
+
+    while i < n1 && j < n2 {
+        if sorted1[i] <= sorted2[j] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+        let diff = (i as f64 / n1f - j as f64 / n2f).abs();
+        d_stat = d_stat.max(diff);
+    }
+
+    // Effective sample size for p-value
+    let en = (n1f * n2f / (n1f + n2f)).sqrt();
+    let pvalue = kolmogorov_pvalue(d_stat, en * en);
+
+    GoodnessOfFitResult {
+        statistic: d_stat,
+        pvalue,
+    }
+}
+
+/// Shapiro-Wilk test for normality.
+///
+/// Tests H0: data was drawn from a normal distribution.
+/// Most powerful normality test for small to moderate sample sizes.
+///
+/// Matches `scipy.stats.shapiro(data)`.
+///
+/// Uses the Royston (1992) algorithm with approximated coefficients
+/// for n <= 5000.
+pub fn shapiro(data: &[f64]) -> GoodnessOfFitResult {
+    let n = data.len();
+    if n < 3 {
+        return GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let nf = n as f64;
+    let mean_val = data.iter().sum::<f64>() / nf;
+
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Compute the Shapiro-Wilk W statistic.
+    // W = (sum(a_i * x_(i))^2) / (sum(x_i - mean)^2)
+    // where a_i are optimal coefficients derived from normal order statistics.
+
+    // Generate approximate coefficients using the normal ppf (Blom's approximation)
+    let mut m = vec![0.0; n];
+    for (i, mi) in m.iter_mut().enumerate() {
+        *mi = standard_normal_ppf((i as f64 + 1.0 - 0.375) / (nf + 0.25));
+    }
+
+    // Normalize the m vector
+    let m_sq_sum: f64 = m.iter().map(|&v| v * v).sum();
+    let m_norm = m_sq_sum.sqrt();
+
+    // Compute approximate weights a_i = m_i / ||m||
+    let a: Vec<f64> = m.iter().map(|&v| v / m_norm).collect();
+
+    // W = (sum(a_i * x_(i)))^2 / SS
+    let numerator: f64 = a
+        .iter()
+        .zip(sorted.iter())
+        .map(|(&ai, &xi)| ai * xi)
+        .sum::<f64>();
+    let ss: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum();
+
+    if ss == 0.0 {
+        return GoodnessOfFitResult {
+            statistic: 1.0,
+            pvalue: 1.0,
+        };
+    }
+
+    let w = (numerator * numerator) / ss;
+
+    // Approximate p-value using Royston's normal transformation
+    // For n >= 7, use ln(1 - W) transformation
+    let pvalue = if n <= 6 {
+        // Small sample: use simple approximation
+        // Based on Shapiro-Francia for tiny n
+        let z = (-((1.0 - w).ln()) - (0.0 + 0.221 * nf.ln() - 0.0174 * nf)) / (1.0 + 0.042 / nf);
+        let norm = Normal::standard();
+        1.0 - ContinuousDistribution::cdf(&norm, z)
+    } else {
+        // Royston approximation: transform ln(1-W) to approximate normality
+        let ln_1mw = (1.0 - w).ln();
+        let mu =
+            0.0038915 * nf.ln().powi(3) - 0.083751 * nf.ln().powi(2) - 0.31082 * nf.ln() - 1.5861;
+        let sigma = (0.0030302 * nf.ln().powi(2) - 0.082676 * nf.ln() - 0.4803).exp();
+        let z = (ln_1mw - mu) / sigma;
+        let norm = Normal::standard();
+        1.0 - ContinuousDistribution::cdf(&norm, z)
+    };
+
+    GoodnessOfFitResult {
+        statistic: w,
+        pvalue: pvalue.clamp(0.0, 1.0),
+    }
+}
+
+/// D'Agostino-Pearson omnibus test for normality.
+///
+/// Tests H0: data was drawn from a normal distribution by combining
+/// the skewness test and kurtosis test into an omnibus chi-squared test.
+///
+/// Matches `scipy.stats.normaltest(data)`.
+pub fn normaltest(data: &[f64]) -> GoodnessOfFitResult {
+    let n = data.len();
+    if n < 8 {
+        return GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let nf = n as f64;
+    let mean_val = data.iter().sum::<f64>() / nf;
+
+    // Compute central moments
+    let mut m2 = 0.0;
+    let mut m3 = 0.0;
+    let mut m4 = 0.0;
+    for &x in data {
+        let d = x - mean_val;
+        let d2 = d * d;
+        m2 += d2;
+        m3 += d2 * d;
+        m4 += d2 * d2;
+    }
+    let m2_n = m2 / nf;
+    let m3_n = m3 / nf;
+    let m4_n = m4 / nf;
+
+    // Skewness test (D'Agostino 1990)
+    let g1 = m3_n / m2_n.powf(1.5); // sample skewness
+    let z_skew = dagostino_skewtest_z(g1, nf);
+
+    // Kurtosis test (Anscombe & Glynn 1983)
+    let g2 = m4_n / (m2_n * m2_n) - 3.0; // excess kurtosis
+    let z_kurt = dagostino_kurttest_z(g2, nf);
+
+    // Omnibus: K² = z_skew² + z_kurt² ~ chi²(2)
+    let k2 = z_skew * z_skew + z_kurt * z_kurt;
+
+    // p-value from chi-squared(2) survival function
+    // For chi²(2): P(X > x) = exp(-x/2)
+    let pvalue = (-k2 / 2.0).exp();
+
+    GoodnessOfFitResult {
+        statistic: k2,
+        pvalue,
+    }
+}
+
+/// Anderson-Darling test for a specified distribution.
+///
+/// Tests H0: data comes from the given distribution family.
+/// Currently supports `"norm"` (normal distribution).
+///
+/// Returns the test statistic and critical values at significance levels
+/// [15%, 10%, 5%, 2.5%, 1%].
+///
+/// Matches `scipy.stats.anderson(data, dist='norm')`.
+pub fn anderson(data: &[f64], dist: &str) -> AndersonResult {
+    let n = data.len();
+    if n < 3 || dist != "norm" {
+        return AndersonResult {
+            statistic: f64::NAN,
+            critical_values: [f64::NAN; 5],
+            significance_level: [15.0, 10.0, 5.0, 2.5, 1.0],
+        };
+    }
+
+    let nf = n as f64;
+
+    // Fit normal parameters from data
+    let mean_val = data.iter().sum::<f64>() / nf;
+    let var_val: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / (nf - 1.0);
+    let std_val = var_val.sqrt();
+
+    if std_val == 0.0 {
+        return AndersonResult {
+            statistic: f64::INFINITY,
+            critical_values: anderson_critical_values_norm(nf),
+            significance_level: [15.0, 10.0, 5.0, 2.5, 1.0],
+        };
+    }
+
+    // Sort and standardize
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let norm = Normal::standard();
+
+    // A² = -n - (1/n) * sum_{i=1}^{n} (2i-1) * [ln(F(Y_i)) + ln(1 - F(Y_{n+1-i}))]
+    let mut s = 0.0;
+    for i in 0..n {
+        let z = (sorted[i] - mean_val) / std_val;
+        let f_z = ContinuousDistribution::cdf(&norm, z);
+        // Clamp to avoid ln(0)
+        let f_z = f_z.clamp(1e-15, 1.0 - 1e-15);
+
+        let z_rev = (sorted[n - 1 - i] - mean_val) / std_val;
+        let f_z_rev = ContinuousDistribution::cdf(&norm, z_rev);
+        let f_z_rev = f_z_rev.clamp(1e-15, 1.0 - 1e-15);
+
+        s += (2.0 * (i + 1) as f64 - 1.0) * (f_z.ln() + (1.0 - f_z_rev).ln());
+    }
+
+    let a2 = -nf - s / nf;
+
+    // Apply correction factor for estimated parameters (case 3 in SciPy)
+    let a2_star = a2 * (1.0 + 0.75 / nf + 2.25 / (nf * nf));
+
+    AndersonResult {
+        statistic: a2_star,
+        critical_values: anderson_critical_values_norm(nf),
+        significance_level: [15.0, 10.0, 5.0, 2.5, 1.0],
+    }
+}
+
+/// Critical values for Anderson-Darling test with normal distribution
+/// at significance levels [15%, 10%, 5%, 2.5%, 1%].
+/// These are the standard tabulated values (Stephens 1974/1986).
+fn anderson_critical_values_norm(_n: f64) -> [f64; 5] {
+    // Standard critical values for normal distribution (parameters estimated)
+    [0.576, 0.656, 0.787, 0.918, 1.092]
+}
+
+/// Kolmogorov distribution p-value: P(D_n >= d).
+/// Uses the Kolmogorov-Smirnov limiting distribution approximation.
+fn kolmogorov_pvalue(d: f64, n: f64) -> f64 {
+    if d <= 0.0 {
+        return 1.0;
+    }
+    if d >= 1.0 {
+        return 0.0;
+    }
+
+    // Effective value: sqrt(n) * d
+    let s = n.sqrt() * d;
+
+    // For large s, use asymptotic series (Kolmogorov's formula):
+    // P(sqrt(n)*D_n > s) ≈ 2 * sum_{k=1}^{inf} (-1)^{k+1} * exp(-2*k²*s²)
+    let mut pval = 0.0;
+    for k in 1..=100 {
+        let kf = k as f64;
+        let term = (-2.0 * kf * kf * s * s).exp();
+        if term < 1e-20 {
+            break;
+        }
+        if k % 2 == 1 {
+            pval += term;
+        } else {
+            pval -= term;
+        }
+    }
+    (2.0 * pval).clamp(0.0, 1.0)
+}
+
+/// D'Agostino's skewness test z-score.
+fn dagostino_skewtest_z(g1: f64, n: f64) -> f64 {
+    // D'Agostino (1990) transformation of sample skewness to z-score
+    let y = g1 * ((n + 1.0) * (n + 3.0) / (6.0 * (n - 2.0))).sqrt();
+
+    let beta2 = 3.0 * (n * n + 27.0 * n - 70.0) * (n + 1.0) * (n + 3.0)
+        / ((n - 2.0) * (n + 5.0) * (n + 7.0) * (n + 9.0));
+    let w2 = (2.0 * (beta2 - 1.0)).sqrt() - 1.0;
+    let delta = 1.0 / w2.ln().sqrt();
+    let alpha = (2.0 / (w2 - 1.0)).sqrt();
+
+    delta * (y / alpha + ((y / alpha).powi(2) + 1.0).sqrt()).ln()
+}
+
+/// Anscombe & Glynn kurtosis test z-score.
+fn dagostino_kurttest_z(g2: f64, n: f64) -> f64 {
+    // Expected value and variance of excess kurtosis under normality
+    let e_g2 = -6.0 / (n + 1.0);
+    let var_g2 = 24.0 * n * (n - 2.0) * (n - 3.0) / ((n + 1.0) * (n + 1.0) * (n + 3.0) * (n + 5.0));
+    let std_g2 = var_g2.sqrt();
+
+    if std_g2 == 0.0 {
+        return 0.0;
+    }
+
+    // Standardize
+    let x = (g2 - e_g2) / std_g2;
+
+    // Apply cube-root transformation (Anscombe & Glynn)
+    let beta1 = 6.0 * (n * n - 5.0 * n + 2.0) / ((n + 7.0) * (n + 9.0))
+        * (6.0 * (n + 3.0) * (n + 5.0) / (n * (n - 2.0) * (n - 3.0))).sqrt();
+
+    let a = 6.0 + 8.0 / beta1 * (2.0 / beta1 + (1.0 + 4.0 / (beta1 * beta1)).sqrt());
+    let z_term = ((1.0 - 2.0 / a) / (1.0 + x * (2.0 / (a - 4.0)).sqrt())).abs();
+    if z_term <= 0.0 {
+        return 0.0;
+    }
+    (1.0 - 2.0 / (9.0 * a) - z_term.powf(1.0 / 3.0)) / (2.0 / (9.0 * a)).sqrt()
 }
 
 #[cfg(test)]
@@ -3689,7 +4073,10 @@ mod tests {
         let h = Hypergeometric::new(52, 4, 5);
         let p1 = h.pmf(1);
         // Known value: 0.29947...
-        assert!(p1 > 0.29 && p1 < 0.31, "P(1 ace in 5 cards) ~ 0.299, got {p1}");
+        assert!(
+            p1 > 0.29 && p1 < 0.31,
+            "P(1 ace in 5 cards) ~ 0.299, got {p1}"
+        );
     }
 
     #[test]
@@ -3867,5 +4254,225 @@ mod tests {
     fn mannwhitneyu_too_few() {
         let result = mannwhitneyu(&[1.0], &[2.0]);
         assert!(result.statistic.is_nan());
+    }
+
+    // ── Goodness-of-fit tests ─────────────────────────────────────────
+
+    #[test]
+    fn ks_1samp_normal_data_from_normal_cdf() {
+        // Data drawn from N(0,1) tested against N(0,1) CDF → high p-value
+        let data: Vec<f64> = (0..200)
+            .map(|i| {
+                let u = (i as f64 + 0.5) / 200.0;
+                standard_normal_ppf(u)
+            })
+            .collect();
+        let norm = Normal::standard();
+        let result = ks_1samp(&data, |x| ContinuousDistribution::cdf(&norm, x));
+        assert!(
+            result.pvalue > 0.05,
+            "normal data vs normal CDF should not reject: p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn ks_1samp_uniform_data_from_normal_cdf() {
+        // Uniform data tested against Normal CDF → low p-value (reject)
+        let data: Vec<f64> = (0..100).map(|i| (i as f64) / 99.0 * 6.0 - 3.0).collect();
+        let norm = Normal::standard();
+        let result = ks_1samp(&data, |x| ContinuousDistribution::cdf(&norm, x));
+        assert!(
+            result.pvalue < 0.05,
+            "uniform data vs normal CDF should reject: p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn ks_1samp_empty_returns_nan() {
+        let result = ks_1samp(&[], |x| x);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
+    fn ks_2samp_same_distribution() {
+        // Two samples from same distribution → high p-value
+        let data1: Vec<f64> = (0..100)
+            .map(|i| standard_normal_ppf((i as f64 + 0.5) / 100.0))
+            .collect();
+        let data2: Vec<f64> = (0..100)
+            .map(|i| standard_normal_ppf((i as f64 + 0.3) / 100.0))
+            .collect();
+        let result = ks_2samp(&data1, &data2);
+        assert!(
+            result.pvalue > 0.01,
+            "same distribution should not reject: p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn ks_2samp_different_distributions() {
+        // Normal vs uniform-like data → low p-value
+        let data1: Vec<f64> = (0..100)
+            .map(|i| standard_normal_ppf((i as f64 + 0.5) / 100.0))
+            .collect();
+        let data2: Vec<f64> = (0..100).map(|i| (i as f64) / 10.0).collect();
+        let result = ks_2samp(&data1, &data2);
+        assert!(
+            result.pvalue < 0.05,
+            "different distributions should reject: p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn ks_2samp_empty_returns_nan() {
+        let result = ks_2samp(&[], &[1.0, 2.0]);
+        assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn shapiro_normal_data() {
+        // Approximately normal data → W close to 1, high p-value
+        let data: Vec<f64> = (0..50)
+            .map(|i| standard_normal_ppf((i as f64 + 0.5) / 50.0))
+            .collect();
+        let result = shapiro(&data);
+        assert!(
+            result.statistic > 0.9,
+            "normal data W should be > 0.9: W={}",
+            result.statistic
+        );
+        assert!(
+            result.pvalue > 0.05,
+            "normal data p-value should be > 0.05: p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn shapiro_exponential_data() {
+        // Exponential-like data (heavily skewed) → lower W
+        let data: Vec<f64> = (1..=50).map(|i| (i as f64 * 0.1).exp()).collect();
+        let result = shapiro(&data);
+        assert!(
+            result.statistic < 0.95,
+            "exponential data W should be < 0.95: W={}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn shapiro_too_few() {
+        let result = shapiro(&[1.0, 2.0]);
+        assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn shapiro_constant_data() {
+        let result = shapiro(&[5.0, 5.0, 5.0, 5.0, 5.0]);
+        assert_close(result.statistic, 1.0, 1e-10, "constant data W");
+        assert_close(result.pvalue, 1.0, 1e-10, "constant data p");
+    }
+
+    #[test]
+    fn normaltest_normal_data() {
+        // Use pseudo-random normal data via Box-Muller pairs
+        // Seed-like deterministic sequence using simple LCG
+        let mut seed: u64 = 42;
+        let mut data = Vec::with_capacity(200);
+        for _ in 0..100 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u1 = (seed >> 11) as f64 / (1u64 << 53) as f64;
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u2 = (seed >> 11) as f64 / (1u64 << 53) as f64;
+            let u1 = u1.max(1e-15); // avoid ln(0)
+            let r = (-2.0 * u1.ln()).sqrt();
+            data.push(r * (2.0 * std::f64::consts::PI * u2).cos());
+            data.push(r * (2.0 * std::f64::consts::PI * u2).sin());
+        }
+        let result = normaltest(&data);
+        assert!(
+            result.pvalue > 0.01,
+            "normal data should not be rejected at 1%: K²={}, p={}",
+            result.statistic,
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn normaltest_skewed_data() {
+        // Highly skewed data → should reject normality
+        let data: Vec<f64> = (0..200)
+            .map(|i| ((i as f64 + 1.0) / 201.0).powi(5))
+            .collect();
+        let result = normaltest(&data);
+        assert!(
+            result.pvalue < 0.05,
+            "skewed data should be rejected: K²={}, p={}",
+            result.statistic,
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn normaltest_too_few() {
+        let result = normaltest(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn anderson_normal_data() {
+        // Normal-like data should have A² below critical values
+        let data: Vec<f64> = (0..100)
+            .map(|i| standard_normal_ppf((i as f64 + 0.5) / 100.0))
+            .collect();
+        let result = anderson(&data, "norm");
+        assert!(
+            result.statistic < result.critical_values[2],
+            "normal data A²={} should be below 5% critical value={}",
+            result.statistic,
+            result.critical_values[2]
+        );
+    }
+
+    #[test]
+    fn anderson_nonnormal_data() {
+        // Exponential-like data should fail normality
+        let data: Vec<f64> = (1..=100).map(|i| (i as f64 / 100.0).ln().abs()).collect();
+        let result = anderson(&data, "norm");
+        assert!(
+            result.statistic > result.critical_values[4],
+            "non-normal data A²={} should exceed 1% critical value={}",
+            result.statistic,
+            result.critical_values[4]
+        );
+    }
+
+    #[test]
+    fn anderson_unsupported_dist() {
+        let result = anderson(&[1.0, 2.0, 3.0], "expon");
+        assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn anderson_significance_levels() {
+        let result = anderson(&[1.0, 2.0, 3.0, 4.0, 5.0], "norm");
+        assert_eq!(result.significance_level, [15.0, 10.0, 5.0, 2.5, 1.0]);
+    }
+
+    #[test]
+    fn ks_1samp_perfect_fit() {
+        // Data exactly matching uniform CDF on [0,1]
+        let data: Vec<f64> = (1..=20).map(|i| i as f64 / 20.0).collect();
+        let result = ks_1samp(&data, |x| x.clamp(0.0, 1.0));
+        assert!(
+            result.statistic < 0.1,
+            "near-perfect fit D={} should be small",
+            result.statistic
+        );
     }
 }

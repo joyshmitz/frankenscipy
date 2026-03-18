@@ -1208,10 +1208,7 @@ fn roots_to_sos_factors(re: &[f64], im: &[f64]) -> Vec<(f64, f64, f64)> {
             // Find conjugate
             let mut found = false;
             for j in (i + 1)..n {
-                if !used[j]
-                    && (re[j] - re[i]).abs() < 1e-10
-                    && (im[j] + im[i]).abs() < 1e-10
-                {
+                if !used[j] && (re[j] - re[i]).abs() < 1e-10 && (im[j] + im[i]).abs() < 1e-10 {
                     // Conjugate pair: (1 - 2*re*z^-1 + |r|²*z^-2)
                     let mag2 = re[i] * re[i] + im[i] * im[i];
                     factors.push((1.0, -2.0 * re[i], mag2));
@@ -1284,11 +1281,15 @@ pub fn sos2zpk(sos: &[SosSection]) -> ZpkCoeffs {
         let b_trim = trim_trailing_zeros(&b_norm);
         let a_trim = trim_trailing_zeros(&a_norm);
 
-        if b_trim.len() > 1 && let Ok((zr, zi)) = poly_roots(&b_trim) {
+        if b_trim.len() > 1
+            && let Ok((zr, zi)) = poly_roots(&b_trim)
+        {
             all_zeros_re.extend(zr);
             all_zeros_im.extend(zi);
         }
-        if a_trim.len() > 1 && let Ok((pr, pi)) = poly_roots(&a_trim) {
+        if a_trim.len() > 1
+            && let Ok((pr, pi)) = poly_roots(&a_trim)
+        {
             all_poles_re.extend(pr);
             all_poles_im.extend(pi);
         }
@@ -1350,9 +1351,8 @@ fn poly_roots(coeffs: &[f64]) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
 
     // Use fsci-linalg eig to get eigenvalues
     let opts = fsci_linalg::DecompOptions::default();
-    let eig_result = fsci_linalg::eig(&companion, opts).map_err(|e| {
-        SignalError::InvalidArgument(format!("eigenvalue computation failed: {e}"))
-    })?;
+    let eig_result = fsci_linalg::eig(&companion, opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("eigenvalue computation failed: {e}")))?;
 
     Ok((eig_result.eigenvalues_re, eig_result.eigenvalues_im))
 }
@@ -1505,10 +1505,7 @@ pub fn freqz(b: &[f64], a: &[f64], n_freqs: Option<usize>) -> Result<FreqzResult
 /// Matches `scipy.signal.sosfreqz(sos, worN)`.
 ///
 /// More numerically stable than freqz for high-order filters.
-pub fn freqz_sos(
-    sos: &[SosSection],
-    n_freqs: Option<usize>,
-) -> Result<FreqzResult, SignalError> {
+pub fn freqz_sos(sos: &[SosSection], n_freqs: Option<usize>) -> Result<FreqzResult, SignalError> {
     if sos.is_empty() {
         return Err(SignalError::InvalidArgument(
             "sos must not be empty".to_string(),
@@ -1570,11 +1567,7 @@ pub fn freqz_sos(
 /// Matches `scipy.signal.freqs(b, a, worN)`.
 ///
 /// Evaluates H(jω) = B(jω) / A(jω) at specified angular frequencies.
-pub fn freqs(
-    b: &[f64],
-    a: &[f64],
-    w: &[f64],
-) -> Result<FreqzResult, SignalError> {
+pub fn freqs(b: &[f64], a: &[f64], w: &[f64]) -> Result<FreqzResult, SignalError> {
     if b.is_empty() || a.is_empty() {
         return Err(SignalError::InvalidArgument(
             "b and a must be non-empty".to_string(),
@@ -1718,10 +1711,10 @@ fn eval_analog_poly(coeffs: &[f64], omega: f64) -> (f64, f64) {
         // (jω)^power: j^0=1, j^1=j, j^2=-1, j^3=-j, j^4=1, ...
         let omega_pow = omega.powi(power as i32);
         match power % 4 {
-            0 => re += c * omega_pow,        // j^0 = 1
-            1 => im += c * omega_pow,        // j^1 = j
-            2 => re -= c * omega_pow,        // j^2 = -1
-            3 => im -= c * omega_pow,        // j^3 = -j
+            0 => re += c * omega_pow, // j^0 = 1
+            1 => im += c * omega_pow, // j^1 = j
+            2 => re -= c * omega_pow, // j^2 = -1
+            3 => im -= c * omega_pow, // j^3 = -j
             _ => unreachable!(),
         }
     }
@@ -1783,9 +1776,8 @@ pub fn periodogram(
 
     // Compute FFT
     let opts = fsci_fft::FftOptions::default();
-    let spectrum = fsci_fft::rfft(&windowed, &opts).map_err(|e| {
-        SignalError::InvalidArgument(format!("FFT failed: {e}"))
-    })?;
+    let spectrum = fsci_fft::rfft(&windowed, &opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
 
     // One-sided PSD: |X[k]|² / (fs * N * win_power)
     let scale = 1.0 / (fs * n as f64 * win_power);
@@ -1888,7 +1880,286 @@ pub fn welch(
     let freq_step = fs / nperseg as f64;
     let frequencies: Vec<f64> = (0..n_freqs).map(|k| k as f64 * freq_step).collect();
 
-    Ok(SpectralResult { frequencies, psd: avg_psd })
+    Ok(SpectralResult {
+        frequencies,
+        psd: avg_psd,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FIR Filter Design
+// ══════════════════════════════════════════════════════════════════════
+
+/// Window type for FIR filter design.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FirWindow {
+    Hamming,
+    Hann,
+    Blackman,
+    /// Kaiser window with shape parameter beta.
+    Kaiser(f64),
+    /// Rectangular window (no windowing).
+    Rectangular,
+}
+
+/// Design a FIR filter using the window method.
+///
+/// Matches `scipy.signal.firwin(numtaps, cutoff, window, pass_zero, fs)`.
+///
+/// Creates a linear-phase FIR filter by windowing the ideal sinc response.
+///
+/// # Arguments
+/// * `numtaps` — Filter length (must be odd for Type I, even for Type II).
+/// * `cutoff` — Cutoff frequency/frequencies (normalized 0 to 1, where 1 = Nyquist).
+///   One value for lowpass/highpass, two for bandpass/bandstop.
+/// * `window` — Window function to apply.
+/// * `pass_zero` — If true, DC gain is 1 (lowpass/bandstop). If false, DC gain is 0 (highpass/bandpass).
+pub fn firwin(
+    numtaps: usize,
+    cutoff: &[f64],
+    window: FirWindow,
+    pass_zero: bool,
+) -> Result<Vec<f64>, SignalError> {
+    if numtaps == 0 {
+        return Err(SignalError::InvalidArgument(
+            "numtaps must be > 0".to_string(),
+        ));
+    }
+    if cutoff.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "cutoff must be non-empty".to_string(),
+        ));
+    }
+    for &c in cutoff {
+        if !(0.0..=1.0).contains(&c) {
+            return Err(SignalError::InvalidArgument(format!(
+                "cutoff {c} out of range [0, 1]"
+            )));
+        }
+    }
+
+    let m = numtaps;
+    let alpha = (m - 1) as f64 / 2.0;
+
+    // Build the ideal bandpass/bandstop impulse response
+    // Start from all the bands implied by cutoff
+    let mut bands: Vec<f64> = Vec::new();
+    if pass_zero {
+        // Starts at 0: lowpass or bandstop
+        bands.push(0.0);
+    }
+    bands.extend_from_slice(cutoff);
+    if pass_zero == (cutoff.len() % 2 == 0) {
+        // End at 1 (Nyquist)
+        bands.push(1.0);
+    }
+
+    // Sum of sinc responses for each passband
+    let mut h = vec![0.0; m];
+    for pair in bands.chunks(2) {
+        if pair.len() < 2 {
+            break;
+        }
+        let (left, right) = (pair[0], pair[1]);
+        for (n, hi) in h.iter_mut().enumerate() {
+            let x = n as f64 - alpha;
+            if x.abs() < 1e-15 {
+                *hi += right - left;
+            } else {
+                *hi += (std::f64::consts::PI * right * x).sin() / (std::f64::consts::PI * x)
+                    - (std::f64::consts::PI * left * x).sin() / (std::f64::consts::PI * x);
+            }
+        }
+    }
+
+    // Apply window
+    let win = make_window(m, window);
+    for (hi, wi) in h.iter_mut().zip(win.iter()) {
+        *hi *= wi;
+    }
+
+    // Normalize for unity gain at the appropriate frequency:
+    // - Lowpass/bandstop (pass_zero=true): normalize at DC (omega=0)
+    // - Highpass (pass_zero=false, 1 cutoff): normalize at Nyquist (omega=PI)
+    // - Bandpass (pass_zero=false, 2+ cutoffs): normalize at passband center
+    let norm_freq = if pass_zero {
+        0.0
+    } else if cutoff.len() >= 2 {
+        std::f64::consts::PI * (cutoff[0] + cutoff[1]) / 2.0
+    } else {
+        std::f64::consts::PI
+    };
+    let mut gain = 0.0;
+    for (n, &hi) in h.iter().enumerate() {
+        gain += hi * (norm_freq * (n as f64 - alpha)).cos();
+    }
+    if gain.abs() > 1e-15 {
+        for hi in &mut h {
+            *hi /= gain;
+        }
+    }
+
+    Ok(h)
+}
+
+/// Design a FIR filter with arbitrary frequency response using frequency-sampling.
+///
+/// Matches `scipy.signal.firwin2(numtaps, freq, gain, window)`.
+///
+/// # Arguments
+/// * `numtaps` — Filter length (should be odd for Type I filter).
+/// * `freq` — Frequency points (0 to 1, normalized), must start at 0 and end at 1.
+/// * `gain` — Desired gain at each frequency point.
+/// * `window` — Window to apply.
+pub fn firwin2(
+    numtaps: usize,
+    freq: &[f64],
+    gain: &[f64],
+    window: FirWindow,
+) -> Result<Vec<f64>, SignalError> {
+    if numtaps == 0 {
+        return Err(SignalError::InvalidArgument(
+            "numtaps must be > 0".to_string(),
+        ));
+    }
+    if freq.len() != gain.len() {
+        return Err(SignalError::InvalidArgument(
+            "freq and gain must have same length".to_string(),
+        ));
+    }
+    if freq.len() < 2 {
+        return Err(SignalError::InvalidArgument(
+            "need at least 2 frequency points".to_string(),
+        ));
+    }
+    if (freq[0] - 0.0).abs() > 1e-10 || (freq[freq.len() - 1] - 1.0).abs() > 1e-10 {
+        return Err(SignalError::InvalidArgument(
+            "freq must start at 0 and end at 1".to_string(),
+        ));
+    }
+
+    // Interpolate the desired frequency response to n_fft points
+    let n_fft = if numtaps % 2 == 1 {
+        numtaps
+    } else {
+        numtaps + 1
+    };
+    let n_half = n_fft / 2 + 1;
+
+    // Linearly interpolate gain at uniform frequency grid
+    let mut h_desired = vec![0.0; n_half];
+    for (k, h_val) in h_desired.iter_mut().enumerate() {
+        let f_k = k as f64 / (n_half - 1) as f64;
+        // Find the interval in freq containing f_k
+        let mut seg = 0;
+        while seg + 1 < freq.len() - 1 && freq[seg + 1] < f_k {
+            seg += 1;
+        }
+        let t = if (freq[seg + 1] - freq[seg]).abs() > 1e-15 {
+            (f_k - freq[seg]) / (freq[seg + 1] - freq[seg])
+        } else {
+            0.0
+        };
+        *h_val = gain[seg] + t * (gain[seg + 1] - gain[seg]);
+    }
+
+    // Construct symmetric spectrum and do inverse FFT
+    let mut spectrum = vec![0.0; n_fft];
+    for (k, &val) in h_desired.iter().enumerate() {
+        spectrum[k] = val;
+    }
+    // Mirror for negative frequencies
+    for k in 1..n_half - 1 {
+        if n_fft - k < n_fft {
+            spectrum[n_fft - k] = spectrum[k];
+        }
+    }
+
+    // Inverse DFT to get impulse response
+    let mut h = vec![0.0; n_fft];
+    let nf = n_fft as f64;
+    for (n, hn) in h.iter_mut().enumerate() {
+        for (k, &sk) in spectrum.iter().enumerate() {
+            *hn += sk * (2.0 * std::f64::consts::PI * n as f64 * k as f64 / nf).cos();
+        }
+        *hn /= nf;
+    }
+
+    // Shift to center (circular shift by n_fft/2)
+    let shift = n_fft / 2;
+    let mut h_shifted = vec![0.0; n_fft];
+    for (i, val) in h.iter().enumerate() {
+        h_shifted[(i + shift) % n_fft] = *val;
+    }
+
+    // Truncate to numtaps
+    let h_out: Vec<f64> = h_shifted[..numtaps].to_vec();
+
+    // Apply window
+    let win = make_window(numtaps, window);
+    let mut result: Vec<f64> = h_out.iter().zip(win.iter()).map(|(&h, &w)| h * w).collect();
+
+    // Normalize
+    let sum: f64 = result.iter().sum();
+    if sum.abs() > 1e-15 && gain[0].abs() > 1e-15 {
+        let target_gain = gain[0];
+        for r in &mut result {
+            *r *= target_gain / sum;
+        }
+    }
+
+    Ok(result)
+}
+
+/// Estimate Kaiser window parameters for FIR filter design.
+///
+/// Matches `scipy.signal.kaiserord(ripple, width)`.
+///
+/// # Arguments
+/// * `ripple` — Maximum ripple/attenuation in dB (positive value, e.g. 60 for 60dB).
+/// * `width` — Transition width (normalized frequency, 0 to 1).
+///
+/// # Returns
+/// `(numtaps, beta)` — Number of taps and Kaiser beta parameter.
+pub fn kaiserord(ripple: f64, width: f64) -> Result<(usize, f64), SignalError> {
+    if ripple <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "ripple must be positive (in dB)".to_string(),
+        ));
+    }
+    if width <= 0.0 || width >= 1.0 {
+        return Err(SignalError::InvalidArgument(
+            "width must be in (0, 1)".to_string(),
+        ));
+    }
+
+    let a = ripple; // attenuation in dB
+
+    // Kaiser's empirical formula for beta
+    let beta = if a > 50.0 {
+        0.1102 * (a - 8.7)
+    } else if a > 21.0 {
+        0.5842 * (a - 21.0).powf(0.4) + 0.07886 * (a - 21.0)
+    } else {
+        0.0
+    };
+
+    // Kaiser's formula for number of taps
+    let numtaps = ((a - 7.95) / (2.285 * std::f64::consts::PI * width)).ceil() as usize + 1;
+    let numtaps = numtaps.max(1);
+
+    Ok((numtaps, beta))
+}
+
+/// Generate a window of given type and length.
+fn make_window(n: usize, window: FirWindow) -> Vec<f64> {
+    match window {
+        FirWindow::Hamming => hamming(n),
+        FirWindow::Hann => hann(n),
+        FirWindow::Blackman => blackman(n),
+        FirWindow::Kaiser(beta) => kaiser(n, beta),
+        FirWindow::Rectangular => vec![1.0; n],
+    }
 }
 
 #[cfg(test)]
@@ -2671,10 +2942,7 @@ mod tests {
         for (i, section) in sos.iter().enumerate() {
             let a2 = section[5];
             // For stability: |a2| < 1
-            assert!(
-                a2.abs() < 1.0 + 1e-10,
-                "section {i} unstable: a2={a2}"
-            );
+            assert!(a2.abs() < 1.0 + 1e-10, "section {i} unstable: a2={a2}");
         }
     }
 
@@ -2847,10 +3115,7 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let y = sosfilt(&sos, &x).expect("sosfilt identity");
         for (i, (&xi, &yi)) in x.iter().zip(y.iter()).enumerate() {
-            assert!(
-                (xi - yi).abs() < 1e-12,
-                "passthrough at {i}: {yi} != {xi}",
-            );
+            assert!((xi - yi).abs() < 1e-12, "passthrough at {i}: {yi} != {xi}",);
         }
     }
 
@@ -2871,10 +3136,7 @@ mod tests {
             "sosfilt output should be finite for stable filter"
         );
         let max_abs = y.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-        assert!(
-            max_abs < 2.0,
-            "output should be bounded (max={max_abs})"
-        );
+        assert!(max_abs < 2.0, "output should be bounded (max={max_abs})");
     }
 
     #[test]
@@ -2918,5 +3180,148 @@ mod tests {
     fn sosfiltfilt_short_rejected() {
         let sos = vec![[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]];
         assert!(sosfiltfilt(&sos, &[1.0, 2.0]).is_err());
+    }
+
+    // ── FIR filter design tests ──────────────────────────────────────
+
+    #[test]
+    fn firwin_lowpass_symmetric() {
+        // FIR lowpass filter should have symmetric (linear phase) coefficients
+        let h = firwin(21, &[0.3], FirWindow::Hamming, true).expect("firwin lowpass");
+        assert_eq!(h.len(), 21);
+        for i in 0..10 {
+            assert!(
+                (h[i] - h[20 - i]).abs() < 1e-12,
+                "symmetry broken at {i}: h[{i}]={}, h[{}]={}",
+                h[i],
+                20 - i,
+                h[20 - i]
+            );
+        }
+    }
+
+    #[test]
+    fn firwin_lowpass_dc_gain() {
+        // Lowpass with pass_zero=true should have unity DC gain
+        let h = firwin(31, &[0.4], FirWindow::Hamming, true).expect("firwin lowpass");
+        let dc_gain: f64 = h.iter().sum();
+        assert!(
+            (dc_gain - 1.0).abs() < 0.05,
+            "DC gain should be ~1.0, got {dc_gain}"
+        );
+    }
+
+    #[test]
+    fn firwin_highpass() {
+        // Highpass: pass_zero=false, DC gain should be ~0
+        let h = firwin(31, &[0.4], FirWindow::Hamming, false).expect("firwin highpass");
+        let dc_gain: f64 = h.iter().sum();
+        assert!(
+            dc_gain.abs() < 0.05,
+            "highpass DC gain should be ~0, got {dc_gain}"
+        );
+    }
+
+    #[test]
+    fn firwin_bandpass() {
+        // Bandpass: two cutoff frequencies, pass_zero=false
+        let h = firwin(51, &[0.2, 0.5], FirWindow::Hamming, false).expect("firwin bandpass");
+        assert_eq!(h.len(), 51);
+        let dc_gain: f64 = h.iter().sum();
+        assert!(
+            dc_gain.abs() < 0.1,
+            "bandpass DC gain should be ~0, got {dc_gain}"
+        );
+    }
+
+    #[test]
+    fn firwin_bandstop() {
+        // Bandstop: two cutoff frequencies, pass_zero=true
+        let h = firwin(51, &[0.2, 0.5], FirWindow::Hamming, true).expect("firwin bandstop");
+        let dc_gain: f64 = h.iter().sum();
+        assert!(
+            (dc_gain - 1.0).abs() < 0.1,
+            "bandstop DC gain should be ~1.0, got {dc_gain}"
+        );
+    }
+
+    #[test]
+    fn firwin_cutoff_attenuation() {
+        // At the cutoff frequency, magnitude should be approximately -6dB (≈0.5)
+        let numtaps = 51;
+        let cutoff = 0.3;
+        let h = firwin(numtaps, &[cutoff], FirWindow::Hamming, true).expect("firwin");
+        // Compute magnitude at cutoff
+        let alpha = (numtaps - 1) as f64 / 2.0;
+        let omega = std::f64::consts::PI * cutoff;
+        let mut mag_real = 0.0;
+        let mut mag_imag = 0.0;
+        for (n, &hn) in h.iter().enumerate() {
+            let phase = omega * (n as f64 - alpha);
+            mag_real += hn * phase.cos();
+            mag_imag += hn * phase.sin();
+        }
+        let mag = (mag_real * mag_real + mag_imag * mag_imag).sqrt();
+        assert!(
+            (mag - 0.5).abs() < 0.15,
+            "magnitude at cutoff should be ~0.5 (-6dB), got {mag}"
+        );
+    }
+
+    #[test]
+    fn firwin2_lowpass_basic() {
+        // Flat passband from 0 to 0.3, stopband from 0.5 to 1.0
+        let freq = vec![0.0, 0.3, 0.5, 1.0];
+        let gain = vec![1.0, 1.0, 0.0, 0.0];
+        let h = firwin2(51, &freq, &gain, FirWindow::Hamming).expect("firwin2");
+        assert_eq!(h.len(), 51);
+        // DC gain should be ~1
+        let dc_gain: f64 = h.iter().sum();
+        assert!((dc_gain - 1.0).abs() < 0.15, "firwin2 DC gain: {dc_gain}");
+    }
+
+    #[test]
+    fn kaiserord_typical_specs() {
+        // 60dB attenuation, transition width 0.1
+        let (numtaps, beta) = kaiserord(60.0, 0.1).expect("kaiserord");
+        assert!(
+            numtaps > 20 && numtaps < 100,
+            "numtaps={numtaps} should be 20-100 for 60dB/0.1"
+        );
+        assert!(
+            beta > 4.0 && beta < 7.0,
+            "beta={beta} should be 4-7 for 60dB"
+        );
+    }
+
+    #[test]
+    fn kaiserord_mild_specs() {
+        // 20dB attenuation, wide transition
+        let (numtaps, beta) = kaiserord(20.0, 0.2).expect("kaiserord mild");
+        assert!(
+            numtaps < 30,
+            "numtaps={numtaps} should be small for mild specs"
+        );
+        // beta should be 0 for attenuation <= 21
+        assert!(beta < 0.5, "beta={beta} should be ~0 for A<=21");
+    }
+
+    #[test]
+    fn firwin_invalid_args() {
+        assert!(firwin(0, &[0.3], FirWindow::Hamming, true).is_err());
+        assert!(firwin(21, &[], FirWindow::Hamming, true).is_err());
+        assert!(firwin(21, &[1.5], FirWindow::Hamming, true).is_err());
+    }
+
+    #[test]
+    fn firwin_kaiser_window() {
+        // Test that Kaiser window variant works
+        let h = firwin(31, &[0.3], FirWindow::Kaiser(5.0), true).expect("firwin kaiser");
+        assert_eq!(h.len(), 31);
+        let dc_gain: f64 = h.iter().sum();
+        assert!(
+            (dc_gain - 1.0).abs() < 0.05,
+            "Kaiser lowpass DC gain: {dc_gain}"
+        );
     }
 }
