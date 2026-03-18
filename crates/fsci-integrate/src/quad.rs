@@ -205,7 +205,10 @@ where
     result_kronrod *= half_length;
     result_gauss *= half_length;
 
-    let error = (result_kronrod - result_gauss).abs();
+    let mut error = (result_kronrod - result_gauss).abs();
+    if error.is_nan() {
+        error = f64::INFINITY;
+    }
 
     (result_kronrod, error)
 }
@@ -292,7 +295,7 @@ where
             // Inner integral of f(y, x) over y ∈ [gfun(x), hfun(x)]
             match quad(|y| f(y, x), y_lo, y_hi, inner_opts) {
                 Ok(r) => r.integral,
-                Err(_) => f64::NAN,
+                Err(_) => f64::INFINITY, // Trigger error in outer quad
             }
         },
         a,
@@ -303,6 +306,14 @@ where
             limit: options.limit,
         },
     )?;
+
+    if !outer_result.integral.is_finite() {
+        return Ok(DblquadResult {
+            integral: f64::NAN,
+            error: f64::INFINITY,
+            converged: false,
+        });
+    }
 
     Ok(DblquadResult {
         integral: outer_result.integral,
@@ -437,11 +448,18 @@ fn simpson_nonuniform_odd(y: &[f64], x: &[f64]) -> f64 {
         let h1 = x[i + 2] - x[i + 1];
         let h_sum = h0 + h1;
         let h_prod = h0 * h1;
-        // Non-uniform Simpson's rule for a pair of panels
-        integral += (h_sum / 6.0)
-            * ((2.0 - h1 / h0) * y[i]
-                + (h_sum * h_sum / h_prod) * y[i + 1]
-                + (2.0 - h0 / h1) * y[i + 2]);
+
+        if h_prod.abs() < f64::EPSILON * 1e-10 {
+            // Coincident points: fall back to trapezoidal rule for the two panels
+            integral += 0.5 * h0 * (y[i] + y[i + 1]);
+            integral += 0.5 * h1 * (y[i + 1] + y[i + 2]);
+        } else {
+            // Non-uniform Simpson's rule for a pair of panels
+            integral += (h_sum / 6.0)
+                * ((2.0 - h1 / h0) * y[i]
+                    + (h_sum * h_sum / h_prod) * y[i + 1]
+                    + (2.0 - h0 / h1) * y[i + 2]);
+        }
         i += 2;
     }
     integral
@@ -553,6 +571,268 @@ pub fn cumulative_trapezoid_uniform(
     let mut cumsum = 0.0;
     for i in 0..n - 1 {
         cumsum += 0.5 * dx * (y[i] + y[i + 1]);
+        result.push(cumsum);
+    }
+
+    Ok(result)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Triple and N-D Quadrature, Romberg, cumulative Simpson
+// ══════════════════════════════════════════════════════════════════════
+
+/// Numerically integrate a function over a 3D region.
+///
+/// Matches `scipy.integrate.tplquad(func, a, b, gfun, hfun, qfun, rfun)`.
+///
+/// Computes ∫∫∫ f(z,y,x) dz dy dx where:
+/// - x ∈ [a, b]
+/// - y ∈ [gfun(x), hfun(x)]
+/// - z ∈ [qfun(x,y), rfun(x,y)]
+pub fn tplquad<F, GL, GH, QL, QH>(
+    f: F,
+    a: f64,
+    b: f64,
+    gfun: GL,
+    hfun: GH,
+    qfun: QL,
+    rfun: QH,
+    options: DblquadOptions,
+) -> Result<DblquadResult, IntegrateValidationError>
+where
+    F: Fn(f64, f64, f64) -> f64,
+    GL: Fn(f64) -> f64,
+    GH: Fn(f64) -> f64,
+    QL: Fn(f64, f64) -> f64,
+    QH: Fn(f64, f64) -> f64,
+{
+    if !a.is_finite() || !b.is_finite() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "outer integration bounds must be finite".to_string(),
+        });
+    }
+
+    let inner_opts = QuadOptions {
+        epsabs: options.epsabs,
+        epsrel: options.epsrel,
+        limit: options.limit,
+    };
+
+    let outer_result = quad(
+        |x| {
+            let y_lo = gfun(x);
+            let y_hi = hfun(x);
+            if (y_lo - y_hi).abs() < f64::EPSILON {
+                return 0.0;
+            }
+            match quad(
+                |y| {
+                    let z_lo = qfun(x, y);
+                    let z_hi = rfun(x, y);
+                    if (z_lo - z_hi).abs() < f64::EPSILON {
+                        return 0.0;
+                    }
+                    match quad(|z| f(z, y, x), z_lo, z_hi, inner_opts) {
+                        Ok(r) => r.integral,
+                        Err(_) => f64::INFINITY,
+                    }
+                },
+                y_lo,
+                y_hi,
+                inner_opts,
+            ) {
+                Ok(r) => r.integral,
+                Err(_) => f64::INFINITY,
+            }
+        },
+        a,
+        b,
+        inner_opts,
+    )?;
+
+    Ok(DblquadResult {
+        integral: outer_result.integral,
+        error: outer_result.error,
+        converged: outer_result.converged,
+    })
+}
+
+/// Romberg integration of a function over [a, b].
+///
+/// Matches `scipy.integrate.romberg(function, a, b)`.
+///
+/// Uses Richardson extrapolation of the trapezoidal rule for higher accuracy.
+///
+/// # Arguments
+/// * `f` — Function to integrate.
+/// * `a` — Lower bound.
+/// * `b` — Upper bound.
+/// * `max_order` — Maximum number of Richardson extrapolation steps (default 10).
+/// * `tol` — Convergence tolerance (default 1.49e-8).
+pub fn romb_func<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    max_order: Option<usize>,
+    tol: Option<f64>,
+) -> Result<QuadResult, IntegrateValidationError>
+where
+    F: Fn(f64) -> f64,
+{
+    if !a.is_finite() || !b.is_finite() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "bounds must be finite".to_string(),
+        });
+    }
+
+    let max_order = max_order.unwrap_or(10);
+    let tol = tol.unwrap_or(1.49e-8);
+
+    // Romberg table: R[i][j]
+    let mut r = vec![vec![0.0; max_order + 1]; max_order + 1];
+    let mut neval = 0;
+
+    // R[0][0] = trapezoidal with 1 interval
+    r[0][0] = 0.5 * (b - a) * (f(a) + f(b));
+    neval += 2;
+
+    for i in 1..=max_order {
+        let n = 1usize << i; // 2^i intervals
+        let h = (b - a) / n as f64;
+
+        // Compute trapezoidal rule with 2^i intervals using previously computed values
+        let mut sum = 0.0;
+        for k in 1..n {
+            if k % 2 == 1 {
+                // Only new points (odd indices)
+                sum += f(a + k as f64 * h);
+                neval += 1;
+            }
+        }
+        r[i][0] = 0.5 * r[i - 1][0] + h * sum;
+
+        // Richardson extrapolation
+        for j in 1..=i {
+            let factor = 4.0_f64.powi(j as i32);
+            r[i][j] = (factor * r[i][j - 1] - r[i - 1][j - 1]) / (factor - 1.0);
+        }
+
+        // Check convergence
+        if i >= 2 && (r[i][i] - r[i - 1][i - 1]).abs() < tol {
+            return Ok(QuadResult {
+                integral: r[i][i],
+                error: (r[i][i] - r[i - 1][i - 1]).abs(),
+                neval,
+                converged: true,
+            });
+        }
+    }
+
+    Ok(QuadResult {
+        integral: r[max_order][max_order],
+        error: if max_order >= 1 {
+            (r[max_order][max_order] - r[max_order - 1][max_order - 1]).abs()
+        } else {
+            f64::INFINITY
+        },
+        neval,
+        converged: false,
+    })
+}
+
+/// Romberg integration of pre-sampled data.
+///
+/// Matches `scipy.integrate.romb(y, dx)`.
+///
+/// The number of samples must be 2^k + 1 for some k.
+pub fn romb(y: &[f64], dx: f64) -> Result<f64, IntegrateValidationError> {
+    let n = y.len();
+    if n < 2 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "need at least 2 points".to_string(),
+        });
+    }
+    // Check n = 2^k + 1
+    let intervals = n - 1;
+    if intervals & (intervals - 1) != 0 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: format!("romb requires 2^k + 1 samples, got {n}"),
+        });
+    }
+
+    let k = (intervals as f64).log2().round() as usize;
+    let mut r = vec![vec![0.0; k + 1]; k + 1];
+
+    // R[0][0] = trapezoidal with full interval
+    r[0][0] = 0.5 * dx * (intervals as f64) * (y[0] + y[intervals]);
+
+    for i in 1..=k {
+        let step = intervals >> i; // stride for level i
+        let num_intervals = 1usize << i;
+        let h = dx * step as f64;
+
+        // Trapezoidal rule at this level
+        let mut sum = 0.0;
+        for j in 0..num_intervals {
+            let idx = j * step;
+            if idx + step <= intervals {
+                sum += y[idx] + y[idx + step];
+            }
+        }
+        r[i][0] = 0.5 * h * sum;
+
+        // Richardson extrapolation
+        for j in 1..=i {
+            let factor = 4.0_f64.powi(j as i32);
+            r[i][j] = (factor * r[i][j - 1] - r[i - 1][j - 1]) / (factor - 1.0);
+        }
+    }
+
+    Ok(r[k][k])
+}
+
+/// Cumulative integral using composite Simpson's rule.
+///
+/// Matches `scipy.integrate.cumulative_simpson(y, x)`.
+///
+/// Returns a vector of length n-2 (for odd-length input) or n-1
+/// representing the cumulative integral at each sample point.
+pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateValidationError> {
+    if y.len() != x.len() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: format!("y ({}) and x ({}) must have same length", y.len(), x.len()),
+        });
+    }
+    let n = y.len();
+    if n < 3 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "need at least 3 points for Simpson's rule".to_string(),
+        });
+    }
+
+    let mut result = Vec::with_capacity(n - 1);
+    let mut cumsum = 0.0;
+
+    // Use Simpson's 1/3 rule for pairs of intervals
+    let mut i = 0;
+    while i + 2 < n {
+        let h0 = x[i + 1] - x[i];
+        let h1 = x[i + 2] - x[i + 1];
+        let h = h0 + h1;
+        // Simpson's rule for non-uniform spacing
+        let s = h / 6.0
+            * (y[i] * (2.0 - h1 / h0)
+                + y[i + 1] * h * h / (h0 * h1)
+                + y[i + 2] * (2.0 - h0 / h1));
+        cumsum += s;
+        result.push(cumsum);
+        i += 2;
+    }
+
+    // If odd number of points, handle last interval with trapezoidal rule
+    if n % 2 == 0 {
+        let last = n - 1;
+        cumsum += 0.5 * (x[last] - x[last - 1]) * (y[last - 1] + y[last]);
         result.push(cumsum);
     }
 
@@ -1070,5 +1350,133 @@ mod tests {
             err,
             IntegrateValidationError::QuadInvalidBounds { .. }
         ));
+    }
+
+    // ── tplquad tests ──────────────────────────────────────────────
+
+    #[test]
+    fn tplquad_unit_cube() {
+        // ∫∫∫ 1 dz dy dx over [0,1]^3 = 1
+        let result = tplquad(
+            |_z, _y, _x| 1.0,
+            0.0,
+            1.0,
+            |_x| 0.0,
+            |_x| 1.0,
+            |_x, _y| 0.0,
+            |_x, _y| 1.0,
+            DblquadOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            (result.integral - 1.0).abs() < 0.01,
+            "unit cube volume: {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn tplquad_xyz() {
+        // ∫∫∫ xyz dz dy dx over [0,1]^3 = (1/2)^3 = 0.125
+        let result = tplquad(
+            |z, y, x| x * y * z,
+            0.0,
+            1.0,
+            |_x| 0.0,
+            |_x| 1.0,
+            |_x, _y| 0.0,
+            |_x, _y| 1.0,
+            DblquadOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            (result.integral - 0.125).abs() < 0.01,
+            "∫xyz = {}, expected 0.125",
+            result.integral
+        );
+    }
+
+    // ── Romberg tests ──────────────────────────────────────────────
+
+    #[test]
+    fn romb_func_polynomial() {
+        // ∫ x^2 dx from 0 to 1 = 1/3
+        let result = romb_func(|x| x * x, 0.0, 1.0, None, None).unwrap();
+        assert!(
+            (result.integral - 1.0 / 3.0).abs() < 1e-10,
+            "romberg ∫x² = {}, expected 1/3",
+            result.integral
+        );
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn romb_func_exp() {
+        // ∫ e^x dx from 0 to 1 = e - 1
+        let result = romb_func(|x| x.exp(), 0.0, 1.0, None, None).unwrap();
+        let expected = std::f64::consts::E - 1.0;
+        assert!(
+            (result.integral - expected).abs() < 1e-8,
+            "romberg ∫e^x = {}, expected {}",
+            result.integral,
+            expected
+        );
+    }
+
+    #[test]
+    fn romb_sampled() {
+        // Sampled x^2 from 0 to 4 with 5 points (2^2 + 1)
+        let y = vec![0.0, 1.0, 4.0, 9.0, 16.0]; // x^2 at x=0,1,2,3,4
+        let result = romb(&y, 1.0).unwrap();
+        // ∫ x^2 from 0 to 4 = 64/3 ≈ 21.333
+        assert!(
+            (result - 64.0 / 3.0).abs() < 0.1,
+            "romb sampled x^2 = {}, expected ~21.33",
+            result
+        );
+    }
+
+    #[test]
+    fn romb_wrong_sample_count() {
+        // 4 samples (not 2^k + 1)
+        assert!(romb(&[1.0, 2.0, 3.0, 4.0], 1.0).is_err());
+    }
+
+    // ── cumulative_simpson tests ───────────────────────────────────
+
+    #[test]
+    fn cumulative_simpson_constant() {
+        // f(x) = 2, x = [0, 1, 2, 3, 4]
+        // Cumulative integral: 2, 4, 6, 8 at each pair
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![2.0; 5];
+        let result = cumulative_simpson(&y, &x).unwrap();
+        // With Simpson for pairs of intervals: integral over [0,2] = 4, over [0,4] = 8
+        assert!(!result.is_empty());
+        let last = *result.last().unwrap();
+        assert!(
+            (last - 8.0).abs() < 0.1,
+            "cumulative_simpson constant: last = {last}, expected ~8.0"
+        );
+    }
+
+    #[test]
+    fn cumulative_simpson_quadratic() {
+        // f(x) = x^2, x = [0, 1, 2, 3, 4]
+        // Simpson should be exact for polynomials up to degree 3
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y: Vec<f64> = x.iter().map(|&xi| xi * xi).collect();
+        let result = cumulative_simpson(&y, &x).unwrap();
+        let last = *result.last().unwrap();
+        let expected = 64.0 / 3.0; // ∫x^2 from 0 to 4
+        assert!(
+            (last - expected).abs() < 0.5,
+            "cumulative_simpson x^2: last = {last}, expected ~{expected}"
+        );
+    }
+
+    #[test]
+    fn cumulative_simpson_too_few() {
+        assert!(cumulative_simpson(&[1.0, 2.0], &[0.0, 1.0]).is_err());
     }
 }

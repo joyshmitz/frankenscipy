@@ -13,23 +13,24 @@ pub mod types;
 
 pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
 pub use bessel::{BESSEL_DISPATCH_PLAN, hankel1, hankel2, iv, j0, j1, jn, jv, kv, y0, y1, yn, yv};
-pub use beta::{BETA_DISPATCH_PLAN, beta, betainc, betaln};
+pub use beta::{BETA_DISPATCH_PLAN, beta, betainc, betaln, btdtr, btdtri, fdtr, fdtri};
 pub use convenience::{
-    CONVENIENCE_DISPATCH_PLAN, entr, expit, logit, logsumexp, rel_entr, sinc, xlogy, xlog1py,
+    CONVENIENCE_DISPATCH_PLAN, entr, expit, kl_div, logit, logsumexp, ndtr, ndtri, rel_entr, sinc,
+    xlog1py, xlogy,
 };
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipk, ellipkinc, exp1, expi, lambertw,
 };
 pub use error::{ERROR_DISPATCH_PLAN, erf, erfc, erfcinv, erfinv};
+pub use gamma::{
+    GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, gdtr,
+    gdtri, perm, polygamma, rgamma, zeta,
+};
+pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
 pub use orthopoly::{
     eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite, eval_hermitenorm,
     eval_jacobi, eval_laguerre, eval_legendre,
 };
-pub use gamma::{
-    GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, perm,
-    polygamma, rgamma, zeta,
-};
-pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
 pub use types::{
     Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
     SpecialResult, SpecialTensor, SpecialTraceEntry, take_special_traces,
@@ -1140,6 +1141,125 @@ mod tests {
                 .iter()
                 .any(|entry| entry.function == "hyp2f1")
         );
+    }
+
+    #[test]
+    fn ndtr_contract_points() {
+        assert!((ndtr(0.0) - 0.5).abs() <= 1.0e-12);
+        assert!((ndtr(1.959_963_984_540_054) - 0.975).abs() <= 5.0e-5);
+        assert_eq!(ndtr(f64::NEG_INFINITY), 0.0);
+        assert_eq!(ndtr(f64::INFINITY), 1.0);
+    }
+
+    #[test]
+    fn ndtr_ndtri_roundtrip() {
+        for x in [-4.0, -1.5, -0.25, 0.0, 0.5, 2.0, 4.0] {
+            let back = ndtri(ndtr(x));
+            assert!(
+                (back - x).abs() <= 2.0e-4,
+                "ndtri(ndtr(x)) mismatch at x={x}: {back}"
+            );
+        }
+    }
+
+    #[test]
+    fn ndtri_domain_and_endpoints() {
+        assert_eq!(ndtri(0.0), f64::NEG_INFINITY);
+        assert_eq!(ndtri(1.0), f64::INFINITY);
+        assert!(ndtri(-0.1).is_nan());
+        assert!(ndtri(1.1).is_nan());
+    }
+
+    #[test]
+    fn beta_distribution_cdf_and_inverse_roundtrip() {
+        let value = btdtr(2.0, 5.0, 0.3);
+        assert!(
+            (value - 0.579_825).abs() <= 1.0e-6,
+            "unexpected beta cdf: {value}"
+        );
+
+        let x = btdtri(2.0, 5.0, 0.3);
+        let back = btdtr(2.0, 5.0, x);
+        assert!(
+            (back - 0.3).abs() <= 1.0e-8,
+            "beta inverse roundtrip failed: {back}"
+        );
+    }
+
+    #[test]
+    fn beta_inverse_endpoints_and_invalid_inputs() {
+        assert_eq!(btdtri(2.0, 5.0, 0.0), 0.0);
+        assert_eq!(btdtri(2.0, 5.0, 1.0), 1.0);
+        assert!(btdtr(2.0, 5.0, -0.1).is_nan());
+        assert!(btdtri(-1.0, 5.0, 0.5).is_nan());
+    }
+
+    #[test]
+    fn f_distribution_cdf_and_inverse_roundtrip() {
+        let x = 1.75;
+        let y = fdtr(5.0, 7.0, x);
+        let back = fdtri(5.0, 7.0, y);
+        assert!(
+            (back - x).abs() <= 1.0e-8,
+            "f inverse roundtrip failed: {back}"
+        );
+    }
+
+    #[test]
+    fn f_distribution_endpoints() {
+        assert_eq!(fdtr(5.0, 7.0, 0.0), 0.0);
+        assert_eq!(fdtri(5.0, 7.0, 0.0), 0.0);
+        assert_eq!(fdtri(5.0, 7.0, 1.0), f64::INFINITY);
+        assert!(fdtr(-1.0, 7.0, 1.0).is_nan());
+    }
+
+    #[test]
+    fn gamma_distribution_cdf_and_inverse_roundtrip() {
+        let x = 3.2;
+        let y = gdtr(2.5, 1.25, x);
+        let back = gdtri(2.5, 1.25, y);
+        assert!(
+            (back - x).abs() <= 1.0e-8,
+            "gamma inverse roundtrip failed: {back}"
+        );
+    }
+
+    #[test]
+    fn gamma_distribution_exponential_special_case() {
+        let x = 1.5_f64;
+        let scale = 2.0_f64;
+        let expected = 1.0 - (-(x / scale)).exp();
+        assert!((gdtr(1.0, scale, x) - expected).abs() <= 1.0e-10);
+    }
+
+    #[test]
+    fn gamma_inverse_endpoints_and_invalid_inputs() {
+        assert_eq!(gdtri(2.0, 3.0, 0.0), 0.0);
+        assert_eq!(gdtri(2.0, 3.0, 1.0), f64::INFINITY);
+        assert!(gdtr(-1.0, 3.0, 1.0).is_nan());
+        assert!(gdtri(2.0, -3.0, 0.5).is_nan());
+    }
+
+    #[test]
+    fn kl_div_matches_rel_entr_offset() {
+        let x = 0.7;
+        let y = 1.4;
+        let rel = rel_entr(
+            &SpecialTensor::RealScalar(x),
+            &SpecialTensor::RealScalar(y),
+            RuntimeMode::Strict,
+        )
+        .expect("rel_entr");
+        let expected = scalar_value(&rel) - x + y;
+        assert!((kl_div(x, y) - expected).abs() <= 1.0e-12);
+        assert_eq!(kl_div(0.0, 2.0), 2.0);
+        assert_eq!(kl_div(1.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn kl_div_invalid_inputs_are_infinite() {
+        assert!(kl_div(-1.0, 1.0).is_infinite());
+        assert!(kl_div(1.0, 0.0).is_infinite());
     }
 
     fn assert_real_scalar_close(actual: SpecialTensor, expected: f64, tol: f64) {

@@ -561,15 +561,21 @@ impl RkSolver {
         // Minimum step: 10 * machine epsilon at current t
         let min_step = 10.0 * (next_after(t, self.direction * f64::INFINITY) - t).abs();
 
-        let mut h_abs = self.h_abs.clamp(min_step, self.max_step);
+        let mut h_abs = self.h_abs.clamp(0.0, self.max_step);
 
         let mut step_accepted = false;
         let mut step_rejected = false;
 
         while !step_accepted {
             if h_abs < min_step {
-                self.state = OdeSolverState::Failed;
-                return Err(StepFailure::StepSizeTooSmall);
+                // If we are extremely close to the boundary, we can allow one final tiny step
+                let remaining = (self.t_bound - t).abs();
+                if remaining < min_step {
+                    h_abs = remaining;
+                } else {
+                    self.state = OdeSolverState::Failed;
+                    return Err(StepFailure::StepSizeTooSmall);
+                }
             }
 
             let h = h_abs * self.direction;

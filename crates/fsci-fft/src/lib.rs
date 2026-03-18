@@ -18,8 +18,8 @@ pub use plan::{
 };
 pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, TransformTrace, WorkerPolicy, dct, dct_i,
-    dct_iii, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, fft2, fftn, hilbert, idct, ifft, ifft2,
-    irfft, rfft, take_transform_traces,
+    dct_iii, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, fft2, fftn, hfft, hilbert, idct, ifft,
+    ifft2, irfft, irfft2, next_fast_len, rfft, rfft2, take_transform_traces,
 };
 
 /// FFT normalization modes matching SciPy/PocketFFT conventions.

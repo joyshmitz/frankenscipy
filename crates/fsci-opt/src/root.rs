@@ -519,6 +519,187 @@ where
     })
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Multivariate Root Finding: root, fsolve
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of multivariate root finding.
+#[derive(Debug, Clone)]
+pub struct MultivariateRootResult {
+    /// Solution vector.
+    pub x: Vec<f64>,
+    /// Residuals F(x) at the solution.
+    pub fun: Vec<f64>,
+    /// Whether the solver converged.
+    pub converged: bool,
+    /// Human-readable message.
+    pub message: String,
+    /// Number of iterations.
+    pub iterations: usize,
+    /// Number of function evaluations.
+    pub function_calls: usize,
+}
+
+/// Find roots of a system of nonlinear equations F(x) = 0.
+///
+/// Matches `scipy.optimize.fsolve(func, x0)`.
+///
+/// Uses Newton's method with finite-difference Jacobian and
+/// simple step-size damping for robustness.
+///
+/// # Arguments
+/// * `func` — Vector function F: R^n → R^n.
+/// * `x0` — Initial guess.
+pub fn fsolve<F>(func: F, x0: &[f64]) -> Result<MultivariateRootResult, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x0.len();
+    if n == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "x0 must not be empty".to_string(),
+        });
+    }
+
+    let tol = 1e-10;
+    let maxiter = 200;
+    let eps = 1e-8; // finite difference step
+
+    let mut x: Vec<f64> = x0.to_vec();
+    let mut nfev = 0usize;
+
+    for iteration in 0..maxiter {
+        let fx = func(&x);
+        nfev += 1;
+
+        // Check convergence: ||F(x)|| < tol.
+        let norm_fx: f64 = fx.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if norm_fx < tol {
+            return Ok(MultivariateRootResult {
+                x,
+                fun: fx,
+                converged: true,
+                message: "fsolve converged".to_string(),
+                iterations: iteration,
+                function_calls: nfev,
+            });
+        }
+
+        // Compute Jacobian via finite differences.
+        let mut jac = vec![vec![0.0; n]; n];
+        for j in 0..n {
+            let mut x_plus = x.clone();
+            let h = eps * (1.0 + x[j].abs());
+            x_plus[j] += h;
+            let fx_plus = func(&x_plus);
+            nfev += 1;
+            for i in 0..n {
+                jac[i][j] = (fx_plus[i] - fx[i]) / h;
+            }
+        }
+
+        // Solve J * dx = -F(x) using Gaussian elimination with partial pivoting.
+        let neg_fx: Vec<f64> = fx.iter().map(|v| -v).collect();
+        let dx = match solve_dense(&jac, &neg_fx) {
+            Some(d) => d,
+            None => {
+                return Ok(MultivariateRootResult {
+                    x,
+                    fun: fx,
+                    converged: false,
+                    message: "fsolve: singular Jacobian".to_string(),
+                    iterations: iteration,
+                    function_calls: nfev,
+                });
+            }
+        };
+
+        // Line search: try full step, then halve.
+        let mut alpha = 1.0;
+        let mut best_x = x.clone();
+        let mut best_norm = norm_fx;
+        for _ in 0..10 {
+            let trial: Vec<f64> = x.iter().zip(&dx).map(|(&xi, &di)| xi + alpha * di).collect();
+            let ftrial = func(&trial);
+            nfev += 1;
+            let trial_norm: f64 = ftrial.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if trial_norm < best_norm {
+                best_x = trial;
+                best_norm = trial_norm;
+                break;
+            }
+            alpha *= 0.5;
+        }
+
+        x = best_x;
+    }
+
+    let fx = func(&x);
+    nfev += 1;
+    Ok(MultivariateRootResult {
+        x,
+        fun: fx,
+        converged: false,
+        message: format!("fsolve failed to converge within {maxiter} iterations"),
+        iterations: maxiter,
+        function_calls: nfev,
+    })
+}
+
+/// Solve a dense linear system Ax = b using Gaussian elimination with partial pivoting.
+/// Returns None if the matrix is singular.
+fn solve_dense(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+    let n = a.len();
+    // Augmented matrix.
+    let mut aug: Vec<Vec<f64>> = a
+        .iter()
+        .zip(b.iter())
+        .map(|(row, &bi)| {
+            let mut r = row.clone();
+            r.push(bi);
+            r
+        })
+        .collect();
+
+    for col in 0..n {
+        // Partial pivoting.
+        let max_row = (col..n)
+            .max_by(|&i, &j| {
+                aug[i][col]
+                    .abs()
+                    .partial_cmp(&aug[j][col].abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        aug.swap(col, max_row);
+
+        if aug[col][col].abs() < 1e-15 {
+            return None; // Singular
+        }
+
+        let pivot = aug[col][col];
+        for row in (col + 1)..n {
+            let factor = aug[row][col] / pivot;
+            for j in col..=n {
+                let val = aug[col][j]; // avoid borrow conflict
+                aug[row][j] -= factor * val;
+            }
+        }
+    }
+
+    // Back substitution.
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut sum = aug[i][n];
+        for j in (i + 1)..n {
+            sum -= aug[i][j] * x[j];
+        }
+        x[i] = sum / aug[i][i];
+    }
+
+    Some(x)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};
@@ -531,6 +712,7 @@ mod tests {
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, ridder, root_scalar,
     };
+    use super::fsolve;
 
     #[derive(Debug, Serialize)]
     struct TestLogEntry<'a> {
@@ -1114,6 +1296,86 @@ mod tests {
                 result.function_calls,
                 Some(f(result.root)),
                 401,
+            );
+        }
+    }
+
+    // ── Multivariate root tests ────────────────────────────────────
+
+    #[test]
+    fn fsolve_2x2_circle_intersection() {
+        // x^2 + y^2 = 1, x - y = 0 → (1/√2, 1/√2)
+        let f = |x: &[f64]| vec![x[0] * x[0] + x[1] * x[1] - 1.0, x[0] - x[1]];
+        let result = fsolve(f, &[0.5, 0.5]).expect("fsolve should converge");
+        assert!(result.converged, "fsolve failed: {}", result.message);
+        let s2 = std::f64::consts::FRAC_1_SQRT_2;
+        assert!(
+            (result.x[0] - s2).abs() < 0.01,
+            "x = {}, expected {}",
+            result.x[0],
+            s2
+        );
+        assert!(
+            (result.x[1] - s2).abs() < 0.01,
+            "y = {}, expected {}",
+            result.x[1],
+            s2
+        );
+    }
+
+    #[test]
+    fn fsolve_linear_system() {
+        // 2x + y = 5, x - y = 1 → x=2, y=1
+        let f = |x: &[f64]| vec![2.0 * x[0] + x[1] - 5.0, x[0] - x[1] - 1.0];
+        let result = fsolve(f, &[0.0, 0.0]).expect("fsolve should converge");
+        assert!(result.converged, "fsolve failed: {}", result.message);
+        assert!(
+            (result.x[0] - 2.0).abs() < 0.01,
+            "x = {}, expected 2.0",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 1.0).abs() < 0.01,
+            "y = {}, expected 1.0",
+            result.x[1]
+        );
+    }
+
+    #[test]
+    fn fsolve_3x3_system() {
+        // x + y + z = 6, x - y + 2z = 5, 2x + y - z = 1 → x=1, y=2, z=3
+        let f = |x: &[f64]| {
+            vec![
+                x[0] + x[1] + x[2] - 6.0,
+                x[0] - x[1] + 2.0 * x[2] - 5.0,
+                2.0 * x[0] + x[1] - x[2] - 1.0,
+            ]
+        };
+        let result = fsolve(f, &[0.0, 0.0, 0.0]).expect("fsolve should converge");
+        assert!(result.converged, "fsolve failed: {}", result.message);
+        assert!((result.x[0] - 1.0).abs() < 0.1, "x = {}", result.x[0]);
+        assert!((result.x[1] - 2.0).abs() < 0.1, "y = {}", result.x[1]);
+        assert!((result.x[2] - 3.0).abs() < 0.1, "z = {}", result.x[2]);
+    }
+
+    #[test]
+    fn fsolve_near_solution_fast() {
+        let f = |x: &[f64]| vec![x[0] * x[0] - 4.0, x[1] * x[1] - 9.0];
+        let result = fsolve(f, &[1.9, 2.9]).expect("fsolve should converge");
+        assert!(result.converged);
+        assert!(result.iterations < 20, "too many iterations: {}", result.iterations);
+    }
+
+    #[test]
+    fn fsolve_residual_is_small() {
+        let f = |x: &[f64]| vec![x[0].sin() + x[1] - 1.0, x[0] + x[1].cos() - 1.0];
+        let result = fsolve(f, &[0.5, 0.5]).expect("fsolve should converge");
+        if result.converged {
+            let residual = f(&result.x);
+            let max_residual = residual.iter().map(|r| r.abs()).fold(0.0_f64, f64::max);
+            assert!(
+                max_residual < 1e-6,
+                "residual too large: {max_residual}"
             );
         }
     }

@@ -1139,13 +1139,149 @@ fn runtime_mode_name(mode: RuntimeMode) -> &'static str {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Multi-D Real FFT, next_fast_len, hfft
+// ══════════════════════════════════════════════════════════════════════
+
+/// 2D real-input FFT.
+///
+/// Matches `scipy.fft.rfft2(x, s)`.
+///
+/// Computes rfft along the last axis, then fft along the first axis.
+pub fn rfft2(
+    input: &[f64],
+    shape: (usize, usize),
+    options: &FftOptions,
+) -> Result<Vec<Complex64>, FftError> {
+    let (rows, cols) = shape;
+    let n = rows * cols;
+    if input.len() != n {
+        return Err(FftError::InvalidShape {
+            detail: "input length must equal rows*cols",
+        });
+    }
+
+    let out_cols = cols / 2 + 1;
+
+    // Step 1: rfft each row.
+    let mut row_results = Vec::with_capacity(rows * out_cols);
+    for r in 0..rows {
+        let row_data = &input[r * cols..(r + 1) * cols];
+        let row_fft = rfft(row_data, options)?;
+        row_results.extend_from_slice(&row_fft[..out_cols]);
+    }
+
+    // Step 2: fft each column of the intermediate result.
+    let mut result = vec![(0.0, 0.0); rows * out_cols];
+    for c in 0..out_cols {
+        // Extract column c.
+        let col: Vec<Complex64> = (0..rows).map(|r| row_results[r * out_cols + c]).collect();
+        let col_fft = fft(&col, options)?;
+        for (r, &val) in col_fft.iter().enumerate() {
+            result[r * out_cols + c] = val;
+        }
+    }
+
+    Ok(result)
+}
+
+/// 2D inverse real FFT.
+///
+/// Matches `scipy.fft.irfft2(x, s)`.
+pub fn irfft2(
+    input: &[Complex64],
+    shape: (usize, usize),
+    options: &FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    let (rows, cols) = shape;
+    let in_cols = cols / 2 + 1;
+    if input.len() != rows * in_cols {
+        return Err(FftError::InvalidShape {
+            detail: "input length must equal rows*(cols/2+1)",
+        });
+    }
+
+    // Step 1: ifft each column.
+    let mut col_results = vec![(0.0, 0.0); rows * in_cols];
+    for c in 0..in_cols {
+        let col: Vec<Complex64> = (0..rows).map(|r| input[r * in_cols + c]).collect();
+        let col_ifft = ifft(&col, options)?;
+        for (r, &val) in col_ifft.iter().enumerate() {
+            col_results[r * in_cols + c] = val;
+        }
+    }
+
+    // Step 2: irfft each row.
+    let mut result = Vec::with_capacity(rows * cols);
+    for r in 0..rows {
+        let row: Vec<Complex64> = (0..in_cols).map(|c| col_results[r * in_cols + c]).collect();
+        let row_real = irfft(&row, Some(cols), options)?;
+        result.extend_from_slice(&row_real);
+    }
+
+    Ok(result)
+}
+
+/// Find the next fast length for FFT computation.
+///
+/// Matches `scipy.fft.next_fast_len(target)`.
+///
+/// Returns the smallest integer >= `target` that is a product of
+/// small prime factors (2, 3, 5), since FFT is most efficient for these sizes.
+pub fn next_fast_len(target: usize) -> usize {
+    if target <= 1 {
+        return target;
+    }
+    let mut n = target;
+    loop {
+        if is_fast_len(n) {
+            return n;
+        }
+        n += 1;
+    }
+}
+
+/// Check if n is composed only of factors 2, 3, 5 (Hamming numbers / regular numbers).
+fn is_fast_len(mut n: usize) -> bool {
+    while n % 2 == 0 {
+        n /= 2;
+    }
+    while n % 3 == 0 {
+        n /= 3;
+    }
+    while n % 5 == 0 {
+        n /= 5;
+    }
+    n == 1
+}
+
+/// Hermitian FFT (FFT of a signal with Hermitian symmetry in the frequency domain).
+///
+/// Matches `scipy.fft.hfft(x, n)`.
+///
+/// Takes a half-spectrum (like rfft output) and produces a real-valued full signal.
+/// This is essentially irfft scaled differently — hfft(x, n) = n * irfft(x, n).
+pub fn hfft(
+    input: &[Complex64],
+    n: Option<usize>,
+    options: &FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    let out_len = n.unwrap_or_else(|| 2 * (input.len() - 1));
+    let mut result = irfft(input, Some(out_len), options)?;
+    let scale = out_len as f64;
+    for v in &mut result {
+        *v *= scale;
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use fsci_runtime::RuntimeMode;
 
     use super::{
-        FftError, FftOptions, TransformKind, WorkerPolicy, fft, fft2, fftn, ifft, ifft2, irfft,
-        rfft, take_transform_traces,
+        FftError, FftOptions, TransformKind, WorkerPolicy, fft, fft2, fftn, hfft, ifft, ifft2,
+        irfft, irfft2, next_fast_len, rfft, rfft2, take_transform_traces,
     };
     use crate::Normalization;
     use crate::plan::clear_shared_plan_cache;
@@ -1462,5 +1598,93 @@ mod tests {
         assert!(!last_two[0].plan_cache_hit);
         assert!(last_two[1].plan_cache_hit);
         assert!(last_two[0].to_json_line().contains("\"operation_id\""));
+    }
+
+    // ── rfft2 / irfft2 tests ───────────────────────────────────────
+
+    #[test]
+    fn rfft2_irfft2_roundtrip() {
+        let rows = 4;
+        let cols = 6;
+        let input: Vec<f64> = (0..(rows * cols)).map(|i| (i as f64 * 0.3).sin()).collect();
+        let opts = FftOptions::default();
+        let spectrum = rfft2(&input, (rows, cols), &opts).expect("rfft2");
+        let recovered = irfft2(&spectrum, (rows, cols), &opts).expect("irfft2");
+        assert_eq!(recovered.len(), input.len());
+        for (i, (&a, &b)) in input.iter().zip(recovered.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "rfft2 roundtrip mismatch at {i}: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn rfft2_output_shape() {
+        let rows = 4;
+        let cols = 8;
+        let input = vec![0.0; rows * cols];
+        let opts = FftOptions::default();
+        let spectrum = rfft2(&input, (rows, cols), &opts).expect("rfft2");
+        // Output should have rows * (cols/2 + 1) elements
+        assert_eq!(spectrum.len(), rows * (cols / 2 + 1));
+    }
+
+    // ── next_fast_len tests ────────────────────────────────────────
+
+    #[test]
+    fn next_fast_len_powers_of_2() {
+        assert_eq!(next_fast_len(1), 1);
+        assert_eq!(next_fast_len(2), 2);
+        assert_eq!(next_fast_len(4), 4);
+        assert_eq!(next_fast_len(8), 8);
+    }
+
+    #[test]
+    fn next_fast_len_non_powers() {
+        assert_eq!(next_fast_len(7), 8);
+        assert_eq!(next_fast_len(11), 12); // 12 = 2^2 * 3
+        assert_eq!(next_fast_len(13), 15); // 15 = 3 * 5
+        assert_eq!(next_fast_len(17), 18); // 18 = 2 * 3^2
+    }
+
+    #[test]
+    fn next_fast_len_already_fast() {
+        // 30 = 2 * 3 * 5
+        assert_eq!(next_fast_len(30), 30);
+        // 100 = 2^2 * 5^2
+        assert_eq!(next_fast_len(100), 100);
+    }
+
+    // ── hfft tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn hfft_basic() {
+        // hfft of a half-spectrum should produce real output
+        let opts = FftOptions::default();
+        let input = vec![(4.0, 0.0), (1.0, -1.0), (0.0, 0.0)]; // 3 elements → n=4
+        let result = hfft(&input, Some(4), &opts).expect("hfft");
+        assert_eq!(result.len(), 4);
+        // All values should be real (no imaginary component issue)
+        for &v in &result {
+            assert!(v.is_finite(), "hfft produced non-finite value: {v}");
+        }
+    }
+
+    #[test]
+    fn hfft_rfft_inverse() {
+        // hfft = n * irfft, so hfft(rfft(x), n) / n = x
+        let opts = FftOptions::default();
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let n = x.len();
+        let spectrum = rfft(&x, &opts).expect("rfft");
+        let recovered = hfft(&spectrum, Some(n), &opts).expect("hfft");
+        for (i, (&a, &b)) in x.iter().zip(recovered.iter()).enumerate() {
+            let b_scaled = b / n as f64;
+            assert!(
+                (a - b_scaled).abs() < 1e-9,
+                "hfft roundtrip mismatch at {i}: {a} vs {b_scaled}"
+            );
+        }
     }
 }

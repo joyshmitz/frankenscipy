@@ -235,7 +235,7 @@ impl CoreArrayBackend {
     pub fn dtype_dispatch_logs(&self) -> Vec<DTypeDispatchLog> {
         self.dtype_dispatch_logs
             .lock()
-            .expect("dtype dispatch log mutex should not be poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
@@ -243,14 +243,14 @@ impl CoreArrayBackend {
     pub fn shape_mismatch_logs(&self) -> Vec<ShapeMismatchLog> {
         self.shape_mismatch_logs
             .lock()
-            .expect("shape mismatch log mutex should not be poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
     fn record_dtype_dispatch(&self, requested_dtype: Option<DType>, resolved_dtype: DType) {
         self.dtype_dispatch_logs
             .lock()
-            .expect("dtype dispatch log mutex should not be poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .push(DTypeDispatchLog {
                 requested_dtype,
                 resolved_dtype,
@@ -266,7 +266,7 @@ impl CoreArrayBackend {
     ) {
         self.shape_mismatch_logs
             .lock()
-            .expect("shape mismatch log mutex should not be poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .push(ShapeMismatchLog {
                 operation,
                 expected_shape,

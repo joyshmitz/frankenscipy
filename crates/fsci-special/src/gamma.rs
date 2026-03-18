@@ -165,6 +165,66 @@ pub fn rgamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real_input("rgamma", z, mode, |x| rgamma_scalar(x, mode))
 }
 
+/// Gamma distribution CDF with shape `a` and scale `b`.
+///
+/// Matches `scipy.special.gdtr(a, b, x)`.
+#[must_use]
+pub fn gdtr(a: f64, b: f64, x: f64) -> f64 {
+    if a.is_nan() || b.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if a <= 0.0 || b <= 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 {
+        return 0.0;
+    }
+    gammainc_scalar(a, x / b, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Inverse gamma distribution CDF with shape `a` and scale `b`.
+///
+/// Matches `scipy.special.gdtri(a, b, y)`.
+#[must_use]
+pub fn gdtri(a: f64, b: f64, y: f64) -> f64 {
+    if a.is_nan() || b.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if a <= 0.0 || b <= 0.0 || !(0.0..=1.0).contains(&y) {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return 0.0;
+    }
+    if y == 1.0 {
+        return f64::INFINITY;
+    }
+
+    let mut lo = 0.0;
+    let mut hi = (a + 1.0).max(1.0);
+    while gdtr(a, 1.0, hi) < y {
+        hi *= 2.0;
+        if !hi.is_finite() {
+            return f64::INFINITY;
+        }
+    }
+
+    for _ in 0..160 {
+        let mid = 0.5 * (lo + hi);
+        let value = gdtr(a, 1.0, mid);
+        if value < y {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if (hi - lo).abs() <= 1.0e-12 * mid.abs().max(1.0) {
+            break;
+        }
+    }
+
+    0.5 * (lo + hi) * b
+}
+
 fn map_real_binary<F>(
     function: &'static str,
     lhs: &SpecialTensor,

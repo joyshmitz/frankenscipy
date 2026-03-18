@@ -726,6 +726,286 @@ impl ContinuousDistribution for Lognormal {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Pareto Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Pareto distribution with shape `b` and scale `scale`.
+///
+/// Matches `scipy.stats.pareto(b, scale=scale)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pareto {
+    pub b: f64,
+    pub scale: f64,
+}
+
+impl Pareto {
+    #[must_use]
+    pub fn new(b: f64, scale: f64) -> Self {
+        assert!(b > 0.0, "shape b must be positive, got {b}");
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { b, scale }
+    }
+}
+
+impl ContinuousDistribution for Pareto {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < self.scale {
+            0.0
+        } else {
+            self.b * self.scale.powf(self.b) / x.powf(self.b + 1.0)
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x < self.scale {
+            0.0
+        } else {
+            1.0 - (self.scale / x).powf(self.b)
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return self.scale;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        self.scale / (1.0 - q).powf(1.0 / self.b)
+    }
+
+    fn mean(&self) -> f64 {
+        if self.b <= 1.0 {
+            f64::INFINITY
+        } else {
+            self.b * self.scale / (self.b - 1.0)
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.b <= 2.0 {
+            f64::INFINITY
+        } else {
+            self.scale * self.scale * self.b / ((self.b - 1.0).powi(2) * (self.b - 2.0))
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Rayleigh Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Rayleigh distribution with scale parameter `scale`.
+///
+/// Matches `scipy.stats.rayleigh(scale=scale)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rayleigh {
+    pub scale: f64,
+}
+
+impl Rayleigh {
+    #[must_use]
+    pub fn new(scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { scale }
+    }
+}
+
+impl ContinuousDistribution for Rayleigh {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.0
+        } else {
+            let sigma_sq = self.scale * self.scale;
+            x / sigma_sq * (-(x * x) / (2.0 * sigma_sq)).exp()
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.0
+        } else {
+            1.0 - (-(x * x) / (2.0 * self.scale * self.scale)).exp()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        self.scale * (-2.0 * (1.0 - q).ln()).sqrt()
+    }
+
+    fn mean(&self) -> f64 {
+        self.scale * (PI / 2.0).sqrt()
+    }
+
+    fn var(&self) -> f64 {
+        (2.0 - PI / 2.0) * self.scale * self.scale
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Gumbel Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Gumbel (extreme value type I) distribution.
+///
+/// Matches `scipy.stats.gumbel_r(loc=loc, scale=scale)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Gumbel {
+    pub loc: f64,
+    pub scale: f64,
+}
+
+impl Gumbel {
+    #[must_use]
+    pub fn new(loc: f64, scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { loc, scale }
+    }
+}
+
+impl ContinuousDistribution for Gumbel {
+    fn pdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        let exp_neg_z = (-z).exp();
+        (-(z + exp_neg_z)).exp() / self.scale
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        (-(-z).exp()).exp()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        self.loc - self.scale * (-q.ln()).ln()
+    }
+
+    fn mean(&self) -> f64 {
+        const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+        self.loc + EULER_GAMMA * self.scale
+    }
+
+    fn var(&self) -> f64 {
+        PI * PI * self.scale * self.scale / 6.0
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Logistic Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Logistic distribution with location `loc` and scale `scale`.
+///
+/// Matches `scipy.stats.logistic(loc=loc, scale=scale)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Logistic {
+    pub loc: f64,
+    pub scale: f64,
+}
+
+impl Logistic {
+    #[must_use]
+    pub fn new(loc: f64, scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { loc, scale }
+    }
+}
+
+impl ContinuousDistribution for Logistic {
+    fn pdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        let exp_neg_z = (-z).exp();
+        exp_neg_z / (self.scale * (1.0 + exp_neg_z).powi(2))
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        1.0 / (1.0 + (-z).exp())
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        self.loc + self.scale * (q / (1.0 - q)).ln()
+    }
+
+    fn mean(&self) -> f64 {
+        self.loc
+    }
+
+    fn var(&self) -> f64 {
+        PI * PI * self.scale * self.scale / 3.0
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Maxwell Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Maxwell distribution with scale parameter `scale`.
+///
+/// Matches `scipy.stats.maxwell(scale=scale)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Maxwell {
+    pub scale: f64,
+}
+
+impl Maxwell {
+    #[must_use]
+    pub fn new(scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { scale }
+    }
+}
+
+impl ContinuousDistribution for Maxwell {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.0
+        } else {
+            (2.0 / PI).sqrt() * x * x / self.scale.powi(3)
+                * (-(x * x) / (2.0 * self.scale * self.scale)).exp()
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            0.0
+        } else {
+            let sqrt_two_over_pi = (2.0 / PI).sqrt();
+            let z = x / (self.scale * 2.0_f64.sqrt());
+            erf_approx(z)
+                - sqrt_two_over_pi
+                    * (x / self.scale)
+                    * (-(x * x) / (2.0 * self.scale * self.scale)).exp()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        2.0 * self.scale * (2.0 / PI).sqrt()
+    }
+
+    fn var(&self) -> f64 {
+        self.scale * self.scale * (3.0 - 8.0 / PI)
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Poisson Distribution (discrete, but commonly needed)
 // ══════════════════════════════════════════════════════════════════════
 
@@ -2890,6 +3170,267 @@ fn dagostino_kurttest_z(g2: f64, n: f64) -> f64 {
     (1.0 - 2.0 / (9.0 * a) - z_term.powf(1.0 / 3.0)) / (2.0 / (9.0 * a)).sqrt()
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Additional Statistics: gaussian_kde, entropy, boxcox, kendalltau
+// ══════════════════════════════════════════════════════════════════════
+
+/// Gaussian Kernel Density Estimator.
+///
+/// Matches `scipy.stats.gaussian_kde(dataset)`.
+///
+/// Uses Silverman's rule for bandwidth selection by default.
+#[derive(Debug, Clone)]
+pub struct GaussianKde {
+    /// Data points.
+    dataset: Vec<f64>,
+    /// Bandwidth (standard deviation of the Gaussian kernel).
+    bandwidth: f64,
+}
+
+impl GaussianKde {
+    /// Create a new Gaussian KDE from data.
+    ///
+    /// Uses Silverman's rule: bw = n^(-1/5) * std(data).
+    pub fn new(data: &[f64]) -> Self {
+        let n = data.len() as f64;
+        let mean = data.iter().sum::<f64>() / n;
+        let var = data.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n;
+        let std_dev = var.sqrt();
+        let bw = std_dev * n.powf(-0.2); // Silverman's rule
+        Self {
+            dataset: data.to_vec(),
+            bandwidth: bw.max(f64::EPSILON),
+        }
+    }
+
+    /// Create a KDE with a specified bandwidth.
+    pub fn with_bandwidth(data: &[f64], bandwidth: f64) -> Self {
+        Self {
+            dataset: data.to_vec(),
+            bandwidth: bandwidth.max(f64::EPSILON),
+        }
+    }
+
+    /// Evaluate the KDE at a single point.
+    pub fn evaluate(&self, x: f64) -> f64 {
+        let n = self.dataset.len() as f64;
+        let inv_bw = 1.0 / self.bandwidth;
+        let norm = inv_bw / (n * (2.0 * std::f64::consts::PI).sqrt());
+        self.dataset
+            .iter()
+            .map(|&xi| {
+                let z = (x - xi) * inv_bw;
+                norm * (-0.5 * z * z).exp()
+            })
+            .sum()
+    }
+
+    /// Evaluate the KDE at multiple points.
+    pub fn evaluate_many(&self, points: &[f64]) -> Vec<f64> {
+        points.iter().map(|&x| self.evaluate(x)).collect()
+    }
+
+    /// Return the bandwidth.
+    pub fn bandwidth(&self) -> f64 {
+        self.bandwidth
+    }
+}
+
+/// Compute the Shannon entropy of a discrete probability distribution.
+///
+/// Matches `scipy.stats.entropy(pk, base)`.
+///
+/// H = -Σ p_k * log(p_k), with 0*log(0) = 0 by convention.
+///
+/// # Arguments
+/// * `pk` — Probability distribution (will be normalized if not summing to 1).
+/// * `base` — Logarithm base (None = natural log, Some(2) = bits).
+pub fn entropy(pk: &[f64], base: Option<f64>) -> f64 {
+    if pk.is_empty() {
+        return 0.0;
+    }
+    let total: f64 = pk.iter().sum();
+    if total <= 0.0 {
+        return 0.0;
+    }
+
+    let h: f64 = pk
+        .iter()
+        .map(|&p| {
+            let prob = p / total;
+            if prob > 0.0 {
+                -prob * prob.ln()
+            } else {
+                0.0
+            }
+        })
+        .sum();
+
+    match base {
+        Some(b) => h / b.ln(),
+        None => h,
+    }
+}
+
+/// Result of Box-Cox transformation.
+#[derive(Debug, Clone)]
+pub struct BoxCoxResult {
+    /// Transformed data.
+    pub data: Vec<f64>,
+    /// Optimal lambda parameter.
+    pub lmbda: f64,
+}
+
+/// Apply Box-Cox transformation to data.
+///
+/// Matches `scipy.stats.boxcox(x, lmbda)`.
+///
+/// Transforms positive data to approximate normality.
+/// `y = (x^λ - 1) / λ` if λ ≠ 0, `y = ln(x)` if λ = 0.
+///
+/// # Arguments
+/// * `data` — Input data (must be positive).
+/// * `lmbda` — If None, find the optimal λ that maximizes the log-likelihood.
+///   If Some(λ), use that value.
+pub fn boxcox(data: &[f64], lmbda: Option<f64>) -> Result<BoxCoxResult, String> {
+    if data.is_empty() {
+        return Err("data must not be empty".to_string());
+    }
+    for (i, &v) in data.iter().enumerate() {
+        if v <= 0.0 {
+            return Err(format!("data[{i}] = {v}: Box-Cox requires all positive values"));
+        }
+    }
+
+    let lambda = lmbda.unwrap_or_else(|| find_optimal_boxcox_lambda(data));
+
+    let transformed: Vec<f64> = data
+        .iter()
+        .map(|&x| {
+            if lambda.abs() < 1e-10 {
+                x.ln()
+            } else {
+                (x.powf(lambda) - 1.0) / lambda
+            }
+        })
+        .collect();
+
+    Ok(BoxCoxResult {
+        data: transformed,
+        lmbda: lambda,
+    })
+}
+
+/// Find optimal Box-Cox lambda by maximizing log-likelihood over a grid.
+fn find_optimal_boxcox_lambda(data: &[f64]) -> f64 {
+    let n = data.len() as f64;
+    let log_geometric_mean: f64 = data.iter().map(|&x| x.ln()).sum::<f64>() / n;
+
+    let mut best_lambda = 0.0;
+    let mut best_ll = f64::NEG_INFINITY;
+
+    // Search lambda in [-2, 2] with resolution 0.01.
+    let steps = 400;
+    for i in 0..=steps {
+        let lambda = -2.0 + 4.0 * i as f64 / steps as f64;
+
+        let transformed: Vec<f64> = data
+            .iter()
+            .map(|&x| {
+                if lambda.abs() < 1e-10 {
+                    x.ln()
+                } else {
+                    (x.powf(lambda) - 1.0) / lambda
+                }
+            })
+            .collect();
+
+        let mean = transformed.iter().sum::<f64>() / n;
+        let var = transformed.iter().map(|&y| (y - mean).powi(2)).sum::<f64>() / n;
+
+        if var <= 0.0 {
+            continue;
+        }
+
+        // Log-likelihood (up to constants):
+        // -n/2 * ln(var) + (lambda - 1) * sum(ln(x))
+        let ll = -n / 2.0 * var.ln() + (lambda - 1.0) * log_geometric_mean * n;
+
+        if ll > best_ll {
+            best_ll = ll;
+            best_lambda = lambda;
+        }
+    }
+
+    best_lambda
+}
+
+/// Kendall's tau rank correlation coefficient.
+///
+/// Matches `scipy.stats.kendalltau(x, y)`.
+///
+/// Returns (tau, p_value). The p-value is approximate for large n.
+pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
+    let n = x.len();
+    if n < 2 || x.len() != y.len() {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    // Count concordant and discordant pairs.
+    let mut concordant: i64 = 0;
+    let mut discordant: i64 = 0;
+    let mut x_ties: i64 = 0;
+    let mut y_ties: i64 = 0;
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let dx = x[i] - x[j];
+            let dy = y[i] - y[j];
+            let product = dx * dy;
+
+            if product > 0.0 {
+                concordant += 1;
+            } else if product < 0.0 {
+                discordant += 1;
+            } else if dx.abs() < f64::EPSILON && dy.abs() >= f64::EPSILON {
+                x_ties += 1;
+            } else if dy.abs() < f64::EPSILON && dx.abs() >= f64::EPSILON {
+                y_ties += 1;
+            }
+            // Both zero: neither concordant, discordant, nor single-axis tie
+        }
+    }
+
+    let n_pairs = (n * (n - 1) / 2) as f64;
+    let denom = ((n_pairs - x_ties as f64) * (n_pairs - y_ties as f64)).sqrt();
+
+    let tau = if denom > 0.0 {
+        (concordant - discordant) as f64 / denom
+    } else {
+        0.0
+    };
+
+    // Approximate p-value using normal approximation for large n.
+    let n_f = n as f64;
+    let var = (2.0 * (2.0 * n_f + 5.0)) / (9.0 * n_f * (n_f - 1.0));
+    let z = tau / var.sqrt();
+    // Two-tailed p-value from standard normal.
+    let p = 2.0 * (1.0 - standard_normal_cdf(z.abs()));
+
+    CorrelationResult {
+        statistic: tau,
+        pvalue: p,
+    }
+}
+
+/// Standard normal CDF approximation.
+fn standard_normal_cdf(x: f64) -> f64 {
+    0.5 * (1.0 + erf_approx(x / std::f64::consts::SQRT_2))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3416,6 +3957,90 @@ mod tests {
         // CDF(scale) = CDF of standard lognorm at 1 = Φ(0) = 0.5
         let ln = Lognormal::new(1.0, 5.0);
         assert_close(ln.cdf(5.0), 0.5, 1e-4, "lognormal cdf at scale");
+    }
+
+    // ── Additional continuous distributions ────────────────────────
+
+    #[test]
+    fn pareto_support_mean_and_variance() {
+        let p = Pareto::new(3.0, 2.0);
+        assert_eq!(p.pdf(1.5), 0.0);
+        assert_eq!(p.cdf(1.5), 0.0);
+        assert_close(p.mean(), 3.0, 1e-12, "pareto mean");
+        assert_close(p.var(), 3.0, 1e-12, "pareto variance");
+    }
+
+    #[test]
+    fn pareto_cdf_ppf_roundtrip() {
+        let p = Pareto::new(2.5, 1.5);
+        let x = p.ppf(0.75);
+        assert_close(p.cdf(x), 0.75, 1e-10, "pareto cdf(ppf(q))");
+    }
+
+    #[test]
+    fn rayleigh_mode_and_roundtrip() {
+        let r = Rayleigh::new(1.0);
+        assert!(r.pdf(1.0) > r.pdf(0.5), "mode near scale");
+        assert!(r.pdf(1.0) > r.pdf(2.0), "density should fall past the mode");
+        let x = r.ppf(0.6);
+        assert_close(r.cdf(x), 0.6, 1e-10, "rayleigh cdf(ppf(q))");
+    }
+
+    #[test]
+    fn rayleigh_mean_and_variance() {
+        let r = Rayleigh::new(2.0);
+        assert_close(r.mean(), 2.0 * (PI / 2.0).sqrt(), 1e-12, "rayleigh mean");
+        assert_close(r.var(), 4.0 * (2.0 - PI / 2.0), 1e-12, "rayleigh variance");
+    }
+
+    #[test]
+    fn gumbel_cdf_ppf_roundtrip() {
+        let g = Gumbel::new(1.0, 2.0);
+        let x = g.ppf(0.8);
+        assert_close(g.cdf(x), 0.8, 1e-10, "gumbel cdf(ppf(q))");
+    }
+
+    #[test]
+    fn gumbel_mean_and_variance() {
+        let g = Gumbel::new(0.5, 1.5);
+        assert_close(
+            g.mean(),
+            0.5 + 0.577_215_664_901_532_9 * 1.5,
+            1e-12,
+            "gumbel mean",
+        );
+        assert_close(g.var(), PI * PI * 1.5 * 1.5 / 6.0, 1e-12, "gumbel variance");
+    }
+
+    #[test]
+    fn logistic_cdf_matches_expit_form() {
+        let l = Logistic::new(2.0, 0.5);
+        assert_close(l.cdf(2.0), 0.5, 1e-12, "logistic cdf at location");
+        assert_close(l.pdf(2.0), 0.5, 1e-12, "logistic pdf at location");
+    }
+
+    #[test]
+    fn logistic_cdf_ppf_roundtrip() {
+        let l = Logistic::new(-1.0, 3.0);
+        let x = l.ppf(0.25);
+        assert_close(l.cdf(x), 0.25, 1e-10, "logistic cdf(ppf(q))");
+    }
+
+    #[test]
+    fn maxwell_support_and_mode() {
+        let m = Maxwell::new(1.0);
+        assert_eq!(m.pdf(-0.5), 0.0);
+        assert!(m.pdf(1.0) > m.pdf(0.5), "maxwell rises before the mode");
+        assert!(m.pdf(1.5) > m.pdf(2.0), "maxwell falls after the mode");
+    }
+
+    #[test]
+    fn maxwell_cdf_and_mean_variance() {
+        let m = Maxwell::new(2.0);
+        assert_eq!(m.cdf(0.0), 0.0);
+        assert!(m.cdf(2.0) > 0.0 && m.cdf(2.0) < 1.0);
+        assert_close(m.mean(), 4.0 * (2.0 / PI).sqrt(), 1e-12, "maxwell mean");
+        assert_close(m.var(), 4.0 * (3.0 - 8.0 / PI), 1e-12, "maxwell variance");
     }
 
     // ── Cauchy distribution ───────────────────────────────────────
@@ -4473,6 +5098,174 @@ mod tests {
             result.statistic < 0.1,
             "near-perfect fit D={} should be small",
             result.statistic
+        );
+    }
+
+    // ── GaussianKde tests ──────────────────────────────────────────
+
+    #[test]
+    fn gaussian_kde_peak_at_data() {
+        let data = vec![0.0; 100]; // All data at 0
+        let kde = GaussianKde::new(&data);
+        let at_zero = kde.evaluate(0.0);
+        let at_far = kde.evaluate(10.0);
+        assert!(
+            at_zero > at_far,
+            "KDE should peak at data: f(0)={at_zero}, f(10)={at_far}"
+        );
+    }
+
+    #[test]
+    fn gaussian_kde_integrates_to_one() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let kde = GaussianKde::new(&data);
+        // Numerical integration from -10 to 15
+        let n = 10000;
+        let a = -10.0;
+        let b = 15.0;
+        let dx = (b - a) / n as f64;
+        let integral: f64 = (0..n)
+            .map(|i| {
+                let x = a + (i as f64 + 0.5) * dx;
+                kde.evaluate(x) * dx
+            })
+            .sum();
+        assert!(
+            (integral - 1.0).abs() < 0.05,
+            "KDE integral = {integral}, expected ~1.0"
+        );
+    }
+
+    #[test]
+    fn gaussian_kde_with_bandwidth() {
+        let data = vec![0.0, 1.0, 2.0];
+        let kde = GaussianKde::with_bandwidth(&data, 0.5);
+        assert!((kde.bandwidth() - 0.5).abs() < 1e-12);
+    }
+
+    // ── Entropy tests ──────────────────────────────────────────────
+
+    #[test]
+    fn entropy_uniform() {
+        // Uniform distribution over 4 outcomes: H = ln(4)
+        let pk = vec![0.25, 0.25, 0.25, 0.25];
+        let h = entropy(&pk, None);
+        assert!(
+            (h - 4.0_f64.ln()).abs() < 1e-10,
+            "uniform entropy: {h}, expected {}",
+            4.0_f64.ln()
+        );
+    }
+
+    #[test]
+    fn entropy_base2() {
+        // Uniform over 8 outcomes in bits: H = 3
+        let pk = vec![1.0; 8];
+        let h = entropy(&pk, Some(2.0));
+        assert!(
+            (h - 3.0).abs() < 1e-10,
+            "entropy in bits: {h}, expected 3.0"
+        );
+    }
+
+    #[test]
+    fn entropy_deterministic() {
+        // Deterministic distribution: H = 0
+        let pk = vec![1.0, 0.0, 0.0];
+        let h = entropy(&pk, None);
+        assert!(h.abs() < 1e-10, "deterministic entropy: {h}");
+    }
+
+    // ── Box-Cox tests ──────────────────────────────────────────────
+
+    #[test]
+    fn boxcox_lambda_1_is_linear() {
+        // λ=1: y = (x^1 - 1)/1 = x - 1
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = boxcox(&data, Some(1.0)).unwrap();
+        for (i, (&y, &x)) in result.data.iter().zip(data.iter()).enumerate() {
+            assert_close(y, x - 1.0, 1e-10, &format!("boxcox λ=1 at {i}"));
+        }
+    }
+
+    #[test]
+    fn boxcox_lambda_0_is_log() {
+        // λ=0: y = ln(x)
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        let result = boxcox(&data, Some(0.0)).unwrap();
+        for (i, (&y, &x)) in result.data.iter().zip(data.iter()).enumerate() {
+            assert_close(y, x.ln(), 1e-10, &format!("boxcox λ=0 at {i}"));
+        }
+    }
+
+    #[test]
+    fn boxcox_optimal_lambda() {
+        // Let the optimizer find lambda
+        let data: Vec<f64> = (1..=20).map(|i| (i as f64).powi(3)).collect();
+        let result = boxcox(&data, None).unwrap();
+        assert_eq!(result.data.len(), 20);
+        // Lambda should be somewhere reasonable
+        assert!(
+            result.lmbda > -3.0 && result.lmbda < 3.0,
+            "optimal lambda out of range: {}",
+            result.lmbda
+        );
+    }
+
+    #[test]
+    fn boxcox_negative_data_rejected() {
+        assert!(boxcox(&[1.0, -1.0, 2.0], Some(1.0)).is_err());
+    }
+
+    // ── Kendall's tau tests ────────────────────────────────────────
+
+    #[test]
+    fn kendalltau_perfect_concordance() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = kendalltau(&x, &y);
+        assert!(
+            (result.statistic - 1.0).abs() < 1e-10,
+            "perfect concordance tau: {}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn kendalltau_perfect_discordance() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![5.0, 4.0, 3.0, 2.0, 1.0];
+        let result = kendalltau(&x, &y);
+        assert!(
+            (result.statistic - (-1.0)).abs() < 1e-10,
+            "perfect discordance tau: {}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn kendalltau_uncorrelated() {
+        // Random-ish data should have |tau| << 1
+        let x = vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0, 8.0, 7.0];
+        let y = vec![8.0, 2.0, 6.0, 1.0, 5.0, 3.0, 7.0, 4.0];
+        let result = kendalltau(&x, &y);
+        assert!(
+            result.statistic.abs() < 0.6,
+            "uncorrelated tau should be small: {}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn kendalltau_pvalue_significant() {
+        // Strong correlation should have small p-value
+        let x: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let y: Vec<f64> = (0..20).map(|i| i as f64 * 2.0 + 1.0).collect();
+        let result = kendalltau(&x, &y);
+        assert!(
+            result.pvalue < 0.05,
+            "strong correlation should have p < 0.05, got {}",
+            result.pvalue
         );
     }
 }

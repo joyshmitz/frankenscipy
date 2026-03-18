@@ -111,7 +111,11 @@ where
     for iteration in 0..options.max_iter {
         // Solve IVP with current y0
         let ivp_result = solve_ivp_internal(f, t_span, &y0, options.rtol, options.atol)?;
-        let yb = ivp_result.y.last().unwrap().clone();
+        let yb = ivp_result
+            .y
+            .last()
+            .ok_or_else(|| BvpError::IvpFailed("IVP result is empty".to_string()))?
+            .clone();
 
         // Evaluate boundary condition residual
         let residual = bc(&y0, &yb);
@@ -135,7 +139,10 @@ where
             let mut y0_pert = y0.clone();
             y0_pert[j] += eps_j;
             let ivp_pert = solve_ivp_internal(f, t_span, &y0_pert, options.rtol, options.atol)?;
-            let yb_pert = ivp_pert.y.last().unwrap();
+            let yb_pert = ivp_pert
+                .y
+                .last()
+                .ok_or_else(|| BvpError::IvpFailed("IVP perturbation result is empty".to_string()))?;
             let residual_pert = bc(&y0_pert, yb_pert);
             for i in 0..n {
                 jac[i][j] = (residual_pert[i] - residual[i]) / eps_j;
@@ -153,7 +160,10 @@ where
 
     // Final evaluation
     let ivp_result = solve_ivp_internal(f, t_span, &y0, options.rtol, options.atol)?;
-    let yb = ivp_result.y.last().unwrap();
+    let yb = ivp_result
+        .y
+        .last()
+        .ok_or_else(|| BvpError::IvpFailed("Final IVP result is empty".to_string()))?;
     let residual = bc(&y0, yb);
     let residual_norm: f64 = residual.iter().map(|r| r * r).sum::<f64>().sqrt();
 

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use fsci_runtime::{
-    MatrixConditionState, RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio,
+    RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio,
 };
 use nalgebra::linalg::Cholesky;
 use nalgebra::{DMatrix, DVector, Dyn, LU, linalg::SVD};
@@ -209,6 +209,8 @@ pub struct LuFactorResult {
     lu_internal: LU<f64, Dyn, Dyn>,
     /// Matrix dimension.
     n: usize,
+    /// 1-norm of the original matrix.
+    a_norm_1: f64,
 }
 
 /// Result of QR decomposition.
@@ -576,8 +578,9 @@ pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError
 /// Single LU factorization + solve against identity. O(n³) instead of O(n⁴).
 fn inv_general(a: &[Vec<f64>], n: usize) -> Result<InvResult, LinalgError> {
     let matrix = dmatrix_from_rows(a)?;
+    let a_norm_1 = matrix.lp_norm(1);
     let lu: LU<f64, Dyn, Dyn> = matrix.lu();
-    let rcond = fast_rcond_from_lu(&lu, n);
+    let rcond = fast_rcond_from_lu(&lu, a_norm_1, n);
 
     // Reject near-singular matrices that LU may not catch exactly
     if rcond < f64::EPSILON {
@@ -737,38 +740,68 @@ pub fn pinv(a: &[Vec<f64>], options: PinvOptions) -> Result<PinvResult, LinalgEr
     })
 }
 
-/// O(n) reciprocal condition estimate from LU diagonal — conservative lower bound
-/// on the true rcond. Avoids the O(n³) SVD that was previously used.
-fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, n: usize) -> f64 {
+/// Solve Aᵀ x = b using LU factorization PA = LU => Aᵀ = Uᵀ Lᵀ P.
+fn solve_lu_transpose(lu: &LU<f64, Dyn, Dyn>, b: &DVector<f64>) -> Option<DVector<f64>> {
+    // Aᵀ = Uᵀ Lᵀ P
+    // Uᵀ Lᵀ P x = b
+    // 1. Solve Uᵀ y = b (lower triangular)
+    let u_t = lu.u().transpose();
+    let y = u_t.solve_lower_triangular(b)?;
+    // 2. Solve Lᵀ z = y (upper triangular)
+    let l_t = lu.l().transpose();
+    let z = l_t.solve_upper_triangular(&y)?;
+    // 3. P x = z => x = Pᵀ z
+    let mut x = z;
+    lu.p().inv_permute_rows(&mut x);
+    Some(x)
+}
+
+/// O(n²) reciprocal condition estimate from LU — 1-norm Higham estimator.
+/// Cost: 2 solves (O(n²)) vs O(n³) for full SVD.
+fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, a_norm: f64, n: usize) -> f64 {
     if n == 0 {
         return 1.0;
     }
-    let u = lu.u();
-    let mut max_diag: f64 = 0.0;
-    let mut min_diag = f64::INFINITY;
-    for i in 0..n {
-        let d = u[(i, i)].abs();
-        max_diag = max_diag.max(d);
-        if d > 0.0 {
-            min_diag = min_diag.min(d);
-        }
-    }
-    if max_diag == 0.0 {
+    if a_norm == 0.0 {
         return 0.0;
     }
-    min_diag / max_diag
+
+    // Estimate ||A⁻¹||₁ via one iteration of Higham's algorithm.
+    let mut x = DVector::from_element(n, 1.0 / (n as f64));
+
+    // 1. Solve Aᵀ w = sign(x)
+    let sign_x = x.map(|val| val.signum());
+    let w = match solve_lu_transpose(lu, &sign_x) {
+        Some(w) => w,
+        None => return 0.0,
+    };
+
+    // 2. Solve A x = sign(w)
+    let sign_w = w.map(|val| val.signum());
+    x = match lu.solve(&sign_w) {
+        Some(x) => x,
+        None => return 0.0,
+    };
+
+    // 3. ||A⁻¹||₁ ≈ ||x||₁
+    let inv_a_norm = x.lp_norm(1);
+
+    if inv_a_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let rcond = 1.0 / (a_norm * inv_a_norm);
+    rcond.min(1.0)
 }
 
-/// Classify rcond into a MatrixConditionState for CASP portfolio decisions.
-fn classify_condition(rcond: f64) -> MatrixConditionState {
-    if rcond > 1e-4 {
-        MatrixConditionState::WellConditioned
-    } else if rcond > 1e-8 {
-        MatrixConditionState::ModerateCondition
-    } else if rcond > 1e-14 {
-        MatrixConditionState::IllConditioned
-    } else {
-        MatrixConditionState::NearSingular
+/// Map linalg assumption to runtime structural evidence for CASP.
+fn assumption_to_evidence(a: MatrixAssumption) -> fsci_runtime::StructuralEvidence {
+    match a {
+        MatrixAssumption::Diagonal => fsci_runtime::StructuralEvidence::Diagonal,
+        MatrixAssumption::UpperTriangular | MatrixAssumption::LowerTriangular => {
+            fsci_runtime::StructuralEvidence::Triangular
+        }
+        _ => fsci_runtime::StructuralEvidence::General,
     }
 }
 
@@ -827,7 +860,7 @@ fn solve_general_with_hardening(
     let rhs = DVector::from_column_slice(b);
     let lu: LU<f64, Dyn, Dyn> = matrix.clone().lu();
     let n = a.len();
-    let rcond = fast_rcond_from_lu(&lu, n);
+    let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), n);
 
     // Hardened mode: reject if condition number is too high
     if mode == RuntimeMode::Hardened && rcond < HARDENED_RCOND_THRESHOLD && rcond > 0.0 {
@@ -920,15 +953,15 @@ pub fn solve_with_casp(
         a.to_vec()
     };
 
-    // Quick LU for condition estimation (O(n³) but needed anyway for LU path)
+    // Quick LU for condition estimation
     let matrix = dmatrix_from_rows(&effective_a)?;
     let lu: LU<f64, Dyn, Dyn> = matrix.clone().lu();
-    let rcond = fast_rcond_from_lu(&lu, rows);
-    let condition_state = classify_condition(rcond);
+    let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), rows);
 
     // Query portfolio for optimal action via expected-loss minimization
+    let evidence = options.assume_a.map(assumption_to_evidence);
     let (action, posterior, expected_losses, chosen_loss) =
-        portfolio.select_action(&condition_state);
+        portfolio.select_action(rcond, evidence);
 
     // Dispatch to chosen solver
     let result = match action {
@@ -945,14 +978,26 @@ pub fn solve_with_casp(
         SolverAction::PivotedQR => solve_qr(&effective_a, b),
         SolverAction::SVDFallback => solve_svd_fallback(&effective_a, b),
         SolverAction::DiagonalFastPath => solve_diagonal(&effective_a, b),
-        SolverAction::TriangularFastPath => solve_triangular_internal(
-            &effective_a,
-            b,
-            TriangularTranspose::NoTranspose,
-            false,
-            false,
-        ),
+        SolverAction::TriangularFastPath => {
+            let lower = options.assume_a == Some(MatrixAssumption::LowerTriangular);
+            solve_triangular_internal(
+                &effective_a,
+                b,
+                TriangularTranspose::NoTranspose,
+                lower,
+                false,
+            )
+        }
     };
+
+    emit_trace(LinalgTrace {
+        operation: "solve_with_casp",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: Some(rcond),
+        warning: rcond_warning(rcond).map(|w| format!("{w:?}")),
+        error: result.as_ref().err().map(|e| e.to_string()),
+    });
 
     // Record evidence regardless of outcome
     let fallback_active = !matches!(action, SolverAction::DirectLU);
@@ -999,25 +1044,45 @@ pub fn randomized_rcond_estimate(
         return 0.0;
     }
 
-    // Inverse power iteration for smallest singular value using LU
+    // Inverse power iteration for smallest singular value using LU on (AᵀA)⁻¹
+    // w_{k+1} = (AᵀA)⁻¹ w_k = A⁻¹ (Aᵀ)⁻¹ w_k
     let mut w = DVector::from_element(n, 1.0 / (n as f64).sqrt());
     for _ in 0..iterations {
-        match lu.solve(&w) {
-            Some(solved) => {
-                let norm = solved.norm();
-                if norm == 0.0 {
-                    return 0.0;
+        // 1. Solve Aᵀ y = w
+        match solve_lu_transpose(lu, &w) {
+            Some(y) => {
+                // 2. Solve A w_new = y
+                match lu.solve(&y) {
+                    Some(solved) => {
+                        let norm = solved.norm();
+                        if norm == 0.0 {
+                            return 0.0;
+                        }
+                        w = solved / norm;
+                    }
+                    None => return 0.0,
                 }
-                w = solved / norm;
             }
             None => return 0.0,
         }
     }
-    let sigma_min_inv = lu.solve(&w).map_or(f64::INFINITY, |s| s.norm());
-    if sigma_min_inv == 0.0 || !sigma_min_inv.is_finite() {
+
+    // Final estimate: ||A⁻¹ w||₂ = 1/σ_min
+    // (AᵀA)⁻¹ w = (1/σ_min²) w
+    let y = match solve_lu_transpose(lu, &w) {
+        Some(y) => y,
+        None => return 0.0,
+    };
+    let w_final = match lu.solve(&y) {
+        Some(s) => s,
+        None => return 0.0,
+    };
+
+    let sigma_min_sq_inv = w_final.norm();
+    if sigma_min_sq_inv <= 0.0 || !sigma_min_sq_inv.is_finite() {
         return 0.0;
     }
-    let sigma_min = 1.0 / sigma_min_inv;
+    let sigma_min = (1.0 / sigma_min_sq_inv).sqrt();
 
     sigma_min / sigma_max
 }
@@ -1084,6 +1149,7 @@ pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResul
     validate_finite_matrix(a, options.mode, options.check_finite)?;
 
     let matrix = dmatrix_from_rows(a)?;
+    let a_norm_1 = matrix.lp_norm(1);
     let lu_decomp: LU<f64, Dyn, Dyn> = matrix.lu();
 
     emit_trace(LinalgTrace {
@@ -1098,6 +1164,7 @@ pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResul
     Ok(LuFactorResult {
         lu_internal: lu_decomp,
         n: rows,
+        a_norm_1,
     })
 }
 
@@ -1118,7 +1185,7 @@ pub fn lu_solve(lu_factor: &LuFactorResult, b: &[f64]) -> Result<SolveResult, Li
         .solve(&rhs)
         .ok_or(LinalgError::SingularMatrix)?;
 
-    let rcond = fast_rcond_from_lu(&lu_factor.lu_internal, lu_factor.n);
+    let rcond = fast_rcond_from_lu(&lu_factor.lu_internal, lu_factor.a_norm_1, lu_factor.n);
 
     emit_trace(LinalgTrace {
         operation: "lu_solve",
@@ -2148,23 +2215,21 @@ fn solve_diagonal(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError>
         min_diag = min_diag.min(abs_diag);
         x[i] = b[i] / diag;
     }
-    let warning = if max_diag > 0.0 {
-        let rcond = min_diag / max_diag;
-        if rcond < 1e-12 {
-            Some(LinalgWarning::IllConditioned {
-                reciprocal_condition: rcond,
-            })
-        } else {
-            None
-        }
+    let rcond = if max_diag > 0.0 { min_diag / max_diag } else { 0.0 };
+    let warning = if rcond < 1e-12 {
+        Some(LinalgWarning::IllConditioned {
+            reciprocal_condition: rcond,
+        })
     } else {
         None
     };
 
+    let backward_error = compute_backward_error_dense(a, &x, b);
+
     Ok(SolveResult {
         x,
         warning,
-        backward_error: None,
+        backward_error: Some(backward_error),
     })
 }
 
@@ -2210,11 +2275,60 @@ fn solve_triangular_internal(
         }
     }
 
+    let backward_error = compute_backward_error_dense(a, &x, b);
+
     Ok(SolveResult {
         x,
         warning: None,
-        backward_error: None,
+        backward_error: Some(backward_error),
     })
+}
+
+/// Compute backward error using dense iteration: ||Ax - b|| / (||A|| × ||x|| + ||b||).
+fn compute_backward_error_dense(a: &[Vec<f64>], x: &[f64], b: &[f64]) -> f64 {
+    let n = a.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let m = if a.is_empty() { 0 } else { a[0].len() };
+
+    let mut residual_sum_sq = 0.0;
+    for i in 0..n {
+        let mut ax_i = 0.0;
+        for (j, &xj) in x.iter().enumerate().take(m) {
+            ax_i += a[i][j] * xj;
+        }
+        let res_i = ax_i - b[i];
+        residual_sum_sq += res_i * res_i;
+    }
+    let residual_norm = residual_sum_sq.sqrt();
+
+    let mut a_sum_sq = 0.0;
+    for row in a {
+        for &val in row {
+            a_sum_sq += val * val;
+        }
+    }
+    let a_norm = a_sum_sq.sqrt();
+
+    let mut x_sum_sq = 0.0;
+    for &val in x {
+        x_sum_sq += val * val;
+    }
+    let x_norm = x_sum_sq.sqrt();
+
+    let mut b_sum_sq = 0.0;
+    for &val in b {
+        b_sum_sq += val * val;
+    }
+    let b_norm = b_sum_sq.sqrt();
+
+    let denom = a_norm * x_norm + b_norm;
+    if denom > 0.0 {
+        residual_norm / denom
+    } else {
+        0.0
+    }
 }
 
 fn dense_from_banded(nlower: usize, nupper: usize, ab: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
@@ -2319,6 +2433,394 @@ fn pseudo_inverse_from_svd(
         }
     }
     Ok(v_t.transpose() * sigma_pinv * u.transpose())
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Subspace Operations: orth, null_space, subspace_angles, polar
+// ══════════════════════════════════════════════════════════════════════
+
+/// Compute an orthonormal basis for the range (column space) of a matrix.
+///
+/// Matches `scipy.linalg.orth(A, rcond)`.
+///
+/// Returns a matrix whose columns form an orthonormal basis for the column
+/// space of A, determined by keeping singular vectors with singular values
+/// above `rcond * max(s)`.
+pub fn orth(
+    a: &[Vec<f64>],
+    rcond: Option<f64>,
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (m, n) = matrix_shape(a)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if m == 0 || n == 0 {
+        return Ok(vec![vec![]; m]);
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let svd_decomp = SVD::new(matrix, true, false);
+    let u = svd_decomp.u.as_ref().ok_or(LinalgError::UnsupportedAssumption)?;
+    let singular_values = &svd_decomp.singular_values;
+
+    let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let tol = rcond.unwrap_or_else(|| (m.max(n) as f64) * f64::EPSILON) * max_s;
+
+    let rank = singular_values.iter().filter(|&&s| s > tol).count();
+
+    // Extract first `rank` columns of U.
+    let mut result = vec![vec![0.0; rank]; m];
+    for i in 0..m {
+        for j in 0..rank {
+            result[i][j] = u[(i, j)];
+        }
+    }
+
+    Ok(result)
+}
+
+/// Compute an orthonormal basis for the null space of a matrix.
+///
+/// Matches `scipy.linalg.null_space(A, rcond)`.
+///
+/// Returns a matrix whose columns form an orthonormal basis for the null
+/// space of A, determined by keeping right singular vectors with singular
+/// values below `rcond * max(s)`.
+pub fn null_space(
+    a: &[Vec<f64>],
+    rcond: Option<f64>,
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (m, n) = matrix_shape(a)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if m == 0 || n == 0 {
+        // If no columns, null space is empty; if no rows, null space is all of R^n.
+        if n == 0 {
+            return Ok(vec![]);
+        }
+        // Return identity for n-dimensional null space.
+        let mut ident = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            ident[i][i] = 1.0;
+        }
+        return Ok(ident);
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let svd_decomp = SVD::new(matrix, false, true);
+    let vt = svd_decomp.v_t.as_ref().ok_or(LinalgError::UnsupportedAssumption)?;
+    let singular_values = &svd_decomp.singular_values;
+
+    let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let tol = rcond.unwrap_or_else(|| (m.max(n) as f64) * f64::EPSILON) * max_s;
+
+    let rank = singular_values.iter().filter(|&&s| s > tol).count();
+    let null_dim = n - rank;
+
+    if null_dim == 0 {
+        return Ok(vec![vec![]; n]);
+    }
+
+    // Null space = last (n - rank) rows of Vt, transposed to columns.
+    let mut result = vec![vec![0.0; null_dim]; n];
+    for i in 0..n {
+        for j in 0..null_dim {
+            result[i][j] = vt[(rank + j, i)];
+        }
+    }
+
+    Ok(result)
+}
+
+/// Compute the angles between two subspaces.
+///
+/// Matches `scipy.linalg.subspace_angles(A, B)`.
+///
+/// Returns the principal angles (in radians, sorted in decreasing order)
+/// between the column spaces of A and B, computed via SVD of Q_A^T Q_B.
+pub fn subspace_angles(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<Vec<f64>, LinalgError> {
+    // Compute orthonormal bases.
+    let qa = orth(a, None, options)?;
+    let qb = orth(b, None, options)?;
+
+    if qa.is_empty() || qa[0].is_empty() || qb.is_empty() || qb[0].is_empty() {
+        return Ok(vec![]);
+    }
+
+    let m = qa.len();
+    let ka = qa[0].len();
+    let kb = qb[0].len();
+
+    // Compute QA^T * QB.
+    let mut product = vec![vec![0.0; kb]; ka];
+    for i in 0..ka {
+        for j in 0..kb {
+            let mut sum = 0.0;
+            for r in 0..m {
+                sum += qa[r][i] * qb[r][j];
+            }
+            product[i][j] = sum;
+        }
+    }
+
+    // SVD of the product to get cosines of principal angles.
+    let sv = svdvals(&product, options)?;
+    let mut angles: Vec<f64> = sv
+        .iter()
+        .map(|&s| s.clamp(0.0, 1.0).acos())
+        .collect();
+    angles.sort_by(|a, b| b.partial_cmp(a).unwrap()); // descending
+    Ok(angles)
+}
+
+/// Compute the polar decomposition of a matrix: A = U * P.
+///
+/// Matches `scipy.linalg.polar(a)`.
+///
+/// Returns `(U, P)` where U is unitary (or semi-unitary) and P is
+/// positive semi-definite Hermitian.
+///
+/// Computed via SVD: `A = U_svd * S * Vt`, then `U = U_svd * Vt` and `P = V * S * Vt`.
+pub fn polar(
+    a: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), LinalgError> {
+    let (m, n) = matrix_shape(a)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if m == 0 || n == 0 {
+        return Ok((vec![], vec![]));
+    }
+
+    let svd_result = svd(a, options)?;
+    let u_svd = &svd_result.u; // m × k
+    let s = &svd_result.s;
+    let vt = &svd_result.vt; // k × n
+    let k = s.len();
+
+    // U = U_svd * Vt (m × n).
+    let mut u_polar = vec![vec![0.0; n]; m];
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = 0.0;
+            for l in 0..k {
+                sum += u_svd[i][l] * vt[l][j];
+            }
+            u_polar[i][j] = sum;
+        }
+    }
+
+    // P = V * S * Vt (n × n).
+    // V = Vt^T, so V[i][j] = Vt[j][i].
+    let mut p = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut sum = 0.0;
+            for l in 0..k {
+                sum += vt[l][i] * s[l] * vt[l][j];
+            }
+            p[i][j] = sum;
+        }
+    }
+
+    Ok((u_polar, p))
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Special Matrix Constructors
+// ══════════════════════════════════════════════════════════════════════
+
+/// Construct a Toeplitz matrix.
+///
+/// Matches `scipy.linalg.toeplitz(c, r)`.
+///
+/// A Toeplitz matrix has constant diagonals. The first column is `c` and
+/// the first row is `r`. If `r` is None, the matrix is symmetric.
+pub fn toeplitz(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
+    let n = c.len();
+    let row = r.unwrap_or(c);
+    let m = row.len();
+
+    let mut result = vec![vec![0.0; m]; n];
+    for i in 0..n {
+        for j in 0..m {
+            result[i][j] = if i <= j { row[j - i] } else { c[i - j] };
+        }
+    }
+    result
+}
+
+/// Construct a circulant matrix.
+///
+/// Matches `scipy.linalg.circulant(c)`.
+///
+/// Each row is a cyclic permutation of the first row.
+pub fn circulant(c: &[f64]) -> Vec<Vec<f64>> {
+    let n = c.len();
+    let mut result = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            result[i][j] = c[(j + n - i) % n];
+        }
+    }
+    result
+}
+
+/// Construct a Hilbert matrix.
+///
+/// Matches `scipy.linalg.hilbert(n)`.
+///
+/// H_{ij} = 1 / (i + j + 1) for i,j starting at 0. The Hilbert matrix
+/// is a classic example of an ill-conditioned matrix.
+pub fn hilbert(n: usize) -> Vec<Vec<f64>> {
+    let mut result = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            result[i][j] = 1.0 / (i + j + 1) as f64;
+        }
+    }
+    result
+}
+
+/// Construct the inverse of a Hilbert matrix.
+///
+/// Matches `scipy.linalg.invhilbert(n)`.
+///
+/// Returns the exact inverse (integer entries) computed via the closed-form
+/// formula, avoiding numerical inversion of the ill-conditioned Hilbert matrix.
+pub fn invhilbert(n: usize) -> Vec<Vec<f64>> {
+    let mut result = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut entry = if (i + j) % 2 == 0 { 1.0 } else { -1.0 };
+            entry *= ((i + j + 1) as f64)
+                * binom(n + i, n - j - 1)
+                * binom(n + j, n - i - 1)
+                * binom(i + j, i).powi(2);
+            result[i][j] = entry;
+        }
+    }
+    result
+}
+
+/// Binomial coefficient C(n, k) as f64.
+fn binom(n: usize, k: usize) -> f64 {
+    if k > n {
+        return 0.0;
+    }
+    let k = k.min(n - k);
+    let mut result = 1.0;
+    for i in 0..k {
+        result *= (n - i) as f64;
+        result /= (i + 1) as f64;
+    }
+    result
+}
+
+/// Construct a Hadamard matrix of order n.
+///
+/// Matches `scipy.linalg.hadamard(n)`.
+///
+/// n must be a power of 2. The matrix has entries ±1 and satisfies H^T H = n I.
+/// Constructed via the Sylvester (recursive) construction.
+pub fn hadamard(n: usize) -> Result<Vec<Vec<f64>>, LinalgError> {
+    if n == 0 || (n & (n - 1)) != 0 {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!("n must be a power of 2, got {n}"),
+        });
+    }
+
+    let mut h = vec![vec![1.0]];
+    let mut size = 1;
+    while size < n {
+        let mut new_h = vec![vec![0.0; 2 * size]; 2 * size];
+        for i in 0..size {
+            for j in 0..size {
+                new_h[i][j] = h[i][j];
+                new_h[i][j + size] = h[i][j];
+                new_h[i + size][j] = h[i][j];
+                new_h[i + size][j + size] = -h[i][j];
+            }
+        }
+        h = new_h;
+        size *= 2;
+    }
+    Ok(h)
+}
+
+/// Construct a companion matrix.
+///
+/// Matches `scipy.linalg.companion(a)`.
+///
+/// The companion matrix for polynomial `a[0]*x^n + a[1]*x^{n-1} + ... + a[n]`
+/// has the coefficients `-a[1:]/a[0]` in the first row and ones on the sub-diagonal.
+pub fn companion(a: &[f64]) -> Result<Vec<Vec<f64>>, LinalgError> {
+    if a.len() < 2 {
+        return Err(LinalgError::InvalidArgument {
+            detail: "companion requires at least 2 coefficients".to_string(),
+        });
+    }
+    if a[0].abs() < f64::EPSILON {
+        return Err(LinalgError::InvalidArgument {
+            detail: "leading coefficient must be nonzero".to_string(),
+        });
+    }
+
+    let n = a.len() - 1;
+    let mut result = vec![vec![0.0; n]; n];
+
+    // First row: -a[1..]/a[0].
+    for j in 0..n {
+        result[0][j] = -a[j + 1] / a[0];
+    }
+
+    // Sub-diagonal: ones.
+    for i in 1..n {
+        result[i][i - 1] = 1.0;
+    }
+
+    Ok(result)
+}
+
+/// Construct a block diagonal matrix from a list of matrices.
+///
+/// Matches `scipy.linalg.block_diag(*arrs)`.
+///
+/// Arranges the input matrices along the diagonal of a larger matrix,
+/// with zeros elsewhere.
+pub fn block_diag(blocks: &[Vec<Vec<f64>>]) -> Vec<Vec<f64>> {
+    if blocks.is_empty() {
+        return vec![];
+    }
+
+    let total_rows: usize = blocks.iter().map(|b| b.len()).sum();
+    let total_cols: usize = blocks
+        .iter()
+        .map(|b| if b.is_empty() { 0 } else { b[0].len() })
+        .sum();
+
+    let mut result = vec![vec![0.0; total_cols]; total_rows];
+    let mut row_offset = 0;
+    let mut col_offset = 0;
+
+    for block in blocks {
+        let br = block.len();
+        let bc = if br > 0 { block[0].len() } else { 0 };
+        for i in 0..br {
+            for j in 0..bc {
+                result[row_offset + i][col_offset + j] = block[i][j];
+            }
+        }
+        row_offset += br;
+        col_offset += bc;
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -2530,8 +3032,8 @@ mod tests {
     #[test]
     fn fast_rcond_from_lu_well_conditioned() {
         let matrix = DMatrix::from_row_slice(2, 2, &[3.0, 2.0, 1.0, 2.0]);
-        let lu = matrix.lu();
-        let rcond = fast_rcond_from_lu(&lu, 2);
+        let lu = matrix.clone().lu();
+        let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), 2);
         assert!(
             rcond > 0.1,
             "well-conditioned matrix should have high rcond, got {rcond}"
@@ -2541,8 +3043,8 @@ mod tests {
     #[test]
     fn fast_rcond_from_lu_ill_conditioned() {
         let matrix = DMatrix::from_row_slice(2, 2, &[1.0, 0.0, 0.0, 1e-15]);
-        let lu = matrix.lu();
-        let rcond = fast_rcond_from_lu(&lu, 2);
+        let lu = matrix.clone().lu();
+        let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), 2);
         assert!(
             rcond < 1e-12,
             "ill-conditioned matrix should have low rcond, got {rcond}"
@@ -3378,7 +3880,7 @@ mod tests {
             assert!(re.abs() < 1e-10, "real part should be ~0, got {re}");
         }
         let mut im_sorted: Vec<f64> = result.eigenvalues_im.clone();
-        im_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        im_sorted.sort_by(|a, b| a.total_cmp(b));
         assert!(
             (im_sorted[0] - (-1.0)).abs() < 1e-10,
             "imaginary part should be -1"
@@ -3398,7 +3900,7 @@ mod tests {
             assert!(im.abs() < 1e-10, "symmetric eigenvalues should be real");
         }
         let mut re_sorted: Vec<f64> = result.eigenvalues_re.clone();
-        re_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        re_sorted.sort_by(|a, b| a.total_cmp(b));
         assert!((re_sorted[0] - 1.0).abs() < 1e-10);
         assert!((re_sorted[1] - 3.0).abs() < 1e-10);
     }
@@ -3720,6 +4222,269 @@ mod tests {
         let r = matrix_rank(&a, None, DecompOptions::default()).expect("rank works");
         assert_eq!(r, 2);
     }
+
+    // ── Subspace operation tests ───────────────────────────────────
+
+    #[test]
+    fn orth_full_rank() {
+        // 3×3 identity → orth should return 3 orthonormal columns
+        let a = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 1.0]];
+        let result = orth(&a, None, DecompOptions::default()).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].len(), 3);
+    }
+
+    #[test]
+    fn orth_rank_deficient() {
+        // Rank-1 matrix: all rows are multiples
+        let a = vec![vec![1.0, 2.0], vec![2.0, 4.0], vec![3.0, 6.0]];
+        let result = orth(&a, None, DecompOptions::default()).unwrap();
+        // Should return 1 orthonormal column
+        assert_eq!(result[0].len(), 1);
+        // Column should be unit norm
+        let norm: f64 = result.iter().map(|r| r[0] * r[0]).sum::<f64>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-10, "orth column not unit norm: {norm}");
+    }
+
+    #[test]
+    fn null_space_full_rank() {
+        // Full-rank 3×3 → null space should be empty
+        let a = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 1.0]];
+        let result = null_space(&a, None, DecompOptions::default()).unwrap();
+        // Each row should have 0 null-space columns
+        assert!(
+            result.is_empty() || result[0].is_empty(),
+            "full-rank matrix should have empty null space"
+        );
+    }
+
+    #[test]
+    fn null_space_rank_deficient() {
+        // [[1, 2], [2, 4]] has rank 1, null space dim = 1
+        let a = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
+        let result = null_space(&a, None, DecompOptions::default()).unwrap();
+        assert_eq!(result.len(), 2); // n=2 rows
+        assert_eq!(result[0].len(), 1); // 1 null-space vector
+        // Verify A * ns ≈ 0
+        let ns = vec![result[0][0], result[1][0]];
+        let ax0 = a[0][0] * ns[0] + a[0][1] * ns[1];
+        let ax1 = a[1][0] * ns[0] + a[1][1] * ns[1];
+        assert!(ax0.abs() < 1e-10, "A*ns[0] = {ax0}");
+        assert!(ax1.abs() < 1e-10, "A*ns[1] = {ax1}");
+    }
+
+    #[test]
+    fn subspace_angles_identical() {
+        // Same subspace → angle should be 0
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.0, 0.0]];
+        let angles =
+            subspace_angles(&a, &a, DecompOptions::default()).unwrap();
+        for &angle in &angles {
+            assert!(angle.abs() < 1e-10, "identical subspace angle: {angle}");
+        }
+    }
+
+    #[test]
+    fn subspace_angles_orthogonal() {
+        // Two orthogonal 1-D subspaces in R^2
+        let a = vec![vec![1.0], vec![0.0]]; // x-axis
+        let b = vec![vec![0.0], vec![1.0]]; // y-axis
+        let angles =
+            subspace_angles(&a, &b, DecompOptions::default()).unwrap();
+        assert!(!angles.is_empty());
+        let half_pi = std::f64::consts::FRAC_PI_2;
+        assert!(
+            (angles[0] - half_pi).abs() < 1e-10,
+            "orthogonal angle: {}, expected π/2",
+            angles[0]
+        );
+    }
+
+    #[test]
+    fn polar_identity() {
+        // Polar decomposition of identity: U = I, P = I
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let (u, p) = polar(&a, DecompOptions::default()).unwrap();
+        for i in 0..2 {
+            for j in 0..2 {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (u[i][j] - expected).abs() < 1e-10,
+                    "U[{i}][{j}] = {}, expected {expected}",
+                    u[i][j]
+                );
+                assert!(
+                    (p[i][j] - expected).abs() < 1e-10,
+                    "P[{i}][{j}] = {}, expected {expected}",
+                    p[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn polar_reconstruction() {
+        // A = U * P, verify the reconstruction
+        let a = vec![vec![3.0, 1.0], vec![1.0, 4.0]];
+        let (u, p) = polar(&a, DecompOptions::default()).unwrap();
+
+        // Reconstruct: U * P
+        for i in 0..2 {
+            for j in 0..2 {
+                let mut sum = 0.0;
+                for k in 0..2 {
+                    sum += u[i][k] * p[k][j];
+                }
+                assert!(
+                    (sum - a[i][j]).abs() < 1e-8,
+                    "UP[{i}][{j}] = {sum}, A[{i}][{j}] = {}",
+                    a[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn polar_p_is_symmetric_positive() {
+        let a = vec![vec![2.0, 1.0], vec![-1.0, 3.0]];
+        let (_u, p) = polar(&a, DecompOptions::default()).unwrap();
+        // P should be symmetric
+        assert!(
+            (p[0][1] - p[1][0]).abs() < 1e-10,
+            "P not symmetric: P[0][1]={}, P[1][0]={}",
+            p[0][1],
+            p[1][0]
+        );
+        // P should be positive semi-definite (eigenvalues >= 0)
+        // For 2×2: trace > 0 and det >= 0
+        let trace = p[0][0] + p[1][1];
+        let det_val = p[0][0] * p[1][1] - p[0][1] * p[1][0];
+        assert!(trace > -1e-10, "P trace: {trace}");
+        assert!(det_val > -1e-10, "P determinant: {det_val}");
+    }
+
+    // ── Special matrix constructor tests ───────────────────────────
+
+    #[test]
+    fn toeplitz_symmetric() {
+        let c = vec![1.0, 2.0, 3.0];
+        let t = toeplitz(&c, None);
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[0], vec![1.0, 2.0, 3.0]);
+        assert_eq!(t[1], vec![2.0, 1.0, 2.0]);
+        assert_eq!(t[2], vec![3.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn toeplitz_asymmetric() {
+        let c = vec![1.0, 2.0, 3.0];
+        let r = vec![1.0, 4.0, 5.0];
+        let t = toeplitz(&c, Some(&r));
+        assert_eq!(t[0], vec![1.0, 4.0, 5.0]);
+        assert_eq!(t[1], vec![2.0, 1.0, 4.0]);
+        assert_eq!(t[2], vec![3.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn circulant_basic() {
+        let c = vec![1.0, 2.0, 3.0];
+        let m = circulant(&c);
+        assert_eq!(m[0], vec![1.0, 2.0, 3.0]);
+        assert_eq!(m[1], vec![3.0, 1.0, 2.0]);
+        assert_eq!(m[2], vec![2.0, 3.0, 1.0]);
+    }
+
+    #[test]
+    fn hilbert_3x3() {
+        let h = hilbert(3);
+        assert!((h[0][0] - 1.0).abs() < 1e-12);
+        assert!((h[0][1] - 0.5).abs() < 1e-12);
+        assert!((h[0][2] - 1.0 / 3.0).abs() < 1e-12);
+        assert!((h[1][0] - 0.5).abs() < 1e-12);
+        assert!((h[1][1] - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn invhilbert_times_hilbert_is_identity() {
+        let n = 4;
+        let h = hilbert(n);
+        let ih = invhilbert(n);
+        // Product should be approximately identity.
+        for i in 0..n {
+            for j in 0..n {
+                let mut sum = 0.0;
+                for k in 0..n {
+                    sum += ih[i][k] * h[k][j];
+                }
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (sum - expected).abs() < 1e-6,
+                    "invhilbert*hilbert[{i}][{j}] = {sum}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hadamard_4() {
+        let h = hadamard(4).unwrap();
+        assert_eq!(h.len(), 4);
+        // H^T H = 4 I
+        for i in 0..4 {
+            for j in 0..4 {
+                let mut dot = 0.0;
+                for k in 0..4 {
+                    dot += h[k][i] * h[k][j];
+                }
+                let expected = if i == j { 4.0 } else { 0.0 };
+                assert!(
+                    (dot - expected).abs() < 1e-12,
+                    "H^T H[{i}][{j}] = {dot}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hadamard_non_power_of_2_rejected() {
+        assert!(hadamard(3).is_err());
+        assert!(hadamard(6).is_err());
+    }
+
+    #[test]
+    fn companion_polynomial() {
+        // p(x) = x^3 - 6x^2 + 11x - 6 = (x-1)(x-2)(x-3)
+        // Roots are eigenvalues of companion matrix
+        let a = vec![1.0, -6.0, 11.0, -6.0];
+        let c = companion(&a).unwrap();
+        assert_eq!(c.len(), 3);
+        assert_eq!(c[0], vec![6.0, -11.0, 6.0]); // -a[1..]/a[0]
+        assert_eq!(c[1], vec![1.0, 0.0, 0.0]);
+        assert_eq!(c[2], vec![0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn companion_too_few_coeffs() {
+        assert!(companion(&[1.0]).is_err());
+    }
+
+    #[test]
+    fn block_diag_basic() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let b = vec![vec![5.0]];
+        let bd = block_diag(&[a, b]);
+        assert_eq!(bd.len(), 3);
+        assert_eq!(bd[0].len(), 3);
+        assert_eq!(bd[0], vec![1.0, 2.0, 0.0]);
+        assert_eq!(bd[1], vec![3.0, 4.0, 0.0]);
+        assert_eq!(bd[2], vec![0.0, 0.0, 5.0]);
+    }
+
+    #[test]
+    fn block_diag_empty() {
+        let bd = block_diag(&[]);
+        assert!(bd.is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -3849,7 +4614,7 @@ mod proptest_tests {
         fn rcond_is_bounded(a in arb_invertible_2x2()) {
             let matrix = dmatrix_from_rows(&a).expect("valid matrix");
             let lu = matrix.clone().lu();
-            let rcond = fast_rcond_from_lu(&lu, 2);
+            let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), 2);
             prop_assert!(rcond >= 0.0, "rcond should be >= 0, got {rcond}");
             prop_assert!(rcond <= 1.0, "rcond should be <= 1, got {rcond}");
         }

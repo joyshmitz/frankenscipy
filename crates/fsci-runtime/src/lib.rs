@@ -59,6 +59,14 @@ impl MatrixConditionState {
     }
 }
 
+/// Structural evidence provided to the portfolio (§0.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StructuralEvidence {
+    General,
+    Diagonal,
+    Triangular,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SolverAction {
     DirectLU,
@@ -150,9 +158,10 @@ impl SolverPortfolio {
     /// Returns (action, posterior, expected_losses, chosen_loss).
     pub fn select_action(
         &self,
-        condition: &MatrixConditionState,
+        rcond: f64,
+        structure: Option<StructuralEvidence>,
     ) -> (SolverAction, [f64; 4], [f64; 5], f64) {
-        let posterior = Self::condition_posterior(condition);
+        let posterior = Self::condition_posterior(rcond);
 
         // If conformal calibrator detects drift, override to SVDFallback
         if self.calibrator.should_fallback() {
@@ -167,16 +176,33 @@ impl SolverPortfolio {
 
         let losses = self.compute_expected_losses(posterior);
 
-        // argmin over expected losses (only general solvers: LU, QR, SVD)
-        let mut best_idx = 0usize;
-        let mut best_loss = losses[0];
-        for (idx, &loss) in losses.iter().enumerate().skip(1).take(2) {
+        // argmin over expected losses
+        // We consider general solvers (0, 1, 2) and applicable fast paths (3, 4)
+        let mut candidates = vec![0, 1, 2];
+        match structure {
+            Some(StructuralEvidence::Diagonal) => candidates.push(3),
+            Some(StructuralEvidence::Triangular) => candidates.push(4),
+            _ => {}
+        }
+
+        let mut best_idx = candidates[0];
+        let mut best_loss = losses[best_idx];
+
+        for &idx in candidates.iter().skip(1) {
+            let loss = losses[idx];
             if loss < best_loss {
                 best_loss = loss;
                 best_idx = idx;
-            } else if (loss - best_loss).abs() <= 1e-12 && idx > best_idx {
-                // Tie-break toward safer action (higher index = safer)
-                best_idx = idx;
+            } else if (loss - best_loss).abs() <= 1e-12 {
+                // Tie-break toward safer action for general solvers
+                // (higher index = safer: LU < QR < SVD)
+                if idx < 3 && idx > best_idx {
+                    best_idx = idx;
+                }
+                // Fast paths (idx >= 3) always win over LU/QR if loss is same
+                else if idx >= 3 && best_idx < 3 {
+                    best_idx = idx;
+                }
             }
         }
 
@@ -233,9 +259,31 @@ impl SolverPortfolio {
 
     /// Hard-classify condition state into posterior distribution.
     /// Uses soft transitions at boundaries via logistic blending.
-    fn condition_posterior(condition: &MatrixConditionState) -> [f64; 4] {
+    fn condition_posterior(rcond: f64) -> [f64; 4] {
+        let log_r = rcond.max(1e-25).log10();
+
+        // Centers of states (log10 rcond):
+        // Well: -2.0, Mod: -6.0, Ill: -11.0, NearSing: -16.0
+        let centers = [-2.0, -6.0, -11.0, -16.0];
         let mut p = [0.0; 4];
-        p[condition.index()] = 1.0;
+
+        if log_r >= centers[0] {
+            p[0] = 1.0;
+        } else if log_r <= centers[3] {
+            p[3] = 1.0;
+        } else {
+            // Find the interval [centers[i+1], centers[i]] that contains log_r
+            for i in 0..3 {
+                let c_upper = centers[i];
+                let c_lower = centers[i + 1];
+                if log_r <= c_upper && log_r >= c_lower {
+                    let weight_upper = (log_r - c_lower) / (c_upper - c_lower);
+                    p[i] = weight_upper;
+                    p[i + 1] = 1.0 - weight_upper;
+                    break;
+                }
+            }
+        }
         p
     }
 }
@@ -528,29 +576,45 @@ mod tests {
     #[test]
     fn casp_selects_lu_for_well_conditioned() {
         let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-        let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::WellConditioned);
+        let (action, _, _, _) = portfolio.select_action(1e-2, None);
         assert_eq!(action, SolverAction::DirectLU);
     }
 
     #[test]
     fn casp_selects_qr_for_moderate() {
         let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-        let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::ModerateCondition);
+        let (action, _, _, _) = portfolio.select_action(1e-6, None);
         assert_eq!(action, SolverAction::PivotedQR);
     }
 
     #[test]
     fn casp_selects_svd_for_ill_conditioned() {
         let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-        let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::IllConditioned);
+        let (action, _, _, _) = portfolio.select_action(1e-12, None);
         assert_eq!(action, SolverAction::SVDFallback);
     }
 
     #[test]
     fn casp_selects_svd_for_near_singular() {
         let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-        let (action, _, _, _) = portfolio.select_action(&MatrixConditionState::NearSingular);
+        let (action, _, _, _) = portfolio.select_action(1e-18, None);
         assert_eq!(action, SolverAction::SVDFallback);
+    }
+
+    #[test]
+    fn casp_soft_transitions() {
+        let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
+        // Mid-way between -2 (Well) and -6 (Mod) is -4 (rcond=1e-4)
+        let (_, posterior, _, _) = portfolio.select_action(1e-4, None);
+        assert_close(posterior[0], 0.5, 1e-10, 1e-10);
+        assert_close(posterior[1], 0.5, 1e-10, 1e-10);
+    }
+
+    #[test]
+    fn casp_selects_fast_path_when_available() {
+        let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
+        let (action, _, _, _) = portfolio.select_action(1e-2, Some(StructuralEvidence::Diagonal));
+        assert_eq!(action, SolverAction::DiagonalFastPath);
     }
 
     #[test]

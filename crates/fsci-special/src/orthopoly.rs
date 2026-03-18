@@ -233,8 +233,8 @@ pub fn eval_gegenbauer(n: u32, alpha: f64, x: f64) -> f64 {
     let mut c_curr = 2.0 * alpha * x;
     for k in 1..n {
         let kf = k as f64;
-        let c_next = (2.0 * (kf + alpha) * x * c_curr - (kf + 2.0 * alpha - 1.0) * c_prev)
-            / (kf + 1.0);
+        let c_next =
+            (2.0 * (kf + alpha) * x * c_curr - (kf + 2.0 * alpha - 1.0) * c_prev) / (kf + 1.0);
         c_prev = c_curr;
         c_curr = c_next;
     }
@@ -330,12 +330,7 @@ mod tests {
         let x = theta.cos();
         for n in 0..=10 {
             let expected = (n as f64 * theta).cos();
-            assert_close(
-                eval_chebyt(n, x),
-                expected,
-                1e-10,
-                &format!("T_{n}(cos θ)"),
-            );
+            assert_close(eval_chebyt(n, x), expected, 1e-10, &format!("T_{n}(cos θ)"));
         }
     }
 
@@ -381,12 +376,7 @@ mod tests {
     fn hermite_h3() {
         // H_3(x) = 8x³ - 12x
         let x = 2.0;
-        assert_close(
-            eval_hermite(3, x),
-            8.0 * x * x * x - 12.0 * x,
-            1e-12,
-            "H_3",
-        );
+        assert_close(eval_hermite(3, x), 8.0 * x * x * x - 12.0 * x, 1e-12, "H_3");
     }
 
     // ── Hermite (probabilist) ─────────────────────────────────────

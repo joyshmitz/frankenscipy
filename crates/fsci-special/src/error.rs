@@ -129,7 +129,7 @@ where
     }
 }
 
-fn erf_scalar(x: f64) -> f64 {
+pub(crate) fn erf_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -185,7 +185,7 @@ fn erfc_scalar(x: f64) -> f64 {
     poly * (-x * x).exp()
 }
 
-fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+pub(crate) fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if y.is_nan() {
         return Ok(f64::NAN);
     }

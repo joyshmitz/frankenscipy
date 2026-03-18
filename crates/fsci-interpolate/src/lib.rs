@@ -1421,6 +1421,266 @@ pub fn griddata(
     }
 }
 
+// ── RegularGridInterpolator ─────────────────────────────────────────
+
+/// Interpolation method for `RegularGridInterpolator`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RegularGridMethod {
+    /// Multilinear interpolation (tensor product of 1D linear).
+    #[default]
+    Linear,
+    /// Nearest-neighbor interpolation on the grid.
+    Nearest,
+}
+
+/// N-dimensional interpolation on a regular (rectilinear) grid.
+///
+/// Matches `scipy.interpolate.RegularGridInterpolator(points, values)`.
+///
+/// Each axis is specified by a sorted, monotonically increasing 1-D array
+/// of grid coordinates. The values array has shape `(n_0, n_1, ..., n_{d-1})`
+/// stored in row-major (C) order as a flat `Vec<f64>`.
+///
+/// Supports linear (multilinear) and nearest-neighbor interpolation.
+#[derive(Debug, Clone)]
+pub struct RegularGridInterpolator {
+    /// Grid coordinates for each axis, sorted and strictly increasing.
+    points: Vec<Vec<f64>>,
+    /// Values on the grid, stored in row-major order. Length = product of axis sizes.
+    values: Vec<f64>,
+    /// Strides for row-major indexing: stride[i] = product of sizes of axes i+1..d.
+    strides: Vec<usize>,
+    /// Interpolation method.
+    method: RegularGridMethod,
+    /// Whether to raise an error for out-of-bounds queries.
+    bounds_error: bool,
+    /// Fill value for out-of-bounds queries (used when `bounds_error` is false).
+    fill_value: Option<f64>,
+}
+
+impl RegularGridInterpolator {
+    /// Create a new regular grid interpolator.
+    ///
+    /// # Arguments
+    /// * `points` — Grid coordinates for each dimension. Each must be sorted
+    ///   and strictly monotonically increasing with at least 2 elements.
+    /// * `values` — Function values on the grid in row-major order.
+    ///   Length must equal the product of all axis sizes.
+    /// * `method` — Interpolation method (Linear or Nearest).
+    /// * `bounds_error` — If true, out-of-bounds queries return an error.
+    /// * `fill_value` — Value to return for out-of-bounds queries when
+    ///   `bounds_error` is false. If `None`, uses `f64::NAN`.
+    pub fn new(
+        points: Vec<Vec<f64>>,
+        values: Vec<f64>,
+        method: RegularGridMethod,
+        bounds_error: bool,
+        fill_value: Option<f64>,
+    ) -> Result<Self, InterpError> {
+        if points.is_empty() {
+            return Err(InterpError::InvalidArgument {
+                detail: "points must have at least one axis".to_string(),
+            });
+        }
+
+        // Validate each axis is sorted, monotonically increasing, and has >= 2 points.
+        for (dim, axis) in points.iter().enumerate() {
+            if axis.len() < 2 {
+                return Err(InterpError::TooFewPoints {
+                    minimum: 2,
+                    actual: axis.len(),
+                });
+            }
+            for w in axis.windows(2) {
+                if w[1] <= w[0] {
+                    return Err(InterpError::InvalidArgument {
+                        detail: format!("axis {dim} grid points must be strictly increasing"),
+                    });
+                }
+            }
+        }
+
+        // Compute expected total size and strides.
+        let ndim = points.len();
+        let mut strides = vec![0usize; ndim];
+        let mut total_size: usize = 1;
+        for i in (0..ndim).rev() {
+            strides[i] = total_size;
+            total_size = total_size.checked_mul(points[i].len()).ok_or_else(|| {
+                InterpError::InvalidArgument {
+                    detail: "grid size overflow".to_string(),
+                }
+            })?;
+        }
+
+        if values.len() != total_size {
+            return Err(InterpError::LengthMismatch {
+                x_len: total_size,
+                y_len: values.len(),
+            });
+        }
+
+        Ok(Self {
+            points,
+            values,
+            strides,
+            method,
+            bounds_error,
+            fill_value,
+        })
+    }
+
+    /// Number of dimensions.
+    pub fn ndim(&self) -> usize {
+        self.points.len()
+    }
+
+    /// Evaluate the interpolator at a single query point.
+    ///
+    /// `xi` must have exactly `ndim` elements.
+    pub fn eval(&self, xi: &[f64]) -> Result<f64, InterpError> {
+        let ndim = self.ndim();
+        if xi.len() != ndim {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("expected {ndim}-D query point, got {}-D", xi.len()),
+            });
+        }
+
+        // Check bounds.
+        for (dim, &x) in xi.iter().enumerate() {
+            let axis = &self.points[dim];
+            if x < axis[0] || x > axis[axis.len() - 1] {
+                if self.bounds_error {
+                    return Err(InterpError::OutOfBounds {
+                        value: format!(
+                            "dimension {dim}: {x} outside [{}, {}]",
+                            axis[0],
+                            axis[axis.len() - 1]
+                        ),
+                    });
+                }
+                return Ok(self.fill_value.unwrap_or(f64::NAN));
+            }
+        }
+
+        match self.method {
+            RegularGridMethod::Linear => self.eval_linear(xi),
+            RegularGridMethod::Nearest => Ok(self.eval_nearest(xi)),
+        }
+    }
+
+    /// Evaluate at multiple query points.
+    pub fn eval_many(&self, xi: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+        xi.iter().map(|x| self.eval(x)).collect()
+    }
+
+    /// Find the index `i` such that `axis[i] <= x < axis[i+1]`, clamped to valid range.
+    fn find_interval(axis: &[f64], x: f64) -> usize {
+        // Binary search for the interval.
+        let n = axis.len();
+        if x <= axis[0] {
+            return 0;
+        }
+        if x >= axis[n - 1] {
+            return n - 2; // last valid interval
+        }
+        // axis[result] <= x < axis[result+1]
+        match axis.binary_search_by(|probe| probe.total_cmp(&x)) {
+            Ok(i) => {
+                // Exact match: use interval starting at i, but clamp to n-2.
+                i.min(n - 2)
+            }
+            Err(i) => {
+                // x is between axis[i-1] and axis[i].
+                i.saturating_sub(1)
+            }
+        }
+    }
+
+    /// Nearest-neighbor evaluation (already bounds-checked).
+    fn eval_nearest(&self, xi: &[f64]) -> f64 {
+        let mut flat_idx = 0;
+        for ((axis, &x), &stride) in self.points.iter().zip(xi).zip(&self.strides) {
+            let i = Self::find_interval(axis, x);
+            // Choose the nearest grid point.
+            let nearest = if i + 1 < axis.len() && (x - axis[i]).abs() > (axis[i + 1] - x).abs() {
+                i + 1
+            } else {
+                i
+            };
+            flat_idx += nearest * stride;
+        }
+        self.values[flat_idx]
+    }
+
+    /// Multilinear interpolation (already bounds-checked).
+    ///
+    /// For d dimensions, interpolates over 2^d vertices of the enclosing hypercube
+    /// using successive 1D linear interpolations along each axis.
+    fn eval_linear(&self, xi: &[f64]) -> Result<f64, InterpError> {
+        let ndim = self.ndim();
+
+        // For each dimension, find the interval index and the fractional position.
+        let mut indices = Vec::with_capacity(ndim);
+        let mut fracs = Vec::with_capacity(ndim);
+        for (axis, &x) in self.points.iter().zip(xi) {
+            let i = Self::find_interval(axis, x);
+            let frac = if (axis[i + 1] - axis[i]).abs() < f64::EPSILON {
+                0.0
+            } else {
+                (x - axis[i]) / (axis[i + 1] - axis[i])
+            };
+            indices.push(i);
+            fracs.push(frac);
+        }
+
+        // Iterate over all 2^ndim corners of the enclosing hypercube.
+        // Each corner contributes weight = product of (1-frac) or frac per dimension.
+        let num_corners = 1usize << ndim;
+        let mut result = 0.0;
+        for corner in 0..num_corners {
+            let mut weight = 1.0;
+            let mut flat_idx = 0;
+            for dim in 0..ndim {
+                let bit = (corner >> dim) & 1;
+                let idx = indices[dim] + bit;
+                flat_idx += idx * self.strides[dim];
+                weight *= if bit == 0 {
+                    1.0 - fracs[dim]
+                } else {
+                    fracs[dim]
+                };
+            }
+            result += weight * self.values[flat_idx];
+        }
+
+        Ok(result)
+    }
+}
+
+/// Convenience function for N-D interpolation on a regular grid.
+///
+/// Matches `scipy.interpolate.interpn(points, values, xi, method)`.
+///
+/// # Arguments
+/// * `points` — Grid coordinates for each dimension (list of 1-D arrays).
+/// * `values` — Values on the grid in row-major order.
+/// * `xi` — Query points, each with `ndim` elements.
+/// * `method` — Interpolation method (`"linear"` or `"nearest"`).
+/// * `bounds_error` — If true, raise error on out-of-bounds queries.
+/// * `fill_value` — Fill value for out-of-bounds queries (default `NaN`).
+pub fn interpn(
+    points: Vec<Vec<f64>>,
+    values: Vec<f64>,
+    xi: &[Vec<f64>],
+    method: RegularGridMethod,
+    bounds_error: bool,
+    fill_value: Option<f64>,
+) -> Result<Vec<f64>, InterpError> {
+    let interp = RegularGridInterpolator::new(points, values, method, bounds_error, fill_value)?;
+    interp.eval_many(xi)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2217,5 +2477,260 @@ mod tests {
                 values[i]
             );
         }
+    }
+
+    // ── RegularGridInterpolator tests ──────────────────────────────
+
+    #[test]
+    fn regular_grid_2d_bilinear() {
+        // 2D grid: f(x,y) = x + 2*y
+        // x = [0, 1, 2], y = [0, 1, 2]
+        let points = vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0]];
+        // values in row-major: values[ix * 3 + iy] = x + 2*y
+        let values = vec![
+            0.0, 2.0, 4.0, // x=0, y=0,1,2
+            1.0, 3.0, 5.0, // x=1, y=0,1,2
+            2.0, 4.0, 6.0, // x=2, y=0,1,2
+        ];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect("rgi");
+
+        // At grid points
+        assert!((interp.eval(&[0.0, 0.0]).unwrap() - 0.0).abs() < 1e-12);
+        assert!((interp.eval(&[1.0, 1.0]).unwrap() - 3.0).abs() < 1e-12);
+        assert!((interp.eval(&[2.0, 2.0]).unwrap() - 6.0).abs() < 1e-12);
+
+        // Bilinear at midpoint: f(0.5, 0.5) = 0.5 + 1.0 = 1.5
+        let val = interp.eval(&[0.5, 0.5]).unwrap();
+        assert!(
+            (val - 1.5).abs() < 1e-12,
+            "bilinear at (0.5,0.5): got {val}, expected 1.5"
+        );
+
+        // Another midpoint: f(1.5, 0.5) = 1.5 + 1.0 = 2.5
+        let val = interp.eval(&[1.5, 0.5]).unwrap();
+        assert!(
+            (val - 2.5).abs() < 1e-12,
+            "bilinear at (1.5,0.5): got {val}, expected 2.5"
+        );
+    }
+
+    #[test]
+    fn regular_grid_3d_trilinear() {
+        // 3D grid: f(x,y,z) = x + y + z
+        // Each axis: [0, 1]
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0], vec![0.0, 1.0]];
+        // 2x2x2 = 8 values
+        let values = vec![
+            0.0, 1.0, // x=0, y=0, z=0,1
+            1.0, 2.0, // x=0, y=1, z=0,1
+            1.0, 2.0, // x=1, y=0, z=0,1
+            2.0, 3.0, // x=1, y=1, z=0,1
+        ];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect("rgi 3d");
+
+        // At center: f(0.5, 0.5, 0.5) = 1.5
+        let val = interp.eval(&[0.5, 0.5, 0.5]).unwrap();
+        assert!(
+            (val - 1.5).abs() < 1e-12,
+            "trilinear center: got {val}, expected 1.5"
+        );
+
+        // At corner: f(1, 1, 1) = 3
+        assert!((interp.eval(&[1.0, 1.0, 1.0]).unwrap() - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn regular_grid_nearest() {
+        // 2D grid
+        let points = vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0]];
+        let values = vec![
+            0.0, 1.0, 2.0, //
+            3.0, 4.0, 5.0, //
+            6.0, 7.0, 8.0, //
+        ];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Nearest, true, None)
+                .expect("rgi nearest");
+
+        // At exact grid points
+        assert!((interp.eval(&[0.0, 0.0]).unwrap() - 0.0).abs() < 1e-12);
+        assert!((interp.eval(&[1.0, 1.0]).unwrap() - 4.0).abs() < 1e-12);
+
+        // Near (1,1) → should return value at (1,1) = 4
+        let val = interp.eval(&[0.9, 1.1]).unwrap();
+        assert!(
+            (val - 4.0).abs() < 1e-12,
+            "nearest at (0.9,1.1): got {val}, expected 4.0"
+        );
+    }
+
+    #[test]
+    fn regular_grid_out_of_bounds_error() {
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0, 2.0, 3.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect("rgi");
+
+        let err = interp.eval(&[-0.5, 0.5]).expect_err("oob");
+        assert!(matches!(err, InterpError::OutOfBounds { .. }));
+    }
+
+    #[test]
+    fn regular_grid_out_of_bounds_fill_value() {
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0, 2.0, 3.0];
+        let interp = RegularGridInterpolator::new(
+            points,
+            values,
+            RegularGridMethod::Linear,
+            false,
+            Some(-999.0),
+        )
+        .expect("rgi");
+
+        let val = interp.eval(&[-0.5, 0.5]).unwrap();
+        assert!(
+            (val - (-999.0)).abs() < 1e-12,
+            "fill value: got {val}, expected -999.0"
+        );
+    }
+
+    #[test]
+    fn regular_grid_1d_degenerates_to_interp1d() {
+        // 1D grid should behave like linear interp1d
+        let points = vec![vec![0.0, 1.0, 2.0, 3.0]];
+        let values = vec![0.0, 2.0, 4.0, 6.0]; // f(x) = 2x
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect("rgi 1d");
+
+        let val = interp.eval(&[0.5]).unwrap();
+        assert!(
+            (val - 1.0).abs() < 1e-12,
+            "1D linear at 0.5: got {val}, expected 1.0"
+        );
+        let val = interp.eval(&[2.5]).unwrap();
+        assert!(
+            (val - 5.0).abs() < 1e-12,
+            "1D linear at 2.5: got {val}, expected 5.0"
+        );
+    }
+
+    #[test]
+    fn regular_grid_single_cell() {
+        // Minimum grid: 2 points per axis
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0]];
+        // f(x,y) = x * y at corners: (0,0)=0, (0,1)=0, (1,0)=0, (1,1)=1
+        let values = vec![0.0, 0.0, 0.0, 1.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect("rgi single cell");
+
+        // Bilinear of x*y at (0.5, 0.5): (1-0.5)*(1-0.5)*0 + (1-0.5)*0.5*0 + 0.5*(1-0.5)*0 + 0.5*0.5*1 = 0.25
+        let val = interp.eval(&[0.5, 0.5]).unwrap();
+        assert!(
+            (val - 0.25).abs() < 1e-12,
+            "single cell bilinear: got {val}, expected 0.25"
+        );
+    }
+
+    #[test]
+    fn regular_grid_non_monotone_rejected() {
+        let points = vec![vec![0.0, 2.0, 1.0], vec![0.0, 1.0]]; // axis 0 not sorted
+        let values = vec![0.0; 6];
+        let err =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect_err("non-monotone");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn regular_grid_values_size_mismatch() {
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0]]; // 2x2 = 4 values needed
+        let values = vec![0.0, 1.0, 2.0]; // only 3
+        let err =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect_err("size mismatch");
+        assert!(matches!(err, InterpError::LengthMismatch { .. }));
+    }
+
+    #[test]
+    fn regular_grid_eval_many() {
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0, 2.0, 3.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect("rgi");
+
+        let results = interp
+            .eval_many(&[vec![0.0, 0.0], vec![1.0, 1.0], vec![0.5, 0.5]])
+            .expect("eval_many");
+        assert_eq!(results.len(), 3);
+        assert!((results[0] - 0.0).abs() < 1e-12);
+        assert!((results[1] - 3.0).abs() < 1e-12);
+        assert!((results[2] - 1.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn interpn_convenience() {
+        // Test the interpn convenience function
+        let points = vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0]];
+        // f(x,y) = x + y
+        let values = vec![
+            0.0, 1.0, 2.0, //
+            1.0, 2.0, 3.0, //
+            2.0, 3.0, 4.0, //
+        ];
+        let xi = vec![vec![0.5, 0.5], vec![1.0, 1.0]];
+        let result =
+            interpn(points, values, &xi, RegularGridMethod::Linear, true, None).expect("interpn");
+        assert!((result[0] - 1.0).abs() < 1e-12, "interpn at (0.5,0.5)");
+        assert!((result[1] - 2.0).abs() < 1e-12, "interpn at (1,1)");
+    }
+
+    #[test]
+    fn regular_grid_at_boundary() {
+        // Queries exactly at grid boundaries should work
+        let points = vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0]];
+        let values = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect("rgi");
+
+        // At all corners
+        assert!((interp.eval(&[0.0, 0.0]).unwrap() - 10.0).abs() < 1e-12);
+        assert!((interp.eval(&[0.0, 1.0]).unwrap() - 20.0).abs() < 1e-12);
+        assert!((interp.eval(&[2.0, 0.0]).unwrap() - 50.0).abs() < 1e-12);
+        assert!((interp.eval(&[2.0, 1.0]).unwrap() - 60.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn regular_grid_oob_nan_default() {
+        // When fill_value is None, out-of-bounds returns NaN
+        let points = vec![vec![0.0, 1.0]];
+        let values = vec![10.0, 20.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
+                .expect("rgi");
+
+        let val = interp.eval(&[-1.0]).unwrap();
+        assert!(val.is_nan(), "expected NaN for OOB, got {val}");
+    }
+
+    #[test]
+    fn regular_grid_wrong_dim_query() {
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0, 2.0, 3.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect("rgi");
+
+        let err = interp.eval(&[0.5]).expect_err("wrong dim");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
     }
 }

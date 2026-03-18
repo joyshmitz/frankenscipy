@@ -1594,24 +1594,45 @@ fn validate_minimize_options(options: MinimizeOptions) -> Result<(), OptError> {
 
 fn bfgs_inverse_update(h_inv: &[Vec<f64>], s: &[f64], y: &[f64], rho: f64) -> Vec<Vec<f64>> {
     let n = s.len();
-    let mut identity = identity_matrix(n);
 
-    for row in 0..n {
-        for col in 0..n {
-            identity[row][col] -= rho * s[row] * y[col];
+    // H_new = (I - rho*s*y^T) * H * (I - rho*y*s^T) + rho*s*s^T
+    //
+    // Let A = (I - rho*s*y^T) * H = H - rho*s*(y^T * H)
+    // Then H_new = A * (I - rho*y*s^T) + rho*s*s^T = A - rho*(A*y)*s^T + rho*s*s^T
+
+    // 1. v^T = y^T * H  (O(n^2))
+    let mut v = vec![0.0; n];
+    for j in 0..n {
+        for i in 0..n {
+            v[j] += y[i] * h_inv[i][j];
         }
     }
-    let left = matrix_mul(&identity, h_inv);
 
-    let mut identity_t = identity_matrix(n);
-    for row in 0..n {
-        for col in 0..n {
-            identity_t[row][col] -= rho * y[row] * s[col];
+    // 2. A = H - rho * s * v^T  (O(n^2))
+    let mut a = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            a[i][j] = h_inv[i][j] - rho * s[i] * v[j];
         }
     }
-    let core = matrix_mul(&left, &identity_t);
-    let rank1 = outer_product(s, s);
-    add_matrices(&core, &scale_matrix(&rank1, rho))
+
+    // 3. u = A * y  (O(n^2))
+    let mut u = vec![0.0; n];
+    for i in 0..n {
+        for j in 0..n {
+            u[i] += a[i][j] * y[j];
+        }
+    }
+
+    // 4. H_new = A - rho * u * s^T + rho * s * s^T (O(n^2))
+    let mut h_new = a;
+    for i in 0..n {
+        for j in 0..n {
+            h_new[i][j] += rho * (s[i] * s[j] - u[i] * s[j]);
+        }
+    }
+
+    h_new
 }
 
 fn log_iteration(
@@ -1717,48 +1738,6 @@ fn identity_matrix(n: usize) -> Vec<Vec<f64>> {
 
 fn matrix_vector_mul(matrix: &[Vec<f64>], vector: &[f64]) -> Vec<f64> {
     matrix.iter().map(|row| dot(row, vector)).collect()
-}
-
-fn outer_product(lhs: &[f64], rhs: &[f64]) -> Vec<Vec<f64>> {
-    lhs.iter()
-        .map(|a| rhs.iter().map(|b| a * b).collect())
-        .collect()
-}
-
-fn matrix_mul(lhs: &[Vec<f64>], rhs: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    let n = lhs.len();
-    let m = rhs.first().map_or(0, |row| row.len());
-    let mut out = vec![vec![0.0; m]; n];
-    for row in 0..n {
-        for col in 0..m {
-            let mut accum = 0.0;
-            for (k, rhs_row) in rhs.iter().enumerate() {
-                accum += lhs[row][k] * rhs_row[col];
-            }
-            out[row][col] = accum;
-        }
-    }
-    out
-}
-
-fn scale_matrix(matrix: &[Vec<f64>], scale: f64) -> Vec<Vec<f64>> {
-    matrix
-        .iter()
-        .map(|row| row.iter().map(|entry| entry * scale).collect())
-        .collect()
-}
-
-fn add_matrices(lhs: &[Vec<f64>], rhs: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    lhs.iter()
-        .zip(rhs.iter())
-        .map(|(left_row, right_row)| {
-            left_row
-                .iter()
-                .zip(right_row.iter())
-                .map(|(left, right)| left + right)
-                .collect()
-        })
-        .collect()
 }
 
 // ══════════════════════════════════════════════════════════════════════

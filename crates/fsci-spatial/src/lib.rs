@@ -119,6 +119,88 @@ pub fn correlation(a: &[f64], b: &[f64]) -> f64 {
     1.0 - ssab / denom
 }
 
+/// Hamming distance: fraction of elements that differ.
+///
+/// Matches `scipy.spatial.distance.hamming(u, v)`.
+/// For real-valued vectors, counts positions where u_i != v_i.
+pub fn hamming(a: &[f64], b: &[f64]) -> f64 {
+    if a.is_empty() {
+        return 0.0;
+    }
+    let mismatches = a
+        .iter()
+        .zip(b.iter())
+        .filter(|&(&ai, &bi)| (ai - bi).abs() > f64::EPSILON)
+        .count();
+    mismatches as f64 / a.len() as f64
+}
+
+/// Jaccard dissimilarity for binary vectors.
+///
+/// Matches `scipy.spatial.distance.jaccard(u, v)`.
+/// J(u,v) = (c_TF + c_FT) / (c_TT + c_TF + c_FT) where c_TT is count
+/// of positions where both are nonzero, etc.
+pub fn jaccard(a: &[f64], b: &[f64]) -> f64 {
+    let mut tt = 0usize;
+    let mut tf = 0usize;
+    let mut ft = 0usize;
+    for (&ai, &bi) in a.iter().zip(b.iter()) {
+        let a_nz = ai.abs() > f64::EPSILON;
+        let b_nz = bi.abs() > f64::EPSILON;
+        match (a_nz, b_nz) {
+            (true, true) => tt += 1,
+            (true, false) => tf += 1,
+            (false, true) => ft += 1,
+            (false, false) => {}
+        }
+    }
+    let denom = tt + tf + ft;
+    if denom == 0 {
+        return 0.0;
+    }
+    (tf + ft) as f64 / denom as f64
+}
+
+/// Canberra distance.
+///
+/// Matches `scipy.spatial.distance.canberra(u, v)`.
+/// d(u,v) = Σ|u_i - v_i| / (|u_i| + |v_i|)
+pub fn canberra(a: &[f64], b: &[f64]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(&ai, &bi)| {
+            let denom = ai.abs() + bi.abs();
+            if denom < f64::EPSILON {
+                0.0
+            } else {
+                (ai - bi).abs() / denom
+            }
+        })
+        .sum()
+}
+
+/// Bray-Curtis dissimilarity.
+///
+/// Matches `scipy.spatial.distance.braycurtis(u, v)`.
+/// d(u,v) = Σ|u_i - v_i| / Σ|u_i + v_i|
+pub fn braycurtis(a: &[f64], b: &[f64]) -> f64 {
+    let num: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(&ai, &bi)| (ai - bi).abs())
+        .sum();
+    let den: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(&ai, &bi)| (ai + bi).abs())
+        .sum();
+    if den < f64::EPSILON {
+        0.0
+    } else {
+        num / den
+    }
+}
+
 /// Distance metric identifiers for use with `pdist` and `cdist_metric`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DistanceMetric {
@@ -128,6 +210,10 @@ pub enum DistanceMetric {
     Chebyshev,
     Cosine,
     Correlation,
+    Hamming,
+    Jaccard,
+    Canberra,
+    Braycurtis,
 }
 
 /// Compute the distance between two points using the specified metric.
@@ -139,6 +225,10 @@ pub fn metric_distance(a: &[f64], b: &[f64], metric: DistanceMetric) -> f64 {
         DistanceMetric::Chebyshev => chebyshev(a, b),
         DistanceMetric::Cosine => cosine(a, b),
         DistanceMetric::Correlation => correlation(a, b),
+        DistanceMetric::Hamming => hamming(a, b),
+        DistanceMetric::Jaccard => jaccard(a, b),
+        DistanceMetric::Canberra => canberra(a, b),
+        DistanceMetric::Braycurtis => braycurtis(a, b),
     }
 }
 
@@ -366,6 +456,45 @@ impl KDTree {
     pub fn size(&self) -> usize {
         self.nodes.len()
     }
+
+    /// Find all points within distance `r` of a query point.
+    ///
+    /// Matches `scipy.spatial.KDTree.query_ball_point(x, r)`.
+    ///
+    /// Returns indices of all points within Euclidean distance `r`.
+    pub fn query_ball_point(&self, query: &[f64], r: f64) -> Result<Vec<usize>, SpatialError> {
+        if query.len() != self.dim {
+            return Err(SpatialError::DimensionMismatch {
+                expected: self.dim,
+                actual: query.len(),
+            });
+        }
+        if self.nodes.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let r_sq = r * r;
+        let mut results = Vec::new();
+        ball_search(&self.nodes, 0, query, r_sq, &mut results);
+        results.sort_unstable();
+        Ok(results)
+    }
+
+    /// Count pairs of points within distance `r` between this tree and another.
+    ///
+    /// Matches `scipy.spatial.KDTree.count_neighbors(other, r)`.
+    pub fn count_neighbors(&self, other: &KDTree, r: f64) -> usize {
+        let r_sq = r * r;
+        let mut count = 0;
+        for node in &self.nodes {
+            for other_node in &other.nodes {
+                if sqeuclidean(&node.point, &other_node.point) <= r_sq {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
 }
 
 fn build_kdtree(
@@ -486,6 +615,38 @@ fn knn_search(
         && let Some(far_idx) = far
     {
         knn_search(nodes, far_idx, query, k, results);
+    }
+}
+
+fn ball_search(
+    nodes: &[KDNode],
+    node_idx: usize,
+    query: &[f64],
+    r_sq: f64,
+    results: &mut Vec<usize>,
+) {
+    let node = &nodes[node_idx];
+    let dist_sq = sqeuclidean(query, &node.point);
+
+    if dist_sq <= r_sq {
+        results.push(node.index);
+    }
+
+    let diff = query[node.split_dim] - node.point[node.split_dim];
+    let (near, far) = if diff <= 0.0 {
+        (node.left, node.right)
+    } else {
+        (node.right, node.left)
+    };
+
+    if let Some(near_idx) = near {
+        ball_search(nodes, near_idx, query, r_sq, results);
+    }
+
+    if diff * diff <= r_sq
+        && let Some(far_idx) = far
+    {
+        ball_search(nodes, far_idx, query, r_sq, results);
     }
 }
 
@@ -717,5 +878,104 @@ mod tests {
 
         assert_eq!(tree_idx, brute_idx);
         assert!((tree_dist - brute_dist).abs() < 1e-10);
+    }
+
+    // ── New distance metric tests ──────────────────────────────────
+
+    #[test]
+    fn hamming_basic() {
+        assert!((hamming(&[1.0, 0.0, 1.0], &[1.0, 1.0, 1.0]) - 1.0 / 3.0).abs() < 1e-12);
+        assert!((hamming(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0])).abs() < 1e-12);
+    }
+
+    #[test]
+    fn jaccard_basic() {
+        // u=[1,0,1], v=[1,1,0]: TT=1, TF=1, FT=1 → J = 2/3
+        assert!((jaccard(&[1.0, 0.0, 1.0], &[1.0, 1.0, 0.0]) - 2.0 / 3.0).abs() < 1e-12);
+        // identical nonzero → J = 0
+        assert!(jaccard(&[1.0, 1.0], &[1.0, 1.0]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn jaccard_all_zeros() {
+        // Both zero → J = 0 (no nonzero elements)
+        assert!(jaccard(&[0.0, 0.0], &[0.0, 0.0]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn canberra_basic() {
+        // |1-2|/(1+2) + |3-4|/(3+4) = 1/3 + 1/7
+        let expected = 1.0 / 3.0 + 1.0 / 7.0;
+        assert!((canberra(&[1.0, 3.0], &[2.0, 4.0]) - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn canberra_zeros() {
+        // Both zero at a position → contribution is 0
+        assert!((canberra(&[0.0, 1.0], &[0.0, 2.0]) - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn braycurtis_basic() {
+        // |1-2| + |3-4| = 2; |1+2| + |3+4| = 10 → 2/10 = 0.2
+        assert!((braycurtis(&[1.0, 3.0], &[2.0, 4.0]) - 0.2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn braycurtis_identical() {
+        assert!(braycurtis(&[5.0, 10.0], &[5.0, 10.0]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn pdist_with_canberra() {
+        let x = vec![vec![0.0, 1.0], vec![1.0, 0.0], vec![1.0, 1.0]];
+        let d = pdist(&x, DistanceMetric::Canberra).unwrap();
+        assert_eq!(d.len(), 3);
+        // All distances should be positive
+        for &di in &d {
+            assert!(di >= 0.0);
+        }
+    }
+
+    // ── KDTree extension tests ─────────────────────────────────────
+
+    #[test]
+    fn kdtree_query_ball_point() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![5.0, 5.0],
+        ];
+        let tree = KDTree::new(&data).unwrap();
+
+        // Radius 1.5 from origin should include points 0, 1, 2 but not 3
+        let mut result = tree.query_ball_point(&[0.0, 0.0], 1.5).unwrap();
+        result.sort();
+        assert_eq!(result, vec![0, 1, 2]);
+
+        // Radius 0.5 from origin should include only point 0
+        let result = tree.query_ball_point(&[0.0, 0.0], 0.5).unwrap();
+        assert_eq!(result, vec![0]);
+    }
+
+    #[test]
+    fn kdtree_query_ball_point_empty() {
+        let data = vec![vec![10.0, 10.0]];
+        let tree = KDTree::new(&data).unwrap();
+        let result = tree.query_ball_point(&[0.0, 0.0], 1.0).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn kdtree_count_neighbors() {
+        let data1 = vec![vec![0.0, 0.0], vec![1.0, 0.0]];
+        let data2 = vec![vec![0.5, 0.0], vec![10.0, 10.0]];
+        let tree1 = KDTree::new(&data1).unwrap();
+        let tree2 = KDTree::new(&data2).unwrap();
+
+        // Within radius 1.0: (0,0)↔(0.5,0) and (1,0)↔(0.5,0) = 2 pairs
+        let count = tree1.count_neighbors(&tree2, 1.0);
+        assert_eq!(count, 2);
     }
 }

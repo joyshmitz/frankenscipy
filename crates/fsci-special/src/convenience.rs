@@ -10,6 +10,8 @@
 //! - `logit` — Log-odds: log(p / (1 - p))
 //! - `entr` — Elementwise entropy: -x * log(x)
 //! - `rel_entr` — Relative entropy (KL divergence element): x * log(x/y)
+//! - `ndtr` / `ndtri` — Standard normal CDF and inverse CDF
+//! - `kl_div` — KL divergence element with the `-x + y` correction
 
 use std::f64::consts::PI;
 
@@ -120,6 +122,43 @@ pub fn rel_entr(
     })
 }
 
+/// Standard normal cumulative distribution function Φ(x).
+///
+/// Matches `scipy.special.ndtr(x)`.
+#[must_use]
+pub fn ndtr(x: f64) -> f64 {
+    0.5 * (1.0 + crate::error::erf_scalar(x / 2.0_f64.sqrt()))
+}
+
+/// Inverse standard normal cumulative distribution function Φ⁻¹(y).
+///
+/// Matches `scipy.special.ndtri(y)`.
+#[must_use]
+pub fn ndtri(y: f64) -> f64 {
+    if y.is_nan() {
+        return f64::NAN;
+    }
+    if !(0.0..=1.0).contains(&y) {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if y == 1.0 {
+        return f64::INFINITY;
+    }
+    2.0_f64.sqrt()
+        * crate::error::erfinv_scalar(2.0 * y - 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// KL divergence element `x * log(x / y) - x + y`.
+///
+/// Matches `scipy.special.kl_div(x, y)`.
+#[must_use]
+pub fn kl_div(x: f64, y: f64) -> f64 {
+    kl_div_scalar(x, y)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Scalar Kernels
 // ══════════════════════════════════════════════════════════════════════
@@ -139,19 +178,11 @@ fn sinc_scalar(x: f64) -> f64 {
 }
 
 fn xlogy_scalar(x: f64, y: f64) -> f64 {
-    if x == 0.0 {
-        0.0
-    } else {
-        x * y.ln()
-    }
+    if x == 0.0 { 0.0 } else { x * y.ln() }
 }
 
 fn xlog1py_scalar(x: f64, y: f64) -> f64 {
-    if x == 0.0 {
-        0.0
-    } else {
-        x * (1.0 + y).ln()
-    }
+    if x == 0.0 { 0.0 } else { x * (1.0 + y).ln() }
 }
 
 fn expit_scalar(x: f64) -> f64 {
@@ -200,6 +231,16 @@ fn rel_entr_scalar(x: f64, y: f64) -> f64 {
         0.0
     } else if x > 0.0 && y > 0.0 {
         x * (x / y).ln()
+    } else {
+        f64::INFINITY
+    }
+}
+
+fn kl_div_scalar(x: f64, y: f64) -> f64 {
+    if x == 0.0 && y >= 0.0 {
+        y
+    } else if x > 0.0 && y > 0.0 {
+        x * (x / y).ln() - x + y
     } else {
         f64::INFINITY
     }
@@ -408,10 +449,7 @@ mod tests {
 
     #[test]
     fn entr_positive() {
-        let result = eval_scalar(entr(
-            &SpecialTensor::RealScalar(0.5),
-            RuntimeMode::Strict,
-        ));
+        let result = eval_scalar(entr(&SpecialTensor::RealScalar(0.5), RuntimeMode::Strict));
         assert_close(result, -0.5 * 0.5_f64.ln(), 1e-12, "entr(0.5)");
     }
 

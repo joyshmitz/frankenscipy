@@ -76,6 +76,75 @@ pub fn betainc(
     })
 }
 
+/// Beta distribution CDF.
+///
+/// Matches `scipy.special.btdtr(a, b, x)`.
+#[must_use]
+pub fn btdtr(a: f64, b: f64, x: f64) -> f64 {
+    betainc_scalar(a, b, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Inverse beta distribution CDF.
+///
+/// Matches `scipy.special.btdtri(a, b, y)`.
+#[must_use]
+pub fn btdtri(a: f64, b: f64, y: f64) -> f64 {
+    if a.is_nan() || b.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if a <= 0.0 || b <= 0.0 || !(0.0..=1.0).contains(&y) {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return 0.0;
+    }
+    if y == 1.0 {
+        return 1.0;
+    }
+
+    invert_monotone_unit_interval(|x| btdtr(a, b, x), y)
+}
+
+/// F-distribution CDF.
+///
+/// Matches `scipy.special.fdtr(dfn, dfd, x)`.
+#[must_use]
+pub fn fdtr(dfn: f64, dfd: f64, x: f64) -> f64 {
+    if dfn.is_nan() || dfd.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if dfn <= 0.0 || dfd <= 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 {
+        return 0.0;
+    }
+    let z = dfn * x / (dfn * x + dfd);
+    btdtr(0.5 * dfn, 0.5 * dfd, z)
+}
+
+/// Inverse F-distribution CDF.
+///
+/// Matches `scipy.special.fdtri(dfn, dfd, y)`.
+#[must_use]
+pub fn fdtri(dfn: f64, dfd: f64, y: f64) -> f64 {
+    if dfn.is_nan() || dfd.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if dfn <= 0.0 || dfd <= 0.0 || !(0.0..=1.0).contains(&y) {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return 0.0;
+    }
+    if y == 1.0 {
+        return f64::INFINITY;
+    }
+
+    let z = btdtri(0.5 * dfn, 0.5 * dfd, y);
+    dfd * z / (dfn * (1.0 - z))
+}
+
 fn map_real_binary<F>(
     function: &'static str,
     a: &SpecialTensor,
@@ -453,6 +522,30 @@ fn betacf(a: f64, b: f64, x: f64) -> f64 {
     }
 
     h
+}
+
+fn invert_monotone_unit_interval(cdf: impl Fn(f64) -> f64, target: f64) -> f64 {
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+
+    for _ in 0..120 {
+        let mid = 0.5 * (lo + hi);
+        let value = cdf(mid);
+        if !value.is_finite() {
+            hi = mid;
+            continue;
+        }
+        if value < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if (hi - lo).abs() <= 1.0e-14 * mid.abs().max(1.0) {
+            break;
+        }
+    }
+
+    0.5 * (lo + hi)
 }
 
 fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {

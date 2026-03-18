@@ -1149,7 +1149,7 @@ mod tests {
         assert!(result.converged);
         // Should find 5 and 3 (in some order)
         let mut evs = result.eigenvalues.clone();
-        evs.sort_by(|a, b| b.partial_cmp(a).unwrap());
+        evs.sort_by(|a, b| b.total_cmp(a));
         assert!(
             (evs[0] - 5.0).abs() < 1e-4,
             "largest = {}, expected 5.0",

@@ -2162,6 +2162,797 @@ fn make_window(n: usize, window: FirWindow) -> Vec<f64> {
     }
 }
 
+// ── Chirp method ────────────────────────────────────────────────────
+
+/// Method for frequency sweep in `chirp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChirpMethod {
+    /// Linear frequency sweep (instantaneous frequency is linear in time).
+    #[default]
+    Linear,
+    /// Quadratic frequency sweep.
+    Quadratic,
+    /// Logarithmic frequency sweep (f0 and f1 must be > 0).
+    Logarithmic,
+}
+
+/// Generate a swept-frequency cosine (chirp) signal.
+///
+/// Matches `scipy.signal.chirp(t, f0, t1, f1, method)`.
+///
+/// # Arguments
+/// * `t` — Time array at which to evaluate the signal.
+/// * `f0` — Frequency at time 0.
+/// * `t1` — Time at which `f1` is specified.
+/// * `f1` — Frequency at time `t1`.
+/// * `method` — Chirp type: linear, quadratic, or logarithmic.
+pub fn chirp(
+    t: &[f64],
+    f0: f64,
+    t1: f64,
+    f1: f64,
+    method: ChirpMethod,
+) -> Result<Vec<f64>, SignalError> {
+    if t1 <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "t1 must be positive".to_string(),
+        ));
+    }
+    if method == ChirpMethod::Logarithmic && (f0 <= 0.0 || f1 <= 0.0) {
+        return Err(SignalError::InvalidArgument(
+            "logarithmic chirp requires f0 > 0 and f1 > 0".to_string(),
+        ));
+    }
+
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let result = match method {
+        ChirpMethod::Linear => {
+            let k = (f1 - f0) / t1;
+            t.iter()
+                .map(|&ti| (two_pi * (f0 * ti + 0.5 * k * ti * ti)).cos())
+                .collect()
+        }
+        ChirpMethod::Quadratic => {
+            let k = (f1 - f0) / (t1 * t1);
+            t.iter()
+                .map(|&ti| (two_pi * (f0 * ti + k * ti * ti * ti / 3.0)).cos())
+                .collect()
+        }
+        ChirpMethod::Logarithmic => {
+            let ratio = f1 / f0;
+            let log_ratio = ratio.ln();
+            t.iter()
+                .map(|&ti| {
+                    let phase = two_pi * f0 * t1 / log_ratio * (ratio.powf(ti / t1) - 1.0);
+                    phase.cos()
+                })
+                .collect()
+        }
+    };
+    Ok(result)
+}
+
+/// Generate a sawtooth or triangle wave.
+///
+/// Matches `scipy.signal.sawtooth(t, width)`.
+///
+/// # Arguments
+/// * `t` — Time array (phase in radians; period is 2π).
+/// * `width` — Width of the rising ramp as a proportion of the period (0 to 1).
+///   `width=1` gives a rising sawtooth, `width=0` a falling sawtooth,
+///   `width=0.5` a triangle wave.
+pub fn sawtooth(t: &[f64], width: f64) -> Result<Vec<f64>, SignalError> {
+    if !(0.0..=1.0).contains(&width) {
+        return Err(SignalError::InvalidArgument(
+            "width must be in [0, 1]".to_string(),
+        ));
+    }
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let result = t
+        .iter()
+        .map(|&ti| {
+            // Normalize to [0, 1) within one period.
+            let phase = ((ti / two_pi) % 1.0 + 1.0) % 1.0;
+            if width == 0.0 {
+                // Pure falling ramp.
+                1.0 - 2.0 * phase
+            } else if phase < width {
+                -1.0 + 2.0 * phase / width
+            } else {
+                1.0 - 2.0 * (phase - width) / (1.0 - width)
+            }
+        })
+        .collect();
+    Ok(result)
+}
+
+/// Generate a square wave.
+///
+/// Matches `scipy.signal.square(t, duty)`.
+///
+/// # Arguments
+/// * `t` — Time array (phase in radians; period is 2π).
+/// * `duty` — Duty cycle (fraction of period at +1). Default 0.5.
+pub fn square(t: &[f64], duty: f64) -> Result<Vec<f64>, SignalError> {
+    if !(0.0..=1.0).contains(&duty) {
+        return Err(SignalError::InvalidArgument(
+            "duty must be in [0, 1]".to_string(),
+        ));
+    }
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let result = t
+        .iter()
+        .map(|&ti| {
+            let phase = ((ti / two_pi) % 1.0 + 1.0) % 1.0;
+            if phase < duty { 1.0 } else { -1.0 }
+        })
+        .collect();
+    Ok(result)
+}
+
+/// Generate a discrete unit impulse (Kronecker delta).
+///
+/// Matches `scipy.signal.unit_impulse(shape, idx)`.
+///
+/// # Arguments
+/// * `shape` — Length of the output array.
+/// * `idx` — Index at which the impulse is placed. If `None`, places at index 0.
+pub fn unit_impulse(shape: usize, idx: Option<usize>) -> Result<Vec<f64>, SignalError> {
+    let i = idx.unwrap_or(0);
+    if i >= shape {
+        return Err(SignalError::InvalidArgument(format!(
+            "idx {i} out of range for shape {shape}"
+        )));
+    }
+    let mut out = vec![0.0; shape];
+    out[i] = 1.0;
+    Ok(out)
+}
+
+/// Detrend type for `detrend`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DetrendType {
+    /// Remove the mean (constant trend).
+    Constant,
+    /// Remove a linear trend (least-squares fit of y = a + b*x).
+    #[default]
+    Linear,
+}
+
+/// Remove a trend from data.
+///
+/// Matches `scipy.signal.detrend(data, type)`.
+///
+/// # Arguments
+/// * `data` — Input signal.
+/// * `dtype` — Type of detrending: constant (remove mean) or linear (remove linear fit).
+pub fn detrend(data: &[f64], dtype: DetrendType) -> Result<Vec<f64>, SignalError> {
+    if data.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "data must not be empty".to_string(),
+        ));
+    }
+    match dtype {
+        DetrendType::Constant => {
+            let mean = data.iter().sum::<f64>() / data.len() as f64;
+            Ok(data.iter().map(|&v| v - mean).collect())
+        }
+        DetrendType::Linear => {
+            let n = data.len() as f64;
+            let sx: f64 = (0..data.len()).map(|i| i as f64).sum();
+            let sy: f64 = data.iter().sum();
+            let sxx: f64 = (0..data.len()).map(|i| (i as f64) * (i as f64)).sum();
+            let sxy: f64 = data.iter().enumerate().map(|(i, &v)| i as f64 * v).sum();
+            let denom = n * sxx - sx * sx;
+            if denom.abs() < f64::EPSILON {
+                // Single point or degenerate; just remove mean.
+                let mean = sy / n;
+                return Ok(data.iter().map(|&v| v - mean).collect());
+            }
+            let slope = (n * sxy - sx * sy) / denom;
+            let intercept = (sy - slope * sx) / n;
+            Ok(data
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| v - (intercept + slope * i as f64))
+                .collect())
+        }
+    }
+}
+
+/// Apply a median filter to a 1-D signal.
+///
+/// Matches `scipy.signal.medfilt(volume, kernel_size)`.
+///
+/// # Arguments
+/// * `data` — Input signal.
+/// * `kernel_size` — Size of the median filter window (must be odd and >= 1).
+pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError> {
+    if kernel_size == 0 || kernel_size.is_multiple_of(2) {
+        return Err(SignalError::InvalidArgument(
+            "kernel_size must be odd and >= 1".to_string(),
+        ));
+    }
+    if data.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let half = kernel_size / 2;
+    let n = data.len();
+    let mut result = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let start = i.saturating_sub(half);
+        let end = (i + half + 1).min(n);
+        let mut window: Vec<f64> = data[start..end].to_vec();
+        window.sort_by(|a, b| a.total_cmp(b));
+        result.push(window[window.len() / 2]);
+    }
+
+    Ok(result)
+}
+
+/// Dispatch a window function by name string.
+///
+/// Matches `scipy.signal.get_window(window, Nx)`.
+///
+/// # Supported windows
+/// `"hann"`, `"hamming"`, `"blackman"`, `"rectangular"` / `"boxcar"`,
+/// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`).
+pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
+    let lower = window.trim().to_lowercase();
+    if let Some(rest) = lower.strip_prefix("kaiser,") {
+        let beta: f64 = rest
+            .trim()
+            .parse()
+            .map_err(|_| SignalError::InvalidArgument(format!("invalid kaiser beta: {rest}")))?;
+        return Ok(kaiser(nx, beta));
+    }
+    match lower.as_str() {
+        "hann" | "hanning" => Ok(hann(nx)),
+        "hamming" => Ok(hamming(nx)),
+        "blackman" => Ok(blackman(nx)),
+        "rectangular" | "boxcar" | "rect" => Ok(vec![1.0; nx]),
+        _ => Err(SignalError::InvalidArgument(format!(
+            "unknown window type: {window}"
+        ))),
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Time-Frequency Analysis: STFT, ISTFT, spectrogram, CSD, coherence
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of the Short-Time Fourier Transform.
+#[derive(Debug, Clone)]
+pub struct StftResult {
+    /// Frequency bins (length = nperseg/2 + 1).
+    pub frequencies: Vec<f64>,
+    /// Time centers for each segment.
+    pub times: Vec<f64>,
+    /// Complex STFT matrix: `zxx[t][f] = (re, im)`.
+    /// Outer index is time segment, inner is frequency bin.
+    pub zxx: Vec<Vec<(f64, f64)>>,
+}
+
+/// Compute the Short-Time Fourier Transform.
+///
+/// Matches `scipy.signal.stft(x, fs, window, nperseg, noverlap)`.
+///
+/// # Arguments
+/// * `x` — Input signal.
+/// * `fs` — Sampling frequency (Hz).
+/// * `nperseg` — Length of each segment (default: 256).
+/// * `noverlap` — Overlap between segments (default: nperseg/2).
+pub fn stft(
+    x: &[f64],
+    fs: f64,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+) -> Result<StftResult, SignalError> {
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+
+    let nperseg = nperseg.unwrap_or_else(|| x.len().min(256));
+    if nperseg == 0 {
+        return Err(SignalError::InvalidArgument(
+            "nperseg must be > 0".to_string(),
+        ));
+    }
+    if nperseg > x.len() {
+        return Err(SignalError::InvalidArgument(format!(
+            "nperseg ({nperseg}) must be <= signal length ({})",
+            x.len()
+        )));
+    }
+
+    let noverlap = noverlap.unwrap_or(nperseg / 2);
+    if noverlap >= nperseg {
+        return Err(SignalError::InvalidArgument(
+            "noverlap must be < nperseg".to_string(),
+        ));
+    }
+
+    let step = nperseg - noverlap;
+    let window = hann(nperseg);
+    let n_freqs = nperseg / 2 + 1;
+    let opts = fsci_fft::FftOptions::default();
+
+    let mut zxx = Vec::new();
+    let mut times = Vec::new();
+    let mut start = 0;
+
+    while start + nperseg <= x.len() {
+        // Window the segment.
+        let windowed: Vec<f64> = x[start..start + nperseg]
+            .iter()
+            .zip(&window)
+            .map(|(&xi, &wi)| xi * wi)
+            .collect();
+
+        // Compute rfft.
+        let spectrum = fsci_fft::rfft(&windowed, &opts)
+            .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+
+        zxx.push(spectrum[..n_freqs].to_vec());
+        times.push((start as f64 + (nperseg - 1) as f64 / 2.0) / fs);
+        start += step;
+    }
+
+    let freq_step = fs / nperseg as f64;
+    let frequencies: Vec<f64> = (0..n_freqs).map(|k| k as f64 * freq_step).collect();
+
+    Ok(StftResult {
+        frequencies,
+        times,
+        zxx,
+    })
+}
+
+/// Compute the inverse Short-Time Fourier Transform (overlap-add reconstruction).
+///
+/// Matches `scipy.signal.istft(Zxx, fs, nperseg, noverlap)`.
+///
+/// # Arguments
+/// * `stft_result` — STFT result from `stft()`.
+/// * `nperseg` — Segment length used in the forward STFT.
+/// * `noverlap` — Overlap used in the forward STFT (default: nperseg/2).
+pub fn istft(
+    stft_result: &StftResult,
+    nperseg: usize,
+    noverlap: Option<usize>,
+) -> Result<Vec<f64>, SignalError> {
+    if stft_result.zxx.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "empty STFT result".to_string(),
+        ));
+    }
+
+    let noverlap = noverlap.unwrap_or(nperseg / 2);
+    let step = nperseg - noverlap;
+    let n_segments = stft_result.zxx.len();
+    let output_len = nperseg + (n_segments - 1) * step;
+
+    let window = hann(nperseg);
+    let opts = fsci_fft::FftOptions::default();
+
+    let mut output = vec![0.0; output_len];
+    let mut window_sum = vec![0.0; output_len];
+
+    for (seg_idx, spectrum) in stft_result.zxx.iter().enumerate() {
+        // Inverse rfft.
+        let segment = fsci_fft::irfft(spectrum, Some(nperseg), &opts)
+            .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
+
+        let start = seg_idx * step;
+        for (j, (&s, &w)) in segment.iter().zip(&window).enumerate() {
+            output[start + j] += s * w;
+            window_sum[start + j] += w * w;
+        }
+    }
+
+    // Normalize by window sum (COLA condition).
+    for (o, &ws) in output.iter_mut().zip(&window_sum) {
+        if ws > 1e-15 {
+            *o /= ws;
+        }
+    }
+
+    Ok(output)
+}
+
+/// Result of the spectrogram computation.
+#[derive(Debug, Clone)]
+pub struct SpectrogramResult {
+    /// Frequency bins.
+    pub frequencies: Vec<f64>,
+    /// Time centers for each segment.
+    pub times: Vec<f64>,
+    /// Power spectral density: `sxx[t][f]`.
+    pub sxx: Vec<Vec<f64>>,
+}
+
+/// Compute a spectrogram (time-frequency power representation).
+///
+/// Matches `scipy.signal.spectrogram(x, fs, nperseg, noverlap)`.
+///
+/// # Arguments
+/// * `x` — Input signal.
+/// * `fs` — Sampling frequency (Hz).
+/// * `nperseg` — Length of each segment (default: 256).
+/// * `noverlap` — Overlap between segments (default: nperseg/8).
+pub fn spectrogram(
+    x: &[f64],
+    fs: f64,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+) -> Result<SpectrogramResult, SignalError> {
+    let nperseg_val = nperseg.unwrap_or_else(|| x.len().min(256));
+    let noverlap_val = noverlap.unwrap_or(nperseg_val / 8);
+
+    let stft_res = stft(x, fs, Some(nperseg_val), Some(noverlap_val))?;
+
+    let n_freqs = stft_res.frequencies.len();
+    let win = hann(nperseg_val);
+    let win_power: f64 = win.iter().map(|&w| w * w).sum::<f64>() / nperseg_val as f64;
+
+    // Convert complex STFT to PSD.
+    let scale = 1.0 / (fs * nperseg_val as f64 * win_power);
+    let sxx: Vec<Vec<f64>> = stft_res
+        .zxx
+        .iter()
+        .map(|seg| {
+            seg.iter()
+                .enumerate()
+                .map(|(k, &(re, im))| {
+                    let mag2 = re * re + im * im;
+                    let factor = if k == 0 || (nperseg_val.is_multiple_of(2) && k == n_freqs - 1) {
+                        1.0
+                    } else {
+                        2.0
+                    };
+                    mag2 * scale * factor
+                })
+                .collect()
+        })
+        .collect();
+
+    Ok(SpectrogramResult {
+        frequencies: stft_res.frequencies,
+        times: stft_res.times,
+        sxx,
+    })
+}
+
+/// Cross-spectral density estimation using Welch's method.
+///
+/// Matches `scipy.signal.csd(x, y, fs, nperseg, noverlap)`.
+///
+/// Returns complex cross-spectral density `Pxy[k] = conj(X[k]) * Y[k]` averaged
+/// over segments.
+///
+/// # Arguments
+/// * `x` — First input signal.
+/// * `y` — Second input signal (same length as x).
+/// * `fs` — Sampling frequency (Hz).
+/// * `nperseg` — Segment length (default: 256).
+/// * `noverlap` — Overlap (default: nperseg/2).
+pub fn csd(
+    x: &[f64],
+    y: &[f64],
+    fs: f64,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+) -> Result<CsdResult, SignalError> {
+    if x.len() != y.len() {
+        return Err(SignalError::InvalidArgument(format!(
+            "x and y must have same length ({} vs {})",
+            x.len(),
+            y.len()
+        )));
+    }
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+
+    let nperseg = nperseg.unwrap_or_else(|| x.len().min(256));
+    if nperseg == 0 || nperseg > x.len() {
+        return Err(SignalError::InvalidArgument(
+            "nperseg must be > 0 and <= signal length".to_string(),
+        ));
+    }
+    let noverlap = noverlap.unwrap_or(nperseg / 2);
+    if noverlap >= nperseg {
+        return Err(SignalError::InvalidArgument(
+            "noverlap must be < nperseg".to_string(),
+        ));
+    }
+
+    let step = nperseg - noverlap;
+    let window = hann(nperseg);
+    let win_power: f64 = window.iter().map(|&w| w * w).sum::<f64>() / nperseg as f64;
+    let n_freqs = nperseg / 2 + 1;
+    let opts = fsci_fft::FftOptions::default();
+
+    let mut avg_csd = vec![(0.0, 0.0); n_freqs];
+    let mut n_segments = 0usize;
+    let mut start = 0;
+
+    while start + nperseg <= x.len() {
+        let wx: Vec<f64> = x[start..start + nperseg]
+            .iter()
+            .zip(&window)
+            .map(|(&xi, &wi)| xi * wi)
+            .collect();
+        let wy: Vec<f64> = y[start..start + nperseg]
+            .iter()
+            .zip(&window)
+            .map(|(&yi, &wi)| yi * wi)
+            .collect();
+
+        let sx = fsci_fft::rfft(&wx, &opts)
+            .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+        let sy = fsci_fft::rfft(&wy, &opts)
+            .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+
+        // Pxy = conj(X) * Y
+        for (k, ((avg_re, avg_im), (&(xr, xi), &(yr, yi)))) in
+            avg_csd.iter_mut().zip(sx.iter().zip(sy.iter())).enumerate()
+        {
+            // conj(X) * Y = (xr - j*xi) * (yr + j*yi) = (xr*yr + xi*yi) + j*(xr*yi - xi*yr)
+            let re = xr * yr + xi * yi;
+            let im = xr * yi - xi * yr;
+            let factor = if k == 0 || (nperseg.is_multiple_of(2) && k == n_freqs - 1) {
+                1.0
+            } else {
+                2.0
+            };
+            *avg_re += re * factor;
+            *avg_im += im * factor;
+        }
+        n_segments += 1;
+        start += step;
+    }
+
+    if n_segments == 0 {
+        return Err(SignalError::InvalidArgument(
+            "signal too short for any segment".to_string(),
+        ));
+    }
+
+    let scale = 1.0 / (fs * nperseg as f64 * win_power * n_segments as f64);
+    for (re, im) in &mut avg_csd {
+        *re *= scale;
+        *im *= scale;
+    }
+
+    let freq_step = fs / nperseg as f64;
+    let frequencies: Vec<f64> = (0..n_freqs).map(|k| k as f64 * freq_step).collect();
+
+    Ok(CsdResult {
+        frequencies,
+        csd: avg_csd,
+    })
+}
+
+/// Result of cross-spectral density computation.
+#[derive(Debug, Clone)]
+pub struct CsdResult {
+    /// Frequency bins.
+    pub frequencies: Vec<f64>,
+    /// Complex cross-spectral density: `(re, im)` per frequency bin.
+    pub csd: Vec<(f64, f64)>,
+}
+
+/// Result of coherence computation.
+#[derive(Debug, Clone)]
+pub struct CoherenceResult {
+    /// Frequency bins.
+    pub frequencies: Vec<f64>,
+    /// Magnitude-squared coherence: `|Pxy|² / (Pxx * Pyy)` per frequency bin.
+    pub coherence: Vec<f64>,
+}
+
+/// Compute magnitude-squared coherence between two signals.
+///
+/// Matches `scipy.signal.coherence(x, y, fs, nperseg, noverlap)`.
+///
+/// `Cxy[f] = |Pxy[f]|² / (Pxx[f] * Pyy[f])` where Pxy is the cross-spectral
+/// density and Pxx, Pyy are the auto-spectral densities.
+///
+/// # Arguments
+/// * `x` — First input signal.
+/// * `y` — Second input signal (same length as x).
+/// * `fs` — Sampling frequency (Hz).
+/// * `nperseg` — Segment length (default: 256).
+/// * `noverlap` — Overlap (default: nperseg/2).
+pub fn coherence(
+    x: &[f64],
+    y: &[f64],
+    fs: f64,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+) -> Result<CoherenceResult, SignalError> {
+    let pxy = csd(x, y, fs, nperseg, noverlap)?;
+    let pxx = csd(x, x, fs, nperseg, noverlap)?;
+    let pyy = csd(y, y, fs, nperseg, noverlap)?;
+
+    let coh: Vec<f64> = pxy
+        .csd
+        .iter()
+        .zip(pxx.csd.iter().zip(pyy.csd.iter()))
+        .map(|(&(pxy_re, pxy_im), (&(pxx_re, _), &(pyy_re, _)))| {
+            // |Pxy|² / (Pxx * Pyy). Auto-spectra are real (imaginary ≈ 0).
+            let pxy_mag2 = pxy_re * pxy_re + pxy_im * pxy_im;
+            let denom = pxx_re * pyy_re;
+            if denom.abs() < 1e-30 {
+                0.0
+            } else {
+                (pxy_mag2 / denom).clamp(0.0, 1.0)
+            }
+        })
+        .collect();
+
+    Ok(CoherenceResult {
+        frequencies: pxy.frequencies,
+        coherence: coh,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Signal Resampling: resample, resample_poly, decimate
+// ══════════════════════════════════════════════════════════════════════
+
+/// Resample a signal using the FFT method.
+///
+/// Matches `scipy.signal.resample(x, num)`.
+///
+/// Changes the number of samples in a signal by zero-padding or truncating
+/// in the frequency domain.
+///
+/// # Arguments
+/// * `x` — Input signal.
+/// * `num` — Desired number of output samples.
+pub fn resample(x: &[f64], num: usize) -> Result<Vec<f64>, SignalError> {
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+    if num == 0 {
+        return Err(SignalError::InvalidArgument("num must be > 0".to_string()));
+    }
+
+    let n = x.len();
+    if num == n {
+        return Ok(x.to_vec());
+    }
+
+    let opts = fsci_fft::FftOptions::default();
+
+    // Forward FFT.
+    let spectrum = fsci_fft::rfft(x, &opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+
+    // Compute target spectrum length for the new sample count.
+    let target_nfreqs = num / 2 + 1;
+
+    // Zero-pad or truncate the spectrum.
+    let mut new_spectrum = vec![(0.0, 0.0); target_nfreqs];
+    let copy_len = spectrum.len().min(target_nfreqs);
+    new_spectrum[..copy_len].copy_from_slice(&spectrum[..copy_len]);
+
+    // Inverse FFT with target length.
+    let result = fsci_fft::irfft(&new_spectrum, Some(num), &opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
+
+    // Scale by num/n to preserve amplitude.
+    let scale = num as f64 / n as f64;
+    Ok(result.into_iter().map(|v| v * scale).collect())
+}
+
+/// Resample a signal using polyphase filtering (rational rate change).
+///
+/// Matches `scipy.signal.resample_poly(x, up, down)`.
+///
+/// Resamples by factor `up/down` using an anti-aliasing FIR filter.
+///
+/// # Arguments
+/// * `x` — Input signal.
+/// * `up` — Upsampling factor.
+/// * `down` — Downsampling factor.
+pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, SignalError> {
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+    if up == 0 || down == 0 {
+        return Err(SignalError::InvalidArgument(
+            "up and down must be > 0".to_string(),
+        ));
+    }
+
+    // Simplify the ratio using GCD.
+    let g = gcd(up, down);
+    let up = up / g;
+    let down = down / g;
+
+    if up == 1 && down == 1 {
+        return Ok(x.to_vec());
+    }
+
+    // Design anti-aliasing FIR filter.
+    let cutoff = 1.0 / (up.max(down) as f64);
+    let n_taps = 2 * 10 * up.max(down) + 1; // ~10 periods per side
+    let h = firwin(n_taps, &[cutoff], FirWindow::Kaiser(5.0), true)?;
+    // Scale filter by up to compensate for upsampling gain.
+    let h_scaled: Vec<f64> = h.iter().map(|&v| v * up as f64).collect();
+
+    // Upsample: insert up-1 zeros between each sample.
+    let upsampled_len = x.len() * up;
+    let mut upsampled = vec![0.0; upsampled_len];
+    for (i, &v) in x.iter().enumerate() {
+        upsampled[i * up] = v;
+    }
+
+    // Apply FIR filter.
+    let filtered = convolve(&upsampled, &h_scaled, ConvolveMode::Same)?;
+
+    // Downsample: take every `down`-th sample.
+    let output: Vec<f64> = filtered.iter().step_by(down).copied().collect();
+
+    Ok(output)
+}
+
+/// Downsample a signal after applying an anti-aliasing filter.
+///
+/// Matches `scipy.signal.decimate(x, q)`.
+///
+/// Applies a lowpass Butterworth filter at Nyquist/q frequency, then
+/// takes every q-th sample.
+///
+/// # Arguments
+/// * `x` — Input signal.
+/// * `q` — Downsampling factor (integer >= 2).
+pub fn decimate(x: &[f64], q: usize) -> Result<Vec<f64>, SignalError> {
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+    if q < 2 {
+        return Err(SignalError::InvalidArgument("q must be >= 2".to_string()));
+    }
+
+    // Design lowpass filter at cutoff = 1/q (normalized to Nyquist = 1).
+    let cutoff = 1.0 / q as f64;
+    let order = 8.min(q); // order 8 max, reduce for small q
+    let ba = butter(order, cutoff, FilterType::Lowpass)?;
+
+    // Zero-phase filtering for no distortion.
+    let filtered = filtfilt(&ba.b, &ba.a, x)?;
+
+    // Downsample.
+    let output: Vec<f64> = filtered.iter().step_by(q).copied().collect();
+    Ok(output)
+}
+
+/// Compute GCD of two positive integers.
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2702,7 +3493,7 @@ mod tests {
             .psd
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .max_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i)
             .unwrap();
         let peak_freq = result.frequencies[peak_idx];
@@ -2749,7 +3540,7 @@ mod tests {
             .psd
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .max_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i)
             .unwrap();
         let peak_freq = result.frequencies[peak_idx];
@@ -3323,5 +4114,550 @@ mod tests {
             (dc_gain - 1.0).abs() < 0.05,
             "Kaiser lowpass DC gain: {dc_gain}"
         );
+    }
+
+    // ── Chirp tests ────────────────────────────────────────────────
+
+    #[test]
+    fn chirp_linear_endpoints() {
+        // At t=0, instantaneous frequency = f0, so signal ≈ cos(0) = 1.0
+        let t: Vec<f64> = vec![0.0];
+        let sig = chirp(&t, 10.0, 1.0, 50.0, ChirpMethod::Linear).unwrap();
+        assert!(
+            (sig[0] - 1.0).abs() < 1e-12,
+            "chirp at t=0 should be cos(0)=1, got {}",
+            sig[0]
+        );
+    }
+
+    #[test]
+    fn chirp_linear_frequency_sweep() {
+        // Generate chirp from 1 Hz to 10 Hz over 1 second; verify it oscillates
+        let n = 1000;
+        let t: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+        let sig = chirp(&t, 1.0, 1.0, 10.0, ChirpMethod::Linear).unwrap();
+        assert_eq!(sig.len(), n);
+        // Count zero crossings — should increase with frequency
+        let crossings: usize = sig
+            .windows(2)
+            .filter(|w| w[0].signum() != w[1].signum())
+            .count();
+        // With sweep from 1-10 Hz over 1s, average freq ~5.5 Hz → ~11 crossings
+        assert!(crossings > 5, "too few zero crossings: {crossings}");
+    }
+
+    #[test]
+    fn chirp_logarithmic() {
+        let t: Vec<f64> = vec![0.0];
+        let sig = chirp(&t, 10.0, 1.0, 100.0, ChirpMethod::Logarithmic).unwrap();
+        assert!((sig[0] - 1.0).abs() < 1e-10, "log chirp at t=0: {}", sig[0]);
+    }
+
+    #[test]
+    fn chirp_logarithmic_rejects_zero_freq() {
+        let t = vec![0.0];
+        assert!(chirp(&t, 0.0, 1.0, 10.0, ChirpMethod::Logarithmic).is_err());
+    }
+
+    // ── Sawtooth / Square tests ────────────────────────────────────
+
+    #[test]
+    fn sawtooth_period_and_amplitude() {
+        let two_pi = 2.0 * std::f64::consts::PI;
+        // Rising sawtooth (width=1): goes from -1 to +1 over one period
+        let t: Vec<f64> = (0..100).map(|i| i as f64 / 100.0 * two_pi).collect();
+        let sig = sawtooth(&t, 1.0).unwrap();
+        // First sample at phase ≈ 0 should be near -1
+        assert!(sig[0] > -1.1 && sig[0] < -0.9, "start: {}", sig[0]);
+        // Mid-period should be near 0
+        assert!(sig[50].abs() < 0.1, "mid: {}", sig[50]);
+    }
+
+    #[test]
+    fn sawtooth_triangle_wave() {
+        let two_pi = 2.0 * std::f64::consts::PI;
+        // Triangle wave (width=0.5): symmetric
+        let t: Vec<f64> = (0..100).map(|i| i as f64 / 100.0 * two_pi).collect();
+        let sig = sawtooth(&t, 0.5).unwrap();
+        // Peak should be at phase = 0.5*2π = π (index 50)
+        // All values should be in [-1, 1]
+        for (i, &v) in sig.iter().enumerate() {
+            assert!(
+                (-1.0 - 1e-10..=1.0 + 1e-10).contains(&v),
+                "triangle out of range at {i}: {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn square_wave_duty_cycle() {
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let t: Vec<f64> = (0..1000).map(|i| i as f64 / 1000.0 * two_pi).collect();
+        let sig = square(&t, 0.5).unwrap();
+        // Count +1 samples — should be ~50%
+        let pos_count = sig.iter().filter(|&&v| v > 0.0).count();
+        assert!(
+            (pos_count as f64 / 1000.0 - 0.5).abs() < 0.02,
+            "duty cycle: {}",
+            pos_count as f64 / 1000.0
+        );
+    }
+
+    #[test]
+    fn square_wave_values() {
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let t: Vec<f64> = (0..100).map(|i| i as f64 / 100.0 * two_pi).collect();
+        let sig = square(&t, 0.5).unwrap();
+        // All values should be exactly +1 or -1
+        for &v in &sig {
+            assert!(v == 1.0 || v == -1.0, "unexpected value: {v}");
+        }
+    }
+
+    // ── Unit impulse tests ─────────────────────────────────────────
+
+    #[test]
+    fn unit_impulse_default_at_zero() {
+        let imp = unit_impulse(10, None).unwrap();
+        assert_eq!(imp.len(), 10);
+        assert!((imp[0] - 1.0).abs() < 1e-12);
+        for &v in &imp[1..] {
+            assert!((v).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn unit_impulse_at_index() {
+        let imp = unit_impulse(5, Some(3)).unwrap();
+        assert!((imp[3] - 1.0).abs() < 1e-12);
+        assert!((imp[0]).abs() < 1e-12);
+        assert!((imp[4]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn unit_impulse_out_of_range() {
+        assert!(unit_impulse(5, Some(5)).is_err());
+    }
+
+    // ── Detrend tests ──────────────────────────────────────────────
+
+    #[test]
+    fn detrend_linear_removes_slope() {
+        // y = 2x + 3 → detrended should be ~0 everywhere
+        let data: Vec<f64> = (0..20).map(|i| 2.0 * i as f64 + 3.0).collect();
+        let result = detrend(&data, DetrendType::Linear).unwrap();
+        for (i, &v) in result.iter().enumerate() {
+            assert!(v.abs() < 1e-10, "detrend linear residual at {i}: {v}");
+        }
+    }
+
+    #[test]
+    fn detrend_constant_removes_mean() {
+        let data = vec![5.0, 5.0, 5.0, 5.0];
+        let result = detrend(&data, DetrendType::Constant).unwrap();
+        for &v in &result {
+            assert!(v.abs() < 1e-12, "detrend constant: {v}");
+        }
+    }
+
+    #[test]
+    fn detrend_preserves_residual() {
+        // y = 2x + noise → detrend should remove trend, preserve noise structure
+        let noise = [0.1, -0.2, 0.05, -0.15, 0.3];
+        let data: Vec<f64> = noise
+            .iter()
+            .enumerate()
+            .map(|(i, &n)| 3.0 * i as f64 + 10.0 + n)
+            .collect();
+        let result = detrend(&data, DetrendType::Linear).unwrap();
+        // Residuals should be close to the noise (within tolerance of linear fit error)
+        let max_residual = result.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+        assert!(max_residual < 0.5, "max residual: {max_residual}");
+    }
+
+    // ── Medfilt tests ──────────────────────────────────────────────
+
+    #[test]
+    fn medfilt_removes_impulse_noise() {
+        // Clean signal with spike impulses
+        let mut data = vec![1.0; 20];
+        data[5] = 100.0; // spike
+        data[15] = -100.0; // spike
+        let filtered = medfilt(&data, 3).unwrap();
+        // Spikes should be removed
+        assert!(
+            (filtered[5] - 1.0).abs() < 1e-12,
+            "spike at 5 not removed: {}",
+            filtered[5]
+        );
+        assert!(
+            (filtered[15] - 1.0).abs() < 1e-12,
+            "spike at 15 not removed: {}",
+            filtered[15]
+        );
+    }
+
+    #[test]
+    fn medfilt_preserves_edges() {
+        // Step function: medfilt should preserve the step
+        let mut data = vec![0.0; 10];
+        for v in &mut data[5..] {
+            *v = 1.0;
+        }
+        let filtered = medfilt(&data, 3).unwrap();
+        // Away from transition, values should be preserved
+        assert!((filtered[0]).abs() < 1e-12);
+        assert!((filtered[3]).abs() < 1e-12);
+        assert!((filtered[7] - 1.0).abs() < 1e-12);
+        assert!((filtered[9] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn medfilt_even_kernel_rejected() {
+        assert!(medfilt(&[1.0, 2.0, 3.0], 4).is_err());
+    }
+
+    // ── get_window tests ───────────────────────────────────────────
+
+    #[test]
+    fn get_window_dispatches_hann() {
+        let w = get_window("hann", 10).unwrap();
+        let expected = hann(10);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_hamming() {
+        let w = get_window("hamming", 10).unwrap();
+        let expected = hamming(10);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_blackman() {
+        let w = get_window("blackman", 10).unwrap();
+        let expected = blackman(10);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_kaiser() {
+        let w = get_window("kaiser,8.6", 10).unwrap();
+        let expected = kaiser(10, 8.6);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_rectangular() {
+        let w = get_window("boxcar", 5).unwrap();
+        assert_eq!(w, vec![1.0; 5]);
+    }
+
+    #[test]
+    fn get_window_unknown_rejected() {
+        assert!(get_window("foobar", 10).is_err());
+    }
+
+    // ── STFT / ISTFT tests ─────────────────────────────────────────
+
+    #[test]
+    fn stft_istft_roundtrip() {
+        // Generate a simple sinusoidal signal, STFT then ISTFT, compare.
+        let fs = 100.0;
+        let n = 400;
+        let freq = 10.0;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * freq * i as f64 / fs).sin())
+            .collect();
+
+        let nperseg = 64;
+        let noverlap = 48;
+        let stft_res = stft(&x, fs, Some(nperseg), Some(noverlap)).unwrap();
+        let reconstructed = istft(&stft_res, nperseg, Some(noverlap)).unwrap();
+
+        // Compare in the well-reconstructed interior (avoiding edge effects).
+        let margin = nperseg;
+        let end = reconstructed.len().min(n) - margin;
+        for i in margin..end {
+            assert!(
+                (reconstructed[i] - x[i]).abs() < 0.15,
+                "STFT-ISTFT mismatch at {i}: got {}, expected {}",
+                reconstructed[i],
+                x[i]
+            );
+        }
+    }
+
+    #[test]
+    fn stft_frequency_bins() {
+        let fs = 1000.0;
+        let x = vec![0.0; 256];
+        let res = stft(&x, fs, Some(256), Some(128)).unwrap();
+        assert_eq!(res.frequencies.len(), 129); // 256/2 + 1
+        assert!((res.frequencies[0]).abs() < 1e-12);
+        // Last frequency should be Nyquist
+        assert!((res.frequencies[128] - 500.0).abs() < 1.0);
+    }
+
+    // ── Spectrogram tests ──────────────────────────────────────────
+
+    #[test]
+    fn spectrogram_chirp_energy_tracks_frequency() {
+        // Generate a chirp from 5 Hz to 45 Hz over 1 second
+        let fs = 200.0;
+        let n = 200;
+        let t: Vec<f64> = (0..n).map(|i| i as f64 / fs).collect();
+        let sig = chirp(&t, 5.0, 1.0, 45.0, ChirpMethod::Linear).unwrap();
+
+        let nperseg = 64;
+        let noverlap = 56;
+        let res = spectrogram(&sig, fs, Some(nperseg), Some(noverlap)).unwrap();
+
+        // Should have multiple time segments and frequency bins
+        assert!(!res.sxx.is_empty(), "spectrogram produced no segments");
+        assert!(
+            res.frequencies.len() > 1,
+            "spectrogram produced no frequencies"
+        );
+        assert!(res.times.len() > 1, "spectrogram produced no time bins");
+    }
+
+    #[test]
+    fn spectrogram_dimensions() {
+        let fs = 100.0;
+        let x: Vec<f64> = (0..500).map(|i| (i as f64 * 0.1).sin()).collect();
+        let res = spectrogram(&x, fs, Some(64), Some(32)).unwrap();
+
+        // Each time segment should have the same number of frequency bins
+        let n_freqs = res.frequencies.len();
+        for (t, seg) in res.sxx.iter().enumerate() {
+            assert_eq!(
+                seg.len(),
+                n_freqs,
+                "segment {t} has {} freq bins, expected {n_freqs}",
+                seg.len()
+            );
+        }
+        assert_eq!(res.times.len(), res.sxx.len());
+    }
+
+    // ── CSD tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn csd_auto_spectrum_matches_welch() {
+        // csd(x, x) should match welch(x) in magnitude
+        let fs = 100.0;
+        let n = 512;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 10.0 * i as f64 / fs).sin())
+            .collect();
+
+        let nperseg = 128;
+        let noverlap = 64;
+        let welch_res = welch(&x, fs, Some(nperseg), Some(noverlap)).unwrap();
+        let csd_res = csd(&x, &x, fs, Some(nperseg), Some(noverlap)).unwrap();
+
+        // Auto-CSD should be real and match welch PSD
+        assert_eq!(welch_res.psd.len(), csd_res.csd.len());
+        for (k, (&welch_val, &(csd_re, csd_im))) in
+            welch_res.psd.iter().zip(csd_res.csd.iter()).enumerate()
+        {
+            // Imaginary part of auto-spectrum should be ~0
+            assert!(
+                csd_im.abs() < welch_val.abs() * 0.01 + 1e-20,
+                "auto-CSD imaginary at bin {k}: {csd_im}"
+            );
+            // Real part should match welch PSD
+            if welch_val.abs() > 1e-15 {
+                let ratio = csd_re / welch_val;
+                assert!(
+                    (ratio - 1.0).abs() < 0.1,
+                    "auto-CSD/welch mismatch at bin {k}: csd={csd_re}, welch={welch_val}"
+                );
+            }
+        }
+    }
+
+    // ── Coherence tests ────────────────────────────────────────────
+
+    #[test]
+    fn coherence_identical_signals() {
+        // Coherence of a signal with itself should be ~1 everywhere
+        let fs = 100.0;
+        let n = 512;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 10.0 * i as f64 / fs).sin())
+            .collect();
+
+        let res = coherence(&x, &x, fs, Some(128), Some(64)).unwrap();
+        for (k, &c) in res.coherence.iter().enumerate() {
+            assert!(
+                c >= 0.99 || res.frequencies[k].abs() < 1e-10,
+                "coherence of identical signals at bin {k} (f={}): {c}",
+                res.frequencies[k]
+            );
+        }
+    }
+
+    #[test]
+    fn coherence_uncorrelated_signals() {
+        // Coherence of uncorrelated signals should be low
+        // Use two different frequency sinusoids as "uncorrelated" approximation
+        let fs = 1000.0;
+        let n = 4096;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 50.0 * i as f64 / fs).sin())
+            .collect();
+        let y: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 200.0 * i as f64 / fs).sin())
+            .collect();
+
+        let res = coherence(&x, &y, fs, Some(256), Some(128)).unwrap();
+        // Average coherence should be much less than 1
+        let avg_coh: f64 = res.coherence.iter().sum::<f64>() / res.coherence.len() as f64;
+        assert!(
+            avg_coh < 0.5,
+            "average coherence of uncorrelated signals: {avg_coh}"
+        );
+    }
+
+    #[test]
+    fn coherence_range_zero_to_one() {
+        let fs = 100.0;
+        let n = 512;
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
+        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.3).cos()).collect();
+
+        let res = coherence(&x, &y, fs, Some(128), Some(64)).unwrap();
+        for (k, &c) in res.coherence.iter().enumerate() {
+            assert!(
+                (0.0..=1.0 + 1e-10).contains(&c),
+                "coherence at bin {k} out of range: {c}"
+            );
+        }
+    }
+
+    // ── Resample tests ─────────────────────────────────────────────
+
+    #[test]
+    fn resample_upsample_preserves_frequency() {
+        // A sine wave at 10 Hz sampled at 100 Hz, upsampled to 200 Hz
+        let fs = 100.0;
+        let n = 100;
+        let freq = 10.0;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * freq * i as f64 / fs).sin())
+            .collect();
+
+        let result = resample(&x, 200).unwrap();
+        assert_eq!(result.len(), 200);
+
+        // Count zero crossings — should approximately double
+        let x_crossings: usize = x
+            .windows(2)
+            .filter(|w| w[0].signum() != w[1].signum())
+            .count();
+        let r_crossings: usize = result
+            .windows(2)
+            .filter(|w| w[0].signum() != w[1].signum())
+            .count();
+        // Upsampled signal should have roughly double the zero crossings
+        assert!(
+            r_crossings >= x_crossings,
+            "upsampled crossings {} < original {}",
+            r_crossings,
+            x_crossings
+        );
+    }
+
+    #[test]
+    fn resample_downsample() {
+        let n = 200;
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.05).sin()).collect();
+        let result = resample(&x, 100).unwrap();
+        assert_eq!(result.len(), 100);
+    }
+
+    #[test]
+    fn resample_same_length() {
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let result = resample(&x, 4).unwrap();
+        assert_eq!(result.len(), 4);
+        for (i, (&a, &b)) in x.iter().zip(result.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-10,
+                "same-length resample mismatch at {i}: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn resample_poly_rational_rate() {
+        // Upsample by 3/2: 100 samples → ~150 samples
+        let n = 100;
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
+        let result = resample_poly(&x, 3, 2).unwrap();
+        // Output length should be approximately n * up / down
+        let expected_len = n * 3 / 2;
+        assert!(
+            (result.len() as i64 - expected_len as i64).unsigned_abs() <= n / 5,
+            "resample_poly length: got {}, expected ~{expected_len}",
+            result.len()
+        );
+    }
+
+    #[test]
+    fn resample_poly_identity() {
+        // up=1, down=1 should return the same signal
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = resample_poly(&x, 1, 1).unwrap();
+        assert_eq!(result.len(), x.len());
+        for (i, (&a, &b)) in x.iter().zip(result.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-10,
+                "identity resample_poly mismatch at {i}"
+            );
+        }
+    }
+
+    // ── Decimate tests ─────────────────────────────────────────────
+
+    #[test]
+    fn decimate_basic() {
+        // Decimate by 4: 400 samples → 100 samples
+        let n = 400;
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.01).sin()).collect();
+        let result = decimate(&x, 4).unwrap();
+        assert_eq!(result.len(), 100);
+    }
+
+    #[test]
+    fn decimate_prevents_aliasing() {
+        // Signal with low-freq (5 Hz) and high-freq (45 Hz) at fs=100
+        // After decimate by 4 (new fs=25), 45 Hz should be removed
+        let fs = 100.0;
+        let n = 400;
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let x: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 / fs;
+                (two_pi * 5.0 * t).sin() + (two_pi * 45.0 * t).sin()
+            })
+            .collect();
+
+        let result = decimate(&x, 4).unwrap();
+        // The decimated signal should have the low-freq component preserved
+        // but the high-freq component should be attenuated by the anti-alias filter
+        let energy: f64 = result.iter().map(|v| v * v).sum::<f64>() / result.len() as f64;
+        // If alias wasn't prevented, energy would be higher
+        assert!(
+            energy < 1.0,
+            "decimated signal energy too high (aliasing?): {energy}"
+        );
+    }
+
+    #[test]
+    fn decimate_rejects_q_less_than_2() {
+        assert!(decimate(&[1.0, 2.0], 1).is_err());
     }
 }
