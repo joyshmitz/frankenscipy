@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::fmt;
+use std::ops::{Add, Div, Mul, Neg, Sub};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,6 +11,138 @@ use fsci_runtime::RuntimeMode;
 pub struct Complex64 {
     pub re: f64,
     pub im: f64,
+}
+
+impl Complex64 {
+    #[must_use]
+    pub const fn new(re: f64, im: f64) -> Self {
+        Self { re, im }
+    }
+
+    #[must_use]
+    pub const fn from_real(value: f64) -> Self {
+        Self { re: value, im: 0.0 }
+    }
+
+    #[must_use]
+    pub fn abs(self) -> f64 {
+        self.re.hypot(self.im)
+    }
+
+    #[must_use]
+    pub fn norm_sqr(self) -> f64 {
+        self.re * self.re + self.im * self.im
+    }
+
+    #[must_use]
+    pub const fn conj(self) -> Self {
+        Self {
+            re: self.re,
+            im: -self.im,
+        }
+    }
+
+    #[must_use]
+    pub fn exp(self) -> Self {
+        let scale = self.re.exp();
+        Self {
+            re: scale * self.im.cos(),
+            im: scale * self.im.sin(),
+        }
+    }
+
+    #[must_use]
+    pub fn recip(self) -> Self {
+        let norm = self.norm_sqr();
+        Self {
+            re: self.re / norm,
+            im: -self.im / norm,
+        }
+    }
+}
+
+impl From<f64> for Complex64 {
+    fn from(value: f64) -> Self {
+        Self::from_real(value)
+    }
+}
+
+impl Add for Complex64 {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            re: self.re + rhs.re,
+            im: self.im + rhs.im,
+        }
+    }
+}
+
+impl Sub for Complex64 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            re: self.re - rhs.re,
+            im: self.im - rhs.im,
+        }
+    }
+}
+
+impl Mul for Complex64 {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        Self {
+            re: self.re * rhs.re - self.im * rhs.im,
+            im: self.re * rhs.im + self.im * rhs.re,
+        }
+    }
+}
+
+impl Div for Complex64 {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        let norm = rhs.norm_sqr();
+        Self {
+            re: (self.re * rhs.re + self.im * rhs.im) / norm,
+            im: (self.im * rhs.re - self.re * rhs.im) / norm,
+        }
+    }
+}
+
+impl Mul<f64> for Complex64 {
+    type Output = Self;
+
+    fn mul(self, rhs: f64) -> Self::Output {
+        Self {
+            re: self.re * rhs,
+            im: self.im * rhs,
+        }
+    }
+}
+
+impl Div<f64> for Complex64 {
+    type Output = Self;
+
+    fn div(self, rhs: f64) -> Self::Output {
+        Self {
+            re: self.re / rhs,
+            im: self.im / rhs,
+        }
+    }
+}
+
+impl Neg for Complex64 {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            re: -self.re,
+            im: -self.im,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

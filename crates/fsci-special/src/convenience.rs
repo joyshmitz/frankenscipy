@@ -178,19 +178,11 @@ fn sinc_scalar(x: f64) -> f64 {
 }
 
 fn xlogy_scalar(x: f64, y: f64) -> f64 {
-    if x == 0.0 {
-        0.0
-    } else {
-        x * y.ln()
-    }
+    if x == 0.0 { 0.0 } else { x * y.ln() }
 }
 
 fn xlog1py_scalar(x: f64, y: f64) -> f64 {
-    if x == 0.0 {
-        0.0
-    } else {
-        x * (1.0 + y).ln()
-    }
+    if x == 0.0 { 0.0 } else { x * (1.0 + y).ln() }
 }
 
 fn expit_scalar(x: f64) -> f64 {
@@ -410,9 +402,9 @@ pub fn dawsn(x: f64) -> f64 {
     // For small x, use Taylor series: D(x) ≈ x - 2x³/3 + 4x⁵/15 - ...
     if ax < 0.2 {
         let x2 = ax * ax;
-        let result = ax * (1.0 - 2.0 * x2 / 3.0 + 4.0 * x2 * x2 / 15.0
-            - 8.0 * x2 * x2 * x2 / 105.0
-            + 16.0 * x2.powi(4) / 945.0);
+        let result = ax
+            * (1.0 - 2.0 * x2 / 3.0 + 4.0 * x2 * x2 / 15.0 - 8.0 * x2 * x2 * x2 / 105.0
+                + 16.0 * x2.powi(4) / 945.0);
         return sign * result;
     }
 

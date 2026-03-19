@@ -5,8 +5,8 @@ use std::f64::consts::{FRAC_2_PI, PI};
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    not_yet_implemented, record_special_trace, DispatchPlan, DispatchStep, KernelRegime,
-    SpecialError, SpecialErrorKind, SpecialResult, SpecialTensor,
+    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
+    SpecialTensor, not_yet_implemented, record_special_trace,
 };
 
 pub const BESSEL_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -300,20 +300,17 @@ fn jv_scalar(v: f64, z: f64) -> f64 {
 
 /// Power series for J_v(z).
 fn jv_series(v: f64, z: f64) -> f64 {
-    let half_z = z / 2.0;
-    let neg_quarter_z2 = -(z * z) / 4.0;
+    // For non-integer v and negative z, J_v(z) involves complex values
+    if z < 0.0 && v.fract() != 0.0 {
+        return f64::NAN;
+    }
 
-    // First term: (z/2)^v / Γ(v+1)
-    let log_first = v * half_z.abs().ln() - lgamma(v + 1.0);
+    let half_z_abs = (z / 2.0).abs();
+
+    // First term: (|z|/2)^v / Γ(v+1), computed in log space
+    let log_first = v * half_z_abs.ln() - lgamma(v + 1.0);
     let mut sum = 0.0;
     let mut log_term = log_first;
-    let sign_z = if z < 0.0 && v.fract() != 0.0 {
-        // For non-integer v and negative z, J_v(z) involves complex values
-        // Return NaN for real-only path
-        return f64::NAN;
-    } else {
-        1.0
-    };
 
     for k in 0..200 {
         let term = log_term.exp();
@@ -324,12 +321,12 @@ fn jv_series(v: f64, z: f64) -> f64 {
             break;
         }
 
-        // Next term: multiply by (-z²/4) / ((k+1)(v+k+1))
+        // Recurrence: next log-magnitude adds log(z²/4) - log(k+1) - log(v+k+1)
         let kf = k as f64;
         log_term += (z * z / 4.0).ln() - (kf + 1.0).ln() - (v + kf + 1.0).ln();
     }
 
-    sign_z * sum
+    sum
 }
 
 /// Asymptotic expansion for J_v(z) for large |z|.
@@ -379,7 +376,13 @@ fn iv_scalar(v: f64, z: f64) -> f64 {
         return f64::NAN;
     }
     if z == 0.0 {
-        return if v == 0.0 { 1.0 } else if v > 0.0 { 0.0 } else { f64::INFINITY };
+        return if v == 0.0 {
+            1.0
+        } else if v > 0.0 {
+            0.0
+        } else {
+            f64::INFINITY
+        };
     }
 
     let az = z.abs();
@@ -423,90 +426,103 @@ fn kv_scalar(v: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         if z == 0.0 {
             return Ok(f64::INFINITY);
         }
-        return domain_error_by_mode(
-            "kv",
-            mode,
-            format!("v={v},z={z}"),
-            "kv requires z > 0",
-        );
+        return domain_error_by_mode("kv", mode, format!("v={v},z={z}"), "kv requires z > 0");
     }
 
-    // Non-integer order: K_v = π/2 * (I_{-v} - I_v) / sin(vπ)
+    // For non-integer v: K_v = π/2 * (I_{-v} - I_v) / sin(vπ)
     let sin_vpi = (v * PI).sin();
-    if sin_vpi.abs() < 1e-15 {
-        // Integer or near-integer order: use limiting form
-        // K_n(z) ≈ (n-1)!/2 * (2/z)^n for small z, or asymptotic for large z
-        // Use asymptotic: K_v(z) ≈ sqrt(π/(2z)) exp(-z) for large z
-        if z > 2.0 {
-            let factor = (PI / (2.0 * z)).sqrt() * (-z).exp();
-            return Ok(factor);
-        }
-        // Small z: compute via series difference limit
-        // Use K_0 and K_1 as base, then recurrence
-        let k0 = kv_zero_order(z);
-        if v.abs() < 0.5 {
-            return Ok(k0);
-        }
-        let k1 = kv_first_order(z);
-        if (v.abs() - 1.0).abs() < 0.5 {
-            return Ok(k1);
-        }
-        // Recurrence: K_{n+1}(z) = K_{n-1}(z) + 2n/z K_n(z)
-        let n = v.abs().round() as u32;
-        let mut k_prev = k0;
-        let mut k_curr = k1;
-        for i in 1..n {
-            let k_next = k_prev + 2.0 * i as f64 / z * k_curr;
-            k_prev = k_curr;
-            k_curr = k_next;
-        }
-        return Ok(k_curr);
+    if sin_vpi.abs() > 1e-10 {
+        // Non-integer order: direct formula
+        let iv_neg = iv_scalar(-v, z);
+        let iv_pos = iv_scalar(v, z);
+        return Ok(PI / 2.0 * (iv_neg - iv_pos) / sin_vpi);
     }
 
-    let iv_neg = iv_scalar(-v, z);
-    let iv_pos = iv_scalar(v, z);
-    Ok(PI / 2.0 * (iv_neg - iv_pos) / sin_vpi)
+    // Integer order: use K_0, K_1 from series, then recurrence K_{n+1} = K_{n-1} + 2n/z K_n
+    let k0 = kv_integer_zero(z);
+    let n = v.abs().round() as u32;
+    if n == 0 {
+        return Ok(k0);
+    }
+    let k1 = kv_integer_one(z);
+    if n == 1 {
+        return Ok(k1);
+    }
+    let mut k_prev = k0;
+    let mut k_curr = k1;
+    for i in 1..n {
+        let k_next = k_prev + 2.0 * i as f64 / z * k_curr;
+        k_prev = k_curr;
+        k_curr = k_next;
+    }
+    Ok(k_curr)
 }
 
-/// K_0(z) via polynomial approximation.
-fn kv_zero_order(z: f64) -> f64 {
-    if z <= 2.0 {
-        let t = z * z / 4.0;
-        -(z / 2.0).ln() * j0_core(z)
-            + (-0.577_215_664_9
-                + t * (0.422_784_335_1
-                    + t * (0.230_831_625_8
-                        + t * (0.034_873_012_6 + t * (0.002_623_720_2 + t * 0.000_107_587_4)))))
-    } else {
-        let t = 2.0 / z;
-        (-z).exp() / z.sqrt()
-            * (1.253_314_137_3
-                + t * (-0.078_565_724_0
-                    + t * (0.021_009_292_8
-                        + t * (-0.010_944_476_7 + t * (0.010_032_511_9 + t * (-0.016_382_637_5))))))
-    }
+fn kv_integer_zero(z: f64) -> f64 {
+    kv_integral(0.0, z)
 }
 
-/// K_1(z) via polynomial approximation.
-fn kv_first_order(z: f64) -> f64 {
-    if z <= 2.0 {
-        let t = z * z / 4.0;
-        z * (z / 2.0).ln() * j1_core(z)
-            + 1.0 / z
-                * (1.0
-                    + t * (0.466_943_581_8
-                        + t * (-0.146_547_888_8
-                            + t * (-0.016_588_089_5
-                                + t * (-0.001_023_145_7 + t * (-0.000_039_827_4))))))
-    } else {
-        let t = 2.0 / z;
-        (-z).exp() / z.sqrt()
-            * (1.253_314_137_3
-                + t * (0.235_697_172_0
-                    + t * (-0.063_027_878_2
-                        + t * (0.032_819_357_6
-                            + t * (-0.029_752_279_3 + t * (0.048_710_583_5))))))
+fn kv_integer_one(z: f64) -> f64 {
+    kv_integral(1.0, z)
+}
+
+fn kv_integral(v: f64, z: f64) -> f64 {
+    let upper = kv_integral_upper(z);
+    adaptive_simpson(
+        &|t| (-z * t.cosh()).exp() * (v * t).cosh(),
+        0.0,
+        upper,
+        1.0e-12,
+        16,
+    )
+}
+
+fn kv_integral_upper(z: f64) -> f64 {
+    let mut upper = 1.0_f64;
+    while z * upper.cosh() < 40.0 && upper < 12.0 {
+        upper += 1.0;
     }
+    upper
+}
+
+fn adaptive_simpson(f: &impl Fn(f64) -> f64, a: f64, b: f64, tol: f64, depth: u32) -> f64 {
+    let fa = f(a);
+    let fb = f(b);
+    let c = 0.5 * (a + b);
+    let fc = f(c);
+    let whole = simpson_estimate(a, b, fa, fb, fc);
+    adaptive_simpson_inner(f, a, b, tol, whole, (fa, fb, fc), depth)
+}
+
+fn adaptive_simpson_inner(
+    f: &impl Fn(f64) -> f64,
+    a: f64,
+    b: f64,
+    tol: f64,
+    whole: f64,
+    samples: (f64, f64, f64),
+    depth: u32,
+) -> f64 {
+    let (fa, fb, fc) = samples;
+    let c = 0.5 * (a + b);
+    let left_mid = 0.5 * (a + c);
+    let right_mid = 0.5 * (c + b);
+    let f_left_mid = f(left_mid);
+    let f_right_mid = f(right_mid);
+    let left = simpson_estimate(a, c, fa, fc, f_left_mid);
+    let right = simpson_estimate(c, b, fc, fb, f_right_mid);
+    let delta = left + right - whole;
+
+    if depth == 0 || delta.abs() <= 15.0 * tol {
+        return left + right + delta / 15.0;
+    }
+
+    adaptive_simpson_inner(f, a, c, tol / 2.0, left, (fa, fc, f_left_mid), depth - 1)
+        + adaptive_simpson_inner(f, c, b, tol / 2.0, right, (fc, fb, f_right_mid), depth - 1)
+}
+
+fn simpson_estimate(a: f64, b: f64, fa: f64, fb: f64, fm: f64) -> f64 {
+    (b - a) * (fa + 4.0 * fm + fb) / 6.0
 }
 
 /// Log-gamma function for Bessel series computation.
@@ -529,7 +545,12 @@ fn lgamma(x: f64) -> f64 {
     const G: f64 = 7.0;
 
     if x < 0.5 {
-        return (PI / (PI * x).sin()).ln() - lgamma(1.0 - x);
+        // Reflection formula: lgamma(x) = ln(π/|sin(πx)|) - lgamma(1-x)
+        let sin_px = (PI * x).sin();
+        if sin_px.abs() < 1e-300 {
+            return f64::INFINITY; // pole
+        }
+        return (PI / sin_px.abs()).ln() - lgamma(1.0 - x);
     }
 
     let z = x - 1.0;
@@ -1207,11 +1228,7 @@ fn j1_core(x: f64) -> f64 {
         (FRAC_2_PI / ax).sqrt() * (xx.cos() * p - z * xx.sin() * q)
     };
 
-    if x < 0.0 {
-        -ans
-    } else {
-        ans
-    }
+    if x < 0.0 { -ans } else { ans }
 }
 
 fn y0_core_positive(x: f64) -> f64 {

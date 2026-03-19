@@ -16,8 +16,8 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    record_special_trace, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
-    SpecialResult, SpecialTensor,
+    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
+    SpecialTensor, record_special_trace,
 };
 
 pub const ELLIPTIC_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -565,7 +565,12 @@ pub fn ellipj(u: f64, m: f64) -> (f64, f64, f64, f64) {
     if (m - 1.0).abs() < 1e-15 {
         let sn = u.tanh();
         let cn = 1.0 / u.cosh();
-        return (sn, cn, cn, 2.0 * u.exp().atan() - std::f64::consts::FRAC_PI_2);
+        return (
+            sn,
+            cn,
+            cn,
+            2.0 * u.exp().atan() - std::f64::consts::FRAC_PI_2,
+        );
     }
 
     // AGM-based computation via descending Landen transformation

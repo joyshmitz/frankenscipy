@@ -5,8 +5,8 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    not_yet_implemented, record_special_trace, DispatchPlan, DispatchStep, KernelRegime,
-    SpecialError, SpecialErrorKind, SpecialResult, SpecialTensor,
+    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor, not_yet_implemented, record_special_trace,
 };
 
 pub const ERROR_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -74,11 +74,23 @@ const INV_SQRT_PI: f64 = 0.564_189_583_547_756_3;
 const TWO_INV_SQRT_PI: f64 = 2.0 * INV_SQRT_PI;
 
 pub fn erf(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("erf", z, mode, |x| Ok(erf_scalar(x)))
+    map_unary_input(
+        "erf",
+        z,
+        mode,
+        |x| Ok(erf_scalar(x)),
+        |value| Ok(erf_complex_scalar(value)),
+    )
 }
 
 pub fn erfc(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("erfc", z, mode, |x| Ok(erfc_scalar(x)))
+    map_unary_input(
+        "erfc",
+        z,
+        mode,
+        |x| Ok(erfc_scalar(x)),
+        |value| Ok(erfc_complex_scalar(value)),
+    )
 }
 
 pub fn erfinv(y: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -87,6 +99,54 @@ pub fn erfinv(y: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 
 pub fn erfcinv(y: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real_input("erfcinv", y, mode, |v| erfcinv_scalar(v, mode))
+}
+
+fn map_unary_input<F, G>(
+    function: &'static str,
+    input: &SpecialTensor,
+    mode: RuntimeMode,
+    real_kernel: F,
+    complex_kernel: G,
+) -> SpecialResult
+where
+    F: Fn(f64) -> Result<f64, SpecialError>,
+    G: Fn(Complex64) -> Result<Complex64, SpecialError>,
+{
+    match input {
+        SpecialTensor::RealScalar(x) => real_kernel(*x).map(SpecialTensor::RealScalar),
+        SpecialTensor::RealVec(values) => values
+            .iter()
+            .copied()
+            .map(real_kernel)
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        SpecialTensor::ComplexScalar(value) => {
+            complex_kernel(*value).map(SpecialTensor::ComplexScalar)
+        }
+        SpecialTensor::ComplexVec(values) => values
+            .iter()
+            .copied()
+            .map(complex_kernel)
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        SpecialTensor::Empty => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid special-function input",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid special-function input",
+            })
+        }
+    }
 }
 
 fn map_real_input<F>(
@@ -157,6 +217,19 @@ pub(crate) fn erf_scalar(x: f64) -> f64 {
     sign * (1.0 - poly * (-x_abs * x_abs).exp())
 }
 
+fn erf_complex_scalar(z: Complex64) -> Complex64 {
+    if z.im == 0.0 {
+        return Complex64::from_real(erf_scalar(z.re));
+    }
+    if z.re < 0.0 {
+        return -erf_complex_scalar(-z);
+    }
+    if z.abs() <= 4.5 || z.re < 1.0 {
+        return erf_complex_series(z);
+    }
+    Complex64::from_real(1.0) - erfc_complex_asymptotic(z)
+}
+
 fn erfc_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
@@ -183,6 +256,54 @@ fn erfc_scalar(x: f64) -> f64 {
     let t = 1.0 / (1.0 + p * x);
     let poly = (((((a5 * t) + a4) * t + a3) * t + a2) * t + a1) * t;
     poly * (-x * x).exp()
+}
+
+fn erfc_complex_scalar(z: Complex64) -> Complex64 {
+    if z.im == 0.0 {
+        return Complex64::from_real(erfc_scalar(z.re));
+    }
+    if z.re < 0.0 {
+        return Complex64::from_real(2.0) - erfc_complex_scalar(-z);
+    }
+    if z.abs() <= 4.5 || z.re < 1.0 {
+        return Complex64::from_real(1.0) - erf_complex_series(z);
+    }
+    erfc_complex_asymptotic(z)
+}
+
+fn erf_complex_series(z: Complex64) -> Complex64 {
+    let z2 = z * z;
+    let mut term = z;
+    let mut sum = term;
+
+    for n in 0..80 {
+        let numer = -z2 * ((2 * n + 1) as f64);
+        let denom = ((n + 1) * (2 * n + 3)) as f64;
+        term = term * numer / denom;
+        sum = sum + term;
+        if n >= 4 && term.abs() <= 1.0e-16 * sum.abs().max(1.0) {
+            break;
+        }
+    }
+
+    sum * TWO_INV_SQRT_PI
+}
+
+fn erfc_complex_asymptotic(z: Complex64) -> Complex64 {
+    let z2 = z * z;
+    let mut term = Complex64::from_real(1.0);
+    let mut sum = term;
+
+    for n in 0..60 {
+        let factor = -((2 * n + 1) as f64);
+        term = term * factor / (z2 * 2.0);
+        sum = sum + term;
+        if n >= 4 && term.abs() <= 1.0e-16 * sum.abs().max(1.0) {
+            break;
+        }
+    }
+
+    ((-z2).exp() * sum / z) / PI.sqrt()
 }
 
 pub(crate) fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {

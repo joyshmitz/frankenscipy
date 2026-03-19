@@ -11,33 +11,33 @@ pub mod hyper;
 pub mod orthopoly;
 pub mod types;
 
-pub use airy::{ai, airy, bi, AiryResult, AIRY_DISPATCH_PLAN};
+pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
 pub use bessel::{
-    hankel1, hankel2, iv, j0, j1, jn, jv, kv, spherical_in, spherical_jn, spherical_kn,
-    spherical_yn, y0, y1, yn, yv, BESSEL_DISPATCH_PLAN,
+    BESSEL_DISPATCH_PLAN, hankel1, hankel2, iv, j0, j1, jn, jv, kv, spherical_in, spherical_jn,
+    spherical_kn, spherical_yn, y0, y1, yn, yv,
 };
-pub use beta::{beta, betainc, betaln, btdtr, btdtri, fdtr, fdtri, BETA_DISPATCH_PLAN};
+pub use beta::{BETA_DISPATCH_PLAN, beta, betainc, betaln, btdtr, btdtri, fdtr, fdtri};
 pub use convenience::{
-    dawsn, entr, expit, fresnel, kl_div, logit, logsumexp, modstruve, ndtr, ndtri, rel_entr, sinc,
-    struve, xlog1py, xlogy, CONVENIENCE_DISPATCH_PLAN,
+    CONVENIENCE_DISPATCH_PLAN, dawsn, entr, expit, fresnel, kl_div, logit, logsumexp, modstruve,
+    ndtr, ndtri, rel_entr, sinc, struve, xlog1py, xlogy,
 };
 pub use elliptic::{
-    ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw, ELLIPTIC_DISPATCH_PLAN,
+    ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw,
 };
-pub use error::{erf, erfc, erfcinv, erfinv, ERROR_DISPATCH_PLAN};
+pub use error::{ERROR_DISPATCH_PLAN, erf, erfc, erfcinv, erfinv};
 pub use gamma::{
-    comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, gdtr, gdtri, perm, polygamma,
-    rgamma, zeta, GAMMA_DISPATCH_PLAN,
+    GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, gdtr,
+    gdtri, perm, polygamma, rgamma, zeta,
 };
-pub use hyper::{hyp1f1, hyp2f1, HYPER_DISPATCH_PLAN};
+pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
 pub use orthopoly::{
     eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite, eval_hermitenorm,
     eval_jacobi, eval_laguerre, eval_legendre, lpmv, roots_chebyt, roots_hermite, roots_jacobi,
     roots_laguerre, roots_legendre, sph_harm, sph_harm_y,
 };
 pub use types::{
-    take_special_traces, Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError,
-    SpecialErrorKind, SpecialResult, SpecialTensor, SpecialTraceEntry,
+    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor, SpecialTraceEntry, take_special_traces,
 };
 
 #[cfg(test)]
@@ -1123,21 +1123,31 @@ mod tests {
 
     #[test]
     fn dispatch_plans_cover_packet_boundaries() {
-        assert!(GAMMA_DISPATCH_PLAN
-            .iter()
-            .any(|entry| entry.function == "gamma"));
-        assert!(BETA_DISPATCH_PLAN
-            .iter()
-            .any(|entry| entry.function == "beta"));
-        assert!(BESSEL_DISPATCH_PLAN
-            .iter()
-            .any(|entry| entry.function == "jv"));
-        assert!(ERROR_DISPATCH_PLAN
-            .iter()
-            .any(|entry| entry.function == "erf"));
-        assert!(HYPER_DISPATCH_PLAN
-            .iter()
-            .any(|entry| entry.function == "hyp2f1"));
+        assert!(
+            GAMMA_DISPATCH_PLAN
+                .iter()
+                .any(|entry| entry.function == "gamma")
+        );
+        assert!(
+            BETA_DISPATCH_PLAN
+                .iter()
+                .any(|entry| entry.function == "beta")
+        );
+        assert!(
+            BESSEL_DISPATCH_PLAN
+                .iter()
+                .any(|entry| entry.function == "jv")
+        );
+        assert!(
+            ERROR_DISPATCH_PLAN
+                .iter()
+                .any(|entry| entry.function == "erf")
+        );
+        assert!(
+            HYPER_DISPATCH_PLAN
+                .iter()
+                .any(|entry| entry.function == "hyp2f1")
+        );
     }
 
     #[test]
@@ -1259,6 +1269,55 @@ mod tests {
         assert!(kl_div(1.0, 0.0).is_infinite());
     }
 
+    #[test]
+    fn complex_erf_erfc_support_known_values_and_identities() {
+        let mode = RuntimeMode::Strict;
+        let i = SpecialTensor::ComplexScalar(Complex64::new(0.0, 1.0));
+
+        let erf_i = erf(&i, mode).expect("erf(i)");
+        assert_complex_scalar_close(
+            erf_i.clone(),
+            Complex64::new(0.0, 1.650_425_758_797_542_8),
+            1.0e-11,
+        );
+
+        let erfc_i = erfc(&i, mode).expect("erfc(i)");
+        assert_complex_scalar_close(
+            erfc_i,
+            Complex64::new(1.0, -1.650_425_758_797_542_8),
+            1.0e-11,
+        );
+
+        let z = SpecialTensor::ComplexScalar(Complex64::new(1.0, 1.0));
+        let z_conj = SpecialTensor::ComplexScalar(Complex64::new(1.0, -1.0));
+        let erf_z = erf(&z, mode).expect("erf(1+i)");
+        let erfc_z = erfc(&z, mode).expect("erfc(1+i)");
+        let erf_conj = erf(&z_conj, mode).expect("erf(1-i)");
+
+        assert_complex_scalar_close(
+            add_complex_scalars(&erf_z, &erfc_z),
+            Complex64::from_real(1.0),
+            1.0e-11,
+        );
+        assert_complex_scalar_close(erf_conj, complex_scalar_value(&erf_z).conj(), 1.0e-11);
+    }
+
+    #[test]
+    fn complex_vector_erf_preserves_shape_and_odd_symmetry() {
+        let mode = RuntimeMode::Strict;
+        let input =
+            SpecialTensor::ComplexVec(vec![Complex64::new(0.0, 0.5), Complex64::new(0.0, -0.5)]);
+
+        let output = erf(&input, mode).expect("complex vector erf");
+        let values = match output {
+            SpecialTensor::ComplexVec(values) => values,
+            _ => panic!("expected complex vector output"),
+        };
+
+        assert_eq!(values.len(), 2);
+        assert_complex_close(values[0], -values[1], 1.0e-12);
+    }
+
     fn assert_real_scalar_close(actual: SpecialTensor, expected: f64, tol: f64) {
         match actual {
             SpecialTensor::RealScalar(value) => {
@@ -1287,6 +1346,25 @@ mod tests {
         }
     }
 
+    fn assert_complex_scalar_close(actual: SpecialTensor, expected: Complex64, tol: f64) {
+        match actual {
+            SpecialTensor::ComplexScalar(value) => assert_complex_close(value, expected, tol),
+            _ => panic!("expected complex scalar output"),
+        }
+    }
+
+    fn assert_complex_close(actual: Complex64, expected: Complex64, tol: f64) {
+        let delta = (actual - expected).abs();
+        assert!(
+            delta <= tol,
+            "expected {}+{}i, got {}+{}i (|delta|={delta})",
+            expected.re,
+            expected.im,
+            actual.re,
+            actual.im
+        );
+    }
+
     fn trace_test_guard() -> std::sync::MutexGuard<'static, ()> {
         static TRACE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         TRACE_TEST_LOCK
@@ -1300,6 +1378,17 @@ mod tests {
             SpecialTensor::RealScalar(value) => *value,
             _ => panic!("expected scalar tensor"),
         }
+    }
+
+    fn complex_scalar_value(tensor: &SpecialTensor) -> Complex64 {
+        match tensor {
+            SpecialTensor::ComplexScalar(value) => *value,
+            _ => panic!("expected complex scalar tensor"),
+        }
+    }
+
+    fn add_complex_scalars(lhs: &SpecialTensor, rhs: &SpecialTensor) -> SpecialTensor {
+        SpecialTensor::ComplexScalar(complex_scalar_value(lhs) + complex_scalar_value(rhs))
     }
 
     fn scalar_to_string(tensor: &SpecialTensor) -> String {
@@ -1803,7 +1892,9 @@ mod tests {
         )
         .expect("yv(0.5, 1)");
         match result {
-            SpecialTensor::RealScalar(v) => assert!(v.is_finite(), "Y_0.5(1) should be finite: {v}"),
+            SpecialTensor::RealScalar(v) => {
+                assert!(v.is_finite(), "Y_0.5(1) should be finite: {v}")
+            }
             _ => panic!("expected scalar"),
         }
     }
@@ -1891,6 +1982,58 @@ mod tests {
         match result {
             SpecialTensor::RealScalar(v) => assert!(v.is_infinite()),
             _ => panic!("expected scalar"),
+        }
+    }
+
+    #[test]
+    fn kv_integer_order_positive_and_finite() {
+        // Small integer-order K_n(1) values should be finite and match reference values.
+        let mode = RuntimeMode::Strict;
+        for (n, target) in [
+            (0.0, 0.421_024_438_240_708_34),
+            (1.0, 0.601_907_230_197_234_6),
+            (2.0, 1.624_838_898_635_177_4),
+        ] {
+            let result = kv(
+                &SpecialTensor::RealScalar(n),
+                &SpecialTensor::RealScalar(1.0),
+                mode,
+            )
+            .expect(&format!("kv({n}, 1)"));
+            match result {
+                SpecialTensor::RealScalar(v) => {
+                    assert!(
+                        v.is_finite() && v > 0.0,
+                        "K_{n}(1) should be positive finite: {v}"
+                    );
+                    assert!(
+                        (v - target).abs() <= 2.0e-10,
+                        "K_{n}(1) mismatch: expected {target}, got {v}"
+                    );
+                }
+                _ => panic!("expected scalar"),
+            }
+        }
+    }
+
+    #[test]
+    fn kv_half_order_formula() {
+        // K_{1/2}(z) = sqrt(π/(2z)) * exp(-z)
+        let mode = RuntimeMode::Strict;
+        for x in [0.5, 1.0, 2.0] {
+            let result = scalar_value(
+                &kv(
+                    &SpecialTensor::RealScalar(0.5),
+                    &SpecialTensor::RealScalar(x),
+                    mode,
+                )
+                .expect("kv(0.5)"),
+            );
+            let expected = (std::f64::consts::PI / (2.0 * x)).sqrt() * (-x).exp();
+            assert!(
+                (result - expected).abs() < 0.01,
+                "K_1/2({x}): got {result}, expected {expected}"
+            );
         }
     }
 }

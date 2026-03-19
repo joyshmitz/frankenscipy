@@ -23,7 +23,7 @@
 
 use std::f64::consts::PI;
 
-use fsci_linalg::{eigh, DecompOptions};
+use fsci_linalg::{DecompOptions, eigh};
 
 /// Evaluate the Legendre polynomial P_n(x) of degree n at point x.
 ///
