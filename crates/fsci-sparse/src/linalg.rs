@@ -1036,7 +1036,11 @@ pub fn bicgstab(
         alpha = rho / dot_product(&r_hat, &v);
 
         // s = r - alpha * v
-        let s: Vec<f64> = r.iter().zip(v.iter()).map(|(ri, vi)| ri - alpha * vi).collect();
+        let s: Vec<f64> = r
+            .iter()
+            .zip(v.iter())
+            .map(|(ri, vi)| ri - alpha * vi)
+            .collect();
 
         let s_norm = vec_norm(&s);
         if s_norm / b_norm < options.tol {
@@ -2473,7 +2477,11 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
 
     // Sort by magnitude (largest first) and take top k
     let mut indexed: Vec<(usize, f64)> = eig_vals.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|a, b| {
+        b.1.abs()
+            .partial_cmp(&a.1.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let k_actual = k.min(indexed.len());
     let mut eigenvalues = Vec::with_capacity(k_actual);
@@ -2543,8 +2551,8 @@ fn hessenberg_eigenvalues(h: &[Vec<f64>], m: usize, max_iter: usize, tol: f64) -
         let shift = a[n - 1][n - 1];
 
         // Apply shift
-        for i in 0..n {
-            a[i][i] -= shift;
+        for (i, row) in a.iter_mut().enumerate().take(n) {
+            row[i] -= shift;
         }
 
         // QR step via Givens rotations
@@ -2555,10 +2563,13 @@ fn hessenberg_eigenvalues(h: &[Vec<f64>], m: usize, max_iter: usize, tol: f64) -
             cs_rot[i] = c;
             sn_rot[i] = s;
             // Apply rotation to rows i and i+1
-            for j in i..n {
-                let temp = c * a[i][j] + s * a[i + 1][j];
-                a[i + 1][j] = -s * a[i][j] + c * a[i + 1][j];
-                a[i][j] = temp;
+            let (upper, lower) = a.split_at_mut(i + 1);
+            let row_i = &mut upper[i];
+            let row_ip1 = &mut lower[0];
+            for (lhs, rhs) in row_i.iter_mut().zip(row_ip1.iter_mut()).skip(i).take(n - i) {
+                let temp = c * *lhs + s * *rhs;
+                *rhs = -s * *lhs + c * *rhs;
+                *lhs = temp;
             }
         }
 
@@ -2566,16 +2577,16 @@ fn hessenberg_eigenvalues(h: &[Vec<f64>], m: usize, max_iter: usize, tol: f64) -
         for i in 0..(n - 1) {
             let c = cs_rot[i];
             let s = sn_rot[i];
-            for j in 0..n.min(i + 3) {
-                let temp = c * a[j][i] + s * a[j][i + 1];
-                a[j][i + 1] = -s * a[j][i] + c * a[j][i + 1];
-                a[j][i] = temp;
+            for row in a.iter_mut().take(n.min(i + 3)) {
+                let temp = c * row[i] + s * row[i + 1];
+                row[i + 1] = -s * row[i] + c * row[i + 1];
+                row[i] = temp;
             }
         }
 
         // Undo shift
-        for i in 0..n {
-            a[i][i] += shift;
+        for (i, row) in a.iter_mut().enumerate().take(n) {
+            row[i] += shift;
         }
     }
 

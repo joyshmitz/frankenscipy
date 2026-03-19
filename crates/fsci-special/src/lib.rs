@@ -1103,12 +1103,15 @@ mod tests {
     }
 
     #[test]
-    fn pending_families_remain_explicitly_unimplemented() {
+    fn previously_pending_families_now_implemented() {
         let scalar = SpecialTensor::RealScalar(1.0);
 
-        // jv for non-integer order is still pending
-        let bessel_err = jv(&scalar, &scalar, RuntimeMode::Strict).expect_err("placeholder");
-        assert_eq!(bessel_err.kind, SpecialErrorKind::NotYetImplemented);
+        // jv is now implemented — verify it returns a value
+        let jv_result = jv(&scalar, &scalar, RuntimeMode::Strict);
+        assert!(
+            jv_result.is_ok(),
+            "jv(1,1) should succeed now that it's implemented"
+        );
 
         // hyp2f1 is now implemented — verify it returns a value instead
         let hyper_result = hyp2f1(&scalar, &scalar, &scalar, &scalar, RuntimeMode::Strict);
@@ -1734,6 +1737,160 @@ mod tests {
             .expect("k_1(x)");
             let expected = (-x).exp() / x * (1.0 + 1.0 / x);
             assert_real_scalar_close(result, expected, 1e-12);
+        }
+    }
+
+    // ── Real-order Bessel function tests ─────────────────────────────
+
+    #[test]
+    fn jv_integer_order_matches_jn() {
+        // jv(n, x) should match jn(n, x) for integer n
+        let mode = RuntimeMode::Strict;
+        for n in 0..=5 {
+            let x = 2.5;
+            let jv_result = scalar_value(
+                &jv(
+                    &SpecialTensor::RealScalar(n as f64),
+                    &SpecialTensor::RealScalar(x),
+                    mode,
+                )
+                .expect("jv"),
+            );
+            let jn_result = scalar_value(
+                &jn(
+                    &SpecialTensor::RealScalar(n as f64),
+                    &SpecialTensor::RealScalar(x),
+                    mode,
+                )
+                .expect("jn"),
+            );
+            assert!(
+                (jv_result - jn_result).abs() < 1e-8,
+                "jv({n}, {x}) = {jv_result}, jn = {jn_result}"
+            );
+        }
+    }
+
+    #[test]
+    fn jv_half_order() {
+        // J_{1/2}(z) = sqrt(2/(πz)) sin(z)
+        let mode = RuntimeMode::Strict;
+        for x in [1.0, 2.0, 5.0, 10.0] {
+            let result = scalar_value(
+                &jv(
+                    &SpecialTensor::RealScalar(0.5),
+                    &SpecialTensor::RealScalar(x),
+                    mode,
+                )
+                .expect("jv(0.5)"),
+            );
+            let expected = (2.0 / (std::f64::consts::PI * x)).sqrt() * x.sin();
+            assert!(
+                (result - expected).abs() < 0.01,
+                "J_1/2({x}): got {result}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn yv_positive_z() {
+        // Y_v should be finite for positive z
+        let mode = RuntimeMode::Strict;
+        let result = yv(
+            &SpecialTensor::RealScalar(0.5),
+            &SpecialTensor::RealScalar(1.0),
+            mode,
+        )
+        .expect("yv(0.5, 1)");
+        match result {
+            SpecialTensor::RealScalar(v) => assert!(v.is_finite(), "Y_0.5(1) should be finite: {v}"),
+            _ => panic!("expected scalar"),
+        }
+    }
+
+    #[test]
+    fn yv_negative_z_strict_returns_nan() {
+        let mode = RuntimeMode::Strict;
+        let result = yv(
+            &SpecialTensor::RealScalar(0.5),
+            &SpecialTensor::RealScalar(-1.0),
+            mode,
+        )
+        .expect("yv strict");
+        assert_real_scalar_nan(result);
+    }
+
+    #[test]
+    fn iv_at_zero() {
+        let mode = RuntimeMode::Strict;
+        // I_0(0) = 1
+        let result = iv(
+            &SpecialTensor::RealScalar(0.0),
+            &SpecialTensor::RealScalar(0.0),
+            mode,
+        )
+        .expect("iv(0,0)");
+        assert_real_scalar_close(result, 1.0, 1e-12);
+        // I_v(0) = 0 for v > 0
+        let result = iv(
+            &SpecialTensor::RealScalar(1.0),
+            &SpecialTensor::RealScalar(0.0),
+            mode,
+        )
+        .expect("iv(1,0)");
+        assert_real_scalar_close(result, 0.0, 1e-12);
+    }
+
+    #[test]
+    fn iv_half_order() {
+        // I_{1/2}(z) = sqrt(2/(πz)) sinh(z)
+        let mode = RuntimeMode::Strict;
+        for x in [0.5, 1.0, 2.0] {
+            let result = scalar_value(
+                &iv(
+                    &SpecialTensor::RealScalar(0.5),
+                    &SpecialTensor::RealScalar(x),
+                    mode,
+                )
+                .expect("iv(0.5)"),
+            );
+            let expected = (2.0 / (std::f64::consts::PI * x)).sqrt() * x.sinh();
+            assert!(
+                (result - expected).abs() < 0.01,
+                "I_1/2({x}): got {result}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn kv_positive_z() {
+        let mode = RuntimeMode::Strict;
+        let result = kv(
+            &SpecialTensor::RealScalar(0.5),
+            &SpecialTensor::RealScalar(1.0),
+            mode,
+        )
+        .expect("kv(0.5, 1)");
+        match result {
+            SpecialTensor::RealScalar(v) => {
+                assert!(v.is_finite() && v > 0.0, "K_0.5(1) should be positive: {v}")
+            }
+            _ => panic!("expected scalar"),
+        }
+    }
+
+    #[test]
+    fn kv_at_zero_is_inf() {
+        let mode = RuntimeMode::Strict;
+        let result = kv(
+            &SpecialTensor::RealScalar(0.0),
+            &SpecialTensor::RealScalar(0.0),
+            mode,
+        )
+        .expect("kv(0,0)");
+        match result {
+            SpecialTensor::RealScalar(v) => assert!(v.is_infinite()),
+            _ => panic!("expected scalar"),
         }
     }
 }

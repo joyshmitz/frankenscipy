@@ -432,18 +432,7 @@ pub fn rfft(input: &[f64], options: &FftOptions) -> Result<Vec<Complex64>, FftEr
     let plan_cache_hit = touch_plan_cache(&key, input.len());
 
     let started = Instant::now();
-    let mut output = if input.len().is_power_of_two() && input.len() >= 4 {
-        // Specialized real FFT: pack pairs of real values as complex, do N/2 FFT,
-        // then unpack using symmetry properties.
-        real_fft_specialized(input, backend)
-    } else {
-        // Fallback: convert to complex and run full FFT
-        let complex_input: Vec<Complex64> = input.iter().map(|&x| (x, 0.0)).collect();
-        let full = backend.transform_1d_unscaled(&complex_input, false);
-        full.into_iter()
-            .take(input.len() / 2 + 1)
-            .collect::<Vec<_>>()
-    };
+    let mut output = real_fft_unscaled(input, backend);
     apply_normalization(&mut output, options.normalization, input.len(), false);
 
     record_trace(TransformTrace {
@@ -501,11 +490,9 @@ pub fn irfft(
     );
     let plan_cache_hit = touch_plan_cache(&key, n);
 
-    let reconstructed = rebuild_hermitian(input, n);
     let started = Instant::now();
-    let mut signal = backend.transform_1d_unscaled(&reconstructed, true);
-    apply_normalization(&mut signal, options.normalization, n, true);
-    let output = signal.into_iter().map(|(re, _)| re).collect::<Vec<_>>();
+    let mut output = real_ifft_unscaled(input, n, backend);
+    apply_real_normalization(&mut output, options.normalization, n, true);
 
     record_trace(TransformTrace {
         operation_id: next_operation_id(),
@@ -548,6 +535,17 @@ pub fn fftn(
     options: &FftOptions,
 ) -> Result<Vec<Complex64>, FftError> {
     run_complex_nd(TransformKind::Fftn, input, shape, options, false)
+}
+
+/// N-dimensional real-input FFT.
+///
+/// Matches `scipy.fft.rfftn(x, s)`.
+pub fn rfftn(
+    input: &[f64],
+    shape: &[usize],
+    options: &FftOptions,
+) -> Result<Vec<Complex64>, FftError> {
+    run_real_nd_forward(TransformKind::Rfftn, input, shape, options)
 }
 
 /// Discrete Cosine Transform (Type II).
@@ -766,15 +764,24 @@ pub fn dst_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    let two_n = 2.0 * n as f64;
+    // DST-III via FFT of length 4N (inverse of DST-II)
+    let m = 4 * n;
+    let mut extended = vec![(0.0, 0.0); m];
+    for k in 0..n {
+        extended[k + 1] = (0.0, -input[k]);
+        extended[m - k - 1] = (0.0, input[k]);
+    }
+
+    let backend = resolve_backend(options.backend);
+    let time_domain = backend.transform_1d_unscaled(&extended, true);
+
     let mut result = Vec::with_capacity(n);
     for i in 0..n {
-        let sign_last = if i % 2 == 0 { 1.0 } else { -1.0 };
-        let mut sum = sign_last * input[n - 1];
-        for (k, &xk) in input.iter().enumerate().take(n - 1) {
-            sum += 2.0 * xk * (PI * (k as f64 + 1.0) * (2.0 * i as f64 + 1.0) / two_n).sin();
-        }
-        result.push(sum);
+        // The raw sum from IFFT of the 4N-length extended signal produces 4 * sum.
+        // SciPy's DST type 3 standard requires 2 * sum.
+        // The previous O(n^2) implementation was: result[i] = sum_j 2 * x[j] * sin(...)
+        // which corresponds to this FFT-based result * 0.5.
+        result.push(time_domain[2 * i + 1].0 * 0.5);
     }
     Ok(result)
 }
@@ -941,6 +948,143 @@ fn run_complex_nd(
     Ok(output)
 }
 
+fn run_real_nd_forward(
+    kind: TransformKind,
+    input: &[f64],
+    shape: &[usize],
+    options: &FftOptions,
+) -> Result<Vec<Complex64>, FftError> {
+    validate_shape(shape)?;
+    let expected_len = checked_product(shape).ok_or(FftError::InvalidShape {
+        detail: "nd shape product overflow",
+    })?;
+    if input.len() != expected_len {
+        return Err(FftError::LengthMismatch {
+            expected: expected_len,
+            actual: input.len(),
+        });
+    }
+
+    validate_workers(options.workers)?;
+    validate_finite_real(input, options)?;
+
+    let last_len = *shape.last().expect("validated non-empty shape");
+    let reduced_last = last_len / 2 + 1;
+    let backend = resolve_backend(options.backend);
+    let axes = (0..shape.len()).collect::<Vec<_>>();
+    let key = PlanKey::new(kind, shape.to_vec(), axes, options.normalization, true);
+    let plan_cache_hit = touch_plan_cache(&key, expected_len);
+
+    let started = Instant::now();
+    let mut output = Vec::with_capacity(expected_len / last_len * reduced_last);
+    for lane in input.chunks_exact(last_len) {
+        output.extend(real_fft_unscaled(lane, backend));
+    }
+
+    let mut complex_shape = shape.to_vec();
+    *complex_shape.last_mut().expect("validated non-empty shape") = reduced_last;
+    if complex_shape.len() > 1 {
+        let max_axis_len = complex_shape.iter().max().copied().unwrap_or(0);
+        let mut scratch = vec![(0.0, 0.0); max_axis_len];
+        for axis in 0..complex_shape.len() - 1 {
+            apply_axis_transform(
+                backend,
+                &mut output,
+                &complex_shape,
+                axis,
+                false,
+                &mut scratch,
+            );
+        }
+    }
+    apply_normalization(&mut output, options.normalization, expected_len, false);
+
+    record_trace(TransformTrace {
+        operation_id: next_operation_id(),
+        kind,
+        direction: "forward",
+        n: expected_len,
+        backend: backend.kind(),
+        plan_cache_hit,
+        mode: options.mode,
+        timing_ns: started.elapsed().as_nanos(),
+    });
+
+    Ok(output)
+}
+
+fn run_real_nd_inverse(
+    kind: TransformKind,
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    validate_shape(shape)?;
+    let expected_len = checked_product(shape).ok_or(FftError::InvalidShape {
+        detail: "nd shape product overflow",
+    })?;
+    let last_len = *shape.last().expect("validated non-empty shape");
+    let reduced_last = last_len / 2 + 1;
+    let complex_len = shape[..shape.len() - 1]
+        .iter()
+        .try_fold(reduced_last, |acc, &dim| acc.checked_mul(dim))
+        .ok_or(FftError::InvalidShape {
+            detail: "nd shape product overflow",
+        })?;
+    if input.len() != complex_len {
+        return Err(FftError::LengthMismatch {
+            expected: complex_len,
+            actual: input.len(),
+        });
+    }
+
+    validate_workers(options.workers)?;
+    validate_finite_complex(input, options)?;
+
+    let backend = resolve_backend(options.backend);
+    let axes = (0..shape.len()).collect::<Vec<_>>();
+    let key = PlanKey::new(kind, shape.to_vec(), axes, options.normalization, true);
+    let plan_cache_hit = touch_plan_cache(&key, expected_len);
+
+    let started = Instant::now();
+    let mut complex_data = input.to_vec();
+    let mut complex_shape = shape.to_vec();
+    *complex_shape.last_mut().expect("validated non-empty shape") = reduced_last;
+    if complex_shape.len() > 1 {
+        let max_axis_len = complex_shape.iter().max().copied().unwrap_or(0);
+        let mut scratch = vec![(0.0, 0.0); max_axis_len];
+        for axis in 0..complex_shape.len() - 1 {
+            apply_axis_transform(
+                backend,
+                &mut complex_data,
+                &complex_shape,
+                axis,
+                true,
+                &mut scratch,
+            );
+        }
+    }
+
+    let mut output = Vec::with_capacity(expected_len);
+    for lane in complex_data.chunks_exact(reduced_last) {
+        output.extend(real_ifft_unscaled(lane, last_len, backend));
+    }
+    apply_real_normalization(&mut output, options.normalization, expected_len, true);
+
+    record_trace(TransformTrace {
+        operation_id: next_operation_id(),
+        kind,
+        direction: "inverse",
+        n: expected_len,
+        backend: backend.kind(),
+        plan_cache_hit,
+        mode: options.mode,
+        timing_ns: started.elapsed().as_nanos(),
+    });
+
+    Ok(output)
+}
+
 fn transform_nd_unscaled(
     backend: &dyn FftBackend,
     input: &[Complex64],
@@ -1000,6 +1144,25 @@ fn rebuild_hermitian(half: &[Complex64], n: usize) -> Vec<Complex64> {
         full[n / 2].1 = 0.0;
     }
     full
+}
+
+fn real_fft_unscaled(input: &[f64], backend: &dyn FftBackend) -> Vec<Complex64> {
+    if input.len().is_power_of_two() && input.len() >= 4 {
+        real_fft_specialized(input, backend)
+    } else {
+        let complex_input: Vec<Complex64> = input.iter().map(|&x| (x, 0.0)).collect();
+        let full = backend.transform_1d_unscaled(&complex_input, false);
+        full.into_iter().take(input.len() / 2 + 1).collect()
+    }
+}
+
+fn real_ifft_unscaled(input: &[Complex64], n: usize, backend: &dyn FftBackend) -> Vec<f64> {
+    let reconstructed = rebuild_hermitian(input, n);
+    backend
+        .transform_1d_unscaled(&reconstructed, true)
+        .into_iter()
+        .map(|(re, _)| re)
+        .collect()
 }
 
 fn resolve_backend(kind: BackendKind) -> &'static dyn FftBackend {
@@ -1144,6 +1307,21 @@ fn apply_normalization(
     }
 }
 
+fn apply_real_normalization(
+    data: &mut [f64],
+    normalization: Normalization,
+    n: usize,
+    inverse: bool,
+) {
+    let scale = normalization_scale(normalization, n, inverse);
+    if (scale - 1.0).abs() <= f64::EPSILON {
+        return;
+    }
+    for value in data.iter_mut() {
+        *value *= scale;
+    }
+}
+
 fn complex_add(lhs: Complex64, rhs: Complex64) -> Complex64 {
     (lhs.0 + rhs.0, lhs.1 + rhs.1)
 }
@@ -1169,6 +1347,8 @@ fn transform_kind_name(kind: TransformKind) -> &'static str {
         TransformKind::Fft2 => "fft2",
         TransformKind::Ifft2 => "ifft2",
         TransformKind::Fftn => "fftn",
+        TransformKind::Rfftn => "rfftn",
+        TransformKind::Irfftn => "irfftn",
     }
 }
 
@@ -1200,36 +1380,8 @@ pub fn rfft2(
     shape: (usize, usize),
     options: &FftOptions,
 ) -> Result<Vec<Complex64>, FftError> {
-    let (rows, cols) = shape;
-    let n = rows * cols;
-    if input.len() != n {
-        return Err(FftError::InvalidShape {
-            detail: "input length must equal rows*cols",
-        });
-    }
-
-    let out_cols = cols / 2 + 1;
-
-    // Step 1: rfft each row.
-    let mut row_results = Vec::with_capacity(rows * out_cols);
-    for r in 0..rows {
-        let row_data = &input[r * cols..(r + 1) * cols];
-        let row_fft = rfft(row_data, options)?;
-        row_results.extend_from_slice(&row_fft[..out_cols]);
-    }
-
-    // Step 2: fft each column of the intermediate result.
-    let mut result = vec![(0.0, 0.0); rows * out_cols];
-    for c in 0..out_cols {
-        // Extract column c.
-        let col: Vec<Complex64> = (0..rows).map(|r| row_results[r * out_cols + c]).collect();
-        let col_fft = fft(&col, options)?;
-        for (r, &val) in col_fft.iter().enumerate() {
-            result[r * out_cols + c] = val;
-        }
-    }
-
-    Ok(result)
+    let dims = [shape.0, shape.1];
+    rfftn(input, &dims, options)
 }
 
 /// 2D inverse real FFT.
@@ -1240,33 +1392,19 @@ pub fn irfft2(
     shape: (usize, usize),
     options: &FftOptions,
 ) -> Result<Vec<f64>, FftError> {
-    let (rows, cols) = shape;
-    let in_cols = cols / 2 + 1;
-    if input.len() != rows * in_cols {
-        return Err(FftError::InvalidShape {
-            detail: "input length must equal rows*(cols/2+1)",
-        });
-    }
+    let dims = [shape.0, shape.1];
+    irfftn(input, &dims, options)
+}
 
-    // Step 1: ifft each column.
-    let mut col_results = vec![(0.0, 0.0); rows * in_cols];
-    for c in 0..in_cols {
-        let col: Vec<Complex64> = (0..rows).map(|r| input[r * in_cols + c]).collect();
-        let col_ifft = ifft(&col, options)?;
-        for (r, &val) in col_ifft.iter().enumerate() {
-            col_results[r * in_cols + c] = val;
-        }
-    }
-
-    // Step 2: irfft each row.
-    let mut result = Vec::with_capacity(rows * cols);
-    for r in 0..rows {
-        let row: Vec<Complex64> = (0..in_cols).map(|c| col_results[r * in_cols + c]).collect();
-        let row_real = irfft(&row, Some(cols), options)?;
-        result.extend_from_slice(&row_real);
-    }
-
-    Ok(result)
+/// N-dimensional inverse real FFT.
+///
+/// Matches `scipy.fft.irfftn(x, s)`.
+pub fn irfftn(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    run_real_nd_inverse(TransformKind::Irfftn, input, shape, options)
 }
 
 /// Find the next fast length for FFT computation.
@@ -1329,7 +1467,7 @@ mod tests {
 
     use super::{
         FftError, FftOptions, TransformKind, WorkerPolicy, fft, fft2, fftn, hfft, ifft, ifft2,
-        irfft, irfft2, next_fast_len, rfft, rfft2, take_transform_traces,
+        irfft, irfft2, irfftn, next_fast_len, rfft, rfft2, rfftn, take_transform_traces,
     };
     use crate::Normalization;
     use crate::plan::clear_shared_plan_cache;
@@ -1401,7 +1539,8 @@ mod tests {
         assert_close(signal[0], 5.0, 1e-12);
 
         // Default length for input length 1 should also be 1
-        let signal_default = irfft(&input, None, &FftOptions::default()).expect("irfft default len 1");
+        let signal_default =
+            irfft(&input, None, &FftOptions::default()).expect("irfft default len 1");
         assert_eq!(signal_default.len(), 1);
         assert_close(signal_default[0], 5.0, 1e-12);
     }
@@ -1653,10 +1792,20 @@ mod tests {
             .collect::<Vec<_>>();
         fft_traces.sort_by(|lhs, rhs| lhs.operation_id.cmp(&rhs.operation_id));
 
-        assert!(fft_traces.len() >= 2, "Expected at least 2 traces for n=137, got {}", fft_traces.len());
+        assert!(
+            fft_traces.len() >= 2,
+            "Expected at least 2 traces for n=137, got {}",
+            fft_traces.len()
+        );
         let last_two = &fft_traces[fft_traces.len() - 2..];
-        assert!(!last_two[0].plan_cache_hit, "First call should be a cache miss");
-        assert!(last_two[1].plan_cache_hit, "Second call should be a cache hit");
+        assert!(
+            !last_two[0].plan_cache_hit,
+            "First call should be a cache miss"
+        );
+        assert!(
+            last_two[1].plan_cache_hit,
+            "Second call should be a cache hit"
+        );
         assert!(last_two[0].to_json_line().contains("\"operation_id\""));
     }
 
@@ -1688,6 +1837,33 @@ mod tests {
         let spectrum = rfft2(&input, (rows, cols), &opts).expect("rfft2");
         // Output should have rows * (cols/2 + 1) elements
         assert_eq!(spectrum.len(), rows * (cols / 2 + 1));
+    }
+
+    #[test]
+    fn rfftn_irfftn_roundtrip() {
+        let shape = [2, 3, 4];
+        let input: Vec<f64> = (0..shape.iter().product::<usize>())
+            .map(|i| (i as f64 * 0.2).cos())
+            .collect();
+        let opts = FftOptions::default();
+        let spectrum = rfftn(&input, &shape, &opts).expect("rfftn");
+        let recovered = irfftn(&spectrum, &shape, &opts).expect("irfftn");
+        assert_eq!(recovered.len(), input.len());
+        for (i, (&a, &b)) in input.iter().zip(recovered.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "rfftn roundtrip mismatch at {i}: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn rfftn_output_shape() {
+        let shape = [2, 3, 8];
+        let input = vec![0.0; shape.iter().product()];
+        let opts = FftOptions::default();
+        let spectrum = rfftn(&input, &shape, &opts).expect("rfftn");
+        assert_eq!(spectrum.len(), shape[0] * shape[1] * (shape[2] / 2 + 1));
     }
 
     // ── next_fast_len tests ────────────────────────────────────────

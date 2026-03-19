@@ -370,13 +370,16 @@ fn estimate_error(k: &[Vec<f64>], e: &[f64], h: f64, n: usize) -> Vec<f64> {
 
 /// Compute the RMS error norm: ||error / scale|| / sqrt(n).
 fn error_norm(error: &[f64], scale: &[f64]) -> f64 {
-    rms_norm(
-        &error
-            .iter()
-            .zip(scale.iter())
-            .map(|(e, s)| e / s)
-            .collect::<Vec<_>>(),
-    )
+    if error.is_empty() {
+        return 0.0;
+    }
+    let n = error.len() as f64;
+    let sum_sq: f64 = error
+        .iter()
+        .zip(scale.iter())
+        .map(|(e, s)| (e / s) * (e / s))
+        .sum();
+    (sum_sq / n).sqrt()
 }
 
 // ═══════════════════════════════════════════════════════════════

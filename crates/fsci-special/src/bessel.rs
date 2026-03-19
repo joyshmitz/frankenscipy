@@ -220,28 +220,325 @@ pub fn yn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialRes
     map_real_binary("yn", n, z, mode, |order, x| yn_scalar(order, x, mode))
 }
 
-pub fn jv(_v: &SpecialTensor, _z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    not_yet_implemented("jv", mode, "P2C-006-D skeleton only")
+/// Bessel function of the first kind for real order v: J_v(z).
+///
+/// Uses power series for small z, asymptotic expansion for large z,
+/// and reduces to j0/j1/jn for integer orders.
+pub fn jv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("jv", v, z, mode, |order, x| Ok(jv_scalar(order, x)))
 }
 
-pub fn yv(_v: &SpecialTensor, _z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    not_yet_implemented("yv", mode, "P2C-006-D skeleton only")
+/// Bessel function of the second kind for real order v: Y_v(z).
+///
+/// Y_v(z) = (J_v(z) cos(vπ) - J_{-v}(z)) / sin(vπ) for non-integer v.
+/// For integer v, uses the integer-order y0/y1/yn implementations.
+pub fn yv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("yv", v, z, mode, |order, x| yv_scalar(order, x, mode))
 }
 
-pub fn iv(_v: &SpecialTensor, _z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    not_yet_implemented("iv", mode, "P2C-006-D skeleton only")
+/// Modified Bessel function of the first kind for real order v: I_v(z).
+///
+/// I_v(z) = (z/2)^v Σ (z²/4)^k / (k! Γ(v+k+1))
+pub fn iv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("iv", v, z, mode, |order, x| Ok(iv_scalar(order, x)))
 }
 
-pub fn kv(_v: &SpecialTensor, _z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    not_yet_implemented("kv", mode, "P2C-006-D skeleton only")
+/// Modified Bessel function of the second kind for real order v: K_v(z).
+///
+/// K_v(z) = π/2 (I_{-v}(z) - I_v(z)) / sin(vπ) for non-integer v.
+pub fn kv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("kv", v, z, mode, |order, x| kv_scalar(order, x, mode))
 }
 
-pub fn hankel1(_v: &SpecialTensor, _z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    not_yet_implemented("hankel1", mode, "P2C-006-D skeleton only")
+/// Hankel function of the first kind: H1_v(z) = J_v(z) + i·Y_v(z).
+///
+/// Returns the real part (imaginary part requires complex output path).
+pub fn hankel1(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    // H1_v = J_v + i*Y_v; return J_v as the real part
+    map_real_binary("hankel1", v, z, mode, |order, x| Ok(jv_scalar(order, x)))
 }
 
-pub fn hankel2(_v: &SpecialTensor, _z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    not_yet_implemented("hankel2", mode, "P2C-006-D skeleton only")
+/// Hankel function of the second kind: H2_v(z) = J_v(z) - i·Y_v(z).
+///
+/// Returns the real part (imaginary part requires complex output path).
+pub fn hankel2(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    // H2_v = J_v - i*Y_v; return J_v as the real part
+    map_real_binary("hankel2", v, z, mode, |order, x| Ok(jv_scalar(order, x)))
+}
+
+/// J_v(z) for real order v via power series.
+fn jv_scalar(v: f64, z: f64) -> f64 {
+    if z.is_nan() || v.is_nan() {
+        return f64::NAN;
+    }
+
+    // Integer order: delegate to integer routines
+    if v.fract() == 0.0 && v.abs() <= i32::MAX as f64 {
+        let n = v as i32;
+        return if n < 0 {
+            let sign = if (-n) & 1 == 0 { 1.0 } else { -1.0 };
+            sign * jn_nonnegative((-n) as u32, z)
+        } else {
+            jn_nonnegative(n as u32, z)
+        };
+    }
+
+    if z == 0.0 {
+        return if v > 0.0 { 0.0 } else { f64::INFINITY };
+    }
+
+    let az = z.abs();
+
+    // Power series: J_v(z) = (z/2)^v Σ (-z²/4)^k / (k! Γ(v+k+1))
+    if az < 20.0 + v.abs() {
+        return jv_series(v, z);
+    }
+
+    // Asymptotic: J_v(z) ≈ sqrt(2/(πz)) cos(z - vπ/2 - π/4) for large z
+    jv_asymptotic(v, az)
+}
+
+/// Power series for J_v(z).
+fn jv_series(v: f64, z: f64) -> f64 {
+    let half_z = z / 2.0;
+    let neg_quarter_z2 = -(z * z) / 4.0;
+
+    // First term: (z/2)^v / Γ(v+1)
+    let log_first = v * half_z.abs().ln() - lgamma(v + 1.0);
+    let mut sum = 0.0;
+    let mut log_term = log_first;
+    let sign_z = if z < 0.0 && v.fract() != 0.0 {
+        // For non-integer v and negative z, J_v(z) involves complex values
+        // Return NaN for real-only path
+        return f64::NAN;
+    } else {
+        1.0
+    };
+
+    for k in 0..200 {
+        let term = log_term.exp();
+        let term_sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+        sum += term_sign * term;
+
+        if term.abs() < 1e-16 * sum.abs().max(1e-300) && k > 5 {
+            break;
+        }
+
+        // Next term: multiply by (-z²/4) / ((k+1)(v+k+1))
+        let kf = k as f64;
+        log_term += (z * z / 4.0).ln() - (kf + 1.0).ln() - (v + kf + 1.0).ln();
+    }
+
+    sign_z * sum
+}
+
+/// Asymptotic expansion for J_v(z) for large |z|.
+fn jv_asymptotic(v: f64, z: f64) -> f64 {
+    let phase = z - v * PI / 2.0 - PI / 4.0;
+    (FRAC_2_PI / z).sqrt() * phase.cos()
+}
+
+/// Y_v(z) for real order v.
+fn yv_scalar(v: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if v.is_nan() || z.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if z <= 0.0 {
+        if z == 0.0 {
+            return Ok(f64::NEG_INFINITY);
+        }
+        return domain_error_by_mode(
+            "yv",
+            mode,
+            format!("v={v},z={z}"),
+            "yv requires z > 0 for real-valued output",
+        );
+    }
+
+    // Integer order: delegate
+    if v.fract() == 0.0 && v.abs() <= i32::MAX as f64 {
+        let n = v as i32;
+        return yn_scalar(n as f64, z, mode);
+    }
+
+    // Non-integer order: Y_v = (J_v cos(vπ) - J_{-v}) / sin(vπ)
+    let sin_vpi = (v * PI).sin();
+    if sin_vpi.abs() < 1e-15 {
+        // Near integer order — should have been caught above
+        return Ok(f64::NAN);
+    }
+
+    let jv_pos = jv_scalar(v, z);
+    let jv_neg = jv_scalar(-v, z);
+    Ok((jv_pos * (v * PI).cos() - jv_neg) / sin_vpi)
+}
+
+/// I_v(z) for real order v via power series.
+fn iv_scalar(v: f64, z: f64) -> f64 {
+    if z.is_nan() || v.is_nan() {
+        return f64::NAN;
+    }
+    if z == 0.0 {
+        return if v == 0.0 { 1.0 } else if v > 0.0 { 0.0 } else { f64::INFINITY };
+    }
+
+    let az = z.abs();
+
+    // Power series: I_v(z) = (z/2)^v Σ (z²/4)^k / (k! Γ(v+k+1))
+    let half_z = az / 2.0;
+    let quarter_z2 = az * az / 4.0;
+
+    let log_first = v * half_z.ln() - lgamma(v + 1.0);
+    let mut sum = 0.0;
+    let mut log_term = log_first;
+
+    for k in 0..200 {
+        sum += log_term.exp();
+
+        if log_term.exp() < 1e-16 * sum.max(1e-300) && k > 5 {
+            break;
+        }
+
+        let kf = k as f64;
+        log_term += quarter_z2.ln() - (kf + 1.0).ln() - (v + kf + 1.0).ln();
+    }
+
+    // Parity for negative z: I_v(-z) = (-1)^v I_v(z) for integer v
+    if z < 0.0 && v.fract() == 0.0 {
+        let n = v as i64;
+        if n % 2 != 0 {
+            return -sum;
+        }
+    }
+
+    sum
+}
+
+/// K_v(z) for real order v.
+fn kv_scalar(v: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if v.is_nan() || z.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if z <= 0.0 {
+        if z == 0.0 {
+            return Ok(f64::INFINITY);
+        }
+        return domain_error_by_mode(
+            "kv",
+            mode,
+            format!("v={v},z={z}"),
+            "kv requires z > 0",
+        );
+    }
+
+    // Non-integer order: K_v = π/2 * (I_{-v} - I_v) / sin(vπ)
+    let sin_vpi = (v * PI).sin();
+    if sin_vpi.abs() < 1e-15 {
+        // Integer or near-integer order: use limiting form
+        // K_n(z) ≈ (n-1)!/2 * (2/z)^n for small z, or asymptotic for large z
+        // Use asymptotic: K_v(z) ≈ sqrt(π/(2z)) exp(-z) for large z
+        if z > 2.0 {
+            let factor = (PI / (2.0 * z)).sqrt() * (-z).exp();
+            return Ok(factor);
+        }
+        // Small z: compute via series difference limit
+        // Use K_0 and K_1 as base, then recurrence
+        let k0 = kv_zero_order(z);
+        if v.abs() < 0.5 {
+            return Ok(k0);
+        }
+        let k1 = kv_first_order(z);
+        if (v.abs() - 1.0).abs() < 0.5 {
+            return Ok(k1);
+        }
+        // Recurrence: K_{n+1}(z) = K_{n-1}(z) + 2n/z K_n(z)
+        let n = v.abs().round() as u32;
+        let mut k_prev = k0;
+        let mut k_curr = k1;
+        for i in 1..n {
+            let k_next = k_prev + 2.0 * i as f64 / z * k_curr;
+            k_prev = k_curr;
+            k_curr = k_next;
+        }
+        return Ok(k_curr);
+    }
+
+    let iv_neg = iv_scalar(-v, z);
+    let iv_pos = iv_scalar(v, z);
+    Ok(PI / 2.0 * (iv_neg - iv_pos) / sin_vpi)
+}
+
+/// K_0(z) via polynomial approximation.
+fn kv_zero_order(z: f64) -> f64 {
+    if z <= 2.0 {
+        let t = z * z / 4.0;
+        -(z / 2.0).ln() * j0_core(z)
+            + (-0.577_215_664_9
+                + t * (0.422_784_335_1
+                    + t * (0.230_831_625_8
+                        + t * (0.034_873_012_6 + t * (0.002_623_720_2 + t * 0.000_107_587_4)))))
+    } else {
+        let t = 2.0 / z;
+        (-z).exp() / z.sqrt()
+            * (1.253_314_137_3
+                + t * (-0.078_565_724_0
+                    + t * (0.021_009_292_8
+                        + t * (-0.010_944_476_7 + t * (0.010_032_511_9 + t * (-0.016_382_637_5))))))
+    }
+}
+
+/// K_1(z) via polynomial approximation.
+fn kv_first_order(z: f64) -> f64 {
+    if z <= 2.0 {
+        let t = z * z / 4.0;
+        z * (z / 2.0).ln() * j1_core(z)
+            + 1.0 / z
+                * (1.0
+                    + t * (0.466_943_581_8
+                        + t * (-0.146_547_888_8
+                            + t * (-0.016_588_089_5
+                                + t * (-0.001_023_145_7 + t * (-0.000_039_827_4))))))
+    } else {
+        let t = 2.0 / z;
+        (-z).exp() / z.sqrt()
+            * (1.253_314_137_3
+                + t * (0.235_697_172_0
+                    + t * (-0.063_027_878_2
+                        + t * (0.032_819_357_6
+                            + t * (-0.029_752_279_3 + t * (0.048_710_583_5))))))
+    }
+}
+
+/// Log-gamma function for Bessel series computation.
+fn lgamma(x: f64) -> f64 {
+    if x <= 0.0 && x.fract().abs() < 1e-14 {
+        return f64::INFINITY;
+    }
+    // Stirling's approximation with Lanczos correction
+    const COEFFS: [f64; 9] = [
+        0.999_999_999_999_809_9,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_572e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
+    const G: f64 = 7.0;
+
+    if x < 0.5 {
+        return (PI / (PI * x).sin()).ln() - lgamma(1.0 - x);
+    }
+
+    let z = x - 1.0;
+    let mut s = COEFFS[0];
+    for (idx, coeff) in COEFFS.iter().enumerate().skip(1) {
+        s += coeff / (z + idx as f64);
+    }
+    let t = z + G + 0.5;
+    0.5 * (2.0 * PI).ln() + (z + 0.5) * t.ln() - t + s.ln()
 }
 
 // ── Spherical Bessel functions ──────────────────────────────────────

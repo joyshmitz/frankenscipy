@@ -19,7 +19,7 @@ pub use plan::{
 pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, TransformTrace, WorkerPolicy, dct, dct_i,
     dct_iii, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, fft2, fftn, hfft, hilbert, idct, ifft,
-    ifft2, irfft, irfft2, next_fast_len, rfft, rfft2, take_transform_traces,
+    ifft2, irfft, irfft2, irfftn, next_fast_len, rfft, rfft2, rfftn, take_transform_traces,
 };
 
 /// FFT normalization modes matching SciPy/PocketFFT conventions.
@@ -41,6 +41,8 @@ pub enum TransformKind {
     Fft2,
     Ifft2,
     Fftn,
+    Rfftn,
+    Irfftn,
 }
 
 #[cfg(test)]
@@ -54,8 +56,8 @@ mod tests {
 
     use super::helpers::fftfreq;
     use super::transforms::{
-        Complex64, FftOptions, dct, dct_i, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft,
-        hilbert, idct, ifft, irfft, rfft,
+        Complex64, FftOptions, dct, dct_i, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, hilbert,
+        idct, ifft, irfft, rfft,
     };
     use super::{Normalization, TransformKind};
 
@@ -283,7 +285,6 @@ mod tests {
             );
         }
     }
-
 
     #[test]
     fn dct_iv_self_inverse() {
