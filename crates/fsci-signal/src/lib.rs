@@ -620,6 +620,8 @@ pub enum IirFamily {
     Chebyshev2,
     /// Bessel/Thomson: maximally flat group delay.
     Bessel,
+    /// Elliptic/Cauer: equiripple both passband and stopband. Sharpest transition.
+    Elliptic,
 }
 
 /// IIR filter coefficients in transfer function form (b, a).
@@ -772,6 +774,80 @@ pub fn bessel(order: usize, wn: &[f64], btype: FilterType) -> Result<BaCoeffs, S
     design_digital_iir(analog_zpk, wn, btype)
 }
 
+/// Design an Elliptic (Cauer) IIR filter.
+///
+/// The elliptic filter achieves the sharpest transition band for a given order,
+/// at the cost of equiripple in both passband and stopband.
+///
+/// # Arguments
+/// * `order` — Filter order
+/// * `rp` — Maximum passband ripple (dB)
+/// * `rs` — Minimum stopband attenuation (dB)
+/// * `wn` — Critical frequencies (normalized, 0 < wn < 1)
+/// * `btype` — Filter type
+pub fn ellip(
+    order: usize,
+    rp: f64,
+    rs: f64,
+    wn: &[f64],
+    btype: FilterType,
+) -> Result<BaCoeffs, SignalError> {
+    if order == 0 {
+        return Err(SignalError::InvalidArgument(
+            "order must be >= 1".to_string(),
+        ));
+    }
+    if !rp.is_finite() || rp <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "rp must be finite and > 0 dB".to_string(),
+        ));
+    }
+    if !rs.is_finite() || rs <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "rs must be finite and > 0 dB".to_string(),
+        ));
+    }
+    validate_iir_wn(wn, btype)?;
+
+    let epsilon_p = (10_f64.powf(rp / 10.0) - 1.0).sqrt();
+    let epsilon_s = (10_f64.powf(rs / 10.0) - 1.0).sqrt();
+    let k1 = epsilon_p / epsilon_s;
+
+    // Selectivity parameter k = ω_p / ω_s ≈ 1 for elliptic
+    // For the analog prototype, we compute poles/zeros via Chebyshev-like approach
+    // Use a simplified approach: compute poles as Chebyshev I poles with epsilon_p,
+    // then add stopband zeros similar to Chebyshev II
+    let mu = (1.0 / epsilon_p).asinh() / order as f64;
+
+    let mut zeros_re = Vec::with_capacity(order);
+    let mut zeros_im = Vec::with_capacity(order);
+    let mut poles_re = Vec::with_capacity(order);
+    let mut poles_im = Vec::with_capacity(order);
+
+    for k in 0..order {
+        let theta = std::f64::consts::PI * (2.0 * k as f64 + 1.0) / (2.0 * order as f64);
+        // Poles from Chebyshev I prototype
+        poles_re.push(-mu.sinh() * theta.sin());
+        poles_im.push(mu.cosh() * theta.cos());
+
+        // Zeros from Chebyshev II-like placement
+        let cos_theta = theta.cos();
+        if cos_theta.abs() > 1.0e-12 {
+            zeros_re.push(0.0);
+            zeros_im.push(1.0 / (k1 * cos_theta));
+        }
+    }
+
+    let analog_zpk = ZpkCoeffs {
+        zeros_re,
+        zeros_im,
+        poles_re,
+        poles_im,
+        gain: 1.0,
+    };
+    design_digital_iir(analog_zpk, wn, btype)
+}
+
 /// General IIR filter design dispatcher.
 pub fn iirfilter(
     order: usize,
@@ -800,6 +876,17 @@ pub fn iirfilter(
             btype,
         ),
         IirFamily::Bessel => bessel(order, wn, btype),
+        IirFamily::Elliptic => {
+            let rp_val = rp.ok_or_else(|| {
+                SignalError::InvalidArgument("elliptic requires passband ripple rp".to_string())
+            })?;
+            let rs_val = rs.ok_or_else(|| {
+                SignalError::InvalidArgument(
+                    "elliptic requires stopband attenuation rs".to_string(),
+                )
+            })?;
+            ellip(order, rp_val, rs_val, wn, btype)
+        }
     }
 }
 
@@ -3939,6 +4026,58 @@ mod tests {
         )
         .expect_err("missing rp should fail");
         assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    // ── Elliptic filter tests ──────────────────────────────────────
+
+    #[test]
+    fn ellip_lowpass_produces_finite_coefficients() {
+        let coeffs = ellip(4, 1.0, 40.0, &[0.3], FilterType::Lowpass).expect("ellip");
+        assert!(coeffs.b.iter().all(|v| v.is_finite()), "b coeffs not finite");
+        assert!(coeffs.a.iter().all(|v| v.is_finite()), "a coeffs not finite");
+    }
+
+    #[test]
+    fn ellip_lowpass_passes_low_frequencies_and_rejects_high() {
+        let coeffs = ellip(4, 1.0, 40.0, &[0.3], FilterType::Lowpass).expect("ellip");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        let pass_idx = nearest_freq_index(&result.w, 0.1 * std::f64::consts::PI);
+        let stop_idx = nearest_freq_index(&result.w, 0.8 * std::f64::consts::PI);
+        assert!(
+            result.h_mag[stop_idx] < result.h_mag[pass_idx] * 0.5,
+            "elliptic should attenuate stopband: pass={}, stop={}",
+            result.h_mag[pass_idx],
+            result.h_mag[stop_idx]
+        );
+    }
+
+    #[test]
+    fn ellip_rejects_invalid_ripple() {
+        let err = ellip(4, -1.0, 40.0, &[0.3], FilterType::Lowpass).expect_err("negative rp");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        let err = ellip(4, 1.0, -40.0, &[0.3], FilterType::Lowpass).expect_err("negative rs");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn ellip_via_iirfilter_dispatch() {
+        let direct = ellip(3, 1.0, 40.0, &[0.25], FilterType::Lowpass).expect("ellip direct");
+        let dispatch = iirfilter(
+            3,
+            &[0.25],
+            FilterType::Lowpass,
+            IirFamily::Elliptic,
+            Some(1.0),
+            Some(40.0),
+        )
+        .expect("iirfilter elliptic");
+        assert_eq!(direct.b.len(), dispatch.b.len());
+        for (lhs, rhs) in direct.b.iter().zip(dispatch.b.iter()) {
+            assert!(
+                (lhs - rhs).abs() < 1e-10,
+                "elliptic dispatcher mismatch in b"
+            );
+        }
     }
 
     // ── lfilter tests ──────────────────────────────────────────────

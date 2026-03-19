@@ -15,6 +15,15 @@
 //! - `eval_genlaguerre(n, alpha, x)` — Generalized Laguerre L_n^α(x)
 //! - `eval_jacobi(n, alpha, beta, x)` — Jacobi P_n^{α,β}(x)
 //! - `eval_gegenbauer(n, alpha, x)` — Gegenbauer C_n^α(x)
+//! - `roots_legendre(n)` — Gauss-Legendre nodes and weights
+//! - `roots_chebyt(n)` — Gauss-Chebyshev nodes and weights
+//! - `roots_hermite(n)` — Gauss-Hermite nodes and weights
+//! - `roots_laguerre(n)` — Gauss-Laguerre nodes and weights
+//! - `roots_jacobi(n, alpha, beta)` — Gauss-Jacobi nodes and weights
+
+use std::f64::consts::PI;
+
+use fsci_linalg::{eigh, DecompOptions};
 
 /// Evaluate the Legendre polynomial P_n(x) of degree n at point x.
 ///
@@ -239,6 +248,339 @@ pub fn eval_gegenbauer(n: u32, alpha: f64, x: f64) -> f64 {
         c_curr = c_next;
     }
     c_curr
+}
+
+/// Compute Gauss-Legendre quadrature nodes and weights on [-1, 1].
+#[must_use]
+pub fn roots_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
+    roots_jacobi(n, 0.0, 0.0)
+}
+
+/// Compute Gauss-Chebyshev quadrature nodes and weights on [-1, 1].
+///
+/// The weight function is `(1 - x^2)^(-1/2)`.
+#[must_use]
+pub fn roots_chebyt(n: usize) -> (Vec<f64>, Vec<f64>) {
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut nodes = Vec::with_capacity(n);
+    let weight = PI / n as f64;
+    let weights = vec![weight; n];
+
+    for k in 0..n {
+        let theta = PI * (2.0 * k as f64 + 1.0) / (2.0 * n as f64);
+        nodes.push(theta.cos());
+    }
+    nodes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    (nodes, weights)
+}
+
+/// Compute Gauss-Hermite quadrature nodes and weights on `(-∞, ∞)`.
+///
+/// The weight function is `exp(-x^2)`.
+#[must_use]
+pub fn roots_hermite(n: usize) -> (Vec<f64>, Vec<f64>) {
+    golub_welsch(n, PI.sqrt(), |_k| 0.0, |k| ((k as f64) / 2.0).sqrt(), true)
+}
+
+/// Compute Gauss-Laguerre quadrature nodes and weights on `[0, ∞)`.
+///
+/// The weight function is `exp(-x)`.
+#[must_use]
+pub fn roots_laguerre(n: usize) -> (Vec<f64>, Vec<f64>) {
+    golub_welsch(n, 1.0, |k| 2.0 * k as f64 + 1.0, |k| k as f64, false)
+}
+
+/// Compute Gauss-Jacobi quadrature nodes and weights on `[-1, 1]`.
+///
+/// The weight function is `(1 - x)^alpha (1 + x)^beta`.
+#[must_use]
+pub fn roots_jacobi(n: usize, alpha: f64, beta: f64) -> (Vec<f64>, Vec<f64>) {
+    assert!(alpha > -1.0, "alpha must be greater than -1");
+    assert!(beta > -1.0, "beta must be greater than -1");
+
+    let mu0 = 2.0_f64.powf(alpha + beta + 1.0) * beta_fn(alpha + 1.0, beta + 1.0);
+    let symmetric = (alpha - beta).abs() <= 1e-14;
+
+    golub_welsch(
+        n,
+        mu0,
+        |k| {
+            let k = k as f64;
+            if (alpha + beta).abs() <= 1e-14 {
+                if k == 0.0 {
+                    (beta - alpha) / (alpha + beta + 2.0)
+                } else {
+                    0.0
+                }
+            } else if k == 0.0 {
+                (beta - alpha) / (alpha + beta + 2.0)
+            } else {
+                (beta * beta - alpha * alpha)
+                    / ((2.0 * k + alpha + beta) * (2.0 * k + alpha + beta + 2.0))
+            }
+        },
+        |k| {
+            let k = k as f64;
+            let sum = 2.0 * k + alpha + beta;
+            2.0 / sum
+                * (((k + alpha) * (k + beta)) / (sum + 1.0)).sqrt()
+                * if k == 1.0 {
+                    1.0
+                } else {
+                    (k * (k + alpha + beta) / (sum - 1.0)).sqrt()
+                }
+        },
+        symmetric,
+    )
+}
+
+fn golub_welsch<FDiag, FOff>(
+    n: usize,
+    mu0: f64,
+    diag: FDiag,
+    offdiag: FOff,
+    symmetrize: bool,
+) -> (Vec<f64>, Vec<f64>)
+where
+    FDiag: Fn(usize) -> f64,
+    FOff: Fn(usize) -> f64,
+{
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut jacobi = vec![vec![0.0; n]; n];
+    for (i, row) in jacobi.iter_mut().enumerate() {
+        row[i] = diag(i);
+    }
+    for k in 1..n {
+        let beta = offdiag(k);
+        jacobi[k - 1][k] = beta;
+        jacobi[k][k - 1] = beta;
+    }
+
+    let eig = eigh(&jacobi, DecompOptions::default()).expect("Golub-Welsch eigensolve succeeds");
+    let mut nodes = eig.eigenvalues;
+    let mut weights: Vec<f64> = (0..n)
+        .map(|col| mu0 * eig.eigenvectors[0][col] * eig.eigenvectors[0][col])
+        .collect();
+
+    if symmetrize {
+        symmetrize_pairs(&mut nodes, &mut weights);
+    }
+
+    (nodes, weights)
+}
+
+fn symmetrize_pairs(nodes: &mut [f64], weights: &mut [f64]) {
+    let n = nodes.len();
+    for i in 0..(n / 2) {
+        let j = n - 1 - i;
+        let node = (nodes[j] - nodes[i]) / 2.0;
+        let weight = (weights[i] + weights[j]) / 2.0;
+        nodes[i] = -node;
+        nodes[j] = node;
+        weights[i] = weight;
+        weights[j] = weight;
+    }
+    if n % 2 == 1 {
+        nodes[n / 2] = 0.0;
+    }
+}
+
+fn beta_fn(a: f64, b: f64) -> f64 {
+    gamma_half_integer_or_lanczos(a) * gamma_half_integer_or_lanczos(b)
+        / gamma_half_integer_or_lanczos(a + b)
+}
+
+fn gamma_half_integer_or_lanczos(x: f64) -> f64 {
+    if x <= 0.0 && x.fract().abs() <= 1e-14 {
+        return f64::NAN;
+    }
+    if (x - 0.5).abs() <= 1e-14 {
+        return PI.sqrt();
+    }
+
+    lanczos_gamma(x)
+}
+
+fn lanczos_gamma(z: f64) -> f64 {
+    const COEFFS: [f64; 9] = [
+        0.999_999_999_999_809_9,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_572e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
+    const G: f64 = 7.0;
+
+    if z < 0.5 {
+        return PI / ((PI * z).sin() * lanczos_gamma(1.0 - z));
+    }
+
+    let z = z - 1.0;
+    let mut x = COEFFS[0];
+    for (idx, coeff) in COEFFS.iter().enumerate().skip(1) {
+        x += coeff / (z + idx as f64);
+    }
+
+    let t = z + G + 0.5;
+    (2.0 * PI).sqrt() * t.powf(z + 0.5) * (-t).exp() * x
+}
+
+// ── Associated Legendre functions ─────────────────────────────────────
+
+/// Evaluate the associated Legendre function P_l^m(x) (with Condon-Shortley phase).
+///
+/// Parameters:
+/// - `m`: order (integer, |m| <= l)
+/// - `l`: degree (non-negative integer)
+/// - `x`: evaluation point, typically in [-1, 1]
+///
+/// Uses upward recurrence in l starting from P_m^m:
+///   P_m^m(x) = (-1)^m (2m-1)!! (1-x²)^{m/2}
+///   P_{m+1}^m(x) = x (2m+1) P_m^m(x)
+///   (l-m) P_l^m(x) = x(2l-1) P_{l-1}^m(x) - (l+m-1) P_{l-2}^m(x)
+///
+/// For negative m: P_l^{-m}(x) = (-1)^m (l-m)!/(l+m)! P_l^m(x)
+pub fn lpmv(m: i32, l: u32, x: f64) -> f64 {
+    let li = l as i32;
+    let am = m.unsigned_abs();
+
+    // |m| > l is zero by definition
+    if am > l {
+        return 0.0;
+    }
+
+    // Compute P_l^{|m|}(x)
+    let plm = lpmv_nonneg_m(am, l, x);
+
+    if m < 0 {
+        // P_l^{-m}(x) = (-1)^m * (l-|m|)!/(l+|m|)! * P_l^{|m|}(x)
+        let sign = if am.is_multiple_of(2) { 1.0 } else { -1.0 };
+        let mut ratio = 1.0;
+        for k in (li - am as i32 + 1)..=(li + am as i32) {
+            ratio /= k as f64;
+        }
+        sign * ratio * plm
+    } else {
+        plm
+    }
+}
+
+/// Compute P_l^m(x) for m >= 0 using stable upward recurrence.
+fn lpmv_nonneg_m(m: u32, l: u32, x: f64) -> f64 {
+    // Start with P_m^m(x) = (-1)^m * (2m-1)!! * (1-x²)^{m/2}
+    let mut pmm = 1.0;
+    if m > 0 {
+        let somx2 = (1.0 - x * x).max(0.0).sqrt();
+        let mut fact = 1.0;
+        for _i in 1..=m {
+            pmm *= -fact * somx2;
+            fact += 2.0;
+        }
+    }
+
+    if l == m {
+        return pmm;
+    }
+
+    // P_{m+1}^m(x) = x * (2m+1) * P_m^m(x)
+    let pmm1 = x * (2.0 * m as f64 + 1.0) * pmm;
+    if l == m + 1 {
+        return pmm1;
+    }
+
+    // Upward recurrence in l
+    let mut p_prev = pmm;
+    let mut p_curr = pmm1;
+    for ll in (m + 2)..=l {
+        let llf = ll as f64;
+        let mf = m as f64;
+        let p_next = ((2.0 * llf - 1.0) * x * p_curr - (llf + mf - 1.0) * p_prev) / (llf - mf);
+        p_prev = p_curr;
+        p_curr = p_next;
+    }
+    p_curr
+}
+
+// ── Spherical harmonics ──────────────────────────────────────────────
+
+use crate::types::Complex64;
+
+/// Complex spherical harmonic Y_l^m(θ, φ).
+///
+/// Uses the physics convention (ISO 31-11):
+///   Y_l^m(θ, φ) = √((2l+1)/(4π) * (l-|m|)!/(l+|m|)!) * P_l^{|m|}(cos φ) * exp(i·m·θ)
+///
+/// Parameters:
+/// - `m`: order (integer, |m| <= l)
+/// - `l`: degree (non-negative integer)
+/// - `theta`: azimuthal angle in [0, 2π)
+/// - `phi`: polar angle (colatitude) in [0, π]
+///
+/// Note: Follows SciPy convention where theta=azimuthal and phi=polar.
+pub fn sph_harm(m: i32, l: u32, theta: f64, phi: f64) -> Complex64 {
+    let am = m.unsigned_abs();
+
+    if am > l {
+        return Complex64 { re: 0.0, im: 0.0 };
+    }
+
+    // Normalization: sqrt((2l+1)/(4π) * (l-|m|)!/(l+|m|)!)
+    let lf = l as f64;
+    let li = l as i32;
+
+    // Compute ln((l-|m|)!/(l+|m|)!) for numerical stability
+    let mut log_ratio = 0.0;
+    for k in (li - am as i32 + 1)..=(li + am as i32) {
+        log_ratio -= (k as f64).ln();
+    }
+    let norm = ((2.0 * lf + 1.0) / (4.0 * std::f64::consts::PI) * log_ratio.exp()).sqrt();
+
+    // Associated Legendre at cos(phi) — Condon-Shortley phase included
+    let plm = lpmv_nonneg_m(am, l, phi.cos());
+
+    // Phase factor exp(i·m·θ)
+    let angle = m as f64 * theta;
+
+    Complex64 {
+        re: norm * plm * angle.cos(),
+        im: norm * plm * angle.sin(),
+    }
+}
+
+/// Real spherical harmonic Y_l^m(θ, φ).
+///
+/// The real form is defined as:
+///   m > 0: Y_l^m = √2 * (-1)^m * Re(Y_l^{|m|})
+///   m = 0: Y_l^0 (already real)
+///   m < 0: Y_l^m = √2 * (-1)^m * Im(Y_l^{|m|})
+pub fn sph_harm_y(l: u32, m: i32, theta: f64, phi: f64) -> f64 {
+    let am = m.unsigned_abs();
+    if am > l {
+        return 0.0;
+    }
+
+    let ylm = sph_harm(am as i32, l, theta, phi);
+
+    if m > 0 {
+        let sign = if am.is_multiple_of(2) { 1.0 } else { -1.0 };
+        std::f64::consts::SQRT_2 * sign * ylm.re
+    } else if m < 0 {
+        let sign = if am.is_multiple_of(2) { 1.0 } else { -1.0 };
+        std::f64::consts::SQRT_2 * sign * ylm.im
+    } else {
+        ylm.re
+    }
 }
 
 #[cfg(test)]
@@ -521,5 +863,288 @@ mod tests {
                 &format!("C_{n}^(1/2) = P_{n}"),
             );
         }
+    }
+
+    // ── Quadrature roots and weights ─────────────────────────────
+
+    #[test]
+    fn roots_legendre_weights_sum_to_two_and_are_symmetric() {
+        let (x, w) = roots_legendre(5);
+        assert_eq!(x.len(), 5);
+        assert_eq!(w.len(), 5);
+        assert_close(w.iter().sum::<f64>(), 2.0, 1e-12, "legendre weight sum");
+        for i in 0..(x.len() / 2) {
+            let j = x.len() - 1 - i;
+            assert_close(x[i], -x[j], 1e-12, "legendre symmetry");
+            assert_close(w[i], w[j], 1e-12, "legendre weight symmetry");
+        }
+    }
+
+    #[test]
+    fn roots_legendre_integrates_polynomials_exactly_through_degree_two_n_minus_one() {
+        let n = 4;
+        let (x, w) = roots_legendre(n);
+        for k in 0..(2 * n) {
+            let numerical = x
+                .iter()
+                .zip(&w)
+                .map(|(&xi, &wi)| wi * xi.powi(k as i32))
+                .sum::<f64>();
+            let exact = if k % 2 == 1 {
+                0.0
+            } else {
+                2.0 / (k as f64 + 1.0)
+            };
+            assert_close(
+                numerical,
+                exact,
+                1e-10,
+                &format!("legendre exactness degree {k}"),
+            );
+        }
+    }
+
+    #[test]
+    fn roots_chebyt_match_closed_form_and_uniform_weights() {
+        let n = 4;
+        let (x, w) = roots_chebyt(n);
+        let expected = [
+            -0.923_879_532_511_286_7,
+            -0.382_683_432_365_089_84,
+            0.382_683_432_365_089_84,
+            0.923_879_532_511_286_7,
+        ];
+        for (actual, expected) in x.iter().zip(expected) {
+            assert_close(*actual, expected, 1e-12, "chebyt node");
+        }
+        for weight in w {
+            assert_close(weight, PI / n as f64, 1e-12, "chebyt weight");
+        }
+    }
+
+    #[test]
+    fn roots_hermite_are_symmetric_and_weight_sum_is_sqrt_pi() {
+        let (x, w) = roots_hermite(5);
+        assert_close(
+            w.iter().sum::<f64>(),
+            PI.sqrt(),
+            1e-10,
+            "hermite weight sum",
+        );
+        for i in 0..(x.len() / 2) {
+            let j = x.len() - 1 - i;
+            assert_close(x[i], -x[j], 1e-12, "hermite symmetry");
+            assert_close(w[i], w[j], 1e-12, "hermite weight symmetry");
+        }
+    }
+
+    #[test]
+    fn roots_hermite_integrates_even_moments() {
+        let (x, w) = roots_hermite(4);
+        let zeroth = x
+            .iter()
+            .zip(&w)
+            .map(|(&xi, &wi)| wi * xi.powi(0))
+            .sum::<f64>();
+        let second = x
+            .iter()
+            .zip(&w)
+            .map(|(&xi, &wi)| wi * xi.powi(2))
+            .sum::<f64>();
+        let fourth = x
+            .iter()
+            .zip(&w)
+            .map(|(&xi, &wi)| wi * xi.powi(4))
+            .sum::<f64>();
+
+        assert_close(zeroth, PI.sqrt(), 1e-10, "hermite zeroth moment");
+        assert_close(second, PI.sqrt() / 2.0, 1e-10, "hermite second moment");
+        assert_close(fourth, 3.0 * PI.sqrt() / 4.0, 1e-9, "hermite fourth moment");
+    }
+
+    #[test]
+    fn roots_laguerre_are_positive_and_weight_sum_is_one() {
+        let (x, w) = roots_laguerre(5);
+        assert!(
+            x.iter().all(|&xi| xi > 0.0),
+            "laguerre nodes should be positive"
+        );
+        assert_close(w.iter().sum::<f64>(), 1.0, 1e-10, "laguerre weight sum");
+    }
+
+    #[test]
+    fn roots_laguerre_integrates_low_degree_polynomials() {
+        let (x, w) = roots_laguerre(4);
+        let first = x.iter().zip(&w).map(|(&xi, &wi)| wi * xi).sum::<f64>();
+        let second = x
+            .iter()
+            .zip(&w)
+            .map(|(&xi, &wi)| wi * xi.powi(2))
+            .sum::<f64>();
+        assert_close(first, 1.0, 1e-10, "laguerre first moment");
+        assert_close(second, 2.0, 1e-9, "laguerre second moment");
+    }
+
+    #[test]
+    fn roots_jacobi_matches_legendre_when_alpha_beta_zero() {
+        let (x_j, w_j) = roots_jacobi(5, 0.0, 0.0);
+        let (x_l, w_l) = roots_legendre(5);
+        for (actual, expected) in x_j.iter().zip(&x_l) {
+            assert_close(*actual, *expected, 1e-12, "jacobi nodes vs legendre");
+        }
+        for (actual, expected) in w_j.iter().zip(&w_l) {
+            assert_close(*actual, *expected, 1e-12, "jacobi weights vs legendre");
+        }
+    }
+
+    #[test]
+    fn roots_jacobi_half_half_has_expected_weight_sum_and_symmetry() {
+        let (x, w) = roots_jacobi(3, 0.5, 0.5);
+        assert_close(w.iter().sum::<f64>(), PI / 2.0, 1e-10, "jacobi mu0");
+        assert_close(x[0], -x[2], 1e-12, "jacobi symmetry");
+        assert_close(w[0], w[2], 1e-12, "jacobi weight symmetry");
+        assert_close(x[1], 0.0, 1e-12, "jacobi center root");
+    }
+
+    // ── Associated Legendre tests ────────────────────────────────────
+
+    #[test]
+    fn lpmv_m0_equals_legendre() {
+        // P_l^0(x) = P_l(x) (ordinary Legendre)
+        for l in 0..=8 {
+            let x = 0.6;
+            assert_close(
+                lpmv(0, l, x),
+                eval_legendre(l, x),
+                1e-12,
+                &format!("P_{l}^0 = P_{l}"),
+            );
+        }
+    }
+
+    #[test]
+    fn lpmv_known_values() {
+        // P_1^1(x) = -(1-x²)^{1/2}
+        let x = 0.5;
+        assert_close(lpmv(1, 1, x), -(1.0 - x * x).sqrt(), 1e-12, "P_1^1");
+
+        // P_2^1(x) = -3x(1-x²)^{1/2}
+        assert_close(
+            lpmv(1, 2, x),
+            -3.0 * x * (1.0 - x * x).sqrt(),
+            1e-12,
+            "P_2^1",
+        );
+
+        // P_2^2(x) = 3(1-x²)
+        assert_close(lpmv(2, 2, x), 3.0 * (1.0 - x * x), 1e-12, "P_2^2");
+    }
+
+    #[test]
+    fn lpmv_negative_m_relation() {
+        // P_l^{-m}(x) = (-1)^m * (l-m)!/(l+m)! * P_l^m(x)
+        let x = 0.4;
+        let l = 3_u32;
+        let m = 2_i32;
+        let positive = lpmv(m, l, x);
+        let negative = lpmv(-m, l, x);
+        // (l-m)!/(l+m)! = 1!/(5!) = 1/120
+        let ratio = 1.0 / 120.0;
+        let sign = 1.0; // (-1)^2 = 1
+        assert_close(negative, sign * ratio * positive, 1e-12, "P_l^{-m}");
+    }
+
+    #[test]
+    fn lpmv_m_exceeds_l_is_zero() {
+        assert_eq!(lpmv(5, 3, 0.5), 0.0);
+        assert_eq!(lpmv(-5, 3, 0.5), 0.0);
+    }
+
+    #[test]
+    fn lpmv_at_endpoints() {
+        // P_l^0(1) = 1, P_l^m(1) = 0 for m > 0
+        for l in 0..=5 {
+            assert_close(lpmv(0, l, 1.0), 1.0, 1e-12, &format!("P_{l}^0(1)"));
+            if l > 0 {
+                assert_close(lpmv(1, l, 1.0), 0.0, 1e-12, &format!("P_{l}^1(1)"));
+            }
+        }
+    }
+
+    // ── Spherical harmonics tests ────────────────────────────────────
+
+    #[test]
+    fn sph_harm_y00_is_constant() {
+        // Y_0^0 = 1/√(4π)
+        let expected = 1.0 / (4.0 * PI).sqrt();
+        for theta in [0.0, 1.0, 3.0, 5.0] {
+            for phi in [0.0, 0.5, 1.5, PI] {
+                let y = sph_harm(0, 0, theta, phi);
+                assert_close(y.re, expected, 1e-12, "Y_0^0 re");
+                assert_close(y.im, 0.0, 1e-12, "Y_0^0 im");
+            }
+        }
+    }
+
+    #[test]
+    fn sph_harm_normalization() {
+        // |Y_l^m|² integrated over sphere = 1
+        // Approximate via numerical integration (trapezoidal on theta/phi grid)
+        let n_theta = 100;
+        let n_phi = 50;
+        let d_theta = 2.0 * PI / n_theta as f64;
+        let d_phi = PI / n_phi as f64;
+
+        for (l, m) in [(1, 0), (1, 1), (2, -1), (2, 2), (3, -2)] {
+            let mut integral = 0.0;
+            for i in 0..n_theta {
+                let theta = (i as f64 + 0.5) * d_theta;
+                for j in 0..n_phi {
+                    let phi = (j as f64 + 0.5) * d_phi;
+                    let y = sph_harm(m, l, theta, phi);
+                    let abs2 = y.re * y.re + y.im * y.im;
+                    integral += abs2 * phi.sin() * d_theta * d_phi;
+                }
+            }
+            assert!(
+                (integral - 1.0).abs() < 0.02,
+                "Y_{l}^{m} normalization: integral={integral}"
+            );
+        }
+    }
+
+    #[test]
+    fn sph_harm_y_m_exceeds_l() {
+        let y = sph_harm(5, 3, 1.0, 1.0);
+        assert_eq!(y.re, 0.0);
+        assert_eq!(y.im, 0.0);
+    }
+
+    #[test]
+    fn sph_harm_y_real_y00_constant() {
+        let expected = 1.0 / (4.0 * PI).sqrt();
+        assert_close(sph_harm_y(0, 0, 1.0, 0.5), expected, 1e-12, "real Y_0^0");
+    }
+
+    #[test]
+    fn sph_harm_y_real_orthogonality() {
+        // Real spherical harmonics are also orthonormal
+        let n_theta = 80;
+        let n_phi = 40;
+        let d_theta = 2.0 * PI / n_theta as f64;
+        let d_phi = PI / n_phi as f64;
+
+        // Compute <Y_1^0 | Y_1^1> — should be ~0
+        let mut cross = 0.0;
+        for i in 0..n_theta {
+            let theta = (i as f64 + 0.5) * d_theta;
+            for j in 0..n_phi {
+                let phi = (j as f64 + 0.5) * d_phi;
+                let y10 = sph_harm_y(1, 0, theta, phi);
+                let y11 = sph_harm_y(1, 1, theta, phi);
+                cross += y10 * y11 * phi.sin() * d_theta * d_phi;
+            }
+        }
+        assert!(cross.abs() < 0.02, "Y_1^0 · Y_1^1 orthogonality: {cross}");
     }
 }

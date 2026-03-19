@@ -5,8 +5,8 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, not_yet_implemented, record_special_trace,
+    not_yet_implemented, record_special_trace, DispatchPlan, DispatchStep, KernelRegime,
+    SpecialError, SpecialErrorKind, SpecialResult, SpecialTensor,
 };
 
 pub const AIRY_DISPATCH_PLAN: &[DispatchPlan] = &[DispatchPlan {

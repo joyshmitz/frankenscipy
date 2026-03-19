@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use fsci_runtime::{
-    RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio,
+    RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio, StructuralEvidence,
 };
 use nalgebra::linalg::Cholesky;
 use nalgebra::{DMatrix, DVector, Dyn, LU, linalg::SVD};
@@ -962,19 +962,48 @@ pub fn solve_with_casp(
         a.to_vec()
     };
 
-    // Quick LU for condition estimation
-    let matrix = dmatrix_from_rows(&effective_a)?;
-    let lu: LU<f64, Dyn, Dyn> = matrix.clone().lu();
-    let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), rows);
+    let mut matrix_cache: Option<DMatrix<f64>> = None;
+    let mut lu_cache: Option<LU<f64, Dyn, Dyn>> = None;
 
-    // Query portfolio for optimal action via expected-loss minimization
-    let evidence = options.assume_a.map(assumption_to_evidence);
-    let (action, posterior, expected_losses, chosen_loss) =
-        portfolio.select_action(rcond, evidence);
+    // Determine rcond and action, deferring expensive LU if possible.
+    let (action, rcond, posterior, expected_losses, chosen_loss) =
+        if options.assume_a == Some(MatrixAssumption::Diagonal) {
+            let rcond = fast_rcond_diagonal(&effective_a);
+            let (act, post, losses, choice) =
+                portfolio.select_action(rcond, Some(StructuralEvidence::Diagonal));
+            (act, rcond, post, losses, choice)
+        } else if options.assume_a == Some(MatrixAssumption::LowerTriangular)
+            || options.assume_a == Some(MatrixAssumption::UpperTriangular)
+        {
+            let lower = options.assume_a == Some(MatrixAssumption::LowerTriangular);
+            let rcond = fast_rcond_triangular(&effective_a, lower);
+            let (act, post, losses, choice) =
+                portfolio.select_action(rcond, Some(StructuralEvidence::Triangular));
+            (act, rcond, post, losses, choice)
+        } else {
+            let matrix = dmatrix_from_rows(&effective_a)?;
+            let lu: LU<f64, Dyn, Dyn> = matrix.clone().lu();
+            let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), rows);
+            let evidence = options.assume_a.map(assumption_to_evidence);
+            let (act, post, losses, choice) = portfolio.select_action(rcond, evidence);
+            matrix_cache = Some(matrix);
+            lu_cache = Some(lu);
+            (act, rcond, post, losses, choice)
+        };
 
     // Dispatch to chosen solver
     let result = match action {
         SolverAction::DirectLU => {
+            let matrix = if let Some(m) = matrix_cache {
+                m
+            } else {
+                dmatrix_from_rows(&effective_a)?
+            };
+            let lu = if let Some(l) = lu_cache {
+                l
+            } else {
+                matrix.clone().lu()
+            };
             let rhs = DVector::from_column_slice(b);
             let x = lu.solve(&rhs).ok_or(LinalgError::SingularMatrix)?;
             let backward_err = compute_backward_error(&matrix, &x, &rhs);
@@ -1026,9 +1055,115 @@ pub fn solve_with_casp(
     result
 }
 
+fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
+    let n = a.len();
+    if n == 0 {
+        return 1.0;
+    }
+
+    // 1. Compute ||A||_1 in O(n^2)
+    let mut a_norm = 0.0;
+    for j in 0..n {
+        let mut col_sum = 0.0;
+        if lower {
+            for row in a.iter().take(n).skip(j) {
+                col_sum += row[j].abs();
+            }
+        } else {
+            for row in a.iter().take(j + 1) {
+                col_sum += row[j].abs();
+            }
+        }
+        if col_sum > a_norm {
+            a_norm = col_sum;
+        }
+    }
+
+    if a_norm == 0.0 {
+        return 0.0;
+    }
+
+    // 2. Estimate ||A^-1||_1 via one iteration of Higham's algorithm in O(n^2)
+    // Solve A^T w = sign(x), then solve A x_new = w. ||x_new||_1 / ||w||_1 is estimate.
+    let x = vec![1.0 / n as f64; n];
+    let mut w = vec![0.0; n];
+
+    // Solve A^T w = sign(x)
+    // If lower, A^T is upper triangular.
+    if lower {
+        // Back substitution for upper triangular A^T
+        for i in (0..n).rev() {
+            let mut sum = x[i].signum();
+            for j in (i + 1)..n {
+                sum -= a[j][i] * w[j];
+            }
+            if a[i][i].abs() < 1e-18 {
+                return 0.0;
+            }
+            w[i] = sum / a[i][i];
+        }
+    } else {
+        // Forward substitution for lower triangular A^T
+        for i in 0..n {
+            let mut sum = x[i].signum();
+            for j in 0..i {
+                sum -= a[j][i] * w[j];
+            }
+            if a[i][i].abs() < 1e-18 {
+                return 0.0;
+            }
+            w[i] = sum / a[i][i];
+        }
+    }
+
+    // Solve A x_new = w
+    let mut x_new = vec![0.0; n];
+    if lower {
+        for i in 0..n {
+            let mut sum = w[i];
+            for j in 0..i {
+                sum -= a[i][j] * x_new[j];
+            }
+            x_new[i] = sum / a[i][i];
+        }
+    } else {
+        for i in (0..n).rev() {
+            let mut sum = w[i];
+            for j in (i + 1)..n {
+                sum -= a[i][j] * x_new[j];
+            }
+            x_new[i] = sum / a[i][i];
+        }
+    }
+
+    let a_inv_norm = x_new.iter().map(|v| v.abs()).sum::<f64>();
+    let rcond = 1.0 / (a_norm * a_inv_norm);
+    if rcond.is_nan() { 0.0 } else { rcond.min(1.0) }
+}
+
+fn fast_rcond_diagonal(a: &[Vec<f64>]) -> f64 {
+    let n = a.len();
+    if n == 0 {
+        return 1.0;
+    }
+    let mut max_abs = 0.0;
+    let mut min_abs = f64::INFINITY;
+    for (i, row) in a.iter().enumerate() {
+        if i >= row.len() {
+            return 0.0; // Ragged matrix treated as singular
+        }
+        let val = row[i].abs();
+        if val > max_abs {
+            max_abs = val;
+        }
+        if val < min_abs {
+            min_abs = val;
+        }
+    }
+    if max_abs == 0.0 { 0.0 } else { min_abs / max_abs }
+}
+
 /// Estimate spectral condition number via power iteration.
-/// Cost: O(n² × iterations) vs O(n³) for full SVD.
-/// Returns the reciprocal condition number (σ_min / σ_max).
 pub fn randomized_rcond_estimate(
     matrix: &DMatrix<f64>,
     lu: &LU<f64, Dyn, Dyn>,

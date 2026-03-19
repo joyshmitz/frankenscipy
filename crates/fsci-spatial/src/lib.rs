@@ -484,17 +484,47 @@ impl KDTree {
     ///
     /// Matches `scipy.spatial.KDTree.count_neighbors(other, r)`.
     pub fn count_neighbors(&self, other: &KDTree, r: f64) -> usize {
+        if self.nodes.is_empty() || other.nodes.is_empty() {
+            return 0;
+        }
         let r_sq = r * r;
         let mut count = 0;
-        for node in &self.nodes {
-            for other_node in &other.nodes {
-                if sqeuclidean(&node.point, &other_node.point) <= r_sq {
-                    count += 1;
-                }
-            }
+        for other_node in &other.nodes {
+            count += ball_search_count(&self.nodes, 0, &other_node.point, r_sq);
         }
         count
     }
+}
+
+fn ball_search_count(
+    nodes: &[KDNode],
+    node_idx: usize,
+    query: &[f64],
+    r_sq: f64,
+) -> usize {
+    let node = &nodes[node_idx];
+    let dist_sq = sqeuclidean(query, &node.point);
+
+    let mut count = if dist_sq <= r_sq { 1 } else { 0 };
+
+    let diff = query[node.split_dim] - node.point[node.split_dim];
+    let (near, far) = if diff <= 0.0 {
+        (node.left, node.right)
+    } else {
+        (node.right, node.left)
+    };
+
+    if let Some(near_idx) = near {
+        count += ball_search_count(nodes, near_idx, query, r_sq);
+    }
+
+    if diff * diff <= r_sq
+        && let Some(far_idx) = far
+    {
+        count += ball_search_count(nodes, far_idx, query, r_sq);
+    }
+
+    count
 }
 
 fn build_kdtree(

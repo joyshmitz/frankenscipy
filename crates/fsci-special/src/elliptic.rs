@@ -16,8 +16,8 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, record_special_trace,
+    record_special_trace, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor,
 };
 
 pub const ELLIPTIC_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -532,6 +532,76 @@ fn gauss_legendre_elliptic_e(phi: f64, m: f64) -> f64 {
     half_phi * sum
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Jacobi elliptic functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Jacobi elliptic functions sn(u, m), cn(u, m), dn(u, m), and amplitude ph(u, m).
+///
+/// Computed via the arithmetic-geometric mean (descending Landen transformation).
+///
+/// Parameters:
+/// - `u`: argument (real)
+/// - `m`: parameter (0 <= m <= 1)
+///
+/// Returns (sn, cn, dn, ph) where:
+/// - sn(u, m) = sin(am(u, m))
+/// - cn(u, m) = cos(am(u, m))
+/// - dn(u, m) = √(1 - m·sn²)
+/// - ph(u, m) = am(u, m) (the Jacobi amplitude)
+///
+/// Identities: sn² + cn² = 1, dn² + m·sn² = 1
+pub fn ellipj(u: f64, m: f64) -> (f64, f64, f64, f64) {
+    if m.is_nan() || u.is_nan() {
+        return (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
+    }
+
+    // Special case: m = 0 => sn = sin(u), cn = cos(u), dn = 1
+    if m.abs() < 1e-15 {
+        return (u.sin(), u.cos(), 1.0, u);
+    }
+
+    // Special case: m = 1 => sn = tanh(u), cn = dn = sech(u)
+    if (m - 1.0).abs() < 1e-15 {
+        let sn = u.tanh();
+        let cn = 1.0 / u.cosh();
+        return (sn, cn, cn, 2.0 * u.exp().atan() - std::f64::consts::FRAC_PI_2);
+    }
+
+    // AGM-based computation via descending Landen transformation
+    const MAX_ITER: usize = 20;
+    let mut a = [0.0; MAX_ITER + 1];
+    let mut b = [0.0; MAX_ITER + 1];
+    let mut c = [0.0; MAX_ITER + 1];
+
+    a[0] = 1.0;
+    b[0] = (1.0 - m).sqrt();
+    c[0] = m.sqrt();
+
+    let mut n = 0;
+    while c[n].abs() > 1e-16 && n < MAX_ITER {
+        let a_new = (a[n] + b[n]) / 2.0;
+        let b_new = (a[n] * b[n]).sqrt();
+        let c_new = (a[n] - b[n]) / 2.0;
+        n += 1;
+        a[n] = a_new;
+        b[n] = b_new;
+        c[n] = c_new;
+    }
+
+    // Compute amplitude by back-substitution
+    let mut phi = (1u64 << n) as f64 * a[n] * u;
+    for k in (1..=n).rev() {
+        phi = (phi + (c[k] / a[k] * phi.sin()).asin()) / 2.0;
+    }
+
+    let sn = phi.sin();
+    let cn = phi.cos();
+    let dn = (1.0 - m * sn * sn).sqrt();
+
+    (sn, cn, dn, phi)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -749,5 +819,76 @@ mod tests {
             }
             other => panic!("expected RealVec, got {other:?}"),
         }
+    }
+
+    // ── Jacobi elliptic functions ────────────────────────────────────
+
+    #[test]
+    fn ellipj_at_zero() {
+        // sn(0, m) = 0, cn(0, m) = 1, dn(0, m) = 1
+        let (sn, cn, dn, ph) = ellipj(0.0, 0.5);
+        assert_close(sn, 0.0, 1e-12, "sn(0) = 0");
+        assert_close(cn, 1.0, 1e-12, "cn(0) = 1");
+        assert_close(dn, 1.0, 1e-12, "dn(0) = 1");
+        assert_close(ph, 0.0, 1e-12, "am(0) = 0");
+    }
+
+    #[test]
+    fn ellipj_m_zero_is_trig() {
+        // m=0: sn = sin, cn = cos, dn = 1
+        let u = 1.0;
+        let (sn, cn, dn, _) = ellipj(u, 0.0);
+        assert_close(sn, u.sin(), 1e-12, "sn(u,0) = sin(u)");
+        assert_close(cn, u.cos(), 1e-12, "cn(u,0) = cos(u)");
+        assert_close(dn, 1.0, 1e-12, "dn(u,0) = 1");
+    }
+
+    #[test]
+    fn ellipj_m_one_is_hyp() {
+        // m=1: sn = tanh, cn = dn = sech
+        let u = 1.0;
+        let (sn, cn, dn, _) = ellipj(u, 1.0);
+        assert_close(sn, u.tanh(), 1e-12, "sn(u,1) = tanh(u)");
+        assert_close(cn, 1.0 / u.cosh(), 1e-12, "cn(u,1) = sech(u)");
+        assert_close(dn, 1.0 / u.cosh(), 1e-12, "dn(u,1) = sech(u)");
+    }
+
+    #[test]
+    fn ellipj_pythagorean_identity() {
+        // sn² + cn² = 1
+        for m in [0.1, 0.3, 0.5, 0.7, 0.9] {
+            for u in [0.5, 1.0, 2.0, 3.0] {
+                let (sn, cn, _, _) = ellipj(u, m);
+                let sum = sn * sn + cn * cn;
+                assert!(
+                    (sum - 1.0).abs() < 1e-10,
+                    "sn²+cn²=1 failed: u={u}, m={m}, sum={sum}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ellipj_dn_identity() {
+        // dn² + m*sn² = 1
+        for m in [0.1, 0.3, 0.5, 0.7, 0.9] {
+            for u in [0.5, 1.0, 2.0, 3.0] {
+                let (sn, _, dn, _) = ellipj(u, m);
+                let sum = dn * dn + m * sn * sn;
+                assert!(
+                    (sum - 1.0).abs() < 1e-10,
+                    "dn²+m·sn²=1 failed: u={u}, m={m}, sum={sum}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ellipj_nan_passthrough() {
+        let (sn, cn, dn, ph) = ellipj(f64::NAN, 0.5);
+        assert!(sn.is_nan());
+        assert!(cn.is_nan());
+        assert!(dn.is_nan());
+        assert!(ph.is_nan());
     }
 }

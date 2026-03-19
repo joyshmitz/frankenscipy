@@ -11,29 +11,33 @@ pub mod hyper;
 pub mod orthopoly;
 pub mod types;
 
-pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
-pub use bessel::{BESSEL_DISPATCH_PLAN, hankel1, hankel2, iv, j0, j1, jn, jv, kv, y0, y1, yn, yv};
-pub use beta::{BETA_DISPATCH_PLAN, beta, betainc, betaln, btdtr, btdtri, fdtr, fdtri};
+pub use airy::{ai, airy, bi, AiryResult, AIRY_DISPATCH_PLAN};
+pub use bessel::{
+    hankel1, hankel2, iv, j0, j1, jn, jv, kv, spherical_in, spherical_jn, spherical_kn,
+    spherical_yn, y0, y1, yn, yv, BESSEL_DISPATCH_PLAN,
+};
+pub use beta::{beta, betainc, betaln, btdtr, btdtri, fdtr, fdtri, BETA_DISPATCH_PLAN};
 pub use convenience::{
-    CONVENIENCE_DISPATCH_PLAN, entr, expit, kl_div, logit, logsumexp, ndtr, ndtri, rel_entr, sinc,
-    xlog1py, xlogy,
+    dawsn, entr, expit, fresnel, kl_div, logit, logsumexp, modstruve, ndtr, ndtri, rel_entr, sinc,
+    struve, xlog1py, xlogy, CONVENIENCE_DISPATCH_PLAN,
 };
 pub use elliptic::{
-    ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipk, ellipkinc, exp1, expi, lambertw,
+    ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw, ELLIPTIC_DISPATCH_PLAN,
 };
-pub use error::{ERROR_DISPATCH_PLAN, erf, erfc, erfcinv, erfinv};
+pub use error::{erf, erfc, erfcinv, erfinv, ERROR_DISPATCH_PLAN};
 pub use gamma::{
-    GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, gdtr,
-    gdtri, perm, polygamma, rgamma, zeta,
+    comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, gdtr, gdtri, perm, polygamma,
+    rgamma, zeta, GAMMA_DISPATCH_PLAN,
 };
-pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
+pub use hyper::{hyp1f1, hyp2f1, HYPER_DISPATCH_PLAN};
 pub use orthopoly::{
     eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite, eval_hermitenorm,
-    eval_jacobi, eval_laguerre, eval_legendre,
+    eval_jacobi, eval_laguerre, eval_legendre, lpmv, roots_chebyt, roots_hermite, roots_jacobi,
+    roots_laguerre, roots_legendre, sph_harm, sph_harm_y,
 };
 pub use types::{
-    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
-    SpecialResult, SpecialTensor, SpecialTraceEntry, take_special_traces,
+    take_special_traces, Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError,
+    SpecialErrorKind, SpecialResult, SpecialTensor, SpecialTraceEntry,
 };
 
 #[cfg(test)]
@@ -1116,31 +1120,21 @@ mod tests {
 
     #[test]
     fn dispatch_plans_cover_packet_boundaries() {
-        assert!(
-            GAMMA_DISPATCH_PLAN
-                .iter()
-                .any(|entry| entry.function == "gamma")
-        );
-        assert!(
-            BETA_DISPATCH_PLAN
-                .iter()
-                .any(|entry| entry.function == "beta")
-        );
-        assert!(
-            BESSEL_DISPATCH_PLAN
-                .iter()
-                .any(|entry| entry.function == "jv")
-        );
-        assert!(
-            ERROR_DISPATCH_PLAN
-                .iter()
-                .any(|entry| entry.function == "erf")
-        );
-        assert!(
-            HYPER_DISPATCH_PLAN
-                .iter()
-                .any(|entry| entry.function == "hyp2f1")
-        );
+        assert!(GAMMA_DISPATCH_PLAN
+            .iter()
+            .any(|entry| entry.function == "gamma"));
+        assert!(BETA_DISPATCH_PLAN
+            .iter()
+            .any(|entry| entry.function == "beta"));
+        assert!(BESSEL_DISPATCH_PLAN
+            .iter()
+            .any(|entry| entry.function == "jv"));
+        assert!(ERROR_DISPATCH_PLAN
+            .iter()
+            .any(|entry| entry.function == "erf"));
+        assert!(HYPER_DISPATCH_PLAN
+            .iter()
+            .any(|entry| entry.function == "hyp2f1"));
     }
 
     #[test]
@@ -1519,5 +1513,227 @@ mod tests {
     #[test]
     fn zeta_nan_passthrough() {
         assert!(zeta(f64::NAN).is_nan());
+    }
+
+    // ── Spherical Bessel function tests ──────────────────────────────
+
+    #[test]
+    fn spherical_jn_j0_is_sinc() {
+        // j_0(x) = sin(x)/x
+        let mode = RuntimeMode::Strict;
+        for x in [0.5, 1.0, 2.0, 5.0, 10.0, 20.0] {
+            let result = spherical_jn(
+                &SpecialTensor::RealScalar(0.0),
+                &SpecialTensor::RealScalar(x),
+                mode,
+            )
+            .expect("spherical_jn(0, x)");
+            let expected = x.sin() / x;
+            assert_real_scalar_close(result, expected, 1e-12);
+        }
+    }
+
+    #[test]
+    fn spherical_jn_at_zero() {
+        let mode = RuntimeMode::Strict;
+        // j_0(0) = 1
+        let j0_0 = spherical_jn(
+            &SpecialTensor::RealScalar(0.0),
+            &SpecialTensor::RealScalar(0.0),
+            mode,
+        )
+        .expect("j_0(0)");
+        assert_real_scalar_close(j0_0, 1.0, 1e-12);
+
+        // j_n(0) = 0 for n > 0
+        for n in 1..=5 {
+            let jn_0 = spherical_jn(
+                &SpecialTensor::RealScalar(n as f64),
+                &SpecialTensor::RealScalar(0.0),
+                mode,
+            )
+            .unwrap_or_else(|_| panic!("j_{n}(0)"));
+            assert_real_scalar_close(jn_0, 0.0, 1e-12);
+        }
+    }
+
+    #[test]
+    fn spherical_jn_recurrence() {
+        // (2n+1) j_n(z) = z (j_{n-1}(z) + j_{n+1}(z))
+        let mode = RuntimeMode::Strict;
+        for n in 1..=6 {
+            for x in [1.0, 2.5, 5.0, 10.0] {
+                let jn_v = scalar_value(
+                    &spherical_jn(
+                        &SpecialTensor::RealScalar(n as f64),
+                        &SpecialTensor::RealScalar(x),
+                        mode,
+                    )
+                    .expect("jn"),
+                );
+                let jn_prev = scalar_value(
+                    &spherical_jn(
+                        &SpecialTensor::RealScalar((n - 1) as f64),
+                        &SpecialTensor::RealScalar(x),
+                        mode,
+                    )
+                    .expect("jn-1"),
+                );
+                let jn_next = scalar_value(
+                    &spherical_jn(
+                        &SpecialTensor::RealScalar((n + 1) as f64),
+                        &SpecialTensor::RealScalar(x),
+                        mode,
+                    )
+                    .expect("jn+1"),
+                );
+                let lhs = (2.0 * n as f64 + 1.0) * jn_v;
+                let rhs = x * (jn_prev + jn_next);
+                assert!(
+                    (lhs - rhs).abs() < 1e-8,
+                    "spherical jn recurrence n={n} x={x}: lhs={lhs} rhs={rhs}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn spherical_yn_y0_is_neg_cos_over_x() {
+        // y_0(x) = -cos(x)/x
+        let mode = RuntimeMode::Strict;
+        for x in [0.5, 1.0, 2.0, 5.0, 10.0] {
+            let result = spherical_yn(
+                &SpecialTensor::RealScalar(0.0),
+                &SpecialTensor::RealScalar(x),
+                mode,
+            )
+            .expect("spherical_yn(0, x)");
+            let expected = -x.cos() / x;
+            assert_real_scalar_close(result, expected, 1e-12);
+        }
+    }
+
+    #[test]
+    fn spherical_yn_at_zero_is_neg_inf() {
+        let mode = RuntimeMode::Strict;
+        let result = spherical_yn(
+            &SpecialTensor::RealScalar(0.0),
+            &SpecialTensor::RealScalar(0.0),
+            mode,
+        )
+        .expect("y_0(0)");
+        match result {
+            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_negative()),
+            _ => panic!("expected scalar"),
+        }
+    }
+
+    #[test]
+    fn spherical_in_i0_is_sinh_over_x() {
+        // i_0(x) = sinh(x)/x
+        let mode = RuntimeMode::Strict;
+        for x in [0.5, 1.0, 2.0, 5.0] {
+            let result = spherical_in(
+                &SpecialTensor::RealScalar(0.0),
+                &SpecialTensor::RealScalar(x),
+                mode,
+            )
+            .expect("spherical_in(0, x)");
+            let expected = x.sinh() / x;
+            assert_real_scalar_close(result, expected, 1e-12);
+        }
+    }
+
+    #[test]
+    fn spherical_in_at_zero() {
+        let mode = RuntimeMode::Strict;
+        let i0_0 = spherical_in(
+            &SpecialTensor::RealScalar(0.0),
+            &SpecialTensor::RealScalar(0.0),
+            mode,
+        )
+        .expect("i_0(0)");
+        assert_real_scalar_close(i0_0, 1.0, 1e-12);
+
+        let i1_0 = spherical_in(
+            &SpecialTensor::RealScalar(1.0),
+            &SpecialTensor::RealScalar(0.0),
+            mode,
+        )
+        .expect("i_1(0)");
+        assert_real_scalar_close(i1_0, 0.0, 1e-12);
+    }
+
+    #[test]
+    fn spherical_kn_k0_is_exp_neg_x_over_x() {
+        // k_0(x) = exp(-x)/x
+        let mode = RuntimeMode::Strict;
+        for x in [0.5, 1.0, 2.0, 5.0] {
+            let result = spherical_kn(
+                &SpecialTensor::RealScalar(0.0),
+                &SpecialTensor::RealScalar(x),
+                mode,
+            )
+            .expect("spherical_kn(0, x)");
+            let expected = (-x).exp() / x;
+            assert_real_scalar_close(result, expected, 1e-12);
+        }
+    }
+
+    #[test]
+    fn spherical_kn_at_zero_is_inf() {
+        let mode = RuntimeMode::Strict;
+        let result = spherical_kn(
+            &SpecialTensor::RealScalar(0.0),
+            &SpecialTensor::RealScalar(0.0),
+            mode,
+        )
+        .expect("k_0(0)");
+        match result {
+            SpecialTensor::RealScalar(v) => assert!(v.is_infinite()),
+            _ => panic!("expected scalar"),
+        }
+    }
+
+    #[test]
+    fn spherical_bessel_negative_order_rejected_in_hardened() {
+        let mode = RuntimeMode::Hardened;
+        let neg = SpecialTensor::RealScalar(-1.0);
+        let x = SpecialTensor::RealScalar(1.0);
+
+        let err = spherical_jn(&neg, &x, mode).expect_err("negative order");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+    }
+
+    #[test]
+    fn spherical_jn_j1_formula() {
+        // j_1(x) = sin(x)/x² - cos(x)/x
+        let mode = RuntimeMode::Strict;
+        for x in [0.5, 1.0, 3.0, 7.0] {
+            let result = spherical_jn(
+                &SpecialTensor::RealScalar(1.0),
+                &SpecialTensor::RealScalar(x),
+                mode,
+            )
+            .expect("j_1(x)");
+            let expected = x.sin() / (x * x) - x.cos() / x;
+            assert_real_scalar_close(result, expected, 1e-12);
+        }
+    }
+
+    #[test]
+    fn spherical_kn_k1_formula() {
+        // k_1(x) = exp(-x)/x * (1 + 1/x)
+        let mode = RuntimeMode::Strict;
+        for x in [0.5, 1.0, 3.0] {
+            let result = spherical_kn(
+                &SpecialTensor::RealScalar(1.0),
+                &SpecialTensor::RealScalar(x),
+                mode,
+            )
+            .expect("k_1(x)");
+            let expected = (-x).exp() / x * (1.0 + 1.0 / x);
+            assert_real_scalar_close(result, expected, 1e-12);
+        }
     }
 }

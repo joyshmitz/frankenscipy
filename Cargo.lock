@@ -599,6 +599,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "fsci-runtime",
+ "nalgebra",
  "proptest",
  "serde_json",
 ]
@@ -681,6 +682,7 @@ name = "fsci-special"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "fsci-linalg",
  "fsci-runtime",
 ]
 

@@ -5,8 +5,8 @@ use std::f64::consts::{FRAC_2_PI, PI};
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, not_yet_implemented, record_special_trace,
+    not_yet_implemented, record_special_trace, DispatchPlan, DispatchStep, KernelRegime,
+    SpecialError, SpecialErrorKind, SpecialResult, SpecialTensor,
 };
 
 pub const BESSEL_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -242,6 +242,269 @@ pub fn hankel1(_v: &SpecialTensor, _z: &SpecialTensor, mode: RuntimeMode) -> Spe
 
 pub fn hankel2(_v: &SpecialTensor, _z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     not_yet_implemented("hankel2", mode, "P2C-006-D skeleton only")
+}
+
+// ── Spherical Bessel functions ──────────────────────────────────────
+
+/// Spherical Bessel function of the first kind j_n(z).
+///
+/// j_n(z) = √(π/(2z)) J_{n+1/2}(z)
+///
+/// Computed via recurrence from:
+///   j_0(z) = sin(z)/z,  j_1(z) = sin(z)/z² - cos(z)/z
+pub fn spherical_jn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("spherical_jn", n, z, mode, |order, x| {
+        spherical_jn_scalar(order, x, mode)
+    })
+}
+
+/// Spherical Bessel function of the second kind y_n(z).
+///
+/// y_n(z) = √(π/(2z)) Y_{n+1/2}(z)
+///
+/// Computed via recurrence from:
+///   y_0(z) = -cos(z)/z,  y_1(z) = -cos(z)/z² - sin(z)/z
+pub fn spherical_yn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("spherical_yn", n, z, mode, |order, x| {
+        spherical_yn_scalar(order, x, mode)
+    })
+}
+
+/// Modified spherical Bessel function of the first kind i_n(z).
+///
+/// i_n(z) = √(π/(2z)) I_{n+1/2}(z)
+///
+/// Computed via recurrence from:
+///   i_0(z) = sinh(z)/z,  i_1(z) = cosh(z)/z - sinh(z)/z²
+pub fn spherical_in(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("spherical_in", n, z, mode, |order, x| {
+        spherical_in_scalar(order, x, mode)
+    })
+}
+
+/// Modified spherical Bessel function of the second kind k_n(z).
+///
+/// k_n(z) = √(2/(πz)) K_{n+1/2}(z)
+///
+/// Computed via recurrence from:
+///   k_0(z) = exp(-z)/z,  k_1(z) = exp(-z)/z * (1 + 1/z)
+pub fn spherical_kn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_binary("spherical_kn", n, z, mode, |order, x| {
+        spherical_kn_scalar(order, x, mode)
+    })
+}
+
+fn spherical_jn_scalar(order: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if order.is_nan() || x.is_nan() {
+        return Ok(f64::NAN);
+    }
+    let n = match integer_order_or_nan("spherical_jn", order, mode)? {
+        Some(v) => v,
+        None => return Ok(f64::NAN),
+    };
+    if n < 0 {
+        return domain_error_by_mode(
+            "spherical_jn",
+            mode,
+            format!("n={n}"),
+            "spherical Bessel order must be non-negative",
+        );
+    }
+    Ok(spherical_jn_nonneg(n as u32, x))
+}
+
+fn spherical_yn_scalar(order: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if order.is_nan() || x.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if x <= 0.0 {
+        if x == 0.0 {
+            return Ok(f64::NEG_INFINITY);
+        }
+        return domain_error_by_mode(
+            "spherical_yn",
+            mode,
+            format!("x={x}"),
+            "spherical_yn requires x > 0",
+        );
+    }
+    let n = match integer_order_or_nan("spherical_yn", order, mode)? {
+        Some(v) => v,
+        None => return Ok(f64::NAN),
+    };
+    if n < 0 {
+        return domain_error_by_mode(
+            "spherical_yn",
+            mode,
+            format!("n={n}"),
+            "spherical Bessel order must be non-negative",
+        );
+    }
+    Ok(spherical_yn_nonneg(n as u32, x))
+}
+
+fn spherical_in_scalar(order: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if order.is_nan() || x.is_nan() {
+        return Ok(f64::NAN);
+    }
+    let n = match integer_order_or_nan("spherical_in", order, mode)? {
+        Some(v) => v,
+        None => return Ok(f64::NAN),
+    };
+    if n < 0 {
+        return domain_error_by_mode(
+            "spherical_in",
+            mode,
+            format!("n={n}"),
+            "spherical Bessel order must be non-negative",
+        );
+    }
+    Ok(spherical_in_nonneg(n as u32, x))
+}
+
+fn spherical_kn_scalar(order: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if order.is_nan() || x.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if x <= 0.0 {
+        if x == 0.0 {
+            return Ok(f64::INFINITY);
+        }
+        return domain_error_by_mode(
+            "spherical_kn",
+            mode,
+            format!("x={x}"),
+            "spherical_kn requires x > 0",
+        );
+    }
+    let n = match integer_order_or_nan("spherical_kn", order, mode)? {
+        Some(v) => v,
+        None => return Ok(f64::NAN),
+    };
+    if n < 0 {
+        return domain_error_by_mode(
+            "spherical_kn",
+            mode,
+            format!("n={n}"),
+            "spherical Bessel order must be non-negative",
+        );
+    }
+    Ok(spherical_kn_nonneg(n as u32, x))
+}
+
+/// j_0(z) = sin(z)/z, j_1(z) = sin(z)/z² - cos(z)/z
+/// Forward recurrence: j_{k+1}(z) = (2k+1)/z * j_k(z) - j_{k-1}(z)
+fn spherical_jn_nonneg(n: u32, x: f64) -> f64 {
+    if x.is_infinite() {
+        return 0.0;
+    }
+    if x == 0.0 {
+        return if n == 0 { 1.0 } else { 0.0 };
+    }
+    let ax = x.abs();
+    if ax < 1e-15 {
+        // Small-x Taylor: j_n(x) ≈ x^n / (2n+1)!!
+        return if n == 0 { 1.0 } else { 0.0 };
+    }
+
+    let mut j_prev = x.sin() / x; // j_0
+    if n == 0 {
+        return j_prev;
+    }
+    let mut j_curr = x.sin() / (x * x) - x.cos() / x; // j_1
+    if n == 1 {
+        return j_curr;
+    }
+
+    for k in 1..n {
+        let next = (2.0 * k as f64 + 1.0) / x * j_curr - j_prev;
+        j_prev = j_curr;
+        j_curr = next;
+    }
+    j_curr
+}
+
+/// y_0(z) = -cos(z)/z, y_1(z) = -cos(z)/z² - sin(z)/z
+/// Forward recurrence: y_{k+1}(z) = (2k+1)/z * y_k(z) - y_{k-1}(z)
+fn spherical_yn_nonneg(n: u32, x: f64) -> f64 {
+    if x.is_infinite() {
+        return 0.0;
+    }
+    let mut y_prev = -x.cos() / x; // y_0
+    if n == 0 {
+        return y_prev;
+    }
+    let mut y_curr = -x.cos() / (x * x) - x.sin() / x; // y_1
+    if n == 1 {
+        return y_curr;
+    }
+
+    for k in 1..n {
+        let next = (2.0 * k as f64 + 1.0) / x * y_curr - y_prev;
+        y_prev = y_curr;
+        y_curr = next;
+    }
+    y_curr
+}
+
+/// i_0(z) = sinh(z)/z, i_1(z) = cosh(z)/z - sinh(z)/z²
+/// Recurrence: i_{k+1}(z) = i_{k-1}(z) - (2k+1)/z * i_k(z)
+fn spherical_in_nonneg(n: u32, x: f64) -> f64 {
+    if x == 0.0 {
+        return if n == 0 { 1.0 } else { 0.0 };
+    }
+    if x.is_infinite() {
+        return f64::INFINITY;
+    }
+    let ax = x.abs();
+    let sh = ax.sinh();
+    let ch = ax.cosh();
+
+    let mut i_prev = sh / ax; // i_0
+    if n == 0 {
+        return i_prev;
+    }
+    let mut i_curr = ch / ax - sh / (ax * ax); // i_1
+    if n == 1 {
+        // For negative x, i_n(-x) = (-1)^n * i_n(x)
+        return if x < 0.0 { -i_curr } else { i_curr };
+    }
+
+    for k in 1..n {
+        let next = i_prev - (2.0 * k as f64 + 1.0) / ax * i_curr;
+        i_prev = i_curr;
+        i_curr = next;
+    }
+    // Parity: i_n(-x) = (-1)^n i_n(x)
+    if x < 0.0 && n % 2 == 1 {
+        -i_curr
+    } else {
+        i_curr
+    }
+}
+
+/// k_0(z) = exp(-z)/z, k_1(z) = exp(-z)/z * (1 + 1/z)
+/// Recurrence: k_{k+1}(z) = k_{k-1}(z) + (2k+1)/z * k_k(z)
+fn spherical_kn_nonneg(n: u32, x: f64) -> f64 {
+    if x.is_infinite() {
+        return 0.0;
+    }
+    let emx = (-x).exp();
+    let mut k_prev = emx / x; // k_0
+    if n == 0 {
+        return k_prev;
+    }
+    let mut k_curr = emx / x * (1.0 + 1.0 / x); // k_1
+    if n == 1 {
+        return k_curr;
+    }
+
+    for k in 1..n {
+        let next = k_prev + (2.0 * k as f64 + 1.0) / x * k_curr;
+        k_prev = k_curr;
+        k_curr = next;
+    }
+    k_curr
 }
 
 fn map_real_input<F>(
@@ -647,7 +910,11 @@ fn j1_core(x: f64) -> f64 {
         (FRAC_2_PI / ax).sqrt() * (xx.cos() * p - z * xx.sin() * q)
     };
 
-    if x < 0.0 { -ans } else { ans }
+    if x < 0.0 {
+        -ans
+    } else {
+        ans
+    }
 }
 
 fn y0_core_positive(x: f64) -> f64 {

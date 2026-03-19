@@ -178,11 +178,19 @@ fn sinc_scalar(x: f64) -> f64 {
 }
 
 fn xlogy_scalar(x: f64, y: f64) -> f64 {
-    if x == 0.0 { 0.0 } else { x * y.ln() }
+    if x == 0.0 {
+        0.0
+    } else {
+        x * y.ln()
+    }
 }
 
 fn xlog1py_scalar(x: f64, y: f64) -> f64 {
-    if x == 0.0 { 0.0 } else { x * (1.0 + y).ln() }
+    if x == 0.0 {
+        0.0
+    } else {
+        x * (1.0 + y).ln()
+    }
 }
 
 fn expit_scalar(x: f64) -> f64 {
@@ -244,6 +252,358 @@ fn kl_div_scalar(x: f64, y: f64) -> f64 {
     } else {
         f64::INFINITY
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Fresnel integrals
+// ══════════════════════════════════════════════════════════════════════
+
+/// Fresnel integrals S(z) and C(z).
+///
+/// S(z) = ∫₀ᶻ sin(πt²/2) dt
+/// C(z) = ∫₀ᶻ cos(πt²/2) dt
+///
+/// Returns (S, C) as a pair of real scalars.
+///
+/// Uses rational approximation for small z and asymptotic expansion for large z.
+pub fn fresnel(z: f64) -> (f64, f64) {
+    let ax = z.abs();
+    if ax < 1e-15 {
+        return (0.0, 0.0);
+    }
+
+    let (s, c) = if ax < 1.6 {
+        fresnel_series(ax)
+    } else if ax < 6.0 {
+        fresnel_mid(ax)
+    } else {
+        fresnel_asymptotic(ax)
+    };
+
+    if z < 0.0 { (-s, -c) } else { (s, c) }
+}
+
+/// Power series for Fresnel integrals (small arguments).
+fn fresnel_series(x: f64) -> (f64, f64) {
+    fresnel_taylor(x)
+}
+
+/// Taylor series computation of Fresnel integrals.
+fn fresnel_taylor(x: f64) -> (f64, f64) {
+    let x2 = x * x;
+    let t = std::f64::consts::FRAC_PI_2 * x2;
+
+    // S(x) = x * Σ (-1)^n t^{2n+1} / ((2n+1)!(4n+3))  where t = πx²/2
+    // C(x) = x * Σ (-1)^n t^{2n} / ((2n)!(4n+1))
+    let mut s = 0.0;
+    let mut c = 0.0;
+    let mut s_term = t / 3.0; // n=0: t/(1!*3)
+    let mut c_term = 1.0; // n=0: 1/(0!*1)
+
+    s += s_term;
+    c += c_term;
+
+    for n in 1..60 {
+        let nf = n as f64;
+        c_term *= -t * t / ((2.0 * nf) * (2.0 * nf - 1.0));
+        c_term *= (4.0 * nf - 3.0) / (4.0 * nf + 1.0);
+        c += c_term;
+
+        s_term *= -t * t / ((2.0 * nf + 1.0) * (2.0 * nf));
+        s_term *= (4.0 * nf - 1.0) / (4.0 * nf + 3.0);
+        s += s_term;
+
+        if s_term.abs() < 1e-16 && c_term.abs() < 1e-16 {
+            break;
+        }
+    }
+
+    (x * s, x * c)
+}
+
+/// Asymptotic expansion for Fresnel integrals (large arguments).
+fn fresnel_asymptotic(x: f64) -> (f64, f64) {
+    // Asymptotic: S(x) ≈ 1/2 - f(x)cos(πx²/2) - g(x)sin(πx²/2)
+    //             C(x) ≈ 1/2 + f(x)sin(πx²/2) - g(x)cos(πx²/2)
+
+    let pix = std::f64::consts::PI * x;
+    let pix2 = pix * x;
+    let half_pix2 = std::f64::consts::FRAC_PI_2 * x * x;
+
+    let mut f_term = 1.0;
+    let mut g_term = 1.0;
+    let mut f = f_term;
+    let mut g = g_term;
+
+    for n in 1..20 {
+        let nf = n as f64;
+        f_term *= -(2.0 * nf) * (2.0 * nf - 1.0) / (pix2 * pix2);
+        g_term *= -(2.0 * nf + 1.0) * (2.0 * nf) / (pix2 * pix2);
+        f += f_term;
+        g += g_term;
+        if f_term.abs() < 1e-16 && g_term.abs() < 1e-16 {
+            break;
+        }
+    }
+
+    f /= pix;
+    g /= pix2;
+
+    let sin_t = half_pix2.sin();
+    let cos_t = half_pix2.cos();
+
+    let s = 0.5 - f * cos_t - g * sin_t;
+    let c = 0.5 + f * sin_t - g * cos_t;
+    (s, c)
+}
+
+/// Mid-range Fresnel integrals (bridge between series and asymptotic).
+fn fresnel_mid(x: f64) -> (f64, f64) {
+    // For moderate x, use numerical integration via composite Simpson
+    let n = 200;
+    let h = x / n as f64;
+    let half_pi = std::f64::consts::FRAC_PI_2;
+
+    let mut s = 0.0;
+    let mut c = 0.0;
+
+    // Simpson's rule
+    for i in 0..=n {
+        let t = i as f64 * h;
+        let arg = half_pi * t * t;
+        let w = if i == 0 || i == n {
+            1.0
+        } else if i % 2 == 1 {
+            4.0
+        } else {
+            2.0
+        };
+        s += w * arg.sin();
+        c += w * arg.cos();
+    }
+
+    s *= h / 3.0;
+    c *= h / 3.0;
+    (s, c)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Dawson function
+// ══════════════════════════════════════════════════════════════════════
+
+/// Dawson function D(x) = exp(-x²) ∫₀ˣ exp(t²) dt.
+///
+/// Related to the imaginary error function: D(x) = √π/2 * exp(-x²) * erfi(x)
+///
+/// Uses Rybicki's algorithm with a Gaussian kernel series for efficiency.
+pub fn dawsn(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 0.0;
+    }
+
+    let sign = x.signum();
+    let ax = x.abs();
+
+    // For small x, use Taylor series: D(x) ≈ x - 2x³/3 + 4x⁵/15 - ...
+    if ax < 0.2 {
+        let x2 = ax * ax;
+        let result = ax * (1.0 - 2.0 * x2 / 3.0 + 4.0 * x2 * x2 / 15.0
+            - 8.0 * x2 * x2 * x2 / 105.0
+            + 16.0 * x2.powi(4) / 945.0);
+        return sign * result;
+    }
+
+    // Rybicki's algorithm: D(x) ≈ (1/√π) Σ exp(-(x - n*h)²) for suitable h
+    // Using the Cephes-style polynomial approximation approach instead
+    if ax < 3.9 {
+        return sign * dawsn_mid(ax);
+    }
+
+    // Asymptotic: D(x) ≈ 1/(2x) + 1/(4x³) + 3/(8x⁵) + ...
+    sign * dawsn_asymptotic(ax)
+}
+
+/// Dawson function for moderate arguments via numerical integration.
+fn dawsn_mid(x: f64) -> f64 {
+    // Use composite Simpson's rule for ∫₀ˣ exp(t²-x²) dt
+    let n = 200;
+    let h = x / n as f64;
+    let x2 = x * x;
+
+    let mut sum = 0.0;
+    for i in 0..=n {
+        let t = i as f64 * h;
+        let w = if i == 0 || i == n {
+            1.0
+        } else if i % 2 == 1 {
+            4.0
+        } else {
+            2.0
+        };
+        sum += w * (t * t - x2).exp();
+    }
+    sum * h / 3.0
+}
+
+/// Dawson function asymptotic expansion for large arguments.
+fn dawsn_asymptotic(x: f64) -> f64 {
+    let x2 = x * x;
+    let inv_2x2 = 0.5 / x2;
+    let mut term = 1.0;
+    let mut sum = 1.0;
+
+    for n in 1..20 {
+        term *= (2 * n - 1) as f64 * inv_2x2;
+        sum += term;
+        if term.abs() < 1e-16 * sum.abs() {
+            break;
+        }
+    }
+
+    sum / (2.0 * x)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Struve functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Struve function H_v(x) for integer order v.
+///
+/// H_v(x) = (x/2)^{v+1} Σ_{k=0}^∞ (-1)^k (x/2)^{2k} / (Γ(k+3/2) Γ(k+v+3/2))
+///
+/// Appears in electromagnetics and acoustics (e.g., radiation impedance).
+pub fn struve(v: f64, x: f64) -> f64 {
+    if x.is_nan() || v.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 0.0;
+    }
+    if x.abs() > 30.0 && v.abs() < x.abs() / 2.0 {
+        return struve_asymptotic(v, x);
+    }
+    struve_series(v, x)
+}
+
+/// Modified Struve function L_v(x).
+///
+/// L_v(x) = -i * exp(-i*v*π/2) * H_v(ix) (for real x, this is real)
+/// L_v(x) = (x/2)^{v+1} Σ_{k=0}^∞ (x/2)^{2k} / (Γ(k+3/2) Γ(k+v+3/2))
+///
+/// Note: same as Struve series but without the (-1)^k alternating sign.
+pub fn modstruve(v: f64, x: f64) -> f64 {
+    if x.is_nan() || v.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 0.0;
+    }
+    modstruve_series(v, x)
+}
+
+/// Struve function via power series.
+fn struve_series(v: f64, x: f64) -> f64 {
+    let half_x = x / 2.0;
+    let half_x_sq = half_x * half_x;
+
+    // H_v(x) = (x/2)^{v+1} Σ (-1)^k (x/2)^{2k} / (Γ(k+3/2) Γ(k+v+3/2))
+    let mut sum = 0.0;
+    let mut term = 1.0 / (gamma_fn(1.5) * gamma_fn(v + 1.5));
+
+    for k in 0..100 {
+        sum += term;
+        let kf = k as f64;
+        term *= -half_x_sq / ((kf + 1.5) * (kf + v + 1.5));
+        if term.abs() < 1e-16 * sum.abs().max(1e-300) {
+            break;
+        }
+    }
+
+    sum * half_x.powf(v + 1.0)
+}
+
+/// Modified Struve function via power series.
+fn modstruve_series(v: f64, x: f64) -> f64 {
+    let half_x = x / 2.0;
+    let half_x_sq = half_x * half_x;
+
+    let mut sum = 0.0;
+    let mut term = 1.0 / (gamma_fn(1.5) * gamma_fn(v + 1.5));
+
+    for k in 0..100 {
+        sum += term;
+        let kf = k as f64;
+        term *= half_x_sq / ((kf + 1.5) * (kf + v + 1.5));
+        if term.abs() < 1e-16 * sum.abs().max(1e-300) {
+            break;
+        }
+    }
+
+    sum * half_x.powf(v + 1.0)
+}
+
+/// Struve asymptotic expansion for large x.
+fn struve_asymptotic(v: f64, x: f64) -> f64 {
+    // H_v(x) ≈ Y_v(x) + (1/π) Σ Γ(k+1/2) / (Γ(v+1/2-k) (x/2)^{2k-v+1})
+    // For large x, approximate using the leading asymptotic behavior
+    // H_0(x) ≈ Y_0(x) + 2/(πx) for large x
+    let pix = std::f64::consts::PI * x;
+
+    // Simple asymptotic: good for v=0
+    if (v - 0.0).abs() < 0.5 {
+        // H_0(x) ≈ Y_0(x) + 2/(πx)
+        // Y_0(x) ≈ sqrt(2/(πx)) sin(x - π/4)
+        let y0_approx = (2.0 / pix).sqrt() * (x - std::f64::consts::FRAC_PI_4).sin();
+        return y0_approx + 2.0 / pix;
+    }
+
+    // Fall back to series for other orders
+    struve_series(v, x)
+}
+
+/// Simple gamma function for use in Struve computation.
+fn gamma_fn(x: f64) -> f64 {
+    // Use Lanczos approximation
+    if x <= 0.0 && x.fract().abs() < 1e-14 {
+        return f64::INFINITY;
+    }
+    if (x - 0.5).abs() < 1e-14 {
+        return std::f64::consts::PI.sqrt();
+    }
+    if (x - 1.5).abs() < 1e-14 {
+        return std::f64::consts::PI.sqrt() / 2.0;
+    }
+    if (x - 2.5).abs() < 1e-14 {
+        return 3.0 * std::f64::consts::PI.sqrt() / 4.0;
+    }
+
+    const COEFFS: [f64; 9] = [
+        0.999_999_999_999_809_9,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_572e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
+    const G: f64 = 7.0;
+
+    if x < 0.5 {
+        return PI / ((PI * x).sin() * gamma_fn(1.0 - x));
+    }
+
+    let z = x - 1.0;
+    let mut s = COEFFS[0];
+    for (idx, coeff) in COEFFS.iter().enumerate().skip(1) {
+        s += coeff / (z + idx as f64);
+    }
+    let t = z + G + 0.5;
+    (2.0 * PI).sqrt() * t.powf(z + 0.5) * (-t).exp() * s
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -472,5 +832,114 @@ mod tests {
             RuntimeMode::Strict,
         ));
         assert_close(result, 0.0, 1e-15, "rel_entr(0,1) = 0");
+    }
+
+    // ── Fresnel integrals ────────────────────────────────────────────
+
+    #[test]
+    fn fresnel_at_zero() {
+        let (s, c) = fresnel(0.0);
+        assert_close(s, 0.0, 1e-15, "S(0) = 0");
+        assert_close(c, 0.0, 1e-15, "C(0) = 0");
+    }
+
+    #[test]
+    fn fresnel_symmetry() {
+        // S(-x) = -S(x), C(-x) = -C(x)
+        for x in [0.5, 1.0, 2.0, 5.0] {
+            let (sp, cp) = fresnel(x);
+            let (sn, cn) = fresnel(-x);
+            assert_close(sn, -sp, 1e-10, &format!("S(-{x})"));
+            assert_close(cn, -cp, 1e-10, &format!("C(-{x})"));
+        }
+    }
+
+    #[test]
+    fn fresnel_large_x_converge_to_half() {
+        // S(∞) = C(∞) = 0.5
+        let (s, c) = fresnel(50.0);
+        assert!((s - 0.5).abs() < 0.05, "S(50) ≈ 0.5, got {s}");
+        assert!((c - 0.5).abs() < 0.05, "C(50) ≈ 0.5, got {c}");
+    }
+
+    #[test]
+    fn fresnel_known_value() {
+        // S(1) ≈ 0.4382591473903548, C(1) ≈ 0.7798934003768228
+        let (s, c) = fresnel(1.0);
+        assert_close(s, 0.438_259_147, 1e-5, "S(1)");
+        assert_close(c, 0.779_893_400, 1e-5, "C(1)");
+    }
+
+    // ── Dawson function ──────────────────────────────────────────────
+
+    #[test]
+    fn dawsn_at_zero() {
+        assert_close(dawsn(0.0), 0.0, 1e-15, "D(0) = 0");
+    }
+
+    #[test]
+    fn dawsn_odd_symmetry() {
+        // D(-x) = -D(x)
+        for x in [0.5, 1.0, 2.0, 5.0] {
+            assert_close(dawsn(-x), -dawsn(x), 1e-10, &format!("D(-{x})"));
+        }
+    }
+
+    #[test]
+    fn dawsn_maximum() {
+        // Maximum of D(x) occurs near x ≈ 0.9241388730
+        // D(0.9241) ≈ 0.5410442246
+        let d = dawsn(0.924_138_873);
+        assert!(d > 0.54 && d < 0.55, "D at maximum ≈ 0.541, got {d}");
+    }
+
+    #[test]
+    fn dawsn_large_x() {
+        // D(x) → 1/(2x) for large x
+        let x = 10.0;
+        let d = dawsn(x);
+        assert_close(d, 0.5 / x, 1e-3, "D(10) ≈ 1/20");
+    }
+
+    #[test]
+    fn dawsn_nan_passthrough() {
+        assert!(dawsn(f64::NAN).is_nan());
+    }
+
+    // ── Struve functions ─────────────────────────────────────────────
+
+    #[test]
+    fn struve_h0_at_zero() {
+        assert_close(struve(0.0, 0.0), 0.0, 1e-15, "H_0(0) = 0");
+    }
+
+    #[test]
+    fn struve_h1_at_zero() {
+        assert_close(struve(1.0, 0.0), 0.0, 1e-15, "H_1(0) = 0");
+    }
+
+    #[test]
+    fn struve_h0_known_value() {
+        // H_0(1) ≈ 0.5683... (from tables)
+        let h = struve(0.0, 1.0);
+        assert!(h > 0.56 && h < 0.58, "H_0(1) ≈ 0.568, got {h}");
+    }
+
+    #[test]
+    fn struve_nan_passthrough() {
+        assert!(struve(0.0, f64::NAN).is_nan());
+        assert!(struve(f64::NAN, 1.0).is_nan());
+    }
+
+    #[test]
+    fn modstruve_at_zero() {
+        assert_close(modstruve(0.0, 0.0), 0.0, 1e-15, "L_0(0) = 0");
+    }
+
+    #[test]
+    fn modstruve_positive() {
+        // L_0(x) > 0 for x > 0 (no alternating signs)
+        let l = modstruve(0.0, 1.0);
+        assert!(l > 0.0, "L_0(1) should be positive, got {l}");
     }
 }

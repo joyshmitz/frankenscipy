@@ -393,7 +393,7 @@ impl ContinuousDistribution for Exponential {
         if x < 0.0 {
             0.0
         } else {
-            1.0 - (-self.lambda * x).exp()
+            -(-self.lambda * x).exp_m1()
         }
     }
 
@@ -649,7 +649,7 @@ impl ContinuousDistribution for Weibull {
         if x <= 0.0 {
             return 0.0;
         }
-        1.0 - (-(x / self.scale).powf(self.c)).exp()
+        -(-(x / self.scale).powf(self.c)).exp_m1()
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -825,7 +825,7 @@ impl ContinuousDistribution for Rayleigh {
         if x < 0.0 {
             0.0
         } else {
-            1.0 - (-(x * x) / (2.0 * self.scale * self.scale)).exp()
+            -(-(x * x) / (2.0 * self.scale * self.scale)).exp_m1()
         }
     }
 

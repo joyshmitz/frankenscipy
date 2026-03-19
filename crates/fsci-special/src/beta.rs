@@ -4,8 +4,8 @@ use fsci_runtime::RuntimeMode;
 
 use crate::gamma;
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, not_yet_implemented, record_special_trace,
+    not_yet_implemented, record_special_trace, DispatchPlan, DispatchStep, KernelRegime,
+    SpecialError, SpecialErrorKind, SpecialResult, SpecialTensor,
 };
 
 pub const BETA_DISPATCH_PLAN: &[DispatchPlan] = &[

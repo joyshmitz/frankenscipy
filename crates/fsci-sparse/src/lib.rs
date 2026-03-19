@@ -11,8 +11,8 @@ pub use formats::{
 pub use linalg::{
     EigsOptions, EigsResult, IluOptions, IterativeSolveOptions, IterativeSolveResult, LuOptions,
     PermutationOrdering, SolveOptions, SolveResult, SparseBackend, SparseIluFactorization,
-    SparseLuFactorization, cg, eigsh, gmres, pcg, spilu, splu, splu_solve, spsolve,
-    spsolve_triangular,
+    SparseLuFactorization, SvdsResult, bicgstab, cg, eigs, eigsh, gmres, lsmr, lsqr, minres, pcg,
+    spilu, splu, splu_solve, spsolve, spsolve_triangular, svds,
 };
 pub use ops::{
     ConversionLogEntry, FormatConvertible, add_coo, add_csc, add_csr, coo_to_csr_with_mode,

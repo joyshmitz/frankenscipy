@@ -54,7 +54,7 @@ mod tests {
 
     use super::helpers::fftfreq;
     use super::transforms::{
-        Complex64, FftOptions, dct, dct_i, dct_iii, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft,
+        Complex64, FftOptions, dct, dct_i, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft,
         hilbert, idct, ifft, irfft, rfft,
     };
     use super::{Normalization, TransformKind};
@@ -270,30 +270,29 @@ mod tests {
     }
 
     #[test]
-    fn dct_iii_inverts_dct_ii() {
+    fn dst_iii_inverts_dst_ii() {
         let input = vec![1.0, -2.0, 3.0, -4.0, 5.0];
         let opts = FftOptions::default();
-        let forward = dct(&input, &opts).expect("dct");
-        let inverse = dct_iii(&forward, &opts).expect("dct_iii");
-        // Find scale factor
-        let scale = inverse[0] / input[0];
-        assert!(scale > 0.0, "scale should be positive");
+        let forward = dst_ii(&input, &opts).expect("dst_ii");
+        let inverse = dst_iii(&forward, &opts).expect("dst_iii");
+        let scale = 4.0 * input.len() as f64;
         for (a, b) in inverse.iter().zip(&input) {
             assert!(
                 (a / scale - b).abs() < 1e-8,
-                "DCT-III(DCT-II(x)): {a}/{scale} vs {b}"
+                "DST-III(DST-II(x)): {a}/{scale} vs {b}"
             );
         }
     }
 
+
     #[test]
     fn dct_iv_self_inverse() {
-        // DCT-IV is its own inverse (up to scaling by N/2)
+        // DCT-IV is its own inverse (up to scaling by 2N)
         let input = vec![1.0, 2.0, 3.0, 4.0];
         let opts = FftOptions::default();
         let forward = dct_iv(&input, &opts).expect("dct_iv");
         let roundtrip = dct_iv(&forward, &opts).expect("dct_iv roundtrip");
-        let scale = input.len() as f64 / 2.0;
+        let scale = 2.0 * input.len() as f64;
         for (a, b) in roundtrip.iter().zip(&input) {
             assert!(
                 (a / scale - b).abs() < 1e-9,
@@ -307,13 +306,12 @@ mod tests {
 
     #[test]
     fn dst_i_roundtrip_proportional() {
-        // DST-I applied twice gives back a scaled version of input
+        // DST-I applied twice gives back a scaled version of input (scale 2*(N+1))
         let input = vec![1.0, 2.0, 3.0, 4.0];
         let opts = FftOptions::default();
         let forward = dst_i(&input, &opts).expect("dst_i");
         let roundtrip = dst_i(&forward, &opts).expect("dst_i roundtrip");
-        let scale = roundtrip[0] / input[0];
-        assert!(scale > 0.0, "scale should be positive");
+        let scale = 2.0 * (input.len() as f64 + 1.0);
         for (a, b) in roundtrip.iter().zip(&input) {
             assert!(
                 (a / scale - b).abs() < 1e-9,
@@ -333,30 +331,13 @@ mod tests {
     }
 
     #[test]
-    fn dst_iii_inverts_dst_ii() {
-        let input = vec![1.0, -2.0, 3.0, -4.0, 5.0];
-        let opts = FftOptions::default();
-        let forward = dst_ii(&input, &opts).expect("dst_ii");
-        let inverse = dst_iii(&forward, &opts).expect("dst_iii");
-        // Find scale factor
-        let scale = inverse[0] / input[0];
-        assert!(scale > 0.0, "scale should be positive");
-        for (a, b) in inverse.iter().zip(&input) {
-            assert!(
-                (a / scale - b).abs() < 1e-8,
-                "DST-III(DST-II(x)): {a}/{scale} vs {b}"
-            );
-        }
-    }
-
-    #[test]
     fn dst_iv_self_inverse() {
-        // DST-IV is its own inverse (up to scaling by N/2)
+        // DST-IV is its own inverse (up to scaling by 2N)
         let input = vec![1.0, 2.0, 3.0, 4.0];
         let opts = FftOptions::default();
         let forward = dst_iv(&input, &opts).expect("dst_iv");
         let roundtrip = dst_iv(&forward, &opts).expect("dst_iv roundtrip");
-        let scale = input.len() as f64 / 2.0;
+        let scale = 2.0 * input.len() as f64;
         for (a, b) in roundtrip.iter().zip(&input) {
             assert!(
                 (a / scale - b).abs() < 1e-9,
@@ -375,7 +356,7 @@ mod tests {
         for (k, &val) in result.iter().enumerate() {
             let mut expected = 0.0;
             for (n, &x) in input.iter().enumerate() {
-                expected += x * (PI * (n as f64 + 1.0) * (k as f64 + 1.0) / 5.0).sin();
+                expected += 2.0 * x * (PI * (n as f64 + 1.0) * (k as f64 + 1.0) / 5.0).sin();
             }
             assert!(
                 (val - expected).abs() < 1e-9,

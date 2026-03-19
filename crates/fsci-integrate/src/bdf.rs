@@ -8,6 +8,7 @@
 use crate::solver::{OdeSolverState, StepFailure, StepOutcome};
 use crate::validation::ToleranceValue;
 use fsci_runtime::RuntimeMode;
+use nalgebra::{DMatrix, Dyn, LU};
 
 /// BDF coefficients (gamma) for orders 1 through 5.
 const BDF_GAMMA: [f64; 5] = [1.0, 2.0 / 3.0, 6.0 / 11.0, 12.0 / 25.0, 60.0 / 137.0];
@@ -45,10 +46,22 @@ pub struct BdfSolver {
     max_order: usize,
     state: OdeSolverState,
     nfev: usize,
+    #[allow(dead_code)]
+    njev: usize,
+    #[allow(dead_code)]
+    nlu: usize,
     mode: RuntimeMode,
 
     // Nordsieck-style array: d[k] for k = 0..order
     d: Vec<Vec<f64>>,
+
+    // Newton state (placeholder fields)
+    #[allow(dead_code)]
+    pub(crate) current_jac: Option<DMatrix<f64>>,
+    #[allow(dead_code)]
+    pub(crate) lu: Option<LU<f64, Dyn, Dyn>>,
+    #[allow(dead_code)]
+    pub(crate) h_abs_last: Option<f64>,
 
     // Previous step values for interpolation
     t_old: Option<f64>,
@@ -115,8 +128,13 @@ impl BdfSolver {
             max_order: config.max_order.min(5),
             state: OdeSolverState::Running,
             nfev: 1,
+            njev: 0,
+            nlu: 0,
             mode: config.mode,
             d,
+            current_jac: None,
+            lu: None,
+            h_abs_last: None,
             t_old: None,
             y_old: None,
         })
@@ -188,7 +206,6 @@ impl BdfSolver {
         for _ in 0..max_retries {
             let t_new = self.t + self.h;
 
-            // Check if we've reached or passed t_bound
             let past_bound = if self.direction > 0.0 {
                 t_new >= self.t_bound
             } else {
@@ -201,7 +218,7 @@ impl BdfSolver {
                 (t_new, self.h)
             };
 
-            // Predict: explicit Euler from current state
+            // Predict: explicit Euler
             let y_predict: Vec<f64> = self
                 .y
                 .iter()
@@ -209,7 +226,7 @@ impl BdfSolver {
                 .map(|(yi, fi)| yi + h_used * fi)
                 .collect();
 
-            // Corrector via functional iteration (implicit BDF solve)
+            // Corrector via functional iteration
             let mut y_new = y_predict.clone();
             let mut converged = false;
 
@@ -220,7 +237,6 @@ impl BdfSolver {
                 let mut max_delta = 0.0_f64;
                 let mut y_next = vec![0.0; self.n];
                 for j in 0..self.n {
-                    // BDF corrector: y_{n+1} = y_n + gamma*h*f(t_{n+1}, y_{n+1})
                     y_next[j] = self.y[j] + gamma * h_used * f_new[j];
                     let delta = (y_next[j] - y_new[j]).abs();
                     let scale = self.atol[j] + self.rtol * y_new[j].abs().max(1e-10);
@@ -235,7 +251,6 @@ impl BdfSolver {
             }
 
             if !converged {
-                // Reduce step size and retry
                 self.h *= 0.5;
                 if self.h.abs() < 1e-14 {
                     self.state = OdeSolverState::Failed;
@@ -254,7 +269,6 @@ impl BdfSolver {
             error_norm = (error_norm / self.n as f64).sqrt();
 
             if error_norm > 1.0 {
-                // Step rejected
                 let factor = (0.5_f64).max(0.9 / error_norm.powf(1.0 / (self.order as f64 + 1.0)));
                 self.h *= factor;
                 if self.h.abs() < 1e-14 {
@@ -271,7 +285,6 @@ impl BdfSolver {
             let f_new = fun(t_new, &y_new);
             self.nfev += 1;
 
-            // Update Nordsieck array
             self.d[0] = y_new.clone();
             for (d1, &fj) in self.d[1].iter_mut().zip(f_new.iter()) {
                 *d1 = h_used * fj;
@@ -280,14 +293,8 @@ impl BdfSolver {
             self.t = t_new;
             self.y = y_new;
 
-            // Adjust step size (conservative: max 1.5x growth)
-            let factor =
-                (1.5_f64).min(0.9 / error_norm.max(1e-10).powf(1.0 / (self.order as f64 + 1.0)));
+            let factor = (1.5_f64).min(0.9 / error_norm.max(1e-10).powf(1.0 / (self.order as f64 + 1.0)));
             self.h = (factor * h_used.abs()).min(self.max_step) * self.direction;
-
-            // Order control — currently fixed at order 1 (backward Euler).
-            // Variable-order BDF (2-5) requires proper Nordsieck array management
-            // which will be implemented in a follow-up.
 
             let state = if past_bound {
                 self.state = OdeSolverState::Finished;
@@ -367,7 +374,6 @@ mod tests {
 
     #[test]
     fn bdf_exponential_decay() {
-        // dy/dt = -y, y(0) = 1 => y(t) = exp(-t)
         let mut fun = |_t: f64, y: &[f64]| vec![-y[0]];
         let config = BdfSolverConfig {
             t0: 0.0,
@@ -396,7 +402,6 @@ mod tests {
 
     #[test]
     fn bdf_linear_ode() {
-        // dy/dt = 1, y(0) = 0 => y(t) = t
         let mut fun = |_t: f64, _y: &[f64]| vec![1.0];
         let config = BdfSolverConfig {
             t0: 0.0,
@@ -424,7 +429,6 @@ mod tests {
 
     #[test]
     fn bdf_stiff_ode() {
-        // dy/dt = -1000*(y - cos(t)), y(0) = 1
         let mut fun = |t: f64, y: &[f64]| vec![-1000.0 * (y[0] - t.cos())];
         let config = BdfSolverConfig {
             t0: 0.0,
@@ -453,7 +457,6 @@ mod tests {
 
     #[test]
     fn bdf_2d_system() {
-        // dy0/dt = -y0, dy1/dt = -2*y1
         let mut fun = |_t: f64, y: &[f64]| vec![-y[0], -2.0 * y[1]];
         let config = BdfSolverConfig {
             t0: 0.0,

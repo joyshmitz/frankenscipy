@@ -675,14 +675,22 @@ pub fn dct_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    let four_n = 4.0 * n as f64;
+    // DCT-IV via FFT of length 8N (simplified approach)
+    // X[k] = 2 * sum_{n=0}^{N-1} x[n] * cos(pi*(2n+1)*(2k+1)/(4N))
+    let m = 8 * n;
+    let mut extended = vec![(0.0, 0.0); m];
+    for i in 0..n {
+        extended[2 * i + 1] = (input[i], 0.0);
+        extended[m - 2 * i - 1] = (input[i], 0.0);
+    }
+
+    let backend = resolve_backend(options.backend);
+    let spectrum = backend.transform_1d_unscaled(&extended, false);
+
     let mut result = Vec::with_capacity(n);
     for k in 0..n {
-        let mut sum = 0.0;
-        for (i, &x) in input.iter().enumerate() {
-            sum += x * (PI * (2.0 * i as f64 + 1.0) * (2.0 * k as f64 + 1.0) / four_n).cos();
-        }
-        result.push(sum);
+        // Real part of bin 2k+1
+        result.push(spectrum[2 * k + 1].0);
     }
     Ok(result)
 }
@@ -710,7 +718,7 @@ pub fn dst_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> 
 
     let mut result = Vec::with_capacity(n);
     for val in spectrum.iter().take(n + 1).skip(1) {
-        result.push(-val.1 * 0.5); // -Im part, scaled by 0.5 to match original behavior
+        result.push(-val.1); // -Im part corresponds to 2 * sum
     }
     Ok(result)
 }
@@ -725,14 +733,23 @@ pub fn dst_ii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    let two_n = 2.0 * n as f64;
+    // DST-II via FFT of length 4N.
+    // X[k] = sum_{n=0}^{N-1} x[n] * sin(pi*(2n+1)*(k+1)/(2N))
+    let m = 4 * n;
+    let mut extended = vec![(0.0, 0.0); m];
+    for i in 0..n {
+        extended[2 * i + 1] = (input[i], 0.0);
+        extended[m - 2 * i - 1] = (-input[i], 0.0);
+    }
+
+    let backend = resolve_backend(options.backend);
+    let spectrum = backend.transform_1d_unscaled(&extended, false);
+
     let mut result = Vec::with_capacity(n);
     for k in 0..n {
-        let mut sum = 0.0;
-        for (i, &x) in input.iter().enumerate() {
-            sum += x * (PI * (2.0 * i as f64 + 1.0) * (k as f64 + 1.0) / two_n).sin();
-        }
-        result.push(sum);
+        // Imaginary part of bin k+1 corresponds to -2 * sum_{n=0}^{N-1} x[n] * sin(...)
+        // Scale by -1.0 to get 2 * sum.
+        result.push(-spectrum[k + 1].1);
     }
     Ok(result)
 }
@@ -748,15 +765,23 @@ pub fn dst_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    let two_n = 2.0 * n as f64;
+    // DST-III via FFT of length 4N (inverse of DST-II)
+    let m = 4 * n;
+    let mut extended = vec![(0.0, 0.0); m];
+    for k in 0..n {
+        extended[k + 1] = (0.0, -input[k]);
+        extended[m - k - 1] = (0.0, input[k]);
+    }
+
+    let backend = resolve_backend(options.backend);
+    let time_domain = backend.transform_1d_unscaled(&extended, true);
+
     let mut result = Vec::with_capacity(n);
+    let scale = 1.0 / m as f64;
     for i in 0..n {
-        let sign_last = if i % 2 == 0 { 1.0 } else { -1.0 };
-        let mut sum = sign_last * input[n - 1] / 2.0;
-        for (k, &xk) in input.iter().enumerate().take(n - 1) {
-            sum += xk * (PI * (k as f64 + 1.0) * (2.0 * i as f64 + 1.0) / two_n).sin();
-        }
-        result.push(sum);
+        // Raw sum is 4 * sum_{k=0}^{N-1} y[k] * sin(pi*(k+1)*(2i+1)/(2N))
+        // Scale by 0.5 to get SciPy's 2 * sum.
+        result.push(time_domain[2 * i + 1].0 * scale * m as f64 * 0.5);
     }
     Ok(result)
 }
@@ -771,14 +796,21 @@ pub fn dst_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    let four_n = 4.0 * n as f64;
+    // DST-IV via FFT of length 8N
+    let m = 8 * n;
+    let mut extended = vec![(0.0, 0.0); m];
+    for i in 0..n {
+        extended[2 * i + 1] = (input[i], 0.0);
+        extended[m - 2 * i - 1] = (-input[i], 0.0);
+    }
+
+    let backend = resolve_backend(options.backend);
+    let spectrum = backend.transform_1d_unscaled(&extended, false);
+
     let mut result = Vec::with_capacity(n);
     for k in 0..n {
-        let mut sum = 0.0;
-        for (i, &x) in input.iter().enumerate() {
-            sum += x * (PI * (2.0 * i as f64 + 1.0) * (2.0 * k as f64 + 1.0) / four_n).sin();
-        }
-        result.push(sum);
+        // -Imaginary part of bin 2k+1
+        result.push(-spectrum[2 * k + 1].1);
     }
     Ok(result)
 }

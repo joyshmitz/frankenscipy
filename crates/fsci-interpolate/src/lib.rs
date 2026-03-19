@@ -1406,14 +1406,16 @@ impl NearestNDInterpolator {
 pub enum GriddataMethod {
     /// Nearest-neighbor interpolation (always works, discontinuous).
     Nearest,
+    /// Piecewise linear interpolation on Delaunay triangulation (C0 continuous).
+    Linear,
 }
 
 /// Interpolate unstructured N-D data onto specified points.
 ///
 /// Matches `scipy.interpolate.griddata(points, values, xi, method)`.
 ///
-/// Currently supports method='nearest'. Linear and cubic methods require
-/// Delaunay triangulation (see LinearNDInterpolator bead).
+/// Supports method='nearest' and method='linear'. Linear uses Delaunay
+/// triangulation with barycentric interpolation.
 pub fn griddata(
     points: &[Vec<f64>],
     values: &[f64],
@@ -1423,6 +1425,10 @@ pub fn griddata(
     match method {
         GriddataMethod::Nearest => {
             let interp = NearestNDInterpolator::new(points, values)?;
+            interp.eval_many(xi)
+        }
+        GriddataMethod::Linear => {
+            let interp = LinearNDInterpolator::new(points, values)?;
             interp.eval_many(xi)
         }
     }
@@ -1689,6 +1695,266 @@ pub fn interpn(
 ) -> Result<Vec<f64>, InterpError> {
     let interp = RegularGridInterpolator::new(points, values, method, bounds_error, fill_value)?;
     interp.eval_many(xi)
+}
+
+// ── Delaunay triangulation (2D) ──────────────────────────────────────
+
+/// 2D Delaunay triangulation using the Bowyer-Watson algorithm.
+///
+/// Given a set of 2D points, computes a triangulation where no point
+/// lies inside the circumcircle of any triangle.
+#[derive(Debug, Clone)]
+pub struct Delaunay2D {
+    /// Input points as (x, y) pairs.
+    pub points: Vec<(f64, f64)>,
+    /// Triangle simplices: each triple (i, j, k) indexes into `points`.
+    pub simplices: Vec<(usize, usize, usize)>,
+}
+
+impl Delaunay2D {
+    /// Construct a Delaunay triangulation from 2D points.
+    pub fn new(points: &[(f64, f64)]) -> Result<Self, InterpError> {
+        if points.len() < 3 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 3,
+                actual: points.len(),
+            });
+        }
+
+        let n = points.len();
+
+        // Find bounding box
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for &(x, y) in points {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+        let dx = (max_x - min_x).max(1e-10);
+        let dy = (max_y - min_y).max(1e-10);
+        let margin = 10.0;
+
+        // Super-triangle vertices (indices n, n+1, n+2)
+        let st0 = (min_x - margin * dx, min_y - margin * dy);
+        let st1 = (max_x + margin * dx, min_y - margin * dy);
+        let st2 = ((min_x + max_x) / 2.0, max_y + margin * dy);
+
+        // All points including super-triangle
+        let mut all_points: Vec<(f64, f64)> = points.to_vec();
+        all_points.push(st0);
+        all_points.push(st1);
+        all_points.push(st2);
+
+        // Start with super-triangle
+        let mut triangles: Vec<(usize, usize, usize)> = vec![(n, n + 1, n + 2)];
+
+        // Insert points one by one (Bowyer-Watson)
+        for p_idx in 0..n {
+            let px = all_points[p_idx].0;
+            let py = all_points[p_idx].1;
+
+            // Find triangles whose circumcircle contains the new point
+            let mut bad_triangles = Vec::new();
+            for (t_idx, &(a, b, c)) in triangles.iter().enumerate() {
+                if in_circumcircle(
+                    all_points[a],
+                    all_points[b],
+                    all_points[c],
+                    (px, py),
+                ) {
+                    bad_triangles.push(t_idx);
+                }
+            }
+
+            // Find boundary edges of the cavity (polygonal hole)
+            let mut boundary_edges: Vec<(usize, usize)> = Vec::new();
+            for &t_idx in &bad_triangles {
+                let (a, b, c) = triangles[t_idx];
+                for &(e0, e1) in &[(a, b), (b, c), (c, a)] {
+                    // Edge is on boundary if it's not shared by another bad triangle
+                    let shared = bad_triangles.iter().any(|&other_idx| {
+                        other_idx != t_idx && {
+                            let (oa, ob, oc) = triangles[other_idx];
+                            triangle_has_edge(oa, ob, oc, e0, e1)
+                        }
+                    });
+                    if !shared {
+                        boundary_edges.push((e0, e1));
+                    }
+                }
+            }
+
+            // Remove bad triangles (in reverse order to maintain indices)
+            let mut to_remove: Vec<usize> = bad_triangles;
+            to_remove.sort_unstable();
+            for &idx in to_remove.iter().rev() {
+                triangles.swap_remove(idx);
+            }
+
+            // Create new triangles connecting boundary edges to new point
+            for &(e0, e1) in &boundary_edges {
+                triangles.push((p_idx, e0, e1));
+            }
+        }
+
+        // Remove triangles that reference super-triangle vertices
+        let simplices: Vec<(usize, usize, usize)> = triangles
+            .into_iter()
+            .filter(|&(a, b, c)| a < n && b < n && c < n)
+            .collect();
+
+        Ok(Self {
+            points: points.to_vec(),
+            simplices,
+        })
+    }
+
+    /// Find the triangle containing a query point, if any.
+    /// Returns the simplex index and barycentric coordinates (λ1, λ2, λ3).
+    pub fn find_simplex(&self, query: (f64, f64)) -> Option<(usize, f64, f64, f64)> {
+        for (idx, &(a, b, c)) in self.simplices.iter().enumerate() {
+            let (l1, l2, l3) =
+                barycentric(self.points[a], self.points[b], self.points[c], query);
+            if l1 >= -1e-10 && l2 >= -1e-10 && l3 >= -1e-10 {
+                return Some((idx, l1, l2, l3));
+            }
+        }
+        None
+    }
+}
+
+/// Check if point d lies inside the circumcircle of triangle (a, b, c).
+fn in_circumcircle(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
+    // Uses the determinant test:
+    // | ax-dx  ay-dy  (ax-dx)²+(ay-dy)² |
+    // | bx-dx  by-dy  (bx-dx)²+(by-dy)² | > 0  means d inside circumcircle
+    // | cx-dx  cy-dy  (cx-dx)²+(cy-dy)² |
+    let ax = a.0 - d.0;
+    let ay = a.1 - d.1;
+    let bx = b.0 - d.0;
+    let by = b.1 - d.1;
+    let cx = c.0 - d.0;
+    let cy = c.1 - d.1;
+
+    let det = ax * (by * (cx * cx + cy * cy) - cy * (bx * bx + by * by))
+        - ay * (bx * (cx * cx + cy * cy) - cx * (bx * bx + by * by))
+        + (ax * ax + ay * ay) * (bx * cy - by * cx);
+
+    // Ensure consistent orientation (counter-clockwise test)
+    let orient = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+    if orient > 0.0 { det > 0.0 } else { det < 0.0 }
+}
+
+/// Check if a triangle (a, b, c) contains the edge (e0, e1).
+fn triangle_has_edge(a: usize, b: usize, c: usize, e0: usize, e1: usize) -> bool {
+    let edges = [(a, b), (b, c), (c, a)];
+    edges
+        .iter()
+        .any(|&(x, y)| (x == e0 && y == e1) || (x == e1 && y == e0))
+}
+
+/// Compute barycentric coordinates of point p in triangle (a, b, c).
+fn barycentric(
+    a: (f64, f64),
+    b: (f64, f64),
+    c: (f64, f64),
+    p: (f64, f64),
+) -> (f64, f64, f64) {
+    let v0x = b.0 - a.0;
+    let v0y = b.1 - a.1;
+    let v1x = c.0 - a.0;
+    let v1y = c.1 - a.1;
+    let v2x = p.0 - a.0;
+    let v2y = p.1 - a.1;
+
+    let d00 = v0x * v0x + v0y * v0y;
+    let d01 = v0x * v1x + v0y * v1y;
+    let d11 = v1x * v1x + v1y * v1y;
+    let d20 = v2x * v0x + v2y * v0y;
+    let d21 = v2x * v1x + v2y * v1y;
+
+    let denom = d00 * d11 - d01 * d01;
+    if denom.abs() < 1e-30 {
+        return (f64::NAN, f64::NAN, f64::NAN);
+    }
+
+    let l2 = (d11 * d20 - d01 * d21) / denom;
+    let l3 = (d00 * d21 - d01 * d20) / denom;
+    let l1 = 1.0 - l2 - l3;
+
+    (l1, l2, l3)
+}
+
+// ── LinearNDInterpolator ─────────────────────────────────────────────
+
+/// Piecewise linear interpolation on a Delaunay triangulation.
+///
+/// For each query point, finds the containing Delaunay triangle and interpolates
+/// using barycentric coordinates. Points outside the convex hull return NaN.
+///
+/// Matches `scipy.interpolate.LinearNDInterpolator(points, values)`.
+#[derive(Debug, Clone)]
+pub struct LinearNDInterpolator {
+    delaunay: Delaunay2D,
+    values: Vec<f64>,
+}
+
+impl LinearNDInterpolator {
+    /// Create a new LinearNDInterpolator from 2D points and values.
+    pub fn new(points: &[Vec<f64>], values: &[f64]) -> Result<Self, InterpError> {
+        if points.is_empty() {
+            return Err(InterpError::TooFewPoints {
+                minimum: 3,
+                actual: 0,
+            });
+        }
+        let dim = points[0].len();
+        if dim != 2 {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("LinearNDInterpolator currently supports 2D only, got {dim}D"),
+            });
+        }
+        if points.len() != values.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: points.len(),
+                y_len: values.len(),
+            });
+        }
+
+        let pts: Vec<(f64, f64)> = points.iter().map(|p| (p[0], p[1])).collect();
+        let delaunay = Delaunay2D::new(&pts)?;
+
+        Ok(Self {
+            delaunay,
+            values: values.to_vec(),
+        })
+    }
+
+    /// Evaluate at a single query point.
+    pub fn eval(&self, query: &[f64]) -> Result<f64, InterpError> {
+        if query.len() != 2 {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("query must be 2D, got {}D", query.len()),
+            });
+        }
+
+        match self.delaunay.find_simplex((query[0], query[1])) {
+            Some((idx, l1, l2, l3)) => {
+                let (a, b, c) = self.delaunay.simplices[idx];
+                Ok(l1 * self.values[a] + l2 * self.values[b] + l3 * self.values[c])
+            }
+            None => Ok(f64::NAN), // Outside convex hull
+        }
+    }
+
+    /// Evaluate at multiple query points.
+    pub fn eval_many(&self, queries: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+        queries.iter().map(|q| self.eval(q)).collect()
+    }
 }
 
 #[cfg(test)]
@@ -2767,5 +3033,134 @@ mod tests {
 
         let err = interp.eval(&[0.5]).expect_err("wrong dim");
         assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    // ── Delaunay2D tests ──────────────────────────────────────────────
+
+    #[test]
+    fn delaunay_simple_triangle() {
+        let points = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)];
+        let d = Delaunay2D::new(&points).expect("delaunay");
+        assert_eq!(d.simplices.len(), 1, "3 points → 1 triangle");
+    }
+
+    #[test]
+    fn delaunay_square() {
+        let points = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let d = Delaunay2D::new(&points).expect("delaunay");
+        assert_eq!(d.simplices.len(), 2, "4 points (square) → 2 triangles");
+    }
+
+    #[test]
+    fn delaunay_find_simplex_inside() {
+        let points = [(0.0, 0.0), (2.0, 0.0), (1.0, 2.0)];
+        let d = Delaunay2D::new(&points).expect("delaunay");
+        let result = d.find_simplex((0.5, 0.5));
+        assert!(result.is_some(), "point inside triangle should be found");
+    }
+
+    #[test]
+    fn delaunay_find_simplex_outside() {
+        let points = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)];
+        let d = Delaunay2D::new(&points).expect("delaunay");
+        let result = d.find_simplex((2.0, 2.0));
+        assert!(result.is_none(), "point outside should return None");
+    }
+
+    #[test]
+    fn delaunay_too_few_points() {
+        let points = [(0.0, 0.0), (1.0, 0.0)];
+        let err = Delaunay2D::new(&points).expect_err("too few");
+        assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    // ── LinearNDInterpolator tests ───────────────────────────────────
+
+    #[test]
+    fn linear_nd_planar_exact() {
+        // z = 2x + 3y + 1 should be reproduced exactly by linear interpolation
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+        ];
+        let values: Vec<f64> = points.iter().map(|p| 2.0 * p[0] + 3.0 * p[1] + 1.0).collect();
+        let interp = LinearNDInterpolator::new(&points, &values).expect("linear nd");
+
+        let query = vec![0.5, 0.5];
+        let result = interp.eval(&query).expect("eval");
+        let expected = 2.0 * 0.5 + 3.0 * 0.5 + 1.0; // = 3.5
+        assert!(
+            (result - expected).abs() < 1e-10,
+            "planar: got {result}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn linear_nd_outside_convex_hull_is_nan() {
+        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0, 2.0];
+        let interp = LinearNDInterpolator::new(&points, &values).expect("linear nd");
+
+        let result = interp.eval(&[2.0, 2.0]).expect("eval outside");
+        assert!(result.is_nan(), "outside convex hull should be NaN");
+    }
+
+    #[test]
+    fn linear_nd_at_data_points() {
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+        ];
+        let values = vec![10.0, 20.0, 30.0, 40.0];
+        let interp = LinearNDInterpolator::new(&points, &values).expect("linear nd");
+
+        for (pt, &expected) in points.iter().zip(values.iter()) {
+            let result = interp.eval(pt).expect("eval");
+            assert!(
+                (result - expected).abs() < 1e-8,
+                "at data point {:?}: got {result}, expected {expected}",
+                pt
+            );
+        }
+    }
+
+    #[test]
+    fn linear_nd_griddata_linear() {
+        // Test the griddata(method="linear") integration
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+        ];
+        let values = vec![0.0, 1.0, 1.0, 2.0]; // z = x + y
+        let xi = vec![vec![0.5, 0.5]];
+        let result = griddata(&points, &values, &xi, GriddataMethod::Linear).expect("griddata");
+        assert!(
+            (result[0] - 1.0).abs() < 1e-8,
+            "griddata linear at (0.5,0.5): got {}, expected 1.0",
+            result[0]
+        );
+    }
+
+    #[test]
+    fn linear_nd_eval_many() {
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+        ];
+        let values = vec![0.0, 1.0, 2.0];
+        let interp = LinearNDInterpolator::new(&points, &values).expect("linear nd");
+
+        let queries = vec![vec![0.25, 0.25], vec![0.5, 0.0]];
+        let results = interp.eval_many(&queries).expect("eval_many");
+        assert_eq!(results.len(), 2);
+        assert!(!results[0].is_nan(), "inside point should not be NaN");
+        assert!(!results[1].is_nan(), "on edge should not be NaN");
     }
 }

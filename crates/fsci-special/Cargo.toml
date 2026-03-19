@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+fsci-linalg = { workspace = true }
 fsci-runtime = { workspace = true }
 
 [dev-dependencies]
