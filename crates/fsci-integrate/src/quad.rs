@@ -589,6 +589,7 @@ pub fn cumulative_trapezoid_uniform(
 /// - x ∈ [a, b]
 /// - y ∈ [gfun(x), hfun(x)]
 /// - z ∈ [qfun(x,y), rfun(x,y)]
+#[allow(clippy::too_many_arguments)]
 pub fn tplquad<F, GL, GH, QL, QH>(
     f: F,
     a: f64,
@@ -837,6 +838,7 @@ pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateVal
     }
 
     // If odd number of points, handle last interval with trapezoidal rule
+    #[allow(clippy::manual_is_multiple_of)]
     if n % 2 == 0 {
         let last = n - 1;
         cumsum += 0.5 * (x[last] - x[last - 1]) * (y[last - 1] + y[last]);

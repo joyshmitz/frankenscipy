@@ -302,6 +302,15 @@ pub struct HessenbergResult {
     pub h: Vec<Vec<f64>>,
 }
 
+/// Result of polar decomposition: A = U * P.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PolarResult {
+    /// Unitary (or semi-unitary) factor U.
+    pub u: Vec<Vec<f64>>,
+    /// Positive semi-definite factor P.
+    pub p: Vec<Vec<f64>>,
+}
+
 /// Options for decomposition operations.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DecompOptions {
@@ -1001,6 +1010,7 @@ pub fn solve_with_casp(
 
     // Record evidence regardless of outcome
     let fallback_active = !matches!(action, SolverAction::DirectLU);
+    let backward_error = result.as_ref().ok().and_then(|r| r.backward_error);
     portfolio.record_evidence(SolverEvidenceEntry {
         component: "solver_portfolio",
         matrix_shape: (rows, cols),
@@ -1010,6 +1020,7 @@ pub fn solve_with_casp(
         expected_losses: expected_losses.to_vec(),
         chosen_expected_loss: chosen_loss,
         fallback_active,
+        backward_error,
     });
 
     result
@@ -2501,9 +2512,10 @@ pub fn null_space(
         }
         // Return identity for n-dimensional null space.
         let mut ident = vec![vec![0.0; n]; n];
-        for i in 0..n {
-            ident[i][i] = 1.0;
+        for (i, row) in ident.iter_mut().enumerate().take(n) {
+            row[i] = 1.0;
         }
+
         return Ok(ident);
     }
 
@@ -2547,9 +2559,9 @@ pub fn null_space(
         // These extra vectors span the complement and must be computed separately.
         if null_dim > u_cols - rank {
             // Use Gram-Schmidt to find remaining orthonormal vectors.
-            let existing = u_cols; // number of columns in U(A^T)
+            let _existing = u_cols; // number of columns in U(A^T)
             let needed = null_dim - (u_cols - rank);
-            let mut extra = gram_schmidt_complement(u_of_at, n, needed);
+            let extra = gram_schmidt_complement(u_of_at, n, needed);
             for j in 0..needed {
                 for i in 0..n {
                     result[i][(u_cols - rank) + j] = extra[j][i];
@@ -2580,7 +2592,7 @@ fn gram_schmidt_complement(
     needed: usize,
 ) -> Vec<Vec<f64>> {
     let k = basis.ncols();
-    let mut result = Vec::with_capacity(needed);
+    let mut result: Vec<Vec<f64>> = Vec::with_capacity(needed);
 
     // Try standard basis vectors e_i and orthogonalize against existing basis
     // and previously found complement vectors.
@@ -2683,46 +2695,37 @@ pub fn subspace_angles(
 pub fn polar(
     a: &[Vec<f64>],
     options: DecompOptions,
-) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), LinalgError> {
+) -> Result<PolarResult, LinalgError> {
     let (m, n) = matrix_shape(a)?;
     validate_finite_matrix(a, options.mode, options.check_finite)?;
 
     if m == 0 || n == 0 {
-        return Ok((vec![], vec![]));
+        return Ok(PolarResult {
+            u: vec![vec![]; m],
+            p: vec![vec![]; n],
+        });
     }
 
     let svd_result = svd(a, options)?;
-    let u_svd = &svd_result.u; // m × k
+    let u_svd = dmatrix_from_rows(&svd_result.u)?;
+    let vt = dmatrix_from_rows(&svd_result.vt)?;
     let s = &svd_result.s;
-    let vt = &svd_result.vt; // k × n
     let k = s.len();
 
     // U = U_svd * Vt (m × n).
-    let mut u_polar = vec![vec![0.0; n]; m];
-    for i in 0..m {
-        for j in 0..n {
-            let mut sum = 0.0;
-            for l in 0..k {
-                sum += u_svd[i][l] * vt[l][j];
-            }
-            u_polar[i][j] = sum;
-        }
-    }
+    let u_polar = u_svd * vt.clone();
 
-    // P = V * S * Vt (n × n).
-    // V = Vt^T, so V[i][j] = Vt[j][i].
-    let mut p = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            let mut sum = 0.0;
-            for l in 0..k {
-                sum += vt[l][i] * s[l] * vt[l][j];
-            }
-            p[i][j] = sum;
-        }
+    // P = V * S * Vt = Vt^T * diag(S) * Vt
+    let mut sigma = DMatrix::zeros(k, k);
+    for (i, &val) in s.iter().enumerate() {
+        sigma[(i, i)] = val;
     }
+    let p_polar = vt.transpose() * sigma * vt;
 
-    Ok((u_polar, p))
+    Ok(PolarResult {
+        u: rows_from_dmatrix(&u_polar),
+        p: rows_from_dmatrix(&p_polar),
+    })
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2773,9 +2776,9 @@ pub fn circulant(c: &[f64]) -> Vec<Vec<f64>> {
 /// is a classic example of an ill-conditioned matrix.
 pub fn hilbert(n: usize) -> Vec<Vec<f64>> {
     let mut result = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            result[i][j] = 1.0 / (i + j + 1) as f64;
+    for (i, row) in result.iter_mut().enumerate().take(n) {
+        for (j, entry) in row.iter_mut().enumerate().take(n) {
+            *entry = 1.0 / (i + j + 1) as f64;
         }
     }
     result
@@ -2789,14 +2792,14 @@ pub fn hilbert(n: usize) -> Vec<Vec<f64>> {
 /// formula, avoiding numerical inversion of the ill-conditioned Hilbert matrix.
 pub fn invhilbert(n: usize) -> Vec<Vec<f64>> {
     let mut result = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            let mut entry = if (i + j) % 2 == 0 { 1.0 } else { -1.0 };
-            entry *= ((i + j + 1) as f64)
+    for (i, row) in result.iter_mut().enumerate().take(n) {
+        for (j, entry) in row.iter_mut().enumerate().take(n) {
+            let mut val = if (i + j) % 2 == 0 { 1.0 } else { -1.0 };
+            val *= ((i + j + 1) as f64)
                 * binom(n + i, n - j - 1)
                 * binom(n + j, n - i - 1)
                 * binom(i + j, i).powi(2);
-            result[i][j] = entry;
+            *entry = val;
         }
     }
     result
@@ -4360,7 +4363,7 @@ mod tests {
         assert_eq!(result.len(), 2); // n=2 rows
         assert_eq!(result[0].len(), 1); // 1 null-space vector
         // Verify A * ns ≈ 0
-        let ns = vec![result[0][0], result[1][0]];
+        let ns = [result[0][0], result[1][0]];
         let ax0 = a[0][0] * ns[0] + a[0][1] * ns[1];
         let ax1 = a[1][0] * ns[0] + a[1][1] * ns[1];
         assert!(ax0.abs() < 1e-10, "A*ns[0] = {ax0}");
@@ -4398,7 +4401,9 @@ mod tests {
     fn polar_identity() {
         // Polar decomposition of identity: U = I, P = I
         let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
-        let (u, p) = polar(&a, DecompOptions::default()).unwrap();
+        let result = polar(&a, DecompOptions::default()).unwrap();
+        let u = result.u;
+        let p = result.p;
         for i in 0..2 {
             for j in 0..2 {
                 let expected = if i == j { 1.0 } else { 0.0 };
@@ -4420,7 +4425,9 @@ mod tests {
     fn polar_reconstruction() {
         // A = U * P, verify the reconstruction
         let a = vec![vec![3.0, 1.0], vec![1.0, 4.0]];
-        let (u, p) = polar(&a, DecompOptions::default()).unwrap();
+        let result = polar(&a, DecompOptions::default()).unwrap();
+        let u = result.u;
+        let p = result.p;
 
         // Reconstruct: U * P
         for i in 0..2 {
@@ -4441,7 +4448,8 @@ mod tests {
     #[test]
     fn polar_p_is_symmetric_positive() {
         let a = vec![vec![2.0, 1.0], vec![-1.0, 3.0]];
-        let (_u, p) = polar(&a, DecompOptions::default()).unwrap();
+        let result = polar(&a, DecompOptions::default()).unwrap();
+        let p = result.p;
         // P should be symmetric
         assert!(
             (p[0][1] - p[1][0]).abs() < 1e-10,
@@ -4504,11 +4512,11 @@ mod tests {
         let h = hilbert(n);
         let ih = invhilbert(n);
         // Product should be approximately identity.
-        for i in 0..n {
-            for j in 0..n {
+        for (i, ih_row) in ih.iter().enumerate().take(n) {
+            for (j, _) in h.iter().enumerate().take(n) {
                 let mut sum = 0.0;
-                for k in 0..n {
-                    sum += ih[i][k] * h[k][j];
+                for (k, &ih_val) in ih_row.iter().enumerate().take(n) {
+                    sum += ih_val * h[k][j];
                 }
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert!(
@@ -4527,8 +4535,8 @@ mod tests {
         for i in 0..4 {
             for j in 0..4 {
                 let mut dot = 0.0;
-                for k in 0..4 {
-                    dot += h[k][i] * h[k][j];
+                for row in h.iter().take(4) {
+                    dot += row[i] * row[j];
                 }
                 let expected = if i == j { 4.0 } else { 0.0 };
                 assert!(

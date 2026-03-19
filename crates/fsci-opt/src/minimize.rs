@@ -1424,14 +1424,18 @@ where
     F: Fn(&[f64]) -> f64,
 {
     let mut gradient = vec![0.0; x.len()];
+    let mut x_perturbed = x.to_vec();
     for (idx, component) in x.iter().enumerate() {
         let step = gradient_eps * (1.0 + component.abs());
-        let mut x_plus = x.to_vec();
-        let mut x_minus = x.to_vec();
-        x_plus[idx] += step;
-        x_minus[idx] -= step;
-        let f_plus = objective.eval(&x_plus)?;
-        let f_minus = objective.eval(&x_minus)?;
+
+        let original = x_perturbed[idx];
+        x_perturbed[idx] = original + step;
+        let f_plus = objective.eval(&x_perturbed)?;
+
+        x_perturbed[idx] = original - step;
+        let f_minus = objective.eval(&x_perturbed)?;
+
+        x_perturbed[idx] = original; // restore
         gradient[idx] = (f_plus - f_minus) / (2.0 * step);
     }
     Ok(gradient)

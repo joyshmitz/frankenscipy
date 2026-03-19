@@ -709,8 +709,8 @@ pub fn dst_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> 
     let spectrum = backend.transform_1d_unscaled(&extended, false);
 
     let mut result = Vec::with_capacity(n);
-    for k in 1..=n {
-        result.push(-spectrum[k].1 * 0.5); // -Im part, scaled by 0.5 to match original behavior
+    for val in spectrum.iter().take(n + 1).skip(1) {
+        result.push(-val.1 * 0.5); // -Im part, scaled by 0.5 to match original behavior
     }
     Ok(result)
 }
@@ -1264,6 +1264,7 @@ pub fn next_fast_len(target: usize) -> usize {
 }
 
 /// Check if n is composed only of factors 2, 3, 5 (Hamming numbers / regular numbers).
+#[allow(clippy::manual_is_multiple_of)]
 fn is_fast_len(mut n: usize) -> bool {
     while n % 2 == 0 {
         n /= 2;

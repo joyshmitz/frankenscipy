@@ -667,15 +667,23 @@ fn gamma_core(x: f64) -> f64 {
         };
     }
     if is_negative_integer_pole(x) {
-        // SciPy returns INF for negative integer poles
-        return f64::INFINITY;
+        // SciPy returns NaN for negative integer poles
+        return f64::NAN;
     }
 
     if x < 0.5 {
         // Reflection formula: Γ(x) = π / (sin(πx) * Γ(1-x))
         let sin_pi_x = (PI * x).sin();
         if sin_pi_x == 0.0 {
-            return f64::INFINITY;
+            // This matches x = 0 handled above, or integer x < 0
+            if x == 0.0 {
+                return if x.is_sign_negative() {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                };
+            }
+            return f64::NAN;
         }
         return PI / (sin_pi_x * gamma_core(1.0 - x));
     }

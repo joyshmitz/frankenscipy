@@ -596,6 +596,7 @@ fn check_evidence_jsonl_serialization() -> ParityGate {
             expected_losses: losses.to_vec(),
             chosen_expected_loss: chosen_loss,
             fallback_active: false,
+            backward_error: None,
         });
     }
 

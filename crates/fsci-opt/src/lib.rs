@@ -54,10 +54,13 @@ where
     }
 
     let mut gradient = Vec::with_capacity(xk.len());
+    let mut x_perturbed = xk.to_vec();
     for index in 0..xk.len() {
-        let mut x_plus = xk.to_vec();
-        x_plus[index] += epsilon;
-        let f_plus = f(&x_plus);
+        let original = x_perturbed[index];
+        x_perturbed[index] += epsilon;
+        let f_plus = f(&x_perturbed);
+        x_perturbed[index] = original; // restore
+
         if !f_plus.is_finite() {
             return Err(OptError::NonFiniteInput {
                 detail: format!("objective returned non-finite value at perturbed index {index}"),
@@ -431,8 +434,8 @@ pub fn linprog(
     for i in 0..total_constraints {
         if b_std[i] < 0.0 {
             b_std[i] = -b_std[i];
-            for j in 0..total_vars {
-                a_std[i][j] = -a_std[i][j];
+            for val in &mut a_std[i] {
+                *val = -*val;
             }
         }
     }
@@ -459,8 +462,12 @@ pub fn linprog(
         tableau[obj_row][total_vars + i] = 1.0; // coefficient for artificial i
     }
     for i in 0..total_constraints {
-        for j in 0..phase1_vars + 1 {
-            tableau[obj_row][j] -= tableau[i][j];
+        let (tableau_i, tableau_obj) = {
+            let (left, right) = tableau.split_at_mut(obj_row);
+            (&left[i], &mut right[0])
+        };
+        for (obj_val, &i_val) in tableau_obj.iter_mut().zip(tableau_i.iter()).take(phase1_vars + 1) {
+            *obj_val -= i_val;
         }
     }
 
@@ -515,9 +522,7 @@ pub fn linprog(
     }
 
     // Set Phase II objective row.
-    for j in 0..total_vars {
-        tableau2[obj_row][j] = c_std[j];
-    }
+    tableau2[obj_row][..total_vars].copy_from_slice(&c_std[..total_vars]);
     tableau2[obj_row][total_vars] = 0.0;
 
     // Eliminate basic variables from objective row.
@@ -525,8 +530,12 @@ pub fn linprog(
         if bj < total_vars {
             let ratio = tableau2[obj_row][bj];
             if ratio.abs() > 1e-15 {
-                for j in 0..total_vars + 1 {
-                    tableau2[obj_row][j] -= ratio * tableau2[row][j];
+                let (row_vals, obj_vals) = {
+                    let (left, right) = tableau2.split_at_mut(obj_row);
+                    (&left[row], &mut right[0])
+                };
+                for (obj_val, &row_val) in obj_vals.iter_mut().zip(row_vals.iter()).take(total_vars + 1) {
+                    *obj_val -= ratio * row_val;
                 }
             }
         }
@@ -612,9 +621,9 @@ fn simplex_iterate(
         // Find entering variable: most negative reduced cost (Bland's rule: smallest index).
         let mut pivot_col = None;
         let mut min_cost = -1e-10;
-        for j in 0..n_vars {
-            if tableau[obj_row][j] < min_cost {
-                min_cost = tableau[obj_row][j];
+        for (j, &cost) in tableau[obj_row].iter().enumerate().take(n_vars) {
+            if cost < min_cost {
+                min_cost = cost;
                 pivot_col = Some(j);
             }
         }
@@ -627,9 +636,9 @@ fn simplex_iterate(
         // Minimum ratio test: find leaving variable.
         let mut pivot_row = None;
         let mut min_ratio = f64::INFINITY;
-        for i in 0..m {
-            if tableau[i][pivot_col] > 1e-12 {
-                let ratio = tableau[i][rhs_col] / tableau[i][pivot_col];
+        for (i, row) in tableau.iter().enumerate().take(m) {
+            if row[pivot_col] > 1e-12 {
+                let ratio = row[rhs_col] / row[pivot_col];
                 if ratio < min_ratio {
                     min_ratio = ratio;
                     pivot_row = Some(i);
@@ -644,23 +653,31 @@ fn simplex_iterate(
 
         // Pivot.
         let pivot_val = tableau[pivot_row][pivot_col];
-        for j in 0..=rhs_col {
-            tableau[pivot_row][j] /= pivot_val;
+        for val in &mut tableau[pivot_row][..=rhs_col] {
+            *val /= pivot_val;
         }
 
         for i in 0..=obj_row {
             if i != pivot_row {
                 let factor = tableau[i][pivot_col];
                 if factor.abs() > 1e-15 {
-                    for j in 0..=rhs_col {
-                        tableau[i][j] -= factor * tableau[pivot_row][j];
+                    let (p_row, t_row) = if i < pivot_row {
+                        let (left, right) = tableau.split_at_mut(pivot_row);
+                        (&right[0], &mut left[i])
+                    } else {
+                        let (left, right) = tableau.split_at_mut(i);
+                        (&left[pivot_row], &mut right[0])
+                    };
+
+                    for (t_val, &p_val) in t_row.iter_mut().zip(p_row.iter()).take(rhs_col + 1) {
+                        *t_val -= factor * p_val;
                     }
                 }
             }
         }
-
         basis[pivot_row] = pivot_col;
     }
+
 
     Err(1) // Iteration limit
 }

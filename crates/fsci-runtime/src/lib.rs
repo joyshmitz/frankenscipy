@@ -204,13 +204,9 @@ impl SolverPortfolio {
                 best_loss = loss;
                 best_idx = idx;
             } else if (loss - best_loss).abs() <= 1e-12 {
-                // Tie-break toward safer action for general solvers
-                // (higher index = safer: LU < QR < SVD)
-                if idx < 3 && idx > best_idx {
-                    best_idx = idx;
-                }
-                // Fast paths (idx >= 3) always win over LU/QR if loss is same
-                else if idx >= 3 && best_idx < 3 {
+                // Tie-break toward safer action for general solvers (higher index = safer: LU < QR < SVD)
+                // or toward fast paths if they have equal expected loss.
+                if (idx < 3 && idx > best_idx) || (idx >= 3 && best_idx < 3) {
                     best_idx = idx;
                 }
             }
@@ -376,6 +372,12 @@ impl ConformalCalibrator {
     /// Set the violation threshold for nonconformity scores.
     pub fn set_violation_threshold(&mut self, threshold: f64) {
         self.violation_threshold = threshold.max(0.0);
+        // Recompute violations after threshold change
+        self.coverage_violations = self
+            .scores
+            .iter()
+            .filter(|&&s| s > self.violation_threshold)
+            .count();
     }
 }
 
@@ -642,6 +644,7 @@ mod tests {
                 expected_losses: vec![1.0, 3.0, 15.0, 0.0, 0.0],
                 chosen_expected_loss: 1.0,
                 fallback_active: false,
+                backward_error: None,
             });
         }
         assert_eq!(portfolio.evidence_len(), 3);
@@ -659,6 +662,7 @@ mod tests {
             expected_losses: vec![5.0, 1.0, 10.0, 0.0, 0.0],
             chosen_expected_loss: 1.0,
             fallback_active: false,
+            backward_error: None,
         });
         let jsonl = portfolio.serialize_jsonl();
         assert!(!jsonl.is_empty());

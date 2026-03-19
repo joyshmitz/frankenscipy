@@ -1274,6 +1274,7 @@ fn make_solver_evidence(action: SolverAction) -> SolverEvidenceEntry {
         expected_losses: vec![1.0, 3.0, 15.0, 0.0, 0.0],
         chosen_expected_loss: 1.0,
         fallback_active: false,
+        backward_error: None,
     }
 }
 

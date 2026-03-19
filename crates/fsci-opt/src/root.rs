@@ -567,6 +567,7 @@ where
 
     let mut x: Vec<f64> = x0.to_vec();
     let mut nfev = 0usize;
+    let mut jac = vec![vec![0.0; n]; n];
 
     for iteration in 0..maxiter {
         let fx = func(&x);
@@ -586,12 +587,12 @@ where
         }
 
         // Compute Jacobian via finite differences.
-        let mut jac = vec![vec![0.0; n]; n];
         for j in 0..n {
-            let mut x_plus = x.clone();
             let h = eps * (1.0 + x[j].abs());
-            x_plus[j] += h;
-            let fx_plus = func(&x_plus);
+            let original = x[j];
+            x[j] += h;
+            let fx_plus = func(&x);
+            x[j] = original; // restore
             nfev += 1;
             for i in 0..n {
                 jac[i][j] = (fx_plus[i] - fx[i]) / h;
@@ -599,7 +600,10 @@ where
         }
 
         // Solve J * dx = -F(x) using Gaussian elimination with partial pivoting.
-        let neg_fx: Vec<f64> = fx.iter().map(|v| -v).collect();
+        let mut neg_fx = fx.clone();
+        for val in &mut neg_fx {
+            *val = -*val;
+        }
         let dx = match solve_dense(&jac, &neg_fx) {
             Some(d) => d,
             None => {
@@ -694,10 +698,13 @@ fn solve_dense(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
 
         let pivot = aug[col][col];
         for row in (col + 1)..n {
-            let factor = aug[row][col] / pivot;
-            for j in col..=n {
-                let val = aug[col][j]; // avoid borrow conflict
-                aug[row][j] -= factor * val;
+            let (aug_col, aug_row) = {
+                let (left, right) = aug.split_at_mut(row);
+                (&left[col], &mut right[0])
+            };
+            let factor = aug_row[col] / pivot;
+            for (aug_row_j, &aug_col_j) in aug_row.iter_mut().zip(aug_col.iter()).take(n + 1).skip(col) {
+                *aug_row_j -= factor * aug_col_j;
             }
         }
     }
