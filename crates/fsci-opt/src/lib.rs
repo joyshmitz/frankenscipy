@@ -343,8 +343,18 @@ pub fn linprog(
             .collect()
     };
 
-    // Check bounds feasibility.
+    // Check bounds feasibility and finiteness of lower bounds.
+    // Our simplex implementation requires finite lower bounds (shifting to standard form).
+    // Free variables (lo = -inf) would need variable splitting which is not yet implemented.
     for (i, &(lo, hi)) in var_bounds.iter().enumerate() {
+        if !lo.is_finite() {
+            return Err(OptError::InvalidBounds {
+                detail: format!(
+                    "variable {i}: lower bound must be finite (got {lo}); \
+                     free variables are not yet supported"
+                ),
+            });
+        }
         if lo > hi {
             return Err(OptError::InvalidBounds {
                 detail: format!("variable {i}: lower bound {lo} > upper bound {hi}"),
@@ -360,10 +370,11 @@ pub fn linprog(
     let m_eq = a_eq.len();
 
     // Count finite upper bounds that need slack variables.
+    // Only include when both bounds are finite (otherwise bound_diff would be infinite).
     let ub_slacks: Vec<(usize, f64)> = var_bounds
         .iter()
         .enumerate()
-        .filter(|(_, b)| b.1.is_finite())
+        .filter(|(_, b)| b.0.is_finite() && b.1.is_finite())
         .map(|(i, b)| (i, b.1 - b.0))
         .collect();
     let n_ub_slack = ub_slacks.len();

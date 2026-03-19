@@ -793,10 +793,11 @@ pub fn romb(y: &[f64], dx: f64) -> Result<f64, IntegrateValidationError> {
 
 /// Cumulative integral using composite Simpson's rule.
 ///
-/// Matches `scipy.integrate.cumulative_simpson(y, x)`.
+/// Inspired by `scipy.integrate.cumulative_simpson(y, x)`.
 ///
-/// Returns a vector of length n-2 (for odd-length input) or n-1
-/// representing the cumulative integral at each sample point.
+/// Returns cumulative integral values computed over pairs of intervals.
+/// For n points, returns `(n-1)/2` values (one per pair of intervals),
+/// plus one more if n is even (last interval uses trapezoidal rule).
 pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateValidationError> {
     if y.len() != x.len() {
         return Err(IntegrateValidationError::QuadInvalidBounds {

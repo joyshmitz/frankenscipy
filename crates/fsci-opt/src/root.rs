@@ -614,10 +614,11 @@ where
             }
         };
 
-        // Line search: try full step, then halve.
+        // Line search: try full step, then halve until improvement found.
         let mut alpha = 1.0;
         let mut best_x = x.clone();
         let best_norm = norm_fx;
+        let mut improved = false;
         for _ in 0..10 {
             let trial: Vec<f64> = x
                 .iter()
@@ -629,9 +630,20 @@ where
             let trial_norm: f64 = ftrial.iter().map(|v| v * v).sum::<f64>().sqrt();
             if trial_norm < best_norm {
                 best_x = trial;
+                improved = true;
                 break;
             }
             alpha *= 0.5;
+        }
+
+        if !improved {
+            // No step improved; take the smallest step anyway to avoid stalling.
+            let trial: Vec<f64> = x
+                .iter()
+                .zip(&dx)
+                .map(|(&xi, &di)| xi + alpha * di)
+                .collect();
+            best_x = trial;
         }
 
         x = best_x;

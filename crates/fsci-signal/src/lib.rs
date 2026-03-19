@@ -727,9 +727,13 @@ pub fn cheby2(
     let mut poles_im = Vec::with_capacity(order);
     for k in 0..order {
         let theta = std::f64::consts::PI * (2.0 * k as f64 + 1.0) / (2.0 * order as f64);
-        let zero_im = 1.0 / theta.cos();
-        zeros_re.push(0.0);
-        zeros_im.push(zero_im);
+        let cos_theta = theta.cos();
+        // Odd-order Chebyshev-II prototypes have one zero at infinity.
+        // Preserve that degree difference instead of materializing a huge finite zero.
+        if cos_theta.abs() > 1.0e-12 {
+            zeros_re.push(0.0);
+            zeros_im.push(1.0 / cos_theta);
+        }
 
         let proto_re = -mu.sinh() * theta.sin();
         let proto_im = mu.cosh() * theta.cos();
@@ -2643,13 +2647,18 @@ pub fn chirp(
         }
         ChirpMethod::Logarithmic => {
             let ratio = f1 / f0;
-            let log_ratio = ratio.ln();
-            t.iter()
-                .map(|&ti| {
-                    let phase = two_pi * f0 * t1 / log_ratio * (ratio.powf(ti / t1) - 1.0);
-                    phase.cos()
-                })
-                .collect()
+            if (ratio - 1.0).abs() < f64::EPSILON {
+                // f0 == f1: constant frequency, just a cosine
+                t.iter().map(|&ti| (two_pi * f0 * ti).cos()).collect()
+            } else {
+                let log_ratio = ratio.ln();
+                t.iter()
+                    .map(|&ti| {
+                        let phase = two_pi * f0 * t1 / log_ratio * (ratio.powf(ti / t1) - 1.0);
+                        phase.cos()
+                    })
+                    .collect()
+            }
         }
     };
     Ok(result)
@@ -3855,6 +3864,21 @@ mod tests {
         assert!(
             result.h_mag[stop_idx] < result.h_mag[pass_idx] * 0.2,
             "Chebyshev-II should strongly attenuate the stopband"
+        );
+    }
+
+    #[test]
+    fn cheby2_odd_order_remains_finite_and_attenuates_stopband() {
+        let coeffs = cheby2(3, 20.0, &[0.3], FilterType::Lowpass).expect("cheby2 odd");
+        assert!(coeffs.b.iter().all(|value| value.is_finite()));
+        assert!(coeffs.a.iter().all(|value| value.is_finite()));
+
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        let pass_idx = nearest_freq_index(&result.w, 0.1 * std::f64::consts::PI);
+        let stop_idx = nearest_freq_index(&result.w, 0.8 * std::f64::consts::PI);
+        assert!(
+            result.h_mag[stop_idx] < result.h_mag[pass_idx] * 0.3,
+            "odd-order Chebyshev-II should still attenuate the stopband"
         );
     }
 
