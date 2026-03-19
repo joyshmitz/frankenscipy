@@ -61,24 +61,23 @@ pub fn savgol_coeffs(
     let half = (window_length / 2) as i64;
     let order = polyorder + 1;
 
-    // Build Vandermonde-like matrix: A[i, j] = x_i^j where x_i = i - half
-    // Then solve A^T A c = A^T e_deriv for the coefficients
-    // where e_deriv selects the deriv-th polynomial coefficient
-
-    // Construct the normal equations: (A^T A) and (A^T b)
-    // A is window_length × order, b = e_{deriv} (unit vector)
-    let mut ata = vec![vec![0.0; order]; order];
-
+    // Build the normal equations matrix A^T A.
+    // (A^T A)_{r,c} = sum_{i=-half}^{half} i^{r+c}
+    // We only need to compute sums of powers up to 2 * polyorder.
+    let mut sums = vec![0.0; 2 * polyorder + 1];
     for i in 0..window_length {
         let xi = (i as i64 - half) as f64;
-        let mut powers = vec![1.0; order];
-        for j in 1..order {
-            powers[j] = powers[j - 1] * xi;
+        let mut p = 1.0;
+        for s in 0..=2 * polyorder {
+            sums[s] += p;
+            p *= xi;
         }
-        for r in 0..order {
-            for c in 0..order {
-                ata[r][c] += powers[r] * powers[c];
-            }
+    }
+
+    let mut ata = vec![vec![0.0; order]; order];
+    for r in 0..order {
+        for c in 0..order {
+            ata[r][c] = sums[r + c];
         }
     }
 
