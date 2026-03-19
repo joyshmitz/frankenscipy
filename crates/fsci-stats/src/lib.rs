@@ -2867,12 +2867,19 @@ pub fn ks_2samp(data1: &[f64], data2: &[f64]) -> GoodnessOfFitResult {
     let mut j = 0;
     let mut d_stat = 0.0_f64;
 
-    while i < n1 && j < n2 {
-        if sorted1[i] <= sorted2[j] {
+    while i < n1 || j < n2 {
+        let val1 = if i < n1 { sorted1[i] } else { f64::INFINITY };
+        let val2 = if j < n2 { sorted2[j] } else { f64::INFINITY };
+        let current_val = val1.min(val2);
+
+        // Advance both indices past all elements <= current_val to handle ties
+        while i < n1 && sorted1[i] <= current_val {
             i += 1;
-        } else {
+        }
+        while j < n2 && sorted2[j] <= current_val {
             j += 1;
         }
+
         let diff = (i as f64 / n1f - j as f64 / n2f).abs();
         d_stat = d_stat.max(diff);
     }

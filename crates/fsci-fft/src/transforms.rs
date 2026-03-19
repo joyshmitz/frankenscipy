@@ -117,13 +117,14 @@ fn cooley_tukey_radix2_inplace(data: &mut [Complex64], inverse: bool) {
 
     // Butterfly stages
     let sign = if inverse { 1.0 } else { -1.0 };
+    let mut twiddles = Vec::with_capacity(n / 2);
     let mut stage_len = 2;
     while stage_len <= n {
         let half = stage_len / 2;
         let angle_step = sign * 2.0 * PI / stage_len as f64;
 
         // Precompute twiddle factors for this stage
-        let mut twiddles = Vec::with_capacity(half);
+        twiddles.clear();
         for k in 0..half {
             let angle = angle_step * k as f64;
             twiddles.push((angle.cos(), angle.sin()));
@@ -279,7 +280,7 @@ impl Default for FftOptions {
             mode: RuntimeMode::Strict,
             normalization: Normalization::Backward,
             workers: WorkerPolicy::Auto,
-            backend: BackendKind::NaiveDft,
+            backend: BackendKind::default(),
             check_finite: false,
             overwrite_input: false,
         }
@@ -765,23 +766,15 @@ pub fn dst_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    // DST-III via FFT of length 4N (inverse of DST-II)
-    let m = 4 * n;
-    let mut extended = vec![(0.0, 0.0); m];
-    for k in 0..n {
-        extended[k + 1] = (0.0, -input[k]);
-        extended[m - k - 1] = (0.0, input[k]);
-    }
-
-    let backend = resolve_backend(options.backend);
-    let time_domain = backend.transform_1d_unscaled(&extended, true);
-
+    let two_n = 2.0 * n as f64;
     let mut result = Vec::with_capacity(n);
-    let scale = 1.0 / m as f64;
     for i in 0..n {
-        // Raw sum is 4 * sum_{k=0}^{N-1} y[k] * sin(pi*(k+1)*(2i+1)/(2N))
-        // Scale by 0.5 to get SciPy's 2 * sum.
-        result.push(time_domain[2 * i + 1].0 * scale * m as f64 * 0.5);
+        let sign_last = if i % 2 == 0 { 1.0 } else { -1.0 };
+        let mut sum = sign_last * input[n - 1];
+        for (k, &xk) in input.iter().enumerate().take(n - 1) {
+            sum += 2.0 * xk * (PI * (k as f64 + 1.0) * (2.0 * i as f64 + 1.0) / two_n).sin();
+        }
+        result.push(sum);
     }
     Ok(result)
 }

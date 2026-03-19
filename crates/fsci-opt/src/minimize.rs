@@ -937,8 +937,11 @@ where
             }
             match objective.eval(&candidate_x) {
                 Ok(fv) => {
-                    if fv <= f + c1 * alpha * directional_deriv {
-                        let s = sub_vectors(&candidate_x, &x);
+                    let actual_step = sub_vectors(&candidate_x, &x);
+                    let actual_directional_deriv = dot(&grad, &actual_step);
+                    
+                    if fv <= f + c1 * actual_directional_deriv {
+                        let s = actual_step;
                         x = candidate_x;
                         f = fv;
                         let new_grad =

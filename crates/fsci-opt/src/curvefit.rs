@@ -379,12 +379,14 @@ where
     let n = x.len();
     let m = r0.len();
     let mut jac = vec![vec![0.0; n]; m];
+    let mut x_perturbed = x.to_vec();
 
     for j in 0..n {
         let step = eps * (1.0 + x[j].abs());
-        let mut x_plus = x.to_vec();
-        x_plus[j] += step;
-        let r_plus = residuals(&x_plus);
+        let original = x_perturbed[j];
+        x_perturbed[j] += step;
+        let r_plus = residuals(&x_perturbed);
+        x_perturbed[j] = original; // restore
         for i in 0..m {
             jac[i][j] = (r_plus[i] - r0[i]) / step;
         }
@@ -460,13 +462,10 @@ fn solve_damped_normal_equations(jtj: &[Vec<f64>], jtr: &[f64], mu: f64, n: usiz
     }
 }
 
-/// Cholesky decomposition and solve: A * x = b.
-/// Returns None if A is not positive definite.
-fn cholesky_solve(a: &[Vec<f64>], b: &[f64], n: usize) -> Option<Vec<f64>> {
-    // Compute lower-triangular L such that A = L * L^T
+/// Compute Cholesky decomposition A = L * L^T.
+fn cholesky_decompose(a: &[Vec<f64>], n: usize) -> Option<Vec<Vec<f64>>> {
     let mut low = vec![vec![0.0; n]; n];
     for i in 0..n {
-        #[allow(clippy::needless_range_loop)]
         for j in 0..=i {
             let mut sum = a[i][j];
             for k in 0..j {
@@ -482,7 +481,11 @@ fn cholesky_solve(a: &[Vec<f64>], b: &[f64], n: usize) -> Option<Vec<f64>> {
             }
         }
     }
+    Some(low)
+}
 
+/// Solve L * L^T * x = b given L.
+fn cholesky_solve_with_l(low: &[Vec<f64>], b: &[f64], n: usize) -> Vec<f64> {
     // Forward substitution: L * y = b
     let mut y = vec![0.0; n];
     for i in 0..n {
@@ -502,8 +505,13 @@ fn cholesky_solve(a: &[Vec<f64>], b: &[f64], n: usize) -> Option<Vec<f64>> {
         }
         x[i] = sum / low[i][i];
     }
+    x
+}
 
-    Some(x)
+/// Cholesky decomposition and solve: A * x = b.
+fn cholesky_solve(a: &[Vec<f64>], b: &[f64], n: usize) -> Option<Vec<f64>> {
+    let low = cholesky_decompose(a, n)?;
+    Some(cholesky_solve_with_l(&low, b, n))
 }
 
 /// Compute parameter covariance matrix from Jacobian.
@@ -518,22 +526,23 @@ fn compute_covariance(
 
     // Invert J^T J via Cholesky
     let mut pcov = vec![vec![0.0; n]; n];
-    for col in 0..n {
-        let mut e = vec![0.0; n];
-        e[col] = 1.0;
-        if let Some(column) = cholesky_solve(&jtj, &e, n) {
+    if let Some(low) = cholesky_decompose(&jtj, n) {
+        for col in 0..n {
+            let mut e = vec![0.0; n];
+            e[col] = 1.0;
+            let column = cholesky_solve_with_l(&low, &e, n);
             for (row, val) in column.iter().enumerate() {
                 pcov[row][col] = *val;
             }
-        } else {
-            // If J^T J is singular, return infinity on diagonal
-            for row in &mut pcov {
-                for val in row.iter_mut() {
-                    *val = f64::INFINITY;
-                }
-            }
-            return pcov;
         }
+    } else {
+        // If J^T J is singular, return infinity on diagonal
+        for row in &mut pcov {
+            for val in row.iter_mut() {
+                *val = f64::INFINITY;
+            }
+        }
+        return pcov;
     }
 
     // Scale by residual variance if not absolute_sigma

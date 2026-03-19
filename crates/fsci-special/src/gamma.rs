@@ -969,7 +969,7 @@ fn zeta_positive(s: f64) -> f64 {
     let term1 = (s / 12.0) * n_f.powf(-s - 1.0);
     let term2 = (s * (s + 1.0) * (s + 2.0) / 720.0) * n_f.powf(-s - 3.0);
 
-    sum + integral + half_last + term1 - term2
+    sum + integral - half_last + term1 - term2
 }
 
 /// Dirichlet eta function η(s) = sum_{n=1}^∞ (-1)^{n+1} / n^s.

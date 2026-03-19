@@ -275,7 +275,7 @@ mod tests {
         let opts = FftOptions::default();
         let forward = dst_ii(&input, &opts).expect("dst_ii");
         let inverse = dst_iii(&forward, &opts).expect("dst_iii");
-        let scale = 4.0 * input.len() as f64;
+        let scale = 2.0 * input.len() as f64;
         for (a, b) in inverse.iter().zip(&input) {
             assert!(
                 (a / scale - b).abs() < 1e-8,

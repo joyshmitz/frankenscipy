@@ -668,9 +668,9 @@ fn next_after(from: f64, toward: f64) -> f64 {
     }
     if from == 0.0 {
         if toward > 0.0 {
-            return f64::MIN_POSITIVE * f64::EPSILON;
+            return f64::from_bits(1);
         }
-        return -f64::MIN_POSITIVE * f64::EPSILON;
+        return -f64::from_bits(1);
     }
     let bits = from.to_bits();
     let next_bits = if (toward > from) == (from > 0.0) {

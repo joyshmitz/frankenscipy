@@ -68,17 +68,15 @@ pub fn savgol_coeffs(
     for i in 0..window_length {
         let xi = (i as i64 - half) as f64;
         let mut p = 1.0;
-        for s in 0..=2 * polyorder {
-            sums[s] += p;
+        for value in sums.iter_mut().take(2 * polyorder + 1) {
+            *value += p;
             p *= xi;
         }
     }
 
     let mut ata = vec![vec![0.0; order]; order];
     for r in 0..order {
-        for c in 0..order {
-            ata[r][c] = sums[r + c];
-        }
+        ata[r][..order].copy_from_slice(&sums[r..(order + r)]);
     }
 
     // For each data point, the filter coefficient is the value of the
@@ -92,7 +90,7 @@ pub fn savgol_coeffs(
     let mut rhs = vec![0.0; order];
     rhs[deriv] = 1.0;
 
-    let c = solve_symmetric_positive(&ata, &rhs);
+    let c = solve_symmetric_positive(&ata, &rhs)?;
 
     // Filter coefficients: w[i] = sum_j c[j] * x_i^j
     let deriv_factorial = factorial_small(deriv);
@@ -151,10 +149,9 @@ pub fn savgol_filter(
     Ok(result)
 }
 
-/// Solve a small SPD system via Cholesky-like decomposition (no pivoting).
-fn solve_symmetric_positive(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+/// Solve a small SPD system via Gaussian elimination with partial pivoting.
+fn solve_symmetric_positive(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, SignalError> {
     let n = b.len();
-    // Simple Gaussian elimination (A is small, typically < 10×10)
     let mut aug: Vec<Vec<f64>> = a
         .iter()
         .zip(b.iter())
@@ -166,30 +163,47 @@ fn solve_symmetric_positive(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
         .collect();
 
     for col in 0..n {
-        if aug[col][col].abs() < f64::EPSILON * 1e6 {
-            continue;
+        // Partial pivoting
+        let mut pivot_row = col;
+        for i in col + 1..n {
+            if aug[i][col].abs() > aug[pivot_row][col].abs() {
+                pivot_row = i;
+            }
         }
-        let pivot_row = aug[col].clone();
-        for aug_row in aug.iter_mut().skip(col + 1) {
-            let factor = aug_row[col] / pivot_row[col];
-            for (j, pv) in pivot_row.iter().enumerate().skip(col) {
-                aug_row[j] -= factor * pv;
+        aug.swap(col, pivot_row);
+
+        if aug[col][col].abs() < 1e-18 {
+            return Err(SignalError::InvalidArgument(
+                "linear system is singular or poorly conditioned".to_string(),
+            ));
+        }
+
+        let pivot_val = aug[col][col];
+        for i in col + 1..n {
+            let factor = aug[i][col] / pivot_val;
+            let (head, tail) = aug.split_at_mut(i);
+            let pivot_row = &head[col];
+            let target_row = &mut tail[0];
+            for (target, pivot) in target_row
+                .iter_mut()
+                .zip(pivot_row.iter())
+                .skip(col)
+                .take(n + 1 - col)
+            {
+                *target -= factor * *pivot;
             }
         }
     }
 
     let mut x = vec![0.0; n];
     for i in (0..n).rev() {
-        if aug[i][i].abs() < f64::EPSILON * 1e6 {
-            continue;
+        let mut sum = aug[i][n];
+        for j in i + 1..n {
+            sum -= aug[i][j] * x[j];
         }
-        x[i] = aug[i][n];
-        for j in (i + 1)..n {
-            x[i] -= aug[i][j] * x[j];
-        }
-        x[i] /= aug[i][i];
+        x[i] = sum / aug[i][i];
     }
-    x
+    Ok(x)
 }
 
 fn factorial_small(n: usize) -> f64 {
@@ -330,8 +344,13 @@ pub fn convolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>, Si
 
     let na = a.len();
     let nb = b.len();
-    let full_len = na + nb - 1;
 
+    // Automatic dispatch to FFT for large inputs (SciPy 'auto' method)
+    if na.saturating_mul(nb) > 1000 {
+        return fftconvolve(a, b, mode);
+    }
+
+    let full_len = na + nb - 1;
     // Compute full convolution
     let mut full = vec![0.0; full_len];
     for (i, &ai) in a.iter().enumerate() {
@@ -455,11 +474,23 @@ pub fn find_peaks(x: &[f64], options: FindPeaksOptions) -> FindPeaksResult {
         };
     }
 
-    // Step 1: find all local maxima (strictly greater than both neighbors)
+    // Step 1: find all local maxima (including plateaus)
     let mut peaks: Vec<usize> = Vec::new();
-    for i in 1..x.len() - 1 {
-        if x[i] > x[i - 1] && x[i] > x[i + 1] {
-            peaks.push(i);
+    let mut i = 1;
+    while i < x.len() - 1 {
+        if x[i] > x[i - 1] {
+            let mut j = i + 1;
+            while j < x.len() && x[j] == x[i] {
+                j += 1;
+            }
+            // If the plateau is followed by a smaller value or the end of the signal
+            if j < x.len() && x[i] > x[j] {
+                // Peak is the middle of the plateau
+                peaks.push((i + j - 1) / 2);
+            }
+            i = j;
+        } else {
+            i += 1;
         }
     }
 
@@ -562,28 +593,35 @@ fn filter_by_distance(peaks: &[usize], heights: &[f64], min_dist: usize) -> Vec<
         return Vec::new();
     }
 
-    // Sort peaks by height (descending) for greedy selection
-    let mut indexed: Vec<(usize, f64)> = peaks
+    // Sort peaks by height (descending) for greedy selection.
+    // Store original index to quickly access 'excluded' status.
+    let mut indexed: Vec<(usize, usize, f64)> = peaks
         .iter()
         .zip(heights.iter())
-        .map(|(&p, &h)| (p, h))
+        .enumerate()
+        .map(|(i, (&p, &h))| (i, p, h))
         .collect();
-    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut selected = Vec::new();
     let mut excluded = vec![false; peaks.len()];
 
-    for &(pk, _) in &indexed {
-        let orig_idx = peaks.iter().position(|&p| p == pk).unwrap();
+    for &(orig_idx, pk, _) in &indexed {
         if excluded[orig_idx] {
             continue;
         }
         selected.push(pk);
-        // Exclude all peaks within min_dist
-        for (j, &other_pk) in peaks.iter().enumerate() {
-            if !excluded[j] && other_pk != pk && other_pk.abs_diff(pk) < min_dist {
-                excluded[j] = true;
-            }
+
+        // Exclude all peaks within min_dist of pk.
+        // Since 'peaks' is sorted by position, use binary search to find the range.
+        let start_val = pk.saturating_sub(min_dist.saturating_sub(1));
+        let end_val = pk + min_dist;
+
+        let left = peaks.binary_search(&start_val).unwrap_or_else(|x| x);
+        let right = peaks.binary_search(&end_val).unwrap_or_else(|x| x);
+
+        for slot in excluded.iter_mut().take(right).skip(left) {
+            *slot = true;
         }
     }
 
@@ -1295,24 +1333,41 @@ pub fn lfilter(b: &[f64], a: &[f64], x: &[f64]) -> Result<Vec<f64>, SignalError>
 ///
 /// This results in zero phase distortion (linear phase) and doubled filter order.
 pub fn filtfilt(b: &[f64], a: &[f64], x: &[f64]) -> Result<Vec<f64>, SignalError> {
-    if x.len() < 3 {
+    let n = x.len();
+    if n < 3 {
         return Err(SignalError::InvalidArgument(
             "input must have length >= 3 for filtfilt".to_string(),
         ));
     }
 
+    let nfilt = b.len().max(a.len());
+    let padlen = (3 * (nfilt - 1)).min(n - 1);
+
+    // 1. Pad signal with mirrored values
+    let mut padded = Vec::with_capacity(n + 2 * padlen);
+    let x0 = x[0];
+    for i in (1..=padlen).rev() {
+        padded.push(2.0 * x0 - x[i]);
+    }
+    padded.extend_from_slice(x);
+    let xn = x[n - 1];
+    for i in 1..=padlen {
+        padded.push(2.0 * xn - x[n - 1 - i]);
+    }
+
     // Forward pass
-    let forward = lfilter(b, a, x)?;
+    let mut forward = lfilter(b, a, &padded)?;
 
     // Reverse
-    let mut reversed: Vec<f64> = forward.into_iter().rev().collect();
+    forward.reverse();
 
     // Backward pass
-    reversed = lfilter(b, a, &reversed)?;
+    let mut reversed = lfilter(b, a, &forward)?;
 
-    // Reverse again
+    // Reverse again and remove padding
     reversed.reverse();
-    Ok(reversed)
+    let result = reversed[padlen..padlen + n].to_vec();
+    Ok(result)
 }
 
 /// Apply a digital filter in SOS (second-order sections) form.
@@ -1373,24 +1428,81 @@ pub fn sosfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalError> {
 /// Results in zero phase distortion and doubled filter order.
 /// More numerically stable than filtfilt for high-order filters.
 pub fn sosfiltfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalError> {
-    if x.len() < 3 {
+    let n = x.len();
+    if n < 3 {
         return Err(SignalError::InvalidArgument(
             "input must have length >= 3 for sosfiltfilt".to_string(),
         ));
     }
 
-    // Forward pass
-    let forward = sosfilt(sos, x)?;
+    // Determine padding length (matches SciPy's default: 3 * (max_order - 1))
+    // For SOS, each section is order 2, so max_order is 3.
+    // 3 * (3-1) = 6.
+    let padlen = 6.min(n - 1);
 
-    // Reverse
-    let mut reversed: Vec<f64> = forward.into_iter().rev().collect();
+    // 1. Pad signal with mirrored values:
+    // [2*x[0]-x[padlen], ..., 2*x[0]-x[1], x[0], ..., x[n-1], 2*x[n-1]-x[n-2], ..., 2*x[n-1]-x[n-padlen-1]]
+    let mut padded = Vec::with_capacity(n + 2 * padlen);
+    let x0 = x[0];
+    for i in (1..=padlen).rev() {
+        padded.push(2.0 * x0 - x[i]);
+    }
+    padded.extend_from_slice(x);
+    let xn = x[n - 1];
+    for i in 1..=padlen {
+        padded.push(2.0 * xn - x[n - 1 - i]);
+    }
 
-    // Backward pass
-    reversed = sosfilt(sos, &reversed)?;
+    // 2. Initialize filter with steady-state for the first padded sample
+    let zi = sosfilt_zi(sos)?;
+    let mut z_forward = zi.clone();
+    let p0 = padded[0];
+    for z in &mut z_forward {
+        z[0] *= p0;
+        z[1] *= p0;
+    }
 
-    // Reverse again
-    reversed.reverse();
-    Ok(reversed)
+    // Forward pass with initial conditions
+    let mut signal = padded;
+    sosfilt_in_place(sos, &mut signal, &z_forward)?;
+
+    // 3. Reverse and repeat for backward pass
+    signal.reverse();
+    let mut z_backward = zi;
+    let s0 = signal[0];
+    for z in &mut z_backward {
+        z[0] *= s0;
+        z[1] *= s0;
+    }
+    sosfilt_in_place(sos, &mut signal, &z_backward)?;
+
+    // 4. Reverse again and remove padding
+    signal.reverse();
+    let result = signal[padlen..padlen + n].to_vec();
+    Ok(result)
+}
+
+/// Internal helper for in-place SOS filtering with initial conditions.
+fn sosfilt_in_place(sos: &[SosSection], x: &mut [f64], zi: &[[f64; 2]]) -> Result<(), SignalError> {
+    for (i, section) in sos.iter().enumerate() {
+        let b0 = section[0] / section[3];
+        let b1 = section[1] / section[3];
+        let b2 = section[2] / section[3];
+        let a1 = section[4] / section[3];
+        let a2 = section[5] / section[3];
+
+        let mut d1 = zi[i][0];
+        let mut d2 = zi[i][1];
+
+        for sample in x.iter_mut() {
+            let xi = *sample;
+            let yi = b0 * xi + d1;
+            d1 = b1 * xi - a1 * yi + d2;
+            d2 = b2 * xi - a2 * yi;
+            *sample = yi;
+        }
+    }
+    Ok(())
 }
 
 /// Compute initial conditions for SOS filter for step response steady-state.
@@ -2856,23 +2968,37 @@ pub fn detrend(data: &[f64], dtype: DetrendType) -> Result<Vec<f64>, SignalError
             Ok(data.iter().map(|&v| v - mean).collect())
         }
         DetrendType::Linear => {
-            let n = data.len() as f64;
-            let sx: f64 = (0..data.len()).map(|i| i as f64).sum();
-            let sy: f64 = data.iter().sum();
-            let sxx: f64 = (0..data.len()).map(|i| (i as f64) * (i as f64)).sum();
-            let sxy: f64 = data.iter().enumerate().map(|(i, &v)| i as f64 * v).sum();
-            let denom = n * sxx - sx * sx;
-            if denom.abs() < f64::EPSILON {
-                // Single point or degenerate; just remove mean.
-                let mean = sy / n;
-                return Ok(data.iter().map(|&v| v - mean).collect());
+            let n = data.len();
+            let n_f = n as f64;
+            if n < 2 {
+                return Ok(vec![0.0; n]);
             }
-            let slope = (n * sxy - sx * sy) / denom;
-            let intercept = (sy - slope * sx) / n;
+
+            // Center x-values to [-(n-1)/2, (n-1)/2] for numerical stability.
+            // This makes sum(x) = 0, simplifying the normal equations.
+            let x_mean = (n_f - 1.0) / 2.0;
+
+            let mut s_xx = 0.0;
+            let mut s_xy = 0.0;
+            let mut y_sum = 0.0;
+
+            for (i, &y) in data.iter().enumerate() {
+                let x = i as f64 - x_mean;
+                s_xx += x * x;
+                s_xy += x * y;
+                y_sum += y;
+            }
+
+            let y_mean = y_sum / n_f;
+            let slope = s_xy / s_xx;
+
             Ok(data
                 .iter()
                 .enumerate()
-                .map(|(i, &v)| v - (intercept + slope * i as f64))
+                .map(|(i, &y)| {
+                    let x = i as f64 - x_mean;
+                    y - (y_mean + slope * x)
+                })
                 .collect())
         }
     }
@@ -2898,13 +3024,23 @@ pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError
     let half = kernel_size / 2;
     let n = data.len();
     let mut result = Vec::with_capacity(n);
+    let mut window = vec![0.0; kernel_size];
 
     for i in 0..n {
-        let start = i.saturating_sub(half);
-        let end = (i + half + 1).min(n);
-        let mut window: Vec<f64> = data[start..end].to_vec();
-        window.sort_by(|a, b| a.total_cmp(b));
-        result.push(window[window.len() / 2]);
+        // Fill window with zero-padding at boundaries (matches SciPy)
+        for (j, val) in window.iter_mut().enumerate() {
+            let idx = i as i64 + j as i64 - half as i64;
+            *val = if idx >= 0 && idx < n as i64 {
+                data[idx as usize]
+            } else {
+                0.0
+            };
+        }
+
+        // Linear-time median selection
+        let mid = kernel_size / 2;
+        let (_, &mut m, _) = window.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
+        result.push(m);
     }
 
     Ok(result)
@@ -3412,18 +3548,28 @@ pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, Sign
     // Scale filter by up to compensate for upsampling gain.
     let h_scaled: Vec<f64> = h.iter().map(|&v| v * up as f64).collect();
 
-    // Upsample: insert up-1 zeros between each sample.
+    // Polyphase implementation to avoid materializing the full upsampled signal.
+    // Equivalent to: upsample -> convolve(mode=Same) -> downsample.
     let upsampled_len = x.len() * up;
-    let mut upsampled = vec![0.0; upsampled_len];
-    for (i, &v) in x.iter().enumerate() {
-        upsampled[i * up] = v;
+    let half_taps = (n_taps - 1) as i64 / 2;
+    let mut output = Vec::with_capacity(upsampled_len.div_ceil(down));
+
+    let mut i = 0usize;
+    while i < upsampled_len {
+        let mut val = 0.0;
+        let target = i as i64 + half_taps;
+
+        // k must satisfy: 0 <= k < n_taps AND (target - k) is a multiple of 'up'.
+        let k_start = (target % up as i64 + up as i64) % up as i64;
+        for k in (k_start as usize..n_taps).step_by(up) {
+            let x_idx = (target - k as i64) / up as i64;
+            if x_idx >= 0 && x_idx < x.len() as i64 {
+                val += h_scaled[k] * x[x_idx as usize];
+            }
+        }
+        output.push(val);
+        i += down;
     }
-
-    // Apply FIR filter.
-    let filtered = convolve(&upsampled, &h_scaled, ConvolveMode::Same)?;
-
-    // Downsample: take every `down`-th sample.
-    let output: Vec<f64> = filtered.iter().step_by(down).copied().collect();
 
     Ok(output)
 }
@@ -3942,6 +4088,26 @@ mod tests {
     }
 
     #[test]
+    fn cheby1_bandpass_passes_midband_and_rejects_outside() {
+        let coeffs = cheby1(3, 1.0, &[0.2, 0.45], FilterType::Bandpass).expect("cheby1 bp");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        let omega_lo = 0.08 * std::f64::consts::PI;
+        let omega_mid = 0.32 * std::f64::consts::PI;
+        let omega_hi = 0.8 * std::f64::consts::PI;
+        let lo_idx = nearest_freq_index(&result.w, omega_lo);
+        let mid_idx = nearest_freq_index(&result.w, omega_mid);
+        let hi_idx = nearest_freq_index(&result.w, omega_hi);
+        assert!(
+            result.h_mag[mid_idx] > result.h_mag[lo_idx],
+            "Chebyshev-I bandpass should pass midband better than low stopband"
+        );
+        assert!(
+            result.h_mag[mid_idx] > result.h_mag[hi_idx],
+            "Chebyshev-I bandpass should pass midband better than high stopband"
+        );
+    }
+
+    #[test]
     fn cheby2_lowpass_rejects_stopband_more_than_passband() {
         let coeffs = cheby2(4, 20.0, &[0.3], FilterType::Lowpass).expect("cheby2");
         let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
@@ -4003,14 +4169,52 @@ mod tests {
             None,
         )
         .expect("iirfilter butter");
-        assert_eq!(direct.b.len(), dispatch.b.len());
-        assert_eq!(direct.a.len(), dispatch.a.len());
-        for (lhs, rhs) in direct.b.iter().zip(dispatch.b.iter()) {
-            assert!((lhs - rhs).abs() < 1e-10, "butter dispatcher mismatch in b");
-        }
-        for (lhs, rhs) in direct.a.iter().zip(dispatch.a.iter()) {
-            assert!((lhs - rhs).abs() < 1e-10, "butter dispatcher mismatch in a");
-        }
+        assert_ba_close(&direct, &dispatch, 1e-10, "butter");
+    }
+
+    #[test]
+    fn iirfilter_dispatch_matches_cheby1() {
+        let direct = cheby1(4, 0.8, &[0.2, 0.5], FilterType::Bandpass).expect("cheby1");
+        let dispatch = iirfilter(
+            4,
+            &[0.2, 0.5],
+            FilterType::Bandpass,
+            IirFamily::Chebyshev1,
+            Some(0.8),
+            None,
+        )
+        .expect("iirfilter cheby1");
+        assert_ba_close(&direct, &dispatch, 1e-10, "cheby1");
+    }
+
+    #[test]
+    fn iirfilter_dispatch_matches_cheby2() {
+        let direct = cheby2(4, 20.0, &[0.25], FilterType::Lowpass).expect("cheby2");
+        let dispatch = iirfilter(
+            4,
+            &[0.25],
+            FilterType::Lowpass,
+            IirFamily::Chebyshev2,
+            None,
+            Some(20.0),
+        )
+        .expect("iirfilter cheby2");
+        assert_ba_close(&direct, &dispatch, 1e-10, "cheby2");
+    }
+
+    #[test]
+    fn iirfilter_dispatch_matches_bessel() {
+        let direct = bessel(3, &[0.35], FilterType::Highpass).expect("bessel");
+        let dispatch = iirfilter(
+            3,
+            &[0.35],
+            FilterType::Highpass,
+            IirFamily::Bessel,
+            None,
+            None,
+        )
+        .expect("iirfilter bessel");
+        assert_ba_close(&direct, &dispatch, 1e-10, "bessel");
     }
 
     #[test]
@@ -4032,8 +4236,14 @@ mod tests {
     #[test]
     fn ellip_lowpass_produces_finite_coefficients() {
         let coeffs = ellip(4, 1.0, 40.0, &[0.3], FilterType::Lowpass).expect("ellip");
-        assert!(coeffs.b.iter().all(|v| v.is_finite()), "b coeffs not finite");
-        assert!(coeffs.a.iter().all(|v| v.is_finite()), "a coeffs not finite");
+        assert!(
+            coeffs.b.iter().all(|v| v.is_finite()),
+            "b coeffs not finite"
+        );
+        assert!(
+            coeffs.a.iter().all(|v| v.is_finite()),
+            "a coeffs not finite"
+        );
     }
 
     #[test]
@@ -4047,6 +4257,26 @@ mod tests {
             "elliptic should attenuate stopband: pass={}, stop={}",
             result.h_mag[pass_idx],
             result.h_mag[stop_idx]
+        );
+    }
+
+    #[test]
+    fn ellip_bandstop_rejects_midband_and_passes_outside() {
+        let coeffs = ellip(4, 1.0, 40.0, &[0.2, 0.45], FilterType::Bandstop).expect("ellip bs");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        let omega_lo = 0.08 * std::f64::consts::PI;
+        let omega_mid = 0.32 * std::f64::consts::PI;
+        let omega_hi = 0.8 * std::f64::consts::PI;
+        let lo_idx = nearest_freq_index(&result.w, omega_lo);
+        let mid_idx = nearest_freq_index(&result.w, omega_mid);
+        let hi_idx = nearest_freq_index(&result.w, omega_hi);
+        assert!(
+            result.h_mag[mid_idx] < result.h_mag[lo_idx],
+            "elliptic bandstop should reject the middle stopband"
+        );
+        assert!(
+            result.h_mag[mid_idx] < result.h_mag[hi_idx],
+            "elliptic bandstop should reject the middle stopband"
         );
     }
 
@@ -4070,13 +4300,7 @@ mod tests {
             Some(40.0),
         )
         .expect("iirfilter elliptic");
-        assert_eq!(direct.b.len(), dispatch.b.len());
-        for (lhs, rhs) in direct.b.iter().zip(dispatch.b.iter()) {
-            assert!(
-                (lhs - rhs).abs() < 1e-10,
-                "elliptic dispatcher mismatch in b"
-            );
-        }
+        assert_ba_close(&direct, &dispatch, 1e-10, "elliptic");
     }
 
     // ── lfilter tests ──────────────────────────────────────────────
@@ -4328,6 +4552,23 @@ mod tests {
             "{msg}: {a} vs {b} (diff={})",
             (a - b).abs()
         );
+    }
+
+    fn assert_ba_close(direct: &BaCoeffs, dispatch: &BaCoeffs, tol: f64, family: &str) {
+        assert_eq!(direct.b.len(), dispatch.b.len());
+        assert_eq!(direct.a.len(), dispatch.a.len());
+        for (lhs, rhs) in direct.b.iter().zip(dispatch.b.iter()) {
+            assert!(
+                (lhs - rhs).abs() < tol,
+                "{family} dispatcher mismatch in b: {lhs} vs {rhs}"
+            );
+        }
+        for (lhs, rhs) in direct.a.iter().zip(dispatch.a.iter()) {
+            assert!(
+                (lhs - rhs).abs() < tol,
+                "{family} dispatcher mismatch in a: {lhs} vs {rhs}"
+            );
+        }
     }
 
     fn nearest_freq_index(w: &[f64], omega: f64) -> usize {
