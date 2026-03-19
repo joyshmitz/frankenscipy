@@ -2508,8 +2508,12 @@ pub fn null_space(
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    let svd_decomp = SVD::new(matrix, false, true);
-    let vt = svd_decomp.v_t.as_ref().ok_or(LinalgError::UnsupportedAssumption)?;
+
+    // To get the full V matrix (n×n), compute SVD of A^T (n×m).
+    // The U of A^T equals V of A, giving us all n right singular vectors.
+    let at = matrix.transpose();
+    let svd_decomp = SVD::new(at, true, false);
+    let u_of_at = svd_decomp.u.as_ref().ok_or(LinalgError::UnsupportedAssumption)?;
     let singular_values = &svd_decomp.singular_values;
 
     let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
@@ -2522,15 +2526,105 @@ pub fn null_space(
         return Ok(vec![vec![]; n]);
     }
 
-    // Null space = last (n - rank) rows of Vt, transposed to columns.
-    let mut result = vec![vec![0.0; null_dim]; n];
-    for i in 0..n {
+    // Null space = columns rank..n of U(A^T) = columns rank..n of V(A).
+    // U(A^T) is n × min(n,m), so for m < n we may not have enough columns.
+    // However, since rank <= min(m,n), and null_dim = n - rank, we need columns
+    // up to index n-1 in U(A^T). When n > m, U(A^T) has n rows but only min(n,m)=m columns.
+    // Columns beyond m correspond to singular value 0, but nalgebra's thin SVD
+    // doesn't compute them. In this case, we need to find an orthonormal basis
+    // for the remaining dimensions via QR of the existing columns' complement.
+    let u_cols = u_of_at.ncols(); // = min(n, m)
+    if rank < u_cols {
+        // We have enough columns in U(A^T) to extract the null space.
+        let mut result = vec![vec![0.0; null_dim]; n];
+        for i in 0..n {
+            for j in 0..null_dim.min(u_cols - rank) {
+                result[i][j] = u_of_at[(i, rank + j)];
+            }
+        }
+        // If null_dim > u_cols - rank, the remaining null-space vectors are
+        // orthogonal to all columns of U(A^T). This happens when m < n and rank = m.
+        // These extra vectors span the complement and must be computed separately.
+        if null_dim > u_cols - rank {
+            // Use Gram-Schmidt to find remaining orthonormal vectors.
+            let existing = u_cols; // number of columns in U(A^T)
+            let needed = null_dim - (u_cols - rank);
+            let mut extra = gram_schmidt_complement(u_of_at, n, needed);
+            for j in 0..needed {
+                for i in 0..n {
+                    result[i][(u_cols - rank) + j] = extra[j][i];
+                }
+            }
+        }
+        Ok(result)
+    } else {
+        // rank == u_cols: all computed singular vectors are in the range.
+        // The entire null space is orthogonal to all of them.
+        // This happens when rank = min(n,m) = m < n.
+        let mut result = vec![vec![0.0; null_dim]; n];
+        let extra = gram_schmidt_complement(u_of_at, n, null_dim);
         for j in 0..null_dim {
-            result[i][j] = vt[(rank + j, i)];
+            for i in 0..n {
+                result[i][j] = extra[j][i];
+            }
+        }
+        Ok(result)
+    }
+}
+
+/// Find `needed` orthonormal vectors that are orthogonal to all columns of `basis`.
+/// `basis` is an n×k matrix (DMatrix). Returns `needed` vectors of length `n`.
+fn gram_schmidt_complement(
+    basis: &DMatrix<f64>,
+    n: usize,
+    needed: usize,
+) -> Vec<Vec<f64>> {
+    let k = basis.ncols();
+    let mut result = Vec::with_capacity(needed);
+
+    // Try standard basis vectors e_i and orthogonalize against existing basis
+    // and previously found complement vectors.
+    for candidate_idx in 0..n {
+        if result.len() >= needed {
+            break;
+        }
+        // Start with e_{candidate_idx}
+        let mut v = vec![0.0; n];
+        v[candidate_idx] = 1.0;
+
+        // Orthogonalize against all basis columns.
+        for col in 0..k {
+            let mut dot = 0.0;
+            for r in 0..n {
+                dot += v[r] * basis[(r, col)];
+            }
+            for r in 0..n {
+                v[r] -= dot * basis[(r, col)];
+            }
+        }
+
+        // Orthogonalize against previously found complement vectors.
+        for prev in &result {
+            let mut dot = 0.0;
+            for r in 0..n {
+                dot += v[r] * prev[r];
+            }
+            for r in 0..n {
+                v[r] -= dot * prev[r];
+            }
+        }
+
+        // Normalize.
+        let norm: f64 = v.iter().map(|&x| x * x).sum::<f64>().sqrt();
+        if norm > 1e-10 {
+            for x in &mut v {
+                *x /= norm;
+            }
+            result.push(v);
         }
     }
 
-    Ok(result)
+    result
 }
 
 /// Compute the angles between two subspaces.

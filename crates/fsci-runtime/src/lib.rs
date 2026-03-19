@@ -107,6 +107,8 @@ pub struct SolverEvidenceEntry {
     pub expected_losses: Vec<f64>,
     pub chosen_expected_loss: f64,
     pub fallback_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backward_error: Option<f64>,
 }
 
 /// Expected-loss solver selection engine (§0.4 alien-artifact).
@@ -178,17 +180,25 @@ impl SolverPortfolio {
 
         // argmin over expected losses
         // We consider general solvers (0, 1, 2) and applicable fast paths (3, 4)
-        let mut candidates = vec![0, 1, 2];
+        // Use stack-allocated array to avoid heap allocation in tight loops.
+        let mut candidates = [0, 1, 2, 0, 0];
+        let mut count = 3;
         match structure {
-            Some(StructuralEvidence::Diagonal) => candidates.push(3),
-            Some(StructuralEvidence::Triangular) => candidates.push(4),
+            Some(StructuralEvidence::Diagonal) => {
+                candidates[3] = 3;
+                count = 4;
+            }
+            Some(StructuralEvidence::Triangular) => {
+                candidates[3] = 4;
+                count = 4;
+            }
             _ => {}
         }
 
         let mut best_idx = candidates[0];
         let mut best_loss = losses[best_idx];
 
-        for &idx in candidates.iter().skip(1) {
+        for &idx in candidates.iter().take(count).skip(1) {
             let loss = losses[idx];
             if loss < best_loss {
                 best_loss = loss;
@@ -212,10 +222,12 @@ impl SolverPortfolio {
 
     /// Record solver evidence for audit trail and calibration.
     pub fn record_evidence(&mut self, entry: SolverEvidenceEntry) {
+        if let Some(err) = entry.backward_error {
+            self.calibrator.observe(err);
+        }
         if self.evidence.len() >= self.evidence_capacity {
             self.evidence.remove(0);
         }
-        // Feed backward error into conformal calibrator if available
         self.evidence.push(entry);
     }
 
