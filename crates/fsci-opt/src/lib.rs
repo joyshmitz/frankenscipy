@@ -466,7 +466,11 @@ pub fn linprog(
             let (left, right) = tableau.split_at_mut(obj_row);
             (&left[i], &mut right[0])
         };
-        for (obj_val, &i_val) in tableau_obj.iter_mut().zip(tableau_i.iter()).take(phase1_vars + 1) {
+        for (obj_val, &i_val) in tableau_obj
+            .iter_mut()
+            .zip(tableau_i.iter())
+            .take(phase1_vars + 1)
+        {
             *obj_val -= i_val;
         }
     }
@@ -534,7 +538,11 @@ pub fn linprog(
                     let (left, right) = tableau2.split_at_mut(obj_row);
                     (&left[row], &mut right[0])
                 };
-                for (obj_val, &row_val) in obj_vals.iter_mut().zip(row_vals.iter()).take(total_vars + 1) {
+                for (obj_val, &row_val) in obj_vals
+                    .iter_mut()
+                    .zip(row_vals.iter())
+                    .take(total_vars + 1)
+                {
                     *obj_val -= ratio * row_val;
                 }
             }
@@ -677,7 +685,6 @@ fn simplex_iterate(
         }
         basis[pivot_row] = pivot_col;
     }
-
 
     Err(1) // Iteration limit
 }

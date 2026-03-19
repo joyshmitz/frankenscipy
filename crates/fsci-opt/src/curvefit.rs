@@ -468,8 +468,8 @@ fn cholesky_decompose(a: &[Vec<f64>], n: usize) -> Option<Vec<Vec<f64>>> {
     for i in 0..n {
         for j in 0..=i {
             let mut sum = a[i][j];
-            for k in 0..j {
-                sum -= low[i][k] * low[j][k];
+            for (&low_ik, &low_jk) in low[i].iter().zip(low[j].iter()).take(j) {
+                sum -= low_ik * low_jk;
             }
             if i == j {
                 if sum <= 0.0 {

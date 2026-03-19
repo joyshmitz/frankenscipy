@@ -703,7 +703,9 @@ fn solve_dense(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
                 (&left[col], &mut right[0])
             };
             let factor = aug_row[col] / pivot;
-            for (aug_row_j, &aug_col_j) in aug_row.iter_mut().zip(aug_col.iter()).take(n + 1).skip(col) {
+            for (aug_row_j, &aug_col_j) in
+                aug_row.iter_mut().zip(aug_col.iter()).take(n + 1).skip(col)
+            {
                 *aug_row_j -= factor * aug_col_j;
             }
         }
