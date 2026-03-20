@@ -552,9 +552,6 @@ fn evidence_p2c002_final_pack() {
         sidecar: None, // Filled in after serialization
     };
 
-    let bundle_json = serde_json::to_string_pretty(&bundle).unwrap();
-    let sidecar = generate_raptorq_sidecar(bundle_json.as_bytes()).ok();
-
     // Write individual artifacts
     fn write_json<T: Serialize>(dir: &Path, name: &str, data: &T) {
         let json = serde_json::to_string_pretty(data).unwrap();
@@ -566,14 +563,25 @@ fn evidence_p2c002_final_pack() {
     write_json(&evidence_dir, "risk_notes.json", &bundle.risk_notes);
     write_json(&evidence_dir, "parity_report.json", &bundle.parity_report);
 
-    if let Some(ref sc) = sidecar {
-        write_json(&evidence_dir, "evidence_bundle.raptorq.json", sc);
-    }
-
-    // Write the full bundle
-    let final_bundle = EvidenceBundle { sidecar, ..bundle };
+    // Write the full bundle (without internal sidecar to keep external sidecar valid)
+    let final_bundle = EvidenceBundle {
+        manifest: bundle.manifest,
+        parity_gates: bundle.parity_gates,
+        risk_notes: bundle.risk_notes,
+        parity_report: bundle.parity_report,
+        sidecar: None,
+    };
     let final_json = serde_json::to_string_pretty(&final_bundle).unwrap();
-    std::fs::write(evidence_dir.join("evidence_bundle.json"), &final_json).unwrap();
+    let bundle_path = evidence_dir.join("evidence_bundle.json");
+    std::fs::write(&bundle_path, &final_json).unwrap();
+
+    // Generate and write sidecar for the final file
+    let external_sidecar = generate_raptorq_sidecar(final_json.as_bytes()).unwrap();
+    std::fs::write(
+        evidence_dir.join("evidence_bundle.raptorq.json"),
+        serde_json::to_string_pretty(&external_sidecar).unwrap(),
+    )
+    .unwrap();
 
     // Assertions
     assert!(

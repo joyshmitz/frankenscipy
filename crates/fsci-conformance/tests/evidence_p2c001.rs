@@ -533,19 +533,27 @@ fn evidence_p2c001_final_pack() {
         ],
     };
 
-    let bundle_json = serde_json::to_vec_pretty(&manifest).unwrap();
-    let sidecar = generate_raptorq_sidecar(&bundle_json).ok();
-
     let evidence = EvidenceBundle {
         manifest,
         parity_gates,
         risk_notes,
         parity_report,
-        sidecar,
+        sidecar: None,
     };
 
     let json = serde_json::to_string_pretty(&evidence).unwrap();
     std::fs::write(evidence_dir.join("evidence_bundle.json"), &json).unwrap();
+
+    // Generate and write sidecar for the final file
+    let external_sidecar = generate_raptorq_sidecar(json.as_bytes()).ok();
+    if let Some(ref sc) = external_sidecar {
+        std::fs::write(
+            evidence_dir.join("evidence_bundle.raptorq.json"),
+            serde_json::to_string_pretty(&sc).unwrap(),
+        )
+        .unwrap();
+    }
+
     std::fs::write(
         evidence_dir.join("fixture_manifest.json"),
         serde_json::to_string_pretty(&evidence.manifest).unwrap(),

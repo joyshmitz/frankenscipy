@@ -359,21 +359,25 @@ fn evidence_p2c004_final_pack() {
         ],
     };
 
-    // Generate RaptorQ sidecar
-    let bundle_json = serde_json::to_vec_pretty(&manifest).unwrap();
-    let sidecar = generate_raptorq_sidecar(&bundle_json).ok();
-
     let evidence = EvidenceBundle {
         manifest,
         parity_gates,
         risk_notes,
         parity_report,
-        sidecar,
+        sidecar: None,
     };
 
     // Write artifacts
     let json = serde_json::to_string_pretty(&evidence).unwrap();
     std::fs::write(evidence_dir.join("evidence_bundle.json"), &json).unwrap();
+
+    // Generate RaptorQ sidecar from the bundle on disk
+    let sidecar = generate_raptorq_sidecar(json.as_bytes()).unwrap();
+    std::fs::write(
+        evidence_dir.join("evidence_bundle.raptorq.json"),
+        serde_json::to_string_pretty(&sidecar).unwrap(),
+    )
+    .unwrap();
 
     let manifest_json = serde_json::to_string_pretty(&evidence.manifest).unwrap();
     std::fs::write(evidence_dir.join("fixture_manifest.json"), &manifest_json).unwrap();
@@ -414,13 +418,6 @@ fn evidence_p2c004_final_pack() {
             s.operation, s.passed, s.total_fixtures, s.max_abs_diff_across_all
         );
     }
-    eprintln!(
-        "  RaptorQ sidecar: {}",
-        if evidence.sidecar.is_some() {
-            "generated"
-        } else {
-            "skipped"
-        }
-    );
+    eprintln!("  RaptorQ sidecar: generated (external)");
     eprintln!("  Artifacts: {evidence_dir:?}");
 }
