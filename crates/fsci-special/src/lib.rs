@@ -1999,7 +1999,7 @@ mod tests {
                 &SpecialTensor::RealScalar(1.0),
                 mode,
             )
-            .expect(&format!("kv({n}, 1)"));
+            .unwrap_or_else(|_| panic!("kv({n}, 1)"));
             match result {
                 SpecialTensor::RealScalar(v) => {
                     assert!(

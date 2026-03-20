@@ -775,25 +775,39 @@ fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, a_norm: f64, n: usize) -> f64 {
         return 0.0;
     }
 
-    // Estimate ||A⁻¹||₁ via one iteration of Higham's algorithm.
+    // Estimate ||A⁻¹||₁ using Higham's iterative algorithm (up to 5 iterations)
     let mut x = DVector::from_element(n, 1.0 / (n as f64));
+    let mut inv_a_norm = 0.0;
 
-    // 1. Solve Aᵀ w = sign(x)
-    let sign_x = x.map(|val| val.signum());
-    let w = match solve_lu_transpose(lu, &sign_x) {
-        Some(w) => w,
-        None => return 0.0,
-    };
+    for _ in 0..5 {
+        let x_old = x.clone();
+        // 1. Solve Aᵀ w = sign(x)
+        let sign_x = x.map(|val| val.signum());
+        let w = match solve_lu_transpose(lu, &sign_x) {
+            Some(w) => w,
+            None => return 0.0,
+        };
 
-    // 2. Solve A x = sign(w)
-    let sign_w = w.map(|val| val.signum());
-    x = match lu.solve(&sign_w) {
-        Some(x) => x,
-        None => return 0.0,
-    };
+        // 2. Solve A x_new = sign(w)
+        let sign_w = w.map(|val| val.signum());
+        let x_new = match lu.solve(&sign_w) {
+            Some(x) => x,
+            None => return 0.0,
+        };
 
-    // 3. ||A⁻¹||₁ ≈ ||x||₁
-    let inv_a_norm = x.lp_norm(1);
+        let new_norm = x_new.lp_norm(1);
+        if (new_norm - inv_a_norm).abs() <= 1e-10 * new_norm {
+            inv_a_norm = new_norm;
+            break;
+        }
+        inv_a_norm = new_norm;
+        x = x_new;
+
+        // Check if we are oscillating or converged in direction
+        if (x.clone() - x_old).lp_norm(1) <= f64::EPSILON * x.lp_norm(1) {
+            break;
+        }
+    }
 
     if inv_a_norm <= 0.0 {
         return 0.0;

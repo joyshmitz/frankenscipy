@@ -168,7 +168,7 @@ where
 
         if e.abs() >= tol && fc.abs() > state.fb.abs() {
             let s = state.fb / fc;
-            let (mut p, mut q) = if (state.a - c).abs() <= f64::EPSILON {
+            let (mut p, mut q) = if state.a == c {
                 (2.0 * m * s, 1.0 - s)
             } else {
                 let q_val = fc / state.fa;

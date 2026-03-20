@@ -66,13 +66,17 @@ fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
     let center = if mean.is_finite() { mean } else { 0.0 };
     let mut lo = center - half_width;
     let mut hi = center + half_width;
+    let mut step = half_width;
 
     // Expand bracket if needed
     while cdf(lo) > q {
-        lo -= half_width;
+        step *= 2.0;
+        lo -= step;
     }
+    step = half_width;
     while cdf(hi) < q {
-        hi += half_width;
+        step *= 2.0;
+        hi += step;
     }
 
     // Bisection
@@ -2504,7 +2508,7 @@ fn rankdata(data: &[f64]) -> Vec<f64> {
     while i < n {
         // Find the end of the tie group
         let mut j = i + 1;
-        while j < n && (indexed[j].0 - indexed[i].0).abs() < 1.0e-15 {
+        while j < n && indexed[j].0 == indexed[i].0 {
             j += 1;
         }
         // Average rank for the tie group (ranks are 1-based)
@@ -2649,7 +2653,7 @@ pub fn mode(data: &[f64]) -> f64 {
     let mut current_count = 1usize;
 
     for &v in &sorted[1..] {
-        if (v - current_val).abs() < 1.0e-15 {
+        if v == current_val {
             current_count += 1;
         } else {
             if current_count > best_count {
@@ -3394,8 +3398,8 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
         for j in (i + 1)..n {
             let dx = x[i] - x[j];
             let dy = y[i] - y[j];
-            let x_tied = dx.abs() < f64::EPSILON;
-            let y_tied = dy.abs() < f64::EPSILON;
+            let x_tied = x[i] == x[j];
+            let y_tied = y[i] == y[j];
 
             if x_tied {
                 x_ties += 1;
@@ -3441,6 +3445,209 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
 /// Standard normal CDF approximation.
 fn standard_normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf_approx(x / std::f64::consts::SQRT_2))
+}
+
+// ── Chi-squared contingency test ─────────────────────────────────────
+
+/// Result of a chi-squared contingency test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chi2ContingencyResult {
+    /// Chi-squared test statistic.
+    pub statistic: f64,
+    /// P-value from chi-squared distribution.
+    pub pvalue: f64,
+    /// Degrees of freedom.
+    pub dof: usize,
+    /// Expected frequencies under the null hypothesis of independence.
+    pub expected: Vec<Vec<f64>>,
+}
+
+/// Chi-squared test of independence for a contingency table.
+///
+/// Tests whether the row and column variables are independent.
+/// Matches `scipy.stats.chi2_contingency(observed)`.
+///
+/// # Arguments
+/// * `observed` — 2D contingency table of observed frequencies (rows x cols).
+///
+/// # Returns
+/// (chi2 statistic, p-value, degrees of freedom, expected frequencies)
+pub fn chi2_contingency(observed: &[Vec<f64>]) -> Chi2ContingencyResult {
+    let nrows = observed.len();
+    if nrows == 0 {
+        return Chi2ContingencyResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            dof: 0,
+            expected: Vec::new(),
+        };
+    }
+    let ncols = observed[0].len();
+    // Validate all rows have the same number of columns
+    if observed.iter().any(|row| row.len() != ncols) {
+        return Chi2ContingencyResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            dof: 0,
+            expected: Vec::new(),
+        };
+    }
+    if ncols == 0 || nrows < 2 || ncols < 2 {
+        return Chi2ContingencyResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            dof: 0,
+            expected: Vec::new(),
+        };
+    }
+
+    // Compute row totals, column totals, grand total
+    let row_totals: Vec<f64> = observed.iter().map(|row| row.iter().sum()).collect();
+    let mut col_totals = vec![0.0; ncols];
+    for row in observed {
+        for (j, &val) in row.iter().enumerate() {
+            col_totals[j] += val;
+        }
+    }
+    let grand_total: f64 = row_totals.iter().sum();
+
+    if grand_total == 0.0 {
+        return Chi2ContingencyResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            dof: 0,
+            expected: Vec::new(),
+        };
+    }
+
+    // Expected frequencies: e_ij = row_i_total * col_j_total / grand_total
+    let expected: Vec<Vec<f64>> = (0..nrows)
+        .map(|i| {
+            (0..ncols)
+                .map(|j| row_totals[i] * col_totals[j] / grand_total)
+                .collect()
+        })
+        .collect();
+
+    // Chi-squared statistic: Σ (o_ij - e_ij)² / e_ij
+    let chi2: f64 = observed
+        .iter()
+        .zip(expected.iter())
+        .flat_map(|(obs_row, exp_row)| {
+            obs_row
+                .iter()
+                .zip(exp_row.iter())
+                .map(|(&o, &e)| if e > 0.0 { (o - e).powi(2) / e } else { 0.0 })
+        })
+        .sum();
+
+    let dof = (nrows - 1) * (ncols - 1);
+
+    // P-value from chi-squared distribution
+    let pvalue = if dof > 0 {
+        // For very large chi2 relative to dof, p-value is effectively 0
+        if chi2 > dof as f64 * 20.0 {
+            0.0
+        } else {
+            let dist = ChiSquared::new(dof as f64);
+            upper_tail_probability(dist.cdf(chi2))
+        }
+    } else {
+        f64::NAN
+    };
+
+    Chi2ContingencyResult {
+        statistic: chi2,
+        pvalue,
+        dof,
+        expected,
+    }
+}
+
+/// Power divergence statistic and test.
+///
+/// Computes the power divergence statistic for testing whether observed
+/// frequencies differ from expected frequencies.
+///
+/// Matches `scipy.stats.power_divergence(f_obs, f_exp, lambda_)`.
+///
+/// # Arguments
+/// * `f_obs` — Observed frequencies.
+/// * `f_exp` — Expected frequencies (if None, assumes uniform).
+/// * `lambda_` — Power divergence parameter. 1.0 = Pearson chi-squared, 0.0 = G-test.
+///
+/// # Returns
+/// (statistic, p-value) where p-value is from chi-squared distribution with len-1 dof.
+pub fn power_divergence(f_obs: &[f64], f_exp: Option<&[f64]>, lambda_: f64) -> (f64, f64) {
+    let n = f_obs.len();
+    if n < 2 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    // Default expected: uniform
+    let total: f64 = f_obs.iter().sum();
+    let uniform_exp = total / n as f64;
+    let default_exp: Vec<f64> = vec![uniform_exp; n];
+    let exp = f_exp.unwrap_or(&default_exp);
+
+    if exp.len() != n {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let stat = if (lambda_ - 1.0).abs() < 1e-10 {
+        // Pearson chi-squared: Σ (o-e)²/e
+        f_obs
+            .iter()
+            .zip(exp.iter())
+            .map(|(&o, &e)| if e > 0.0 { (o - e).powi(2) / e } else { 0.0 })
+            .sum()
+    } else if lambda_.abs() < 1e-10 {
+        // G-test (log-likelihood ratio): 2 Σ o ln(o/e)
+        2.0 * f_obs
+            .iter()
+            .zip(exp.iter())
+            .map(|(&o, &e)| {
+                if o > 0.0 && e > 0.0 {
+                    o * (o / e).ln()
+                } else {
+                    0.0
+                }
+            })
+            .sum::<f64>()
+    } else {
+        // General power divergence: 2/(λ(λ+1)) Σ o((o/e)^λ - 1)
+        let factor = 2.0 / (lambda_ * (lambda_ + 1.0));
+        factor
+            * f_obs
+                .iter()
+                .zip(exp.iter())
+                .map(|(&o, &e)| {
+                    if o > 0.0 && e > 0.0 {
+                        o * ((o / e).powf(lambda_) - 1.0)
+                    } else {
+                        0.0
+                    }
+                })
+                .sum::<f64>()
+    };
+
+    let dof = (n - 1) as f64;
+    let pvalue = if dof > 0.0 {
+        let dist = ChiSquared::new(dof);
+        upper_tail_probability(dist.cdf(stat))
+    } else {
+        f64::NAN
+    };
+
+    (stat, pvalue)
+}
+
+fn upper_tail_probability(cdf_val: f64) -> f64 {
+    if !cdf_val.is_finite() {
+        0.0
+    } else {
+        (1.0 - cdf_val).clamp(0.0, 1.0)
+    }
 }
 
 #[cfg(test)]
@@ -5291,5 +5498,135 @@ mod tests {
             result.pvalue.is_nan(),
             "p-value should be NaN for undefined tau"
         );
+    }
+
+    // ── Chi-squared contingency tests ────────────────────────────────
+
+    #[test]
+    fn chi2_contingency_2x2_known() {
+        // Classic 2x2 contingency table
+        // [[10, 10], [20, 20]] — independent rows → chi2 = 0, p ≈ 1
+        let table = vec![vec![10.0, 10.0], vec![20.0, 20.0]];
+        let result = chi2_contingency(&table);
+        assert!(
+            result.statistic < 0.01,
+            "independent table chi2 should be ~0: {}",
+            result.statistic
+        );
+        assert!(
+            result.pvalue > 0.9,
+            "independent table p should be ~1: {}",
+            result.pvalue
+        );
+        assert_eq!(result.dof, 1);
+    }
+
+    #[test]
+    fn chi2_contingency_2x2_dependent() {
+        // Highly dependent: [[50, 5], [5, 50]]
+        let table = vec![vec![50.0, 5.0], vec![5.0, 50.0]];
+        let result = chi2_contingency(&table);
+        assert!(
+            result.statistic > 10.0,
+            "dependent table should have large chi2: {}",
+            result.statistic
+        );
+        assert!(
+            result.pvalue < 0.01,
+            "dependent table should have small p: {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn chi2_contingency_expected_frequencies() {
+        let table = vec![vec![10.0, 20.0], vec![30.0, 40.0]];
+        let result = chi2_contingency(&table);
+        // Grand total = 100
+        // Row totals: [30, 70], Col totals: [40, 60]
+        // Expected: [[30*40/100, 30*60/100], [70*40/100, 70*60/100]] = [[12, 18], [28, 42]]
+        assert!(
+            (result.expected[0][0] - 12.0).abs() < 1e-10,
+            "expected[0][0] = {}",
+            result.expected[0][0]
+        );
+        assert!(
+            (result.expected[1][1] - 42.0).abs() < 1e-10,
+            "expected[1][1] = {}",
+            result.expected[1][1]
+        );
+    }
+
+    #[test]
+    fn chi2_contingency_3x3() {
+        let table = vec![
+            vec![10.0, 20.0, 30.0],
+            vec![20.0, 15.0, 25.0],
+            vec![30.0, 25.0, 5.0],
+        ];
+        let result = chi2_contingency(&table);
+        assert_eq!(result.dof, 4); // (3-1)*(3-1)
+        assert!(result.statistic.is_finite());
+        assert!(result.pvalue >= 0.0 && result.pvalue <= 1.0);
+    }
+
+    #[test]
+    fn chi2_contingency_empty_rejected() {
+        let result = chi2_contingency(&[]);
+        assert!(result.statistic.is_nan());
+    }
+
+    // ── Power divergence tests ───────────────────────────────────────
+
+    #[test]
+    fn power_divergence_pearson_uniform() {
+        // Observed matches expected → stat ≈ 0, p ≈ 1
+        let obs = [25.0, 25.0, 25.0, 25.0];
+        let (stat, pvalue) = power_divergence(&obs, None, 1.0);
+        assert!(stat.abs() < 1e-10, "uniform obs chi2 = {stat}");
+        assert!(pvalue > 0.99, "uniform p = {pvalue}");
+    }
+
+    #[test]
+    fn power_divergence_pearson_skewed() {
+        // Very skewed: [50, 10, 10, 10] vs expected uniform [20, 20, 20, 20]
+        let obs = [50.0, 10.0, 10.0, 10.0];
+        let (stat, pvalue) = power_divergence(&obs, None, 1.0);
+        assert!(stat > 10.0, "skewed chi2 should be large: {stat}");
+        assert!(pvalue < 0.05, "skewed p should be small: {pvalue}");
+    }
+
+    #[test]
+    fn power_divergence_gtest() {
+        // G-test (lambda=0): same as Pearson for large samples
+        let obs = [50.0, 10.0, 10.0, 10.0];
+        let (stat_g, _) = power_divergence(&obs, None, 0.0);
+        let (stat_p, _) = power_divergence(&obs, None, 1.0);
+        // G and Pearson should be in the same ballpark
+        assert!(
+            (stat_g - stat_p).abs() / stat_p < 0.3,
+            "G={stat_g} vs Pearson={stat_p}"
+        );
+    }
+
+    #[test]
+    fn power_divergence_custom_expected() {
+        let obs = [10.0, 20.0, 30.0];
+        let exp = [20.0, 20.0, 20.0];
+        let (stat, pvalue) = power_divergence(&obs, Some(&exp), 1.0);
+        // chi2 = (10-20)²/20 + (20-20)²/20 + (30-20)²/20 = 100/20 + 0 + 100/20 = 10
+        assert!((stat - 10.0).abs() < 1e-10, "expected chi2=10, got {stat}");
+        assert!(pvalue > 0.0 && pvalue < 1.0);
+    }
+
+    #[test]
+    fn upper_tail_probability_nan_maps_to_zero() {
+        assert_eq!(upper_tail_probability(f64::NAN), 0.0);
+    }
+
+    #[test]
+    fn upper_tail_probability_clamps_numeric_roundoff() {
+        assert_eq!(upper_tail_probability(-0.25), 1.0);
+        assert_eq!(upper_tail_probability(1.25), 0.0);
     }
 }

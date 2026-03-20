@@ -130,7 +130,7 @@ pub fn hamming(a: &[f64], b: &[f64]) -> f64 {
     let mismatches = a
         .iter()
         .zip(b.iter())
-        .filter(|&(&ai, &bi)| (ai - bi).abs() > f64::EPSILON)
+        .filter(|&(&ai, &bi)| ai != bi)
         .count();
     mismatches as f64 / a.len() as f64
 }
@@ -145,8 +145,8 @@ pub fn jaccard(a: &[f64], b: &[f64]) -> f64 {
     let mut tf = 0usize;
     let mut ft = 0usize;
     for (&ai, &bi) in a.iter().zip(b.iter()) {
-        let a_nz = ai.abs() > f64::EPSILON;
-        let b_nz = bi.abs() > f64::EPSILON;
+        let a_nz = ai != 0.0;
+        let b_nz = bi != 0.0;
         match (a_nz, b_nz) {
             (true, true) => tt += 1,
             (true, false) => tf += 1,
@@ -170,7 +170,7 @@ pub fn canberra(a: &[f64], b: &[f64]) -> f64 {
         .zip(b.iter())
         .map(|(&ai, &bi)| {
             let denom = ai.abs() + bi.abs();
-            if denom < f64::EPSILON {
+            if denom == 0.0 {
                 0.0
             } else {
                 (ai - bi).abs() / denom
@@ -194,11 +194,7 @@ pub fn braycurtis(a: &[f64], b: &[f64]) -> f64 {
         .zip(b.iter())
         .map(|(&ai, &bi)| (ai + bi).abs())
         .sum();
-    if den < f64::EPSILON {
-        0.0
-    } else {
-        num / den
-    }
+    if den == 0.0 { 0.0 } else { num / den }
 }
 
 /// Distance metric identifiers for use with `pdist` and `cdist_metric`.
@@ -354,12 +350,37 @@ pub fn cdist_metric(
             actual: xb[0].len(),
         });
     }
+    for row in xa.iter().skip(1) {
+        if row.len() != dim {
+            return Err(SpatialError::DimensionMismatch {
+                expected: dim,
+                actual: row.len(),
+            });
+        }
+    }
+    for row in xb.iter().skip(1) {
+        if row.len() != dim {
+            return Err(SpatialError::DimensionMismatch {
+                expected: dim,
+                actual: row.len(),
+            });
+        }
+    }
 
     let result: Vec<Vec<f64>> = xa
         .iter()
         .map(|a| xb.iter().map(|b| metric_distance(a, b, metric)).collect())
         .collect();
     Ok(result)
+}
+
+/// Compute the full Euclidean distance matrix between two point sets.
+///
+/// Matches `scipy.spatial.distance_matrix(x, y)`.
+///
+/// This is an explicit convenience wrapper around Euclidean `cdist`.
+pub fn distance_matrix(x: &[Vec<f64>], y: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, SpatialError> {
+    cdist_metric(x, y, DistanceMetric::Euclidean)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -469,6 +490,11 @@ impl KDTree {
                 actual: query.len(),
             });
         }
+        if !r.is_finite() || r < 0.0 {
+            return Err(SpatialError::InvalidArgument(
+                "radius must be finite and nonnegative".to_string(),
+            ));
+        }
         if self.nodes.is_empty() {
             return Ok(vec![]);
         }
@@ -477,6 +503,35 @@ impl KDTree {
         let mut results = Vec::new();
         ball_search(&self.nodes, 0, query, r_sq, &mut results);
         results.sort_unstable();
+        Ok(results)
+    }
+
+    /// Find all cross-tree neighbors within distance `r`.
+    ///
+    /// Matches `scipy.spatial.KDTree.query_ball_tree(other, r)`.
+    ///
+    /// Returns one neighbor list per point in `self`, where each inner vector
+    /// contains indices from `other` within Euclidean distance `r`.
+    pub fn query_ball_tree(&self, other: &KDTree, r: f64) -> Result<Vec<Vec<usize>>, SpatialError> {
+        if self.dim != other.dim {
+            return Err(SpatialError::DimensionMismatch {
+                expected: self.dim,
+                actual: other.dim,
+            });
+        }
+        if !r.is_finite() || r < 0.0 {
+            return Err(SpatialError::InvalidArgument(
+                "radius must be finite and nonnegative".to_string(),
+            ));
+        }
+        if self.nodes.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut results = vec![Vec::new(); self.nodes.len()];
+        for node in &self.nodes {
+            results[node.index] = other.query_ball_point(&node.point, r)?;
+        }
         Ok(results)
     }
 
@@ -496,12 +551,7 @@ impl KDTree {
     }
 }
 
-fn ball_search_count(
-    nodes: &[KDNode],
-    node_idx: usize,
-    query: &[f64],
-    r_sq: f64,
-) -> usize {
+fn ball_search_count(nodes: &[KDNode], node_idx: usize, query: &[f64], r_sq: f64) -> usize {
     let node = &nodes[node_idx];
     let dist_sq = sqeuclidean(query, &node.point);
 
@@ -678,6 +728,156 @@ fn ball_search(
     {
         ball_search(nodes, far_idx, query, r_sq, results);
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Convex Hull (2D)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of a 2D convex hull computation.
+///
+/// Matches `scipy.spatial.ConvexHull(points)` for 2D point sets.
+#[derive(Debug, Clone)]
+pub struct ConvexHull {
+    /// Indices of input points that form the convex hull (in CCW order).
+    pub vertices: Vec<usize>,
+    /// Hull edges as pairs of vertex indices (into the original points array).
+    pub simplices: Vec<(usize, usize)>,
+    /// Area enclosed by the convex hull.
+    pub area: f64,
+    /// Perimeter of the convex hull (called "volume" in SciPy for consistency
+    /// with higher dimensions, but for 2D it's the perimeter).
+    pub perimeter: f64,
+}
+
+impl ConvexHull {
+    /// Compute the convex hull of a set of 2D points using Andrew's monotone chain algorithm.
+    ///
+    /// Time complexity: O(n log n).
+    ///
+    /// # Arguments
+    /// * `points` — Slice of (x, y) coordinate pairs.
+    pub fn new(points: &[(f64, f64)]) -> Result<Self, SpatialError> {
+        if points.len() < 3 {
+            return Err(SpatialError::InvalidArgument(
+                "convex hull requires at least 3 points".to_string(),
+            ));
+        }
+
+        let n = points.len();
+
+        // Sort points by x, then by y (lexicographic)
+        let mut sorted_indices: Vec<usize> = (0..n).collect();
+        sorted_indices.sort_by(|&a, &b| {
+            points[a]
+                .0
+                .partial_cmp(&points[b].0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(
+                    points[a]
+                        .1
+                        .partial_cmp(&points[b].1)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+        });
+
+        // Build lower hull
+        let mut lower: Vec<usize> = Vec::new();
+        for &idx in &sorted_indices {
+            while lower.len() >= 2
+                && cross(
+                    points[lower[lower.len() - 2]],
+                    points[lower[lower.len() - 1]],
+                    points[idx],
+                ) <= 0.0
+            {
+                lower.pop();
+            }
+            lower.push(idx);
+        }
+
+        // Build upper hull
+        let mut upper: Vec<usize> = Vec::new();
+        for &idx in sorted_indices.iter().rev() {
+            while upper.len() >= 2
+                && cross(
+                    points[upper[upper.len() - 2]],
+                    points[upper[upper.len() - 1]],
+                    points[idx],
+                ) <= 0.0
+            {
+                upper.pop();
+            }
+            upper.push(idx);
+        }
+
+        // Remove last point of each half because it's repeated
+        lower.pop();
+        upper.pop();
+
+        let mut vertices: Vec<usize> = lower;
+        vertices.extend(upper);
+
+        // Handle degenerate cases (all collinear)
+        if vertices.len() < 3 {
+            // Collinear: return endpoints
+            let mut unique_vertices = vertices.clone();
+            unique_vertices.dedup();
+            return Ok(Self {
+                simplices: if unique_vertices.len() >= 2 {
+                    vec![(unique_vertices[0], unique_vertices[1])]
+                } else {
+                    Vec::new()
+                },
+                area: 0.0,
+                perimeter: if unique_vertices.len() >= 2 {
+                    let p0 = points[unique_vertices[0]];
+                    let p1 = points[unique_vertices[1]];
+                    ((p1.0 - p0.0).powi(2) + (p1.1 - p0.1).powi(2)).sqrt()
+                } else {
+                    0.0
+                },
+                vertices: unique_vertices,
+            });
+        }
+
+        // Compute simplices (edges)
+        let nv = vertices.len();
+        let simplices: Vec<(usize, usize)> = (0..nv)
+            .map(|i| (vertices[i], vertices[(i + 1) % nv]))
+            .collect();
+
+        // Compute area using the shoelace formula
+        let mut area = 0.0;
+        for i in 0..nv {
+            let j = (i + 1) % nv;
+            let pi = points[vertices[i]];
+            let pj = points[vertices[j]];
+            area += pi.0 * pj.1 - pj.0 * pi.1;
+        }
+        area = area.abs() / 2.0;
+
+        // Compute perimeter
+        let mut perimeter = 0.0;
+        for &(a, b) in &simplices {
+            let dx = points[b].0 - points[a].0;
+            let dy = points[b].1 - points[a].1;
+            perimeter += (dx * dx + dy * dy).sqrt();
+        }
+
+        Ok(Self {
+            vertices,
+            simplices,
+            area,
+            perimeter,
+        })
+    }
+}
+
+/// Cross product of vectors OA and OB where O, A, B are 2D points.
+/// Positive = counter-clockwise, negative = clockwise, zero = collinear.
+fn cross(o: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
 }
 
 #[cfg(test)]
@@ -888,6 +1088,33 @@ mod tests {
     }
 
     #[test]
+    fn distance_matrix_matches_cdist() {
+        let xa = vec![vec![0.0, 0.0], vec![1.0, 0.0]];
+        let xb = vec![vec![0.0, 1.0], vec![1.0, 1.0]];
+        let dm = distance_matrix(&xa, &xb).expect("distance_matrix");
+        let cd = cdist(&xa, &xb).expect("cdist");
+        assert_eq!(dm.len(), cd.len());
+        for (row_dm, row_cd) in dm.iter().zip(cd.iter()) {
+            assert_eq!(row_dm.len(), row_cd.len());
+            for (&a, &b) in row_dm.iter().zip(row_cd.iter()) {
+                assert!(
+                    (a - b).abs() < 1e-12,
+                    "distance_matrix mismatch: {a} vs {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cdist_metric_dimension_mismatch_in_later_row() {
+        let xa = vec![vec![0.0, 0.0], vec![1.0]];
+        let xb = vec![vec![0.0, 1.0], vec![1.0, 1.0]];
+        let err = cdist_metric(&xa, &xb, DistanceMetric::Euclidean)
+            .expect_err("later row dimension mismatch");
+        assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
+    }
+
+    #[test]
     fn kdtree_large_random() {
         // Verify KDTree gives same result as brute force for 100 points
         let data: Vec<Vec<f64>> = (0..100)
@@ -998,6 +1225,15 @@ mod tests {
     }
 
     #[test]
+    fn kdtree_query_ball_point_negative_radius_rejected() {
+        let tree = KDTree::new(&[vec![0.0, 0.0]]).unwrap();
+        let err = tree
+            .query_ball_point(&[0.0, 0.0], -1.0)
+            .expect_err("negative radius");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
     fn kdtree_count_neighbors() {
         let data1 = vec![vec![0.0, 0.0], vec![1.0, 0.0]];
         let data2 = vec![vec![0.5, 0.0], vec![10.0, 10.0]];
@@ -1007,5 +1243,131 @@ mod tests {
         // Within radius 1.0: (0,0)↔(0.5,0) and (1,0)↔(0.5,0) = 2 pairs
         let count = tree1.count_neighbors(&tree2, 1.0);
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn kdtree_query_ball_tree() {
+        let data1 = vec![vec![0.0, 0.0], vec![2.0, 0.0], vec![5.0, 5.0]];
+        let data2 = vec![vec![0.5, 0.0], vec![2.5, 0.0], vec![9.0, 9.0]];
+        let tree1 = KDTree::new(&data1).unwrap();
+        let tree2 = KDTree::new(&data2).unwrap();
+
+        let neighbors = tree1.query_ball_tree(&tree2, 0.75).unwrap();
+        assert_eq!(neighbors.len(), data1.len());
+        assert_eq!(neighbors[0], vec![0]);
+        assert_eq!(neighbors[1], vec![1]);
+        assert!(neighbors[2].is_empty());
+    }
+
+    #[test]
+    fn kdtree_query_ball_tree_dimension_mismatch() {
+        let tree1 = KDTree::new(&[vec![0.0, 0.0]]).unwrap();
+        let tree2 = KDTree::new(&[vec![0.0, 0.0, 0.0]]).unwrap();
+        let err = tree1
+            .query_ball_tree(&tree2, 1.0)
+            .expect_err("dimension mismatch");
+        assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn kdtree_query_ball_tree_negative_radius_rejected() {
+        let tree1 = KDTree::new(&[vec![0.0, 0.0]]).unwrap();
+        let tree2 = KDTree::new(&[vec![0.5, 0.0]]).unwrap();
+        let err = tree1
+            .query_ball_tree(&tree2, -1.0)
+            .expect_err("negative radius");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    // ── ConvexHull tests ─────────────────────────────────────────────
+
+    #[test]
+    fn convex_hull_square() {
+        let points = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let hull = ConvexHull::new(&points).expect("hull");
+        assert_eq!(hull.vertices.len(), 4, "square has 4 hull vertices");
+        assert!((hull.area - 1.0).abs() < 1e-10, "area = {}", hull.area);
+        assert!(
+            (hull.perimeter - 4.0).abs() < 1e-10,
+            "perimeter = {}",
+            hull.perimeter
+        );
+    }
+
+    #[test]
+    fn convex_hull_triangle() {
+        let points = [(0.0, 0.0), (4.0, 0.0), (2.0, 3.0)];
+        let hull = ConvexHull::new(&points).expect("hull");
+        assert_eq!(hull.vertices.len(), 3, "triangle has 3 hull vertices");
+        // Area of triangle with base 4, height 3 = 6
+        assert!((hull.area - 6.0).abs() < 1e-10, "area = {}", hull.area);
+    }
+
+    #[test]
+    fn convex_hull_interior_points_excluded() {
+        // Square with interior point
+        let points = [
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (2.0, 2.0),
+            (0.0, 2.0),
+            (1.0, 1.0), // interior
+        ];
+        let hull = ConvexHull::new(&points).expect("hull");
+        assert_eq!(
+            hull.vertices.len(),
+            4,
+            "interior point should be excluded: {:?}",
+            hull.vertices
+        );
+        assert!(!hull.vertices.contains(&4), "point 4 is interior");
+    }
+
+    #[test]
+    fn convex_hull_simplices_form_closed_polygon() {
+        let points = [(0.0, 0.0), (1.0, 0.0), (0.5, 1.0)];
+        let hull = ConvexHull::new(&points).expect("hull");
+        // Each vertex appears exactly twice in simplices (as start and end of adjacent edges)
+        let mut vertex_count = std::collections::HashMap::new();
+        for &(a, b) in &hull.simplices {
+            *vertex_count.entry(a).or_insert(0) += 1;
+            *vertex_count.entry(b).or_insert(0) += 1;
+        }
+        for &v in &hull.vertices {
+            assert_eq!(
+                vertex_count.get(&v),
+                Some(&2),
+                "vertex {v} should appear exactly twice in simplices"
+            );
+        }
+    }
+
+    #[test]
+    fn convex_hull_too_few_points() {
+        let points = [(0.0, 0.0), (1.0, 1.0)];
+        let err = ConvexHull::new(&points).expect_err("too few");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn convex_hull_many_points() {
+        // Generate points on a circle (all should be on hull) + center
+        let n = 20;
+        let mut points: Vec<(f64, f64)> = (0..n)
+            .map(|i| {
+                let theta = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+                (theta.cos(), theta.sin())
+            })
+            .collect();
+        points.push((0.0, 0.0)); // center point
+        let hull = ConvexHull::new(&points).expect("hull");
+        assert_eq!(hull.vertices.len(), n, "circle points all on hull");
+        assert!(!hull.vertices.contains(&n), "center point excluded");
+        // Area should approximate π
+        assert!(
+            (hull.area - std::f64::consts::PI).abs() < 0.1,
+            "area ≈ π: {}",
+            hull.area
+        );
     }
 }

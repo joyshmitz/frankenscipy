@@ -433,6 +433,109 @@ pub fn fftconvolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>,
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Cross-correlation
+// ══════════════════════════════════════════════════════════════════════
+
+/// Cross-correlation of two 1D arrays.
+///
+/// Equivalent to `convolve(a, v[::-1], mode)` — reverse v and convolve.
+/// Matches `scipy.signal.correlate(a, v, mode)`.
+///
+/// # Arguments
+/// * `a` — First input array.
+/// * `v` — Second input array (will be time-reversed internally).
+/// * `mode` — Output mode: Full, Same, or Valid.
+pub fn correlate(a: &[f64], v: &[f64], mode: ConvolveMode) -> Result<Vec<f64>, SignalError> {
+    if a.is_empty() || v.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "inputs must be non-empty".to_string(),
+        ));
+    }
+    // Correlate = convolve with reversed kernel
+    let v_rev: Vec<f64> = v.iter().rev().copied().collect();
+    convolve(a, &v_rev, mode)
+}
+
+/// 2D cross-correlation of two 2D arrays.
+///
+/// Matches `scipy.signal.correlate2d(in1, in2, mode)`.
+///
+/// # Arguments
+/// * `a` — First 2D input (rows x cols, row-major flat array).
+/// * `a_shape` — (rows, cols) of first input.
+/// * `v` — Second 2D input (kernel, row-major flat array).
+/// * `v_shape` — (rows, cols) of kernel.
+/// * `mode` — Output mode: Full, Same, or Valid.
+pub fn correlate2d(
+    a: &[f64],
+    a_shape: (usize, usize),
+    v: &[f64],
+    v_shape: (usize, usize),
+    mode: ConvolveMode,
+) -> Result<Vec<f64>, SignalError> {
+    let (ar, ac) = a_shape;
+    let (vr, vc) = v_shape;
+    if a.len() != ar * ac || v.len() != vr * vc {
+        return Err(SignalError::InvalidArgument(
+            "array length must match shape".to_string(),
+        ));
+    }
+    if ar == 0 || ac == 0 || vr == 0 || vc == 0 {
+        return Err(SignalError::InvalidArgument(
+            "inputs must be non-empty".to_string(),
+        ));
+    }
+
+    // Reverse v in both dimensions for correlation
+    let mut v_rev = vec![0.0; vr * vc];
+    for i in 0..vr {
+        for j in 0..vc {
+            v_rev[i * vc + j] = v[(vr - 1 - i) * vc + (vc - 1 - j)];
+        }
+    }
+
+    // 2D convolution (direct method)
+    let (out_r, out_c, start_r, start_c) = match mode {
+        ConvolveMode::Full => (ar + vr - 1, ac + vc - 1, 0, 0),
+        ConvolveMode::Same => (ar, ac, (vr - 1) / 2, (vc - 1) / 2),
+        ConvolveMode::Valid => {
+            if ar < vr || ac < vc {
+                return Err(SignalError::InvalidArgument(
+                    "in valid mode, a must be at least as large as v".to_string(),
+                ));
+            }
+            (ar - vr + 1, ac - vc + 1, vr - 1, vc - 1)
+        }
+    };
+
+    let full_r = ar + vr - 1;
+    let full_c = ac + vc - 1;
+
+    // Compute full 2D convolution
+    let mut full = vec![0.0; full_r * full_c];
+    for i in 0..ar {
+        for j in 0..ac {
+            let aval = a[i * ac + j];
+            for ki in 0..vr {
+                for kj in 0..vc {
+                    full[(i + ki) * full_c + (j + kj)] += aval * v_rev[ki * vc + kj];
+                }
+            }
+        }
+    }
+
+    // Extract requested region
+    let mut result = vec![0.0; out_r * out_c];
+    for i in 0..out_r {
+        for j in 0..out_c {
+            result[i * out_c + j] = full[(i + start_r) * full_c + (j + start_c)];
+        }
+    }
+
+    Ok(result)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Peak Detection
 // ══════════════════════════════════════════════════════════════════════
 
@@ -5643,5 +5746,92 @@ mod tests {
     #[test]
     fn decimate_rejects_q_less_than_2() {
         assert!(decimate(&[1.0, 2.0], 1).is_err());
+    }
+
+    // ── Cross-correlation tests ──────────────────────────────────────
+
+    #[test]
+    fn correlate_autocorrelation_peak_at_zero_lag() {
+        // Auto-correlation peak should be at center (zero lag)
+        let x = vec![0.0, 1.0, 2.0, 3.0, 2.0, 1.0, 0.0];
+        let result = correlate(&x, &x, ConvolveMode::Full).expect("correlate");
+        let mid = result.len() / 2;
+        for (i, &val) in result.iter().enumerate() {
+            assert!(
+                val <= result[mid] + 1e-10,
+                "peak should be at center lag: r[{i}]={val} > r[{mid}]={}",
+                result[mid]
+            );
+        }
+    }
+
+    #[test]
+    fn correlate_shifted_signal() {
+        // Cross-correlate with a shifted copy — peak indicates shift
+        let a = vec![0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 0.0];
+        let v = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0];
+        let result = correlate(&a, &v, ConvolveMode::Full).expect("correlate");
+        // Peak should indicate the shift
+        let peak_idx = result
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .unwrap()
+            .0;
+        // v is shifted right by 1 relative to a, so peak should be at center-1
+        let center = result.len() / 2;
+        assert!(
+            (peak_idx as i64 - center as i64).abs() <= 2,
+            "peak at {peak_idx}, center at {center}"
+        );
+    }
+
+    #[test]
+    fn correlate_same_mode() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let v = vec![1.0, 0.0, -1.0];
+        let result = correlate(&a, &v, ConvolveMode::Same).expect("correlate same");
+        assert_eq!(result.len(), a.len(), "same mode output length = input length");
+    }
+
+    #[test]
+    fn correlate_valid_mode() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let v = vec![1.0, 0.0, -1.0];
+        let result = correlate(&a, &v, ConvolveMode::Valid).expect("correlate valid");
+        assert_eq!(result.len(), 3, "valid mode output length");
+    }
+
+    #[test]
+    fn correlate_symmetry() {
+        // correlate(a, a) should be symmetric
+        let a = vec![1.0, 3.0, 2.0, 5.0];
+        let result = correlate(&a, &a, ConvolveMode::Full).expect("correlate");
+        let n = result.len();
+        for i in 0..n / 2 {
+            assert!(
+                (result[i] - result[n - 1 - i]).abs() < 1e-10,
+                "autocorrelation should be symmetric: r[{i}]={} vs r[{}]={}",
+                result[i],
+                n - 1 - i,
+                result[n - 1 - i]
+            );
+        }
+    }
+
+    #[test]
+    fn correlate2d_identity_kernel() {
+        // Correlation with delta function should return the input
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let v = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]; // center = 1
+        let result = correlate2d(&a, (3, 3), &v, (3, 3), ConvolveMode::Same).expect("correlate2d");
+        assert_eq!(result.len(), 9);
+        // With a centered delta, same-mode correlation should approximate input
+        assert!(
+            (result[4] - a[4]).abs() < 1e-10,
+            "center should match: {} vs {}",
+            result[4],
+            a[4]
+        );
     }
 }

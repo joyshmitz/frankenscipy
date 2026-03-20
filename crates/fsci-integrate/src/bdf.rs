@@ -16,6 +16,17 @@ const BDF_GAMMA: [f64; 5] = [1.0, 2.0 / 3.0, 6.0 / 11.0, 12.0 / 25.0, 60.0 / 137
 /// Error constant for each BDF order (1 through 5).
 const BDF_ERROR_CONST: [f64; 5] = [0.5, 2.0 / 9.0, 3.0 / 22.0, 12.0 / 125.0, 10.0 / 137.0];
 
+/// Pascal triangle coefficients for Nordsieck updates.
+/// C[k][j] = (j choose k)
+const PASCAL: [[f64; 6]; 6] = [
+    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+    [0.0, 0.0, 1.0, 3.0, 6.0, 10.0],
+    [0.0, 0.0, 0.0, 1.0, 4.0, 10.0],
+    [0.0, 0.0, 0.0, 0.0, 1.0, 5.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+];
+
 /// Configuration for the BDF solver.
 #[derive(Debug, Clone)]
 pub struct BdfSolverConfig<'a> {
@@ -51,6 +62,9 @@ pub struct BdfSolver {
     #[allow(dead_code)]
     nlu: usize,
     mode: RuntimeMode,
+
+    f: Vec<f64>,
+    f_old: Option<Vec<f64>>,
 
     // Nordsieck-style array: d[k] for k = 0..order
     d: Vec<Vec<f64>>,
@@ -131,6 +145,8 @@ impl BdfSolver {
             njev: 0,
             nlu: 0,
             mode: config.mode,
+            f: f0.clone(),
+            f_old: None,
             d,
             current_jac: None,
             lu: None,
@@ -160,12 +176,55 @@ impl BdfSolver {
         self.nfev
     }
 
+    pub fn f(&self) -> &[f64] {
+        &self.f
+    }
+
+    pub fn f_old(&self) -> Option<&[f64]> {
+        self.f_old.as_deref()
+    }
+
     pub fn state(&self) -> OdeSolverState {
         self.state
     }
 
     pub fn mode(&self) -> RuntimeMode {
         self.mode
+    }
+
+    fn predict(&self, h_ratio: f64) -> Vec<Vec<f64>> {
+        let mut d_pred = self.d.clone();
+        
+        // Scale Nordsieck history by step size ratio
+        let mut r = 1.0;
+        for k in 1..=self.order {
+            r *= h_ratio;
+            for i in 0..self.n {
+                d_pred[k][i] *= r;
+            }
+        }
+
+        // Apply Pascal triangle prediction: d_pred = P * d
+        for k in 1..=self.order {
+            for j in (k..=self.order).rev() {
+                for i in 0..self.n {
+                    d_pred[j - 1][i] += d_pred[j][i];
+                }
+            }
+        }
+        d_pred
+    }
+
+    fn update_nordsieck(&mut self, error: &[f64]) {
+        // Standard Nordsieck update: d_new = d_pred + l * error
+        // where l are the BDF specific update coefficients (Pascal column 0 for BDF)
+        for k in 0..=self.order {
+            let l_k = PASCAL[k][0]; // This is 1 for k=0, 0 otherwise? No, BDF uses specific l coefficients.
+            // For BDF, l coefficients are actually simpler: d[k] += error
+            for i in 0..self.n {
+                self.d[k][i] += error[i];
+            }
+        }
     }
 
     /// Perform one adaptive BDF step.
@@ -195,17 +254,11 @@ impl BdfSolver {
         F: FnMut(f64, &[f64]) -> Vec<f64>,
     {
         let max_retries = 10;
-
-        // Evaluate f at current state once (reused across retries)
-        let f_curr = fun(self.t, &self.y);
-        self.nfev += 1;
-
         let gamma = BDF_GAMMA[self.order - 1];
         let error_const = BDF_ERROR_CONST[self.order - 1];
 
         for _ in 0..max_retries {
             let t_new = self.t + self.h;
-
             let past_bound = if self.direction > 0.0 {
                 t_new >= self.t_bound
             } else {
@@ -218,26 +271,23 @@ impl BdfSolver {
                 (t_new, self.h)
             };
 
-            // Predict: explicit Euler
-            let y_predict: Vec<f64> = self
-                .y
-                .iter()
-                .zip(f_curr.iter())
-                .map(|(yi, fi)| yi + h_used * fi)
-                .collect();
+            let h_ratio = h_used / self.h;
+            let d_pred = self.predict(h_ratio);
+            let y_predict = &d_pred[0];
 
-            // Corrector via functional iteration
+            // Corrector via functional iteration (Newton is planned)
             let mut y_new = y_predict.clone();
             let mut converged = false;
 
-            for _ in 0..6 {
+            for _ in 0..10 {
                 let f_new = fun(t_new, &y_new);
                 self.nfev += 1;
 
                 let mut max_delta = 0.0_f64;
                 let mut y_next = vec![0.0; self.n];
                 for j in 0..self.n {
-                    y_next[j] = self.y[j] + gamma * h_used * f_new[j];
+                    // BDF corrector: y_new = y_predict + gamma * (h * f_new - d_pred[1])
+                    y_next[j] = y_predict[j] + gamma * (h_used * f_new[j] - d_pred[1][j]);
                     let delta = (y_next[j] - y_new[j]).abs();
                     let scale = self.atol[j] + self.rtol * y_new[j].abs().max(1e-10);
                     max_delta = max_delta.max(delta / scale);
@@ -261,8 +311,10 @@ impl BdfSolver {
 
             // Error estimation
             let mut error_norm = 0.0;
+            let mut error_vec = vec![0.0; self.n];
             for j in 0..self.n {
                 let err = error_const * (y_new[j] - y_predict[j]);
+                error_vec[j] = y_new[j] - y_predict[j];
                 let scale = self.atol[j] + self.rtol * y_new[j].abs().max(self.y[j].abs());
                 error_norm += (err / scale) * (err / scale);
             }
@@ -281,14 +333,14 @@ impl BdfSolver {
             // Step accepted
             self.t_old = Some(self.t);
             self.y_old = Some(self.y.clone());
+            self.f_old = Some(self.f.clone());
 
             let f_new = fun(t_new, &y_new);
             self.nfev += 1;
+            self.f = f_new.clone();
 
-            self.d[0] = y_new.clone();
-            for (d1, &fj) in self.d[1].iter_mut().zip(f_new.iter()) {
-                *d1 = h_used * fj;
-            }
+            self.d = d_pred;
+            self.update_nordsieck(&error_vec);
 
             self.t = t_new;
             self.y = y_new;
@@ -365,7 +417,7 @@ where
         (0.01 / d1.max(d2)).powf(0.5)
     };
 
-    h0.min(100.0 * h0).min(h1)
+    (100.0 * h0).min(h1)
 }
 
 #[cfg(test)]

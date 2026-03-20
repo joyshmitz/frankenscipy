@@ -661,7 +661,7 @@ pub fn dct_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     let n = input.len();
     // DCT-III is scaled IDCT-II
     let idct_result = idct(input, options)?;
-    Ok(idct_result.into_iter().map(|v| v * n as f64).collect())
+    Ok(idct_result.into_iter().map(|v| v * 2.0 * n as f64).collect())
 }
 
 /// Discrete Cosine Transform Type IV.
@@ -767,21 +767,24 @@ pub fn dst_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     // DST-III via FFT of length 4N (inverse of DST-II)
     let m = 4 * n;
     let mut extended = vec![(0.0, 0.0); m];
-    for k in 0..n {
+    for k in 0..n - 1 {
         extended[k + 1] = (0.0, -input[k]);
         extended[m - k - 1] = (0.0, input[k]);
     }
+    // The last term X[N-1] has a 1/2 factor in the standard DST-III formula
+    let last_val = input[n - 1] * 0.5;
+    extended[n] = (0.0, -last_val);
+    extended[m - n] = (0.0, last_val);
 
     let backend = resolve_backend(options.backend);
     let time_domain = backend.transform_1d_unscaled(&extended, true);
 
     let mut result = Vec::with_capacity(n);
     for i in 0..n {
-        // The raw sum from IFFT of the 4N-length extended signal produces 4 * sum.
-        // SciPy's DST type 3 standard requires 2 * sum.
-        // The previous O(n^2) implementation was: result[i] = sum_j 2 * x[j] * sin(...)
-        // which corresponds to this FFT-based result * 0.5.
-        result.push(time_domain[2 * i + 1].0 * 0.5);
+        // The raw sum from IFFT of the 4N-length extended signal produces 2 * sum
+        // of the terms in the standard DST-III definition.
+        // matches SciPy's unnormalized dst(type=3) result.
+        result.push(time_domain[2 * i + 1].0);
     }
     Ok(result)
 }

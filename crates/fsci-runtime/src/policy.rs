@@ -140,8 +140,8 @@ pub(crate) fn softmax(logits: [f64; 3]) -> [f64; 3] {
     let max_logit = logits.iter().fold(f64::NEG_INFINITY, |acc, v| acc.max(*v));
     let exps = logits.map(|v| (v - max_logit).exp());
     let denom = exps.iter().sum::<f64>();
-    if denom == 0.0 {
-        return [1.0, 0.0, 0.0];
+    if denom <= 0.0 {
+        return [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
     }
     exps.map(|v| v / denom)
 }

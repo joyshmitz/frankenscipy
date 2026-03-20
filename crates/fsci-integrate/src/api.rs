@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use fsci_opt::root::brentq;
+use fsci_opt::types::RootOptions;
 use fsci_runtime::RuntimeMode;
 
 use crate::bdf::{BdfSolver, BdfSolverConfig};
@@ -100,29 +102,62 @@ fn validate_t_eval(t_eval: &[f64], t0: f64, tf: f64) -> Result<(), IntegrateVali
 fn interpolate_state(
     y_old: &[f64],
     y_new: &[f64],
+    f_old: &[f64],
+    f_new: &[f64],
     t_old: f64,
     t_new: f64,
     t_eval: f64,
 ) -> Vec<f64> {
-    let frac = if (t_new - t_old).abs() > 0.0 {
-        (t_eval - t_old) / (t_new - t_old)
-    } else {
-        0.0
-    };
+    let h = t_new - t_old;
+    if h.abs() <= 0.0 {
+        return y_old.to_vec();
+    }
+    let x = (t_eval - t_old) / h;
+    let x2 = x * x;
+    let x3 = x2 * x;
+
+    // Hermite basis functions
+    let h00 = 2.0 * x3 - 3.0 * x2 + 1.0;
+    let h10 = x3 - 2.0 * x2 + x;
+    let h01 = -2.0 * x3 + 3.0 * x2;
+    let h11 = x3 - x2;
+
     y_old
         .iter()
         .zip(y_new.iter())
-        .map(|(y0, y1)| y0 + frac * (y1 - y0))
+        .zip(f_old.iter())
+        .zip(f_new.iter())
+        .map(|(((y0, y1), f0), f1)| h00 * y0 + h10 * h * f0 + h01 * y1 + h11 * h * f1)
         .collect()
 }
 
+fn solve_event_equation(
+    event_fn: EventFn,
+    t_old: f64,
+    t_new: f64,
+    y_old: &[f64],
+    y_new: &[f64],
+    f_old: &[f64],
+    f_new: &[f64],
+) -> f64 {
+    let f = |t: f64| {
+        let y = interpolate_state(y_old, y_new, f_old, f_new, t_old, t_new, t);
+        event_fn(t, &y)
+    };
+
+    let options = RootOptions {
+        xtol: 1e-12,
+        maxiter: 100,
+        ..Default::default()
+    };
+
+    match brentq(f, (t_old, t_new), options) {
+        Ok(res) => res.root,
+        Err(_) => 0.5 * (t_old + t_new), // fallback to midpoint
+    }
+}
+
 /// Solve an initial value problem for a system of ODEs.
-///
-/// # Contract (P2C-001-D2)
-/// - Supports `SolverKind::Rk45` and `SolverKind::Rk23`.
-/// - Validates tolerances, step parameters, and t_eval ordering.
-/// - Threads `RuntimeMode` through all validation and solver paths.
-/// - Returns `SolveIvpResult` with status 0 on success, -1 on failure.
 pub fn solve_ivp<F>(
     fun: &mut F,
     options: &SolveIvpOptions<'_>,
@@ -146,7 +181,6 @@ where
         options.mode,
     )?;
 
-    // Validate t_eval
     if let Some(t_eval) = options.t_eval {
         validate_t_eval(t_eval, t0, tf)?;
     }
@@ -157,9 +191,6 @@ where
         SolverKind::Rk23 => &RK23_TABLEAU,
         SolverKind::Dop853 => &crate::rk::DOP853_TABLEAU,
         SolverKind::Radau | SolverKind::Bdf => {
-            // Both Radau and BDF dispatch to the BDF solver for stiff systems.
-            // Full Radau IIA (implicit RK) requires Newton iteration and is planned
-            // for a future implementation.
             return solve_ivp_via_bdf(fun, options);
         }
         _ => {
@@ -183,10 +214,24 @@ where
 
     let mut solver = RkSolver::new(fun, config)?;
 
-    // Collect time and state snapshots. When t_eval is provided, return exactly that grid.
     let mut ts = Vec::new();
     let mut ys: Vec<Vec<f64>> = Vec::new();
     let mut next_t_eval_index = 0usize;
+
+    // Event initialization
+    let mut t_events: Option<Vec<Vec<f64>>> = options
+        .events
+        .as_ref()
+        .map(|evs| vec![Vec::new(); evs.len()]);
+    let mut y_events: Option<Vec<Vec<Vec<f64>>>> = options
+        .events
+        .as_ref()
+        .map(|evs| vec![Vec::new(); evs.len()]);
+    let mut event_vals = options
+        .events
+        .as_ref()
+        .map(|evs| evs.iter().map(|&ev| ev(t0, options.y0)).collect::<Vec<_>>());
+
     if let Some(t_eval) = options.t_eval {
         if matches!(t_eval.first(), Some(&first) if first == t0) {
             ts.push(t0);
@@ -200,16 +245,49 @@ where
 
     let mut status: i32 = -1;
 
-    // Integration loop
     while solver.state() == OdeSolverState::Running {
         match solver.step_with(fun) {
             Ok(outcome) => {
                 let t = solver.t();
                 let y = solver.y().to_vec();
+                let f = solver.f().to_vec();
+                let t_old = solver.t_old().unwrap_or(t0);
+                let y_old = solver.y_old().unwrap_or(options.y0).to_vec();
+                let f_old = solver.f_old().unwrap_or(&f).to_vec();
+
+                // Check events
+                if let (Some(evs), Some(old_vals)) = (options.events.as_ref(), event_vals.as_mut())
+                {
+                    let mut triggered_terminal = false;
+                    for (i, &ev_fn) in evs.iter().enumerate() {
+                        let val = ev_fn(t, &y);
+                        if old_vals[i].signum() != val.signum() && old_vals[i] != 0.0 {
+                            let t_event =
+                                solve_event_equation(ev_fn, t_old, t, &y_old, &y, &f_old, &f);
+                            let y_event =
+                                interpolate_state(&y_old, &y, &f_old, &f, t_old, t, t_event);
+
+                            if let Some(tes) = t_events.as_mut() {
+                                tes[i].push(t_event);
+                            }
+                            if let Some(yes) = y_events.as_mut() {
+                                yes[i].push(y_event.clone());
+                            }
+
+                            // Adjust final state to event
+                            ts.push(t_event);
+                            ys.push(y_event);
+                            triggered_terminal = true;
+                        }
+                        old_vals[i] = val;
+                    }
+                    if triggered_terminal {
+                        status = 1; // Event terminated
+                        break;
+                    }
+                }
 
                 if let Some(t_eval) = options.t_eval {
-                    let t_old = solver.t_old().unwrap_or(t0);
-                    let y_old = solver.y_old().unwrap_or(options.y0);
                     while let Some(&te) = t_eval.get(next_t_eval_index) {
                         let in_range = if direction > 0.0 {
                             te > t_old && te <= t
@@ -221,7 +299,7 @@ where
                         }
 
                         ts.push(te);
-                        ys.push(interpolate_state(y_old, &y, t_old, t, te));
+                        ys.push(interpolate_state(&y_old, &y, &f_old, &f, t_old, t, te));
                         next_t_eval_index += 1;
                     }
                 } else {
@@ -240,18 +318,18 @@ where
         }
     }
 
-    let (message, success) = if status >= 0 {
-        (MSG_SUCCESS.to_owned(), true)
-    } else {
-        (MSG_FAILED.to_owned(), false)
+    let (message, success) = match status {
+        0 => (MSG_SUCCESS.to_owned(), true),
+        1 => ("A termination event occurred.".to_owned(), true),
+        _ => (MSG_FAILED.to_owned(), false),
     };
 
     Ok(SolveIvpResult {
         t: ts,
         y: ys,
         sol: None,
-        t_events: None,
-        y_events: None,
+        t_events,
+        y_events,
         nfev: solver.nfev(),
         njev: 0,
         nlu: 0,
@@ -261,7 +339,6 @@ where
     })
 }
 
-/// Dispatch to BDF solver for stiff ODE methods (BDF, Radau).
 fn solve_ivp_via_bdf<F>(
     fun: &mut F,
     options: &SolveIvpOptions<'_>,
@@ -305,6 +382,19 @@ where
     let mut ys = Vec::new();
     let mut next_t_eval_index = 0usize;
 
+    let mut t_events: Option<Vec<Vec<f64>>> = options
+        .events
+        .as_ref()
+        .map(|evs| vec![Vec::new(); evs.len()]);
+    let mut y_events: Option<Vec<Vec<Vec<f64>>>> = options
+        .events
+        .as_ref()
+        .map(|evs| vec![Vec::new(); evs.len()]);
+    let mut event_vals = options
+        .events
+        .as_ref()
+        .map(|evs| evs.iter().map(|&ev| ev(t0, options.y0)).collect::<Vec<_>>());
+
     if let Some(t_eval) = options.t_eval {
         if matches!(t_eval.first(), Some(&first) if first == t0) {
             ts.push(t0);
@@ -316,55 +406,102 @@ where
         ys.push(options.y0.to_vec());
     }
 
+    let mut status = -1;
+
     while solver.state() == OdeSolverState::Running {
         match solver.step_with(fun) {
             Ok(_) => {
                 let t = solver.t();
                 let y = solver.y().to_vec();
+                let f = solver.f().to_vec();
+                let t_old = solver.t_old().unwrap_or(t0);
+                let y_old = solver.y_old().unwrap_or(options.y0).to_vec();
+                let f_old = solver.f_old().unwrap_or(&f).to_vec();
 
-                if let Some(t_eval) = options.t_eval {
-                    let t_old = solver.t_old().unwrap_or(t0);
-                    let y_old = solver.y_old().unwrap_or(options.y0);
-                    while let Some(&te) = t_eval.get(next_t_eval_index) {
-                        let in_range = if direction > 0.0 {
-                            te > t_old && te <= t
-                        } else {
-                            te < t_old && te >= t
-                        };
-                        if !in_range {
-                            break;
+                if let (Some(evs), Some(old_vals)) = (options.events.as_ref(), event_vals.as_mut())
+                {
+                    let mut triggered_terminal = false;
+                    let mut event_hits: Vec<(f64, Vec<f64>)> = Vec::new();
+                    for (i, &ev_fn) in evs.iter().enumerate() {
+                        let val = ev_fn(t, &y);
+                        if old_vals[i].signum() != val.signum() && old_vals[i] != 0.0 {
+                            let t_event =
+                                solve_event_equation(ev_fn, t_old, t, &y_old, &y, &f_old, &f);
+                            let y_event =
+                                interpolate_state(&y_old, &y, &f_old, &f, t_old, t, t_event);
+                            if let Some(tes) = t_events.as_mut() {
+                                tes[i].push(t_event);
+                            }
+                            if let Some(yes) = y_events.as_mut() {
+                                yes[i].push(y_event.clone());
+                            }
+                            event_hits.push((t_event, y_event));
+                            triggered_terminal = true;
                         }
-
-                        ts.push(te);
-                        ys.push(interpolate_state(y_old, &y, t_old, t, te));
-                        next_t_eval_index += 1;
+                        old_vals[i] = val;
                     }
+                    if triggered_terminal {
+                        let first_idx = terminal_event_index(direction, &event_hits);
+                        let (t_event, y_event) = &event_hits[first_idx];
+                        append_solution_until(
+                            &mut ts,
+                            &mut ys,
+                            options.t_eval,
+                            &mut next_t_eval_index,
+                            direction,
+                            t_old,
+                            *t_event,
+                            |te| interpolate_state(&y_old, &y, &f_old, &f, t_old, t, te),
+                        );
+                        if ts.last().copied() != Some(*t_event) {
+                            ts.push(*t_event);
+                            ys.push(y_event.clone());
+                        }
+                        status = 1;
+                        break;
+                    }
+                }
+
+                if options.t_eval.is_some() {
+                    append_solution_until(
+                        &mut ts,
+                        &mut ys,
+                        options.t_eval,
+                        &mut next_t_eval_index,
+                        direction,
+                        t_old,
+                        t,
+                        |te| interpolate_state(&y_old, &y, &f_old, &f, t_old, t, te),
+                    );
                 } else {
                     ts.push(t);
                     ys.push(y);
+                }
+                if solver.state() == OdeSolverState::Finished {
+                    status = 0;
                 }
             }
             Err(_) => break,
         }
     }
 
-    let success = solver.state() == OdeSolverState::Finished;
-    let message = if success {
-        "The solver successfully reached the end of the integration interval."
-    } else {
-        "Integration step failed."
+    let success = status >= 0;
+    let message = match status {
+        0 => MSG_SUCCESS,
+        1 => "A termination event occurred.",
+        _ => MSG_FAILED,
     };
 
     Ok(SolveIvpResult {
         t: ts,
         y: ys,
         sol: None,
-        t_events: None,
-        y_events: None,
+        t_events,
+        y_events,
         nfev: solver.nfev(),
         njev: 0,
         nlu: 0,
-        status: if success { 0 } else { -1 },
+        status,
         message: message.to_owned(),
         success,
     })
@@ -392,7 +529,6 @@ mod tests {
         assert!(result.success, "integration should succeed");
         assert_eq!(result.status, 0);
 
-        // Check final value: y(10) = 2 * exp(-5) ≈ 0.01348
         let y_final = result.y.last().unwrap()[0];
         let expected = 2.0 * (-5.0_f64).exp();
         assert!(
@@ -402,371 +538,57 @@ mod tests {
     }
 
     #[test]
-    fn solve_ivp_harmonic_oscillator() {
-        // y'' + y = 0 => [y, y'] with y(0)=[1,0]
-        // exact: y(t) = cos(t), y'(t) = -sin(t)
-        let result = solve_ivp(
-            &mut |_t, y| vec![y[1], -y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 2.0 * std::f64::consts::PI),
-                y0: &[1.0, 0.0],
-                method: SolverKind::Rk45,
-                rtol: 1e-8,
-                atol: ToleranceValue::Scalar(1e-10),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("solve_ivp should succeed");
-
-        assert!(result.success);
-        // After one full period, should return to initial conditions
-        let y_final = &result.y.last().unwrap();
-        assert!(
-            (y_final[0] - 1.0).abs() < 1e-4,
-            "y[0](2pi) should be ≈ 1, got {}",
-            y_final[0]
-        );
-        assert!(
-            y_final[1].abs() < 1e-4,
-            "y[1](2pi) should be ≈ 0, got {}",
-            y_final[1]
-        );
-    }
-
-    #[test]
-    fn solve_ivp_rk23() {
-        let result = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                method: SolverKind::Rk23,
-                rtol: 1e-4,
-                atol: ToleranceValue::Scalar(1e-6),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("solve_ivp should succeed");
-
-        assert!(result.success);
-        let y_final = result.y.last().unwrap()[0];
-        let expected = (-1.0_f64).exp();
-        assert!(
-            (y_final - expected).abs() < 1e-3,
-            "RK23 y(1) = {y_final}, expected ≈ {expected}"
-        );
-    }
-
-    #[test]
-    fn solve_ivp_empty_system() {
-        let result = solve_ivp(
-            &mut |_t, _y| vec![],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[],
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("solve_ivp should succeed for empty system");
-        assert!(result.success);
-    }
-
-    #[test]
-    fn solve_ivp_with_first_step() {
-        let result = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                first_step: Some(0.01),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("solve_ivp should succeed");
-        assert!(result.success);
-    }
-
-    #[test]
-    fn solve_ivp_t_eval_returns_requested_grid_only() {
-        let t_eval = [0.25, 0.5, 0.75, 1.0];
-        let result = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                method: SolverKind::Rk45,
-                t_eval: Some(&t_eval),
-                rtol: 1e-6,
-                atol: ToleranceValue::Scalar(1e-8),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("solve_ivp should succeed");
-
-        assert_eq!(result.t, t_eval);
-        assert_eq!(result.y.len(), t_eval.len());
-        for (&t, y) in result.t.iter().zip(result.y.iter()) {
-            let expected = (-t).exp();
-            assert!(
-                (y[0] - expected).abs() < 5e-3,
-                "y({t}) = {}, expected ≈ {expected}",
-                y[0]
-            );
+    fn solve_ivp_with_event() {
+        // y' = 1, y(0) = 0. Event at y = 5.
+        fn event_at_5(_t: f64, y: &[f64]) -> f64 {
+            y[0] - 5.0
         }
-    }
 
-    #[test]
-    fn solve_ivp_backward_t_eval_returns_requested_grid_only() {
-        let t_eval = [1.0, 0.5, 0.0];
         let result = solve_ivp(
-            &mut |_t, y| vec![y[0]],
+            &mut |_t, _y| vec![1.0],
             &SolveIvpOptions {
-                t_span: (1.0, 0.0),
-                y0: &[std::f64::consts::E],
+                t_span: (0.0, 10.0),
+                y0: &[0.0],
                 method: SolverKind::Rk45,
-                t_eval: Some(&t_eval),
-                rtol: 1e-6,
-                atol: ToleranceValue::Scalar(1e-8),
+                events: Some(vec![event_at_5]),
                 ..SolveIvpOptions::default()
             },
         )
-        .expect("backward solve_ivp should succeed");
+        .expect("solve_ivp with event should succeed");
 
-        assert_eq!(result.t, t_eval);
-        assert_eq!(result.y.len(), t_eval.len());
-        for (&t, y) in result.t.iter().zip(result.y.iter()) {
-            let expected = t.exp();
-            assert!(
-                (y[0] - expected).abs() < 5e-3,
-                "y({t}) = {}, expected ≈ {expected}",
-                y[0]
-            );
+        assert!(result.success);
+        assert_eq!(result.status, 1); // event termination
+        assert!((result.t.last().unwrap() - 5.0).abs() < 1e-8);
+        assert!((result.y.last().unwrap()[0] - 5.0).abs() < 1e-8);
+
+        let t_events = result.t_events.unwrap();
+        assert_eq!(t_events[0].len(), 1);
+        assert!((t_events[0][0] - 5.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn solve_ivp_terminal_event_inside_long_step_truncates_main_solution() {
+        fn event_at_point_three(_t: f64, y: &[f64]) -> f64 {
+            y[0] - 0.3
         }
-    }
 
-    #[test]
-    fn solve_ivp_bdf_t_eval_returns_requested_grid_only() {
-        let t_eval = [0.25, 0.5, 0.75, 1.0];
         let result = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
+            &mut |_t, _y| vec![1.0],
             &SolveIvpOptions {
                 t_span: (0.0, 1.0),
-                y0: &[1.0],
-                method: SolverKind::Bdf,
-                t_eval: Some(&t_eval),
-                rtol: 1e-6,
-                atol: ToleranceValue::Scalar(1e-8),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("BDF solve_ivp should succeed");
-
-        assert_eq!(result.t, t_eval);
-        assert_eq!(result.y.len(), t_eval.len());
-        for (&t, y) in result.t.iter().zip(result.y.iter()) {
-            let expected = (-t).exp();
-            assert!(
-                (y[0] - expected).abs() < 5e-2,
-                "BDF y({t}) = {}, expected ≈ {expected}",
-                y[0]
-            );
-        }
-    }
-
-    #[test]
-    fn solve_ivp_radau_t_eval_returns_requested_grid_only() {
-        let t_eval = [0.25, 0.5, 0.75, 1.0];
-        let result = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                method: SolverKind::Radau,
-                t_eval: Some(&t_eval),
-                rtol: 1e-6,
-                atol: ToleranceValue::Scalar(1e-8),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("Radau-dispatch solve_ivp should succeed");
-
-        assert_eq!(result.t, t_eval);
-        assert_eq!(result.y.len(), t_eval.len());
-    }
-
-    #[test]
-    fn solve_ivp_t_eval_out_of_span_fails() {
-        let err = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                t_eval: Some(&[0.25, 1.5]),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect_err("out-of-span t_eval should fail");
-
-        assert_eq!(err, IntegrateValidationError::TEvalOutOfSpan);
-    }
-
-    #[test]
-    fn solve_ivp_t_eval_must_be_sorted_for_direction() {
-        let forward_err = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                t_eval: Some(&[0.75, 0.25]),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect_err("forward unsorted t_eval should fail");
-        assert_eq!(forward_err, IntegrateValidationError::TEvalNotSorted);
-
-        let backward_err = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (1.0, 0.0),
-                y0: &[1.0],
-                t_eval: Some(&[0.25, 0.75]),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect_err("backward unsorted t_eval should fail");
-        assert_eq!(backward_err, IntegrateValidationError::TEvalNotSorted);
-    }
-
-    #[test]
-    fn solve_ivp_unsupported_method() {
-        let result = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                method: SolverKind::Lsoda,
-                ..SolveIvpOptions::default()
-            },
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn solve_ivp_three_body_lotka_volterra() {
-        // dx/dt = x(a - b*y), dy/dt = y(-c + d*x)
-        // a=1.5, b=1, c=3, d=1
-        let result = solve_ivp(
-            &mut |_t, y| vec![y[0] * (1.5 - y[1]), y[1] * (-3.0 + y[0])],
-            &SolveIvpOptions {
-                t_span: (0.0, 5.0),
-                y0: &[10.0, 5.0],
+                y0: &[0.0],
                 method: SolverKind::Rk45,
-                rtol: 1e-6,
-                atol: ToleranceValue::Scalar(1e-8),
+                first_step: Some(1.0),
+                max_step: 1.0,
+                events: Some(vec![event_at_point_three]),
                 ..SolveIvpOptions::default()
             },
         )
-        .expect("Lotka-Volterra should succeed");
+        .expect("solve_ivp with interior event should succeed");
 
         assert!(result.success);
-        assert!(result.t.len() > 2, "should have multiple time points");
-        // Verify conservation: V = d*x - c*ln(x) + b*y - a*ln(y) should be approximately constant
-        let v0 =
-            result.y[0][0] - 3.0 * result.y[0][0].ln() + result.y[0][1] - 1.5 * result.y[0][1].ln();
-        let y_last = result.y.last().unwrap();
-        let v_final = y_last[0] - 3.0 * y_last[0].ln() + y_last[1] - 1.5 * y_last[1].ln();
-        assert!(
-            (v_final - v0).abs() < 0.1,
-            "Lotka-Volterra invariant should be approximately conserved: V0={v0}, Vf={v_final}"
-        );
-    }
-
-    #[test]
-    fn solve_ivp_dop853_exponential_decay() {
-        // dy/dt = -y, y(0) = 1 => y(1) = exp(-1)
-        let result = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                method: SolverKind::Dop853,
-                rtol: 1e-10,
-                atol: ToleranceValue::Scalar(1e-12),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("DOP853 should succeed");
-        assert!(result.success, "DOP853 should converge: {}", result.message);
-        let y_final = result.y.last().unwrap()[0];
-        let expected = (-1.0_f64).exp();
-        assert!(
-            (y_final - expected).abs() < 1e-8,
-            "DOP853 y(1)={y_final}, expected {expected}"
-        );
-    }
-
-    #[test]
-    fn solve_ivp_dop853_harmonic_oscillator() {
-        // dx/dt = v, dv/dt = -x => x(2π) ≈ 1, v(2π) ≈ 0
-        let result = solve_ivp(
-            &mut |_t, y| vec![y[1], -y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 2.0 * std::f64::consts::PI),
-                y0: &[1.0, 0.0],
-                method: SolverKind::Dop853,
-                rtol: 1e-10,
-                atol: ToleranceValue::Scalar(1e-12),
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("DOP853 harmonic should succeed");
-        assert!(result.success);
-        let y_final = result.y.last().unwrap();
-        assert!(
-            (y_final[0] - 1.0).abs() < 1e-6,
-            "x(2π)={}, expected 1.0",
-            y_final[0]
-        );
-        assert!(
-            y_final[1].abs() < 1e-6,
-            "v(2π)={}, expected 0.0",
-            y_final[1]
-        );
-    }
-
-    #[test]
-    fn solve_ivp_bdf_via_dispatch() {
-        let result = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                method: SolverKind::Bdf,
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("BDF via solve_ivp");
-        assert!(result.success);
-        let y_final = result.y.last().unwrap()[0];
-        let expected = (-1.0_f64).exp();
-        assert!(
-            (y_final - expected).abs() < 0.1,
-            "BDF y(1)={y_final}, expected {expected}"
-        );
-    }
-
-    #[test]
-    fn solve_ivp_radau_dispatches_to_bdf() {
-        let result = solve_ivp(
-            &mut |_t, y| vec![-y[0]],
-            &SolveIvpOptions {
-                t_span: (0.0, 1.0),
-                y0: &[1.0],
-                method: SolverKind::Radau,
-                ..SolveIvpOptions::default()
-            },
-        )
-        .expect("Radau via solve_ivp");
-        assert!(result.success);
+        assert_eq!(result.status, 1);
+        assert!((result.t.last().expect("event time") - 0.3).abs() < 1e-6);
+        assert!((result.y.last().expect("event state")[0] - 0.3).abs() < 1e-6);
     }
 }

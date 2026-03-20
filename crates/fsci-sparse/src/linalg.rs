@@ -2204,6 +2204,156 @@ mod tests {
         let err = svds(&a, 0, EigsOptions::default()).expect_err("k=0");
         assert!(matches!(err, SparseError::InvalidArgument { .. }));
     }
+
+    // ── Graph algorithms (csgraph) tests ─────────────────────────────
+
+    fn triangle_graph_csr() -> CsrMatrix {
+        // 3-node connected graph: 0-1 (w=1), 1-2 (w=2), 0-2 (w=3)
+        CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+            vec![0, 1, 1, 2, 0, 2],
+            vec![1, 0, 2, 1, 2, 0],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr")
+    }
+
+    fn disconnected_graph_csr() -> CsrMatrix {
+        // 4-node graph: 0-1 connected, 2-3 connected, no edge between groups
+        CooMatrix::from_triplets(
+            Shape2D::new(4, 4),
+            vec![1.0, 1.0, 1.0, 1.0],
+            vec![0, 1, 2, 3],
+            vec![1, 0, 3, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr")
+    }
+
+    #[test]
+    fn connected_components_single_component() {
+        let g = triangle_graph_csr();
+        let result = connected_components(&g).expect("cc");
+        assert_eq!(result.n_components, 1);
+        assert!(
+            result.labels.iter().all(|&l| l == 0),
+            "all nodes in same component"
+        );
+    }
+
+    #[test]
+    fn connected_components_two_components() {
+        let g = disconnected_graph_csr();
+        let result = connected_components(&g).expect("cc");
+        assert_eq!(result.n_components, 2, "should have 2 components");
+        // Nodes 0,1 in one component, nodes 2,3 in another
+        assert_eq!(result.labels[0], result.labels[1]);
+        assert_eq!(result.labels[2], result.labels[3]);
+        assert_ne!(result.labels[0], result.labels[2]);
+    }
+
+    #[test]
+    fn connected_components_isolated_node() {
+        // 3 nodes, only 0-1 connected, node 2 isolated
+        let g = CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![1.0, 1.0],
+            vec![0, 1],
+            vec![1, 0],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let result = connected_components(&g).expect("cc");
+        assert_eq!(result.n_components, 2);
+    }
+
+    #[test]
+    fn dijkstra_triangle_graph() {
+        let g = triangle_graph_csr();
+        let result = dijkstra(&g, 0).expect("dijkstra");
+        assert_eq!(result.distances[0], 0.0);
+        assert_eq!(result.distances[1], 1.0); // direct edge weight 1
+        // Node 2: either direct (weight 3) or via node 1 (1+2=3) — both are 3
+        assert!(
+            (result.distances[2] - 3.0).abs() < 1e-10,
+            "dist to node 2: {}",
+            result.distances[2]
+        );
+    }
+
+    #[test]
+    fn dijkstra_unreachable_node() {
+        let g = disconnected_graph_csr();
+        let result = dijkstra(&g, 0).expect("dijkstra");
+        assert_eq!(result.distances[0], 0.0);
+        assert!(result.distances[1].is_finite());
+        assert!(
+            result.distances[2].is_infinite(),
+            "node 2 should be unreachable"
+        );
+    }
+
+    #[test]
+    fn dijkstra_source_out_of_bounds() {
+        let g = triangle_graph_csr();
+        let err = dijkstra(&g, 10).expect_err("oob");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn minimum_spanning_tree_triangle() {
+        let g = triangle_graph_csr();
+        let result = minimum_spanning_tree(&g).expect("mst");
+        // Triangle with weights 1, 2, 3 → MST has edges 1 and 2, total = 3
+        assert_eq!(result.edges.len(), 2, "MST of 3-node graph has 2 edges");
+        assert!(
+            (result.total_weight - 3.0).abs() < 1e-10,
+            "MST weight: {}",
+            result.total_weight
+        );
+    }
+
+    #[test]
+    fn minimum_spanning_tree_disconnected() {
+        let g = disconnected_graph_csr();
+        let result = minimum_spanning_tree(&g).expect("mst");
+        // Disconnected: MST has edges within each component
+        assert_eq!(result.edges.len(), 2, "MST edges in disconnected graph");
+    }
+
+    #[test]
+    fn csgraph_rejects_non_square_adjacency() {
+        let g = CooMatrix::from_triplets(
+            Shape2D::new(2, 3),
+            vec![1.0, 1.0],
+            vec![0, 1],
+            vec![1, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+
+        assert!(matches!(
+            connected_components(&g),
+            Err(SparseError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            dijkstra(&g, 0),
+            Err(SparseError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            minimum_spanning_tree(&g),
+            Err(SparseError::InvalidArgument { .. })
+        ));
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2713,4 +2863,256 @@ pub fn svds(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<SvdsR
         u: u_vecs,
         vt: v_vecs,
     })
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Sparse Graph Algorithms (csgraph)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of connected components computation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectedComponentsResult {
+    /// Number of connected components.
+    pub n_components: usize,
+    /// Component label for each node (0-indexed).
+    pub labels: Vec<usize>,
+}
+
+fn validate_csgraph(graph: &CsrMatrix) -> SparseResult<()> {
+    let shape = graph.shape();
+    if shape.rows != shape.cols {
+        return Err(SparseError::InvalidArgument {
+            message: format!(
+                "csgraph routines require a square adjacency matrix, got {}x{}",
+                shape.rows, shape.cols
+            ),
+        });
+    }
+
+    let n = shape.rows;
+    for &col in graph.indices() {
+        if col >= n {
+            return Err(SparseError::InvalidArgument {
+                message: format!("graph edge references node {col}, but node count is {n}"),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Find connected components of a sparse graph.
+///
+/// Matches `scipy.sparse.csgraph.connected_components(graph, directed=False)`.
+///
+/// The input CSR matrix is treated as an adjacency matrix (nonzero = edge).
+/// For undirected graphs, the matrix should be symmetric.
+pub fn connected_components(graph: &CsrMatrix) -> SparseResult<ConnectedComponentsResult> {
+    validate_csgraph(graph)?;
+    let n = graph.shape().rows;
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+
+    // Build symmetric adjacency list so both edge directions are traversed,
+    // even if the input matrix isn't perfectly symmetric.
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for &j in indices.iter().take(indptr[i + 1]).skip(indptr[i]) {
+            adj[i].push(j);
+            adj[j].push(i); // reverse edge for undirected
+        }
+    }
+
+    let mut labels = vec![usize::MAX; n];
+    let mut component = 0;
+
+    for start in 0..n {
+        if labels[start] != usize::MAX {
+            continue;
+        }
+
+        // BFS from this node
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(start);
+        labels[start] = component;
+
+        while let Some(node) = queue.pop_front() {
+            for &neighbor in &adj[node] {
+                if labels[neighbor] == usize::MAX {
+                    labels[neighbor] = component;
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        component += 1;
+    }
+
+    Ok(ConnectedComponentsResult {
+        n_components: component,
+        labels,
+    })
+}
+
+/// Result of shortest path computation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShortestPathResult {
+    /// Distance from source to each node (f64::INFINITY if unreachable).
+    pub distances: Vec<f64>,
+    /// Predecessor array for path reconstruction (-1 for source/unreachable).
+    pub predecessors: Vec<i64>,
+}
+
+/// Single-source shortest paths using Dijkstra's algorithm.
+///
+/// Matches `scipy.sparse.csgraph.dijkstra(graph, indices=source)`.
+///
+/// Requires non-negative edge weights. The CSR matrix values are edge weights.
+pub fn dijkstra(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathResult> {
+    validate_csgraph(graph)?;
+    let n = graph.shape().rows;
+    if source >= n {
+        return Err(SparseError::InvalidArgument {
+            message: format!("source {source} out of bounds for graph with {n} nodes"),
+        });
+    }
+
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+    let data = graph.data();
+
+    let mut dist = vec![f64::INFINITY; n];
+    let mut pred = vec![-1_i64; n];
+    let mut visited = vec![false; n];
+
+    dist[source] = 0.0;
+
+    // Use a simple O(V²) implementation (BinaryHeap would be O(E log V) but
+    // requires Ord on f64 which is messy without a wrapper)
+    for _ in 0..n {
+        // Find unvisited node with minimum distance
+        let mut u = usize::MAX;
+        let mut min_dist = f64::INFINITY;
+        for i in 0..n {
+            if !visited[i] && dist[i] < min_dist {
+                min_dist = dist[i];
+                u = i;
+            }
+        }
+
+        if u == usize::MAX {
+            break; // All remaining nodes unreachable
+        }
+
+        visited[u] = true;
+
+        // Relax edges from u
+        for idx in indptr[u]..indptr[u + 1] {
+            let v = indices[idx];
+            let weight = data[idx];
+            if weight < 0.0 {
+                return Err(SparseError::InvalidArgument {
+                    message: "Dijkstra requires non-negative edge weights".to_string(),
+                });
+            }
+            let alt = dist[u] + weight;
+            if alt < dist[v] {
+                dist[v] = alt;
+                pred[v] = u as i64;
+            }
+        }
+    }
+
+    Ok(ShortestPathResult {
+        distances: dist,
+        predecessors: pred,
+    })
+}
+
+/// Result of minimum spanning tree computation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MstResult {
+    /// Total weight of the MST.
+    pub total_weight: f64,
+    /// Edges in the MST as (u, v, weight) triples.
+    pub edges: Vec<(usize, usize, f64)>,
+}
+
+/// Compute the minimum spanning tree of a sparse graph using Kruskal's algorithm.
+///
+/// Matches `scipy.sparse.csgraph.minimum_spanning_tree(graph)`.
+///
+/// The CSR matrix is treated as an undirected weighted adjacency matrix.
+pub fn minimum_spanning_tree(graph: &CsrMatrix) -> SparseResult<MstResult> {
+    validate_csgraph(graph)?;
+    let n = graph.shape().rows;
+    if n == 0 {
+        return Ok(MstResult {
+            total_weight: 0.0,
+            edges: Vec::new(),
+        });
+    }
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+    let data = graph.data();
+
+    // Collect all edges (deduplicate for undirected by only taking i < j)
+    let mut edges: Vec<(f64, usize, usize)> = Vec::new();
+    for i in 0..n {
+        for idx in indptr[i]..indptr[i + 1] {
+            let j = indices[idx];
+            let w = data[idx];
+            if i < j && w.is_finite() {
+                edges.push((w, i, j));
+            }
+        }
+    }
+
+    // Sort edges by weight (Kruskal's)
+    edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Union-Find
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut rank = vec![0u32; n];
+
+    let mut mst_edges = Vec::new();
+    let mut total_weight = 0.0;
+
+    for (w, u, v) in edges {
+        let ru = uf_find(&mut parent, u);
+        let rv = uf_find(&mut parent, v);
+        if ru != rv {
+            uf_union(&mut parent, &mut rank, ru, rv);
+            mst_edges.push((u, v, w));
+            total_weight += w;
+            if mst_edges.len() == n - 1 {
+                break;
+            }
+        }
+    }
+
+    Ok(MstResult {
+        total_weight,
+        edges: mst_edges,
+    })
+}
+
+/// Union-Find: find with path compression.
+fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]]; // path halving
+        x = parent[x];
+    }
+    x
+}
+
+/// Union-Find: union by rank.
+fn uf_union(parent: &mut [usize], rank: &mut [u32], x: usize, y: usize) {
+    match rank[x].cmp(&rank[y]) {
+        std::cmp::Ordering::Less => parent[x] = y,
+        std::cmp::Ordering::Greater => parent[y] = x,
+        std::cmp::Ordering::Equal => {
+            parent[y] = x;
+            rank[x] += 1;
+        }
+    }
 }

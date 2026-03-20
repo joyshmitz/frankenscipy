@@ -1907,12 +1907,12 @@ where
             } else {
                 b = u;
             }
-            if fu <= fw || (w - x).abs() < f64::EPSILON {
+            if fu <= fw || w == x {
                 v = w;
                 fv = fw;
                 w = u;
                 fw = fu;
-            } else if fu <= fv || (v - x).abs() < f64::EPSILON || (v - w).abs() < f64::EPSILON {
+            } else if fu <= fv || v == x || v == w {
                 v = u;
                 fv = fu;
             }

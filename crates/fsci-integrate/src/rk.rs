@@ -24,15 +24,6 @@ const SAFETY: f64 = 0.9;
 const MIN_FACTOR: f64 = 0.2;
 const MAX_FACTOR: f64 = 10.0;
 
-/// RMS norm: ||x|| / sqrt(n).
-fn rms_norm(x: &[f64]) -> f64 {
-    if x.is_empty() {
-        return 0.0;
-    }
-    let sum_sq: f64 = x.iter().map(|v| v * v).sum();
-    (sum_sq / x.len() as f64).sqrt()
-}
-
 /// Butcher tableau for an explicit Runge-Kutta method.
 pub struct ButcherTableau {
     /// A coefficients (lower-triangular, row-major, n_stages × n_stages).
@@ -421,6 +412,7 @@ pub struct RkSolver {
     max_step: f64,
     // Solver state
     f: Vec<f64>,
+    f_old: Option<Vec<f64>>,
     h_abs: f64,
     error_exponent: f64,
     k: Vec<Vec<f64>>,
@@ -503,11 +495,22 @@ impl RkSolver {
             atol: config.atol,
             max_step: config.max_step,
             f: f0,
+            f_old: None,
             h_abs,
             error_exponent,
             k,
             nfev,
         })
+    }
+
+    /// Current derivative.
+    pub fn f(&self) -> &[f64] {
+        &self.f
+    }
+
+    /// Previous derivative (after at least one successful step).
+    pub fn f_old(&self) -> Option<&[f64]> {
+        self.f_old.as_deref()
     }
 
     /// Current time.
@@ -622,6 +625,7 @@ impl RkSolver {
 
                 self.y_old = Some(self.y.clone());
                 self.t_old = Some(t);
+                self.f_old = Some(self.f.clone());
                 self.t = t_new;
                 self.y = y_new;
                 self.h_abs = h_abs;
