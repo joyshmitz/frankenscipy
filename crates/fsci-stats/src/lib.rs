@@ -152,7 +152,7 @@ impl ContinuousDistribution for Normal {
 
     fn cdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
-        0.5 * (1.0 + erf_approx(z * FRAC_1_SQRT_2))
+        0.5 * (1.0 + fsci_special::erf(z * FRAC_1_SQRT_2))
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -1343,18 +1343,6 @@ fn ln_beta(a: f64, b: f64) -> f64 {
 // ══════════════════════════════════════════════════════════════════════
 // Internal Helper Functions
 // ══════════════════════════════════════════════════════════════════════
-
-/// Error function approximation (Abramowitz & Stegun 7.1.26).
-fn erf_approx(x: f64) -> f64 {
-    let sign = x.signum();
-    let x = x.abs();
-    let t = 1.0 / (1.0 + 0.327_591_1 * x);
-    let poly = t
-        * (0.254_829_592
-            + t * (-0.284_496_736
-                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
-    sign * (1.0 - poly * (-x * x).exp())
-}
 
 /// Standard normal inverse CDF (Beasley-Springer-Moro algorithm).
 fn standard_normal_ppf(p: f64) -> f64 {
@@ -2634,6 +2622,79 @@ pub fn kurtosis(data: &[f64]) -> f64 {
         m4 += d2 * d2;
     }
     kurtosis_from_moments(nf, m2, m4)
+}
+
+/// Result of the `describe` function.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescribeResult {
+    pub nobs: usize,
+    pub minmax: (f64, f64),
+    pub mean: f64,
+    pub variance: f64,
+    pub skewness: f64,
+    pub kurtosis: f64,
+}
+
+/// Compute several descriptive statistics of a data set.
+///
+/// Matches `scipy.stats.describe(a)`.
+pub fn describe(data: &[f64]) -> Result<DescribeResult, String> {
+    let n = data.len();
+    if n == 0 {
+        return Err("describe requires at least one observation".to_string());
+    }
+    let nf = n as f64;
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    let mut sum = 0.0;
+    for &x in data {
+        if x < min { min = x; }
+        if x > max { max = x; }
+        sum += x;
+    }
+    let mean_val = sum / nf;
+    
+    let mut m2 = 0.0;
+    let mut m3 = 0.0;
+    let mut m4 = 0.0;
+    for &x in data {
+        let d = x - mean_val;
+        let d2 = d * d;
+        m2 += d2;
+        m3 += d2 * d;
+        m4 += d2 * d2;
+    }
+    
+    let variance = if n > 1 { m2 / (nf - 1.0) } else { 0.0 };
+    let skewness = skew_from_moments(nf, m2, m3);
+    let kurtosis = kurtosis_from_moments(nf, m2, m4);
+    
+    Ok(DescribeResult {
+        nobs: n,
+        minmax: (min, max),
+        mean: mean_val,
+        variance,
+        skewness,
+        kurtosis,
+    })
+}
+
+/// Compute the median absolute deviation (MAD).
+///
+/// Matches `scipy.stats.median_abs_deviation(a, scale=1.0)`.
+/// Default scale is 1.0. For normal consistency, use 1.4826.
+pub fn median_abs_deviation(data: &[f64], scale: f64) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let med = quantile_sorted(&sorted, 0.5);
+    
+    let mut diffs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
+    diffs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mad = quantile_sorted(&diffs, 0.5);
+    mad * scale
 }
 
 /// Compute the mode (most frequent value) of a data set.

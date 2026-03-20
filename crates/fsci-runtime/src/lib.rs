@@ -268,6 +268,11 @@ impl SolverPortfolio {
     /// Hard-classify condition state into posterior distribution.
     /// Uses soft transitions at boundaries via logistic blending.
     fn condition_posterior(rcond: f64) -> [f64; 4] {
+        // Guard: if rcond is NaN/Inf, assume worst case (NearSingular)
+        if !rcond.is_finite() || rcond <= 0.0 {
+            return [0.0, 0.0, 0.0, 1.0];
+        }
+
         let log_r = rcond.max(1e-25).log10();
 
         // Centers of states (log10 rcond):
