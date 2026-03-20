@@ -12,7 +12,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -25,7 +25,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[2, 2] dtype=Float32 (max_diff=0.00e0)"
     },
     {
@@ -38,7 +38,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[3] dtype=Float32 (max_diff=0.00e0)"
     },
     {
@@ -51,7 +51,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[2] dtype=Complex128 (max_diff=0.00e0)"
     },
     {
@@ -64,7 +64,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[5] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -77,7 +77,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[3] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -88,9 +88,9 @@
       "shape": "[5]",
       "dtype": "float64",
       "max_abs_diff": 0.0,
-      "tolerance_atol": 1E-15,
-      "tolerance_rtol": 1E-13,
-      "oracle_status": "missing",
+      "tolerance_atol": 0.0,
+      "tolerance_rtol": 0.0,
+      "oracle_status": "available",
       "message": "array matched shape=[5] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -101,9 +101,9 @@
       "shape": "[4]",
       "dtype": "float64",
       "max_abs_diff": 0.0,
-      "tolerance_atol": 1E-15,
-      "tolerance_rtol": 1E-13,
-      "oracle_status": "missing",
+      "tolerance_atol": 0.0,
+      "tolerance_rtol": 0.0,
+      "oracle_status": "available",
       "message": "array matched shape=[4] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -116,7 +116,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "shape matched [2, 3]"
     },
     {
@@ -129,7 +129,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "dtype matched Complex64"
     },
     {
@@ -142,7 +142,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[2, 2] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -155,7 +155,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[2] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -168,7 +168,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[2] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -181,7 +181,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[3, 2] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -194,7 +194,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": 0.0,
       "tolerance_rtol": 0.0,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "array matched shape=[3, 2] dtype=Float64 (max_diff=0.00e0)"
     },
     {
@@ -207,7 +207,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "relation matched (true)"
     },
     {
@@ -220,7 +220,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "relation matched (true)"
     },
     {
@@ -233,7 +233,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "relation matched (true)"
     },
     {
@@ -246,7 +246,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "relation matched (true)"
     },
     {
@@ -259,7 +259,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "relation matched (true)"
     },
     {
@@ -272,7 +272,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "relation matched (true)"
     },
     {
@@ -285,7 +285,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "error kind matched (InvalidStep)"
     },
     {
@@ -298,7 +298,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "error kind matched (InvalidStep)"
     },
     {
@@ -311,7 +311,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "error kind matched (UnsupportedDtype)"
     },
     {
@@ -324,7 +324,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "error kind matched (InvalidShape)"
     },
     {
@@ -337,7 +337,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "error kind matched (InvalidIndex)"
     },
     {
@@ -350,7 +350,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "error kind matched (InvalidShape)"
     },
     {
@@ -363,7 +363,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "error kind matched (InvalidShape)"
     },
     {
@@ -376,7 +376,7 @@
       "max_abs_diff": 0.0,
       "tolerance_atol": null,
       "tolerance_rtol": null,
-      "oracle_status": "missing",
+      "oracle_status": "available",
       "message": "error kind matched (BroadcastIncompatible)"
     }
   ]
