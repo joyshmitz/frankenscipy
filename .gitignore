@@ -82,3 +82,7 @@ storage.sqlite3.bak
 storage.sqlite3.corrupt-*
 storage.sqlite3-shm.corrupt-*
 storage.sqlite3-wal.corrupt-*
+
+# Scratch test binaries and scripts
+/test_canberra
+/test_canberra.rs
