@@ -153,31 +153,27 @@ fn airy_series(x: f64, _mode: RuntimeMode) -> Result<AiryResult, SpecialError> {
     let mut g = x; // g(x) = x + ...
     let mut gp = 1.0_f64; // g'(x) = 1 + ...
 
-    let x3 = x * x * x;
-    let mut t_f = 1.0_f64;
-    let mut t_g = x;
+    if x != 0.0 {
+        let x3 = x * x * x;
+        let mut t_f = 1.0_f64;
+        let mut t_g = x;
 
-    for k in 1..50 {
-        let k3 = 3 * k;
-        // f term: multiply by x^3 / ((3k-1)*(3k))
-        t_f *= x3 / ((k3 as f64 - 1.0) * k3 as f64);
-        f += t_f;
-        fp += t_f * k3 as f64 / x; // derivative contributes k3 * x^(3k-1) coefficient
+        for k in 1..50 {
+            let k3 = 3 * k;
+            // f term: multiply by x^3 / ((3k-1)*(3k))
+            t_f *= x3 / ((k3 as f64 - 1.0) * k3 as f64);
+            f += t_f;
+            fp += t_f * k3 as f64 / x; // derivative contributes k3 * x^(3k-1) coefficient
 
-        // g term: multiply by x^3 / ((3k)*(3k+1))
-        t_g *= x3 / (k3 as f64 * (k3 as f64 + 1.0));
-        g += t_g;
-        gp += t_g * (k3 as f64 + 1.0) / x;
+            // g term: multiply by x^3 / ((3k)*(3k+1))
+            t_g *= x3 / (k3 as f64 * (k3 as f64 + 1.0));
+            g += t_g;
+            gp += t_g * (k3 as f64 + 1.0) / x;
 
-        if t_f.abs() < 1e-16 * f.abs() && t_g.abs() < 1e-16 * g.abs() {
-            break;
+            if t_f.abs() < 1e-16 * f.abs() && t_g.abs() < 1e-16 * g.abs() {
+                break;
+            }
         }
-    }
-
-    // Handle derivative at x=0 specially to avoid division by zero
-    if x.abs() < f64::EPSILON {
-        fp = 0.0;
-        gp = 1.0;
     }
 
     let sqrt3 = 3.0_f64.sqrt();

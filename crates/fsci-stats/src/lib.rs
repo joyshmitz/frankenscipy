@@ -2726,7 +2726,7 @@ pub fn variation(data: &[f64]) -> f64 {
     if mean_val == 0.0 {
         return f64::NAN;
     }
-    let var: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / (n - 1.0);
+    let var: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / n;
     var.sqrt() / mean_val
 }
 
@@ -2739,7 +2739,7 @@ pub fn zscore(data: &[f64]) -> Vec<f64> {
     }
     let n = data.len() as f64;
     let mean_val = data.iter().sum::<f64>() / n;
-    let std_val = (data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
+    let std_val = (data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / n).sqrt();
     if std_val == 0.0 {
         return vec![0.0; data.len()];
     }
@@ -3500,6 +3500,18 @@ pub fn chi2_contingency(observed: &[Vec<f64>]) -> Chi2ContingencyResult {
             expected: Vec::new(),
         };
     }
+    if observed
+        .iter()
+        .flat_map(|row| row.iter())
+        .any(|&value| !value.is_finite() || value < 0.0)
+    {
+        return Chi2ContingencyResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            dof: 0,
+            expected: Vec::new(),
+        };
+    }
 
     // Compute row totals, column totals, grand total
     let row_totals: Vec<f64> = observed.iter().map(|row| row.iter().sum()).collect();
@@ -3530,18 +3542,27 @@ pub fn chi2_contingency(observed: &[Vec<f64>]) -> Chi2ContingencyResult {
         .collect();
 
     // Chi-squared statistic: Σ (o_ij - e_ij)² / e_ij
+    let dof = (nrows - 1) * (ncols - 1);
+    let use_yates_correction = dof == 1;
     let chi2: f64 = observed
         .iter()
         .zip(expected.iter())
         .flat_map(|(obs_row, exp_row)| {
-            obs_row
-                .iter()
-                .zip(exp_row.iter())
-                .map(|(&o, &e)| if e > 0.0 { (o - e).powi(2) / e } else { 0.0 })
+            obs_row.iter().zip(exp_row.iter()).map(|(&o, &e)| {
+                if e > 0.0 {
+                    let diff = (o - e).abs();
+                    let corrected = if use_yates_correction {
+                        (diff - diff.min(0.5)).powi(2)
+                    } else {
+                        diff.powi(2)
+                    };
+                    corrected / e
+                } else {
+                    0.0
+                }
+            })
         })
         .sum();
-
-    let dof = (nrows - 1) * (ncols - 1);
 
     // P-value from chi-squared distribution
     let pvalue = if dof > 0 {
@@ -3583,14 +3604,29 @@ pub fn power_divergence(f_obs: &[f64], f_exp: Option<&[f64]>, lambda_: f64) -> (
     if n < 2 {
         return (f64::NAN, f64::NAN);
     }
+    if f_obs.iter().any(|&value| !value.is_finite() || value < 0.0) {
+        return (f64::NAN, f64::NAN);
+    }
 
     // Default expected: uniform
     let total: f64 = f_obs.iter().sum();
+    if !total.is_finite() || total <= 0.0 {
+        return (f64::NAN, f64::NAN);
+    }
     let uniform_exp = total / n as f64;
     let default_exp: Vec<f64> = vec![uniform_exp; n];
     let exp = f_exp.unwrap_or(&default_exp);
 
     if exp.len() != n {
+        return (f64::NAN, f64::NAN);
+    }
+    if exp.iter().any(|&value| !value.is_finite() || value < 0.0) {
+        return (f64::NAN, f64::NAN);
+    }
+    let exp_total: f64 = exp.iter().sum();
+    let rel_tol = f64::EPSILON.sqrt();
+    let scale = total.abs().max(exp_total.abs()).max(1.0);
+    if (total - exp_total).abs() > rel_tol * scale {
         return (f64::NAN, f64::NAN);
     }
 
@@ -4779,8 +4815,8 @@ mod tests {
         // Mean of z-scores should be 0
         let z_mean: f64 = z.iter().sum::<f64>() / z.len() as f64;
         assert!(z_mean.abs() < 1e-10, "z-score mean should be 0");
-        // Std of z-scores should be ~1 (using ddof=1 normalization)
-        let z_var: f64 = z.iter().map(|&zi| zi * zi).sum::<f64>() / (z.len() - 1) as f64;
+        // Std of z-scores should be ~1 (using ddof=0 normalization matching scipy default)
+        let z_var: f64 = z.iter().map(|&zi| zi * zi).sum::<f64>() / z.len() as f64;
         assert_close(z_var.sqrt(), 1.0, 1e-10, "z-score std should be 1");
     }
 
@@ -5527,13 +5563,13 @@ mod tests {
         let table = vec![vec![50.0, 5.0], vec![5.0, 50.0]];
         let result = chi2_contingency(&table);
         assert!(
-            result.statistic > 10.0,
-            "dependent table should have large chi2: {}",
+            (result.statistic - 70.4).abs() < 1e-10,
+            "dependent table should match Yates-corrected chi2: {}",
             result.statistic
         );
         assert!(
-            result.pvalue < 0.01,
-            "dependent table should have small p: {}",
+            result.pvalue < 1e-10,
+            "dependent table should have tiny p: {}",
             result.pvalue
         );
     }
@@ -5554,6 +5590,11 @@ mod tests {
             (result.expected[1][1] - 42.0).abs() < 1e-10,
             "expected[1][1] = {}",
             result.expected[1][1]
+        );
+        assert!(
+            (result.statistic - 0.4464285714285714).abs() < 1e-12,
+            "Yates-corrected chi2 = {}",
+            result.statistic
         );
     }
 
@@ -5617,6 +5658,15 @@ mod tests {
         // chi2 = (10-20)²/20 + (20-20)²/20 + (30-20)²/20 = 100/20 + 0 + 100/20 = 10
         assert!((stat - 10.0).abs() < 1e-10, "expected chi2=10, got {stat}");
         assert!(pvalue > 0.0 && pvalue < 1.0);
+    }
+
+    #[test]
+    fn power_divergence_unequal_totals_rejected() {
+        let obs = [10.0, 20.0];
+        let exp = [20.0, 20.0];
+        let (stat, pvalue) = power_divergence(&obs, Some(&exp), 1.0);
+        assert!(stat.is_nan());
+        assert!(pvalue.is_nan());
     }
 
     #[test]

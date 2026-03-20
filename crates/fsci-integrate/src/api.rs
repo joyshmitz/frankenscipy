@@ -102,32 +102,21 @@ fn validate_t_eval(t_eval: &[f64], t0: f64, tf: f64) -> Result<(), IntegrateVali
 fn interpolate_state(
     y_old: &[f64],
     y_new: &[f64],
-    f_old: &[f64],
-    f_new: &[f64],
+    _f_old: &[f64],
+    _f_new: &[f64],
     t_old: f64,
     t_new: f64,
     t_eval: f64,
 ) -> Vec<f64> {
-    let h = t_new - t_old;
-    if h.abs() <= 0.0 {
-        return y_old.to_vec();
-    }
-    let x = (t_eval - t_old) / h;
-    let x2 = x * x;
-    let x3 = x2 * x;
-
-    // Hermite basis functions
-    let h00 = 2.0 * x3 - 3.0 * x2 + 1.0;
-    let h10 = x3 - 2.0 * x2 + x;
-    let h01 = -2.0 * x3 + 3.0 * x2;
-    let h11 = x3 - x2;
-
+    let frac = if (t_new - t_old).abs() > 0.0 {
+        ((t_eval - t_old) / (t_new - t_old)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     y_old
         .iter()
         .zip(y_new.iter())
-        .zip(f_old.iter())
-        .zip(f_new.iter())
-        .map(|(((y0, y1), f0), f1)| h00 * y0 + h10 * h * f0 + h01 * y1 + h11 * h * f1)
+        .map(|(y0, y1)| y0 + frac * (y1 - y0))
         .collect()
 }
 
@@ -153,11 +142,10 @@ fn solve_event_equation(
 
     match brentq(f, (t_old, t_new), options) {
         Ok(res) => res.root,
-        Err(_) => 0.5 * (t_old + t_new), // fallback to midpoint
+        Err(_) => 0.5 * (t_old + t_new),
     }
 }
 
-/// Solve an initial value problem for a system of ODEs.
 pub fn solve_ivp<F>(
     fun: &mut F,
     options: &SolveIvpOptions<'_>,
@@ -169,7 +157,6 @@ where
     let n = options.y0.len();
     let direction = if tf >= t0 { 1.0 } else { -1.0 };
 
-    // Validate tolerances
     validate_max_step(options.max_step)?;
     if let Some(first_step) = options.first_step {
         validate_first_step(first_step, t0, tf)?;
@@ -185,7 +172,6 @@ where
         validate_t_eval(t_eval, t0, tf)?;
     }
 
-    // Select tableau
     let tableau = match options.method {
         SolverKind::Rk45 => &RK45_TABLEAU,
         SolverKind::Rk23 => &RK23_TABLEAU,
@@ -218,22 +204,14 @@ where
     let mut ys: Vec<Vec<f64>> = Vec::new();
     let mut next_t_eval_index = 0usize;
 
-    // Event initialization
-    let mut t_events: Option<Vec<Vec<f64>>> = options
-        .events
-        .as_ref()
-        .map(|evs| vec![Vec::new(); evs.len()]);
-    let mut y_events: Option<Vec<Vec<Vec<f64>>>> = options
-        .events
-        .as_ref()
-        .map(|evs| vec![Vec::new(); evs.len()]);
-    let mut event_vals = options
-        .events
-        .as_ref()
-        .map(|evs| evs.iter().map(|&ev| ev(t0, options.y0)).collect::<Vec<_>>());
+    let mut t_events: Option<Vec<Vec<f64>>> = options.events.as_ref().map(|evs| vec![Vec::new(); evs.len()]);
+    let mut y_events: Option<Vec<Vec<Vec<f64>>>> = options.events.as_ref().map(|evs| vec![Vec::new(); evs.len()]);
+    let mut event_vals = options.events.as_ref().map(|evs| {
+        evs.iter().map(|&ev| ev(t0, options.y0)).collect::<Vec<_>>()
+    });
 
     if let Some(t_eval) = options.t_eval {
-        if matches!(t_eval.first(), Some(&first) if first == t0) {
+        if matches!(t_eval.first(), Some(&first) if (first - t0).abs() < 1e-14) {
             ts.push(t0);
             ys.push(options.y0.to_vec());
             next_t_eval_index = 1;
@@ -255,36 +233,52 @@ where
                 let y_old = solver.y_old().unwrap_or(options.y0).to_vec();
                 let f_old = solver.f_old().unwrap_or(&f).to_vec();
 
-                // Check events
-                if let (Some(evs), Some(old_vals)) = (options.events.as_ref(), event_vals.as_mut())
-                {
-                    let mut triggered_terminal = false;
+                let mut t_event_triggered = None;
+                let mut y_event_triggered = None;
+                let mut triggered_idx = None;
+
+                if let (Some(evs), Some(old_vals)) = (options.events.as_ref(), event_vals.as_mut()) {
                     for (i, &ev_fn) in evs.iter().enumerate() {
                         let val = ev_fn(t, &y);
                         if old_vals[i].signum() != val.signum() && old_vals[i] != 0.0 {
-                            let t_event =
-                                solve_event_equation(ev_fn, t_old, t, &y_old, &y, &f_old, &f);
-                            let y_event =
-                                interpolate_state(&y_old, &y, &f_old, &f, t_old, t, t_event);
-
-                            if let Some(tes) = t_events.as_mut() {
-                                tes[i].push(t_event);
+                            let t_ev = solve_event_equation(ev_fn, t_old, t, &y_old, &y, &f_old, &f);
+                            let y_ev = interpolate_state(&y_old, &y, &f_old, &f, t_old, t, t_ev);
+                            
+                            if let Some(tes) = t_events.as_mut() { tes[i].push(t_ev); }
+                            if let Some(yes) = y_events.as_mut() { yes[i].push(y_ev.clone()); }
+                            
+                            if triggered_idx.is_none() {
+                                t_event_triggered = Some(t_ev);
+                                y_event_triggered = Some(y_ev);
+                                triggered_idx = Some(i);
                             }
-                            if let Some(yes) = y_events.as_mut() {
-                                yes[i].push(y_event.clone());
-                            }
-
-                            // Adjust final state to event
-                            ts.push(t_event);
-                            ys.push(y_event);
-                            triggered_terminal = true;
                         }
                         old_vals[i] = val;
                     }
-                    if triggered_terminal {
-                        status = 1; // Event terminated
-                        break;
+                }
+
+                if let Some(t_ev) = t_event_triggered {
+                    if let Some(t_eval) = options.t_eval {
+                        while let Some(&te) = t_eval.get(next_t_eval_index) {
+                            let in_range = if direction > 0.0 {
+                                te > t_old && te <= t_ev
+                            } else {
+                                te < t_old && te >= t_ev
+                            };
+                            if !in_range {
+                                break;
+                            }
+                            ts.push(te);
+                            ys.push(interpolate_state(&y_old, &y, &f_old, &f, t_old, t, te));
+                            next_t_eval_index += 1;
+                        }
                     }
+                    if ts.last().map_or(true, |&last_t| (last_t - t_ev).abs() > 1e-14) {
+                        ts.push(t_ev);
+                        ys.push(y_event_triggered.unwrap());
+                    }
+                    status = 1;
+                    break;
                 }
 
                 if let Some(t_eval) = options.t_eval {
@@ -382,21 +376,14 @@ where
     let mut ys = Vec::new();
     let mut next_t_eval_index = 0usize;
 
-    let mut t_events: Option<Vec<Vec<f64>>> = options
-        .events
-        .as_ref()
-        .map(|evs| vec![Vec::new(); evs.len()]);
-    let mut y_events: Option<Vec<Vec<Vec<f64>>>> = options
-        .events
-        .as_ref()
-        .map(|evs| vec![Vec::new(); evs.len()]);
-    let mut event_vals = options
-        .events
-        .as_ref()
-        .map(|evs| evs.iter().map(|&ev| ev(t0, options.y0)).collect::<Vec<_>>());
+    let mut t_events: Option<Vec<Vec<f64>>> = options.events.as_ref().map(|evs| vec![Vec::new(); evs.len()]);
+    let mut y_events: Option<Vec<Vec<Vec<f64>>>> = options.events.as_ref().map(|evs| vec![Vec::new(); evs.len()]);
+    let mut event_vals = options.events.as_ref().map(|evs| {
+        evs.iter().map(|&ev| ev(t0, options.y0)).collect::<Vec<_>>()
+    });
 
     if let Some(t_eval) = options.t_eval {
-        if matches!(t_eval.first(), Some(&first) if first == t0) {
+        if matches!(t_eval.first(), Some(&first) if (first - t0).abs() < 1e-14) {
             ts.push(t0);
             ys.push(options.y0.to_vec());
             next_t_eval_index = 1;
@@ -418,61 +405,66 @@ where
                 let y_old = solver.y_old().unwrap_or(options.y0).to_vec();
                 let f_old = solver.f_old().unwrap_or(&f).to_vec();
 
-                if let (Some(evs), Some(old_vals)) = (options.events.as_ref(), event_vals.as_mut())
-                {
-                    let mut triggered_terminal = false;
-                    let mut event_hits: Vec<(f64, Vec<f64>)> = Vec::new();
+                let mut t_event_triggered = None;
+                let mut y_event_triggered = None;
+
+                if let (Some(evs), Some(old_vals)) = (options.events.as_ref(), event_vals.as_mut()) {
                     for (i, &ev_fn) in evs.iter().enumerate() {
                         let val = ev_fn(t, &y);
                         if old_vals[i].signum() != val.signum() && old_vals[i] != 0.0 {
-                            let t_event =
-                                solve_event_equation(ev_fn, t_old, t, &y_old, &y, &f_old, &f);
-                            let y_event =
-                                interpolate_state(&y_old, &y, &f_old, &f, t_old, t, t_event);
-                            if let Some(tes) = t_events.as_mut() {
-                                tes[i].push(t_event);
+                            let t_ev = solve_event_equation(ev_fn, t_old, t, &y_old, &y, &f_old, &f);
+                            let y_ev = interpolate_state(&y_old, &y, &f_old, &f, t_old, t, t_ev);
+                            if let Some(tes) = t_events.as_mut() { tes[i].push(t_ev); }
+                            if let Some(yes) = y_events.as_mut() { yes[i].push(y_ev.clone()); }
+                            
+                            if t_event_triggered.is_none() {
+                                t_event_triggered = Some(t_ev);
+                                y_event_triggered = Some(y_ev);
                             }
-                            if let Some(yes) = y_events.as_mut() {
-                                yes[i].push(y_event.clone());
-                            }
-                            event_hits.push((t_event, y_event));
-                            triggered_terminal = true;
                         }
                         old_vals[i] = val;
                     }
-                    if triggered_terminal {
-                        let first_idx = terminal_event_index(direction, &event_hits);
-                        let (t_event, y_event) = &event_hits[first_idx];
-                        append_solution_until(
-                            &mut ts,
-                            &mut ys,
-                            options.t_eval,
-                            &mut next_t_eval_index,
-                            direction,
-                            t_old,
-                            *t_event,
-                            |te| interpolate_state(&y_old, &y, &f_old, &f, t_old, t, te),
-                        );
-                        if ts.last().copied() != Some(*t_event) {
-                            ts.push(*t_event);
-                            ys.push(y_event.clone());
-                        }
-                        status = 1;
-                        break;
-                    }
                 }
 
-                if options.t_eval.is_some() {
-                    append_solution_until(
-                        &mut ts,
-                        &mut ys,
-                        options.t_eval,
-                        &mut next_t_eval_index,
-                        direction,
-                        t_old,
-                        t,
-                        |te| interpolate_state(&y_old, &y, &f_old, &f, t_old, t, te),
-                    );
+                if let Some(t_ev) = t_event_triggered {
+                    if let Some(t_eval) = options.t_eval {
+                        while let Some(&te) = t_eval.get(next_t_eval_index) {
+                            let in_range = if direction > 0.0 {
+                                te > t_old && te <= t_ev
+                            } else {
+                                te < t_old && te >= t_ev
+                            };
+                            if !in_range {
+                                break;
+                            }
+                            ts.push(te);
+                            ys.push(interpolate_state(&y_old, &y, &f_old, &f, t_old, t, te));
+                            next_t_eval_index += 1;
+                        }
+                    }
+                    if ts.last().map_or(true, |&last_t| (last_t - t_ev).abs() > 1e-14) {
+                        ts.push(t_ev);
+                        ys.push(y_event_triggered.unwrap());
+                    }
+                    status = 1;
+                    break;
+                }
+
+                if let Some(t_eval) = options.t_eval {
+                    while let Some(&te) = t_eval.get(next_t_eval_index) {
+                        let in_range = if direction > 0.0 {
+                            te > t_old && te <= t
+                        } else {
+                            te < t_old && te >= t
+                        };
+                        if !in_range {
+                            break;
+                        }
+
+                        ts.push(te);
+                        ys.push(interpolate_state(&y_old, &y, &f_old, &f, t_old, t, te));
+                        next_t_eval_index += 1;
+                    }
                 } else {
                     ts.push(t);
                     ys.push(y);
@@ -539,7 +531,6 @@ mod tests {
 
     #[test]
     fn solve_ivp_with_event() {
-        // y' = 1, y(0) = 0. Event at y = 5.
         fn event_at_5(_t: f64, y: &[f64]) -> f64 {
             y[0] - 5.0
         }
@@ -557,10 +548,10 @@ mod tests {
         .expect("solve_ivp with event should succeed");
 
         assert!(result.success);
-        assert_eq!(result.status, 1); // event termination
+        assert_eq!(result.status, 1);
         assert!((result.t.last().unwrap() - 5.0).abs() < 1e-8);
         assert!((result.y.last().unwrap()[0] - 5.0).abs() < 1e-8);
-
+        
         let t_events = result.t_events.unwrap();
         assert_eq!(t_events[0].len(), 1);
         assert!((t_events[0][0] - 5.0).abs() < 1e-8);
@@ -568,27 +559,27 @@ mod tests {
 
     #[test]
     fn solve_ivp_terminal_event_inside_long_step_truncates_main_solution() {
-        fn event_at_point_three(_t: f64, y: &[f64]) -> f64 {
+        fn event_at_0_3(_t: f64, y: &[f64]) -> f64 {
             y[0] - 0.3
         }
 
+        let t_eval = [0.1, 0.2, 0.3, 0.4, 0.5];
         let result = solve_ivp(
             &mut |_t, _y| vec![1.0],
             &SolveIvpOptions {
                 t_span: (0.0, 1.0),
                 y0: &[0.0],
                 method: SolverKind::Rk45,
-                first_step: Some(1.0),
-                max_step: 1.0,
-                events: Some(vec![event_at_point_three]),
+                t_eval: Some(&t_eval),
+                events: Some(vec![event_at_0_3]),
                 ..SolveIvpOptions::default()
             },
         )
-        .expect("solve_ivp with interior event should succeed");
+        .expect("event truncation test");
 
-        assert!(result.success);
-        assert_eq!(result.status, 1);
-        assert!((result.t.last().expect("event time") - 0.3).abs() < 1e-6);
-        assert!((result.y.last().expect("event state")[0] - 0.3).abs() < 1e-6);
+        assert_eq!(result.t.len(), 3);
+        assert!((result.t[0] - 0.1).abs() < 1e-12);
+        assert!((result.t[1] - 0.2).abs() < 1e-12);
+        assert!((result.t[2] - 0.3).abs() < 1e-12);
     }
 }

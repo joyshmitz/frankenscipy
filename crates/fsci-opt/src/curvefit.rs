@@ -109,6 +109,26 @@ where
             detail: String::from("x0 must not contain NaN or Inf"),
         });
     }
+    if !options.diff_step.is_finite() || options.diff_step <= 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("diff_step must be finite and > 0"),
+        });
+    }
+    if !options.gtol.is_finite() || options.gtol < 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("gtol must be finite and >= 0"),
+        });
+    }
+    if !options.xtol.is_finite() || options.xtol < 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("xtol must be finite and >= 0"),
+        });
+    }
+    if !options.ftol.is_finite() || options.ftol < 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("ftol must be finite and >= 0"),
+        });
+    }
 
     let max_nfev = options.max_nfev.unwrap_or(100 * (n + 1));
 
@@ -522,6 +542,10 @@ fn compute_covariance(
     n: usize,
     absolute_sigma: bool,
 ) -> Vec<Vec<f64>> {
+    if !absolute_sigma && m <= n {
+        return vec![vec![f64::INFINITY; n]; n];
+    }
+
     let jtj = jtj_matrix(jac);
 
     // Invert J^T J via Cholesky
@@ -713,6 +737,33 @@ mod tests {
     }
 
     #[test]
+    fn curve_fit_zero_dof_returns_infinite_covariance() {
+        let xdata = [0.0, 1.0];
+        let ydata = [1.0, 3.0];
+        let model = |x: f64, p: &[f64]| p[0] * x + p[1];
+
+        let result = curve_fit(
+            model,
+            &xdata,
+            &ydata,
+            CurveFitOptions {
+                p0: Some(vec![1.0, 1.0]),
+                absolute_sigma: false,
+                ..CurveFitOptions::default()
+            },
+        )
+        .expect("should fit exactly");
+
+        assert!(
+            result
+                .pcov
+                .iter()
+                .flatten()
+                .all(|entry| entry.is_infinite())
+        );
+    }
+
+    #[test]
     fn curve_fit_xdata_ydata_length_mismatch() {
         let model = |_x: f64, _p: &[f64]| 0.0;
         let err = curve_fit(
@@ -733,6 +784,21 @@ mod tests {
         let model = |_x: f64, _p: &[f64]| 0.0;
         let err = curve_fit(model, &[1.0], &[1.0], CurveFitOptions::default())
             .expect_err("should require p0");
+        assert!(matches!(err, OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn least_squares_rejects_non_positive_diff_step() {
+        let residuals = |x: &[f64]| vec![x[0] - 1.0];
+        let err = least_squares(
+            residuals,
+            &[0.0],
+            LeastSquaresOptions {
+                diff_step: 0.0,
+                ..LeastSquaresOptions::default()
+            },
+        )
+        .expect_err("should reject zero diff_step");
         assert!(matches!(err, OptError::InvalidArgument { .. }));
     }
 

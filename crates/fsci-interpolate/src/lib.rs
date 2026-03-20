@@ -1641,10 +1641,11 @@ impl RegularGridInterpolator {
         let mut fracs = Vec::with_capacity(ndim);
         for (axis, &x) in self.points.iter().zip(xi) {
             let i = Self::find_interval(axis, x);
-            let frac = if (axis[i + 1] - axis[i]).abs() < f64::EPSILON {
+            let denom = axis[i + 1] - axis[i];
+            let frac = if denom == 0.0 {
                 0.0
             } else {
-                (x - axis[i]) / (axis[i + 1] - axis[i])
+                (x - axis[i]) / denom
             };
             indices.push(i);
             fracs.push(frac);
@@ -3162,5 +3163,20 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(!results[0].is_nan(), "inside point should not be NaN");
         assert!(!results[1].is_nan(), "on edge should not be NaN");
+    }
+
+    #[test]
+    fn bspline_antiderivative_matches_scipy() {
+        let t = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0];
+        let c = vec![1.0, 2.0, 3.0, 4.0, 0.0];
+        let k = 2;
+        let b = BSpline::new(t, c, k).unwrap();
+        let b_anti = b.antiderivative(1).unwrap();
+        println!("c = {:?}", b_anti.c);
+        println!("t = {:?}", b_anti.t);
+        assert!((b_anti.c[1] - 0.3333333333333333).abs() < 1e-6);
+        assert!((b_anti.c[2] - 1.6666666666666667).abs() < 1e-6);
+        assert!((b_anti.c[3] - 4.6666666666666667).abs() < 1e-6);
+        assert!((b_anti.c[4] - 7.3333333333333333).abs() < 1e-6);
     }
 }

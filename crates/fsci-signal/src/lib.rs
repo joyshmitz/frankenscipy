@@ -497,7 +497,7 @@ pub fn correlate2d(
     // 2D convolution (direct method)
     let (out_r, out_c, start_r, start_c) = match mode {
         ConvolveMode::Full => (ar + vr - 1, ac + vc - 1, 0, 0),
-        ConvolveMode::Same => (ar, ac, (vr - 1) / 2, (vc - 1) / 2),
+        ConvolveMode::Same => (ar, ac, vr / 2, vc / 2),
         ConvolveMode::Valid => {
             if ar < vr || ac < vc {
                 return Err(SignalError::InvalidArgument(
@@ -5791,7 +5791,11 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let v = vec![1.0, 0.0, -1.0];
         let result = correlate(&a, &v, ConvolveMode::Same).expect("correlate same");
-        assert_eq!(result.len(), a.len(), "same mode output length = input length");
+        assert_eq!(
+            result.len(),
+            a.len(),
+            "same mode output length = input length"
+        );
     }
 
     #[test]
@@ -5832,6 +5836,17 @@ mod tests {
             "center should match: {} vs {}",
             result[4],
             a[4]
+        );
+    }
+
+    #[test]
+    fn correlate2d_same_even_kernel_matches_scipy_centering() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let v = vec![1.0, 1.0, 1.0, 1.0];
+        let result = correlate2d(&a, (3, 3), &v, (2, 2), ConvolveMode::Same).expect("correlate2d");
+        assert_eq!(
+            result,
+            vec![12.0, 16.0, 9.0, 24.0, 28.0, 15.0, 15.0, 17.0, 9.0]
         );
     }
 }

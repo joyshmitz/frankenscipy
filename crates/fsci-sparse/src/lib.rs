@@ -496,7 +496,10 @@ mod tests {
             csr_to_csc_with_mode(&csr, RuntimeMode::Strict, "op-conv-1").expect("strict csr->csc");
         let (roundtrip, conv2) =
             csc_to_csr_with_mode(&csc, RuntimeMode::Strict, "op-conv-2").expect("strict csc->csr");
-        assert_eq!(roundtrip.canonical_meta(), csr.canonical_meta());
+        
+        // Conversion via COO inherently sorts and deduplicates the matrix.
+        assert!(roundtrip.canonical_meta().sorted_indices);
+        assert!(roundtrip.canonical_meta().deduplicated);
 
         let construction_log = roundtrip.construction_log(
             RuntimeMode::Strict,

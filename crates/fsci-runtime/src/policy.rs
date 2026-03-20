@@ -81,6 +81,38 @@ impl PolicyController {
     }
 
     pub fn decide(&mut self, signals: DecisionSignals) -> PolicyDecision {
+        if !signals.is_finite() {
+            let logits = [-1.0e30, -1.0e30, 0.0];
+            let posterior = [0.0, 0.0, 1.0];
+            let expected_losses = expected_loss(self.mode, posterior);
+            let action = PolicyAction::FailClosed;
+            let top_state = RiskState::IncompatibleMetadata;
+            let reason = format!(
+                "mode={:?}; top_state={:?}; p=1.000000; non_finite_signals=true",
+                self.mode, top_state
+            );
+
+            self.ledger.record(DecisionEvidenceEntry {
+                mode: self.mode,
+                signals,
+                logits,
+                posterior,
+                expected_losses,
+                action,
+                top_state,
+                reason: reason.clone(),
+            });
+
+            return PolicyDecision {
+                mode: self.mode,
+                action,
+                top_state,
+                posterior,
+                expected_losses,
+                reason,
+            };
+        }
+
         let logits = logits_from_signals(signals);
         let posterior = softmax(logits);
         let expected_losses = expected_loss(self.mode, posterior);
@@ -192,4 +224,26 @@ pub(crate) fn top_risk_state(posterior: [f64; 3]) -> (RiskState, f64) {
         }
     }
     (RiskState::ALL[best_idx], best_prob)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decide_fail_closes_on_non_finite_signals() {
+        let mut ctrl = PolicyController::new(RuntimeMode::Strict, 4);
+        let decision = ctrl.decide(DecisionSignals::new(f64::NAN, 0.0, 0.0));
+
+        assert_eq!(decision.action, PolicyAction::FailClosed);
+        assert_eq!(decision.top_state, RiskState::IncompatibleMetadata);
+        assert_eq!(decision.posterior, [0.0, 0.0, 1.0]);
+        assert!(decision.expected_losses.iter().all(|loss| loss.is_finite()));
+        assert!(decision.reason.contains("non_finite_signals=true"));
+
+        let entry = ctrl.ledger().latest().expect("ledger entry");
+        assert_eq!(entry.action, PolicyAction::FailClosed);
+        assert_eq!(entry.posterior, [0.0, 0.0, 1.0]);
+        assert!(entry.logits.iter().all(|logit| logit.is_finite()));
+    }
 }

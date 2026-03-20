@@ -820,25 +820,9 @@ impl ConvexHull {
 
         // Handle degenerate cases (all collinear)
         if vertices.len() < 3 {
-            // Collinear: return endpoints
-            let mut unique_vertices = vertices.clone();
-            unique_vertices.dedup();
-            return Ok(Self {
-                simplices: if unique_vertices.len() >= 2 {
-                    vec![(unique_vertices[0], unique_vertices[1])]
-                } else {
-                    Vec::new()
-                },
-                area: 0.0,
-                perimeter: if unique_vertices.len() >= 2 {
-                    let p0 = points[unique_vertices[0]];
-                    let p1 = points[unique_vertices[1]];
-                    ((p1.0 - p0.0).powi(2) + (p1.1 - p0.1).powi(2)).sqrt()
-                } else {
-                    0.0
-                },
-                vertices: unique_vertices,
-            });
+            return Err(SpatialError::InvalidArgument(
+                "convex hull requires at least 3 non-collinear points".to_string(),
+            ));
         }
 
         // Compute simplices (edges)
@@ -1346,6 +1330,13 @@ mod tests {
     fn convex_hull_too_few_points() {
         let points = [(0.0, 0.0), (1.0, 1.0)];
         let err = ConvexHull::new(&points).expect_err("too few");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn convex_hull_collinear_points_rejected() {
+        let points = [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
+        let err = ConvexHull::new(&points).expect_err("collinear");
         assert!(matches!(err, SpatialError::InvalidArgument(_)));
     }
 

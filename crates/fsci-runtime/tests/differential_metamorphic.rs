@@ -446,23 +446,19 @@ fn adv_empty_evidence_first_decision() {
 }
 
 // A4: NaN injection – controller should not panic and should record
-// the decision in the ledger.
+// the decision in the ledger as a deterministic fail-closed outcome.
 #[test]
 fn adv_nan_injection_no_panic() {
     let mut ctrl = PolicyController::new(RuntimeMode::Strict, 16);
     let d = ctrl.decide(DecisionSignals::new(f64::NAN, f64::NAN, f64::NAN));
-    // Controller should not panic; ledger should record the entry
     assert_eq!(ctrl.ledger().len(), 1);
-    // Action produced (even if degenerate) – just verify it's one of the valid actions
-    assert!(
-        d.action == PolicyAction::Allow
-            || d.action == PolicyAction::FullValidate
-            || d.action == PolicyAction::FailClosed
-    );
+    assert_eq!(d.action, PolicyAction::FailClosed);
+    assert_eq!(d.top_state, RiskState::IncompatibleMetadata);
+    assert_eq!(d.posterior, [0.0, 0.0, 1.0]);
     log_adversarial(
         "adv_nan_injection_no_panic",
         "all-NaN signals",
-        "no panic, valid action produced",
+        "no panic, fail-closed action produced",
         true,
     );
 }
@@ -477,15 +473,13 @@ fn adv_inf_injection_no_panic() {
         f64::INFINITY,
     ));
     assert_eq!(ctrl.ledger().len(), 1);
-    assert!(
-        d.action == PolicyAction::Allow
-            || d.action == PolicyAction::FullValidate
-            || d.action == PolicyAction::FailClosed
-    );
+    assert_eq!(d.action, PolicyAction::FailClosed);
+    assert_eq!(d.top_state, RiskState::IncompatibleMetadata);
+    assert_eq!(d.posterior, [0.0, 0.0, 1.0]);
     log_adversarial(
         "adv_inf_injection_no_panic",
         "all-Infinity signals",
-        "no panic, valid action produced",
+        "no panic, fail-closed action produced",
         true,
     );
 }
@@ -500,15 +494,13 @@ fn adv_neg_inf_injection_no_panic() {
         f64::NEG_INFINITY,
     ));
     assert_eq!(ctrl.ledger().len(), 1);
-    assert!(
-        d.action == PolicyAction::Allow
-            || d.action == PolicyAction::FullValidate
-            || d.action == PolicyAction::FailClosed
-    );
+    assert_eq!(d.action, PolicyAction::FailClosed);
+    assert_eq!(d.top_state, RiskState::IncompatibleMetadata);
+    assert_eq!(d.posterior, [0.0, 0.0, 1.0]);
     log_adversarial(
         "adv_neg_inf_injection_no_panic",
         "all-NEG_INFINITY signals",
-        "no panic, valid action produced",
+        "no panic, fail-closed action produced",
         true,
     );
 }

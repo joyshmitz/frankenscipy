@@ -137,12 +137,11 @@ pub fn csr_to_csc_with_mode(
         });
     }
     let mut csc = csr.to_csc()?;
-    if mode == RuntimeMode::Strict {
-        csc.canonical = csr.canonical;
-    } else {
-        csc.canonical.sorted_indices = true;
-        csc.canonical.deduplicated = true;
-    }
+    // The conversion process via COO always sorts and deduplicates the triplets,
+    // so the resulting CSC is always canonical, regardless of mode.
+    csc.canonical.sorted_indices = true;
+    csc.canonical.deduplicated = true;
+
     let log = conversion_log(
         operation_id.into(),
         SparseFormat::Csr,
@@ -164,12 +163,11 @@ pub fn csc_to_csr_with_mode(
         });
     }
     let mut csr = csc.to_csr()?;
-    if mode == RuntimeMode::Strict {
-        csr.canonical = csc.canonical;
-    } else {
-        csr.canonical.sorted_indices = true;
-        csr.canonical.deduplicated = true;
-    }
+    // The conversion process via COO always sorts and deduplicates the triplets,
+    // so the resulting CSR is always canonical, regardless of mode.
+    csr.canonical.sorted_indices = true;
+    csr.canonical.deduplicated = true;
+
     let log = conversion_log(
         operation_id.into(),
         SparseFormat::Csc,

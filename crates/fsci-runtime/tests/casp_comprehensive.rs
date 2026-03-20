@@ -1822,13 +1822,13 @@ fn adv_ledger_overflow_then_hostile() {
 
 #[test]
 fn adv_nan_through_controller() {
-    // NaN signals should still produce a decision (clamped)
     let mut ctrl = PolicyController::new(RuntimeMode::Strict, 16);
     let d = ctrl.decide(DecisionSignals::new(f64::NAN, 0.0, 0.0));
-    // NaN.clamp(0,1) = NaN in Rust, so posterior may be weird
-    // but the controller should not panic
     assert_eq!(ctrl.ledger().len(), 1);
-    let _ = d.action; // just ensure it's accessible
+    assert_eq!(d.action, PolicyAction::FailClosed);
+    assert_eq!(d.top_state, RiskState::IncompatibleMetadata);
+    assert_eq!(d.posterior, [0.0, 0.0, 1.0]);
+    assert!(d.expected_losses.iter().all(|loss| loss.is_finite()));
 }
 
 #[test]
@@ -1836,7 +1836,10 @@ fn adv_inf_through_controller() {
     let mut ctrl = PolicyController::new(RuntimeMode::Strict, 16);
     let d = ctrl.decide(DecisionSignals::new(f64::INFINITY, 0.0, 0.0));
     assert_eq!(ctrl.ledger().len(), 1);
-    let _ = d.action;
+    assert_eq!(d.action, PolicyAction::FailClosed);
+    assert_eq!(d.top_state, RiskState::IncompatibleMetadata);
+    assert_eq!(d.posterior, [0.0, 0.0, 1.0]);
+    assert!(d.expected_losses.iter().all(|loss| loss.is_finite()));
 }
 
 #[test]
@@ -1844,7 +1847,10 @@ fn adv_neg_inf_through_controller() {
     let mut ctrl = PolicyController::new(RuntimeMode::Strict, 16);
     let d = ctrl.decide(DecisionSignals::new(f64::NEG_INFINITY, 0.0, 0.0));
     assert_eq!(ctrl.ledger().len(), 1);
-    let _ = d.action;
+    assert_eq!(d.action, PolicyAction::FailClosed);
+    assert_eq!(d.top_state, RiskState::IncompatibleMetadata);
+    assert_eq!(d.posterior, [0.0, 0.0, 1.0]);
+    assert!(d.expected_losses.iter().all(|loss| loss.is_finite()));
 }
 
 #[test]
