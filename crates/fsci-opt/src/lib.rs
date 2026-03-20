@@ -627,13 +627,13 @@ fn simplex_iterate(
     let rhs_col = n_vars;
 
     for iteration in 0..maxiter {
-        // Find entering variable: most negative reduced cost (Bland's rule: smallest index).
+        // Find entering variable using Bland's rule: smallest index with negative reduced cost.
         let mut pivot_col = None;
-        let mut min_cost = -1e-10;
+        let tol = 1e-12;
         for (j, &cost) in tableau[obj_row].iter().enumerate().take(n_vars) {
-            if cost < min_cost {
-                min_cost = cost;
+            if cost < -tol {
                 pivot_col = Some(j);
+                break;
             }
         }
 
@@ -646,7 +646,7 @@ fn simplex_iterate(
         let mut pivot_row = None;
         let mut min_ratio = f64::INFINITY;
         for (i, row) in tableau.iter().enumerate().take(m) {
-            if row[pivot_col] > 1e-12 {
+            if row[pivot_col] > tol {
                 let ratio = row[rhs_col] / row[pivot_col];
                 if ratio < min_ratio {
                     min_ratio = ratio;
@@ -897,7 +897,7 @@ where
         // Check convergence: spread of fitness values.
         let fmin = fitness.iter().cloned().fold(f64::INFINITY, f64::min);
         let fmax = fitness.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        if (fmax - fmin).abs() < opts.tol {
+        if (fmax - fmin).abs() <= opts.tol * (1.0 + fmin.abs()) {
             converged = true;
             break;
         }

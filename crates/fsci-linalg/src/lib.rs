@@ -2034,12 +2034,21 @@ pub fn logm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Lin
     let matrix = dmatrix_from_rows(a)?;
     let n = rows;
 
-    // Use Schur decomposition for better numerical stability
-    // For real matrices with positive eigenvalues, we can use eigendecomposition
+    // Check if the matrix is symmetric
+    let is_symmetric = (0..n).all(|i| {
+        (0..n).all(|j| (matrix[(i, j)] - matrix[(j, i)]).abs() < 1e-12 * matrix[(i, j)].abs().max(1.0))
+    });
+
+    if !is_symmetric {
+        // Non-symmetric: use general Schur-based path
+        return logm_general(&matrix, n, options);
+    }
+
+    // Symmetric matrix: use eigendecomposition (symmetric_eigen is safe here)
     let eig = matrix.clone().symmetric_eigen();
     let eigenvalues = &eig.eigenvalues;
 
-    // Check all eigenvalues are positive
+    // Check all eigenvalues are positive (required for real logarithm)
     for (i, &ev) in eigenvalues.iter().enumerate() {
         if ev <= 0.0 {
             emit_trace(LinalgTrace {
@@ -2050,7 +2059,6 @@ pub fn logm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Lin
                 warning: Some(format!("non-positive eigenvalue {ev} at index {i}")),
                 error: None,
             });
-            // For non-positive eigenvalues, use the general (non-symmetric) path
             return logm_general(&matrix, n, options);
         }
     }
@@ -2097,7 +2105,8 @@ fn logm_general(
         }
     }
 
-    // Compute off-diagonal of log(T) using Parlett's recurrence
+    // Compute off-diagonal of log(T) using Parlett's recurrence:
+    //   log_T[i,j] = (T[i,j] - Σ_{k=i+1}^{j-1} log_T[i,k]*log_T[k,j]) / (log_T[j,j] - log_T[i,i])
     for j in 1..n {
         for i in (0..j).rev() {
             let di = log_t[(i, i)];
@@ -2106,10 +2115,17 @@ fn logm_general(
             for k in (i + 1)..j {
                 sum -= log_t[(i, k)] * log_t[(k, j)];
             }
-            if (t[(i, i)] - t[(j, j)]).abs() > 1e-15 {
-                log_t[(i, j)] = sum * (dj - di) / (t[(j, j)] - t[(i, i)]);
+            let denom = dj - di;
+            if denom.abs() > 1e-15 {
+                log_t[(i, j)] = sum / denom;
             } else {
-                log_t[(i, j)] = sum / t[(i, i)];
+                // Near-degenerate case: T[i,i] ≈ T[j,j]
+                // Use L'Hôpital limit: sum / T[i,i] (since d/dt ln(t) = 1/t)
+                if t[(i, i)].abs() > 1e-15 {
+                    log_t[(i, j)] = sum / t[(i, i)];
+                } else {
+                    log_t[(i, j)] = 0.0;
+                }
             }
         }
     }

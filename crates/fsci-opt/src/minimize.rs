@@ -429,6 +429,8 @@ where
         let move_vec = sub_vectors(&x, &x_start);
         let move_norm = l2_norm(&move_vec);
         let f_delta = (f_start - f).abs();
+        
+        // Convergence check
         if move_norm <= tol || f_delta <= tol {
             let result = OptimizeResult {
                 x: x.clone(),
@@ -448,8 +450,35 @@ where
             return Ok(result);
         }
 
-        if move_norm > 1.0e-12 {
-            directions[largest_drop_idx] = scale_vector(&move_vec, 1.0 / move_norm);
+        // Direction set update (standard Powell criterion)
+        // x_start is point before iteration, x is point after n line searches
+        // x_ext = 2*x - x_start (extrapolated point)
+        let x_ext: Vec<f64> = x.iter().zip(x_start.iter()).map(|(&xi, &xs)| 2.0 * xi - xs).collect();
+        let f_ext = objective.eval(&x_ext)?;
+        
+        if f_ext < f_start {
+            let term1 = f_start - f - largest_drop;
+            let term2 = f_start - f_ext;
+            let lhs = 2.0 * (f_start - 2.0 * f + f_ext) * term1 * term1;
+            let rhs = largest_drop * term2 * term2;
+            
+            if lhs < rhs {
+                // Update direction set: replace direction of largest drop with total move
+                let search = golden_section_direction_search(
+                    &mut objective,
+                    &x,
+                    f,
+                    &move_vec,
+                    tol.max(1.0e-4),
+                )?;
+                x = search.x;
+                f = search.f;
+                
+                if move_norm > 1.0e-12 {
+                    directions.remove(largest_drop_idx);
+                    directions.push(scale_vector(&move_vec, 1.0 / move_norm));
+                }
+            }
         }
     }
 
@@ -1489,17 +1518,71 @@ fn golden_section_direction_search<F>(
 where
     F: Fn(&[f64]) -> f64,
 {
+    // 1. Bracket the minimum along the direction
+    // Simple bracketing: start with small step, expand until we find an increase
+    let mut a = 0.0;
+    let mut b = 1.0;
+    let mut fa = fx;
+    let mut fb = objective.eval(&add_scaled(x, direction, b))?;
+
+    if fb > fa {
+        // Try other direction
+        b = -1.0;
+        fb = objective.eval(&add_scaled(x, direction, b))?;
+        if fb > fa {
+            // Already bracketed by (-1, 1)?
+            a = -1.0;
+            b = 1.0;
+        } else {
+            // Decresing in negative direction
+            let mut step = -2.0;
+            loop {
+                let f_next = objective.eval(&add_scaled(x, direction, step))?;
+                if f_next > fb {
+                    a = step;
+                    break;
+                }
+                a = fb; // reuse a as temp fb_prev
+                fb = f_next;
+                b = step;
+                step *= 2.0;
+                if step.abs() > 1e10 { break; }
+            }
+        }
+    } else {
+        // Decreasing in positive direction
+        let mut step = 2.0;
+        loop {
+            let f_next = objective.eval(&add_scaled(x, direction, step))?;
+            if f_next > fb {
+                a = b;
+                b = step;
+                // fb is already lower than fa, and f_next > fb, so we have a bracket [a_orig, step]
+                // but specifically [0, step] contains a minimum since f(0) > f(1) and f(step) > f(1)
+                a = 0.0;
+                b = step;
+                break;
+            }
+            fb = f_next;
+            a = step / 2.0;
+            b = step;
+            step *= 2.0;
+            if step > 1e10 { break; }
+        }
+    }
+
+    let mut left = a;
+    let mut right = b;
+
     let phi = 0.5 * (5.0_f64.sqrt() - 1.0);
-    let mut left = -1.5;
-    let mut right = 1.5;
     let mut c = right - phi * (right - left);
     let mut d = left + phi * (right - left);
 
     let mut fc = objective.eval(&add_scaled(x, direction, c))?;
     let mut fd = objective.eval(&add_scaled(x, direction, d))?;
 
-    for _ in 0..40 {
-        if (right - left).abs() <= tolerance {
+    for _ in 0..60 {
+        if (right - left).abs() <= tolerance * (1.0 + left.abs().max(right.abs())) {
             break;
         }
         if fc < fd {
