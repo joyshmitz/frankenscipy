@@ -429,7 +429,7 @@ where
         let move_vec = sub_vectors(&x, &x_start);
         let move_norm = l2_norm(&move_vec);
         let f_delta = (f_start - f).abs();
-        
+
         // Convergence check
         if move_norm <= tol || f_delta <= tol {
             let result = OptimizeResult {
@@ -453,15 +453,19 @@ where
         // Direction set update (standard Powell criterion)
         // x_start is point before iteration, x is point after n line searches
         // x_ext = 2*x - x_start (extrapolated point)
-        let x_ext: Vec<f64> = x.iter().zip(x_start.iter()).map(|(&xi, &xs)| 2.0 * xi - xs).collect();
+        let x_ext: Vec<f64> = x
+            .iter()
+            .zip(x_start.iter())
+            .map(|(&xi, &xs)| 2.0 * xi - xs)
+            .collect();
         let f_ext = objective.eval(&x_ext)?;
-        
+
         if f_ext < f_start {
             let term1 = f_start - f - largest_drop;
             let term2 = f_start - f_ext;
             let lhs = 2.0 * (f_start - 2.0 * f + f_ext) * term1 * term1;
             let rhs = largest_drop * term2 * term2;
-            
+
             if lhs < rhs {
                 // Update direction set: replace direction of largest drop with total move
                 let search = golden_section_direction_search(
@@ -473,7 +477,7 @@ where
                 )?;
                 x = search.x;
                 f = search.f;
-                
+
                 if move_norm > 1.0e-12 {
                     directions.remove(largest_drop_idx);
                     directions.push(scale_vector(&move_vec, 1.0 / move_norm));
@@ -1518,35 +1522,39 @@ fn golden_section_direction_search<F>(
 where
     F: Fn(&[f64]) -> f64,
 {
+    const MAX_BRACKET_STEP: f64 = 1.0e10;
+
     // 1. Bracket the minimum along the direction
     // Simple bracketing: start with small step, expand until we find an increase
-    let mut a = 0.0;
     let mut b = 1.0;
-    let mut fa = fx;
     let mut fb = objective.eval(&add_scaled(x, direction, b))?;
 
-    if fb > fa {
+    let (mut left, mut right) = if fb > fx {
         // Try other direction
         b = -1.0;
         fb = objective.eval(&add_scaled(x, direction, b))?;
-        if fb > fa {
+        if fb > fx {
             // Already bracketed by (-1, 1)?
-            a = -1.0;
-            b = 1.0;
+            (-1.0, 1.0)
         } else {
-            // Decresing in negative direction
+            // Decreasing in negative direction
             let mut step = -2.0;
             loop {
                 let f_next = objective.eval(&add_scaled(x, direction, step))?;
                 if f_next > fb {
-                    a = step;
-                    break;
+                    break (step, b);
                 }
-                a = fb; // reuse a as temp fb_prev
-                fb = f_next;
                 b = step;
+                fb = f_next;
                 step *= 2.0;
-                if step.abs() > 1e10 { break; }
+                if step.abs() > MAX_BRACKET_STEP {
+                    let candidate_x = add_scaled(x, direction, b);
+                    return Ok(LineSearchStep {
+                        alpha: b,
+                        x: candidate_x,
+                        f: fb,
+                    });
+                }
             }
         }
     } else {
@@ -1555,24 +1563,23 @@ where
         loop {
             let f_next = objective.eval(&add_scaled(x, direction, step))?;
             if f_next > fb {
-                a = b;
-                b = step;
                 // fb is already lower than fa, and f_next > fb, so we have a bracket [a_orig, step]
                 // but specifically [0, step] contains a minimum since f(0) > f(1) and f(step) > f(1)
-                a = 0.0;
-                b = step;
-                break;
+                break (0.0, step);
             }
-            fb = f_next;
-            a = step / 2.0;
             b = step;
+            fb = f_next;
             step *= 2.0;
-            if step > 1e10 { break; }
+            if step > MAX_BRACKET_STEP {
+                let candidate_x = add_scaled(x, direction, b);
+                return Ok(LineSearchStep {
+                    alpha: b,
+                    x: candidate_x,
+                    f: fb,
+                });
+            }
         }
-    }
-
-    let mut left = a;
-    let mut right = b;
+    };
 
     let phi = 0.5 * (5.0_f64.sqrt() - 1.0);
     let mut c = right - phi * (right - left);
@@ -2020,6 +2027,7 @@ mod tests {
     use proptest::prelude::*;
     use serde::Serialize;
 
+    use super::{Objective, golden_section_direction_search};
     use crate::{
         ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptError, OptimizeMethod,
         OptimizeResult, bfgs, cg_pr_plus, minimize, minimize_scalar, powell, take_optimize_traces,
@@ -2685,6 +2693,24 @@ mod tests {
             RuntimeMode::Strict,
             &result,
             122,
+        );
+    }
+
+    #[test]
+    fn golden_section_direction_search_returns_best_sample_when_no_bracket_exists() {
+        let fun = |x: &[f64]| x[0].exp();
+        let mut objective = Objective::new(&fun, RuntimeMode::Strict, 512);
+        let search =
+            golden_section_direction_search(&mut objective, &[0.0], fun(&[0.0]), &[1.0], 1.0e-6)
+                .expect("line search succeeds");
+        assert!(
+            search.alpha < 0.0,
+            "search should move downhill in the negative direction"
+        );
+        assert!(search.f.is_finite());
+        assert!(
+            search.f < 1.0,
+            "best sampled point should improve the objective"
         );
     }
 

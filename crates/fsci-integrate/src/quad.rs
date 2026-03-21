@@ -794,11 +794,11 @@ pub fn romb(y: &[f64], dx: f64) -> Result<f64, IntegrateValidationError> {
 
 /// Cumulative integral using composite Simpson's rule.
 ///
-/// Inspired by `scipy.integrate.cumulative_simpson(y, x)`.
+/// Matches `scipy.integrate.cumulative_simpson(y, x=x)` for 1-D sampled data.
 ///
-/// Returns cumulative integral values computed over pairs of intervals.
-/// For n points, returns `(n-1)/2` values (one per pair of intervals),
-/// plus one more if n is even (last interval uses trapezoidal rule).
+/// Returns one cumulative value per subinterval, so the result length is `n - 1`.
+/// With two or fewer samples, this falls back to `cumulative_trapezoid`, matching
+/// SciPy's documented behavior.
 pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateValidationError> {
     if y.len() != x.len() {
         return Err(IntegrateValidationError::QuadInvalidBounds {
@@ -806,46 +806,80 @@ pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateVal
         });
     }
     let n = y.len();
-    if n < 3 {
+    if n < 2 {
         return Err(IntegrateValidationError::QuadInvalidBounds {
-            detail: "need at least 3 points for Simpson's rule".to_string(),
+            detail: "need at least 2 points for cumulative integration".to_string(),
         });
+    }
+    if n <= 2 {
+        return cumulative_trapezoid(y, x);
     }
 
     let mut result = Vec::with_capacity(n - 1);
     let mut cumsum = 0.0;
 
-    // Use Simpson's 1/3 rule for pairs of intervals
-    let mut i = 0;
-    while i + 2 < n {
-        let h0 = x[i + 1] - x[i];
-        let h1 = x[i + 2] - x[i + 1];
-        let h = h0 + h1;
-        // Guard against zero-width intervals (duplicate x values)
-        let s = if h0.abs() < f64::EPSILON || h1.abs() < f64::EPSILON {
-            // Fall back to trapezoidal for degenerate intervals
-            0.5 * h * (y[i] + y[i + 2])
-        } else {
-            // Simpson's rule for non-uniform spacing
-            h / 6.0
-                * (y[i] * (2.0 - h1 / h0)
-                    + y[i + 1] * h * h / (h0 * h1)
-                    + y[i + 2] * (2.0 - h0 / h1))
-        };
-        cumsum += s;
-        result.push(cumsum);
-        i += 2;
+    let first_h0 = x[1] - x[0];
+    let first_h1 = x[2] - x[1];
+    if !(first_h0.is_finite() && first_h1.is_finite() && first_h0 > 0.0 && first_h1 > 0.0) {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "x must be finite and strictly increasing".to_string(),
+        });
     }
 
-    // If odd number of points, handle last interval with trapezoidal rule
-    #[allow(clippy::manual_is_multiple_of)]
-    if n % 2 == 0 {
-        let last = n - 1;
-        cumsum += 0.5 * (x[last] - x[last - 1]) * (y[last - 1] + y[last]);
+    let mut interval_integrals = Vec::with_capacity(n - 1);
+    interval_integrals.push(cumulative_simpson_left_interval(
+        y[0], y[1], y[2], first_h0, first_h1,
+    ));
+    interval_integrals.push(cumulative_simpson_right_interval(
+        y[0], y[1], y[2], first_h0, first_h1,
+    ));
+
+    for i in 3..n {
+        let h_prev = x[i - 1] - x[i - 2];
+        let h_curr = x[i] - x[i - 1];
+        if !(h_prev.is_finite() && h_curr.is_finite() && h_prev > 0.0 && h_curr > 0.0) {
+            return Err(IntegrateValidationError::QuadInvalidBounds {
+                detail: "x must be finite and strictly increasing".to_string(),
+            });
+        }
+        interval_integrals.push(cumulative_simpson_right_interval(
+            y[i - 2],
+            y[i - 1],
+            y[i],
+            h_prev,
+            h_curr,
+        ));
+    }
+
+    for value in interval_integrals {
+        cumsum += value;
         result.push(cumsum);
     }
 
     Ok(result)
+}
+
+fn cumulative_simpson_left_interval(y0: f64, y1: f64, y2: f64, h0: f64, h1: f64) -> f64 {
+    if h0.abs() < f64::EPSILON || h1.abs() < f64::EPSILON {
+        0.5 * h0 * (y0 + y1)
+    } else {
+        let hsum = h0 + h1;
+        h0 / 6.0
+            * ((3.0 - h0 / hsum) * y0 + (3.0 + h0 * h0 / (h1 * hsum) + h0 / hsum) * y1
+                - h0 * h0 / (h1 * hsum) * y2)
+    }
+}
+
+fn cumulative_simpson_right_interval(y0: f64, y1: f64, y2: f64, h0: f64, h1: f64) -> f64 {
+    if h0.abs() < f64::EPSILON || h1.abs() < f64::EPSILON {
+        0.5 * h1 * (y1 + y2)
+    } else {
+        let hsum = h0 + h1;
+        h1 / 6.0
+            * (-h1 * h1 / (h0 * hsum) * y0
+                + (3.0 + h1 * h1 / (h0 * hsum) + h1 / hsum) * y1
+                + (3.0 - h1 / hsum) * y2)
+    }
 }
 
 #[cfg(test)]
@@ -1456,17 +1490,15 @@ mod tests {
     #[test]
     fn cumulative_simpson_constant() {
         // f(x) = 2, x = [0, 1, 2, 3, 4]
-        // Cumulative integral: 2, 4, 6, 8 at each pair
+        // Cumulative integral at each point: 2, 4, 6, 8
         let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
         let y = vec![2.0; 5];
         let result = cumulative_simpson(&y, &x).unwrap();
-        // With Simpson for pairs of intervals: integral over [0,2] = 4, over [0,4] = 8
-        assert!(!result.is_empty());
-        let last = *result.last().unwrap();
-        assert!(
-            (last - 8.0).abs() < 0.1,
-            "cumulative_simpson constant: last = {last}, expected ~8.0"
-        );
+        assert_eq!(result.len(), 4);
+        let expected = [2.0, 4.0, 6.0, 8.0];
+        for (got, want) in result.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-12, "got {got}, expected {want}");
+        }
     }
 
     #[test]
@@ -1476,16 +1508,32 @@ mod tests {
         let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
         let y: Vec<f64> = x.iter().map(|&xi| xi * xi).collect();
         let result = cumulative_simpson(&y, &x).unwrap();
-        let last = *result.last().unwrap();
-        let expected = 64.0 / 3.0; // ∫x^2 from 0 to 4
-        assert!(
-            (last - expected).abs() < 0.5,
-            "cumulative_simpson x^2: last = {last}, expected ~{expected}"
-        );
+        assert_eq!(result.len(), 4);
+        let expected = [1.0 / 3.0, 8.0 / 3.0, 9.0, 64.0 / 3.0];
+        for (got, want) in result.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-10, "got {got}, expected {want}");
+        }
+    }
+
+    #[test]
+    fn cumulative_simpson_two_points_falls_back_to_trapezoid() {
+        let x = vec![0.0, 2.0];
+        let y = vec![1.0, 3.0];
+        let result = cumulative_simpson(&y, &x).unwrap();
+        assert_eq!(result, vec![4.0]);
+    }
+
+    #[test]
+    fn cumulative_simpson_requires_strictly_increasing_x() {
+        let err = cumulative_simpson(&[1.0, 2.0, 3.0], &[0.0, 0.0, 1.0]).unwrap_err();
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
     }
 
     #[test]
     fn cumulative_simpson_too_few() {
-        assert!(cumulative_simpson(&[1.0, 2.0], &[0.0, 1.0]).is_err());
+        assert!(cumulative_simpson(&[1.0], &[0.0]).is_err());
     }
 }
