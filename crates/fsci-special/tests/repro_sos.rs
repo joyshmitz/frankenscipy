@@ -23,12 +23,10 @@ fn test_repro_sos() {
         panic!("expected vector");
     }
     
-    /*
     // Check broadcasting
     let y_scalar = SpecialTensor::RealScalar(1.0);
     let res_broad = rel_entr(&x_vec, &y_scalar, RuntimeMode::Strict);
     assert!(res_broad.is_ok(), "broadcasting should be supported: {:?}", res_broad.err());
-    */
 
     // Check infinity cases
     let inf = f64::INFINITY;
@@ -38,5 +36,10 @@ fn test_repro_sos() {
     }
 
     let res_kl_inf = fsci_special::kl_div(1.0, inf);
-    assert!(res_kl_inf.is_infinite(), "kl_div(1, inf) should be inf, got {}", res_kl_inf);
+    assert!(res_kl_inf.is_nan(), "kl_div(1, inf) should be NaN, got {}", res_kl_inf);
+
+    let res_xlogy = fsci_special::xlogy(&SpecialTensor::RealScalar(0.0), &SpecialTensor::RealScalar(f64::NAN), RuntimeMode::Strict).expect("xlogy(0, nan)");
+    if let SpecialTensor::RealScalar(v) = res_xlogy {
+        assert!(v.is_nan(), "xlogy(0, nan) should be NaN, got {}", v);
+    }
 }

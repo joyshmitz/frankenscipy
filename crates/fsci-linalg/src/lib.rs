@@ -2534,7 +2534,7 @@ fn solve_triangular_internal(
         }
     }
 
-    let backward_error = compute_backward_error_dense(a, &x, b);
+    let backward_error = compute_backward_error_dense(&mat, &x, b);
 
     Ok(SolveResult {
         x,

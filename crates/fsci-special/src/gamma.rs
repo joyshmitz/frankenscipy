@@ -376,26 +376,49 @@ fn gamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
 }
 
 fn gammaln_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
-    if matches!(mode, RuntimeMode::Hardened) && is_negative_integer_pole(x) {
-        record_special_trace(
-            "gammaln",
-            mode,
-            "pole_input",
-            format!("input={x}"),
-            "fail_closed",
-            "gammaln pole at nonpositive integer",
-            false,
-        );
-        return Err(SpecialError {
-            function: "gammaln",
-            kind: SpecialErrorKind::PoleInput,
-            mode,
-            detail: "gammaln pole at nonpositive integer",
-        });
+    if x.is_nan() {
+        return Ok(f64::NAN);
     }
-    let value = gamma_core(x);
-    let output = value.abs().ln();
-    if !output.is_finite() {
+    if is_negative_integer_pole(x) || x == 0.0 {
+        if matches!(mode, RuntimeMode::Hardened) {
+            record_special_trace(
+                "gammaln",
+                mode,
+                "pole_input",
+                format!("input={x}"),
+                "fail_closed",
+                "gammaln pole at nonpositive integer",
+                false,
+            );
+            return Err(SpecialError {
+                function: "gammaln",
+                kind: SpecialErrorKind::PoleInput,
+                mode,
+                detail: "gammaln pole at nonpositive integer",
+            });
+        } else {
+            return Ok(f64::INFINITY);
+        }
+    }
+
+    let output = if x >= 0.5 {
+        if x < 100.0 {
+            lngamma_lanczos(x)
+        } else {
+            lngamma_positive(x)
+        }
+    } else {
+        // Reflection formula: ln|Γ(x)| = ln(π) - ln|sin(πx)| - ln|Γ(1-x)|
+        // Valid for all x < 0.5 (except poles handled above)
+        let g1mx = if 1.0 - x < 100.0 {
+            lngamma_lanczos(1.0 - x)
+        } else {
+            lngamma_positive(1.0 - x)
+        };
+        PI.ln() - (PI * x).sin().abs().ln() - g1mx
+    };
+
+    if !output.is_finite() && !x.is_infinite() {
         record_special_trace(
             "gammaln",
             mode,
@@ -407,6 +430,17 @@ fn gammaln_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         );
     }
     Ok(output)
+}
+
+fn lngamma_lanczos(x: f64) -> f64 {
+    let mut coeff_sum = LANCZOS_COEFFS[0];
+    for (idx, coeff) in LANCZOS_COEFFS.iter().enumerate().skip(1) {
+        coeff_sum += coeff / (x + (idx as f64 - 1.0));
+    }
+
+    let t = x + 6.5;
+    // ln(Γ(x)) = ln(sqrt(2π)) + (x-0.5)ln(t) - t + ln(coeff_sum)
+    0.5 * (2.0 * PI).ln() + (x - 0.5) * t.ln() - t + coeff_sum.ln()
 }
 
 fn digamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {

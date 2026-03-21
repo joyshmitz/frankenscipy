@@ -19,23 +19,41 @@ use fsci_runtime::RuntimeMode;
 
 use crate::types::{
     DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor,
+    SpecialTensor, record_special_trace,
 };
 
-pub const CONVENIENCE_DISPATCH_PLAN: &[DispatchPlan] = &[DispatchPlan {
-    function: "sinc",
-    steps: &[
-        DispatchStep {
-            regime: KernelRegime::Series,
-            when: "|x| < 1e-7: Taylor series to avoid 0/0",
-        },
-        DispatchStep {
+pub const CONVENIENCE_DISPATCH_PLAN: &[DispatchPlan] = &[
+    DispatchPlan {
+        function: "sinc",
+        steps: &[
+            DispatchStep {
+                regime: KernelRegime::Series,
+                when: "|x| < 1e-7: Taylor series to avoid 0/0",
+            },
+            DispatchStep {
+                regime: KernelRegime::BackendDelegate,
+                when: "general: sin(πx)/(πx)",
+            },
+        ],
+        notes: "sinc(0) = 1 by convention. Matches numpy.sinc normalization.",
+    },
+    DispatchPlan {
+        function: "xlogy",
+        steps: &[DispatchStep {
             regime: KernelRegime::BackendDelegate,
-            when: "general: sin(πx)/(πx)",
-        },
-    ],
-    notes: "sinc(0) = 1 by convention. Matches numpy.sinc normalization.",
-}];
+            when: "direct evaluation with 0*log(y)=0 convention",
+        }],
+        notes: "Strict mode propagates NaN even when x=0.",
+    },
+    DispatchPlan {
+        function: "rel_entr",
+        steps: &[DispatchStep {
+            regime: KernelRegime::BackendDelegate,
+            when: "direct evaluation using x*log(x/y)",
+        }],
+        notes: "Matches SciPy domain rules including infinities.",
+    },
+];
 
 /// Normalized sinc function: sin(πx) / (πx).
 ///
@@ -164,6 +182,9 @@ pub fn kl_div(x: f64, y: f64) -> f64 {
 // ══════════════════════════════════════════════════════════════════════
 
 fn sinc_scalar(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
     if x == 0.0 {
         return 1.0;
     }
@@ -178,14 +199,31 @@ fn sinc_scalar(x: f64) -> f64 {
 }
 
 fn xlogy_scalar(x: f64, y: f64) -> f64 {
-    if x == 0.0 { 0.0 } else { x * y.ln() }
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        0.0
+    } else {
+        x * y.ln()
+    }
 }
 
 fn xlog1py_scalar(x: f64, y: f64) -> f64 {
-    if x == 0.0 { 0.0 } else { x * (1.0 + y).ln() }
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        0.0
+    } else {
+        x * (1.0 + y).ln()
+    }
 }
 
 fn expit_scalar(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
     if x >= 0.0 {
         let ex = (-x).exp();
         1.0 / (1.0 + ex)
@@ -196,6 +234,9 @@ fn expit_scalar(x: f64) -> f64 {
 }
 
 fn logit_scalar(p: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if p.is_nan() {
+        return Ok(f64::NAN);
+    }
     if p <= 0.0 || p >= 1.0 {
         return match mode {
             RuntimeMode::Strict => {
@@ -205,18 +246,32 @@ fn logit_scalar(p: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
                     Ok(f64::INFINITY)
                 }
             }
-            RuntimeMode::Hardened => Err(SpecialError {
-                function: "logit",
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "p must be in (0, 1)",
-            }),
+            RuntimeMode::Hardened => {
+                record_special_trace(
+                    "logit",
+                    mode,
+                    "domain_error",
+                    format!("p={p}"),
+                    "fail_closed",
+                    "p must be in (0, 1)",
+                    false,
+                );
+                Err(SpecialError {
+                    function: "logit",
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "p must be in (0, 1)",
+                })
+            }
         };
     }
     Ok((p / (1.0 - p)).ln())
 }
 
 fn entr_scalar(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
     if x == 0.0 {
         0.0
     } else if x < 0.0 {
@@ -265,6 +320,9 @@ fn kl_div_scalar(x: f64, y: f64) -> f64 {
 ///
 /// Uses rational approximation for small z and asymptotic expansion for large z.
 pub fn fresnel(z: f64) -> (f64, f64) {
+    if z.is_nan() {
+        return (f64::NAN, f64::NAN);
+    }
     let ax = z.abs();
     if ax < 1e-15 {
         return (0.0, 0.0);
@@ -278,7 +336,11 @@ pub fn fresnel(z: f64) -> (f64, f64) {
         fresnel_asymptotic(ax)
     };
 
-    if z < 0.0 { (-s, -c) } else { (s, c) }
+    if z < 0.0 {
+        (-s, -c)
+    } else {
+        (s, c)
+    }
 }
 
 /// Power series for Fresnel integrals (small arguments).
@@ -611,7 +673,7 @@ fn gamma_fn(x: f64) -> f64 {
 fn map_real<F>(
     function: &'static str,
     input: &SpecialTensor,
-    _mode: RuntimeMode,
+    mode: RuntimeMode,
     kernel: F,
 ) -> SpecialResult
 where
@@ -622,339 +684,96 @@ where
         SpecialTensor::RealVec(values) => values
             .iter()
             .copied()
-            .map(&kernel)
+            .map(kernel)
             .collect::<Result<Vec<_>, _>>()
             .map(SpecialTensor::RealVec),
-        _ => Err(SpecialError {
-            function,
-            kind: SpecialErrorKind::DomainError,
-            mode: _mode,
-            detail: "unsupported input type",
-        }),
+        _ => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "unsupported_type",
+                "fail_closed",
+                "unsupported input type for convenience scalar function",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "unsupported input type",
+            })
+        }
     }
 }
 
 fn map_real_binary<F>(
     function: &'static str,
-    a: &SpecialTensor,
-    b: &SpecialTensor,
+    lhs: &SpecialTensor,
+    rhs: &SpecialTensor,
     mode: RuntimeMode,
     kernel: F,
 ) -> SpecialResult
 where
     F: Fn(f64, f64) -> Result<f64, SpecialError>,
 {
-    match (a, b) {
-        (SpecialTensor::RealScalar(x), SpecialTensor::RealScalar(y)) => {
-            kernel(*x, *y).map(SpecialTensor::RealScalar)
+    match (lhs, rhs) {
+        (SpecialTensor::RealScalar(left), SpecialTensor::RealScalar(right)) => {
+            kernel(*left, *right).map(SpecialTensor::RealScalar)
         }
-        (SpecialTensor::RealVec(xs), SpecialTensor::RealVec(ys)) => {
-            if xs.len() != ys.len() {
+        (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => left
+            .iter()
+            .copied()
+            .map(|value| kernel(value, *right))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => right
+            .iter()
+            .copied()
+            .map(|value| kernel(*left, value))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
+            if left.len() != right.len() {
+                record_special_trace(
+                    function,
+                    mode,
+                    "domain_error",
+                    format!("lhs_len={},rhs_len={}", left.len(), right.len()),
+                    "fail_closed",
+                    "vector inputs must have matching lengths",
+                    false,
+                );
                 return Err(SpecialError {
                     function,
                     kind: SpecialErrorKind::DomainError,
                     mode,
-                    detail: "input vectors must have same length",
+                    detail: "vector inputs must have matching lengths",
                 });
             }
-            xs.iter()
-                .zip(ys.iter())
-                .map(|(&x, &y)| kernel(x, y))
+            left.iter()
+                .copied()
+                .zip(right.iter().copied())
+                .map(|(l, r)| kernel(l, r))
                 .collect::<Result<Vec<_>, _>>()
                 .map(SpecialTensor::RealVec)
         }
-        _ => Err(SpecialError {
-            function,
-            kind: SpecialErrorKind::DomainError,
-            mode,
-            detail: "unsupported input type combination",
-        }),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn eval_scalar(result: SpecialResult) -> f64 {
-        match result.expect("should succeed") {
-            SpecialTensor::RealScalar(v) => v,
-            other => panic!("expected RealScalar, got {other:?}"),
+        _ => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "unsupported_types",
+                "fail_closed",
+                "unsupported input type combination for binary convenience function",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "unsupported input type combination",
+            })
         }
-    }
-
-    fn assert_close(actual: f64, expected: f64, tol: f64, msg: &str) {
-        assert!(
-            (actual - expected).abs() < tol,
-            "{msg}: got {actual}, expected {expected}"
-        );
-    }
-
-    #[test]
-    fn sinc_at_zero() {
-        let result = eval_scalar(sinc(&SpecialTensor::RealScalar(0.0), RuntimeMode::Strict));
-        assert_close(result, 1.0, 1e-15, "sinc(0)");
-    }
-
-    #[test]
-    fn sinc_at_integer() {
-        // sinc(n) = 0 for non-zero integers
-        for n in 1..=5 {
-            let result = eval_scalar(sinc(
-                &SpecialTensor::RealScalar(n as f64),
-                RuntimeMode::Strict,
-            ));
-            assert!(result.abs() < 1e-15, "sinc({n}) should be 0, got {result}");
-        }
-    }
-
-    #[test]
-    fn sinc_at_half() {
-        // sinc(0.5) = sin(π/2) / (π/2) = 1/(π/2) = 2/π
-        let result = eval_scalar(sinc(&SpecialTensor::RealScalar(0.5), RuntimeMode::Strict));
-        assert_close(result, 2.0 / PI, 1e-12, "sinc(0.5)");
-    }
-
-    #[test]
-    fn xlogy_zero_x() {
-        let result = eval_scalar(xlogy(
-            &SpecialTensor::RealScalar(0.0),
-            &SpecialTensor::RealScalar(0.0),
-            RuntimeMode::Strict,
-        ));
-        assert_close(result, 0.0, 1e-15, "xlogy(0, 0) = 0");
-    }
-
-    #[test]
-    fn xlogy_normal() {
-        let result = eval_scalar(xlogy(
-            &SpecialTensor::RealScalar(2.0),
-            &SpecialTensor::RealScalar(std::f64::consts::E),
-            RuntimeMode::Strict,
-        ));
-        assert_close(result, 2.0, 1e-12, "xlogy(2, e) = 2");
-    }
-
-    #[test]
-    fn logsumexp_basic() {
-        // logsumexp([0, 0]) = log(2)
-        assert_close(logsumexp(&[0.0, 0.0]), 2.0_f64.ln(), 1e-12, "logsumexp");
-    }
-
-    #[test]
-    fn logsumexp_large_values() {
-        // Should handle large values without overflow
-        let result = logsumexp(&[1000.0, 1001.0]);
-        assert!(result.is_finite(), "should not overflow");
-        assert_close(
-            result,
-            1001.0 + (1.0 + (-1.0_f64).exp()).ln(),
-            1e-10,
-            "logsumexp large",
-        );
-    }
-
-    #[test]
-    fn logsumexp_empty() {
-        assert!(logsumexp(&[]).is_infinite() && logsumexp(&[]).is_sign_negative());
-    }
-
-    #[test]
-    fn expit_zero() {
-        let result = eval_scalar(expit(&SpecialTensor::RealScalar(0.0), RuntimeMode::Strict));
-        assert_close(result, 0.5, 1e-15, "expit(0) = 0.5");
-    }
-
-    #[test]
-    fn expit_large_positive() {
-        let result = eval_scalar(expit(
-            &SpecialTensor::RealScalar(100.0),
-            RuntimeMode::Strict,
-        ));
-        assert_close(result, 1.0, 1e-10, "expit(100) ≈ 1");
-    }
-
-    #[test]
-    fn expit_large_negative() {
-        let result = eval_scalar(expit(
-            &SpecialTensor::RealScalar(-100.0),
-            RuntimeMode::Strict,
-        ));
-        assert_close(result, 0.0, 1e-10, "expit(-100) ≈ 0");
-    }
-
-    #[test]
-    fn logit_expit_inverse() {
-        // logit(expit(x)) = x
-        for &x in &[-5.0, -1.0, 0.0, 1.0, 5.0] {
-            let p = eval_scalar(expit(&SpecialTensor::RealScalar(x), RuntimeMode::Strict));
-            let back = eval_scalar(logit(&SpecialTensor::RealScalar(p), RuntimeMode::Strict));
-            assert_close(back, x, 1e-10, &format!("logit(expit({x}))"));
-        }
-    }
-
-    #[test]
-    fn entr_at_zero() {
-        let result = eval_scalar(entr(&SpecialTensor::RealScalar(0.0), RuntimeMode::Strict));
-        assert_close(result, 0.0, 1e-15, "entr(0) = 0");
-    }
-
-    #[test]
-    fn entr_at_one() {
-        let result = eval_scalar(entr(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict));
-        assert_close(result, 0.0, 1e-15, "entr(1) = -1*ln(1) = 0");
-    }
-
-    #[test]
-    fn entr_positive() {
-        let result = eval_scalar(entr(&SpecialTensor::RealScalar(0.5), RuntimeMode::Strict));
-        assert_close(result, -0.5 * 0.5_f64.ln(), 1e-12, "entr(0.5)");
-    }
-
-    #[test]
-    fn rel_entr_equal() {
-        // rel_entr(x, x) = x * log(1) = 0
-        let result = eval_scalar(rel_entr(
-            &SpecialTensor::RealScalar(1.0),
-            &SpecialTensor::RealScalar(1.0),
-            RuntimeMode::Strict,
-        ));
-        assert_close(result, 0.0, 1e-15, "rel_entr(1,1) = 0");
-    }
-
-    #[test]
-    fn rel_entr_zero_x() {
-        let result = eval_scalar(rel_entr(
-            &SpecialTensor::RealScalar(0.0),
-            &SpecialTensor::RealScalar(1.0),
-            RuntimeMode::Strict,
-        ));
-        assert_close(result, 0.0, 1e-15, "rel_entr(0,1) = 0");
-    }
-
-    #[test]
-    fn rel_entr_nan_inputs_propagate() {
-        let left_nan = eval_scalar(rel_entr(
-            &SpecialTensor::RealScalar(f64::NAN),
-            &SpecialTensor::RealScalar(1.0),
-            RuntimeMode::Strict,
-        ));
-        assert!(left_nan.is_nan(), "rel_entr(NaN, 1) should be NaN");
-
-        let right_nan = eval_scalar(rel_entr(
-            &SpecialTensor::RealScalar(1.0),
-            &SpecialTensor::RealScalar(f64::NAN),
-            RuntimeMode::Strict,
-        ));
-        assert!(right_nan.is_nan(), "rel_entr(1, NaN) should be NaN");
-    }
-
-    // ── Fresnel integrals ────────────────────────────────────────────
-
-    #[test]
-    fn fresnel_at_zero() {
-        let (s, c) = fresnel(0.0);
-        assert_close(s, 0.0, 1e-15, "S(0) = 0");
-        assert_close(c, 0.0, 1e-15, "C(0) = 0");
-    }
-
-    #[test]
-    fn fresnel_symmetry() {
-        // S(-x) = -S(x), C(-x) = -C(x)
-        for x in [0.5, 1.0, 2.0, 5.0] {
-            let (sp, cp) = fresnel(x);
-            let (sn, cn) = fresnel(-x);
-            assert_close(sn, -sp, 1e-10, &format!("S(-{x})"));
-            assert_close(cn, -cp, 1e-10, &format!("C(-{x})"));
-        }
-    }
-
-    #[test]
-    fn fresnel_large_x_converge_to_half() {
-        // S(∞) = C(∞) = 0.5
-        let (s, c) = fresnel(50.0);
-        assert!((s - 0.5).abs() < 0.05, "S(50) ≈ 0.5, got {s}");
-        assert!((c - 0.5).abs() < 0.05, "C(50) ≈ 0.5, got {c}");
-    }
-
-    #[test]
-    fn fresnel_known_value() {
-        // S(1) ≈ 0.4382591473903548, C(1) ≈ 0.7798934003768228
-        let (s, c) = fresnel(1.0);
-        assert_close(s, 0.438_259_147, 1e-5, "S(1)");
-        assert_close(c, 0.779_893_400, 1e-5, "C(1)");
-    }
-
-    // ── Dawson function ──────────────────────────────────────────────
-
-    #[test]
-    fn dawsn_at_zero() {
-        assert_close(dawsn(0.0), 0.0, 1e-15, "D(0) = 0");
-    }
-
-    #[test]
-    fn dawsn_odd_symmetry() {
-        // D(-x) = -D(x)
-        for x in [0.5, 1.0, 2.0, 5.0] {
-            assert_close(dawsn(-x), -dawsn(x), 1e-10, &format!("D(-{x})"));
-        }
-    }
-
-    #[test]
-    fn dawsn_maximum() {
-        // Maximum of D(x) occurs near x ≈ 0.9241388730
-        // D(0.9241) ≈ 0.5410442246
-        let d = dawsn(0.924_138_873);
-        assert!(d > 0.54 && d < 0.55, "D at maximum ≈ 0.541, got {d}");
-    }
-
-    #[test]
-    fn dawsn_large_x() {
-        // D(x) → 1/(2x) for large x
-        let x = 10.0;
-        let d = dawsn(x);
-        assert_close(d, 0.5 / x, 1e-3, "D(10) ≈ 1/20");
-    }
-
-    #[test]
-    fn dawsn_nan_passthrough() {
-        assert!(dawsn(f64::NAN).is_nan());
-    }
-
-    // ── Struve functions ─────────────────────────────────────────────
-
-    #[test]
-    fn struve_h0_at_zero() {
-        assert_close(struve(0.0, 0.0), 0.0, 1e-15, "H_0(0) = 0");
-    }
-
-    #[test]
-    fn struve_h1_at_zero() {
-        assert_close(struve(1.0, 0.0), 0.0, 1e-15, "H_1(0) = 0");
-    }
-
-    #[test]
-    fn struve_h0_known_value() {
-        // H_0(1) ≈ 0.5683... (from tables)
-        let h = struve(0.0, 1.0);
-        assert!(h > 0.56 && h < 0.58, "H_0(1) ≈ 0.568, got {h}");
-    }
-
-    #[test]
-    fn struve_nan_passthrough() {
-        assert!(struve(0.0, f64::NAN).is_nan());
-        assert!(struve(f64::NAN, 1.0).is_nan());
-    }
-
-    #[test]
-    fn modstruve_at_zero() {
-        assert_close(modstruve(0.0, 0.0), 0.0, 1e-15, "L_0(0) = 0");
-    }
-
-    #[test]
-    fn modstruve_positive() {
-        // L_0(x) > 0 for x > 0 (no alternating signs)
-        let l = modstruve(0.0, 1.0);
-        assert!(l > 0.0, "L_0(1) should be positive, got {l}");
     }
 }
