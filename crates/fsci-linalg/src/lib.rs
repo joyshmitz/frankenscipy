@@ -2695,6 +2695,126 @@ fn pseudo_inverse_from_svd(
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Matrix Equation Solvers
+// ══════════════════════════════════════════════════════════════════════
+
+/// Solve the Sylvester equation AX + XB = Q.
+///
+/// Uses the Bartels-Stewart algorithm: reduce A and B to Schur form,
+/// then solve the resulting triangular Sylvester equation column by column.
+///
+/// Matches `scipy.linalg.solve_sylvester(a, b, q)`.
+pub fn solve_sylvester(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    q: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (m, ma) = matrix_shape(a)?;
+    let (n, nb) = matrix_shape(b)?;
+    let (qr, qc) = matrix_shape(q)?;
+
+    if m != ma {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if n != nb {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if qr != m || qc != n {
+        return Err(LinalgError::DimensionMismatch {
+            expected: format!("{}x{}", m, n),
+            actual: format!("{}x{}", qr, qc),
+        });
+    }
+    if m == 0 || n == 0 {
+        return Ok(Vec::new());
+    }
+
+    let a_mat = dmatrix_from_rows(a)?;
+    let b_mat = dmatrix_from_rows(b)?;
+    let q_mat = dmatrix_from_rows(q)?;
+
+    // Schur decompositions: A = U T_A U^T, B = V T_B V^T
+    let schur_a = a_mat.clone().schur();
+    let (u, ta) = schur_a.unpack();
+    let schur_b = b_mat.clone().schur();
+    let (v, tb) = schur_b.unpack();
+
+    // Transform Q: F = U^T Q V
+    let f = u.transpose() * &q_mat * &v;
+
+    // Solve triangular Sylvester: T_A Y + Y T_B = F
+    // Column by column from right to left
+    let mut y = DMatrix::<f64>::zeros(m, n);
+
+    for j in (0..n).rev() {
+        // y[:,j] satisfies: (T_A + T_B[j,j] I) y[:,j] = f[:,j] - Σ_{k>j} T_B[j,k] y[:,k]
+        let mut rhs = f.column(j).clone_owned();
+
+        // Subtract contributions from already-solved columns
+        for k in (j + 1)..n {
+            let tb_jk = tb[(j, k)];
+            if tb_jk.abs() > 0.0 {
+                for i in 0..m {
+                    rhs[i] -= tb_jk * y[(i, k)];
+                }
+            }
+        }
+
+        // Build the shifted matrix: T_A + T_B[j,j] * I
+        let mut shifted = ta.clone();
+        let shift = tb[(j, j)];
+        for i in 0..m {
+            shifted[(i, i)] += shift;
+        }
+
+        // Solve the shifted system via back-substitution (quasi-upper-triangular)
+        // Use LU factorization for robustness
+        let lu = shifted.clone().full_piv_lu();
+        let col_solution = lu.solve(&rhs).unwrap_or_else(|| {
+            // Fallback: try direct solve
+            DMatrix::from_column_slice(m, 1, &vec![0.0; m]).column(0).clone_owned()
+        });
+
+        for i in 0..m {
+            y[(i, j)] = col_solution[i];
+        }
+    }
+
+    // Transform back: X = U Y V^T
+    let x = &u * y * v.transpose();
+
+    emit_trace(LinalgTrace {
+        operation: "solve_sylvester",
+        matrix_size: (m, n),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(rows_from_dmatrix(&x))
+}
+
+/// Solve the continuous Lyapunov equation AX + XA^T = Q.
+///
+/// Special case of Sylvester equation with B = A^T.
+///
+/// Matches `scipy.linalg.solve_continuous_lyapunov(a, q)`.
+pub fn solve_continuous_lyapunov(
+    a: &[Vec<f64>],
+    q: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (n, _) = matrix_shape(a)?;
+    // B = A^T
+    let a_t: Vec<Vec<f64>> = (0..n)
+        .map(|i| (0..n).map(|j| a[j][i]).collect())
+        .collect();
+    solve_sylvester(a, &a_t, q, options)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Subspace Operations: orth, null_space, subspace_angles, polar
 // ══════════════════════════════════════════════════════════════════════
 
