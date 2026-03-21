@@ -2655,26 +2655,6 @@ fn validate_finite_matrix_and_vector(
     Ok(())
 }
 
-/// Solve (T + shift*I) x = b where T is upper-triangular, via back-substitution.
-fn solve_shifted_upper_triangular(
-    t: &DMatrix<f64>,
-    shift: f64,
-    b: &nalgebra::DVector<f64>,
-) -> nalgebra::DVector<f64> {
-    let n = b.len();
-    let mut x = nalgebra::DVector::zeros(n);
-
-    for i in (0..n).rev() {
-        let mut sum = b[i];
-        for j in (i + 1)..n {
-            sum -= t[(i, j)] * x[j];
-        }
-        let diag = t[(i, i)] + shift;
-        x[i] = if diag.abs() > 1e-30 { sum / diag } else { 0.0 };
-    }
-
-    x
-}
 
 fn dmatrix_from_rows(rows: &[Vec<f64>]) -> Result<DMatrix<f64>, LinalgError> {
     let (m, n) = matrix_shape(rows)?;

@@ -2364,6 +2364,71 @@ mod tests {
             Err(SparseError::InvalidArgument { .. })
         ));
     }
+
+    // ── Bellman-Ford tests ───────────────────────────────────────────
+
+    #[test]
+    fn bellman_ford_positive_weights() {
+        // Same as Dijkstra test — should give identical results
+        let g = triangle_graph_csr();
+        let result = bellman_ford(&g, 0).expect("bellman_ford");
+        assert_eq!(result.distances[0], 0.0);
+        assert_eq!(result.distances[1], 1.0);
+        assert!(
+            (result.distances[2] - 3.0).abs() < 1e-10,
+            "dist to 2: {}",
+            result.distances[2]
+        );
+    }
+
+    #[test]
+    fn bellman_ford_negative_edge() {
+        // Graph: 0→1 (w=4), 0→2 (w=5), 1→2 (w=-3)
+        // Shortest 0→2: 0→1→2 = 4+(-3) = 1 (not direct 5)
+        let g = CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![4.0, 5.0, -3.0],
+            vec![0, 0, 1],
+            vec![1, 2, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let result = bellman_ford(&g, 0).expect("bellman_ford neg");
+        assert_eq!(result.distances[0], 0.0);
+        assert_eq!(result.distances[1], 4.0);
+        assert!(
+            (result.distances[2] - 1.0).abs() < 1e-10,
+            "shortest to 2 via neg edge: {}",
+            result.distances[2]
+        );
+    }
+
+    #[test]
+    fn bellman_ford_negative_cycle_detected() {
+        // Negative cycle: 0→1 (w=1), 1→2 (w=-1), 2→0 (w=-1)
+        // Total cycle weight: 1 + (-1) + (-1) = -1 < 0
+        let g = CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![1.0, -1.0, -1.0],
+            vec![0, 1, 2],
+            vec![1, 2, 0],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let err = bellman_ford(&g, 0).expect_err("negative cycle");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn bellman_ford_unreachable() {
+        let g = disconnected_graph_csr();
+        let result = bellman_ford(&g, 0).expect("bellman_ford");
+        assert!(result.distances[2].is_infinite());
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3028,6 +3093,72 @@ pub fn dijkstra(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathRe
             if alt < dist[v] {
                 dist[v] = alt;
                 pred[v] = u as i64;
+            }
+        }
+    }
+
+    Ok(ShortestPathResult {
+        distances: dist,
+        predecessors: pred,
+    })
+}
+
+/// Single-source shortest paths using Bellman-Ford algorithm.
+///
+/// Matches `scipy.sparse.csgraph.bellman_ford(graph, indices=source)`.
+///
+/// Supports negative edge weights (unlike Dijkstra). Detects negative cycles.
+pub fn bellman_ford(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathResult> {
+    let n = graph.shape().rows;
+    if source >= n {
+        return Err(SparseError::InvalidArgument {
+            message: format!("source {source} out of bounds for graph with {n} nodes"),
+        });
+    }
+
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+    let data = graph.data();
+
+    let mut dist = vec![f64::INFINITY; n];
+    let mut pred = vec![-1_i64; n];
+    dist[source] = 0.0;
+
+    // Relax all edges n-1 times
+    for _ in 0..n.saturating_sub(1) {
+        let mut changed = false;
+        for u in 0..n {
+            if dist[u] == f64::INFINITY {
+                continue;
+            }
+            for idx in indptr[u]..indptr[u + 1] {
+                let v = indices[idx];
+                let weight = data[idx];
+                let alt = dist[u] + weight;
+                if alt < dist[v] {
+                    dist[v] = alt;
+                    pred[v] = u as i64;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break; // Early termination: no updates in this pass
+        }
+    }
+
+    // Check for negative cycles: one more pass
+    for u in 0..n {
+        if dist[u] == f64::INFINITY {
+            continue;
+        }
+        for idx in indptr[u]..indptr[u + 1] {
+            let v = indices[idx];
+            let weight = data[idx];
+            if dist[u] + weight < dist[v] {
+                return Err(SparseError::InvalidArgument {
+                    message: "graph contains a negative-weight cycle".to_string(),
+                });
             }
         }
     }

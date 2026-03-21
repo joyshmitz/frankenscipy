@@ -12,8 +12,9 @@ pub use linalg::{
     ConnectedComponentsResult, EigsOptions, EigsResult, IluOptions, IterativeSolveOptions,
     IterativeSolveResult, LuOptions, MstResult, PermutationOrdering, ShortestPathResult,
     SolveOptions, SolveResult, SparseBackend, SparseIluFactorization, SparseLuFactorization,
-    SvdsResult, bicgstab, cg, connected_components, dijkstra, eigs, eigsh, gmres, lsmr, lsqr,
-    minimum_spanning_tree, minres, pcg, spilu, splu, splu_solve, spsolve, spsolve_triangular, svds,
+    SvdsResult, bellman_ford, bicgstab, cg, connected_components, dijkstra, eigs, eigsh, gmres,
+    lsmr, lsqr, minimum_spanning_tree, minres, pcg, spilu, splu, splu_solve, spsolve,
+    spsolve_triangular, svds,
 };
 pub use ops::{
     ConversionLogEntry, FormatConvertible, add_coo, add_csc, add_csr, coo_to_csr_with_mode,

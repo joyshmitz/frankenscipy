@@ -1994,12 +1994,28 @@ pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
     let df_between = k - 1.0;
     let df_within = nf - k;
 
-    if df_within <= 0.0 || ss_within == 0.0 {
+    if df_within <= 0.0 {
         return TtestResult {
-            statistic: f64::INFINITY,
-            pvalue: 0.0,
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
             df: df_between,
         };
+    }
+
+    if ss_within == 0.0 {
+        if ss_between == 0.0 {
+            return TtestResult {
+                statistic: f64::NAN,
+                pvalue: f64::NAN,
+                df: df_between,
+            };
+        } else {
+            return TtestResult {
+                statistic: f64::INFINITY,
+                pvalue: 0.0,
+                df: df_between,
+            };
+        }
     }
 
     let ms_between = ss_between / df_between;
@@ -3514,11 +3530,7 @@ pub fn fisher_exact(table: &[[f64; 2]; 2]) -> FisherExactResult {
     let observed_k = a as u64;
     let p_observed = hyper.pmf(observed_k);
 
-    let k_min = if n_draw + n_succ > big_m {
-        n_draw + n_succ - big_m
-    } else {
-        0
-    };
+    let k_min = (n_draw + n_succ).saturating_sub(big_m);
     let k_max = n_draw.min(n_succ);
 
     let mut pvalue = 0.0;
@@ -3530,7 +3542,7 @@ pub fn fisher_exact(table: &[[f64; 2]; 2]) -> FisherExactResult {
     }
 
     // Clamp to [0, 1]
-    let pvalue = pvalue.min(1.0).max(0.0);
+    let pvalue = pvalue.clamp(0.0, 1.0);
 
     FisherExactResult {
         odds_ratio,
@@ -5110,6 +5122,20 @@ mod tests {
     fn f_oneway_too_few_groups() {
         let result = f_oneway(&[&[1.0, 2.0]]);
         assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn f_oneway_constant_identical_groups() {
+        let result = f_oneway(&[&[1.0, 1.0, 1.0], &[1.0, 1.0, 1.0]]);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
+    fn f_oneway_constant_different_groups() {
+        let result = f_oneway(&[&[1.0, 1.0, 1.0], &[2.0, 2.0, 2.0]]);
+        assert!(result.statistic.is_infinite());
+        assert_eq!(result.pvalue, 0.0);
     }
 
     #[test]

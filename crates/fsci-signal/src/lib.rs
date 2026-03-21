@@ -565,34 +565,36 @@ pub fn hilbert(x: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
 
     let fft_opts = fsci_fft::FftOptions::default();
 
-    // Compute FFT
-    let spectrum = fsci_fft::fft(x, &fft_opts)
+    // Convert real input to complex for full FFT
+    let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
+
+    // Compute full complex FFT
+    let spectrum = fsci_fft::fft(&complex_input, &fft_opts)
         .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
 
-    // Build the filter h
+    // Build the analytic signal filter h:
+    // h[0] = 1, h[1..N/2] = 2, h[N/2] = 1 (even N), h[N/2+1..] = 0
     let mut h = vec![0.0; n];
     h[0] = 1.0;
-    if n % 2 == 0 {
-        // Even length
-        for i in 1..n / 2 {
-            h[i] = 2.0;
+    if n.is_multiple_of(2) {
+        for item in h.iter_mut().take(n / 2).skip(1) {
+            *item = 2.0;
         }
         h[n / 2] = 1.0;
     } else {
-        // Odd length
-        for i in 1..=(n - 1) / 2 {
-            h[i] = 2.0;
+        for item in h.iter_mut().take((n - 1) / 2 + 1).skip(1) {
+            *item = 2.0;
         }
     }
 
-    // Multiply spectrum by h
+    // Multiply spectrum by h (zero negative frequencies, double positive)
     let filtered: Vec<(f64, f64)> = spectrum
         .iter()
         .zip(h.iter())
         .map(|(&(re, im), &hi)| (re * hi, im * hi))
         .collect();
 
-    // Inverse FFT
+    // Inverse FFT gives the analytic signal
     let analytic = fsci_fft::ifft(&filtered, &fft_opts)
         .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
 
@@ -6081,11 +6083,11 @@ mod tests {
         let envelope = hilbert_envelope(&x).expect("hilbert envelope");
         assert_eq!(envelope.len(), n);
         // Exclude edges (transient effects) and check middle
-        for i in 20..n - 20 {
+        for (i, &env_val) in envelope.iter().enumerate().take(n - 20).skip(20) {
             assert!(
-                (envelope[i] - 1.0).abs() < 0.1,
+                (env_val - 1.0).abs() < 0.1,
                 "envelope[{i}] = {}, expected ~1.0",
-                envelope[i]
+                env_val
             );
         }
     }

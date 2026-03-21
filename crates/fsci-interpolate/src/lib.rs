@@ -880,39 +880,25 @@ fn akima_slopes(delta: &[f64]) -> Vec<f64> {
         return slopes;
     }
 
-    // Extend delta with two phantom values on each side (Akima's parabolic extension)
-    let mut ext = Vec::with_capacity(m + 4);
-    ext.push(2.0 * delta[0] - delta[1]);
-    ext.push(2.0 * delta[0] - delta[1] + (delta[0] - delta[1]));
-    ext.extend_from_slice(delta);
-    ext.push(2.0 * delta[m - 1] - delta[m - 2]);
-    ext.push(2.0 * delta[m - 1] - delta[m - 2] + (delta[m - 1] - delta[m - 2]));
-
-    // Recompute with proper phantom slopes:
-    // ext[0] = 2*d[0] - d[1]  (left phantom 2)
-    // ext[1] = d[0]           (left phantom 1)  => actually just use linear extrapolation
+    // Akima's phantom slopes for the endpoints
     let mut d = Vec::with_capacity(m + 4);
-    // Two phantom slopes on the left
-    d.push(2.0 * delta[0] - delta.get(1).copied().unwrap_or(delta[0]));
-    d.push(delta[0] + (delta[0] - delta.get(1).copied().unwrap_or(delta[0])));
+
+    let d0 = delta[0];
+    let d1 = delta.get(1).copied().unwrap_or(d0);
+
+    // Two phantom slopes on the left: m_{-2} and m_{-1}
+    d.push(3.0 * d0 - 2.0 * d1);
+    d.push(2.0 * d0 - d1);
+
     // Actual slopes
     d.extend_from_slice(delta);
-    // Two phantom slopes on the right
-    d.push(
-        delta[m - 1]
-            + (delta[m - 1]
-                - delta
-                    .get(m.wrapping_sub(2))
-                    .copied()
-                    .unwrap_or(delta[m - 1])),
-    );
-    d.push(
-        2.0 * delta[m - 1]
-            - delta
-                .get(m.wrapping_sub(2))
-                .copied()
-                .unwrap_or(delta[m - 1]),
-    );
+
+    // Two phantom slopes on the right: m_{m} and m_{m+1}
+    let d_last = delta[m - 1];
+    let d_prev = delta.get(m.wrapping_sub(2)).copied().unwrap_or(d_last);
+
+    d.push(2.0 * d_last - d_prev);
+    d.push(3.0 * d_last - 2.0 * d_prev);
 
     // Now d has m+4 elements, indexed from 0 to m+3.
     // Original delta[i] = d[i+2].
