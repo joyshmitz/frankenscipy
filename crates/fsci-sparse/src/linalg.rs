@@ -1033,7 +1033,17 @@ pub fn bicgstab(
         // v = A * p
         v = csr_matvec(a, &p);
 
-        alpha = rho / dot_product(&r_hat, &v);
+        let r_hat_v = dot_product(&r_hat, &v);
+        if r_hat_v.abs() < f64::EPSILON * 1e6 {
+            // Breakdown
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: false,
+                iterations: iteration,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+        alpha = rho / r_hat_v;
 
         // s = r - alpha * v
         let s: Vec<f64> = r

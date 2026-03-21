@@ -536,6 +536,81 @@ pub fn correlate2d(
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Hilbert Transform / Analytic Signal
+// ══════════════════════════════════════════════════════════════════════
+
+/// Compute the analytic signal using the Hilbert transform.
+///
+/// Returns a complex-valued signal where:
+/// - Real part = original signal
+/// - Imaginary part = Hilbert transform of the signal
+///
+/// The instantaneous amplitude (envelope) is `|analytic|` and the
+/// instantaneous phase is `angle(analytic)`.
+///
+/// Matches `scipy.signal.hilbert(x)`.
+///
+/// # Algorithm
+/// 1. Compute FFT of the input
+/// 2. Create a filter: h[0] = 1, h[1..N/2] = 2, h[N/2] = 1 (if N even), h[N/2+1..] = 0
+/// 3. Multiply FFT by h
+/// 4. Inverse FFT gives the analytic signal
+pub fn hilbert(x: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
+    let n = x.len();
+    if n == 0 {
+        return Err(SignalError::InvalidArgument(
+            "input must be non-empty".to_string(),
+        ));
+    }
+
+    let fft_opts = fsci_fft::FftOptions::default();
+
+    // Compute FFT
+    let spectrum = fsci_fft::fft(x, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+
+    // Build the filter h
+    let mut h = vec![0.0; n];
+    h[0] = 1.0;
+    if n % 2 == 0 {
+        // Even length
+        for i in 1..n / 2 {
+            h[i] = 2.0;
+        }
+        h[n / 2] = 1.0;
+    } else {
+        // Odd length
+        for i in 1..=(n - 1) / 2 {
+            h[i] = 2.0;
+        }
+    }
+
+    // Multiply spectrum by h
+    let filtered: Vec<(f64, f64)> = spectrum
+        .iter()
+        .zip(h.iter())
+        .map(|(&(re, im), &hi)| (re * hi, im * hi))
+        .collect();
+
+    // Inverse FFT
+    let analytic = fsci_fft::ifft(&filtered, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
+
+    Ok(analytic)
+}
+
+/// Compute the envelope (instantaneous amplitude) of a signal.
+///
+/// This is `|hilbert(x)|` — the magnitude of the analytic signal.
+pub fn hilbert_envelope(x: &[f64]) -> Result<Vec<f64>, SignalError> {
+    let analytic = hilbert(x)?;
+    Ok(analytic
+        .iter()
+        .map(|&(re, im)| (re * re + im * im).sqrt())
+        .collect())
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Peak Detection
 // ══════════════════════════════════════════════════════════════════════
 
@@ -5992,5 +6067,59 @@ mod tests {
             result,
             vec![12.0, 16.0, 9.0, 24.0, 28.0, 15.0, 15.0, 17.0, 9.0]
         );
+    }
+
+    // ── Hilbert transform tests ──────────────────────────────────────
+
+    #[test]
+    fn hilbert_sinusoid_envelope() {
+        // Pure sinusoid should have ~constant envelope of 1.0
+        let n = 256;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 10.0 * i as f64 / n as f64).sin())
+            .collect();
+        let envelope = hilbert_envelope(&x).expect("hilbert envelope");
+        assert_eq!(envelope.len(), n);
+        // Exclude edges (transient effects) and check middle
+        for i in 20..n - 20 {
+            assert!(
+                (envelope[i] - 1.0).abs() < 0.1,
+                "envelope[{i}] = {}, expected ~1.0",
+                envelope[i]
+            );
+        }
+    }
+
+    #[test]
+    fn hilbert_real_part_preserved() {
+        // Real part of analytic signal should equal original signal
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0];
+        let analytic = hilbert(&x).expect("hilbert");
+        for (i, (&xi, &(re, _))) in x.iter().zip(analytic.iter()).enumerate() {
+            assert!(
+                (re - xi).abs() < 1e-10,
+                "real part[{i}] = {re}, expected {xi}"
+            );
+        }
+    }
+
+    #[test]
+    fn hilbert_empty_input_rejected() {
+        let err = hilbert(&[]).expect_err("empty");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn hilbert_dc_signal() {
+        // DC signal: Hilbert transform of constant is zero
+        let x = vec![5.0; 64];
+        let analytic = hilbert(&x).expect("hilbert dc");
+        // Imaginary parts should be ~0 for constant input
+        for (i, &(_, im)) in analytic.iter().enumerate() {
+            assert!(
+                im.abs() < 1e-10,
+                "DC imaginary[{i}] = {im}, expected ~0"
+            );
+        }
     }
 }

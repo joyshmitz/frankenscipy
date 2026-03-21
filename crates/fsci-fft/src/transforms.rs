@@ -1457,6 +1457,11 @@ pub fn hfft(
     n: Option<usize>,
     options: &FftOptions,
 ) -> Result<Vec<f64>, FftError> {
+    if input.is_empty() {
+        return Err(FftError::InvalidShape {
+            detail: "input length must be greater than zero",
+        });
+    }
     let out_len = n.unwrap_or_else(|| 2 * (input.len() - 1));
     let mut result = irfft(input, Some(out_len), options)?;
     let scale = out_len as f64;
@@ -1927,5 +1932,16 @@ mod tests {
                 "hfft roundtrip mismatch at {i}: {a} vs {b_scaled}"
             );
         }
+    }
+
+    #[test]
+    fn hfft_empty_input_returns_invalid_shape() {
+        let err = hfft(&[], None, &FftOptions::default()).expect_err("empty hfft must fail");
+        assert_eq!(
+            err,
+            FftError::InvalidShape {
+                detail: "input length must be greater than zero",
+            }
+        );
     }
 }
