@@ -1174,7 +1174,11 @@ fn fast_rcond_diagonal(a: &[Vec<f64>]) -> f64 {
             min_abs = val;
         }
     }
-    if max_abs == 0.0 { 0.0 } else { min_abs / max_abs }
+    if max_abs == 0.0 {
+        0.0
+    } else {
+        min_abs / max_abs
+    }
 }
 
 /// Estimate spectral condition number via power iteration.
@@ -2036,7 +2040,9 @@ pub fn logm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Lin
 
     // Check if the matrix is symmetric
     let is_symmetric = (0..n).all(|i| {
-        (0..n).all(|j| (matrix[(i, j)] - matrix[(j, i)]).abs() < 1e-12 * matrix[(i, j)].abs().max(1.0))
+        (0..n).all(|j| {
+            (matrix[(i, j)] - matrix[(j, i)]).abs() < 1e-12 * matrix[(i, j)].abs().max(1.0)
+        })
     });
 
     if !is_symmetric {
@@ -2106,23 +2112,35 @@ fn logm_general(
     }
 
     // Compute off-diagonal of log(T) using Parlett's recurrence:
-    //   log_T[i,j] = (T[i,j] - Σ_{k=i+1}^{j-1} log_T[i,k]*log_T[k,j]) / (log_T[j,j] - log_T[i,i])
+    //   (t[j,j] - t[i,i]) f[i,j]
+    //     = t[i,j] (f[j,j] - f[i,i])
+    //       + Σ_{k=i+1}^{j-1} (t[i,k] f[k,j] - f[i,k] t[k,j])
+    //
+    // For repeated diagonal entries we fall back to the first-derivative limit
+    // used by the logarithm of a Jordan block: f[i,j] ~= n[i,j] / λ.
     for j in 1..n {
         for i in (0..j).rev() {
+            let tii = t[(i, i)];
+            let tjj = t[(j, j)];
             let di = log_t[(i, i)];
             let dj = log_t[(j, j)];
-            let mut sum = t[(i, j)];
+            let mut correction = 0.0;
             for k in (i + 1)..j {
-                sum -= log_t[(i, k)] * log_t[(k, j)];
+                correction += t[(i, k)] * log_t[(k, j)] - log_t[(i, k)] * t[(k, j)];
             }
-            let denom = dj - di;
-            if denom.abs() > 1e-15 {
-                log_t[(i, j)] = sum / denom;
+            let eigen_gap = tjj - tii;
+            if eigen_gap.abs() > 1e-15 {
+                let numerator = t[(i, j)] * (dj - di) + correction;
+                log_t[(i, j)] = numerator / eigen_gap;
             } else {
                 // Near-degenerate case: T[i,i] ≈ T[j,j]
-                // Use L'Hôpital limit: sum / T[i,i] (since d/dt ln(t) = 1/t)
-                if t[(i, i)].abs() > 1e-15 {
-                    log_t[(i, j)] = sum / t[(i, i)];
+                // Use the first-derivative limit for log(λI + N).
+                let mut jordan_sum = t[(i, j)];
+                for k in (i + 1)..j {
+                    jordan_sum += t[(i, k)] * log_t[(k, j)] - log_t[(i, k)] * t[(k, j)];
+                }
+                if tii.abs() > 1e-15 {
+                    log_t[(i, j)] = jordan_sum / tii;
                 } else {
                     log_t[(i, j)] = 0.0;
                 }
@@ -2165,7 +2183,53 @@ pub fn sqrtm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
     let matrix = dmatrix_from_rows(a)?;
     let n = rows;
 
-    // Try symmetric path first
+    // Check symmetry before using symmetric eigendecomposition
+    let is_symmetric = (0..n).all(|i| {
+        (0..n).all(|j| {
+            (matrix[(i, j)] - matrix[(j, i)]).abs()
+                < 1e-12 * matrix[(i, j)].abs().max(1.0)
+        })
+    });
+
+    if !is_symmetric {
+        // Non-symmetric: sqrtm via Schur decomposition
+        // A = Q T Q^T, sqrt(A) = Q sqrt(T) Q^T
+        let schur = matrix.clone().schur();
+        let (q, t) = schur.unpack();
+        let mut sqrt_t = DMatrix::<f64>::zeros(n, n);
+        for i in 0..n {
+            if t[(i, i)] >= 0.0 {
+                sqrt_t[(i, i)] = t[(i, i)].sqrt();
+            } else {
+                sqrt_t[(i, i)] = f64::NAN;
+            }
+        }
+        // Off-diagonal: Parlett recurrence for sqrt
+        for j in 1..n {
+            for i in (0..j).rev() {
+                let si = sqrt_t[(i, i)];
+                let sj = sqrt_t[(j, j)];
+                let mut sum = t[(i, j)];
+                for k in (i + 1)..j {
+                    sum -= sqrt_t[(i, k)] * sqrt_t[(k, j)];
+                }
+                let denom = si + sj;
+                sqrt_t[(i, j)] = if denom.abs() > 1e-15 { sum / denom } else { 0.0 };
+            }
+        }
+        let result = &q * sqrt_t * q.transpose();
+        emit_trace(LinalgTrace {
+            operation: "sqrtm",
+            matrix_size: (n, n),
+            mode: options.mode,
+            rcond: None,
+            warning: Some("used general (non-symmetric) Schur path".to_string()),
+            error: None,
+        });
+        return Ok(rows_from_dmatrix(&result));
+    }
+
+    // Symmetric path: eigendecomposition is safe here
     let eig = matrix.clone().symmetric_eigen();
     let eigenvalues = &eig.eigenvalues;
 
@@ -2391,7 +2455,11 @@ fn solve_diagonal(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError>
         min_diag = min_diag.min(abs_diag);
         x[i] = b[i] / diag;
     }
-    let rcond = if max_diag > 0.0 { min_diag / max_diag } else { 0.0 };
+    let rcond = if max_diag > 0.0 {
+        min_diag / max_diag
+    } else {
+        0.0
+    };
     let warning = if rcond < 1e-12 {
         Some(LinalgWarning::IllConditioned {
             reciprocal_condition: rcond,
@@ -2636,7 +2704,10 @@ pub fn orth(
 
     let matrix = dmatrix_from_rows(a)?;
     let svd_decomp = SVD::new(matrix, true, false);
-    let u = svd_decomp.u.as_ref().ok_or(LinalgError::UnsupportedAssumption)?;
+    let u = svd_decomp
+        .u
+        .as_ref()
+        .ok_or(LinalgError::UnsupportedAssumption)?;
     let singular_values = &svd_decomp.singular_values;
 
     let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
@@ -2690,7 +2761,10 @@ pub fn null_space(
     // The U of A^T equals V of A, giving us all n right singular vectors.
     let at = matrix.transpose();
     let svd_decomp = SVD::new(at, true, false);
-    let u_of_at = svd_decomp.u.as_ref().ok_or(LinalgError::UnsupportedAssumption)?;
+    let u_of_at = svd_decomp
+        .u
+        .as_ref()
+        .ok_or(LinalgError::UnsupportedAssumption)?;
     let singular_values = &svd_decomp.singular_values;
 
     let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
@@ -2751,11 +2825,7 @@ pub fn null_space(
 
 /// Find `needed` orthonormal vectors that are orthogonal to all columns of `basis`.
 /// `basis` is an n×k matrix (DMatrix). Returns `needed` vectors of length `n`.
-fn gram_schmidt_complement(
-    basis: &DMatrix<f64>,
-    n: usize,
-    needed: usize,
-) -> Vec<Vec<f64>> {
+fn gram_schmidt_complement(basis: &DMatrix<f64>, n: usize, needed: usize) -> Vec<Vec<f64>> {
     let k = basis.ncols();
     let mut result: Vec<Vec<f64>> = Vec::with_capacity(needed);
 
@@ -2841,10 +2911,7 @@ pub fn subspace_angles(
 
     // SVD of the product to get cosines of principal angles.
     let sv = svdvals(&product, options)?;
-    let mut angles: Vec<f64> = sv
-        .iter()
-        .map(|&s| s.clamp(0.0, 1.0).acos())
-        .collect();
+    let mut angles: Vec<f64> = sv.iter().map(|&s| s.clamp(0.0, 1.0).acos()).collect();
     angles.sort_by(|a, b| b.partial_cmp(a).unwrap()); // descending
     Ok(angles)
 }
@@ -2857,10 +2924,7 @@ pub fn subspace_angles(
 /// positive semi-definite Hermitian.
 ///
 /// Computed via SVD: `A = U_svd * S * Vt`, then `U = U_svd * Vt` and `P = V * S * Vt`.
-pub fn polar(
-    a: &[Vec<f64>],
-    options: DecompOptions,
-) -> Result<PolarResult, LinalgError> {
+pub fn polar(a: &[Vec<f64>], options: DecompOptions) -> Result<PolarResult, LinalgError> {
     let (m, n) = matrix_shape(a)?;
     validate_finite_matrix(a, options.mode, options.check_finite)?;
 
@@ -4422,6 +4486,25 @@ mod tests {
         assert_eq!(err, LinalgError::ExpectedSquareMatrix);
     }
 
+    #[test]
+    fn logm_upper_triangular_distinct_diagonal_matches_closed_form() {
+        let a = vec![vec![2.0, 1.0], vec![0.0, 3.0]];
+        let result = logm(&a, DecompOptions::default()).expect("logm works");
+        let expected = vec![
+            vec![2.0_f64.ln(), 3.0_f64.ln() - 2.0_f64.ln()],
+            vec![0.0, 3.0_f64.ln()],
+        ];
+        assert_close_matrix(&result, &expected, 1e-12, 1e-12);
+    }
+
+    #[test]
+    fn logm_upper_triangular_repeated_diagonal_uses_jordan_limit() {
+        let a = vec![vec![2.0, 1.0], vec![0.0, 2.0]];
+        let result = logm(&a, DecompOptions::default()).expect("logm works");
+        let expected = vec![vec![2.0_f64.ln(), 0.5], vec![0.0, 2.0_f64.ln()]];
+        assert_close_matrix(&result, &expected, 1e-12, 1e-12);
+    }
+
     // ── Norm and rank tests ─────────────────────────────────────────
 
     #[test]
@@ -4490,7 +4573,11 @@ mod tests {
     #[test]
     fn orth_full_rank() {
         // 3×3 identity → orth should return 3 orthonormal columns
-        let a = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 1.0]];
+        let a = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
         let result = orth(&a, None, DecompOptions::default()).unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].len(), 3);
@@ -4505,13 +4592,20 @@ mod tests {
         assert_eq!(result[0].len(), 1);
         // Column should be unit norm
         let norm: f64 = result.iter().map(|r| r[0] * r[0]).sum::<f64>().sqrt();
-        assert!((norm - 1.0).abs() < 1e-10, "orth column not unit norm: {norm}");
+        assert!(
+            (norm - 1.0).abs() < 1e-10,
+            "orth column not unit norm: {norm}"
+        );
     }
 
     #[test]
     fn null_space_full_rank() {
         // Full-rank 3×3 → null space should be empty
-        let a = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 1.0]];
+        let a = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
         let result = null_space(&a, None, DecompOptions::default()).unwrap();
         // Each row should have 0 null-space columns
         assert!(
@@ -4539,8 +4633,7 @@ mod tests {
     fn subspace_angles_identical() {
         // Same subspace → angle should be 0
         let a = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.0, 0.0]];
-        let angles =
-            subspace_angles(&a, &a, DecompOptions::default()).unwrap();
+        let angles = subspace_angles(&a, &a, DecompOptions::default()).unwrap();
         for &angle in &angles {
             assert!(angle.abs() < 1e-10, "identical subspace angle: {angle}");
         }
@@ -4551,8 +4644,7 @@ mod tests {
         // Two orthogonal 1-D subspaces in R^2
         let a = vec![vec![1.0], vec![0.0]]; // x-axis
         let b = vec![vec![0.0], vec![1.0]]; // y-axis
-        let angles =
-            subspace_angles(&a, &b, DecompOptions::default()).unwrap();
+        let angles = subspace_angles(&a, &b, DecompOptions::default()).unwrap();
         assert!(!angles.is_empty());
         let half_pi = std::f64::consts::FRAC_PI_2;
         assert!(
