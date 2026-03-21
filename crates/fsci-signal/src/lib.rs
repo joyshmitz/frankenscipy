@@ -1382,15 +1382,72 @@ fn complex_sqrt(re: f64, im: f64) -> (f64, f64) {
     (real, imag)
 }
 
+/// Compute initial conditions for lfilter for step response steady-state.
+///
+/// Matches `scipy.signal.lfilter_zi(b, a)`.
+pub fn lfilter_zi(b: &[f64], a: &[f64]) -> Result<Vec<f64>, SignalError> {
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".to_string(),
+        ));
+    }
+    let a0 = a[0];
+    if a0 == 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "a[0] must not be zero".to_string(),
+        ));
+    }
+
+    let nb = b.len();
+    let na = a.len();
+    let n = nb.max(na);
+    
+    // Pad and normalize
+    let mut b_norm = vec![0.0; n];
+    let mut a_norm = vec![0.0; n];
+    for (i, &val) in b.iter().enumerate() { b_norm[i] = val / a0; }
+    for (i, &val) in a.iter().enumerate() { a_norm[i] = val / a0; }
+
+    if n <= 1 {
+        return Ok(Vec::new());
+    }
+
+    let m = n - 1;
+    // Build the system (I - A)z = b[1:] - a[1:]*b[0]
+    let mut matrix = vec![vec![0.0; m]; m];
+    let mut rhs = vec![0.0; m];
+    
+    let b0 = b_norm[0];
+    for i in 0..m {
+        rhs[i] = b_norm[i + 1] - a_norm[i + 1] * b0;
+        
+        matrix[i][0] += a_norm[i + 1];
+        matrix[i][i] += 1.0;
+        if i + 1 < m {
+            matrix[i][i + 1] -= 1.0;
+        }
+    }
+
+    let solve_opts = fsci_linalg::SolveOptions {
+        mode: fsci_runtime::RuntimeMode::Strict,
+        ..Default::default()
+    };
+    
+    let result = fsci_linalg::solve(&matrix, &rhs, solve_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("lfilter_zi solve failed: {e}")))?;
+        
+    Ok(result.x)
+}
+
 /// Apply a digital IIR filter using the Direct Form II transposed structure.
 ///
-/// Matches `scipy.signal.lfilter(b, a, x)`.
-///
-/// # Arguments
-/// * `b` — Numerator coefficients
-/// * `a` — Denominator coefficients (a[0] should be 1.0 or will be normalized)
-/// * `x` — Input signal
-pub fn lfilter(b: &[f64], a: &[f64], x: &[f64]) -> Result<Vec<f64>, SignalError> {
+/// Matches `scipy.signal.lfilter(b, a, x, zi=zi)`.
+pub fn lfilter(
+    b: &[f64],
+    a: &[f64],
+    x: &[f64],
+    zi: Option<&[f64]>,
+) -> Result<Vec<f64>, SignalError> {
     if b.is_empty() || a.is_empty() {
         return Err(SignalError::InvalidArgument(
             "b and a must be non-empty".to_string(),
@@ -1413,7 +1470,20 @@ pub fn lfilter(b: &[f64], a: &[f64], x: &[f64]) -> Result<Vec<f64>, SignalError>
 
     // Direct Form II transposed
     let mut y = Vec::with_capacity(x.len());
-    let mut d = vec![0.0; nfilt]; // delay line
+    let mut d = if let Some(initial) = zi {
+        if initial.len() != nfilt - 1 {
+            return Err(SignalError::InvalidArgument(format!(
+                "zi length ({}) must be nfilt-1 ({})",
+                initial.len(),
+                nfilt - 1
+            )));
+        }
+        let mut d_init = vec![0.0; nfilt];
+        d_init[..nfilt-1].copy_from_slice(initial);
+        d_init
+    } else {
+        vec![0.0; nfilt]
+    };
 
     for &xi in x {
         let yi = b_norm.first().copied().unwrap_or(0.0) * xi + d[0];
@@ -1458,14 +1528,17 @@ pub fn filtfilt(b: &[f64], a: &[f64], x: &[f64]) -> Result<Vec<f64>, SignalError
         padded.push(2.0 * xn - x[n - 1 - i]);
     }
 
-    // Forward pass
-    let mut forward = lfilter(b, a, &padded)?;
+    // Forward pass with initial conditions
+    let zi = lfilter_zi(b, a)?;
+    let zi_f: Vec<f64> = zi.iter().map(|&v| v * padded[0]).collect();
+    let mut forward = lfilter(b, a, &padded, Some(&zi_f))?;
 
     // Reverse
     forward.reverse();
 
-    // Backward pass
-    let mut reversed = lfilter(b, a, &forward)?;
+    // Backward pass with initial conditions
+    let zi_b: Vec<f64> = zi.iter().map(|&v| v * forward[0]).collect();
+    let mut reversed = lfilter(b, a, &forward, Some(&zi_b))?;
 
     // Reverse again and remove padding
     reversed.reverse();
@@ -2539,11 +2612,13 @@ pub fn periodogram(
 /// # Arguments
 /// * `x` — Input signal
 /// * `fs` — Sampling frequency (Hz)
+/// * `window` — Window type to use (default: "hann")
 /// * `nperseg` — Length of each segment (default: 256)
 /// * `noverlap` — Number of overlapping samples (default: nperseg/2)
 pub fn welch(
     x: &[f64],
     fs: f64,
+    window: Option<&str>,
     nperseg: Option<usize>,
     noverlap: Option<usize>,
 ) -> Result<SpectralResult, SignalError> {
@@ -2574,7 +2649,7 @@ pub fn welch(
     }
 
     let step = nperseg - noverlap;
-    let window = hann(nperseg);
+    let win_coeffs = get_window(window.unwrap_or("hann"), nperseg)?;
 
     // Segment the signal and compute periodograms
     let n_freqs = nperseg / 2 + 1;
@@ -2584,7 +2659,7 @@ pub fn welch(
     let mut start = 0;
     while start + nperseg <= x.len() {
         let segment = &x[start..start + nperseg];
-        let seg_result = periodogram(segment, fs, Some(&window))?;
+        let seg_result = periodogram(segment, fs, Some(&win_coeffs))?;
 
         for (avg, &val) in avg_psd.iter_mut().zip(seg_result.psd.iter()) {
             *avg += val;
@@ -3149,13 +3224,41 @@ pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError
     Ok(result)
 }
 
+/// Generate a Bartlett window.
+pub fn bartlett(n: usize) -> Vec<f64> {
+    if n == 0 { return Vec::new(); }
+    if n == 1 { return vec![1.0]; }
+    let nf = (n - 1) as f64;
+    (0..n)
+        .map(|i| {
+            let x = i as f64 - nf / 2.0;
+            1.0 - (2.0 * x / nf).abs()
+        })
+        .collect()
+}
+
+/// Generate a flat top window.
+pub fn flattop(n: usize) -> Vec<f64> {
+    if n == 0 { return Vec::new(); }
+    if n == 1 { return vec![1.0]; }
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let nf = (n - 1) as f64;
+    (0..n)
+        .map(|i| {
+            let arg = two_pi * i as f64 / nf;
+            0.21557895 - 0.41663158 * arg.cos() + 0.277263158 * (2.0 * arg).cos()
+                - 0.083578947 * (3.0 * arg).cos() + 0.006947368 * (4.0 * arg).cos()
+        })
+        .collect()
+}
+
 /// Dispatch a window function by name string.
 ///
 /// Matches `scipy.signal.get_window(window, Nx)`.
 ///
 /// # Supported windows
-/// `"hann"`, `"hamming"`, `"blackman"`, `"rectangular"` / `"boxcar"`,
-/// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`).
+/// `"hann"`, `"hamming"`, `"blackman"`, `"bartlett"`, `"flattop"`,
+/// `"rectangular"` / `"boxcar"`, `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`).
 pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
     let lower = window.trim().to_lowercase();
     if let Some(rest) = lower.strip_prefix("kaiser,") {
@@ -3169,6 +3272,8 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
         "hann" | "hanning" => Ok(hann(nx)),
         "hamming" => Ok(hamming(nx)),
         "blackman" => Ok(blackman(nx)),
+        "bartlett" => Ok(bartlett(nx)),
+        "flattop" => Ok(flattop(nx)),
         "rectangular" | "boxcar" | "rect" => Ok(vec![1.0; nx]),
         _ => Err(SignalError::InvalidArgument(format!(
             "unknown window type: {window}"
@@ -3199,11 +3304,13 @@ pub struct StftResult {
 /// # Arguments
 /// * `x` — Input signal.
 /// * `fs` — Sampling frequency (Hz).
+/// * `window` — Window type to use (default: "hann").
 /// * `nperseg` — Length of each segment (default: 256).
 /// * `noverlap` — Overlap between segments (default: nperseg/2).
 pub fn stft(
     x: &[f64],
     fs: f64,
+    window: Option<&str>,
     nperseg: Option<usize>,
     noverlap: Option<usize>,
 ) -> Result<StftResult, SignalError> {
@@ -3234,7 +3341,7 @@ pub fn stft(
     }
 
     let step = nperseg - noverlap;
-    let window = hann(nperseg);
+    let win_coeffs = get_window(window.unwrap_or("hann"), nperseg)?;
     let n_freqs = nperseg / 2 + 1;
     let opts = fsci_fft::FftOptions::default();
 
@@ -3246,7 +3353,7 @@ pub fn stft(
         // Window the segment.
         let windowed: Vec<f64> = x[start..start + nperseg]
             .iter()
-            .zip(&window)
+            .zip(&win_coeffs)
             .map(|(&xi, &wi)| xi * wi)
             .collect();
 
@@ -3339,22 +3446,24 @@ pub struct SpectrogramResult {
 /// # Arguments
 /// * `x` — Input signal.
 /// * `fs` — Sampling frequency (Hz).
+/// * `window` — Window type to use (default: "hann").
 /// * `nperseg` — Length of each segment (default: 256).
 /// * `noverlap` — Overlap between segments (default: nperseg/8).
 pub fn spectrogram(
     x: &[f64],
     fs: f64,
+    window: Option<&str>,
     nperseg: Option<usize>,
     noverlap: Option<usize>,
 ) -> Result<SpectrogramResult, SignalError> {
     let nperseg_val = nperseg.unwrap_or_else(|| x.len().min(256));
     let noverlap_val = noverlap.unwrap_or(nperseg_val / 8);
 
-    let stft_res = stft(x, fs, Some(nperseg_val), Some(noverlap_val))?;
+    let stft_res = stft(x, fs, window, Some(nperseg_val), Some(noverlap_val))?;
 
     let n_freqs = stft_res.frequencies.len();
-    let win = hann(nperseg_val);
-    let win_power: f64 = win.iter().map(|&w| w * w).sum::<f64>() / nperseg_val as f64;
+    let win_coeffs = get_window(window.unwrap_or("hann"), nperseg_val)?;
+    let win_power: f64 = win_coeffs.iter().map(|&w| w * w).sum::<f64>() / nperseg_val as f64;
 
     // Convert complex STFT to PSD.
     let scale = 1.0 / (fs * nperseg_val as f64 * win_power);
@@ -3395,12 +3504,14 @@ pub fn spectrogram(
 /// * `x` — First input signal.
 /// * `y` — Second input signal (same length as x).
 /// * `fs` — Sampling frequency (Hz).
+/// * `window` — Window type to use (default: "hann").
 /// * `nperseg` — Segment length (default: 256).
 /// * `noverlap` — Overlap (default: nperseg/2).
 pub fn csd(
     x: &[f64],
     y: &[f64],
     fs: f64,
+    window: Option<&str>,
     nperseg: Option<usize>,
     noverlap: Option<usize>,
 ) -> Result<CsdResult, SignalError> {
@@ -3431,8 +3542,8 @@ pub fn csd(
     }
 
     let step = nperseg - noverlap;
-    let window = hann(nperseg);
-    let win_power: f64 = window.iter().map(|&w| w * w).sum::<f64>() / nperseg as f64;
+    let win_coeffs = get_window(window.unwrap_or("hann"), nperseg)?;
+    let win_power: f64 = win_coeffs.iter().map(|&w| w * w).sum::<f64>() / nperseg as f64;
     let n_freqs = nperseg / 2 + 1;
     let opts = fsci_fft::FftOptions::default();
 
@@ -3443,12 +3554,12 @@ pub fn csd(
     while start + nperseg <= x.len() {
         let wx: Vec<f64> = x[start..start + nperseg]
             .iter()
-            .zip(&window)
+            .zip(&win_coeffs)
             .map(|(&xi, &wi)| xi * wi)
             .collect();
         let wy: Vec<f64> = y[start..start + nperseg]
             .iter()
-            .zip(&window)
+            .zip(&win_coeffs)
             .map(|(&yi, &wi)| yi * wi)
             .collect();
 
@@ -3526,18 +3637,20 @@ pub struct CoherenceResult {
 /// * `x` — First input signal.
 /// * `y` — Second input signal (same length as x).
 /// * `fs` — Sampling frequency (Hz).
+/// * `window` — Window type to use (default: "hann").
 /// * `nperseg` — Segment length (default: 256).
 /// * `noverlap` — Overlap (default: nperseg/2).
 pub fn coherence(
     x: &[f64],
     y: &[f64],
     fs: f64,
+    window: Option<&str>,
     nperseg: Option<usize>,
     noverlap: Option<usize>,
 ) -> Result<CoherenceResult, SignalError> {
-    let pxy = csd(x, y, fs, nperseg, noverlap)?;
-    let pxx = csd(x, x, fs, nperseg, noverlap)?;
-    let pyy = csd(y, y, fs, nperseg, noverlap)?;
+    let pxy = csd(x, y, fs, window, nperseg, noverlap)?;
+    let pxx = csd(x, x, fs, window, nperseg, noverlap)?;
+    let pyy = csd(y, y, fs, window, nperseg, noverlap)?;
 
     let coh: Vec<f64> = pxy
         .csd
@@ -4412,7 +4525,7 @@ mod tests {
     fn lfilter_identity() {
         // b=[1], a=[1] should pass signal through
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let y = lfilter(&[1.0], &[1.0], &x).expect("lfilter");
+        let y = lfilter(&[1.0], &[1.0], &x, None).expect("lfilter");
         assert_eq!(y, x);
     }
 
@@ -4420,7 +4533,7 @@ mod tests {
     fn lfilter_delay() {
         // b=[0, 1], a=[1] = one-sample delay
         let x = vec![1.0, 2.0, 3.0, 4.0];
-        let y = lfilter(&[0.0, 1.0], &[1.0], &x).expect("lfilter");
+        let y = lfilter(&[0.0, 1.0], &[1.0], &x, None).expect("lfilter");
         assert!((y[0]).abs() < 1e-12);
         assert!((y[1] - 1.0).abs() < 1e-12);
         assert!((y[2] - 2.0).abs() < 1e-12);
@@ -4431,7 +4544,7 @@ mod tests {
     fn lfilter_first_order_iir() {
         // y[n] = x[n] + 0.5*y[n-1] (b=[1], a=[1, -0.5])
         let x = vec![1.0, 0.0, 0.0, 0.0, 0.0];
-        let y = lfilter(&[1.0], &[1.0, -0.5], &x).expect("lfilter");
+        let y = lfilter(&[1.0], &[1.0, -0.5], &x, None).expect("lfilter");
         assert!((y[0] - 1.0).abs() < 1e-12);
         assert!((y[1] - 0.5).abs() < 1e-12);
         assert!((y[2] - 0.25).abs() < 1e-12);
@@ -4444,7 +4557,7 @@ mod tests {
         let x: Vec<f64> = (0..100)
             .map(|i| (2.0 * std::f64::consts::PI * 0.05 * i as f64).sin())
             .collect();
-        let y = lfilter(&coeffs.b, &coeffs.a, &x).expect("lfilter");
+        let y = lfilter(&coeffs.b, &coeffs.a, &x, None).expect("lfilter");
         assert_eq!(y.len(), x.len());
         assert!(y.iter().all(|v| v.is_finite()));
     }
@@ -4582,7 +4695,7 @@ mod tests {
             .map(|i| (2.0 * std::f64::consts::PI * 50.0 * i as f64 / fs).sin())
             .collect();
 
-        let result = welch(&x, fs, Some(256), None).expect("welch");
+        let result = welch(&x, fs, None, Some(256), None).expect("welch");
         assert!(!result.frequencies.is_empty());
         assert_eq!(result.frequencies.len(), result.psd.len());
 
@@ -4614,7 +4727,7 @@ mod tests {
             .collect();
 
         let psd_raw = periodogram(&x, fs, None).expect("periodogram");
-        let psd_welch = welch(&x, fs, Some(128), None).expect("welch");
+        let psd_welch = welch(&x, fs, None, Some(128), None).expect("welch");
 
         // Welch PSD should be smoother (lower variance)
         let raw_var = variance_of_psd(&psd_raw.psd);
@@ -4627,12 +4740,12 @@ mod tests {
 
     #[test]
     fn welch_empty_rejected() {
-        assert!(welch(&[], 1.0, None, None).is_err());
+        assert!(welch(&[], 1.0, None, None, None).is_err());
     }
 
     #[test]
     fn welch_nperseg_too_large() {
-        assert!(welch(&[1.0, 2.0, 3.0], 1.0, Some(10), None).is_err());
+        assert!(welch(&[1.0, 2.0, 3.0], 1.0, None, Some(10), None).is_err());
     }
 
     fn variance_of_psd(psd: &[f64]) -> f64 {
@@ -4975,7 +5088,7 @@ mod tests {
             .map(|i| (2.0 * std::f64::consts::PI * 0.05 * i as f64).sin())
             .collect();
 
-        let y_lfilter = lfilter(&coeffs.b, &coeffs.a, &x).expect("lfilter");
+        let y_lfilter = lfilter(&coeffs.b, &coeffs.a, &x, None).expect("lfilter");
         let y_sosfilt = sosfilt(&sos, &x).expect("sosfilt");
 
         for (i, (&yl, &ys)) in y_lfilter.iter().zip(y_sosfilt.iter()).enumerate() {
@@ -5441,6 +5554,24 @@ mod tests {
     }
 
     #[test]
+    fn get_window_dispatches_bartlett() {
+        let w = get_window("bartlett", 11).unwrap();
+        assert_eq!(w.len(), 11);
+        assert!((w[5] - 1.0).abs() < 1e-12, "peak at center");
+        assert!((w[0]).abs() < 1e-12, "zero at endpoints");
+        assert!((w[10]).abs() < 1e-12, "zero at endpoints");
+    }
+
+    #[test]
+    fn get_window_dispatches_flattop() {
+        let w = get_window("flattop", 11).unwrap();
+        assert_eq!(w.len(), 11);
+        // Flattop peak is ~1.0 but slightly different due to coeffs
+        let peak = w.iter().copied().fold(0.0_f64, f64::max);
+        assert!((peak - 1.0).abs() < 0.01);
+    }
+
+    #[test]
     fn get_window_unknown_rejected() {
         assert!(get_window("foobar", 10).is_err());
     }
@@ -5459,7 +5590,7 @@ mod tests {
 
         let nperseg = 64;
         let noverlap = 48;
-        let stft_res = stft(&x, fs, Some(nperseg), Some(noverlap)).unwrap();
+        let stft_res = stft(&x, fs, None, Some(nperseg), Some(noverlap)).unwrap();
         let reconstructed = istft(&stft_res, nperseg, Some(noverlap)).unwrap();
 
         // Compare in the well-reconstructed interior (avoiding edge effects).
@@ -5479,7 +5610,7 @@ mod tests {
     fn stft_frequency_bins() {
         let fs = 1000.0;
         let x = vec![0.0; 256];
-        let res = stft(&x, fs, Some(256), Some(128)).unwrap();
+        let res = stft(&x, fs, None, Some(256), Some(128)).unwrap();
         assert_eq!(res.frequencies.len(), 129); // 256/2 + 1
         assert!((res.frequencies[0]).abs() < 1e-12);
         // Last frequency should be Nyquist
@@ -5498,7 +5629,7 @@ mod tests {
 
         let nperseg = 64;
         let noverlap = 56;
-        let res = spectrogram(&sig, fs, Some(nperseg), Some(noverlap)).unwrap();
+        let res = spectrogram(&sig, fs, None, Some(nperseg), Some(noverlap)).unwrap();
 
         // Should have multiple time segments and frequency bins
         assert!(!res.sxx.is_empty(), "spectrogram produced no segments");
@@ -5513,7 +5644,7 @@ mod tests {
     fn spectrogram_dimensions() {
         let fs = 100.0;
         let x: Vec<f64> = (0..500).map(|i| (i as f64 * 0.1).sin()).collect();
-        let res = spectrogram(&x, fs, Some(64), Some(32)).unwrap();
+        let res = spectrogram(&x, fs, None, Some(64), Some(32)).unwrap();
 
         // Each time segment should have the same number of frequency bins
         let n_freqs = res.frequencies.len();
@@ -5541,8 +5672,8 @@ mod tests {
 
         let nperseg = 128;
         let noverlap = 64;
-        let welch_res = welch(&x, fs, Some(nperseg), Some(noverlap)).unwrap();
-        let csd_res = csd(&x, &x, fs, Some(nperseg), Some(noverlap)).unwrap();
+        let welch_res = welch(&x, fs, None, Some(nperseg), Some(noverlap)).unwrap();
+        let csd_res = csd(&x, &x, fs, None, Some(nperseg), Some(noverlap)).unwrap();
 
         // Auto-CSD should be real and match welch PSD
         assert_eq!(welch_res.psd.len(), csd_res.csd.len());
@@ -5576,7 +5707,7 @@ mod tests {
             .map(|i| (2.0 * std::f64::consts::PI * 10.0 * i as f64 / fs).sin())
             .collect();
 
-        let res = coherence(&x, &x, fs, Some(128), Some(64)).unwrap();
+        let res = coherence(&x, &x, fs, None, Some(128), Some(64)).unwrap();
         for (k, &c) in res.coherence.iter().enumerate() {
             assert!(
                 c >= 0.99 || res.frequencies[k].abs() < 1e-10,
@@ -5599,7 +5730,7 @@ mod tests {
             .map(|i| (2.0 * std::f64::consts::PI * 200.0 * i as f64 / fs).sin())
             .collect();
 
-        let res = coherence(&x, &y, fs, Some(256), Some(128)).unwrap();
+        let res = coherence(&x, &y, fs, None, Some(256), Some(128)).unwrap();
         // Average coherence should be much less than 1
         let avg_coh: f64 = res.coherence.iter().sum::<f64>() / res.coherence.len() as f64;
         assert!(
@@ -5615,7 +5746,7 @@ mod tests {
         let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.1).sin()).collect();
         let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.3).cos()).collect();
 
-        let res = coherence(&x, &y, fs, Some(128), Some(64)).unwrap();
+        let res = coherence(&x, &y, fs, None, Some(128), Some(64)).unwrap();
         for (k, &c) in res.coherence.iter().enumerate() {
             assert!(
                 (0.0..=1.0 + 1e-10).contains(&c),

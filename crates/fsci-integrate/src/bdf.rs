@@ -256,7 +256,8 @@ impl BdfSolver {
                 }
                 y_new = y_next;
 
-                if max_delta < 0.01 {
+                // Convergence when Newton correction is small relative to error tolerances
+                if max_delta < 1.0 {
                     converged = true;
                     break;
                 }

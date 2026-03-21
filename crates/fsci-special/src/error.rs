@@ -189,7 +189,7 @@ where
     }
 }
 
-pub(crate) fn erf_scalar(x: f64) -> f64 {
+pub fn erf_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -230,7 +230,7 @@ fn erf_complex_scalar(z: Complex64) -> Complex64 {
     Complex64::from_real(1.0) - erfc_complex_asymptotic(z)
 }
 
-fn erfc_scalar(x: f64) -> f64 {
+pub fn erfc_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -306,7 +306,7 @@ fn erfc_complex_asymptotic(z: Complex64) -> Complex64 {
     ((-z2).exp() * sum / z) / PI.sqrt()
 }
 
-pub(crate) fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+pub fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if y.is_nan() {
         return Ok(f64::NAN);
     }

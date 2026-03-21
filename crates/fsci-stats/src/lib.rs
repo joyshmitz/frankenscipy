@@ -152,7 +152,7 @@ impl ContinuousDistribution for Normal {
 
     fn cdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
-        0.5 * (1.0 + fsci_special::erf(z * FRAC_1_SQRT_2))
+        0.5 * (1.0 + fsci_special::erf_scalar(z * FRAC_1_SQRT_2))
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -716,7 +716,7 @@ impl ContinuousDistribution for Lognormal {
             return 0.0;
         }
         let z = (x / self.scale).ln() / self.s;
-        0.5 * (1.0 + erf_approx(z * FRAC_1_SQRT_2))
+        0.5 * (1.0 + fsci_special::erf_scalar(z * FRAC_1_SQRT_2))
     }
 
     fn mean(&self) -> f64 {
@@ -993,7 +993,7 @@ impl ContinuousDistribution for Maxwell {
         } else {
             let sqrt_two_over_pi = (2.0 / PI).sqrt();
             let z = x / (self.scale * 2.0_f64.sqrt());
-            erf_approx(z)
+            fsci_special::erf_scalar(z)
                 - sqrt_two_over_pi
                     * (x / self.scale)
                     * (-(x * x) / (2.0 * self.scale * self.scale)).exp()
@@ -2624,61 +2624,6 @@ pub fn kurtosis(data: &[f64]) -> f64 {
     kurtosis_from_moments(nf, m2, m4)
 }
 
-/// Result of the `describe` function.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DescribeResult {
-    pub nobs: usize,
-    pub minmax: (f64, f64),
-    pub mean: f64,
-    pub variance: f64,
-    pub skewness: f64,
-    pub kurtosis: f64,
-}
-
-/// Compute several descriptive statistics of a data set.
-///
-/// Matches `scipy.stats.describe(a)`.
-pub fn describe(data: &[f64]) -> Result<DescribeResult, String> {
-    let n = data.len();
-    if n == 0 {
-        return Err("describe requires at least one observation".to_string());
-    }
-    let nf = n as f64;
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    let mut sum = 0.0;
-    for &x in data {
-        if x < min { min = x; }
-        if x > max { max = x; }
-        sum += x;
-    }
-    let mean_val = sum / nf;
-    
-    let mut m2 = 0.0;
-    let mut m3 = 0.0;
-    let mut m4 = 0.0;
-    for &x in data {
-        let d = x - mean_val;
-        let d2 = d * d;
-        m2 += d2;
-        m3 += d2 * d;
-        m4 += d2 * d2;
-    }
-    
-    let variance = if n > 1 { m2 / (nf - 1.0) } else { 0.0 };
-    let skewness = skew_from_moments(nf, m2, m3);
-    let kurtosis = kurtosis_from_moments(nf, m2, m4);
-    
-    Ok(DescribeResult {
-        nobs: n,
-        minmax: (min, max),
-        mean: mean_val,
-        variance,
-        skewness,
-        kurtosis,
-    })
-}
-
 /// Compute the median absolute deviation (MAD).
 ///
 /// Matches `scipy.stats.median_abs_deviation(a, scale=1.0)`.
@@ -3505,7 +3450,7 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
 
 /// Standard normal CDF approximation.
 fn standard_normal_cdf(x: f64) -> f64 {
-    0.5 * (1.0 + erf_approx(x / std::f64::consts::SQRT_2))
+    0.5 * (1.0 + fsci_special::erf_scalar(x / std::f64::consts::SQRT_2))
 }
 
 // ── Chi-squared contingency test ─────────────────────────────────────

@@ -24,7 +24,9 @@ pub use convenience::{
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw,
 };
-pub use error::{ERROR_DISPATCH_PLAN, erf, erfc, erfcinv, erfinv};
+pub use error::{
+    ERROR_DISPATCH_PLAN, erf, erf_scalar, erfc, erfc_scalar, erfcinv, erfinv, erfinv_scalar,
+};
 pub use gamma::{
     GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, gdtr,
     gdtri, perm, polygamma, rgamma, zeta,
