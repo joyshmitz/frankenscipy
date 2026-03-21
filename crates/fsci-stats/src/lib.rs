@@ -3453,6 +3453,91 @@ fn standard_normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + fsci_special::erf_scalar(x / std::f64::consts::SQRT_2))
 }
 
+// ── Fisher's exact test ──────────────────────────────────────────────
+
+/// Result of Fisher's exact test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FisherExactResult {
+    /// Sample odds ratio: (a*d) / (b*c) for table [[a,b],[c,d]].
+    pub odds_ratio: f64,
+    /// Two-sided p-value from the hypergeometric distribution.
+    pub pvalue: f64,
+}
+
+/// Fisher's exact test for a 2x2 contingency table.
+///
+/// Computes the exact p-value using the hypergeometric distribution.
+/// This is the gold standard for small-sample contingency tables where
+/// chi-squared approximation is unreliable.
+///
+/// Matches `scipy.stats.fisher_exact(table)`.
+///
+/// # Arguments
+/// * `table` — 2x2 contingency table [[a, b], [c, d]] with non-negative integer counts.
+pub fn fisher_exact(table: &[[f64; 2]; 2]) -> FisherExactResult {
+    let a = table[0][0];
+    let b = table[0][1];
+    let c = table[1][0];
+    let d = table[1][1];
+
+    // Odds ratio
+    let odds_ratio = if b * c > 0.0 {
+        (a * d) / (b * c)
+    } else if a * d > 0.0 {
+        f64::INFINITY
+    } else {
+        f64::NAN
+    };
+
+    // Marginals
+    let row0 = a + b; // n
+    let col0 = a + c; // K
+    let total = a + b + c + d; // N
+
+    if total == 0.0 {
+        return FisherExactResult {
+            odds_ratio,
+            pvalue: 1.0,
+        };
+    }
+
+    // Use hypergeometric distribution: X ~ Hypergeometric(N=total, K=col0, n=row0)
+    // P(X = k) = C(K,k) C(N-K,n-k) / C(N,n)
+    let big_m = total as u64;
+    let n_succ = col0 as u64;
+    let n_draw = row0 as u64;
+
+    let hyper = Hypergeometric::new(big_m, n_succ, n_draw);
+
+    // Two-sided p-value: sum probabilities of all outcomes as extreme or more extreme
+    // than the observed value (where "extreme" means pmf <= pmf(observed))
+    let observed_k = a as u64;
+    let p_observed = hyper.pmf(observed_k);
+
+    let k_min = if n_draw + n_succ > big_m {
+        n_draw + n_succ - big_m
+    } else {
+        0
+    };
+    let k_max = n_draw.min(n_succ);
+
+    let mut pvalue = 0.0;
+    for k in k_min..=k_max {
+        let p_k = hyper.pmf(k);
+        if p_k <= p_observed + 1e-14 {
+            pvalue += p_k;
+        }
+    }
+
+    // Clamp to [0, 1]
+    let pvalue = pvalue.min(1.0).max(0.0);
+
+    FisherExactResult {
+        odds_ratio,
+        pvalue,
+    }
+}
+
 // ── Chi-squared contingency test ─────────────────────────────────────
 
 /// Result of a chi-squared contingency test.
@@ -5684,5 +5769,63 @@ mod tests {
     fn upper_tail_probability_clamps_numeric_roundoff() {
         assert_eq!(upper_tail_probability(-0.25), 1.0);
         assert_eq!(upper_tail_probability(1.25), 0.0);
+    }
+
+    // ── Fisher's exact test ──────────────────────────────────────────
+
+    #[test]
+    fn fisher_exact_independent_table() {
+        // Independent: [[10, 10], [10, 10]] → p ≈ 1
+        let result = fisher_exact(&[[10.0, 10.0], [10.0, 10.0]]);
+        assert!(
+            (result.odds_ratio - 1.0).abs() < 1e-10,
+            "OR should be 1: {}",
+            result.odds_ratio
+        );
+        assert!(
+            result.pvalue > 0.9,
+            "independent p should be ~1: {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn fisher_exact_dependent_table() {
+        // Strongly dependent: [[8, 2], [1, 9]]
+        let result = fisher_exact(&[[8.0, 2.0], [1.0, 9.0]]);
+        assert!(
+            result.odds_ratio > 10.0,
+            "OR should be large: {}",
+            result.odds_ratio
+        );
+        assert!(
+            result.pvalue < 0.01,
+            "dependent p should be small: {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn fisher_exact_known_value() {
+        // Classic example: [[1, 9], [11, 3]]
+        // SciPy: fisher_exact([[1,9],[11,3]]) → odds_ratio ≈ 0.0303, p ≈ 0.0014
+        let result = fisher_exact(&[[1.0, 9.0], [11.0, 3.0]]);
+        assert!(
+            result.odds_ratio < 0.1,
+            "OR should be small: {}",
+            result.odds_ratio
+        );
+        assert!(
+            result.pvalue < 0.01,
+            "p should be very small: {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn fisher_exact_zero_cell() {
+        // Table with zero: [[0, 5], [5, 0]]
+        let result = fisher_exact(&[[0.0, 5.0], [5.0, 0.0]]);
+        assert!(result.pvalue < 0.05, "p should be small: {}", result.pvalue);
     }
 }

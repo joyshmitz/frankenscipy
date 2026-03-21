@@ -1232,7 +1232,10 @@ where
         // Inner CG loop to solve H*d = -g approximately
         // Using Hessian-vector products via finite differences: H*v ≈ (∇f(x+εv) - ∇f(x)) / ε
         let cg_tol = grad_norm.min(0.5); // Eisenstat-Walker forcing term
-        let (direction, nhvp) = cg_newton_direction(&mut objective, &x, &grad, eps, cg_tol, n)?;
+        let (direction, nhvp) = match cg_newton_direction(&mut objective, &x, &grad, eps, cg_tol, n) {
+            Ok(v) => v,
+            Err(e) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, e)),
+        };
         njev += nhvp; // each HVP requires one gradient evaluation
 
         // Line search along direction

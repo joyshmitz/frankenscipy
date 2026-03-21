@@ -396,9 +396,18 @@ impl ArrayApiBackend for CoreArrayBackend {
         dtype: Option<DType>,
     ) -> ArrayApiResult<Self::Array> {
         let resolved_dtype = self.resolve_supported_dtype(dtype)?;
-        let start_v = scalar_to_f64(start)?;
-        let stop_v = scalar_to_f64(stop)?;
-        let step_v = scalar_to_f64(step)?;
+        let start_v = finite_scalar_to_f64(
+            start,
+            ArrayApiErrorKind::NonFiniteInput,
+            "arange start must be finite",
+        )?;
+        let stop_v = finite_scalar_to_f64(
+            stop,
+            ArrayApiErrorKind::NonFiniteInput,
+            "arange stop must be finite",
+        )?;
+        let step_v =
+            finite_scalar_to_f64(step, ArrayApiErrorKind::InvalidStep, "step must be finite")?;
         if step_v == 0.0 {
             return Err(ArrayApiError::new(
                 ArrayApiErrorKind::InvalidStep,
@@ -697,6 +706,19 @@ fn scalar_to_f64(value: ScalarValue) -> ArrayApiResult<f64> {
                 ))
             }
         }
+    }
+}
+
+fn finite_scalar_to_f64(
+    value: ScalarValue,
+    kind: ArrayApiErrorKind,
+    message: &'static str,
+) -> ArrayApiResult<f64> {
+    let converted = scalar_to_f64(value)?;
+    if converted.is_finite() {
+        Ok(converted)
+    } else {
+        Err(ArrayApiError::new(kind, message))
     }
 }
 
@@ -1108,6 +1130,41 @@ mod tests {
         };
         let ok = full(&backend, &Shape::new(vec![1]), &full_request);
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn backend_arange_rejects_non_finite_bounds_and_step() {
+        let backend = strict_backend();
+
+        let start_err = backend
+            .arange(
+                ScalarValue::F64(f64::NAN),
+                ScalarValue::F64(3.0),
+                ScalarValue::F64(1.0),
+                Some(DType::Float64),
+            )
+            .expect_err("non-finite start must fail");
+        assert_eq!(start_err.kind, ArrayApiErrorKind::NonFiniteInput);
+
+        let stop_err = backend
+            .arange(
+                ScalarValue::F64(0.0),
+                ScalarValue::F64(f64::INFINITY),
+                ScalarValue::F64(1.0),
+                Some(DType::Float64),
+            )
+            .expect_err("non-finite stop must fail");
+        assert_eq!(stop_err.kind, ArrayApiErrorKind::NonFiniteInput);
+
+        let step_err = backend
+            .arange(
+                ScalarValue::F64(0.0),
+                ScalarValue::F64(3.0),
+                ScalarValue::F64(f64::NAN),
+                Some(DType::Float64),
+            )
+            .expect_err("non-finite step must fail");
+        assert_eq!(step_err.kind, ArrayApiErrorKind::InvalidStep);
     }
 
     #[derive(Debug, Serialize)]

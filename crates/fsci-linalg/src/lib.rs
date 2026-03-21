@@ -2655,6 +2655,27 @@ fn validate_finite_matrix_and_vector(
     Ok(())
 }
 
+/// Solve (T + shift*I) x = b where T is upper-triangular, via back-substitution.
+fn solve_shifted_upper_triangular(
+    t: &DMatrix<f64>,
+    shift: f64,
+    b: &nalgebra::DVector<f64>,
+) -> nalgebra::DVector<f64> {
+    let n = b.len();
+    let mut x = nalgebra::DVector::zeros(n);
+
+    for i in (0..n).rev() {
+        let mut sum = b[i];
+        for j in (i + 1)..n {
+            sum -= t[(i, j)] * x[j];
+        }
+        let diag = t[(i, i)] + shift;
+        x[i] = if diag.abs() > 1e-30 { sum / diag } else { 0.0 };
+    }
+
+    x
+}
+
 fn dmatrix_from_rows(rows: &[Vec<f64>]) -> Result<DMatrix<f64>, LinalgError> {
     let (m, n) = matrix_shape(rows)?;
     let mut data = Vec::with_capacity(m * n);
@@ -2721,9 +2742,10 @@ pub fn solve_sylvester(
         return Err(LinalgError::ExpectedSquareMatrix);
     }
     if qr != m || qc != n {
-        return Err(LinalgError::DimensionMismatch {
-            expected: format!("{}x{}", m, n),
-            actual: format!("{}x{}", qr, qc),
+        return Err(LinalgError::NotSupported {
+            detail: format!(
+                "Q shape ({qr}x{qc}) must match A rows ({m}) x B cols ({n})"
+            ),
         });
     }
     if m == 0 || n == 0 {
@@ -2743,41 +2765,53 @@ pub fn solve_sylvester(
     // Transform Q: F = U^T Q V
     let f = u.transpose() * &q_mat * &v;
 
-    // Solve triangular Sylvester: T_A Y + Y T_B = F
-    // Column by column from right to left
-    let mut y = DMatrix::<f64>::zeros(m, n);
+    // Solve T_A Y + Y T_B = F by vectorization:
+    // vec(Y) satisfies (I_n ⊗ T_A + T_B^T ⊗ I_m) vec(Y) = vec(F)
+    // For small problems this is direct; for larger ones we use the column-by-column
+    // approach with the Schur structure.
+    //
+    // Direct approach: build the (mn × mn) system and solve via LU.
+    let mn = m * n;
+    let mut system = DMatrix::<f64>::zeros(mn, mn);
 
-    for j in (0..n).rev() {
-        // y[:,j] satisfies: (T_A + T_B[j,j] I) y[:,j] = f[:,j] - Σ_{k>j} T_B[j,k] y[:,k]
-        let mut rhs = f.column(j).clone_owned();
+    // I_n ⊗ T_A: for each block (j,j), place T_A
+    for j in 0..n {
+        for r in 0..m {
+            for c in 0..m {
+                system[(j * m + r, j * m + c)] += ta[(r, c)];
+            }
+        }
+    }
 
-        // Subtract contributions from already-solved columns
-        for k in (j + 1)..n {
-            let tb_jk = tb[(j, k)];
-            if tb_jk.abs() > 0.0 {
+    // T_B^T ⊗ I_m: for each (j,k) in T_B^T, place T_B[k,j] * I_m
+    for j in 0..n {
+        for k in 0..n {
+            let tbkj = tb[(k, j)]; // T_B^T[j,k] = T_B[k,j]
+            if tbkj.abs() > 0.0 {
                 for i in 0..m {
-                    rhs[i] -= tb_jk * y[(i, k)];
+                    system[(j * m + i, k * m + i)] += tbkj;
                 }
             }
         }
+    }
 
-        // Build the shifted matrix: T_A + T_B[j,j] * I
-        let mut shifted = ta.clone();
-        let shift = tb[(j, j)];
+    // RHS: vec(F)
+    let mut rhs_vec = nalgebra::DVector::<f64>::zeros(mn);
+    for j in 0..n {
         for i in 0..m {
-            shifted[(i, i)] += shift;
+            rhs_vec[j * m + i] = f[(i, j)];
         }
+    }
 
-        // Solve the shifted system via back-substitution (quasi-upper-triangular)
-        // Use LU factorization for robustness
-        let lu = shifted.clone().full_piv_lu();
-        let col_solution = lu.solve(&rhs).unwrap_or_else(|| {
-            // Fallback: try direct solve
-            DMatrix::from_column_slice(m, 1, &vec![0.0; m]).column(0).clone_owned()
-        });
+    // Solve via LU
+    let lu = system.full_piv_lu();
+    let sol = lu.solve(&rhs_vec).unwrap_or_else(|| nalgebra::DVector::zeros(mn));
 
+    // Unvectorize Y
+    let mut y = DMatrix::<f64>::zeros(m, n);
+    for j in 0..n {
         for i in 0..m {
-            y[(i, j)] = col_solution[i];
+            y[(i, j)] = sol[j * m + i];
         }
     }
 
@@ -5274,5 +5308,148 @@ mod proptest_tests {
         };
         let err = ldl(&a, options).expect_err("asymmetric in hardened");
         assert!(matches!(err, LinalgError::InvalidArgument { .. }));
+    }
+
+    // ── Sylvester / Lyapunov tests ──────────────────────────────────
+
+    #[test]
+    fn solve_sylvester_diagonal() {
+        // A = diag(1,2), B = diag(3,4), known X = [[1,1],[1,1]]
+        // Q = AX + XB = [[1+3, 1+4], [2+3, 2+4]] = [[4,5],[5,6]]
+        let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
+        let b = vec![vec![3.0, 0.0], vec![0.0, 4.0]];
+        let q = vec![vec![4.0, 5.0], vec![5.0, 6.0]];
+        let x = solve_sylvester(&a, &b, &q, DecompOptions::default()).expect("sylvester");
+        // Verify AX + XB = Q
+        let n = 2;
+        for i in 0..n {
+            for j in 0..n {
+                let mut ax_xb = 0.0;
+                for k in 0..n {
+                    ax_xb += a[i][k] * x[k][j] + x[i][k] * b[k][j];
+                }
+                assert!(
+                    (ax_xb - q[i][j]).abs() < 1e-8,
+                    "AX+XB[{i},{j}] = {ax_xb}, expected {}",
+                    q[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn solve_sylvester_general() {
+        // Non-diagonal A, B
+        let a = vec![vec![1.0, 2.0], vec![0.0, 3.0]];
+        let b = vec![vec![4.0, 1.0], vec![0.0, 5.0]];
+        // Choose X = [[1,0],[0,1]] → Q = AX + XB = A + B = [[5,3],[0,8]]
+        let q = vec![vec![5.0, 3.0], vec![0.0, 8.0]];
+        let x = solve_sylvester(&a, &b, &q, DecompOptions::default()).expect("sylvester");
+        let n = 2;
+        for i in 0..n {
+            for j in 0..n {
+                let mut ax_xb = 0.0;
+                for k in 0..n {
+                    ax_xb += a[i][k] * x[k][j] + x[i][k] * b[k][j];
+                }
+                assert!(
+                    (ax_xb - q[i][j]).abs() < 1e-6,
+                    "AX+XB[{i},{j}] = {ax_xb}, expected {}",
+                    q[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn solve_sylvester_3x3() {
+        let a = vec![
+            vec![2.0, 1.0, 0.0],
+            vec![0.0, 3.0, 1.0],
+            vec![0.0, 0.0, 4.0],
+        ];
+        let b = vec![
+            vec![5.0, 0.0, 0.0],
+            vec![1.0, 6.0, 0.0],
+            vec![0.0, 1.0, 7.0],
+        ];
+        // X = I → Q = A + B
+        let q = vec![
+            vec![7.0, 1.0, 0.0],
+            vec![1.0, 9.0, 1.0],
+            vec![0.0, 1.0, 11.0],
+        ];
+        let x = solve_sylvester(&a, &b, &q, DecompOptions::default()).expect("sylvester 3x3");
+        let n = 3;
+        for i in 0..n {
+            for j in 0..n {
+                let mut ax_xb = 0.0;
+                for k in 0..n {
+                    ax_xb += a[i][k] * x[k][j] + x[i][k] * b[k][j];
+                }
+                assert!(
+                    (ax_xb - q[i][j]).abs() < 1e-6,
+                    "AX+XB[{i},{j}] = {ax_xb}, expected {}",
+                    q[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn solve_sylvester_rejects_non_square() {
+        let a = vec![vec![1.0, 2.0]]; // 1x2
+        let b = vec![vec![1.0]];
+        let q = vec![vec![1.0]];
+        let err =
+            solve_sylvester(&a, &b, &q, DecompOptions::default()).expect_err("non-square A");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
+    #[test]
+    fn solve_continuous_lyapunov_basic() {
+        // A = [[1,0],[0,2]], X = I → Q = AX + XA^T = A + A^T = 2*A (since A is symmetric)
+        let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
+        let q = vec![vec![2.0, 0.0], vec![0.0, 4.0]];
+        let x =
+            solve_continuous_lyapunov(&a, &q, DecompOptions::default()).expect("lyapunov");
+        let n = 2;
+        for i in 0..n {
+            for j in 0..n {
+                let mut ax_xat = 0.0;
+                for k in 0..n {
+                    ax_xat += a[i][k] * x[k][j] + x[i][k] * a[j][k]; // A^T[k,j] = A[j,k]
+                }
+                assert!(
+                    (ax_xat - q[i][j]).abs() < 1e-6,
+                    "AX+XA^T[{i},{j}] = {ax_xat}, expected {}",
+                    q[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn solve_continuous_lyapunov_non_symmetric_a() {
+        // Non-symmetric stable A: A = [[-1,2],[0,-3]]
+        // X = I → Q = AX + XA^T = A + A^T = [[-2,2],[2,-6]]
+        let a = vec![vec![-1.0, 2.0], vec![0.0, -3.0]];
+        let q = vec![vec![-2.0, 2.0], vec![2.0, -6.0]];
+        let x =
+            solve_continuous_lyapunov(&a, &q, DecompOptions::default()).expect("lyapunov non-sym");
+        let n = 2;
+        for i in 0..n {
+            for j in 0..n {
+                let mut ax_xat = 0.0;
+                for k in 0..n {
+                    ax_xat += a[i][k] * x[k][j] + x[i][k] * a[j][k];
+                }
+                assert!(
+                    (ax_xat - q[i][j]).abs() < 1e-6,
+                    "AX+XA^T[{i},{j}] = {ax_xat}, expected {}",
+                    q[i][j]
+                );
+            }
+        }
     }
 }
