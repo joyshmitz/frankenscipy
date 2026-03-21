@@ -458,7 +458,10 @@ where
             .zip(x_start.iter())
             .map(|(&xi, &xs)| 2.0 * xi - xs)
             .collect();
-        let f_ext = objective.eval(&x_ext)?;
+        let f_ext = match objective.eval(&x_ext) {
+            Ok(v) => v,
+            Err(err) => return Ok(result_from_error(&x, iteration, objective.nfev, 0, err)),
+        };
 
         if f_ext < f_start {
             let term1 = f_start - f - largest_drop;
@@ -468,13 +471,16 @@ where
 
             if lhs < rhs {
                 // Update direction set: replace direction of largest drop with total move
-                let search = golden_section_direction_search(
+                let search = match golden_section_direction_search(
                     &mut objective,
                     &x,
                     f,
                     &move_vec,
                     tol.max(1.0e-4),
-                )?;
+                ) {
+                    Ok(v) => v,
+                    Err(err) => return Ok(result_from_error(&x, iteration, objective.nfev, 0, err)),
+                };
                 x = search.x;
                 f = search.f;
 
@@ -712,7 +718,10 @@ where
                     f_values[n] = f_c;
                 } else {
                     // Shrink
-                    nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n)?;
+                    match nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n) {
+                        Ok(()) => {},
+                        Err(err) => return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err)),
+                    }
                 }
             } else {
                 // Inside contraction: x_cc = centroid - psi * (centroid - worst)
@@ -732,7 +741,10 @@ where
                     f_values[n] = f_cc;
                 } else {
                     // Shrink
-                    nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n)?;
+                    match nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n) {
+                        Ok(()) => {},
+                        Err(err) => return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err)),
+                    }
                 }
             }
         }

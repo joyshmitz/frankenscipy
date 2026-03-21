@@ -80,14 +80,16 @@ pub fn arange<B: ArrayApiBackend>(
     backend: &B,
     request: &ArangeRequest,
 ) -> ArrayApiResult<B::Array> {
-    if request.step == ScalarValue::I64(0)
-        || request.step == ScalarValue::U64(0)
-        || request.step == ScalarValue::F64(0.0)
-        || request.step == (ScalarValue::ComplexF64 { re: 0.0, im: 0.0 })
-    {
+    if scalar_is_zero(request.step) {
         return Err(ArrayApiError::new(
             ArrayApiErrorKind::InvalidStep,
             "step must be nonzero",
+        ));
+    }
+    if !scalar_is_finite(request.step) {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::InvalidStep,
+            "step must be finite",
         ));
     }
     backend.arange(request.start, request.stop, request.step, request.dtype)
@@ -113,6 +115,24 @@ pub fn from_slice<B: ArrayApiBackend>(
 ) -> ArrayApiResult<B::Array> {
     validate_shape(&request.shape)?;
     backend.array_from_slice(values, &request.shape, request.dtype, request.order)
+}
+
+fn scalar_is_zero(value: ScalarValue) -> bool {
+    match value {
+        ScalarValue::Bool(v) => !v,
+        ScalarValue::I64(v) => v == 0,
+        ScalarValue::U64(v) => v == 0,
+        ScalarValue::F64(v) => v == 0.0,
+        ScalarValue::ComplexF64 { re, im } => re == 0.0 && im == 0.0,
+    }
+}
+
+fn scalar_is_finite(value: ScalarValue) -> bool {
+    match value {
+        ScalarValue::Bool(_) | ScalarValue::I64(_) | ScalarValue::U64(_) => true,
+        ScalarValue::F64(v) => v.is_finite(),
+        ScalarValue::ComplexF64 { re, im } => re.is_finite() && im.is_finite(),
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +187,33 @@ mod tests {
                 dtype: Some(DType::Float64),
             };
             let err = arange(&backend, &request).expect_err("zero step must fail");
+            assert_eq!(err.kind, ArrayApiErrorKind::InvalidStep);
+        }
+    }
+
+    #[test]
+    fn arange_rejects_non_finite_step_values() {
+        let backend = strict_backend();
+        for step in [
+            ScalarValue::F64(f64::NAN),
+            ScalarValue::F64(f64::INFINITY),
+            ScalarValue::F64(f64::NEG_INFINITY),
+            ScalarValue::ComplexF64 {
+                re: f64::NAN,
+                im: 0.0,
+            },
+            ScalarValue::ComplexF64 {
+                re: 1.0,
+                im: f64::INFINITY,
+            },
+        ] {
+            let request = ArangeRequest {
+                start: ScalarValue::F64(0.0),
+                stop: ScalarValue::F64(3.0),
+                step,
+                dtype: Some(DType::Float64),
+            };
+            let err = arange(&backend, &request).expect_err("non-finite step must fail");
             assert_eq!(err.kind, ArrayApiErrorKind::InvalidStep);
         }
     }
