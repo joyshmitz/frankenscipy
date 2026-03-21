@@ -677,8 +677,7 @@ pub fn dct_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    // DCT-IV via FFT of length 8N (simplified approach)
-    // X[k] = 2 * sum_{n=0}^{N-1} x[n] * cos(pi*(2n+1)*(2k+1)/(4N))
+    // DCT-IV via FFT of length 8N
     let m = 8 * n;
     let mut extended = vec![(0.0, 0.0); m];
     for i in 0..n {
