@@ -2768,6 +2768,77 @@ pub fn zscore(data: &[f64]) -> Vec<f64> {
     data.iter().map(|&x| (x - mean_val) / std_val).collect()
 }
 
+/// Compute the q-th percentile of data.
+///
+/// Uses linear interpolation between data points.
+/// `q` should be in [0, 100].
+///
+/// Matches `numpy.percentile(data, q)`.
+pub fn percentile(data: &[f64], q: f64) -> f64 {
+    if data.is_empty() || q.is_nan() {
+        return f64::NAN;
+    }
+    let q_frac = (q / 100.0).clamp(0.0, 1.0);
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    quantile_sorted(&sorted, q_frac)
+}
+
+/// Compute the mean after trimming a proportion from each tail.
+///
+/// Matches `scipy.stats.trim_mean(a, proportiontocut)`.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `proportiontocut` — Fraction to trim from each end (0.0 to 0.5)
+pub fn trim_mean(data: &[f64], proportiontocut: f64) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let prop = proportiontocut.clamp(0.0, 0.5);
+    let n = data.len();
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let ncut = (n as f64 * prop).floor() as usize;
+    let trimmed = &sorted[ncut..n - ncut];
+    if trimmed.is_empty() {
+        return f64::NAN;
+    }
+    trimmed.iter().sum::<f64>() / trimmed.len() as f64
+}
+
+/// Exact binomial test.
+///
+/// Tests H0: probability of success = p, given k successes in n trials.
+/// Returns (k, n, two-sided p-value).
+///
+/// Matches `scipy.stats.binomtest(k, n, p)`.
+pub fn binomtest(k: u64, n: u64, p: f64) -> f64 {
+    if n == 0 || p.is_nan() || p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return if k == 0 { 1.0 } else { 0.0 };
+    }
+    if p == 1.0 {
+        return if k == n { 1.0 } else { 0.0 };
+    }
+
+    let binom = Binomial::new(n, p);
+
+    // Two-sided p-value: sum P(X=j) for all j where P(X=j) <= P(X=k)
+    let p_observed = DiscreteDistribution::pmf(&binom, k);
+    let mut pvalue = 0.0;
+    for j in 0..=n {
+        let p_j = DiscreteDistribution::pmf(&binom, j);
+        if p_j <= p_observed + 1e-14 {
+            pvalue += p_j;
+        }
+    }
+    pvalue.min(1.0)
+}
+
 // Internal helpers for skewness and kurtosis
 fn skew_from_moments(n: f64, m2: f64, m3: f64) -> f64 {
     if m2 == 0.0 {
@@ -5853,5 +5924,85 @@ mod tests {
         // Table with zero: [[0, 5], [5, 0]]
         let result = fisher_exact(&[[0.0, 5.0], [5.0, 0.0]]);
         assert!(result.pvalue < 0.05, "p should be small: {}", result.pvalue);
+    }
+
+    // ── percentile tests ─────────────────────────────────────────────
+
+    #[test]
+    fn percentile_median() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        assert!((percentile(&data, 50.0) - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn percentile_min_max() {
+        let data = vec![10.0, 20.0, 30.0, 40.0, 50.0];
+        assert!((percentile(&data, 0.0) - 10.0).abs() < 1e-12);
+        assert!((percentile(&data, 100.0) - 50.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn percentile_interpolation() {
+        // 25th percentile of [1, 2, 3, 4]: position = 0.25*3 = 0.75
+        // interpolate: 1*(1-0.75) + 2*0.75 = 1.75
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        assert!((percentile(&data, 25.0) - 1.75).abs() < 1e-12);
+    }
+
+    #[test]
+    fn percentile_empty() {
+        assert!(percentile(&[], 50.0).is_nan());
+    }
+
+    // ── trim_mean tests ──────────────────────────────────────────────
+
+    #[test]
+    fn trim_mean_zero_trim() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        assert!((trim_mean(&data, 0.0) - mean).abs() < 1e-12);
+    }
+
+    #[test]
+    fn trim_mean_with_outliers() {
+        // Trim 20% from each end of [1, 2, 3, 4, 100]
+        // Removes 1 element each end (20% of 5 = 1) → [2, 3, 4] → mean = 3
+        let data = vec![1.0, 2.0, 3.0, 4.0, 100.0];
+        assert!((trim_mean(&data, 0.2) - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn trim_mean_empty() {
+        assert!(trim_mean(&[], 0.1).is_nan());
+    }
+
+    // ── binomtest tests ──────────────────────────────────────────────
+
+    #[test]
+    fn binomtest_fair_coin() {
+        // 50 heads out of 100 with p=0.5 → not significant
+        let p = binomtest(50, 100, 0.5);
+        assert!(p > 0.1, "fair coin should not reject: p={p}");
+    }
+
+    #[test]
+    fn binomtest_biased_coin() {
+        // 90 heads out of 100 with p=0.5 → very significant
+        let p = binomtest(90, 100, 0.5);
+        assert!(p < 0.001, "biased result should reject: p={p}");
+    }
+
+    #[test]
+    fn binomtest_all_successes() {
+        // n successes out of n with p=0.5
+        let p = binomtest(10, 10, 0.5);
+        assert!(p < 0.01, "all successes should reject: p={p}");
+    }
+
+    #[test]
+    fn binomtest_edge_cases() {
+        assert!((binomtest(0, 10, 0.0) - 1.0).abs() < 1e-12);
+        assert!((binomtest(10, 10, 1.0) - 1.0).abs() < 1e-12);
+        assert!(binomtest(5, 0, 0.5).is_nan());
     }
 }

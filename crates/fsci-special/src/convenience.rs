@@ -227,6 +227,9 @@ fn entr_scalar(x: f64) -> f64 {
 }
 
 fn rel_entr_scalar(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
     if x == 0.0 && y >= 0.0 {
         0.0
     } else if x > 0.0 && y > 0.0 {
@@ -237,6 +240,9 @@ fn rel_entr_scalar(x: f64, y: f64) -> f64 {
 }
 
 fn kl_div_scalar(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
     if x == 0.0 && y >= 0.0 {
         y
     } else if x > 0.0 && y > 0.0 {
@@ -824,6 +830,23 @@ mod tests {
             RuntimeMode::Strict,
         ));
         assert_close(result, 0.0, 1e-15, "rel_entr(0,1) = 0");
+    }
+
+    #[test]
+    fn rel_entr_nan_inputs_propagate() {
+        let left_nan = eval_scalar(rel_entr(
+            &SpecialTensor::RealScalar(f64::NAN),
+            &SpecialTensor::RealScalar(1.0),
+            RuntimeMode::Strict,
+        ));
+        assert!(left_nan.is_nan(), "rel_entr(NaN, 1) should be NaN");
+
+        let right_nan = eval_scalar(rel_entr(
+            &SpecialTensor::RealScalar(1.0),
+            &SpecialTensor::RealScalar(f64::NAN),
+            RuntimeMode::Strict,
+        ));
+        assert!(right_nan.is_nan(), "rel_entr(1, NaN) should be NaN");
     }
 
     // ── Fresnel integrals ────────────────────────────────────────────

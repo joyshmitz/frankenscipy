@@ -1272,6 +1272,12 @@ mod tests {
     }
 
     #[test]
+    fn kl_div_nan_inputs_propagate() {
+        assert!(kl_div(f64::NAN, 1.0).is_nan());
+        assert!(kl_div(1.0, f64::NAN).is_nan());
+    }
+
+    #[test]
     fn complex_erf_erfc_support_known_values_and_identities() {
         let mode = RuntimeMode::Strict;
         let i = SpecialTensor::ComplexScalar(Complex64::new(0.0, 1.0));
