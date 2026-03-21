@@ -2429,6 +2429,50 @@ mod tests {
         let result = bellman_ford(&g, 0).expect("bellman_ford");
         assert!(result.distances[2].is_infinite());
     }
+
+    // ── BFS/DFS traversal tests ─────────────────────────────────────
+
+    #[test]
+    fn bfs_order_triangle() {
+        let g = triangle_graph_csr();
+        let (order, pred) = breadth_first_order(&g, 0).expect("bfs");
+        assert_eq!(order[0], 0, "BFS starts at source");
+        assert_eq!(order.len(), 3, "BFS visits all 3 nodes");
+        assert_eq!(pred[0], -1, "source has no predecessor");
+    }
+
+    #[test]
+    fn bfs_order_disconnected() {
+        let g = disconnected_graph_csr();
+        let (order, _) = breadth_first_order(&g, 0).expect("bfs");
+        // Only visits nodes reachable from 0: nodes 0 and 1
+        assert_eq!(order.len(), 2, "BFS only visits connected component");
+        assert!(order.contains(&0));
+        assert!(order.contains(&1));
+    }
+
+    #[test]
+    fn dfs_order_triangle() {
+        let g = triangle_graph_csr();
+        let (order, pred) = depth_first_order(&g, 0).expect("dfs");
+        assert_eq!(order[0], 0, "DFS starts at source");
+        assert_eq!(order.len(), 3, "DFS visits all 3 nodes");
+        assert_eq!(pred[0], -1, "source has no predecessor");
+    }
+
+    #[test]
+    fn dfs_order_disconnected() {
+        let g = disconnected_graph_csr();
+        let (order, _) = depth_first_order(&g, 0).expect("dfs");
+        assert_eq!(order.len(), 2, "DFS only visits connected component");
+    }
+
+    #[test]
+    fn bfs_source_out_of_bounds() {
+        let g = triangle_graph_csr();
+        let err = breadth_first_order(&g, 10).expect_err("oob");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3167,6 +3211,92 @@ pub fn bellman_ford(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPa
         distances: dist,
         predecessors: pred,
     })
+}
+
+/// Breadth-first search traversal order from a source node.
+///
+/// Returns the node indices in BFS order and a predecessor array.
+///
+/// Matches `scipy.sparse.csgraph.breadth_first_order(graph, i_start)`.
+pub fn breadth_first_order(
+    graph: &CsrMatrix,
+    source: usize,
+) -> SparseResult<(Vec<usize>, Vec<i64>)> {
+    let n = graph.shape().rows;
+    if source >= n {
+        return Err(SparseError::InvalidArgument {
+            message: format!("source {source} out of bounds for graph with {n} nodes"),
+        });
+    }
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+
+    let mut visited = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+    let mut predecessors = vec![-1_i64; n];
+
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(source);
+    visited[source] = true;
+    predecessors[source] = -1;
+
+    while let Some(node) = queue.pop_front() {
+        order.push(node);
+        for idx in indptr[node]..indptr[node + 1] {
+            let neighbor = indices[idx];
+            if !visited[neighbor] {
+                visited[neighbor] = true;
+                predecessors[neighbor] = node as i64;
+                queue.push_back(neighbor);
+            }
+        }
+    }
+
+    Ok((order, predecessors))
+}
+
+/// Depth-first search traversal order from a source node.
+///
+/// Returns the node indices in DFS pre-order and a predecessor array.
+///
+/// Matches `scipy.sparse.csgraph.depth_first_order(graph, i_start)`.
+pub fn depth_first_order(
+    graph: &CsrMatrix,
+    source: usize,
+) -> SparseResult<(Vec<usize>, Vec<i64>)> {
+    let n = graph.shape().rows;
+    if source >= n {
+        return Err(SparseError::InvalidArgument {
+            message: format!("source {source} out of bounds for graph with {n} nodes"),
+        });
+    }
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+
+    let mut visited = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+    let mut predecessors = vec![-1_i64; n];
+
+    let mut stack = vec![source];
+    visited[source] = true;
+
+    while let Some(node) = stack.pop() {
+        order.push(node);
+        // Push neighbors in reverse order so leftmost is visited first
+        let neighbors: Vec<usize> = (indptr[node]..indptr[node + 1])
+            .map(|idx| indices[idx])
+            .filter(|&neighbor| !visited[neighbor])
+            .collect();
+        for &neighbor in neighbors.iter().rev() {
+            if !visited[neighbor] {
+                visited[neighbor] = true;
+                predecessors[neighbor] = node as i64;
+                stack.push(neighbor);
+            }
+        }
+    }
+
+    Ok((order, predecessors))
 }
 
 /// Result of minimum spanning tree computation.
