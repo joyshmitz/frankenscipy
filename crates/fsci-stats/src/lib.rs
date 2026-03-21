@@ -155,6 +155,11 @@ impl ContinuousDistribution for Normal {
         0.5 * (1.0 + fsci_special::erf_scalar(z * FRAC_1_SQRT_2))
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        0.5 * fsci_special::erfc_scalar(z * FRAC_1_SQRT_2)
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         // Use the specialized rational approximation
         Normal::ppf(self, q)
@@ -206,6 +211,18 @@ impl ContinuousDistribution for StudentT {
         let w = v / (v + t2);
         let ib = regularized_incomplete_beta(0.5 * v, 0.5, w);
         if x > 0.0 { 1.0 - 0.5 * ib } else { 0.5 * ib }
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        let v = self.df;
+        if x == 0.0 {
+            return 0.5;
+        }
+        // Use regularized incomplete beta function
+        let t2 = x * x;
+        let w = v / (v + t2);
+        let ib = regularized_incomplete_beta(0.5 * v, 0.5, w);
+        if x > 0.0 { 0.5 * ib } else { 1.0 - 0.5 * ib }
     }
 
     fn mean(&self) -> f64 {
@@ -268,6 +285,13 @@ impl ContinuousDistribution for ChiSquared {
         }
         // CDF of chi2(k) = regularized lower incomplete gamma P(k/2, x/2)
         lower_regularized_gamma(0.5 * self.df, 0.5 * x)
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 1.0;
+        }
+        upper_regularized_gamma(0.5 * self.df, 0.5 * x)
     }
 
     fn mean(&self) -> f64 {
@@ -1495,6 +1519,21 @@ fn lower_regularized_gamma(a: f64, x: f64) -> f64 {
     } else {
         // Continued fraction (complement)
         1.0 - gamma_inc_cf(a, x)
+    }
+}
+
+/// Upper regularized incomplete gamma function Q(a, x) = Γ(a,x)/Γ(a).
+/// Equivalent to 1 - lower_regularized_gamma(a, x) but more precise for large x.
+fn upper_regularized_gamma(a: f64, x: f64) -> f64 {
+    if x <= 0.0 {
+        return 1.0;
+    }
+    if x < a + 1.0 {
+        // Series expansion complement
+        1.0 - gamma_inc_series(a, x)
+    } else {
+        // Continued fraction
+        gamma_inc_cf(a, x)
     }
 }
 
