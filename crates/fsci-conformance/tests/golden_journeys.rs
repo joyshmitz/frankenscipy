@@ -20,10 +20,7 @@ use fsci_linalg::{
     InvOptions, LstsqOptions, PinvOptions, SolveOptions, det, inv, lstsq, pinv, solve,
 };
 use fsci_opt::{MinimizeOptions, OptimizeMethod, RootOptions, bfgs, bisect, brentq, cg_pr_plus};
-use fsci_runtime::{
-    DecisionSignals, PolicyAction, PolicyController, RuntimeMode,
-    SolverPortfolio,
-};
+use fsci_runtime::{DecisionSignals, PolicyAction, PolicyController, RuntimeMode, SolverPortfolio};
 use fsci_sparse::{FormatConvertible, Shape2D, eye, random, scale_csr, spmv_csr};
 use fsci_special::{SpecialTensor, erf, erfc, gamma, gammaln, rgamma};
 use serde::Serialize;

@@ -661,7 +661,10 @@ pub fn dct_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     let n = input.len();
     // DCT-III is scaled IDCT-II
     let idct_result = idct(input, options)?;
-    Ok(idct_result.into_iter().map(|v| v * 2.0 * n as f64).collect())
+    Ok(idct_result
+        .into_iter()
+        .map(|v| v * 2.0 * n as f64)
+        .collect())
 }
 
 /// Discrete Cosine Transform Type IV.

@@ -1401,12 +1401,16 @@ pub fn lfilter_zi(b: &[f64], a: &[f64]) -> Result<Vec<f64>, SignalError> {
     let nb = b.len();
     let na = a.len();
     let n = nb.max(na);
-    
+
     // Pad and normalize
     let mut b_norm = vec![0.0; n];
     let mut a_norm = vec![0.0; n];
-    for (i, &val) in b.iter().enumerate() { b_norm[i] = val / a0; }
-    for (i, &val) in a.iter().enumerate() { a_norm[i] = val / a0; }
+    for (i, &val) in b.iter().enumerate() {
+        b_norm[i] = val / a0;
+    }
+    for (i, &val) in a.iter().enumerate() {
+        a_norm[i] = val / a0;
+    }
 
     if n <= 1 {
         return Ok(Vec::new());
@@ -1416,11 +1420,11 @@ pub fn lfilter_zi(b: &[f64], a: &[f64]) -> Result<Vec<f64>, SignalError> {
     // Build the system (I - A)z = b[1:] - a[1:]*b[0]
     let mut matrix = vec![vec![0.0; m]; m];
     let mut rhs = vec![0.0; m];
-    
+
     let b0 = b_norm[0];
     for i in 0..m {
         rhs[i] = b_norm[i + 1] - a_norm[i + 1] * b0;
-        
+
         matrix[i][0] += a_norm[i + 1];
         matrix[i][i] += 1.0;
         if i + 1 < m {
@@ -1432,10 +1436,10 @@ pub fn lfilter_zi(b: &[f64], a: &[f64]) -> Result<Vec<f64>, SignalError> {
         mode: fsci_runtime::RuntimeMode::Strict,
         ..Default::default()
     };
-    
+
     let result = fsci_linalg::solve(&matrix, &rhs, solve_opts)
         .map_err(|e| SignalError::InvalidArgument(format!("lfilter_zi solve failed: {e}")))?;
-        
+
     Ok(result.x)
 }
 
@@ -1479,7 +1483,7 @@ pub fn lfilter(
             )));
         }
         let mut d_init = vec![0.0; nfilt];
-        d_init[..nfilt-1].copy_from_slice(initial);
+        d_init[..nfilt - 1].copy_from_slice(initial);
         d_init
     } else {
         vec![0.0; nfilt]
@@ -3226,8 +3230,12 @@ pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError
 
 /// Generate a Bartlett window.
 pub fn bartlett(n: usize) -> Vec<f64> {
-    if n == 0 { return Vec::new(); }
-    if n == 1 { return vec![1.0]; }
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
     let nf = (n - 1) as f64;
     (0..n)
         .map(|i| {
@@ -3239,15 +3247,20 @@ pub fn bartlett(n: usize) -> Vec<f64> {
 
 /// Generate a flat top window.
 pub fn flattop(n: usize) -> Vec<f64> {
-    if n == 0 { return Vec::new(); }
-    if n == 1 { return vec![1.0]; }
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
     let two_pi = 2.0 * std::f64::consts::PI;
     let nf = (n - 1) as f64;
     (0..n)
         .map(|i| {
             let arg = two_pi * i as f64 / nf;
             0.21557895 - 0.41663158 * arg.cos() + 0.277263158 * (2.0 * arg).cos()
-                - 0.083578947 * (3.0 * arg).cos() + 0.006947368 * (4.0 * arg).cos()
+                - 0.083578947 * (3.0 * arg).cos()
+                + 0.006947368 * (4.0 * arg).cos()
         })
         .collect()
 }

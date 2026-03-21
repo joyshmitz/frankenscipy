@@ -139,10 +139,9 @@ where
             let mut y0_pert = y0.clone();
             y0_pert[j] += eps_j;
             let ivp_pert = solve_ivp_internal(f, t_span, &y0_pert, options.rtol, options.atol)?;
-            let yb_pert = ivp_pert
-                .y
-                .last()
-                .ok_or_else(|| BvpError::IvpFailed("IVP perturbation result is empty".to_string()))?;
+            let yb_pert = ivp_pert.y.last().ok_or_else(|| {
+                BvpError::IvpFailed("IVP perturbation result is empty".to_string())
+            })?;
             let residual_pert = bc(&y0_pert, yb_pert);
             for i in 0..n {
                 jac[i][j] = (residual_pert[i] - residual[i]) / eps_j;

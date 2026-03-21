@@ -255,8 +255,7 @@ fn check_mode_consistency() -> ParityGate {
 /// Verify that well-conditioned state selects DirectLU (lowest expected loss).
 fn check_portfolio_well_conditioned() -> ParityGate {
     let portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
-    let (action, posterior, losses, chosen_loss) =
-        portfolio.select_action(1e-2, None);
+    let (action, posterior, losses, chosen_loss) = portfolio.select_action(1e-2, None);
 
     let pass = action == SolverAction::DirectLU
         && posterior[0] == 1.0
@@ -311,7 +310,8 @@ fn check_portfolio_all_states_valid() -> ParityGate {
     let mut detail = String::new();
 
     for state in &MatrixConditionState::ALL {
-        let (action, posterior, losses, chosen) = portfolio.select_action(state_to_rcond(state), None);
+        let (action, posterior, losses, chosen) =
+            portfolio.select_action(state_to_rcond(state), None);
         let finite_losses = losses.iter().all(|l| l.is_finite());
         let finite_posterior = posterior.iter().all(|p| p.is_finite());
         let posterior_sums_to_one = (posterior.iter().sum::<f64>() - 1.0).abs() < 1e-10;
@@ -586,7 +586,8 @@ fn check_evidence_jsonl_serialization() -> ParityGate {
     let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
 
     for state in &MatrixConditionState::ALL {
-        let (action, posterior, losses, chosen_loss) = portfolio.select_action(state_to_rcond(state), None);
+        let (action, posterior, losses, chosen_loss) =
+            portfolio.select_action(state_to_rcond(state), None);
         portfolio.record_evidence(fsci_runtime::SolverEvidenceEntry {
             component: "fsci_linalg",
             matrix_shape: (32, 32),

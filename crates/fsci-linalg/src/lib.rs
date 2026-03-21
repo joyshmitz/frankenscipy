@@ -443,10 +443,12 @@ pub fn solve(a: &[Vec<f64>], b: &[f64], options: SolveOptions) -> Result<SolveRe
         }
         MatrixAssumption::Diagonal => solve_diagonal(&matrix, b),
         MatrixAssumption::UpperTriangular => {
-            solve_triangular_internal(&matrix, b, TriangularTranspose::NoTranspose, false, false)
+            let lower = options.transposed; // Upper^T is Lower
+            solve_triangular_internal(&matrix, b, TriangularTranspose::NoTranspose, lower, false)
         }
         MatrixAssumption::LowerTriangular => {
-            solve_triangular_internal(&matrix, b, TriangularTranspose::NoTranspose, true, false)
+            let lower = !options.transposed; // Lower^T is Upper
+            solve_triangular_internal(&matrix, b, TriangularTranspose::NoTranspose, lower, false)
         }
         MatrixAssumption::Banded | MatrixAssumption::TriDiagonal => {
             // Banded/tridiagonal structure in solve() falls back to general LU.
@@ -989,7 +991,12 @@ pub fn solve_with_casp(
         } else if options.assume_a == Some(MatrixAssumption::LowerTriangular)
             || options.assume_a == Some(MatrixAssumption::UpperTriangular)
         {
-            let lower = options.assume_a == Some(MatrixAssumption::LowerTriangular);
+            let is_upper = options.assume_a == Some(MatrixAssumption::UpperTriangular);
+            let lower = if options.transposed {
+                is_upper
+            } else {
+                !is_upper
+            };
             let rcond = fast_rcond_triangular(&effective_a, lower);
             let (act, post, losses, choice) =
                 portfolio.select_action(rcond, Some(StructuralEvidence::Triangular));
@@ -1031,7 +1038,12 @@ pub fn solve_with_casp(
         SolverAction::SVDFallback => solve_svd_fallback(&effective_a, b),
         SolverAction::DiagonalFastPath => solve_diagonal(&effective_a, b),
         SolverAction::TriangularFastPath => {
-            let lower = options.assume_a == Some(MatrixAssumption::LowerTriangular);
+            let is_upper = options.assume_a == Some(MatrixAssumption::UpperTriangular);
+            let lower = if options.transposed {
+                is_upper
+            } else {
+                !is_upper
+            };
             solve_triangular_internal(
                 &effective_a,
                 b,
@@ -2186,8 +2198,7 @@ pub fn sqrtm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
     // Check symmetry before using symmetric eigendecomposition
     let is_symmetric = (0..n).all(|i| {
         (0..n).all(|j| {
-            (matrix[(i, j)] - matrix[(j, i)]).abs()
-                < 1e-12 * matrix[(i, j)].abs().max(1.0)
+            (matrix[(i, j)] - matrix[(j, i)]).abs() < 1e-12 * matrix[(i, j)].abs().max(1.0)
         })
     });
 
@@ -2214,7 +2225,11 @@ pub fn sqrtm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
                     sum -= sqrt_t[(i, k)] * sqrt_t[(k, j)];
                 }
                 let denom = si + sj;
-                sqrt_t[(i, j)] = if denom.abs() > 1e-15 { sum / denom } else { 0.0 };
+                sqrt_t[(i, j)] = if denom.abs() > 1e-15 {
+                    sum / denom
+                } else {
+                    0.0
+                };
             }
         }
         let result = &q * sqrt_t * q.transpose();
@@ -4977,6 +4992,69 @@ mod proptest_tests {
             prop_assert!(rcond >= 0.0, "rcond should be >= 0, got {rcond}");
             prop_assert!(rcond <= 1.0, "rcond should be <= 1, got {rcond}");
         }
+    }
+
+    #[test]
+    fn test_solve_transposed_upper_triangular() {
+        // Upper triangular matrix A
+        // [ 2, 1 ]
+        // [ 0, 2 ]
+        let a = vec![vec![2.0, 1.0], vec![0.0, 2.0]];
+
+        // b = [ 5, 4 ]
+        let b = vec![5.0, 4.0];
+
+        // A^T x = b
+        // [ 2, 0 ] [ x1 ] = [ 5 ]
+        // [ 1, 2 ] [ x2 ] = [ 4 ]
+        // 2*x1 = 5 => x1 = 2.5
+        // 1*x1 + 2*x2 = 4 => 2.5 + 2*x2 = 4 => 2*x2 = 1.5 => x2 = 0.75
+        // Expected x = [ 2.5, 0.75 ]
+
+        let options = SolveOptions {
+            assume_a: Some(MatrixAssumption::UpperTriangular),
+            transposed: true,
+            ..SolveOptions::default()
+        };
+
+        let result = solve(&a, &b, options).expect("solve works");
+        let expected = [2.5, 0.75];
+
+        for (i, (&r, &e)) in result.x.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (r - e).abs() < 1e-10,
+                "FAILURE at index {i}: got {r}, expected {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_solve_with_casp_transposed_upper_triangular() {
+        use fsci_runtime::{RuntimeMode, SolverPortfolio};
+
+        let a = vec![vec![2.0, 1.0], vec![0.0, 2.0]];
+        let b = vec![5.0, 4.0];
+        let options = SolveOptions {
+            assume_a: Some(MatrixAssumption::UpperTriangular),
+            transposed: true,
+            ..SolveOptions::default()
+        };
+
+        let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 64);
+        let result =
+            solve_with_casp(&a, &b, options, &mut portfolio).expect("solve_with_casp works");
+        let expected = [2.5, 0.75];
+
+        for (i, (&r, &e)) in result.x.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (r - e).abs() < 1e-10,
+                "FAILURE at index {i}: got {r}, expected {e}"
+            );
+        }
+
+        // Also verify the action was TriangularFastPath
+        let evidence = portfolio.serialize_jsonl();
+        assert!(evidence.contains("TriangularFastPath"));
     }
 
     // ── LDL decomposition tests ─────────────────────────────────────

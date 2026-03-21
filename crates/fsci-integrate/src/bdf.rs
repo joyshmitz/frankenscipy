@@ -192,6 +192,10 @@ impl BdfSolver {
         }
 
         if self.n == 0 || self.t == self.t_bound {
+            self.t_old = Some(self.t);
+            self.y_old = Some(self.y.clone());
+            self.f_old = Some(self.f.clone());
+            self.t = self.t_bound;
             self.state = OdeSolverState::Finished;
             return Ok(StepOutcome {
                 message: None,
@@ -308,7 +312,8 @@ impl BdfSolver {
             self.t = t_new;
             self.y = y_new;
 
-            let factor = (1.5_f64).min(0.9 / error_norm.max(1e-10).powf(1.0 / (self.order as f64 + 1.0)));
+            let factor =
+                (1.5_f64).min(0.9 / error_norm.max(1e-10).powf(1.0 / (self.order as f64 + 1.0)));
             self.h = (factor * h_used.abs()).min(self.max_step) * self.direction;
 
             let state = if past_bound {

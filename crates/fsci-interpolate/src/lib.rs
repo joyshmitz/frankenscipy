@@ -1761,12 +1761,7 @@ impl Delaunay2D {
             // Find triangles whose circumcircle contains the new point
             let mut bad_triangles = Vec::new();
             for (t_idx, &(a, b, c)) in triangles.iter().enumerate() {
-                if in_circumcircle(
-                    all_points[a],
-                    all_points[b],
-                    all_points[c],
-                    (px, py),
-                ) {
+                if in_circumcircle(all_points[a], all_points[b], all_points[c], (px, py)) {
                     bad_triangles.push(t_idx);
                 }
             }
@@ -1818,8 +1813,7 @@ impl Delaunay2D {
     /// Returns the simplex index and barycentric coordinates (λ1, λ2, λ3).
     pub fn find_simplex(&self, query: (f64, f64)) -> Option<(usize, f64, f64, f64)> {
         for (idx, &(a, b, c)) in self.simplices.iter().enumerate() {
-            let (l1, l2, l3) =
-                barycentric(self.points[a], self.points[b], self.points[c], query);
+            let (l1, l2, l3) = barycentric(self.points[a], self.points[b], self.points[c], query);
             if l1 >= -1e-10 && l2 >= -1e-10 && l3 >= -1e-10 {
                 return Some((idx, l1, l2, l3));
             }
@@ -1859,12 +1853,7 @@ fn triangle_has_edge(a: usize, b: usize, c: usize, e0: usize, e1: usize) -> bool
 }
 
 /// Compute barycentric coordinates of point p in triangle (a, b, c).
-fn barycentric(
-    a: (f64, f64),
-    b: (f64, f64),
-    c: (f64, f64),
-    p: (f64, f64),
-) -> (f64, f64, f64) {
+fn barycentric(a: (f64, f64), b: (f64, f64), c: (f64, f64), p: (f64, f64)) -> (f64, f64, f64) {
     let v0x = b.0 - a.0;
     let v0y = b.1 - a.1;
     let v1x = c.0 - a.0;
@@ -3086,7 +3075,10 @@ mod tests {
             vec![0.0, 1.0],
             vec![1.0, 1.0],
         ];
-        let values: Vec<f64> = points.iter().map(|p| 2.0 * p[0] + 3.0 * p[1] + 1.0).collect();
+        let values: Vec<f64> = points
+            .iter()
+            .map(|p| 2.0 * p[0] + 3.0 * p[1] + 1.0)
+            .collect();
         let interp = LinearNDInterpolator::new(&points, &values).expect("linear nd");
 
         let query = vec![0.5, 0.5];
@@ -3150,11 +3142,7 @@ mod tests {
 
     #[test]
     fn linear_nd_eval_many() {
-        let points = vec![
-            vec![0.0, 0.0],
-            vec![1.0, 0.0],
-            vec![0.0, 1.0],
-        ];
+        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
         let values = vec![0.0, 1.0, 2.0];
         let interp = LinearNDInterpolator::new(&points, &values).expect("linear nd");
 
@@ -3174,9 +3162,9 @@ mod tests {
         let b_anti = b.antiderivative(1).unwrap();
         println!("c = {:?}", b_anti.c);
         println!("t = {:?}", b_anti.t);
-        assert!((b_anti.c[1] - 0.3333333333333333).abs() < 1e-6);
-        assert!((b_anti.c[2] - 1.6666666666666667).abs() < 1e-6);
-        assert!((b_anti.c[3] - 4.6666666666666667).abs() < 1e-6);
-        assert!((b_anti.c[4] - 7.3333333333333333).abs() < 1e-6);
+        assert!((b_anti.c[1] - 0.333_333_333_333_333_3).abs() < 1e-6);
+        assert!((b_anti.c[2] - 1.666_666_666_666_666_7).abs() < 1e-6);
+        assert!((b_anti.c[3] - 4.666_666_666_666_667).abs() < 1e-6);
+        assert!((b_anti.c[4] - 7.333_333_333_333_333).abs() < 1e-6);
     }
 }

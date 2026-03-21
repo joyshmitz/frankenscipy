@@ -326,7 +326,8 @@ fn e2e_003_solver_portfolio_selection() {
 
     for (i, state) in MatrixConditionState::ALL.iter().enumerate() {
         let t = Instant::now();
-        let (action, posterior, _expected_losses, chosen_loss) = portfolio.select_action(state_to_rcond(state), None);
+        let (action, posterior, _expected_losses, chosen_loss) =
+            portfolio.select_action(state_to_rcond(state), None);
         let posterior_sum: f64 = posterior.iter().sum();
         let pass = (posterior_sum - 1.0).abs() < 1e-9;
         if !pass {

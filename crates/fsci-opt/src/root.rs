@@ -822,7 +822,13 @@ where
 
         // Compute step: dx = -B^{-1} F(x)
         let dx: Vec<f64> = (0..n)
-            .map(|i| -b_inv[i].iter().zip(fx.iter()).map(|(b, f)| b * f).sum::<f64>())
+            .map(|i| {
+                -b_inv[i]
+                    .iter()
+                    .zip(fx.iter())
+                    .map(|(b, f)| b * f)
+                    .sum::<f64>()
+            })
             .collect();
 
         // Update x
@@ -831,19 +837,38 @@ where
         nfev += 1;
 
         // Broyden update: B^{-1}_{k+1} = B^{-1}_k + (Δx - B^{-1}_k Δf) Δx^T B^{-1}_k / (Δx^T B^{-1}_k Δf)
-        let df: Vec<f64> = fx_new.iter().zip(fx.iter()).map(|(fn_, fo)| fn_ - fo).collect();
+        let df: Vec<f64> = fx_new
+            .iter()
+            .zip(fx.iter())
+            .map(|(fn_, fo)| fn_ - fo)
+            .collect();
 
         // b_inv_df = B^{-1} * Δf
         let b_inv_df: Vec<f64> = (0..n)
-            .map(|i| b_inv[i].iter().zip(df.iter()).map(|(b, d)| b * d).sum::<f64>())
+            .map(|i| {
+                b_inv[i]
+                    .iter()
+                    .zip(df.iter())
+                    .map(|(b, d)| b * d)
+                    .sum::<f64>()
+            })
             .collect();
 
         // numerator = Δx - B^{-1} Δf
-        let numer: Vec<f64> = dx.iter().zip(b_inv_df.iter()).map(|(d, bd)| d - bd).collect();
+        let numer: Vec<f64> = dx
+            .iter()
+            .zip(b_inv_df.iter())
+            .map(|(d, bd)| d - bd)
+            .collect();
 
         // dx^T B^{-1} = row vector
         let dx_b_inv: Vec<f64> = (0..n)
-            .map(|j| dx.iter().zip(b_inv.iter()).map(|(d, row)| d * row[j]).sum::<f64>())
+            .map(|j| {
+                dx.iter()
+                    .zip(b_inv.iter())
+                    .map(|(d, row)| d * row[j])
+                    .sum::<f64>()
+            })
             .collect();
 
         // denominator = Δx^T B^{-1} Δf
@@ -880,7 +905,7 @@ mod tests {
     use proptest::prelude::*;
     use serde::Serialize;
 
-    use super::{broyden1, fsolve, root, MultivariateRootMethod, MultivariateRootOptions};
+    use super::{MultivariateRootMethod, MultivariateRootOptions, broyden1, fsolve, root};
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, ridder, root_scalar,
     };
@@ -1557,8 +1582,8 @@ mod tests {
     #[test]
     fn root_hybr_matches_fsolve() {
         let f = |x: &[f64]| vec![2.0 * x[0] + x[1] - 5.0, x[0] - x[1] - 1.0];
-        let direct = fsolve(&f, &[0.0, 0.0]).expect("fsolve");
-        let dispatched = root(&f, &[0.0, 0.0], MultivariateRootOptions::default()).expect("root");
+        let direct = fsolve(f, &[0.0, 0.0]).expect("fsolve");
+        let dispatched = root(f, &[0.0, 0.0], MultivariateRootOptions::default()).expect("root");
         assert!(dispatched.converged);
         assert!((direct.x[0] - dispatched.x[0]).abs() < 1e-10);
         assert!((direct.x[1] - dispatched.x[1]).abs() < 1e-10);
@@ -1571,7 +1596,7 @@ mod tests {
             method: MultivariateRootMethod::Broyden1,
             ..MultivariateRootOptions::default()
         };
-        let result = root(&f, &[0.0, 0.0], options).expect("root broyden1");
+        let result = root(f, &[0.0, 0.0], options).expect("root broyden1");
         assert!(result.converged, "broyden1 failed: {}", result.message);
         assert!(
             (result.x[0] - 2.0).abs() < 0.05,
@@ -1589,7 +1614,7 @@ mod tests {
     fn broyden1_nonlinear_circle() {
         // x² + y² = 1, x - y = 0 → x=y=1/√2
         let f = |x: &[f64]| vec![x[0] * x[0] + x[1] * x[1] - 1.0, x[0] - x[1]];
-        let result = broyden1(&f, &[0.5, 0.5], 1e-10, 200).expect("broyden1");
+        let result = broyden1(f, &[0.5, 0.5], 1e-10, 200).expect("broyden1");
         assert!(result.converged, "broyden1 failed: {}", result.message);
         let s2 = std::f64::consts::FRAC_1_SQRT_2;
         assert!(
@@ -1609,7 +1634,7 @@ mod tests {
                 2.0 * x[0] + x[1] - x[2] - 1.0,
             ]
         };
-        let result = broyden1(&f, &[0.0, 0.0, 0.0], 1e-10, 200).expect("broyden1 3d");
+        let result = broyden1(f, &[0.0, 0.0, 0.0], 1e-10, 200).expect("broyden1 3d");
         assert!(result.converged, "broyden1 3d failed: {}", result.message);
         assert!((result.x[0] - 1.0).abs() < 0.1, "x = {}", result.x[0]);
         assert!((result.x[1] - 2.0).abs() < 0.1, "y = {}", result.x[1]);
@@ -1619,7 +1644,7 @@ mod tests {
     #[test]
     fn broyden1_empty_x0_rejected() {
         let f = |_x: &[f64]| vec![];
-        let err = broyden1(&f, &[], 1e-10, 200).expect_err("empty");
+        let err = broyden1(f, &[], 1e-10, 200).expect_err("empty");
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
     }
 }

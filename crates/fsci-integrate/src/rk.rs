@@ -554,6 +554,8 @@ impl RkSolver {
         // Handle empty system or already at boundary
         if self.n == 0 || self.t == self.t_bound {
             self.t_old = Some(self.t);
+            self.y_old = Some(self.y.clone());
+            self.f_old = Some(self.f.clone());
             self.t = self.t_bound;
             self.state = OdeSolverState::Finished;
             return Ok(StepOutcome {

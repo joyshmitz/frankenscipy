@@ -2635,7 +2635,7 @@ pub fn median_abs_deviation(data: &[f64], scale: f64) -> f64 {
     let mut sorted = data.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let med = quantile_sorted(&sorted, 0.5);
-    
+
     let mut diffs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
     diffs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mad = quantile_sorted(&diffs, 0.5);
