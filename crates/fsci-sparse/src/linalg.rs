@@ -3376,8 +3376,8 @@ pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>>
     // Compute degree vector (sum of edge weights per row)
     let mut degree = vec![0.0; n];
     for i in 0..n {
-        for idx in indptr[i]..indptr[i + 1] {
-            degree[i] += data[idx].abs();
+        for &value in data.iter().take(indptr[i + 1]).skip(indptr[i]) {
+            degree[i] += value.abs();
         }
     }
 
