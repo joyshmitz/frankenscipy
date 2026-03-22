@@ -679,7 +679,6 @@ pub fn lombscargle(x: &[f64], y: &[f64], freqs: &[f64]) -> Result<Vec<f64>, Sign
         ));
     }
 
-    let n = x.len() as f64;
     let mut power = Vec::with_capacity(freqs.len());
 
     for &omega in freqs {
@@ -813,11 +812,12 @@ pub fn morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
         let gauss = (-t * t / 2.0).exp();
         let phase = 2.0 * std::f64::consts::PI * w * t;
         let mut re = gauss * phase.cos();
-        let mut im = gauss * phase.sin();
+        let im = gauss * phase.sin();
 
         if complete {
             // Correction: subtract the DC component to ensure zero mean
-            let correction = (-2.0 * std::f64::consts::PI * std::f64::consts::PI * w * w / 2.0).exp();
+            let correction =
+                (-2.0 * std::f64::consts::PI * std::f64::consts::PI * w * w / 2.0).exp();
             re -= gauss * correction;
         }
 
@@ -854,7 +854,7 @@ where
         ));
     }
 
-    let n = data.len();
+    let _n = data.len();
     let mut result = Vec::with_capacity(widths.len());
 
     for &width in widths {
@@ -6712,14 +6712,14 @@ mod tests {
             .map(|i| (2.0 * std::f64::consts::PI * 10.0 * i as f64 / n as f64).sin())
             .collect();
         let widths: Vec<f64> = (1..=20).map(|w| w as f64).collect();
-        let result = cwt(&x, |points, a| ricker(points, a), &widths).expect("cwt");
+        let result = cwt(&x, ricker, &widths).expect("cwt");
         assert_eq!(result.len(), widths.len());
         assert_eq!(result[0].len(), n);
     }
 
     #[test]
     fn cwt_empty_data_rejected() {
-        let err = cwt(&[], |p, a| ricker(p, a), &[1.0]).expect_err("empty");
+        let err = cwt(&[], ricker, &[1.0]).expect_err("empty");
         assert!(matches!(err, SignalError::InvalidArgument(_)));
     }
 
@@ -6831,6 +6831,9 @@ mod tests {
             .windows(2)
             .filter(|w| w[0].signum() != w[1].signum())
             .count();
-        assert!(crossings > 2, "linear chirp should oscillate: {crossings} crossings");
+        assert!(
+            crossings > 2,
+            "linear chirp should oscillate: {crossings} crossings"
+        );
     }
 }

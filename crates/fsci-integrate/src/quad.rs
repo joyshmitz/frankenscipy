@@ -871,8 +871,7 @@ where
         let result = quad(
             |x| {
                 args.borrow_mut()[dim] = x;
-                nquad_inner(func, ranges, options, args, total_neval, dim + 1)
-                    .unwrap_or(0.0)
+                nquad_inner(func, ranges, options, args, total_neval, dim + 1).unwrap_or(0.0)
             },
             a,
             b,
@@ -1647,8 +1646,8 @@ mod tests {
     fn nquad_2d_product() {
         // ∫₀¹ ∫₀¹ x*y dx dy = (1/2)(1/2) = 0.25
         let opts = QuadOptions::default();
-        let result = nquad(|args| args[0] * args[1], &[(0.0, 1.0), (0.0, 1.0)], opts)
-            .expect("nquad 2d");
+        let result =
+            nquad(|args| args[0] * args[1], &[(0.0, 1.0), (0.0, 1.0)], opts).expect("nquad 2d");
         assert!(
             (result.integral - 0.25).abs() < 1e-8,
             "∫∫ xy dxdy = {}, expected 0.25",
@@ -1660,12 +1659,8 @@ mod tests {
     fn nquad_3d_unit_cube() {
         // ∫₀¹ ∫₀¹ ∫₀¹ 1 dxdydz = 1
         let opts = QuadOptions::default();
-        let result = nquad(
-            |_args| 1.0,
-            &[(0.0, 1.0), (0.0, 1.0), (0.0, 1.0)],
-            opts,
-        )
-        .expect("nquad 3d");
+        let result =
+            nquad(|_args| 1.0, &[(0.0, 1.0), (0.0, 1.0), (0.0, 1.0)], opts).expect("nquad 3d");
         assert!(
             (result.integral - 1.0).abs() < 1e-6,
             "∫∫∫ 1 dV = {}, expected 1.0",

@@ -1919,7 +1919,7 @@ fn sample_median(data: &[f64]) -> f64 {
     let mut sorted = data.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 0 {
+    if sorted.len().is_multiple_of(2) {
         0.5 * (sorted[mid - 1] + sorted[mid])
     } else {
         sorted[mid]
@@ -2295,8 +2295,7 @@ pub fn levene(groups: &[&[f64]]) -> VarianceTestResult {
         return invalid_variance_test_result();
     }
 
-    let grand_mean =
-        deviations.iter().flatten().sum::<f64>() / n_total as f64;
+    let grand_mean = deviations.iter().flatten().sum::<f64>() / n_total as f64;
 
     let ss_between: f64 = deviations
         .iter()
@@ -2326,7 +2325,9 @@ pub fn levene(groups: &[&[f64]]) -> VarianceTestResult {
 
     let df_between = k - 1.0;
     let w = (df_within / df_between) * (ss_between / ss_within);
-    let pvalue = FDistribution::new(df_between, df_within).sf(w).clamp(0.0, 1.0);
+    let pvalue = FDistribution::new(df_between, df_within)
+        .sf(w)
+        .clamp(0.0, 1.0);
     VarianceTestResult {
         statistic: w,
         pvalue,
@@ -2349,7 +2350,10 @@ pub fn bartlett(groups: &[&[f64]]) -> VarianceTestResult {
     }
 
     let variances: Vec<f64> = groups.iter().map(|group| sample_variance(group)).collect();
-    if variances.iter().any(|variance| !variance.is_finite() || *variance < 0.0) {
+    if variances
+        .iter()
+        .any(|variance| !variance.is_finite() || *variance < 0.0)
+    {
         return invalid_variance_test_result();
     }
 
@@ -2448,7 +2452,7 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
 
     let df = kf - 1.0;
     let dist = ChiSquared::new(df);
-    let pvalue = (1.0 - dist.cdf(chi2)).max(0.0).min(1.0);
+    let pvalue = (1.0 - dist.cdf(chi2)).clamp(0.0, 1.0);
 
     TtestResult {
         statistic: chi2,
@@ -2485,7 +2489,12 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
 
     let n_total = all_scores.len();
     // Rank all scores
-    let mut indexed: Vec<(f64, usize)> = all_scores.iter().copied().enumerate().map(|(i, v)| (v, i)).collect();
+    let mut indexed: Vec<(f64, usize)> = all_scores
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(i, v)| (v, i))
+        .collect();
     indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut ranks = vec![0.0; n_total];
     for (rank, &(_, idx)) in indexed.iter().enumerate() {
@@ -2507,8 +2516,8 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
     for &ni in &group_sizes {
         let group_mean = scores[offset..offset + ni].iter().sum::<f64>() / ni as f64;
         numerator += ni as f64 * (group_mean - grand_mean).powi(2);
-        for j in offset..offset + ni {
-            denominator += (scores[j] - grand_mean).powi(2);
+        for score in scores.iter().skip(offset).take(ni) {
+            denominator += (score - grand_mean).powi(2);
         }
         offset += ni;
     }
@@ -2521,7 +2530,7 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
 
     let df = (k - 1) as f64;
     let dist = ChiSquared::new(df);
-    let pvalue = (1.0 - dist.cdf(statistic)).max(0.0).min(1.0);
+    let pvalue = (1.0 - dist.cdf(statistic)).clamp(0.0, 1.0);
 
     VarianceTestResult { statistic, pvalue }
 }
@@ -2544,7 +2553,11 @@ pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
     let nf = n as f64;
 
     // Pool and rank all observations
-    let mut pooled: Vec<(f64, bool)> = x.iter().map(|&v| (v, true)).chain(y.iter().map(|&v| (v, false))).collect();
+    let mut pooled: Vec<(f64, bool)> = x
+        .iter()
+        .map(|&v| (v, true))
+        .chain(y.iter().map(|&v| (v, false)))
+        .collect();
     pooled.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     // Mood statistic: M = Σ (rank_i - (n+1)/2)² for x observations
@@ -2560,7 +2573,7 @@ pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
     // Expected value and variance under H0
     let nx = x.len() as f64;
     let e_m = nx * (nf * nf - 1.0) / 12.0;
-    let var_m = nx * (nf - nx) * (nf + 1.0) * (nf * nf - 4.0) / (180.0 * nf);
+    let var_m = nx * (nf - nx) * (nf + 1.0) * (nf + 2.0) * (nf - 2.0) / 180.0;
 
     if var_m <= 0.0 {
         return TtestResult {
@@ -6743,11 +6756,7 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let b = vec![2.0, 3.0, 4.0, 5.0, 6.0]; // same spread, shifted
         let result = fligner(&[&a, &b]);
-        assert!(
-            result.pvalue > 0.1,
-            "equal variance: p={}",
-            result.pvalue
-        );
+        assert!(result.pvalue > 0.1, "equal variance: p={}", result.pvalue);
     }
 
     #[test]
@@ -6777,11 +6786,7 @@ mod tests {
         let a: Vec<f64> = (0..50).map(|i| i as f64 * 10.0).collect(); // wide
         let b: Vec<f64> = (0..50).map(|i| 250.0 + i as f64 * 0.1).collect(); // narrow
         let result = mood(&a, &b);
-        assert!(
-            result.pvalue < 0.05,
-            "different scale: p={}",
-            result.pvalue
-        );
+        assert!(result.pvalue < 0.05, "different scale: p={}", result.pvalue);
     }
 
     // ── Median test ──────────────────────────────────────────────────
@@ -6791,11 +6796,7 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let b = vec![1.5, 2.5, 3.5, 4.5, 5.5];
         let result = median_test(&[&a, &b]);
-        assert!(
-            result.pvalue > 0.1,
-            "similar medians: p={}",
-            result.pvalue
-        );
+        assert!(result.pvalue > 0.1, "similar medians: p={}", result.pvalue);
     }
 
     #[test]

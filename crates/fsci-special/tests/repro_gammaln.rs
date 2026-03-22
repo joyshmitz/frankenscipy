@@ -1,5 +1,5 @@
-use fsci_special::{gammaln, SpecialTensor};
 use fsci_runtime::RuntimeMode;
+use fsci_special::{SpecialTensor, gammaln};
 
 #[test]
 fn test_gammaln_overflow() {

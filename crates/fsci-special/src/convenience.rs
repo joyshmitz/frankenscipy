@@ -202,22 +202,14 @@ fn xlogy_scalar(x: f64, y: f64) -> f64 {
     if x.is_nan() || y.is_nan() {
         return f64::NAN;
     }
-    if x == 0.0 {
-        0.0
-    } else {
-        x * y.ln()
-    }
+    if x == 0.0 { 0.0 } else { x * y.ln() }
 }
 
 fn xlog1py_scalar(x: f64, y: f64) -> f64 {
     if x.is_nan() || y.is_nan() {
         return f64::NAN;
     }
-    if x == 0.0 {
-        0.0
-    } else {
-        x * (1.0 + y).ln()
-    }
+    if x == 0.0 { 0.0 } else { x * (1.0 + y).ln() }
 }
 
 fn expit_scalar(x: f64) -> f64 {
@@ -336,11 +328,7 @@ pub fn fresnel(z: f64) -> (f64, f64) {
         fresnel_asymptotic(ax)
     };
 
-    if z < 0.0 {
-        (-s, -c)
-    } else {
-        (s, c)
-    }
+    if z < 0.0 { (-s, -c) } else { (s, c) }
 }
 
 /// Power series for Fresnel integrals (small arguments).

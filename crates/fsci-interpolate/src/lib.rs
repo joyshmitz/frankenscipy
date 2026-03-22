@@ -370,9 +370,13 @@ fn solve_spline_clamped(
 
 fn thomas_solve(sub: &[f64], diag: &mut [f64], sup: &[f64], rhs: &mut [f64]) {
     let n = diag.len();
-    if n == 0 { return; }
+    if n == 0 {
+        return;
+    }
     for i in 1..n {
-        if diag[i - 1].abs() < 1e-18 { continue; }
+        if diag[i - 1].abs() < 1e-18 {
+            continue;
+        }
         let w = sub[i] / diag[i - 1];
         diag[i] -= w * sup[i - 1];
         rhs[i] -= w * rhs[i - 1];
@@ -397,10 +401,16 @@ pub struct PchipInterpolator {
 impl PchipInterpolator {
     pub fn new(x: &[f64], y: &[f64]) -> Result<Self, InterpError> {
         if x.len() != y.len() {
-            return Err(InterpError::LengthMismatch { x_len: x.len(), y_len: y.len() });
+            return Err(InterpError::LengthMismatch {
+                x_len: x.len(),
+                y_len: y.len(),
+            });
         }
         if x.len() < 2 {
-            return Err(InterpError::TooFewPoints { minimum: 2, actual: x.len() });
+            return Err(InterpError::TooFewPoints {
+                minimum: 2,
+                actual: x.len(),
+            });
         }
         if x.windows(2).any(|w| w[1] <= w[0]) {
             return Err(InterpError::UnsortedX);
@@ -417,7 +427,10 @@ impl PchipInterpolator {
             d[1] = delta[0];
         } else {
             for i in 1..m {
-                if delta[i - 1].signum() != delta[i].signum() || delta[i - 1] == 0.0 || delta[i] == 0.0 {
+                if delta[i - 1].signum() != delta[i].signum()
+                    || delta[i - 1] == 0.0
+                    || delta[i] == 0.0
+                {
                     d[i] = 0.0;
                 } else {
                     let w1 = 2.0 * h[i] + h[i - 1];
@@ -440,15 +453,24 @@ impl PchipInterpolator {
             ]);
         }
 
-        Ok(Self { x: x.to_vec(), coeffs })
+        Ok(Self {
+            x: x.to_vec(),
+            coeffs,
+        })
     }
 
     pub fn eval(&self, x_new: f64) -> f64 {
-        if x_new.is_nan() { return f64::NAN; }
+        if x_new.is_nan() {
+            return f64::NAN;
+        }
         let n = self.x.len();
-        let i = if x_new <= self.x[0] { 0 }
-                else if x_new >= self.x[n - 1] { n - 2 }
-                else { find_interval_helper(&self.x, x_new) };
+        let i = if x_new <= self.x[0] {
+            0
+        } else if x_new >= self.x[n - 1] {
+            n - 2
+        } else {
+            find_interval_helper(&self.x, x_new)
+        };
         let dx = x_new - self.x[i];
         let [a, b, c, d] = self.coeffs[i];
         a + dx * (b + dx * (c + dx * d))
@@ -461,17 +483,32 @@ impl PchipInterpolator {
 
 fn pchip_end_slope(h: &[f64], delta: &[f64], is_left: bool) -> f64 {
     let m = delta.len();
-    if m < 2 { return delta[0]; }
-    let (d1, d2, h1, h2) = if is_left { (delta[0], delta[1], h[0], h[1]) }
-                           else { (delta[m - 1], delta[m - 2], h[m - 1], h[m - 2]) };
+    if m < 2 {
+        return delta[0];
+    }
+    let (d1, d2, h1, h2) = if is_left {
+        (delta[0], delta[1], h[0], h[1])
+    } else {
+        (delta[m - 1], delta[m - 2], h[m - 1], h[m - 2])
+    };
     let mut d = ((2.0 * h1 + h2) * d1 - h1 * d2) / (h1 + h2);
-    if d.signum() != d1.signum() { d = 0.0; }
-    else if d1.signum() != d2.signum() && d.abs() > 3.0 * d1.abs() { d = 3.0 * d1; }
+    if d.signum() != d1.signum() {
+        d = 0.0;
+    } else if d1.signum() != d2.signum() && d.abs() > 3.0 * d1.abs() {
+        d = 3.0 * d1;
+    }
     d
 }
 
 pub fn interp1d_linear(x: &[f64], y: &[f64], x_new: &[f64]) -> Result<Vec<f64>, InterpError> {
-    let interp = Interp1d::new(x, y, Interp1dOptions { bounds_error: false, ..Default::default() })?;
+    let interp = Interp1d::new(
+        x,
+        y,
+        Interp1dOptions {
+            bounds_error: false,
+            ..Default::default()
+        },
+    )?;
     interp.eval_many(x_new)
 }
 
@@ -484,19 +521,40 @@ pub struct CubicSplineStandalone {
 
 impl CubicSplineStandalone {
     pub fn new(x: &[f64], y: &[f64], bc: SplineBc) -> Result<Self, InterpError> {
-        if x.len() != y.len() { return Err(InterpError::LengthMismatch { x_len: x.len(), y_len: y.len() }); }
-        if x.len() < 4 { return Err(InterpError::TooFewPoints { minimum: 4, actual: x.len() }); }
-        if x.windows(2).any(|w| w[1] <= w[0]) { return Err(InterpError::UnsortedX); }
+        if x.len() != y.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: x.len(),
+                y_len: y.len(),
+            });
+        }
+        if x.len() < 4 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 4,
+                actual: x.len(),
+            });
+        }
+        if x.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(InterpError::UnsortedX);
+        }
         let coeffs = compute_cubic_spline(x, y, bc)?;
-        Ok(Self { x: x.to_vec(), coeffs })
+        Ok(Self {
+            x: x.to_vec(),
+            coeffs,
+        })
     }
 
     pub fn eval(&self, x_new: f64) -> f64 {
-        if x_new.is_nan() { return f64::NAN; }
+        if x_new.is_nan() {
+            return f64::NAN;
+        }
         let n = self.x.len();
-        let i = if x_new <= self.x[0] { 0 }
-                else if x_new >= self.x[n - 1] { n - 2 }
-                else { find_interval_helper(&self.x, x_new) };
+        let i = if x_new <= self.x[0] {
+            0
+        } else if x_new >= self.x[n - 1] {
+            n - 2
+        } else {
+            find_interval_helper(&self.x, x_new)
+        };
         let dx = x_new - self.x[i];
         let [a, b, c, d] = self.coeffs[i];
         a + dx * (b + dx * (c + dx * d))
@@ -509,21 +567,43 @@ impl CubicSplineStandalone {
     pub fn derivative(&self, nu: usize) -> CubicSplineDerivative {
         let m = self.coeffs.len();
         match nu {
-            0 => CubicSplineDerivative { x: self.x.clone(), coeffs: self.coeffs.clone() },
+            0 => CubicSplineDerivative {
+                x: self.x.clone(),
+                coeffs: self.coeffs.clone(),
+            },
             1 => {
-                let dc: Vec<[f64; 4]> = self.coeffs.iter().map(|&[_a, b, c, d]| [b, 2.0 * c, 3.0 * d, 0.0]).collect();
-                CubicSplineDerivative { x: self.x.clone(), coeffs: dc }
+                let dc: Vec<[f64; 4]> = self
+                    .coeffs
+                    .iter()
+                    .map(|&[_a, b, c, d]| [b, 2.0 * c, 3.0 * d, 0.0])
+                    .collect();
+                CubicSplineDerivative {
+                    x: self.x.clone(),
+                    coeffs: dc,
+                }
             }
             2 => {
-                let dc: Vec<[f64; 4]> = self.coeffs.iter().map(|&[_a, _b, c, d]| [2.0 * c, 6.0 * d, 0.0, 0.0]).collect();
-                CubicSplineDerivative { x: self.x.clone(), coeffs: dc }
+                let dc: Vec<[f64; 4]> = self
+                    .coeffs
+                    .iter()
+                    .map(|&[_a, _b, c, d]| [2.0 * c, 6.0 * d, 0.0, 0.0])
+                    .collect();
+                CubicSplineDerivative {
+                    x: self.x.clone(),
+                    coeffs: dc,
+                }
             }
-            _ => CubicSplineDerivative { x: self.x.clone(), coeffs: vec![[0.0; 4]; m] },
+            _ => CubicSplineDerivative {
+                x: self.x.clone(),
+                coeffs: vec![[0.0; 4]; m],
+            },
         }
     }
 
     pub fn integrate(&self, a: f64, b: f64) -> f64 {
-        if (b - a).abs() < 1e-15 { return 0.0; }
+        if (b - a).abs() < 1e-15 {
+            return 0.0;
+        }
         let sign = if a > b { -1.0 } else { 1.0 };
         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
         let n = self.x.len();
@@ -531,11 +611,15 @@ impl CubicSplineStandalone {
         for i in 0..n - 1 {
             let seg_lo = self.x[i].max(lo);
             let seg_hi = self.x[i + 1].min(hi);
-            if seg_lo >= seg_hi { continue; }
+            if seg_lo >= seg_hi {
+                continue;
+            }
             let [a0, b0, c0, d0] = self.coeffs[i];
             let dx_lo = seg_lo - self.x[i];
             let dx_hi = seg_hi - self.x[i];
-            let anti = |dx: f64| a0 * dx + b0 * dx * dx / 2.0 + c0 * dx.powi(3) / 3.0 + d0 * dx.powi(4) / 4.0;
+            let anti = |dx: f64| {
+                a0 * dx + b0 * dx * dx / 2.0 + c0 * dx.powi(3) / 3.0 + d0 * dx.powi(4) / 4.0
+            };
             total += anti(dx_hi) - anti(dx_lo);
         }
         sign * total
@@ -550,11 +634,17 @@ pub struct CubicSplineDerivative {
 
 impl CubicSplineDerivative {
     pub fn eval(&self, x_new: f64) -> f64 {
-        if x_new.is_nan() { return f64::NAN; }
+        if x_new.is_nan() {
+            return f64::NAN;
+        }
         let n = self.x.len();
-        let i = if x_new <= self.x[0] { 0 }
-                else if x_new >= self.x[n - 1] { n - 2 }
-                else { find_interval_helper(&self.x, x_new) };
+        let i = if x_new <= self.x[0] {
+            0
+        } else if x_new >= self.x[n - 1] {
+            n - 2
+        } else {
+            find_interval_helper(&self.x, x_new)
+        };
         let dx = x_new - self.x[i];
         let [a, b, c, d] = self.coeffs[i];
         a + dx * (b + dx * (c + dx * d))
@@ -570,12 +660,26 @@ pub struct Akima1DInterpolator {
 
 impl Akima1DInterpolator {
     pub fn new(x: &[f64], y: &[f64]) -> Result<Self, InterpError> {
-        if x.len() != y.len() { return Err(InterpError::LengthMismatch { x_len: x.len(), y_len: y.len() }); }
-        if x.len() < 2 { return Err(InterpError::TooFewPoints { minimum: 2, actual: x.len() }); }
-        if x.windows(2).any(|w| w[1] <= w[0]) { return Err(InterpError::UnsortedX); }
+        if x.len() != y.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: x.len(),
+                y_len: y.len(),
+            });
+        }
+        if x.len() < 2 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 2,
+                actual: x.len(),
+            });
+        }
+        if x.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(InterpError::UnsortedX);
+        }
         let n = x.len();
         let m = n - 1;
-        let delta: Vec<f64> = (0..m).map(|i| (y[i + 1] - y[i]) / (x[i + 1] - x[i])).collect();
+        let delta: Vec<f64> = (0..m)
+            .map(|i| (y[i + 1] - y[i]) / (x[i + 1] - x[i]))
+            .collect();
         let slopes = akima_slopes(&delta);
         let h: Vec<f64> = (0..m).map(|i| x[i + 1] - x[i]).collect();
         let mut coeffs = Vec::with_capacity(m);
@@ -588,7 +692,10 @@ impl Akima1DInterpolator {
                 (slopes[i] + slopes[i + 1] - 2.0 * delta[i]) / (hi * hi),
             ]);
         }
-        Ok(Self { x: x.to_vec(), coeffs })
+        Ok(Self {
+            x: x.to_vec(),
+            coeffs,
+        })
     }
 
     pub fn eval(&self, x_new: f64) -> f64 {
@@ -607,21 +714,32 @@ fn akima_slopes(delta: &[f64]) -> Vec<f64> {
     let m = delta.len();
     let n = m + 1;
     let mut slopes = vec![0.0; n];
-    if m == 0 { return slopes; }
-    if m == 1 { slopes[0] = delta[0]; slopes[1] = delta[0]; return slopes; }
+    if m == 0 {
+        return slopes;
+    }
+    if m == 1 {
+        slopes[0] = delta[0];
+        slopes[1] = delta[0];
+        return slopes;
+    }
     let mut d = Vec::with_capacity(m + 4);
     let d0 = delta[0];
     let d1 = delta.get(1).copied().unwrap_or(d0);
-    d.push(3.0 * d0 - 2.0 * d1); d.push(2.0 * d0 - d1);
+    d.push(3.0 * d0 - 2.0 * d1);
+    d.push(2.0 * d0 - d1);
     d.extend_from_slice(delta);
     let d_last = delta[m - 1];
     let d_prev = delta.get(m.wrapping_sub(2)).copied().unwrap_or(d_last);
-    d.push(2.0 * d_last - d_prev); d.push(3.0 * d_last - 2.0 * d_prev);
+    d.push(2.0 * d_last - d_prev);
+    d.push(3.0 * d_last - 2.0 * d_prev);
     for j in 0..n {
         let w1 = (d[j + 3] - d[j + 2]).abs();
         let w2 = (d[j + 1] - d[j]).abs();
-        slopes[j] = if w1 + w2 < 1e-30 { 0.5 * (d[j + 1] + d[j + 2]) }
-                    else { (w1 * d[j + 1] + w2 * d[j + 2]) / (w1 + w2) };
+        slopes[j] = if w1 + w2 < 1e-30 {
+            0.5 * (d[j + 1] + d[j + 2])
+        } else {
+            (w1 * d[j + 1] + w2 * d[j + 2]) / (w1 + w2)
+        };
     }
     slopes
 }
@@ -638,17 +756,32 @@ impl BSpline {
     pub fn new(t: Vec<f64>, c: Vec<f64>, k: usize) -> Result<Self, InterpError> {
         let expected_knots = c.len() + k + 1;
         if t.len() != expected_knots {
-            return Err(InterpError::InvalidArgument { detail: format!("knot length {} != c.len()+k+1={}", t.len(), expected_knots) });
+            return Err(InterpError::InvalidArgument {
+                detail: format!("knot length {} != c.len()+k+1={}", t.len(), expected_knots),
+            });
         }
         if t.windows(2).any(|w| w[1] < w[0]) {
-            return Err(InterpError::InvalidArgument { detail: "knots must be non-decreasing".to_string() });
+            return Err(InterpError::InvalidArgument {
+                detail: "knots must be non-decreasing".to_string(),
+            });
         }
-        Ok(Self { t, c, k, extrapolate: true })
+        Ok(Self {
+            t,
+            c,
+            k,
+            extrapolate: true,
+        })
     }
 
-    pub fn knots(&self) -> &[f64] { &self.t }
-    pub fn coeffs(&self) -> &[f64] { &self.c }
-    pub fn degree(&self) -> usize { self.k }
+    pub fn knots(&self) -> &[f64] {
+        &self.t
+    }
+    pub fn coeffs(&self) -> &[f64] {
+        &self.c
+    }
+    pub fn degree(&self) -> usize {
+        self.k
+    }
 
     pub fn eval(&self, x: f64) -> f64 {
         let mut d = vec![0.0; self.k + 1];
@@ -659,7 +792,9 @@ impl BSpline {
         let n = self.c.len();
         let k = self.k;
         let t = &self.t;
-        if !self.extrapolate && (x < t[k] || x > t[n]) { return f64::NAN; }
+        if !self.extrapolate && (x < t[k] || x > t[n]) {
+            return f64::NAN;
+        }
         let mu = self.find_span(x);
         for (j, value) in d.iter_mut().enumerate().take(k + 1) {
             let idx = mu.wrapping_sub(k) + j;
@@ -674,7 +809,9 @@ impl BSpline {
                     if denom > 0.0 {
                         let alpha = (x - t[left]) / denom;
                         d[j] = (1.0 - alpha) * d[j - 1] + alpha * d[j];
-                    } else { d[j] = d[j - 1]; }
+                    } else {
+                        d[j] = d[j - 1];
+                    }
                 }
             }
         }
@@ -682,7 +819,9 @@ impl BSpline {
     }
 
     pub fn eval_many(&self, xs: &[f64]) -> Vec<f64> {
-        if xs.is_empty() { return Vec::new(); }
+        if xs.is_empty() {
+            return Vec::new();
+        }
         let mut d = vec![0.0; self.k + 1];
         let is_sorted = xs.windows(2).all(|w| w[0] <= w[1]);
         if is_sorted {
@@ -691,7 +830,9 @@ impl BSpline {
             let n = self.c.len();
             let t = &self.t;
             for &x in xs {
-                while mu < n - 1 && x >= t[mu + 1] { mu += 1; }
+                while mu < n - 1 && x >= t[mu + 1] {
+                    mu += 1;
+                }
                 results.push(self.eval_into_with_span(x, mu, &mut d));
             }
             results
@@ -704,7 +845,9 @@ impl BSpline {
         let n = self.c.len();
         let k = self.k;
         let t = &self.t;
-        if !self.extrapolate && (x < t[k] || x > t[n]) { return f64::NAN; }
+        if !self.extrapolate && (x < t[k] || x > t[n]) {
+            return f64::NAN;
+        }
         for (j, value) in d.iter_mut().enumerate().take(k + 1) {
             let idx = mu.wrapping_sub(k) + j;
             *value = if idx < n { self.c[idx] } else { 0.0 };
@@ -718,7 +861,9 @@ impl BSpline {
                     if denom > 0.0 {
                         let alpha = (x - t[left]) / denom;
                         d[j] = (1.0 - alpha) * d[j - 1] + alpha * d[j];
-                    } else { d[j] = d[j - 1]; }
+                    } else {
+                        d[j] = d[j - 1];
+                    }
                 }
             }
         }
@@ -726,39 +871,56 @@ impl BSpline {
     }
 
     pub fn derivative(&self, nu: usize) -> Result<Self, InterpError> {
-        if nu == 0 { return Ok(self.clone()); }
+        if nu == 0 {
+            return Ok(self.clone());
+        }
         let mut t = self.t.clone();
         let mut c = self.c.clone();
         let mut k = self.k;
         for _ in 0..nu {
-            if k == 0 { return Err(InterpError::InvalidArgument { detail: "cannot differentiate degree-0 spline".to_string() }); }
+            if k == 0 {
+                return Err(InterpError::InvalidArgument {
+                    detail: "cannot differentiate degree-0 spline".to_string(),
+                });
+            }
             let n = c.len();
             let mut dc = Vec::with_capacity(n - 1);
             for i in 0..n - 1 {
                 let denom = t[i + k + 1] - t[i + 1];
-                dc.push(if denom > 0.0 { k as f64 * (c[i + 1] - c[i]) / denom } else { 0.0 });
+                dc.push(if denom > 0.0 {
+                    k as f64 * (c[i + 1] - c[i]) / denom
+                } else {
+                    0.0
+                });
             }
-            t.remove(t.len() - 1); t.remove(0);
-            c = dc; k -= 1;
+            t.remove(t.len() - 1);
+            t.remove(0);
+            c = dc;
+            k -= 1;
         }
         Self::new(t, c, k)
     }
 
     pub fn antiderivative(&self, nu: usize) -> Result<Self, InterpError> {
-        if nu == 0 { return Ok(self.clone()); }
+        if nu == 0 {
+            return Ok(self.clone());
+        }
         let mut t = self.t.clone();
         let mut c = self.c.clone();
         let mut k = self.k;
         for _ in 0..nu {
             let n = c.len();
-            t.insert(0, t[0]); t.push(*t.last().unwrap());
+            t.insert(0, t[0]);
+            t.push(*t.last().unwrap());
             k += 1;
             let mut new_c = vec![0.0; n + 1];
             for i in 0..n {
                 let denom = t[i + k + 1] - t[i + 1];
                 new_c[i + 1] = new_c[i] + c[i] * denom / k as f64;
             }
-            while new_c.len() + k + 1 < t.len() { new_c.push(*new_c.last().unwrap()); }
+            while new_c.len() + k + 1 < t.len() {
+                new_c.push(*new_c.last().unwrap());
+            }
             c = new_c;
         }
         Self::new(t, c, k)
@@ -773,17 +935,25 @@ impl BSpline {
         let n = self.c.len();
         let k = self.k;
         let t = &self.t;
-        if x <= t[k] { return k; }
+        if x <= t[k] {
+            return k;
+        }
         if x >= t[n] {
             let mut mu = n - 1;
-            while mu > k && t[mu] == t[n] { mu -= 1; }
+            while mu > k && t[mu] == t[n] {
+                mu -= 1;
+            }
             return mu;
         }
         let mut lo = k;
         let mut hi = n;
         while hi - lo > 1 {
             let mid = (lo + hi) / 2;
-            if t[mid] <= x { lo = mid; } else { hi = mid; }
+            if t[mid] <= x {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
         }
         lo
     }
@@ -791,15 +961,33 @@ impl BSpline {
 
 pub fn make_interp_spline(x: &[f64], y: &[f64], k: usize) -> Result<BSpline, InterpError> {
     let n = x.len();
-    if n != y.len() { return Err(InterpError::LengthMismatch { x_len: n, y_len: y.len() }); }
-    if n < k + 1 { return Err(InterpError::TooFewPoints { minimum: k + 1, actual: n }); }
-    if x.windows(2).any(|w| w[1] <= w[0]) { return Err(InterpError::UnsortedX); }
+    if n != y.len() {
+        return Err(InterpError::LengthMismatch {
+            x_len: n,
+            y_len: y.len(),
+        });
+    }
+    if n < k + 1 {
+        return Err(InterpError::TooFewPoints {
+            minimum: k + 1,
+            actual: n,
+        });
+    }
+    if x.windows(2).any(|w| w[1] <= w[0]) {
+        return Err(InterpError::UnsortedX);
+    }
     let num_knots = n + k + 1;
     let num_interior = n - k - 1;
     let mut t = Vec::with_capacity(num_knots);
-    for _ in 0..=k { t.push(x[0]); }
-    for i in 0..num_interior { t.push(x[i + 1 + (k - 1) / 2]); }
-    for _ in 0..=k { t.push(x[n - 1]); }
+    for _ in 0..=k {
+        t.push(x[0]);
+    }
+    for i in 0..num_interior {
+        t.push(x[i + 1 + (k - 1) / 2]);
+    }
+    for _ in 0..=k {
+        t.push(x[n - 1]);
+    }
     let mut a_mat = vec![vec![0.0; n]; n];
     for i in 0..n {
         let basis = eval_basis_all(&t, x[i], k, n);
@@ -812,16 +1000,27 @@ pub fn make_interp_spline(x: &[f64], y: &[f64], k: usize) -> Result<BSpline, Int
 
 pub fn make_lsq_spline(x: &[f64], y: &[f64], t: &[f64], k: usize) -> Result<BSpline, InterpError> {
     let m = x.len();
-    if m != y.len() { return Err(InterpError::LengthMismatch { x_len: m, y_len: y.len() }); }
+    if m != y.len() {
+        return Err(InterpError::LengthMismatch {
+            x_len: m,
+            y_len: y.len(),
+        });
+    }
     let n = t.len() - k - 1;
-    if n == 0 || n > m { return Err(InterpError::InvalidArgument { detail: format!("need t.len()-k-1 coeffs ({n}) <= points ({m})") }); }
+    if n == 0 || n > m {
+        return Err(InterpError::InvalidArgument {
+            detail: format!("need t.len()-k-1 coeffs ({n}) <= points ({m})"),
+        });
+    }
     let mut ata = vec![vec![0.0; n]; n];
     let mut aty = vec![0.0; n];
     for i in 0..m {
         let basis = eval_basis_all(t, x[i], k, n);
         for j in 0..n {
             aty[j] += basis[j] * y[i];
-            for l in 0..n { ata[j][l] += basis[j] * basis[l]; }
+            for l in 0..n {
+                ata[j][l] += basis[j] * basis[l];
+            }
         }
     }
     let c = solve_dense_system(&mut ata, &mut aty)?;
@@ -832,7 +1031,12 @@ fn eval_basis_all(t: &[f64], x: f64, k: usize, n: usize) -> Vec<f64> {
     let mut basis = vec![0.0; n];
     for i in 0..n {
         if i + 1 < t.len() {
-            basis[i] = if (t[i] <= x && x < t[i + 1]) || (x == t[i + 1] && i + 1 == t.len() - k - 1) { 1.0 } else { 0.0 };
+            basis[i] = if (t[i] <= x && x < t[i + 1]) || (x == t[i + 1] && i + 1 == t.len() - k - 1)
+            {
+                1.0
+            } else {
+                0.0
+            };
         }
     }
     for p in 1..=k {
@@ -841,11 +1045,15 @@ fn eval_basis_all(t: &[f64], x: f64, k: usize, n: usize) -> Vec<f64> {
             let mut val = 0.0;
             if i + p < t.len() {
                 let denom_left = t[i + p] - t[i];
-                if denom_left > 0.0 { val += (x - t[i]) / denom_left * prev[i]; }
+                if denom_left > 0.0 {
+                    val += (x - t[i]) / denom_left * prev[i];
+                }
             }
             if i + p + 1 < t.len() && i + 1 < n {
                 let denom_right = t[i + p + 1] - t[i + 1];
-                if denom_right > 0.0 { val += (t[i + p + 1] - x) / denom_right * prev[i + 1]; }
+                if denom_right > 0.0 {
+                    val += (t[i + p + 1] - x) / denom_right * prev[i + 1];
+                }
             }
             basis[i] = val;
         }
@@ -855,26 +1063,44 @@ fn eval_basis_all(t: &[f64], x: f64, k: usize, n: usize) -> Vec<f64> {
 
 fn solve_dense_system(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<Vec<f64>, InterpError> {
     let n = b.len();
-    if n == 0 || a.len() != n { return Err(InterpError::InvalidArgument { detail: "empty or mismatched system".to_string() }); }
+    if n == 0 || a.len() != n {
+        return Err(InterpError::InvalidArgument {
+            detail: "empty or mismatched system".to_string(),
+        });
+    }
     for col in 0..n {
         let mut max_row = col;
         let mut max_val = a[col][col].abs();
         for (row, a_row) in a.iter().enumerate().skip(col + 1) {
-            if a_row[col].abs() > max_val { max_val = a_row[col].abs(); max_row = row; }
+            if a_row[col].abs() > max_val {
+                max_val = a_row[col].abs();
+                max_row = row;
+            }
         }
-        if max_val < 1e-14 { return Err(InterpError::InvalidArgument { detail: "singular matrix".to_string() }); }
-        if max_row != col { a.swap(col, max_row); b.swap(col, max_row); }
+        if max_val < 1e-14 {
+            return Err(InterpError::InvalidArgument {
+                detail: "singular matrix".to_string(),
+            });
+        }
+        if max_row != col {
+            a.swap(col, max_row);
+            b.swap(col, max_row);
+        }
         for row in col + 1..n {
             let factor = a[row][col] / a[col][col];
             let pivot_row = a[col].clone();
-            for (j, pval) in pivot_row.iter().enumerate().skip(col) { a[row][j] -= factor * pval; }
+            for (j, pval) in pivot_row.iter().enumerate().skip(col) {
+                a[row][j] -= factor * pval;
+            }
             b[row] -= factor * b[col];
         }
     }
     let mut x = vec![0.0; n];
     for i in (0..n).rev() {
         let mut s = b[i];
-        for j in i + 1..n { s -= a[i][j] * x[j]; }
+        for j in i + 1..n {
+            s -= a[i][j] * x[j];
+        }
         x[i] = s / a[i][i];
     }
     Ok(x)
@@ -888,13 +1114,33 @@ pub struct NearestNDInterpolator {
 
 impl NearestNDInterpolator {
     pub fn new(points: &[Vec<f64>], values: &[f64]) -> Result<Self, InterpError> {
-        if points.is_empty() { return Err(InterpError::TooFewPoints { minimum: 1, actual: 0 }); }
-        if points.len() != values.len() { return Err(InterpError::LengthMismatch { x_len: points.len(), y_len: values.len() }); }
-        let tree = fsci_spatial::KDTree::new(points).map_err(|e| InterpError::InvalidArgument { detail: format!("KDTree error: {e}") })?;
-        Ok(Self { tree, values: values.to_vec() })
+        if points.is_empty() {
+            return Err(InterpError::TooFewPoints {
+                minimum: 1,
+                actual: 0,
+            });
+        }
+        if points.len() != values.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: points.len(),
+                y_len: values.len(),
+            });
+        }
+        let tree = fsci_spatial::KDTree::new(points).map_err(|e| InterpError::InvalidArgument {
+            detail: format!("KDTree error: {e}"),
+        })?;
+        Ok(Self {
+            tree,
+            values: values.to_vec(),
+        })
     }
     pub fn eval(&self, query: &[f64]) -> Result<f64, InterpError> {
-        let (idx, _dist) = self.tree.query(query).map_err(|e| InterpError::InvalidArgument { detail: format!("query error: {e}") })?;
+        let (idx, _dist) = self
+            .tree
+            .query(query)
+            .map_err(|e| InterpError::InvalidArgument {
+                detail: format!("query error: {e}"),
+            })?;
         Ok(self.values[idx])
     }
     pub fn eval_many(&self, queries: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
@@ -903,9 +1149,17 @@ impl NearestNDInterpolator {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GriddataMethod { Nearest, Linear }
+pub enum GriddataMethod {
+    Nearest,
+    Linear,
+}
 
-pub fn griddata(points: &[Vec<f64>], values: &[f64], xi: &[Vec<f64>], method: GriddataMethod) -> Result<Vec<f64>, InterpError> {
+pub fn griddata(
+    points: &[Vec<f64>],
+    values: &[f64],
+    xi: &[Vec<f64>],
+    method: GriddataMethod,
+) -> Result<Vec<f64>, InterpError> {
     match method {
         GriddataMethod::Nearest => NearestNDInterpolator::new(points, values)?.eval_many(xi),
         GriddataMethod::Linear => LinearNDInterpolator::new(points, values)?.eval_many(xi),
@@ -913,7 +1167,11 @@ pub fn griddata(points: &[Vec<f64>], values: &[f64], xi: &[Vec<f64>], method: Gr
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RegularGridMethod { #[default] Linear, Nearest }
+pub enum RegularGridMethod {
+    #[default]
+    Linear,
+    Nearest,
+}
 
 #[derive(Debug, Clone)]
 pub struct RegularGridInterpolator {
@@ -926,32 +1184,81 @@ pub struct RegularGridInterpolator {
 }
 
 impl RegularGridInterpolator {
-    pub fn new(points: Vec<Vec<f64>>, values: Vec<f64>, method: RegularGridMethod, bounds_error: bool, fill_value: Option<f64>) -> Result<Self, InterpError> {
-        if points.is_empty() { return Err(InterpError::InvalidArgument { detail: "points empty".to_string() }); }
+    pub fn new(
+        points: Vec<Vec<f64>>,
+        values: Vec<f64>,
+        method: RegularGridMethod,
+        bounds_error: bool,
+        fill_value: Option<f64>,
+    ) -> Result<Self, InterpError> {
+        if points.is_empty() {
+            return Err(InterpError::InvalidArgument {
+                detail: "points empty".to_string(),
+            });
+        }
         for (dim, axis) in points.iter().enumerate() {
-            if axis.len() < 2 { return Err(InterpError::TooFewPoints { minimum: 2, actual: axis.len() }); }
-            if axis.windows(2).any(|w| w[1] <= w[0]) { return Err(InterpError::InvalidArgument { detail: format!("axis {dim} not strictly increasing") }); }
+            if axis.len() < 2 {
+                return Err(InterpError::TooFewPoints {
+                    minimum: 2,
+                    actual: axis.len(),
+                });
+            }
+            if axis.windows(2).any(|w| w[1] <= w[0]) {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!("axis {dim} not strictly increasing"),
+                });
+            }
         }
         let ndim = points.len();
         let mut strides = vec![0usize; ndim];
         let mut total_size: usize = 1;
         for i in (0..ndim).rev() {
             strides[i] = total_size;
-            total_size = total_size.checked_mul(points[i].len()).ok_or_else(|| InterpError::InvalidArgument { detail: "grid overflow".to_string() })?;
+            total_size = total_size.checked_mul(points[i].len()).ok_or_else(|| {
+                InterpError::InvalidArgument {
+                    detail: "grid overflow".to_string(),
+                }
+            })?;
         }
-        if values.len() != total_size { return Err(InterpError::LengthMismatch { x_len: total_size, y_len: values.len() }); }
-        Ok(Self { points, values, strides, method, bounds_error, fill_value })
+        if values.len() != total_size {
+            return Err(InterpError::LengthMismatch {
+                x_len: total_size,
+                y_len: values.len(),
+            });
+        }
+        Ok(Self {
+            points,
+            values,
+            strides,
+            method,
+            bounds_error,
+            fill_value,
+        })
     }
 
-    pub fn ndim(&self) -> usize { self.points.len() }
+    pub fn ndim(&self) -> usize {
+        self.points.len()
+    }
 
     pub fn eval(&self, xi: &[f64]) -> Result<f64, InterpError> {
         let ndim = self.ndim();
-        if xi.len() != ndim { return Err(InterpError::InvalidArgument { detail: format!("expected {ndim}D, got {}D", xi.len()) }); }
+        if xi.len() != ndim {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("expected {ndim}D, got {}D", xi.len()),
+            });
+        }
         for (dim, &x) in xi.iter().enumerate() {
             let axis = &self.points[dim];
             if x < axis[0] || x > axis[axis.len() - 1] {
-                if self.bounds_error { return Err(InterpError::OutOfBounds { value: format!("dim {dim}: {x} outside [{}, {}]", axis[0], axis[axis.len()-1]) }); }
+                if self.bounds_error {
+                    return Err(InterpError::OutOfBounds {
+                        value: format!(
+                            "dim {dim}: {x} outside [{}, {}]",
+                            axis[0],
+                            axis[axis.len() - 1]
+                        ),
+                    });
+                }
                 return Ok(self.fill_value.unwrap_or(f64::NAN));
             }
         }
@@ -961,20 +1268,33 @@ impl RegularGridInterpolator {
         }
     }
 
-    pub fn eval_many(&self, xi: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> { xi.iter().map(|x| self.eval(x)).collect() }
+    pub fn eval_many(&self, xi: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+        xi.iter().map(|x| self.eval(x)).collect()
+    }
 
     fn find_interval(axis: &[f64], x: f64) -> usize {
         let n = axis.len();
-        if x <= axis[0] { return 0; }
-        if x >= axis[n - 1] { return n - 2; }
-        match axis.binary_search_by(|probe| probe.total_cmp(&x)) { Ok(i) => i.min(n - 2), Err(i) => i.saturating_sub(1) }
+        if x <= axis[0] {
+            return 0;
+        }
+        if x >= axis[n - 1] {
+            return n - 2;
+        }
+        match axis.binary_search_by(|probe| probe.total_cmp(&x)) {
+            Ok(i) => i.min(n - 2),
+            Err(i) => i.saturating_sub(1),
+        }
     }
 
     fn eval_nearest(&self, xi: &[f64]) -> f64 {
         let mut flat_idx = 0;
         for ((axis, &x), &stride) in self.points.iter().zip(xi).zip(&self.strides) {
             let i = Self::find_interval(axis, x);
-            let nearest = if i + 1 < axis.len() && (x - axis[i]).abs() > (axis[i + 1] - x).abs() { i + 1 } else { i };
+            let nearest = if i + 1 < axis.len() && (x - axis[i]).abs() > (axis[i + 1] - x).abs() {
+                i + 1
+            } else {
+                i
+            };
             flat_idx += nearest * stride;
         }
         self.values[flat_idx]
@@ -988,7 +1308,11 @@ impl RegularGridInterpolator {
             let i = Self::find_interval(axis, x);
             let denom = axis[i + 1] - axis[i];
             indices.push(i);
-            fracs.push(if denom == 0.0 { 0.0 } else { (x - axis[i]) / denom });
+            fracs.push(if denom == 0.0 {
+                0.0
+            } else {
+                (x - axis[i]) / denom
+            });
         }
         let mut result = 0.0;
         for corner in 0..(1usize << ndim) {
@@ -997,7 +1321,11 @@ impl RegularGridInterpolator {
             for dim in 0..ndim {
                 let bit = (corner >> dim) & 1;
                 flat_idx += (indices[dim] + bit) * self.strides[dim];
-                weight *= if bit == 0 { 1.0 - fracs[dim] } else { fracs[dim] };
+                weight *= if bit == 0 {
+                    1.0 - fracs[dim]
+                } else {
+                    fracs[dim]
+                };
             }
             result += weight * self.values[flat_idx];
         }
@@ -1005,19 +1333,44 @@ impl RegularGridInterpolator {
     }
 }
 
-pub fn interpn(points: Vec<Vec<f64>>, values: Vec<f64>, xi: &[Vec<f64>], method: RegularGridMethod, bounds_error: bool, fill_value: Option<f64>) -> Result<Vec<f64>, InterpError> {
+pub fn interpn(
+    points: Vec<Vec<f64>>,
+    values: Vec<f64>,
+    xi: &[Vec<f64>],
+    method: RegularGridMethod,
+    bounds_error: bool,
+    fill_value: Option<f64>,
+) -> Result<Vec<f64>, InterpError> {
     RegularGridInterpolator::new(points, values, method, bounds_error, fill_value)?.eval_many(xi)
 }
 
 #[derive(Debug, Clone)]
-pub struct Delaunay2D { pub points: Vec<(f64, f64)>, pub simplices: Vec<(usize, usize, usize)> }
+pub struct Delaunay2D {
+    pub points: Vec<(f64, f64)>,
+    pub simplices: Vec<(usize, usize, usize)>,
+}
 
 impl Delaunay2D {
     pub fn new(points: &[(f64, f64)]) -> Result<Self, InterpError> {
         let n = points.len();
-        if n < 3 { return Err(InterpError::TooFewPoints { minimum: 3, actual: n }); }
-        let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-        for &(x, y) in points { min_x = min_x.min(x); min_y = min_y.min(y); max_x = max_x.max(x); max_y = max_y.max(y); }
+        if n < 3 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 3,
+                actual: n,
+            });
+        }
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for &(x, y) in points {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
         let (dx, dy) = ((max_x - min_x).max(1e-10), (max_y - min_y).max(1e-10));
         let margin = 10.0;
         let mut all_points = points.to_vec();
@@ -1028,68 +1381,151 @@ impl Delaunay2D {
         for p_idx in 0..n {
             let p = all_points[p_idx];
             let mut bad = Vec::new();
-            for (t_idx, &(a, b, c)) in triangles.iter().enumerate() { if in_circumcircle(all_points[a], all_points[b], all_points[c], p) { bad.push(t_idx); } }
+            for (t_idx, &(a, b, c)) in triangles.iter().enumerate() {
+                if in_circumcircle(all_points[a], all_points[b], all_points[c], p) {
+                    bad.push(t_idx);
+                }
+            }
             let mut boundary = Vec::new();
             for &t_idx in &bad {
                 let (a, b, c) = triangles[t_idx];
                 for &(e0, e1) in &[(a, b), (b, c), (c, a)] {
-                    if !bad.iter().any(|&o| o != t_idx && triangle_has_edge(triangles[o].0, triangles[o].1, triangles[o].2, e0, e1)) { boundary.push((e0, e1)); }
+                    if !bad.iter().any(|&o| {
+                        o != t_idx
+                            && triangle_has_edge(
+                                triangles[o].0,
+                                triangles[o].1,
+                                triangles[o].2,
+                                e0,
+                                e1,
+                            )
+                    }) {
+                        boundary.push((e0, e1));
+                    }
                 }
             }
-            bad.sort_unstable(); for &idx in bad.iter().rev() { triangles.swap_remove(idx); }
-            for &(e0, e1) in &boundary { triangles.push((p_idx, e0, e1)); }
+            bad.sort_unstable();
+            for &idx in bad.iter().rev() {
+                triangles.swap_remove(idx);
+            }
+            for &(e0, e1) in &boundary {
+                triangles.push((p_idx, e0, e1));
+            }
         }
-        Ok(Self { points: points.to_vec(), simplices: triangles.into_iter().filter(|&(a, b, c)| a < n && b < n && c < n).collect() })
+        Ok(Self {
+            points: points.to_vec(),
+            simplices: triangles
+                .into_iter()
+                .filter(|&(a, b, c)| a < n && b < n && c < n)
+                .collect(),
+        })
     }
     pub fn find_simplex(&self, query: (f64, f64)) -> Option<(usize, f64, f64, f64)> {
         for (idx, &(a, b, c)) in self.simplices.iter().enumerate() {
             let (l1, l2, l3) = barycentric(self.points[a], self.points[b], self.points[c], query);
-            if l1 >= -1e-10 && l2 >= -1e-10 && l3 >= -1e-10 { return Some((idx, l1, l2, l3)); }
+            if l1 >= -1e-10 && l2 >= -1e-10 && l3 >= -1e-10 {
+                return Some((idx, l1, l2, l3));
+            }
         }
         None
     }
 }
 
 fn in_circumcircle(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
-    let (ax, ay, bx, by, cx, cy) = (a.0 - d.0, a.1 - d.1, b.0 - d.0, b.1 - d.1, c.0 - d.0, c.1 - d.1);
-    let det = ax * (by * (cx * cx + cy * cy) - cy * (bx * bx + by * by)) - ay * (bx * (cx * cx + cy * cy) - cx * (bx * bx + by * by)) + (ax * ax + ay * ay) * (bx * cy - by * cx);
+    let (ax, ay, bx, by, cx, cy) = (
+        a.0 - d.0,
+        a.1 - d.1,
+        b.0 - d.0,
+        b.1 - d.1,
+        c.0 - d.0,
+        c.1 - d.1,
+    );
+    let det = ax * (by * (cx * cx + cy * cy) - cy * (bx * bx + by * by))
+        - ay * (bx * (cx * cx + cy * cy) - cx * (bx * bx + by * by))
+        + (ax * ax + ay * ay) * (bx * cy - by * cx);
     let orient = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
     if orient > 0.0 { det > 0.0 } else { det < 0.0 }
 }
 
 fn triangle_has_edge(a: usize, b: usize, c: usize, e0: usize, e1: usize) -> bool {
-    [(a, b), (b, c), (c, a)].iter().any(|&(x, y)| (x == e0 && y == e1) || (x == e1 && y == e0))
+    [(a, b), (b, c), (c, a)]
+        .iter()
+        .any(|&(x, y)| (x == e0 && y == e1) || (x == e1 && y == e0))
 }
 
 fn barycentric(a: (f64, f64), b: (f64, f64), c: (f64, f64), p: (f64, f64)) -> (f64, f64, f64) {
-    let (v0x, v0y, v1x, v1y, v2x, v2y) = (b.0 - a.0, b.1 - a.1, c.0 - a.0, c.1 - a.1, p.0 - a.0, p.1 - a.1);
-    let (d00, d01, d11, d20, d21) = (v0x * v0x + v0y * v0y, v0x * v1x + v0y * v1y, v1x * v1x + v1y * v1y, v2x * v0x + v2y * v0y, v2x * v1x + v2y * v1y);
+    let (v0x, v0y, v1x, v1y, v2x, v2y) = (
+        b.0 - a.0,
+        b.1 - a.1,
+        c.0 - a.0,
+        c.1 - a.1,
+        p.0 - a.0,
+        p.1 - a.1,
+    );
+    let (d00, d01, d11, d20, d21) = (
+        v0x * v0x + v0y * v0y,
+        v0x * v1x + v0y * v1y,
+        v1x * v1x + v1y * v1y,
+        v2x * v0x + v2y * v0y,
+        v2x * v1x + v2y * v1y,
+    );
     let denom = d00 * d11 - d01 * d01;
-    if denom.abs() < 1e-30 { return (f64::NAN, f64::NAN, f64::NAN); }
+    if denom.abs() < 1e-30 {
+        return (f64::NAN, f64::NAN, f64::NAN);
+    }
     let l2 = (d11 * d20 - d01 * d21) / denom;
     let l3 = (d00 * d21 - d01 * d20) / denom;
     (1.0 - l2 - l3, l2, l3)
 }
 
 #[derive(Debug, Clone)]
-pub struct LinearNDInterpolator { delaunay: Delaunay2D, values: Vec<f64> }
+pub struct LinearNDInterpolator {
+    delaunay: Delaunay2D,
+    values: Vec<f64>,
+}
 
 impl LinearNDInterpolator {
     pub fn new(points: &[Vec<f64>], values: &[f64]) -> Result<Self, InterpError> {
-        if points.is_empty() { return Err(InterpError::TooFewPoints { minimum: 3, actual: 0 }); }
-        if points[0].len() != 2 { return Err(InterpError::InvalidArgument { detail: "LinearND only 2D".to_string() }); }
-        if points.len() != values.len() { return Err(InterpError::LengthMismatch { x_len: points.len(), y_len: values.len() }); }
+        if points.is_empty() {
+            return Err(InterpError::TooFewPoints {
+                minimum: 3,
+                actual: 0,
+            });
+        }
+        if points[0].len() != 2 {
+            return Err(InterpError::InvalidArgument {
+                detail: "LinearND only 2D".to_string(),
+            });
+        }
+        if points.len() != values.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: points.len(),
+                y_len: values.len(),
+            });
+        }
         let pts: Vec<(f64, f64)> = points.iter().map(|p| (p[0], p[1])).collect();
-        Ok(Self { delaunay: Delaunay2D::new(&pts)?, values: values.to_vec() })
+        Ok(Self {
+            delaunay: Delaunay2D::new(&pts)?,
+            values: values.to_vec(),
+        })
     }
     pub fn eval(&self, query: &[f64]) -> Result<f64, InterpError> {
-        if query.len() != 2 { return Err(InterpError::InvalidArgument { detail: "query must be 2D".to_string() }); }
+        if query.len() != 2 {
+            return Err(InterpError::InvalidArgument {
+                detail: "query must be 2D".to_string(),
+            });
+        }
         match self.delaunay.find_simplex((query[0], query[1])) {
-            Some((idx, l1, l2, l3)) => { let (a, b, c) = self.delaunay.simplices[idx]; Ok(l1 * self.values[a] + l2 * self.values[b] + l3 * self.values[c]) }
+            Some((idx, l1, l2, l3)) => {
+                let (a, b, c) = self.delaunay.simplices[idx];
+                Ok(l1 * self.values[a] + l2 * self.values[b] + l3 * self.values[c])
+            }
             None => Ok(f64::NAN),
         }
     }
-    pub fn eval_many(&self, queries: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> { queries.iter().map(|q| self.eval(q)).collect() }
+    pub fn eval_many(&self, queries: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+        queries.iter().map(|q| self.eval(q)).collect()
+    }
 }
 
 // ── RBF Interpolator ─────────────────────────────────────────────────
@@ -1241,7 +1677,10 @@ mod tests {
     fn nearest_interp() {
         let x = vec![0.0, 1.0, 2.0];
         let y = vec![10.0, 20.0, 30.0];
-        let opts = Interp1dOptions { kind: InterpKind::Nearest, ..Interp1dOptions::default() };
+        let opts = Interp1dOptions {
+            kind: InterpKind::Nearest,
+            ..Interp1dOptions::default()
+        };
         let interp = Interp1d::new(&x, &y, opts).expect("interp1d");
         assert_eq!(interp.eval(0.4).unwrap(), 10.0);
         assert_eq!(interp.eval(0.6).unwrap(), 20.0);
@@ -1276,8 +1715,7 @@ mod tests {
     fn rbf_exact_at_data_points() {
         let points = vec![vec![0.0], vec![1.0], vec![2.0], vec![3.0]];
         let values = vec![0.0, 1.0, 4.0, 9.0]; // x²
-        let rbf =
-            RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf");
+        let rbf = RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf");
         for (pt, &expected) in points.iter().zip(values.iter()) {
             let result = rbf.eval(pt);
             assert!(
@@ -1292,8 +1730,7 @@ mod tests {
     fn rbf_smooth_between_points() {
         let points = vec![vec![0.0], vec![1.0], vec![2.0]];
         let values = vec![0.0, 1.0, 0.0]; // triangular
-        let rbf =
-            RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf");
+        let rbf = RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf");
         let mid = rbf.eval(&[0.5]);
         assert!(mid > 0.0 && mid < 1.0, "midpoint should interpolate: {mid}");
     }
@@ -1308,8 +1745,7 @@ mod tests {
             vec![1.0, 1.0],
         ];
         let values = vec![0.0, 1.0, 1.0, 2.0];
-        let rbf =
-            RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf 2d");
+        let rbf = RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf 2d");
         let center = rbf.eval(&[0.5, 0.5]);
         assert!(
             (center - 1.0).abs() < 0.3,
@@ -1321,8 +1757,8 @@ mod tests {
     fn rbf_multiquadric_kernel() {
         let points = vec![vec![0.0], vec![1.0], vec![2.0]];
         let values = vec![1.0, 2.0, 3.0];
-        let rbf = RbfInterpolator::new(&points, &values, RbfKernel::Multiquadric, 1.0)
-            .expect("rbf mq");
+        let rbf =
+            RbfInterpolator::new(&points, &values, RbfKernel::Multiquadric, 1.0).expect("rbf mq");
         // Should interpolate exactly at data points
         for (pt, &expected) in points.iter().zip(values.iter()) {
             let result = rbf.eval(pt);
@@ -1338,16 +1774,14 @@ mod tests {
     fn rbf_eval_many() {
         let points = vec![vec![0.0], vec![1.0]];
         let values = vec![0.0, 1.0];
-        let rbf =
-            RbfInterpolator::new(&points, &values, RbfKernel::Linear, 1.0).expect("rbf");
+        let rbf = RbfInterpolator::new(&points, &values, RbfKernel::Linear, 1.0).expect("rbf");
         let results = rbf.eval_many(&[vec![0.0], vec![0.5], vec![1.0]]);
         assert_eq!(results.len(), 3);
     }
 
     #[test]
     fn rbf_empty_rejected() {
-        let err =
-            RbfInterpolator::new(&[], &[], RbfKernel::Gaussian, 1.0).expect_err("empty");
+        let err = RbfInterpolator::new(&[], &[], RbfKernel::Gaussian, 1.0).expect_err("empty");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
     }
 }

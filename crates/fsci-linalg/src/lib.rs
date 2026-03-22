@@ -2385,7 +2385,7 @@ pub fn signm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
 pub fn funm(
     a: &[Vec<f64>],
     func: impl Fn(f64) -> f64,
-    options: DecompOptions,
+    _options: DecompOptions,
 ) -> Result<Vec<Vec<f64>>, LinalgError> {
     let (rows, cols) = matrix_shape(a)?;
     if rows != cols {
@@ -2755,7 +2755,6 @@ fn validate_finite_matrix_and_vector(
     Ok(())
 }
 
-
 fn dmatrix_from_rows(rows: &[Vec<f64>]) -> Result<DMatrix<f64>, LinalgError> {
     let (m, n) = matrix_shape(rows)?;
     let mut data = Vec::with_capacity(m * n);
@@ -2823,9 +2822,7 @@ pub fn solve_sylvester(
     }
     if qr != m || qc != n {
         return Err(LinalgError::NotSupported {
-            detail: format!(
-                "Q shape ({qr}x{qc}) must match A rows ({m}) x B cols ({n})"
-            ),
+            detail: format!("Q shape ({qr}x{qc}) must match A rows ({m}) x B cols ({n})"),
         });
     }
     if m == 0 || n == 0 {
@@ -2885,7 +2882,9 @@ pub fn solve_sylvester(
 
     // Solve via LU
     let lu = system.full_piv_lu();
-    let sol = lu.solve(&rhs_vec).unwrap_or_else(|| nalgebra::DVector::zeros(mn));
+    let sol = lu
+        .solve(&rhs_vec)
+        .unwrap_or_else(|| nalgebra::DVector::zeros(mn));
 
     // Unvectorize Y
     let mut y = DMatrix::<f64>::zeros(m, n);
@@ -2922,9 +2921,7 @@ pub fn solve_continuous_lyapunov(
 ) -> Result<Vec<Vec<f64>>, LinalgError> {
     let (n, _) = matrix_shape(a)?;
     // B = A^T
-    let a_t: Vec<Vec<f64>> = (0..n)
-        .map(|i| (0..n).map(|j| a[j][i]).collect())
-        .collect();
+    let a_t: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| a[j][i]).collect()).collect();
     solve_sylvester(a, &a_t, q, options)
 }
 
@@ -5569,8 +5566,7 @@ mod proptest_tests {
         let a = vec![vec![1.0, 2.0]]; // 1x2
         let b = vec![vec![1.0]];
         let q = vec![vec![1.0]];
-        let err =
-            solve_sylvester(&a, &b, &q, DecompOptions::default()).expect_err("non-square A");
+        let err = solve_sylvester(&a, &b, &q, DecompOptions::default()).expect_err("non-square A");
         assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
     }
 
@@ -5579,8 +5575,7 @@ mod proptest_tests {
         // A = [[1,0],[0,2]], X = I → Q = AX + XA^T = A + A^T = 2*A (since A is symmetric)
         let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
         let q = vec![vec![2.0, 0.0], vec![0.0, 4.0]];
-        let x =
-            solve_continuous_lyapunov(&a, &q, DecompOptions::default()).expect("lyapunov");
+        let x = solve_continuous_lyapunov(&a, &q, DecompOptions::default()).expect("lyapunov");
         let n = 2;
         for i in 0..n {
             for j in 0..n {
@@ -5629,8 +5624,8 @@ mod proptest_tests {
         // A X A^T - X + Q = 0 → X[i,i] = Q[i,i] / (1 - A[i,i]²)
         let a = vec![vec![0.5, 0.0], vec![0.0, 0.3]];
         let q = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
-        let x = solve_discrete_lyapunov(&a, &q, DecompOptions::default())
-            .expect("discrete lyapunov");
+        let x =
+            solve_discrete_lyapunov(&a, &q, DecompOptions::default()).expect("discrete lyapunov");
         // Verify: A X A^T - X + Q = 0
         let n = 2;
         for i in 0..n {
@@ -5642,10 +5637,7 @@ mod proptest_tests {
                     }
                 }
                 let residual = axa_t - x[i][j] + q[i][j];
-                assert!(
-                    residual.abs() < 1e-6,
-                    "AXA^T-X+Q[{i},{j}] = {residual}"
-                );
+                assert!(residual.abs() < 1e-6, "AXA^T-X+Q[{i},{j}] = {residual}");
             }
         }
     }
@@ -5667,10 +5659,7 @@ mod proptest_tests {
                     }
                 }
                 let residual = axa_t - x[i][j] + q[i][j];
-                assert!(
-                    residual.abs() < 1e-6,
-                    "AXA^T-X+Q[{i},{j}] = {residual}"
-                );
+                assert!(residual.abs() < 1e-6, "AXA^T-X+Q[{i},{j}] = {residual}");
             }
         }
     }
@@ -5679,8 +5668,8 @@ mod proptest_tests {
     fn solve_discrete_lyapunov_rejects_non_square() {
         let a = vec![vec![1.0, 2.0]];
         let q = vec![vec![1.0]];
-        let err = solve_discrete_lyapunov(&a, &q, DecompOptions::default())
-            .expect_err("non-square");
+        let err =
+            solve_discrete_lyapunov(&a, &q, DecompOptions::default()).expect_err("non-square");
         assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
     }
 
@@ -5723,8 +5712,8 @@ mod proptest_tests {
     fn fractional_matrix_power_sqrt() {
         // A^0.5 squared should give A (for positive definite A)
         let a = vec![vec![4.0, 0.0], vec![0.0, 9.0]];
-        let sqrt_a = fractional_matrix_power(&a, 0.5, DecompOptions::default())
-            .expect("fractional power");
+        let sqrt_a =
+            fractional_matrix_power(&a, 0.5, DecompOptions::default()).expect("fractional power");
         // sqrt_a should be [[2,0],[0,3]]
         assert!(
             (sqrt_a[0][0] - 2.0).abs() < 1e-8,
@@ -5745,11 +5734,7 @@ mod proptest_tests {
         let a2 = fractional_matrix_power(&a, 2.0, DecompOptions::default()).expect("A^2");
         // A² = [[7,10],[15,22]]
         assert!((a2[0][0] - 7.0).abs() < 1e-6, "A²[0,0] = {}", a2[0][0]);
-        assert!(
-            (a2[1][1] - 22.0).abs() < 1e-6,
-            "A²[1,1] = {}",
-            a2[1][1]
-        );
+        assert!((a2[1][1] - 22.0).abs() < 1e-6, "A²[1,1] = {}", a2[1][1]);
     }
 
     #[test]

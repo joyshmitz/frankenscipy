@@ -654,9 +654,9 @@ impl ArrayApiBackend for CoreArrayBackend {
         let rows = array.shape.dims[0];
         let cols = array.shape.dims[1];
         let mut values = Vec::with_capacity(array.values.len());
-        
+
         let is_f_order = array.order == MemoryOrder::F;
-        
+
         for col in 0..cols {
             for row in 0..rows {
                 let idx = if is_f_order {
@@ -667,10 +667,14 @@ impl ArrayApiBackend for CoreArrayBackend {
                 values.push(array.values[idx]);
             }
         }
-        
+
         // Transposing an F-order array makes it C-order, and vice-versa
-        let new_order = if is_f_order { MemoryOrder::C } else { MemoryOrder::F };
-        
+        let new_order = if is_f_order {
+            MemoryOrder::C
+        } else {
+            MemoryOrder::F
+        };
+
         Ok(CoreArray {
             shape: Shape::new(vec![cols, rows]),
             dtype: array.dtype,

@@ -858,10 +858,160 @@ impl ConvexHull {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Delaunay Triangulation (2D)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of a 2D Delaunay triangulation.
+///
+/// Matches the core surface of `scipy.spatial.Delaunay(points)` for 2D point
+/// sets: the original points, the triangle simplices, and simplex lookup.
+#[derive(Debug, Clone)]
+pub struct Delaunay {
+    /// Input points in the original order.
+    pub points: Vec<(f64, f64)>,
+    /// Triangle simplices as triples of indices into `points`.
+    pub simplices: Vec<(usize, usize, usize)>,
+}
+
+impl Delaunay {
+    /// Compute a 2D Delaunay triangulation with a Bowyer-Watson sweep.
+    pub fn new(points: &[(f64, f64)]) -> Result<Self, SpatialError> {
+        let n = points.len();
+        if n < 3 {
+            return Err(SpatialError::InvalidArgument(
+                "delaunay triangulation requires at least 3 points".to_string(),
+            ));
+        }
+
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for &(x, y) in points {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+
+        let dx = (max_x - min_x).max(1e-10);
+        let dy = (max_y - min_y).max(1e-10);
+        let margin = 10.0;
+        let mut all_points = points.to_vec();
+        all_points.push((min_x - margin * dx, min_y - margin * dy));
+        all_points.push((max_x + margin * dx, min_y - margin * dy));
+        all_points.push(((min_x + max_x) / 2.0, max_y + margin * dy));
+
+        let mut triangles = vec![(n, n + 1, n + 2)];
+        for p_idx in 0..n {
+            let point = all_points[p_idx];
+            let mut bad = Vec::new();
+            for (t_idx, &(a, b, c)) in triangles.iter().enumerate() {
+                if point_in_circumcircle(all_points[a], all_points[b], all_points[c], point) {
+                    bad.push(t_idx);
+                }
+            }
+
+            let mut boundary = Vec::new();
+            for &t_idx in &bad {
+                let (a, b, c) = triangles[t_idx];
+                for &(e0, e1) in &[(a, b), (b, c), (c, a)] {
+                    if !bad.iter().any(|&other_idx| {
+                        other_idx != t_idx
+                            && triangle_has_edge(
+                                triangles[other_idx].0,
+                                triangles[other_idx].1,
+                                triangles[other_idx].2,
+                                e0,
+                                e1,
+                            )
+                    }) {
+                        boundary.push((e0, e1));
+                    }
+                }
+            }
+
+            bad.sort_unstable();
+            for &idx in bad.iter().rev() {
+                triangles.swap_remove(idx);
+            }
+            for &(e0, e1) in &boundary {
+                triangles.push((p_idx, e0, e1));
+            }
+        }
+
+        let simplices: Vec<(usize, usize, usize)> = triangles
+            .into_iter()
+            .filter(|&(a, b, c)| a < n && b < n && c < n)
+            .collect();
+        if simplices.is_empty() {
+            return Err(SpatialError::InvalidArgument(
+                "delaunay triangulation requires at least 3 non-collinear points".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            points: points.to_vec(),
+            simplices,
+        })
+    }
+
+    /// Find the simplex containing a query point.
+    ///
+    /// Returns the simplex index and its barycentric coordinates when the point
+    /// lies in or on a triangle, or `None` if it falls outside the triangulation.
+    pub fn find_simplex(&self, query: (f64, f64)) -> Option<(usize, f64, f64, f64)> {
+        for (idx, &(a, b, c)) in self.simplices.iter().enumerate() {
+            let (l1, l2, l3) =
+                barycentric_2d(self.points[a], self.points[b], self.points[c], query);
+            if l1 >= -1e-10 && l2 >= -1e-10 && l3 >= -1e-10 {
+                return Some((idx, l1, l2, l3));
+            }
+        }
+        None
+    }
+}
+
 /// Cross product of vectors OA and OB where O, A, B are 2D points.
 /// Positive = counter-clockwise, negative = clockwise, zero = collinear.
 fn cross(o: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+}
+
+fn point_in_circumcircle(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
+    let (ax, ay) = (a.0 - d.0, a.1 - d.1);
+    let (bx, by) = (b.0 - d.0, b.1 - d.1);
+    let (cx, cy) = (c.0 - d.0, c.1 - d.1);
+    let det = ax * (by * (cx * cx + cy * cy) - cy * (bx * bx + by * by))
+        - ay * (bx * (cx * cx + cy * cy) - cx * (bx * bx + by * by))
+        + (ax * ax + ay * ay) * (bx * cy - by * cx);
+    let orient = cross(a, b, c);
+    if orient > 0.0 { det > 0.0 } else { det < 0.0 }
+}
+
+fn triangle_has_edge(a: usize, b: usize, c: usize, e0: usize, e1: usize) -> bool {
+    [(a, b), (b, c), (c, a)]
+        .iter()
+        .any(|&(x, y)| (x == e0 && y == e1) || (x == e1 && y == e0))
+}
+
+fn barycentric_2d(a: (f64, f64), b: (f64, f64), c: (f64, f64), p: (f64, f64)) -> (f64, f64, f64) {
+    let (v0x, v0y) = (b.0 - a.0, b.1 - a.1);
+    let (v1x, v1y) = (c.0 - a.0, c.1 - a.1);
+    let (v2x, v2y) = (p.0 - a.0, p.1 - a.1);
+    let d00 = v0x * v0x + v0y * v0y;
+    let d01 = v0x * v1x + v0y * v1y;
+    let d11 = v1x * v1x + v1y * v1y;
+    let d20 = v2x * v0x + v2y * v0y;
+    let d21 = v2x * v1x + v2y * v1y;
+    let denom = d00 * d11 - d01 * d01;
+    if denom.abs() < 1e-30 {
+        return (f64::NAN, f64::NAN, f64::NAN);
+    }
+    let l2 = (d11 * d20 - d01 * d21) / denom;
+    let l3 = (d00 * d21 - d01 * d20) / denom;
+    (1.0 - l2 - l3, l2, l3)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -938,57 +1088,41 @@ pub fn procrustes(
     let mut mtm = vec![vec![0.0; d]; d];
     for i in 0..d {
         for j in 0..d {
-            for k in 0..d {
-                mtm[i][j] += m[k][i] * m[k][j]; // M^T M
+            for row_k in m.iter().take(d) {
+                mtm[i][j] += row_k[i] * row_k[j]; // M^T M
             }
         }
     }
 
-    // For 2D case (most common), solve directly
-    // For general case, use iterative square root inverse
-    let rotation = if d == 2 {
-        // 2D: compute polar decomposition analytically
-        let det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
-        let trace_mtm = mtm[0][0] + mtm[1][1];
-        let det_mtm = mtm[0][0] * mtm[1][1] - mtm[0][1] * mtm[1][0];
-        let s = (trace_mtm + 2.0 * det_mtm.max(0.0).sqrt()).max(0.0).sqrt();
-        if s > 1e-15 {
-            // R = M / s (scaled)
-            vec![
-                vec![m[0][0] / s + m[1][1] / s, m[0][1] / s - m[1][0] / s],
-                vec![m[1][0] / s - m[0][1] / s, m[0][0] / s + m[1][1] / s],
-            ]
-        } else {
-            // Degenerate: use identity
-            vec![vec![1.0, 0.0], vec![0.0, 1.0]]
-        }
-    } else {
-        // General: Newton iteration for (M^T M)^{-1/2}, then R = M * result
-        // Start with identity as initial guess
-        let mut y = vec![vec![0.0; d]; d];
-        for i in 0..d { y[i][i] = 1.0; }
+    // R = M * (M^T M)^{-1/2} via Denman-Beavers iteration for matrix square root inverse
+    // Y_{k+1} = 0.5 * Y_k * (3I - B Y_k²) where B = M^T M, converges to B^{-1/2}
+    let mut y = vec![vec![0.0; d]; d];
+    for (i, row) in y.iter_mut().enumerate().take(d) {
+        row[i] = 1.0;
+    }
 
-        for _ in 0..20 {
-            // Y_new = 0.5 * Y * (3I - M^T M Y² )
-            let mut y2 = mat_mul(&y, &y, d);
-            let mut my2 = mat_mul(&mtm, &y2, d);
-            for i in 0..d {
-                for j in 0..d {
-                    my2[i][j] = if i == j { 3.0 } else { 0.0 } - my2[i][j];
-                }
+    for _ in 0..30 {
+        let y2 = mat_mul(&y, &y, d);
+        let by2 = mat_mul(&mtm, &y2, d);
+        let mut rhs = vec![vec![0.0; d]; d];
+        for i in 0..d {
+            for j in 0..d {
+                rhs[i][j] = if i == j { 3.0 } else { 0.0 } - by2[i][j];
             }
-            let y_new = mat_mul(&y, &my2, d);
-            let mut max_diff = 0.0_f64;
-            for i in 0..d {
-                for j in 0..d {
-                    max_diff = max_diff.max((y_new[i][j] * 0.5 - y[i][j]).abs());
-                    y[i][j] = y_new[i][j] * 0.5;
-                }
-            }
-            if max_diff < 1e-14 { break; }
         }
-        mat_mul(&m, &y, d)
-    };
+        let y_new = mat_mul(&y, &rhs, d);
+        let mut max_diff = 0.0_f64;
+        for i in 0..d {
+            for j in 0..d {
+                max_diff = max_diff.max((y_new[i][j] * 0.5 - y[i][j]).abs());
+                y[i][j] = y_new[i][j] * 0.5;
+            }
+        }
+        if max_diff < 1e-14 {
+            break;
+        }
+    }
+    let rotation = mat_mul(&m, &y, d);
 
     // Apply rotation: mtx2_aligned = mtx2 * R
     let mut aligned = vec![vec![0.0; d]; n];
@@ -1074,7 +1208,11 @@ fn scale_matrix(data: &mut [Vec<f64>], factor: f64) {
 /// * `start` — Starting point on the unit sphere.
 /// * `end` — Ending point on the unit sphere.
 /// * `t` — Interpolation parameters in [0, 1]. Can be multiple values.
-pub fn geometric_slerp(start: &[f64], end: &[f64], t_values: &[f64]) -> Result<Vec<Vec<f64>>, SpatialError> {
+pub fn geometric_slerp(
+    start: &[f64],
+    end: &[f64],
+    t_values: &[f64],
+) -> Result<Vec<Vec<f64>>, SpatialError> {
     if start.len() != end.len() {
         return Err(SpatialError::DimensionMismatch {
             expected: start.len(),
@@ -1608,6 +1746,54 @@ mod tests {
         );
     }
 
+    // ── Delaunay tests ──────────────────────────────────────────────
+
+    #[test]
+    fn delaunay_square_triangulates() {
+        let points = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let tri = Delaunay::new(&points).expect("triangulation");
+        assert_eq!(tri.points, points);
+        assert_eq!(
+            tri.simplices.len(),
+            2,
+            "square should split into 2 triangles"
+        );
+        for &(a, b, c) in &tri.simplices {
+            assert!(a < points.len() && b < points.len() && c < points.len());
+            assert_ne!(cross(points[a], points[b], points[c]), 0.0);
+        }
+    }
+
+    #[test]
+    fn delaunay_find_simplex_inside_triangle() {
+        let points = [(0.0, 0.0), (2.0, 0.0), (0.0, 2.0)];
+        let tri = Delaunay::new(&points).expect("triangulation");
+        let (_, l1, l2, l3) = tri.find_simplex((0.25, 0.5)).expect("inside simplex");
+        assert!(l1 >= 0.0 && l2 >= 0.0 && l3 >= 0.0);
+        assert!(((l1 + l2 + l3) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn delaunay_find_simplex_outside_returns_none() {
+        let points = [(0.0, 0.0), (2.0, 0.0), (0.0, 2.0)];
+        let tri = Delaunay::new(&points).expect("triangulation");
+        assert!(tri.find_simplex((3.0, 3.0)).is_none());
+    }
+
+    #[test]
+    fn delaunay_collinear_points_rejected() {
+        let points = [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
+        let err = Delaunay::new(&points).expect_err("collinear");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn delaunay_too_few_points_rejected() {
+        let points = [(0.0, 0.0), (1.0, 0.0)];
+        let err = Delaunay::new(&points).expect_err("too few");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
     // ── Procrustes tests ─────────────────────────────────────────────
 
     #[test]
@@ -1638,7 +1824,10 @@ mod tests {
     fn procrustes_scaled() {
         // data2 is data1 scaled by 2 (should align after normalization)
         let data1 = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![-1.0, 0.0]];
-        let data2: Vec<Vec<f64>> = data1.iter().map(|p| p.iter().map(|&v| v * 2.0).collect()).collect();
+        let data2: Vec<Vec<f64>> = data1
+            .iter()
+            .map(|p| p.iter().map(|&v| v * 2.0).collect())
+            .collect();
         let result = procrustes(&data1, &data2).expect("procrustes");
         assert!(
             result.disparity < 1e-10,

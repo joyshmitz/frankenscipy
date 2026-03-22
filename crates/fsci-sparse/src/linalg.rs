@@ -2483,10 +2483,7 @@ mod tests {
         let l = laplacian(&g, false).expect("laplacian");
         for (i, row) in l.iter().enumerate() {
             let sum: f64 = row.iter().sum();
-            assert!(
-                sum.abs() < 1e-10,
-                "row {i} sum should be 0: {sum}"
-            );
+            assert!(sum.abs() < 1e-10, "row {i} sum should be 0: {sum}");
         }
     }
 
@@ -2508,11 +2505,11 @@ mod tests {
         // Normalized Laplacian has 1.0 on diagonal (for connected nodes)
         let g = triangle_graph_csr();
         let l = laplacian(&g, true).expect("normed laplacian");
-        for i in 0..3 {
+        for (i, row) in l.iter().enumerate().take(3) {
             assert!(
-                (l[i][i] - 1.0).abs() < 1e-10,
+                (row[i] - 1.0).abs() < 1e-10,
                 "L_norm[{i},{i}] = {}, expected 1.0",
-                l[i][i]
+                row[i]
             );
         }
     }
@@ -2522,13 +2519,13 @@ mod tests {
         let g = triangle_graph_csr();
         let l = laplacian(&g, false).expect("laplacian");
         let n = l.len();
-        for i in 0..n {
-            for j in 0..n {
+        for (i, row_i) in l.iter().enumerate().take(n) {
+            for (j, row_j) in l.iter().enumerate().take(n) {
                 assert!(
-                    (l[i][j] - l[j][i]).abs() < 1e-10,
+                    (row_i[j] - row_j[i]).abs() < 1e-10,
                     "L[{i},{j}]={} != L[{j},{i}]={}",
-                    l[i][j],
-                    l[j][i]
+                    row_i[j],
+                    row_j[i]
                 );
             }
         }
