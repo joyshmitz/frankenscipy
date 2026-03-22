@@ -13,7 +13,8 @@ pub use linalg::{
     IterativeSolveResult, LuOptions, MstResult, PermutationOrdering, ShortestPathResult,
     SolveOptions, SolveResult, SparseBackend, SparseIluFactorization, SparseLuFactorization,
     SvdsResult, bellman_ford, bicgstab, breadth_first_order, cg, connected_components,
-    depth_first_order, dijkstra, eigs, eigsh, gmres, lsmr, lsqr, minimum_spanning_tree, minres,
+    depth_first_order, dijkstra, eigs, eigsh, gmres, laplacian, lsmr, lsqr,
+    minimum_spanning_tree, minres,
     pcg, spilu, splu, splu_solve, spsolve, spsolve_triangular, svds,
 };
 pub use ops::{

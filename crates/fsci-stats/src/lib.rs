@@ -1558,25 +1558,35 @@ fn gamma_inc_series(a: f64, x: f64) -> f64 {
 }
 
 fn gamma_inc_cf(a: f64, x: f64) -> f64 {
-    // Lentz's continued fraction
-    let mut c = 1e-30_f64;
-    let mut d = 1.0 / (x + 1.0 - a);
+    // Lentz's continued fraction for upper incomplete gamma
+    let b0 = x + 1.0 - a;
+    let mut c = 1.0 / 1e-30;
+    let mut d = 1.0 / b0;
+    if d == 0.0 {
+        d = 1e-30;
+    }
     let mut f = d;
 
-    for n in 1..200 {
-        let n_f = n as f64;
-        let an = if n % 2 == 1 {
-            let k = (n_f + 1.0) / 2.0;
-            -(a - k) * (a + k - 1.0) / ((a + n_f - 1.0) * (a + n_f))
-        } else {
-            let k = n_f / 2.0;
-            k * (a - k) / ((a + n_f - 1.0) * (a + n_f))
-        };
-        // Simplified: use modified Lentz
-        d = 1.0 / (1.0 + an * d);
-        c = 1.0 + an / c;
-        f *= d * c;
-        if ((d * c) - 1.0).abs() < 1e-15 {
+    for m in 1..200 {
+        let mf = m as f64;
+        let an = mf * (a - mf);
+        let bn = x + 1.0 - a + 2.0 * mf;
+
+        d = bn + an * d;
+        if d.abs() < 1e-30 {
+            d = 1e-30;
+        }
+        d = 1.0 / d;
+
+        c = bn + an / c;
+        if c.abs() < 1e-30 {
+            c = 1e-30;
+        }
+
+        let delta = c * d;
+        f *= delta;
+
+        if (delta - 1.0).abs() < 1e-15 {
             break;
         }
     }
@@ -1874,6 +1884,48 @@ pub struct TtestResult {
     pub df: f64,
 }
 
+/// Result of a variance homogeneity test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VarianceTestResult {
+    /// Test statistic.
+    pub statistic: f64,
+    /// Right-tail p-value.
+    pub pvalue: f64,
+}
+
+fn invalid_variance_test_result() -> VarianceTestResult {
+    VarianceTestResult {
+        statistic: f64::NAN,
+        pvalue: f64::NAN,
+    }
+}
+
+fn sample_mean(data: &[f64]) -> f64 {
+    data.iter().sum::<f64>() / data.len() as f64
+}
+
+fn sample_variance(data: &[f64]) -> f64 {
+    if data.len() < 2 {
+        return f64::NAN;
+    }
+    let mean = sample_mean(data);
+    data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (data.len() as f64 - 1.0)
+}
+
+fn sample_median(data: &[f64]) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        0.5 * (sorted[mid - 1] + sorted[mid])
+    } else {
+        sorted[mid]
+    }
+}
+
 /// One-sample t-test: test whether the mean of a sample differs from `popmean`.
 ///
 /// Matches `scipy.stats.ttest_1samp(a, popmean)`.
@@ -1984,6 +2036,97 @@ pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
     }
 }
 
+/// Paired t-test for related samples.
+///
+/// Tests H0: mean of differences a[i] - b[i] is zero.
+/// Requires equal-length paired observations.
+///
+/// Matches `scipy.stats.ttest_rel(a, b)`.
+pub fn ttest_rel(a: &[f64], b: &[f64]) -> TtestResult {
+    if a.len() != b.len() || a.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+    let n = a.len() as f64;
+    let diffs: Vec<f64> = a.iter().zip(b.iter()).map(|(&ai, &bi)| ai - bi).collect();
+    let d_mean = diffs.iter().sum::<f64>() / n;
+    let d_var = diffs.iter().map(|&d| (d - d_mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let se = (d_var / n).sqrt();
+
+    if se == 0.0 {
+        return TtestResult {
+            statistic: if d_mean == 0.0 { 0.0 } else { f64::INFINITY },
+            pvalue: if d_mean == 0.0 { 1.0 } else { 0.0 },
+            df: n - 1.0,
+        };
+    }
+
+    let t = d_mean / se;
+    let df = n - 1.0;
+    let tdist = StudentT::new(df);
+    let pvalue = 2.0 * tdist.sf(t.abs());
+    TtestResult {
+        statistic: t,
+        pvalue,
+        df,
+    }
+}
+
+/// One-sample chi-squared goodness-of-fit test.
+///
+/// Tests whether observed frequencies differ significantly from expected.
+/// This is a convenience wrapper around `power_divergence` with lambda=1.
+///
+/// Matches `scipy.stats.chisquare(f_obs, f_exp)`.
+pub fn chisquare(f_obs: &[f64], f_exp: Option<&[f64]>) -> (f64, f64) {
+    power_divergence(f_obs, f_exp, 1.0)
+}
+
+/// 1D Wasserstein distance (earth mover's distance) between two distributions.
+///
+/// Computes the first Wasserstein distance between empirical distributions
+/// defined by samples u and v.
+///
+/// Matches `scipy.stats.wasserstein_distance(u_values, v_values)`.
+pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
+    if u.is_empty() || v.is_empty() {
+        return f64::NAN;
+    }
+
+    // Sort both distributions
+    let mut u_sorted = u.to_vec();
+    let mut v_sorted = v.to_vec();
+    u_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    v_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Merge and compute the area between CDFs
+    let nu = u.len() as f64;
+    let nv = v.len() as f64;
+
+    // Combine all unique values and compute CDF difference at each
+    let mut all_vals: Vec<f64> = u_sorted.iter().chain(v_sorted.iter()).copied().collect();
+    all_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_vals.dedup();
+
+    let mut distance = 0.0;
+    let mut prev_val = all_vals[0];
+
+    for &val in &all_vals[1..] {
+        // CDF of u at prev_val
+        let cdf_u = u_sorted.partition_point(|&x| x <= prev_val) as f64 / nu;
+        // CDF of v at prev_val
+        let cdf_v = v_sorted.partition_point(|&x| x <= prev_val) as f64 / nv;
+
+        distance += (cdf_u - cdf_v).abs() * (val - prev_val);
+        prev_val = val;
+    }
+
+    distance
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Non-parametric Tests and ANOVA
 // ══════════════════════════════════════════════════════════════════════
@@ -2081,6 +2224,123 @@ pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
         pvalue,
         df: df_between,
     }
+}
+
+/// Levene's test for equal variances using median-centered absolute deviations.
+///
+/// Matches the robust default behavior of `scipy.stats.levene(*groups)`.
+pub fn levene(groups: &[&[f64]]) -> VarianceTestResult {
+    if groups.len() < 2 || groups.iter().any(|group| group.len() < 2) {
+        return invalid_variance_test_result();
+    }
+
+    let deviations: Vec<Vec<f64>> = groups
+        .iter()
+        .map(|group| {
+            let center = sample_median(group);
+            group.iter().map(|&x| (x - center).abs()).collect()
+        })
+        .collect();
+
+    let k = deviations.len() as f64;
+    let n_total: usize = deviations.iter().map(Vec::len).sum();
+    let df_within = n_total as f64 - k;
+    if df_within <= 0.0 {
+        return invalid_variance_test_result();
+    }
+
+    let grand_mean =
+        deviations.iter().flatten().sum::<f64>() / n_total as f64;
+
+    let ss_between: f64 = deviations
+        .iter()
+        .map(|group| {
+            let mean = sample_mean(group);
+            group.len() as f64 * (mean - grand_mean).powi(2)
+        })
+        .sum();
+
+    let ss_within: f64 = deviations
+        .iter()
+        .map(|group| {
+            let mean = sample_mean(group);
+            group.iter().map(|&x| (x - mean).powi(2)).sum::<f64>()
+        })
+        .sum();
+
+    if ss_within == 0.0 {
+        if ss_between == 0.0 {
+            return invalid_variance_test_result();
+        }
+        return VarianceTestResult {
+            statistic: f64::INFINITY,
+            pvalue: 0.0,
+        };
+    }
+
+    let df_between = k - 1.0;
+    let w = (df_within / df_between) * (ss_between / ss_within);
+    let pvalue = FDistribution::new(df_between, df_within).sf(w).clamp(0.0, 1.0);
+    VarianceTestResult {
+        statistic: w,
+        pvalue,
+    }
+}
+
+/// Bartlett's test for equal variances under normality.
+///
+/// Matches `scipy.stats.bartlett(*groups)`.
+pub fn bartlett(groups: &[&[f64]]) -> VarianceTestResult {
+    if groups.len() < 2 || groups.iter().any(|group| group.len() < 2) {
+        return invalid_variance_test_result();
+    }
+
+    let k = groups.len() as f64;
+    let n_total: usize = groups.iter().map(|group| group.len()).sum();
+    let df = n_total as f64 - k;
+    if df <= 0.0 {
+        return invalid_variance_test_result();
+    }
+
+    let variances: Vec<f64> = groups.iter().map(|group| sample_variance(group)).collect();
+    if variances.iter().any(|variance| !variance.is_finite() || *variance < 0.0) {
+        return invalid_variance_test_result();
+    }
+
+    let pooled_variance: f64 = groups
+        .iter()
+        .zip(&variances)
+        .map(|(group, variance)| (group.len() as f64 - 1.0) * variance)
+        .sum::<f64>()
+        / df;
+
+    if pooled_variance <= 0.0 {
+        if variances.iter().all(|variance| *variance == 0.0) {
+            return invalid_variance_test_result();
+        }
+        return VarianceTestResult {
+            statistic: f64::INFINITY,
+            pvalue: 0.0,
+        };
+    }
+
+    let weighted_log_variance_sum: f64 = groups
+        .iter()
+        .zip(&variances)
+        .map(|(group, variance)| (group.len() as f64 - 1.0) * variance.ln())
+        .sum();
+
+    let correction = 1.0
+        + (groups
+            .iter()
+            .map(|group| 1.0 / (group.len() as f64 - 1.0))
+            .sum::<f64>()
+            - 1.0 / df)
+            / (3.0 * (k - 1.0));
+
+    let statistic = (df * pooled_variance.ln() - weighted_log_variance_sum) / correction;
+    let pvalue = ChiSquared::new(k - 1.0).sf(statistic).clamp(0.0, 1.0);
+    VarianceTestResult { statistic, pvalue }
 }
 
 /// Mann-Whitney U test (rank-sum test for two independent samples).
@@ -2275,13 +2535,7 @@ pub fn kruskal(groups: &[&[f64]]) -> TtestResult {
 
     // P-value from chi-squared distribution
     let chi2 = ChiSquared::new(df);
-    let cdf_val = chi2.cdf(h);
-    let pvalue = if !cdf_val.is_finite() || !(0.0..=1.0).contains(&cdf_val) {
-        // Numerical overflow in CDF — for large H, p is effectively 0
-        if h > 0.0 { 0.0 } else { 1.0 }
-    } else {
-        (1.0 - cdf_val).max(0.0)
-    };
+    let pvalue = chi2.sf(h).clamp(0.0, 1.0);
 
     TtestResult {
         statistic: h,
@@ -3783,13 +4037,8 @@ pub fn chi2_contingency(observed: &[Vec<f64>]) -> Chi2ContingencyResult {
 
     // P-value from chi-squared distribution
     let pvalue = if dof > 0 {
-        // For very large chi2 relative to dof, p-value is effectively 0
-        if chi2 > dof as f64 * 20.0 {
-            0.0
-        } else {
-            let dist = ChiSquared::new(dof as f64);
-            upper_tail_probability(dist.cdf(chi2))
-        }
+        let dist = ChiSquared::new(dof as f64);
+        dist.sf(chi2).clamp(0.0, 1.0)
     } else {
         f64::NAN
     };
@@ -3887,20 +4136,12 @@ pub fn power_divergence(f_obs: &[f64], f_exp: Option<&[f64]>, lambda_: f64) -> (
     let dof = (n - 1) as f64;
     let pvalue = if dof > 0.0 {
         let dist = ChiSquared::new(dof);
-        upper_tail_probability(dist.cdf(stat))
+        dist.sf(stat).clamp(0.0, 1.0)
     } else {
         f64::NAN
     };
 
     (stat, pvalue)
-}
-
-fn upper_tail_probability(cdf_val: f64) -> f64 {
-    if !cdf_val.is_finite() {
-        0.0
-    } else {
-        (1.0 - cdf_val).clamp(0.0, 1.0)
-    }
 }
 
 #[cfg(test)]
@@ -5253,6 +5494,58 @@ mod tests {
     }
 
     #[test]
+    fn levene_equal_variance_groups() {
+        let a: Vec<f64> = (0..20).map(|i| i as f64 * 0.2 - 2.0).collect();
+        let b: Vec<f64> = (0..20).map(|i| i as f64 * 0.2 + 3.0).collect();
+        let c: Vec<f64> = (0..20).map(|i| i as f64 * 0.2 - 7.0).collect();
+        let result = levene(&[&a, &b, &c]);
+        assert!(
+            result.pvalue > 0.05,
+            "equal-variance groups should not reject, p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn levene_detects_different_variances() {
+        let a = vec![-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5];
+        let b = vec![-4.5, -3.0, -1.5, 0.0, 1.5, 3.0, 4.5];
+        let c = vec![-9.0, -6.0, -3.0, 0.0, 3.0, 6.0, 9.0];
+        let result = levene(&[&a, &b, &c]);
+        assert!(
+            result.pvalue < 0.05,
+            "different-variance groups should reject, p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn bartlett_equal_variance_groups() {
+        let a: Vec<f64> = (0..20).map(|i| i as f64 * 0.2 - 2.0).collect();
+        let b: Vec<f64> = (0..20).map(|i| i as f64 * 0.2 + 3.0).collect();
+        let c: Vec<f64> = (0..20).map(|i| i as f64 * 0.2 - 7.0).collect();
+        let result = bartlett(&[&a, &b, &c]);
+        assert!(
+            result.pvalue > 0.05,
+            "equal-variance groups should not reject, p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn bartlett_detects_different_variances() {
+        let a = vec![-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5];
+        let b = vec![-4.5, -3.0, -1.5, 0.0, 1.5, 3.0, 4.5];
+        let c = vec![-9.0, -6.0, -3.0, 0.0, 3.0, 6.0, 9.0];
+        let result = bartlett(&[&a, &b, &c]);
+        assert!(
+            result.pvalue < 0.05,
+            "different-variance groups should reject, p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
     fn mannwhitneyu_same_distribution() {
         let x: Vec<f64> = (0..50).map(|i| (i as f64) * 0.02).collect();
         let y: Vec<f64> = (0..50).map(|i| (i as f64) * 0.02 + 0.001).collect();
@@ -5900,17 +6193,6 @@ mod tests {
         assert!(pvalue.is_nan());
     }
 
-    #[test]
-    fn upper_tail_probability_nan_maps_to_zero() {
-        assert_eq!(upper_tail_probability(f64::NAN), 0.0);
-    }
-
-    #[test]
-    fn upper_tail_probability_clamps_numeric_roundoff() {
-        assert_eq!(upper_tail_probability(-0.25), 1.0);
-        assert_eq!(upper_tail_probability(1.25), 0.0);
-    }
-
     // ── Fisher's exact test ──────────────────────────────────────────
 
     #[test]
@@ -6047,5 +6329,82 @@ mod tests {
         assert!((binomtest(0, 10, 0.0) - 1.0).abs() < 1e-12);
         assert!((binomtest(10, 10, 1.0) - 1.0).abs() < 1e-12);
         assert!(binomtest(5, 0, 0.5).is_nan());
+    }
+
+    // ── ttest_rel tests ──────────────────────────────────────────────
+
+    #[test]
+    fn ttest_rel_no_difference() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let b = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = ttest_rel(&a, &b);
+        assert!(
+            (result.statistic).abs() < 1e-10,
+            "identical pairs: t = {}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn ttest_rel_significant_shift() {
+        // b = a + 10, very significant difference
+        let a: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let b: Vec<f64> = a.iter().map(|&x| x + 10.0).collect();
+        let result = ttest_rel(&a, &b);
+        assert!(
+            result.pvalue < 0.001,
+            "shifted pairs should be significant: p = {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn ttest_rel_unequal_lengths() {
+        let result = ttest_rel(&[1.0, 2.0], &[1.0]);
+        assert!(result.statistic.is_nan());
+    }
+
+    // ── chisquare tests ──────────────────────────────────────────────
+
+    #[test]
+    fn chisquare_uniform() {
+        let obs = [25.0, 25.0, 25.0, 25.0];
+        let (stat, p) = chisquare(&obs, None);
+        assert!(stat.abs() < 1e-10, "uniform chi2 = {stat}");
+        assert!(p > 0.99, "uniform p = {p}");
+    }
+
+    #[test]
+    fn chisquare_skewed() {
+        let obs = [50.0, 10.0, 10.0, 10.0];
+        let (stat, p) = chisquare(&obs, None);
+        assert!(stat > 10.0, "skewed chi2 = {stat}");
+        assert!(p < 0.05, "skewed p = {p}");
+    }
+
+    // ── wasserstein_distance tests ───────────────────────────────────
+
+    #[test]
+    fn wasserstein_identical() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let d = wasserstein_distance(&a, &a);
+        assert!(d.abs() < 1e-10, "identical should be 0: {d}");
+    }
+
+    #[test]
+    fn wasserstein_shifted() {
+        // Shift by 1.0: W distance should be ~1.0
+        let a: Vec<f64> = (0..100).map(|i| i as f64 / 100.0).collect();
+        let b: Vec<f64> = a.iter().map(|&x| x + 1.0).collect();
+        let d = wasserstein_distance(&a, &b);
+        assert!(
+            (d - 1.0).abs() < 0.05,
+            "shifted by 1 should give W ≈ 1: {d}"
+        );
+    }
+
+    #[test]
+    fn wasserstein_empty() {
+        assert!(wasserstein_distance(&[], &[1.0]).is_nan());
     }
 }

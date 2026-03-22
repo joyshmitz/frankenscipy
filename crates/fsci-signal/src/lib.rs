@@ -1106,6 +1106,93 @@ pub fn ellip(
     design_digital_iir(analog_zpk, wn, btype)
 }
 
+/// Design a second-order IIR notch (band-reject) filter.
+///
+/// Removes a narrow band of frequencies centered at `w0`.
+///
+/// Matches `scipy.signal.iirnotch(w0, Q)`.
+///
+/// # Arguments
+/// * `w0` — Frequency to reject (normalized, 0 < w0 < 1).
+/// * `q` — Quality factor. Higher Q = narrower notch.
+///
+/// Returns `BaCoeffs` (b, a) for the second-order notch filter.
+pub fn iirnotch(w0: f64, q: f64) -> Result<BaCoeffs, SignalError> {
+    if !w0.is_finite() || w0 <= 0.0 || w0 >= 1.0 {
+        return Err(SignalError::InvalidArgument(
+            "w0 must be in (0, 1)".to_string(),
+        ));
+    }
+    if !q.is_finite() || q <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "Q must be positive".to_string(),
+        ));
+    }
+
+    // Digital frequency: ω₀ = π·w0 (w0 is normalized to [0,1] where 1 = Nyquist)
+    let omega0 = std::f64::consts::PI * w0;
+    let bw = omega0 / q;
+    let r = (1.0 - bw / 2.0).max(0.0);
+    let cos_w0 = omega0.cos();
+
+    // Numerator: zeros on unit circle at e^(±jω₀)
+    // b = [1, -2cos(ω₀), 1] (normalized for unity gain at DC/Nyquist)
+    let b0 = 1.0;
+    let b1 = -2.0 * cos_w0;
+    let b2 = 1.0;
+
+    // Denominator: poles inside unit circle at r·e^(±jω₀)
+    // a = [1, -2r·cos(ω₀), r²]
+    let a0 = 1.0;
+    let a1 = -2.0 * r * cos_w0;
+    let a2 = r * r;
+
+    // Normalize for unity passband gain
+    let gain = (a0 + a1 + a2) / (b0 + b1 + b2);
+    Ok(BaCoeffs {
+        b: vec![b0 * gain, b1 * gain, b2 * gain],
+        a: vec![a0, a1, a2],
+    })
+}
+
+/// Design a second-order IIR peak (band-pass) filter.
+///
+/// Boosts a narrow band of frequencies centered at `w0`.
+///
+/// Matches `scipy.signal.iirpeak(w0, Q)`.
+///
+/// # Arguments
+/// * `w0` — Center frequency (normalized, 0 < w0 < 1).
+/// * `q` — Quality factor. Higher Q = narrower peak.
+///
+/// Returns `BaCoeffs` (b, a) for the second-order peak filter.
+pub fn iirpeak(w0: f64, q: f64) -> Result<BaCoeffs, SignalError> {
+    if !w0.is_finite() || w0 <= 0.0 || w0 >= 1.0 {
+        return Err(SignalError::InvalidArgument(
+            "w0 must be in (0, 1)".to_string(),
+        ));
+    }
+    if !q.is_finite() || q <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "Q must be positive".to_string(),
+        ));
+    }
+
+    let omega0 = std::f64::consts::PI * w0;
+    let bw = omega0 / q;
+    let r = (1.0 - bw / 2.0).max(0.0);
+    let cos_w0 = omega0.cos();
+
+    // Peak filter: poles on unit circle, zeros inside
+    // b = [1-r², 0, -(1-r²)] / 2 (normalized to unity gain at w0)
+    // a = [1, -2r·cos(ω₀), r²]
+    let gain_factor = (1.0 - r * r) / 2.0;
+    let b = vec![gain_factor, 0.0, -gain_factor];
+    let a = vec![1.0, -2.0 * r * cos_w0, r * r];
+
+    Ok(BaCoeffs { b, a })
+}
+
 /// General IIR filter design dispatcher.
 pub fn iirfilter(
     order: usize,
@@ -1733,10 +1820,9 @@ pub fn sosfiltfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalErro
         ));
     }
 
-    // Determine padding length (matches SciPy's default: 3 * (max_order - 1))
-    // For SOS, each section is order 2, so max_order is 3.
-    // 3 * (3-1) = 6.
-    let padlen = 6.min(n - 1);
+    // Determine padding length (matches SciPy's default: 3 * (ntaps - 1))
+    // For SOS, ntaps = 2 * n_sections + 1. So 3 * (2 * n_sections) = 6 * n_sections.
+    let padlen = (6 * sos.len()).min(n - 1);
 
     // 1. Pad signal with mirrored values:
     // [2*x[0]-x[padlen], ..., 2*x[0]-x[1], x[0], ..., x[n-1], 2*x[n-1]-x[n-2], ..., 2*x[n-1]-x[n-padlen-1]]
@@ -6211,5 +6297,55 @@ mod tests {
         for (i, &(_, im)) in analytic.iter().enumerate() {
             assert!(im.abs() < 1e-10, "DC imaginary[{i}] = {im}, expected ~0");
         }
+    }
+
+    // ── Notch/peak filter tests ──────────────────────────────────────
+
+    #[test]
+    fn iirnotch_rejects_target_frequency() {
+        let coeffs = iirnotch(0.3, 30.0).expect("iirnotch");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        // Find response at notch frequency (0.3π)
+        let notch_idx = nearest_freq_index(&result.w, 0.3 * std::f64::consts::PI);
+        // Response at notch should be near zero
+        assert!(
+            result.h_mag[notch_idx] < 0.1,
+            "notch should attenuate target freq: mag = {}",
+            result.h_mag[notch_idx]
+        );
+        // Response away from notch should be near 1
+        let pass_idx = nearest_freq_index(&result.w, 0.1 * std::f64::consts::PI);
+        assert!(
+            result.h_mag[pass_idx] > 0.9,
+            "passband should be near unity: mag = {}",
+            result.h_mag[pass_idx]
+        );
+    }
+
+    #[test]
+    fn iirpeak_boosts_target_frequency() {
+        let coeffs = iirpeak(0.3, 30.0).expect("iirpeak");
+        let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
+        let peak_idx = nearest_freq_index(&result.w, 0.3 * std::f64::consts::PI);
+        let pass_idx = nearest_freq_index(&result.w, 0.1 * std::f64::consts::PI);
+        assert!(
+            result.h_mag[peak_idx] > result.h_mag[pass_idx] * 2.0,
+            "peak should boost target: peak={}, pass={}",
+            result.h_mag[peak_idx],
+            result.h_mag[pass_idx]
+        );
+    }
+
+    #[test]
+    fn iirnotch_invalid_params() {
+        assert!(iirnotch(0.0, 10.0).is_err());
+        assert!(iirnotch(1.0, 10.0).is_err());
+        assert!(iirnotch(0.5, -1.0).is_err());
+    }
+
+    #[test]
+    fn iirpeak_invalid_params() {
+        assert!(iirpeak(0.0, 10.0).is_err());
+        assert!(iirpeak(0.5, 0.0).is_err());
     }
 }

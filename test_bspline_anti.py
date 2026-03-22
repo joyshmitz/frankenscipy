@@ -1,10 +1,11 @@
 import numpy as np
 from scipy.interpolate import BSpline
 
-t = [0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0]
-c = [1.0, 2.0, 3.0, 4.0, 0.0]
+t = np.array([0, 0, 0, 1, 1, 1], dtype=float)
+c = np.array([1.0, 2.0, 3.0], dtype=float)
 k = 2
-b = BSpline(t, c, k)
-b_anti = b.antiderivative(1)
-print("scipy anti c:", b_anti.c)
-print("scipy anti t:", b_anti.t)
+spl = BSpline(t, c, k)
+anti = spl.antiderivative()
+print("Knots:", anti.t)
+print("Coeffs:", anti.c)
+print("Degree:", anti.k)

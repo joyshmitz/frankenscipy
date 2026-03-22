@@ -2473,6 +2473,66 @@ mod tests {
         let err = breadth_first_order(&g, 10).expect_err("oob");
         assert!(matches!(err, SparseError::InvalidArgument { .. }));
     }
+
+    // ── Graph Laplacian tests ────────────────────────────────────────
+
+    #[test]
+    fn laplacian_row_sums_zero() {
+        // Unnormalized Laplacian has zero row sums
+        let g = triangle_graph_csr();
+        let l = laplacian(&g, false).expect("laplacian");
+        for (i, row) in l.iter().enumerate() {
+            let sum: f64 = row.iter().sum();
+            assert!(
+                sum.abs() < 1e-10,
+                "row {i} sum should be 0: {sum}"
+            );
+        }
+    }
+
+    #[test]
+    fn laplacian_diagonal_is_degree() {
+        let g = triangle_graph_csr();
+        let l = laplacian(&g, false).expect("laplacian");
+        // Triangle graph: each node has degree = sum of edge weights to neighbors
+        // Node 0: edges to 1 (w=1) and 2 (w=3) → degree = 4
+        assert!(
+            (l[0][0] - 4.0).abs() < 1e-10,
+            "L[0,0] = {}, expected 4",
+            l[0][0]
+        );
+    }
+
+    #[test]
+    fn laplacian_normed_diagonal_ones() {
+        // Normalized Laplacian has 1.0 on diagonal (for connected nodes)
+        let g = triangle_graph_csr();
+        let l = laplacian(&g, true).expect("normed laplacian");
+        for i in 0..3 {
+            assert!(
+                (l[i][i] - 1.0).abs() < 1e-10,
+                "L_norm[{i},{i}] = {}, expected 1.0",
+                l[i][i]
+            );
+        }
+    }
+
+    #[test]
+    fn laplacian_symmetric() {
+        let g = triangle_graph_csr();
+        let l = laplacian(&g, false).expect("laplacian");
+        let n = l.len();
+        for i in 0..n {
+            for j in 0..n {
+                assert!(
+                    (l[i][j] - l[j][i]).abs() < 1e-10,
+                    "L[{i},{j}]={} != L[{j},{i}]={}",
+                    l[i][j],
+                    l[j][i]
+                );
+            }
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3293,6 +3353,62 @@ pub fn depth_first_order(graph: &CsrMatrix, source: usize) -> SparseResult<(Vec<
     }
 
     Ok((order, predecessors))
+}
+
+/// Compute the graph Laplacian matrix L = D - A.
+///
+/// The graph Laplacian is fundamental for spectral graph theory, spectral clustering,
+/// diffusion processes, and network analysis.
+///
+/// Matches `scipy.sparse.csgraph.laplacian(graph, normed=normed)`.
+///
+/// # Arguments
+/// * `graph` — Adjacency matrix in CSR format (edge weights as values).
+/// * `normed` — If true, compute the symmetric normalized Laplacian L_sym = D^(-1/2) L D^(-1/2).
+///
+/// Returns the Laplacian as a dense matrix (Vec<Vec<f64>>).
+pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>> {
+    let n = graph.shape().rows;
+    let indptr = graph.indptr();
+    let indices = graph.indices();
+    let data = graph.data();
+
+    // Compute degree vector (sum of edge weights per row)
+    let mut degree = vec![0.0; n];
+    for i in 0..n {
+        for idx in indptr[i]..indptr[i + 1] {
+            degree[i] += data[idx].abs();
+        }
+    }
+
+    // Build L = D - A
+    let mut lapl = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        lapl[i][i] = degree[i];
+        for idx in indptr[i]..indptr[i + 1] {
+            let j = indices[idx];
+            lapl[i][j] -= data[idx];
+        }
+    }
+
+    if normed {
+        // Symmetric normalized: L_sym = D^(-1/2) L D^(-1/2)
+        let mut d_inv_sqrt = vec![0.0; n];
+        for i in 0..n {
+            d_inv_sqrt[i] = if degree[i] > 0.0 {
+                1.0 / degree[i].sqrt()
+            } else {
+                0.0
+            };
+        }
+        for i in 0..n {
+            for j in 0..n {
+                lapl[i][j] *= d_inv_sqrt[i] * d_inv_sqrt[j];
+            }
+        }
+    }
+
+    Ok(lapl)
 }
 
 /// Result of minimum spanning tree computation.
