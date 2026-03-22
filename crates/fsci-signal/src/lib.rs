@@ -1715,6 +1715,11 @@ pub fn lfilter(
 ///
 /// This results in zero phase distortion (linear phase) and doubled filter order.
 pub fn filtfilt(b: &[f64], a: &[f64], x: &[f64]) -> Result<Vec<f64>, SignalError> {
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".to_string(),
+        ));
+    }
     let n = x.len();
     if n < 3 {
         return Err(SignalError::InvalidArgument(
@@ -4901,6 +4906,12 @@ mod tests {
     #[test]
     fn filtfilt_short_input_rejected() {
         assert!(filtfilt(&[1.0], &[1.0], &[1.0, 2.0]).is_err());
+    }
+
+    #[test]
+    fn filtfilt_empty_coefficients_rejected() {
+        assert!(filtfilt(&[], &[1.0], &[1.0, 2.0, 3.0]).is_err());
+        assert!(filtfilt(&[1.0], &[], &[1.0, 2.0, 3.0]).is_err());
     }
 
     // ── Periodogram tests ──────────────────────────────────────────
