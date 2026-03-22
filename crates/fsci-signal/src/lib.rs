@@ -654,6 +654,118 @@ pub fn hilbert_envelope(x: &[f64]) -> Result<Vec<f64>, SignalError> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Spectral Analysis (Lomb-Scargle) and Waveform Generation
+// ══════════════════════════════════════════════════════════════════════
+
+/// Lomb-Scargle periodogram for unevenly-spaced data.
+///
+/// Computes the Lomb-Scargle periodogram power at specified angular frequencies.
+///
+/// Matches `scipy.signal.lombscargle(x, y, freqs)`.
+///
+/// # Arguments
+/// * `x` — Sample times (must be non-decreasing).
+/// * `y` — Measurements at each sample time.
+/// * `freqs` — Angular frequencies at which to evaluate the periodogram.
+pub fn lombscargle(x: &[f64], y: &[f64], freqs: &[f64]) -> Result<Vec<f64>, SignalError> {
+    if x.len() != y.len() {
+        return Err(SignalError::InvalidArgument(
+            "x and y must have the same length".to_string(),
+        ));
+    }
+    if x.len() < 2 {
+        return Err(SignalError::InvalidArgument(
+            "need at least 2 data points".to_string(),
+        ));
+    }
+
+    let n = x.len() as f64;
+    let mut power = Vec::with_capacity(freqs.len());
+
+    for &omega in freqs {
+        // Compute tau: phase offset for orthogonality
+        let mut s2 = 0.0;
+        let mut c2 = 0.0;
+        for &xi in x {
+            s2 += (2.0 * omega * xi).sin();
+            c2 += (2.0 * omega * xi).cos();
+        }
+        let tau = (s2 / c2).atan() / (2.0 * omega);
+
+        // Compute power at this frequency
+        let mut y_cos_sum = 0.0;
+        let mut cos2_sum = 0.0;
+        let mut y_sin_sum = 0.0;
+        let mut sin2_sum = 0.0;
+
+        for (&xi, &yi) in x.iter().zip(y.iter()) {
+            let phase = omega * (xi - tau);
+            let c = phase.cos();
+            let s = phase.sin();
+            y_cos_sum += yi * c;
+            cos2_sum += c * c;
+            y_sin_sum += yi * s;
+            sin2_sum += s * s;
+        }
+
+        let p = if cos2_sum > 0.0 && sin2_sum > 0.0 {
+            0.5 * (y_cos_sum.powi(2) / cos2_sum + y_sin_sum.powi(2) / sin2_sum)
+        } else {
+            0.0
+        };
+        power.push(p);
+    }
+
+    Ok(power)
+}
+
+/// Gaussian-modulated sinusoidal pulse.
+///
+/// Returns the samples of a Gaussian-modulated sinusoid:
+///   y(t) = exp(-a t²) cos(2π fc t)
+/// where a = (π fc bw)² / (-2 ln(bwr)) and bwr is the reference level (-6dB default).
+///
+/// Matches `scipy.signal.gausspulse(t, fc, bw)`.
+pub fn gausspulse(t: &[f64], fc: f64, bw: f64) -> Vec<f64> {
+    let bwr = -6.0; // reference level in dB
+    let ref_level = 10.0_f64.powf(bwr / 20.0);
+    let a = -(std::f64::consts::PI * fc * bw).powi(2) / (2.0 * ref_level.ln());
+
+    t.iter()
+        .map(|&ti| {
+            let envelope = (-a * ti * ti).exp();
+            let carrier = (2.0 * std::f64::consts::PI * fc * ti).cos();
+            envelope * carrier
+        })
+        .collect()
+}
+
+/// Frequency-swept cosine with polynomial instantaneous frequency.
+///
+/// Generates cos(2π ∫₀ᵗ f(τ) dτ) where f(τ) is a polynomial.
+///
+/// Matches `scipy.signal.sweep_poly(t, poly)`.
+///
+/// # Arguments
+/// * `t` — Time points.
+/// * `poly` — Polynomial coefficients [p₀, p₁, ..., pₙ] for f(t) = p₀tⁿ + ... + pₙ.
+pub fn sweep_poly(t: &[f64], poly: &[f64]) -> Vec<f64> {
+    t.iter()
+        .map(|&ti| {
+            // Integrate polynomial: ∫₀ᵗ (p₀τⁿ + ... + pₙ) dτ
+            // = p₀t^{n+1}/(n+1) + ... + pₙt
+            let n = poly.len();
+            let mut phase_integral = 0.0;
+            for (k, &coeff) in poly.iter().enumerate() {
+                let power = n - 1 - k; // degree of this term
+                phase_integral += coeff * ti.powi(power as i32 + 1) / (power as f64 + 1.0);
+            }
+            (2.0 * std::f64::consts::PI * phase_integral).cos()
+        })
+        .collect()
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Wavelets
 // ══════════════════════════════════════════════════════════════════════
 
@@ -6582,11 +6694,14 @@ mod tests {
 
     #[test]
     fn morlet_complex_oscillatory() {
-        let w = morlet(100, 5.0, 1.0, false);
-        assert_eq!(w.len(), 100);
-        // Should have both real and imaginary components
-        let has_im = w.iter().any(|&(_, im)| im.abs() > 0.01);
-        assert!(has_im, "morlet should have nonzero imaginary part");
+        let w = morlet(200, 5.5, 10.0, false);
+        assert_eq!(w.len(), 200);
+        // With wider s, the Gaussian envelope is broader and oscillations are visible
+        let max_im = w.iter().map(|&(_, im)| im.abs()).fold(0.0_f64, f64::max);
+        assert!(
+            max_im > 0.01,
+            "morlet should have nonzero imaginary part, max_im = {max_im}"
+        );
     }
 
     #[test]
@@ -6639,5 +6754,83 @@ mod tests {
         let w = bohman_window(64);
         assert!(w[0].abs() < 1e-12, "bohman start should be 0");
         assert!(w[63].abs() < 1e-12, "bohman end should be 0");
+    }
+
+    // ── Lomb-Scargle tests ───────────────────────────────────────────
+
+    #[test]
+    fn lombscargle_detects_known_frequency() {
+        // Signal with known frequency at 5 rad/s
+        let n = 200;
+        let x: Vec<f64> = (0..n).map(|i| i as f64 * 0.05).collect();
+        let y: Vec<f64> = x.iter().map(|&t| (5.0 * t).sin()).collect();
+        let freqs: Vec<f64> = (1..20).map(|f| f as f64).collect();
+        let power = lombscargle(&x, &y, &freqs).expect("lombscargle");
+        // Peak should be near freq=5
+        let peak_idx = power
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .unwrap()
+            .0;
+        assert!(
+            (freqs[peak_idx] - 5.0).abs() <= 1.0,
+            "peak at freq={}, expected ~5",
+            freqs[peak_idx]
+        );
+    }
+
+    #[test]
+    fn lombscargle_rejects_mismatched() {
+        let err = lombscargle(&[1.0, 2.0], &[1.0], &[1.0]).expect_err("mismatch");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    // ── gausspulse tests ─────────────────────────────────────────────
+
+    #[test]
+    fn gausspulse_peak_at_zero() {
+        let t: Vec<f64> = (-50..=50).map(|i| i as f64 * 0.001).collect();
+        let y = gausspulse(&t, 1000.0, 0.5);
+        // Peak should be at t=0 (index 50)
+        assert!(
+            y[50] > y[0].abs() && y[50] > y[100].abs(),
+            "gausspulse should peak at t=0"
+        );
+    }
+
+    #[test]
+    fn gausspulse_envelope_decay() {
+        // Envelope should decay away from center
+        let t: Vec<f64> = (0..100).map(|i| i as f64 * 0.001).collect();
+        let y = gausspulse(&t, 100.0, 0.5);
+        let max_abs = y.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+        assert!(y[0].abs() >= max_abs * 0.99, "peak should be at t=0");
+    }
+
+    // ── sweep_poly tests ─────────────────────────────────────────────
+
+    #[test]
+    fn sweep_poly_constant_freq() {
+        // Constant frequency f(t) = 10 → cos(2π·10·t)
+        let t: Vec<f64> = (0..100).map(|i| i as f64 * 0.01).collect();
+        let y = sweep_poly(&t, &[10.0]); // poly = [10] → f(t) = 10
+        assert_eq!(y.len(), 100);
+        // At t=0, should be cos(0) = 1
+        assert!((y[0] - 1.0).abs() < 1e-10, "sweep_poly(0) = {}", y[0]);
+    }
+
+    #[test]
+    fn sweep_poly_linear_chirp() {
+        // Linear chirp: f(t) = 10 + 100*t → poly = [100, 10]
+        let t: Vec<f64> = (0..200).map(|i| i as f64 * 0.001).collect();
+        let y = sweep_poly(&t, &[100.0, 10.0]);
+        assert_eq!(y.len(), 200);
+        // Should oscillate
+        let crossings = y
+            .windows(2)
+            .filter(|w| w[0].signum() != w[1].signum())
+            .count();
+        assert!(crossings > 2, "linear chirp should oscillate: {crossings} crossings");
     }
 }

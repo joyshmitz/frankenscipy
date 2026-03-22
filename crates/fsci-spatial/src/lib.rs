@@ -864,6 +864,252 @@ fn cross(o: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Procrustes Analysis
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of Procrustes analysis.
+#[derive(Debug, Clone)]
+pub struct ProcrustesResult {
+    /// Standardized version of data1.
+    pub mtx1: Vec<Vec<f64>>,
+    /// Standardized and transformed version of data2.
+    pub mtx2: Vec<Vec<f64>>,
+    /// Residual disparity (sum of squared differences after alignment).
+    pub disparity: f64,
+}
+
+/// Procrustes analysis: find optimal rotation/reflection + scaling to align two point sets.
+///
+/// Both inputs must have the same shape (n × d). The data are centered, scaled
+/// to unit Frobenius norm, then the optimal orthogonal transformation is found via SVD.
+///
+/// Matches `scipy.spatial.procrustes(data1, data2)`.
+pub fn procrustes(
+    data1: &[Vec<f64>],
+    data2: &[Vec<f64>],
+) -> Result<ProcrustesResult, SpatialError> {
+    let n = data1.len();
+    if n == 0 || data2.len() != n {
+        return Err(SpatialError::InvalidArgument(
+            "inputs must be non-empty and have same number of rows".to_string(),
+        ));
+    }
+    let d = data1[0].len();
+    if data2[0].len() != d {
+        return Err(SpatialError::DimensionMismatch {
+            expected: d,
+            actual: data2[0].len(),
+        });
+    }
+
+    // Center both datasets
+    let mut mtx1 = center_matrix(data1);
+    let mut mtx2 = center_matrix(data2);
+
+    // Scale to unit Frobenius norm
+    let norm1 = frobenius_norm(&mtx1);
+    let norm2 = frobenius_norm(&mtx2);
+    if norm1 > 0.0 {
+        scale_matrix(&mut mtx1, 1.0 / norm1);
+    }
+    if norm2 > 0.0 {
+        scale_matrix(&mut mtx2, 1.0 / norm2);
+    }
+
+    // Find optimal rotation: minimize ||mtx1 - mtx2 R||²
+    // Solution: R = V U^T where mtx2^T mtx1 = U S V^T (SVD)
+    // Compute M = mtx2^T mtx1 (d × d matrix)
+    let mut m = vec![vec![0.0; d]; d];
+    for i in 0..d {
+        for j in 0..d {
+            for k in 0..n {
+                m[i][j] += mtx2[k][i] * mtx1[k][j];
+            }
+        }
+    }
+
+    // Compute R = optimal rotation via M^T M eigendecomposition
+    // For small d (typically 2 or 3), use iterative power method on M^T M
+    // R = V U^T where M = U S V^T
+    // Simpler approach: R = M (M^T M)^{-1/2}
+    // Even simpler for Procrustes: use polar decomposition M = R H where R orthogonal
+    // R = M (M^T M)^{-1/2}
+    let mut mtm = vec![vec![0.0; d]; d];
+    for i in 0..d {
+        for j in 0..d {
+            for k in 0..d {
+                mtm[i][j] += m[k][i] * m[k][j]; // M^T M
+            }
+        }
+    }
+
+    // For 2D case (most common), solve directly
+    // For general case, use iterative square root inverse
+    let rotation = if d == 2 {
+        // 2D: compute polar decomposition analytically
+        let det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+        let trace_mtm = mtm[0][0] + mtm[1][1];
+        let det_mtm = mtm[0][0] * mtm[1][1] - mtm[0][1] * mtm[1][0];
+        let s = (trace_mtm + 2.0 * det_mtm.max(0.0).sqrt()).max(0.0).sqrt();
+        if s > 1e-15 {
+            // R = M / s (scaled)
+            vec![
+                vec![m[0][0] / s + m[1][1] / s, m[0][1] / s - m[1][0] / s],
+                vec![m[1][0] / s - m[0][1] / s, m[0][0] / s + m[1][1] / s],
+            ]
+        } else {
+            // Degenerate: use identity
+            vec![vec![1.0, 0.0], vec![0.0, 1.0]]
+        }
+    } else {
+        // General: Newton iteration for (M^T M)^{-1/2}, then R = M * result
+        // Start with identity as initial guess
+        let mut y = vec![vec![0.0; d]; d];
+        for i in 0..d { y[i][i] = 1.0; }
+
+        for _ in 0..20 {
+            // Y_new = 0.5 * Y * (3I - M^T M Y² )
+            let mut y2 = mat_mul(&y, &y, d);
+            let mut my2 = mat_mul(&mtm, &y2, d);
+            for i in 0..d {
+                for j in 0..d {
+                    my2[i][j] = if i == j { 3.0 } else { 0.0 } - my2[i][j];
+                }
+            }
+            let y_new = mat_mul(&y, &my2, d);
+            let mut max_diff = 0.0_f64;
+            for i in 0..d {
+                for j in 0..d {
+                    max_diff = max_diff.max((y_new[i][j] * 0.5 - y[i][j]).abs());
+                    y[i][j] = y_new[i][j] * 0.5;
+                }
+            }
+            if max_diff < 1e-14 { break; }
+        }
+        mat_mul(&m, &y, d)
+    };
+
+    // Apply rotation: mtx2_aligned = mtx2 * R
+    let mut aligned = vec![vec![0.0; d]; n];
+    for i in 0..n {
+        for j in 0..d {
+            for k in 0..d {
+                aligned[i][j] += mtx2[i][k] * rotation[k][j];
+            }
+        }
+    }
+
+    // Compute disparity: sum of squared differences
+    let mut disparity = 0.0;
+    for i in 0..n {
+        for j in 0..d {
+            disparity += (mtx1[i][j] - aligned[i][j]).powi(2);
+        }
+    }
+
+    Ok(ProcrustesResult {
+        mtx1,
+        mtx2: aligned,
+        disparity,
+    })
+}
+
+fn center_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = data.len();
+    let d = data[0].len();
+    let mut means = vec![0.0; d];
+    for row in data {
+        for (j, &val) in row.iter().enumerate() {
+            means[j] += val;
+        }
+    }
+    for m in &mut means {
+        *m /= n as f64;
+    }
+    data.iter()
+        .map(|row| row.iter().enumerate().map(|(j, &v)| v - means[j]).collect())
+        .collect()
+}
+
+fn frobenius_norm(data: &[Vec<f64>]) -> f64 {
+    data.iter()
+        .flat_map(|row| row.iter())
+        .map(|&v| v * v)
+        .sum::<f64>()
+        .sqrt()
+}
+
+fn mat_mul(a: &[Vec<f64>], b: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
+    let mut c = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                c[i][j] += a[i][k] * b[k][j];
+            }
+        }
+    }
+    c
+}
+
+fn scale_matrix(data: &mut [Vec<f64>], factor: f64) {
+    for row in data.iter_mut() {
+        for v in row.iter_mut() {
+            *v *= factor;
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Geometric SLERP
+// ══════════════════════════════════════════════════════════════════════
+
+/// Spherical linear interpolation (SLERP) between two N-dimensional unit vectors.
+///
+/// Interpolates along the great circle arc on the unit sphere.
+///
+/// Matches `scipy.spatial.geometric_slerp(start, end, t)`.
+///
+/// # Arguments
+/// * `start` — Starting point on the unit sphere.
+/// * `end` — Ending point on the unit sphere.
+/// * `t` — Interpolation parameters in [0, 1]. Can be multiple values.
+pub fn geometric_slerp(start: &[f64], end: &[f64], t_values: &[f64]) -> Result<Vec<Vec<f64>>, SpatialError> {
+    if start.len() != end.len() {
+        return Err(SpatialError::DimensionMismatch {
+            expected: start.len(),
+            actual: end.len(),
+        });
+    }
+    let d = start.len();
+
+    // Compute angle between start and end
+    let dot: f64 = start.iter().zip(end.iter()).map(|(&a, &b)| a * b).sum();
+    let dot = dot.clamp(-1.0, 1.0);
+    let omega = dot.acos();
+
+    let mut results = Vec::with_capacity(t_values.len());
+
+    if omega.abs() < 1e-10 {
+        // Points are the same: all interpolations = start
+        for _ in t_values {
+            results.push(start.to_vec());
+        }
+        return Ok(results);
+    }
+
+    let sin_omega = omega.sin();
+
+    for &t in t_values {
+        let a = ((1.0 - t) * omega).sin() / sin_omega;
+        let b = (t * omega).sin() / sin_omega;
+        let point: Vec<f64> = (0..d).map(|i| a * start[i] + b * end[i]).collect();
+        results.push(point);
+    }
+
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1360,5 +1606,84 @@ mod tests {
             "area ≈ π: {}",
             hull.area
         );
+    }
+
+    // ── Procrustes tests ─────────────────────────────────────────────
+
+    #[test]
+    fn procrustes_identical() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let result = procrustes(&data, &data).expect("procrustes");
+        assert!(
+            result.disparity < 1e-10,
+            "identical data should have 0 disparity: {}",
+            result.disparity
+        );
+    }
+
+    #[test]
+    fn procrustes_rotated() {
+        // data2 is data1 rotated 90 degrees
+        let data1 = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![-1.0, 0.0]];
+        let data2 = vec![vec![0.0, 1.0], vec![-1.0, 0.0], vec![0.0, -1.0]];
+        let result = procrustes(&data1, &data2).expect("procrustes");
+        assert!(
+            result.disparity < 0.01,
+            "rotated data should align: disparity = {}",
+            result.disparity
+        );
+    }
+
+    #[test]
+    fn procrustes_scaled() {
+        // data2 is data1 scaled by 2 (should align after normalization)
+        let data1 = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![-1.0, 0.0]];
+        let data2: Vec<Vec<f64>> = data1.iter().map(|p| p.iter().map(|&v| v * 2.0).collect()).collect();
+        let result = procrustes(&data1, &data2).expect("procrustes");
+        assert!(
+            result.disparity < 1e-10,
+            "scaled data should align: disparity = {}",
+            result.disparity
+        );
+    }
+
+    // ── Geometric SLERP tests ────────────────────────────────────────
+
+    #[test]
+    fn slerp_endpoints() {
+        let start = vec![1.0, 0.0, 0.0];
+        let end = vec![0.0, 1.0, 0.0];
+        let result = geometric_slerp(&start, &end, &[0.0, 1.0]).expect("slerp");
+        assert_eq!(result.len(), 2);
+        // t=0 → start
+        assert!((result[0][0] - 1.0).abs() < 1e-10);
+        // t=1 → end
+        assert!((result[1][1] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn slerp_midpoint_on_sphere() {
+        let start = vec![1.0, 0.0];
+        let end = vec![0.0, 1.0];
+        let result = geometric_slerp(&start, &end, &[0.5]).expect("slerp");
+        // Midpoint should be on unit circle
+        let norm: f64 = result[0].iter().map(|&v| v * v).sum::<f64>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-10,
+            "midpoint should be on unit sphere: norm = {norm}"
+        );
+        // Should be at 45 degrees
+        let expected = 1.0 / 2.0_f64.sqrt();
+        assert!(
+            (result[0][0] - expected).abs() < 1e-10,
+            "slerp midpoint x: {}",
+            result[0][0]
+        );
+    }
+
+    #[test]
+    fn slerp_dimension_mismatch() {
+        let err = geometric_slerp(&[1.0, 0.0], &[1.0, 0.0, 0.0], &[0.5]).expect_err("dim");
+        assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
     }
 }

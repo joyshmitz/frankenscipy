@@ -2390,6 +2390,240 @@ pub fn bartlett(groups: &[&[f64]]) -> VarianceTestResult {
 }
 
 /// Mann-Whitney U test (rank-sum test for two independent samples).
+/// Friedman test for repeated measures (non-parametric).
+///
+/// Tests H0: all treatments have the same effect. Non-parametric alternative
+/// to repeated-measures ANOVA. Each group must have the same length.
+///
+/// Matches `scipy.stats.friedmanchisquare(*groups)`.
+pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
+    let k = groups.len();
+    if k < 3 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+    let n = groups[0].len();
+    if n < 2 || groups.iter().any(|g| g.len() != n) {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    // Rank within each block (row) with tie handling (average ranks)
+    let mut rank_sums = vec![0.0; k];
+    for block in 0..n {
+        let mut vals: Vec<(f64, usize)> = groups
+            .iter()
+            .enumerate()
+            .map(|(j, g)| (g[block], j))
+            .collect();
+        vals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Average ranks for ties
+        let mut i = 0;
+        while i < k {
+            let mut j = i + 1;
+            while j < k && (vals[j].0 - vals[i].0).abs() < 1e-12 {
+                j += 1;
+            }
+            // Positions i..j all tied — average rank
+            let avg_rank = (i..j).map(|r| r as f64 + 1.0).sum::<f64>() / (j - i) as f64;
+            for tied in &vals[i..j] {
+                rank_sums[tied.1] += avg_rank;
+            }
+            i = j;
+        }
+    }
+
+    // Friedman statistic: χ² = 12/(nk(k+1)) Σ R_j² - 3n(k+1)
+    let kf = k as f64;
+    let nf = n as f64;
+    let sum_sq: f64 = rank_sums.iter().map(|&r| r * r).sum();
+    let chi2 = 12.0 / (nf * kf * (kf + 1.0)) * sum_sq - 3.0 * nf * (kf + 1.0);
+
+    let df = kf - 1.0;
+    let dist = ChiSquared::new(df);
+    let pvalue = (1.0 - dist.cdf(chi2)).max(0.0).min(1.0);
+
+    TtestResult {
+        statistic: chi2,
+        pvalue,
+        df,
+    }
+}
+
+/// Fligner-Killeen test for equal variances.
+///
+/// A robust non-parametric test that uses the chi-squared distribution
+/// of median-centered rank scores.
+///
+/// Matches `scipy.stats.fligner(*groups)`.
+pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
+    if groups.len() < 2 || groups.iter().any(|g| g.len() < 2) {
+        return invalid_variance_test_result();
+    }
+
+    let k = groups.len();
+
+    // Compute median-centered scores using normal quantiles
+    let mut all_scores: Vec<f64> = Vec::new();
+    let mut group_sizes: Vec<usize> = Vec::new();
+
+    for group in groups {
+        let mut sorted = group.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = quantile_sorted(&sorted, 0.5);
+        let deviations: Vec<f64> = group.iter().map(|&x| (x - median).abs()).collect();
+        all_scores.extend_from_slice(&deviations);
+        group_sizes.push(group.len());
+    }
+
+    let n_total = all_scores.len();
+    // Rank all scores
+    let mut indexed: Vec<(f64, usize)> = all_scores.iter().copied().enumerate().map(|(i, v)| (v, i)).collect();
+    indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut ranks = vec![0.0; n_total];
+    for (rank, &(_, idx)) in indexed.iter().enumerate() {
+        ranks[idx] = rank as f64 + 1.0;
+    }
+
+    // Transform ranks to normal quantile scores
+    let nf = n_total as f64;
+    let scores: Vec<f64> = ranks
+        .iter()
+        .map(|&r| standard_normal_ppf((1.0 + r / (nf + 1.0)) / 2.0))
+        .collect();
+
+    // Compute group means of scores
+    let grand_mean = scores.iter().sum::<f64>() / nf;
+    let mut offset = 0;
+    let mut numerator = 0.0;
+    let mut denominator = 0.0;
+    for &ni in &group_sizes {
+        let group_mean = scores[offset..offset + ni].iter().sum::<f64>() / ni as f64;
+        numerator += ni as f64 * (group_mean - grand_mean).powi(2);
+        for j in offset..offset + ni {
+            denominator += (scores[j] - grand_mean).powi(2);
+        }
+        offset += ni;
+    }
+
+    let statistic = if denominator > 0.0 {
+        (nf - k as f64) * numerator / denominator
+    } else {
+        f64::NAN
+    };
+
+    let df = (k - 1) as f64;
+    let dist = ChiSquared::new(df);
+    let pvalue = (1.0 - dist.cdf(statistic)).max(0.0).min(1.0);
+
+    VarianceTestResult { statistic, pvalue }
+}
+
+/// Mood's test for equal scale parameters.
+///
+/// Tests H0: two samples have equal scale. Non-parametric.
+///
+/// Matches `scipy.stats.mood(x, y)`.
+pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
+    if x.len() < 3 || y.len() < 3 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let n = x.len() + y.len();
+    let nf = n as f64;
+
+    // Pool and rank all observations
+    let mut pooled: Vec<(f64, bool)> = x.iter().map(|&v| (v, true)).chain(y.iter().map(|&v| (v, false))).collect();
+    pooled.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Mood statistic: M = Σ (rank_i - (n+1)/2)² for x observations
+    let center = (nf + 1.0) / 2.0;
+    let mut m_stat = 0.0;
+    for (rank, &(_, is_x)) in pooled.iter().enumerate() {
+        if is_x {
+            let r = rank as f64 + 1.0;
+            m_stat += (r - center).powi(2);
+        }
+    }
+
+    // Expected value and variance under H0
+    let nx = x.len() as f64;
+    let e_m = nx * (nf * nf - 1.0) / 12.0;
+    let var_m = nx * (nf - nx) * (nf + 1.0) * (nf * nf - 4.0) / (180.0 * nf);
+
+    if var_m <= 0.0 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let z = (m_stat - e_m) / var_m.sqrt();
+    let norm = Normal::standard();
+    let pvalue = 2.0 * (1.0 - ContinuousDistribution::cdf(&norm, z.abs()));
+
+    TtestResult {
+        statistic: z,
+        pvalue,
+        df: f64::NAN, // Non-parametric, no df
+    }
+}
+
+/// Mood's median test for equal medians across groups.
+///
+/// Tests H0: all groups have the same median.
+///
+/// Matches `scipy.stats.median_test(*groups)`.
+pub fn median_test(groups: &[&[f64]]) -> TtestResult {
+    if groups.len() < 2 || groups.iter().any(|g| g.is_empty()) {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    // Pool all data and find grand median
+    let mut all_data: Vec<f64> = groups.iter().flat_map(|g| g.iter().copied()).collect();
+    all_data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let grand_median = quantile_sorted(&all_data, 0.5);
+
+    // Count observations above/below median per group
+    let k = groups.len();
+    let mut above = vec![0.0; k];
+    let mut below = vec![0.0; k];
+    for (i, group) in groups.iter().enumerate() {
+        for &val in *group {
+            if val > grand_median {
+                above[i] += 1.0;
+            } else {
+                below[i] += 1.0;
+            }
+        }
+    }
+
+    // Chi-squared test on the 2×k contingency table
+    let table = vec![above, below];
+    let result = chi2_contingency(&table);
+    TtestResult {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+        df: (k - 1) as f64,
+    }
+}
+
 ///
 /// Matches `scipy.stats.mannwhitneyu(x, y, alternative='two-sided')`.
 ///
@@ -6477,5 +6711,102 @@ mod tests {
     #[test]
     fn energy_distance_empty() {
         assert!(energy_distance(&[], &[1.0]).is_nan());
+    }
+
+    // ── Friedman test ────────────────────────────────────────────────
+
+    #[test]
+    fn friedmanchisquare_identical_groups() {
+        // All groups identical → no treatment effect
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = friedmanchisquare(&[&a, &a, &a]);
+        assert!(result.pvalue > 0.9, "identical groups: p={}", result.pvalue);
+    }
+
+    #[test]
+    fn friedmanchisquare_different_groups() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let b = vec![6.0, 7.0, 8.0, 9.0, 10.0];
+        let c = vec![11.0, 12.0, 13.0, 14.0, 15.0];
+        let result = friedmanchisquare(&[&a, &b, &c]);
+        assert!(
+            result.pvalue < 0.01,
+            "different groups should reject: p={}",
+            result.pvalue
+        );
+    }
+
+    // ── Fligner test ─────────────────────────────────────────────────
+
+    #[test]
+    fn fligner_equal_variance() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let b = vec![2.0, 3.0, 4.0, 5.0, 6.0]; // same spread, shifted
+        let result = fligner(&[&a, &b]);
+        assert!(
+            result.pvalue > 0.1,
+            "equal variance: p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn fligner_unequal_variance() {
+        let a: Vec<f64> = (0..50).map(|i| i as f64).collect(); // wide spread
+        let b: Vec<f64> = (0..50).map(|i| 25.0 + 0.01 * i as f64).collect(); // narrow
+        let result = fligner(&[&a, &b]);
+        assert!(
+            result.pvalue < 0.05,
+            "unequal variance: p={}",
+            result.pvalue
+        );
+    }
+
+    // ── Mood test ────────────────────────────────────────────────────
+
+    #[test]
+    fn mood_equal_scale() {
+        let a: Vec<f64> = (0..30).map(|i| i as f64).collect();
+        let b: Vec<f64> = (0..30).map(|i| i as f64 + 100.0).collect();
+        let result = mood(&a, &b);
+        assert!(result.pvalue > 0.1, "equal scale: p={}", result.pvalue);
+    }
+
+    #[test]
+    fn mood_different_scale() {
+        let a: Vec<f64> = (0..50).map(|i| i as f64 * 10.0).collect(); // wide
+        let b: Vec<f64> = (0..50).map(|i| 250.0 + i as f64 * 0.1).collect(); // narrow
+        let result = mood(&a, &b);
+        assert!(
+            result.pvalue < 0.05,
+            "different scale: p={}",
+            result.pvalue
+        );
+    }
+
+    // ── Median test ──────────────────────────────────────────────────
+
+    #[test]
+    fn median_test_same_median() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let b = vec![1.5, 2.5, 3.5, 4.5, 5.5];
+        let result = median_test(&[&a, &b]);
+        assert!(
+            result.pvalue > 0.1,
+            "similar medians: p={}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn median_test_different_medians() {
+        let a: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let b: Vec<f64> = (100..120).map(|i| i as f64).collect();
+        let result = median_test(&[&a, &b]);
+        assert!(
+            result.pvalue < 0.01,
+            "different medians: p={}",
+            result.pvalue
+        );
     }
 }

@@ -1092,6 +1092,125 @@ impl LinearNDInterpolator {
     pub fn eval_many(&self, queries: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> { queries.iter().map(|q| self.eval(q)).collect() }
 }
 
+// ── RBF Interpolator ─────────────────────────────────────────────────
+
+/// Radial basis function kernel types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RbfKernel {
+    /// Linear: r
+    #[default]
+    Linear,
+    /// Thin plate spline: r² ln(r)
+    ThinPlateSpline,
+    /// Multiquadric: sqrt(1 + (εr)²)
+    Multiquadric,
+    /// Inverse multiquadric: 1/sqrt(1 + (εr)²)
+    InverseMultiquadric,
+    /// Gaussian: exp(-(εr)²)
+    Gaussian,
+}
+
+/// N-dimensional scattered data interpolation using radial basis functions.
+///
+/// Matches `scipy.interpolate.RBFInterpolator(y, d, kernel=kernel)`.
+#[derive(Debug, Clone)]
+pub struct RbfInterpolator {
+    points: Vec<Vec<f64>>,
+    weights: Vec<f64>,
+    kernel: RbfKernel,
+    epsilon: f64,
+}
+
+impl RbfInterpolator {
+    /// Create a new RBF interpolator.
+    ///
+    /// # Arguments
+    /// * `points` — Data point coordinates (N points × D dimensions).
+    /// * `values` — Function values at each point.
+    /// * `kernel` — Radial basis function kernel.
+    /// * `epsilon` — Shape parameter (used by multiquadric, inverse_multiquadric, gaussian).
+    pub fn new(
+        points: &[Vec<f64>],
+        values: &[f64],
+        kernel: RbfKernel,
+        epsilon: f64,
+    ) -> Result<Self, InterpError> {
+        let n = points.len();
+        if n == 0 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 1,
+                actual: 0,
+            });
+        }
+        if n != values.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: n,
+                y_len: values.len(),
+            });
+        }
+
+        // Build the RBF matrix: Φ[i,j] = φ(||points[i] - points[j]||)
+        let mut phi = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                let r = euclidean_dist(&points[i], &points[j]);
+                phi[i][j] = rbf_eval(kernel, r, epsilon);
+            }
+        }
+
+        // Solve Φ w = values for weights
+        let mut phi_mut = phi;
+        let mut values_mut = values.to_vec();
+        let weights = solve_dense_system(&mut phi_mut, &mut values_mut)?;
+
+        Ok(Self {
+            points: points.to_vec(),
+            weights,
+            kernel,
+            epsilon,
+        })
+    }
+
+    /// Evaluate the interpolant at a query point.
+    pub fn eval(&self, query: &[f64]) -> f64 {
+        let mut result = 0.0;
+        for (i, pt) in self.points.iter().enumerate() {
+            let r = euclidean_dist(pt, query);
+            result += self.weights[i] * rbf_eval(self.kernel, r, self.epsilon);
+        }
+        result
+    }
+
+    /// Evaluate at multiple query points.
+    pub fn eval_many(&self, queries: &[Vec<f64>]) -> Vec<f64> {
+        queries.iter().map(|q| self.eval(q)).collect()
+    }
+}
+
+fn rbf_eval(kernel: RbfKernel, r: f64, epsilon: f64) -> f64 {
+    match kernel {
+        RbfKernel::Linear => r,
+        RbfKernel::ThinPlateSpline => {
+            if r < 1e-30 {
+                0.0
+            } else {
+                r * r * r.ln()
+            }
+        }
+        RbfKernel::Multiquadric => (1.0 + (epsilon * r).powi(2)).sqrt(),
+        RbfKernel::InverseMultiquadric => 1.0 / (1.0 + (epsilon * r).powi(2)).sqrt(),
+        RbfKernel::Gaussian => (-(epsilon * r).powi(2)).exp(),
+    }
+}
+
+fn euclidean_dist(a: &[f64], b: &[f64]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(&ai, &bi)| (ai - bi).powi(2))
+        .sum::<f64>()
+        .sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1149,5 +1268,86 @@ mod tests {
         assert_eq!(anti.degree(), 2);
         assert_eq!(anti.eval(0.0), 0.0);
         assert_eq!(anti.eval(1.0), 1.0);
+    }
+
+    // ── RBF Interpolator tests ───────────────────────────────────────
+
+    #[test]
+    fn rbf_exact_at_data_points() {
+        let points = vec![vec![0.0], vec![1.0], vec![2.0], vec![3.0]];
+        let values = vec![0.0, 1.0, 4.0, 9.0]; // x²
+        let rbf =
+            RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf");
+        for (pt, &expected) in points.iter().zip(values.iter()) {
+            let result = rbf.eval(pt);
+            assert!(
+                (result - expected).abs() < 1e-6,
+                "RBF at {:?}: got {result}, expected {expected}",
+                pt
+            );
+        }
+    }
+
+    #[test]
+    fn rbf_smooth_between_points() {
+        let points = vec![vec![0.0], vec![1.0], vec![2.0]];
+        let values = vec![0.0, 1.0, 0.0]; // triangular
+        let rbf =
+            RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf");
+        let mid = rbf.eval(&[0.5]);
+        assert!(mid > 0.0 && mid < 1.0, "midpoint should interpolate: {mid}");
+    }
+
+    #[test]
+    fn rbf_2d() {
+        // 2D: f(x,y) = x + y at corners of unit square
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+        ];
+        let values = vec![0.0, 1.0, 1.0, 2.0];
+        let rbf =
+            RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf 2d");
+        let center = rbf.eval(&[0.5, 0.5]);
+        assert!(
+            (center - 1.0).abs() < 0.3,
+            "center of x+y should be ~1: {center}"
+        );
+    }
+
+    #[test]
+    fn rbf_multiquadric_kernel() {
+        let points = vec![vec![0.0], vec![1.0], vec![2.0]];
+        let values = vec![1.0, 2.0, 3.0];
+        let rbf = RbfInterpolator::new(&points, &values, RbfKernel::Multiquadric, 1.0)
+            .expect("rbf mq");
+        // Should interpolate exactly at data points
+        for (pt, &expected) in points.iter().zip(values.iter()) {
+            let result = rbf.eval(pt);
+            assert!(
+                (result - expected).abs() < 1e-6,
+                "MQ at {:?}: {result} vs {expected}",
+                pt
+            );
+        }
+    }
+
+    #[test]
+    fn rbf_eval_many() {
+        let points = vec![vec![0.0], vec![1.0]];
+        let values = vec![0.0, 1.0];
+        let rbf =
+            RbfInterpolator::new(&points, &values, RbfKernel::Linear, 1.0).expect("rbf");
+        let results = rbf.eval_many(&[vec![0.0], vec![0.5], vec![1.0]]);
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn rbf_empty_rejected() {
+        let err =
+            RbfInterpolator::new(&[], &[], RbfKernel::Gaussian, 1.0).expect_err("empty");
+        assert!(matches!(err, InterpError::TooFewPoints { .. }));
     }
 }

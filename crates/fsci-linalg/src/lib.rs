@@ -2363,6 +2363,106 @@ pub fn matrix_power(
     Ok(rows_from_dmatrix(&result))
 }
 
+/// Matrix sign function.
+///
+/// For a matrix with no purely imaginary eigenvalues, sign(A) is defined as
+/// A * (A²)^{-1/2}, or equivalently via eigendecomposition:
+/// sign(A) = V * diag(sign(λ_i)) * V^{-1}.
+///
+/// Matches `scipy.linalg.signm(A)`.
+pub fn signm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    funm(a, |x| if x >= 0.0 { 1.0 } else { -1.0 }, options)
+}
+
+/// General matrix function via eigendecomposition.
+///
+/// Computes f(A) = V * diag(f(λ_i)) * V^{-1} where A = V * diag(λ) * V^{-1}.
+///
+/// For symmetric matrices, uses orthogonal eigendecomposition (more stable).
+/// For general matrices, uses Schur decomposition with Parlett's recurrence.
+///
+/// Matches `scipy.linalg.funm(A, func)`.
+pub fn funm(
+    a: &[Vec<f64>],
+    func: impl Fn(f64) -> f64,
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if rows == 0 {
+        return Ok(Vec::new());
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let n = rows;
+
+    // Check symmetry
+    let is_symmetric = (0..n).all(|i| {
+        (0..n).all(|j| {
+            (matrix[(i, j)] - matrix[(j, i)]).abs() < 1e-12 * matrix[(i, j)].abs().max(1.0)
+        })
+    });
+
+    if is_symmetric {
+        // Symmetric: A = V D V^T, f(A) = V f(D) V^T
+        let eig = matrix.clone().symmetric_eigen();
+        let v = &eig.eigenvectors;
+        let mut fd = DMatrix::<f64>::zeros(n, n);
+        for i in 0..n {
+            fd[(i, i)] = func(eig.eigenvalues[i]);
+        }
+        let result = v * fd * v.transpose();
+        return Ok(rows_from_dmatrix(&result));
+    }
+
+    // General: use Schur decomposition A = Q T Q^T
+    // Then f(A) = Q f(T) Q^T via Parlett's recurrence
+    let schur = matrix.clone().schur();
+    let (q, t) = schur.unpack();
+
+    let mut ft = DMatrix::<f64>::zeros(n, n);
+    // Diagonal: f(T[i,i])
+    for i in 0..n {
+        ft[(i, i)] = func(t[(i, i)]);
+    }
+
+    // Off-diagonal via Parlett's recurrence
+    for j in 1..n {
+        for i in (0..j).rev() {
+            let mut sum = t[(i, j)] * (ft[(j, j)] - ft[(i, i)]);
+            for k in (i + 1)..j {
+                sum += t[(i, k)] * ft[(k, j)] - ft[(i, k)] * t[(k, j)];
+            }
+            let denom = t[(j, j)] - t[(i, i)];
+            ft[(i, j)] = if denom.abs() > 1e-15 {
+                sum / denom
+            } else if t[(i, i)].abs() > 1e-15 {
+                sum / t[(i, i)]
+            } else {
+                0.0
+            };
+        }
+    }
+
+    let result = &q * ft * q.transpose();
+    Ok(rows_from_dmatrix(&result))
+}
+
+/// Fractional matrix power A^p for non-integer p.
+///
+/// Computes A^p via eigendecomposition: A^p = V * diag(λ_i^p) * V^{-1}.
+///
+/// Matches `scipy.linalg.fractional_matrix_power(A, p)`.
+pub fn fractional_matrix_power(
+    a: &[Vec<f64>],
+    p: f64,
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    funm(a, |x| x.powf(p), options)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Norms and Rank — Public API
 // ══════════════════════════════════════════════════════════════════════
@@ -5581,6 +5681,81 @@ mod proptest_tests {
         let q = vec![vec![1.0]];
         let err = solve_discrete_lyapunov(&a, &q, DecompOptions::default())
             .expect_err("non-square");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
+    // ── signm / funm / fractional_matrix_power tests ─────────────────
+
+    #[test]
+    fn signm_identity() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let result = signm(&a, DecompOptions::default()).expect("signm");
+        assert!((result[0][0] - 1.0).abs() < 1e-10);
+        assert!((result[1][1] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn signm_negative_identity() {
+        let a = vec![vec![-1.0, 0.0], vec![0.0, -1.0]];
+        let result = signm(&a, DecompOptions::default()).expect("signm");
+        assert!((result[0][0] - (-1.0)).abs() < 1e-10);
+        assert!((result[1][1] - (-1.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn funm_exp_matches_expm() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
+        let funm_result = funm(&a, f64::exp, DecompOptions::default()).expect("funm exp");
+        let expm_result = expm(&a, DecompOptions::default()).expect("expm");
+        for i in 0..2 {
+            for j in 0..2 {
+                assert!(
+                    (funm_result[i][j] - expm_result[i][j]).abs() < 1e-8,
+                    "funm exp vs expm at [{i},{j}]: {} vs {}",
+                    funm_result[i][j],
+                    expm_result[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_matrix_power_sqrt() {
+        // A^0.5 squared should give A (for positive definite A)
+        let a = vec![vec![4.0, 0.0], vec![0.0, 9.0]];
+        let sqrt_a = fractional_matrix_power(&a, 0.5, DecompOptions::default())
+            .expect("fractional power");
+        // sqrt_a should be [[2,0],[0,3]]
+        assert!(
+            (sqrt_a[0][0] - 2.0).abs() < 1e-8,
+            "sqrt(4) = {}",
+            sqrt_a[0][0]
+        );
+        assert!(
+            (sqrt_a[1][1] - 3.0).abs() < 1e-8,
+            "sqrt(9) = {}",
+            sqrt_a[1][1]
+        );
+    }
+
+    #[test]
+    fn fractional_matrix_power_integer() {
+        // A^2 should match A * A
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let a2 = fractional_matrix_power(&a, 2.0, DecompOptions::default()).expect("A^2");
+        // A² = [[7,10],[15,22]]
+        assert!((a2[0][0] - 7.0).abs() < 1e-6, "A²[0,0] = {}", a2[0][0]);
+        assert!(
+            (a2[1][1] - 22.0).abs() < 1e-6,
+            "A²[1,1] = {}",
+            a2[1][1]
+        );
+    }
+
+    #[test]
+    fn funm_rejects_non_square() {
+        let a = vec![vec![1.0, 2.0]];
+        let err = funm(&a, |x| x, DecompOptions::default()).expect_err("non-square");
         assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
     }
 }
