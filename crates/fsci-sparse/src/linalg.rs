@@ -3242,8 +3242,7 @@ pub fn breadth_first_order(
 
     while let Some(node) = queue.pop_front() {
         order.push(node);
-        for idx in indptr[node]..indptr[node + 1] {
-            let neighbor = indices[idx];
+        for &neighbor in indices.iter().take(indptr[node + 1]).skip(indptr[node]) {
             if !visited[neighbor] {
                 visited[neighbor] = true;
                 predecessors[neighbor] = node as i64;
@@ -3260,10 +3259,7 @@ pub fn breadth_first_order(
 /// Returns the node indices in DFS pre-order and a predecessor array.
 ///
 /// Matches `scipy.sparse.csgraph.depth_first_order(graph, i_start)`.
-pub fn depth_first_order(
-    graph: &CsrMatrix,
-    source: usize,
-) -> SparseResult<(Vec<usize>, Vec<i64>)> {
+pub fn depth_first_order(graph: &CsrMatrix, source: usize) -> SparseResult<(Vec<usize>, Vec<i64>)> {
     let n = graph.shape().rows;
     if source >= n {
         return Err(SparseError::InvalidArgument {

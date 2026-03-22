@@ -654,16 +654,28 @@ impl ArrayApiBackend for CoreArrayBackend {
         let rows = array.shape.dims[0];
         let cols = array.shape.dims[1];
         let mut values = Vec::with_capacity(array.values.len());
+        
+        let is_f_order = array.order == MemoryOrder::F;
+        
         for col in 0..cols {
             for row in 0..rows {
-                values.push(array.values[row * cols + col]);
+                let idx = if is_f_order {
+                    col * rows + row
+                } else {
+                    row * cols + col
+                };
+                values.push(array.values[idx]);
             }
         }
+        
+        // Transposing an F-order array makes it C-order, and vice-versa
+        let new_order = if is_f_order { MemoryOrder::C } else { MemoryOrder::F };
+        
         Ok(CoreArray {
             shape: Shape::new(vec![cols, rows]),
             dtype: array.dtype,
             values,
-            order: array.order,
+            order: new_order,
         })
     }
 }
@@ -898,17 +910,24 @@ fn basic_getitem(
             let rows = basic_slice_indices(&slices[0], array.shape.dims[0], mode)?;
             let cols = basic_slice_indices(&slices[1], array.shape.dims[1], mode)?;
             let mut values = Vec::with_capacity(rows.len().saturating_mul(cols.len()));
+            let nrows = array.shape.dims[0];
             let ncols = array.shape.dims[1];
+            let is_f_order = array.order == MemoryOrder::F;
             for row in &rows {
                 for col in &cols {
-                    values.push(array.values[row * ncols + col]);
+                    let idx = if is_f_order {
+                        col * nrows + row
+                    } else {
+                        row * ncols + col
+                    };
+                    values.push(array.values[idx]);
                 }
             }
             Ok(CoreArray {
                 shape: Shape::new(vec![rows.len(), cols.len()]),
                 dtype: array.dtype,
                 values,
-                order: array.order,
+                order: MemoryOrder::C, // Note: slicing conceptually returns C-order in this layout
             })
         }
         _ => Err(ArrayApiError::new(

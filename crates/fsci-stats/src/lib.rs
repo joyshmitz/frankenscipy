@@ -612,6 +612,13 @@ impl ContinuousDistribution for GammaDist {
         lower_regularized_gamma(self.a, x / self.scale)
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 1.0;
+        }
+        upper_regularized_gamma(self.a, x / self.scale)
+    }
+
     fn mean(&self) -> f64 {
         self.a * self.scale
     }
@@ -2854,7 +2861,7 @@ pub fn trim_mean(data: &[f64], proportiontocut: f64) -> f64 {
 ///
 /// Matches `scipy.stats.binomtest(k, n, p)`.
 pub fn binomtest(k: u64, n: u64, p: f64) -> f64 {
-    if n == 0 || p.is_nan() || p < 0.0 || p > 1.0 {
+    if n == 0 || k > n || p.is_nan() || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if p == 0.0 {
@@ -3654,10 +3661,7 @@ pub fn fisher_exact(table: &[[f64; 2]; 2]) -> FisherExactResult {
     // Clamp to [0, 1]
     let pvalue = pvalue.clamp(0.0, 1.0);
 
-    FisherExactResult {
-        odds_ratio,
-        pvalue,
-    }
+    FisherExactResult { odds_ratio, pvalue }
 }
 
 // ── Chi-squared contingency test ─────────────────────────────────────

@@ -373,6 +373,47 @@ pub fn convolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>, Si
     }
 }
 
+/// Deconvolve `divisor` out of `signal` using polynomial long division.
+///
+/// Returns `(quotient, remainder)` such that
+/// `signal = convolve(divisor, quotient, Full) + remainder`.
+///
+/// Matches `scipy.signal.deconvolve(signal, divisor)`.
+pub fn deconvolve(signal: &[f64], divisor: &[f64]) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    if signal.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "signal must be non-empty".to_string(),
+        ));
+    }
+    if divisor.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "divisor must be non-empty".to_string(),
+        ));
+    }
+    if divisor[0] == 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "divisor[0] must not be zero".to_string(),
+        ));
+    }
+    if divisor.len() > signal.len() {
+        return Ok((Vec::new(), signal.to_vec()));
+    }
+
+    let quotient_len = signal.len() - divisor.len() + 1;
+    let mut quotient = vec![0.0; quotient_len];
+    let mut remainder = signal.to_vec();
+
+    for i in 0..quotient_len {
+        let coeff = remainder[i] / divisor[0];
+        quotient[i] = coeff;
+        for (j, &div) in divisor.iter().enumerate() {
+            remainder[i + j] -= coeff * div;
+        }
+    }
+
+    Ok((quotient, remainder))
+}
+
 /// FFT-based convolution (faster for large inputs).
 ///
 /// Matches `scipy.signal.fftconvolve(a, b, mode)`.
@@ -4172,6 +4213,56 @@ mod tests {
         assert!(matches!(err, SignalError::InvalidArgument(_)));
     }
 
+    #[test]
+    fn deconvolve_recovers_original_signal() {
+        let original = vec![0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0];
+        let impulse_response = vec![2.0, 1.0];
+        let recorded =
+            convolve(&impulse_response, &original, ConvolveMode::Full).expect("convolve");
+
+        let (quotient, remainder) = deconvolve(&recorded, &impulse_response).expect("deconvolve");
+
+        assert_eq!(quotient.len(), original.len());
+        for (i, (&got, &expected)) in quotient.iter().zip(original.iter()).enumerate() {
+            assert!(
+                (got - expected).abs() < 1e-12,
+                "quotient[{i}] = {got}, expected {expected}"
+            );
+        }
+        assert_eq!(remainder.len(), recorded.len());
+        for (i, &value) in remainder.iter().enumerate() {
+            assert!(value.abs() < 1e-12, "remainder[{i}] = {value}");
+        }
+    }
+
+    #[test]
+    fn deconvolve_known_polynomial_division() {
+        let signal = vec![0.0, 0.0, 1.0, 2.0, 3.0];
+        let divisor = vec![1.0, 2.0];
+
+        let (quotient, remainder) = deconvolve(&signal, &divisor).expect("deconvolve");
+
+        assert_eq!(quotient, vec![0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(remainder, vec![0.0, 0.0, 0.0, 0.0, 3.0]);
+    }
+
+    #[test]
+    fn deconvolve_divisor_longer_than_signal_returns_empty_quotient() {
+        let signal = vec![1.0, 2.0];
+        let divisor = vec![1.0, 2.0, 3.0];
+
+        let (quotient, remainder) = deconvolve(&signal, &divisor).expect("deconvolve");
+
+        assert!(quotient.is_empty());
+        assert_eq!(remainder, signal);
+    }
+
+    #[test]
+    fn deconvolve_zero_leading_divisor_rejected() {
+        let err = deconvolve(&[1.0, 2.0, 3.0], &[0.0, 1.0]).expect_err("zero leading divisor");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
     // ── find_peaks tests ────────────────────────────────────────────
 
     #[test]
@@ -6118,10 +6209,7 @@ mod tests {
         let analytic = hilbert(&x).expect("hilbert dc");
         // Imaginary parts should be ~0 for constant input
         for (i, &(_, im)) in analytic.iter().enumerate() {
-            assert!(
-                im.abs() < 1e-10,
-                "DC imaginary[{i}] = {im}, expected ~0"
-            );
+            assert!(im.abs() < 1e-10, "DC imaginary[{i}] = {im}, expected ~0");
         }
     }
 }

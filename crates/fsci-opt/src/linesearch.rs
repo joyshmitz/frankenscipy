@@ -268,13 +268,9 @@ where
     }
 
     // Return best found
-    let xlo: Vec<f64> = (0..n).map(|i| x[i] + alpha_lo * d[i]).collect();
-    let flo = f(&xlo);
-    *evals += 1;
-
     Ok(LineSearchResult {
         alpha: alpha_lo,
-        f_at_alpha: flo,
+        f_at_alpha: f_lo,
         directional_derivative: dg0,
         evaluations: *evals,
     })

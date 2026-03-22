@@ -792,6 +792,97 @@ pub fn romb(y: &[f64], dx: f64) -> Result<f64, IntegrateValidationError> {
     Ok(r[k][k])
 }
 
+/// N-dimensional adaptive quadrature via nested `quad` calls.
+///
+/// Matches `scipy.integrate.nquad(func, ranges)`.
+///
+/// # Arguments
+/// * `func` — Function of N variables. Takes a slice `&[f64]` of length N.
+/// * `ranges` — Integration ranges as `(lower, upper)` pairs, from outermost to innermost.
+/// * `options` — Quadrature options for each 1D integration.
+///
+/// # Example
+/// ```ignore
+/// // ∫₀¹ ∫₀¹ x*y dx dy = 0.25
+/// let result = nquad(|args| args[0] * args[1], &[(0.0, 1.0), (0.0, 1.0)], opts)?;
+/// ```
+pub fn nquad<F>(
+    func: F,
+    ranges: &[(f64, f64)],
+    options: QuadOptions,
+) -> Result<QuadResult, IntegrateValidationError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    use std::cell::RefCell;
+
+    let ndim = ranges.len();
+    if ndim == 0 {
+        return Ok(QuadResult {
+            integral: func(&[]),
+            error: 0.0,
+            neval: 1,
+            converged: true,
+        });
+    }
+
+    // Use RefCell for interior mutability since quad() takes Fn, not FnMut
+    let args = RefCell::new(vec![0.0; ndim]);
+    let total_neval = RefCell::new(0usize);
+
+    let result = nquad_inner(&func, ranges, &options, &args, &total_neval, 0)?;
+
+    Ok(QuadResult {
+        integral: result,
+        error: 0.0,
+        neval: *total_neval.borrow(),
+        converged: true,
+    })
+}
+
+fn nquad_inner<F>(
+    func: &F,
+    ranges: &[(f64, f64)],
+    options: &QuadOptions,
+    args: &std::cell::RefCell<Vec<f64>>,
+    total_neval: &std::cell::RefCell<usize>,
+    dim: usize,
+) -> Result<f64, IntegrateValidationError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let (a, b) = ranges[dim];
+
+    if dim == ranges.len() - 1 {
+        // Innermost dimension: call quad directly
+        let result = quad(
+            |x| {
+                args.borrow_mut()[dim] = x;
+                func(&args.borrow())
+            },
+            a,
+            b,
+            *options,
+        )?;
+        *total_neval.borrow_mut() += result.neval;
+        Ok(result.integral)
+    } else {
+        // Outer dimension: integrate by nesting
+        let result = quad(
+            |x| {
+                args.borrow_mut()[dim] = x;
+                nquad_inner(func, ranges, options, args, total_neval, dim + 1)
+                    .unwrap_or(0.0)
+            },
+            a,
+            b,
+            *options,
+        )?;
+        *total_neval.borrow_mut() += result.neval;
+        Ok(result.integral)
+    }
+}
+
 /// Cumulative integral using composite Simpson's rule.
 ///
 /// Matches `scipy.integrate.cumulative_simpson(y, x=x)` for 1-D sampled data.
@@ -1535,5 +1626,58 @@ mod tests {
     #[test]
     fn cumulative_simpson_too_few() {
         assert!(cumulative_simpson(&[1.0], &[0.0]).is_err());
+    }
+
+    // ── nquad tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn nquad_1d_matches_quad() {
+        let opts = QuadOptions::default();
+        let result_nquad = nquad(|args| args[0] * args[0], &[(0.0, 1.0)], opts).expect("nquad 1d");
+        let result_quad = quad(|x| x * x, 0.0, 1.0, opts).expect("quad");
+        assert!(
+            (result_nquad.integral - result_quad.integral).abs() < 1e-10,
+            "nquad 1D should match quad: {} vs {}",
+            result_nquad.integral,
+            result_quad.integral
+        );
+    }
+
+    #[test]
+    fn nquad_2d_product() {
+        // ∫₀¹ ∫₀¹ x*y dx dy = (1/2)(1/2) = 0.25
+        let opts = QuadOptions::default();
+        let result = nquad(|args| args[0] * args[1], &[(0.0, 1.0), (0.0, 1.0)], opts)
+            .expect("nquad 2d");
+        assert!(
+            (result.integral - 0.25).abs() < 1e-8,
+            "∫∫ xy dxdy = {}, expected 0.25",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn nquad_3d_unit_cube() {
+        // ∫₀¹ ∫₀¹ ∫₀¹ 1 dxdydz = 1
+        let opts = QuadOptions::default();
+        let result = nquad(
+            |_args| 1.0,
+            &[(0.0, 1.0), (0.0, 1.0), (0.0, 1.0)],
+            opts,
+        )
+        .expect("nquad 3d");
+        assert!(
+            (result.integral - 1.0).abs() < 1e-6,
+            "∫∫∫ 1 dV = {}, expected 1.0",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn nquad_0d() {
+        // 0-dimensional: just evaluates the function
+        let opts = QuadOptions::default();
+        let result = nquad(|_| 42.0, &[], opts).expect("nquad 0d");
+        assert!((result.integral - 42.0).abs() < 1e-12);
     }
 }

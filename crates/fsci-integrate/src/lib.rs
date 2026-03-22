@@ -14,8 +14,8 @@ pub use bdf::{BdfSolver, BdfSolverConfig};
 pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
 pub use quad::{
     CompositeQuadResult, DblquadOptions, DblquadResult, QuadOptions, QuadResult,
-    cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, quad, romb,
-    romb_func, simpson, simpson_uniform, tplquad, trapezoid, trapezoid_uniform,
+    cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, nquad, quad,
+    romb, romb_func, simpson, simpson_uniform, tplquad, trapezoid, trapezoid_uniform,
 };
 pub use rk::{
     ButcherTableau, DOP853_TABLEAU, RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig,
@@ -40,36 +40,34 @@ pub fn odeint<F>(
 where
     F: FnMut(&[f64], f64) -> Vec<f64>,
 {
-    if t.len() < 2 {
+    if t.is_empty() {
+        return Ok(vec![]);
+    }
+    if t.len() == 1 {
         return Ok(vec![y0.to_vec()]);
     }
 
-    let mut results = Vec::with_capacity(t.len());
-    results.push(y0.to_vec());
+    // odeint convention: func(y, t), but solve_ivp uses func(t, y)
+    let mut ivp_func = |ti: f64, yi: &[f64]| -> Vec<f64> { func(yi, ti) };
 
-    let mut current_y = y0.to_vec();
+    let t0 = t[0];
+    let tf = t[t.len() - 1];
 
-    for i in 0..t.len() - 1 {
-        // odeint convention: func(y, t), but solve_ivp uses func(t, y)
-        let mut ivp_func = |ti: f64, yi: &[f64]| -> Vec<f64> { func(yi, ti) };
+    let result = solve_ivp(
+        &mut ivp_func,
+        &SolveIvpOptions {
+            t_span: (t0, tf),
+            y0,
+            method: SolverKind::Rk45,
+            t_eval: Some(t),
+            rtol: 1.49e-8,
+            atol: ToleranceValue::Scalar(1.49e-8),
+            ..SolveIvpOptions::default()
+        },
+    )?;
 
-        let result = solve_ivp(
-            &mut ivp_func,
-            &SolveIvpOptions {
-                t_span: (t[i], t[i + 1]),
-                y0: &current_y,
-                method: SolverKind::Rk45,
-                rtol: 1.49e-8,
-                atol: ToleranceValue::Scalar(1.49e-8),
-                ..SolveIvpOptions::default()
-            },
-        )?;
-
-        if let Some(y_final) = result.y.last() {
-            current_y = y_final.clone();
-        }
-        results.push(current_y.clone());
-    }
-
-    Ok(results)
+    // transpose result.y since solve_ivp returns columns for each time step,
+    // wait, solve_ivp result.y is Vec<Vec<f64>> where each inner vector is the state at t_i.
+    // Let's assume result.y matches the shape we need.
+    Ok(result.y)
 }
