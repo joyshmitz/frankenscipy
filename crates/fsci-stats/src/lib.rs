@@ -2127,6 +2127,52 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
     distance
 }
 
+/// Energy distance between two 1D distributions.
+///
+/// A statistical distance based on the Cramér distance:
+///   D(u, v) = 2 * E|X-Y| - E|X-X'| - E|Y-Y'|
+/// where X, X' ~ u and Y, Y' ~ v.
+///
+/// Matches `scipy.stats.energy_distance(u_values, v_values)`.
+pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
+    if u.is_empty() || v.is_empty() {
+        return f64::NAN;
+    }
+
+    let nu = u.len() as f64;
+    let nv = v.len() as f64;
+
+    // E|X-Y|: mean of |u_i - v_j| over all pairs
+    let mut e_xy = 0.0;
+    for &ui in u {
+        for &vj in v {
+            e_xy += (ui - vj).abs();
+        }
+    }
+    e_xy /= nu * nv;
+
+    // E|X-X'|: mean of |u_i - u_j| over all pairs
+    let mut e_xx = 0.0;
+    for i in 0..u.len() {
+        for j in (i + 1)..u.len() {
+            e_xx += (u[i] - u[j]).abs();
+        }
+    }
+    e_xx *= 2.0 / (nu * nu); // double because we only summed upper triangle
+
+    // E|Y-Y'|
+    let mut e_yy = 0.0;
+    for i in 0..v.len() {
+        for j in (i + 1)..v.len() {
+            e_yy += (v[i] - v[j]).abs();
+        }
+    }
+    e_yy *= 2.0 / (nv * nv);
+
+    let d_sq = 2.0 * e_xy - e_xx - e_yy;
+    d_sq.max(0.0).sqrt()
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Non-parametric Tests and ANOVA
 // ══════════════════════════════════════════════════════════════════════
@@ -6406,5 +6452,30 @@ mod tests {
     #[test]
     fn wasserstein_empty() {
         assert!(wasserstein_distance(&[], &[1.0]).is_nan());
+    }
+
+    // ── energy_distance tests ────────────────────────────────────────
+
+    #[test]
+    fn energy_distance_identical() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let d = energy_distance(&a, &a);
+        assert!(d.abs() < 1e-10, "identical should be 0: {d}");
+    }
+
+    #[test]
+    fn energy_distance_different() {
+        let a = vec![0.0, 1.0, 2.0];
+        let b = vec![10.0, 11.0, 12.0];
+        let d = energy_distance(&a, &b);
+        assert!(
+            (d - 4.268_749_491_621_899).abs() < 1e-12,
+            "should match SciPy oracle for separated samples: {d}"
+        );
+    }
+
+    #[test]
+    fn energy_distance_empty() {
+        assert!(energy_distance(&[], &[1.0]).is_nan());
     }
 }

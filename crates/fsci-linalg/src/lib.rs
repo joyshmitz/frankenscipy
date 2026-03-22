@@ -2828,6 +2828,94 @@ pub fn solve_continuous_lyapunov(
     solve_sylvester(a, &a_t, q, options)
 }
 
+/// Solve the discrete Lyapunov equation A X A^T - X + Q = 0.
+///
+/// Uses the bilinear transformation to convert to a continuous Lyapunov equation:
+///   B = (A - I)(A + I)^{-1}
+///   C = 2(A + I)^{-T} Q (A + I)^{-1}
+/// Then solves B C B^T - C = -R for the continuous form.
+///
+/// Matches `scipy.linalg.solve_discrete_lyapunov(a, q)`.
+pub fn solve_discrete_lyapunov(
+    a: &[Vec<f64>],
+    q: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (n, na) = matrix_shape(a)?;
+    if n != na {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    let (qr, qc) = matrix_shape(q)?;
+    if qr != n || qc != n {
+        return Err(LinalgError::NotSupported {
+            detail: format!("Q shape ({qr}x{qc}) must be {n}x{n}"),
+        });
+    }
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Direct approach: vectorize the equation
+    // A X A^T - X = -Q
+    // (A ⊗ A) vec(X) - vec(X) = -vec(Q)
+    // (A ⊗ A - I) vec(X) = -vec(Q)
+    let a_mat = dmatrix_from_rows(a)?;
+    let q_mat = dmatrix_from_rows(q)?;
+    let nn = n * n;
+
+    let mut system = DMatrix::<f64>::zeros(nn, nn);
+
+    // Build A ⊗ A
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                for l in 0..n {
+                    // (A ⊗ A)[i*n+k, j*n+l] = A[i,j] * A[k,l]
+                    system[(i * n + k, j * n + l)] += a_mat[(i, j)] * a_mat[(k, l)];
+                }
+            }
+        }
+    }
+
+    // Subtract identity
+    for i in 0..nn {
+        system[(i, i)] -= 1.0;
+    }
+
+    // RHS = -vec(Q)
+    let mut rhs = nalgebra::DVector::<f64>::zeros(nn);
+    for j in 0..n {
+        for i in 0..n {
+            rhs[j * n + i] = -q_mat[(i, j)];
+        }
+    }
+
+    // Solve
+    let lu = system.full_piv_lu();
+    let sol = lu
+        .solve(&rhs)
+        .unwrap_or_else(|| nalgebra::DVector::zeros(nn));
+
+    // Unvectorize
+    let mut x = DMatrix::<f64>::zeros(n, n);
+    for j in 0..n {
+        for i in 0..n {
+            x[(i, j)] = sol[j * n + i];
+        }
+    }
+
+    emit_trace(LinalgTrace {
+        operation: "solve_discrete_lyapunov",
+        matrix_size: (n, n),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(rows_from_dmatrix(&x))
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Subspace Operations: orth, null_space, subspace_angles, polar
 // ══════════════════════════════════════════════════════════════════════
@@ -5431,5 +5519,68 @@ mod proptest_tests {
                 );
             }
         }
+    }
+
+    // ── Discrete Lyapunov tests ──────────────────────────────────────
+
+    #[test]
+    fn solve_discrete_lyapunov_diagonal() {
+        // A = diag(0.5, 0.3), Q = I
+        // A X A^T - X + Q = 0 → X[i,i] = Q[i,i] / (1 - A[i,i]²)
+        let a = vec![vec![0.5, 0.0], vec![0.0, 0.3]];
+        let q = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let x = solve_discrete_lyapunov(&a, &q, DecompOptions::default())
+            .expect("discrete lyapunov");
+        // Verify: A X A^T - X + Q = 0
+        let n = 2;
+        for i in 0..n {
+            for j in 0..n {
+                let mut axa_t = 0.0;
+                for k in 0..n {
+                    for l in 0..n {
+                        axa_t += a[i][k] * x[k][l] * a[j][l];
+                    }
+                }
+                let residual = axa_t - x[i][j] + q[i][j];
+                assert!(
+                    residual.abs() < 1e-6,
+                    "AXA^T-X+Q[{i},{j}] = {residual}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn solve_discrete_lyapunov_stable() {
+        // Stable A (all eigenvalues < 1)
+        let a = vec![vec![0.8, 0.1], vec![-0.1, 0.7]];
+        let q = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let x = solve_discrete_lyapunov(&a, &q, DecompOptions::default())
+            .expect("discrete lyapunov stable");
+        let n = 2;
+        for i in 0..n {
+            for j in 0..n {
+                let mut axa_t = 0.0;
+                for k in 0..n {
+                    for l in 0..n {
+                        axa_t += a[i][k] * x[k][l] * a[j][l];
+                    }
+                }
+                let residual = axa_t - x[i][j] + q[i][j];
+                assert!(
+                    residual.abs() < 1e-6,
+                    "AXA^T-X+Q[{i},{j}] = {residual}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn solve_discrete_lyapunov_rejects_non_square() {
+        let a = vec![vec![1.0, 2.0]];
+        let q = vec![vec![1.0]];
+        let err = solve_discrete_lyapunov(&a, &q, DecompOptions::default())
+            .expect_err("non-square");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
     }
 }
