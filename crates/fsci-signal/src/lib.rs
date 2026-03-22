@@ -654,6 +654,186 @@ pub fn hilbert_envelope(x: &[f64]) -> Result<Vec<f64>, SignalError> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Wavelets
+// ══════════════════════════════════════════════════════════════════════
+
+/// Ricker wavelet (Mexican hat wavelet).
+///
+/// The second derivative of a Gaussian: ψ(t) = (2/(√3σ π^{1/4})) (1 - (t/σ)²) exp(-t²/(2σ²))
+///
+/// Matches `scipy.signal.ricker(points, a)`.
+///
+/// # Arguments
+/// * `points` — Number of points in the output vector.
+/// * `a` — Width parameter (standard deviation of the Gaussian).
+pub fn ricker(points: usize, a: f64) -> Vec<f64> {
+    let mut output = Vec::with_capacity(points);
+    let center = (points as f64 - 1.0) / 2.0;
+    let a2 = a * a;
+    let norm = 2.0 / (3.0_f64.sqrt() * std::f64::consts::PI.powf(0.25));
+
+    for i in 0..points {
+        let t = i as f64 - center;
+        let t2 = t * t;
+        let gauss = (-t2 / (2.0 * a2)).exp();
+        output.push(norm / a.sqrt() * (1.0 - t2 / a2) * gauss);
+    }
+    output
+}
+
+/// Complex Morlet wavelet.
+///
+/// ψ(t) = exp(2πi w₀ t) exp(-t²/2) (with optional correction for non-zero mean)
+///
+/// Matches `scipy.signal.morlet(M, w, s, complete)`.
+///
+/// # Arguments
+/// * `m` — Number of points in the output.
+/// * `w` — Omega0 (center frequency), default 5.0.
+/// * `s` — Scaling factor, default 1.0.
+/// * `complete` — If true, apply correction term for non-zero mean.
+pub fn morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
+    let mut output = Vec::with_capacity(m);
+    let center = (m as f64 - 1.0) / 2.0;
+
+    for i in 0..m {
+        let t = (i as f64 - center) / s;
+        let gauss = (-t * t / 2.0).exp();
+        let phase = 2.0 * std::f64::consts::PI * w * t;
+        let mut re = gauss * phase.cos();
+        let mut im = gauss * phase.sin();
+
+        if complete {
+            // Correction: subtract the DC component to ensure zero mean
+            let correction = (-2.0 * std::f64::consts::PI * std::f64::consts::PI * w * w / 2.0).exp();
+            re -= gauss * correction;
+        }
+
+        output.push((re, im));
+    }
+    output
+}
+
+/// Continuous Wavelet Transform.
+///
+/// Computes CWT using the specified wavelet function at different scales.
+///
+/// Matches `scipy.signal.cwt(data, wavelet, widths)`.
+///
+/// # Arguments
+/// * `data` — Input signal.
+/// * `wavelet_fn` — Function that generates a wavelet for a given width: `fn(points, width) -> Vec<f64>`.
+/// * `widths` — Array of wavelet widths (scales) to use.
+///
+/// Returns a 2D array (widths.len() × data.len()), where each row is the CWT
+/// at the corresponding scale.
+pub fn cwt<F>(data: &[f64], wavelet_fn: F, widths: &[f64]) -> Result<Vec<Vec<f64>>, SignalError>
+where
+    F: Fn(usize, f64) -> Vec<f64>,
+{
+    if data.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "data must be non-empty".to_string(),
+        ));
+    }
+    if widths.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "widths must be non-empty".to_string(),
+        ));
+    }
+
+    let n = data.len();
+    let mut result = Vec::with_capacity(widths.len());
+
+    for &width in widths {
+        // Generate wavelet at this scale
+        let wavelet_len = (10.0 * width).ceil() as usize;
+        let wavelet_len = wavelet_len.max(1);
+        let wavelet = wavelet_fn(wavelet_len, width);
+
+        // Convolve data with wavelet (mode = same)
+        let conv = convolve(data, &wavelet, ConvolveMode::Same)?;
+        result.push(conv);
+    }
+
+    Ok(result)
+}
+
+// ── Additional window functions ──────────────────────────────────────
+
+/// Tukey (tapered cosine) window.
+///
+/// Matches `scipy.signal.windows.tukey(M, alpha)`.
+///
+/// alpha=0 → rectangular, alpha=1 → Hann.
+pub fn tukey_window(m: usize, alpha: f64) -> Vec<f64> {
+    if m == 0 {
+        return Vec::new();
+    }
+    if m == 1 {
+        return vec![1.0];
+    }
+    let alpha = alpha.clamp(0.0, 1.0);
+    let mut w = vec![1.0; m];
+    let n = m - 1;
+
+    if alpha > 0.0 {
+        let taper_len = (alpha * n as f64 / 2.0) as usize;
+        for i in 0..=taper_len.min(n) {
+            let val =
+                0.5 * (1.0 - (std::f64::consts::PI * i as f64 / (alpha * n as f64 / 2.0)).cos());
+            w[i] = val;
+            w[n - i] = val;
+        }
+    }
+    w
+}
+
+/// Nuttall window (minimum 4-term Blackman-Harris).
+///
+/// Matches `scipy.signal.windows.nuttall(M)`.
+pub fn nuttall_window(m: usize) -> Vec<f64> {
+    if m == 0 {
+        return Vec::new();
+    }
+    if m == 1 {
+        return vec![1.0];
+    }
+    let n = m - 1;
+    (0..m)
+        .map(|i| {
+            let x = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+            0.355_768 - 0.487_396 * x.cos() + 0.144_232 * (2.0 * x).cos()
+                - 0.012_604 * (3.0 * x).cos()
+        })
+        .collect()
+}
+
+/// Bohman window.
+///
+/// Matches `scipy.signal.windows.bohman(M)`.
+pub fn bohman_window(m: usize) -> Vec<f64> {
+    if m == 0 {
+        return Vec::new();
+    }
+    if m == 1 {
+        return vec![1.0];
+    }
+    let n = m - 1;
+    (0..m)
+        .map(|i| {
+            let x = (2.0 * i as f64 / n as f64 - 1.0).abs();
+            if x >= 1.0 {
+                0.0
+            } else {
+                (1.0 - x) * (std::f64::consts::PI * x).cos()
+                    + (1.0 / std::f64::consts::PI) * (std::f64::consts::PI * x).sin()
+            }
+        })
+        .collect()
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Peak Detection
 // ══════════════════════════════════════════════════════════════════════
 
@@ -6358,5 +6538,106 @@ mod tests {
     fn iirpeak_invalid_params() {
         assert!(iirpeak(0.0, 10.0).is_err());
         assert!(iirpeak(0.5, 0.0).is_err());
+    }
+
+    // ── Wavelet tests ────────────────────────────────────────────────
+
+    #[test]
+    fn ricker_symmetric() {
+        let w = ricker(101, 5.0);
+        assert_eq!(w.len(), 101);
+        // Symmetric around center
+        for i in 0..50 {
+            assert!(
+                (w[i] - w[100 - i]).abs() < 1e-12,
+                "ricker not symmetric at {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn ricker_peak_at_center() {
+        let w = ricker(101, 5.0);
+        let center = 50;
+        // Peak should be at center
+        for (i, &val) in w.iter().enumerate() {
+            assert!(
+                val <= w[center] + 1e-12,
+                "ricker: w[{i}]={val} > w[center]={}",
+                w[center]
+            );
+        }
+    }
+
+    #[test]
+    fn ricker_zero_integral() {
+        // Ricker wavelet has zero mean (wavelet admissibility)
+        let w = ricker(1001, 10.0);
+        let integral: f64 = w.iter().sum();
+        assert!(
+            integral.abs() < 0.1,
+            "ricker integral should be ~0: {integral}"
+        );
+    }
+
+    #[test]
+    fn morlet_complex_oscillatory() {
+        let w = morlet(100, 5.0, 1.0, false);
+        assert_eq!(w.len(), 100);
+        // Should have both real and imaginary components
+        let has_im = w.iter().any(|&(_, im)| im.abs() > 0.01);
+        assert!(has_im, "morlet should have nonzero imaginary part");
+    }
+
+    #[test]
+    fn cwt_detects_frequency() {
+        // Create signal with known frequency component
+        let n = 256;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (2.0 * std::f64::consts::PI * 10.0 * i as f64 / n as f64).sin())
+            .collect();
+        let widths: Vec<f64> = (1..=20).map(|w| w as f64).collect();
+        let result = cwt(&x, |points, a| ricker(points, a), &widths).expect("cwt");
+        assert_eq!(result.len(), widths.len());
+        assert_eq!(result[0].len(), n);
+    }
+
+    #[test]
+    fn cwt_empty_data_rejected() {
+        let err = cwt(&[], |p, a| ricker(p, a), &[1.0]).expect_err("empty");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn tukey_window_endpoints() {
+        let w = tukey_window(100, 0.5);
+        assert_eq!(w.len(), 100);
+        // Endpoints should be near zero
+        assert!(w[0] < 0.01, "tukey start should be ~0: {}", w[0]);
+        // Center should be 1.0
+        assert!(
+            (w[50] - 1.0).abs() < 0.01,
+            "tukey center should be ~1: {}",
+            w[50]
+        );
+    }
+
+    #[test]
+    fn nuttall_window_symmetric() {
+        let w = nuttall_window(64);
+        assert_eq!(w.len(), 64);
+        for i in 0..32 {
+            assert!(
+                (w[i] - w[63 - i]).abs() < 1e-12,
+                "nuttall not symmetric at {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn bohman_window_endpoints_zero() {
+        let w = bohman_window(64);
+        assert!(w[0].abs() < 1e-12, "bohman start should be 0");
+        assert!(w[63].abs() < 1e-12, "bohman end should be 0");
     }
 }
