@@ -210,16 +210,20 @@ fn airy_asymptotic(x: f64, _mode: RuntimeMode) -> Result<AiryResult, SpecialErro
         // Oscillatory regime for x < 0
         let prefactor = 1.0 / (PI.sqrt() * abs_x.powf(0.25));
 
-        let (c_cos, c_sin) = oscillatory_coefficients(zeta);
+        let (l, m, n, o) = oscillatory_coefficients(zeta);
 
         let phase = zeta + PI / 4.0;
         let cos_phase = phase.cos();
         let sin_phase = phase.sin();
 
-        let ai = prefactor * (c_cos * cos_phase + c_sin * sin_phase);
-        let aip = -prefactor * abs_x.sqrt() * (-c_cos * sin_phase + c_sin * cos_phase);
-        let bi = prefactor * (-c_sin * cos_phase + c_cos * sin_phase);
-        let bip = prefactor * abs_x.sqrt() * (c_sin * sin_phase + c_cos * cos_phase);
+        // Ai(-x) ~ pi^-1/2 x^-1/4 [ L sin(zeta+pi/4) - M cos(zeta+pi/4) ]
+        let ai = prefactor * (l * sin_phase - m * cos_phase);
+        // Ai'(-x) ~ -pi^-1/2 x^1/4 [ N cos(zeta+pi/4) + O sin(zeta+pi/4) ]
+        let aip = -prefactor * abs_x.sqrt() * (n * cos_phase + o * sin_phase);
+        // Bi(-x) ~ pi^-1/2 x^-1/4 [ L cos(zeta+pi/4) + M sin(zeta+pi/4) ]
+        let bi = prefactor * (l * cos_phase + m * sin_phase);
+        // Bi'(-x) ~ pi^-1/2 x^1/4 [ -N sin(zeta+pi/4) + O cos(zeta+pi/4) ]
+        let bip = prefactor * abs_x.sqrt() * (-n * sin_phase + o * cos_phase);
 
         Ok(AiryResult { ai, aip, bi, bip })
     }
@@ -252,17 +256,29 @@ fn asymptotic_coefficients(zeta: f64) -> (f64, f64, f64, f64) {
 }
 
 /// Oscillatory asymptotic coefficients for x < 0.
-fn oscillatory_coefficients(zeta: f64) -> (f64, f64) {
+fn oscillatory_coefficients(zeta: f64) -> (f64, f64, f64, f64) {
     let iz = 1.0 / zeta;
     let iz2 = iz * iz;
 
+    // u_k for functions
     let u1 = 5.0 / 72.0;
     let u2 = 385.0 / 10368.0;
+    let u3 = 85085.0 / 2239488.0;
+    let u4 = 37_182_145.0 / 644_972_544.0;
 
-    let c_cos = 1.0 + u2 * iz2;
-    let c_sin = u1 * iz;
+    let l = 1.0 - u2 * iz2 + u4 * iz2 * iz2;
+    let m = u1 * iz - u3 * iz * iz2;
 
-    (c_cos, c_sin)
+    // v_k for derivatives
+    let v1 = 7.0 / 72.0;
+    let v2 = 455.0 / 10368.0;
+    let v3 = 95095.0 / 2239488.0;
+    let v4 = 40_415_375.0 / 644_972_544.0;
+
+    let n = 1.0 - v2 * iz2 + v4 * iz2 * iz2;
+    let o = v1 * iz - v3 * iz * iz2;
+
+    (l, m, n, o)
 }
 
 fn map_real_input<F>(
@@ -462,5 +478,22 @@ mod tests {
         let x = SpecialTensor::Empty;
         let err = airy(&x, RuntimeMode::Strict).expect_err("empty input");
         assert_eq!(err.kind, SpecialErrorKind::DomainError);
+    }
+
+    #[test]
+    fn airy_large_negative() {
+        // Ai(-10) ≈ 0.0402412384827037, Bi(-10) ≈ -0.314680808611115
+        let x = SpecialTensor::RealScalar(-10.0);
+        let result = airy(&x, RuntimeMode::Strict).expect("airy(-10)");
+        let ai = match &result[0] {
+            SpecialTensor::RealScalar(v) => *v,
+            _ => panic!("expected scalar"),
+        };
+        let bi = match &result[2] {
+            SpecialTensor::RealScalar(v) => *v,
+            _ => panic!("expected scalar"),
+        };
+        assert_close(ai, 0.040_241_238_482_703_7, 1e-6, "Ai(-10)");
+        assert_close(bi, -0.314_680_808_611_115, 1e-6, "Bi(-10)");
     }
 }

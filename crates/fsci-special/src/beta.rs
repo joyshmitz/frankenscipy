@@ -350,7 +350,7 @@ fn beta_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     Ok(log_value.exp())
 }
 
-fn betaln_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+pub fn betaln_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if a.is_nan() || b.is_nan() {
         return Ok(f64::NAN);
     }
@@ -390,7 +390,7 @@ fn betaln_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialError>
     Ok(lg_a + lg_b - lg_ab)
 }
 
-fn betainc_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+pub fn betainc_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if a.is_nan() || b.is_nan() || x.is_nan() {
         return Ok(f64::NAN);
     }

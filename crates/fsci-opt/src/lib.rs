@@ -1276,8 +1276,8 @@ mod tests {
     use crate::{
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions,
         LinearConstraint, MinimizeOptions, NonlinearConstraint, OptimizeMethod, RootOptions,
-        approx_fprime, basinhopping, check_grad, differential_evolution, linear_sum_assignment,
-        linprog,
+        approx_fprime, basinhopping, check_grad, differential_evolution, dual_annealing,
+        linear_sum_assignment, linprog,
     };
 
     #[test]

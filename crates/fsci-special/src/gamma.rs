@@ -375,7 +375,7 @@ fn gamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     Ok(value)
 }
 
-fn gammaln_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+pub fn gammaln_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if x.is_nan() {
         return Ok(f64::NAN);
     }
@@ -526,13 +526,13 @@ fn rgamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     Ok(value)
 }
 
-fn gammainc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+pub fn gammainc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     validate_incomplete_gamma_domain("gammainc", a, x, mode)?;
     let (p, _) = regularized_gamma_pair(a, x, mode)?;
     Ok(p)
 }
 
-fn gammaincc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+pub fn gammaincc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     validate_incomplete_gamma_domain("gammaincc", a, x, mode)?;
     let (_, q) = regularized_gamma_pair(a, x, mode)?;
     Ok(q)

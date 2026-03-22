@@ -45,6 +45,9 @@ impl Complex64 {
     #[must_use]
     pub fn exp(self) -> Self {
         let scale = self.re.exp();
+        if scale == 0.0 {
+            return Self::new(0.0, 0.0);
+        }
         Self {
             re: scale * self.im.cos(),
             im: scale * self.im.sin(),
@@ -53,6 +56,9 @@ impl Complex64 {
 
     #[must_use]
     pub fn recip(self) -> Self {
+        if self.re.is_infinite() || self.im.is_infinite() {
+            return Self::new(0.0, 0.0);
+        }
         let norm = self.norm_sqr();
         Self {
             re: self.re / norm,

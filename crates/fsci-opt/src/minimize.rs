@@ -146,9 +146,9 @@ where
         if ys > 1.0e-12 {
             let rho = 1.0 / ys;
             h_inv = bfgs_inverse_update(&h_inv, &s, &y, rho);
-        } else {
-            h_inv = identity_matrix(n);
         }
+        // If ys <= 1e-12, skip the update to preserve existing curvature info.
+        // Resetting to identity would lose all accumulated information.
 
         log_iteration(
             OptimizeMethod::Bfgs,

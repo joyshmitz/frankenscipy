@@ -4220,8 +4220,19 @@ pub fn resample(x: &[f64], num: usize) -> Result<Vec<f64>, SignalError> {
     let opts = fsci_fft::FftOptions::default();
 
     // Forward FFT.
-    let spectrum = fsci_fft::rfft(x, &opts)
+    let mut spectrum = fsci_fft::rfft(x, &opts)
         .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+
+    // If input length is even, the Nyquist component must be halved
+    // because it will be mirrored (doubled) if upsampled, or we want
+    // to match SciPy's Fourier-method convention.
+    if n.is_multiple_of(2) {
+        let nyq = n / 2;
+        if nyq < spectrum.len() {
+            spectrum[nyq].0 *= 0.5;
+            spectrum[nyq].1 *= 0.5;
+        }
+    }
 
     // Compute target spectrum length for the new sample count.
     let target_nfreqs = num / 2 + 1;
@@ -4230,6 +4241,15 @@ pub fn resample(x: &[f64], num: usize) -> Result<Vec<f64>, SignalError> {
     let mut new_spectrum = vec![(0.0, 0.0); target_nfreqs];
     let copy_len = spectrum.len().min(target_nfreqs);
     new_spectrum[..copy_len].copy_from_slice(&spectrum[..copy_len]);
+
+    // If target length is even and we are downsampling, SciPy's resample
+    // zeroes out the Nyquist bin to avoid aliasing artifacts.
+    if num.is_multiple_of(2) && num < n {
+        let target_nyq = num / 2;
+        if target_nyq < new_spectrum.len() {
+            new_spectrum[target_nyq] = (0.0, 0.0);
+        }
+    }
 
     // Inverse FFT with target length.
     let result = fsci_fft::irfft(&new_spectrum, Some(num), &opts)

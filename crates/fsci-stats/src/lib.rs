@@ -12,6 +12,7 @@
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
+use fsci_runtime::RuntimeMode;
 use rand::Rng;
 
 /// Trait for continuous probability distributions.
@@ -1487,166 +1488,20 @@ fn gamma_ratio_t(v: f64) -> f64 {
     ln_coeff.exp()
 }
 
-/// Log-gamma function via Stirling series with recurrence for small arguments.
 fn ln_gamma(x: f64) -> f64 {
-    if x <= 0.0 {
-        return f64::INFINITY;
-    }
-    if x < 8.0 {
-        let mut shifted = x;
-        let mut correction = 0.0;
-        while shifted < 8.0 {
-            correction += shifted.ln();
-            shifted += 1.0;
-        }
-        stirling_ln_gamma(shifted) - correction
-    } else {
-        stirling_ln_gamma(x)
-    }
+    fsci_special::gammaln_scalar(x, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
-fn stirling_ln_gamma(x: f64) -> f64 {
-    let half_ln_2pi = 0.5 * (2.0 * PI).ln();
-    let inv = 1.0 / x;
-    let inv2 = inv * inv;
-    (x - 0.5) * x.ln() - x
-        + half_ln_2pi
-        + inv * (1.0 / 12.0 - inv2 * (1.0 / 360.0 - inv2 * (1.0 / 1260.0 - inv2 / 1680.0)))
-}
-
-/// Lower regularized incomplete gamma function P(a, x) = γ(a,x)/Γ(a).
-/// Uses series expansion for x < a+1, continued fraction otherwise.
 fn lower_regularized_gamma(a: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x < a + 1.0 {
-        // Series expansion
-        gamma_inc_series(a, x)
-    } else {
-        // Continued fraction (complement)
-        1.0 - gamma_inc_cf(a, x)
-    }
+    fsci_special::gammainc_scalar(a, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
-/// Upper regularized incomplete gamma function Q(a, x) = Γ(a,x)/Γ(a).
-/// Equivalent to 1 - lower_regularized_gamma(a, x) but more precise for large x.
 fn upper_regularized_gamma(a: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 1.0;
-    }
-    if x < a + 1.0 {
-        // Series expansion complement
-        1.0 - gamma_inc_series(a, x)
-    } else {
-        // Continued fraction
-        gamma_inc_cf(a, x)
-    }
+    fsci_special::gammaincc_scalar(a, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
-fn gamma_inc_series(a: f64, x: f64) -> f64 {
-    let mut sum = 1.0 / a;
-    let mut term = 1.0 / a;
-    for n in 1..200 {
-        term *= x / (a + n as f64);
-        sum += term;
-        if term.abs() < 1e-15 * sum.abs() {
-            break;
-        }
-    }
-    sum * (-x + a * x.ln() - ln_gamma(a)).exp()
-}
-
-fn gamma_inc_cf(a: f64, x: f64) -> f64 {
-    // Lentz's continued fraction for upper incomplete gamma
-    let b0 = x + 1.0 - a;
-    let mut c = 1.0 / 1e-30;
-    let mut d = 1.0 / b0;
-    if d == 0.0 {
-        d = 1e-30;
-    }
-    let mut f = d;
-
-    for m in 1..200 {
-        let mf = m as f64;
-        let an = mf * (a - mf);
-        let bn = x + 1.0 - a + 2.0 * mf;
-
-        d = bn + an * d;
-        if d.abs() < 1e-30 {
-            d = 1e-30;
-        }
-        d = 1.0 / d;
-
-        c = bn + an / c;
-        if c.abs() < 1e-30 {
-            c = 1e-30;
-        }
-
-        let delta = c * d;
-        f *= delta;
-
-        if (delta - 1.0).abs() < 1e-15 {
-            break;
-        }
-    }
-
-    f * (-x + a * x.ln() - ln_gamma(a)).exp()
-}
-
-/// Regularized incomplete beta function I_x(a, b) using continued fraction.
 fn regularized_incomplete_beta(a: f64, b: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    // Special cases with closed-form solutions
-    if (a - 1.0).abs() < 1e-14 && (b - 1.0).abs() < 1e-14 {
-        return x; // Beta(1,1) = Uniform(0,1)
-    }
-    if (a - 1.0).abs() < 1e-14 {
-        return 1.0 - (1.0 - x).powf(b); // I_x(1, b) = 1 - (1-x)^b
-    }
-    if (b - 1.0).abs() < 1e-14 {
-        return x.powf(a); // I_x(a, 1) = x^a
-    }
-    // Use symmetry: if x > (a+1)/(a+b+2), compute 1 - I_{1-x}(b, a)
-    if x > (a + 1.0) / (a + b + 2.0) {
-        return 1.0 - regularized_incomplete_beta(b, a, 1.0 - x);
-    }
-    let lnbeta = ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b);
-    let front = (a * x.ln() + b * (1.0 - x).ln() - lnbeta).exp() / a;
-    front * beta_cf(a, b, x)
-}
-
-/// Continued fraction for incomplete beta (Lentz's method).
-fn beta_cf(a: f64, b: f64, x: f64) -> f64 {
-    let mut f = 1.0;
-    let mut c = 1.0;
-    let mut d = 1.0 / (1.0 - (a + b) * x / (a + 1.0));
-
-    for m in 1..200 {
-        let m_f = m as f64;
-        // Even step
-        let num_even = m_f * (b - m_f) * x / ((a + 2.0 * m_f - 1.0) * (a + 2.0 * m_f));
-        d = 1.0 / (1.0 + num_even * d);
-        c = 1.0 + num_even / c;
-        f *= d * c;
-
-        // Odd step
-        let num_odd = -(a + m_f) * (a + b + m_f) * x / ((a + 2.0 * m_f) * (a + 2.0 * m_f + 1.0));
-        d = 1.0 / (1.0 + num_odd * d);
-        c = 1.0 + num_odd / c;
-        f *= d * c;
-
-        if ((d * c) - 1.0).abs() < 1e-15 {
-            break;
-        }
-    }
-
-    f
+    fsci_special::betainc_scalar(a, b, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
 // ══════════════════════════════════════════════════════════════════════

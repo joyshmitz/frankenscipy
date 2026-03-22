@@ -193,34 +193,13 @@ pub fn erf_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
-    if x == f64::INFINITY {
-        return 1.0;
+    if x.is_infinite() {
+        return x.signum();
     }
-    if x == f64::NEG_INFINITY {
-        return -1.0;
-    }
-    if x == 0.0 {
-        return x;
-    }
-
-    // Abramowitz & Stegun 7.1.26 approximation.
-    let sign = x.signum();
-    let x_abs = x.abs();
-    let p = 0.327_591_1;
-    let a1 = 0.254_829_592;
-    let a2 = -0.284_496_736;
-    let a3 = 1.421_413_741;
-    let a4 = -1.453_152_027;
-    let a5 = 1.061_405_429;
-    let t = 1.0 / (1.0 + p * x_abs);
-    let poly = (((((a5 * t) + a4) * t + a3) * t + a2) * t + a1) * t;
-    sign * (1.0 - poly * (-x_abs * x_abs).exp())
+    erf_complex_scalar(Complex64::from_real(x)).re
 }
 
 fn erf_complex_scalar(z: Complex64) -> Complex64 {
-    if z.im == 0.0 {
-        return Complex64::from_real(erf_scalar(z.re));
-    }
     if z.re < 0.0 {
         return -erf_complex_scalar(-z);
     }
@@ -234,34 +213,13 @@ pub fn erfc_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
-    if x == 0.0 {
-        return 1.0;
+    if x.is_infinite() {
+        return if x.is_sign_positive() { 0.0 } else { 2.0 };
     }
-    if x == f64::INFINITY {
-        return 0.0;
-    }
-    if x == f64::NEG_INFINITY {
-        return 2.0;
-    }
-    if x < 0.0 {
-        return 2.0 - erfc_scalar(-x);
-    }
-
-    let p = 0.327_591_1;
-    let a1 = 0.254_829_592;
-    let a2 = -0.284_496_736;
-    let a3 = 1.421_413_741;
-    let a4 = -1.453_152_027;
-    let a5 = 1.061_405_429;
-    let t = 1.0 / (1.0 + p * x);
-    let poly = (((((a5 * t) + a4) * t + a3) * t + a2) * t + a1) * t;
-    poly * (-x * x).exp()
+    erfc_complex_scalar(Complex64::from_real(x)).re
 }
 
 fn erfc_complex_scalar(z: Complex64) -> Complex64 {
-    if z.im == 0.0 {
-        return Complex64::from_real(erfc_scalar(z.re));
-    }
     if z.re < 0.0 {
         return Complex64::from_real(2.0) - erfc_complex_scalar(-z);
     }
@@ -294,10 +252,20 @@ fn erfc_complex_asymptotic(z: Complex64) -> Complex64 {
     let mut term = Complex64::from_real(1.0);
     let mut sum = term;
 
+    let mut last_term_abs = term.abs();
     for n in 0..60 {
         let factor = -((2 * n + 1) as f64);
-        term = term * factor / (z2 * 2.0);
+        let next_term = term * factor / (z2 * 2.0);
+        let next_term_abs = next_term.abs();
+
+        if next_term_abs > last_term_abs {
+            break; // Series starts to diverge
+        }
+
+        term = next_term;
+        last_term_abs = next_term_abs;
         sum = sum + term;
+
         if n >= 4 && term.abs() <= 1.0e-16 * sum.abs().max(1.0) {
             break;
         }
@@ -353,7 +321,36 @@ pub fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         return Ok(y);
     }
 
-    Ok(inv_norm_cdf_scalar(0.5 * (y + 1.0)) / 2.0_f64.sqrt())
+    let mut x = inv_norm_cdf_scalar(0.5 * (y + 1.0)) / 2.0_f64.sqrt();
+
+    // Newton-Raphson refinement for double precision accuracy.
+    if y.abs() < 0.7 {
+        // Use erf for central values
+        for _ in 0..2 {
+            let fx = erf_scalar(x) - y;
+            let dfx = TWO_INV_SQRT_PI * (-x * x).exp();
+            if dfx.abs() < 1e-300 {
+                break;
+            }
+            x -= fx / dfx;
+        }
+    } else {
+        // Use erfc for tail values to avoid 1 - small precision loss
+        let yc = if y > 0.0 { 1.0 - y } else { 1.0 + y };
+        let sign = y.signum();
+        x = x.abs();
+        for _ in 0..2 {
+            let fx = erfc_scalar(x) - yc;
+            let dfx = -TWO_INV_SQRT_PI * (-x * x).exp();
+            if dfx.abs() < 1e-300 {
+                break;
+            }
+            x -= fx / dfx;
+        }
+        x *= sign;
+    }
+
+    Ok(x)
 }
 
 fn erfcinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {

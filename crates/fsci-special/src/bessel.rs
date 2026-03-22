@@ -375,17 +375,32 @@ fn iv_scalar(v: f64, z: f64) -> f64 {
     if z.is_nan() || v.is_nan() {
         return f64::NAN;
     }
-    if z == 0.0 {
+    let az = z.abs();
+    if az == 0.0 {
         return if v == 0.0 {
             1.0
         } else if v > 0.0 {
             0.0
+        } else if v.fract() == 0.0 {
+            // I_{-n}(0) = I_n(0)
+            if v.abs() == 0.0 { 1.0 } else { 0.0 }
         } else {
             f64::INFINITY
         };
     }
 
-    let az = z.abs();
+    if v < 0.0 {
+        if v.fract() == 0.0 {
+            return iv_scalar(v.abs(), z);
+        }
+        // I_{-v}(z) = I_v(z) + (2/pi) * sin(v*pi) * K_v(z)
+        // But for real-only iv_scalar, we usually follow scipy.special.iv behavior.
+        // scipy.special.iv(-v, z) for non-integer v and z > 0 returns same as formula.
+    }
+
+    if az > 50.0 {
+        return iv_asymptotic(v, az);
+    }
 
     // Power series: I_v(z) = (z/2)^v Σ (z²/4)^k / (k! Γ(v+k+1))
     let half_z = az / 2.0;
@@ -396,9 +411,10 @@ fn iv_scalar(v: f64, z: f64) -> f64 {
     let mut log_term = log_first;
 
     for k in 0..200 {
-        sum += log_term.exp();
+        let term = log_term.exp();
+        sum += term;
 
-        if log_term.exp() < 1e-16 * sum.max(1e-300) && k > 5 {
+        if term < 1e-16 * sum && k > 10 {
             break;
         }
 
@@ -407,14 +423,37 @@ fn iv_scalar(v: f64, z: f64) -> f64 {
     }
 
     // Parity for negative z: I_v(-z) = (-1)^v I_v(z) for integer v
-    if z < 0.0 && v.fract() == 0.0 {
-        let n = v as i64;
-        if n % 2 != 0 {
-            return -sum;
+    if z < 0.0 {
+        if v.fract() == 0.0 {
+            let n = v.abs() as i64;
+            if n % 2 != 0 {
+                return -sum;
+            }
+        } else {
+            return f64::NAN; // Complex for non-integer v and negative z
         }
     }
 
     sum
+}
+
+fn iv_asymptotic(v: f64, z: f64) -> f64 {
+    // I_v(z) ~ e^z / sqrt(2*pi*z) * [ 1 - (4v^2-1)/8z + (4v^2-1)(4v^2-9)/(2! (8z)^2) - ... ]
+    let mu = 4.0 * v * v;
+    let mut sum = 1.0;
+    let mut term = 1.0;
+    let iz8 = 1.0 / (8.0 * z);
+
+    for k in 1..20 {
+        let kf = k as f64;
+        term *= -(mu - (2.0 * kf - 1.0).powi(2)) * iz8 / kf;
+        sum += term;
+        if term.abs() < 1e-14 * sum.abs() {
+            break;
+        }
+    }
+
+    (z * 2.0 * PI).sqrt().recip() * z.exp() * sum
 }
 
 /// K_v(z) for real order v.

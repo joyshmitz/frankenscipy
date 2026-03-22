@@ -16,7 +16,10 @@ pub use bessel::{
     BESSEL_DISPATCH_PLAN, hankel1, hankel2, iv, j0, j1, jn, jv, kv, spherical_in, spherical_jn,
     spherical_kn, spherical_yn, y0, y1, yn, yv,
 };
-pub use beta::{BETA_DISPATCH_PLAN, beta, betainc, betaln, btdtr, btdtri, fdtr, fdtri};
+pub use beta::{
+    BETA_DISPATCH_PLAN, beta, betainc, betaln, btdtr, btdtri, fdtr, fdtri, betainc_scalar,
+    betaln_scalar,
+};
 pub use convenience::{
     CONVENIENCE_DISPATCH_PLAN, dawsn, entr, expit, fresnel, kl_div, logit, logsumexp, modstruve,
     ndtr, ndtri, rel_entr, sinc, struve, xlog1py, xlogy,
@@ -29,7 +32,7 @@ pub use error::{
 };
 pub use gamma::{
     GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, gdtr,
-    gdtri, perm, polygamma, rgamma, zeta,
+    gdtri, perm, polygamma, rgamma, zeta, gammainc_scalar, gammaincc_scalar, gammaln_scalar,
 };
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
 pub use orthopoly::{
@@ -84,6 +87,40 @@ mod tests {
 
         let j1_zero = j1(&zero, RuntimeMode::Strict).expect("j1(0) should evaluate");
         assert_real_scalar_close(j1_zero, 0.0, 1e-8);
+    }
+
+    #[test]
+    fn erf_infinity_regression() {
+        use fsci_runtime::RuntimeMode;
+        let inf = SpecialTensor::RealScalar(f64::INFINITY);
+        let neg_inf = SpecialTensor::RealScalar(f64::NEG_INFINITY);
+        
+        let res_inf = erf(&inf, RuntimeMode::Strict).unwrap();
+        let res_neg_inf = erf(&neg_inf, RuntimeMode::Strict).unwrap();
+        
+        match res_inf {
+            SpecialTensor::RealScalar(v) => assert_eq!(v, 1.0, "erf(inf) should be 1.0"),
+            _ => panic!(),
+        }
+        match res_neg_inf {
+            SpecialTensor::RealScalar(v) => assert_eq!(v, -1.0, "erf(-inf) should be -1.0"),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn iv_large_argument_regression() {
+        use fsci_runtime::RuntimeMode;
+        // I_0.5(500) = sqrt(2/(pi*500)) * sinh(500) ≈ 1.13e215
+        let v = SpecialTensor::RealScalar(0.5);
+        let z = SpecialTensor::RealScalar(500.0);
+        let result = iv(&v, &z, RuntimeMode::Strict).expect("iv(0.5, 500)");
+        match result {
+            SpecialTensor::RealScalar(val) => {
+                assert!(val > 1e214 && val < 1e216, "iv(0.5, 500) should be ~1e215, got {val}");
+            }
+            _ => panic!("expected scalar"),
+        }
     }
 
     #[test]
