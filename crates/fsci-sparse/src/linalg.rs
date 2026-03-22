@@ -2107,7 +2107,7 @@ mod tests {
         assert_eq!(result.eigenvalues.len(), 2);
         // Should find the two largest: 5 and 3
         let mut sorted = result.eigenvalues.clone();
-        sorted.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap());
+        sorted.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap_or(std::cmp::Ordering::Equal));
         assert!(
             (sorted[0] - 5.0).abs() < 1.0,
             "largest eigenvalue: {}",

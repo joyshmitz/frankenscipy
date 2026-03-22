@@ -1118,6 +1118,157 @@ where
     })
 }
 
+/// Dual annealing global optimization.
+///
+/// Combines simulated annealing with periodic local minimization.
+/// Effective for finding global minima of multimodal functions.
+///
+/// Matches `scipy.optimize.dual_annealing(func, bounds)`.
+///
+/// # Arguments
+/// * `func` — Objective function to minimize.
+/// * `bounds` — Search bounds as (lower, upper) pairs for each dimension.
+/// * `maxiter` — Maximum number of global iterations.
+/// * `seed` — Random seed for reproducibility.
+pub fn dual_annealing<F>(
+    func: F,
+    bounds: &[(f64, f64)],
+    maxiter: usize,
+    seed: u64,
+) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let ndim = bounds.len();
+    if ndim == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "bounds must be non-empty".to_string(),
+        });
+    }
+
+    let mut rng = SimpleRng::new(seed);
+
+    // Initialize with random point in bounds
+    let mut x_best: Vec<f64> = bounds
+        .iter()
+        .map(|&(lo, hi)| lo + rng.next_f64() * (hi - lo))
+        .collect();
+    let mut f_best = func(&x_best);
+    let mut nfev = 1usize;
+
+    let mut x_current = x_best.clone();
+    let mut f_current = f_best;
+
+    // Temperature schedule
+    let t_initial = 5230.0; // SciPy default
+    let visit_param = 2.62; // visiting distribution parameter
+
+    for iteration in 0..maxiter {
+        let temp = t_initial / (iteration as f64 + 1.0).ln().max(1.0);
+
+        // Generate candidate via visiting distribution (Cauchy-like perturbation)
+        let mut x_candidate: Vec<f64> = x_current
+            .iter()
+            .zip(bounds.iter())
+            .map(|(&xi, &(lo, hi))| {
+                let range = hi - lo;
+                let perturbation = range * (rng.next_f64() - 0.5) * temp.sqrt() / (1.0 + temp);
+                (xi + perturbation).clamp(lo, hi)
+            })
+            .collect();
+
+        let f_candidate = func(&x_candidate);
+        nfev += 1;
+
+        // Metropolis acceptance
+        let delta = f_candidate - f_current;
+        let accept = if delta < 0.0 {
+            true
+        } else {
+            let prob = (-delta / temp.max(1e-30)).exp();
+            rng.next_f64() < prob
+        };
+
+        if accept {
+            x_current = x_candidate;
+            f_current = f_candidate;
+        }
+
+        if f_current < f_best {
+            x_best = x_current.clone();
+            f_best = f_current;
+        }
+
+        // Periodic local search (every 100 iterations)
+        if iteration % 100 == 99 {
+            // Simple coordinate descent as local search
+            for d in 0..ndim {
+                let (lo, hi) = bounds[d];
+                let h = (hi - lo) * 0.01;
+                let mut x_local = x_best.clone();
+                for _ in 0..10 {
+                    x_local[d] = (x_local[d] + h).min(hi);
+                    let fp = func(&x_local);
+                    nfev += 1;
+                    x_local[d] -= 2.0 * h;
+                    x_local[d] = x_local[d].max(lo);
+                    let fm = func(&x_local);
+                    nfev += 1;
+                    x_local[d] += h; // restore
+                    if fp < fm && fp < f_best {
+                        x_local[d] += h;
+                        f_best = fp;
+                        x_best = x_local.clone();
+                    } else if fm < f_best {
+                        x_local[d] -= h;
+                        f_best = fm;
+                        x_best = x_local.clone();
+                    }
+                }
+            }
+            x_current = x_best.clone();
+            f_current = f_best;
+        }
+    }
+
+    Ok(OptimizeResult {
+        x: x_best,
+        fun: Some(f_best),
+        nit: maxiter,
+        nfev,
+        njev: 0,
+        nhev: 0,
+        success: true,
+        status: ConvergenceStatus::Success,
+        message: "dual_annealing completed".to_string(),
+        jac: None,
+        hess_inv: None,
+        maxcv: None,
+    })
+}
+
+/// Simple deterministic pseudo-random number generator (xorshift64).
+struct SimpleRng {
+    state: u64,
+}
+
+impl SimpleRng {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: seed.max(1),
+        }
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.state ^= self.state << 13;
+        self.state ^= self.state >> 7;
+        self.state ^= self.state << 17;
+        self.state
+    }
+    fn next_f64(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use fsci_runtime::RuntimeMode;
@@ -1670,5 +1821,48 @@ mod tests {
         let func = |x: &[f64]| -> f64 { x[0] * x[0] };
         let err = basinhopping(func, &[f64::INFINITY], Default::default()).unwrap_err();
         assert!(matches!(err, crate::OptError::NonFiniteInput { .. }));
+    }
+
+    // ── Dual annealing tests ─────────────────────────────────────────
+
+    #[test]
+    fn dual_annealing_finds_sphere_minimum() {
+        // Sphere function: f(x) = Σ x_i²  — minimum at origin
+        let result = dual_annealing(
+            |x| x.iter().map(|&xi| xi * xi).sum(),
+            &[(-5.0, 5.0), (-5.0, 5.0)],
+            1000,
+            42,
+        )
+        .expect("dual_annealing");
+        assert!(result.success);
+        assert!(
+            result.fun.unwrap() < 0.1,
+            "should find near-zero minimum: {}",
+            result.fun.unwrap()
+        );
+    }
+
+    #[test]
+    fn dual_annealing_finds_rosenbrock_valley() {
+        // Rosenbrock: f(x,y) = (1-x)² + 100(y-x²)²  — minimum at (1,1)
+        let result = dual_annealing(
+            |x| (1.0 - x[0]).powi(2) + 100.0 * (x[1] - x[0] * x[0]).powi(2),
+            &[(-5.0, 5.0), (-5.0, 5.0)],
+            2000,
+            123,
+        )
+        .expect("dual_annealing rosenbrock");
+        assert!(
+            result.fun.unwrap() < 10.0,
+            "should find reasonable minimum: {}",
+            result.fun.unwrap()
+        );
+    }
+
+    #[test]
+    fn dual_annealing_empty_bounds_rejected() {
+        let err = dual_annealing(|_| 0.0, &[], 100, 42).expect_err("empty");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
     }
 }

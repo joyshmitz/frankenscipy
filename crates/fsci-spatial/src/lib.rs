@@ -1498,7 +1498,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, p)| (i, euclidean(p, &query)))
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap();
 
         assert_eq!(tree_idx, brute_idx);

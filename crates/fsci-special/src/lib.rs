@@ -1032,6 +1032,29 @@ mod tests {
     }
 
     #[test]
+    fn erfinv_tail_contract_points() {
+        let mode = RuntimeMode::Strict;
+        let pairs = [
+            (0.999_999, 3.458_910_737_275_499, 1.0e-7),
+            (0.999_999_999_999, 5.042_031_898_572_696, 2.0e-5),
+            (-0.999_999, -3.458_910_737_275_499, 1.0e-7),
+        ];
+
+        for (y, expected, tol) in pairs {
+            let actual = erfinv(&SpecialTensor::RealScalar(y), mode).expect("erfinv tail point");
+            assert_real_scalar_close(actual, expected, tol);
+        }
+    }
+
+    #[test]
+    fn erfcinv_tiny_argument_remains_finite_and_accurate() {
+        let mode = RuntimeMode::Strict;
+        let actual =
+            erfcinv(&SpecialTensor::RealScalar(1.0e-20), mode).expect("erfcinv tiny argument");
+        assert_real_scalar_close(actual, 6.601_580_622_355_143, 1.0e-8);
+    }
+
+    #[test]
     fn property_bessel_envelope_large_x_grid() {
         let _guard = trace_test_guard();
         clear_test_logs();

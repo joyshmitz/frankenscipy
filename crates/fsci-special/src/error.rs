@@ -353,24 +353,7 @@ pub fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         return Ok(y);
     }
 
-    // Winitzki approximation with two Newton refinements.
-    let a = 0.147;
-    let ln_term = (1.0 - y * y).ln();
-    let first = 2.0 / (PI * a) + ln_term / 2.0;
-    let second = (first * first - ln_term / a).sqrt();
-    let mut x = (second - first).sqrt().copysign(y);
-
-    // Polish with Newton-Raphson iterations.
-    for _ in 0..4 {
-        let fx = erf_scalar(x) - y;
-        let dfx = TWO_INV_SQRT_PI * (-x * x).exp();
-        if dfx == 0.0 {
-            break;
-        }
-        x -= fx / dfx;
-    }
-
-    Ok(x)
+    Ok(inv_norm_cdf_scalar(0.5 * (y + 1.0)) / 2.0_f64.sqrt())
 }
 
 fn erfcinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
@@ -417,5 +400,73 @@ fn erfcinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         };
     }
 
-    erfinv_scalar(1.0 - y, mode)
+    if y == 1.0 {
+        return Ok(0.0);
+    }
+
+    Ok(-inv_norm_cdf_scalar(0.5 * y) / 2.0_f64.sqrt())
+}
+
+fn inv_norm_cdf_scalar(p: f64) -> f64 {
+    if p.is_nan() {
+        return f64::NAN;
+    }
+    if !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p == 1.0 {
+        return f64::INFINITY;
+    }
+
+    // Acklam's rational approximation for the inverse normal CDF.
+    const P_LOW: f64 = 0.024_25;
+    const P_HIGH: f64 = 1.0 - P_LOW;
+
+    const A: [f64; 6] = [
+        -3.969_683_028_665_376e+01,
+        2.209_460_984_245_205e+02,
+        -2.759_285_104_469_687e+02,
+        1.383_577_518_672_69e+02,
+        -3.066_479_806_614_716e+01,
+        2.506_628_277_459_239,
+    ];
+    const B: [f64; 5] = [
+        -5.447_609_879_822_406e+01,
+        1.615_858_368_580_409e+02,
+        -1.556_989_798_598_866e+02,
+        6.680_131_188_771_972e+01,
+        -1.328_068_155_288_572e+01,
+    ];
+    const C: [f64; 6] = [
+        -7.784_894_002_430_293e-03,
+        -3.223_964_580_411_365e-01,
+        -2.400_758_277_161_838,
+        -2.549_732_539_343_734,
+        4.374_664_141_464_968,
+        2.938_163_982_698_783,
+    ];
+    const D: [f64; 4] = [
+        7.784_695_709_041_462e-03,
+        3.224_671_290_700_398e-01,
+        2.445_134_137_142_996,
+        3.754_408_661_907_416,
+    ];
+
+    if p < P_LOW {
+        let q = (-2.0 * p.ln()).sqrt();
+        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    } else if p <= P_HIGH {
+        let q = p - 0.5;
+        let r = q * q;
+        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
+            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+    } else {
+        let q = (-2.0 * (1.0 - p).ln()).sqrt();
+        -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    }
 }

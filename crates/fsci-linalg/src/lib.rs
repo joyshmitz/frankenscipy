@@ -928,15 +928,25 @@ fn solve_svd_fallback(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgEr
     let matrix = dmatrix_from_rows(a)?;
     let rhs = DVector::from_column_slice(b);
     let svd = SVD::new(matrix.clone(), true, true);
-    let x = svd
-        .solve(&rhs, f64::EPSILON)
-        .map_err(|_| LinalgError::SingularMatrix)?;
     let max_s = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let threshold = (matrix.nrows().max(matrix.ncols()) as f64) * f64::EPSILON * max_s;
+    let rank = svd
+        .singular_values
+        .iter()
+        .filter(|&&s| s > threshold)
+        .count();
+    if matrix.nrows() == matrix.ncols() && rank < matrix.nrows() {
+        return Err(LinalgError::SingularMatrix);
+    }
+
+    let x = svd
+        .solve(&rhs, threshold)
+        .map_err(|_| LinalgError::SingularMatrix)?;
     let min_s = svd
         .singular_values
         .iter()
         .copied()
-        .filter(|s| *s > 0.0)
+        .filter(|s| *s > threshold)
         .fold(None, |acc, s| match acc {
             None => Some(s),
             Some(m) => Some(m.min(s)),
@@ -1109,35 +1119,40 @@ fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
         return 0.0;
     }
 
-    // 2. Estimate ||A^-1||_1 via solving A x = e where e is a vector of signs.
-    // This is a common heuristic for triangular matrices.
+    // 2. Estimate ||A^-1||_1 via a greedy 1-norm estimator.
+    // We estimate ||A^-1||_1 = ||(A^T)^-1||_\infty by solving A^T x = b
+    // where b_i in {-1, 1} is chosen greedily to maximize x_i.
     let mut x = vec![0.0; n];
     if lower {
-        for i in 0..n {
-            let mut sum = 1.0; // e_i = 1
-            for j in 0..i {
-                sum -= a[i][j] * x[j];
+        // A^T is upper triangular. Solve A^T x = b backward.
+        for i in (0..n).rev() {
+            let mut sum = 0.0;
+            for j in (i + 1)..n {
+                sum += a[j][i] * x[j]; // A^T_ij = A_ji
             }
             if a[i][i].abs() < 1e-18 {
                 return 0.0;
             }
-            x[i] = sum / a[i][i];
+            let b_i = if sum < 0.0 { 1.0 } else { -1.0 };
+            x[i] = (b_i - sum) / a[i][i];
         }
     } else {
-        for i in (0..n).rev() {
-            let mut sum = 1.0; // e_i = 1
-            for j in (i + 1)..n {
-                sum -= a[i][j] * x[j];
+        // A^T is lower triangular. Solve A^T x = b forward.
+        for i in 0..n {
+            let mut sum = 0.0;
+            for j in 0..i {
+                sum += a[j][i] * x[j]; // A^T_ij = A_ji
             }
             if a[i][i].abs() < 1e-18 {
                 return 0.0;
             }
-            x[i] = sum / a[i][i];
+            let b_i = if sum < 0.0 { 1.0 } else { -1.0 };
+            x[i] = (b_i - sum) / a[i][i];
         }
     }
+    let a_inv_norm: f64 = x.iter().map(|v| v.abs()).fold(0.0, f64::max);
 
-    let a_inv_norm_estimate = x.iter().map(|v| v.abs()).sum::<f64>() / (n as f64).sqrt();
-    let rcond = 1.0 / (a_norm * a_inv_norm_estimate);
+    let rcond = 1.0 / (a_norm * a_inv_norm);
     if rcond.is_nan() {
         0.0
     } else {
@@ -3224,7 +3239,7 @@ pub fn subspace_angles(
     // SVD of the product to get cosines of principal angles.
     let sv = svdvals(&product, options)?;
     let mut angles: Vec<f64> = sv.iter().map(|&s| s.clamp(0.0, 1.0).acos()).collect();
-    angles.sort_by(|a, b| b.partial_cmp(a).unwrap()); // descending
+    angles.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)); // descending
     Ok(angles)
 }
 
@@ -3716,6 +3731,42 @@ mod tests {
         let lu_result = solve_general(&a, &b).expect("LU solve works");
         let svd_result = solve_svd_fallback(&a, &b).expect("SVD solve works");
         assert_close_slice(&svd_result.x, &lu_result.x, 1e-12, 1e-12);
+    }
+
+    #[test]
+    fn solve_svd_fallback_rejects_rank_deficient_square_systems() {
+        let a = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
+        let b = vec![1.0, 2.0];
+        let err = solve_svd_fallback(&a, &b).expect_err("rank-deficient system");
+        assert_eq!(err, LinalgError::SingularMatrix);
+    }
+
+    #[test]
+    fn solve_svd_fallback_warns_on_ill_conditioned_but_full_rank_systems() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1e-14]];
+        let b = vec![1.0, 1.0];
+        let result = solve_svd_fallback(&a, &b).expect("full-rank system");
+        assert!(matches!(result.warning, Some(LinalgWarning::IllConditioned { .. })));
+    }
+
+    #[test]
+    fn fast_rcond_triangular_matches_exact_upper_2x2_inverse_norm() {
+        let a = vec![vec![1.0, 1.0], vec![0.0, 1.0]];
+        let rcond = fast_rcond_triangular(&a, false);
+        assert!(
+            (rcond - 0.25).abs() < 1e-12,
+            "expected exact reciprocal condition 0.25, got {rcond}"
+        );
+    }
+
+    #[test]
+    fn fast_rcond_triangular_matches_exact_lower_2x2_inverse_norm() {
+        let a = vec![vec![1.0, 0.0], vec![1.0, 1.0]];
+        let rcond = fast_rcond_triangular(&a, true);
+        assert!(
+            (rcond - 0.25).abs() < 1e-12,
+            "expected exact reciprocal condition 0.25, got {rcond}"
+        );
     }
 
     #[test]

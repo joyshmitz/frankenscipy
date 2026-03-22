@@ -6476,7 +6476,7 @@ mod tests {
         let peak_idx = result
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap()
             .0;
         // v is shifted right by 1 relative to a, so peak should be at center-1
@@ -6770,7 +6770,7 @@ mod tests {
         let peak_idx = power
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap()
             .0;
         assert!(
