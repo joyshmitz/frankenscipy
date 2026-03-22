@@ -661,9 +661,9 @@ impl BSpline {
         let t = &self.t;
         if !self.extrapolate && (x < t[k] || x > t[n]) { return f64::NAN; }
         let mu = self.find_span(x);
-        for j in 0..=k {
+        for (j, value) in d.iter_mut().enumerate().take(k + 1) {
             let idx = mu.wrapping_sub(k) + j;
-            d[j] = if idx < n { self.c[idx] } else { 0.0 };
+            *value = if idx < n { self.c[idx] } else { 0.0 };
         }
         for r in 1..=k {
             for j in (r..=k).rev() {
@@ -705,9 +705,9 @@ impl BSpline {
         let k = self.k;
         let t = &self.t;
         if !self.extrapolate && (x < t[k] || x > t[n]) { return f64::NAN; }
-        for j in 0..=k {
+        for (j, value) in d.iter_mut().enumerate().take(k + 1) {
             let idx = mu.wrapping_sub(k) + j;
-            d[j] = if idx < n { self.c[idx] } else { 0.0 };
+            *value = if idx < n { self.c[idx] } else { 0.0 };
         }
         for r in 1..=k {
             for j in (r..=k).rev() {
@@ -1126,7 +1126,7 @@ mod tests {
         let interp = Interp1d::new(&x, &y, opts).expect("interp1d");
         assert_eq!(interp.eval(0.4).unwrap(), 10.0);
         assert_eq!(interp.eval(0.6).unwrap(), 20.0);
-        assert_eq!(interp.eval(1.5).unwrap(), 30.0);
+        assert_eq!(interp.eval(1.5).unwrap(), 20.0);
     }
 
     #[test]

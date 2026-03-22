@@ -479,7 +479,9 @@ where
                     tol.max(1.0e-4),
                 ) {
                     Ok(v) => v,
-                    Err(err) => return Ok(result_from_error(&x, iteration, objective.nfev, 0, err)),
+                    Err(err) => {
+                        return Ok(result_from_error(&x, iteration, objective.nfev, 0, err));
+                    }
                 };
                 x = search.x;
                 f = search.f;
@@ -718,9 +720,12 @@ where
                     f_values[n] = f_c;
                 } else {
                     // Shrink
-                    match nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n) {
-                        Ok(()) => {},
-                        Err(err) => return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err)),
+                    match nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n)
+                    {
+                        Ok(()) => {}
+                        Err(err) => {
+                            return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err));
+                        }
                     }
                 }
             } else {
@@ -741,9 +746,12 @@ where
                     f_values[n] = f_cc;
                 } else {
                     // Shrink
-                    match nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n) {
-                        Ok(()) => {},
-                        Err(err) => return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err)),
+                    match nelder_mead_shrink(&mut simplex, &mut f_values, sigma, &mut objective, n)
+                    {
+                        Ok(()) => {}
+                        Err(err) => {
+                            return Ok(result_from_error(&simplex[0], nit, objective.nfev, 0, err));
+                        }
                     }
                 }
             }
@@ -1232,7 +1240,8 @@ where
         // Inner CG loop to solve H*d = -g approximately
         // Using Hessian-vector products via finite differences: H*v ≈ (∇f(x+εv) - ∇f(x)) / ε
         let cg_tol = grad_norm.min(0.5); // Eisenstat-Walker forcing term
-        let (direction, nhvp) = match cg_newton_direction(&mut objective, &x, &grad, eps, cg_tol, n) {
+        let (direction, nhvp) = match cg_newton_direction(&mut objective, &x, &grad, eps, cg_tol, n)
+        {
             Ok(v) => v,
             Err(e) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, e)),
         };
