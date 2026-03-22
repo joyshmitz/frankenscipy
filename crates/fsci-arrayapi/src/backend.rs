@@ -161,7 +161,11 @@ impl CoreArray {
         for value in &self.values {
             data.push(scalar_to_f64(*value)?);
         }
-        Ok(DMatrix::from_row_slice(rows, cols, &data))
+
+        match self.order {
+            MemoryOrder::F => Ok(DMatrix::from_column_slice(rows, cols, &data)),
+            _ => Ok(DMatrix::from_row_slice(rows, cols, &data)),
+        }
     }
 
     #[must_use]
@@ -196,6 +200,21 @@ impl CoreArray {
     #[must_use]
     pub fn values(&self) -> &[ScalarValue] {
         &self.values
+    }
+
+    #[must_use]
+    pub fn shape(&self) -> &Shape {
+        &self.shape
+    }
+
+    #[must_use]
+    pub fn order(&self) -> MemoryOrder {
+        self.order
+    }
+
+    #[must_use]
+    pub fn dtype(&self) -> DType {
+        self.dtype
     }
 }
 
@@ -653,32 +672,18 @@ impl ArrayApiBackend for CoreArrayBackend {
 
         let rows = array.shape.dims[0];
         let cols = array.shape.dims[1];
-        let mut values = Vec::with_capacity(array.values.len());
 
-        let is_f_order = array.order == MemoryOrder::F;
-
-        for col in 0..cols {
-            for row in 0..rows {
-                let idx = if is_f_order {
-                    col * rows + row
-                } else {
-                    row * cols + col
-                };
-                values.push(array.values[idx]);
-            }
-        }
-
-        // Transposing an F-order array makes it C-order, and vice-versa
-        let new_order = if is_f_order {
-            MemoryOrder::C
-        } else {
-            MemoryOrder::F
+        // Zero-copy transpose: swap dimensions and flip memory order
+        let new_order = match array.order {
+            MemoryOrder::C => MemoryOrder::F,
+            MemoryOrder::F => MemoryOrder::C,
+            _ => array.order, // Fallback for other orders
         };
 
         Ok(CoreArray {
             shape: Shape::new(vec![cols, rows]),
             dtype: array.dtype,
-            values,
+            values: array.values.clone(),
             order: new_order,
         })
     }
@@ -846,12 +851,12 @@ fn basic_slice_indices(
 
     let step = spec.step;
     let mut start = spec.start.unwrap_or(if step > 0 { 0 } else { len_i - 1 });
-    let mut stop = spec.stop.unwrap_or(if step > 0 { len_i } else { -1 });
+    let mut stop = spec.stop.unwrap_or(if step > 0 { len_i } else { -len_i - 1 });
 
     if start < 0 {
         start += len_i;
     }
-    if stop < 0 {
+    if stop < 0 && spec.stop.is_some() {
         stop += len_i;
     }
 
@@ -864,17 +869,16 @@ fn basic_slice_indices(
             out.push(cur as usize);
             cur += step;
         }
-        return Ok(out);
-    }
-
-    start = start.clamp(-1, len_i.saturating_sub(1));
-    stop = stop.clamp(-1, len_i.saturating_sub(1));
-    let mut cur = start;
-    while cur > stop {
-        if cur >= 0 {
-            out.push(cur as usize);
+    } else {
+        start = start.clamp(0, len_i.saturating_sub(1));
+        // stop for negative step can be -1 to include index 0
+        let mut cur = start;
+        while cur > stop && cur >= 0 {
+            if cur < len_i {
+                out.push(cur as usize);
+            }
+            cur += step;
         }
-        cur += step;
     }
     Ok(out)
 }
@@ -1621,5 +1625,104 @@ mod tests {
             prop_assert_eq!(selected.size(), 1);
             prop_assert_eq!(selected.values()[0], ScalarValue::F64(idx as f64));
         }
+    }
+
+    #[test]
+    fn test_negative_step_slicing() {
+        let backend = strict_backend();
+        let values: Vec<ScalarValue> = (0..5).map(|v| ScalarValue::F64(v as f64)).collect();
+        let request = CreationRequest {
+            shape: Shape::new(vec![5]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        };
+        let array = from_slice(&backend, &values, &request).expect("from_slice");
+
+        // arr[::-1]
+        let index = IndexRequest {
+            mode: IndexingMode::Basic,
+            index: IndexExpr::Basic {
+                slices: vec![SliceSpec {
+                    start: None,
+                    stop: None,
+                    step: -1,
+                }],
+            },
+        };
+        let sliced = getitem(&backend, &array, &index).expect("slice ::-1");
+        assert_eq!(sliced.size(), 5);
+        let expected: Vec<ScalarValue> = vec![4.0, 3.0, 2.0, 1.0, 0.0]
+            .into_iter()
+            .map(ScalarValue::F64)
+            .collect();
+        assert_eq!(sliced.values(), &expected);
+    }
+
+    #[test]
+    fn test_complex_slicing() {
+        let backend = strict_backend();
+        let values: Vec<ScalarValue> = (0..10).map(|v| ScalarValue::F64(v as f64)).collect();
+        let request = CreationRequest {
+            shape: Shape::new(vec![10]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        };
+        let array = from_slice(&backend, &values, &request).expect("from_slice");
+
+        // arr[1:8:2] -> [1, 3, 5, 7]
+        let idx1 = IndexRequest {
+            mode: IndexingMode::Basic,
+            index: IndexExpr::Basic {
+                slices: vec![SliceSpec {
+                    start: Some(1),
+                    stop: Some(8),
+                    step: 2,
+                }],
+            },
+        };
+        let res1 = getitem(&backend, &array, &idx1).unwrap();
+        assert_eq!(res1.values(), &[1.0, 3.0, 5.0, 7.0].map(ScalarValue::F64));
+
+        // arr[8:1:-2] -> [8, 6, 4, 2]
+        let idx2 = IndexRequest {
+            mode: IndexingMode::Basic,
+            index: IndexExpr::Basic {
+                slices: vec![SliceSpec {
+                    start: Some(8),
+                    stop: Some(1),
+                    step: -2,
+                }],
+            },
+        };
+        let res2 = getitem(&backend, &array, &idx2).unwrap();
+        assert_eq!(res2.values(), &[8.0, 6.0, 4.0, 2.0].map(ScalarValue::F64));
+
+        // arr[5:-1] -> [5, 6, 7, 8]
+        let idx3 = IndexRequest {
+            mode: IndexingMode::Basic,
+            index: IndexExpr::Basic {
+                slices: vec![SliceSpec {
+                    start: Some(5),
+                    stop: Some(-1),
+                    step: 1,
+                }],
+            },
+        };
+        let res3 = getitem(&backend, &array, &idx3).unwrap();
+        assert_eq!(res3.values(), &[5.0, 6.0, 7.0, 8.0].map(ScalarValue::F64));
+
+        // arr[:-5:-1] -> [9, 8, 7, 6]
+        let idx4 = IndexRequest {
+            mode: IndexingMode::Basic,
+            index: IndexExpr::Basic {
+                slices: vec![SliceSpec {
+                    start: None,
+                    stop: Some(-5),
+                    step: -1,
+                }],
+            },
+        };
+        let res4 = getitem(&backend, &array, &idx4).unwrap();
+        assert_eq!(res4.values(), &[9.0, 8.0, 7.0, 6.0].map(ScalarValue::F64));
     }
 }

@@ -360,7 +360,8 @@ pub fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     let second = (first * first - ln_term / a).sqrt();
     let mut x = (second - first).sqrt().copysign(y);
 
-    for _ in 0..2 {
+    // Polish with Newton-Raphson iterations.
+    for _ in 0..4 {
         let fx = erf_scalar(x) - y;
         let dfx = TWO_INV_SQRT_PI * (-x * x).exp();
         if dfx == 0.0 {

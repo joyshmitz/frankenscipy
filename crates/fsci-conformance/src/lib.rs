@@ -4032,13 +4032,29 @@ fn array_api_source_array(
 }
 
 fn observed_array(array: &FsciArrayApiCoreArray) -> ArrayApiObservedOutcome {
+    use fsci_arrayapi::MemoryOrder;
+
+    let values = if array.order() == MemoryOrder::F && array.shape().rank() == 2 {
+        let rows = array.shape().dims[0];
+        let cols = array.shape().dims[1];
+        let mut row_major = Vec::with_capacity(array.values().len());
+        for r in 0..rows {
+            for c in 0..cols {
+                // In F-order, index is c * rows + r
+                row_major.push(array.values()[c * rows + r]);
+            }
+        }
+        row_major
+    } else {
+        array.values().to_vec()
+    };
+
     ArrayApiObservedOutcome::Array {
         shape: array.shape().dims.clone(),
         dtype: runtime_dtype_to_fixture(array.dtype()),
-        values: array
-            .values()
-            .iter()
-            .map(|value| runtime_scalar_to_fixture(*value))
+        values: values
+            .into_iter()
+            .map(|value| runtime_scalar_to_fixture(value))
             .collect(),
     }
 }

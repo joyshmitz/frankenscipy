@@ -46,7 +46,7 @@ pub struct ButcherTableau {
 // RK45: Dormand-Prince 5(4) Butcher tableau
 // ═══════════════════════════════════════════════════════════════
 
-static RK45_C: &[f64] = &[0.0, 1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0];
+static RK45_C: &[f64] = &[0.0, 1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0, 1.0];
 
 static RK45_A0: &[f64] = &[];
 static RK45_A1: &[f64] = &[1.0 / 5.0];
@@ -65,8 +65,18 @@ static RK45_A5: &[f64] = &[
     49.0 / 176.0,
     -5103.0 / 18656.0,
 ];
+static RK45_A6: &[f64] = &[
+    35.0 / 384.0,
+    0.0,
+    500.0 / 1113.0,
+    125.0 / 192.0,
+    -2187.0 / 6784.0,
+    11.0 / 84.0,
+];
 
-static RK45_A: &[&[f64]] = &[RK45_A0, RK45_A1, RK45_A2, RK45_A3, RK45_A4, RK45_A5];
+static RK45_A: &[&[f64]] = &[
+    RK45_A0, RK45_A1, RK45_A2, RK45_A3, RK45_A4, RK45_A5, RK45_A6,
+];
 
 static RK45_B: &[f64] = &[
     35.0 / 384.0,
@@ -92,7 +102,7 @@ pub static RK45_TABLEAU: ButcherTableau = ButcherTableau {
     b: RK45_B,
     c: RK45_C,
     e: RK45_E,
-    n_stages: 6,
+    n_stages: 7,
     order: 5,
     error_estimator_order: 4,
 };
@@ -101,13 +111,14 @@ pub static RK45_TABLEAU: ButcherTableau = ButcherTableau {
 // RK23: Bogacki-Shampine 3(2) Butcher tableau
 // ═══════════════════════════════════════════════════════════════
 
-static RK23_C: &[f64] = &[0.0, 1.0 / 2.0, 3.0 / 4.0];
+static RK23_C: &[f64] = &[0.0, 1.0 / 2.0, 3.0 / 4.0, 1.0];
 
 static RK23_A0: &[f64] = &[];
 static RK23_A1: &[f64] = &[1.0 / 2.0];
 static RK23_A2: &[f64] = &[0.0, 3.0 / 4.0];
+static RK23_A3: &[f64] = &[2.0 / 9.0, 1.0 / 3.0, 4.0 / 9.0];
 
-static RK23_A: &[&[f64]] = &[RK23_A0, RK23_A1, RK23_A2];
+static RK23_A: &[&[f64]] = &[RK23_A0, RK23_A1, RK23_A2, RK23_A3];
 
 static RK23_B: &[f64] = &[2.0 / 9.0, 1.0 / 3.0, 4.0 / 9.0];
 
@@ -118,7 +129,7 @@ pub static RK23_TABLEAU: ButcherTableau = ButcherTableau {
     b: RK23_B,
     c: RK23_C,
     e: RK23_E,
-    n_stages: 3,
+    n_stages: 4,
     order: 3,
     error_estimator_order: 2,
 };
@@ -337,8 +348,11 @@ where
         }
     }
 
-    let f_new = fun(t + h, &y_new);
-    k[tableau.n_stages] = f_new.clone();
+    // FSAL (First Same As Last) property: for methods like Dormand-Prince RK45
+    // and Bogacki-Shampine RK23, the last stage k[n_stages-1] is the derivative
+    // at (t+h, y_new).
+    let f_new = k[tableau.n_stages - 1].clone();
+    k[tableau.n_stages] = f_new.clone(); // store for next step if needed
 
     (y_new, f_new)
 }
@@ -599,7 +613,7 @@ impl RkSolver {
 
             // Perform the RK step
             let (y_new, f_new) = rk_step(fun, t, &self.y, &self.f, h, self.tableau, &mut self.k);
-            self.nfev += self.tableau.n_stages; // one eval per non-zero stage + final eval
+            self.nfev += self.tableau.n_stages - 1; // leverage FSAL: exactly n_stages - 1 new evals per step
 
             // Compute error scale
             let scale = self.compute_scale(&self.y, &y_new);
@@ -917,5 +931,39 @@ mod tests {
         assert!(x < 1.0 + 1e-15);
         let y = next_after(1.0, 0.0);
         assert!(y < 1.0);
+    }
+
+    #[test]
+    fn solver_rk45_fsal_efficiency() {
+        let mut fun = |_t: f64, y: &[f64]| -> Vec<f64> { vec![y[0]] };
+        let config = RkSolverConfig {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 1.0,
+            rtol: 1e-3,
+            atol: ToleranceValue::Scalar(1e-6),
+            max_step: f64::INFINITY,
+            first_step: Some(0.1), // Fix step size to make nfev predictable
+            mode: RuntimeMode::Strict,
+            tableau: &RK45_TABLEAU,
+        };
+        let mut solver = RkSolver::new(&mut fun, config).expect("solver creation");
+
+        let mut steps = 0;
+        while solver.state() == OdeSolverState::Running {
+            solver.step_with(&mut |_t, y| vec![y[0]]).unwrap();
+            steps += 1;
+        }
+
+        // RK45 has 6 stages. Without FSAL, each step would take 7 evaluations (6 stages + 1 final).
+        // With FSAL, each step takes 6 evaluations (the 7th is reused as the 1st of the next).
+        // Total nfev should be: 1 (initial) + 6 * steps.
+        let expected_nfev = 1 + 6 * steps;
+        assert_eq!(
+            solver.nfev(),
+            expected_nfev,
+            "FSAL: expected {expected_nfev} evaluations for {steps} steps, got {}",
+            solver.nfev()
+        );
     }
 }

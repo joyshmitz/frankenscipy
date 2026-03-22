@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc aad3b503ca4238e1a3b401aedabf4b64f9b70573dc218eee648fd6830b87ccfb # shrinks to case = (SparseCase { shape: Shape2D { rows: 3, cols: 2 }, data: [0.0, -1.0], row_indices: [1, 0], col_indices: [0, 0] }, [-1.0, 0.0])
+cc 83e5842f440e0a67035290fb3084ee8896a8c40dbc65cf9589bc038b5633855d # shrinks to case = SparseCase { shape: Shape2D { rows: 2, cols: 1 }, data: [-1.0, 0.0], row_indices: [0, 1], col_indices: [0, 0] }

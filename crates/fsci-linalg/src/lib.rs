@@ -937,12 +937,12 @@ fn solve_svd_fallback(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgEr
         .iter()
         .copied()
         .filter(|s| *s > 0.0)
-        .fold(f64::INFINITY, f64::min);
-    let rcond = if min_s.is_finite() && max_s > 0.0 {
-        min_s / max_s
-    } else {
-        0.0
-    };
+        .fold(None, |acc, s| match acc {
+            None => Some(s),
+            Some(m) => Some(m.min(s)),
+        })
+        .unwrap_or(0.0);
+    let rcond = if max_s > 0.0 { min_s / max_s } else { 0.0 };
     let backward_err = compute_backward_error(&matrix, &x, &rhs);
 
     Ok(SolveResult {
@@ -1109,62 +1109,40 @@ fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
         return 0.0;
     }
 
-    // 2. Estimate ||A^-1||_1 via one iteration of Higham's algorithm in O(n^2)
-    // Solve A^T w = sign(x), then solve A x_new = w. ||x_new||_1 / ||w||_1 is estimate.
-    let x = vec![1.0 / n as f64; n];
-    let mut w = vec![0.0; n];
-
-    // Solve A^T w = sign(x)
-    // If lower, A^T is upper triangular.
+    // 2. Estimate ||A^-1||_1 via solving A x = e where e is a vector of signs.
+    // This is a common heuristic for triangular matrices.
+    let mut x = vec![0.0; n];
     if lower {
-        // Back substitution for upper triangular A^T
-        for i in (0..n).rev() {
-            let mut sum = x[i].signum();
-            for j in (i + 1)..n {
-                sum -= a[j][i] * w[j];
+        for i in 0..n {
+            let mut sum = 1.0; // e_i = 1
+            for j in 0..i {
+                sum -= a[i][j] * x[j];
             }
             if a[i][i].abs() < 1e-18 {
                 return 0.0;
             }
-            w[i] = sum / a[i][i];
+            x[i] = sum / a[i][i];
         }
     } else {
-        // Forward substitution for lower triangular A^T
-        for i in 0..n {
-            let mut sum = x[i].signum();
-            for j in 0..i {
-                sum -= a[j][i] * w[j];
+        for i in (0..n).rev() {
+            let mut sum = 1.0; // e_i = 1
+            for j in (i + 1)..n {
+                sum -= a[i][j] * x[j];
             }
             if a[i][i].abs() < 1e-18 {
                 return 0.0;
             }
-            w[i] = sum / a[i][i];
+            x[i] = sum / a[i][i];
         }
     }
 
-    // Solve A x_new = w
-    let mut x_new = vec![0.0; n];
-    if lower {
-        for i in 0..n {
-            let mut sum = w[i];
-            for j in 0..i {
-                sum -= a[i][j] * x_new[j];
-            }
-            x_new[i] = sum / a[i][i];
-        }
+    let a_inv_norm_estimate = x.iter().map(|v| v.abs()).sum::<f64>() / (n as f64).sqrt();
+    let rcond = 1.0 / (a_norm * a_inv_norm_estimate);
+    if rcond.is_nan() {
+        0.0
     } else {
-        for i in (0..n).rev() {
-            let mut sum = w[i];
-            for j in (i + 1)..n {
-                sum -= a[i][j] * x_new[j];
-            }
-            x_new[i] = sum / a[i][i];
-        }
+        rcond.min(1.0)
     }
-
-    let a_inv_norm = x_new.iter().map(|v| v.abs()).sum::<f64>();
-    let rcond = 1.0 / (a_norm * a_inv_norm);
-    if rcond.is_nan() { 0.0 } else { rcond.min(1.0) }
 }
 
 fn fast_rcond_diagonal(a: &[Vec<f64>]) -> f64 {
