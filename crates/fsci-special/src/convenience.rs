@@ -655,6 +655,129 @@ fn gamma_fn(x: f64) -> f64 {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Number Theory Functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Bernoulli number B_n.
+///
+/// Returns the nth Bernoulli number. B_0=1, B_1=-1/2, B_2=1/6, B_3=0, ...
+/// Odd Bernoulli numbers beyond B_1 are zero.
+///
+/// Matches `scipy.special.bernoulli(n)`.
+pub fn bernoulli(n: u32) -> f64 {
+    // Precomputed for small n
+    match n {
+        0 => 1.0,
+        1 => -0.5,
+        2 => 1.0 / 6.0,
+        4 => -1.0 / 30.0,
+        6 => 1.0 / 42.0,
+        8 => -1.0 / 30.0,
+        10 => 5.0 / 66.0,
+        12 => -691.0 / 2730.0,
+        14 => 7.0 / 6.0,
+        16 => -3617.0 / 510.0,
+        18 => 43867.0 / 798.0,
+        20 => -174611.0 / 330.0,
+        _ => {
+            if n % 2 == 1 {
+                return 0.0; // Odd Bernoulli numbers (n >= 3) are zero
+            }
+            // Use the relationship with zeta function:
+            // B_{2n} = (-1)^{n+1} * 2 * (2n)! / (2π)^{2n} * ζ(2n)
+            let nf = n as f64;
+            let sign = if (n / 2) % 2 == 0 { -1.0 } else { 1.0 };
+            let zeta_val = crate::gamma::zeta(nf);
+            sign * 2.0 * gamma_fn(nf + 1.0) / (2.0 * PI).powf(nf) * zeta_val
+        }
+    }
+}
+
+/// Euler number E_n.
+///
+/// Returns the nth Euler number. E_0=1, E_1=0, E_2=-1, E_3=0, E_4=5, ...
+/// Odd Euler numbers are zero.
+///
+/// Matches `scipy.special.euler(n)`.
+pub fn euler(n: u32) -> f64 {
+    if n % 2 == 1 {
+        return 0.0;
+    }
+    match n {
+        0 => 1.0,
+        2 => -1.0,
+        4 => 5.0,
+        6 => -61.0,
+        8 => 1385.0,
+        10 => -50521.0,
+        12 => 2702765.0,
+        14 => -199360981.0,
+        _ => {
+            // Compute via alternating sum formula or recurrence
+            // E_{2n} = -Σ_{k=0}^{n-1} C(2n, 2k) E_{2k}
+            let mut e = vec![0.0; (n / 2 + 1) as usize];
+            e[0] = 1.0;
+            for m in 1..=(n / 2) as usize {
+                let mut sum = 0.0;
+                for k in 0..m {
+                    sum += comb_f64(2 * m as u64, 2 * k as u64) * e[k];
+                }
+                e[m] = -sum;
+            }
+            e[(n / 2) as usize]
+        }
+    }
+}
+
+/// Hurwitz zeta function ζ(s, a) = Σ_{n=0}^∞ 1/(n+a)^s.
+///
+/// Generalizes the Riemann zeta function: ζ(s) = ζ(s, 1).
+///
+/// Matches `scipy.special.zeta(s, a)` (the two-argument form).
+pub fn hurwitz_zeta(s: f64, a: f64) -> f64 {
+    if s.is_nan() || a.is_nan() {
+        return f64::NAN;
+    }
+    if a <= 0.0 {
+        return f64::NAN;
+    }
+    if s <= 1.0 {
+        return f64::INFINITY; // Pole at s=1
+    }
+
+    // Direct summation for small a or moderate s
+    let mut sum = 0.0;
+    let max_terms = 10000;
+    for n in 0..max_terms {
+        let term = 1.0 / (n as f64 + a).powf(s);
+        sum += term;
+        if term < 1e-16 * sum.abs() && n > 10 {
+            break;
+        }
+    }
+
+    // Euler-Maclaurin correction for the tail
+    let n = max_terms as f64;
+    let tail = (n + a).powf(1.0 - s) / (s - 1.0);
+    sum += tail;
+
+    sum
+}
+
+fn comb_f64(n: u64, k: u64) -> f64 {
+    if k > n {
+        return 0.0;
+    }
+    let k = k.min(n - k);
+    let mut result = 1.0;
+    for i in 0..k {
+        result *= (n - i) as f64;
+        result /= (i + 1) as f64;
+    }
+    result
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Helpers
 // ══════════════════════════════════════════════════════════════════════
 

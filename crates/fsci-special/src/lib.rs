@@ -21,8 +21,8 @@ pub use beta::{
     betaln_scalar,
 };
 pub use convenience::{
-    CONVENIENCE_DISPATCH_PLAN, dawsn, entr, expit, fresnel, kl_div, logit, logsumexp, modstruve,
-    ndtr, ndtri, rel_entr, sinc, struve, xlog1py, xlogy,
+    CONVENIENCE_DISPATCH_PLAN, bernoulli, dawsn, entr, euler, expit, fresnel, hurwitz_zeta, kl_div,
+    logit, logsumexp, modstruve, ndtr, ndtri, rel_entr, sinc, struve, xlog1py, xlogy,
 };
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw,
@@ -2103,5 +2103,58 @@ mod tests {
                 "K_1/2({x}): got {result}, expected {expected}"
             );
         }
+    }
+
+    // ── Bernoulli / Euler / Hurwitz zeta tests ───────────────────────
+
+    #[test]
+    fn bernoulli_known_values() {
+        assert!((bernoulli(0) - 1.0).abs() < 1e-12);
+        assert!((bernoulli(1) - (-0.5)).abs() < 1e-12);
+        assert!((bernoulli(2) - (1.0 / 6.0)).abs() < 1e-12);
+        assert!((bernoulli(3)).abs() < 1e-12); // odd > 1 are zero
+        assert!((bernoulli(4) - (-1.0 / 30.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn euler_known_values() {
+        assert!((euler(0) - 1.0).abs() < 1e-12);
+        assert!((euler(1)).abs() < 1e-12); // odd are zero
+        assert!((euler(2) - (-1.0)).abs() < 1e-12);
+        assert!((euler(4) - 5.0).abs() < 1e-12);
+        assert!((euler(6) - (-61.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn hurwitz_zeta_reduces_to_riemann() {
+        // ζ(s, 1) = ζ(s) (Riemann zeta)
+        let riemann = zeta(2.0);
+        let hurwitz = hurwitz_zeta(2.0, 1.0);
+        assert!(
+            (hurwitz - riemann).abs() < 1e-4,
+            "hurwitz(2,1) = {hurwitz}, riemann(2) = {riemann}"
+        );
+    }
+
+    #[test]
+    fn hurwitz_zeta_known_value() {
+        // ζ(2, 0.5) = π² / 2 ≈ 4.9348
+        let result = hurwitz_zeta(2.0, 0.5);
+        let expected = std::f64::consts::PI * std::f64::consts::PI / 2.0;
+        assert!(
+            (result - expected).abs() < 0.01,
+            "ζ(2, 0.5) = {result}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn hurwitz_zeta_nan_inputs() {
+        assert!(hurwitz_zeta(f64::NAN, 1.0).is_nan());
+        assert!(hurwitz_zeta(2.0, -1.0).is_nan());
+    }
+
+    #[test]
+    fn hurwitz_zeta_pole() {
+        assert!(hurwitz_zeta(1.0, 1.0).is_infinite());
     }
 }
