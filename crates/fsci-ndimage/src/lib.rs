@@ -114,8 +114,8 @@ impl NdArray {
     /// Convert flat index to multi-dimensional index.
     fn unravel(&self, mut flat: usize) -> Vec<usize> {
         let mut idx = vec![0usize; self.ndim()];
-        for d in 0..self.ndim() {
-            idx[d] = flat / self.strides[d];
+        for (d, slot) in idx.iter_mut().enumerate() {
+            *slot = flat / self.strides[d];
             flat %= self.strides[d];
         }
         idx
@@ -305,10 +305,10 @@ pub fn gaussian_filter(
         let ksize = 2 * radius + 1;
         let mut kernel_1d = vec![0.0; ksize];
         let mut total = 0.0;
-        for i in 0..ksize {
+        for (i, value) in kernel_1d.iter_mut().enumerate() {
             let x = i as f64 - radius as f64;
             let g = (-x * x / (2.0 * sigma * sigma)).exp();
-            kernel_1d[i] = g;
+            *value = g;
             total += g;
         }
         for v in &mut kernel_1d {
@@ -1034,8 +1034,8 @@ pub fn center_of_mass(
 
 /// Euclidean distance transform for a binary image.
 ///
-/// For each background pixel (0), computes the distance to the nearest
-/// foreground pixel (nonzero). Foreground pixels get distance 0.
+/// For each foreground pixel (nonzero), computes the distance to the nearest
+/// background pixel (0). Background pixels get distance 0.
 ///
 /// Uses the brute-force approach for correctness (suitable for moderate sizes).
 /// Matches `scipy.ndimage.distance_transform_edt`.
@@ -1053,26 +1053,26 @@ pub fn distance_transform_edt(input: &NdArray) -> Result<NdArray, NdimageError> 
     let cols = input.shape[1];
     let mut output = NdArray::zeros(input.shape.clone());
 
-    // Collect foreground pixel positions
-    let mut fg_pixels = Vec::new();
+    // Collect background pixel positions.
+    let mut bg_pixels = Vec::new();
     for r in 0..rows {
         for c in 0..cols {
-            if input.get(&[r, c]) != 0.0 {
-                fg_pixels.push((r, c));
+            if input.get(&[r, c]) == 0.0 {
+                bg_pixels.push((r, c));
             }
         }
     }
 
-    // For each pixel, find distance to nearest foreground pixel
+    // For each foreground pixel, find distance to nearest background pixel.
     for r in 0..rows {
         for c in 0..cols {
-            if input.get(&[r, c]) != 0.0 {
+            if input.get(&[r, c]) == 0.0 {
                 output.set(&[r, c], 0.0);
             } else {
-                let mut min_dist = f64::MAX;
-                for &(fr, fc) in &fg_pixels {
-                    let dr = r as f64 - fr as f64;
-                    let dc = c as f64 - fc as f64;
+                let mut min_dist = f64::INFINITY;
+                for &(br, bc) in &bg_pixels {
+                    let dr = r as f64 - br as f64;
+                    let dc = c as f64 - bc as f64;
                     let dist = (dr * dr + dc * dc).sqrt();
                     if dist < min_dist {
                         min_dist = dist;
@@ -1383,15 +1383,22 @@ mod tests {
     fn distance_transform_edt_basic() {
         #[rustfmt::skip]
         let data = vec![
-            0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0,
+            1.0, 1.0, 1.0,
+            1.0, 0.0, 1.0,
+            1.0, 1.0, 1.0,
         ];
         let input = NdArray::new(data, vec![3, 3]).unwrap();
         let result = distance_transform_edt(&input).unwrap();
-        assert_eq!(result.data[4], 0.0); // foreground pixel
-        assert!((result.data[1] - 1.0).abs() < 1e-10); // adjacent
-        assert!((result.data[0] - 2.0f64.sqrt()).abs() < 1e-10); // diagonal
+        assert_eq!(result.data[4], 0.0); // background pixel
+        assert!((result.data[1] - 1.0).abs() < 1e-10); // adjacent foreground pixel
+        assert!((result.data[0] - 2.0f64.sqrt()).abs() < 1e-10); // diagonal foreground pixel
+    }
+
+    #[test]
+    fn distance_transform_edt_zero_background_stays_zero() {
+        let input = NdArray::new(vec![0.0; 9], vec![3, 3]).unwrap();
+        let result = distance_transform_edt(&input).unwrap();
+        assert!(result.data.iter().all(|&v| v == 0.0));
     }
 
     #[test]

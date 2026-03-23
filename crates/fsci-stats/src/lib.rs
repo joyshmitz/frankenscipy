@@ -2068,7 +2068,7 @@ impl ContinuousDistribution for InverseGaussian {
         }
         let mu = self.mu;
         let sqrt_x = x.sqrt();
-        let t1 = standard_normal_cdf((sqrt_x / mu - 1.0 / sqrt_x));
+        let t1 = standard_normal_cdf(sqrt_x / mu - 1.0 / sqrt_x);
         let t2 = (2.0 / mu).exp() * standard_normal_cdf(-(sqrt_x / mu + 1.0 / sqrt_x));
         t1 + t2
     }
@@ -2556,7 +2556,7 @@ impl Fisk {
 
 impl ContinuousDistribution for Fisk {
     fn pdf(&self, x: f64) -> f64 {
-        if x < 0.0 {
+        if x <= 0.0 {
             return 0.0;
         }
         let c = self.c;

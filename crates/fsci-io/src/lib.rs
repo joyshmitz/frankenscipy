@@ -8,8 +8,6 @@
 //! - `wavfile.read` / `wavfile.write` — WAV audio file read/write
 //! - `netcdf_file` — NetCDF (simplified) read/write
 
-use std::collections::HashMap;
-use std::io::{Read, Write};
 
 /// Error type for I/O operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -422,7 +420,8 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
                 24 => data_bytes
                     .chunks_exact(3)
                     .map(|c| {
-                        let raw = i32::from_le_bytes([0, c[0], c[1], c[2]]) >> 8;
+                        let sign = if c[2] & 0x80 != 0 { 0xFF } else { 0x00 };
+                        let raw = i32::from_le_bytes([c[0], c[1], c[2], sign]);
                         raw as f64 / 8_388_608.0
                     })
                     .collect(),
@@ -453,7 +452,7 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
 
         pos += 8 + chunk_size;
         // Chunks are word-aligned
-        if chunk_size % 2 != 0 {
+        if !chunk_size.is_multiple_of(2) {
             pos += 1;
         }
     }
@@ -557,15 +556,15 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
                 None => return Ok(arrays),
                 Some(line) => {
                     let trimmed = line.trim();
-                    if trimmed.starts_with("# name:") {
-                        name = Some(trimmed[7..].trim().to_string());
-                    } else if trimmed.starts_with("# rows:") {
-                        rows = trimmed[7..]
+                    if let Some(stripped) = trimmed.strip_prefix("# name:") {
+                        name = Some(stripped.trim().to_string());
+                    } else if let Some(stripped) = trimmed.strip_prefix("# rows:") {
+                        rows = stripped
                             .trim()
                             .parse()
                             .map_err(|e| IoError::InvalidFormat(format!("bad rows: {e}")))?;
-                    } else if trimmed.starts_with("# columns:") {
-                        cols = trimmed[10..]
+                    } else if let Some(stripped) = trimmed.strip_prefix("# columns:") {
+                        cols = stripped
                             .trim()
                             .parse()
                             .map_err(|e| IoError::InvalidFormat(format!("bad cols: {e}")))?;
@@ -585,7 +584,7 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
                             // Read remaining rows
                             for _ in 1..rows {
                                 if let Some(line) = lines.next() {
-                                    for val_str in line.trim().split_whitespace() {
+                                    for val_str in line.split_whitespace() {
                                         let v: f64 = val_str.parse().map_err(|e| {
                                             IoError::InvalidFormat(format!("bad value: {e}"))
                                         })?;
@@ -743,6 +742,34 @@ mod tests {
                 "sample {i}: orig={orig}, read={read}"
             );
         }
+    }
+
+    #[test]
+    fn wav_read_24bit_pcm_sign_extends_negative_samples() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36u32 + 3u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&44100u32.to_le_bytes());
+        bytes.extend_from_slice(&(44100u32 * 3).to_le_bytes());
+        bytes.extend_from_slice(&3u16.to_le_bytes());
+        bytes.extend_from_slice(&24u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&[0x00, 0x00, 0x80]); // -1.0 in signed 24-bit PCM
+        bytes.push(0); // pad odd-sized chunk
+
+        let wav = wav_read(&bytes).expect("24-bit wav should decode");
+        assert_eq!(wav.bits_per_sample, 24);
+        assert!(
+            (wav.data[0] + 1.0).abs() < 1e-6,
+            "expected -1.0 sample, got {}",
+            wav.data[0]
+        );
     }
 
     #[test]

@@ -2597,7 +2597,7 @@ pub fn spsolve_triangular(a: &CsrMatrix, b: &[f64], lower: bool) -> SparseResult
     if lower {
         // Forward substitution
         for i in 0..n {
-            let mut diag = 0.0;
+            let mut diag: f64 = 0.0;
             for idx in indptr[i]..indptr[i + 1] {
                 let j = indices[idx];
                 if j < i {
@@ -2616,7 +2616,7 @@ pub fn spsolve_triangular(a: &CsrMatrix, b: &[f64], lower: bool) -> SparseResult
     } else {
         // Backward substitution
         for i in (0..n).rev() {
-            let mut diag = 0.0;
+            let mut diag: f64 = 0.0;
             for idx in indptr[i]..indptr[i + 1] {
                 let j = indices[idx];
                 if j > i {
@@ -3375,7 +3375,7 @@ pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>>
     let data = graph.data();
 
     // Compute degree vector (sum of edge weights per row)
-    let mut degree = vec![0.0; n];
+    let mut degree: Vec<f64> = vec![0.0; n];
     for i in 0..n {
         for &value in data.iter().take(indptr[i + 1]).skip(indptr[i]) {
             degree[i] += value.abs();
@@ -3383,7 +3383,7 @@ pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>>
     }
 
     // Build L = D - A
-    let mut lapl = vec![vec![0.0; n]; n];
+    let mut lapl: Vec<Vec<f64>> = vec![vec![0.0; n]; n];
     for i in 0..n {
         lapl[i][i] = degree[i];
         for idx in indptr[i]..indptr[i + 1] {

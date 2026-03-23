@@ -48,7 +48,7 @@ pub fn transpose<B: ArrayApiBackend>(backend: &B, array: &B::Array) -> ArrayApiR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{ArrayApiArray, ArrayApiBackend, CoreArrayBackend};
+    use crate::backend::{ArrayApiBackend, CoreArrayBackend};
     use crate::types::{DType, ExecutionMode, MemoryOrder, ScalarValue, SliceSpec};
 
     fn strict_backend() -> CoreArrayBackend {

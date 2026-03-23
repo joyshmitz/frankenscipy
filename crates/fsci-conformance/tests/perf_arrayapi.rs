@@ -15,7 +15,7 @@
 //! "after" uses the current optimized `CoreArrayBackend::broadcast_to`.
 
 use fsci_arrayapi::{
-    ArrayApiArray, ArrayApiBackend, CoreArray, CoreArrayBackend, CreationRequest, DType,
+    ArrayApiBackend, CoreArray, CoreArrayBackend, CreationRequest, DType,
     ExecutionMode, MemoryOrder, ScalarValue, Shape, from_slice,
 };
 use serde::Serialize;

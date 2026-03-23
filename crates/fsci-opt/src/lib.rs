@@ -1146,6 +1146,18 @@ where
             detail: "bounds must be non-empty".to_string(),
         });
     }
+    for (i, &(lo, hi)) in bounds.iter().enumerate() {
+        if !lo.is_finite() || !hi.is_finite() {
+            return Err(OptError::InvalidBounds {
+                detail: format!("variable {i}: bounds must be finite, got ({lo}, {hi})"),
+            });
+        }
+        if lo >= hi {
+            return Err(OptError::InvalidBounds {
+                detail: format!("variable {i}: lower bound {lo} >= upper bound {hi}"),
+            });
+        }
+    }
 
     let mut rng = SimpleRng::new(seed);
 
@@ -2117,6 +2129,18 @@ mod tests {
     fn dual_annealing_empty_bounds_rejected() {
         let err = dual_annealing(|_| 0.0, &[], 100, 42).expect_err("empty");
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn dual_annealing_nonfinite_bounds_rejected() {
+        let err = dual_annealing(|_| 0.0, &[(f64::NAN, 1.0)], 100, 42).expect_err("nonfinite");
+        assert!(matches!(err, crate::OptError::InvalidBounds { .. }));
+    }
+
+    #[test]
+    fn dual_annealing_inverted_bounds_rejected() {
+        let err = dual_annealing(|_| 0.0, &[(2.0, 2.0)], 100, 42).expect_err("inverted");
+        assert!(matches!(err, crate::OptError::InvalidBounds { .. }));
     }
 
     #[test]

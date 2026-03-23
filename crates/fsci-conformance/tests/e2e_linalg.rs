@@ -890,7 +890,7 @@ fn e2e_p2c002_10_det_chain() {
         "strict",
         || {
             let product = det_a * det_inv_a;
-            let diff = (product - 1.0).abs();
+            let diff = (product - 1.0f64).abs();
             if diff < 1e-6 {
                 Ok(format!("det(A)*det(inv(A))={product:.12}, diff={diff:.2e}"))
             } else {

@@ -1723,10 +1723,12 @@ impl LinearNDInterpolator {
                 actual: 0,
             });
         }
-        if points[0].len() != 2 {
-            return Err(InterpError::InvalidArgument {
-                detail: "LinearND only 2D".to_string(),
-            });
+        for (i, point) in points.iter().enumerate() {
+            if point.len() != 2 {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!("LinearND only supports 2D points; point {i} has dimension {}", point.len()),
+                });
+            }
         }
         if points.len() != values.len() {
             return Err(InterpError::LengthMismatch {
@@ -1786,6 +1788,7 @@ pub struct RbfInterpolator {
     weights: Vec<f64>,
     kernel: RbfKernel,
     epsilon: f64,
+    dim: usize,
 }
 
 impl RbfInterpolator {
@@ -1815,6 +1818,22 @@ impl RbfInterpolator {
                 y_len: values.len(),
             });
         }
+        let dim = points[0].len();
+        if dim == 0 {
+            return Err(InterpError::InvalidArgument {
+                detail: "RbfInterpolator points must have at least one dimension".to_string(),
+            });
+        }
+        for (i, point) in points.iter().enumerate() {
+            if point.len() != dim {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!(
+                        "all RbfInterpolator points must have the same dimension; point 0 has {dim} but point {i} has {}",
+                        point.len()
+                    ),
+                });
+            }
+        }
 
         // Build the RBF matrix: Φ[i,j] = φ(||points[i] - points[j]||)
         let mut phi = vec![vec![0.0; n]; n];
@@ -1835,11 +1854,15 @@ impl RbfInterpolator {
             weights,
             kernel,
             epsilon,
+            dim,
         })
     }
 
     /// Evaluate the interpolant at a query point.
     pub fn eval(&self, query: &[f64]) -> f64 {
+        if query.len() != self.dim {
+            return f64::NAN;
+        }
         let mut result = 0.0;
         for (i, pt) in self.points.iter().enumerate() {
             let r = euclidean_dist(pt, query);
@@ -2049,6 +2072,31 @@ mod tests {
                 pt
             );
         }
+    }
+
+    #[test]
+    fn rbf_rejects_mixed_point_dimensions() {
+        let points = vec![vec![0.0, 0.0], vec![1.0], vec![0.5, 0.25]];
+        let values = vec![0.0, 1.0, 2.0];
+        let err = RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0)
+            .expect_err("mixed dims");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn rbf_query_dimension_mismatch_returns_nan() {
+        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0, 1.0];
+        let rbf = RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf");
+        assert!(rbf.eval(&[0.5]).is_nan());
+    }
+
+    #[test]
+    fn linear_nd_interpolator_rejects_malformed_point_dimensions() {
+        let points = vec![vec![0.0, 0.0], vec![1.0], vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0, 2.0];
+        let err = LinearNDInterpolator::new(&points, &values).expect_err("malformed point");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
     }
 
     #[test]

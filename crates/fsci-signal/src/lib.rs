@@ -923,20 +923,8 @@ pub fn zoom_fft(
     // Starting point on unit circle: a = exp(j * 2π * f1)
     let a = (1.0, two_pi * f1);
 
-    // Step: w = exp(j * 2π * (f2 - f1) / M)
-    // But CZT convention is w^{nk}, so we need w = exp(-j * step)
-    // Actually, to go from f1 to f2 in M steps:
-    //   points at exp(j * 2π * (f1 + k*(f2-f1)/M))
-    //   = a * w^{-k} where w = exp(-j * 2π * (f2-f1)/M)
-    // Wait — the CZT formula is X[k] = Σ x[n] a^{-n} w^{nk}
-    // For DFT: a = 1, w = exp(-j2π/N)
-    // For zoom: we want to evaluate at z_k = exp(j * 2π * f_k)
-    // where f_k = f1 + k*(f2-f1)/M for k=0..M-1
-    //
-    // So z_k = exp(j*2π*f1) * exp(j*2π*(f2-f1)*k/M)
-    // In CZT: z_k = a * w^{-k}
-    // => w^{-k} = exp(j*2π*(f2-f1)*k/M)
-    // => w = exp(-j*2π*(f2-f1)/M)
+    // We want z_k = exp(j*2π*f_k) where f_k = f1 + k*(f2-f1)/M.
+    // In CZT: z_k = a * w^{-k}, so w = exp(-j*2π*(f2-f1)/M).
 
     let w = (1.0, -two_pi * (f2 - f1) / m as f64);
 
@@ -3951,12 +3939,16 @@ pub fn remez(
 
     // Convert cosine coefficients to symmetric FIR filter taps.
     // H(f) = a_0 + 2 * Σ_{k=1}^{m} a_k cos(2πkf)
-    // corresponds to h[m] = a_0, h[m±k] = a_k for k=1..m
+    // corresponds to h[m] = a_0, h[m±k] = a_k/2 for k=1..m
     let mut h = vec![0.0; n];
     h[m] = a_coeffs[0];
     for k in 1..n_coeffs {
-        h[m - k] = a_coeffs[k] / 2.0;
-        h[m + k] = a_coeffs[k] / 2.0;
+        if m >= k {
+            h[m - k] = a_coeffs[k] / 2.0;
+        }
+        if m + k < n {
+            h[m + k] = a_coeffs[k] / 2.0;
+        }
     }
 
     Ok(h)
@@ -4267,6 +4259,72 @@ pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError
     }
 
     Ok(result)
+}
+
+/// Apply a 1-D adaptive Wiener filter.
+///
+/// Matches the high-level behavior of `scipy.signal.wiener(im, mysize, noise)`
+/// for 1-D inputs with zero-padded local windows.
+pub fn wiener(
+    data: &[f64],
+    mysize: usize,
+    noise: Option<f64>,
+) -> Result<Vec<f64>, SignalError> {
+    if mysize == 0 || mysize.is_multiple_of(2) {
+        return Err(SignalError::InvalidArgument(
+            "mysize must be odd and >= 1".to_string(),
+        ));
+    }
+    if let Some(value) = noise
+        && (!value.is_finite() || value < 0.0)
+    {
+        return Err(SignalError::InvalidArgument(
+            "noise must be a finite non-negative value when provided".to_string(),
+        ));
+    }
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let half = mysize / 2;
+    let n = data.len();
+    let mut local_mean = vec![0.0; n];
+    let mut local_var = vec![0.0; n];
+    let window_area = mysize as f64;
+
+    for i in 0..n {
+        let mut sum = 0.0;
+        let mut sumsq = 0.0;
+        for offset in 0..mysize {
+            let idx = i as i64 + offset as i64 - half as i64;
+            let value = if idx >= 0 && idx < n as i64 {
+                data[idx as usize]
+            } else {
+                0.0
+            };
+            sum += value;
+            sumsq += value * value;
+        }
+        let mean = sum / window_area;
+        local_mean[i] = mean;
+        local_var[i] = (sumsq / window_area - mean * mean).max(0.0);
+    }
+
+    let noise_power =
+        noise.unwrap_or_else(|| local_var.iter().sum::<f64>() / local_var.len() as f64);
+
+    Ok(data
+        .iter()
+        .enumerate()
+        .map(|(i, &value)| {
+            if local_var[i] <= noise_power {
+                local_mean[i]
+            } else {
+                let gain = 1.0 - noise_power / local_var[i];
+                local_mean[i] + gain * (value - local_mean[i])
+            }
+        })
+        .collect())
 }
 
 /// Generate a Bartlett window.
@@ -6774,6 +6832,37 @@ mod tests {
     #[test]
     fn medfilt_even_kernel_rejected() {
         assert!(medfilt(&[1.0, 2.0, 3.0], 4).is_err());
+    }
+
+    #[test]
+    fn wiener_constant_signal_is_stable() {
+        let data = vec![2.0; 9];
+        let filtered = wiener(&data, 3, None).unwrap();
+        for value in filtered.iter().skip(1).take(filtered.len() - 2) {
+            assert!((*value - 2.0).abs() < 1e-12, "interior constant signal drifted: {value}");
+        }
+    }
+
+    #[test]
+    fn wiener_smooths_impulse_with_explicit_noise() {
+        let data = vec![0.0, 0.0, 10.0, 0.0, 0.0];
+        let filtered = wiener(&data, 3, Some(1.0)).unwrap();
+        assert!(filtered[2] < 10.0, "center should be attenuated: {}", filtered[2]);
+        assert!(filtered[2] > filtered[1], "center should remain dominant");
+        assert!(filtered[1] > 0.0, "neighbors should pick up local energy");
+    }
+
+    #[test]
+    fn wiener_estimated_noise_falls_back_to_local_mean() {
+        let data = vec![0.0, 1.0, 0.0];
+        let filtered = wiener(&data, 3, Some(10.0)).unwrap();
+        assert!((filtered[1] - (1.0 / 3.0)).abs() < 1e-12, "expected local mean at center");
+    }
+
+    #[test]
+    fn wiener_rejects_invalid_window() {
+        assert!(wiener(&[1.0, 2.0, 3.0], 0, None).is_err());
+        assert!(wiener(&[1.0, 2.0, 3.0], 4, None).is_err());
     }
 
     // ── get_window tests ───────────────────────────────────────────
