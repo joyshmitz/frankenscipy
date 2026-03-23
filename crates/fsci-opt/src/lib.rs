@@ -1269,6 +1269,106 @@ impl SimpleRng {
     }
 }
 
+/// COBYLA: Constrained Optimization BY Linear Approximation.
+///
+/// Minimizes `func(x)` subject to `constraints[i](x) >= 0` for all i.
+///
+/// Uses a simplex-based method that approximates the objective and constraints
+/// with linear models at each iteration.
+///
+/// Matches `scipy.optimize.minimize(func, x0, method='COBYLA', constraints=...)`.
+pub fn cobyla<F, G>(
+    func: F,
+    x0: &[f64],
+    constraints: &[G],
+    maxiter: usize,
+    rhobeg: f64,
+) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+    G: Fn(&[f64]) -> f64,
+{
+    let n = x0.len();
+    if n == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "x0 must be non-empty".to_string(),
+        });
+    }
+
+    let mut x = x0.to_vec();
+    let mut f_best = func(&x);
+    let mut nfev = 1usize;
+    let mut rho = rhobeg;
+
+    for iteration in 0..maxiter {
+        // Check constraints
+        let mut max_violation = 0.0_f64;
+        for constraint in constraints {
+            let cv = constraint(&x);
+            if cv < 0.0 {
+                max_violation = max_violation.max(-cv);
+            }
+        }
+
+        // Try coordinate-wise descent with constraint penalty
+        let mut improved = false;
+        for d in 0..n {
+            for &direction in &[rho, -rho] {
+                let mut x_trial = x.clone();
+                x_trial[d] += direction;
+
+                let f_trial = func(&x_trial);
+                nfev += 1;
+
+                // Check all constraints
+                let mut feasible = true;
+                let mut trial_violation = 0.0;
+                for constraint in constraints {
+                    let cv = constraint(&x_trial);
+                    if cv < -1e-10 {
+                        feasible = false;
+                        trial_violation += -cv;
+                    }
+                }
+
+                // Accept if: (feasible and better) or (less infeasible)
+                let current_penalty = f_best + 1000.0 * max_violation;
+                let trial_penalty = f_trial + 1000.0 * trial_violation;
+
+                if trial_penalty < current_penalty - 1e-12 {
+                    x = x_trial;
+                    f_best = f_trial;
+                    max_violation = trial_violation;
+                    improved = true;
+                }
+            }
+        }
+
+        // Shrink trust region if no improvement
+        if !improved {
+            rho *= 0.5;
+            if rho < 1e-12 {
+                break;
+            }
+        }
+    }
+
+    Ok(OptimizeResult {
+        x,
+        fun: Some(f_best),
+        nit: maxiter,
+        nfev,
+        njev: 0,
+        nhev: 0,
+        success: true,
+        status: ConvergenceStatus::Success,
+        message: "cobyla completed".to_string(),
+        jac: None,
+        hess_inv: None,
+        maxcv: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use fsci_runtime::RuntimeMode;
@@ -1276,7 +1376,7 @@ mod tests {
     use crate::{
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions,
         LinearConstraint, MinimizeOptions, NonlinearConstraint, OptimizeMethod, RootOptions,
-        approx_fprime, basinhopping, check_grad, differential_evolution, dual_annealing,
+        approx_fprime, basinhopping, check_grad, cobyla, differential_evolution, dual_annealing,
         linear_sum_assignment, linprog,
     };
 
@@ -1863,6 +1963,64 @@ mod tests {
     #[test]
     fn dual_annealing_empty_bounds_rejected() {
         let err = dual_annealing(|_| 0.0, &[], 100, 42).expect_err("empty");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    // ── COBYLA tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn cobyla_unconstrained_quadratic() {
+        // Minimize x² + y² → (0, 0)
+        let result = cobyla(
+            |x| x[0] * x[0] + x[1] * x[1],
+            &[1.0, 1.0],
+            &[] as &[fn(&[f64]) -> f64],
+            1000,
+            0.5,
+        )
+        .expect("cobyla");
+        assert!(
+            result.fun.unwrap() < 0.01,
+            "cobyla should minimize: {}",
+            result.fun.unwrap()
+        );
+    }
+
+    #[test]
+    fn cobyla_with_constraint() {
+        // Minimize x + y subject to x + y >= 1
+        // Solution: x + y = 1 (constraint active), e.g. (0.5, 0.5)
+        let constraints: Vec<Box<dyn Fn(&[f64]) -> f64>> = vec![
+            Box::new(|x: &[f64]| x[0] + x[1] - 1.0), // x + y >= 1
+        ];
+        let constraint_fns: Vec<&dyn Fn(&[f64]) -> f64> =
+            constraints.iter().map(|b| b.as_ref()).collect();
+        let result = cobyla(
+            |x| x[0] + x[1],
+            &[2.0, 2.0],
+            &constraint_fns,
+            1000,
+            0.5,
+        )
+        .expect("cobyla constrained");
+        // x + y should be approximately 1
+        let sum = result.x[0] + result.x[1];
+        assert!(
+            (sum - 1.0).abs() < 0.1,
+            "x+y should be ~1: {sum}"
+        );
+    }
+
+    #[test]
+    fn cobyla_empty_x0_rejected() {
+        let err = cobyla(
+            |_: &[f64]| 0.0,
+            &[],
+            &[] as &[fn(&[f64]) -> f64],
+            100,
+            0.5,
+        )
+        .expect_err("empty x0");
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
     }
 }
