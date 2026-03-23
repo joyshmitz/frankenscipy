@@ -946,6 +946,136 @@ pub fn bohman_window(m: usize) -> Vec<f64> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Upsample-FIR-Downsample and Minimum Phase
+// ══════════════════════════════════════════════════════════════════════
+
+/// Upsample, apply FIR filter, then downsample in one efficient step.
+///
+/// Matches `scipy.signal.upfirdn(h, x, up, down)`.
+///
+/// # Arguments
+/// * `h` — FIR filter coefficients.
+/// * `x` — Input signal.
+/// * `up` — Upsampling factor (insert up-1 zeros between samples).
+/// * `down` — Downsampling factor (keep every down-th sample).
+pub fn upfirdn(h: &[f64], x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, SignalError> {
+    if up == 0 || down == 0 {
+        return Err(SignalError::InvalidArgument(
+            "up and down must be >= 1".to_string(),
+        ));
+    }
+    if h.is_empty() || x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "h and x must be non-empty".to_string(),
+        ));
+    }
+
+    // Upsampled length: x.len() * up
+    // Convolution output length: x.len() * up + h.len() - 1
+    // After downsampling: ceil((x.len() * up + h.len() - 1) / down)
+    let up_len = x.len() * up;
+    let conv_len = up_len + h.len() - 1;
+    let out_len = (conv_len + down - 1) / down;
+
+    let mut output = Vec::with_capacity(out_len);
+
+    for out_idx in 0..out_len {
+        let conv_idx = out_idx * down;
+        let mut sum = 0.0;
+        for (k, &hk) in h.iter().enumerate() {
+            let inp_idx = conv_idx as i64 - k as i64;
+            if inp_idx >= 0 && inp_idx < up_len as i64 {
+                let inp_idx = inp_idx as usize;
+                if inp_idx % up == 0 {
+                    let x_idx = inp_idx / up;
+                    sum += hk * x[x_idx];
+                }
+            }
+        }
+        output.push(sum);
+    }
+
+    Ok(output)
+}
+
+/// Convert a linear-phase FIR filter to minimum phase.
+///
+/// Preserves the magnitude response but creates the shortest possible impulse response.
+///
+/// Matches `scipy.signal.minimum_phase(h)`.
+pub fn minimum_phase(h: &[f64]) -> Result<Vec<f64>, SignalError> {
+    if h.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "filter must be non-empty".to_string(),
+        ));
+    }
+    let n = h.len();
+    if n == 1 {
+        return Ok(h.to_vec());
+    }
+
+    // Compute the cepstrum approach:
+    // 1. FFT of h → H
+    // 2. log(|H|) → cepstrum
+    // 3. Create minimum-phase version by doubling the causal part
+    // 4. exp + IFFT
+
+    let fft_opts = fsci_fft::FftOptions::default();
+
+    // Pad to next power of 2 for better FFT
+    let nfft = n.next_power_of_two() * 2;
+    let mut h_padded: Vec<(f64, f64)> = h.iter().map(|&v| (v, 0.0)).collect();
+    h_padded.resize(nfft, (0.0, 0.0));
+
+    let spectrum = fsci_fft::fft(&h_padded, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+
+    // Log magnitude spectrum
+    let log_mag: Vec<(f64, f64)> = spectrum
+        .iter()
+        .map(|&(re, im)| {
+            let mag = (re * re + im * im).sqrt().max(1e-30);
+            (mag.ln(), 0.0)
+        })
+        .collect();
+
+    // IFFT to get cepstrum
+    let cepstrum = fsci_fft::ifft(&log_mag, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
+
+    // Fold cepstrum: double the causal part (except DC and Nyquist)
+    let mut min_phase_cepstrum: Vec<(f64, f64)> = vec![(0.0, 0.0); nfft];
+    min_phase_cepstrum[0] = cepstrum[0];
+    for i in 1..nfft / 2 {
+        min_phase_cepstrum[i] = (2.0 * cepstrum[i].0, 2.0 * cepstrum[i].1);
+    }
+    if nfft > 1 {
+        min_phase_cepstrum[nfft / 2] = cepstrum[nfft / 2];
+    }
+
+    // FFT of folded cepstrum
+    let folded_spectrum = fsci_fft::fft(&min_phase_cepstrum, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+
+    // exp to get minimum-phase spectrum
+    let min_spectrum: Vec<(f64, f64)> = folded_spectrum
+        .iter()
+        .map(|&(re, im)| {
+            let mag = re.exp();
+            (mag * im.cos(), mag * im.sin())
+        })
+        .collect();
+
+    // IFFT to get time domain
+    let result = fsci_fft::ifft(&min_spectrum, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
+
+    // Take first (n+1)/2 samples (minimum phase has half the length)
+    let mp_len = (n + 1) / 2;
+    Ok(result.iter().take(mp_len).map(|&(re, _)| re).collect())
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Peak Detection
 // ══════════════════════════════════════════════════════════════════════
 
