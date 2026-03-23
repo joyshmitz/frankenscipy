@@ -2510,21 +2510,15 @@ pub fn solve_circulant(c: &[f64], b: &[f64]) -> Result<Vec<f64>, LinalgError> {
         return Ok(Vec::new());
     }
 
-    let nf = n as f64;
-
-    // Direct DFT of c and b
-    let mut fft_c = vec![(0.0, 0.0); n];
-    let mut fft_b = vec![(0.0, 0.0); n];
-    for k in 0..n {
-        for j in 0..n {
-            let angle = -2.0 * std::f64::consts::PI * k as f64 * j as f64 / nf;
-            let (cos_a, sin_a) = (angle.cos(), angle.sin());
-            fft_c[k].0 += c[j] * cos_a;
-            fft_c[k].1 += c[j] * sin_a;
-            fft_b[k].0 += b[j] * cos_a;
-            fft_b[k].1 += b[j] * sin_a;
-        }
-    }
+    let opts = fsci_fft::FftOptions::default();
+    let c_complex: Vec<(f64, f64)> = c.iter().map(|&value| (value, 0.0)).collect();
+    let b_complex: Vec<(f64, f64)> = b.iter().map(|&value| (value, 0.0)).collect();
+    let fft_c = fsci_fft::fft(&c_complex, &opts).map_err(|err| LinalgError::InvalidArgument {
+        detail: format!("circulant FFT failed: {err}"),
+    })?;
+    let fft_b = fsci_fft::fft(&b_complex, &opts).map_err(|err| LinalgError::InvalidArgument {
+        detail: format!("rhs FFT failed: {err}"),
+    })?;
 
     // Element-wise division: fft_b / fft_c
     let fft_x: Vec<(f64, f64)> = fft_b
@@ -2540,18 +2534,43 @@ pub fn solve_circulant(c: &[f64], b: &[f64]) -> Result<Vec<f64>, LinalgError> {
         })
         .collect();
 
-    // Inverse DFT
-    let mut x = vec![0.0; n];
-    for j in 0..n {
-        let mut re = 0.0;
-        for k in 0..n {
-            let angle = 2.0 * std::f64::consts::PI * k as f64 * j as f64 / nf;
-            re += fft_x[k].0 * angle.cos() - fft_x[k].1 * angle.sin();
-        }
-        x[j] = re / nf;
+    let x = fsci_fft::ifft(&fft_x, &opts).map_err(|err| LinalgError::InvalidArgument {
+        detail: format!("circulant inverse FFT failed: {err}"),
+    })?;
+    Ok(x.into_iter().map(|(re, _)| re).collect())
+}
+
+/// Solve a Toeplitz linear system T x = b.
+///
+/// The Toeplitz matrix is defined by its first column `c` and optional first
+/// row `r`. If `r` is omitted, a symmetric Toeplitz matrix is assumed.
+///
+/// Matches `scipy.linalg.solve_toeplitz((c, r), b)`.
+pub fn solve_toeplitz(
+    c: &[f64],
+    r: Option<&[f64]>,
+    b: &[f64],
+) -> Result<Vec<f64>, LinalgError> {
+    let n = c.len();
+    if b.len() != n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (n, n),
+            b_len: b.len(),
+        });
+    }
+    let row = r.unwrap_or(c);
+    if row.len() != n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (n, row.len()),
+            b_len: b.len(),
+        });
+    }
+    if n == 0 {
+        return Ok(Vec::new());
     }
 
-    Ok(x)
+    let matrix = toeplitz(c, r);
+    Ok(solve(&matrix, b, SolveOptions::default())?.x)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3400,7 +3419,11 @@ pub fn toeplitz(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
     let mut result = vec![vec![0.0; m]; n];
     for i in 0..n {
         for j in 0..m {
-            result[i][j] = if i <= j { row[j - i] } else { c[i - j] };
+            result[i][j] = if j >= i {
+                if i == 0 && j == 0 { c[0] } else { row[j - i] }
+            } else {
+                c[i - j]
+            };
         }
     }
     result
@@ -5926,5 +5949,71 @@ mod proptest_tests {
         assert!((x[0] - 2.0).abs() < 1e-10);
         assert!((x[1] - 3.0).abs() < 1e-10);
         assert!((x[2] - 1.0).abs() < 1e-10);
+    }
+
+    // ── solve_toeplitz tests ─────────────────────────────────────────
+
+    #[test]
+    fn solve_toeplitz_symmetric_identity() {
+        let c = [1.0, 0.0, 0.0];
+        let b = [2.0, 3.0, 4.0];
+        let x = solve_toeplitz(&c, None, &b).expect("solve_toeplitz");
+        for (i, (&xi, &bi)) in x.iter().zip(b.iter()).enumerate() {
+            assert!(
+                (xi - bi).abs() < 1e-10,
+                "x[{i}] = {xi}, expected {bi}"
+            );
+        }
+    }
+
+    #[test]
+    fn solve_toeplitz_matches_scipy_doc_example() {
+        let c = [1.0, 3.0, 6.0, 10.0];
+        let r = [1.0, -1.0, -2.0, -3.0];
+        let b = [1.0, 2.0, 2.0, 5.0];
+        let x = solve_toeplitz(&c, Some(&r), &b).expect("solve_toeplitz");
+        let expected = [
+            1.6666666666666667,
+            -1.0,
+            -2.6666666666666665,
+            2.3333333333333335,
+        ];
+        for (i, (&xi, &want)) in x.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (xi - want).abs() < 1e-10,
+                "x[{i}] = {xi}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn solve_toeplitz_ignores_row_zero_entry() {
+        let c = [2.0, 1.0, 0.0];
+        let r = [99.0, -1.0, 0.5];
+        let matrix = toeplitz(&c, Some(&r));
+        assert!((matrix[0][0] - 2.0).abs() < 1e-12, "top-left must come from c[0]");
+
+        let x_expected = [1.0, -2.0, 0.5];
+        let mut b = vec![0.0; 3];
+        for i in 0..3 {
+            for (j, value) in x_expected.iter().enumerate() {
+                b[i] += matrix[i][j] * *value;
+            }
+        }
+
+        let x = solve_toeplitz(&c, Some(&r), &b).expect("solve_toeplitz");
+        for (i, (&xi, &want)) in x.iter().zip(x_expected.iter()).enumerate() {
+            assert!(
+                (xi - want).abs() < 1e-10,
+                "x[{i}] = {xi}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn solve_toeplitz_rejects_shape_mismatch() {
+        let err = solve_toeplitz(&[1.0, 2.0, 3.0], Some(&[1.0, 2.0]), &[1.0, 2.0, 3.0])
+            .expect_err("row length mismatch");
+        assert!(matches!(err, LinalgError::IncompatibleShapes { .. }));
     }
 }
