@@ -851,7 +851,9 @@ fn basic_slice_indices(
 
     let step = spec.step;
     let mut start = spec.start.unwrap_or(if step > 0 { 0 } else { len_i - 1 });
-    let mut stop = spec.stop.unwrap_or(if step > 0 { len_i } else { -len_i - 1 });
+    let mut stop = spec
+        .stop
+        .unwrap_or(if step > 0 { len_i } else { -len_i - 1 });
 
     if start < 0 {
         start += len_i;

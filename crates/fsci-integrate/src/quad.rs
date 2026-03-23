@@ -987,10 +987,7 @@ fn gauss_legendre_nodes_weights(n: usize) -> (Vec<f64>, Vec<f64>) {
     }
 
     // Sort by node value
-    let mut pairs: Vec<(f64, f64)> = full_nodes
-        .into_iter()
-        .zip(full_weights)
-        .collect();
+    let mut pairs: Vec<(f64, f64)> = full_nodes.into_iter().zip(full_weights).collect();
     pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let sorted_nodes = pairs.iter().map(|p| p.0).collect();
     let sorted_weights = pairs.iter().map(|p| p.1).collect();

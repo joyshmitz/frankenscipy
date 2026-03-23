@@ -1254,9 +1254,7 @@ struct SimpleRng {
 
 impl SimpleRng {
     fn new(seed: u64) -> Self {
-        Self {
-            state: seed.max(1),
-        }
+        Self { state: seed.max(1) }
     }
     fn next_u64(&mut self) -> u64 {
         self.state ^= self.state << 13;
@@ -1995,32 +1993,17 @@ mod tests {
         ];
         let constraint_fns: Vec<&dyn Fn(&[f64]) -> f64> =
             constraints.iter().map(|b| b.as_ref()).collect();
-        let result = cobyla(
-            |x| x[0] + x[1],
-            &[2.0, 2.0],
-            &constraint_fns,
-            1000,
-            0.5,
-        )
-        .expect("cobyla constrained");
+        let result = cobyla(|x| x[0] + x[1], &[2.0, 2.0], &constraint_fns, 1000, 0.5)
+            .expect("cobyla constrained");
         // x + y should be approximately 1
         let sum = result.x[0] + result.x[1];
-        assert!(
-            (sum - 1.0).abs() < 0.1,
-            "x+y should be ~1: {sum}"
-        );
+        assert!((sum - 1.0).abs() < 0.1, "x+y should be ~1: {sum}");
     }
 
     #[test]
     fn cobyla_empty_x0_rejected() {
-        let err = cobyla(
-            |_: &[f64]| 0.0,
-            &[],
-            &[] as &[fn(&[f64]) -> f64],
-            100,
-            0.5,
-        )
-        .expect_err("empty x0");
+        let err = cobyla(|_: &[f64]| 0.0, &[], &[] as &[fn(&[f64]) -> f64], 100, 0.5)
+            .expect_err("empty x0");
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
     }
 }

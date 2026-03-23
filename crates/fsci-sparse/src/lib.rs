@@ -315,23 +315,16 @@ mod tests {
 
     #[test]
     fn dia_rejects_length_mismatch() {
-        let err = DiaMatrix::from_diagonals(
-            Shape2D::new(3, 3),
-            vec![0, 1],
-            vec![vec![1.0, 2.0, 3.0]],
-        )
-        .expect_err("offset/data mismatch");
+        let err =
+            DiaMatrix::from_diagonals(Shape2D::new(3, 3), vec![0, 1], vec![vec![1.0, 2.0, 3.0]])
+                .expect_err("offset/data mismatch");
         assert!(matches!(err, SparseError::IncompatibleShape { .. }));
     }
 
     #[test]
     fn dia_rejects_invalid_diagonal_length() {
-        let err = DiaMatrix::from_diagonals(
-            Shape2D::new(3, 3),
-            vec![1],
-            vec![vec![1.0, 2.0, 3.0]],
-        )
-        .expect_err("invalid diagonal length");
+        let err = DiaMatrix::from_diagonals(Shape2D::new(3, 3), vec![1], vec![vec![1.0, 2.0, 3.0]])
+            .expect_err("invalid diagonal length");
         assert!(matches!(err, SparseError::IncompatibleShape { .. }));
     }
 
@@ -340,11 +333,7 @@ mod tests {
         let dia = DiaMatrix::from_diagonals(
             Shape2D::new(3, 4),
             vec![0, 1, -1],
-            vec![
-                vec![1.0, 2.0, 3.0],
-                vec![10.0, 20.0, 30.0],
-                vec![7.0, 8.0],
-            ],
+            vec![vec![1.0, 2.0, 3.0], vec![10.0, 20.0, 30.0], vec![7.0, 8.0]],
         )
         .expect("dia");
         let dense = dense_from_coo(&dia.to_coo().expect("dia->coo"));
@@ -367,8 +356,10 @@ mod tests {
         )
         .expect("dia");
         let dense_from_dia = dense_from_coo(&dia.to_coo().expect("dia->coo"));
-        let dense_from_csr = dense_from_coo(&dia.to_csr().expect("dia->csr").to_coo().expect("csr->coo"));
-        let dense_from_csc = dense_from_coo(&dia.to_csc().expect("dia->csc").to_coo().expect("csc->coo"));
+        let dense_from_csr =
+            dense_from_coo(&dia.to_csr().expect("dia->csr").to_coo().expect("csr->coo"));
+        let dense_from_csc =
+            dense_from_coo(&dia.to_csc().expect("dia->csc").to_coo().expect("csc->coo"));
         assert_matrix_close(&dense_from_dia, &dense_from_csr);
         assert_matrix_close(&dense_from_dia, &dense_from_csc);
     }

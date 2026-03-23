@@ -783,11 +783,7 @@ impl DiaMatrix {
     /// * `shape` — Matrix shape (rows, cols).
     /// * `data` — Diagonal data arrays. Each has length max(rows, cols).
     /// * `offsets` — Diagonal offsets (0=main, +k=superdiagonal, -k=subdiagonal).
-    pub fn new(
-        shape: Shape2D,
-        data: Vec<Vec<f64>>,
-        offsets: Vec<i64>,
-    ) -> SparseResult<Self> {
+    pub fn new(shape: Shape2D, data: Vec<Vec<f64>>, offsets: Vec<i64>) -> SparseResult<Self> {
         if data.len() != offsets.len() {
             return Err(SparseError::InvalidArgument {
                 message: "data and offsets must have same length".to_string(),

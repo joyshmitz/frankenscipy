@@ -1153,11 +1153,7 @@ fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
     let a_inv_norm: f64 = x.iter().map(|v| v.abs()).fold(0.0, f64::max);
 
     let rcond = 1.0 / (a_norm * a_inv_norm);
-    if rcond.is_nan() {
-        0.0
-    } else {
-        rcond.min(1.0)
-    }
+    if rcond.is_nan() { 0.0 } else { rcond.min(1.0) }
 }
 
 fn fast_rcond_diagonal(a: &[Vec<f64>]) -> f64 {
@@ -2467,10 +2463,7 @@ pub fn fractional_matrix_power(
 /// column j is the Kronecker product of A[:,j] and B[:,j].
 ///
 /// Matches `scipy.linalg.khatri_rao(A, B)`.
-pub fn khatri_rao(
-    a: &[Vec<f64>],
-    b: &[Vec<f64>],
-) -> Result<Vec<Vec<f64>>, LinalgError> {
+pub fn khatri_rao(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgError> {
     let (m, na) = matrix_shape(a)?;
     let (p, nb) = matrix_shape(b)?;
     if na != nb {
@@ -2546,11 +2539,7 @@ pub fn solve_circulant(c: &[f64], b: &[f64]) -> Result<Vec<f64>, LinalgError> {
 /// row `r`. If `r` is omitted, a symmetric Toeplitz matrix is assumed.
 ///
 /// Matches `scipy.linalg.solve_toeplitz((c, r), b)`.
-pub fn solve_toeplitz(
-    c: &[f64],
-    r: Option<&[f64]>,
-    b: &[f64],
-) -> Result<Vec<f64>, LinalgError> {
+pub fn solve_toeplitz(c: &[f64], r: Option<&[f64]>, b: &[f64]) -> Result<Vec<f64>, LinalgError> {
     let n = c.len();
     if b.len() != n {
         return Err(LinalgError::IncompatibleShapes {
@@ -3867,7 +3856,10 @@ mod tests {
         let a = vec![vec![1.0, 0.0], vec![0.0, 1e-14]];
         let b = vec![1.0, 1.0];
         let result = solve_svd_fallback(&a, &b).expect("full-rank system");
-        assert!(matches!(result.warning, Some(LinalgWarning::IllConditioned { .. })));
+        assert!(matches!(
+            result.warning,
+            Some(LinalgWarning::IllConditioned { .. })
+        ));
     }
 
     #[test]
@@ -5929,10 +5921,7 @@ mod proptest_tests {
         let b = [2.0, 3.0, 4.0];
         let x = solve_circulant(&c, &b).expect("solve_circulant");
         for (i, (&xi, &bi)) in x.iter().zip(b.iter()).enumerate() {
-            assert!(
-                (xi - bi).abs() < 1e-10,
-                "x[{i}] = {xi}, expected {bi}"
-            );
+            assert!((xi - bi).abs() < 1e-10, "x[{i}] = {xi}, expected {bi}");
         }
     }
 
@@ -5959,10 +5948,7 @@ mod proptest_tests {
         let b = [2.0, 3.0, 4.0];
         let x = solve_toeplitz(&c, None, &b).expect("solve_toeplitz");
         for (i, (&xi, &bi)) in x.iter().zip(b.iter()).enumerate() {
-            assert!(
-                (xi - bi).abs() < 1e-10,
-                "x[{i}] = {xi}, expected {bi}"
-            );
+            assert!((xi - bi).abs() < 1e-10, "x[{i}] = {xi}, expected {bi}");
         }
     }
 
@@ -5979,10 +5965,7 @@ mod proptest_tests {
             2.3333333333333335,
         ];
         for (i, (&xi, &want)) in x.iter().zip(expected.iter()).enumerate() {
-            assert!(
-                (xi - want).abs() < 1e-10,
-                "x[{i}] = {xi}, expected {want}"
-            );
+            assert!((xi - want).abs() < 1e-10, "x[{i}] = {xi}, expected {want}");
         }
     }
 
@@ -5991,7 +5974,10 @@ mod proptest_tests {
         let c = [2.0, 1.0, 0.0];
         let r = [99.0, -1.0, 0.5];
         let matrix = toeplitz(&c, Some(&r));
-        assert!((matrix[0][0] - 2.0).abs() < 1e-12, "top-left must come from c[0]");
+        assert!(
+            (matrix[0][0] - 2.0).abs() < 1e-12,
+            "top-left must come from c[0]"
+        );
 
         let x_expected = [1.0, -2.0, 0.5];
         let mut b = vec![0.0; 3];
@@ -6003,10 +5989,7 @@ mod proptest_tests {
 
         let x = solve_toeplitz(&c, Some(&r), &b).expect("solve_toeplitz");
         for (i, (&xi, &want)) in x.iter().zip(x_expected.iter()).enumerate() {
-            assert!(
-                (xi - want).abs() < 1e-10,
-                "x[{i}] = {xi}, expected {want}"
-            );
+            assert!((xi - want).abs() < 1e-10, "x[{i}] = {xi}, expected {want}");
         }
     }
 

@@ -17,8 +17,8 @@ pub use bessel::{
     spherical_kn, spherical_yn, y0, y1, yn, yv,
 };
 pub use beta::{
-    BETA_DISPATCH_PLAN, beta, betainc, betaln, btdtr, btdtri, fdtr, fdtri, betainc_scalar,
-    betaln_scalar,
+    BETA_DISPATCH_PLAN, beta, betainc, betainc_scalar, betaln, betaln_scalar, btdtr, btdtri, fdtr,
+    fdtri,
 };
 pub use convenience::{
     CONVENIENCE_DISPATCH_PLAN, bernoulli, dawsn, entr, euler, expit, fresnel, hurwitz_zeta, kl_div,
@@ -31,8 +31,8 @@ pub use error::{
     ERROR_DISPATCH_PLAN, erf, erf_scalar, erfc, erfc_scalar, erfcinv, erfinv, erfinv_scalar,
 };
 pub use gamma::{
-    GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammaincc, gammaln, gdtr,
-    gdtri, perm, polygamma, rgamma, zeta, gammainc_scalar, gammaincc_scalar, gammaln_scalar,
+    GAMMA_DISPATCH_PLAN, comb, digamma, factorial, gamma, gammainc, gammainc_scalar, gammaincc,
+    gammaincc_scalar, gammaln, gammaln_scalar, gdtr, gdtri, perm, polygamma, rgamma, zeta,
 };
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
 pub use orthopoly::{
@@ -94,10 +94,10 @@ mod tests {
         use fsci_runtime::RuntimeMode;
         let inf = SpecialTensor::RealScalar(f64::INFINITY);
         let neg_inf = SpecialTensor::RealScalar(f64::NEG_INFINITY);
-        
+
         let res_inf = erf(&inf, RuntimeMode::Strict).unwrap();
         let res_neg_inf = erf(&neg_inf, RuntimeMode::Strict).unwrap();
-        
+
         match res_inf {
             SpecialTensor::RealScalar(v) => assert_eq!(v, 1.0, "erf(inf) should be 1.0"),
             _ => panic!(),
@@ -117,7 +117,10 @@ mod tests {
         let result = iv(&v, &z, RuntimeMode::Strict).expect("iv(0.5, 500)");
         match result {
             SpecialTensor::RealScalar(val) => {
-                assert!(val > 1e214 && val < 1e216, "iv(0.5, 500) should be ~1e215, got {val}");
+                assert!(
+                    val > 1e214 && val < 1e216,
+                    "iv(0.5, 500) should be ~1e215, got {val}"
+                );
             }
             _ => panic!("expected scalar"),
         }

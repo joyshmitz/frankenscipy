@@ -669,7 +669,12 @@ fn knn_search(
     // Insert if we have room or this is closer than the worst
     if results.len() < k || dist_sq < results.last().unwrap().1 {
         let pos = results
-            .binary_search_by(|probe| probe.1.partial_cmp(&dist_sq).unwrap_or(std::cmp::Ordering::Equal))
+            .binary_search_by(|probe| {
+                probe
+                    .1
+                    .partial_cmp(&dist_sq)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .unwrap_or_else(|e| e);
         if results.len() < k {
             results.insert(pos, (node.index, dist_sq));
@@ -1084,8 +1089,7 @@ impl Voronoi {
                 }
                 _ => {
                     return Err(SpatialError::InvalidArgument(
-                        "voronoi construction encountered a non-manifold Delaunay edge"
-                            .to_string(),
+                        "voronoi construction encountered a non-manifold Delaunay edge".to_string(),
                     ));
                 }
             }
