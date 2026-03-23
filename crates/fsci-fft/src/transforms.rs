@@ -973,7 +973,7 @@ fn run_real_nd_forward(
     validate_workers(options.workers)?;
     validate_finite_real(input, options)?;
 
-    let last_len = *shape.last().expect("validated non-empty shape");
+    let last_len = *shape.last().ok_or(FftError::InvalidShape { detail: "empty shape" })?;
     let reduced_last = last_len / 2 + 1;
     let backend = resolve_backend(options.backend);
     let axes = (0..shape.len()).collect::<Vec<_>>();
@@ -987,7 +987,11 @@ fn run_real_nd_forward(
     }
 
     let mut complex_shape = shape.to_vec();
-    *complex_shape.last_mut().expect("validated non-empty shape") = reduced_last;
+    if let Some(last) = complex_shape.last_mut() {
+        *last = reduced_last;
+    } else {
+        return Err(FftError::InvalidShape { detail: "empty shape" });
+    }
     if complex_shape.len() > 1 {
         let max_axis_len = complex_shape.iter().max().copied().unwrap_or(0);
         let mut scratch = vec![(0.0, 0.0); max_axis_len];
@@ -1028,7 +1032,7 @@ fn run_real_nd_inverse(
     let expected_len = checked_product(shape).ok_or(FftError::InvalidShape {
         detail: "nd shape product overflow",
     })?;
-    let last_len = *shape.last().expect("validated non-empty shape");
+    let last_len = *shape.last().ok_or(FftError::InvalidShape { detail: "empty shape" })?;
     let reduced_last = last_len / 2 + 1;
     let complex_len = shape[..shape.len() - 1]
         .iter()
@@ -1054,7 +1058,11 @@ fn run_real_nd_inverse(
     let started = Instant::now();
     let mut complex_data = input.to_vec();
     let mut complex_shape = shape.to_vec();
-    *complex_shape.last_mut().expect("validated non-empty shape") = reduced_last;
+    if let Some(last) = complex_shape.last_mut() {
+        *last = reduced_last;
+    } else {
+        return Err(FftError::InvalidShape { detail: "empty shape" });
+    }
     if complex_shape.len() > 1 {
         let max_axis_len = complex_shape.iter().max().copied().unwrap_or(0);
         let mut scratch = vec![(0.0, 0.0); max_axis_len];

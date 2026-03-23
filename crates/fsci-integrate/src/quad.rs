@@ -36,6 +36,26 @@ pub struct QuadResult {
     pub converged: bool,
 }
 
+/// Result of vector-valued numerical quadrature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuadVecResult {
+    /// Estimated value of the integral for each output component.
+    pub integral: Vec<f64>,
+    /// Estimated absolute error using the maximum componentwise GK15/G7 delta.
+    pub error: f64,
+    /// Number of function evaluations.
+    pub neval: usize,
+    /// Whether the requested accuracy was achieved.
+    pub converged: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct QuadVecSpec {
+    epsabs: f64,
+    epsrel: f64,
+    dim: usize,
+}
+
 /// Numerically integrate a scalar function over a finite interval [a, b].
 ///
 /// Uses adaptive Gauss-Kronrod quadrature (7-point Gauss / 15-point Kronrod).
@@ -88,6 +108,60 @@ where
     })
 }
 
+/// Numerically integrate a vector-valued function over a finite interval [a, b].
+///
+/// Uses the same adaptive Gauss-Kronrod quadrature core as [`quad`], but
+/// preserves every output component of the integrand.
+///
+/// Matches the core finite-interval behavior of `scipy.integrate.quad_vec(f, a, b)`.
+pub fn quad_vec<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    options: QuadOptions,
+) -> Result<QuadVecResult, IntegrateValidationError>
+where
+    F: Fn(f64) -> Vec<f64>,
+{
+    if !a.is_finite() || !b.is_finite() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "integration bounds must be finite".to_string(),
+        });
+    }
+    if options.epsabs < 0.0 || options.epsrel < 0.0 {
+        return Err(IntegrateValidationError::QuadInvalidTolerance {
+            detail: "tolerances must be non-negative".to_string(),
+        });
+    }
+
+    let sample = f(a);
+    let dim = sample.len();
+    if (a - b).abs() < f64::EPSILON {
+        return Ok(QuadVecResult {
+            integral: vec![0.0; dim],
+            error: 0.0,
+            neval: 1,
+            converged: true,
+        });
+    }
+
+    let mut neval = 0;
+    let spec = QuadVecSpec {
+        epsabs: options.epsabs,
+        epsrel: options.epsrel,
+        dim,
+    };
+    let (integral, error, converged) =
+        adaptive_gk15_vec(&f, a, b, options.limit, &mut neval, spec)?;
+
+    Ok(QuadVecResult {
+        integral,
+        error,
+        neval,
+        converged,
+    })
+}
+
 /// Adaptive Gauss-Kronrod 15-point quadrature with recursive subdivision.
 fn adaptive_gk15<F>(
     f: &F,
@@ -122,6 +196,46 @@ where
     let converged = c_left && c_right;
 
     (total_integral, total_error, converged)
+}
+
+/// Adaptive Gauss-Kronrod 15-point quadrature for vector-valued integrands.
+fn adaptive_gk15_vec<F>(
+    f: &F,
+    a: f64,
+    b: f64,
+    limit: usize,
+    neval: &mut usize,
+    spec: QuadVecSpec,
+) -> Result<(Vec<f64>, f64, bool), IntegrateValidationError>
+where
+    F: Fn(f64) -> Vec<f64>,
+{
+    let (integral, error) = gauss_kronrod_15_vec(f, a, b, neval, spec.dim)?;
+    let tolerance = spec.epsabs.max(spec.epsrel * max_abs_component(&integral));
+
+    if error <= tolerance || limit == 0 {
+        return Ok((integral, error, error <= tolerance));
+    }
+
+    let mid = 0.5 * (a + b);
+    let next_limit = limit.saturating_sub(1);
+
+    let next_spec = QuadVecSpec {
+        epsabs: spec.epsabs / 2.0,
+        ..spec
+    };
+    let (i_left, e_left, c_left) = adaptive_gk15_vec(f, a, mid, next_limit, neval, next_spec)?;
+    let (i_right, e_right, c_right) = adaptive_gk15_vec(f, mid, b, next_limit, neval, next_spec)?;
+
+    let total_integral = i_left
+        .iter()
+        .zip(i_right.iter())
+        .map(|(left, right)| left + right)
+        .collect();
+    let total_error = e_left + e_right;
+    let converged = c_left && c_right;
+
+    Ok((total_integral, total_error, converged))
 }
 
 /// Gauss-Kronrod 15-point / 7-point quadrature rule on [a, b].
@@ -211,6 +325,116 @@ where
     }
 
     (result_kronrod, error)
+}
+
+/// Vector-valued Gauss-Kronrod 15-point / 7-point quadrature rule on [a, b].
+fn gauss_kronrod_15_vec<F>(
+    f: &F,
+    a: f64,
+    b: f64,
+    neval: &mut usize,
+    dim: usize,
+) -> Result<(Vec<f64>, f64), IntegrateValidationError>
+where
+    F: Fn(f64) -> Vec<f64>,
+{
+    const XGK: [f64; 15] = [
+        -0.991_455_371_120_812_6,
+        -0.949_107_912_342_759,
+        -0.864_864_423_359_769_1,
+        -0.741_531_185_599_394_4,
+        -0.586_087_235_467_691_1,
+        -0.405_845_151_377_397_2,
+        -0.207_784_955_007_898_5,
+        0.0,
+        0.207_784_955_007_898_5,
+        0.405_845_151_377_397_2,
+        0.586_087_235_467_691_1,
+        0.741_531_185_599_394_4,
+        0.864_864_423_359_769_1,
+        0.949_107_912_342_759,
+        0.991_455_371_120_812_6,
+    ];
+    const WGK: [f64; 15] = [
+        0.022_935_322_010_529_2,
+        0.063_092_092_629_979,
+        0.104_790_010_322_250_2,
+        0.140_653_259_715_525_9,
+        0.169_004_726_639_267_9,
+        0.190_350_578_064_785_4,
+        0.204_432_940_075_298_9,
+        0.209_482_141_084_728,
+        0.204_432_940_075_298_9,
+        0.190_350_578_064_785_4,
+        0.169_004_726_639_267_9,
+        0.140_653_259_715_525_9,
+        0.104_790_010_322_250_2,
+        0.063_092_092_629_979,
+        0.022_935_322_010_529_2,
+    ];
+    const WG: [f64; 7] = [
+        0.129_484_966_168_869_7,
+        0.279_705_391_489_276_7,
+        0.381_830_050_505_118_9,
+        0.417_959_183_673_469_4,
+        0.381_830_050_505_118_9,
+        0.279_705_391_489_276_7,
+        0.129_484_966_168_869_7,
+    ];
+
+    let half_length = 0.5 * (b - a);
+    let center = 0.5 * (a + b);
+
+    let mut result_kronrod = vec![0.0; dim];
+    let mut result_gauss = vec![0.0; dim];
+
+    for (i, (&xgk, &wgk)) in XGK.iter().zip(WGK.iter()).enumerate() {
+        let x = center + half_length * xgk;
+        let fval = f(x);
+        *neval += 1;
+
+        if fval.len() != dim {
+            return Err(IntegrateValidationError::QuadInvalidBounds {
+                detail: format!(
+                    "integrand returned inconsistent vector length: expected {dim}, got {}",
+                    fval.len()
+                ),
+            });
+        }
+
+        for (acc, value) in result_kronrod.iter_mut().zip(fval.iter()) {
+            *acc += wgk * value;
+        }
+
+        if i % 2 == 1 {
+            let wg = WG[i / 2];
+            for (acc, value) in result_gauss.iter_mut().zip(fval.iter()) {
+                *acc += wg * value;
+            }
+        }
+    }
+
+    for value in &mut result_kronrod {
+        *value *= half_length;
+    }
+    for value in &mut result_gauss {
+        *value *= half_length;
+    }
+
+    let mut error = result_kronrod
+        .iter()
+        .zip(result_gauss.iter())
+        .map(|(kronrod, gauss)| (kronrod - gauss).abs())
+        .fold(0.0, f64::max);
+    if error.is_nan() {
+        error = f64::INFINITY;
+    }
+
+    Ok((result_kronrod, error))
+}
+
+fn max_abs_component(values: &[f64]) -> f64 {
+    values.iter().map(|value| value.abs()).fold(0.0, f64::max)
 }
 
 /// Options for double integration.
@@ -792,16 +1016,6 @@ pub fn romb(y: &[f64], dx: f64) -> Result<f64, IntegrateValidationError> {
     Ok(r[k][k])
 }
 
-/// N-dimensional adaptive quadrature via nested `quad` calls.
-///
-/// Matches `scipy.integrate.nquad(func, ranges)`.
-///
-/// # Arguments
-/// * `func` — Function of N variables. Takes a slice `&[f64]` of length N.
-/// * `ranges` — Integration ranges as `(lower, upper)` pairs, from outermost to innermost.
-/// * `options` — Quadrature options for each 1D integration.
-///
-/// # Example
 /// Fixed-order Gaussian quadrature using Gauss-Legendre nodes.
 ///
 /// Integrates `f(x)` over `[a, b]` using `n`-point Gauss-Legendre quadrature.
@@ -843,9 +1057,21 @@ where
     Ok((integral, n))
 }
 
-/// ```ignore
+/// N-dimensional adaptive quadrature via nested `quad` calls.
+///
+/// Matches `scipy.integrate.nquad(func, ranges)`.
+///
+/// # Arguments
+/// * `func` — Function of N variables. Takes a slice `&[f64]` of length N.
+/// * `ranges` — Integration ranges as `(lower, upper)` pairs, from outermost to innermost.
+/// * `options` — Quadrature options for each 1D integration.
+///
+/// # Example
+/// ```rust
+/// use fsci_integrate::{nquad, QuadOptions};
 /// // ∫₀¹ ∫₀¹ x*y dx dy = 0.25
-/// let result = nquad(|args| args[0] * args[1], &[(0.0, 1.0), (0.0, 1.0)], opts)?;
+/// let result = nquad(|args| args[0] * args[1], &[(0.0, 1.0), (0.0, 1.0)], QuadOptions::default()).unwrap();
+/// assert!((result.integral - 0.25).abs() < 1e-10);
 /// ```
 pub fn nquad<F>(
     func: F,
@@ -940,7 +1166,7 @@ fn gauss_legendre_nodes_weights(n: usize) -> (Vec<f64>, Vec<f64>) {
     let mut weights = Vec::with_capacity(n);
 
     // Only need to find roots for the first half (symmetric)
-    let m = (n + 1) / 2;
+    let m = n.div_ceil(2);
     for i in 0..m {
         // Initial guess: Chebyshev approximation
         let mut x = (std::f64::consts::PI * (i as f64 + 0.75) / (nf + 0.5)).cos();
@@ -1270,6 +1496,75 @@ mod tests {
             "integral should be atan(100)={expected}, got {}",
             result.integral
         );
+    }
+
+    #[test]
+    fn quad_vec_constant_function() {
+        let result =
+            quad_vec(|_| vec![5.0, -2.0], 0.0, 1.0, QuadOptions::default()).expect("quad_vec");
+        assert!(result.converged);
+        assert!((result.integral[0] - 5.0).abs() < 1e-12);
+        assert!((result.integral[1] + 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn quad_vec_polynomial_components() {
+        let result =
+            quad_vec(|x| vec![x, x * x], 0.0, 1.0, QuadOptions::default()).expect("quad_vec");
+        assert!(result.converged);
+        assert!((result.integral[0] - 0.5).abs() < 1e-12);
+        assert!((result.integral[1] - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn quad_vec_reversed_bounds() {
+        let result =
+            quad_vec(|x| vec![x, 1.0], 1.0, 0.0, QuadOptions::default()).expect("quad_vec");
+        assert!(result.converged);
+        assert!((result.integral[0] + 0.5).abs() < 1e-12);
+        assert!((result.integral[1] + 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn quad_vec_invalid_input_errors() {
+        let bounds_err = quad_vec(|x| vec![x], f64::INFINITY, 1.0, QuadOptions::default())
+            .expect_err("non-finite bounds");
+        assert!(matches!(
+            bounds_err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
+
+        let tol_err = quad_vec(
+            |x| vec![x],
+            0.0,
+            1.0,
+            QuadOptions {
+                epsabs: -1.0,
+                ..QuadOptions::default()
+            },
+        )
+        .expect_err("negative tolerance");
+        assert!(matches!(
+            tol_err,
+            IntegrateValidationError::QuadInvalidTolerance { .. }
+        ));
+    }
+
+    #[test]
+    fn quad_vec_rejects_inconsistent_output_shape() {
+        let err = quad_vec(
+            |x| {
+                if x < 0.5 { vec![x] } else { vec![x, x * x] }
+            },
+            0.0,
+            1.0,
+            QuadOptions::default(),
+        )
+        .expect_err("inconsistent output length");
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
     }
 
     // ── dblquad tests ───────────────────────────────────────────────

@@ -13,9 +13,10 @@ pub use api::{EventFn, OdeSolution, SolveIvpOptions, SolveIvpResult, SolverKind,
 pub use bdf::{BdfSolver, BdfSolverConfig};
 pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
 pub use quad::{
-    CompositeQuadResult, DblquadOptions, DblquadResult, QuadOptions, QuadResult,
+    CompositeQuadResult, DblquadOptions, DblquadResult, QuadOptions, QuadResult, QuadVecResult,
     cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, fixed_quad,
-    nquad, quad, romb, romb_func, simpson, simpson_uniform, tplquad, trapezoid, trapezoid_uniform,
+    nquad, quad, quad_vec, romb, romb_func, simpson, simpson_uniform, tplquad, trapezoid,
+    trapezoid_uniform,
 };
 pub use rk::{
     ButcherTableau, DOP853_TABLEAU, RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig,

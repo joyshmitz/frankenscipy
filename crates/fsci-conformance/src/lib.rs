@@ -4054,7 +4054,7 @@ fn observed_array(array: &FsciArrayApiCoreArray) -> ArrayApiObservedOutcome {
         dtype: runtime_dtype_to_fixture(array.dtype()),
         values: values
             .into_iter()
-            .map(|value| runtime_scalar_to_fixture(value))
+            .map(runtime_scalar_to_fixture)
             .collect(),
     }
 }

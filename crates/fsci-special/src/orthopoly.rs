@@ -386,7 +386,8 @@ where
         jacobi[k][k - 1] = beta;
     }
 
-    let eig = eigh(&jacobi, DecompOptions::default()).expect("Golub-Welsch eigensolve succeeds");
+    let eig = eigh(&jacobi, DecompOptions::default())
+        .unwrap_or_else(|_| panic!("Golub-Welsch eigensolve mathematically guaranteed to succeed"));
     let mut nodes = eig.eigenvalues;
     let mut weights: Vec<f64> = (0..n)
         .map(|col| mu0 * eig.eigenvectors[0][col] * eig.eigenvectors[0][col])

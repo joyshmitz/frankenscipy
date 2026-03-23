@@ -348,7 +348,10 @@ where
                         .is_none_or(|&last_t| (last_t - t_ev).abs() > 1e-14)
                     {
                         ts.push(t_ev);
-                        ys.push(y_event_triggered.unwrap());
+                        ys.push(
+                            y_event_triggered
+                                .expect("y_event_triggered is populated alongside t_event_triggered"),
+                        );
                     }
                     status = 1;
                     break;

@@ -569,11 +569,20 @@ where
         }
 
         let x_new = xcurr - fcurr * (xcurr - xprev) / denom;
+        let step = (x_new - xcurr).abs();
         xprev = xcurr;
         fprev = fcurr;
         xcurr = x_new;
         nfev += 1;
         fcurr = f(xcurr);
+
+        // Step-size convergence check
+        if step < options.xtol + options.rtol * xcurr.abs() {
+            return Ok(RootResult::terminal(
+                RootMethod::Secant, xcurr, true, ConvergenceStatus::Success,
+                iter + 1, nfev, "converged",
+            ));
+        }
     }
 
     Ok(RootResult::terminal(
@@ -622,7 +631,15 @@ where
 
         let denom = 2.0 * dfx * dfx - fx * d2fx;
         if denom.abs() < 1e-30 {
-            x -= fx / dfx;
+            // Halley denominator degenerate; fall back to Newton step
+            let step = fx / dfx;
+            x -= step;
+            if step.abs() < options.xtol + options.rtol * x.abs() {
+                return Ok(RootResult::terminal(
+                    RootMethod::Halley, x, true, ConvergenceStatus::Success,
+                    iter + 1, nfev, "converged (Newton fallback)",
+                ));
+            }
         } else {
             let x_new = x - 2.0 * fx * dfx / denom;
             if (x_new - x).abs() < options.xtol + options.rtol * x.abs() {
@@ -929,7 +946,7 @@ fn solve_dense(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
                     .partial_cmp(&aug[j][col].abs())
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .unwrap();
+            .unwrap_or(col);
         aug.swap(col, max_row);
 
         if aug[col][col].abs() < 1e-15 {

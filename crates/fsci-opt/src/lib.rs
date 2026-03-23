@@ -481,26 +481,28 @@ pub fn linprog(
     let maxiter = maxiter.unwrap_or(10_000);
 
     // Simplex iterations for Phase I.
-    let phase1_result = simplex_iterate(&mut tableau, &mut basis, maxiter, phase1_vars);
-    if let Err(err_code) = phase1_result {
-        let (status, message) = if err_code == 3 {
-            (
-                3,
-                "Phase I problem is unbounded (should not happen)".to_string(),
-            )
-        } else {
-            (1, "Phase I iteration limit exceeded".to_string())
-        };
-        return Ok(LinprogResult {
-            x: vec![0.0; n],
-            fun: 0.0,
-            slack: vec![0.0; m_ub],
-            success: false,
-            status,
-            message,
-            nit: maxiter,
-        });
-    }
+    let phase1_nit = match simplex_iterate(&mut tableau, &mut basis, maxiter, phase1_vars) {
+        Ok(nit) => nit,
+        Err(err_code) => {
+            let (status, message) = if err_code == 3 {
+                (
+                    3,
+                    "Phase I problem is unbounded (should not happen)".to_string(),
+                )
+            } else {
+                (1, "Phase I iteration limit exceeded".to_string())
+            };
+            return Ok(LinprogResult {
+                x: vec![0.0; n],
+                fun: 0.0,
+                slack: vec![0.0; m_ub],
+                success: false,
+                status,
+                message,
+                nit: maxiter,
+            });
+        }
+    };
 
     // Check if Phase I found a feasible solution (all artificials = 0).
     // Phase I objective = -sum(artificials). If < -1e-8, some artificials are nonzero → infeasible.
@@ -513,7 +515,7 @@ pub fn linprog(
             success: false,
             status: 2,
             message: "Problem is infeasible".to_string(),
-            nit: phase1_result.unwrap(),
+            nit: phase1_nit,
         });
     }
 
@@ -552,7 +554,7 @@ pub fn linprog(
     }
 
     let phase2_result = simplex_iterate(&mut tableau2, &mut basis, maxiter, total_vars);
-    let nit = phase1_result.unwrap_or(0) + phase2_result.unwrap_or(maxiter);
+    let nit = phase1_nit + phase2_result.unwrap_or(maxiter);
 
     if let Err(err_code) = phase2_result {
         let (status, message) = if err_code == 3 {

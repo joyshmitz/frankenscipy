@@ -91,7 +91,7 @@ fn journey_01_linalg_pipeline() {
     assert!(result.x.len() == 4);
 
     // Verify residual: ||Ax - b|| < tol
-    let mut residual = [0.0; 4];
+    let mut residual: [f64; 4] = [0.0; 4];
     for (i, (row, bi)) in a.iter().zip(&b).enumerate() {
         residual[i] = row
             .iter()

@@ -536,13 +536,13 @@ impl DiaMatrix {
         let mut y = vec![0.0; rows];
         for (k, &off) in self.offsets.iter().enumerate() {
             let diag = &self.data[k];
-            for i in 0..rows {
+            for (i, yi) in y.iter_mut().enumerate() {
                 let j = i as isize + off;
                 if j >= 0 && (j as usize) < cols {
                     let j = j as usize;
                     let idx = if off >= 0 { i } else { j };
                     if idx < diag.len() {
-                        y[i] += diag[idx] * x[j];
+                        *yi += diag[idx] * x[j];
                     }
                 }
             }

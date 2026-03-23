@@ -389,14 +389,12 @@ fn iv_scalar(v: f64, z: f64) -> f64 {
         };
     }
 
-    if v < 0.0 {
-        if v.fract() == 0.0 {
-            return iv_scalar(v.abs(), z);
-        }
-        // I_{-v}(z) = I_v(z) + (2/pi) * sin(v*pi) * K_v(z)
-        // But for real-only iv_scalar, we usually follow scipy.special.iv behavior.
-        // scipy.special.iv(-v, z) for non-integer v and z > 0 returns same as formula.
+    if v < 0.0 && v.fract() == 0.0 {
+        return iv_scalar(v.abs(), z);
     }
+    // I_{-v}(z) = I_v(z) + (2/pi) * sin(v*pi) * K_v(z)
+    // But for real-only iv_scalar, we usually follow scipy.special.iv behavior.
+    // scipy.special.iv(-v, z) for non-integer v and z > 0 returns same as formula.
 
     if az > 50.0 {
         return iv_asymptotic(v, az);

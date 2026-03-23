@@ -903,11 +903,7 @@ pub fn czt(
 /// * `m` — Number of output points.
 ///
 /// Matches `scipy.signal.zoom_fft`.
-pub fn zoom_fft(
-    x: &[f64],
-    f_range: (f64, f64),
-    m: usize,
-) -> Result<Vec<(f64, f64)>, SignalError> {
+pub fn zoom_fft(x: &[f64], f_range: (f64, f64), m: usize) -> Result<Vec<(f64, f64)>, SignalError> {
     if x.is_empty() {
         return Err(SignalError::InvalidArgument(
             "Input signal must be non-empty".to_string(),
@@ -1197,7 +1193,12 @@ pub fn bohman_window(m: usize) -> Vec<f64> {
 }
 
 #[allow(dead_code)]
-fn __removed_upfirdn_early_copy(h: &[f64], x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, SignalError> {
+fn __removed_upfirdn_early_copy(
+    h: &[f64],
+    x: &[f64],
+    up: usize,
+    down: usize,
+) -> Result<Vec<f64>, SignalError> {
     if up == 0 || down == 0 {
         return Err(SignalError::InvalidArgument(
             "up and down must be >= 1".to_string(),
@@ -4268,11 +4269,7 @@ pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError
 ///
 /// Matches the high-level behavior of `scipy.signal.wiener(im, mysize, noise)`
 /// for 1-D inputs with zero-padded local windows.
-pub fn wiener(
-    data: &[f64],
-    mysize: usize,
-    noise: Option<f64>,
-) -> Result<Vec<f64>, SignalError> {
+pub fn wiener(data: &[f64], mysize: usize, noise: Option<f64>) -> Result<Vec<f64>, SignalError> {
     if mysize == 0 || mysize.is_multiple_of(2) {
         return Err(SignalError::InvalidArgument(
             "mysize must be odd and >= 1".to_string(),
@@ -6842,7 +6839,10 @@ mod tests {
         let data = vec![2.0; 9];
         let filtered = wiener(&data, 3, None).unwrap();
         for value in filtered.iter().skip(1).take(filtered.len() - 2) {
-            assert!((*value - 2.0).abs() < 1e-12, "interior constant signal drifted: {value}");
+            assert!(
+                (*value - 2.0).abs() < 1e-12,
+                "interior constant signal drifted: {value}"
+            );
         }
     }
 
@@ -6850,7 +6850,11 @@ mod tests {
     fn wiener_smooths_impulse_with_explicit_noise() {
         let data = vec![0.0, 0.0, 10.0, 0.0, 0.0];
         let filtered = wiener(&data, 3, Some(1.0)).unwrap();
-        assert!(filtered[2] < 10.0, "center should be attenuated: {}", filtered[2]);
+        assert!(
+            filtered[2] < 10.0,
+            "center should be attenuated: {}",
+            filtered[2]
+        );
         assert!(filtered[2] > filtered[1], "center should remain dominant");
         assert!(filtered[1] > 0.0, "neighbors should pick up local energy");
     }
@@ -6859,7 +6863,10 @@ mod tests {
     fn wiener_estimated_noise_falls_back_to_local_mean() {
         let data = vec![0.0, 1.0, 0.0];
         let filtered = wiener(&data, 3, Some(10.0)).unwrap();
-        assert!((filtered[1] - (1.0 / 3.0)).abs() < 1e-12, "expected local mean at center");
+        assert!(
+            (filtered[1] - (1.0 / 3.0)).abs() < 1e-12,
+            "expected local mean at center"
+        );
     }
 
     #[test]
@@ -7821,7 +7828,10 @@ mod tests {
         let result = czt(&x, n, None, None).unwrap();
 
         // Find magnitude peak
-        let mags: Vec<f64> = result.iter().map(|&(r, i)| (r * r + i * i).sqrt()).collect();
+        let mags: Vec<f64> = result
+            .iter()
+            .map(|&(r, i)| (r * r + i * i).sqrt())
+            .collect();
         // Cosine has energy at both bin f and bin N-f (mirror)
         let peak_bin = mags
             .iter()
@@ -7835,7 +7845,10 @@ mod tests {
             n - freq as usize
         );
         // Check that both bins have significant energy
-        assert!(mags[freq as usize] > mags[0] * 10.0, "bin {freq} should have energy");
+        assert!(
+            mags[freq as usize] > mags[0] * 10.0,
+            "bin {freq} should have energy"
+        );
     }
 
     #[test]
@@ -7857,7 +7870,10 @@ mod tests {
         let result = zoom_fft(&x, (8.0 / n as f64, 14.0 / n as f64), m).unwrap();
 
         // Should have two peaks in the zoomed spectrum
-        let mags: Vec<f64> = result.iter().map(|&(r, i)| (r * r + i * i).sqrt()).collect();
+        let mags: Vec<f64> = result
+            .iter()
+            .map(|&(r, i)| (r * r + i * i).sqrt())
+            .collect();
         let max_mag = mags.iter().cloned().fold(0.0f64, f64::max);
         let peaks: Vec<usize> = mags
             .iter()
@@ -7888,13 +7904,7 @@ mod tests {
     #[test]
     fn remez_lowpass_filter() {
         // Design a 31-tap lowpass filter with cutoff at 0.2
-        let h = remez(
-            31,
-            &[0.0, 0.15, 0.25, 0.5],
-            &[1.0, 0.0],
-            None,
-        )
-        .unwrap();
+        let h = remez(31, &[0.0, 0.15, 0.25, 0.5], &[1.0, 0.0], None).unwrap();
         assert_eq!(h.len(), 31);
 
         // Filter should be symmetric (linear phase)
@@ -7910,9 +7920,6 @@ mod tests {
 
         // Sum of coefficients should approximate passband gain (1.0)
         let sum: f64 = h.iter().sum();
-        assert!(
-            sum > 0.5 && sum < 1.5,
-            "filter sum = {sum}, expected ~1.0"
-        );
+        assert!(sum > 0.5 && sum < 1.5, "filter sum = {sum}, expected ~1.0");
     }
 }

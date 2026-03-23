@@ -549,6 +549,54 @@ impl KDTree {
         }
         count
     }
+
+    /// Compute a sparse cross-distance matrix for pairs within `max_distance`.
+    ///
+    /// Matches the core surface of `scipy.spatial.KDTree.sparse_distance_matrix`
+    /// by returning `(row, col, distance)` triplets for all retained pairs.
+    pub fn sparse_distance_matrix(
+        &self,
+        other: &KDTree,
+        max_distance: f64,
+    ) -> Result<Vec<(usize, usize, f64)>, SpatialError> {
+        if self.dim != other.dim {
+            return Err(SpatialError::DimensionMismatch {
+                expected: self.dim,
+                actual: other.dim,
+            });
+        }
+        if !max_distance.is_finite() || max_distance < 0.0 {
+            return Err(SpatialError::InvalidArgument(
+                "max_distance must be finite and nonnegative".to_string(),
+            ));
+        }
+        if self.nodes.is_empty() || other.nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut other_points = vec![None; other.nodes.len()];
+        for node in &other.nodes {
+            other_points[node.index] = Some(node.point.as_slice());
+        }
+
+        let mut entries = Vec::new();
+        for node in &self.nodes {
+            for other_index in other.query_ball_point(&node.point, max_distance)? {
+                let Some(other_point) = other_points[other_index] else {
+                    return Err(SpatialError::InvalidArgument(
+                        "kdtree internal point index mapping was inconsistent".to_string(),
+                    ));
+                };
+                entries.push((
+                    node.index,
+                    other_index,
+                    sqeuclidean(&node.point, other_point).sqrt(),
+                ));
+            }
+        }
+        entries.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        Ok(entries)
+    }
 }
 
 fn ball_search_count(nodes: &[KDNode], node_idx: usize, query: &[f64], r_sq: f64) -> usize {
@@ -667,7 +715,10 @@ fn knn_search(
     let dist_sq = sqeuclidean(query, &node.point);
 
     // Insert if we have room or this is closer than the worst
-    if results.len() < k || dist_sq < results.last().unwrap().1 {
+    let is_better = results
+        .last()
+        .is_none_or(|&(_, worst_dist)| dist_sq < worst_dist);
+    if results.len() < k || is_better {
         let pos = results
             .binary_search_by(|probe| {
                 probe
@@ -1785,6 +1836,37 @@ mod tests {
             .query_ball_tree(&tree2, -1.0)
             .expect_err("negative radius");
         assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn kdtree_sparse_distance_matrix_basic() {
+        let tree1 = KDTree::new(&[vec![0.0, 0.0], vec![2.0, 0.0]]).unwrap();
+        let tree2 = KDTree::new(&[vec![0.5, 0.0], vec![2.5, 0.0], vec![9.0, 9.0]]).unwrap();
+
+        let entries = tree1.sparse_distance_matrix(&tree2, 0.75).unwrap();
+        assert_eq!(
+            entries,
+            vec![(0, 0, 0.5), (1, 1, 0.5)],
+            "sparse triplets should preserve original point indices"
+        );
+    }
+
+    #[test]
+    fn kdtree_sparse_distance_matrix_empty() {
+        let tree1 = KDTree::new(&[vec![0.0, 0.0]]).unwrap();
+        let tree2 = KDTree::new(&[vec![10.0, 10.0]]).unwrap();
+        let entries = tree1.sparse_distance_matrix(&tree2, 1.0).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn kdtree_sparse_distance_matrix_dimension_mismatch() {
+        let tree1 = KDTree::new(&[vec![0.0, 0.0]]).unwrap();
+        let tree2 = KDTree::new(&[vec![0.0, 0.0, 0.0]]).unwrap();
+        let err = tree1
+            .sparse_distance_matrix(&tree2, 1.0)
+            .expect_err("dimension mismatch");
+        assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
     }
 
     // ── ConvexHull tests ─────────────────────────────────────────────

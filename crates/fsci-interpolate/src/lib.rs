@@ -144,7 +144,7 @@ impl Interp1d {
             return Ok(f64::NAN);
         }
         // Bounds checking
-        if x_new < self.x[0] || x_new > *self.x.last().unwrap() {
+        if x_new < self.x[0] || x_new > self.x[self.x.len() - 1] {
             if self.options.bounds_error {
                 return Err(InterpError::OutOfBounds {
                     value: format!("{x_new}"),
@@ -214,7 +214,7 @@ impl Interp1d {
                 })
             }
             InterpKind::CubicSpline => {
-                let coeffs = self.spline_coeffs.as_ref().unwrap();
+                let coeffs = self.spline_coeffs.as_ref().expect("cubic spline initialized with coeffs");
                 let dx = x_new - self.x[i];
                 let [a, b, c, d] = coeffs[i];
                 Ok(a + dx * (b + dx * (c + dx * d)))
@@ -920,7 +920,7 @@ impl BSpline {
         for _ in 0..nu {
             let n = c.len();
             t.insert(0, t[0]);
-            t.push(*t.last().unwrap());
+            t.push(t[t.len() - 1]);
             k += 1;
             let mut new_c = vec![0.0; n + 1];
             for i in 0..n {
@@ -928,7 +928,7 @@ impl BSpline {
                 new_c[i + 1] = new_c[i] + c[i] * denom / k as f64;
             }
             while new_c.len() + k + 1 < t.len() {
-                new_c.push(*new_c.last().unwrap());
+                new_c.push(new_c[new_c.len() - 1]);
             }
             c = new_c;
         }

@@ -686,7 +686,7 @@ pub fn bernoulli(n: u32) -> f64 {
             // Use the relationship with zeta function:
             // B_{2n} = (-1)^{n+1} * 2 * (2n)! / (2π)^{2n} * ζ(2n)
             let nf = n as f64;
-            let sign = if (n / 2) % 2 == 0 { -1.0 } else { 1.0 };
+            let sign = if (n / 2) & 1 == 0 { -1.0 } else { 1.0 };
             let zeta_val = crate::gamma::zeta(nf);
             sign * 2.0 * gamma_fn(nf + 1.0) / (2.0 * PI).powf(nf) * zeta_val
         }
@@ -719,8 +719,8 @@ pub fn euler(n: u32) -> f64 {
             e[0] = 1.0;
             for m in 1..=(n / 2) as usize {
                 let mut sum = 0.0;
-                for k in 0..m {
-                    sum += comb_f64(2 * m as u64, 2 * k as u64) * e[k];
+                for (k, &ek) in e.iter().enumerate().take(m) {
+                    sum += comb_f64(2 * m as u64, 2 * k as u64) * ek;
                 }
                 e[m] = -sum;
             }

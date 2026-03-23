@@ -1096,9 +1096,9 @@ impl MultivariateNormal {
                 )));
             }
         }
-        for i in 0..cov.len() {
-            for j in 0..cov.len() {
-                if (cov[i][j] - cov[j][i]).abs() > 1e-12 {
+        for (i, row_i) in cov.iter().enumerate() {
+            for (j, row_j) in cov.iter().enumerate() {
+                if (row_i[j] - row_j[i]).abs() > 1e-12 {
                     return Err(StatsError::InvalidArgument(
                         "covariance matrix must be symmetric".to_string(),
                     ));
@@ -1147,9 +1147,9 @@ impl MultivariateNormal {
         for _ in 0..n {
             let z = sample_standard_normals(self.mean.len(), rng);
             let mut sample = self.mean.clone();
-            for i in 0..self.chol.len() {
+            for (i, row) in self.chol.iter().enumerate() {
                 for (j, &zj) in z.iter().take(i + 1).enumerate() {
-                    sample[i] += self.chol[i][j] * zj;
+                    sample[i] += row[j] * zj;
                 }
             }
             samples.push(sample);
@@ -2032,10 +2032,10 @@ impl ContinuousDistribution for InverseGamma {
     }
 }
 
-/// Log-normal distribution (parameterized by mu, sigma of underlying normal).
-///
-/// Note: The Lognormal struct above uses s/scale. This is an alias with
-/// the same interface. Kept for disambiguation.
+// Log-normal distribution (parameterized by mu, sigma of underlying normal).
+//
+// Note: The Lognormal struct above uses s/scale. This is an alias with
+// the same interface. Kept for disambiguation.
 
 /// Inverse Gaussian (Wald) distribution.
 ///
@@ -2232,7 +2232,7 @@ impl PowerLaw {
 
 impl ContinuousDistribution for PowerLaw {
     fn pdf(&self, x: f64) -> f64 {
-        if x < 0.0 || x > 1.0 {
+        if !(0.0..=1.0).contains(&x) {
             0.0
         } else {
             self.a * x.powf(self.a - 1.0)
@@ -5283,6 +5283,276 @@ pub fn power_divergence(f_obs: &[f64], f_exp: Option<&[f64]>, lambda_: f64) -> (
     (stat, pvalue)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Multiple Comparison Corrections
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of a multiple comparison correction.
+#[derive(Debug, Clone)]
+pub struct MultitestResult {
+    /// Corrected p-values.
+    pub pvalues_corrected: Vec<f64>,
+    /// Whether each test is rejected at the given alpha.
+    pub reject: Vec<bool>,
+}
+
+/// Bonferroni correction: multiply each p-value by the number of tests.
+///
+/// Matches `scipy.stats.false_discovery_control` and `statsmodels.multipletests(method='bonferroni')`.
+pub fn multipletests_bonferroni(pvalues: &[f64], alpha: f64) -> MultitestResult {
+    let n = pvalues.len();
+    let corrected: Vec<f64> = pvalues.iter().map(|&p| (p * n as f64).min(1.0)).collect();
+    let reject: Vec<bool> = corrected.iter().map(|&p| p < alpha).collect();
+    MultitestResult {
+        pvalues_corrected: corrected,
+        reject,
+    }
+}
+
+/// Šidák correction: 1 - (1 - p)^n.
+///
+/// Less conservative than Bonferroni for independent tests.
+pub fn multipletests_sidak(pvalues: &[f64], alpha: f64) -> MultitestResult {
+    let n = pvalues.len();
+    let corrected: Vec<f64> = pvalues
+        .iter()
+        .map(|&p| (1.0 - (1.0 - p).powi(n as i32)).min(1.0))
+        .collect();
+    let reject: Vec<bool> = corrected.iter().map(|&p| p < alpha).collect();
+    MultitestResult {
+        pvalues_corrected: corrected,
+        reject,
+    }
+}
+
+/// Holm-Bonferroni step-down correction.
+///
+/// Matches `statsmodels.multipletests(method='holm')`.
+pub fn multipletests_holm(pvalues: &[f64], alpha: f64) -> MultitestResult {
+    let n = pvalues.len();
+    if n == 0 {
+        return MultitestResult {
+            pvalues_corrected: vec![],
+            reject: vec![],
+        };
+    }
+
+    // Sort p-values, keeping track of original indices
+    let mut indexed: Vec<(usize, f64)> = pvalues.iter().copied().enumerate().collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut corrected = vec![0.0; n];
+    let mut running_max = 0.0f64;
+
+    for (rank, &(orig_idx, p)) in indexed.iter().enumerate() {
+        let factor = (n - rank) as f64;
+        let adjusted = (p * factor).min(1.0);
+        // Enforce monotonicity: corrected p-values must be non-decreasing
+        running_max = running_max.max(adjusted);
+        corrected[orig_idx] = running_max;
+    }
+
+    let reject: Vec<bool> = corrected.iter().map(|&p| p < alpha).collect();
+    MultitestResult {
+        pvalues_corrected: corrected,
+        reject,
+    }
+}
+
+/// Benjamini-Hochberg (FDR) correction.
+///
+/// Controls false discovery rate rather than family-wise error rate.
+/// Matches `statsmodels.multipletests(method='fdr_bh')`.
+pub fn multipletests_fdr_bh(pvalues: &[f64], alpha: f64) -> MultitestResult {
+    let n = pvalues.len();
+    if n == 0 {
+        return MultitestResult {
+            pvalues_corrected: vec![],
+            reject: vec![],
+        };
+    }
+
+    let mut indexed: Vec<(usize, f64)> = pvalues.iter().copied().enumerate().collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut corrected = vec![0.0; n];
+    let mut running_min = 1.0f64;
+
+    // Process from largest to smallest p-value
+    for (rank, &(orig_idx, p)) in indexed.iter().enumerate().rev() {
+        let adjusted = (p * n as f64 / (rank + 1) as f64).min(1.0);
+        running_min = running_min.min(adjusted);
+        corrected[orig_idx] = running_min;
+    }
+
+    let reject: Vec<bool> = corrected.iter().map(|&p| p < alpha).collect();
+    MultitestResult {
+        pvalues_corrected: corrected,
+        reject,
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Effect Sizes
+// ══════════════════════════════════════════════════════════════════════
+
+/// Cohen's d: standardized mean difference between two groups.
+///
+/// Uses pooled standard deviation.
+pub fn cohens_d(group1: &[f64], group2: &[f64]) -> f64 {
+    let n1 = group1.len() as f64;
+    let n2 = group2.len() as f64;
+    if n1 < 2.0 || n2 < 2.0 {
+        return f64::NAN;
+    }
+
+    let mean1: f64 = group1.iter().sum::<f64>() / n1;
+    let mean2: f64 = group2.iter().sum::<f64>() / n2;
+
+    let var1: f64 = group1.iter().map(|&x| (x - mean1).powi(2)).sum::<f64>() / (n1 - 1.0);
+    let var2: f64 = group2.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0);
+
+    let pooled_std = (((n1 - 1.0) * var1 + (n2 - 1.0) * var2) / (n1 + n2 - 2.0)).sqrt();
+
+    if pooled_std == 0.0 {
+        return if (mean1 - mean2).abs() < 1e-15 {
+            0.0
+        } else {
+            f64::INFINITY * (mean1 - mean2).signum()
+        };
+    }
+
+    (mean1 - mean2) / pooled_std
+}
+
+/// Cramér's V: association measure for contingency tables.
+///
+/// V = sqrt(χ²/(n * min(r-1, c-1))), where χ² is the chi-squared statistic.
+pub fn cramers_v(observed: &[Vec<f64>]) -> Result<f64, StatsError> {
+    let result = chi2_contingency(observed)?;
+    let n: f64 = observed.iter().flat_map(|row| row.iter()).sum();
+    let r = observed.len();
+    let c = observed[0].len();
+    let min_dim = (r - 1).min(c - 1);
+    if min_dim == 0 || n == 0.0 {
+        return Ok(0.0);
+    }
+    Ok((result.statistic / (n * min_dim as f64)).sqrt())
+}
+
+/// Point-biserial correlation: correlation between binary and continuous variable.
+///
+/// Equivalent to Pearson r when one variable is dichotomous.
+pub fn pointbiserialr(binary: &[f64], continuous: &[f64]) -> Result<CorrelationResult, StatsError> {
+    if binary.len() != continuous.len() || binary.len() < 3 {
+        return Err(StatsError::InvalidArgument(
+            "inputs must have same length >= 3".to_string(),
+        ));
+    }
+    // Point-biserial is just Pearson correlation
+    pearsonr(binary, continuous)
+}
+
+/// Rank-biserial correlation for Mann-Whitney U test.
+///
+/// r = 1 - 2U/(n1*n2).
+pub fn rank_biserial(u_stat: f64, n1: usize, n2: usize) -> f64 {
+    let n = n1 as f64 * n2 as f64;
+    if n == 0.0 {
+        return f64::NAN;
+    }
+    1.0 - 2.0 * u_stat / n
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Additional Statistical Functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Compute the sign test for a paired sample.
+///
+/// Tests whether the median of differences is zero.
+pub fn sign_test(x: &[f64], y: &[f64]) -> Result<TtestResult, StatsError> {
+    if x.len() != y.len() {
+        return Err(StatsError::InvalidArgument(
+            "x and y must have the same length".to_string(),
+        ));
+    }
+
+    let diffs: Vec<f64> = x.iter().zip(y.iter()).map(|(&a, &b)| a - b).collect();
+    let n_pos = diffs.iter().filter(|&&d| d > 0.0).count();
+    let n_neg = diffs.iter().filter(|&&d| d < 0.0).count();
+    let n = n_pos + n_neg; // exclude ties
+
+    if n == 0 {
+        return Ok(TtestResult {
+            statistic: 0.0,
+            pvalue: 1.0,
+            df: f64::NAN,
+        });
+    }
+
+    // Under H0, n_pos ~ Binomial(n, 0.5)
+    let k = n_pos.min(n_neg) as f64;
+    let nf = n as f64;
+
+    // Normal approximation for large n
+    let z = (k - nf / 2.0 + 0.5) / (nf / 4.0).sqrt(); // continuity correction
+    let normal = Normal::standard();
+    let pvalue = 2.0 * normal.cdf(z.min(0.0));
+
+    Ok(TtestResult {
+        statistic: k,
+        pvalue: pvalue.clamp(0.0, 1.0),
+        df: nf,
+    })
+}
+
+/// Compute bootstrap confidence interval for a statistic.
+///
+/// Returns (lower, upper) bounds of the confidence interval.
+pub fn bootstrap_ci<F>(
+    data: &[f64],
+    stat_fn: F,
+    n_bootstrap: usize,
+    confidence: f64,
+    seed: u64,
+) -> (f64, f64)
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let n = data.len();
+    if n == 0 || n_bootstrap == 0 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let mut rng_state = seed;
+    let next_rng = |state: &mut u64| -> usize {
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        ((*state >> 33) as usize) % n
+    };
+
+    let mut boot_stats = Vec::with_capacity(n_bootstrap);
+    let mut sample = vec![0.0; n];
+
+    for _ in 0..n_bootstrap {
+        for s in sample.iter_mut() {
+            *s = data[next_rng(&mut rng_state)];
+        }
+        boot_stats.push(stat_fn(&sample));
+    }
+
+    boot_stats.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let alpha = 1.0 - confidence;
+    let lo_idx = ((alpha / 2.0) * n_bootstrap as f64).floor() as usize;
+    let hi_idx = ((1.0 - alpha / 2.0) * n_bootstrap as f64).ceil() as usize;
+
+    let lo = boot_stats[lo_idx.min(n_bootstrap - 1)];
+    let hi = boot_stats[hi_idx.min(n_bootstrap - 1)];
+
+    (lo, hi)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7907,5 +8177,70 @@ mod tests {
         let r = Rice::new(1.0);
         assert!(r.pdf(1.0) > 0.0);
         assert!(r.pdf(-1.0) == 0.0);
+    }
+
+    #[test]
+    fn bonferroni_correction() {
+        let pvals = vec![0.01, 0.04, 0.03, 0.005];
+        let result = multipletests_bonferroni(&pvals, 0.05);
+        assert_eq!(result.pvalues_corrected.len(), 4);
+        assert!((result.pvalues_corrected[0] - 0.04).abs() < 1e-10); // 0.01 * 4
+        assert!((result.pvalues_corrected[3] - 0.02).abs() < 1e-10); // 0.005 * 4
+        assert!(result.reject[3]); // 0.02 < 0.05
+        assert!(!result.reject[1]); // 0.16 > 0.05
+    }
+
+    #[test]
+    fn holm_correction() {
+        let pvals = vec![0.01, 0.04, 0.03, 0.005];
+        let result = multipletests_holm(&pvals, 0.05);
+        // Sorted: 0.005, 0.01, 0.03, 0.04
+        // Holm: 0.005*4=0.02, 0.01*3=0.03, 0.03*2=0.06, 0.04*1=0.04
+        // Monotone enforced: 0.02, 0.03, 0.06, 0.06
+        assert!(result.reject[3]); // 0.005 → 0.02 < 0.05
+        assert!(result.reject[0]); // 0.01 → 0.03 < 0.05
+    }
+
+    #[test]
+    fn fdr_bh_correction() {
+        let pvals = vec![0.01, 0.04, 0.03, 0.005];
+        let result = multipletests_fdr_bh(&pvals, 0.05);
+        // All corrected p-values should be <= 1.0
+        assert!(result.pvalues_corrected.iter().all(|&p| p <= 1.0));
+        // The smallest p-value should still be the most significant
+        assert!(result.pvalues_corrected[3] <= result.pvalues_corrected[0]);
+    }
+
+    #[test]
+    fn cohens_d_different_means() {
+        let g1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let g2 = vec![4.0, 5.0, 6.0, 7.0, 8.0];
+        let d = cohens_d(&g1, &g2);
+        assert!(d < 0.0); // g1 mean < g2 mean
+        assert!(d.abs() > 1.0); // large effect
+    }
+
+    #[test]
+    fn cohens_d_identical_groups() {
+        let g = vec![1.0, 2.0, 3.0, 4.0];
+        let d = cohens_d(&g, &g);
+        assert!((d - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn sign_test_no_difference() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let y = vec![1.1, 1.9, 3.1, 3.9, 5.1, 5.9, 7.1, 7.9];
+        let result = sign_test(&x, &y).unwrap();
+        assert!(result.pvalue > 0.05);
+    }
+
+    #[test]
+    fn bootstrap_ci_contains_mean() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mean_fn = |d: &[f64]| d.iter().sum::<f64>() / d.len() as f64;
+        let (lo, hi) = bootstrap_ci(&data, mean_fn, 1000, 0.95, 42);
+        let true_mean = 3.0;
+        assert!(lo < true_mean && hi > true_mean, "CI [{lo}, {hi}] should contain {true_mean}");
     }
 }
