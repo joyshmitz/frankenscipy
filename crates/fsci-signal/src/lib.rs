@@ -3766,12 +3766,28 @@ pub fn flattop(n: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Generate a cosine window.
+///
+/// Matches `scipy.signal.windows.cosine(M)`.
+pub fn cosine(n: usize) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+    let nf = n as f64;
+    (0..n)
+        .map(|i| (std::f64::consts::PI * (i as f64 + 0.5) / nf).sin())
+        .collect()
+}
+
 /// Dispatch a window function by name string.
 ///
 /// Matches `scipy.signal.get_window(window, Nx)`.
 ///
 /// # Supported windows
-/// `"hann"`, `"hamming"`, `"blackman"`, `"bartlett"`, `"flattop"`,
+/// `"hann"`, `"hamming"`, `"blackman"`, `"bartlett"`, `"flattop"`, `"cosine"`,
 /// `"rectangular"` / `"boxcar"`, `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`).
 pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
     let lower = window.trim().to_lowercase();
@@ -3788,6 +3804,7 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
         "blackman" => Ok(blackman(nx)),
         "bartlett" => Ok(bartlett(nx)),
         "flattop" => Ok(flattop(nx)),
+        "cosine" => Ok(cosine(nx)),
         "rectangular" | "boxcar" | "rect" => Ok(vec![1.0; nx]),
         _ => Err(SignalError::InvalidArgument(format!(
             "unknown window type: {window}"
@@ -4317,6 +4334,123 @@ pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, Sign
     }
 
     Ok(output)
+}
+
+/// Upsample, FIR filter, and downsample a 1-D signal.
+///
+/// Matches `scipy.signal.upfirdn(h, x, up, down)` for the default 1-D case.
+pub fn upfirdn(h: &[f64], x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, SignalError> {
+    if h.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "h must be 1-D with non-zero length".to_string(),
+        ));
+    }
+    if up == 0 || down == 0 {
+        return Err(SignalError::InvalidArgument(
+            "up and down must be >= 1".to_string(),
+        ));
+    }
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let upsampled_len = (x.len() - 1) * up + 1;
+    let full_len = upsampled_len + h.len() - 1;
+    let mut output = vec![0.0; full_len];
+
+    for (i, &sample) in x.iter().enumerate() {
+        let base = i * up;
+        for (tap_idx, &tap) in h.iter().enumerate() {
+            output[base + tap_idx] += sample * tap;
+        }
+    }
+
+    Ok(output.into_iter().step_by(down).collect())
+}
+
+/// Convert a linear-phase FIR filter to minimum phase.
+///
+/// Matches `scipy.signal.minimum_phase(h)` for the default homomorphic method
+/// with `half=True`.
+pub fn minimum_phase(h: &[f64]) -> Result<Vec<f64>, SignalError> {
+    if h.len() <= 2 {
+        return Err(SignalError::InvalidArgument(
+            "h must be 1-D and at least 2 samples long".to_string(),
+        ));
+    }
+
+    let suggested_fft = ((2 * (h.len() - 1)) as f64 / 0.01).ceil() as usize;
+    let n_fft = suggested_fft
+        .max(h.len())
+        .checked_next_power_of_two()
+        .unwrap_or(suggested_fft.max(h.len()));
+    let opts = fsci_fft::FftOptions::default();
+
+    let mut padded = vec![(0.0, 0.0); n_fft];
+    for (dst, &coeff) in padded.iter_mut().zip(h.iter()) {
+        dst.0 = coeff;
+    }
+
+    let spectrum = fsci_fft::fft(&padded, &opts)
+        .map_err(|err| SignalError::InvalidArgument(format!("minimum_phase FFT failed: {err}")))?;
+    let magnitudes: Vec<f64> = spectrum
+        .iter()
+        .map(|&(re, im)| (re * re + im * im).sqrt())
+        .collect();
+    let min_positive = magnitudes
+        .iter()
+        .copied()
+        .filter(|&value| value > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    let epsilon = if min_positive.is_finite() {
+        1e-7 * min_positive
+    } else {
+        1e-7
+    };
+
+    let log_spectrum: Vec<(f64, f64)> = magnitudes
+        .into_iter()
+        .map(|value| ((value + epsilon).ln() * 0.5, 0.0))
+        .collect();
+    let cepstrum = fsci_fft::ifft(&log_spectrum, &opts).map_err(|err| {
+        SignalError::InvalidArgument(format!("minimum_phase inverse FFT failed: {err}"))
+    })?;
+
+    let mut homomorphic_window = vec![0.0; n_fft];
+    homomorphic_window[0] = 1.0;
+    let stop = n_fft / 2;
+    for value in homomorphic_window.iter_mut().take(stop).skip(1) {
+        *value = 2.0;
+    }
+    if n_fft % 2 == 1 {
+        homomorphic_window[stop] = 1.0;
+    }
+
+    let weighted_cepstrum: Vec<(f64, f64)> = cepstrum
+        .iter()
+        .zip(homomorphic_window.iter())
+        .map(|(&(re, _), &weight)| (re * weight, 0.0))
+        .collect();
+    let minimum_log_spectrum = fsci_fft::fft(&weighted_cepstrum, &opts).map_err(|err| {
+        SignalError::InvalidArgument(format!("minimum_phase cepstrum FFT failed: {err}"))
+    })?;
+    let minimum_spectrum: Vec<(f64, f64)> = minimum_log_spectrum
+        .into_iter()
+        .map(|(re, im)| {
+            let exp_re = re.exp();
+            (exp_re * im.cos(), exp_re * im.sin())
+        })
+        .collect();
+    let minimum_impulse = fsci_fft::ifft(&minimum_spectrum, &opts).map_err(|err| {
+        SignalError::InvalidArgument(format!("minimum_phase reconstruction failed: {err}"))
+    })?;
+
+    let n_out = h.len().div_ceil(2);
+    Ok(minimum_impulse
+        .into_iter()
+        .take(n_out)
+        .map(|(re, _)| re)
+        .collect())
 }
 
 /// Downsample a signal after applying an anti-aliasing filter.
@@ -6157,6 +6291,21 @@ mod tests {
     }
 
     #[test]
+    fn get_window_dispatches_cosine() {
+        let w = get_window("cosine", 5).unwrap();
+        let expected = [
+            0.3090169943749474,
+            0.8090169943749475,
+            1.0,
+            0.8090169943749475,
+            0.3090169943749474,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn get_window_unknown_rejected() {
         assert!(get_window("foobar", 10).is_err());
     }
@@ -6806,6 +6955,70 @@ mod tests {
         let w = bohman_window(64);
         assert!(w[0].abs() < 1e-12, "bohman start should be 0");
         assert!(w[63].abs() < 1e-12, "bohman end should be 0");
+    }
+
+    #[test]
+    fn cosine_window_matches_scipy_reference() {
+        let w = cosine(5);
+        let expected = [
+            0.3090169943749474,
+            0.8090169943749475,
+            1.0,
+            0.8090169943749475,
+            0.3090169943749474,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn upfirdn_fir_only_matches_scipy_example() {
+        let y = upfirdn(&[1.0, 1.0, 1.0], &[1.0, 1.0, 1.0], 1, 1).expect("upfirdn");
+        assert_eq!(y, vec![1.0, 2.0, 3.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn upfirdn_upsampling_matches_scipy_example() {
+        let y = upfirdn(&[1.0], &[1.0, 2.0, 3.0], 3, 1).expect("upfirdn");
+        assert_eq!(y, vec![1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0]);
+    }
+
+    #[test]
+    fn upfirdn_interpolate_and_decimate_matches_scipy_example() {
+        let y = upfirdn(&[0.5, 1.0, 0.5], &[0.0, 1.0, 2.0, 3.0, 4.0], 2, 3).expect("upfirdn");
+        let expected = [0.0, 1.0, 2.5, 4.0];
+        for (actual, want) in y.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn upfirdn_empty_input_returns_empty() {
+        let y = upfirdn(&[1.0, 2.0], &[], 2, 1).expect("empty input");
+        assert!(y.is_empty());
+    }
+
+    #[test]
+    fn upfirdn_rejects_invalid_arguments() {
+        assert!(upfirdn(&[], &[1.0, 2.0], 1, 1).is_err());
+        assert!(upfirdn(&[1.0], &[1.0, 2.0], 0, 1).is_err());
+        assert!(upfirdn(&[1.0], &[1.0, 2.0], 1, 0).is_err());
+    }
+
+    #[test]
+    fn minimum_phase_matches_scipy_reference() {
+        let h = minimum_phase(&[1.0, 2.0, 3.0, 2.0, 1.0]).expect("minimum_phase");
+        let expected = [1.00107477, 0.99999638, 0.99892826];
+        for (actual, want) in h.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-6, "{actual} vs {want}");
+        }
+    }
+
+    #[test]
+    fn minimum_phase_rejects_short_filters() {
+        assert!(minimum_phase(&[]).is_err());
+        assert!(minimum_phase(&[1.0, 2.0]).is_err());
     }
 
     // ── Lomb-Scargle tests ───────────────────────────────────────────
