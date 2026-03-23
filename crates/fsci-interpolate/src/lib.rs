@@ -754,6 +754,11 @@ pub struct BSpline {
 
 impl BSpline {
     pub fn new(t: Vec<f64>, c: Vec<f64>, k: usize) -> Result<Self, InterpError> {
+        if c.len() <= k {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("number of coefficients ({}) must be > degree ({})", c.len(), k),
+            });
+        }
         let expected_knots = c.len() + k + 1;
         if t.len() != expected_knots {
             return Err(InterpError::InvalidArgument {

@@ -4218,36 +4218,31 @@ pub fn resample(x: &[f64], num: usize) -> Result<Vec<f64>, SignalError> {
     }
 
     let opts = fsci_fft::FftOptions::default();
+    let m = n.min(num);
+    let m2 = m / 2 + 1;
 
     // Forward FFT.
-    let mut spectrum = fsci_fft::rfft(x, &opts)
+    let spectrum = fsci_fft::rfft(x, &opts)
         .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
-
-    // If input length is even, the Nyquist component must be halved
-    // because it will be mirrored (doubled) if upsampled, or we want
-    // to match SciPy's Fourier-method convention.
-    if n.is_multiple_of(2) {
-        let nyq = n / 2;
-        if nyq < spectrum.len() {
-            spectrum[nyq].0 *= 0.5;
-            spectrum[nyq].1 *= 0.5;
-        }
-    }
 
     // Compute target spectrum length for the new sample count.
     let target_nfreqs = num / 2 + 1;
 
-    // Zero-pad or truncate the spectrum.
+    // Zero-pad or truncate the spectrum, keeping only the bins that are
+    // representable in both the input and output grids.
     let mut new_spectrum = vec![(0.0, 0.0); target_nfreqs];
-    let copy_len = spectrum.len().min(target_nfreqs);
-    new_spectrum[..copy_len].copy_from_slice(&spectrum[..copy_len]);
+    new_spectrum[..m2].copy_from_slice(&spectrum[..m2]);
 
-    // If target length is even and we are downsampling, SciPy's resample
-    // zeroes out the Nyquist bin to avoid aliasing artifacts.
-    if num.is_multiple_of(2) && num < n {
-        let target_nyq = num / 2;
-        if target_nyq < new_spectrum.len() {
-            new_spectrum[target_nyq] = (0.0, 0.0);
+    // Match SciPy's treatment of the unpaired Nyquist bin when the smaller
+    // of the input/output lengths is even and the lengths differ.
+    if m.is_multiple_of(2) {
+        let nyquist = m / 2;
+        if num < n {
+            new_spectrum[nyquist].0 *= 2.0;
+            new_spectrum[nyquist].1 *= 2.0;
+        } else {
+            new_spectrum[nyquist].0 *= 0.5;
+            new_spectrum[nyquist].1 *= 0.5;
         }
     }
 
@@ -6395,6 +6390,43 @@ mod tests {
             assert!(
                 (a - b).abs() < 1e-10,
                 "same-length resample mismatch at {i}: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn resample_upsample_even_nyquist_matches_scipy() {
+        let x = vec![1.0, -1.0, 1.0, -1.0];
+        let result = resample(&x, 8).unwrap();
+        let expected = [1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0];
+
+        assert_eq!(result.len(), expected.len());
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "upsampled Nyquist mismatch at {i}: got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn resample_downsample_even_nyquist_matches_scipy() {
+        let x = vec![0.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0];
+        let result = resample(&x, 6).unwrap();
+        let expected = [
+            0.0,
+            0.8660254037844386,
+            -0.8660254037844386,
+            0.0,
+            0.8660254037844386,
+            -0.8660254037844386,
+        ];
+
+        assert_eq!(result.len(), expected.len());
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "downsampled Nyquist mismatch at {i}: got {got}, expected {want}"
             );
         }
     }

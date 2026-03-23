@@ -590,14 +590,15 @@ fn build_kdtree(
 
     let split_dim = depth % dim;
 
-    // Sort by the split dimension
-    indices.sort_by(|&a, &b| {
+    let median = indices.len() / 2;
+
+    // Partition by the split dimension to find the median in O(N) time
+    indices.select_nth_unstable_by(median, |&a, &b| {
         data[a][split_dim]
             .partial_cmp(&data[b][split_dim])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let median = indices.len() / 2;
     let node_idx = nodes.len();
     let point_idx = indices[median];
 
@@ -666,12 +667,16 @@ fn knn_search(
     let dist_sq = sqeuclidean(query, &node.point);
 
     // Insert if we have room or this is closer than the worst
-    if results.len() < k {
-        results.push((node.index, dist_sq));
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    } else if dist_sq < results[k - 1].1 {
-        results[k - 1] = (node.index, dist_sq);
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    if results.len() < k || dist_sq < results.last().unwrap().1 {
+        let pos = results
+            .binary_search_by(|probe| probe.1.partial_cmp(&dist_sq).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or_else(|e| e);
+        if results.len() < k {
+            results.insert(pos, (node.index, dist_sq));
+        } else if pos < k {
+            results.pop();
+            results.insert(pos, (node.index, dist_sq));
+        }
     }
 
     let diff = query[node.split_dim] - node.point[node.split_dim];
@@ -1012,6 +1017,137 @@ fn barycentric_2d(a: (f64, f64), b: (f64, f64), c: (f64, f64), p: (f64, f64)) ->
     let l2 = (d11 * d20 - d01 * d21) / denom;
     let l3 = (d00 * d21 - d01 * d20) / denom;
     (1.0 - l2 - l3, l2, l3)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Voronoi Diagram (2D)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of a 2D Voronoi diagram construction.
+///
+/// Matches the core SciPy surface for `scipy.spatial.Voronoi(points)`:
+/// input points, Voronoi vertices, ridge connectivity, and point regions.
+#[derive(Debug, Clone)]
+pub struct Voronoi {
+    /// Input points in the original order.
+    pub points: Vec<(f64, f64)>,
+    /// Voronoi vertices (circumcenters of Delaunay simplices).
+    pub vertices: Vec<(f64, f64)>,
+    /// Input-point pairs whose dual Delaunay edge defines each Voronoi ridge.
+    pub ridge_points: Vec<(usize, usize)>,
+    /// Voronoi vertex pairs for each ridge. `-1` denotes an unbounded ray.
+    pub ridge_vertices: Vec<(isize, isize)>,
+    /// Region vertex indices for each Voronoi region. `-1` denotes infinity.
+    pub regions: Vec<Vec<isize>>,
+    /// Region index for each input point.
+    pub point_region: Vec<usize>,
+}
+
+impl Voronoi {
+    /// Compute a 2D Voronoi diagram via the dual of the Delaunay triangulation.
+    pub fn new(points: &[(f64, f64)]) -> Result<Self, SpatialError> {
+        let delaunay = Delaunay::new(points)?;
+        let n = points.len();
+
+        let mut vertices = Vec::with_capacity(delaunay.simplices.len());
+        for &(a, b, c) in &delaunay.simplices {
+            vertices.push(circumcenter_2d(points[a], points[b], points[c])?);
+        }
+
+        let mut edge_to_triangles: std::collections::HashMap<(usize, usize), Vec<usize>> =
+            std::collections::HashMap::new();
+        let mut point_to_triangles = vec![Vec::new(); n];
+        for (tri_idx, &(a, b, c)) in delaunay.simplices.iter().enumerate() {
+            point_to_triangles[a].push(tri_idx);
+            point_to_triangles[b].push(tri_idx);
+            point_to_triangles[c].push(tri_idx);
+            for (u, v) in [(a, b), (b, c), (c, a)] {
+                let edge = canonical_edge(u, v);
+                edge_to_triangles.entry(edge).or_default().push(tri_idx);
+            }
+        }
+
+        let mut ridge_points = Vec::with_capacity(edge_to_triangles.len());
+        let mut ridge_vertices = Vec::with_capacity(edge_to_triangles.len());
+        let mut point_is_unbounded = vec![false; n];
+
+        for (&(u, v), triangles) in &edge_to_triangles {
+            ridge_points.push((u, v));
+            match triangles.as_slice() {
+                [tri_idx] => {
+                    point_is_unbounded[u] = true;
+                    point_is_unbounded[v] = true;
+                    ridge_vertices.push((-1, *tri_idx as isize));
+                }
+                [left, right] => {
+                    ridge_vertices.push((*left as isize, *right as isize));
+                }
+                _ => {
+                    return Err(SpatialError::InvalidArgument(
+                        "voronoi construction encountered a non-manifold Delaunay edge"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+
+        let mut regions = vec![Vec::new()];
+        let mut point_region = vec![0usize; n];
+        for point_idx in 0..n {
+            let point = points[point_idx];
+            let mut incident = point_to_triangles[point_idx].clone();
+            incident.sort_by(|&lhs, &rhs| {
+                let a = vertices[lhs];
+                let b = vertices[rhs];
+                let angle_a = (a.1 - point.1).atan2(a.0 - point.0);
+                let angle_b = (b.1 - point.1).atan2(b.0 - point.0);
+                angle_a
+                    .partial_cmp(&angle_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            let mut region: Vec<isize> = incident.into_iter().map(|idx| idx as isize).collect();
+            if point_is_unbounded[point_idx] {
+                region.insert(0, -1);
+            }
+
+            point_region[point_idx] = regions.len();
+            regions.push(region);
+        }
+
+        Ok(Self {
+            points: points.to_vec(),
+            vertices,
+            ridge_points,
+            ridge_vertices,
+            regions,
+            point_region,
+        })
+    }
+}
+
+fn canonical_edge(a: usize, b: usize) -> (usize, usize) {
+    if a < b { (a, b) } else { (b, a) }
+}
+
+fn circumcenter_2d(
+    a: (f64, f64),
+    b: (f64, f64),
+    c: (f64, f64),
+) -> Result<(f64, f64), SpatialError> {
+    let d = 2.0 * (a.0 * (b.1 - c.1) + b.0 * (c.1 - a.1) + c.0 * (a.1 - b.1));
+    if d.abs() < 1e-30 {
+        return Err(SpatialError::InvalidArgument(
+            "voronoi diagram requires at least 3 non-collinear points".to_string(),
+        ));
+    }
+
+    let a2 = a.0 * a.0 + a.1 * a.1;
+    let b2 = b.0 * b.0 + b.1 * b.1;
+    let c2 = c.0 * c.0 + c.1 * c.1;
+    let ux = (a2 * (b.1 - c.1) + b2 * (c.1 - a.1) + c2 * (a.1 - b.1)) / d;
+    let uy = (a2 * (c.0 - b.0) + b2 * (a.0 - c.0) + c2 * (b.0 - a.0)) / d;
+    Ok((ux, uy))
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1792,6 +1928,61 @@ mod tests {
         let points = [(0.0, 0.0), (1.0, 0.0)];
         let err = Delaunay::new(&points).expect_err("too few");
         assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    // ── Voronoi tests ───────────────────────────────────────────────
+
+    #[test]
+    fn voronoi_triangle_has_single_vertex_and_infinite_ridges() {
+        let points = [(0.0, 0.0), (2.0, 0.0), (1.0, 2.0)];
+        let vor = Voronoi::new(&points).expect("voronoi");
+
+        assert_eq!(vor.points, points);
+        assert_eq!(vor.vertices.len(), 1);
+        assert!((vor.vertices[0].0 - 1.0).abs() < 1e-10);
+        assert!((vor.vertices[0].1 - 0.75).abs() < 1e-10);
+        assert_eq!(vor.ridge_points.len(), 3);
+        assert_eq!(vor.ridge_vertices.len(), 3);
+        assert!(vor.ridge_vertices.iter().all(|&(a, b)| a == -1 && b == 0));
+        assert_eq!(vor.point_region.len(), 3);
+        for &region_idx in &vor.point_region {
+            let region = &vor.regions[region_idx];
+            assert!(region.contains(&-1));
+            assert!(region.contains(&0));
+        }
+    }
+
+    #[test]
+    fn voronoi_center_point_gets_finite_region() {
+        let points = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (1.0, 1.0)];
+        let vor = Voronoi::new(&points).expect("voronoi");
+
+        assert_eq!(vor.vertices.len(), 4);
+        let center_region = &vor.regions[vor.point_region[4]];
+        assert_eq!(center_region.len(), 4);
+        assert!(center_region.iter().all(|&idx| idx >= 0));
+
+        let expected = [(2.0, 1.0), (1.0, 0.0), (1.0, 2.0), (0.0, 1.0)];
+        for &(ex, ey) in &expected {
+            assert!(
+                vor.vertices
+                    .iter()
+                    .any(|&(vx, vy)| (vx - ex).abs() < 1e-10 && (vy - ey).abs() < 1e-10),
+                "missing Voronoi vertex ({ex}, {ey})"
+            );
+        }
+
+        for &vertex_idx in center_region {
+            let vertex = vor.vertices[vertex_idx as usize];
+            assert!(
+                expected
+                    .iter()
+                    .any(|&(ex, ey)| (vertex.0 - ex).abs() < 1e-10 && (vertex.1 - ey).abs() < 1e-10),
+                "unexpected center-region vertex ({}, {})",
+                vertex.0,
+                vertex.1
+            );
+        }
     }
 
     // ── Procrustes tests ─────────────────────────────────────────────
