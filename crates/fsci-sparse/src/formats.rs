@@ -753,3 +753,159 @@ fn mode_label(mode: RuntimeMode) -> &'static str {
         RuntimeMode::Hardened => "hardened",
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// DIA (Diagonal) Sparse Format
+// ══════════════════════════════════════════════════════════════════════
+
+/// Sparse matrix in DIAgonal format.
+///
+/// Stores diagonals as dense arrays with integer offsets.
+/// Offset 0 = main diagonal, positive = above, negative = below.
+///
+/// Efficient for banded matrices where only a few diagonals are nonzero.
+///
+/// Matches `scipy.sparse.dia_matrix`.
+#[derive(Debug, Clone)]
+pub struct DiaMatrix {
+    shape: Shape2D,
+    /// Data array: each row is one diagonal, stored left-to-right.
+    /// data[k] has length = max(rows, cols).
+    data: Vec<Vec<f64>>,
+    /// Diagonal offsets. offsets[k] is the offset for data[k].
+    offsets: Vec<i64>,
+}
+
+impl DiaMatrix {
+    /// Create a DIA matrix from diagonal data and offsets.
+    ///
+    /// # Arguments
+    /// * `shape` — Matrix shape (rows, cols).
+    /// * `data` — Diagonal data arrays. Each has length max(rows, cols).
+    /// * `offsets` — Diagonal offsets (0=main, +k=superdiagonal, -k=subdiagonal).
+    pub fn new(
+        shape: Shape2D,
+        data: Vec<Vec<f64>>,
+        offsets: Vec<i64>,
+    ) -> SparseResult<Self> {
+        if data.len() != offsets.len() {
+            return Err(SparseError::InvalidArgument {
+                message: "data and offsets must have same length".to_string(),
+            });
+        }
+        Ok(Self {
+            shape,
+            data,
+            offsets,
+        })
+    }
+
+    /// Matrix shape.
+    pub fn shape(&self) -> Shape2D {
+        self.shape
+    }
+
+    /// Number of stored diagonals.
+    pub fn num_diags(&self) -> usize {
+        self.offsets.len()
+    }
+
+    /// Get element at (row, col).
+    pub fn get(&self, row: usize, col: usize) -> f64 {
+        let offset_needed = col as i64 - row as i64;
+        for (k, &off) in self.offsets.iter().enumerate() {
+            if off == offset_needed {
+                // Element is on diagonal k at position depending on the offset
+                let idx = if off >= 0 { row } else { col };
+                if idx < self.data[k].len() {
+                    return self.data[k][idx];
+                }
+            }
+        }
+        0.0
+    }
+
+    /// Matrix-vector product y = A * x.
+    pub fn matvec(&self, x: &[f64]) -> SparseResult<Vec<f64>> {
+        let (rows, cols) = (self.shape.rows, self.shape.cols);
+        if x.len() != cols {
+            return Err(SparseError::IncompatibleShape {
+                message: format!("x length {} != cols {}", x.len(), cols),
+            });
+        }
+
+        let mut y = vec![0.0; rows];
+        for (k, &off) in self.offsets.iter().enumerate() {
+            let diag = &self.data[k];
+            for i in 0..rows {
+                let j = i as i64 + off;
+                if j >= 0 && (j as usize) < cols {
+                    let j = j as usize;
+                    let idx = if off >= 0 { i } else { j };
+                    if idx < diag.len() {
+                        y[i] += diag[idx] * x[j];
+                    }
+                }
+            }
+        }
+        Ok(y)
+    }
+
+    /// Convert to COO format.
+    pub fn to_coo(&self) -> SparseResult<CooMatrix> {
+        let (rows, cols) = (self.shape.rows, self.shape.cols);
+        let mut row_indices = Vec::new();
+        let mut col_indices = Vec::new();
+        let mut data = Vec::new();
+
+        for (k, &off) in self.offsets.iter().enumerate() {
+            let diag = &self.data[k];
+            for i in 0..rows {
+                let j = i as i64 + off;
+                if j >= 0 && (j as usize) < cols {
+                    let j = j as usize;
+                    let idx = if off >= 0 { i } else { j };
+                    if idx < diag.len() {
+                        let val = diag[idx];
+                        if val != 0.0 {
+                            row_indices.push(i);
+                            col_indices.push(j);
+                            data.push(val);
+                        }
+                    }
+                }
+            }
+        }
+
+        CooMatrix::from_triplets(self.shape, data, row_indices, col_indices, true)
+    }
+
+    /// Convert to CSR format.
+    pub fn to_csr(&self) -> SparseResult<CsrMatrix> {
+        self.to_coo()?.to_csr()
+    }
+
+    /// Convert to CSC format.
+    pub fn to_csc(&self) -> SparseResult<CscMatrix> {
+        self.to_coo()?.to_csc()
+    }
+
+    /// Number of nonzero elements.
+    pub fn nnz(&self) -> usize {
+        let (rows, cols) = (self.shape.rows, self.shape.cols);
+        let mut count = 0;
+        for (k, &off) in self.offsets.iter().enumerate() {
+            let diag = &self.data[k];
+            for i in 0..rows {
+                let j = i as i64 + off;
+                if j >= 0 && (j as usize) < cols {
+                    let idx = if off >= 0 { i } else { j as usize };
+                    if idx < diag.len() && diag[idx] != 0.0 {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+}

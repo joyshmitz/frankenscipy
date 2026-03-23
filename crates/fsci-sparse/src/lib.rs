@@ -489,6 +489,75 @@ mod tests {
         assert_vec_close(&spmv_csc(&csc, &vector).expect("csc spmv"), &expected);
     }
 
+    // ── DIA format tests ─────────────────────────────────────────────
+
+    #[test]
+    fn dia_tridiagonal_matvec() {
+        // Tridiagonal: [[2,-1,0], [-1,2,-1], [0,-1,2]]
+        let shape = Shape2D::new(3, 3);
+        let data = vec![
+            vec![-1.0, -1.0, 0.0], // subdiagonal (offset -1)
+            vec![2.0, 2.0, 2.0],   // main diagonal (offset 0)
+            vec![0.0, -1.0, -1.0], // superdiagonal (offset +1)
+        ];
+        let offsets = vec![-1, 0, 1];
+        let dia = DiaMatrix::new(shape, data, offsets).expect("dia");
+        let x = vec![1.0, 2.0, 3.0];
+        let y = dia.matvec(&x).expect("matvec");
+        // [2*1-1*2, -1*1+2*2-1*3, -1*2+2*3] = [0, 0, 4]
+        assert!((y[0] - 0.0).abs() < 1e-12);
+        assert!((y[1] - 0.0).abs() < 1e-12);
+        assert!((y[2] - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dia_to_csr_roundtrip() {
+        let shape = Shape2D::new(3, 3);
+        let data = vec![
+            vec![1.0, 2.0, 3.0], // main diagonal
+        ];
+        let offsets = vec![0];
+        let dia = DiaMatrix::new(shape, data, offsets).expect("dia");
+
+        let csr = dia.to_csr().expect("to_csr");
+        assert_eq!(csr.shape().rows, 3);
+        assert_eq!(csr.shape().cols, 3);
+
+        // Verify diagonal elements
+        let x = vec![1.0, 1.0, 1.0];
+        let y = spmv_csr(&csr, &x).expect("spmv");
+        assert!((y[0] - 1.0).abs() < 1e-12);
+        assert!((y[1] - 2.0).abs() < 1e-12);
+        assert!((y[2] - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dia_get_element() {
+        let shape = Shape2D::new(3, 3);
+        let data = vec![
+            vec![5.0, 6.0, 7.0], // main diagonal
+            vec![0.0, 8.0, 9.0], // superdiagonal
+        ];
+        let offsets = vec![0, 1];
+        let dia = DiaMatrix::new(shape, data, offsets).expect("dia");
+
+        assert!((dia.get(0, 0) - 5.0).abs() < 1e-12);
+        assert!((dia.get(1, 1) - 6.0).abs() < 1e-12);
+        assert!((dia.get(0, 1) - 8.0).abs() < 1e-12);
+        assert!((dia.get(2, 0) - 0.0).abs() < 1e-12); // not on stored diagonal
+    }
+
+    #[test]
+    fn dia_nnz() {
+        let shape = Shape2D::new(3, 3);
+        let data = vec![
+            vec![1.0, 0.0, 3.0], // main diagonal (1 zero)
+        ];
+        let offsets = vec![0];
+        let dia = DiaMatrix::new(shape, data, offsets).expect("dia");
+        assert_eq!(dia.nnz(), 2); // only nonzero entries count
+    }
+
     #[test]
     fn spmv_identity_matrix_returns_input() {
         let identity = eye(5).expect("identity matrix");
