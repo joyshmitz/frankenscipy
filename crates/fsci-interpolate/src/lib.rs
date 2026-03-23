@@ -968,6 +968,134 @@ impl BSpline {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct BarycentricInterpolator {
+    xi: Vec<f64>,
+    yi: Vec<f64>,
+    wi: Vec<f64>,
+}
+
+impl BarycentricInterpolator {
+    pub fn new(xi: &[f64], yi: &[f64]) -> Result<Self, InterpError> {
+        if xi.len() != yi.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: xi.len(),
+                y_len: yi.len(),
+            });
+        }
+        if xi.is_empty() {
+            return Err(InterpError::TooFewPoints {
+                minimum: 1,
+                actual: 0,
+            });
+        }
+        for i in 0..xi.len() {
+            for j in i + 1..xi.len() {
+                if (xi[i] - xi[j]).abs() <= 1e-15 {
+                    return Err(InterpError::InvalidArgument {
+                        detail: format!("duplicate interpolation nodes at indices {i} and {j}"),
+                    });
+                }
+            }
+        }
+
+        let mut wi = vec![1.0; xi.len()];
+        for i in 0..xi.len() {
+            let mut denom = 1.0;
+            for j in 0..xi.len() {
+                if i != j {
+                    denom *= xi[i] - xi[j];
+                }
+            }
+            wi[i] = 1.0 / denom;
+        }
+
+        Ok(Self {
+            xi: xi.to_vec(),
+            yi: yi.to_vec(),
+            wi,
+        })
+    }
+
+    pub fn eval(&self, x: f64) -> f64 {
+        for (&xi, &yi) in self.xi.iter().zip(self.yi.iter()) {
+            if (x - xi).abs() <= 1e-15 {
+                return yi;
+            }
+        }
+
+        let mut numerator = 0.0;
+        let mut denominator = 0.0;
+        for ((&xi, &yi), &wi) in self.xi.iter().zip(self.yi.iter()).zip(self.wi.iter()) {
+            let term = wi / (x - xi);
+            numerator += term * yi;
+            denominator += term;
+        }
+        numerator / denominator
+    }
+
+    pub fn eval_many(&self, xs: &[f64]) -> Vec<f64> {
+        xs.iter().map(|&x| self.eval(x)).collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UnivariateSpline {
+    spline: BSpline,
+    smoothing_factor: f64,
+}
+
+impl UnivariateSpline {
+    pub fn new(x: &[f64], y: &[f64], s: f64) -> Result<Self, InterpError> {
+        if x.len() != y.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: x.len(),
+                y_len: y.len(),
+            });
+        }
+        if x.len() < 4 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 4,
+                actual: x.len(),
+            });
+        }
+        if x.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(InterpError::UnsortedX);
+        }
+
+        let spline = if s <= 0.0 {
+            make_interp_spline(x, y, 3)?
+        } else {
+            make_smoothing_spline_impl(x, y, s, 3)?
+        };
+
+        Ok(Self {
+            spline,
+            smoothing_factor: s.max(0.0),
+        })
+    }
+
+    pub fn eval(&self, x: f64) -> f64 {
+        self.spline.eval(x)
+    }
+
+    pub fn eval_many(&self, xs: &[f64]) -> Vec<f64> {
+        self.spline.eval_many(xs)
+    }
+
+    pub fn derivative(&self, nu: usize) -> Result<BSpline, InterpError> {
+        self.spline.derivative(nu)
+    }
+
+    pub fn integral(&self, a: f64, b: f64) -> Result<f64, InterpError> {
+        self.spline.integrate(a, b)
+    }
+
+    pub fn smoothing_factor(&self) -> f64 {
+        self.smoothing_factor
+    }
+}
+
 pub fn make_interp_spline(x: &[f64], y: &[f64], k: usize) -> Result<BSpline, InterpError> {
     let n = x.len();
     if n != y.len() {
@@ -985,18 +1113,7 @@ pub fn make_interp_spline(x: &[f64], y: &[f64], k: usize) -> Result<BSpline, Int
     if x.windows(2).any(|w| w[1] <= w[0]) {
         return Err(InterpError::UnsortedX);
     }
-    let num_knots = n + k + 1;
-    let num_interior = n - k - 1;
-    let mut t = Vec::with_capacity(num_knots);
-    for _ in 0..=k {
-        t.push(x[0]);
-    }
-    for i in 0..num_interior {
-        t.push(x[i + 1 + (k - 1) / 2]);
-    }
-    for _ in 0..=k {
-        t.push(x[n - 1]);
-    }
+    let t = interpolation_knots(x, k);
     let mut a_mat = vec![vec![0.0; n]; n];
     for i in 0..n {
         let basis = eval_basis_all(&t, x[i], k, n);
@@ -1034,6 +1151,82 @@ pub fn make_lsq_spline(x: &[f64], y: &[f64], t: &[f64], k: usize) -> Result<BSpl
     }
     let c = solve_dense_system(&mut ata, &mut aty)?;
     BSpline::new(t.to_vec(), c, k)
+}
+
+fn interpolation_knots(x: &[f64], k: usize) -> Vec<f64> {
+    let n = x.len();
+    let num_knots = n + k + 1;
+    let num_interior = n - k - 1;
+    let mut t = Vec::with_capacity(num_knots);
+    for _ in 0..=k {
+        t.push(x[0]);
+    }
+    for i in 0..num_interior {
+        t.push(x[i + 1 + (k - 1) / 2]);
+    }
+    for _ in 0..=k {
+        t.push(x[n - 1]);
+    }
+    t
+}
+
+fn make_smoothing_spline_impl(
+    x: &[f64],
+    y: &[f64],
+    s: f64,
+    k: usize,
+) -> Result<BSpline, InterpError> {
+    let t = interpolation_knots(x, k);
+    let n = x.len();
+    let mut ata = vec![vec![0.0; n]; n];
+    let mut aty = vec![0.0; n];
+    for i in 0..n {
+        let basis = eval_basis_all(&t, x[i], k, n);
+        for j in 0..n {
+            aty[j] += basis[j] * y[i];
+            for l in 0..n {
+                ata[j][l] += basis[j] * basis[l];
+            }
+        }
+    }
+
+    let scale = y.iter().map(|value| value.abs()).fold(0.0_f64, f64::max).max(1.0);
+    let lambda = s / ((n as f64) * scale * scale);
+    if lambda > 0.0 {
+        for i in 0..n {
+            ata[i][i] += penalty_diagonal(i, n, lambda);
+            if i + 1 < n {
+                let off = penalty_first_off_diagonal(i, n, lambda);
+                ata[i][i + 1] += off;
+                ata[i + 1][i] += off;
+            }
+            if i + 2 < n {
+                ata[i][i + 2] += lambda;
+                ata[i + 2][i] += lambda;
+            }
+        }
+    }
+
+    let c = solve_dense_system(&mut ata, &mut aty)?;
+    BSpline::new(t, c, k)
+}
+
+fn penalty_diagonal(i: usize, n: usize, lambda: f64) -> f64 {
+    if i == 0 || i + 1 == n {
+        lambda
+    } else if i == 1 || i + 2 == n {
+        5.0 * lambda
+    } else {
+        6.0 * lambda
+    }
+}
+
+fn penalty_first_off_diagonal(i: usize, n: usize, lambda: f64) -> f64 {
+    if i == 0 || i + 2 == n {
+        -2.0 * lambda
+    } else {
+        -4.0 * lambda
+    }
 }
 
 fn eval_basis_all(t: &[f64], x: f64, k: usize, n: usize) -> Vec<f64> {
@@ -1716,6 +1909,64 @@ mod tests {
         assert_eq!(anti.degree(), 2);
         assert_eq!(anti.eval(0.0), 0.0);
         assert_eq!(anti.eval(1.0), 1.0);
+    }
+
+    #[test]
+    fn barycentric_interpolator_matches_quadratic() {
+        let xi = vec![-1.0, 0.0, 2.0];
+        let yi: Vec<f64> = xi.iter().map(|&x| x * x + 2.0 * x + 1.0).collect();
+        let interp = BarycentricInterpolator::new(&xi, &yi).expect("barycentric");
+        assert!((interp.eval(1.5) - 6.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn barycentric_interpolator_is_exact_at_nodes() {
+        let xi = vec![3.0, -1.0, 0.5];
+        let yi = vec![7.0, 2.0, -4.0];
+        let interp = BarycentricInterpolator::new(&xi, &yi).expect("barycentric");
+        for (&x, &y) in xi.iter().zip(yi.iter()) {
+            assert!((interp.eval(x) - y).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn barycentric_interpolator_rejects_duplicate_nodes() {
+        let err =
+            BarycentricInterpolator::new(&[0.0, 1.0, 1.0], &[1.0, 2.0, 3.0]).expect_err("dupes");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn univariate_spline_interpolates_when_s_zero() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![1.0, 2.0, 0.0, 3.0];
+        let spline = UnivariateSpline::new(&x, &y, 0.0).expect("spline");
+        for (&xi, &yi) in x.iter().zip(y.iter()) {
+            assert!((spline.eval(xi) - yi).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn univariate_spline_smoothing_reduces_residual_variation() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 1.3, 3.8, 9.1, 15.7];
+        let interp = UnivariateSpline::new(&x, &y, 0.0).expect("interp spline");
+        let smooth = UnivariateSpline::new(&x, &y, 2.0).expect("smooth spline");
+
+        let interp_knot_residual = x
+            .iter()
+            .zip(y.iter())
+            .map(|(&xi, &yi)| (interp.eval(xi) - yi).abs())
+            .sum::<f64>();
+        let smooth_knot_residual = x
+            .iter()
+            .zip(y.iter())
+            .map(|(&xi, &yi)| (smooth.eval(xi) - yi).abs())
+            .sum::<f64>();
+
+        assert!(interp_knot_residual < 1e-8);
+        assert!(smooth_knot_residual > 1e-3);
+        assert!((smooth.eval(2.5) - 6.25).abs() < 1.5);
     }
 
     // ── RBF Interpolator tests ───────────────────────────────────────

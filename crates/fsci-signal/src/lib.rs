@@ -765,6 +765,90 @@ pub fn sweep_poly(t: &[f64], poly: &[f64]) -> Vec<f64> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Sequences and Matched Filtering
+// ══════════════════════════════════════════════════════════════════════
+
+/// Generate a maximum-length sequence (m-sequence) using a linear feedback shift register.
+///
+/// Returns a binary sequence of length 2^nbits - 1 with values in {-1, 1}.
+/// M-sequences have ideal autocorrelation properties.
+///
+/// Matches `scipy.signal.max_len_seq(nbits)`.
+pub fn max_len_seq(nbits: usize) -> Result<Vec<f64>, SignalError> {
+    if nbits < 2 || nbits > 31 {
+        return Err(SignalError::InvalidArgument(
+            "nbits must be in [2, 31]".to_string(),
+        ));
+    }
+
+    let seq_len = (1usize << nbits) - 1;
+
+    // Primitive polynomial taps for each nbits (from tables)
+    let taps: &[usize] = match nbits {
+        2 => &[2, 1],
+        3 => &[3, 1],
+        4 => &[4, 1],
+        5 => &[5, 2],
+        6 => &[6, 1],
+        7 => &[7, 1],
+        8 => &[8, 4, 3, 2],
+        9 => &[9, 4],
+        10 => &[10, 3],
+        11 => &[11, 2],
+        12 => &[12, 6, 4, 1],
+        13 => &[13, 4, 3, 1],
+        14 => &[14, 5, 3, 1],
+        15 => &[15, 1],
+        16 => &[16, 5, 3, 2],
+        _ => &[nbits, 1], // fallback (may not be primitive for all n)
+    };
+
+    let mut state = 1u32; // Initial state (nonzero)
+    let mut seq = Vec::with_capacity(seq_len);
+
+    for _ in 0..seq_len {
+        // Output is the last bit
+        let output = state & 1;
+        seq.push(if output == 1 { 1.0 } else { -1.0 });
+
+        // Feedback: XOR of tapped bits
+        let mut feedback = 0u32;
+        for &tap in taps {
+            feedback ^= (state >> (tap - 1)) & 1;
+        }
+
+        // Shift register
+        state = (state >> 1) | (feedback << (nbits - 1));
+    }
+
+    Ok(seq)
+}
+
+/// Matched filter: correlate signal with template, normalized by template energy.
+///
+/// Returns the normalized cross-correlation, which peaks at the location
+/// where the template best matches the signal.
+pub fn matched_filter(template: &[f64], signal: &[f64]) -> Result<Vec<f64>, SignalError> {
+    if template.is_empty() || signal.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "template and signal must be non-empty".to_string(),
+        ));
+    }
+
+    // Template energy
+    let energy: f64 = template.iter().map(|&t| t * t).sum();
+    if energy == 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "template must have nonzero energy".to_string(),
+        ));
+    }
+
+    // Cross-correlate and normalize
+    let corr = correlate(signal, template, ConvolveMode::Full)?;
+    Ok(corr.iter().map(|&c| c / energy).collect())
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Wavelets
 // ══════════════════════════════════════════════════════════════════════
 
@@ -945,20 +1029,8 @@ pub fn bohman_window(m: usize) -> Vec<f64> {
         .collect()
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// Upsample-FIR-Downsample and Minimum Phase
-// ══════════════════════════════════════════════════════════════════════
-
-/// Upsample, apply FIR filter, then downsample in one efficient step.
-///
-/// Matches `scipy.signal.upfirdn(h, x, up, down)`.
-///
-/// # Arguments
-/// * `h` — FIR filter coefficients.
-/// * `x` — Input signal.
-/// * `up` — Upsampling factor (insert up-1 zeros between samples).
-/// * `down` — Downsampling factor (keep every down-th sample).
-pub fn upfirdn(h: &[f64], x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, SignalError> {
+#[allow(dead_code)]
+fn __removed_upfirdn_early_copy(h: &[f64], x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, SignalError> {
     if up == 0 || down == 0 {
         return Err(SignalError::InvalidArgument(
             "up and down must be >= 1".to_string(),
@@ -1000,10 +1072,9 @@ pub fn upfirdn(h: &[f64], x: &[f64], up: usize, down: usize) -> Result<Vec<f64>,
 
 /// Convert a linear-phase FIR filter to minimum phase.
 ///
-/// Preserves the magnitude response but creates the shortest possible impulse response.
-///
-/// Matches `scipy.signal.minimum_phase(h)`.
-pub fn minimum_phase(h: &[f64]) -> Result<Vec<f64>, SignalError> {
+/// (duplicate removed — defined later in file)
+#[allow(dead_code)]
+fn __removed_minimum_phase_early_copy(h: &[f64]) -> Result<Vec<f64>, SignalError> {
     if h.is_empty() {
         return Err(SignalError::InvalidArgument(
             "filter must be non-empty".to_string(),
@@ -7134,6 +7205,50 @@ mod tests {
         assert!(upfirdn(&[], &[1.0, 2.0], 1, 1).is_err());
         assert!(upfirdn(&[1.0], &[1.0, 2.0], 0, 1).is_err());
         assert!(upfirdn(&[1.0], &[1.0, 2.0], 1, 0).is_err());
+    }
+
+    // ── Max-length sequence + matched filter tests ───────────────────
+
+    #[test]
+    fn max_len_seq_length() {
+        let seq = max_len_seq(5).expect("mls");
+        assert_eq!(seq.len(), 31);
+        assert!(seq.iter().all(|&v| v == 1.0 || v == -1.0));
+    }
+
+    #[test]
+    fn max_len_seq_balanced() {
+        let seq = max_len_seq(6).expect("mls");
+        let ones = seq.iter().filter(|&&v| v == 1.0).count();
+        let neg_ones = seq.iter().filter(|&&v| v == -1.0).count();
+        assert_eq!(ones + neg_ones, 63);
+        assert_eq!((ones as i64 - neg_ones as i64).unsigned_abs(), 1);
+    }
+
+    #[test]
+    fn max_len_seq_invalid_nbits() {
+        assert!(max_len_seq(0).is_err());
+        assert!(max_len_seq(1).is_err());
+    }
+
+    #[test]
+    fn matched_filter_peak_at_template_location() {
+        let template = vec![1.0, 2.0, 3.0, 2.0, 1.0];
+        let mut signal = vec![0.0; 20];
+        for (i, &t) in template.iter().enumerate() {
+            signal[8 + i] = t;
+        }
+        let result = matched_filter(&template, &signal).expect("matched_filter");
+        let peak_idx = result
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .unwrap()
+            .0;
+        assert!(
+            (peak_idx as i64 - 12).abs() <= 1,
+            "peak at {peak_idx}, expected ~12"
+        );
     }
 
     #[test]

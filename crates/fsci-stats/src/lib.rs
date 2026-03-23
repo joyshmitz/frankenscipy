@@ -15,6 +15,22 @@ use std::f64::consts::{FRAC_1_SQRT_2, PI};
 use fsci_runtime::RuntimeMode;
 use rand::Rng;
 
+/// Error type for stats APIs that validate structured inputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatsError {
+    InvalidArgument(String),
+}
+
+impl std::fmt::Display for StatsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for StatsError {}
+
 /// Trait for continuous probability distributions.
 pub trait ContinuousDistribution {
     /// Probability density function.
@@ -1042,6 +1058,181 @@ impl ContinuousDistribution for Maxwell {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Multivariate Normal Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Multivariate normal distribution with cached Cholesky factorization.
+///
+/// Matches `scipy.stats.multivariate_normal(mean, cov)` for the default
+/// `allow_singular=False` path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultivariateNormal {
+    pub mean: Vec<f64>,
+    pub cov: Vec<Vec<f64>>,
+    chol: Vec<Vec<f64>>,
+    log_det: f64,
+}
+
+impl MultivariateNormal {
+    pub fn new(mean: &[f64], cov: &[Vec<f64>]) -> Result<Self, StatsError> {
+        if mean.is_empty() {
+            return Err(StatsError::InvalidArgument(
+                "mean must be non-empty".to_string(),
+            ));
+        }
+        if cov.len() != mean.len() {
+            return Err(StatsError::InvalidArgument(format!(
+                "cov row count ({}) must match mean length ({})",
+                cov.len(),
+                mean.len()
+            )));
+        }
+        for (row_idx, row) in cov.iter().enumerate() {
+            if row.len() != mean.len() {
+                return Err(StatsError::InvalidArgument(format!(
+                    "cov row {row_idx} has length {}, expected {}",
+                    row.len(),
+                    mean.len()
+                )));
+            }
+        }
+        for i in 0..cov.len() {
+            for j in 0..cov.len() {
+                if (cov[i][j] - cov[j][i]).abs() > 1e-12 {
+                    return Err(StatsError::InvalidArgument(
+                        "covariance matrix must be symmetric".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let chol = cholesky_decompose(cov)?;
+        let log_det = 2.0
+            * (0..chol.len())
+                .map(|i| chol[i][i].ln())
+                .sum::<f64>();
+        Ok(Self {
+            mean: mean.to_vec(),
+            cov: cov.to_vec(),
+            chol,
+            log_det,
+        })
+    }
+
+    pub fn logpdf(&self, x: &[f64]) -> Result<f64, StatsError> {
+        if x.len() != self.mean.len() {
+            return Err(StatsError::InvalidArgument(format!(
+                "x length ({}) must match dimension ({})",
+                x.len(),
+                self.mean.len()
+            )));
+        }
+        let centered: Vec<f64> = x
+            .iter()
+            .zip(self.mean.iter())
+            .map(|(&xi, &mi)| xi - mi)
+            .collect();
+        let solved = solve_lower_triangular(&self.chol, &centered)?;
+        let mahalanobis = solved.iter().map(|value| value * value).sum::<f64>();
+        let dim = self.mean.len() as f64;
+        Ok(-0.5 * (dim * (2.0 * PI).ln() + self.log_det + mahalanobis))
+    }
+
+    pub fn pdf(&self, x: &[f64]) -> Result<f64, StatsError> {
+        Ok(self.logpdf(x)?.exp())
+    }
+
+    pub fn rvs(&self, n: usize, rng: &mut impl Rng) -> Vec<Vec<f64>> {
+        let mut samples = Vec::with_capacity(n);
+        for _ in 0..n {
+            let z = sample_standard_normals(self.mean.len(), rng);
+            let mut sample = self.mean.clone();
+            for i in 0..self.chol.len() {
+                for (j, &zj) in z.iter().take(i + 1).enumerate() {
+                    sample[i] += self.chol[i][j] * zj;
+                }
+            }
+            samples.push(sample);
+        }
+        samples
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Von Mises Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Von Mises circular distribution.
+///
+/// Matches `scipy.stats.vonmises(kappa, loc=loc)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VonMises {
+    pub kappa: f64,
+    pub loc: f64,
+}
+
+impl VonMises {
+    #[must_use]
+    pub fn new(kappa: f64, loc: f64) -> Self {
+        assert!(kappa >= 0.0, "kappa must be non-negative, got {kappa}");
+        Self { kappa, loc }
+    }
+
+    fn period_start(&self) -> f64 {
+        self.loc - PI
+    }
+
+    fn base_cdf(&self, x: f64) -> f64 {
+        let start = self.period_start();
+        let end = start + 2.0 * PI;
+        if x <= start {
+            return 0.0;
+        }
+        if x >= end {
+            return 1.0;
+        }
+
+        let steps = 2048usize;
+        let step = (x - start) / steps as f64;
+        let mut sum = 0.5 * (self.pdf(start) + self.pdf(x));
+        for idx in 1..steps {
+            sum += self.pdf(start + idx as f64 * step);
+        }
+        (sum * step).clamp(0.0, 1.0)
+    }
+
+    #[must_use]
+    pub fn circular_variance(&self) -> f64 {
+        self.var()
+    }
+}
+
+impl ContinuousDistribution for VonMises {
+    fn pdf(&self, x: f64) -> f64 {
+        let i0 = modified_bessel_i(0.0, self.kappa);
+        (self.kappa * (x - self.loc).cos()).exp() / (2.0 * PI * i0)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let start = self.period_start();
+        let period = 2.0 * PI;
+        let cycles = ((x - start) / period).floor();
+        let reduced = x - cycles * period;
+        cycles + self.base_cdf(reduced)
+    }
+
+    fn mean(&self) -> f64 {
+        self.loc
+    }
+
+    fn var(&self) -> f64 {
+        let i0 = modified_bessel_i(0.0, self.kappa);
+        let i1 = modified_bessel_i(1.0, self.kappa);
+        1.0 - i1 / i0
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Poisson Distribution (discrete, but commonly needed)
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1502,6 +1693,69 @@ fn upper_regularized_gamma(a: f64, x: f64) -> f64 {
 
 fn regularized_incomplete_beta(a: f64, b: f64, x: f64) -> f64 {
     fsci_special::betainc_scalar(a, b, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+fn modified_bessel_i(order: f64, x: f64) -> f64 {
+    match fsci_special::iv(
+        &fsci_special::SpecialTensor::RealScalar(order),
+        &fsci_special::SpecialTensor::RealScalar(x),
+        RuntimeMode::Strict,
+    ) {
+        Ok(fsci_special::SpecialTensor::RealScalar(value)) => value,
+        _ => f64::NAN,
+    }
+}
+
+fn cholesky_decompose(matrix: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    let n = matrix.len();
+    let mut lower = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..=i {
+            let sum = (0..j).map(|k| lower[i][k] * lower[j][k]).sum::<f64>();
+            if i == j {
+                let value = matrix[i][i] - sum;
+                if value <= 0.0 || !value.is_finite() {
+                    return Err(StatsError::InvalidArgument(
+                        "covariance matrix must be symmetric positive definite".to_string(),
+                    ));
+                }
+                lower[i][j] = value.sqrt();
+            } else {
+                lower[i][j] = (matrix[i][j] - sum) / lower[j][j];
+            }
+        }
+    }
+    Ok(lower)
+}
+
+fn solve_lower_triangular(lower: &[Vec<f64>], rhs: &[f64]) -> Result<Vec<f64>, StatsError> {
+    let n = lower.len();
+    let mut solution = vec![0.0; n];
+    for i in 0..n {
+        let sum = (0..i).map(|j| lower[i][j] * solution[j]).sum::<f64>();
+        if lower[i][i] == 0.0 {
+            return Err(StatsError::InvalidArgument(
+                "singular lower-triangular system".to_string(),
+            ));
+        }
+        solution[i] = (rhs[i] - sum) / lower[i][i];
+    }
+    Ok(solution)
+}
+
+fn sample_standard_normals(n: usize, rng: &mut impl Rng) -> Vec<f64> {
+    let mut values = Vec::with_capacity(n);
+    while values.len() < n {
+        let u1 = rng.random::<f64>().max(1e-15);
+        let u2 = rng.random::<f64>();
+        let radius = (-2.0 * u1.ln()).sqrt();
+        let angle = 2.0 * PI * u2;
+        values.push(radius * angle.cos());
+        if values.len() < n {
+            values.push(radius * angle.sin());
+        }
+    }
+    values
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -4667,6 +4921,65 @@ mod tests {
         assert_close(g.var(), 12.0, 1e-10, "Gamma(3,2) var");
     }
 
+    #[test]
+    fn multivariate_normal_pdf_matches_scipy_reference() {
+        let rv = MultivariateNormal::new(&[0.0, 0.0], &[vec![1.0, 0.2], vec![0.2, 2.0]])
+            .expect("multivariate normal");
+        let pdf = rv.pdf(&[0.0, 0.0]).expect("pdf");
+        assert_close(pdf, 0.11368210220849669, 1e-12, "multivariate_normal pdf");
+    }
+
+    #[test]
+    fn multivariate_normal_logpdf_matches_scipy_reference() {
+        let rv = MultivariateNormal::new(&[0.0, 0.0], &[vec![1.0, 0.2], vec![0.2, 2.0]])
+            .expect("multivariate normal");
+        let logpdf = rv.logpdf(&[0.0, 0.0]).expect("logpdf");
+        assert_close(
+            logpdf,
+            -2.1743493030305583,
+            1e-12,
+            "multivariate_normal logpdf",
+        );
+    }
+
+    #[test]
+    fn multivariate_normal_rejects_invalid_covariance() {
+        assert!(MultivariateNormal::new(&[0.0, 0.0], &[vec![1.0]]).is_err());
+        assert!(MultivariateNormal::new(&[0.0, 0.0], &[vec![1.0, 2.0], vec![0.0, 1.0]]).is_err());
+    }
+
+    #[test]
+    fn multivariate_normal_rvs_tracks_mean() {
+        let rv = MultivariateNormal::new(&[1.0, -2.0], &[vec![1.0, 0.3], vec![0.3, 1.5]])
+            .expect("multivariate normal");
+        let mut rng = rand::rng();
+        let samples = rv.rvs(4000, &mut rng);
+        let mean0 = samples.iter().map(|row| row[0]).sum::<f64>() / samples.len() as f64;
+        let mean1 = samples.iter().map(|row| row[1]).sum::<f64>() / samples.len() as f64;
+        assert!((mean0 - 1.0).abs() < 0.08, "sample mean0 = {mean0}");
+        assert!((mean1 + 2.0).abs() < 0.08, "sample mean1 = {mean1}");
+    }
+
+    #[test]
+    fn vonmises_pdf_and_cdf_match_scipy_reference() {
+        let vm = VonMises::new(2.5, 0.3);
+        assert_close(vm.pdf(0.3), 0.5893613785159519, 1e-10, "vonmises pdf at loc");
+        assert_close(vm.cdf(0.3), 0.5, 1e-4, "vonmises cdf at loc");
+        assert_close(
+            vm.cdf(0.3 + PI / 2.0),
+            0.978826666129197,
+            1e-4,
+            "vonmises cdf at loc+pi/2",
+        );
+    }
+
+    #[test]
+    fn vonmises_is_periodic() {
+        let vm = VonMises::new(2.5, 0.3);
+        assert_close(vm.pdf(0.3 + 2.0 * PI), vm.pdf(0.3), 1e-12, "pdf periodicity");
+        assert_close(vm.cdf(0.3 + 2.0 * PI), 1.5, 1e-4, "cdf period lift");
+    }
+
     // ── Poisson distribution ────────────────────────────────────────
 
     #[test]
@@ -6663,6 +6976,85 @@ mod tests {
             result.pvalue < 0.01,
             "different medians: p={}",
             result.pvalue
+        );
+    }
+
+    // ── VonMises tests ───────────────────────────────────────────────
+
+    #[test]
+    fn vonmises_pdf_integrates_to_one() {
+        // Numerically integrate von Mises PDF over [-π, π]
+        let vm = VonMises::new(2.0, 0.0);
+        let n = 1000;
+        let h = 2.0 * std::f64::consts::PI / n as f64;
+        let mut integral = 0.0;
+        for i in 0..n {
+            let x = -std::f64::consts::PI + (i as f64 + 0.5) * h;
+            integral += vm.pdf(x) * h;
+        }
+        assert!(
+            (integral - 1.0).abs() < 0.01,
+            "vonmises integral = {integral}"
+        );
+    }
+
+    #[test]
+    fn vonmises_peak_at_mu() {
+        let vm = VonMises::new(5.0, 1.0);
+        let at_mu = vm.pdf(1.0);
+        let away = vm.pdf(1.0 + 1.0);
+        assert!(at_mu > away, "peak should be at mu");
+    }
+
+    #[test]
+    fn vonmises_circular_variance() {
+        // High kappa → low variance
+        let vm_high = VonMises::new(100.0, 0.0);
+        let vm_low = VonMises::new(0.5, 0.0);
+        assert!(
+            vm_high.circular_variance() < vm_low.circular_variance(),
+            "high kappa should have lower variance"
+        );
+    }
+
+    // ── MultivariateNormal tests ─────────────────────────────────────
+
+    #[test]
+    fn mvn_1d_matches_normal() {
+        let mvn = MultivariateNormal::new(&[0.0], &[vec![1.0]]).expect("1D MVN");
+        let norm = Normal::standard();
+        let x = 1.5;
+        let mvn_pdf = mvn.pdf(&[x]).expect("mvn pdf");
+        let norm_pdf = norm.pdf(x);
+        assert!(
+            (mvn_pdf - norm_pdf).abs() < 1e-10,
+            "1D MVN should match Normal: {} vs {}",
+            mvn_pdf,
+            norm_pdf
+        );
+    }
+
+    #[test]
+    fn mvn_peak_at_mean() {
+        let mvn =
+            MultivariateNormal::new(&[1.0, 2.0], &[vec![1.0, 0.0], vec![0.0, 1.0]]).expect("MVN");
+        let at_mean = mvn.pdf(&[1.0, 2.0]).expect("pdf at mean");
+        let away = mvn.pdf(&[3.0, 4.0]).expect("pdf away");
+        assert!(at_mean > away, "peak should be at mean");
+    }
+
+    #[test]
+    fn mvn_logpdf_consistent() {
+        let mvn =
+            MultivariateNormal::new(&[0.0, 0.0], &[vec![1.0, 0.0], vec![0.0, 1.0]]).expect("MVN");
+        let x = [1.0, 1.0];
+        let pdf = mvn.pdf(&x).expect("pdf");
+        let logpdf = mvn.logpdf(&x).expect("logpdf");
+        assert!(
+            (pdf.ln() - logpdf).abs() < 1e-10,
+            "ln(pdf) = {}, logpdf = {}",
+            pdf.ln(),
+            logpdf
         );
     }
 }

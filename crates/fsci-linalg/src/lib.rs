@@ -302,6 +302,19 @@ pub struct HessenbergResult {
     pub h: Vec<Vec<f64>>,
 }
 
+/// Result of generalized Schur (QZ) decomposition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QzResult {
+    /// Left transform matrix Q.
+    pub q: Vec<Vec<f64>>,
+    /// Right transform matrix Z.
+    pub z: Vec<Vec<f64>>,
+    /// Generalized Schur form of A under Qᵀ A Z.
+    pub aa: Vec<Vec<f64>>,
+    /// Generalized Schur form of B under Qᵀ B Z.
+    pub bb: Vec<Vec<f64>>,
+}
+
 /// Result of polar decomposition: A = U * P.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolarResult {
@@ -1917,6 +1930,67 @@ pub fn hessenberg(a: &[Vec<f64>], options: DecompOptions) -> Result<HessenbergRe
     Ok(HessenbergResult {
         q: rows_from_dmatrix(&q_mat),
         h: rows_from_dmatrix(&h_mat),
+    })
+}
+
+/// Generalized Schur (QZ) decomposition for the matrix pencil (A, B).
+///
+/// Returns matrices `(AA, BB, Q, Z)` satisfying `Qᵀ A Z = AA` and `Qᵀ B Z = BB`.
+/// This implementation currently supports the regular, invertible-`B` case by
+/// reducing `A B⁻¹` to real Schur form and choosing `Z = B⁻¹ Q`, which yields
+/// `BB = I` and an upper quasi-triangular `AA`.
+///
+/// Matches the core algebraic contract of `scipy.linalg.qz(a, b)`.
+pub fn qz(a: &[Vec<f64>], b: &[Vec<f64>], options: DecompOptions) -> Result<QzResult, LinalgError> {
+    let (ar, ac) = matrix_shape(a)?;
+    let (br, bc) = matrix_shape(b)?;
+    if ar != ac || br != bc {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if ar != br {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!(
+                "A and B must have identical square shapes, got ({ar}x{ac}) and ({br}x{bc})"
+            ),
+        });
+    }
+    hardened_dimension_check(options.mode, ar, ac)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+    validate_finite_matrix(b, options.mode, options.check_finite)?;
+
+    if ar == 0 {
+        return Ok(QzResult {
+            q: Vec::new(),
+            z: Vec::new(),
+            aa: Vec::new(),
+            bb: Vec::new(),
+        });
+    }
+
+    let a_mat = dmatrix_from_rows(a)?;
+    let b_mat = dmatrix_from_rows(b)?;
+    let identity = DMatrix::<f64>::identity(ar, ar);
+    let b_inv = b_mat.clone().lu().solve(&identity).ok_or(LinalgError::SingularMatrix)?;
+
+    let schur_decomp = (&a_mat * &b_inv).schur();
+    let (q_mat, t_mat) = schur_decomp.unpack();
+    let z_mat = &b_inv * &q_mat;
+    let bb_mat = q_mat.transpose() * &b_mat * &z_mat;
+
+    emit_trace(LinalgTrace {
+        operation: "qz",
+        matrix_size: (ar, ac),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(QzResult {
+        q: rows_from_dmatrix(&q_mat),
+        z: rows_from_dmatrix(&z_mat),
+        aa: rows_from_dmatrix(&t_mat),
+        bb: rows_from_dmatrix(&bb_mat),
     })
 }
 
@@ -4883,6 +4957,77 @@ mod tests {
         let result = hessenberg(&a, DecompOptions::default()).expect("hessenberg of empty");
         assert!(result.q.is_empty());
         assert!(result.h.is_empty());
+    }
+
+    // ── QZ decomposition tests ───────────────────────────────────────
+
+    #[test]
+    fn qz_empty_matrix() {
+        let a: Vec<Vec<f64>> = vec![];
+        let b: Vec<Vec<f64>> = vec![];
+        let result = qz(&a, &b, DecompOptions::default()).expect("qz of empty");
+        assert!(result.q.is_empty());
+        assert!(result.z.is_empty());
+        assert!(result.aa.is_empty());
+        assert!(result.bb.is_empty());
+    }
+
+    #[test]
+    fn qz_singular_b_rejected() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let b = vec![vec![1.0, 0.0], vec![0.0, 0.0]];
+        let err = qz(&a, &b, DecompOptions::default()).expect_err("singular B");
+        assert!(matches!(err, LinalgError::SingularMatrix));
+    }
+
+    #[test]
+    fn qz_generalized_relation_holds() {
+        let a = vec![vec![4.0, 2.0], vec![1.0, 3.0]];
+        let b = vec![vec![2.0, 0.0], vec![0.5, 1.5]];
+        let result = qz(&a, &b, DecompOptions::default()).expect("qz works");
+
+        let n = a.len();
+        let mut qtaz = vec![vec![0.0; n]; n];
+        let mut qtbz = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    for l in 0..n {
+                        qtaz[i][j] += result.q[k][i] * a[k][l] * result.z[l][j];
+                        qtbz[i][j] += result.q[k][i] * b[k][l] * result.z[l][j];
+                    }
+                }
+            }
+        }
+
+        assert_close_matrix(&qtaz, &result.aa, 1e-10, 1e-10);
+        assert_close_matrix(&qtbz, &result.bb, 1e-10, 1e-10);
+        for i in 0..n {
+            for j in 0..i {
+                assert!(result.bb[i][j].abs() < 1e-10, "BB must be upper triangular");
+            }
+        }
+    }
+
+    #[test]
+    fn qz_with_identity_b_matches_schur_contract() {
+        let a = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![0.0, 4.0, 5.0],
+            vec![0.0, 0.0, 6.0],
+        ];
+        let b = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let result = qz(&a, &b, DecompOptions::default()).expect("qz works");
+        assert_close_matrix(&result.bb, &b, 1e-10, 1e-10);
+        for i in 2..result.aa.len() {
+            for j in 0..i.saturating_sub(1) {
+                assert!(result.aa[i][j].abs() < 1e-10, "AA must be quasi-upper triangular");
+            }
+        }
     }
 
     // ── Matrix exponential tests ──────────────────────────────────────
