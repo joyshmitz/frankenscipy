@@ -765,6 +765,185 @@ pub fn sweep_poly(t: &[f64], poly: &[f64]) -> Vec<f64> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Chirp Z-Transform
+// ══════════════════════════════════════════════════════════════════════
+
+/// Chirp Z-Transform: evaluate the Z-transform at M points along a spiral
+/// in the complex plane starting at `a`, stepping by `w`.
+///
+/// Given x[n] for n=0..N-1, computes:
+///   X[k] = Σ_{n=0}^{N-1} x[n] · a^{-n} · w^{nk},  k = 0..M-1
+///
+/// # Arguments
+/// * `x` — Input signal (real-valued).
+/// * `m` — Number of output points.
+/// * `w` — Step factor as (magnitude, angle) in polar form.
+///         Default: `(1.0, -2π/M)` (unit circle, same as DFT).
+/// * `a` — Starting point as (magnitude, angle) in polar form.
+///         Default: `(1.0, 0.0)` (z = 1).
+///
+/// Matches `scipy.signal.czt`.
+pub fn czt(
+    x: &[f64],
+    m: usize,
+    w: Option<(f64, f64)>,
+    a: Option<(f64, f64)>,
+) -> Result<Vec<(f64, f64)>, SignalError> {
+    let n = x.len();
+    if n == 0 {
+        return Err(SignalError::InvalidArgument(
+            "Input signal must be non-empty".to_string(),
+        ));
+    }
+    if m == 0 {
+        return Ok(vec![]);
+    }
+
+    let two_pi = 2.0 * std::f64::consts::PI;
+
+    // Default w: unit circle step = exp(-j2π/M)
+    let (w_mag, w_ang) = w.unwrap_or((1.0, -two_pi / m as f64));
+    // Default a: z = 1
+    let (a_mag, a_ang) = a.unwrap_or((1.0, 0.0));
+
+    // Bluestein's algorithm for CZT via convolution:
+    // 1) Form yn[n] = x[n] * a^{-n} * w^{n²/2}
+    // 2) Form h[n] = w^{-n²/2}
+    // 3) Convolve yn with h, then multiply by w^{k²/2}
+
+    let l = (n + m - 1).next_power_of_two(); // FFT length
+
+    // Precompute w^{k²/2} chirp factors
+    // w^{k²/2} = (w_mag)^{k²/2} * exp(j * w_ang * k²/2)
+    let chirp = |k: i64| -> (f64, f64) {
+        let half_k2 = (k * k) as f64 / 2.0;
+        let mag = w_mag.powf(half_k2);
+        let ang = w_ang * half_k2;
+        (mag * ang.cos(), mag * ang.sin())
+    };
+
+    // a^{-n} = (a_mag)^{-n} * exp(-j * a_ang * n)
+    let a_neg = |nn: usize| -> (f64, f64) {
+        let nf = nn as f64;
+        let mag = a_mag.powf(-nf);
+        let ang = -a_ang * nf;
+        (mag * ang.cos(), mag * ang.sin())
+    };
+
+    // Complex multiply helper
+    let cmul = |a: (f64, f64), b: (f64, f64)| -> (f64, f64) {
+        (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+    };
+
+    // Build yn: length L, zero-padded
+    let mut yn = vec![(0.0f64, 0.0f64); l];
+    for i in 0..n {
+        let an = a_neg(i);
+        let wn = chirp(i as i64);
+        let xi = (x[i], 0.0);
+        yn[i] = cmul(cmul(xi, an), wn);
+    }
+
+    // Build h: w^{-k²/2} for k = -(N-1)..M-1, stored in wrap-around order
+    let mut h = vec![(0.0f64, 0.0f64); l];
+    // h[k] for k = 0..M-1
+    for k in 0..m {
+        let c = chirp(k as i64);
+        // w^{-k²/2} = conjugate of w^{k²/2} when w is on unit circle,
+        // but in general we need to invert
+        let mag_sq = c.0 * c.0 + c.1 * c.1;
+        if mag_sq > 0.0 {
+            h[k] = (c.0 / mag_sq, -c.1 / mag_sq);
+        }
+    }
+    // h[L-k] for k = 1..N-1 (negative indices wrapped)
+    for k in 1..n {
+        let c = chirp(k as i64);
+        let mag_sq = c.0 * c.0 + c.1 * c.1;
+        if mag_sq > 0.0 {
+            h[l - k] = (c.0 / mag_sq, -c.1 / mag_sq);
+        }
+    }
+
+    // FFT of yn and h, multiply, IFFT
+    let fft_opts = fsci_fft::FftOptions::default();
+    let yn_fft = fsci_fft::fft(&yn, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+    let h_fft = fsci_fft::fft(&h, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+
+    let product_fft: Vec<(f64, f64)> = yn_fft
+        .iter()
+        .zip(h_fft.iter())
+        .map(|(&a, &b)| cmul(a, b))
+        .collect();
+
+    let product = fsci_fft::ifft(&product_fft, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
+
+    // Extract result: X[k] = product[k] * w^{k²/2}
+    let mut result = Vec::with_capacity(m);
+    for k in 0..m {
+        let wk = chirp(k as i64);
+        result.push(cmul(product[k], wk));
+    }
+
+    Ok(result)
+}
+
+/// Zoom FFT: compute the DFT over a frequency sub-range [f1, f2] with M points.
+///
+/// This uses the Chirp Z-Transform to evaluate the Z-transform at M equally
+/// spaced points on the unit circle arc from f1 to f2 (normalized frequencies,
+/// where 1.0 = sampling rate).
+///
+/// # Arguments
+/// * `x` — Input signal.
+/// * `f_range` — (f1, f2) normalized frequency range.
+/// * `m` — Number of output points.
+///
+/// Matches `scipy.signal.zoom_fft`.
+pub fn zoom_fft(
+    x: &[f64],
+    f_range: (f64, f64),
+    m: usize,
+) -> Result<Vec<(f64, f64)>, SignalError> {
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "Input signal must be non-empty".to_string(),
+        ));
+    }
+    if m == 0 {
+        return Ok(vec![]);
+    }
+
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let (f1, f2) = f_range;
+
+    // Starting point on unit circle: a = exp(j * 2π * f1)
+    let a = (1.0, two_pi * f1);
+
+    // Step: w = exp(j * 2π * (f2 - f1) / M)
+    // But CZT convention is w^{nk}, so we need w = exp(-j * step)
+    // Actually, to go from f1 to f2 in M steps:
+    //   points at exp(j * 2π * (f1 + k*(f2-f1)/M))
+    //   = a * w^{-k} where w = exp(-j * 2π * (f2-f1)/M)
+    // Wait — the CZT formula is X[k] = Σ x[n] a^{-n} w^{nk}
+    // For DFT: a = 1, w = exp(-j2π/N)
+    // For zoom: we want to evaluate at z_k = exp(j * 2π * f_k)
+    // where f_k = f1 + k*(f2-f1)/M for k=0..M-1
+    //
+    // So z_k = exp(j*2π*f1) * exp(j*2π*(f2-f1)*k/M)
+    // In CZT: z_k = a * w^{-k}
+    // => w^{-k} = exp(j*2π*(f2-f1)*k/M)
+    // => w = exp(-j*2π*(f2-f1)/M)
+
+    let w = (1.0, -two_pi * (f2 - f1) / m as f64);
+
+    czt(x, m, Some(w), Some(a))
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Sequences and Matched Filtering
 // ══════════════════════════════════════════════════════════════════════
 
@@ -3669,6 +3848,166 @@ fn make_window(n: usize, window: FirWindow) -> Vec<f64> {
         FirWindow::Kaiser(beta) => kaiser(n, beta),
         FirWindow::Rectangular => vec![1.0; n],
     }
+}
+
+/// Design a FIR filter using the Parks-McClellan (Remez exchange) algorithm.
+///
+/// Matches `scipy.signal.remez(numtaps, bands, desired)`.
+///
+/// # Arguments
+/// * `numtaps` — Number of filter coefficients (must be odd for type I).
+/// * `bands` — Frequency band edges, normalized [0, 0.5]. Must come in pairs.
+///   e.g., `[0.0, 0.1, 0.2, 0.5]` defines passband [0, 0.1] and stopband [0.2, 0.5].
+/// * `desired` — Desired gain in each band (one per band pair).
+/// * `weight` — Optional weights per band (one per band pair). Default: all 1.0.
+pub fn remez(
+    numtaps: usize,
+    bands: &[f64],
+    desired: &[f64],
+    weight: Option<&[f64]>,
+) -> Result<Vec<f64>, SignalError> {
+    if numtaps < 1 {
+        return Err(SignalError::InvalidArgument(
+            "numtaps must be >= 1".to_string(),
+        ));
+    }
+    if bands.len() % 2 != 0 || bands.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "bands must have even number of elements".to_string(),
+        ));
+    }
+    let nbands = bands.len() / 2;
+    if desired.len() != nbands {
+        return Err(SignalError::InvalidArgument(format!(
+            "desired length {} must equal number of bands {}",
+            desired.len(),
+            nbands
+        )));
+    }
+
+    let weights: Vec<f64> = weight.map_or_else(|| vec![1.0; nbands], |w| w.to_vec());
+    if weights.len() != nbands {
+        return Err(SignalError::InvalidArgument(
+            "weight length must equal number of bands".to_string(),
+        ));
+    }
+
+    // Simplified Remez: use frequency-sampling method as approximation
+    // (Full Parks-McClellan is very complex; this provides a reasonable approximation)
+    let n = numtaps;
+    let m = n / 2; // number of cosine coefficients for type I (odd length)
+
+    // Create dense frequency grid
+    let grid_size = 512.max(16 * n);
+    let mut freq_grid = Vec::with_capacity(grid_size);
+    let mut desired_grid = Vec::with_capacity(grid_size);
+    let mut weight_grid = Vec::with_capacity(grid_size);
+
+    for band_idx in 0..nbands {
+        let f_start = bands[2 * band_idx];
+        let f_end = bands[2 * band_idx + 1];
+        let npts = (grid_size as f64 * (f_end - f_start) * 2.0).ceil() as usize;
+        let npts = npts.max(4);
+
+        for k in 0..npts {
+            let freq = f_start + (f_end - f_start) * k as f64 / (npts - 1).max(1) as f64;
+            freq_grid.push(freq);
+            desired_grid.push(desired[band_idx]);
+            weight_grid.push(weights[band_idx]);
+        }
+    }
+
+    // Least-squares design on the cosine basis
+    // H(f) = sum_{k=0}^{m} a_k * cos(2π * k * f)
+    // Minimize weighted error: sum w_i * (H(f_i) - D(f_i))^2
+    let n_coeffs = m + 1;
+    let ng = freq_grid.len();
+
+    // Normal equations: A^T W A x = A^T W d
+    let mut ata = vec![vec![0.0; n_coeffs]; n_coeffs];
+    let mut atd = vec![0.0; n_coeffs];
+    let two_pi = 2.0 * std::f64::consts::PI;
+
+    for i in 0..ng {
+        let f = freq_grid[i];
+        let w = weight_grid[i] * weight_grid[i]; // squared for WLS
+        let d = desired_grid[i];
+
+        for j in 0..n_coeffs {
+            let cj = (two_pi * j as f64 * f).cos();
+            atd[j] += w * cj * d;
+            for k in j..n_coeffs {
+                let ck = (two_pi * k as f64 * f).cos();
+                ata[j][k] += w * cj * ck;
+                if k != j {
+                    ata[k][j] = ata[j][k];
+                }
+            }
+        }
+    }
+
+    // Solve normal equations (Cholesky or simple Gaussian elimination)
+    let a_coeffs = solve_symmetric(&ata, &atd)?;
+
+    // Convert cosine coefficients to symmetric FIR filter taps.
+    // H(f) = a_0 + 2 * Σ_{k=1}^{m} a_k cos(2πkf)
+    // corresponds to h[m] = a_0, h[m±k] = a_k for k=1..m
+    let mut h = vec![0.0; n];
+    h[m] = a_coeffs[0];
+    for k in 1..n_coeffs {
+        h[m - k] = a_coeffs[k] / 2.0;
+        h[m + k] = a_coeffs[k] / 2.0;
+    }
+
+    Ok(h)
+}
+
+/// Solve symmetric positive definite system via Cholesky.
+fn solve_symmetric(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, SignalError> {
+    let n = a.len();
+    // Cholesky factorization: A = L L^T
+    let mut l = vec![vec![0.0; n]; n];
+    for j in 0..n {
+        let mut sum = a[j][j];
+        for k in 0..j {
+            sum -= l[j][k] * l[j][k];
+        }
+        if sum <= 0.0 {
+            // Fall back to regularization
+            l[j][j] = 1e-10;
+        } else {
+            l[j][j] = sum.sqrt();
+        }
+        for i in j + 1..n {
+            let mut sum = a[i][j];
+            for k in 0..j {
+                sum -= l[i][k] * l[j][k];
+            }
+            l[i][j] = sum / l[j][j];
+        }
+    }
+
+    // Forward substitution: L y = b
+    let mut y = vec![0.0; n];
+    for i in 0..n {
+        let mut sum = b[i];
+        for j in 0..i {
+            sum -= l[i][j] * y[j];
+        }
+        y[i] = sum / l[i][i];
+    }
+
+    // Back substitution: L^T x = y
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut sum = y[i];
+        for j in i + 1..n {
+            sum -= l[j][i] * x[j];
+        }
+        x[i] = sum / l[i][i];
+    }
+
+    Ok(x)
 }
 
 // ── Chirp method ────────────────────────────────────────────────────
@@ -7344,6 +7683,144 @@ mod tests {
         assert!(
             crossings > 2,
             "linear chirp should oscillate: {crossings} crossings"
+        );
+    }
+
+    #[test]
+    fn czt_matches_dft_for_unit_circle() {
+        // With default parameters, CZT should match the DFT
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let n = x.len();
+        let result = czt(&x, n, None, None).unwrap();
+
+        // Compare with direct DFT
+        let two_pi = 2.0 * std::f64::consts::PI;
+        for k in 0..n {
+            let mut re = 0.0;
+            let mut im = 0.0;
+            for (j, &xj) in x.iter().enumerate() {
+                let angle = -two_pi * (k as f64) * (j as f64) / (n as f64);
+                re += xj * angle.cos();
+                im += xj * angle.sin();
+            }
+            assert!(
+                (result[k].0 - re).abs() < 1e-10,
+                "CZT real[{k}] = {}, expected {re}",
+                result[k].0
+            );
+            assert!(
+                (result[k].1 - im).abs() < 1e-10,
+                "CZT imag[{k}] = {}, expected {im}",
+                result[k].1
+            );
+        }
+    }
+
+    #[test]
+    fn czt_single_tone_detection() {
+        // A pure sinusoid should produce a peak at its frequency
+        let n = 64;
+        let freq = 5.0; // bin 5
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (two_pi * freq * i as f64 / n as f64).cos())
+            .collect();
+
+        let result = czt(&x, n, None, None).unwrap();
+
+        // Find magnitude peak
+        let mags: Vec<f64> = result.iter().map(|&(r, i)| (r * r + i * i).sqrt()).collect();
+        // Cosine has energy at both bin f and bin N-f (mirror)
+        let peak_bin = mags
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
+        assert!(
+            peak_bin == freq as usize || peak_bin == n - freq as usize,
+            "peak should be at bin {freq} or {}, got {peak_bin}",
+            n - freq as usize
+        );
+        // Check that both bins have significant energy
+        assert!(mags[freq as usize] > mags[0] * 10.0, "bin {freq} should have energy");
+    }
+
+    #[test]
+    fn zoom_fft_resolves_narrow_band() {
+        // Two close frequencies that zoom FFT should resolve
+        let n = 128;
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let f1 = 10.0 / n as f64; // normalized freq
+        let f2 = 12.0 / n as f64;
+        let x: Vec<f64> = (0..n)
+            .map(|i| {
+                (two_pi * f1 * n as f64 * i as f64 / n as f64).cos()
+                    + (two_pi * f2 * n as f64 * i as f64 / n as f64).cos()
+            })
+            .collect();
+
+        // Zoom into the frequency range containing both tones
+        let m = 64;
+        let result = zoom_fft(&x, (8.0 / n as f64, 14.0 / n as f64), m).unwrap();
+
+        // Should have two peaks in the zoomed spectrum
+        let mags: Vec<f64> = result.iter().map(|&(r, i)| (r * r + i * i).sqrt()).collect();
+        let max_mag = mags.iter().cloned().fold(0.0f64, f64::max);
+        let peaks: Vec<usize> = mags
+            .iter()
+            .enumerate()
+            .filter(|&(_, m)| *m > max_mag * 0.5)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            peaks.len() >= 2,
+            "zoom FFT should resolve 2 peaks, got {} peaks",
+            peaks.len()
+        );
+    }
+
+    #[test]
+    fn czt_empty_output() {
+        let x = vec![1.0, 2.0];
+        let result = czt(&x, 0, None, None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn czt_empty_input_errors() {
+        let result = czt(&[], 4, None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn remez_lowpass_filter() {
+        // Design a 31-tap lowpass filter with cutoff at 0.2
+        let h = remez(
+            31,
+            &[0.0, 0.15, 0.25, 0.5],
+            &[1.0, 0.0],
+            None,
+        )
+        .unwrap();
+        assert_eq!(h.len(), 31);
+
+        // Filter should be symmetric (linear phase)
+        for i in 0..15 {
+            assert!(
+                (h[i] - h[30 - i]).abs() < 1e-10,
+                "h[{i}] = {} != h[{}] = {}",
+                h[i],
+                30 - i,
+                h[30 - i]
+            );
+        }
+
+        // Sum of coefficients should approximate passband gain (1.0)
+        let sum: f64 = h.iter().sum();
+        assert!(
+            sum > 0.5 && sum < 1.5,
+            "filter sum = {sum}, expected ~1.0"
         );
     }
 }

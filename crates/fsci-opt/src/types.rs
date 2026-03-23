@@ -21,6 +21,10 @@ pub enum RootMethod {
     Brenth,
     Bisect,
     Ridder,
+    Toms748,
+    Newton,
+    Secant,
+    Halley,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

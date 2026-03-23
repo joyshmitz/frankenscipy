@@ -1979,6 +1979,743 @@ impl ContinuousDistribution for Triangular {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Additional Distributions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Inverse Gamma distribution.
+///
+/// Matches `scipy.stats.invgamma`.
+pub struct InverseGamma {
+    pub a: f64, // shape
+}
+
+impl InverseGamma {
+    #[must_use]
+    pub fn new(a: f64) -> Self {
+        assert!(a > 0.0, "shape parameter must be positive");
+        Self { a }
+    }
+}
+
+impl ContinuousDistribution for InverseGamma {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let a = self.a;
+        x.powf(-a - 1.0) * (-1.0 / x).exp() / ln_gamma(a).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        // CDF = 1 - gammainc(a, 1/x) = gammaincc(a, 1/x)
+        // Using upper regularized incomplete gamma
+        upper_regularized_gamma(self.a, 1.0 / x)
+    }
+
+    fn mean(&self) -> f64 {
+        if self.a > 1.0 {
+            1.0 / (self.a - 1.0)
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.a > 2.0 {
+            1.0 / ((self.a - 1.0).powi(2) * (self.a - 2.0))
+        } else {
+            f64::INFINITY
+        }
+    }
+}
+
+/// Log-normal distribution (parameterized by mu, sigma of underlying normal).
+///
+/// Note: The Lognormal struct above uses s/scale. This is an alias with
+/// the same interface. Kept for disambiguation.
+
+/// Inverse Gaussian (Wald) distribution.
+///
+/// Matches `scipy.stats.invgauss`.
+pub struct InverseGaussian {
+    pub mu: f64, // mean
+}
+
+impl InverseGaussian {
+    #[must_use]
+    pub fn new(mu: f64) -> Self {
+        assert!(mu > 0.0, "mu must be positive");
+        Self { mu }
+    }
+}
+
+impl ContinuousDistribution for InverseGaussian {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let mu = self.mu;
+        (1.0 / (2.0 * PI * x.powi(3))).sqrt()
+            * (-(x - mu).powi(2) / (2.0 * mu * mu * x)).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let mu = self.mu;
+        let sqrt_x = x.sqrt();
+        let t1 = standard_normal_cdf((sqrt_x / mu - 1.0 / sqrt_x));
+        let t2 = (2.0 / mu).exp() * standard_normal_cdf(-(sqrt_x / mu + 1.0 / sqrt_x));
+        t1 + t2
+    }
+
+    fn mean(&self) -> f64 {
+        self.mu
+    }
+
+    fn var(&self) -> f64 {
+        self.mu.powi(3)
+    }
+}
+
+/// Generalized Extreme Value (GEV) distribution.
+///
+/// Matches `scipy.stats.genextreme`.
+pub struct GenExtreme {
+    pub c: f64, // shape parameter
+}
+
+impl GenExtreme {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for GenExtreme {
+    fn pdf(&self, x: f64) -> f64 {
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            // Gumbel case (c -> 0): exp(-(x + exp(-x)))
+            let ex = (-x).exp();
+            (-(x + ex)).exp()
+        } else {
+            let t = 1.0 + c * x;
+            if t <= 0.0 {
+                return 0.0;
+            }
+            let tp = t.powf(-1.0 / c);
+            tp.powf(c + 1.0) * (-tp).exp()
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            (-(-x).exp()).exp()
+        } else {
+            let t = 1.0 + c * x;
+            if t <= 0.0 {
+                return if c > 0.0 { 0.0 } else { 1.0 };
+            }
+            (-t.powf(-1.0 / c)).exp()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            0.577_215_664_901_532_9 // Euler-Mascheroni constant
+        } else if c < 1.0 {
+            (ln_gamma(1.0 - c).exp() - 1.0) / c
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            PI * PI / 6.0
+        } else if c < 0.5 {
+            let g1 = ln_gamma(1.0 - c).exp();
+            let g2 = ln_gamma(1.0 - 2.0 * c).exp();
+            (g2 - g1 * g1) / (c * c)
+        } else {
+            f64::INFINITY
+        }
+    }
+}
+
+/// Generalized Pareto distribution.
+///
+/// Matches `scipy.stats.genpareto`.
+pub struct GenPareto {
+    pub c: f64,
+}
+
+impl GenPareto {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for GenPareto {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            (-x).exp()
+        } else {
+            let t = 1.0 + c * x;
+            if t <= 0.0 {
+                return 0.0;
+            }
+            t.powf(-1.0 / c - 1.0)
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            1.0 - (-x).exp()
+        } else {
+            let t = 1.0 + c * x;
+            if t <= 0.0 {
+                return if c > 0.0 { 0.0 } else { 1.0 };
+            }
+            1.0 - t.powf(-1.0 / c)
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        if self.c < 1.0 {
+            1.0 / (1.0 - self.c)
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.c < 0.5 {
+            1.0 / ((1.0 - self.c).powi(2) * (1.0 - 2.0 * self.c))
+        } else {
+            f64::INFINITY
+        }
+    }
+}
+
+/// Power-law distribution: x^(a-1) on [0, 1].
+///
+/// Matches `scipy.stats.powerlaw`.
+pub struct PowerLaw {
+    pub a: f64,
+}
+
+impl PowerLaw {
+    #[must_use]
+    pub fn new(a: f64) -> Self {
+        assert!(a > 0.0, "a must be positive");
+        Self { a }
+    }
+}
+
+impl ContinuousDistribution for PowerLaw {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 || x > 1.0 {
+            0.0
+        } else {
+            self.a * x.powf(self.a - 1.0)
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            0.0
+        } else if x >= 1.0 {
+            1.0
+        } else {
+            x.powf(self.a)
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            0.0
+        } else if q >= 1.0 {
+            1.0
+        } else {
+            q.powf(1.0 / self.a)
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        self.a / (self.a + 1.0)
+    }
+
+    fn var(&self) -> f64 {
+        self.a / ((self.a + 1.0).powi(2) * (self.a + 2.0))
+    }
+}
+
+/// Half-normal distribution (folded normal).
+///
+/// Matches `scipy.stats.halfnorm`.
+pub struct HalfNormal;
+
+impl ContinuousDistribution for HalfNormal {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.0
+        } else {
+            (2.0 / PI).sqrt() * (-x * x / 2.0).exp()
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.0
+        } else {
+            fsci_special::erf_scalar(x / std::f64::consts::SQRT_2)
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        (2.0 / PI).sqrt()
+    }
+
+    fn var(&self) -> f64 {
+        1.0 - 2.0 / PI
+    }
+}
+
+/// Truncated normal distribution on [a, b].
+///
+/// Matches `scipy.stats.truncnorm`.
+pub struct TruncNormal {
+    pub a: f64,
+    pub b: f64,
+}
+
+impl TruncNormal {
+    #[must_use]
+    pub fn new(a: f64, b: f64) -> Self {
+        assert!(a < b, "a must be less than b");
+        Self { a, b }
+    }
+}
+
+impl ContinuousDistribution for TruncNormal {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < self.a || x > self.b {
+            return 0.0;
+        }
+        let phi_x = (-x * x / 2.0).exp() / (2.0 * PI).sqrt();
+        let norm = standard_normal_cdf(self.b) - standard_normal_cdf(self.a);
+        if norm > 0.0 {
+            phi_x / norm
+        } else {
+            0.0
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= self.a {
+            return 0.0;
+        }
+        if x >= self.b {
+            return 1.0;
+        }
+        let phi_a = standard_normal_cdf(self.a);
+        let norm = standard_normal_cdf(self.b) - phi_a;
+        if norm > 0.0 {
+            (standard_normal_cdf(x) - phi_a) / norm
+        } else {
+            0.0
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        let phi_a = (-self.a * self.a / 2.0).exp() / (2.0 * PI).sqrt();
+        let phi_b = (-self.b * self.b / 2.0).exp() / (2.0 * PI).sqrt();
+        let norm = standard_normal_cdf(self.b) - standard_normal_cdf(self.a);
+        if norm > 0.0 {
+            (phi_a - phi_b) / norm
+        } else {
+            (self.a + self.b) / 2.0
+        }
+    }
+
+    fn var(&self) -> f64 {
+        let phi_a = (-self.a * self.a / 2.0).exp() / (2.0 * PI).sqrt();
+        let phi_b = (-self.b * self.b / 2.0).exp() / (2.0 * PI).sqrt();
+        let norm = standard_normal_cdf(self.b) - standard_normal_cdf(self.a);
+        if norm <= 0.0 {
+            return 0.0;
+        }
+        let z = norm;
+        1.0 + (self.a * phi_a - self.b * phi_b) / z - ((phi_a - phi_b) / z).powi(2)
+    }
+}
+
+/// Chi distribution (not chi-squared).
+///
+/// Matches `scipy.stats.chi`.
+pub struct Chi {
+    pub df: f64,
+}
+
+impl Chi {
+    #[must_use]
+    pub fn new(df: f64) -> Self {
+        assert!(df > 0.0, "df must be positive");
+        Self { df }
+    }
+}
+
+impl ContinuousDistribution for Chi {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let k = self.df;
+        2.0_f64.powf(1.0 - k / 2.0) * x.powf(k - 1.0) * (-x * x / 2.0).exp()
+            / ln_gamma(k / 2.0).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        // CDF of chi with k df = regularized lower incomplete gamma(k/2, x²/2)
+        lower_regularized_gamma(self.df / 2.0, x * x / 2.0)
+    }
+
+    fn mean(&self) -> f64 {
+        let k = self.df;
+        std::f64::consts::SQRT_2 * ln_gamma((k + 1.0) / 2.0).exp() / ln_gamma(k / 2.0).exp()
+    }
+
+    fn var(&self) -> f64 {
+        let m = self.mean();
+        self.df - m * m
+    }
+}
+
+/// Rice distribution.
+///
+/// Matches `scipy.stats.rice`.
+pub struct Rice {
+    pub b: f64, // non-centrality parameter
+}
+
+impl Rice {
+    #[must_use]
+    pub fn new(b: f64) -> Self {
+        assert!(b >= 0.0, "b must be non-negative");
+        Self { b }
+    }
+}
+
+impl ContinuousDistribution for Rice {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let b = self.b;
+        // f(x) = x * exp(-(x² + b²)/2) * I₀(b*x)
+        x * (-(x * x + b * b) / 2.0).exp() * modified_bessel_i(0.0, b * x)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        // Numerical integration via Simpson's rule
+        let n = 200;
+        let h = x / n as f64;
+        let mut sum = self.pdf(0.0) + self.pdf(x);
+        for i in 1..n {
+            let t = i as f64 * h;
+            let w = if i % 2 == 0 { 2.0 } else { 4.0 };
+            sum += w * self.pdf(t);
+        }
+        (sum * h / 3.0).clamp(0.0, 1.0)
+    }
+
+    fn mean(&self) -> f64 {
+        // mean ≈ sqrt(π/2) * L_{1/2}(-b²/2)
+        // For simplicity, use numerical integration
+        let n = 500;
+        let upper = self.b + 6.0;
+        let h = upper / n as f64;
+        let mut sum = 0.0;
+        for i in 0..=n {
+            let x = i as f64 * h;
+            let w = if i == 0 || i == n {
+                1.0
+            } else if i % 2 == 0 {
+                2.0
+            } else {
+                4.0
+            };
+            sum += w * x * self.pdf(x);
+        }
+        sum * h / 3.0
+    }
+
+    fn var(&self) -> f64 {
+        let m = self.mean();
+        // E[X²] via integration
+        let n = 500;
+        let upper = self.b + 6.0;
+        let h = upper / n as f64;
+        let mut sum = 0.0;
+        for i in 0..=n {
+            let x = i as f64 * h;
+            let w = if i == 0 || i == n {
+                1.0
+            } else if i % 2 == 0 {
+                2.0
+            } else {
+                4.0
+            };
+            sum += w * x * x * self.pdf(x);
+        }
+        let ex2 = sum * h / 3.0;
+        ex2 - m * m
+    }
+}
+
+/// Nakagami distribution.
+///
+/// Matches `scipy.stats.nakagami`.
+pub struct Nakagami {
+    pub nu: f64, // shape parameter >= 0.5
+}
+
+impl Nakagami {
+    #[must_use]
+    pub fn new(nu: f64) -> Self {
+        assert!(nu >= 0.5, "nu must be >= 0.5");
+        Self { nu }
+    }
+}
+
+impl ContinuousDistribution for Nakagami {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let nu = self.nu;
+        2.0 * nu.powf(nu) / ln_gamma(nu).exp() * x.powf(2.0 * nu - 1.0)
+            * (-nu * x * x).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        lower_regularized_gamma(self.nu, self.nu * x * x)
+    }
+
+    fn mean(&self) -> f64 {
+        ln_gamma(self.nu + 0.5).exp() / (self.nu.sqrt() * ln_gamma(self.nu).exp())
+    }
+
+    fn var(&self) -> f64 {
+        let m = self.mean();
+        1.0 - m * m
+    }
+}
+
+/// Log-logistic (Fisk) distribution.
+///
+/// Matches `scipy.stats.fisk`.
+pub struct Fisk {
+    pub c: f64, // shape
+}
+
+impl Fisk {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for Fisk {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        c * x.powf(c - 1.0) / (1.0 + x.powf(c)).powi(2)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            0.0
+        } else {
+            1.0 / (1.0 + x.powf(-self.c))
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        (q / (1.0 - q)).powf(1.0 / self.c)
+    }
+
+    fn mean(&self) -> f64 {
+        if self.c > 1.0 {
+            let b = PI / self.c;
+            b / b.sin()
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.c > 2.0 {
+            let b = PI / self.c;
+            2.0 * b / (2.0 * b).sin() - b * b / (b.sin() * b.sin())
+        } else {
+            f64::INFINITY
+        }
+    }
+}
+
+/// Loguniform (reciprocal) distribution on [a, b].
+///
+/// Matches `scipy.stats.loguniform`.
+pub struct Loguniform {
+    pub a: f64,
+    pub b: f64,
+}
+
+impl Loguniform {
+    #[must_use]
+    pub fn new(a: f64, b: f64) -> Self {
+        assert!(a > 0.0, "a must be positive");
+        assert!(b > a, "b must be greater than a");
+        Self { a, b }
+    }
+}
+
+impl ContinuousDistribution for Loguniform {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < self.a || x > self.b {
+            0.0
+        } else {
+            1.0 / (x * (self.b / self.a).ln())
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= self.a {
+            0.0
+        } else if x >= self.b {
+            1.0
+        } else {
+            (x / self.a).ln() / (self.b / self.a).ln()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return self.a;
+        }
+        if q >= 1.0 {
+            return self.b;
+        }
+        self.a * (self.b / self.a).powf(q)
+    }
+
+    fn mean(&self) -> f64 {
+        (self.b - self.a) / (self.b / self.a).ln()
+    }
+
+    fn var(&self) -> f64 {
+        let log_ratio = (self.b / self.a).ln();
+        let m = self.mean();
+        (self.b * self.b - self.a * self.a) / (2.0 * log_ratio) - m * m
+    }
+}
+
+// Discrete distributions: Zipf, Boltzmann, etc.
+
+/// Zipf (zeta) distribution.
+///
+/// Matches `scipy.stats.zipf`.
+pub struct Zipf {
+    pub a: f64,
+}
+
+impl Zipf {
+    #[must_use]
+    pub fn new(a: f64) -> Self {
+        assert!(a > 1.0, "a must be > 1");
+        Self { a }
+    }
+
+    /// PMF: P(X=k) = k^{-a} / zeta(a)
+    pub fn pmf(&self, k: usize) -> f64 {
+        if k == 0 {
+            return 0.0;
+        }
+        (k as f64).powf(-self.a) / riemann_zeta(self.a)
+    }
+
+    /// CDF: sum of PMF from 1 to k.
+    pub fn cdf(&self, k: usize) -> f64 {
+        let z = riemann_zeta(self.a);
+        let mut sum = 0.0;
+        for i in 1..=k {
+            sum += (i as f64).powf(-self.a);
+        }
+        (sum / z).min(1.0)
+    }
+
+    /// Mean: zeta(a-1)/zeta(a), exists for a > 2.
+    pub fn mean(&self) -> f64 {
+        if self.a > 2.0 {
+            riemann_zeta(self.a - 1.0) / riemann_zeta(self.a)
+        } else {
+            f64::INFINITY
+        }
+    }
+}
+
+/// Helper: Riemann zeta function for real s > 1.
+fn riemann_zeta(s: f64) -> f64 {
+    // Direct summation with acceleration
+    let mut sum = 0.0;
+    for k in 1..=10000 {
+        let term = (k as f64).powf(-s);
+        sum += term;
+        if term < 1e-15 * sum {
+            break;
+        }
+    }
+    sum
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Statistical Tests
 // ══════════════════════════════════════════════════════════════════════
 
@@ -7056,5 +7793,119 @@ mod tests {
             pdf.ln(),
             logpdf
         );
+    }
+
+    #[test]
+    fn inverse_gamma_pdf_cdf() {
+        let ig = InverseGamma::new(3.0);
+        assert!(ig.pdf(1.0) > 0.0);
+        assert!(ig.pdf(-1.0) == 0.0);
+        let c = ig.cdf(1.0);
+        assert!(c > 0.0 && c < 1.0);
+        assert!((ig.mean() - 0.5).abs() < 1e-10); // 1/(a-1) = 1/2
+    }
+
+    #[test]
+    fn inverse_gaussian_pdf_cdf() {
+        let ig = InverseGaussian::new(1.0);
+        assert!(ig.pdf(1.0) > 0.0);
+        assert!(ig.pdf(-1.0) == 0.0);
+        let c = ig.cdf(1.0);
+        assert!(c > 0.0 && c < 1.0);
+        assert!((ig.mean() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn gen_extreme_gumbel_case() {
+        let gev = GenExtreme::new(0.0); // Gumbel
+        assert!(gev.pdf(0.0) > 0.0);
+        let c = gev.cdf(0.0);
+        assert!(c > 0.0 && c < 1.0);
+    }
+
+    #[test]
+    fn gen_pareto_pdf_cdf() {
+        let gp = GenPareto::new(0.5);
+        assert!(gp.pdf(1.0) > 0.0);
+        assert!(gp.pdf(-1.0) == 0.0);
+        let c = gp.cdf(1.0);
+        assert!(c > 0.0 && c < 1.0);
+    }
+
+    #[test]
+    fn power_law_cdf_ppf() {
+        let pl = PowerLaw::new(2.0);
+        assert!((pl.cdf(0.5) - 0.25).abs() < 1e-10); // x^a = 0.25
+        assert!((pl.ppf(0.25) - 0.5).abs() < 1e-10);
+        assert!((pl.mean() - 2.0 / 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn half_normal_pdf_cdf() {
+        let hn = HalfNormal;
+        assert!(hn.pdf(0.0) > 0.0);
+        assert!(hn.pdf(-1.0) == 0.0);
+        let c = hn.cdf(1.0);
+        assert!(c > 0.0 && c < 1.0);
+        assert!((hn.mean() - (2.0 / PI).sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn trunc_normal_within_bounds() {
+        let tn = TruncNormal::new(-1.0, 1.0);
+        assert!(tn.pdf(0.0) > 0.0);
+        assert!(tn.pdf(2.0) == 0.0);
+        assert!(tn.cdf(-1.0) == 0.0);
+        assert!(tn.cdf(1.0) == 1.0);
+    }
+
+    #[test]
+    fn chi_dist_cdf() {
+        let chi = Chi::new(2.0);
+        assert!(chi.pdf(1.0) > 0.0);
+        let c = chi.cdf(1.0);
+        assert!(c > 0.0 && c < 1.0);
+    }
+
+    #[test]
+    fn fisk_cdf_ppf() {
+        let f = Fisk::new(2.0);
+        let x = 1.0;
+        let c = f.cdf(x);
+        assert!((c - 0.5).abs() < 1e-10); // CDF(1) = 1/(1+1) = 0.5
+        assert!((f.ppf(0.5) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn loguniform_cdf_ppf() {
+        let lu = Loguniform::new(1.0, 10.0);
+        assert!((lu.cdf(1.0) - 0.0).abs() < 1e-10);
+        assert!((lu.cdf(10.0) - 1.0).abs() < 1e-10);
+        assert!((lu.ppf(0.5) - (10.0f64).sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn zipf_pmf_sums() {
+        let z = Zipf::new(2.0);
+        // PMF should be positive and decreasing
+        assert!(z.pmf(1) > z.pmf(2));
+        assert!(z.pmf(2) > z.pmf(3));
+        let c = z.cdf(10);
+        assert!(c > 0.9); // most mass in first 10 terms
+    }
+
+    #[test]
+    fn nakagami_pdf_cdf() {
+        let n = Nakagami::new(1.0);
+        assert!(n.pdf(1.0) > 0.0);
+        let c = n.cdf(1.0);
+        assert!(c > 0.0 && c < 1.0);
+    }
+
+    #[test]
+    fn rice_pdf_positive() {
+        let r = Rice::new(1.0);
+        assert!(r.pdf(1.0) > 0.0);
+        assert!(r.pdf(-1.0) == 0.0);
     }
 }

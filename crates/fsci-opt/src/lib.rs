@@ -17,7 +17,8 @@ pub use minimize::{
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, bisect,
-    brenth, brentq, broyden1, fsolve, ridder, root, root_scalar,
+    brenth, brentq, broyden1, fsolve, halley, newton_scalar, ridder, root, root_scalar, secant,
+    toms748,
 };
 pub use types::{
     Bounds, ConvergenceStatus, LinearConstraint, MinimizeOptions, NonlinearConstraint, OptError,
@@ -1161,13 +1162,11 @@ where
 
     // Temperature schedule
     let t_initial = 5230.0; // SciPy default
-    let visit_param = 2.62; // visiting distribution parameter
-
     for iteration in 0..maxiter {
         let temp = t_initial / (iteration as f64 + 1.0).ln().max(1.0);
 
         // Generate candidate via visiting distribution (Cauchy-like perturbation)
-        let mut x_candidate: Vec<f64> = x_current
+        let x_candidate: Vec<f64> = x_current
             .iter()
             .zip(bounds.iter())
             .map(|(&xi, &(lo, hi))| {
@@ -1247,6 +1246,164 @@ where
     })
 }
 
+/// Simplicial homology global optimization over a bounded box.
+///
+/// This implementation uses a bounded lattice search to identify promising
+/// simplicial cells, then polishes the best seeds with the existing L-BFGS-B
+/// local optimizer. It matches the high-level contract of
+/// `scipy.optimize.shgo(func, bounds)` for unconstrained bounded problems.
+pub fn shgo<F>(func: F, bounds: &[(f64, f64)]) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let ndim = bounds.len();
+    if ndim == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "bounds must be non-empty".to_string(),
+        });
+    }
+    for (i, &(lo, hi)) in bounds.iter().enumerate() {
+        if !lo.is_finite() || !hi.is_finite() {
+            return Err(OptError::InvalidBounds {
+                detail: format!("variable {i}: bounds must be finite, got ({lo}, {hi})"),
+            });
+        }
+        if lo >= hi {
+            return Err(OptError::InvalidBounds {
+                detail: format!("variable {i}: lower bound {lo} >= upper bound {hi}"),
+            });
+        }
+    }
+
+    let target_points = 5usize.saturating_pow((ndim.min(4)) as u32).max(9);
+    let axis_levels = ((target_points as f64).powf(1.0 / ndim as f64).ceil() as usize + 1).max(3);
+    let mut lattice = Vec::new();
+    let mut current = vec![0.0; ndim];
+    build_shgo_lattice(bounds, axis_levels, 0, &mut current, &mut lattice);
+
+    let mut nfev = 0usize;
+    let mut ranked: Vec<(f64, Vec<f64>)> = lattice
+        .into_iter()
+        .filter_map(|point| {
+            let value = func(&point);
+            nfev += 1;
+            value.is_finite().then_some((value, point))
+        })
+        .collect();
+
+    if ranked.is_empty() {
+        return Err(OptError::NonFiniteInput {
+            detail: "objective returned only non-finite values over the bounded domain".to_string(),
+        });
+    }
+
+    ranked.sort_by(|lhs, rhs| lhs.0.partial_cmp(&rhs.0).unwrap_or(std::cmp::Ordering::Equal));
+    let starts = select_shgo_starts(&ranked, bounds, 8);
+    let bound_tuples: Vec<Bound> = bounds.iter().map(|&(lo, hi)| (Some(lo), Some(hi))).collect();
+    let local_options = MinimizeOptions {
+        method: Some(OptimizeMethod::LBfgsB),
+        tol: Some(1e-8),
+        maxiter: Some(250),
+        maxfev: Some(2500),
+        ..MinimizeOptions::default()
+    };
+
+    let mut best_x = ranked[0].1.clone();
+    let mut best_fun = ranked[0].0;
+    let mut total_nit = 0usize;
+
+    for start in starts {
+        let local = lbfgsb(&func, &start, local_options, Some(&bound_tuples))?;
+        nfev += local.nfev;
+        total_nit += local.nit;
+        if let Some(fun) = local.fun
+            && fun < best_fun
+        {
+            best_fun = fun;
+            best_x = local.x;
+        }
+    }
+
+    Ok(OptimizeResult {
+        x: best_x,
+        fun: Some(best_fun),
+        success: true,
+        status: ConvergenceStatus::Success,
+        message: "shgo completed".to_string(),
+        nfev,
+        njev: 0,
+        nhev: 0,
+        nit: total_nit.max(1),
+        jac: None,
+        hess_inv: None,
+        maxcv: None,
+    })
+}
+
+fn build_shgo_lattice(
+    bounds: &[(f64, f64)],
+    axis_levels: usize,
+    dim: usize,
+    current: &mut Vec<f64>,
+    lattice: &mut Vec<Vec<f64>>,
+) {
+    if dim == bounds.len() {
+        lattice.push(current.clone());
+        return;
+    }
+
+    let (lo, hi) = bounds[dim];
+    for step in 0..axis_levels {
+        let fraction = if axis_levels == 1 {
+            0.0
+        } else {
+            step as f64 / (axis_levels - 1) as f64
+        };
+        current[dim] = lo + fraction * (hi - lo);
+        build_shgo_lattice(bounds, axis_levels, dim + 1, current, lattice);
+    }
+}
+
+fn select_shgo_starts(
+    ranked: &[(f64, Vec<f64>)],
+    bounds: &[(f64, f64)],
+    max_starts: usize,
+) -> Vec<Vec<f64>> {
+    let mut starts = Vec::new();
+    let distance_scale = bounds
+        .iter()
+        .map(|(lo, hi)| hi - lo)
+        .sum::<f64>()
+        .max(1.0);
+    let min_distance = 0.1 * distance_scale / bounds.len() as f64;
+
+    for (_, point) in ranked {
+        let distinct = starts.iter().all(|existing: &Vec<f64>| {
+            existing
+                .iter()
+                .zip(point.iter())
+                .map(|(lhs, rhs)| {
+                    let delta = lhs - rhs;
+                    delta * delta
+                })
+                .sum::<f64>()
+                .sqrt()
+                >= min_distance
+        });
+        if distinct {
+            starts.push(point.clone());
+            if starts.len() >= max_starts {
+                break;
+            }
+        }
+    }
+
+    if starts.is_empty() {
+        starts.push(ranked[0].1.clone());
+    }
+    starts
+}
+
 /// Simple deterministic pseudo-random number generator (xorshift64).
 struct SimpleRng {
     state: u64,
@@ -1298,7 +1455,7 @@ where
     let mut nfev = 1usize;
     let mut rho = rhobeg;
 
-    for iteration in 0..maxiter {
+    for _iteration in 0..maxiter {
         // Check constraints
         let mut max_violation = 0.0_f64;
         for constraint in constraints {
@@ -1319,12 +1476,10 @@ where
                 nfev += 1;
 
                 // Check all constraints
-                let mut feasible = true;
                 let mut trial_violation = 0.0;
                 for constraint in constraints {
                     let cv = constraint(&x_trial);
                     if cv < -1e-10 {
-                        feasible = false;
                         trial_violation += -cv;
                     }
                 }
@@ -1375,7 +1530,7 @@ mod tests {
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions,
         LinearConstraint, MinimizeOptions, NonlinearConstraint, OptimizeMethod, RootOptions,
         approx_fprime, basinhopping, check_grad, cobyla, differential_evolution, dual_annealing,
-        linear_sum_assignment, linprog,
+        linear_sum_assignment, linprog, shgo,
     };
 
     #[test]
@@ -1962,6 +2117,44 @@ mod tests {
     fn dual_annealing_empty_bounds_rejected() {
         let err = dual_annealing(|_| 0.0, &[], 100, 42).expect_err("empty");
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn shgo_finds_sphere_minimum() {
+        let result = shgo(
+            |x| x.iter().map(|&xi| xi * xi).sum(),
+            &[(-5.0, 5.0), (-5.0, 5.0)],
+        )
+        .expect("shgo sphere");
+        assert!(result.success);
+        assert!(
+            result.fun.expect("objective value") < 1e-6,
+            "expected near-zero minimum, got {:?}",
+            result.fun
+        );
+    }
+
+    #[test]
+    fn shgo_finds_multimodal_global_minimum() {
+        let result = shgo(
+            |x| {
+                let xi = x[0];
+                xi.powi(4) - 4.0 * xi * xi + xi
+            },
+            &[(-3.0, 3.0)],
+        )
+        .expect("shgo multimodal");
+        assert!(
+            result.fun.expect("objective value") < -3.0,
+            "expected global basin, got {:?}",
+            result.fun
+        );
+    }
+
+    #[test]
+    fn shgo_rejects_invalid_bounds() {
+        let err = shgo(|_| 0.0, &[(1.0, 1.0)]).expect_err("invalid bounds");
+        assert!(matches!(err, crate::OptError::InvalidBounds { .. }));
     }
 
     // ── COBYLA tests ─────────────────────────────────────────────────

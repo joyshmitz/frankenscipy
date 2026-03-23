@@ -2650,10 +2650,11 @@ pub fn issymmetric(a: &[Vec<f64>], atol: f64, rtol: f64) -> Result<bool, LinalgE
     if rows != cols {
         return Ok(false);
     }
-    for i in 0..rows {
-        for j in (i + 1)..cols {
-            let diff = (a[i][j] - a[j][i]).abs();
-            let scale = a[i][j].abs().max(a[j][i].abs());
+    for (i, row) in a.iter().enumerate().take(rows) {
+        for (j, &upper) in row.iter().enumerate().skip(i + 1).take(cols - (i + 1)) {
+            let lower = a[j][i];
+            let diff = (upper - lower).abs();
+            let scale = upper.abs().max(lower.abs());
             if diff > atol + rtol * scale {
                 return Ok(false);
             }
@@ -6206,5 +6207,27 @@ mod proptest_tests {
     fn issymmetric_non_square() {
         let a = vec![vec![1.0, 2.0, 3.0]];
         assert!(!issymmetric(&a, 0.0, 0.0).expect("non-square"));
+    }
+
+    #[test]
+    fn ishermitian_matches_symmetric_for_real_matrix() {
+        let a = vec![vec![2.0, -1.0], vec![-1.0, 3.0]];
+        assert!(ishermitian(&a, 0.0, 0.0).expect("ishermitian"));
+    }
+
+    #[test]
+    fn ishermitian_false_for_real_asymmetric_matrix() {
+        let a = vec![vec![1.0, 4.0], vec![2.0, 3.0]];
+        assert!(!ishermitian(&a, 0.0, 0.0).expect("ishermitian"));
+    }
+
+    #[test]
+    fn matrix_rank_explicit_tolerance_changes_result() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1e-12]];
+        let default_rank = matrix_rank(&a, None, DecompOptions::default()).expect("default rank");
+        let tolerant_rank =
+            matrix_rank(&a, Some(1e-10), DecompOptions::default()).expect("tolerant rank");
+        assert_eq!(default_rank, 2);
+        assert_eq!(tolerant_rank, 1);
     }
 }

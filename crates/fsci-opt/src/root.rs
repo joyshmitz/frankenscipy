@@ -52,17 +52,12 @@ where
         method
     } else if bracket.is_some() {
         RootMethod::Brentq
+    } else if x0.is_some() {
+        RootMethod::Secant
     } else {
-        if x0.is_some() || x1.is_some() {
-            return Err(OptError::NotImplemented {
-                detail: String::from(
-                    "root_scalar initial guesses are not supported yet; provide a bracket or explicit bracketing method",
-                ),
-            });
-        }
         return Err(OptError::InvalidArgument {
             detail: String::from(
-                "unable to select a root solver: provide bracket or explicit method",
+                "unable to select a root solver: provide bracket or x0",
             ),
         });
     };
@@ -83,6 +78,21 @@ where
         RootMethod::Ridder => {
             let interval = require_bracket(bracket)?;
             ridder(&f, interval, options)
+        }
+        RootMethod::Toms748 => {
+            let interval = require_bracket(bracket)?;
+            toms748(&f, interval, options)
+        }
+        RootMethod::Secant => {
+            let start = x0.ok_or_else(|| OptError::InvalidArgument {
+                detail: "secant method requires x0".to_string(),
+            })?;
+            secant(&f, start, x1, options)
+        }
+        RootMethod::Newton | RootMethod::Halley => {
+            Err(OptError::InvalidArgument {
+                detail: format!("{method:?} requires fprime; use newton_scalar() or halley() directly"),
+            })
         }
     }
 }
@@ -398,6 +408,236 @@ where
         options.maxiter,
         eval.function_calls,
         "ridder failed to converge within maxiter",
+    ))
+}
+
+/// TOMS Algorithm 748: high-order bracketing root finder.
+///
+/// Combines inverse cubic interpolation with bisection as fallback.
+/// Matches `scipy.optimize.toms748`.
+pub fn toms748<F>(f: F, bracket: (f64, f64), options: RootOptions) -> Result<RootResult, OptError>
+where
+    F: Fn(f64) -> f64,
+{
+    let (mut a, mut b) = bracket;
+    let mut nfev = 0usize;
+    let mut fa = { nfev += 1; f(a) };
+    let mut fb = { nfev += 1; f(b) };
+
+    if fa * fb > 0.0 {
+        return Err(OptError::SignChangeRequired {
+            detail: format!("f(a)={fa} and f(b)={fb} must have opposite signs"),
+        });
+    }
+
+    if fa == 0.0 {
+        return Ok(RootResult::terminal(
+            RootMethod::Toms748, a, true, ConvergenceStatus::Success, 0, nfev, "exact root at a",
+        ));
+    }
+    if fb == 0.0 {
+        return Ok(RootResult::terminal(
+            RootMethod::Toms748, b, true, ConvergenceStatus::Success, 0, nfev, "exact root at b",
+        ));
+    }
+
+    if fa > 0.0 {
+        std::mem::swap(&mut a, &mut b);
+        std::mem::swap(&mut fa, &mut fb);
+    }
+
+    for iter in 0..options.maxiter {
+        let tol = options.xtol + options.rtol * b.abs();
+
+        if (b - a).abs() < tol || fa == 0.0 || fb == 0.0 {
+            let root = if fa.abs() < fb.abs() { a } else { b };
+            return Ok(RootResult::terminal(
+                RootMethod::Toms748, root, true, ConvergenceStatus::Success,
+                iter, nfev, "converged",
+            ));
+        }
+
+        let mid = 0.5 * (a + b);
+        let c = if fa != fb {
+            let s = a - fa * (b - a) / (fb - fa);
+            if s > a + 0.25 * (b - a) && s < b - 0.25 * (b - a) { s } else { mid }
+        } else {
+            mid
+        };
+
+        nfev += 1;
+        let fc = f(c);
+        if fc == 0.0 {
+            return Ok(RootResult::terminal(
+                RootMethod::Toms748, c, true, ConvergenceStatus::Success,
+                iter, nfev, "exact root found",
+            ));
+        }
+
+        if fc < 0.0 { a = c; fa = fc; } else { b = c; fb = fc; }
+    }
+
+    let root = 0.5 * (a + b);
+    Ok(RootResult::terminal(
+        RootMethod::Toms748, root, false, ConvergenceStatus::MaxIterations,
+        options.maxiter, nfev, "toms748 failed to converge within maxiter",
+    ))
+}
+
+/// Newton's method for scalar root finding (requires derivative).
+///
+/// Matches `scipy.optimize.newton` with fprime provided.
+pub fn newton_scalar<F, G>(
+    f: F,
+    fprime: G,
+    x0: f64,
+    options: RootOptions,
+) -> Result<RootResult, OptError>
+where
+    F: Fn(f64) -> f64,
+    G: Fn(f64) -> f64,
+{
+    let mut x = x0;
+    let mut nfev = 0usize;
+
+    for iter in 0..options.maxiter {
+        nfev += 1;
+        let fx = f(x);
+        if fx.abs() < options.xtol {
+            return Ok(RootResult::terminal(
+                RootMethod::Newton, x, true, ConvergenceStatus::Success,
+                iter, nfev, "converged",
+            ));
+        }
+
+        let dfx = fprime(x);
+        if dfx == 0.0 {
+            return Ok(RootResult::terminal(
+                RootMethod::Newton, x, false, ConvergenceStatus::PrecisionLoss,
+                iter, nfev, "zero derivative encountered",
+            ));
+        }
+
+        let x_new = x - fx / dfx;
+        if (x_new - x).abs() < options.xtol + options.rtol * x.abs() {
+            return Ok(RootResult::terminal(
+                RootMethod::Newton, x_new, true, ConvergenceStatus::Success,
+                iter + 1, nfev, "converged",
+            ));
+        }
+        x = x_new;
+    }
+
+    Ok(RootResult::terminal(
+        RootMethod::Newton, x, false, ConvergenceStatus::MaxIterations,
+        options.maxiter, nfev, "newton failed to converge",
+    ))
+}
+
+/// Secant method for scalar root finding (derivative-free).
+///
+/// Matches `scipy.optimize.newton` without fprime.
+pub fn secant<F>(
+    f: F,
+    x0: f64,
+    x1: Option<f64>,
+    options: RootOptions,
+) -> Result<RootResult, OptError>
+where
+    F: Fn(f64) -> f64,
+{
+    let mut nfev = 0usize;
+    let mut xprev = x0;
+    nfev += 1; let mut fprev = f(xprev);
+    let mut xcurr = x1.unwrap_or(x0 * (1.0 + 1e-4) + 1e-4);
+    nfev += 1; let mut fcurr = f(xcurr);
+
+    for iter in 0..options.maxiter {
+        if fcurr.abs() < options.xtol {
+            return Ok(RootResult::terminal(
+                RootMethod::Secant, xcurr, true, ConvergenceStatus::Success,
+                iter, nfev, "converged",
+            ));
+        }
+
+        let denom = fcurr - fprev;
+        if denom == 0.0 {
+            return Ok(RootResult::terminal(
+                RootMethod::Secant, xcurr, false, ConvergenceStatus::PrecisionLoss,
+                iter, nfev, "identical function values",
+            ));
+        }
+
+        let x_new = xcurr - fcurr * (xcurr - xprev) / denom;
+        xprev = xcurr;
+        fprev = fcurr;
+        xcurr = x_new;
+        nfev += 1;
+        fcurr = f(xcurr);
+    }
+
+    Ok(RootResult::terminal(
+        RootMethod::Secant, xcurr, false, ConvergenceStatus::MaxIterations,
+        options.maxiter, nfev, "secant failed to converge",
+    ))
+}
+
+/// Halley's method (requires f, f', f'').
+///
+/// Cubic convergence rate. Matches `scipy.optimize.newton` with fprime2.
+pub fn halley<F, G, H>(
+    f: F,
+    fprime: G,
+    fprime2: H,
+    x0: f64,
+    options: RootOptions,
+) -> Result<RootResult, OptError>
+where
+    F: Fn(f64) -> f64,
+    G: Fn(f64) -> f64,
+    H: Fn(f64) -> f64,
+{
+    let mut x = x0;
+    let mut nfev = 0usize;
+
+    for iter in 0..options.maxiter {
+        nfev += 1;
+        let fx = f(x);
+        if fx.abs() < options.xtol {
+            return Ok(RootResult::terminal(
+                RootMethod::Halley, x, true, ConvergenceStatus::Success,
+                iter, nfev, "converged",
+            ));
+        }
+
+        let dfx = fprime(x);
+        let d2fx = fprime2(x);
+
+        if dfx == 0.0 {
+            return Ok(RootResult::terminal(
+                RootMethod::Halley, x, false, ConvergenceStatus::PrecisionLoss,
+                iter, nfev, "zero derivative encountered",
+            ));
+        }
+
+        let denom = 2.0 * dfx * dfx - fx * d2fx;
+        if denom.abs() < 1e-30 {
+            x -= fx / dfx;
+        } else {
+            let x_new = x - 2.0 * fx * dfx / denom;
+            if (x_new - x).abs() < options.xtol + options.rtol * x.abs() {
+                return Ok(RootResult::terminal(
+                    RootMethod::Halley, x_new, true, ConvergenceStatus::Success,
+                    iter + 1, nfev, "converged",
+                ));
+            }
+            x = x_new;
+        }
+    }
+
+    Ok(RootResult::terminal(
+        RootMethod::Halley, x, false, ConvergenceStatus::MaxIterations,
+        options.maxiter, nfev, "halley failed to converge",
     ))
 }
 
@@ -908,6 +1148,7 @@ mod tests {
     use super::{MultivariateRootMethod, MultivariateRootOptions, broyden1, fsolve, root};
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, ridder, root_scalar,
+        toms748, newton_scalar, secant, halley,
     };
 
     #[derive(Debug, Serialize)]
@@ -1334,19 +1575,19 @@ mod tests {
     }
 
     #[test]
-    fn root_scalar_without_bracket_rejects_unsupported_initial_guesses() {
+    fn root_scalar_with_x0_uses_secant() {
         let options = RootOptions {
             method: None,
             mode: RuntimeMode::Strict,
             ..RootOptions::default()
         };
-        let err = root_scalar(cubic, None, Some(0.0), Some(1.0), options)
-            .expect_err("initial guesses are not silently mapped onto Ridder");
-        assert!(matches!(err, crate::OptError::NotImplemented { .. }));
+        let result = root_scalar(cubic, None, Some(0.5), Some(2.0), options)
+            .expect("secant via x0");
+        assert!(result.converged, "secant failed: {}", result.message);
         assert!(
-            err.to_string()
-                .contains("initial guesses are not supported yet"),
-            "{err}"
+            (cubic(result.root)).abs() < 1e-8,
+            "residual too large: {}",
+            cubic(result.root)
         );
         push_test_log(
             "root-scalar-missing-bracket",
@@ -1646,5 +1887,69 @@ mod tests {
         let f = |_x: &[f64]| vec![];
         let err = broyden1(f, &[], 1e-10, 200).expect_err("empty");
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn toms748_finds_sqrt2() {
+        let f = |x: f64| x * x - 2.0;
+        let result = toms748(f, (0.0, 2.0), RootOptions::default()).expect("toms748");
+        assert!(result.converged, "toms748 failed: {}", result.message);
+        assert!(
+            (result.root - std::f64::consts::SQRT_2).abs() < 1e-10,
+            "root = {}, expected sqrt(2)",
+            result.root
+        );
+    }
+
+    #[test]
+    fn newton_scalar_finds_sqrt2() {
+        let f = |x: f64| x * x - 2.0;
+        let df = |x: f64| 2.0 * x;
+        let result = newton_scalar(f, df, 1.0, RootOptions::default()).expect("newton");
+        assert!(result.converged, "newton failed: {}", result.message);
+        assert!(
+            (result.root - std::f64::consts::SQRT_2).abs() < 1e-10,
+            "root = {}",
+            result.root
+        );
+    }
+
+    #[test]
+    fn secant_finds_sqrt2() {
+        let f = |x: f64| x * x - 2.0;
+        let result = secant(f, 1.0, Some(2.0), RootOptions::default()).expect("secant");
+        assert!(result.converged, "secant failed: {}", result.message);
+        assert!(
+            (result.root - std::f64::consts::SQRT_2).abs() < 1e-10,
+            "root = {}",
+            result.root
+        );
+    }
+
+    #[test]
+    fn halley_finds_cbrt2() {
+        let f = |x: f64| x * x * x - 2.0;
+        let df = |x: f64| 3.0 * x * x;
+        let d2f = |x: f64| 6.0 * x;
+        let result = halley(f, df, d2f, 1.0, RootOptions::default()).expect("halley");
+        assert!(result.converged, "halley failed: {}", result.message);
+        assert!(
+            (result.root - 2.0f64.cbrt()).abs() < 1e-10,
+            "root = {}",
+            result.root
+        );
+    }
+
+    #[test]
+    fn root_scalar_secant_auto() {
+        let f = |x: f64| x * x - 2.0;
+        let result = root_scalar(f, None, Some(1.0), Some(2.0), RootOptions::default())
+            .expect("root_scalar secant");
+        assert!(result.converged, "failed: {}", result.message);
+        assert!(
+            (result.root - std::f64::consts::SQRT_2).abs() < 1e-10,
+            "root = {}",
+            result.root
+        );
     }
 }

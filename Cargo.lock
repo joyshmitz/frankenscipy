@@ -615,6 +615,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fsci-io"
+version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+ "proptest",
+]
+
+[[package]]
 name = "fsci-linalg"
 version = "0.1.0"
 dependencies = [
@@ -625,6 +633,14 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "fsci-ndimage"
+version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+ "proptest",
 ]
 
 [[package]]
