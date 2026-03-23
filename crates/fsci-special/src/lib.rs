@@ -37,8 +37,9 @@ pub use gamma::{
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
 pub use orthopoly::{
     eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite, eval_hermitenorm,
-    eval_jacobi, eval_laguerre, eval_legendre, lpmv, roots_chebyt, roots_hermite, roots_jacobi,
-    roots_laguerre, roots_legendre, sph_harm, sph_harm_y,
+    eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt, eval_sh_chebyu, eval_sh_legendre,
+    lpmv, roots_chebyt, roots_hermite, roots_jacobi, roots_laguerre, roots_legendre, sph_harm,
+    sph_harm_y,
 };
 pub use types::{
     Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,

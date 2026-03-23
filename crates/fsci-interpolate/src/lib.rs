@@ -1096,6 +1096,35 @@ impl UnivariateSpline {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct InterpolatedUnivariateSpline {
+    spline: UnivariateSpline,
+}
+
+impl InterpolatedUnivariateSpline {
+    pub fn new(x: &[f64], y: &[f64]) -> Result<Self, InterpError> {
+        Ok(Self {
+            spline: UnivariateSpline::new(x, y, 0.0)?,
+        })
+    }
+
+    pub fn eval(&self, x: f64) -> f64 {
+        self.spline.eval(x)
+    }
+
+    pub fn eval_many(&self, xs: &[f64]) -> Vec<f64> {
+        self.spline.eval_many(xs)
+    }
+
+    pub fn derivative(&self, nu: usize) -> Result<BSpline, InterpError> {
+        self.spline.derivative(nu)
+    }
+
+    pub fn integral(&self, a: f64, b: f64) -> Result<f64, InterpError> {
+        self.spline.integral(a, b)
+    }
+}
+
 pub fn make_interp_spline(x: &[f64], y: &[f64], k: usize) -> Result<BSpline, InterpError> {
     let n = x.len();
     if n != y.len() {
@@ -1967,6 +1996,42 @@ mod tests {
         assert!(interp_knot_residual < 1e-8);
         assert!(smooth_knot_residual > 1e-3);
         assert!((smooth.eval(2.5) - 6.25).abs() < 1.5);
+    }
+
+    #[test]
+    fn interpolated_univariate_spline_matches_exact_knots() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![2.0, -1.0, 4.0, 3.0];
+        let spline = InterpolatedUnivariateSpline::new(&x, &y).expect("interpolated spline");
+        for (&xi, &yi) in x.iter().zip(y.iter()) {
+            assert!((spline.eval(xi) - yi).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn interpolated_univariate_spline_matches_zero_smoothing_univariate() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![1.0, 0.0, 1.0, 8.0];
+        let interp = InterpolatedUnivariateSpline::new(&x, &y).expect("interpolated spline");
+        let uni = UnivariateSpline::new(&x, &y, 0.0).expect("univariate spline");
+        let xs = vec![0.25, 1.5, 2.75];
+        let lhs = interp.eval_many(&xs);
+        let rhs = uni.eval_many(&xs);
+        for (a, b) in lhs.iter().zip(rhs.iter()) {
+            assert!((a - b).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn interpolated_univariate_spline_derivative_and_integral_work() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 8.0, 27.0];
+        let spline = InterpolatedUnivariateSpline::new(&x, &y).expect("interpolated spline");
+        let deriv = spline.derivative(1).expect("derivative");
+        assert!(deriv.eval(1.5).is_finite());
+        let integral = spline.integral(0.0, 3.0).expect("integral");
+        assert!(integral.is_finite());
+        assert!(integral > 0.0);
     }
 
     // ── RBF Interpolator tests ───────────────────────────────────────

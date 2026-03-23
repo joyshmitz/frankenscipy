@@ -250,6 +250,29 @@ pub fn eval_gegenbauer(n: u32, alpha: f64, x: f64) -> f64 {
     c_curr
 }
 
+/// Evaluate the shifted Legendre polynomial P_n*(x) = P_n(2x - 1).
+///
+/// The shifted Legendre polynomials are orthogonal on [0, 1] instead of [-1, 1].
+///
+/// Matches `scipy.special.eval_sh_legendre(n, x)`.
+pub fn eval_sh_legendre(n: u32, x: f64) -> f64 {
+    eval_legendre(n, 2.0 * x - 1.0)
+}
+
+/// Evaluate the shifted Chebyshev polynomial T_n*(x) = T_n(2x - 1).
+///
+/// The shifted Chebyshev polynomials are orthogonal on [0, 1] instead of [-1, 1].
+///
+/// Matches `scipy.special.eval_sh_chebyt(n, x)`.
+pub fn eval_sh_chebyt(n: u32, x: f64) -> f64 {
+    eval_chebyt(n, 2.0 * x - 1.0)
+}
+
+/// Evaluate the shifted Chebyshev polynomial U_n*(x) = U_n(2x - 1).
+pub fn eval_sh_chebyu(n: u32, x: f64) -> f64 {
+    eval_chebyu(n, 2.0 * x - 1.0)
+}
+
 /// Compute Gauss-Legendre quadrature nodes and weights on [-1, 1].
 #[must_use]
 pub fn roots_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
@@ -1146,5 +1169,43 @@ mod tests {
             }
         }
         assert!(cross.abs() < 0.02, "Y_1^0 · Y_1^1 orthogonality: {cross}");
+    }
+
+    // ── Shifted polynomial tests ─────────────────────────────────────
+
+    #[test]
+    fn sh_legendre_at_endpoints() {
+        // P_n*(0) = P_n(-1) = (-1)^n
+        for n in 0..=6 {
+            let expected = if n % 2 == 0 { 1.0 } else { -1.0 };
+            assert_close(eval_sh_legendre(n, 0.0), expected, 1e-12, &format!("P*_{n}(0)"));
+        }
+        // P_n*(1) = P_n(1) = 1
+        for n in 0..=6 {
+            assert_close(eval_sh_legendre(n, 1.0), 1.0, 1e-12, &format!("P*_{n}(1)"));
+        }
+    }
+
+    #[test]
+    fn sh_legendre_midpoint() {
+        // P_n*(0.5) = P_n(0) = 0 for odd n, nonzero for even n
+        assert_close(eval_sh_legendre(1, 0.5), 0.0, 1e-12, "P*_1(0.5)");
+        assert_close(eval_sh_legendre(3, 0.5), 0.0, 1e-12, "P*_3(0.5)");
+    }
+
+    #[test]
+    fn sh_chebyt_at_endpoints() {
+        // T_n*(0) = T_n(-1) = (-1)^n
+        for n in 0..=6 {
+            let expected = if n % 2 == 0 { 1.0 } else { -1.0 };
+            assert_close(eval_sh_chebyt(n, 0.0), expected, 1e-12, &format!("T*_{n}(0)"));
+        }
+    }
+
+    #[test]
+    fn sh_chebyu_at_midpoint() {
+        // U_n*(0.5) = U_n(0) = 0 for odd n
+        assert_close(eval_sh_chebyu(1, 0.5), 0.0, 1e-12, "U*_1(0.5)");
+        assert_close(eval_sh_chebyu(3, 0.5), 0.0, 1e-12, "U*_3(0.5)");
     }
 }

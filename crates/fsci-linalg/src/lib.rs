@@ -2637,6 +2637,42 @@ pub fn solve_toeplitz(c: &[f64], r: Option<&[f64]>, b: &[f64]) -> Result<Vec<f64
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Matrix Property Checks
+// ══════════════════════════════════════════════════════════════════════
+
+/// Check if a matrix is symmetric within tolerance.
+///
+/// Returns true if `|A[i,j] - A[j,i]| <= atol + rtol * max(|A[i,j]|, |A[j,i]|)` for all i,j.
+///
+/// Matches `scipy.linalg.issymmetric(a, atol, rtol)`.
+pub fn issymmetric(a: &[Vec<f64>], atol: f64, rtol: f64) -> Result<bool, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Ok(false);
+    }
+    for i in 0..rows {
+        for j in (i + 1)..cols {
+            let diff = (a[i][j] - a[j][i]).abs();
+            let scale = a[i][j].abs().max(a[j][i].abs());
+            if diff > atol + rtol * scale {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Check if a matrix is Hermitian within tolerance.
+///
+/// For real matrices, this is equivalent to `issymmetric`.
+///
+/// Matches `scipy.linalg.ishermitian(a, atol, rtol)`.
+pub fn ishermitian(a: &[Vec<f64>], atol: f64, rtol: f64) -> Result<bool, LinalgError> {
+    // For real matrices, Hermitian = symmetric
+    issymmetric(a, atol, rtol)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Norms and Rank — Public API
 // ══════════════════════════════════════════════════════════════════════
 
@@ -6143,5 +6179,32 @@ mod proptest_tests {
         let err = solve_toeplitz(&[1.0, 2.0, 3.0], Some(&[1.0, 2.0]), &[1.0, 2.0, 3.0])
             .expect_err("row length mismatch");
         assert!(matches!(err, LinalgError::IncompatibleShapes { .. }));
+    }
+
+    // ── issymmetric / ishermitian tests ───────────────────────────────
+
+    #[test]
+    fn issymmetric_true_for_symmetric() {
+        let a = vec![vec![1.0, 2.0, 3.0], vec![2.0, 5.0, 6.0], vec![3.0, 6.0, 9.0]];
+        assert!(issymmetric(&a, 0.0, 0.0).expect("issymmetric"));
+    }
+
+    #[test]
+    fn issymmetric_false_for_asymmetric() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        assert!(!issymmetric(&a, 0.0, 0.0).expect("issymmetric"));
+    }
+
+    #[test]
+    fn issymmetric_with_tolerance() {
+        let a = vec![vec![1.0, 2.0], vec![2.0 + 1e-10, 4.0]];
+        assert!(!issymmetric(&a, 0.0, 0.0).expect("strict"));
+        assert!(issymmetric(&a, 1e-9, 0.0).expect("with tolerance"));
+    }
+
+    #[test]
+    fn issymmetric_non_square() {
+        let a = vec![vec![1.0, 2.0, 3.0]];
+        assert!(!issymmetric(&a, 0.0, 0.0).expect("non-square"));
     }
 }
