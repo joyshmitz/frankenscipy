@@ -36,6 +36,7 @@ pub enum SparseFormat {
     Csr,
     Csc,
     Coo,
+    Dia,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,6 +389,95 @@ impl CooMatrix {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiaMatrix {
+    pub(crate) shape: Shape2D,
+    pub(crate) offsets: Vec<isize>,
+    pub(crate) data: Vec<Vec<f64>>,
+}
+
+impl DiaMatrix {
+    pub fn from_diagonals(
+        shape: Shape2D,
+        offsets: Vec<isize>,
+        data: Vec<Vec<f64>>,
+    ) -> SparseResult<Self> {
+        if offsets.len() != data.len() {
+            return Err(SparseError::IncompatibleShape {
+                message: "DIA offsets and data lengths must match".to_string(),
+            });
+        }
+
+        let mut seen = std::collections::BTreeSet::new();
+        for (&offset, diagonal) in offsets.iter().zip(data.iter()) {
+            if !seen.insert(offset) {
+                return Err(SparseError::InvalidArgument {
+                    message: "DIA offsets must be unique".to_string(),
+                });
+            }
+
+            let expected_len = diagonal_len(shape, offset);
+            if expected_len == 0 {
+                return Err(SparseError::InvalidArgument {
+                    message: format!("DIA offset {offset} is out of bounds for matrix shape"),
+                });
+            }
+            if diagonal.len() != expected_len {
+                return Err(SparseError::IncompatibleShape {
+                    message: format!(
+                        "DIA diagonal for offset {offset} has length {}, expected {expected_len}",
+                        diagonal.len()
+                    ),
+                });
+            }
+        }
+
+        Ok(Self {
+            shape,
+            offsets,
+            data,
+        })
+    }
+
+    #[must_use]
+    pub const fn shape(&self) -> Shape2D {
+        self.shape
+    }
+
+    #[must_use]
+    pub fn nnz(&self) -> usize {
+        self.data.iter().map(Vec::len).sum()
+    }
+
+    #[must_use]
+    pub fn offsets(&self) -> &[isize] {
+        &self.offsets
+    }
+
+    #[must_use]
+    pub fn data(&self) -> &[Vec<f64>] {
+        &self.data
+    }
+
+    #[must_use]
+    pub fn construction_log(
+        &self,
+        mode: RuntimeMode,
+        operation_id: impl Into<String>,
+        validation_result: impl Into<String>,
+    ) -> ConstructionLogEntry {
+        ConstructionLogEntry {
+            timestamp: now_timestamp(),
+            operation_id: operation_id.into(),
+            format: SparseFormat::Dia,
+            shape: self.shape,
+            nnz: self.nnz(),
+            mode,
+            validation_result: validation_result.into(),
+        }
+    }
+}
+
 pub trait NalgebraBridge {
     fn to_nalgebra_cs(&self) -> NalgebraCsMatrix<f64>;
     fn from_nalgebra_cs(matrix: &NalgebraCsMatrix<f64>) -> SparseResult<Self>
@@ -608,6 +698,15 @@ fn validate_compressed(
     })
 }
 
+fn diagonal_len(shape: Shape2D, offset: isize) -> usize {
+    let start_row = if offset < 0 { (-offset) as usize } else { 0 };
+    let start_col = if offset > 0 { offset as usize } else { 0 };
+    shape
+        .rows
+        .saturating_sub(start_row)
+        .min(shape.cols.saturating_sub(start_col))
+}
+
 fn detect_canonical(indptr: &[usize], indices: &[usize]) -> (bool, bool) {
     let mut sorted = true;
     let mut deduplicated = true;
@@ -644,6 +743,7 @@ fn format_label(format: SparseFormat) -> &'static str {
         SparseFormat::Csr => "csr",
         SparseFormat::Csc => "csc",
         SparseFormat::Coo => "coo",
+        SparseFormat::Dia => "dia",
     }
 }
 

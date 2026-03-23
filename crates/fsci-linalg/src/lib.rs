@@ -2457,6 +2457,104 @@ pub fn fractional_matrix_power(
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
+// Specialized Solvers and Products
+// ══════════════════════════════════════════════════════════════════════
+
+/// Khatri-Rao product (column-wise Kronecker product).
+///
+/// For matrices A (m×n) and B (p×n), produces an (m*p × n) matrix where
+/// column j is the Kronecker product of A[:,j] and B[:,j].
+///
+/// Matches `scipy.linalg.khatri_rao(A, B)`.
+pub fn khatri_rao(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (m, na) = matrix_shape(a)?;
+    let (p, nb) = matrix_shape(b)?;
+    if na != nb {
+        return Err(LinalgError::NotSupported {
+            detail: format!("A has {na} columns but B has {nb} columns; must match"),
+        });
+    }
+    let ncols = na;
+    let nrows = m * p;
+
+    let mut result = vec![vec![0.0; ncols]; nrows];
+    for j in 0..ncols {
+        for i in 0..m {
+            for k in 0..p {
+                result[i * p + k][j] = a[i][j] * b[k][j];
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Solve a circulant linear system C x = b using FFT.
+///
+/// A circulant matrix is defined by its first column c. The solution
+/// is computed in O(n log n) via FFT: x = ifft(fft(b) / fft(c)).
+///
+/// Matches `scipy.linalg.solve_circulant(c, b)`.
+pub fn solve_circulant(c: &[f64], b: &[f64]) -> Result<Vec<f64>, LinalgError> {
+    let n = c.len();
+    if b.len() != n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (n, n),
+            b_len: b.len(),
+        });
+    }
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+
+    let nf = n as f64;
+
+    // Direct DFT of c and b
+    let mut fft_c = vec![(0.0, 0.0); n];
+    let mut fft_b = vec![(0.0, 0.0); n];
+    for k in 0..n {
+        for j in 0..n {
+            let angle = -2.0 * std::f64::consts::PI * k as f64 * j as f64 / nf;
+            let (cos_a, sin_a) = (angle.cos(), angle.sin());
+            fft_c[k].0 += c[j] * cos_a;
+            fft_c[k].1 += c[j] * sin_a;
+            fft_b[k].0 += b[j] * cos_a;
+            fft_b[k].1 += b[j] * sin_a;
+        }
+    }
+
+    // Element-wise division: fft_b / fft_c
+    let fft_x: Vec<(f64, f64)> = fft_b
+        .iter()
+        .zip(fft_c.iter())
+        .map(|(&(br, bi), &(cr, ci))| {
+            let denom = cr * cr + ci * ci;
+            if denom < 1e-30 {
+                (0.0, 0.0)
+            } else {
+                ((br * cr + bi * ci) / denom, (bi * cr - br * ci) / denom)
+            }
+        })
+        .collect();
+
+    // Inverse DFT
+    let mut x = vec![0.0; n];
+    for j in 0..n {
+        let mut re = 0.0;
+        for k in 0..n {
+            let angle = 2.0 * std::f64::consts::PI * k as f64 * j as f64 / nf;
+            re += fft_x[k].0 * angle.cos() - fft_x[k].1 * angle.sin();
+        }
+        x[j] = re / nf;
+    }
+
+    Ok(x)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Norms and Rank — Public API
 // ══════════════════════════════════════════════════════════════════════
 
@@ -5771,5 +5869,62 @@ mod proptest_tests {
         let a = vec![vec![1.0, 2.0]];
         let err = funm(&a, |x| x, DecompOptions::default()).expect_err("non-square");
         assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
+    // ── khatri_rao tests ─────────────────────────────────────────────
+
+    #[test]
+    fn khatri_rao_basic() {
+        // A = [[1,2],[3,4]], B = [[5,6]]
+        // Column 0: kron([1,3], [5]) = [5, 15]
+        // Column 1: kron([2,4], [6]) = [12, 24]
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let b = vec![vec![5.0, 6.0]];
+        let result = khatri_rao(&a, &b).expect("khatri_rao");
+        assert_eq!(result.len(), 2); // 2*1 rows
+        assert_eq!(result[0].len(), 2); // 2 cols
+        assert!((result[0][0] - 5.0).abs() < 1e-12);
+        assert!((result[1][0] - 15.0).abs() < 1e-12);
+        assert!((result[0][1] - 12.0).abs() < 1e-12);
+        assert!((result[1][1] - 24.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn khatri_rao_mismatched_cols() {
+        let a = vec![vec![1.0, 2.0]];
+        let b = vec![vec![1.0, 2.0, 3.0]];
+        let err = khatri_rao(&a, &b).expect_err("mismatched cols");
+        assert!(matches!(err, LinalgError::NotSupported { .. }));
+    }
+
+    // ── solve_circulant tests ────────────────────────────────────────
+
+    #[test]
+    fn solve_circulant_identity() {
+        // Circulant of [1, 0, 0] is the identity matrix
+        let c = [1.0, 0.0, 0.0];
+        let b = [2.0, 3.0, 4.0];
+        let x = solve_circulant(&c, &b).expect("solve_circulant");
+        for (i, (&xi, &bi)) in x.iter().zip(b.iter()).enumerate() {
+            assert!(
+                (xi - bi).abs() < 1e-10,
+                "x[{i}] = {xi}, expected {bi}"
+            );
+        }
+    }
+
+    #[test]
+    fn solve_circulant_shift() {
+        // Circulant of [0, 1, 0] is a shift matrix
+        // [0 0 1]   [x0]   [b0]
+        // [1 0 0] * [x1] = [b1]
+        // [0 1 0]   [x2]   [b2]
+        // So x0=b1, x1=b2, x2=b0
+        let c = [0.0, 1.0, 0.0];
+        let b = [1.0, 2.0, 3.0];
+        let x = solve_circulant(&c, &b).expect("solve_circulant shift");
+        assert!((x[0] - 2.0).abs() < 1e-10);
+        assert!((x[1] - 3.0).abs() < 1e-10);
+        assert!((x[2] - 1.0).abs() < 1e-10);
     }
 }

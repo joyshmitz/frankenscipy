@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fsci_runtime::RuntimeMode;
 
 use crate::formats::{
-    CooMatrix, CscMatrix, CsrMatrix, Shape2D, SparseError, SparseFormat, SparseResult,
+    CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, Shape2D, SparseError, SparseFormat, SparseResult,
 };
 
 pub trait FormatConvertible {
@@ -102,6 +102,34 @@ impl FormatConvertible for CscMatrix {
                 data.push(self.data()[idx]);
             }
         }
+        CooMatrix::from_triplets(self.shape(), data, rows, cols, false)
+    }
+}
+
+impl FormatConvertible for DiaMatrix {
+    fn to_csr(&self) -> SparseResult<CsrMatrix> {
+        self.to_coo()?.to_csr()
+    }
+
+    fn to_csc(&self) -> SparseResult<CscMatrix> {
+        self.to_coo()?.to_csc()
+    }
+
+    fn to_coo(&self) -> SparseResult<CooMatrix> {
+        let mut rows = Vec::with_capacity(self.nnz());
+        let mut cols = Vec::with_capacity(self.nnz());
+        let mut data = Vec::with_capacity(self.nnz());
+
+        for (&offset, diagonal) in self.offsets().iter().zip(self.data().iter()) {
+            let start_row = if offset < 0 { (-offset) as usize } else { 0 };
+            let start_col = if offset > 0 { offset as usize } else { 0 };
+            for (idx, &value) in diagonal.iter().enumerate() {
+                rows.push(start_row + idx);
+                cols.push(start_col + idx);
+                data.push(value);
+            }
+        }
+
         CooMatrix::from_triplets(self.shape(), data, rows, cols, false)
     }
 }
@@ -420,5 +448,6 @@ fn format_label(format: SparseFormat) -> &'static str {
         SparseFormat::Csr => "csr",
         SparseFormat::Csc => "csc",
         SparseFormat::Coo => "coo",
+        SparseFormat::Dia => "dia",
     }
 }

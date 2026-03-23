@@ -802,6 +802,47 @@ pub fn romb(y: &[f64], dx: f64) -> Result<f64, IntegrateValidationError> {
 /// * `options` — Quadrature options for each 1D integration.
 ///
 /// # Example
+/// Fixed-order Gaussian quadrature using Gauss-Legendre nodes.
+///
+/// Integrates `f(x)` over `[a, b]` using `n`-point Gauss-Legendre quadrature.
+/// Exact for polynomials up to degree `2n - 1`.
+///
+/// Matches `scipy.integrate.fixed_quad(func, a, b, n=n)`.
+pub fn fixed_quad<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    n: usize,
+) -> Result<(f64, usize), IntegrateValidationError>
+where
+    F: Fn(f64) -> f64,
+{
+    if n == 0 {
+        return Ok((0.0, 0));
+    }
+    if !a.is_finite() || !b.is_finite() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "bounds must be finite".to_string(),
+        });
+    }
+
+    // Get Gauss-Legendre nodes and weights on [-1, 1]
+    let (nodes, weights) = gauss_legendre_nodes_weights(n);
+
+    // Transform from [-1, 1] to [a, b]: x = (b-a)/2 * t + (a+b)/2
+    let half_width = (b - a) / 2.0;
+    let center = (a + b) / 2.0;
+
+    let mut integral = 0.0;
+    for (node, weight) in nodes.iter().zip(weights.iter()) {
+        let x = half_width * node + center;
+        integral += weight * f(x);
+    }
+    integral *= half_width;
+
+    Ok((integral, n))
+}
+
 /// ```ignore
 /// // ∫₀¹ ∫₀¹ x*y dx dy = 0.25
 /// let result = nquad(|args| args[0] * args[1], &[(0.0, 1.0), (0.0, 1.0)], opts)?;
@@ -880,6 +921,105 @@ where
         *total_neval.borrow_mut() += result.neval;
         Ok(result.integral)
     }
+}
+
+/// Compute n-point Gauss-Legendre nodes and weights on [-1, 1].
+///
+/// Uses Newton's method to find roots of the Legendre polynomial P_n(x),
+/// then computes weights via the Christoffel-Darboux formula.
+fn gauss_legendre_nodes_weights(n: usize) -> (Vec<f64>, Vec<f64>) {
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    if n == 1 {
+        return (vec![0.0], vec![2.0]);
+    }
+
+    let nf = n as f64;
+    let mut nodes = Vec::with_capacity(n);
+    let mut weights = Vec::with_capacity(n);
+
+    // Only need to find roots for the first half (symmetric)
+    let m = (n + 1) / 2;
+    for i in 0..m {
+        // Initial guess: Chebyshev approximation
+        let mut x = (std::f64::consts::PI * (i as f64 + 0.75) / (nf + 0.5)).cos();
+
+        // Newton's method to find root of P_n(x)
+        for _ in 0..50 {
+            let (pn, dpn) = legendre_pn_dpn(n, x);
+            let dx = pn / dpn;
+            x -= dx;
+            if dx.abs() < 1e-15 {
+                break;
+            }
+        }
+
+        let (_, dpn) = legendre_pn_dpn(n, x);
+        let w = 2.0 / ((1.0 - x * x) * dpn * dpn);
+
+        nodes.push(x);
+        weights.push(w);
+    }
+
+    // Fill symmetric half
+    let mut full_nodes = Vec::with_capacity(n);
+    let mut full_weights = Vec::with_capacity(n);
+
+    for i in (0..m).rev() {
+        if n % 2 == 1 && i == m - 1 {
+            // Middle node (for odd n)
+            continue;
+        }
+        full_nodes.push(-nodes[i]);
+        full_weights.push(weights[i]);
+    }
+    if n % 2 == 1 {
+        full_nodes.push(nodes[m - 1]); // should be ~0
+        full_weights.push(weights[m - 1]);
+    }
+    for i in 0..m {
+        if n % 2 == 1 && i == m - 1 {
+            continue;
+        }
+        full_nodes.push(nodes[i]);
+        full_weights.push(weights[i]);
+    }
+
+    // Sort by node value
+    let mut pairs: Vec<(f64, f64)> = full_nodes
+        .into_iter()
+        .zip(full_weights)
+        .collect();
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let sorted_nodes = pairs.iter().map(|p| p.0).collect();
+    let sorted_weights = pairs.iter().map(|p| p.1).collect();
+
+    (sorted_nodes, sorted_weights)
+}
+
+/// Evaluate P_n(x) and P_n'(x) using the recurrence relation.
+fn legendre_pn_dpn(n: usize, x: f64) -> (f64, f64) {
+    let mut p_prev = 1.0; // P_0
+    let mut p_curr = x; // P_1
+
+    for k in 1..n {
+        let kf = k as f64;
+        let p_next = ((2.0 * kf + 1.0) * x * p_curr - kf * p_prev) / (kf + 1.0);
+        p_prev = p_curr;
+        p_curr = p_next;
+    }
+
+    // P_n'(x) = n (x P_n(x) - P_{n-1}(x)) / (x² - 1)
+    let nf = n as f64;
+    let dpn = if (x * x - 1.0).abs() > 1e-30 {
+        nf * (x * p_curr - p_prev) / (x * x - 1.0)
+    } else {
+        // At x = ±1, use L'Hôpital or the value P_n'(1) = n(n+1)/2
+        nf * (nf + 1.0) / 2.0
+    };
+
+    (p_curr, dpn)
 }
 
 /// Cumulative integral using composite Simpson's rule.
@@ -1674,5 +1814,42 @@ mod tests {
         let opts = QuadOptions::default();
         let result = nquad(|_| 42.0, &[], opts).expect("nquad 0d");
         assert!((result.integral - 42.0).abs() < 1e-12);
+    }
+
+    // ── fixed_quad tests ─────────────────────────────────────────────
+
+    #[test]
+    fn fixed_quad_polynomial_exact() {
+        // n-point Gauss-Legendre is exact for polynomials up to degree 2n-1
+        // 5-point should be exact for x^9
+        let (result, neval) = fixed_quad(|x| x.powi(4), 0.0, 1.0, 5).expect("fixed_quad");
+        assert_eq!(neval, 5);
+        assert!(
+            (result - 0.2).abs() < 1e-12,
+            "∫₀¹ x⁴ dx = 0.2, got {result}"
+        );
+    }
+
+    #[test]
+    fn fixed_quad_sin() {
+        // ∫₀^π sin(x) dx = 2
+        let (result, _) =
+            fixed_quad(|x| x.sin(), 0.0, std::f64::consts::PI, 10).expect("fixed_quad sin");
+        assert!(
+            (result - 2.0).abs() < 1e-10,
+            "∫₀^π sin(x) = 2, got {result}"
+        );
+    }
+
+    #[test]
+    fn fixed_quad_matches_quad() {
+        // fixed_quad with high n should match adaptive quad
+        let (fq, _) = fixed_quad(|x| x.exp(), 0.0, 1.0, 20).expect("fixed_quad");
+        let aq = quad(|x| x.exp(), 0.0, 1.0, QuadOptions::default()).expect("quad");
+        assert!(
+            (fq - aq.integral).abs() < 1e-10,
+            "fixed_quad vs quad: {fq} vs {}",
+            aq.integral
+        );
     }
 }

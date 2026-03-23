@@ -5,8 +5,8 @@ pub mod ops;
 
 pub use construct::{block_diag, bmat, diags, eye, kron, random};
 pub use formats::{
-    CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, NalgebraBridge, Shape2D,
-    SparseError, SparseFormat, SparseResult,
+    CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix,
+    NalgebraBridge, Shape2D, SparseError, SparseFormat, SparseResult,
 };
 pub use linalg::{
     ConnectedComponentsResult, EigsOptions, EigsResult, IluOptions, IterativeSolveOptions,
@@ -311,6 +311,66 @@ mod tests {
         assert_eq!(coo.row_indices(), &[0, 0]);
         assert_eq!(coo.col_indices(), &[1, 1]);
         assert_vec_close(coo.data(), &[1.0, 2.0]);
+    }
+
+    #[test]
+    fn dia_rejects_length_mismatch() {
+        let err = DiaMatrix::from_diagonals(
+            Shape2D::new(3, 3),
+            vec![0, 1],
+            vec![vec![1.0, 2.0, 3.0]],
+        )
+        .expect_err("offset/data mismatch");
+        assert!(matches!(err, SparseError::IncompatibleShape { .. }));
+    }
+
+    #[test]
+    fn dia_rejects_invalid_diagonal_length() {
+        let err = DiaMatrix::from_diagonals(
+            Shape2D::new(3, 3),
+            vec![1],
+            vec![vec![1.0, 2.0, 3.0]],
+        )
+        .expect_err("invalid diagonal length");
+        assert!(matches!(err, SparseError::IncompatibleShape { .. }));
+    }
+
+    #[test]
+    fn dia_to_coo_preserves_dense_semantics() {
+        let dia = DiaMatrix::from_diagonals(
+            Shape2D::new(3, 4),
+            vec![0, 1, -1],
+            vec![
+                vec![1.0, 2.0, 3.0],
+                vec![10.0, 20.0, 30.0],
+                vec![7.0, 8.0],
+            ],
+        )
+        .expect("dia");
+        let dense = dense_from_coo(&dia.to_coo().expect("dia->coo"));
+        assert_matrix_close(
+            &dense,
+            &[
+                vec![1.0, 10.0, 0.0, 0.0],
+                vec![7.0, 2.0, 20.0, 0.0],
+                vec![0.0, 8.0, 3.0, 30.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn dia_converts_through_csr_and_csc() {
+        let dia = DiaMatrix::from_diagonals(
+            Shape2D::new(4, 4),
+            vec![0, 2],
+            vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0]],
+        )
+        .expect("dia");
+        let dense_from_dia = dense_from_coo(&dia.to_coo().expect("dia->coo"));
+        let dense_from_csr = dense_from_coo(&dia.to_csr().expect("dia->csr").to_coo().expect("csr->coo"));
+        let dense_from_csc = dense_from_coo(&dia.to_csc().expect("dia->csc").to_coo().expect("csc->coo"));
+        assert_matrix_close(&dense_from_dia, &dense_from_csr);
+        assert_matrix_close(&dense_from_dia, &dense_from_csc);
     }
 
     #[test]
