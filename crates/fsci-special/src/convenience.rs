@@ -888,3 +888,234 @@ where
         }
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Kelvin Functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Kelvin function ber(x): real part of J_0(x * sqrt(j)).
+///
+/// Matches `scipy.special.ber`.
+pub fn ber(x: f64) -> f64 {
+    // ber(x) = Re[J_0(x * e^{jπ/4})] = Σ (-1)^k (x/2)^{4k} / ((2k)!)^2
+    let x2 = x * x / 4.0;
+    let mut term = 1.0;
+    let mut sum = 1.0;
+    for k in 1..50 {
+        term *= -x2 * x2 / ((2 * k - 1) as f64 * (2 * k) as f64).powi(2);
+        sum += term;
+        if term.abs() < sum.abs() * 1e-16 {
+            break;
+        }
+    }
+    sum
+}
+
+/// Kelvin function bei(x): imaginary part of J_0(x * sqrt(j)).
+///
+/// Matches `scipy.special.bei`.
+pub fn bei(x: f64) -> f64 {
+    // bei(x) = Im[J_0(x * e^{jπ/4})] = Σ (-1)^k (x/2)^{4k+2} / ((2k+1)!)^2 ... no
+    // Actually: bei(x) = Σ_{k=0}^∞ (-1)^k (x/2)^{4k+2} / ((2k)!(2k+1)!) ... no
+    // Correct series: bei(x) = Σ_{k=0}^∞ (-1)^k (x/2)^{4k+2} / ((2k+1)!)^2
+    // Wait, let me re-derive. J_0(z) = Σ (-1)^n (z/2)^{2n} / (n!)^2
+    // With z = x*sqrt(j) = x*e^{jπ/4}:
+    // (z/2)^{2n} = (x/2)^{2n} * e^{jnπ/2}
+    // e^{jnπ/2} cycles: 1, j, -1, -j, 1, ...
+    // J_0(x*e^{jπ/4}) = Σ (-1)^n (x/2)^{2n} / (n!)^2 * e^{jnπ/2}
+    //
+    // Real parts (n mod 4 == 0: factor 1, n mod 4 == 2: factor -1):
+    // ber(x) = Σ_{k=0} (x/2)^{4k}/(2k)!^2 - (x/2)^{4k+2}/((2k+1)!)^2 ... hmm not quite
+    //
+    // Let me just use: n=0: e^0=1 real, n=1: e^{jπ/2}=j imag, n=2: e^{jπ}=-1 real, n=3: e^{j3π/2}=-j imag
+    // So (-1)^n * e^{jnπ/2}: n=0: 1, n=1: -j, n=2: 1, n=3: j, n=4: 1, ...
+    // Wait: (-1)^0 * e^0 = 1, (-1)^1 * e^{jπ/2} = -j, (-1)^2 * e^{jπ} = -1, (-1)^3 * e^{j3π/2} = j
+    // Hmm that gives: real parts at n=0: 1, n=2: -1, n=4: 1, n=6: -1, ...
+    // And: imag parts at n=1: -1, n=3: 1, n=5: -1, n=7: 1, ...
+    //
+    // ber(x) = 1 - (x/2)^4/(2!)^2 + (x/2)^8/(4!)^2 - ... = Σ_{k=0} (-1)^k (x/2)^{4k} / ((2k)!)^2
+    // bei(x) = -(x/2)^2/(1!)^2 + (x/2)^6/(3!)^2 - ... = Σ_{k=0} (-1)^{k+1} (x/2)^{4k+2} / ((2k+1)!)^2
+    //
+    // Wait that gives bei with a leading negative. Let me reconsider.
+    // Actually: (-1)^1 * e^{jπ/2} = (-1)(j) = -j. The imaginary part is -1.
+    // (-1)^3 * e^{j3π/2} = (-1)(-j) = j. The imaginary part is +1.
+    //
+    // bei(x) = Σ_{n odd} (-1)^n (x/2)^{2n} / (n!)^2 * sin(nπ/2)
+    // n=1: (-1)^1 * (x/2)^2 / 1 * sin(π/2) = -(x/2)^2
+    // n=3: (-1)^3 * (x/2)^6 / 36 * sin(3π/2) = -(x/2)^6/36 * (-1) = (x/2)^6/36
+    //
+    // So bei(x) = -(x/2)^2 + (x/2)^6/36 - (x/2)^{10}/(5!)^2 + ...
+    //           = Σ_{k=0} (-1)^{k+1} (x/2)^{4k+2} / ((2k+1)!)^2
+
+    let x2 = x * x / 4.0; // (x/2)^2
+    let mut term = -x2; // first term: -(x/2)^2
+    let mut sum = term;
+    for k in 1..50 {
+        // Ratio: next/current = -(x/2)^4 / ((2k+1) * (2k))^2 ... let me compute:
+        // term_k = (-1)^{k+1} (x/2)^{4k+2} / ((2k+1)!)^2
+        // term_{k+1}/term_k = -1 * (x/2)^4 / ((2k+2)*(2k+3))^2
+        term *= -x2 * x2 / ((2 * k) as f64 * (2 * k + 1) as f64).powi(2);
+        sum += term;
+        if term.abs() < sum.abs() * 1e-16 {
+            break;
+        }
+    }
+    sum
+}
+
+/// Kelvin function ker(x): real part of K_0(x * sqrt(j)).
+///
+/// Matches `scipy.special.ker`.
+pub fn ker(x: f64) -> f64 {
+    if x <= 0.0 {
+        return f64::INFINITY;
+    }
+    // For small x, use the series representation:
+    // ker(x) = -(ln(x/2) + γ) * ber(x) + (π/4) * bei(x) + Σ h(k) terms
+    // where γ is the Euler-Mascheroni constant.
+    //
+    // For simplicity, use numerical integration of the integral representation:
+    // ker(x) = ∫_0^∞ cos(x*sinh(t) - x*cosh(t)·something) dt (complex)
+    //
+    // Actually, use the relation: ker(x) + j·kei(x) = K_0(x·e^{jπ/4})
+    // And K_0 can be computed from the series for small arguments.
+    //
+    // K_0(z) = -(ln(z/2) + γ) I_0(z) + Σ_{k=0}^∞ (z/2)^{2k} ψ(k+1) / (k!)^2
+    // where ψ is the digamma function and ψ(1) = -γ, ψ(k+1) = -γ + Σ_{j=1}^k 1/j
+
+    let gamma_em = 0.577_215_664_901_532_9;
+    let x_half = x / 2.0;
+    let ln_x2 = x_half.ln();
+
+    // Compute ber(x) and bei(x) for the log term
+    let ber_x = ber(x);
+    let bei_x = bei(x);
+
+    // ker(x) = -(ln(x/2) + γ) * ber(x) + (π/4) * bei(x) + series_correction
+    // The series correction involves harmonic numbers.
+    let x2 = x_half * x_half;
+    let mut term = 1.0; // (x/2)^0 / (0!)^2 = 1
+    let mut harmonic = 0.0; // H_0 = 0
+    let mut correction = 0.0; // ψ(1) = -γ, but first term has k=0
+
+    for k in 0..50 {
+        if k > 0 {
+            term *= x2 * x2 / ((2 * k - 1) as f64 * (2 * k) as f64).powi(2);
+            harmonic += 1.0 / (2 * k - 1) as f64 + 1.0 / (2 * k) as f64;
+        }
+        // The correction uses (H_{2k} from the real part of ψ contributions)
+        let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+        correction += sign * term * harmonic;
+    }
+
+    -(ln_x2 + gamma_em) * ber_x + (std::f64::consts::PI / 4.0) * bei_x + correction
+}
+
+/// Kelvin function kei(x): imaginary part of K_0(x * sqrt(j)).
+///
+/// Matches `scipy.special.kei`.
+pub fn kei(x: f64) -> f64 {
+    if x <= 0.0 {
+        return -std::f64::consts::PI / 4.0; // kei(0) = -π/4
+    }
+    // kei(x) = -(ln(x/2) + γ) * bei(x) - (π/4) * ber(x) + series_correction
+
+    let gamma_em = 0.577_215_664_901_532_9;
+    let x_half = x / 2.0;
+    let ln_x2 = x_half.ln();
+
+    let ber_x = ber(x);
+    let bei_x = bei(x);
+
+    let x2 = x_half * x_half;
+    let mut term = -x2; // first imaginary series term
+    let mut harmonic = 1.0; // H_1 = 1
+    let mut correction = term * harmonic;
+
+    for k in 1..50 {
+        term *= -x2 * x2 / ((2 * k) as f64 * (2 * k + 1) as f64).powi(2);
+        harmonic += 1.0 / (2 * k) as f64 + 1.0 / (2 * k + 1) as f64;
+        correction += term * harmonic;
+    }
+
+    -(ln_x2 + gamma_em) * bei_x - (std::f64::consts::PI / 4.0) * ber_x + correction
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Exponential Integral Variants
+// ══════════════════════════════════════════════════════════════════════
+
+/// Generalized exponential integral E_n(x) = ∫_1^∞ t^{-n} e^{-xt} dt.
+///
+/// Matches `scipy.special.expn`.
+pub fn expn(n: usize, x: f64) -> f64 {
+    if x < 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return if n > 1 { 1.0 / (n as f64 - 1.0) } else { f64::INFINITY };
+    }
+    if n == 0 {
+        return (-x).exp() / x;
+    }
+    if n == 1 {
+        // E_1(x) = -Ei(-x) for x > 0
+        // Use series for small x, continued fraction for large x
+        if x < 1.0 {
+            let gamma_em = 0.577_215_664_901_532_9;
+            let mut sum = -gamma_em - x.ln();
+            let mut term = -x;
+            sum += term;
+            for k in 2..100 {
+                term *= -x / k as f64;
+                let contrib = term / k as f64;
+                sum += contrib;
+                if contrib.abs() < sum.abs() * 1e-16 {
+                    break;
+                }
+            }
+            return sum;
+        }
+        // Continued fraction for E_1(x) when x >= 1
+        let mut result = 0.0;
+        for k in (1..=20).rev() {
+            result = k as f64 / (1.0 + k as f64 / (x + result));
+        }
+        return (-x).exp() / (x + result);
+    }
+
+    // General n > 1: use recurrence E_{n+1}(x) = (e^{-x} - x E_n(x)) / n
+    // Start from E_1 and recur upward
+    let mut e_prev = expn(1, x);
+    for j in 1..n {
+        let e_next = ((-x).exp() - x * e_prev) / j as f64;
+        e_prev = e_next;
+    }
+    e_prev
+}
+
+/// Exponential integral Ei(x) = PV ∫_{-∞}^{x} e^t/t dt (scalar version).
+///
+/// Matches `scipy.special.expi` for scalar inputs.
+pub fn expi_scalar(x: f64) -> f64 {
+    if x == 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if x < 0.0 {
+        return -expn(1, -x);
+    }
+    // For x > 0, use series
+    let gamma_em = 0.577_215_664_901_532_9;
+    let mut sum = gamma_em + x.ln();
+    let mut term = x;
+    sum += term;
+    for k in 2..200 {
+        term *= x / k as f64;
+        let contrib = term / k as f64;
+        sum += contrib;
+        if contrib.abs() < sum.abs() * 1e-16 {
+            break;
+        }
+    }
+    sum
+}

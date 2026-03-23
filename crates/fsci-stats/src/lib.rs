@@ -5428,27 +5428,25 @@ pub fn cohens_d(group1: &[f64], group2: &[f64]) -> f64 {
 /// Cramér's V: association measure for contingency tables.
 ///
 /// V = sqrt(χ²/(n * min(r-1, c-1))), where χ² is the chi-squared statistic.
-pub fn cramers_v(observed: &[Vec<f64>]) -> Result<f64, StatsError> {
-    let result = chi2_contingency(observed)?;
+pub fn cramers_v(observed: &[Vec<f64>]) -> f64 {
+    let result = chi2_contingency(observed);
     let n: f64 = observed.iter().flat_map(|row| row.iter()).sum();
     let r = observed.len();
+    if r == 0 {
+        return 0.0;
+    }
     let c = observed[0].len();
     let min_dim = (r - 1).min(c - 1);
     if min_dim == 0 || n == 0.0 {
-        return Ok(0.0);
+        return 0.0;
     }
-    Ok((result.statistic / (n * min_dim as f64)).sqrt())
+    (result.statistic / (n * min_dim as f64)).sqrt()
 }
 
 /// Point-biserial correlation: correlation between binary and continuous variable.
 ///
 /// Equivalent to Pearson r when one variable is dichotomous.
-pub fn pointbiserialr(binary: &[f64], continuous: &[f64]) -> Result<CorrelationResult, StatsError> {
-    if binary.len() != continuous.len() || binary.len() < 3 {
-        return Err(StatsError::InvalidArgument(
-            "inputs must have same length >= 3".to_string(),
-        ));
-    }
+pub fn pointbiserialr(binary: &[f64], continuous: &[f64]) -> CorrelationResult {
     // Point-biserial is just Pearson correlation
     pearsonr(binary, continuous)
 }

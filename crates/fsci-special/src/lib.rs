@@ -21,8 +21,9 @@ pub use beta::{
     fdtri,
 };
 pub use convenience::{
-    CONVENIENCE_DISPATCH_PLAN, bernoulli, dawsn, entr, euler, expit, fresnel, hurwitz_zeta, kl_div,
-    logit, logsumexp, modstruve, ndtr, ndtri, rel_entr, sinc, struve, xlog1py, xlogy,
+    CONVENIENCE_DISPATCH_PLAN, bei, ber, bernoulli, dawsn, entr, euler, expi_scalar, expit, expn,
+    fresnel, hurwitz_zeta, kei, ker, kl_div, logit, logsumexp, modstruve, ndtr, ndtri, rel_entr,
+    sinc, struve, xlog1py, xlogy,
 };
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw,
