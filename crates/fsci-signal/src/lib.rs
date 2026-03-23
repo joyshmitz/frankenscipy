@@ -778,9 +778,9 @@ pub fn sweep_poly(t: &[f64], poly: &[f64]) -> Vec<f64> {
 /// * `x` — Input signal (real-valued).
 /// * `m` — Number of output points.
 /// * `w` — Step factor as (magnitude, angle) in polar form.
-///         Default: `(1.0, -2π/M)` (unit circle, same as DFT).
+///   Default: `(1.0, -2π/M)` (unit circle, same as DFT).
 /// * `a` — Starting point as (magnitude, angle) in polar form.
-///         Default: `(1.0, 0.0)` (z = 1).
+///   Default: `(1.0, 0.0)` (z = 1).
 ///
 /// Matches `scipy.signal.czt`.
 pub fn czt(
@@ -847,13 +847,13 @@ pub fn czt(
     // Build h: w^{-k²/2} for k = -(N-1)..M-1, stored in wrap-around order
     let mut h = vec![(0.0f64, 0.0f64); l];
     // h[k] for k = 0..M-1
-    for k in 0..m {
+    for (k, hk) in h.iter_mut().enumerate().take(m) {
         let c = chirp(k as i64);
         // w^{-k²/2} = conjugate of w^{k²/2} when w is on unit circle,
         // but in general we need to invert
         let mag_sq = c.0 * c.0 + c.1 * c.1;
         if mag_sq > 0.0 {
-            h[k] = (c.0 / mag_sq, -c.1 / mag_sq);
+            *hk = (c.0 / mag_sq, -c.1 / mag_sq);
         }
     }
     // h[L-k] for k = 1..N-1 (negative indices wrapped)
@@ -883,9 +883,9 @@ pub fn czt(
 
     // Extract result: X[k] = product[k] * w^{k²/2}
     let mut result = Vec::with_capacity(m);
-    for k in 0..m {
+    for (k, value) in product.iter().enumerate().take(m) {
         let wk = chirp(k as i64);
-        result.push(cmul(product[k], wk));
+        result.push(cmul(*value, wk));
     }
 
     Ok(result)
@@ -942,7 +942,7 @@ pub fn zoom_fft(
 ///
 /// Matches `scipy.signal.max_len_seq(nbits)`.
 pub fn max_len_seq(nbits: usize) -> Result<Vec<f64>, SignalError> {
-    if nbits < 2 || nbits > 31 {
+    if !(2..=31).contains(&nbits) {
         return Err(SignalError::InvalidArgument(
             "nbits must be in [2, 31]".to_string(),
         ));
@@ -1214,7 +1214,7 @@ fn __removed_upfirdn_early_copy(h: &[f64], x: &[f64], up: usize, down: usize) ->
     // After downsampling: ceil((x.len() * up + h.len() - 1) / down)
     let up_len = x.len() * up;
     let conv_len = up_len + h.len() - 1;
-    let out_len = (conv_len + down - 1) / down;
+    let out_len = conv_len.div_ceil(down);
 
     let mut output = Vec::with_capacity(out_len);
 
@@ -1225,7 +1225,7 @@ fn __removed_upfirdn_early_copy(h: &[f64], x: &[f64], up: usize, down: usize) ->
             let inp_idx = conv_idx as i64 - k as i64;
             if inp_idx >= 0 && inp_idx < up_len as i64 {
                 let inp_idx = inp_idx as usize;
-                if inp_idx % up == 0 {
+                if inp_idx.is_multiple_of(up) {
                     let x_idx = inp_idx / up;
                     sum += hk * x[x_idx];
                 }
@@ -1309,7 +1309,7 @@ fn __removed_minimum_phase_early_copy(h: &[f64]) -> Result<Vec<f64>, SignalError
         .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
 
     // Take first (n+1)/2 samples (minimum phase has half the length)
-    let mp_len = (n + 1) / 2;
+    let mp_len = n.div_ceil(2);
     Ok(result.iter().take(mp_len).map(|&(re, _)| re).collect())
 }
 
@@ -3859,7 +3859,7 @@ pub fn remez(
             "numtaps must be >= 1".to_string(),
         ));
     }
-    if bands.len() % 2 != 0 || bands.is_empty() {
+    if !bands.len().is_multiple_of(2) || bands.is_empty() {
         return Err(SignalError::InvalidArgument(
             "bands must have even number of elements".to_string(),
         ));
@@ -3918,18 +3918,21 @@ pub fn remez(
 
     for i in 0..ng {
         let f = freq_grid[i];
-        let w = weight_grid[i] * weight_grid[i]; // squared for WLS
+        let w = weight_grid[i]; // WLS weight: minimize Σ w_i * (H(f_i) - D(f_i))²
         let d = desired_grid[i];
 
         for j in 0..n_coeffs {
             let cj = (two_pi * j as f64 * f).cos();
             atd[j] += w * cj * d;
-            for k in j..n_coeffs {
+            let (head, tail) = ata.split_at_mut(j + 1);
+            let ata_j = &mut head[j];
+            ata_j[j] += w * cj * cj;
+            for (offset, ata_row) in tail.iter_mut().enumerate() {
+                let k = j + 1 + offset;
                 let ck = (two_pi * k as f64 * f).cos();
-                ata[j][k] += w * cj * ck;
-                if k != j {
-                    ata[k][j] = ata[j][k];
-                }
+                let value = w * cj * ck;
+                ata_row[j] += value;
+                ata_j[k] += value;
             }
         }
     }
@@ -3961,8 +3964,8 @@ fn solve_symmetric(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, SignalError> {
     let mut l = vec![vec![0.0; n]; n];
     for j in 0..n {
         let mut sum = a[j][j];
-        for k in 0..j {
-            sum -= l[j][k] * l[j][k];
+        for &value in l[j].iter().take(j) {
+            sum -= value * value;
         }
         if sum <= 0.0 {
             // Fall back to regularization
@@ -3972,8 +3975,8 @@ fn solve_symmetric(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, SignalError> {
         }
         for i in j + 1..n {
             let mut sum = a[i][j];
-            for k in 0..j {
-                sum -= l[i][k] * l[j][k];
+            for (&li_k, &lj_k) in l[i].iter().zip(l[j].iter()).take(j) {
+                sum -= li_k * lj_k;
             }
             l[i][j] = sum / l[j][j];
         }
