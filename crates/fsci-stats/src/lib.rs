@@ -3221,6 +3221,296 @@ impl ContinuousDistribution for Moyal {
     }
 }
 
+/// Gompertz distribution.
+///
+/// Matches `scipy.stats.gompertz`.
+pub struct Gompertz {
+    pub c: f64,
+}
+
+impl Gompertz {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for Gompertz {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        self.c * (x + self.c * (1.0 - x.exp()) / self.c).exp()
+            * (self.c * (1.0 - x.exp())).exp()
+            * x.exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        1.0 - (-self.c * (x.exp() - 1.0)).exp()
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NAN // No simple closed form
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Generalized logistic distribution.
+///
+/// Matches `scipy.stats.genlogistic`.
+pub struct GenLogistic {
+    pub c: f64,
+}
+
+impl GenLogistic {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for GenLogistic {
+    fn pdf(&self, x: f64) -> f64 {
+        let c = self.c;
+        c * (-x).exp() / (1.0 + (-x).exp()).powf(c + 1.0)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        1.0 / (1.0 + (-x).exp()).powf(self.c)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        -(q.powf(-1.0 / self.c) - 1.0).ln()
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Frechet (right) distribution (Weibull maximum).
+///
+/// Matches `scipy.stats.frechet_r` / `scipy.stats.weibull_max`.
+pub struct FrechetR {
+    pub c: f64,
+}
+
+impl FrechetR {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for FrechetR {
+    fn pdf(&self, x: f64) -> f64 {
+        if x > 0.0 {
+            return 0.0;
+        }
+        let ax = (-x).abs();
+        self.c * ax.powf(self.c - 1.0) * (-ax.powf(self.c)).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x > 0.0 {
+            return 1.0;
+        }
+        (-(-x).powf(self.c)).exp()
+    }
+
+    fn mean(&self) -> f64 {
+        if self.c > 1.0 {
+            -ln_gamma(1.0 - 1.0 / self.c).exp()
+        } else {
+            f64::NEG_INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Truncated exponential distribution on [0, b].
+///
+/// Matches `scipy.stats.truncexpon`.
+pub struct TruncExpon {
+    pub b: f64,
+}
+
+impl TruncExpon {
+    #[must_use]
+    pub fn new(b: f64) -> Self {
+        assert!(b > 0.0, "b must be positive");
+        Self { b }
+    }
+}
+
+impl ContinuousDistribution for TruncExpon {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 || x > self.b {
+            0.0
+        } else {
+            (-x).exp() / (1.0 - (-self.b).exp())
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            0.0
+        } else if x >= self.b {
+            1.0
+        } else {
+            (1.0 - (-x).exp()) / (1.0 - (-self.b).exp())
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        let eb = (-self.b).exp();
+        1.0 / (1.0 - eb) - self.b * eb / (1.0 - eb)
+    }
+
+    fn var(&self) -> f64 {
+        let m = self.mean();
+        let eb = (-self.b).exp();
+        let e2 = (2.0 - (2.0 + 2.0 * self.b + self.b * self.b) * eb) / (1.0 - eb);
+        e2 - m * m
+    }
+}
+
+/// Generalized half-logistic distribution.
+///
+/// Matches `scipy.stats.genhalflogistic`.
+pub struct GenHalfLogistic {
+    pub c: f64,
+}
+
+impl GenHalfLogistic {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for GenHalfLogistic {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let limit = 1.0 / self.c;
+        if x >= limit {
+            return 0.0;
+        }
+        2.0 * (1.0 - self.c * x).powf(1.0 / self.c - 1.0)
+            / (1.0 + (1.0 - self.c * x).powf(1.0 / self.c)).powi(2)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let limit = 1.0 / self.c;
+        if x >= limit {
+            return 1.0;
+        }
+        let t = (1.0 - self.c * x).powf(1.0 / self.c);
+        1.0 - 2.0 * t / (1.0 + t)
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Tukey-Lambda distribution.
+///
+/// Matches `scipy.stats.tukeylambda`.
+pub struct TukeyLambda {
+    pub lam: f64,
+}
+
+impl TukeyLambda {
+    #[must_use]
+    pub fn new(lam: f64) -> Self {
+        Self { lam }
+    }
+}
+
+impl ContinuousDistribution for TukeyLambda {
+    fn pdf(&self, x: f64) -> f64 {
+        // PDF via numerical derivative of CDF
+        let h = 1e-7;
+        let c1 = self.cdf(x + h);
+        let c0 = self.cdf(x - h);
+        (c1 - c0) / (2.0 * h)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        // PPF is Q(p) = (p^λ - (1-p)^λ) / λ for λ ≠ 0
+        // CDF is the inverse of PPF, found by bisection
+        let mut lo = 0.0f64;
+        let mut hi = 1.0f64;
+        for _ in 0..60 {
+            let mid = (lo + hi) / 2.0;
+            let q = self.ppf(mid);
+            if q < x {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo + hi) / 2.0
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        let lam = self.lam;
+        if lam.abs() < 1e-15 {
+            // Logistic: Q(p) = ln(p/(1-p))
+            (q / (1.0 - q)).ln()
+        } else {
+            (q.powf(lam) - (1.0 - q).powf(lam)) / lam
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        0.0 // Symmetric
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Ranking and Order Statistics
 // ══════════════════════════════════════════════════════════════════════

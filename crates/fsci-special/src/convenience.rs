@@ -1392,3 +1392,119 @@ pub fn gamma_mod_squared(a: f64, b: f64) -> f64 {
 
     (2.0 * log_mod).exp() / product
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Convenience Wrappers
+// ══════════════════════════════════════════════════════════════════════
+
+/// Log of the binomial coefficient: ln(C(n, k)).
+///
+/// Matches `scipy.special.gammaln` combination.
+pub fn log_comb(n: f64, k: f64) -> f64 {
+    let mode = fsci_runtime::RuntimeMode::Strict;
+    let lgn1 = crate::gammaln_scalar(n + 1.0, mode).unwrap_or(f64::NAN);
+    let lgk1 = crate::gammaln_scalar(k + 1.0, mode).unwrap_or(f64::NAN);
+    let lgnk1 = crate::gammaln_scalar(n - k + 1.0, mode).unwrap_or(f64::NAN);
+    lgn1 - lgk1 - lgnk1
+}
+
+/// Regularized incomplete beta function I_x(a, b).
+///
+/// Scalar convenience wrapper for `scipy.special.betainc`.
+fn betainc_conv(a: f64, b: f64, x: f64) -> f64 {
+    crate::betainc_scalar(a, b, x, fsci_runtime::RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Inverse of the regularized incomplete beta function.
+///
+/// Finds x such that I_x(a, b) = y.
+/// Matches `scipy.special.betaincinv`.
+pub fn betaincinv(a: f64, b: f64, y: f64) -> f64 {
+    if y <= 0.0 {
+        return 0.0;
+    }
+    if y >= 1.0 {
+        return 1.0;
+    }
+
+    // Bisection
+    let mut lo = 0.0f64;
+    let mut hi = 1.0f64;
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        let val = betainc_conv(a, b, mid);
+        if val < y {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) / 2.0
+}
+
+/// Regularized incomplete gamma function P(a, x).
+///
+/// Scalar wrapper matching `scipy.special.gammainc`.
+pub fn gammainc_conv(a: f64, x: f64) -> f64 {
+    crate::gammainc_scalar(a, x, fsci_runtime::RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Upper regularized incomplete gamma function Q(a, x) = 1 - P(a, x).
+///
+/// Scalar wrapper matching `scipy.special.gammaincc`.
+pub fn gammaincc_conv(a: f64, x: f64) -> f64 {
+    crate::gammaincc_scalar(a, x, fsci_runtime::RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Inverse of the regularized incomplete gamma function.
+///
+/// Finds x such that P(a, x) = y.
+/// Matches `scipy.special.gammaincinv`.
+pub fn gammaincinv(a: f64, y: f64) -> f64 {
+    if y <= 0.0 {
+        return 0.0;
+    }
+    if y >= 1.0 {
+        return f64::INFINITY;
+    }
+
+    // Newton's method with bisection fallback
+    let mut x = a; // initial guess
+    for _ in 0..100 {
+        let p = gammainc_conv(a, x);
+        let err = p - y;
+        if err.abs() < 1e-14 {
+            break;
+        }
+        // Derivative of P(a,x) w.r.t. x is x^(a-1) * e^(-x) / Gamma(a)
+        let mode = fsci_runtime::RuntimeMode::Strict;
+        let dpx = x.powf(a - 1.0) * (-x).exp() / crate::gammaln_scalar(a, mode).unwrap_or(f64::NAN).exp();
+        if dpx.abs() > 1e-30 {
+            x -= err / dpx;
+            x = x.max(0.0);
+        } else {
+            // Bisection step
+            if err > 0.0 {
+                x *= 0.5;
+            } else {
+                x *= 2.0;
+            }
+        }
+    }
+    x
+}
+
+/// Evaluate the complementary error function erfc(x) = 1 - erf(x).
+///
+/// Scalar convenience wrapper.
+pub fn erfc_conv(x: f64) -> f64 {
+    crate::erfc_scalar(x)
+}
+
+/// Inverse complementary error function.
+///
+/// Finds x such that erfc(x) = y.
+/// Matches `scipy.special.erfcinv`.
+pub fn erfcinv_conv(y: f64) -> f64 {
+    crate::erfinv_scalar(1.0 - y, fsci_runtime::RuntimeMode::Strict).unwrap_or(f64::NAN)
+}

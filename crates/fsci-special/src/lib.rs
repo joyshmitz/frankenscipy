@@ -26,6 +26,8 @@ pub use convenience::{
     hurwitz_zeta, kei, ker, kl_div, log_softmax, logit, logsumexp, modstruve, ndtr, ndtri, poch,
     rel_entr, sinc, sinc_squared, softmax, spence, struve, tetragamma, trigamma, wrightomega,
     xlog1py, xlogy,
+    // Convenience wrappers
+    betaincinv, erfc_conv, erfcinv_conv, gammainc_conv, gammaincc_conv, gammaincinv, log_comb,
 };
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw,
