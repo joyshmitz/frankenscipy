@@ -2122,7 +2122,7 @@ mod tests {
         assert!(parsed.get("test_id").is_some());
         assert!(parsed.get("optimizer").is_some());
         assert!(parsed.get("timestamp_ms").is_some());
-        test_log_sink().lock().expect("log sink lock").push(payload);
+        test_log_sink().lock().unwrap_or_else(|e| e.into_inner()).push(payload);
     }
 
     fn sphere(x: &[f64]) -> f64 {
@@ -2400,7 +2400,7 @@ mod tests {
 
     #[test]
     fn bfgs_callback_receives_intermediate_points() {
-        callback_points().lock().expect("callback lock").clear();
+        callback_points().lock().unwrap_or_else(|e| e.into_inner()).clear();
         let options = MinimizeOptions {
             method: Some(OptimizeMethod::Bfgs),
             callback: Some(callback_record_and_stop),
@@ -2410,7 +2410,7 @@ mod tests {
             ..MinimizeOptions::default()
         };
         let result = bfgs(&sphere, &[2.5, -1.5], options).expect("bfgs executes");
-        let points = callback_points().lock().expect("callback lock");
+        let points = callback_points().lock().unwrap_or_else(|e| e.into_inner());
         assert!(!points.is_empty());
         assert_eq!(points[0], vec![2.5, -1.5]);
         assert_eq!(result.status, ConvergenceStatus::CallbackStop);
@@ -3166,7 +3166,7 @@ mod tests {
             callback: Some(callback_record_and_stop),
             ..MinimizeOptions::default()
         };
-        callback_points().lock().unwrap().clear();
+        callback_points().lock().unwrap_or_else(|e| e.into_inner()).clear();
         let result = minimize(sphere, &[2.0, -3.0], options).expect("minimize executes");
         assert!(!result.success);
         assert_eq!(result.status, ConvergenceStatus::CallbackStop);

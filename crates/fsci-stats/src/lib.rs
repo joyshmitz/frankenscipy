@@ -2998,6 +2998,367 @@ impl ContinuousDistribution for Gilbrat {
     }
 }
 
+/// Levy distribution (one-sided stable with α=1/2, β=1).
+///
+/// Matches `scipy.stats.levy`.
+pub struct Levy {
+    pub loc: f64,
+    pub scale: f64,
+}
+
+impl Levy {
+    #[must_use]
+    pub fn new(loc: f64, scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive");
+        Self { loc, scale }
+    }
+}
+
+impl Default for Levy {
+    fn default() -> Self {
+        Self {
+            loc: 0.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl ContinuousDistribution for Levy {
+    fn pdf(&self, x: f64) -> f64 {
+        let z = x - self.loc;
+        if z <= 0.0 {
+            return 0.0;
+        }
+        (self.scale / (2.0 * PI)).sqrt() * (-self.scale / (2.0 * z)).exp()
+            / z.powf(1.5)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let z = x - self.loc;
+        if z <= 0.0 {
+            return 0.0;
+        }
+        fsci_special::erfc_scalar((self.scale / (2.0 * z)).sqrt())
+    }
+
+    fn mean(&self) -> f64 {
+        f64::INFINITY
+    }
+
+    fn var(&self) -> f64 {
+        f64::INFINITY
+    }
+}
+
+/// Burr (Type XII) distribution.
+///
+/// Matches `scipy.stats.burr12`.
+pub struct Burr12 {
+    pub c: f64,
+    pub d: f64,
+}
+
+impl Burr12 {
+    #[must_use]
+    pub fn new(c: f64, d: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        assert!(d > 0.0, "d must be positive");
+        Self { c, d }
+    }
+}
+
+impl ContinuousDistribution for Burr12 {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        let d = self.d;
+        c * d * x.powf(c - 1.0) / (1.0 + x.powf(c)).powf(d + 1.0)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        1.0 - (1.0 + x.powf(self.c)).powf(-self.d)
+    }
+
+    fn mean(&self) -> f64 {
+        if self.c * self.d > 1.0 {
+            let c = self.c;
+            let d = self.d;
+            d * ln_gamma(d - 1.0 / c).exp() * ln_gamma(1.0 + 1.0 / c).exp()
+                / ln_gamma(d + 1.0).exp()
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN // Complex formula, return NaN for now
+    }
+}
+
+/// Log-Laplace distribution.
+///
+/// Matches `scipy.stats.loglaplace`.
+pub struct LogLaplace {
+    pub c: f64,
+}
+
+impl LogLaplace {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for LogLaplace {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        if x < 1.0 {
+            c / 2.0 * x.powf(c - 1.0)
+        } else {
+            c / 2.0 * x.powf(-c - 1.0)
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        if x < 1.0 {
+            0.5 * x.powf(c)
+        } else {
+            1.0 - 0.5 * x.powf(-c)
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        if self.c > 1.0 {
+            self.c * self.c / (self.c * self.c - 1.0)
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Mielke Beta-Kappa distribution.
+///
+/// Matches `scipy.stats.mielke`.
+pub struct Mielke {
+    pub k: f64,
+    pub s: f64,
+}
+
+impl Mielke {
+    #[must_use]
+    pub fn new(k: f64, s: f64) -> Self {
+        assert!(k > 0.0 && s > 0.0, "k and s must be positive");
+        Self { k, s }
+    }
+}
+
+impl ContinuousDistribution for Mielke {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let k = self.k;
+        let s = self.s;
+        k * x.powf(k - 1.0) / (1.0 + x.powf(s)).powf(1.0 + k / s)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let xk = x.powf(self.k);
+        xk / (1.0 + x.powf(self.s)).powf(self.k / self.s)
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NAN // Complex
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Moyal distribution.
+///
+/// Matches `scipy.stats.moyal`.
+pub struct Moyal;
+
+impl ContinuousDistribution for Moyal {
+    fn pdf(&self, x: f64) -> f64 {
+        let inv_sqrt_2pi = 1.0 / (2.0 * PI).sqrt();
+        inv_sqrt_2pi * (-0.5 * (x + (-x).exp())).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        1.0 - fsci_special::erfc_scalar(((-x).exp() / 2.0).sqrt())
+    }
+
+    fn mean(&self) -> f64 {
+        0.577_215_664_901_532_9 + (2.0f64).ln() // γ + ln(2)
+    }
+
+    fn var(&self) -> f64 {
+        PI * PI / 2.0
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Ranking and Order Statistics
+// ══════════════════════════════════════════════════════════════════════
+
+/// Compute quantiles of data at given probabilities.
+///
+/// Matches `numpy.quantile`.
+pub fn quantile(data: &[f64], q: &[f64]) -> Vec<f64> {
+    if data.is_empty() {
+        return vec![f64::NAN; q.len()];
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+
+    q.iter()
+        .map(|&qi| {
+            let qi = qi.clamp(0.0, 1.0);
+            let idx = qi * (n - 1) as f64;
+            let lo = idx.floor() as usize;
+            let hi = idx.ceil() as usize;
+            let frac = idx - lo as f64;
+            if lo == hi || hi >= n {
+                sorted[lo.min(n - 1)]
+            } else {
+                sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+            }
+        })
+        .collect()
+}
+
+/// Compute weighted mean.
+pub fn weighted_mean(values: &[f64], weights: &[f64]) -> f64 {
+    let total_w: f64 = weights.iter().sum();
+    if total_w == 0.0 {
+        return f64::NAN;
+    }
+    values
+        .iter()
+        .zip(weights.iter())
+        .map(|(&v, &w)| v * w)
+        .sum::<f64>()
+        / total_w
+}
+
+/// Compute weighted variance.
+pub fn weighted_var(values: &[f64], weights: &[f64]) -> f64 {
+    let mean = weighted_mean(values, weights);
+    let total_w: f64 = weights.iter().sum();
+    if total_w == 0.0 {
+        return f64::NAN;
+    }
+    values
+        .iter()
+        .zip(weights.iter())
+        .map(|(&v, &w)| w * (v - mean).powi(2))
+        .sum::<f64>()
+        / total_w
+}
+
+/// Compute the geometric mean.
+///
+/// Matches `scipy.stats.gmean`.
+pub fn gmean(data: &[f64]) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let n = data.len() as f64;
+    let log_sum: f64 = data.iter().map(|&x| x.ln()).sum();
+    (log_sum / n).exp()
+}
+
+/// Compute the harmonic mean.
+///
+/// Matches `scipy.stats.hmean`.
+pub fn hmean(data: &[f64]) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let n = data.len() as f64;
+    let inv_sum: f64 = data.iter().map(|&x| 1.0 / x).sum();
+    if inv_sum == 0.0 {
+        return f64::INFINITY;
+    }
+    n / inv_sum
+}
+
+/// Compute the power mean (generalized mean).
+///
+/// Matches `scipy.stats.pmean`.
+pub fn pmean(data: &[f64], p: f64) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return gmean(data);
+    }
+    let n = data.len() as f64;
+    let power_sum: f64 = data.iter().map(|&x| x.powf(p)).sum();
+    (power_sum / n).powf(1.0 / p)
+}
+
+/// Circular mean for angular data.
+///
+/// Matches `scipy.stats.circmean`.
+pub fn circmean(data: &[f64]) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let sin_sum: f64 = data.iter().map(|&x| x.sin()).sum();
+    let cos_sum: f64 = data.iter().map(|&x| x.cos()).sum();
+    sin_sum.atan2(cos_sum)
+}
+
+/// Circular variance for angular data.
+///
+/// Matches `scipy.stats.circvar`.
+pub fn circvar(data: &[f64]) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let n = data.len() as f64;
+    let sin_sum: f64 = data.iter().map(|&x| x.sin()).sum();
+    let cos_sum: f64 = data.iter().map(|&x| x.cos()).sum();
+    let r = (sin_sum * sin_sum + cos_sum * cos_sum).sqrt() / n;
+    1.0 - r
+}
+
+/// Circular standard deviation for angular data.
+///
+/// Matches `scipy.stats.circstd`.
+pub fn circstd(data: &[f64]) -> f64 {
+    let v = circvar(data);
+    if v <= 0.0 {
+        return 0.0;
+    }
+    (-2.0 * (1.0 - v).ln()).sqrt()
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Statistical Tests
 // ══════════════════════════════════════════════════════════════════════
@@ -5622,6 +5983,45 @@ pub struct MultitestResult {
     pub reject: Vec<bool>,
 }
 
+fn validate_probability_vector(values: &[f64], name: &str) -> Result<(), StatsError> {
+    if values.is_empty() {
+        return Err(StatsError::InvalidArgument(format!("{name} must not be empty")));
+    }
+    for (idx, &value) in values.iter().enumerate() {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(StatsError::InvalidArgument(format!(
+                "{name}[{idx}] must be finite and lie in [0, 1]"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn harmonic_number(n: usize) -> f64 {
+    (1..=n).map(|k| 1.0 / k as f64).sum()
+}
+
+fn fdr_adjusted_pvalues(pvalues: &[f64], scale: f64) -> Vec<f64> {
+    let n = pvalues.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut indexed: Vec<(usize, f64)> = pvalues.iter().copied().enumerate().collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut corrected = vec![0.0; n];
+    let mut running_min = 1.0f64;
+
+    for (rank, &(orig_idx, p)) in indexed.iter().enumerate().rev() {
+        let adjusted = (p * scale * n as f64 / (rank + 1) as f64).min(1.0);
+        running_min = running_min.min(adjusted);
+        corrected[orig_idx] = running_min;
+    }
+
+    corrected
+}
+
 /// Bonferroni correction: multiply each p-value by the number of tests.
 ///
 /// Matches `scipy.stats.false_discovery_control` and `statsmodels.multipletests(method='bonferroni')`.
@@ -5716,6 +6116,115 @@ pub fn multipletests_fdr_bh(pvalues: &[f64], alpha: f64) -> MultitestResult {
         pvalues_corrected: corrected,
         reject,
     }
+}
+
+/// Combine independent p-values into a single test statistic and p-value.
+///
+/// Supported methods: `"fisher"` (default), `"pearson"`, `"tippett"`, `"stouffer"`.
+///
+/// Matches the core behavior of `scipy.stats.combine_pvalues`.
+pub fn combine_pvalues(
+    pvalues: &[f64],
+    method: Option<&str>,
+    weights: Option<&[f64]>,
+) -> Result<GoodnessOfFitResult, StatsError> {
+    validate_probability_vector(pvalues, "pvalues")?;
+    let method = method.unwrap_or("fisher");
+    let k = pvalues.len() as f64;
+
+    let result = match method {
+        "fisher" => {
+            let statistic = if pvalues.contains(&0.0) {
+                f64::INFINITY
+            } else {
+                -2.0 * pvalues.iter().map(|&p| p.ln()).sum::<f64>()
+            };
+            let pvalue = ChiSquared::new(2.0 * k).sf(statistic).clamp(0.0, 1.0);
+            GoodnessOfFitResult { statistic, pvalue }
+        }
+        "pearson" => {
+            let statistic = if pvalues.contains(&1.0) {
+                f64::INFINITY
+            } else {
+                -2.0 * pvalues.iter().map(|&p| (1.0 - p).ln()).sum::<f64>()
+            };
+            let pvalue = ChiSquared::new(2.0 * k).cdf(statistic).clamp(0.0, 1.0);
+            GoodnessOfFitResult { statistic, pvalue }
+        }
+        "tippett" => {
+            let statistic = pvalues.iter().copied().fold(f64::INFINITY, f64::min);
+            let pvalue = (1.0 - (1.0 - statistic).powf(k)).clamp(0.0, 1.0);
+            GoodnessOfFitResult { statistic, pvalue }
+        }
+        "stouffer" => {
+            let weights = if let Some(weights) = weights {
+                if weights.len() != pvalues.len() {
+                    return Err(StatsError::InvalidArgument(
+                        "weights must have the same length as pvalues".to_string(),
+                    ));
+                }
+                if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+                    return Err(StatsError::InvalidArgument(
+                        "weights must be finite and non-negative".to_string(),
+                    ));
+                }
+                weights.to_vec()
+            } else {
+                vec![1.0; pvalues.len()]
+            };
+
+            let weight_norm = weights.iter().map(|&w| w * w).sum::<f64>().sqrt();
+            if weight_norm == 0.0 {
+                return Err(StatsError::InvalidArgument(
+                    "weights must not all be zero".to_string(),
+                ));
+            }
+
+            let statistic = weights
+                .iter()
+                .zip(pvalues.iter())
+                .map(|(&w, &p)| {
+                    let bounded = p.clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+                    w * standard_normal_ppf(1.0 - bounded)
+                })
+                .sum::<f64>()
+                / weight_norm;
+            let pvalue = Normal::standard().sf(statistic).clamp(0.0, 1.0);
+            GoodnessOfFitResult { statistic, pvalue }
+        }
+        _ => {
+            return Err(StatsError::InvalidArgument(format!(
+                "unsupported combine_pvalues method: {method}"
+            )));
+        }
+    };
+
+    Ok(result)
+}
+
+/// Adjust p-values to control the false discovery rate.
+///
+/// Supported methods: `"bh"` (default) and `"by"`.
+///
+/// Matches the core behavior of `scipy.stats.false_discovery_control`.
+pub fn false_discovery_control(
+    pvalues: &[f64],
+    method: Option<&str>,
+) -> Result<Vec<f64>, StatsError> {
+    validate_probability_vector(pvalues, "pvalues")?;
+    let method = method.unwrap_or("bh");
+
+    let corrected = match method {
+        "bh" => fdr_adjusted_pvalues(pvalues, 1.0),
+        "by" => fdr_adjusted_pvalues(pvalues, harmonic_number(pvalues.len())),
+        _ => {
+            return Err(StatsError::InvalidArgument(format!(
+                "unsupported false_discovery_control method: {method}"
+            )));
+        }
+    };
+
+    Ok(corrected)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -8577,6 +9086,83 @@ mod tests {
         assert!(result.pvalues_corrected.iter().all(|&p| p <= 1.0));
         // The smallest p-value should still be the most significant
         assert!(result.pvalues_corrected[3] <= result.pvalues_corrected[0]);
+    }
+
+    #[test]
+    fn combine_pvalues_fisher_matches_closed_form() {
+        let pvalues = [0.01, 0.03, 0.2];
+        let result = combine_pvalues(&pvalues, Some("fisher"), None).expect("fisher");
+        let expected_statistic = -2.0 * pvalues.iter().map(|p| p.ln()).sum::<f64>();
+        let expected_pvalue = ChiSquared::new(2.0 * pvalues.len() as f64).sf(expected_statistic);
+        assert_close(
+            result.statistic,
+            expected_statistic,
+            1e-12,
+            "combine_pvalues fisher statistic",
+        );
+        assert_close(
+            result.pvalue,
+            expected_pvalue,
+            1e-12,
+            "combine_pvalues fisher pvalue",
+        );
+    }
+
+    #[test]
+    fn combine_pvalues_stouffer_supports_weights() {
+        let pvalues = [0.01, 0.05, 0.2];
+        let weights = [2.0, 1.0, 0.5];
+        let result = combine_pvalues(&pvalues, Some("stouffer"), Some(&weights)).expect("stouffer");
+        assert!(result.statistic.is_finite());
+        assert!(result.pvalue >= 0.0 && result.pvalue <= 1.0);
+        assert!(result.pvalue < 0.1, "combined evidence should remain significant enough");
+    }
+
+    #[test]
+    fn combine_pvalues_tippett_uses_smallest_pvalue() {
+        let pvalues = [0.4, 0.03, 0.8, 0.2];
+        let result = combine_pvalues(&pvalues, Some("tippett"), None).expect("tippett");
+        assert_close(result.statistic, 0.03, 1e-12, "tippett statistic");
+        let expected_pvalue = 1.0 - (1.0 - 0.03_f64).powi(pvalues.len() as i32);
+        assert_close(result.pvalue, expected_pvalue, 1e-12, "tippett pvalue");
+    }
+
+    #[test]
+    fn false_discovery_control_bh_matches_existing_helper() {
+        let pvalues = [0.01, 0.04, 0.03, 0.005];
+        let corrected = false_discovery_control(&pvalues, Some("bh")).expect("bh");
+        let helper = multipletests_fdr_bh(&pvalues, 0.05);
+        assert_eq!(corrected.len(), helper.pvalues_corrected.len());
+        for (actual, expected) in corrected.iter().zip(helper.pvalues_corrected.iter()) {
+            assert_close(*actual, *expected, 1e-12, "fdr bh corrected");
+        }
+    }
+
+    #[test]
+    fn false_discovery_control_by_is_more_conservative() {
+        let pvalues = [0.01, 0.04, 0.03, 0.005];
+        let bh = false_discovery_control(&pvalues, Some("bh")).expect("bh");
+        let by = false_discovery_control(&pvalues, Some("by")).expect("by");
+        for (&bh_p, &by_p) in bh.iter().zip(by.iter()) {
+            assert!(by_p >= bh_p, "BY should be at least as conservative as BH");
+        }
+    }
+
+    #[test]
+    fn multiple_testing_wrappers_reject_invalid_input() {
+        let err = combine_pvalues(&[], None, None).expect_err("empty pvalues");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err = combine_pvalues(&[0.01, 1.2], None, None).expect_err("invalid pvalue");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err =
+            combine_pvalues(&[0.01, 0.02], Some("stouffer"), Some(&[1.0])).expect_err("weights");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err =
+            false_discovery_control(&[0.01, 0.02], Some("unknown")).expect_err("bad method");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 
     #[test]

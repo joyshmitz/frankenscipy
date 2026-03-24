@@ -794,9 +794,7 @@ mod tests {
                 .step_with(&mut |_t, y| vec![-y[0]])
                 .expect("step should succeed");
             steps += 1;
-            if steps > 1000 {
-                panic!("too many steps");
-            }
+            assert!(steps <= 1000, "too many steps");
         }
 
         assert_eq!(solver.state(), OdeSolverState::Finished);
@@ -832,9 +830,7 @@ mod tests {
                 .step_with(&mut |_t, y| vec![y[1], -y[0]])
                 .expect("step should succeed");
             steps += 1;
-            if steps > 1000 {
-                panic!("too many steps");
-            }
+            assert!(steps <= 1000, "too many steps");
         }
 
         // At t=pi: y ≈ [-1, 0]
@@ -911,9 +907,7 @@ mod tests {
                 .step_with(&mut |_t, y| vec![-y[0]])
                 .expect("step should succeed");
             steps += 1;
-            if steps > 5000 {
-                panic!("too many steps");
-            }
+            assert!(steps <= 5000, "too many steps");
         }
 
         let expected = (-1.0_f64).exp();

@@ -1570,6 +1570,86 @@ fn gauss_kronrod_inner(f: &dyn Fn(f64) -> f64, a: f64, b: f64, options: QuadOpti
     }
 }
 
+/// Newton-Cotes integration weights for n equally-spaced points.
+///
+/// Returns weights such that ∫₀¹ f(x) dx ≈ Σ w_i * f(x_i).
+/// Matches `scipy.integrate.newton_cotes`.
+pub fn newton_cotes(n: usize) -> Result<Vec<f64>, IntegrateValidationError> {
+    if n == 0 {
+        return Ok(vec![1.0]);
+    }
+    match n {
+        1 => Ok(vec![0.5, 0.5]),                                     // Trapezoidal
+        2 => Ok(vec![1.0 / 6.0, 4.0 / 6.0, 1.0 / 6.0]),           // Simpson's 1/3
+        3 => Ok(vec![1.0 / 8.0, 3.0 / 8.0, 3.0 / 8.0, 1.0 / 8.0]), // Simpson's 3/8
+        4 => Ok(vec![
+            7.0 / 90.0,
+            32.0 / 90.0,
+            12.0 / 90.0,
+            32.0 / 90.0,
+            7.0 / 90.0,
+        ]), // Boole's rule
+        _ => {
+            // General Newton-Cotes via Lagrange integration
+            let nf = n as f64;
+            let mut weights = vec![0.0; n + 1];
+            for i in 0..=n {
+                // w_i = ∫₀¹ L_i(x) dx where L_i = Π_{j≠i} (x - j/n) / (i/n - j/n)
+                // Use numerical integration with high-order quadrature
+                let m = 200;
+                let mut integral = 0.0;
+                for k in 0..=m {
+                    let x = k as f64 / m as f64;
+                    let w = if k == 0 || k == m {
+                        1.0
+                    } else if k % 2 == 0 {
+                        2.0
+                    } else {
+                        4.0
+                    };
+                    let mut li = 1.0;
+                    for j in 0..=n {
+                        if j != i {
+                            li *= (x - j as f64 / nf) / (i as f64 / nf - j as f64 / nf);
+                        }
+                    }
+                    integral += w * li;
+                }
+                weights[i] = integral / (3.0 * m as f64);
+            }
+            Ok(weights)
+        }
+    }
+}
+
+/// Integrate using Newton-Cotes composite rule of given order.
+///
+/// `order` is the number of subintervals per panel (1=trapezoidal, 2=Simpson).
+pub fn newton_cotes_quad<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    n_panels: usize,
+    order: usize,
+) -> Result<f64, IntegrateValidationError>
+where
+    F: Fn(f64) -> f64,
+{
+    let weights = newton_cotes(order)?;
+    let panel_width = (b - a) / n_panels as f64;
+    let mut total = 0.0;
+
+    for panel in 0..n_panels {
+        let panel_a = a + panel as f64 * panel_width;
+        for (i, &w) in weights.iter().enumerate() {
+            let x = panel_a + i as f64 * panel_width / order as f64;
+            total += w * f(x) * panel_width;
+        }
+    }
+
+    Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

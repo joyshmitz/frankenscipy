@@ -15,8 +15,9 @@ pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
 pub use quad::{
     CompositeQuadResult, DblquadOptions, DblquadResult, QuadOptions, QuadResult, QuadVecResult,
     cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, fixed_quad,
-    gauss_kronrod_quad, nquad, quad, quad_vec, romb, romb_func, romberg, simpson,
-    simpson_irregular, simpson_uniform, tplquad, trapezoid, trapezoid_irregular, trapezoid_uniform,
+    gauss_kronrod_quad, newton_cotes, newton_cotes_quad, nquad, quad, quad_vec, romb, romb_func,
+    romberg, simpson, simpson_irregular, simpson_uniform, tplquad, trapezoid, trapezoid_irregular,
+    trapezoid_uniform,
 };
 pub use rk::{
     ButcherTableau, DOP853_TABLEAU, RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig,

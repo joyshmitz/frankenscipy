@@ -63,7 +63,7 @@ pub const C: f64 = SPEED_OF_LIGHT;
 pub const MU_0: f64 = 1.256_637_062_12e-6;
 
 /// Electric constant (vacuum permittivity) ε₀ [F/m]
-pub const EPSILON_0: f64 = 8.854_187_8128e-12;
+pub const EPSILON_0: f64 = 8.854_187_812_8e-12;
 
 /// Planck constant [J·s]
 pub const PLANCK: f64 = 6.626_070_15e-34;
@@ -117,7 +117,7 @@ pub const RYDBERG: f64 = 1.097_373_156_816_0e7;
 // ══════════════════════════════════════════════════════════════════════
 
 /// Electron mass [kg]
-pub const ELECTRON_MASS: f64 = 9.109_383_7015e-31;
+pub const ELECTRON_MASS: f64 = 9.109_383_701_5e-31;
 /// Shorthand alias
 pub const M_E: f64 = ELECTRON_MASS;
 
@@ -141,10 +141,10 @@ pub const U: f64 = ATOMIC_MASS;
 // ══════════════════════════════════════════════════════════════════════
 
 /// Bohr magneton [J/T]
-pub const BOHR_MAGNETON: f64 = 9.274_010_0783e-24;
+pub const BOHR_MAGNETON: f64 = 9.274_010_078_3e-24;
 
 /// Nuclear magneton [J/T]
-pub const NUCLEAR_MAGNETON: f64 = 5.050_783_7461e-27;
+pub const NUCLEAR_MAGNETON: f64 = 5.050_783_746_1e-27;
 
 /// Magnetic flux quantum Φ₀ = h/(2e) [Wb]
 pub const MAGNETIC_FLUX_QUANTUM: f64 = 2.067_833_848e-15;
@@ -163,7 +163,7 @@ pub const VON_KLITZING: f64 = 2.581_280_745e4;
 // ══════════════════════════════════════════════════════════════════════
 
 /// Fine-structure constant α
-pub const FINE_STRUCTURE: f64 = 7.297_352_5693e-3;
+pub const FINE_STRUCTURE: f64 = 7.297_352_569_3e-3;
 /// Shorthand alias
 pub const ALPHA: f64 = FINE_STRUCTURE;
 
@@ -171,10 +171,10 @@ pub const ALPHA: f64 = FINE_STRUCTURE;
 pub const BOHR_RADIUS: f64 = 5.291_772_109_03e-11;
 
 /// Hartree energy [J]
-pub const HARTREE: f64 = 4.359_744_722_2071e-18;
+pub const HARTREE: f64 = 4.359_744_722_207_1e-18;
 
 /// Classical electron radius [m]
-pub const CLASSICAL_ELECTRON_RADIUS: f64 = 2.817_940_3262e-15;
+pub const CLASSICAL_ELECTRON_RADIUS: f64 = 2.817_940_326_2e-15;
 
 /// Compton wavelength of electron [m]
 pub const COMPTON_WAVELENGTH: f64 = 2.426_310_238_67e-12;
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn planck_order_of_magnitude() {
-        assert!(PLANCK > 6e-34 && PLANCK < 7e-34);
+        const { assert!(PLANCK > 6e-34 && PLANCK < 7e-34); }
     }
 
     #[test]
