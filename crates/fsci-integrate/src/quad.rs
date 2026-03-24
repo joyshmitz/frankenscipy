@@ -1342,7 +1342,7 @@ pub fn romberg<F>(f: F, a: f64, b: f64, tol: f64, max_order: usize) -> QuadResul
 where
     F: Fn(f64) -> f64,
 {
-    let max_order = max_order.max(2).min(20);
+    let max_order = max_order.clamp(2, 20);
     let mut r = vec![vec![0.0; max_order]; max_order];
     let mut neval = 0usize;
 
@@ -1422,8 +1422,10 @@ pub fn simpson_irregular(y: &[f64], x: &[f64]) -> f64 {
         let hsum = h0 + h1;
 
         // Simpson's 3/8 for unequal spacing
-        sum += hsum / 6.0 * (y[i] * (2.0 - h1 / h0) + y[i + 1] * hsum * hsum / (h0 * h1)
-            + y[i + 2] * (2.0 - h0 / h1));
+        sum += hsum / 6.0
+            * (y[i] * (2.0 - h1 / h0)
+                + y[i + 1] * hsum * hsum / (h0 * h1)
+                + y[i + 2] * (2.0 - h0 / h1));
 
         i += 2;
     }

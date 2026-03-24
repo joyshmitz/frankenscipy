@@ -2703,7 +2703,6 @@ impl Zipf {
 
 /// Helper: Riemann zeta function for real s > 1.
 fn riemann_zeta(s: f64) -> f64 {
-    // Direct summation with acceleration
     let mut sum = 0.0;
     for k in 1..=10000 {
         let term = (k as f64).powf(-s);
@@ -2713,6 +2712,290 @@ fn riemann_zeta(s: f64) -> f64 {
         }
     }
     sum
+}
+
+/// Double Weibull distribution.
+///
+/// Matches `scipy.stats.dweibull`.
+pub struct DoubleWeibull {
+    pub c: f64,
+}
+
+impl DoubleWeibull {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for DoubleWeibull {
+    fn pdf(&self, x: f64) -> f64 {
+        let c = self.c;
+        0.5 * c * x.abs().powf(c - 1.0) * (-x.abs().powf(c)).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let c = self.c;
+        if x < 0.0 {
+            0.5 * (-(-x).powf(c)).exp()
+        } else {
+            1.0 - 0.5 * (-x.powf(c)).exp()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        0.0 // symmetric about 0
+    }
+
+    fn var(&self) -> f64 {
+        let c = self.c;
+        ln_gamma(1.0 + 2.0 / c).exp() // Γ(1 + 2/c) for unit scale
+    }
+}
+
+/// Semicircular distribution on [-1, 1].
+///
+/// Matches `scipy.stats.semicircular`.
+pub struct Semicircular;
+
+impl ContinuousDistribution for Semicircular {
+    fn pdf(&self, x: f64) -> f64 {
+        if x.abs() > 1.0 {
+            0.0
+        } else {
+            2.0 / PI * (1.0 - x * x).sqrt()
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= -1.0 {
+            0.0
+        } else if x >= 1.0 {
+            1.0
+        } else {
+            0.5 + x * (1.0 - x * x).sqrt() / PI + x.asin() / PI
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        0.0
+    }
+
+    fn var(&self) -> f64 {
+        0.25 // 1/4
+    }
+}
+
+/// Cosine distribution on [-π, π].
+///
+/// Matches `scipy.stats.cosine`.
+pub struct CosineDistribution;
+
+impl ContinuousDistribution for CosineDistribution {
+    fn pdf(&self, x: f64) -> f64 {
+        if x.abs() > PI {
+            0.0
+        } else {
+            (1.0 + x.cos()) / (2.0 * PI)
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= -PI {
+            0.0
+        } else if x >= PI {
+            1.0
+        } else {
+            (PI + x + x.sin()) / (2.0 * PI)
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        0.0
+    }
+
+    fn var(&self) -> f64 {
+        PI * PI / 3.0 - 2.0 // π²/3 - 2
+    }
+}
+
+/// Reciprocal (log-uniform on [a, b]) distribution.
+/// Alias for Loguniform kept for compatibility.
+///
+/// Matches `scipy.stats.reciprocal`.
+pub type Reciprocal = Loguniform;
+
+/// Wald distribution (alias for Inverse Gaussian).
+///
+/// Matches `scipy.stats.wald`.
+pub type Wald = InverseGaussian;
+
+/// Erlang distribution: Gamma with integer shape.
+///
+/// Matches `scipy.stats.erlang`.
+pub struct Erlang {
+    pub k: usize,
+    pub rate: f64,
+}
+
+impl Erlang {
+    #[must_use]
+    pub fn new(k: usize, rate: f64) -> Self {
+        assert!(k > 0, "k must be positive");
+        assert!(rate > 0.0, "rate must be positive");
+        Self { k, rate }
+    }
+}
+
+impl ContinuousDistribution for Erlang {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let k = self.k as f64;
+        let lambda = self.rate;
+        lambda.powf(k) * x.powf(k - 1.0) * (-lambda * x).exp() / ln_gamma(k).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        lower_regularized_gamma(self.k as f64, self.rate * x)
+    }
+
+    fn mean(&self) -> f64 {
+        self.k as f64 / self.rate
+    }
+
+    fn var(&self) -> f64 {
+        self.k as f64 / (self.rate * self.rate)
+    }
+}
+
+/// Anglit distribution on [-π/4, π/4].
+///
+/// Matches `scipy.stats.anglit`.
+pub struct Anglit;
+
+impl ContinuousDistribution for Anglit {
+    fn pdf(&self, x: f64) -> f64 {
+        let quarter_pi = PI / 4.0;
+        if x.abs() > quarter_pi {
+            0.0
+        } else {
+            (2.0 * x).cos()
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let quarter_pi = PI / 4.0;
+        if x <= -quarter_pi {
+            0.0
+        } else if x >= quarter_pi {
+            1.0
+        } else {
+            ((2.0 * x).sin() + 1.0) / 2.0
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        0.0
+    }
+
+    fn var(&self) -> f64 {
+        PI * PI / 16.0 - 0.5 // π²/16 - 1/2
+    }
+}
+
+/// Bradford distribution on [0, 1] with shape c.
+///
+/// Matches `scipy.stats.bradford`.
+pub struct Bradford {
+    pub c: f64,
+}
+
+impl Bradford {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for Bradford {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 || x > 1.0 {
+            0.0
+        } else {
+            self.c / ((1.0 + self.c * x) * (1.0 + self.c).ln())
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            0.0
+        } else if x >= 1.0 {
+            1.0
+        } else {
+            (1.0 + self.c * x).ln() / (1.0 + self.c).ln()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return 1.0;
+        }
+        ((1.0 + self.c).powf(q) - 1.0) / self.c
+    }
+
+    fn mean(&self) -> f64 {
+        let k = (1.0 + self.c).ln();
+        (self.c - k) / (self.c * k)
+    }
+
+    fn var(&self) -> f64 {
+        let k = (1.0 + self.c).ln();
+        let m = self.mean();
+        (self.c * (self.c + 2.0 * k) - 2.0 * k * k) / (2.0 * self.c * k * k) - m * m
+            + (self.c + 2.0) / (2.0 * (self.c + 1.0)) / k
+            - m * m
+    }
+}
+
+/// Gilbrat distribution (log-normal with s=1).
+///
+/// Matches `scipy.stats.gilbrat`.
+pub struct Gilbrat;
+
+impl ContinuousDistribution for Gilbrat {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            0.0
+        } else {
+            (-0.5 * x.ln().powi(2)).exp() / (x * (2.0 * PI).sqrt())
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            0.0
+        } else {
+            standard_normal_cdf(x.ln())
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        std::f64::consts::E.sqrt() // exp(1/2)
+    }
+
+    fn var(&self) -> f64 {
+        std::f64::consts::E * (std::f64::consts::E - 1.0) // e(e-1)
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════

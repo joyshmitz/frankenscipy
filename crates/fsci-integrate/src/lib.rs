@@ -16,8 +16,7 @@ pub use quad::{
     CompositeQuadResult, DblquadOptions, DblquadResult, QuadOptions, QuadResult, QuadVecResult,
     cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_uniform, dblquad, fixed_quad,
     gauss_kronrod_quad, nquad, quad, quad_vec, romb, romb_func, romberg, simpson,
-    simpson_irregular, simpson_uniform, tplquad, trapezoid, trapezoid_irregular,
-    trapezoid_uniform,
+    simpson_irregular, simpson_uniform, tplquad, trapezoid, trapezoid_irregular, trapezoid_uniform,
 };
 pub use rk::{
     ButcherTableau, DOP853_TABLEAU, RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig,

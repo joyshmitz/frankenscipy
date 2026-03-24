@@ -1636,6 +1636,129 @@ pub fn geometric_slerp(
     Ok(results)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Coordinate Transforms
+// ══════════════════════════════════════════════════════════════════════
+
+/// Convert spherical coordinates (r, θ, φ) to Cartesian (x, y, z).
+///
+/// θ = polar angle from z-axis (0 to π), φ = azimuthal angle in x-y plane (0 to 2π).
+pub fn spherical_to_cartesian(r: f64, theta: f64, phi: f64) -> (f64, f64, f64) {
+    (
+        r * theta.sin() * phi.cos(),
+        r * theta.sin() * phi.sin(),
+        r * theta.cos(),
+    )
+}
+
+/// Convert Cartesian (x, y, z) to spherical (r, θ, φ).
+pub fn cartesian_to_spherical(x: f64, y: f64, z: f64) -> (f64, f64, f64) {
+    let r = (x * x + y * y + z * z).sqrt();
+    let theta = if r > 0.0 { (z / r).acos() } else { 0.0 };
+    let phi = y.atan2(x);
+    (r, theta, phi)
+}
+
+/// Convert cylindrical coordinates (r, θ, z) to Cartesian (x, y, z).
+pub fn cylindrical_to_cartesian(rho: f64, theta: f64, z: f64) -> (f64, f64, f64) {
+    (rho * theta.cos(), rho * theta.sin(), z)
+}
+
+/// Convert Cartesian (x, y, z) to cylindrical (ρ, θ, z).
+pub fn cartesian_to_cylindrical(x: f64, y: f64, z: f64) -> (f64, f64, f64) {
+    let rho = (x * x + y * y).sqrt();
+    let theta = y.atan2(x);
+    (rho, theta, z)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Rotation
+// ══════════════════════════════════════════════════════════════════════
+
+/// 3D rotation matrix from axis-angle representation.
+///
+/// Rodrigues' rotation formula. `axis` must be a unit vector.
+/// `angle` is in radians.
+///
+/// Matches `scipy.spatial.transform.Rotation.from_rotvec`.
+pub fn rotation_matrix(axis: &[f64; 3], angle: f64) -> [[f64; 3]; 3] {
+    let c = angle.cos();
+    let s = angle.sin();
+    let t = 1.0 - c;
+    let [x, y, z] = *axis;
+
+    [
+        [t * x * x + c, t * x * y - s * z, t * x * z + s * y],
+        [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
+        [t * x * z - s * y, t * y * z + s * x, t * z * z + c],
+    ]
+}
+
+/// Apply a 3x3 rotation matrix to a 3D point.
+pub fn rotate_point(r: &[[f64; 3]; 3], p: &[f64; 3]) -> [f64; 3] {
+    [
+        r[0][0] * p[0] + r[0][1] * p[1] + r[0][2] * p[2],
+        r[1][0] * p[0] + r[1][1] * p[1] + r[1][2] * p[2],
+        r[2][0] * p[0] + r[2][1] * p[1] + r[2][2] * p[2],
+    ]
+}
+
+/// Compute the angle between two vectors.
+pub fn angle_between(a: &[f64], b: &[f64]) -> f64 {
+    let dot: f64 = a.iter().zip(b.iter()).map(|(&ai, &bi)| ai * bi).sum();
+    let na: f64 = a.iter().map(|&x| x * x).sum::<f64>().sqrt();
+    let nb: f64 = b.iter().map(|&x| x * x).sum::<f64>().sqrt();
+    if na * nb == 0.0 {
+        return 0.0;
+    }
+    (dot / (na * nb)).clamp(-1.0, 1.0).acos()
+}
+
+/// Cross product of two 3D vectors.
+pub fn cross_3d(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Dot product of two vectors.
+pub fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(&ai, &bi)| ai * bi).sum()
+}
+
+/// Normalize a vector to unit length.
+pub fn normalize(v: &[f64]) -> Vec<f64> {
+    let norm: f64 = v.iter().map(|&x| x * x).sum::<f64>().sqrt();
+    if norm == 0.0 {
+        return v.to_vec();
+    }
+    v.iter().map(|&x| x / norm).collect()
+}
+
+/// Directed Hausdorff distance between two point sets.
+///
+/// Returns max_{a in A} min_{b in B} ||a - b||.
+/// Matches `scipy.spatial.distance.directed_hausdorff`.
+pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
+    let mut max_dist = 0.0f64;
+    for a in xa {
+        let mut min_dist = f64::INFINITY;
+        for b in xb {
+            let d = euclidean(a, b);
+            min_dist = min_dist.min(d);
+        }
+        max_dist = max_dist.max(min_dist);
+    }
+    max_dist
+}
+
+/// Hausdorff distance between two point sets (symmetric).
+pub fn hausdorff_distance(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
+    directed_hausdorff(xa, xb).max(directed_hausdorff(xb, xa))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

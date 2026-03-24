@@ -1511,6 +1511,140 @@ fn filter_by_distance(peaks: &[usize], heights: &[f64], min_dist: usize) -> Vec<
     selected
 }
 
+/// Compute peak prominences for given peak indices.
+///
+/// Matches `scipy.signal.peak_prominences`.
+///
+/// Returns (prominences, left_bases, right_bases).
+pub fn peak_prominences(x: &[f64], peaks: &[usize]) -> (Vec<f64>, Vec<usize>, Vec<usize>) {
+    let mut prominences = Vec::with_capacity(peaks.len());
+    let mut left_bases = Vec::with_capacity(peaks.len());
+    let mut right_bases = Vec::with_capacity(peaks.len());
+
+    for &pk in peaks {
+        if pk >= x.len() {
+            prominences.push(0.0);
+            left_bases.push(pk);
+            right_bases.push(pk);
+            continue;
+        }
+
+        let peak_val = x[pk];
+
+        // Search left for minimum
+        let mut left_min = peak_val;
+        let mut left_base = pk;
+        for i in (0..pk).rev() {
+            if x[i] < left_min {
+                left_min = x[i];
+                left_base = i;
+            }
+            if x[i] > peak_val {
+                break;
+            }
+        }
+
+        // Search right for minimum
+        let mut right_min = peak_val;
+        let mut right_base = pk;
+        for (i, &value) in x.iter().enumerate().skip(pk + 1) {
+            if value < right_min {
+                right_min = value;
+                right_base = i;
+            }
+            if value > peak_val {
+                break;
+            }
+        }
+
+        prominences.push(peak_val - left_min.max(right_min));
+        left_bases.push(left_base);
+        right_bases.push(right_base);
+    }
+
+    (prominences, left_bases, right_bases)
+}
+
+/// Compute peak widths at a given relative height.
+///
+/// Matches `scipy.signal.peak_widths`.
+///
+/// `rel_height` is the fraction of prominence at which to measure width (0.5 = half-prominence).
+///
+/// Returns (widths, width_heights, left_ips, right_ips).
+pub fn peak_widths(
+    x: &[f64],
+    peaks: &[usize],
+    rel_height: f64,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let (prominences, left_bases, right_bases) = peak_prominences(x, peaks);
+
+    let mut widths = Vec::with_capacity(peaks.len());
+    let mut width_heights = Vec::with_capacity(peaks.len());
+    let mut left_ips = Vec::with_capacity(peaks.len());
+    let mut right_ips = Vec::with_capacity(peaks.len());
+
+    for (idx, &pk) in peaks.iter().enumerate() {
+        let height = x[pk] - prominences[idx] * rel_height;
+        width_heights.push(height);
+
+        // Find left intersection point (interpolated)
+        let mut left_ip = left_bases[idx] as f64;
+        for i in (left_bases[idx]..pk).rev() {
+            if x[i] <= height {
+                // Linear interpolation between i and i+1
+                if i + 1 < x.len() && (x[i + 1] - x[i]).abs() > 1e-15 {
+                    left_ip = i as f64 + (height - x[i]) / (x[i + 1] - x[i]);
+                } else {
+                    left_ip = i as f64;
+                }
+                break;
+            }
+        }
+
+        // Find right intersection point
+        let mut right_ip = right_bases[idx] as f64;
+        for i in pk + 1..=right_bases[idx] {
+            if x[i] <= height {
+                if i > 0 && (x[i] - x[i - 1]).abs() > 1e-15 {
+                    right_ip = i as f64 - (x[i] - height) / (x[i] - x[i - 1]);
+                } else {
+                    right_ip = i as f64;
+                }
+                break;
+            }
+        }
+
+        left_ips.push(left_ip);
+        right_ips.push(right_ip);
+        widths.push(right_ip - left_ip);
+    }
+
+    (widths, width_heights, left_ips, right_ips)
+}
+
+/// Compute the analytic signal's instantaneous frequency.
+///
+/// Matches `scipy.signal.instantaneous_frequency` (via Hilbert transform).
+pub fn instantaneous_frequency(x: &[f64], fs: f64) -> Result<Vec<f64>, SignalError> {
+    let analytic = hilbert(x)?;
+
+    // Instantaneous phase
+    let phase: Vec<f64> = analytic.iter().map(|&(re, im)| im.atan2(re)).collect();
+
+    // Unwrap phase
+    let unwrapped = unwrap_phase(&phase);
+
+    // Instantaneous frequency = d(phase)/dt / (2π)
+    let mut freq = Vec::with_capacity(x.len());
+    freq.push(0.0);
+    for i in 1..unwrapped.len() {
+        freq.push((unwrapped[i] - unwrapped[i - 1]) * fs / (2.0 * std::f64::consts::PI));
+    }
+
+    Ok(freq)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // IIR Filter Design
 // ══════════════════════════════════════════════════════════════════════
@@ -3318,35 +3452,91 @@ pub fn group_delay(
     for i in 0..n {
         let omega = std::f64::consts::PI * i as f64 / (n - 1).max(1) as f64;
         w_out.push(omega);
-
-        // Evaluate B(e^{jω})
-        let (b_re, b_im) = eval_poly_on_unit_circle(b, omega);
-        let b_mag2 = b_re * b_re + b_im * b_im;
-
-        // Standard formula: τ_g(ω) = Re{D_B / B} - Re{D_A / A}
-        // where D_B(e^{jω}) = Σ_k k * b[k] * e^{-jkω}
-        // and Re{D/B} = (D_re*B_re + D_im*B_im) / |B|²
-        let (db_re, db_im) = eval_weighted_poly_on_unit_circle(b, omega);
-        let gd_b = if b_mag2 > 1e-30 {
-            (db_re * b_re + db_im * b_im) / b_mag2
-        } else {
-            0.0
-        };
-
-        // For A: τ_A = Re{Σ k*a[k]*e^{-jkω} / A(e^{jω})}
-        let (a_re, a_im) = eval_poly_on_unit_circle(a, omega);
-        let a_mag2 = a_re * a_re + a_im * a_im;
-        let (da_re, da_im) = eval_weighted_poly_on_unit_circle(a, omega);
-        let gd_a = if a_mag2 > 1e-30 {
-            (da_re * a_re + da_im * a_im) / a_mag2
-        } else {
-            0.0
-        };
-
-        gd_out.push(gd_b - gd_a);
+        gd_out.push(group_delay_at_frequency(b, a, omega));
     }
 
     Ok((w_out, gd_out))
+}
+
+/// Compute phase delay of a digital filter.
+///
+/// Matches the core SciPy surface of `scipy.signal.phase_delay((b, a), w)`.
+///
+/// Phase delay: τ_p(ω) = -φ(ω) / ω, where φ is the unwrapped phase response.
+/// At ω = 0 the limit is taken from the analytic group delay.
+pub fn phase_delay(
+    b: &[f64],
+    a: &[f64],
+    n_freqs: Option<usize>,
+) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    let response = freqz(b, a, n_freqs)?;
+    let unwrapped_phase = unwrap_phase(&response.h_phase);
+    let mut pd_out = Vec::with_capacity(response.w.len());
+
+    for ((&omega, &mag), &phase) in response
+        .w
+        .iter()
+        .zip(response.h_mag.iter())
+        .zip(unwrapped_phase.iter())
+    {
+        let delay = if omega.abs() < 1e-14 {
+            group_delay_at_frequency(b, a, omega)
+        } else if mag <= 1e-30 {
+            0.0
+        } else {
+            -phase / omega
+        };
+        pd_out.push(delay);
+    }
+
+    Ok((response.w, pd_out))
+}
+
+fn group_delay_at_frequency(b: &[f64], a: &[f64], omega: f64) -> f64 {
+    // Evaluate B(e^{jω})
+    let (b_re, b_im) = eval_poly_on_unit_circle(b, omega);
+    let b_mag2 = b_re * b_re + b_im * b_im;
+
+    // Standard formula: τ_g(ω) = Re{D_B / B} - Re{D_A / A}
+    // where D_B(e^{jω}) = Σ_k k * b[k] * e^{-jkω}
+    // and Re{D/B} = (D_re*B_re + D_im*B_im) / |B|²
+    let (db_re, db_im) = eval_weighted_poly_on_unit_circle(b, omega);
+    let gd_b = if b_mag2 > 1e-30 {
+        (db_re * b_re + db_im * b_im) / b_mag2
+    } else {
+        0.0
+    };
+
+    // For A: τ_A = Re{Σ k*a[k]*e^{-jkω} / A(e^{jω})}
+    let (a_re, a_im) = eval_poly_on_unit_circle(a, omega);
+    let a_mag2 = a_re * a_re + a_im * a_im;
+    let (da_re, da_im) = eval_weighted_poly_on_unit_circle(a, omega);
+    let gd_a = if a_mag2 > 1e-30 {
+        (da_re * a_re + da_im * a_im) / a_mag2
+    } else {
+        0.0
+    };
+
+    gd_b - gd_a
+}
+
+fn unwrap_phase(phase: &[f64]) -> Vec<f64> {
+    if phase.is_empty() {
+        return Vec::new();
+    }
+
+    let mut unwrapped = vec![phase[0]];
+    for i in 1..phase.len() {
+        let mut diff = phase[i] - phase[i - 1];
+        while diff > std::f64::consts::PI {
+            diff -= 2.0 * std::f64::consts::PI;
+        }
+        while diff < -std::f64::consts::PI {
+            diff += 2.0 * std::f64::consts::PI;
+        }
+        unwrapped.push(unwrapped[i - 1] + diff);
+    }
+    unwrapped
 }
 
 /// Evaluate Σ k*c[k]*e^{-jkω} (weighted polynomial for group delay).
@@ -3973,12 +4163,12 @@ pub fn firls(
     desired: &[f64],
     weight: Option<&[f64]>,
 ) -> Result<Vec<f64>, SignalError> {
-    if numtaps < 1 || numtaps % 2 == 0 {
+    if numtaps < 1 || numtaps.is_multiple_of(2) {
         return Err(SignalError::InvalidArgument(
             "numtaps must be odd and >= 1".to_string(),
         ));
     }
-    if bands.len() % 2 != 0 || bands.is_empty() {
+    if !bands.len().is_multiple_of(2) || bands.is_empty() {
         return Err(SignalError::InvalidArgument(
             "bands must have even number of elements".to_string(),
         ));
@@ -4039,13 +4229,14 @@ pub fn firls(
                 let inv_pi_i = 1.0 / (2.0 * pi_i);
 
                 let part1 = d_lo * (sin_hi - sin_lo) * inv_pi_i;
-                let part2 = slope
-                    * (df * sin_hi * inv_pi_i + (cos_hi - cos_lo) * inv_pi_i * inv_pi_i);
+                let part2 =
+                    slope * (df * sin_hi * inv_pi_i + (cos_hi - cos_lo) * inv_pi_i * inv_pi_i);
                 w * (part1 + part2)
             };
             b_vec[i] += bi;
 
-            for j in i..n_coeffs {
+            let row_i = &mut q[i];
+            for (j, cell) in row_i.iter_mut().enumerate().skip(i) {
                 // Q[i,j] = w * ∫ cos(2πif) cos(2πjf) df
                 // = w/2 * ∫ [cos(2π(i-j)f) + cos(2π(i+j)f)] df
                 let qij = if i == 0 && j == 0 {
@@ -4060,10 +4251,9 @@ pub fn firls(
                         }
                     };
                     w * 0.5
-                        * (integrate_cos((i as f64 - j as f64))
-                            + integrate_cos((i as f64 + j as f64)))
+                        * (integrate_cos(i as f64 - j as f64) + integrate_cos(i as f64 + j as f64))
                 };
-                q[i][j] += qij;
+                *cell += qij;
                 if j != i {
                     q[j][i] += qij;
                 }
@@ -4599,7 +4789,7 @@ pub fn triang(n: usize) -> Vec<f64> {
     let nf = n as f64;
     (0..n)
         .map(|i| {
-            if n % 2 == 0 {
+            if n.is_multiple_of(2) {
                 // Even: peak between two center samples
                 let k = i as f64;
                 1.0 - ((k - (nf - 1.0) / 2.0) / (nf / 2.0)).abs()
@@ -6622,6 +6812,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn phase_delay_fir_linear_phase() {
+        let b = vec![1.0, 2.0, 3.0, 2.0, 1.0];
+        let a = vec![1.0];
+        let result = freqz(&b, &a, Some(64)).expect("freqz for pd check");
+        let (w, pd) = phase_delay(&b, &a, Some(64)).expect("phase_delay");
+        assert_eq!(w.len(), 64);
+
+        for (i, (&pd_val, &mag)) in pd.iter().zip(result.h_mag.iter()).enumerate() {
+            if mag > 0.1 {
+                assert!(
+                    (pd_val - 2.0).abs() < 0.15,
+                    "phase delay at bin {i} (mag={mag:.3}) should be ~2.0, got {pd_val}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn phase_delay_matches_group_delay_for_pure_delay() {
+        let b = vec![0.0, 0.0, 1.0];
+        let a = vec![1.0];
+        let (_, gd) = group_delay(&b, &a, Some(64)).expect("group_delay");
+        let (_, pd) = phase_delay(&b, &a, Some(64)).expect("phase_delay");
+
+        for (i, (&gd_val, &pd_val)) in gd.iter().zip(pd.iter()).enumerate().skip(1) {
+            assert!(
+                (gd_val - pd_val).abs() < 1e-10,
+                "pure delay mismatch at bin {i}: gd={gd_val}, pd={pd_val}",
+            );
+        }
+    }
+
+    #[test]
+    fn phase_delay_dc_uses_group_delay_limit() {
+        let b = vec![1.0, 0.0, -1.0];
+        let a = vec![1.0];
+        let (_, gd) = group_delay(&b, &a, Some(32)).expect("group_delay");
+        let (_, pd) = phase_delay(&b, &a, Some(32)).expect("phase_delay");
+        assert!(
+            (pd[0] - gd[0]).abs() < 1e-12,
+            "phase delay DC limit should match group delay: {} vs {}",
+            pd[0],
+            gd[0]
+        );
+    }
+
+    #[test]
+    fn phase_delay_rejects_empty_coefficients() {
+        assert!(phase_delay(&[], &[1.0], Some(16)).is_err());
+        assert!(phase_delay(&[1.0], &[], Some(16)).is_err());
     }
 
     #[test]
