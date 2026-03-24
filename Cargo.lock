@@ -563,6 +563,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fsci-cluster"
+version = "0.1.0"
+dependencies = [
+ "fsci-runtime",
+ "proptest",
+]
+
+[[package]]
 name = "fsci-conformance"
 version = "0.1.0"
 dependencies = [
@@ -582,6 +590,10 @@ dependencies = [
  "thiserror",
  "toml",
 ]
+
+[[package]]
+name = "fsci-constants"
+version = "0.1.0"
 
 [[package]]
 name = "fsci-fft"

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/fsci-cluster",
+  "crates/fsci-constants",
   "crates/fsci-integrate",
   "crates/fsci-interpolate",
   "crates/fsci-io",
@@ -28,7 +30,9 @@ unsafe_code = "forbid"
 
 [workspace.dependencies]
 fsci-arrayapi = { path = "crates/fsci-arrayapi" }
+fsci-cluster = { path = "crates/fsci-cluster" }
 fsci-conformance = { path = "crates/fsci-conformance" }
+fsci-constants = { path = "crates/fsci-constants" }
 fsci-fft = { path = "crates/fsci-fft" }
 fsci-integrate = { path = "crates/fsci-integrate" }
 fsci-interpolate = { path = "crates/fsci-interpolate" }

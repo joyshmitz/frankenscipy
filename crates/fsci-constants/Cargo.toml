@@ -1,0 +1,12 @@
+[package]
+name = "fsci-constants"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+
+[lints]
+workspace = true

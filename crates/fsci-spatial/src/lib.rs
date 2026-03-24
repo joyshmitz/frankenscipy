@@ -1206,6 +1206,203 @@ fn circumcenter_2d(
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Spherical Voronoi Diagram (3D)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of a 3D spherical Voronoi diagram for points on a common sphere.
+///
+/// Matches the core SciPy surface for `scipy.spatial.SphericalVoronoi`:
+/// input points, Voronoi vertices, and per-point vertex regions.
+#[derive(Debug, Clone)]
+pub struct SphericalVoronoi {
+    /// Input points in original order.
+    pub points: Vec<[f64; 3]>,
+    /// Voronoi vertices on the sphere.
+    pub vertices: Vec<[f64; 3]>,
+    /// For each input point, the ordered vertex indices of its Voronoi region.
+    pub regions: Vec<Vec<usize>>,
+    /// Sphere center.
+    pub center: [f64; 3],
+    /// Sphere radius.
+    pub radius: f64,
+}
+
+impl SphericalVoronoi {
+    /// Construct a spherical Voronoi diagram for 3D points on a common sphere.
+    pub fn new(points: &[[f64; 3]], center: [f64; 3], radius: f64) -> Result<Self, SpatialError> {
+        if points.len() < 4 {
+            return Err(SpatialError::InvalidArgument(
+                "spherical voronoi requires at least 4 points".to_string(),
+            ));
+        }
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(SpatialError::InvalidArgument(
+                "spherical voronoi requires a positive finite radius".to_string(),
+            ));
+        }
+
+        let tol = 1e-8;
+        for (i, &point) in points.iter().enumerate() {
+            let dist = norm3(sub3(point, center));
+            if (dist - radius).abs() > tol * radius.max(1.0) {
+                return Err(SpatialError::InvalidArgument(format!(
+                    "point {i} is not on the specified sphere"
+                )));
+            }
+        }
+        for i in 0..points.len() {
+            for j in (i + 1)..points.len() {
+                if norm3(sub3(points[i], points[j])) <= tol * radius.max(1.0) {
+                    return Err(SpatialError::InvalidArgument(
+                        "spherical voronoi requires distinct points".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let mut vertices = Vec::new();
+        let mut face_indices = Vec::new();
+        let n = points.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                for k in (j + 1)..n {
+                    let pi = points[i];
+                    let pj = points[j];
+                    let pk = points[k];
+                    let mut normal = cross3(sub3(pj, pi), sub3(pk, pi));
+                    let normal_norm = norm3(normal);
+                    if normal_norm <= 1e-12 {
+                        continue;
+                    }
+                    if dot3(normal, sub3(pi, center)) < 0.0 {
+                        normal = scale3(normal, -1.0);
+                    }
+
+                    let mut is_face = true;
+                    for (idx, &point) in points.iter().enumerate() {
+                        if idx == i || idx == j || idx == k {
+                            continue;
+                        }
+                        let signed = dot3(normal, sub3(point, pi));
+                        if signed > tol * radius.max(1.0) {
+                            is_face = false;
+                            break;
+                        }
+                    }
+                    if !is_face {
+                        continue;
+                    }
+
+                    let unit = scale3(normal, 1.0 / norm3(normal));
+                    let vertex = add3(center, scale3(unit, radius));
+                    if vertices
+                        .iter()
+                        .any(|&existing| norm3(sub3(existing, vertex)) <= tol * radius.max(1.0))
+                    {
+                        return Err(SpatialError::InvalidArgument(
+                            "spherical voronoi requires non-coplanar generators on the sphere"
+                                .to_string(),
+                        ));
+                    }
+                    vertices.push(vertex);
+                    face_indices.push((i, j, k));
+                }
+            }
+        }
+
+        if vertices.len() < 4 {
+            return Err(SpatialError::InvalidArgument(
+                "spherical voronoi requires non-degenerate 3D point configuration".to_string(),
+            ));
+        }
+
+        let mut regions = vec![Vec::new(); n];
+        for (vertex_idx, &(i, j, k)) in face_indices.iter().enumerate() {
+            regions[i].push(vertex_idx);
+            regions[j].push(vertex_idx);
+            regions[k].push(vertex_idx);
+        }
+
+        for (point_idx, region) in regions.iter_mut().enumerate() {
+            if region.len() < 3 {
+                return Err(SpatialError::InvalidArgument(format!(
+                    "point {point_idx} does not have a valid spherical Voronoi region"
+                )));
+            }
+            sort_spherical_region(region, points[point_idx], &vertices, center);
+        }
+
+        Ok(Self {
+            points: points.to_vec(),
+            vertices,
+            regions,
+            center,
+            radius,
+        })
+    }
+}
+
+fn sort_spherical_region(
+    region: &mut [usize],
+    point: [f64; 3],
+    vertices: &[[f64; 3]],
+    center: [f64; 3],
+) {
+    let point_dir = normalize3(sub3(point, center));
+    let first = normalize3(project_to_tangent(
+        sub3(vertices[region[0]], center),
+        point_dir,
+    ));
+    let ortho = cross3(point_dir, first);
+    region.sort_by(|&lhs, &rhs| {
+        let lhs_dir = normalize3(project_to_tangent(sub3(vertices[lhs], center), point_dir));
+        let rhs_dir = normalize3(project_to_tangent(sub3(vertices[rhs], center), point_dir));
+        let lhs_angle = dot3(lhs_dir, ortho).atan2(dot3(lhs_dir, first));
+        let rhs_angle = dot3(rhs_dir, ortho).atan2(dot3(rhs_dir, first));
+        lhs_angle
+            .partial_cmp(&rhs_angle)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn norm3(a: [f64; 3]) -> f64 {
+    dot3(a, a).sqrt()
+}
+
+fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale3(a: [f64; 3], factor: f64) -> [f64; 3] {
+    [a[0] * factor, a[1] * factor, a[2] * factor]
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn normalize3(a: [f64; 3]) -> [f64; 3] {
+    let n = norm3(a);
+    if n <= 1e-15 { a } else { scale3(a, 1.0 / n) }
+}
+
+fn project_to_tangent(v: [f64; 3], normal: [f64; 3]) -> [f64; 3] {
+    sub3(v, scale3(normal, dot3(v, normal)))
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Procrustes Analysis
 // ══════════════════════════════════════════════════════════════════════
 
@@ -2069,6 +2266,69 @@ mod tests {
                 vertex.1
             );
         }
+    }
+
+    // ── Spherical Voronoi tests ─────────────────────────────────────
+
+    #[test]
+    fn spherical_voronoi_tetrahedron_has_four_vertices() {
+        let scale = 1.0 / 3.0_f64.sqrt();
+        let points = [
+            [scale, scale, scale],
+            [scale, -scale, -scale],
+            [-scale, scale, -scale],
+            [-scale, -scale, scale],
+        ];
+        let sv = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0).expect("spherical voronoi");
+
+        assert_eq!(sv.points, points);
+        assert_eq!(sv.vertices.len(), 4);
+        assert_eq!(sv.regions.len(), 4);
+        for region in &sv.regions {
+            assert_eq!(region.len(), 3);
+            for &vertex_idx in region {
+                assert!(vertex_idx < sv.vertices.len());
+            }
+        }
+        for vertex in &sv.vertices {
+            assert!((norm3(*vertex) - 1.0).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn spherical_voronoi_rejects_wrong_radius() {
+        let points = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+        ];
+        let err = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 2.0).expect_err("radius");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn spherical_voronoi_rejects_duplicate_points() {
+        let points = [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let err = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0).expect_err("duplicate");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn spherical_voronoi_rejects_coplanar_great_circle_points() {
+        let points = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+        ];
+        let err = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0).expect_err("degenerate");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
     }
 
     // ── Procrustes tests ─────────────────────────────────────────────
