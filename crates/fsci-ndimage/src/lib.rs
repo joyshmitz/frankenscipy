@@ -108,7 +108,10 @@ impl NdArray {
     }
 
     fn flat_index(&self, idx: &[usize]) -> usize {
-        idx.iter().zip(self.strides.iter()).map(|(i, s)| i * s).sum()
+        idx.iter()
+            .zip(self.strides.iter())
+            .map(|(i, s)| i * s)
+            .sum()
     }
 
     /// Convert flat index to multi-dimensional index.
@@ -727,11 +730,7 @@ pub fn prewitt(
 /// Laplace filter (sum of second derivatives).
 ///
 /// Matches `scipy.ndimage.laplace`.
-pub fn laplace(
-    input: &NdArray,
-    mode: BoundaryMode,
-    cval: f64,
-) -> Result<NdArray, NdimageError> {
+pub fn laplace(input: &NdArray, mode: BoundaryMode, cval: f64) -> Result<NdArray, NdimageError> {
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
@@ -782,7 +781,11 @@ pub fn binary_erosion(
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
-    let size = if structure_size == 0 { 3 } else { structure_size };
+    let size = if structure_size == 0 {
+        3
+    } else {
+        structure_size
+    };
     let mut current = input.clone();
 
     for _ in 0..iterations.max(1) {
@@ -838,7 +841,11 @@ pub fn binary_dilation(
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
-    let size = if structure_size == 0 { 3 } else { structure_size };
+    let size = if structure_size == 0 {
+        3
+    } else {
+        structure_size
+    };
     let mut current = input.clone();
 
     for _ in 0..iterations.max(1) {
@@ -1138,11 +1145,7 @@ pub fn variance_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> 
 /// Standard deviation of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.standard_deviation`.
-pub fn standard_deviation_labels(
-    input: &NdArray,
-    labels: &NdArray,
-    num_labels: usize,
-) -> Vec<f64> {
+pub fn standard_deviation_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f64> {
     variance_labels(input, labels, num_labels)
         .into_iter()
         .map(|v| v.sqrt())
@@ -1153,10 +1156,7 @@ pub fn standard_deviation_labels(
 ///
 /// Returns a Vec of (min_indices, max_indices) for each label.
 /// Matches `scipy.ndimage.find_objects`.
-pub fn find_objects(
-    labels: &NdArray,
-    num_labels: usize,
-) -> Vec<Option<(Vec<usize>, Vec<usize>)>> {
+pub fn find_objects(labels: &NdArray, num_labels: usize) -> Vec<Option<(Vec<usize>, Vec<usize>)>> {
     let ndim = labels.ndim();
     let mut mins: Vec<Vec<usize>> = vec![vec![usize::MAX; ndim]; num_labels + 1];
     let mut maxs: Vec<Vec<usize>> = vec![vec![0; ndim]; num_labels + 1];
@@ -1188,11 +1188,7 @@ pub fn find_objects(
 /// Center of mass for each labeled region.
 ///
 /// Matches `scipy.ndimage.center_of_mass`.
-pub fn center_of_mass(
-    input: &NdArray,
-    labels: &NdArray,
-    num_labels: usize,
-) -> Vec<Vec<f64>> {
+pub fn center_of_mass(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<Vec<f64>> {
     let ndim = input.ndim();
     let mut weighted_sums = vec![vec![0.0; ndim]; num_labels + 1];
     let mut total_weights = vec![0.0; num_labels + 1];
@@ -1554,11 +1550,7 @@ pub fn map_coordinates(
 
 /// Compute the maximum of the input array.
 pub fn array_max(input: &NdArray) -> f64 {
-    input
-        .data
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, f64::max)
+    input.data.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
 }
 
 /// Compute the minimum of the input array.
@@ -1793,8 +1785,7 @@ mod tests {
     #[test]
     fn percentile_filter_median() {
         let input = NdArray::new(vec![1.0, 5.0, 3.0, 2.0, 4.0], vec![5]).unwrap();
-        let result =
-            percentile_filter(&input, 50.0, 3, BoundaryMode::Constant, 0.0).unwrap();
+        let result = percentile_filter(&input, 50.0, 3, BoundaryMode::Constant, 0.0).unwrap();
         // 50th percentile of [0, 1, 5] = 1.0
         assert_eq!(result.data[0], 1.0);
     }
@@ -1808,8 +1799,7 @@ mod tests {
             0.0, 0.0, 0.0,
         ];
         let input = NdArray::new(data, vec![3, 3]).unwrap();
-        let result =
-            morphological_gradient(&input, 3, BoundaryMode::Constant, 0.0).unwrap();
+        let result = morphological_gradient(&input, 3, BoundaryMode::Constant, 0.0).unwrap();
         // Center pixel: max-min = 1-0 = 1
         assert_eq!(result.data[4], 1.0);
         // Corner pixel: max-min = 0-0 = 0 (unless center is in neighborhood)

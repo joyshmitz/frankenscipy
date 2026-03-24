@@ -66,11 +66,7 @@ fn rotate_left_owned<T: Clone>(input: &[T], shift: usize) -> Vec<T> {
 /// Matches `scipy.signal.fftconvolve(a, b, mode)`.
 ///
 /// `mode`: "full" (default), "same", or "valid".
-pub fn fftconvolve(
-    a: &[f64],
-    b: &[f64],
-    mode: &str,
-) -> Result<Vec<f64>, FftError> {
+pub fn fftconvolve(a: &[f64], b: &[f64], mode: &str) -> Result<Vec<f64>, FftError> {
     if a.is_empty() || b.is_empty() {
         return Ok(vec![]);
     }
@@ -127,11 +123,7 @@ pub fn fftconvolve(
 /// FFT-based cross-correlation of two 1D real signals.
 ///
 /// Equivalent to convolving a with reversed b.
-pub fn fftcorrelate(
-    a: &[f64],
-    b: &[f64],
-    mode: &str,
-) -> Result<Vec<f64>, FftError> {
+pub fn fftcorrelate(a: &[f64], b: &[f64], mode: &str) -> Result<Vec<f64>, FftError> {
     // Correlation = convolution with time-reversed b
     let b_rev: Vec<f64> = b.iter().rev().cloned().collect();
     fftconvolve(a, &b_rev, mode)

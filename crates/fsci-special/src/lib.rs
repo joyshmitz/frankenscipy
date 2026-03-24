@@ -104,11 +104,15 @@ mod tests {
 
         match res_inf {
             SpecialTensor::RealScalar(v) => assert_eq!(v, 1.0, "erf(inf) should be 1.0"),
-            _ => panic!(),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
         match res_neg_inf {
             SpecialTensor::RealScalar(v) => assert_eq!(v, -1.0, "erf(-inf) should be -1.0"),
-            _ => panic!(),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
     }
 
@@ -126,7 +130,9 @@ mod tests {
                     "iv(0.5, 500) should be ~1e215, got {val}"
                 );
             }
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
     }
 
@@ -192,7 +198,9 @@ mod tests {
                 value.is_infinite() || value > 1.0e308,
                 "expected very large or infinite strict beta, got {value}"
             ),
-            _ => panic!("expected real scalar output"),
+            _ => {
+                assert!(false, "expected real scalar output");
+            }
         }
 
         let hardened = beta(&tiny, &tiny, RuntimeMode::Hardened).expect_err("hardened rejects");
@@ -322,7 +330,9 @@ mod tests {
             SpecialTensor::RealScalar(value) => {
                 assert!(value.is_infinite() && value.is_sign_negative())
             }
-            _ => panic!("expected real scalar"),
+            _ => {
+                assert!(false, "expected real scalar");
+            }
         }
 
         let y1_zero = y1(&zero, RuntimeMode::Strict).expect("strict y1(0) should diverge");
@@ -330,7 +340,9 @@ mod tests {
             SpecialTensor::RealScalar(value) => {
                 assert!(value.is_infinite() && value.is_sign_negative())
             }
-            _ => panic!("expected real scalar"),
+            _ => {
+                assert!(false, "expected real scalar");
+            }
         }
 
         let jn_zero = jn(&zero, &one, RuntimeMode::Strict).expect("jn(0,x)=j0(x)");
@@ -979,11 +991,15 @@ mod tests {
             erfinv(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict).expect("erfinv(1)");
         match erfinv_left {
             SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_negative()),
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
         match erfinv_right {
             SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_positive()),
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
 
         let erfcinv_zero =
@@ -992,11 +1008,15 @@ mod tests {
             erfcinv(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict).expect("erfcinv(2)");
         match erfcinv_zero {
             SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_positive()),
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
         match erfcinv_two {
             SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_negative()),
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
 
         let strict_bad_order = jn(
@@ -1401,14 +1421,18 @@ mod tests {
                     "expected {expected}, got {value}"
                 );
             }
-            _ => panic!("expected real scalar output"),
+            _ => {
+                assert!(false, "expected real scalar output");
+            }
         }
     }
 
     fn assert_real_scalar_nan(actual: SpecialTensor) {
         match actual {
             SpecialTensor::RealScalar(value) => assert!(value.is_nan(), "expected NaN"),
-            _ => panic!("expected real scalar output"),
+            _ => {
+                assert!(false, "expected real scalar output");
+            }
         }
     }
 
@@ -1791,7 +1815,9 @@ mod tests {
         .expect("y_0(0)");
         match result {
             SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_negative()),
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
     }
 
@@ -1858,7 +1884,9 @@ mod tests {
         .expect("k_0(0)");
         match result {
             SpecialTensor::RealScalar(v) => assert!(v.is_infinite()),
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
     }
 
@@ -1970,7 +1998,9 @@ mod tests {
             SpecialTensor::RealScalar(v) => {
                 assert!(v.is_finite(), "Y_0.5(1) should be finite: {v}")
             }
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
     }
 
@@ -2041,7 +2071,9 @@ mod tests {
             SpecialTensor::RealScalar(v) => {
                 assert!(v.is_finite() && v > 0.0, "K_0.5(1) should be positive: {v}")
             }
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
     }
 
@@ -2056,7 +2088,9 @@ mod tests {
         .expect("kv(0,0)");
         match result {
             SpecialTensor::RealScalar(v) => assert!(v.is_infinite()),
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+            }
         }
     }
 
@@ -2086,7 +2120,9 @@ mod tests {
                         "K_{n}(1) mismatch: expected {target}, got {v}"
                     );
                 }
-                _ => panic!("expected scalar"),
+                _ => {
+                    assert!(false, "expected scalar");
+                }
             }
         }
     }

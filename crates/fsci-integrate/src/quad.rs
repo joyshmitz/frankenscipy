@@ -1579,8 +1579,8 @@ pub fn newton_cotes(n: usize) -> Result<Vec<f64>, IntegrateValidationError> {
         return Ok(vec![1.0]);
     }
     match n {
-        1 => Ok(vec![0.5, 0.5]),                                     // Trapezoidal
-        2 => Ok(vec![1.0 / 6.0, 4.0 / 6.0, 1.0 / 6.0]),           // Simpson's 1/3
+        1 => Ok(vec![0.5, 0.5]),                                   // Trapezoidal
+        2 => Ok(vec![1.0 / 6.0, 4.0 / 6.0, 1.0 / 6.0]),            // Simpson's 1/3
         3 => Ok(vec![1.0 / 8.0, 3.0 / 8.0, 3.0 / 8.0, 1.0 / 8.0]), // Simpson's 3/8
         4 => Ok(vec![
             7.0 / 90.0,

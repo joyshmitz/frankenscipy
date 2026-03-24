@@ -585,7 +585,7 @@ pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError
         MatrixAssumption::General
         | MatrixAssumption::Symmetric
         | MatrixAssumption::Hermitian
-        | MatrixAssumption::PositiveDefinite => inv_general(a, rows),
+        | MatrixAssumption::PositiveDefinite => inv_general(a, rows, options.mode),
         _ => inv_column_by_column(a, rows, cols, options),
     };
 
@@ -611,14 +611,22 @@ pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError
 }
 
 /// Single LU factorization + solve against identity. O(n³) instead of O(n⁴).
-fn inv_general(a: &[Vec<f64>], n: usize) -> Result<InvResult, LinalgError> {
+fn inv_general(a: &[Vec<f64>], n: usize, mode: RuntimeMode) -> Result<InvResult, LinalgError> {
     let matrix = dmatrix_from_rows(a)?;
     let a_norm_1 = matrix.lp_norm(1);
     let lu: LU<f64, Dyn, Dyn> = matrix.lu();
     let rcond = fast_rcond_from_lu(&lu, a_norm_1, n);
 
-    // Reject near-singular matrices that LU may not catch exactly
-    if rcond < f64::EPSILON {
+    // Hardened mode: reject if condition number is too high
+    if mode == RuntimeMode::Hardened && rcond < HARDENED_RCOND_THRESHOLD && rcond > 0.0 {
+        return Err(LinalgError::ConditionTooHigh {
+            rcond,
+            threshold: HARDENED_RCOND_THRESHOLD,
+        });
+    }
+
+    // Exact singularity
+    if rcond == 0.0 {
         return Err(LinalgError::SingularMatrix);
     }
 
@@ -4052,6 +4060,153 @@ pub fn kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     }
 
     result
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Condition Number and Matrix Properties
+// ══════════════════════════════════════════════════════════════════════
+
+/// Condition number of a matrix (ratio of largest to smallest singular value).
+///
+/// Matches `numpy.linalg.cond` / `scipy.linalg.cond`.
+pub fn cond(a: &[Vec<f64>], options: DecompOptions) -> Result<f64, LinalgError> {
+    let sv = svdvals(a, options)?;
+    if sv.is_empty() {
+        return Ok(f64::INFINITY);
+    }
+    let s_max = sv[0];
+    let s_min = sv[sv.len() - 1];
+    if s_min == 0.0 {
+        Ok(f64::INFINITY)
+    } else {
+        Ok(s_max / s_min)
+    }
+}
+
+/// Trace of a matrix (sum of diagonal elements).
+///
+/// Matches `numpy.trace`.
+pub fn trace(a: &[Vec<f64>]) -> f64 {
+    let n = a.len();
+    let mut sum = 0.0;
+    for (i, row) in a.iter().enumerate().take(n) {
+        if i < row.len() {
+            sum += row[i];
+        }
+    }
+    sum
+}
+
+/// Diagonal of a matrix as a vector.
+///
+/// Matches `numpy.diag(a)` when a is 2D.
+pub fn diag(a: &[Vec<f64>]) -> Vec<f64> {
+    let n = a.len();
+    let mut d = Vec::with_capacity(n);
+    for (i, row) in a.iter().enumerate().take(n) {
+        if i < row.len() {
+            d.push(row[i]);
+        }
+    }
+    d
+}
+
+/// Create a diagonal matrix from a vector.
+///
+/// Matches `numpy.diag(v)` when v is 1D.
+pub fn diagm(v: &[f64]) -> Vec<Vec<f64>> {
+    let n = v.len();
+    let mut m = vec![vec![0.0; n]; n];
+    for (i, &vi) in v.iter().enumerate() {
+        m[i][i] = vi;
+    }
+    m
+}
+
+/// Eye (identity) matrix of size n×m.
+///
+/// Matches `numpy.eye`.
+pub fn eye(n: usize, m: usize) -> Vec<Vec<f64>> {
+    let mut result = vec![vec![0.0; m]; n];
+    for (i, row) in result.iter_mut().enumerate().take(n.min(m)) {
+        row[i] = 1.0;
+    }
+    result
+}
+
+/// Matrix-matrix multiplication C = A * B.
+///
+/// Matches `numpy.matmul` / `A @ B`.
+pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgError> {
+    if a.is_empty() || b.is_empty() {
+        return Ok(vec![]);
+    }
+    let (m, ka) = (a.len(), a[0].len());
+    let (kb, n) = (b.len(), b[0].len());
+    if ka != kb {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (m, ka),
+            b_len: kb,
+        });
+    }
+    let mut c = vec![vec![0.0; n]; m];
+    for i in 0..m {
+        for j in 0..n {
+            for k in 0..ka {
+                c[i][j] += a[i][k] * b[k][j];
+            }
+        }
+    }
+    Ok(c)
+}
+
+/// Matrix-vector multiplication y = A * x.
+///
+/// Matches `A @ x`.
+pub fn matvec(a: &[Vec<f64>], x: &[f64]) -> Result<Vec<f64>, LinalgError> {
+    if a.is_empty() {
+        return Ok(vec![]);
+    }
+    let m = a.len();
+    let n = a[0].len();
+    if n != x.len() {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (m, n),
+            b_len: x.len(),
+        });
+    }
+    let mut y = vec![0.0; m];
+    for i in 0..m {
+        for j in 0..n {
+            y[i] += a[i][j] * x[j];
+        }
+    }
+    Ok(y)
+}
+
+/// Outer product of two vectors.
+///
+/// Matches `numpy.outer`.
+pub fn outer(a: &[f64], b: &[f64]) -> Vec<Vec<f64>> {
+    let m = a.len();
+    let n = b.len();
+    let mut result = vec![vec![0.0; n]; m];
+    for i in 0..m {
+        for j in 0..n {
+            result[i][j] = a[i] * b[j];
+        }
+    }
+    result
+}
+
+/// Vector dot product.
+pub fn vdot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(&ai, &bi)| ai * bi).sum()
+}
+
+/// Vector L2 norm.
+pub fn vnorm(v: &[f64]) -> f64 {
+    v.iter().map(|&x| x * x).sum::<f64>().sqrt()
 }
 
 #[cfg(test)]

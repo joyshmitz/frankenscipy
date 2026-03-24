@@ -864,4 +864,3 @@ fn mode_label(mode: RuntimeMode) -> &'static str {
         RuntimeMode::Hardened => "hardened",
     }
 }
-

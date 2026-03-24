@@ -390,9 +390,10 @@ where
                         .map(|t_old| (rk.t() - t_old).abs())
                         .or(self.first_step);
                     self.switch_to_bdf(fun, preferred_first_step)?;
-                    match &mut self.mode {
-                        LsodaMode::Bdf(bdf) => bdf.step_with(fun),
-                        LsodaMode::Adams(_) => unreachable!("mode switch completed"),
+                    if let LsodaMode::Bdf(bdf) = &mut self.mode {
+                        bdf.step_with(fun)
+                    } else {
+                        Err(crate::solver::StepFailure::ConvergenceFailure)
                     }
                 }
                 Err(err) => Err(err),

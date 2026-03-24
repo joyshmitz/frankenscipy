@@ -214,7 +214,10 @@ impl Interp1d {
                 })
             }
             InterpKind::CubicSpline => {
-                let coeffs = self.spline_coeffs.as_ref().expect("cubic spline initialized with coeffs");
+                let coeffs = self
+                    .spline_coeffs
+                    .as_ref()
+                    .expect("cubic spline initialized with coeffs");
                 let dx = x_new - self.x[i];
                 let [a, b, c, d] = coeffs[i];
                 Ok(a + dx * (b + dx * (c + dx * d)))
@@ -1219,7 +1222,11 @@ fn make_smoothing_spline_impl(
         }
     }
 
-    let scale = y.iter().map(|value| value.abs()).fold(0.0_f64, f64::max).max(1.0);
+    let scale = y
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
     let lambda = s / ((n as f64) * scale * scale);
     if lambda > 0.0 {
         for i in 0..n {
@@ -1726,7 +1733,10 @@ impl LinearNDInterpolator {
         for (i, point) in points.iter().enumerate() {
             if point.len() != 2 {
                 return Err(InterpError::InvalidArgument {
-                    detail: format!("LinearND only supports 2D points; point {i} has dimension {}", point.len()),
+                    detail: format!(
+                        "LinearND only supports 2D points; point {i} has dimension {}",
+                        point.len()
+                    ),
                 });
             }
         }
@@ -1918,7 +1928,9 @@ impl KroghInterpolator {
     /// Create a Krogh interpolator through points (xi, yi).
     pub fn new(xi: &[f64], yi: &[f64]) -> Result<Self, InterpError> {
         if xi.len() != yi.len() || xi.is_empty() {
-            return Err(InterpError::InvalidArgument { detail: "xi and yi must have same non-zero length".to_string() });
+            return Err(InterpError::InvalidArgument {
+                detail: "xi and yi must have same non-zero length".to_string(),
+            });
         }
         let n = xi.len();
 
@@ -1928,7 +1940,9 @@ impl KroghInterpolator {
             for i in (j..n).rev() {
                 let dx = xi[i] - xi[i - j];
                 if dx.abs() < 1e-15 {
-                    return Err(InterpError::InvalidArgument { detail: "duplicate knots".to_string() });
+                    return Err(InterpError::InvalidArgument {
+                        detail: "duplicate knots".to_string(),
+                    });
                 }
                 dd[i] = (dd[i] - dd[i - 1]) / dx;
             }
@@ -1965,7 +1979,9 @@ impl KroghInterpolator {
 /// Matches `scipy.interpolate.lagrange`.
 pub fn lagrange(xi: &[f64], yi: &[f64]) -> Result<Vec<f64>, InterpError> {
     if xi.len() != yi.len() || xi.is_empty() {
-        return Err(InterpError::InvalidArgument { detail: "xi and yi must have same non-zero length".to_string() });
+        return Err(InterpError::InvalidArgument {
+            detail: "xi and yi must have same non-zero length".to_string(),
+        });
     }
     let n = xi.len();
 
@@ -1988,7 +2004,9 @@ pub fn lagrange(xi: &[f64], yi: &[f64]) -> Result<Vec<f64>, InterpError> {
             }
             let denom = xi[i] - xi[j];
             if denom.abs() < 1e-15 {
-                return Err(InterpError::InvalidArgument { detail: "duplicate knots".to_string() });
+                return Err(InterpError::InvalidArgument {
+                    detail: "duplicate knots".to_string(),
+                });
             }
 
             // Multiply current polynomial by (x - x_j) / denom
@@ -2038,12 +2056,14 @@ impl PPoly {
     /// Create a piecewise polynomial from coefficients and breakpoints.
     pub fn new(c: Vec<Vec<f64>>, x: Vec<f64>) -> Result<Self, InterpError> {
         if c.len() + 1 != x.len() {
-            return Err(InterpError::InvalidArgument { detail: format!(
-                "need {} intervals for {} breakpoints, got {}",
-                x.len() - 1,
-                x.len(),
-                c.len()
-            )});
+            return Err(InterpError::InvalidArgument {
+                detail: format!(
+                    "need {} intervals for {} breakpoints, got {}",
+                    x.len() - 1,
+                    x.len(),
+                    c.len()
+                ),
+            });
         }
         Ok(Self { c, x })
     }

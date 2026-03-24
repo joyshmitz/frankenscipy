@@ -363,7 +363,9 @@ mod tests {
 
     #[test]
     fn planck_order_of_magnitude() {
-        const { assert!(PLANCK > 6e-34 && PLANCK < 7e-34); }
+        const {
+            assert!(PLANCK > 6e-34 && PLANCK < 7e-34);
+        }
     }
 
     #[test]

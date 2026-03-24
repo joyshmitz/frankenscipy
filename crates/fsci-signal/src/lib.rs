@@ -3580,7 +3580,7 @@ fn eval_analog_poly(coeffs: &[f64], omega: f64) -> (f64, f64) {
             1 => im += c * omega_pow, // j^1 = j
             2 => re -= c * omega_pow, // j^2 = -1
             3 => im -= c * omega_pow, // j^3 = -j
-            _ => unreachable!(),
+            _ => re += 0.0,           // Mathematically impossible
         }
     }
     (re, im)

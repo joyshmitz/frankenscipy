@@ -1335,7 +1335,10 @@ mod tests {
         assert!(parsed.get("test_id").is_some());
         assert!(parsed.get("optimizer").is_some());
         assert!(parsed.get("timestamp_ms").is_some());
-        test_log_sink().lock().unwrap_or_else(|e| e.into_inner()).push(payload);
+        test_log_sink()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(payload);
     }
 
     fn cubic(x: f64) -> f64 {

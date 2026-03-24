@@ -1053,7 +1053,11 @@ pub fn expn(n: usize, x: f64) -> f64 {
         return f64::NAN;
     }
     if x == 0.0 {
-        return if n > 1 { 1.0 / (n as f64 - 1.0) } else { f64::INFINITY };
+        return if n > 1 {
+            1.0 / (n as f64 - 1.0)
+        } else {
+            f64::INFINITY
+        };
     }
     if n == 0 {
         return (-x).exp() / x;
@@ -1141,10 +1145,7 @@ pub fn trigamma(x: f64) -> f64 {
 
     let inv_x = 1.0 / val;
     let inv_x2 = inv_x * inv_x;
-    result += inv_x
-        + inv_x2 / 2.0
-        + inv_x2 * inv_x / 6.0
-        - inv_x2 * inv_x2 * inv_x / 30.0
+    result += inv_x + inv_x2 / 2.0 + inv_x2 * inv_x / 6.0 - inv_x2 * inv_x2 * inv_x / 30.0
         + inv_x2 * inv_x2 * inv_x2 * inv_x / 42.0;
 
     result
@@ -1386,8 +1387,8 @@ pub fn gamma_mod_squared(a: f64, b: f64) -> f64 {
     // Stirling: ln|Γ(a+ib)| ≈ (a-0.5)*ln(a²+b²)/2 - b*atan(b/a) - a + 0.5*ln(2π) + ...
     let r2 = val_a * val_a + b * b;
     let theta = b.atan2(val_a);
-    let log_mod = (val_a - 0.5) * r2.ln() / 2.0 - b * theta - val_a
-        + 0.5 * (2.0 * std::f64::consts::PI).ln();
+    let log_mod =
+        (val_a - 0.5) * r2.ln() / 2.0 - b * theta - val_a + 0.5 * (2.0 * std::f64::consts::PI).ln();
 
     (2.0 * log_mod).exp() / product
 }

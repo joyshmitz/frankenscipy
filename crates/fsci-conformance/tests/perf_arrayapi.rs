@@ -15,8 +15,8 @@
 //! "after" uses the current optimized `CoreArrayBackend::broadcast_to`.
 
 use fsci_arrayapi::{
-    ArrayApiBackend, CoreArray, CoreArrayBackend, CreationRequest, DType,
-    ExecutionMode, MemoryOrder, ScalarValue, Shape, from_slice,
+    ArrayApiBackend, CoreArray, CoreArrayBackend, CreationRequest, DType, ExecutionMode,
+    MemoryOrder, ScalarValue, Shape, from_slice,
 };
 use serde::Serialize;
 use std::time::Instant;

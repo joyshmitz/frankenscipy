@@ -342,19 +342,31 @@ mod tests {
         assert_eq!(result.len(), 4);
         let ai = match &result[0] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         let aip = match &result[1] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         let bi = match &result[2] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         let bip = match &result[3] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
 
         assert_close(ai, 0.355_028_053_887_817_2, 1e-10, "Ai(0)");
@@ -370,11 +382,17 @@ mod tests {
         let result = airy(&x, RuntimeMode::Strict).expect("airy(1)");
         let ai = match &result[0] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         let bi = match &result[2] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         assert_close(ai, 0.135_292_416_312_881_4, 1e-6, "Ai(1)");
         assert_close(bi, 1.207_423_594_952_871, 1e-4, "Bi(1)");
@@ -387,11 +405,17 @@ mod tests {
         let result = airy(&x, RuntimeMode::Strict).expect("airy(-1)");
         let ai = match &result[0] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         let bi = match &result[2] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         assert_close(ai, 0.535_560_883_292_352, 1e-6, "Ai(-1)");
         assert_close(bi, 0.103_997_389_496_945_9, 1e-4, "Bi(-1)");
@@ -404,7 +428,10 @@ mod tests {
         let result = airy(&x, RuntimeMode::Strict).expect("airy(10)");
         let ai = match &result[0] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         assert!(ai > 0.0, "Ai(10) should be positive");
         assert!(ai < 1e-8, "Ai(10) should be very small, got {ai}");
@@ -416,7 +443,10 @@ mod tests {
         let result = airy(&x, RuntimeMode::Strict).expect("airy(NaN)");
         let ai = match &result[0] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         assert!(ai.is_nan());
     }
@@ -427,11 +457,17 @@ mod tests {
         let result = airy(&x, RuntimeMode::Strict).expect("airy(inf)");
         let ai = match &result[0] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         let bi = match &result[2] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         assert_eq!(ai, 0.0, "Ai(+inf)=0");
         assert!(bi.is_infinite() && bi.is_sign_positive(), "Bi(+inf)=+inf");
@@ -443,7 +479,10 @@ mod tests {
         let result = ai(&x, RuntimeMode::Strict).expect("ai(0)");
         let val = match result {
             SpecialTensor::RealScalar(v) => v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         assert_close(val, 0.355_028_053_887_817_2, 1e-10, "ai(0)");
     }
@@ -454,7 +493,10 @@ mod tests {
         let result = bi(&x, RuntimeMode::Strict).expect("bi(0)");
         let val = match result {
             SpecialTensor::RealScalar(v) => v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         assert_close(val, 0.614_926_627_446_001, 1e-8, "bi(0)");
     }
@@ -469,7 +511,9 @@ mod tests {
                 assert_eq!(v.len(), 3);
                 assert_close(v[0], 0.355_028_053_887_817_2, 1e-10, "Ai(0)");
             }
-            _ => panic!("expected vector"),
+            _ => {
+                panic!("expected vector");
+            }
         }
     }
 
@@ -487,11 +531,17 @@ mod tests {
         let result = airy(&x, RuntimeMode::Strict).expect("airy(-10)");
         let ai = match &result[0] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         let bi = match &result[2] {
             SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected scalar"),
+            _ => {
+                assert!(false, "expected scalar");
+                0.0
+            }
         };
         assert_close(ai, 0.040_241_238_482_703_7, 1e-6, "Ai(-10)");
         assert_close(bi, -0.314_680_808_611_115, 1e-6, "Bi(-10)");

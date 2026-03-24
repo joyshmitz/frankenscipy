@@ -114,8 +114,8 @@ pub fn kmeans(
         }
         for c in 0..k {
             if counts[c] > 0 {
-                for j in 0..d {
-                    new_centroids[c][j] /= counts[c] as f64;
+                for val in &mut new_centroids[c][..d] {
+                    *val /= counts[c] as f64;
                 }
             } else {
                 // Empty cluster: keep old centroid
@@ -352,10 +352,7 @@ pub enum LinkageMethod {
 /// merged at distance dist, producing a cluster with count observations.
 ///
 /// Matches `scipy.cluster.hierarchy.linkage`.
-pub fn linkage(
-    data: &[Vec<f64>],
-    method: LinkageMethod,
-) -> Result<Vec<[f64; 4]>, ClusterError> {
+pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>, ClusterError> {
     let n = data.len();
     if n < 2 {
         return Err(ClusterError::InvalidArgument(
@@ -439,9 +436,7 @@ pub fn linkage(
                     let nj = cluster_size[mj] as f64;
                     let nk = cluster_size[k] as f64;
                     let nt = ni + nj + nk;
-                    (((nk + ni) * d_ki * d_ki + (nk + nj) * d_kj * d_kj
-                        - nk * min_d * min_d)
-                        / nt)
+                    (((nk + ni) * d_ki * d_ki + (nk + nj) * d_kj * d_kj - nk * min_d * min_d) / nt)
                         .max(0.0)
                         .sqrt()
                 }
@@ -465,8 +460,8 @@ pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
 
     // Each leaf is its own cluster initially
     let mut cluster_of = vec![0usize; 2 * n - 1];
-    for i in 0..n {
-        cluster_of[i] = i;
+    for (i, cluster) in cluster_of.iter_mut().enumerate().take(n) {
+        *cluster = i;
     }
 
     // Process merges in order, stopping when we have max_clusters
@@ -506,8 +501,8 @@ pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
 pub fn cophenet(z: &[[f64; 4]]) -> Vec<f64> {
     let n = z.len() + 1;
     let mut membership = vec![vec![]; 2 * n - 1];
-    for i in 0..n {
-        membership[i] = vec![i];
+    for (i, mem) in membership.iter_mut().enumerate().take(n) {
+        *mem = vec![i];
     }
 
     let mut condensed = vec![0.0; n * (n - 1) / 2];
@@ -796,7 +791,11 @@ mod tests {
         let n = whitened.len() as f64;
         for col in 0..2 {
             let mean: f64 = whitened.iter().map(|r| r[col]).sum::<f64>() / n;
-            let var: f64 = whitened.iter().map(|r| (r[col] - mean).powi(2)).sum::<f64>() / n;
+            let var: f64 = whitened
+                .iter()
+                .map(|r| (r[col] - mean).powi(2))
+                .sum::<f64>()
+                / n;
             assert!(
                 (var.sqrt() - 1.0).abs() < 0.01,
                 "column {col} std = {}",

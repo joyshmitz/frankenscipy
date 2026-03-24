@@ -1,7 +1,7 @@
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
-use crate::formats::{CscMatrix, CsrMatrix, SparseError, SparseResult};
+use crate::formats::{CscMatrix, CsrMatrix, Shape2D, SparseError, SparseResult};
 use crate::ops::FormatConvertible;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1353,14 +1353,14 @@ pub fn floyd_warshall(graph: &CsrMatrix) -> Vec<Vec<f64>> {
     let mut dist = vec![vec![f64::INFINITY; n]; n];
 
     // Initialize from graph edges
-    for i in 0..n {
-        dist[i][i] = 0.0;
+    for (i, row) in dist.iter_mut().enumerate().take(n) {
+        row[i] = 0.0;
         let row_start = graph.indptr()[i];
         let row_end = graph.indptr()[i + 1];
         for idx in row_start..row_end {
             let j = graph.indices()[idx];
             let w = graph.data()[idx];
-            dist[i][j] = w;
+            row[j] = w;
         }
     }
 
@@ -1388,11 +1388,7 @@ pub fn floyd_warshall(graph: &CsrMatrix) -> Vec<Vec<f64>> {
 /// Returns (INFINITY, empty) if no path exists.
 ///
 /// Matches `scipy.sparse.csgraph.shortest_path` for single source/target.
-pub fn shortest_path(
-    graph: &CsrMatrix,
-    source: usize,
-    target: usize,
-) -> (f64, Vec<usize>) {
+pub fn shortest_path(graph: &CsrMatrix, source: usize, target: usize) -> (f64, Vec<usize>) {
     let n = graph.shape().rows;
     if source >= n || target >= n {
         return (f64::INFINITY, vec![]);
@@ -1475,7 +1471,7 @@ pub fn reverse_cuthill_mckee(graph: &CsrMatrix) -> Vec<usize> {
         let start = (0..n)
             .filter(|&i| !visited[i])
             .min_by_key(|&i| degrees[i])
-            .unwrap();
+            .unwrap_or(0);
 
         // BFS from start, visiting neighbors in order of increasing degree
         let mut queue = std::collections::VecDeque::new();
@@ -1537,12 +1533,7 @@ pub fn structural_rank(graph: &CsrMatrix) -> usize {
 }
 
 /// Try to find an augmenting path from `row` in the bipartite matching.
-fn augment(
-    graph: &CsrMatrix,
-    row: usize,
-    match_col: &mut [usize],
-    visited: &mut [bool],
-) -> bool {
+fn augment(graph: &CsrMatrix, row: usize, match_col: &mut [usize], visited: &mut [bool]) -> bool {
     let row_start = graph.indptr()[row];
     let row_end = graph.indptr()[row + 1];
 
@@ -1557,6 +1548,207 @@ fn augment(
         }
     }
     false
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Sparse Matrix Operations
+// ══════════════════════════════════════════════════════════════════════
+
+/// Sparse matrix norm.
+///
+/// Supports "fro" (Frobenius), "1" (max column sum), "inf" (max row sum).
+/// Matches `scipy.sparse.linalg.norm`.
+pub fn sparse_norm(a: &CsrMatrix, kind: &str) -> f64 {
+    let n = a.shape().rows;
+    match kind {
+        "fro" | "frobenius" => a.data().iter().map(|&v| v * v).sum::<f64>().sqrt(),
+        "1" => {
+            let m = a.shape().cols;
+            let mut col_sums = vec![0.0; m];
+            // Iterate via CSR structure
+            for i in 0..n {
+                let start = a.indptr()[i];
+                let end = a.indptr()[i + 1];
+                for idx in start..end {
+                    let j = a.indices()[idx];
+                    if j < m {
+                        col_sums[j] += a.data()[idx].abs();
+                    }
+                }
+            }
+            col_sums.iter().cloned().fold(0.0, f64::max)
+        }
+        "inf" => {
+            let mut max_row = 0.0f64;
+            for i in 0..n {
+                let start = a.indptr()[i];
+                let end = a.indptr()[i + 1];
+                let row_sum: f64 = a.data()[start..end].iter().map(|v| v.abs()).sum();
+                max_row = max_row.max(row_sum);
+            }
+            max_row
+        }
+        _ => a.data().iter().map(|&v| v * v).sum::<f64>().sqrt(), // default frobenius
+    }
+}
+
+/// Extract the diagonal of a CSR matrix.
+///
+/// Matches `scipy.sparse.csr_matrix.diagonal()`.
+pub fn sparse_diagonal(a: &CsrMatrix) -> Vec<f64> {
+    let n = a.shape().rows.min(a.shape().cols);
+    let mut diag = vec![0.0; n];
+    for (i, d) in diag.iter_mut().enumerate().take(n) {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        for idx in start..end {
+            if a.indices()[idx] == i {
+                *d = a.data()[idx];
+                break;
+            }
+        }
+    }
+    diag
+}
+
+/// Compute the trace of a CSR matrix (sum of diagonal elements).
+///
+/// Matches `scipy.sparse.csr_matrix.trace()`.
+pub fn sparse_trace(a: &CsrMatrix) -> f64 {
+    sparse_diagonal(a).iter().sum()
+}
+
+/// Transpose a CSR matrix, returning a new CSR matrix.
+///
+/// Matches `scipy.sparse.csr_matrix.T`.
+pub fn sparse_transpose(a: &CsrMatrix) -> CsrMatrix {
+    let (rows, cols) = (a.shape().rows, a.shape().cols);
+    let nnz = a.data().len();
+
+    // Count entries per column (= per row of transpose)
+    let mut col_counts = vec![0usize; cols];
+    for &j in a.indices() {
+        if j < cols {
+            col_counts[j] += 1;
+        }
+    }
+
+    // Build transpose indptr
+    let mut t_indptr = vec![0usize; cols + 1];
+    for j in 0..cols {
+        t_indptr[j + 1] = t_indptr[j] + col_counts[j];
+    }
+
+    // Fill transpose data
+    let mut t_indices = vec![0usize; nnz];
+    let mut t_data = vec![0.0; nnz];
+    let mut pos = vec![0usize; cols];
+
+    for i in 0..rows {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        for idx in start..end {
+            let j = a.indices()[idx];
+            if j < cols {
+                let dest = t_indptr[j] + pos[j];
+                t_indices[dest] = i;
+                t_data[dest] = a.data()[idx];
+                pos[j] += 1;
+            }
+        }
+    }
+
+    CsrMatrix::from_components(Shape2D::new(cols, rows), t_data, t_indices, t_indptr, false)
+        .expect("transpose should produce valid CSR")
+}
+
+/// Count the number of nonzero elements in a CSR matrix.
+///
+/// Matches `scipy.sparse.csr_matrix.nnz`.
+pub fn sparse_nnz(a: &CsrMatrix) -> usize {
+    a.data().iter().filter(|&&v| v != 0.0).count()
+}
+
+/// Compute the density of a CSR matrix (fraction of nonzeros).
+pub fn sparse_density(a: &CsrMatrix) -> f64 {
+    let total = a.shape().rows * a.shape().cols;
+    if total == 0 {
+        return 0.0;
+    }
+    sparse_nnz(a) as f64 / total as f64
+}
+
+/// Sparse matrix-vector product: y = A * x.
+///
+/// Matches `scipy.sparse.csr_matrix @ vector`.
+pub fn spmv(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
+    let n = a.shape().rows;
+    let mut y = vec![0.0; n];
+    for (i, yi) in y.iter_mut().enumerate().take(n) {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        for idx in start..end {
+            let j = a.indices()[idx];
+            if j < x.len() {
+                *yi += a.data()[idx] * x[j];
+            }
+        }
+    }
+    y
+}
+
+/// Sparse matrix-matrix product: C = A * B (both CSR).
+///
+/// Returns a new CSR matrix.
+pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
+    let m = a.shape().rows;
+    let n = b.shape().cols;
+
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut vals = Vec::new();
+
+    for i in 0..m {
+        // Accumulate row i of C
+        let mut row_acc = std::collections::BTreeMap::new();
+        let a_start = a.indptr()[i];
+        let a_end = a.indptr()[i + 1];
+
+        for a_idx in a_start..a_end {
+            let k = a.indices()[a_idx];
+            let a_ik = a.data()[a_idx];
+
+            if k < b.shape().rows {
+                let b_start = b.indptr()[k];
+                let b_end = b.indptr()[k + 1];
+                for b_idx in b_start..b_end {
+                    let j = b.indices()[b_idx];
+                    let b_kj = b.data()[b_idx];
+                    *row_acc.entry(j).or_insert(0.0) += a_ik * b_kj;
+                }
+            }
+        }
+
+        for (&j, &v) in &row_acc {
+            if v.abs() > 0.0 {
+                rows.push(i);
+                cols.push(j);
+                vals.push(v);
+            }
+        }
+    }
+
+    // Build CSR from COO-like data
+    let mut indptr = vec![0usize; m + 1];
+    for &r in &rows {
+        indptr[r + 1] += 1;
+    }
+    for i in 0..m {
+        indptr[i + 1] += indptr[i];
+    }
+
+    CsrMatrix::from_components(Shape2D::new(m, n), vals, cols, indptr, false)
+        .expect("spmm should produce valid CSR")
 }
 
 #[cfg(test)]

@@ -8,7 +8,6 @@
 //! - `wavfile.read` / `wavfile.write` — WAV audio file read/write
 //! - `netcdf_file` — NetCDF (simplified) read/write
 
-
 /// Error type for I/O operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IoError {
@@ -104,9 +103,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
 
     let parts: Vec<&str> = header.split_whitespace().collect();
     if parts.len() < 5 {
-        return Err(IoError::InvalidFormat(
-            "incomplete header line".to_string(),
-        ));
+        return Err(IoError::InvalidFormat("incomplete header line".to_string()));
     }
 
     let object = match parts[1].to_lowercase().as_str() {
@@ -115,18 +112,14 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
         other => {
             return Err(IoError::InvalidFormat(format!(
                 "unknown object type: {other}"
-            )))
+            )));
         }
     };
 
     let format = match parts[2].to_lowercase().as_str() {
         "coordinate" => MmFormat::Coordinate,
         "array" => MmFormat::Array,
-        other => {
-            return Err(IoError::InvalidFormat(format!(
-                "unknown format: {other}"
-            )))
-        }
+        other => return Err(IoError::InvalidFormat(format!("unknown format: {other}"))),
     };
 
     let field = match parts[3].to_lowercase().as_str() {
@@ -137,7 +130,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
         other => {
             return Err(IoError::InvalidFormat(format!(
                 "unknown field type: {other}"
-            )))
+            )));
         }
     };
 
@@ -146,11 +139,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
         "symmetric" => MmSymmetry::Symmetric,
         "skew-symmetric" => MmSymmetry::SkewSymmetric,
         "hermitian" => MmSymmetry::Hermitian,
-        other => {
-            return Err(IoError::InvalidFormat(format!(
-                "unknown symmetry: {other}"
-            )))
-        }
+        other => return Err(IoError::InvalidFormat(format!("unknown symmetry: {other}"))),
     };
 
     // Skip comment lines
@@ -164,8 +153,8 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
         break;
     }
 
-    let size_str = size_line
-        .ok_or_else(|| IoError::InvalidFormat("missing size line".to_string()))?;
+    let size_str =
+        size_line.ok_or_else(|| IoError::InvalidFormat("missing size line".to_string()))?;
     let size_parts: Vec<&str> = size_str.split_whitespace().collect();
 
     match format {
@@ -371,7 +360,9 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
         return Err(IoError::InvalidFormat("missing RIFF header".to_string()));
     }
     if &bytes[8..12] != b"WAVE" {
-        return Err(IoError::InvalidFormat("missing WAVE identifier".to_string()));
+        return Err(IoError::InvalidFormat(
+            "missing WAVE identifier".to_string(),
+        ));
     }
 
     // Find fmt chunk
@@ -401,7 +392,9 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
             bits_per_sample = u16::from_le_bytes([fmt[14], fmt[15]]);
         } else if chunk_id == b"data" {
             if pos + 8 + chunk_size > bytes.len() {
-                return Err(IoError::InvalidFormat("data chunk extends past file".to_string()));
+                return Err(IoError::InvalidFormat(
+                    "data chunk extends past file".to_string(),
+                ));
             }
             let data_bytes = &bytes[pos + 8..pos + 8 + chunk_size];
 
@@ -412,7 +405,10 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
             }
 
             let samples = match bits_per_sample {
-                8 => data_bytes.iter().map(|&b| (b as f64 - 128.0) / 128.0).collect(),
+                8 => data_bytes
+                    .iter()
+                    .map(|&b| (b as f64 - 128.0) / 128.0)
+                    .collect(),
                 16 => data_bytes
                     .chunks_exact(2)
                     .map(|c| i16::from_le_bytes([c[0], c[1]]) as f64 / 32768.0)
@@ -431,14 +427,12 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
                     .collect(),
                 32 => data_bytes
                     .chunks_exact(4)
-                    .map(|c| {
-                        i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64 / 2_147_483_648.0
-                    })
+                    .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64 / 2_147_483_648.0)
                     .collect(),
                 _ => {
                     return Err(IoError::UnsupportedFeature(format!(
                         "unsupported bits per sample: {bits_per_sample}"
-                    )))
+                    )));
                 }
             };
 

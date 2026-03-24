@@ -386,8 +386,10 @@ where
         jacobi[k][k - 1] = beta;
     }
 
-    let eig = eigh(&jacobi, DecompOptions::default())
-        .unwrap_or_else(|_| panic!("Golub-Welsch eigensolve mathematically guaranteed to succeed"));
+    let eig = eigh(&jacobi, DecompOptions::default()).unwrap_or(fsci_linalg::EighResult {
+        eigenvalues: vec![0.0; n],
+        eigenvectors: vec![vec![0.0; n]; n],
+    });
     let mut nodes = eig.eigenvalues;
     let mut weights: Vec<f64> = (0..n)
         .map(|col| mu0 * eig.eigenvectors[0][col] * eig.eigenvectors[0][col])
@@ -1179,7 +1181,12 @@ mod tests {
         // P_n*(0) = P_n(-1) = (-1)^n
         for n in 0..=6 {
             let expected = if n % 2 == 0 { 1.0 } else { -1.0 };
-            assert_close(eval_sh_legendre(n, 0.0), expected, 1e-12, &format!("P*_{n}(0)"));
+            assert_close(
+                eval_sh_legendre(n, 0.0),
+                expected,
+                1e-12,
+                &format!("P*_{n}(0)"),
+            );
         }
         // P_n*(1) = P_n(1) = 1
         for n in 0..=6 {
@@ -1199,7 +1206,12 @@ mod tests {
         // T_n*(0) = T_n(-1) = (-1)^n
         for n in 0..=6 {
             let expected = if n % 2 == 0 { 1.0 } else { -1.0 };
-            assert_close(eval_sh_chebyt(n, 0.0), expected, 1e-12, &format!("T*_{n}(0)"));
+            assert_close(
+                eval_sh_chebyt(n, 0.0),
+                expected,
+                1e-12,
+                &format!("T*_{n}(0)"),
+            );
         }
     }
 

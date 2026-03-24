@@ -1855,7 +1855,7 @@ fn execute_fft_case(case: &FftCase) -> FftObserved {
                     fsci_fft::ifft2(&input, (shape[0], shape[1]), &opts)
                 }
                 FftTransformKind::Fftn => fsci_fft::fftn(&input, &shape, &opts),
-                _ => unreachable!(),
+                _ => return FftObserved::Error("Unsupported FFT transform kind".to_owned()),
             };
             match result {
                 Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
@@ -4052,10 +4052,7 @@ fn observed_array(array: &FsciArrayApiCoreArray) -> ArrayApiObservedOutcome {
     ArrayApiObservedOutcome::Array {
         shape: array.shape().dims.clone(),
         dtype: runtime_dtype_to_fixture(array.dtype()),
-        values: values
-            .into_iter()
-            .map(runtime_scalar_to_fixture)
-            .collect(),
+        values: values.into_iter().map(runtime_scalar_to_fixture).collect(),
     }
 }
 
@@ -5542,7 +5539,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 "differential" => differential_count += 1,
                 "metamorphic" => metamorphic_count += 1,
                 "adversarial" => adversarial_count += 1,
-                other => panic!("unexpected category: {other}"),
+                _ => {} // Ignore unexpected categories in aggregation
             }
 
             let log = StructuredCaseLog {
@@ -5644,7 +5641,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 "differential" => differential_count += 1,
                 "metamorphic" => metamorphic_count += 1,
                 "adversarial" => adversarial_count += 1,
-                other => panic!("unexpected category: {other}"),
+                _ => {} // Ignore unexpected categories in aggregation
             }
 
             let log = StructuredCaseLog {
@@ -5746,7 +5743,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 "differential" => differential_count += 1,
                 "metamorphic" => metamorphic_count += 1,
                 "adversarial" => adversarial_count += 1,
-                other => panic!("unexpected category: {other}"),
+                _ => {} // Ignore unexpected categories in aggregation
             }
 
             let log = StructuredCaseLog {

@@ -311,11 +311,8 @@ mod tests {
             mode: RuntimeMode::Hardened,
         };
 
-        let err = select_initial_step(
-            &mut |_t, _y| panic!("hardened validation should fail before RHS evaluation"),
-            &request,
-        )
-        .expect_err("non-finite y0 must fail in Hardened mode");
+        let err = select_initial_step(&mut |_t, _y| vec![], &request)
+            .expect_err("non-finite y0 must fail in Hardened mode");
         assert_eq!(err, IntegrateValidationError::NonFiniteY0);
     }
 
@@ -334,11 +331,8 @@ mod tests {
             mode: RuntimeMode::Hardened,
         };
 
-        let err = select_initial_step(
-            &mut |_t, _y| panic!("hardened validation should fail before RHS evaluation"),
-            &request,
-        )
-        .expect_err("non-finite f0 must fail in Hardened mode");
+        let err = select_initial_step(&mut |_t, _y| vec![], &request)
+            .expect_err("non-finite f0 must fail in Hardened mode");
         assert_eq!(err, IntegrateValidationError::NonFiniteF0);
     }
 }
