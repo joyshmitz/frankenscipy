@@ -1645,6 +1645,126 @@ pub fn instantaneous_frequency(x: &[f64], fs: f64) -> Result<Vec<f64>, SignalErr
     Ok(freq)
 }
 
+/// Find indices of relative maxima.
+///
+/// Matches `scipy.signal.argrelmax`.
+pub fn argrelmax(x: &[f64], order: usize) -> Vec<usize> {
+    let order = order.max(1);
+    let mut maxima = Vec::new();
+    for i in order..x.len().saturating_sub(order) {
+        let mut is_max = true;
+        for j in 1..=order {
+            if x[i] <= x[i - j] || x[i] <= x[i + j] {
+                is_max = false;
+                break;
+            }
+        }
+        if is_max {
+            maxima.push(i);
+        }
+    }
+    maxima
+}
+
+/// Find indices of relative minima.
+///
+/// Matches `scipy.signal.argrelmin`.
+pub fn argrelmin(x: &[f64], order: usize) -> Vec<usize> {
+    let order = order.max(1);
+    let mut minima = Vec::new();
+    for i in order..x.len().saturating_sub(order) {
+        let mut is_min = true;
+        for j in 1..=order {
+            if x[i] >= x[i - j] || x[i] >= x[i + j] {
+                is_min = false;
+                break;
+            }
+        }
+        if is_min {
+            minima.push(i);
+        }
+    }
+    minima
+}
+
+/// Find indices of relative extrema (both maxima and minima).
+///
+/// Matches `scipy.signal.argrelextrema`.
+pub fn argrelextrema(x: &[f64], order: usize, greater: bool) -> Vec<usize> {
+    if greater {
+        argrelmax(x, order)
+    } else {
+        argrelmin(x, order)
+    }
+}
+
+/// Compute the vector strength of a set of events at a given period.
+///
+/// Returns (strength, pvalue).
+/// Matches `scipy.signal.vectorstrength`.
+pub fn vectorstrength(events: &[f64], period: f64) -> (f64, f64) {
+    if events.is_empty() || period <= 0.0 {
+        return (0.0, 1.0);
+    }
+
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let n = events.len() as f64;
+
+    // Phase of each event in the cycle
+    let sin_sum: f64 = events.iter().map(|&t| (two_pi * t / period).sin()).sum();
+    let cos_sum: f64 = events.iter().map(|&t| (two_pi * t / period).cos()).sum();
+
+    let r = (sin_sum * sin_sum + cos_sum * cos_sum).sqrt() / n;
+
+    // Rayleigh test p-value
+    let pvalue = (-n * r * r).exp();
+
+    (r, pvalue.clamp(0.0, 1.0))
+}
+
+/// 1D order filter: select the k-th smallest value in each window.
+///
+/// Matches `scipy.signal.order_filter`.
+pub fn order_filter(x: &[f64], window_size: usize, rank: usize) -> Vec<f64> {
+    if x.is_empty() || window_size == 0 {
+        return vec![];
+    }
+    let half = window_size / 2;
+    let mut result = Vec::with_capacity(x.len());
+
+    for i in 0..x.len() {
+        let start = if i >= half { i - half } else { 0 };
+        let end = (i + half + 1).min(x.len());
+        let mut window: Vec<f64> = x[start..end].to_vec();
+        window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = rank.min(window.len() - 1);
+        result.push(window[idx]);
+    }
+
+    result
+}
+
+/// Unwrap phase angles to avoid discontinuities.
+///
+/// Matches `numpy.unwrap`.
+pub fn unwrap_phase(phase: &[f64]) -> Vec<f64> {
+    if phase.is_empty() {
+        return vec![];
+    }
+    let mut unwrapped = vec![phase[0]];
+    for i in 1..phase.len() {
+        let mut diff = phase[i] - phase[i - 1];
+        while diff > std::f64::consts::PI {
+            diff -= 2.0 * std::f64::consts::PI;
+        }
+        while diff < -std::f64::consts::PI {
+            diff += 2.0 * std::f64::consts::PI;
+        }
+        unwrapped.push(unwrapped[i - 1] + diff);
+    }
+    unwrapped
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // IIR Filter Design
 // ══════════════════════════════════════════════════════════════════════
@@ -3518,25 +3638,6 @@ fn group_delay_at_frequency(b: &[f64], a: &[f64], omega: f64) -> f64 {
     };
 
     gd_b - gd_a
-}
-
-fn unwrap_phase(phase: &[f64]) -> Vec<f64> {
-    if phase.is_empty() {
-        return Vec::new();
-    }
-
-    let mut unwrapped = vec![phase[0]];
-    for i in 1..phase.len() {
-        let mut diff = phase[i] - phase[i - 1];
-        while diff > std::f64::consts::PI {
-            diff -= 2.0 * std::f64::consts::PI;
-        }
-        while diff < -std::f64::consts::PI {
-            diff += 2.0 * std::f64::consts::PI;
-        }
-        unwrapped.push(unwrapped[i - 1] + diff);
-    }
-    unwrapped
 }
 
 /// Evaluate Σ k*c[k]*e^{-jkω} (weighted polynomial for group delay).
