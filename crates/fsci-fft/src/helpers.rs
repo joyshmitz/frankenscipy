@@ -61,9 +61,85 @@ fn rotate_left_owned<T: Clone>(input: &[T], shift: usize) -> Vec<T> {
         .collect()
 }
 
+/// FFT-based convolution of two 1D real signals.
+///
+/// Matches `scipy.signal.fftconvolve(a, b, mode)`.
+///
+/// `mode`: "full" (default), "same", or "valid".
+pub fn fftconvolve(
+    a: &[f64],
+    b: &[f64],
+    mode: &str,
+) -> Result<Vec<f64>, FftError> {
+    if a.is_empty() || b.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let n = a.len() + b.len() - 1;
+    let fft_len = n.next_power_of_two();
+    let opts = crate::FftOptions::default();
+
+    // Zero-pad and convert to complex
+    let mut ca: Vec<(f64, f64)> = a.iter().map(|&x| (x, 0.0)).collect();
+    ca.resize(fft_len, (0.0, 0.0));
+    let mut cb: Vec<(f64, f64)> = b.iter().map(|&x| (x, 0.0)).collect();
+    cb.resize(fft_len, (0.0, 0.0));
+
+    // FFT both
+    let fa = crate::fft(&ca, &opts)?;
+    let fb = crate::fft(&cb, &opts)?;
+
+    // Pointwise multiply
+    let fc: Vec<(f64, f64)> = fa
+        .iter()
+        .zip(fb.iter())
+        .map(|(&(ar, ai), &(br, bi))| (ar * br - ai * bi, ar * bi + ai * br))
+        .collect();
+
+    // IFFT
+    let result_full = crate::ifft(&fc, &opts)?;
+
+    // Extract real parts, truncated to length n
+    let full: Vec<f64> = result_full[..n].iter().map(|&(r, _)| r).collect();
+
+    // Apply mode
+    match mode {
+        "same" => {
+            let start = (b.len() - 1) / 2;
+            let end = start + a.len();
+            Ok(full[start..end.min(full.len())].to_vec())
+        }
+        "valid" => {
+            if a.len() >= b.len() {
+                let start = b.len() - 1;
+                let end = a.len();
+                Ok(full[start..end.min(full.len())].to_vec())
+            } else {
+                let start = a.len() - 1;
+                let end = b.len();
+                Ok(full[start..end.min(full.len())].to_vec())
+            }
+        }
+        _ => Ok(full), // "full"
+    }
+}
+
+/// FFT-based cross-correlation of two 1D real signals.
+///
+/// Equivalent to convolving a with reversed b.
+pub fn fftcorrelate(
+    a: &[f64],
+    b: &[f64],
+    mode: &str,
+) -> Result<Vec<f64>, FftError> {
+    // Correlation = convolution with time-reversed b
+    let b_rev: Vec<f64> = b.iter().rev().cloned().collect();
+    fftconvolve(a, &b_rev, mode)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{fftfreq, fftshift_1d, ifftshift_1d, rfftfreq};
+    use super::{fftconvolve, fftfreq, fftshift_1d, ifftshift_1d, rfftfreq};
 
     #[test]
     fn fftfreq_even_length_matches_expected_ordering() {
@@ -136,5 +212,38 @@ mod tests {
     fn fftshift_empty() {
         let empty: Vec<i32> = vec![];
         assert_eq!(fftshift_1d(&empty), empty);
+    }
+
+    #[test]
+    fn fftconvolve_impulse() {
+        // Convolving with [1] should return the signal unchanged
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let b = vec![1.0];
+        let result = fftconvolve(&a, &b, "full").unwrap();
+        assert_eq!(result.len(), 4);
+        for (i, (&r, &e)) in result.iter().zip(a.iter()).enumerate() {
+            assert!((r - e).abs() < 1e-10, "idx {i}: {r} != {e}");
+        }
+    }
+
+    #[test]
+    fn fftconvolve_known() {
+        // [1, 2, 3] * [0, 1, 0.5] = [0, 1, 2.5, 4, 1.5]
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![0.0, 1.0, 0.5];
+        let result = fftconvolve(&a, &b, "full").unwrap();
+        let expected = vec![0.0, 1.0, 2.5, 4.0, 1.5];
+        assert_eq!(result.len(), 5);
+        for (i, (&r, &e)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!((r - e).abs() < 1e-10, "idx {i}: {r} != {e}");
+        }
+    }
+
+    #[test]
+    fn fftconvolve_same_mode() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let b = vec![1.0, 1.0, 1.0];
+        let result = fftconvolve(&a, &b, "same").unwrap();
+        assert_eq!(result.len(), 5); // same length as a
     }
 }

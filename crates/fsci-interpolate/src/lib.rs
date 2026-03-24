@@ -1901,6 +1901,177 @@ fn euclidean_dist(a: &[f64], b: &[f64]) -> f64 {
         .sqrt()
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Additional Interpolators
+// ══════════════════════════════════════════════════════════════════════
+
+/// Krogh interpolator: polynomial through all given points.
+///
+/// Uses divided differences (Newton form) for the interpolating polynomial.
+/// Matches `scipy.interpolate.KroghInterpolator`.
+pub struct KroghInterpolator {
+    xi: Vec<f64>,
+    coeffs: Vec<f64>,
+}
+
+impl KroghInterpolator {
+    /// Create a Krogh interpolator through points (xi, yi).
+    pub fn new(xi: &[f64], yi: &[f64]) -> Result<Self, InterpError> {
+        if xi.len() != yi.len() || xi.is_empty() {
+            return Err(InterpError::InvalidArgument { detail: "xi and yi must have same non-zero length".to_string() });
+        }
+        let n = xi.len();
+
+        // Compute divided differences (Newton form)
+        let mut dd = yi.to_vec();
+        for j in 1..n {
+            for i in (j..n).rev() {
+                let dx = xi[i] - xi[i - j];
+                if dx.abs() < 1e-15 {
+                    return Err(InterpError::InvalidArgument { detail: "duplicate knots".to_string() });
+                }
+                dd[i] = (dd[i] - dd[i - 1]) / dx;
+            }
+        }
+
+        Ok(Self {
+            xi: xi.to_vec(),
+            coeffs: dd,
+        })
+    }
+
+    /// Evaluate the interpolating polynomial at x.
+    pub fn evaluate(&self, x: f64) -> f64 {
+        let n = self.coeffs.len();
+        // Horner's method for Newton form
+        let mut result = self.coeffs[n - 1];
+        for i in (0..n - 1).rev() {
+            result = result * (x - self.xi[i]) + self.coeffs[i];
+        }
+        result
+    }
+
+    /// Evaluate at multiple points.
+    pub fn evaluate_many(&self, xs: &[f64]) -> Vec<f64> {
+        xs.iter().map(|&x| self.evaluate(x)).collect()
+    }
+}
+
+/// Lagrange interpolation polynomial.
+///
+/// Returns the polynomial coefficients (highest degree first) that interpolate
+/// the given data points. Not recommended for large n due to Runge's phenomenon.
+///
+/// Matches `scipy.interpolate.lagrange`.
+pub fn lagrange(xi: &[f64], yi: &[f64]) -> Result<Vec<f64>, InterpError> {
+    if xi.len() != yi.len() || xi.is_empty() {
+        return Err(InterpError::InvalidArgument { detail: "xi and yi must have same non-zero length".to_string() });
+    }
+    let n = xi.len();
+
+    // Build the polynomial by summing Lagrange basis polynomials
+    // Each L_i(x) = Π_{j≠i} (x - x_j) / (x_i - x_j)
+    // The result is a polynomial of degree n-1
+
+    // We'll work with coefficient vectors directly
+    let mut result = vec![0.0; n];
+
+    for i in 0..n {
+        // Compute the i-th Lagrange basis polynomial coefficients
+        let mut basis = vec![0.0; n];
+        basis[0] = 1.0; // Start with constant 1
+        let mut deg = 0;
+
+        for j in 0..n {
+            if j == i {
+                continue;
+            }
+            let denom = xi[i] - xi[j];
+            if denom.abs() < 1e-15 {
+                return Err(InterpError::InvalidArgument { detail: "duplicate knots".to_string() });
+            }
+
+            // Multiply current polynomial by (x - x_j) / denom
+            // Shift coefficients and add
+            deg += 1;
+            for k in (1..=deg).rev() {
+                basis[k] = (basis[k - 1] - xi[j] * basis[k]) / denom;
+            }
+            basis[0] = -xi[j] * basis[0] / denom;
+        }
+
+        // Add yi * basis to result
+        for k in 0..n {
+            result[k] += yi[i] * basis[k];
+        }
+    }
+
+    // Reverse to get highest degree first (standard convention)
+    result.reverse();
+    Ok(result)
+}
+
+/// Evaluate a polynomial given coefficients (highest degree first).
+///
+/// p(x) = coeffs[0] * x^(n-1) + coeffs[1] * x^(n-2) + ... + coeffs[n-1]
+pub fn polyval(coeffs: &[f64], x: f64) -> f64 {
+    let mut result = 0.0;
+    for &c in coeffs {
+        result = result * x + c;
+    }
+    result
+}
+
+/// Piecewise polynomial representation.
+///
+/// Stores polynomial coefficients for each interval between breakpoints.
+/// Matches `scipy.interpolate.PPoly`.
+pub struct PPoly {
+    /// Coefficients: c[i][j] is the j-th coefficient (highest degree first)
+    /// for the i-th interval.
+    pub c: Vec<Vec<f64>>,
+    /// Breakpoints (n+1 values for n intervals).
+    pub x: Vec<f64>,
+}
+
+impl PPoly {
+    /// Create a piecewise polynomial from coefficients and breakpoints.
+    pub fn new(c: Vec<Vec<f64>>, x: Vec<f64>) -> Result<Self, InterpError> {
+        if c.len() + 1 != x.len() {
+            return Err(InterpError::InvalidArgument { detail: format!(
+                "need {} intervals for {} breakpoints, got {}",
+                x.len() - 1,
+                x.len(),
+                c.len()
+            )});
+        }
+        Ok(Self { c, x })
+    }
+
+    /// Evaluate the piecewise polynomial at a point.
+    pub fn evaluate(&self, xval: f64) -> f64 {
+        // Find interval
+        let n = self.x.len() - 1;
+        let mut seg = 0;
+        for i in 1..n {
+            if xval >= self.x[i] {
+                seg = i;
+            } else {
+                break;
+            }
+        }
+
+        // Evaluate polynomial in local coordinates
+        let dx = xval - self.x[seg];
+        polyval(&self.c[seg], dx)
+    }
+
+    /// Evaluate at multiple points.
+    pub fn evaluate_many(&self, xs: &[f64]) -> Vec<f64> {
+        xs.iter().map(|&x| self.evaluate(x)).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

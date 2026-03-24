@@ -4235,8 +4235,7 @@ pub fn firls(
             };
             b_vec[i] += bi;
 
-            let row_i = &mut q[i];
-            for (j, cell) in row_i.iter_mut().enumerate().skip(i) {
+            for j in i..n_coeffs {
                 // Q[i,j] = w * ∫ cos(2πif) cos(2πjf) df
                 // = w/2 * ∫ [cos(2π(i-j)f) + cos(2π(i+j)f)] df
                 let qij = if i == 0 && j == 0 {
@@ -4253,11 +4252,14 @@ pub fn firls(
                     w * 0.5
                         * (integrate_cos(i as f64 - j as f64) + integrate_cos(i as f64 + j as f64))
                 };
-                *cell += qij;
-                if j != i {
-                    q[j][i] += qij;
-                }
+                q[i][j] += qij;
             }
+        }
+    }
+
+    for i in 0..n_coeffs {
+        for j in i + 1..n_coeffs {
+            q[j][i] = q[i][j];
         }
     }
 
