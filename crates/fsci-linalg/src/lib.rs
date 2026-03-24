@@ -3854,9 +3854,10 @@ pub fn fiedler(a: &[f64]) -> Vec<Vec<f64>> {
     f
 }
 
-/// Fiedler companion matrix.
+/// Companion matrix from polynomial coefficients (alternate entry point).
 ///
-/// Matches `scipy.linalg.fiedler_companion`.
+/// Given coefficients [a₀, a₁, ..., aₙ] of p(x) = a₀xⁿ + a₁xⁿ⁻¹ + ... + aₙ,
+/// returns the (n×n) companion matrix whose eigenvalues are the polynomial roots.
 pub fn fiedler_companion(a: &[f64]) -> Vec<Vec<f64>> {
     let n = a.len();
     if n < 2 {

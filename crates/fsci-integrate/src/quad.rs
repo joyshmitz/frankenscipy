@@ -1450,43 +1450,86 @@ where
 }
 
 fn gauss_kronrod_inner(f: &dyn Fn(f64) -> f64, a: f64, b: f64, options: QuadOptions) -> QuadResult {
-    // 7-point Gauss nodes and weights on [-1, 1]
-    let g_nodes = [
-        0.0,
-        0.405_845_151_377_397_2,
-        -0.405_845_151_377_397_2,
-        0.741_531_185_599_394_4,
-        -0.741_531_185_599_394_4,
-        0.949_107_912_342_758_5,
+    // Gauss-Kronrod G7-K15 quadrature rule.
+    // The 7 Gauss nodes are a subset of the 15 Kronrod nodes.
+    // We evaluate f at all 15 Kronrod nodes, and compute both the
+    // 7-point Gauss estimate and the 15-point Kronrod estimate.
+    // The difference gives an error estimate.
+
+    // 15-point Kronrod nodes on [-1, 1] (sorted)
+    let k_nodes: [f64; 15] = [
+        -0.991_455_371_120_812_6,
         -0.949_107_912_342_758_5,
+        -0.864_864_423_359_769_1,
+        -0.741_531_185_599_394_4,
+        -0.586_087_235_467_691_1,
+        -0.405_845_151_377_397_2,
+        -0.207_784_955_007_898_5,
+        0.0,
+        0.207_784_955_007_898_5,
+        0.405_845_151_377_397_2,
+        0.586_087_235_467_691_1,
+        0.741_531_185_599_394_4,
+        0.864_864_423_359_769_1,
+        0.949_107_912_342_758_5,
+        0.991_455_371_120_812_6,
     ];
-    let g_weights = [
+
+    // 15-point Kronrod weights
+    let k_weights: [f64; 15] = [
+        0.022_935_322_010_529_2,
+        0.063_092_092_629_978_6,
+        0.104_790_010_322_250_2,
+        0.140_653_259_715_525_9,
+        0.169_004_726_639_267_9,
+        0.190_350_578_064_785_4,
+        0.204_432_940_075_298_9,
+        0.209_482_141_084_727_8,
+        0.204_432_940_075_298_9,
+        0.190_350_578_064_785_4,
+        0.169_004_726_639_267_9,
+        0.140_653_259_715_525_9,
+        0.104_790_010_322_250_2,
+        0.063_092_092_629_978_6,
+        0.022_935_322_010_529_2,
+    ];
+
+    // 7-point Gauss weights (for the 7 nodes that are shared with Kronrod)
+    // These correspond to Kronrod indices 1, 3, 5, 7, 9, 11, 13
+    let g_weights: [f64; 7] = [
+        0.129_484_966_168_869_7,
+        0.279_705_391_489_276_7,
+        0.381_830_050_505_118_9,
         0.417_959_183_673_469_4,
         0.381_830_050_505_118_9,
-        0.381_830_050_505_118_9,
         0.279_705_391_489_276_7,
-        0.279_705_391_489_276_7,
-        0.129_484_966_168_869_7,
         0.129_484_966_168_869_7,
     ];
+    // Indices into k_nodes that correspond to the 7 Gauss nodes
+    let g_indices: [usize; 7] = [1, 3, 5, 7, 9, 11, 13];
 
     let mid = 0.5 * (a + b);
     let half = 0.5 * (b - a);
-    let mut neval = 0;
 
-    let mut gauss_sum = 0.0;
-    let mut kronrod_sum = 0.0;
+    // Evaluate f at all 15 Kronrod nodes
+    let fvals: Vec<f64> = k_nodes.iter().map(|&node| f(mid + half * node)).collect();
+    let neval = 15;
 
-    for (&node, &weight) in g_nodes.iter().zip(g_weights.iter()) {
-        let x = mid + half * node;
-        let fx = f(x);
-        neval += 1;
-        gauss_sum += weight * fx;
-        kronrod_sum += weight * fx;
-    }
+    // Kronrod estimate (15-point)
+    let kronrod_sum: f64 = fvals
+        .iter()
+        .zip(k_weights.iter())
+        .map(|(&fv, &w)| w * fv)
+        .sum::<f64>()
+        * half;
 
-    gauss_sum *= half;
-    kronrod_sum *= half;
+    // Gauss estimate (7-point, using subset of evaluations)
+    let gauss_sum: f64 = g_indices
+        .iter()
+        .zip(g_weights.iter())
+        .map(|(&idx, &w)| w * fvals[idx])
+        .sum::<f64>()
+        * half;
 
     let error = (kronrod_sum - gauss_sum).abs();
 
