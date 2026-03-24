@@ -6300,6 +6300,270 @@ pub fn power_divergence(f_obs: &[f64], f_exp: Option<&[f64]>, lambda_: f64) -> (
     (stat, pvalue)
 }
 
+/// Ansari-Bradley test for equality of scale parameters.
+///
+/// Matches `scipy.stats.ansari`.
+pub fn ansari(x: &[f64], y: &[f64]) -> TtestResult {
+    let nx = x.len();
+    let ny = y.len();
+    let n = nx + ny;
+
+    if nx < 1 || ny < 1 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let mut combined: Vec<(f64, bool)> = x
+        .iter()
+        .map(|&v| (v, true))
+        .chain(y.iter().map(|&v| (v, false)))
+        .collect();
+    combined.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let scores: Vec<f64> = (0..n)
+        .map(|i| {
+            let from_start = (i + 1) as f64;
+            let from_end = (n - i) as f64;
+            from_start.min(from_end)
+        })
+        .collect();
+
+    let ab_stat: f64 = combined
+        .iter()
+        .zip(scores.iter())
+        .filter(|((_, is_x), _)| *is_x)
+        .map(|(_, &s)| s)
+        .sum();
+
+    let nxf = nx as f64;
+    let nyf = ny as f64;
+    let nf = n as f64;
+
+    let mean = if n % 2 == 0 {
+        nxf * (nf + 2.0) / 4.0
+    } else {
+        nxf * (nf + 1.0).powi(2) / (4.0 * nf)
+    };
+
+    let var = if n % 2 == 0 {
+        nxf * nyf * (nf + 2.0) * (nf - 2.0) / (48.0 * (nf - 1.0))
+    } else {
+        nxf * nyf * (nf + 1.0) * (3.0 + nf * nf) / (48.0 * nf * nf)
+    };
+
+    let z = if var > 0.0 {
+        (ab_stat - mean) / var.sqrt()
+    } else {
+        0.0
+    };
+
+    let normal = Normal::standard();
+    let pvalue = 2.0 * (1.0 - normal.cdf(z.abs()));
+
+    TtestResult {
+        statistic: ab_stat,
+        pvalue: pvalue.clamp(0.0, 1.0),
+        df: f64::NAN,
+    }
+}
+
+/// Permutation test: estimate p-value by random permutation.
+///
+/// Matches `scipy.stats.permutation_test` (simplified).
+pub fn permutation_test<F>(
+    x: &[f64],
+    y: &[f64],
+    stat_fn: F,
+    n_permutations: usize,
+    seed: u64,
+) -> (f64, f64)
+where
+    F: Fn(&[f64], &[f64]) -> f64,
+{
+    let observed = stat_fn(x, y);
+    let n = x.len() + y.len();
+    let mut combined: Vec<f64> = x.iter().chain(y.iter()).cloned().collect();
+    let mut rng = seed;
+    let mut count_extreme = 0usize;
+
+    for _ in 0..n_permutations {
+        for i in (1..n).rev() {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let j = (rng >> 33) as usize % (i + 1);
+            combined.swap(i, j);
+        }
+
+        let perm_stat = stat_fn(&combined[..x.len()], &combined[x.len()..]);
+        if perm_stat.abs() >= observed.abs() {
+            count_extreme += 1;
+        }
+    }
+
+    let pvalue = (count_extreme + 1) as f64 / (n_permutations + 1) as f64;
+    (observed, pvalue)
+}
+
+/// Brunner-Munzel test for stochastic equality.
+///
+/// Tests H₀: P(X > Y) = 0.5.
+/// Matches `scipy.stats.brunnermunzel`.
+pub fn brunnermunzel(x: &[f64], y: &[f64]) -> TtestResult {
+    let nx = x.len();
+    let ny = y.len();
+    if nx < 2 || ny < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let nxf = nx as f64;
+    let nyf = ny as f64;
+
+    // Compute mean rank for each group in combined sample
+    let mut combined: Vec<(f64, usize)> = x
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (v, i))
+        .chain(y.iter().enumerate().map(|(i, &v)| (v, nx + i)))
+        .collect();
+    combined.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut ranks = vec![0.0; nx + ny];
+    let mut i = 0;
+    while i < combined.len() {
+        let mut j = i;
+        while j < combined.len() && combined[j].0 == combined[i].0 {
+            j += 1;
+        }
+        let avg_rank = (i + j + 1) as f64 / 2.0;
+        for k in i..j {
+            ranks[combined[k].1] = avg_rank;
+        }
+        i = j;
+    }
+
+    let mean_rx: f64 = ranks[..nx].iter().sum::<f64>() / nxf;
+    let mean_ry: f64 = ranks[nx..].iter().sum::<f64>() / nyf;
+
+    // Within-group ranks
+    let rank_within = |data: &[f64]| -> Vec<f64> {
+        let mut indexed: Vec<(usize, f64)> = data.iter().cloned().enumerate().collect();
+        indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mut r = vec![0.0; data.len()];
+        let mut k = 0;
+        while k < indexed.len() {
+            let mut l = k;
+            while l < indexed.len() && indexed[l].1 == indexed[k].1 {
+                l += 1;
+            }
+            let avg = (k + l + 1) as f64 / 2.0;
+            for m in k..l {
+                r[indexed[m].0] = avg;
+            }
+            k = l;
+        }
+        r
+    };
+
+    let rx_within = rank_within(x);
+    let ry_within = rank_within(y);
+
+    let sx2: f64 = ranks[..nx]
+        .iter()
+        .zip(rx_within.iter())
+        .map(|(&ri, &rwi)| (ri - rwi - mean_rx + (nxf + 1.0) / 2.0).powi(2))
+        .sum::<f64>()
+        / (nxf - 1.0);
+
+    let sy2: f64 = ranks[nx..]
+        .iter()
+        .zip(ry_within.iter())
+        .map(|(&ri, &rwi)| (ri - rwi - mean_ry + (nyf + 1.0) / 2.0).powi(2))
+        .sum::<f64>()
+        / (nyf - 1.0);
+
+    let nf = nxf + nyf;
+    let denom = (nxf * sx2 + nyf * sy2).sqrt();
+    let w = if denom > 0.0 {
+        nxf * nyf * (mean_ry - mean_rx) / (nf * denom)
+    } else {
+        0.0
+    };
+
+    let df = if denom > 0.0 {
+        let df_num = (nxf * sx2 + nyf * sy2).powi(2);
+        let df_den = (nxf * sx2).powi(2) / (nxf - 1.0) + (nyf * sy2).powi(2) / (nyf - 1.0);
+        if df_den > 0.0 { df_num / df_den } else { 1.0 }
+    } else {
+        1.0
+    };
+
+    let t_dist = StudentT::new(df);
+    let pvalue = 2.0 * (1.0 - t_dist.cdf(w.abs()));
+
+    TtestResult {
+        statistic: w,
+        pvalue: pvalue.clamp(0.0, 1.0),
+        df,
+    }
+}
+
+/// Alexander-Govern test for comparing means of k groups.
+///
+/// More robust alternative to one-way ANOVA for unequal variances.
+/// Matches `scipy.stats.alexandergovern`.
+pub fn alexandergovern(groups: &[&[f64]]) -> VarianceTestResult {
+    let k = groups.len();
+    if k < 2 {
+        return VarianceTestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let means: Vec<f64> = groups
+        .iter()
+        .map(|g| g.iter().sum::<f64>() / g.len() as f64)
+        .collect();
+    let vars: Vec<f64> = groups
+        .iter()
+        .zip(means.iter())
+        .map(|(g, &m)| g.iter().map(|&x| (x - m).powi(2)).sum::<f64>() / (g.len() - 1) as f64)
+        .collect();
+    let weights: Vec<f64> = groups
+        .iter()
+        .zip(vars.iter())
+        .map(|(g, &v)| g.len() as f64 / v)
+        .collect();
+    let total_weight: f64 = weights.iter().sum();
+    let weighted_mean: f64 = means
+        .iter()
+        .zip(weights.iter())
+        .map(|(&m, &w)| m * w)
+        .sum::<f64>()
+        / total_weight;
+
+    let stat: f64 = means
+        .iter()
+        .zip(weights.iter())
+        .map(|(&m, &w)| w * (m - weighted_mean).powi(2))
+        .sum();
+
+    let df = (k - 1) as f64;
+    let chi2 = ChiSquared::new(df);
+    let pvalue = chi2.sf(stat);
+
+    VarianceTestResult {
+        statistic: stat,
+        pvalue: pvalue.clamp(0.0, 1.0),
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Multiple Comparison Corrections
 // ══════════════════════════════════════════════════════════════════════
