@@ -21,10 +21,11 @@ pub use beta::{
     fdtri,
 };
 pub use convenience::{
-    CONVENIENCE_DISPATCH_PLAN, bei, ber, bernoulli, dawsn, digamma_scalar, entr, euler,
-    expi_scalar, expit, expn, fresnel, hurwitz_zeta, kei, ker, kl_div, log_softmax, logit,
-    logsumexp, modstruve, ndtr, ndtri, poch, rel_entr, sinc, softmax, spence, struve, tetragamma,
-    trigamma, xlog1py, xlogy,
+    CONVENIENCE_DISPATCH_PLAN, arccosh, arcsinh, arctanh, bei, ber, bernoulli, dawsn,
+    digamma_scalar, entr, euler, expi_scalar, expit, expn, fresnel, gamma_mod_squared,
+    hurwitz_zeta, kei, ker, kl_div, log_softmax, logit, logsumexp, modstruve, ndtr, ndtri, poch,
+    rel_entr, sinc, sinc_squared, softmax, spence, struve, tetragamma, trigamma, wrightomega,
+    xlog1py, xlogy,
 };
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw,

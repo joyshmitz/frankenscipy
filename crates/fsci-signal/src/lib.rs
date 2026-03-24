@@ -4213,7 +4213,7 @@ pub fn firls(
 
         let pi = std::f64::consts::PI;
 
-        for i in 0..n_coeffs {
+        for (i, row_i) in q.iter_mut().enumerate().take(n_coeffs) {
             // b[i] = w * ∫ D(f) cos(2πif) df over [f_lo, f_hi]
             let bi = if i == 0 {
                 // ∫ D(f) df = d_lo * df + slope * df^2 / 2
@@ -4235,7 +4235,7 @@ pub fn firls(
             };
             b_vec[i] += bi;
 
-            for j in i..n_coeffs {
+            for (j, cell) in row_i.iter_mut().enumerate().skip(i) {
                 // Q[i,j] = w * ∫ cos(2πif) cos(2πjf) df
                 // = w/2 * ∫ [cos(2π(i-j)f) + cos(2π(i+j)f)] df
                 let qij = if i == 0 && j == 0 {
@@ -4252,14 +4252,15 @@ pub fn firls(
                     w * 0.5
                         * (integrate_cos(i as f64 - j as f64) + integrate_cos(i as f64 + j as f64))
                 };
-                q[i][j] += qij;
+                *cell += qij;
             }
         }
     }
 
-    for i in 0..n_coeffs {
-        for j in i + 1..n_coeffs {
-            q[j][i] = q[i][j];
+    let upper_triangle = q.clone();
+    for (i, row_i) in q.iter_mut().enumerate().take(n_coeffs) {
+        for (j, cell) in row_i.iter_mut().enumerate().take(i) {
+            *cell = upper_triangle[j][i];
         }
     }
 

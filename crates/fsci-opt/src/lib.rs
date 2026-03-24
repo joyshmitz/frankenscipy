@@ -1810,6 +1810,250 @@ where
     })
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Constrained Optimization via Augmented Lagrangian
+// ══════════════════════════════════════════════════════════════════════
+
+/// Minimize a function subject to nonlinear constraints using an augmented
+/// Lagrangian penalty method.
+///
+/// Solves: min f(x) subject to c(x) >= 0.
+///
+/// This converts the constrained problem into a sequence of unconstrained
+/// subproblems, each solved via Nelder-Mead.
+pub fn augmented_lagrangian<F, C>(
+    f: F,
+    constraints: C,
+    x0: &[f64],
+    n_constraints: usize,
+    max_outer: usize,
+    max_inner: usize,
+) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+    C: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x0.len();
+    if n == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "x0 must be non-empty".to_string(),
+        });
+    }
+
+    let mut x = x0.to_vec();
+    let mut lambda = vec![0.0; n_constraints]; // Lagrange multipliers
+    let mut mu = 10.0; // penalty parameter
+    let mut total_nfev = 0;
+
+    for outer in 0..max_outer {
+        // Build augmented Lagrangian:
+        // L(x) = f(x) - Σ λ_i * c_i(x) + (μ/2) * Σ max(0, -c_i(x) + λ_i/μ)²
+        let lambda_copy = lambda.clone();
+        let mu_copy = mu;
+        let penalty_fn = |xv: &[f64]| -> f64 {
+            let fval = f(xv);
+            let cvec = constraints(xv);
+            let mut penalty = 0.0;
+            for (i, &ci) in cvec.iter().enumerate() {
+                let shifted = -ci + lambda_copy[i] / mu_copy;
+                if shifted > 0.0 {
+                    penalty += shifted * shifted;
+                }
+            }
+            fval + mu_copy / 2.0 * penalty
+        };
+
+        // Solve unconstrained subproblem
+        let opts = MinimizeOptions {
+            method: Some(crate::OptimizeMethod::NelderMead),
+            maxiter: Some(max_inner),
+            tol: Some(1e-8),
+            ..MinimizeOptions::default()
+        };
+        let result = crate::minimize(penalty_fn, &x, opts)?;
+        total_nfev += result.nfev;
+        x = result.x;
+
+        // Update multipliers
+        let cvec = constraints(&x);
+        let mut max_violation = 0.0f64;
+        for (i, &ci) in cvec.iter().enumerate() {
+            lambda[i] = (lambda[i] - mu * ci).max(0.0);
+            max_violation = max_violation.max((-ci).max(0.0));
+        }
+
+        // Check convergence
+        if max_violation < 1e-6 {
+            let fval = f(&x);
+            return Ok(OptimizeResult {
+                x,
+                fun: Some(fval),
+                success: true,
+                status: ConvergenceStatus::Success,
+                message: format!("augmented lagrangian converged in {outer} outer iterations"),
+                nfev: total_nfev,
+                njev: 0,
+                nhev: 0,
+                nit: outer + 1,
+                jac: None,
+                hess_inv: None,
+                maxcv: Some(max_violation),
+            });
+        }
+
+        // Increase penalty
+        mu *= 10.0;
+    }
+
+    let fval = f(&x);
+    Ok(OptimizeResult {
+        x,
+        fun: Some(fval),
+        success: false,
+        status: ConvergenceStatus::MaxIterations,
+        message: "augmented lagrangian did not converge".to_string(),
+        nfev: total_nfev,
+        njev: 0,
+        nhev: 0,
+        nit: max_outer,
+        jac: None,
+        hess_inv: None,
+        maxcv: None,
+    })
+}
+
+/// Golden-section search for 1D minimization on [a, b].
+///
+/// Matches `scipy.optimize.golden`.
+pub fn golden<F>(f: F, a: f64, b: f64, tol: f64, maxiter: usize) -> (f64, f64)
+where
+    F: Fn(f64) -> f64,
+{
+    let gr = (5.0_f64.sqrt() - 1.0) / 2.0; // golden ratio conjugate
+    let mut lo = a;
+    let mut hi = b;
+    let mut c = hi - gr * (hi - lo);
+    let mut d = lo + gr * (hi - lo);
+    let mut fc = f(c);
+    let mut fd = f(d);
+
+    for _ in 0..maxiter {
+        if (hi - lo).abs() < tol {
+            break;
+        }
+        if fc < fd {
+            hi = d;
+            d = c;
+            fd = fc;
+            c = hi - gr * (hi - lo);
+            fc = f(c);
+        } else {
+            lo = c;
+            c = d;
+            fc = fd;
+            d = lo + gr * (hi - lo);
+            fd = f(d);
+        }
+    }
+
+    let x_min = (lo + hi) / 2.0;
+    (x_min, f(x_min))
+}
+
+/// Brent's method for 1D minimization.
+///
+/// Matches `scipy.optimize.brent`.
+pub fn brent_minimize<F>(f: F, a: f64, b: f64, tol: f64, maxiter: usize) -> (f64, f64)
+where
+    F: Fn(f64) -> f64,
+{
+    let golden = 0.381_966_011_250_105; // 1 - golden ratio conjugate
+
+    let mut x = a + golden * (b - a);
+    let mut w = x;
+    let mut v = x;
+    let mut fx = f(x);
+    let mut fw = fx;
+    let mut fv = fx;
+    let mut lo = a;
+    let mut hi = b;
+    let mut e = 0.0f64;
+    let mut d_step;
+
+    for _ in 0..maxiter {
+        let mid = 0.5 * (lo + hi);
+        let tol1 = tol * x.abs() + 1e-10;
+        let tol2 = 2.0 * tol1;
+
+        if (x - mid).abs() <= tol2 - 0.5 * (hi - lo) {
+            return (x, fx);
+        }
+
+        // Try parabolic interpolation
+        if e.abs() > tol1 {
+            let r = (x - w) * (fx - fv);
+            let q = (x - v) * (fx - fw);
+            let p = (x - v) * q - (x - w) * r;
+            let q = 2.0 * (q - r);
+            let (p, q) = if q > 0.0 { (-p, q) } else { (p, -q) };
+
+            if p.abs() < (0.5 * q * e).abs() && p > q * (lo - x) && p < q * (hi - x) {
+                d_step = p / q;
+                let u = x + d_step;
+                if (u - lo) < tol2 || (hi - u) < tol2 {
+                    d_step = if x < mid { tol1 } else { -tol1 };
+                }
+            } else {
+                e = if x < mid { hi - x } else { lo - x };
+                d_step = golden * e;
+            }
+        } else {
+            e = if x < mid { hi - x } else { lo - x };
+            d_step = golden * e;
+        }
+
+        let u = if d_step.abs() >= tol1 {
+            x + d_step
+        } else {
+            x + tol1 * d_step.signum()
+        };
+        let fu = f(u);
+
+        if fu <= fx {
+            if u < x {
+                hi = x;
+            } else {
+                lo = x;
+            }
+            v = w;
+            fv = fw;
+            w = x;
+            fw = fx;
+            x = u;
+            fx = fu;
+        } else {
+            if u < x {
+                lo = u;
+            } else {
+                hi = u;
+            }
+            if fu <= fw || w == x {
+                v = w;
+                fv = fw;
+                w = u;
+                fw = fu;
+            } else if fu <= fv || v == x || v == w {
+                v = u;
+                fv = fu;
+            }
+        }
+
+        e = d_step;
+    }
+
+    (x, fx)
+}
+
 #[cfg(test)]
 mod tests {
     use fsci_runtime::RuntimeMode;

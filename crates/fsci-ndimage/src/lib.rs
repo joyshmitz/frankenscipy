@@ -1462,6 +1462,110 @@ pub fn gaussian_gradient_magnitude(
     Ok(result)
 }
 
+/// Grey-scale erosion (minimum filter equivalent for continuous values).
+///
+/// Matches `scipy.ndimage.grey_erosion`.
+pub fn grey_erosion(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    minimum_filter(input, size, mode, cval)
+}
+
+/// Grey-scale dilation (maximum filter equivalent for continuous values).
+///
+/// Matches `scipy.ndimage.grey_dilation`.
+pub fn grey_dilation(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    maximum_filter(input, size, mode, cval)
+}
+
+/// Grey-scale opening: erosion followed by dilation.
+///
+/// Matches `scipy.ndimage.grey_opening`.
+pub fn grey_opening(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let eroded = minimum_filter(input, size, mode, cval)?;
+    maximum_filter(&eroded, size, mode, cval)
+}
+
+/// Grey-scale closing: dilation followed by erosion.
+///
+/// Matches `scipy.ndimage.grey_closing`.
+pub fn grey_closing(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let dilated = maximum_filter(input, size, mode, cval)?;
+    minimum_filter(&dilated, size, mode, cval)
+}
+
+/// Map coordinates: evaluate input at arbitrary (non-integer) coordinates.
+///
+/// Uses nearest-neighbor interpolation.
+/// Matches `scipy.ndimage.map_coordinates`.
+pub fn map_coordinates(
+    input: &NdArray,
+    coordinates: &[Vec<f64>],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<Vec<f64>, NdimageError> {
+    if coordinates.is_empty() {
+        return Ok(vec![]);
+    }
+    let ndim = input.ndim();
+    if coordinates.len() != ndim {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "coordinates has {} arrays but input has {} dimensions",
+            coordinates.len(),
+            ndim
+        )));
+    }
+
+    let npts = coordinates[0].len();
+    for c in coordinates {
+        if c.len() != npts {
+            return Err(NdimageError::DimensionMismatch(
+                "all coordinate arrays must have the same length".to_string(),
+            ));
+        }
+    }
+
+    let mut result = Vec::with_capacity(npts);
+    for p in 0..npts {
+        let idx: Vec<i64> = coordinates.iter().map(|c| c[p].round() as i64).collect();
+        result.push(input.get_boundary(&idx, mode, cval));
+    }
+
+    Ok(result)
+}
+
+/// Compute the maximum of the input array.
+pub fn array_max(input: &NdArray) -> f64 {
+    input
+        .data
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max)
+}
+
+/// Compute the minimum of the input array.
+pub fn array_min(input: &NdArray) -> f64 {
+    input.data.iter().cloned().fold(f64::INFINITY, f64::min)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

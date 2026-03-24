@@ -1292,3 +1292,102 @@ pub fn spence(x: f64) -> f64 {
 
     integral * h / 3.0
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Additional Special Functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Wright Omega function: solution of y + ln(y) = z.
+///
+/// Matches `scipy.special.wrightomega`.
+pub fn wrightomega(z: f64) -> f64 {
+    // Initial guess via Lambert W approximation
+    let mut w = if z > 1.0 {
+        z - z.ln()
+    } else if z > -2.0 {
+        z.exp() / (1.0 + z.exp())
+    } else {
+        z.exp()
+    };
+
+    // Newton iteration: f(w) = w + ln(w) - z, f'(w) = 1 + 1/w
+    for _ in 0..50 {
+        if w <= 0.0 {
+            w = 1e-15;
+        }
+        let residual = w + w.ln() - z;
+        if residual.abs() < 1e-15 {
+            break;
+        }
+        w -= residual / (1.0 + 1.0 / w);
+    }
+
+    w
+}
+
+/// Iterated exponential function (tetration): exp(exp(...exp(x)...)) applied n times.
+///
+/// exp2(x) = exp(exp(x))
+pub fn exp2_iterated(x: f64) -> f64 {
+    x.exp().exp()
+}
+
+/// Normalized sinc function squared: (sin(πx)/(πx))².
+pub fn sinc_squared(x: f64) -> f64 {
+    let s = sinc_scalar(x);
+    s * s
+}
+
+/// Inverse hyperbolic sine (sinh⁻¹): ln(x + √(x²+1)).
+///
+/// Matches `numpy.arcsinh`.
+pub fn arcsinh(x: f64) -> f64 {
+    x.asinh()
+}
+
+/// Inverse hyperbolic cosine (cosh⁻¹): ln(x + √(x²-1)).
+///
+/// Matches `numpy.arccosh`.
+pub fn arccosh(x: f64) -> f64 {
+    x.acosh()
+}
+
+/// Inverse hyperbolic tangent (tanh⁻¹): 0.5 * ln((1+x)/(1-x)).
+///
+/// Matches `numpy.arctanh`.
+pub fn arctanh(x: f64) -> f64 {
+    x.atanh()
+}
+
+/// Compute the squared modulus of the Gamma function |Γ(a + ib)|².
+///
+/// Useful in scattering theory and other physics applications.
+pub fn gamma_mod_squared(a: f64, b: f64) -> f64 {
+    // |Γ(a + ib)|² = π * b / (sinh(πb)) * Π_{k=0}^{∞} 1/(1 + b²/(a+k)²)
+    // For simplicity, use |Γ(z)|² = Γ(z) * Γ(z̄) = Γ(a+ib) * Γ(a-ib)
+    // This equals π / (a * Π_{k=1}^{N} ((a+k)² + b²) / k²) approximately
+    //
+    // Use the relation: |Γ(a+ib)|² = π*b / (sinh(πb)) for a = 0
+    // General case: recurrence + asymptotic
+    if b == 0.0 {
+        let mode = fsci_runtime::RuntimeMode::Strict;
+        let g = crate::gammaln_scalar(a, mode).unwrap_or(f64::NAN);
+        return (2.0 * g).exp();
+    }
+
+    // Numerical: use Stirling's approximation shifted to large argument
+    let mut val_a = a;
+    let mut product = 1.0;
+    while val_a < 8.0 {
+        product *= val_a * val_a + b * b;
+        val_a += 1.0;
+    }
+
+    // Stirling: ln|Γ(a+ib)| ≈ (a-0.5)*ln(a²+b²)/2 - b*atan(b/a) - a + 0.5*ln(2π) + ...
+    let r2 = val_a * val_a + b * b;
+    let theta = b.atan2(val_a);
+    let log_mod = (val_a - 0.5) * r2.ln() / 2.0 - b * theta - val_a
+        + 0.5 * (2.0 * std::f64::consts::PI).ln();
+
+    (2.0 * log_mod).exp() / product
+}

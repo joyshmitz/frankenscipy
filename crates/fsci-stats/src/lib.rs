@@ -2926,7 +2926,7 @@ impl Bradford {
 
 impl ContinuousDistribution for Bradford {
     fn pdf(&self, x: f64) -> f64 {
-        if x < 0.0 || x > 1.0 {
+        if !(0.0..=1.0).contains(&x) {
             0.0
         } else {
             self.c / ((1.0 + self.c * x) * (1.0 + self.c).ln())
@@ -4848,6 +4848,49 @@ pub fn normaltest(data: &[f64]) -> GoodnessOfFitResult {
         statistic: k2,
         pvalue,
     }
+}
+
+/// Jarque-Bera test for normality.
+///
+/// Tests H0: data was drawn from a normal distribution using the sample
+/// skewness and excess kurtosis.
+///
+/// Matches `scipy.stats.jarque_bera(data)`.
+pub fn jarque_bera(data: &[f64]) -> GoodnessOfFitResult {
+    let n = data.len();
+    if n < 2 {
+        return GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let nf = n as f64;
+    let mean_val = data.iter().sum::<f64>() / nf;
+    let mut m2 = 0.0;
+    let mut m3 = 0.0;
+    let mut m4 = 0.0;
+    for &x in data {
+        let d = x - mean_val;
+        let d2 = d * d;
+        m2 += d2;
+        m3 += d2 * d;
+        m4 += d2 * d2;
+    }
+
+    if m2 == 0.0 {
+        return GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let skewness = skew_from_moments(nf, m2, m3);
+    let excess_kurtosis = kurtosis_from_moments(nf, m2, m4);
+    let statistic = nf / 6.0 * (skewness * skewness + 0.25 * excess_kurtosis * excess_kurtosis);
+    let pvalue = ChiSquared::new(2.0).sf(statistic).clamp(0.0, 1.0);
+
+    GoodnessOfFitResult { statistic, pvalue }
 }
 
 /// Anderson-Darling test for a specified distribution.
@@ -7575,6 +7618,50 @@ mod tests {
     fn normaltest_too_few() {
         let result = normaltest(&[1.0, 2.0, 3.0, 4.0, 5.0]);
         assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn jarque_bera_tracks_formula() {
+        let data = [1.0, 1.5, 2.5, 4.0, 8.0, 16.0];
+        let result = jarque_bera(&data);
+        let expected_statistic = data.len() as f64 / 6.0
+            * (skew(&data).powi(2) + 0.25 * kurtosis(&data).powi(2));
+        let expected_pvalue = ChiSquared::new(2.0).sf(expected_statistic);
+        assert_close(
+            result.statistic,
+            expected_statistic,
+            1e-12,
+            "jarque_bera statistic",
+        );
+        assert_close(result.pvalue, expected_pvalue, 1e-12, "jarque_bera pvalue");
+    }
+
+    #[test]
+    fn jarque_bera_rejects_skewed_data() {
+        let data: Vec<f64> = (0..200)
+            .map(|i| ((i as f64 + 1.0) / 201.0).powi(6))
+            .collect();
+        let result = jarque_bera(&data);
+        assert!(
+            result.pvalue < 0.05,
+            "skewed data should be rejected: JB={}, p={}",
+            result.statistic,
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn jarque_bera_constant_data_returns_nan() {
+        let result = jarque_bera(&[3.0, 3.0, 3.0, 3.0]);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
+    fn jarque_bera_too_few_returns_nan() {
+        let result = jarque_bera(&[1.0]);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
     }
 
     #[test]
