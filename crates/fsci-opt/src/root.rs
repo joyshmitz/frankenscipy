@@ -56,9 +56,7 @@ where
         RootMethod::Secant
     } else {
         return Err(OptError::InvalidArgument {
-            detail: String::from(
-                "unable to select a root solver: provide bracket or x0",
-            ),
+            detail: String::from("unable to select a root solver: provide bracket or x0"),
         });
     };
 
@@ -89,11 +87,9 @@ where
             })?;
             secant(&f, start, x1, options)
         }
-        RootMethod::Newton | RootMethod::Halley => {
-            Err(OptError::InvalidArgument {
-                detail: format!("{method:?} requires fprime; use newton_scalar() or halley() directly"),
-            })
-        }
+        RootMethod::Newton | RootMethod::Halley => Err(OptError::InvalidArgument {
+            detail: format!("{method:?} requires fprime; use newton_scalar() or halley() directly"),
+        }),
     }
 }
 
@@ -421,8 +417,14 @@ where
 {
     let (mut a, mut b) = bracket;
     let mut nfev = 0usize;
-    let mut fa = { nfev += 1; f(a) };
-    let mut fb = { nfev += 1; f(b) };
+    let mut fa = {
+        nfev += 1;
+        f(a)
+    };
+    let mut fb = {
+        nfev += 1;
+        f(b)
+    };
 
     if fa * fb > 0.0 {
         return Err(OptError::SignChangeRequired {
@@ -432,12 +434,24 @@ where
 
     if fa == 0.0 {
         return Ok(RootResult::terminal(
-            RootMethod::Toms748, a, true, ConvergenceStatus::Success, 0, nfev, "exact root at a",
+            RootMethod::Toms748,
+            a,
+            true,
+            ConvergenceStatus::Success,
+            0,
+            nfev,
+            "exact root at a",
         ));
     }
     if fb == 0.0 {
         return Ok(RootResult::terminal(
-            RootMethod::Toms748, b, true, ConvergenceStatus::Success, 0, nfev, "exact root at b",
+            RootMethod::Toms748,
+            b,
+            true,
+            ConvergenceStatus::Success,
+            0,
+            nfev,
+            "exact root at b",
         ));
     }
 
@@ -452,15 +466,24 @@ where
         if (b - a).abs() < tol || fa == 0.0 || fb == 0.0 {
             let root = if fa.abs() < fb.abs() { a } else { b };
             return Ok(RootResult::terminal(
-                RootMethod::Toms748, root, true, ConvergenceStatus::Success,
-                iter, nfev, "converged",
+                RootMethod::Toms748,
+                root,
+                true,
+                ConvergenceStatus::Success,
+                iter,
+                nfev,
+                "converged",
             ));
         }
 
         let mid = 0.5 * (a + b);
         let c = if fa != fb {
             let s = a - fa * (b - a) / (fb - fa);
-            if s > a + 0.25 * (b - a) && s < b - 0.25 * (b - a) { s } else { mid }
+            if s > a + 0.25 * (b - a) && s < b - 0.25 * (b - a) {
+                s
+            } else {
+                mid
+            }
         } else {
             mid
         };
@@ -469,18 +492,34 @@ where
         let fc = f(c);
         if fc == 0.0 {
             return Ok(RootResult::terminal(
-                RootMethod::Toms748, c, true, ConvergenceStatus::Success,
-                iter, nfev, "exact root found",
+                RootMethod::Toms748,
+                c,
+                true,
+                ConvergenceStatus::Success,
+                iter,
+                nfev,
+                "exact root found",
             ));
         }
 
-        if fc < 0.0 { a = c; fa = fc; } else { b = c; fb = fc; }
+        if fc < 0.0 {
+            a = c;
+            fa = fc;
+        } else {
+            b = c;
+            fb = fc;
+        }
     }
 
     let root = 0.5 * (a + b);
     Ok(RootResult::terminal(
-        RootMethod::Toms748, root, false, ConvergenceStatus::MaxIterations,
-        options.maxiter, nfev, "toms748 failed to converge within maxiter",
+        RootMethod::Toms748,
+        root,
+        false,
+        ConvergenceStatus::MaxIterations,
+        options.maxiter,
+        nfev,
+        "toms748 failed to converge within maxiter",
     ))
 }
 
@@ -505,32 +544,52 @@ where
         let fx = f(x);
         if fx.abs() < options.xtol {
             return Ok(RootResult::terminal(
-                RootMethod::Newton, x, true, ConvergenceStatus::Success,
-                iter, nfev, "converged",
+                RootMethod::Newton,
+                x,
+                true,
+                ConvergenceStatus::Success,
+                iter,
+                nfev,
+                "converged",
             ));
         }
 
         let dfx = fprime(x);
         if dfx == 0.0 {
             return Ok(RootResult::terminal(
-                RootMethod::Newton, x, false, ConvergenceStatus::PrecisionLoss,
-                iter, nfev, "zero derivative encountered",
+                RootMethod::Newton,
+                x,
+                false,
+                ConvergenceStatus::PrecisionLoss,
+                iter,
+                nfev,
+                "zero derivative encountered",
             ));
         }
 
         let x_new = x - fx / dfx;
         if (x_new - x).abs() < options.xtol + options.rtol * x.abs() {
             return Ok(RootResult::terminal(
-                RootMethod::Newton, x_new, true, ConvergenceStatus::Success,
-                iter + 1, nfev, "converged",
+                RootMethod::Newton,
+                x_new,
+                true,
+                ConvergenceStatus::Success,
+                iter + 1,
+                nfev,
+                "converged",
             ));
         }
         x = x_new;
     }
 
     Ok(RootResult::terminal(
-        RootMethod::Newton, x, false, ConvergenceStatus::MaxIterations,
-        options.maxiter, nfev, "newton failed to converge",
+        RootMethod::Newton,
+        x,
+        false,
+        ConvergenceStatus::MaxIterations,
+        options.maxiter,
+        nfev,
+        "newton failed to converge",
     ))
 }
 
@@ -548,23 +607,35 @@ where
 {
     let mut nfev = 0usize;
     let mut xprev = x0;
-    nfev += 1; let mut fprev = f(xprev);
+    nfev += 1;
+    let mut fprev = f(xprev);
     let mut xcurr = x1.unwrap_or(x0 * (1.0 + 1e-4) + 1e-4);
-    nfev += 1; let mut fcurr = f(xcurr);
+    nfev += 1;
+    let mut fcurr = f(xcurr);
 
     for iter in 0..options.maxiter {
         if fcurr.abs() < options.xtol {
             return Ok(RootResult::terminal(
-                RootMethod::Secant, xcurr, true, ConvergenceStatus::Success,
-                iter, nfev, "converged",
+                RootMethod::Secant,
+                xcurr,
+                true,
+                ConvergenceStatus::Success,
+                iter,
+                nfev,
+                "converged",
             ));
         }
 
         let denom = fcurr - fprev;
         if denom == 0.0 {
             return Ok(RootResult::terminal(
-                RootMethod::Secant, xcurr, false, ConvergenceStatus::PrecisionLoss,
-                iter, nfev, "identical function values",
+                RootMethod::Secant,
+                xcurr,
+                false,
+                ConvergenceStatus::PrecisionLoss,
+                iter,
+                nfev,
+                "identical function values",
             ));
         }
 
@@ -579,15 +650,25 @@ where
         // Step-size convergence check
         if step < options.xtol + options.rtol * xcurr.abs() {
             return Ok(RootResult::terminal(
-                RootMethod::Secant, xcurr, true, ConvergenceStatus::Success,
-                iter + 1, nfev, "converged",
+                RootMethod::Secant,
+                xcurr,
+                true,
+                ConvergenceStatus::Success,
+                iter + 1,
+                nfev,
+                "converged",
             ));
         }
     }
 
     Ok(RootResult::terminal(
-        RootMethod::Secant, xcurr, false, ConvergenceStatus::MaxIterations,
-        options.maxiter, nfev, "secant failed to converge",
+        RootMethod::Secant,
+        xcurr,
+        false,
+        ConvergenceStatus::MaxIterations,
+        options.maxiter,
+        nfev,
+        "secant failed to converge",
     ))
 }
 
@@ -614,8 +695,13 @@ where
         let fx = f(x);
         if fx.abs() < options.xtol {
             return Ok(RootResult::terminal(
-                RootMethod::Halley, x, true, ConvergenceStatus::Success,
-                iter, nfev, "converged",
+                RootMethod::Halley,
+                x,
+                true,
+                ConvergenceStatus::Success,
+                iter,
+                nfev,
+                "converged",
             ));
         }
 
@@ -624,8 +710,13 @@ where
 
         if dfx == 0.0 {
             return Ok(RootResult::terminal(
-                RootMethod::Halley, x, false, ConvergenceStatus::PrecisionLoss,
-                iter, nfev, "zero derivative encountered",
+                RootMethod::Halley,
+                x,
+                false,
+                ConvergenceStatus::PrecisionLoss,
+                iter,
+                nfev,
+                "zero derivative encountered",
             ));
         }
 
@@ -636,16 +727,26 @@ where
             x -= step;
             if step.abs() < options.xtol + options.rtol * x.abs() {
                 return Ok(RootResult::terminal(
-                    RootMethod::Halley, x, true, ConvergenceStatus::Success,
-                    iter + 1, nfev, "converged (Newton fallback)",
+                    RootMethod::Halley,
+                    x,
+                    true,
+                    ConvergenceStatus::Success,
+                    iter + 1,
+                    nfev,
+                    "converged (Newton fallback)",
                 ));
             }
         } else {
             let x_new = x - 2.0 * fx * dfx / denom;
             if (x_new - x).abs() < options.xtol + options.rtol * x.abs() {
                 return Ok(RootResult::terminal(
-                    RootMethod::Halley, x_new, true, ConvergenceStatus::Success,
-                    iter + 1, nfev, "converged",
+                    RootMethod::Halley,
+                    x_new,
+                    true,
+                    ConvergenceStatus::Success,
+                    iter + 1,
+                    nfev,
+                    "converged",
                 ));
             }
             x = x_new;
@@ -653,8 +754,13 @@ where
     }
 
     Ok(RootResult::terminal(
-        RootMethod::Halley, x, false, ConvergenceStatus::MaxIterations,
-        options.maxiter, nfev, "halley failed to converge",
+        RootMethod::Halley,
+        x,
+        false,
+        ConvergenceStatus::MaxIterations,
+        options.maxiter,
+        nfev,
+        "halley failed to converge",
     ))
 }
 
@@ -1164,8 +1270,8 @@ mod tests {
 
     use super::{MultivariateRootMethod, MultivariateRootOptions, broyden1, fsolve, root};
     use crate::{
-        ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, ridder, root_scalar,
-        toms748, newton_scalar, secant, halley,
+        ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, halley, newton_scalar,
+        ridder, root_scalar, secant, toms748,
     };
 
     #[derive(Debug, Serialize)]
@@ -1598,8 +1704,8 @@ mod tests {
             mode: RuntimeMode::Strict,
             ..RootOptions::default()
         };
-        let result = root_scalar(cubic, None, Some(0.5), Some(2.0), options)
-            .expect("secant via x0");
+        let result =
+            root_scalar(cubic, None, Some(0.5), Some(2.0), options).expect("secant via x0");
         assert!(result.converged, "secant failed: {}", result.message);
         assert!(
             (cubic(result.root)).abs() < 1e-8,

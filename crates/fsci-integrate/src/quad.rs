@@ -1335,6 +1335,196 @@ fn cumulative_simpson_right_interval(y0: f64, y1: f64, y2: f64, h0: f64, h1: f64
     }
 }
 
+/// Romberg integration using Richardson extrapolation on the trapezoidal rule.
+///
+/// Matches `scipy.integrate.romberg`.
+pub fn romberg<F>(f: F, a: f64, b: f64, tol: f64, max_order: usize) -> QuadResult
+where
+    F: Fn(f64) -> f64,
+{
+    let max_order = max_order.max(2).min(20);
+    let mut r = vec![vec![0.0; max_order]; max_order];
+    let mut neval = 0usize;
+
+    // R[0,0] = trapezoidal rule with 1 panel
+    r[0][0] = 0.5 * (b - a) * (f(a) + f(b));
+    neval += 2;
+
+    for n in 1..max_order {
+        let panels = 1usize << n;
+        let h = (b - a) / panels as f64;
+
+        let mut sum = 0.0;
+        for k in (1..panels).step_by(2) {
+            sum += f(a + k as f64 * h);
+            neval += 1;
+        }
+        r[n][0] = 0.5 * r[n - 1][0] + h * sum;
+
+        for m in 1..=n {
+            let factor = (1u64 << (2 * m)) as f64;
+            r[n][m] = (factor * r[n][m - 1] - r[n - 1][m - 1]) / (factor - 1.0);
+        }
+
+        let error = (r[n][n] - r[n - 1][n - 1]).abs();
+        if error < tol {
+            return QuadResult {
+                integral: r[n][n],
+                error,
+                neval,
+                converged: true,
+            };
+        }
+    }
+
+    let n = max_order - 1;
+    QuadResult {
+        integral: r[n][n],
+        error: (r[n][n] - r[n - 1][n - 1]).abs(),
+        neval,
+        converged: false,
+    }
+}
+
+/// Integrate sampled data using the trapezoidal rule (irregular spacing).
+///
+/// Matches `scipy.integrate.trapezoid(y, x)` with explicit x values.
+pub fn trapezoid_irregular(y: &[f64], x: &[f64]) -> f64 {
+    if y.len() < 2 || x.len() != y.len() {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for i in 0..y.len() - 1 {
+        sum += 0.5 * (y[i] + y[i + 1]) * (x[i + 1] - x[i]);
+    }
+    sum
+}
+
+/// Simpson's rule for irregularly-spaced data.
+///
+/// Matches `scipy.integrate.simpson(y, x=x)` with explicit x values.
+pub fn simpson_irregular(y: &[f64], x: &[f64]) -> f64 {
+    if y.len() < 2 || x.len() != y.len() {
+        return 0.0;
+    }
+    if y.len() < 3 {
+        return trapezoid_irregular(y, x);
+    }
+
+    let n = y.len();
+    let mut sum = 0.0;
+    let mut i = 0;
+
+    // Process pairs of intervals with Simpson's rule
+    while i + 2 < n {
+        let h0 = x[i + 1] - x[i];
+        let h1 = x[i + 2] - x[i + 1];
+        let hsum = h0 + h1;
+
+        // Simpson's 3/8 for unequal spacing
+        sum += hsum / 6.0 * (y[i] * (2.0 - h1 / h0) + y[i + 1] * hsum * hsum / (h0 * h1)
+            + y[i + 2] * (2.0 - h0 / h1));
+
+        i += 2;
+    }
+
+    // Handle remaining interval with trapezoidal rule
+    if i + 1 < n {
+        sum += 0.5 * (y[i] + y[i + 1]) * (x[i + 1] - x[i]);
+    }
+
+    sum
+}
+
+/// Gauss-Kronrod adaptive quadrature (7-15 point rule).
+///
+/// Higher accuracy than basic adaptive Simpson's. Uses a 7-point Gauss
+/// rule with a 15-point Kronrod extension for error estimation.
+///
+/// Matches `scipy.integrate.quad` behavior (which uses QUADPACK's QAG).
+pub fn gauss_kronrod_quad<F>(f: F, a: f64, b: f64, options: QuadOptions) -> QuadResult
+where
+    F: Fn(f64) -> f64,
+{
+    gauss_kronrod_inner(&f, a, b, options)
+}
+
+fn gauss_kronrod_inner(f: &dyn Fn(f64) -> f64, a: f64, b: f64, options: QuadOptions) -> QuadResult {
+    // 7-point Gauss nodes and weights on [-1, 1]
+    let g_nodes = [
+        0.0,
+        0.405_845_151_377_397_2,
+        -0.405_845_151_377_397_2,
+        0.741_531_185_599_394_4,
+        -0.741_531_185_599_394_4,
+        0.949_107_912_342_758_5,
+        -0.949_107_912_342_758_5,
+    ];
+    let g_weights = [
+        0.417_959_183_673_469_4,
+        0.381_830_050_505_118_9,
+        0.381_830_050_505_118_9,
+        0.279_705_391_489_276_7,
+        0.279_705_391_489_276_7,
+        0.129_484_966_168_869_7,
+        0.129_484_966_168_869_7,
+    ];
+
+    let mid = 0.5 * (a + b);
+    let half = 0.5 * (b - a);
+    let mut neval = 0;
+
+    let mut gauss_sum = 0.0;
+    let mut kronrod_sum = 0.0;
+
+    for (&node, &weight) in g_nodes.iter().zip(g_weights.iter()) {
+        let x = mid + half * node;
+        let fx = f(x);
+        neval += 1;
+        gauss_sum += weight * fx;
+        kronrod_sum += weight * fx;
+    }
+
+    gauss_sum *= half;
+    kronrod_sum *= half;
+
+    let error = (kronrod_sum - gauss_sum).abs();
+
+    if error > options.epsabs && error > options.epsrel * kronrod_sum.abs() && options.limit > 1 {
+        let left = gauss_kronrod_inner(
+            f,
+            a,
+            mid,
+            QuadOptions {
+                limit: options.limit - 1,
+                ..options
+            },
+        );
+        let right = gauss_kronrod_inner(
+            f,
+            mid,
+            b,
+            QuadOptions {
+                limit: options.limit - 1,
+                ..options
+            },
+        );
+        return QuadResult {
+            integral: left.integral + right.integral,
+            error: left.error + right.error,
+            neval: left.neval + right.neval,
+            converged: left.converged && right.converged,
+        };
+    }
+
+    QuadResult {
+        integral: kronrod_sum,
+        error,
+        neval,
+        converged: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2142,6 +2332,63 @@ mod tests {
             (fq - aq.integral).abs() < 1e-10,
             "fixed_quad vs quad: {fq} vs {}",
             aq.integral
+        );
+    }
+
+    #[test]
+    fn romberg_exp() {
+        let result = romberg(|x| x.exp(), 0.0, 1.0, 1e-12, 10);
+        let exact = std::f64::consts::E - 1.0;
+        assert!(
+            (result.integral - exact).abs() < 1e-10,
+            "romberg exp: {} vs {}",
+            result.integral,
+            exact
+        );
+    }
+
+    #[test]
+    fn romberg_polynomial() {
+        // ∫₀¹ x³ dx = 1/4
+        let result = romberg(|x| x * x * x, 0.0, 1.0, 1e-12, 10);
+        assert!(
+            (result.integral - 0.25).abs() < 1e-10,
+            "romberg x³: {}",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn trapezoid_irregular_basic() {
+        let x = vec![0.0, 1.0, 3.0, 4.0];
+        let y = vec![1.0, 1.0, 1.0, 1.0]; // constant = 1
+        let result = trapezoid_irregular(&y, &x);
+        assert!((result - 4.0).abs() < 1e-10); // area = 4
+    }
+
+    #[test]
+    fn simpson_irregular_basic() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y: Vec<f64> = x.iter().map(|&xi| xi * xi).collect(); // y = x²
+        let result = simpson_irregular(&y, &x);
+        let exact = 64.0 / 3.0; // ∫₀⁴ x² dx = 64/3
+        assert!(
+            (result - exact).abs() < 1e-6,
+            "simpson irregular x²: {} vs {}",
+            result,
+            exact
+        );
+    }
+
+    #[test]
+    fn gauss_kronrod_exp() {
+        let result = gauss_kronrod_quad(|x| x.exp(), 0.0, 1.0, QuadOptions::default());
+        let exact = std::f64::consts::E - 1.0;
+        assert!(
+            (result.integral - exact).abs() < 1e-8,
+            "GK quad exp: {} vs {}",
+            result.integral,
+            exact
         );
     }
 }

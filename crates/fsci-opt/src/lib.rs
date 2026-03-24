@@ -264,6 +264,52 @@ pub struct LinprogResult {
     pub nit: usize,
 }
 
+/// Variable integrality kind for `milp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Integrality {
+    Continuous,
+    Integer,
+    Binary,
+}
+
+/// Result of a mixed-integer linear programming problem.
+#[derive(Debug, Clone)]
+pub struct MilpResult {
+    /// Solution vector.
+    pub x: Vec<f64>,
+    /// Optimal objective value `c^T x`.
+    pub fun: f64,
+    /// Whether the solver succeeded.
+    pub success: bool,
+    /// Solver status: 0 = optimal, 1 = node/iteration limit, 2 = infeasible, 3 = unbounded.
+    pub status: u8,
+    /// Human-readable message.
+    pub message: String,
+    /// Number of LP relaxations solved.
+    pub mip_node_count: usize,
+    /// Accumulated LP iteration count.
+    pub nit: usize,
+}
+
+/// Problem definition for `milp`.
+#[derive(Debug, Clone, Copy)]
+pub struct MilpProblem<'a> {
+    pub c: &'a [f64],
+    pub integrality: &'a [Integrality],
+    pub a_ub: &'a [Vec<f64>],
+    pub b_ub: &'a [f64],
+    pub a_eq: &'a [Vec<f64>],
+    pub b_eq: &'a [f64],
+    pub bounds: &'a [(Option<f64>, Option<f64>)],
+}
+
+/// Solver controls for `milp`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MilpOptions {
+    pub max_nodes: Option<usize>,
+    pub lp_maxiter: Option<usize>,
+}
+
 /// Solve a linear programming problem using the revised simplex method.
 ///
 /// Matches `scipy.optimize.linprog(c, A_ub, b_ub, A_eq, b_eq, bounds, method)`.
@@ -614,6 +660,231 @@ pub fn linprog(
         status: 0,
         message: "Optimization terminated successfully".to_string(),
         nit,
+    })
+}
+
+fn default_milp_bounds(
+    n: usize,
+    bounds: &[(Option<f64>, Option<f64>)],
+) -> Result<Vec<(f64, f64)>, OptError> {
+    if bounds.is_empty() {
+        Ok(vec![(0.0, f64::INFINITY); n])
+    } else if bounds.len() != n {
+        Err(OptError::InvalidArgument {
+            detail: format!("bounds length ({}) must match c length ({n})", bounds.len()),
+        })
+    } else {
+        Ok(bounds
+            .iter()
+            .map(|(lo, hi)| (lo.unwrap_or(f64::NEG_INFINITY), hi.unwrap_or(f64::INFINITY)))
+            .collect())
+    }
+}
+
+fn bounds_to_options(bounds: &[(f64, f64)]) -> Vec<(Option<f64>, Option<f64>)> {
+    bounds
+        .iter()
+        .map(|&(lo, hi)| {
+            (
+                if lo.is_finite() { Some(lo) } else { None },
+                if hi.is_finite() { Some(hi) } else { None },
+            )
+        })
+        .collect()
+}
+
+fn is_integral_with_tol(value: f64, tol: f64) -> bool {
+    (value - value.round()).abs() <= tol
+}
+
+/// Solve a mixed-integer linear program by branch-and-bound over `linprog`
+/// relaxations.
+///
+/// Matches the core SciPy surface of `scipy.optimize.milp` for bounded
+/// continuous/integer/binary variables on small to medium problems.
+pub fn milp(problem: MilpProblem<'_>, options: MilpOptions) -> Result<MilpResult, OptError> {
+    let MilpProblem {
+        c,
+        integrality,
+        a_ub,
+        b_ub,
+        a_eq,
+        b_eq,
+        bounds,
+    } = problem;
+
+    let n = c.len();
+    if n == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "c must not be empty".to_string(),
+        });
+    }
+
+    let integrality = if integrality.is_empty() {
+        vec![Integrality::Continuous; n]
+    } else {
+        if integrality.len() != n {
+            return Err(OptError::InvalidArgument {
+                detail: format!(
+                    "integrality length ({}) must match c length ({n})",
+                    integrality.len()
+                ),
+            });
+        }
+        integrality.to_vec()
+    };
+
+    let mut root_bounds = default_milp_bounds(n, bounds)?;
+    for (i, (bound, kind)) in root_bounds.iter_mut().zip(integrality.iter()).enumerate() {
+        if !bound.0.is_finite() {
+            return Err(OptError::InvalidBounds {
+                detail: format!(
+                    "variable {i}: lower bound must be finite (got {}); free MILP variables are not supported",
+                    bound.0
+                ),
+            });
+        }
+        match kind {
+            Integrality::Continuous | Integrality::Integer => {}
+            Integrality::Binary => {
+                bound.0 = bound.0.max(0.0);
+                bound.1 = bound.1.min(1.0);
+            }
+        }
+        if bound.0 > bound.1 {
+            return Ok(MilpResult {
+                x: vec![0.0; n],
+                fun: 0.0,
+                success: false,
+                status: 2,
+                message: format!(
+                    "variable {i}: bounds are infeasible after integrality restrictions"
+                ),
+                mip_node_count: 0,
+                nit: 0,
+            });
+        }
+    }
+
+    let max_nodes = options.max_nodes.unwrap_or(2_048);
+    let tol = 1e-9;
+    let mut node_count = 0usize;
+    let mut total_nit = 0usize;
+    let mut best: Option<LinprogResult> = None;
+    let mut root_status = None;
+    let mut stack = vec![root_bounds];
+
+    while let Some(node_bounds) = stack.pop() {
+        if node_count >= max_nodes {
+            return Ok(match best {
+                Some(best) => MilpResult {
+                    x: best.x,
+                    fun: best.fun,
+                    success: false,
+                    status: 1,
+                    message: "MILP node limit exceeded after finding an incumbent".to_string(),
+                    mip_node_count: node_count,
+                    nit: total_nit,
+                },
+                None => MilpResult {
+                    x: vec![0.0; n],
+                    fun: 0.0,
+                    success: false,
+                    status: 1,
+                    message: "MILP node limit exceeded before finding a feasible integer solution"
+                        .to_string(),
+                    mip_node_count: node_count,
+                    nit: total_nit,
+                },
+            });
+        }
+
+        node_count += 1;
+        let lp = linprog(
+            c,
+            a_ub,
+            b_ub,
+            a_eq,
+            b_eq,
+            &bounds_to_options(&node_bounds),
+            options.lp_maxiter,
+        )?;
+        total_nit += lp.nit;
+
+        if root_status.is_none() {
+            root_status = Some(lp.status);
+        }
+        if !lp.success {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_some_and(|incumbent| lp.fun >= incumbent.fun - tol)
+        {
+            continue;
+        }
+
+        let branch_index = integrality
+            .iter()
+            .enumerate()
+            .find_map(|(i, kind)| match kind {
+                Integrality::Continuous => None,
+                Integrality::Integer | Integrality::Binary => {
+                    if is_integral_with_tol(lp.x[i], tol) {
+                        None
+                    } else {
+                        Some(i)
+                    }
+                }
+            });
+
+        match branch_index {
+            None => best = Some(lp),
+            Some(i) => {
+                let value = lp.x[i];
+                let floor = value.floor();
+                let ceil = value.ceil();
+
+                let mut lower_branch = node_bounds.clone();
+                lower_branch[i].1 = lower_branch[i].1.min(floor);
+                if lower_branch[i].0 <= lower_branch[i].1 {
+                    stack.push(lower_branch);
+                }
+
+                let mut upper_branch = node_bounds;
+                upper_branch[i].0 = upper_branch[i].0.max(ceil);
+                if upper_branch[i].0 <= upper_branch[i].1 {
+                    stack.push(upper_branch);
+                }
+            }
+        }
+    }
+
+    Ok(match best {
+        Some(best) => MilpResult {
+            x: best.x,
+            fun: best.fun,
+            success: true,
+            status: 0,
+            message: "Optimization terminated successfully".to_string(),
+            mip_node_count: node_count,
+            nit: total_nit,
+        },
+        None => {
+            let (status, message) = match root_status {
+                Some(3) => (3, "LP relaxation is unbounded".to_string()),
+                _ => (2, "Problem is infeasible".to_string()),
+            };
+            MilpResult {
+                x: vec![0.0; n],
+                fun: 0.0,
+                success: false,
+                status,
+                message,
+                mip_node_count: node_count,
+                nit: total_nit,
+            }
+        }
     })
 }
 
@@ -1311,9 +1582,16 @@ where
         });
     }
 
-    ranked.sort_by(|lhs, rhs| lhs.0.partial_cmp(&rhs.0).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|lhs, rhs| {
+        lhs.0
+            .partial_cmp(&rhs.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let starts = select_shgo_starts(&ranked, bounds, 8);
-    let bound_tuples: Vec<Bound> = bounds.iter().map(|&(lo, hi)| (Some(lo), Some(hi))).collect();
+    let bound_tuples: Vec<Bound> = bounds
+        .iter()
+        .map(|&(lo, hi)| (Some(lo), Some(hi)))
+        .collect();
     let local_options = MinimizeOptions {
         method: Some(OptimizeMethod::LBfgsB),
         tol: Some(1e-8),
@@ -1384,11 +1662,7 @@ fn select_shgo_starts(
     max_starts: usize,
 ) -> Vec<Vec<f64>> {
     let mut starts = Vec::new();
-    let distance_scale = bounds
-        .iter()
-        .map(|(lo, hi)| hi - lo)
-        .sum::<f64>()
-        .max(1.0);
+    let distance_scale = bounds.iter().map(|(lo, hi)| hi - lo).sum::<f64>().max(1.0);
     let min_distance = 0.1 * distance_scale / bounds.len() as f64;
 
     for (_, point) in ranked {
@@ -1541,10 +1815,10 @@ mod tests {
     use fsci_runtime::RuntimeMode;
 
     use crate::{
-        BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions,
-        LinearConstraint, MinimizeOptions, NonlinearConstraint, OptimizeMethod, RootOptions,
-        approx_fprime, basinhopping, check_grad, cobyla, differential_evolution, dual_annealing,
-        linear_sum_assignment, linprog, shgo,
+        BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions, Integrality,
+        LinearConstraint, MilpOptions, MilpProblem, MinimizeOptions, NonlinearConstraint,
+        OptimizeMethod, RootOptions, approx_fprime, basinhopping, check_grad, cobyla,
+        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, shgo,
     };
 
     #[test]
@@ -1881,6 +2155,95 @@ mod tests {
         let a_ub = vec![vec![1.0]]; // wrong number of columns
         let b_ub = vec![5.0];
         assert!(linprog(&c, &a_ub, &b_ub, &[], &[], &[], None).is_err());
+    }
+
+    // ── milp tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn milp_finds_integer_optimum() {
+        let c = vec![-1.0, -2.0];
+        let a_ub = vec![vec![1.0, 1.0]];
+        let b_ub = vec![4.0];
+        let bounds = vec![(Some(0.0), Some(3.0)), (Some(0.0), Some(3.0))];
+        let result = milp(
+            MilpProblem {
+                c: &c,
+                integrality: &[Integrality::Integer, Integrality::Integer],
+                a_ub: &a_ub,
+                b_ub: &b_ub,
+                a_eq: &[],
+                b_eq: &[],
+                bounds: &bounds,
+            },
+            MilpOptions::default(),
+        )
+        .expect("milp");
+        assert!(result.success, "milp failed: {}", result.message);
+        assert_eq!(result.x, vec![1.0, 3.0]);
+        assert!((result.fun + 7.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn milp_handles_binary_variables() {
+        let c = vec![-3.0, -2.0];
+        let a_ub = vec![vec![1.0, 1.0]];
+        let b_ub = vec![1.0];
+        let result = milp(
+            MilpProblem {
+                c: &c,
+                integrality: &[Integrality::Binary, Integrality::Binary],
+                a_ub: &a_ub,
+                b_ub: &b_ub,
+                a_eq: &[],
+                b_eq: &[],
+                bounds: &[],
+            },
+            MilpOptions::default(),
+        )
+        .expect("milp");
+        assert!(result.success, "milp failed: {}", result.message);
+        assert_eq!(result.x, vec![1.0, 0.0]);
+        assert!((result.fun + 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn milp_reports_infeasible_problem() {
+        let c = vec![1.0];
+        let a_eq = vec![vec![1.0]];
+        let b_eq = vec![0.5];
+        let result = milp(
+            MilpProblem {
+                c: &c,
+                integrality: &[Integrality::Integer],
+                a_ub: &[],
+                b_ub: &[],
+                a_eq: &a_eq,
+                b_eq: &b_eq,
+                bounds: &[(Some(0.0), Some(1.0))],
+            },
+            MilpOptions::default(),
+        )
+        .expect("milp");
+        assert!(!result.success);
+        assert_eq!(result.status, 2);
+    }
+
+    #[test]
+    fn milp_rejects_integrality_length_mismatch() {
+        let err = milp(
+            MilpProblem {
+                c: &[1.0, 2.0],
+                integrality: &[Integrality::Integer],
+                a_ub: &[],
+                b_ub: &[],
+                a_eq: &[],
+                b_eq: &[],
+                bounds: &[],
+            },
+            MilpOptions::default(),
+        )
+        .expect_err("integrality length mismatch");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
     }
 
     // ── Differential Evolution tests ───────────────────────────────

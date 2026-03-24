@@ -1338,6 +1338,227 @@ fn has_empty_structural_row(a: &CsrMatrix) -> bool {
     indptr.windows(2).any(|w| w[0] == w[1])
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Additional Graph Algorithms
+// ══════════════════════════════════════════════════════════════════════
+
+/// Floyd-Warshall all-pairs shortest path algorithm.
+///
+/// Returns an n×n matrix of shortest distances. Input is a CSR adjacency matrix
+/// where values are edge weights. Missing edges are treated as infinite distance.
+///
+/// Matches `scipy.sparse.csgraph.floyd_warshall`.
+pub fn floyd_warshall(graph: &CsrMatrix) -> Vec<Vec<f64>> {
+    let n = graph.shape().rows;
+    let mut dist = vec![vec![f64::INFINITY; n]; n];
+
+    // Initialize from graph edges
+    for i in 0..n {
+        dist[i][i] = 0.0;
+        let row_start = graph.indptr()[i];
+        let row_end = graph.indptr()[i + 1];
+        for idx in row_start..row_end {
+            let j = graph.indices()[idx];
+            let w = graph.data()[idx];
+            dist[i][j] = w;
+        }
+    }
+
+    // Floyd-Warshall relaxation
+    for k in 0..n {
+        for i in 0..n {
+            if dist[i][k] == f64::INFINITY {
+                continue;
+            }
+            for j in 0..n {
+                let through_k = dist[i][k] + dist[k][j];
+                if through_k < dist[i][j] {
+                    dist[i][j] = through_k;
+                }
+            }
+        }
+    }
+
+    dist
+}
+
+/// Shortest path between two nodes using Dijkstra's algorithm.
+///
+/// Returns (distance, path) where path is the sequence of node indices.
+/// Returns (INFINITY, empty) if no path exists.
+///
+/// Matches `scipy.sparse.csgraph.shortest_path` for single source/target.
+pub fn shortest_path(
+    graph: &CsrMatrix,
+    source: usize,
+    target: usize,
+) -> (f64, Vec<usize>) {
+    let n = graph.shape().rows;
+    if source >= n || target >= n {
+        return (f64::INFINITY, vec![]);
+    }
+
+    let mut dist = vec![f64::INFINITY; n];
+    let mut prev = vec![usize::MAX; n];
+    let mut visited = vec![false; n];
+    dist[source] = 0.0;
+
+    for _ in 0..n {
+        // Find unvisited node with minimum distance
+        let mut u = usize::MAX;
+        let mut min_d = f64::INFINITY;
+        for (i, (&d, &v)) in dist.iter().zip(visited.iter()).enumerate() {
+            if !v && d < min_d {
+                min_d = d;
+                u = i;
+            }
+        }
+
+        if u == usize::MAX || u == target {
+            break;
+        }
+
+        visited[u] = true;
+
+        let row_start = graph.indptr()[u];
+        let row_end = graph.indptr()[u + 1];
+        for idx in row_start..row_end {
+            let v = graph.indices()[idx];
+            let w = graph.data()[idx];
+            let alt = dist[u] + w;
+            if alt < dist[v] {
+                dist[v] = alt;
+                prev[v] = u;
+            }
+        }
+    }
+
+    if dist[target] == f64::INFINITY {
+        return (f64::INFINITY, vec![]);
+    }
+
+    // Reconstruct path
+    let mut path = vec![target];
+    let mut current = target;
+    while current != source {
+        current = prev[current];
+        if current == usize::MAX {
+            return (f64::INFINITY, vec![]);
+        }
+        path.push(current);
+    }
+    path.reverse();
+
+    (dist[target], path)
+}
+
+/// Reverse Cuthill-McKee ordering to reduce matrix bandwidth.
+///
+/// Returns a permutation vector. Matches `scipy.sparse.csgraph.reverse_cuthill_mckee`.
+pub fn reverse_cuthill_mckee(graph: &CsrMatrix) -> Vec<usize> {
+    let n = graph.shape().rows;
+    if n == 0 {
+        return vec![];
+    }
+
+    let mut visited = vec![false; n];
+    let mut result = Vec::with_capacity(n);
+
+    // Find starting node: minimum degree
+    let degrees: Vec<usize> = (0..n)
+        .map(|i| graph.indptr()[i + 1] - graph.indptr()[i])
+        .collect();
+
+    // Process all connected components
+    while result.len() < n {
+        // Find unvisited node with minimum degree
+        let start = (0..n)
+            .filter(|&i| !visited[i])
+            .min_by_key(|&i| degrees[i])
+            .unwrap();
+
+        // BFS from start, visiting neighbors in order of increasing degree
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(start);
+        visited[start] = true;
+
+        while let Some(u) = queue.pop_front() {
+            result.push(u);
+
+            // Get unvisited neighbors sorted by degree
+            let row_start = graph.indptr()[u];
+            let row_end = graph.indptr()[u + 1];
+            let mut neighbors: Vec<usize> = (row_start..row_end)
+                .map(|idx| graph.indices()[idx])
+                .filter(|&v| !visited[v])
+                .collect();
+            neighbors.sort_by_key(|&v| degrees[v]);
+
+            for v in neighbors {
+                if !visited[v] {
+                    visited[v] = true;
+                    queue.push_back(v);
+                }
+            }
+        }
+    }
+
+    // Reverse the ordering
+    result.reverse();
+    result
+}
+
+/// Compute the structural rank of a sparse matrix.
+///
+/// The structural rank is the maximum number of entries that can be
+/// placed in the matrix such that no two are in the same row or column.
+/// This is an upper bound on the numerical rank.
+///
+/// Matches `scipy.sparse.linalg.structural_rank` (approximate).
+pub fn structural_rank(graph: &CsrMatrix) -> usize {
+    let n = graph.shape().rows;
+    let m = graph.shape().cols;
+    if n == 0 || m == 0 {
+        return 0;
+    }
+
+    // Maximum bipartite matching using augmenting paths
+    let mut match_col = vec![usize::MAX; m]; // match_col[j] = row matched to column j
+
+    let mut rank = 0;
+    for row in 0..n {
+        let mut visited = vec![false; m];
+        if augment(graph, row, &mut match_col, &mut visited) {
+            rank += 1;
+        }
+    }
+
+    rank
+}
+
+/// Try to find an augmenting path from `row` in the bipartite matching.
+fn augment(
+    graph: &CsrMatrix,
+    row: usize,
+    match_col: &mut [usize],
+    visited: &mut [bool],
+) -> bool {
+    let row_start = graph.indptr()[row];
+    let row_end = graph.indptr()[row + 1];
+
+    for idx in row_start..row_end {
+        let col = graph.indices()[idx];
+        if col < visited.len() && !visited[col] {
+            visited[col] = true;
+            if match_col[col] == usize::MAX || augment(graph, match_col[col], match_col, visited) {
+                match_col[col] = row;
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3958,6 +3958,134 @@ pub fn remez(
     Ok(h)
 }
 
+/// Design a linear-phase FIR filter using least-squares.
+///
+/// Matches `scipy.signal.firls(numtaps, bands, desired)`.
+///
+/// # Arguments
+/// * `numtaps` — Number of taps (must be odd for type I).
+/// * `bands` — Frequency band edges in pairs, normalized [0, 1] where 1 = Nyquist.
+/// * `desired` — Desired gain at each band edge (length must equal bands length).
+/// * `weight` — Optional weight per band pair.
+pub fn firls(
+    numtaps: usize,
+    bands: &[f64],
+    desired: &[f64],
+    weight: Option<&[f64]>,
+) -> Result<Vec<f64>, SignalError> {
+    if numtaps < 1 || numtaps % 2 == 0 {
+        return Err(SignalError::InvalidArgument(
+            "numtaps must be odd and >= 1".to_string(),
+        ));
+    }
+    if bands.len() % 2 != 0 || bands.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "bands must have even number of elements".to_string(),
+        ));
+    }
+    if desired.len() != bands.len() {
+        return Err(SignalError::InvalidArgument(format!(
+            "desired length {} must equal bands length {}",
+            desired.len(),
+            bands.len()
+        )));
+    }
+
+    let nbands = bands.len() / 2;
+    let weights: Vec<f64> = weight.map_or_else(|| vec![1.0; nbands], |w| w.to_vec());
+
+    let m = (numtaps - 1) / 2;
+    let n_coeffs = m + 1;
+
+    // Build the Q matrix and b vector for the least-squares problem
+    // Q[i,j] = Σ_bands w_k ∫_{f_lo}^{f_hi} cos(πif) cos(πjf) df
+    // b[i] = Σ_bands w_k ∫_{f_lo}^{f_hi} D(f) cos(πif) df
+    // where D(f) is linearly interpolated desired response
+
+    let mut q = vec![vec![0.0; n_coeffs]; n_coeffs];
+    let mut b_vec = vec![0.0; n_coeffs];
+
+    for band in 0..nbands {
+        let f_lo = bands[2 * band] / 2.0; // Convert from [0,1] Nyquist to [0,0.5] normalized
+        let f_hi = bands[2 * band + 1] / 2.0;
+        let d_lo = desired[2 * band];
+        let d_hi = desired[2 * band + 1];
+        let w = weights[band];
+
+        let df = f_hi - f_lo;
+        if df <= 0.0 {
+            continue;
+        }
+
+        // D(f) = d_lo + (d_hi - d_lo) * (f - f_lo) / (f_hi - f_lo)
+        //      = d_lo + slope * (f - f_lo)
+        let slope = (d_hi - d_lo) / df;
+
+        let pi = std::f64::consts::PI;
+
+        for i in 0..n_coeffs {
+            // b[i] = w * ∫ D(f) cos(2πif) df over [f_lo, f_hi]
+            let bi = if i == 0 {
+                // ∫ D(f) df = d_lo * df + slope * df^2 / 2
+                w * (d_lo * df + slope * df * df / 2.0)
+            } else {
+                let pi_i = pi * i as f64;
+                // ∫ (d_lo + slope*(f-f_lo)) * cos(2πif) df
+                // = d_lo * sin(2πif)/(2πi) + slope * [(f-f_lo)*sin(2πif)/(2πi) + cos(2πif)/(2πi)^2]
+                let sin_hi = (2.0 * pi_i * f_hi).sin();
+                let sin_lo = (2.0 * pi_i * f_lo).sin();
+                let cos_hi = (2.0 * pi_i * f_hi).cos();
+                let cos_lo = (2.0 * pi_i * f_lo).cos();
+                let inv_pi_i = 1.0 / (2.0 * pi_i);
+
+                let part1 = d_lo * (sin_hi - sin_lo) * inv_pi_i;
+                let part2 = slope
+                    * (df * sin_hi * inv_pi_i + (cos_hi - cos_lo) * inv_pi_i * inv_pi_i);
+                w * (part1 + part2)
+            };
+            b_vec[i] += bi;
+
+            for j in i..n_coeffs {
+                // Q[i,j] = w * ∫ cos(2πif) cos(2πjf) df
+                // = w/2 * ∫ [cos(2π(i-j)f) + cos(2π(i+j)f)] df
+                let qij = if i == 0 && j == 0 {
+                    w * df
+                } else {
+                    let integrate_cos = |freq: f64| -> f64 {
+                        if freq.abs() < 1e-15 {
+                            df
+                        } else {
+                            let pf = 2.0 * pi * freq;
+                            ((pf * f_hi).sin() - (pf * f_lo).sin()) / pf
+                        }
+                    };
+                    w * 0.5
+                        * (integrate_cos((i as f64 - j as f64))
+                            + integrate_cos((i as f64 + j as f64)))
+                };
+                q[i][j] += qij;
+                if j != i {
+                    q[j][i] += qij;
+                }
+            }
+        }
+    }
+
+    // Solve Q a = b
+    let a_coeffs = solve_symmetric(&q, &b_vec)?;
+
+    // Convert to FIR filter taps
+    let n = numtaps;
+    let mut h = vec![0.0; n];
+    h[m] = a_coeffs[0];
+    for k in 1..n_coeffs {
+        h[m - k] = a_coeffs[k] / 2.0;
+        h[m + k] = a_coeffs[k] / 2.0;
+    }
+
+    Ok(h)
+}
+
 /// Solve symmetric positive definite system via Cholesky.
 fn solve_symmetric(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, SignalError> {
     let n = a.len();
@@ -4380,6 +4508,110 @@ pub fn cosine(n: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Gaussian window.
+///
+/// Matches `scipy.signal.windows.gaussian(n, std)`.
+pub fn gaussian_window(n: usize, std: f64) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+    let center = (n as f64 - 1.0) / 2.0;
+    (0..n)
+        .map(|i| {
+            let x = (i as f64 - center) / std;
+            (-0.5 * x * x).exp()
+        })
+        .collect()
+}
+
+/// General Gaussian window: exp(-0.5 * |x/σ|^p).
+///
+/// Matches `scipy.signal.windows.general_gaussian(n, p, sig)`.
+pub fn general_gaussian(n: usize, p: f64, sig: f64) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+    let center = (n as f64 - 1.0) / 2.0;
+    (0..n)
+        .map(|i| {
+            let x = (i as f64 - center) / sig;
+            (-0.5 * x.abs().powf(2.0 * p)).exp()
+        })
+        .collect()
+}
+
+/// Parzen (de la Vallée Poussin) window.
+///
+/// Matches `scipy.signal.windows.parzen(n)`.
+pub fn parzen(n: usize) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+    let nf = n as f64;
+    let half = nf / 2.0;
+    (0..n)
+        .map(|i| {
+            let k = (i as f64 - (nf - 1.0) / 2.0).abs();
+            if k <= nf / 4.0 {
+                1.0 - 6.0 * (k / half).powi(2) + 6.0 * (k / half).powi(3)
+            } else {
+                2.0 * (1.0 - k / half).powi(3)
+            }
+        })
+        .collect()
+}
+
+/// Exponential (Poisson) window.
+///
+/// Matches `scipy.signal.windows.exponential(n, tau=tau)`.
+pub fn exponential_window(n: usize, tau: f64) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+    let center = (n as f64 - 1.0) / 2.0;
+    (0..n)
+        .map(|i| (-(i as f64 - center).abs() / tau).exp())
+        .collect()
+}
+
+/// Triangular window.
+///
+/// Matches `scipy.signal.windows.triang(n)`.
+pub fn triang(n: usize) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+    let nf = n as f64;
+    (0..n)
+        .map(|i| {
+            if n % 2 == 0 {
+                // Even: peak between two center samples
+                let k = i as f64;
+                1.0 - ((k - (nf - 1.0) / 2.0) / (nf / 2.0)).abs()
+            } else {
+                // Odd: peak at center
+                let k = i as f64;
+                1.0 - ((k - (nf - 1.0) / 2.0) / ((nf + 1.0) / 2.0)).abs()
+            }
+        })
+        .collect()
+}
+
 /// Dispatch a window function by name string.
 ///
 /// Matches `scipy.signal.get_window(window, Nx)`.
@@ -4400,10 +4632,15 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
         "hann" | "hanning" => Ok(hann(nx)),
         "hamming" => Ok(hamming(nx)),
         "blackman" => Ok(blackman(nx)),
-        "bartlett" => Ok(bartlett(nx)),
+        "bartlett" | "triangle" => Ok(bartlett(nx)),
         "flattop" => Ok(flattop(nx)),
         "cosine" => Ok(cosine(nx)),
         "rectangular" | "boxcar" | "rect" => Ok(vec![1.0; nx]),
+        "parzen" => Ok(parzen(nx)),
+        "triang" => Ok(triang(nx)),
+        "tukey" => Ok(tukey_window(nx, 0.5)),
+        "nuttall" => Ok(nuttall_window(nx)),
+        "bohman" => Ok(bohman_window(nx)),
         _ => Err(SignalError::InvalidArgument(format!(
             "unknown window type: {window}"
         ))),

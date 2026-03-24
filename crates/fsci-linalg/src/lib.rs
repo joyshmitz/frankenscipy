@@ -315,6 +315,17 @@ pub struct QzResult {
     pub bb: Vec<Vec<f64>>,
 }
 
+/// Ordering selector for the simplified real `ordqz` path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrdQzSort {
+    /// Stable generalized eigenvalues first for continuous-time systems:
+    /// λ = α/β with λ < 0.
+    LeftHalfPlane,
+    /// Stable generalized eigenvalues first for discrete-time systems:
+    /// λ = α/β with |λ| < 1.
+    InsideUnitCircle,
+}
+
 /// Result of polar decomposition: A = U * P.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolarResult {
@@ -1970,7 +1981,11 @@ pub fn qz(a: &[Vec<f64>], b: &[Vec<f64>], options: DecompOptions) -> Result<QzRe
     let a_mat = dmatrix_from_rows(a)?;
     let b_mat = dmatrix_from_rows(b)?;
     let identity = DMatrix::<f64>::identity(ar, ar);
-    let b_inv = b_mat.clone().lu().solve(&identity).ok_or(LinalgError::SingularMatrix)?;
+    let b_inv = b_mat
+        .clone()
+        .lu()
+        .solve(&identity)
+        .ok_or(LinalgError::SingularMatrix)?;
 
     let schur_decomp = (&a_mat * &b_inv).schur();
     let (q_mat, t_mat) = schur_decomp.unpack();
@@ -1991,6 +2006,83 @@ pub fn qz(a: &[Vec<f64>], b: &[Vec<f64>], options: DecompOptions) -> Result<QzRe
         z: rows_from_dmatrix(&z_mat),
         aa: rows_from_dmatrix(&t_mat),
         bb: rows_from_dmatrix(&bb_mat),
+    })
+}
+
+fn ordqz_selected(alpha: f64, beta: f64, sort: OrdQzSort) -> bool {
+    if !alpha.is_finite() || !beta.is_finite() || beta.abs() <= f64::EPSILON {
+        return false;
+    }
+    let lambda = alpha / beta;
+    match sort {
+        OrdQzSort::LeftHalfPlane => lambda < 0.0,
+        OrdQzSort::InsideUnitCircle => lambda.abs() < 1.0,
+    }
+}
+
+fn stable_first_permutation(diagonal_pairs: &[(f64, f64)], sort: OrdQzSort) -> Vec<usize> {
+    let mut selected = Vec::with_capacity(diagonal_pairs.len());
+    let mut rejected = Vec::with_capacity(diagonal_pairs.len());
+    for (index, &(alpha, beta)) in diagonal_pairs.iter().enumerate() {
+        if ordqz_selected(alpha, beta, sort) {
+            selected.push(index);
+        } else {
+            rejected.push(index);
+        }
+    }
+    selected.extend(rejected);
+    selected
+}
+
+fn permute_columns(matrix: &[Vec<f64>], permutation: &[usize]) -> Vec<Vec<f64>> {
+    matrix
+        .iter()
+        .map(|row| permutation.iter().map(|&j| row[j]).collect())
+        .collect()
+}
+
+fn permute_similarity(matrix: &[Vec<f64>], permutation: &[usize]) -> Vec<Vec<f64>> {
+    permutation
+        .iter()
+        .map(|&i| permutation.iter().map(|&j| matrix[i][j]).collect())
+        .collect()
+}
+
+/// Reorders a simplified real generalized Schur form so selected generalized
+/// eigenvalues appear first.
+///
+/// This implementation is intentionally scoped to the current regular,
+/// invertible-`B` `qz` path in FrankenSciPy. It computes `qz(a, b, ...)`, then
+/// applies a stable-first permutation to the real diagonal generalized
+/// eigenvalue ratios `aa[i][i] / bb[i][i]`. The same permutation is applied to
+/// `Q`, `Z`, `AA`, and `BB`, preserving the generalized Schur relation.
+pub fn ordqz(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    sort: OrdQzSort,
+    options: DecompOptions,
+) -> Result<QzResult, LinalgError> {
+    let result = qz(a, b, options)?;
+    if result.aa.is_empty() {
+        return Ok(result);
+    }
+
+    let n = result.aa.len();
+    if result.bb.len() != n {
+        return Err(LinalgError::InvalidArgument {
+            detail: "ordqz received inconsistent QZ factors".to_string(),
+        });
+    }
+
+    let diagonal_pairs: Vec<(f64, f64)> =
+        (0..n).map(|i| (result.aa[i][i], result.bb[i][i])).collect();
+    let permutation = stable_first_permutation(&diagonal_pairs, sort);
+
+    Ok(QzResult {
+        q: permute_columns(&result.q, &permutation),
+        z: permute_columns(&result.z, &permutation),
+        aa: permute_similarity(&result.aa, &permutation),
+        bb: permute_similarity(&result.bb, &permutation),
     })
 }
 
@@ -3697,6 +3789,270 @@ pub fn block_diag(blocks: &[Vec<Vec<f64>>]) -> Vec<Vec<f64>> {
     result
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Additional Special Matrices
+// ══════════════════════════════════════════════════════════════════════
+
+/// Pascal matrix (lower triangular or symmetric).
+///
+/// Matches `scipy.linalg.pascal`.
+pub fn pascal(n: usize, symmetric: bool) -> Vec<Vec<f64>> {
+    // Lower-triangular Pascal matrix: L[i][j] = C(i, j) for j <= i
+    let mut l = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        l[i][0] = 1.0;
+        for j in 1..=i {
+            l[i][j] = l[i - 1][j - 1] + l[i - 1][j];
+        }
+    }
+
+    if symmetric {
+        // Symmetric Pascal: S = L * L^T
+        let mut s = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                for (&lik, &ljk) in l[i].iter().zip(l[j].iter()) {
+                    s[i][j] += lik * ljk;
+                }
+            }
+        }
+        s
+    } else {
+        l
+    }
+}
+
+/// DFT matrix of size n.
+///
+/// F[j][k] = exp(-2πijk/n) / sqrt(n)  (unitary normalization).
+///
+/// Matches `scipy.linalg.dft`.
+pub fn dft_matrix(n: usize) -> Vec<Vec<(f64, f64)>> {
+    let scale = 1.0 / (n as f64).sqrt();
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let mut f = vec![vec![(0.0, 0.0); n]; n];
+    for (j, row) in f.iter_mut().enumerate() {
+        for (k, value) in row.iter_mut().enumerate() {
+            let angle = -two_pi * (j * k) as f64 / n as f64;
+            *value = (scale * angle.cos(), scale * angle.sin());
+        }
+    }
+    f
+}
+
+/// Fiedler matrix: F[i][j] = |i - j|.
+///
+/// Matches `scipy.linalg.fiedler`.
+pub fn fiedler(a: &[f64]) -> Vec<Vec<f64>> {
+    let n = a.len();
+    let mut f = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            f[i][j] = (a[i] - a[j]).abs();
+        }
+    }
+    f
+}
+
+/// Fiedler companion matrix.
+///
+/// Matches `scipy.linalg.fiedler_companion`.
+pub fn fiedler_companion(a: &[f64]) -> Vec<Vec<f64>> {
+    let n = a.len();
+    if n < 2 {
+        return vec![vec![]];
+    }
+    let m = n - 1;
+    let mut c = vec![vec![0.0; m]; m];
+
+    // First row: -a[1..] / a[0]
+    for j in 0..m {
+        c[0][j] = -a[j + 1] / a[0];
+    }
+    // Sub-diagonal: 1s
+    for i in 1..m {
+        c[i][i - 1] = 1.0;
+    }
+
+    c
+}
+
+/// Leslie population matrix.
+///
+/// Matches `scipy.linalg.leslie`.
+pub fn leslie(f_vals: &[f64], s_vals: &[f64]) -> Result<Vec<Vec<f64>>, LinalgError> {
+    if f_vals.is_empty() {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if s_vals.len() + 1 != f_vals.len() {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (f_vals.len(), f_vals.len()),
+            b_len: s_vals.len(),
+        });
+    }
+
+    let n = f_vals.len();
+    let mut l = vec![vec![0.0; n]; n];
+
+    // First row: fecundity rates
+    for (j, &fj) in f_vals.iter().enumerate() {
+        l[0][j] = fj;
+    }
+    // Sub-diagonal: survival rates
+    for (i, &si) in s_vals.iter().enumerate() {
+        l[i + 1][i] = si;
+    }
+
+    Ok(l)
+}
+
+/// Convolution matrix for a 1D filter.
+///
+/// Creates a Toeplitz matrix that performs convolution when multiplied by a vector.
+/// Matches `scipy.linalg.convolution_matrix`.
+pub fn convolution_matrix(h: &[f64], n: usize, mode: &str) -> Vec<Vec<f64>> {
+    let k = h.len();
+    let out_len = match mode {
+        "full" => n + k - 1,
+        "same" => n,
+        "valid" => {
+            if n >= k {
+                n - k + 1
+            } else {
+                0
+            }
+        }
+        _ => n + k - 1, // default to full
+    };
+
+    let offset = match mode {
+        "same" => (k - 1) / 2,
+        "valid" => k - 1,
+        _ => 0,
+    };
+
+    let mut mat = vec![vec![0.0; n]; out_len];
+    for (i, row) in mat.iter_mut().enumerate() {
+        for (j, &hj) in h.iter().enumerate() {
+            let col = i as i64 + offset as i64 - j as i64;
+            if col >= 0 && (col as usize) < n {
+                row[col as usize] = hj;
+            }
+        }
+    }
+
+    mat
+}
+
+/// Compute the bandwidth of a matrix (lower and upper).
+///
+/// Returns (lower_bandwidth, upper_bandwidth).
+/// Matches `scipy.linalg.bandwidth`.
+pub fn bandwidth(a: &[Vec<f64>]) -> (usize, usize) {
+    let n = a.len();
+    if n == 0 {
+        return (0, 0);
+    }
+    let m = a[0].len();
+    let mut lower = 0usize;
+    let mut upper = 0usize;
+
+    for (i, row) in a.iter().enumerate().take(n) {
+        for (j, &value) in row.iter().enumerate().take(m) {
+            if value.abs() > 0.0 {
+                if i > j {
+                    lower = lower.max(i - j);
+                }
+                if j > i {
+                    upper = upper.max(j - i);
+                }
+            }
+        }
+    }
+
+    (lower, upper)
+}
+
+/// Create a tri (tridiagonal-like) matrix.
+///
+/// tri(n, m, k) creates an n×m matrix with ones at and below the k-th diagonal.
+/// Matches `numpy.tri`.
+pub fn tri(n: usize, m: usize, k: i64) -> Vec<Vec<f64>> {
+    let mut result = vec![vec![0.0; m]; n];
+    for (i, row) in result.iter_mut().enumerate() {
+        for (j, value) in row.iter_mut().enumerate() {
+            if (j as i64) <= (i as i64) + k {
+                *value = 1.0;
+            }
+        }
+    }
+    result
+}
+
+/// Extract lower triangle of a matrix.
+///
+/// Matches `numpy.tril`.
+pub fn tril(a: &[Vec<f64>], k: i64) -> Vec<Vec<f64>> {
+    let n = a.len();
+    if n == 0 {
+        return vec![];
+    }
+    let m = a[0].len();
+    let mut result = vec![vec![0.0; m]; n];
+    for i in 0..n {
+        for j in 0..m {
+            if (j as i64) <= (i as i64) + k {
+                result[i][j] = a[i][j];
+            }
+        }
+    }
+    result
+}
+
+/// Extract upper triangle of a matrix.
+///
+/// Matches `numpy.triu`.
+pub fn triu(a: &[Vec<f64>], k: i64) -> Vec<Vec<f64>> {
+    let n = a.len();
+    if n == 0 {
+        return vec![];
+    }
+    let m = a[0].len();
+    let mut result = vec![vec![0.0; m]; n];
+    for i in 0..n {
+        for j in 0..m {
+            if (j as i64) >= (i as i64) + k {
+                result[i][j] = a[i][j];
+            }
+        }
+    }
+    result
+}
+
+/// Kronecker product of two matrices.
+///
+/// Matches `numpy.kron` / `scipy.linalg.kron`.
+pub fn kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    if a.is_empty() || b.is_empty() {
+        return vec![];
+    }
+    let (ra, ca) = (a.len(), a[0].len());
+    let (rb, cb) = (b.len(), b[0].len());
+    let mut result = vec![vec![0.0; ca * cb]; ra * rb];
+
+    for i in 0..ra {
+        for j in 0..ca {
+            for k in 0..rb {
+                for l in 0..cb {
+                    result[i * rb + k][j * cb + l] = a[i][j] * b[k][l];
+                }
+            }
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5062,9 +5418,114 @@ mod tests {
         assert_close_matrix(&result.bb, &b, 1e-10, 1e-10);
         for i in 2..result.aa.len() {
             for j in 0..i.saturating_sub(1) {
-                assert!(result.aa[i][j].abs() < 1e-10, "AA must be quasi-upper triangular");
+                assert!(
+                    result.aa[i][j].abs() < 1e-10,
+                    "AA must be quasi-upper triangular"
+                );
             }
         }
+    }
+
+    #[test]
+    fn ordqz_empty_matrix() {
+        let a: Vec<Vec<f64>> = vec![];
+        let b: Vec<Vec<f64>> = vec![];
+        let result = ordqz(
+            &a,
+            &b,
+            OrdQzSort::InsideUnitCircle,
+            DecompOptions::default(),
+        )
+        .expect("ordqz");
+        assert!(result.q.is_empty());
+        assert!(result.z.is_empty());
+        assert!(result.aa.is_empty());
+        assert!(result.bb.is_empty());
+    }
+
+    #[test]
+    fn ordqz_inside_unit_circle_moves_stable_ratio_first() {
+        let a = vec![
+            vec![2.0, 0.0, 0.0],
+            vec![0.0, 0.25, 0.0],
+            vec![0.0, 0.0, -3.0],
+        ];
+        let b = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let result = ordqz(
+            &a,
+            &b,
+            OrdQzSort::InsideUnitCircle,
+            DecompOptions::default(),
+        )
+        .expect("ordqz");
+
+        let ratios: Vec<f64> = (0..result.aa.len())
+            .map(|i| result.aa[i][i] / result.bb[i][i])
+            .collect();
+        assert!(
+            (ratios[0] - 0.25).abs() < 1e-12,
+            "stable ratio must come first"
+        );
+        assert!(ratios[1].abs() >= 1.0);
+        assert!(ratios[2].abs() >= 1.0);
+
+        let n = a.len();
+        let mut qtaz = vec![vec![0.0; n]; n];
+        let mut qtbz = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    for l in 0..n {
+                        qtaz[i][j] += result.q[k][i] * a[k][l] * result.z[l][j];
+                        qtbz[i][j] += result.q[k][i] * b[k][l] * result.z[l][j];
+                    }
+                }
+            }
+        }
+
+        assert_close_matrix(&qtaz, &result.aa, 1e-10, 1e-10);
+        assert_close_matrix(&qtbz, &result.bb, 1e-10, 1e-10);
+    }
+
+    #[test]
+    fn ordqz_left_half_plane_moves_negative_ratio_first() {
+        let a = vec![
+            vec![1.5, 0.0, 0.0],
+            vec![0.0, -2.0, 0.0],
+            vec![0.0, 0.0, -0.5],
+        ];
+        let b = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let result =
+            ordqz(&a, &b, OrdQzSort::LeftHalfPlane, DecompOptions::default()).expect("ordqz");
+        let ratios: Vec<f64> = (0..result.aa.len())
+            .map(|i| result.aa[i][i] / result.bb[i][i])
+            .collect();
+
+        assert!(ratios[0] < 0.0);
+        assert!(ratios[1] < 0.0);
+        assert!(ratios[2] > 0.0);
+    }
+
+    #[test]
+    fn ordqz_shape_mismatch_rejected() {
+        let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+        let b = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let err = ordqz(
+            &a,
+            &b,
+            OrdQzSort::InsideUnitCircle,
+            DecompOptions::default(),
+        )
+        .expect_err("shape mismatch");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
     }
 
     // ── Matrix exponential tests ──────────────────────────────────────
@@ -5501,6 +5962,117 @@ mod tests {
     fn block_diag_empty() {
         let bd = block_diag(&[]);
         assert!(bd.is_empty());
+    }
+
+    #[test]
+    fn pascal_lower_triangular() {
+        let p = pascal(4, false);
+        assert_eq!(p[0], vec![1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(p[1], vec![1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(p[2], vec![1.0, 2.0, 1.0, 0.0]);
+        assert_eq!(p[3], vec![1.0, 3.0, 3.0, 1.0]);
+    }
+
+    #[test]
+    fn pascal_symmetric() {
+        let p = pascal(3, true);
+        // Symmetric Pascal: P[i][j] = C(i+j, i)
+        assert_eq!(p[0], vec![1.0, 1.0, 1.0]);
+        assert_eq!(p[1], vec![1.0, 2.0, 3.0]);
+        assert_eq!(p[2], vec![1.0, 3.0, 6.0]);
+    }
+
+    #[test]
+    fn fiedler_basic() {
+        let f = fiedler(&[1.0, 4.0, 2.0]);
+        assert_eq!(f[0][0], 0.0);
+        assert_eq!(f[0][1], 3.0); // |1-4|
+        assert_eq!(f[0][2], 1.0); // |1-2|
+        assert_eq!(f[1][0], 3.0);
+        assert_eq!(f[1][2], 2.0); // |4-2|
+    }
+
+    #[test]
+    fn leslie_matrix() {
+        let l = leslie(&[0.5, 1.0, 0.8], &[0.9, 0.7]).unwrap();
+        assert_eq!(l[0], vec![0.5, 1.0, 0.8]); // fecundity row
+        assert_eq!(l[1][0], 0.9); // survival[0]
+        assert_eq!(l[2][1], 0.7); // survival[1]
+        assert_eq!(l[1][1], 0.0);
+    }
+
+    #[test]
+    fn convolution_matrix_full() {
+        let m = convolution_matrix(&[1.0, 2.0, 3.0], 4, "full");
+        assert_eq!(m.len(), 6); // 4 + 3 - 1
+        assert_eq!(m[0].len(), 4);
+        // First row should be [1, 0, 0, 0] (h[0] applied to first input)
+        assert_eq!(m[0][0], 1.0);
+    }
+
+    #[test]
+    fn bandwidth_diagonal() {
+        let a = vec![
+            vec![1.0, 2.0, 0.0],
+            vec![0.0, 3.0, 4.0],
+            vec![0.0, 0.0, 5.0],
+        ];
+        let (lower, upper) = bandwidth(&a);
+        assert_eq!(lower, 0);
+        assert_eq!(upper, 1);
+    }
+
+    #[test]
+    fn tril_triu_roundtrip() {
+        let a = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 9.0],
+        ];
+        let l = tril(&a, 0);
+        let u = triu(&a, 1);
+        // l + u should reconstruct a
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!((l[i][j] + u[i][j] - a[i][j]).abs() < 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn kron_2x2() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let b = vec![vec![0.0, 5.0], vec![6.0, 7.0]];
+        let k = kron(&a, &b);
+        assert_eq!(k.len(), 4);
+        assert_eq!(k[0].len(), 4);
+        // k[0][0] = 1*0 = 0, k[0][1] = 1*5 = 5
+        assert_eq!(k[0][0], 0.0);
+        assert_eq!(k[0][1], 5.0);
+        // k[0][2] = 2*0 = 0, k[0][3] = 2*5 = 10
+        assert_eq!(k[0][2], 0.0);
+        assert_eq!(k[0][3], 10.0);
+    }
+
+    #[test]
+    fn tri_basic() {
+        let t = tri(3, 4, 0);
+        assert_eq!(t[0], vec![1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(t[1], vec![1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(t[2], vec![1.0, 1.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn dft_matrix_unitary() {
+        let f = dft_matrix(4);
+        // DFT matrix should be unitary: F * F^H = I
+        // Check first row dot first row conjugate = 1
+        let mut dot = (0.0, 0.0);
+        for k in 0..4 {
+            let (r, i) = f[0][k];
+            dot.0 += r * r + i * i;
+        }
+        assert!((dot.0 - 1.0).abs() < 1e-10, "first row norm = {}", dot.0);
     }
 }
 
@@ -6186,7 +6758,11 @@ mod proptest_tests {
 
     #[test]
     fn issymmetric_true_for_symmetric() {
-        let a = vec![vec![1.0, 2.0, 3.0], vec![2.0, 5.0, 6.0], vec![3.0, 6.0, 9.0]];
+        let a = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![2.0, 5.0, 6.0],
+            vec![3.0, 6.0, 9.0],
+        ];
         assert!(issymmetric(&a, 0.0, 0.0).expect("issymmetric"));
     }
 

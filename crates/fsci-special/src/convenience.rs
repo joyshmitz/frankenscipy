@@ -1119,3 +1119,176 @@ pub fn expi_scalar(x: f64) -> f64 {
     }
     sum
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Polygamma Functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Trigamma function ψ₁(x) = d²ln(Γ(x))/dx².
+///
+/// Matches `scipy.special.polygamma(1, x)`.
+pub fn trigamma(x: f64) -> f64 {
+    if x <= 0.0 && x == x.floor() {
+        return f64::INFINITY;
+    }
+
+    let mut val = x;
+    let mut result = 0.0;
+    while val < 8.0 {
+        result += 1.0 / (val * val);
+        val += 1.0;
+    }
+
+    let inv_x = 1.0 / val;
+    let inv_x2 = inv_x * inv_x;
+    result += inv_x
+        + inv_x2 / 2.0
+        + inv_x2 * inv_x / 6.0
+        - inv_x2 * inv_x2 * inv_x / 30.0
+        + inv_x2 * inv_x2 * inv_x2 * inv_x / 42.0;
+
+    result
+}
+
+/// Tetragamma function ψ₂(x) = d³ln(Γ(x))/dx³.
+///
+/// Matches `scipy.special.polygamma(2, x)`.
+pub fn tetragamma(x: f64) -> f64 {
+    if x <= 0.0 && x == x.floor() {
+        return f64::NAN;
+    }
+
+    let mut val = x;
+    let mut result = 0.0;
+    while val < 8.0 {
+        result -= 2.0 / (val * val * val);
+        val += 1.0;
+    }
+
+    let inv_x = 1.0 / val;
+    let inv_x2 = inv_x * inv_x;
+    let inv_x3 = inv_x2 * inv_x;
+    result += -inv_x2 - inv_x3 - inv_x2 * inv_x2 / 2.0 + inv_x2 * inv_x2 * inv_x2 / 6.0;
+
+    result
+}
+
+/// Digamma function ψ(x) = d(ln Γ(x))/dx (scalar).
+pub fn digamma_scalar(x: f64) -> f64 {
+    if x <= 0.0 && x == x.floor() {
+        return f64::NAN;
+    }
+
+    let mut val = x;
+    let mut result = 0.0;
+
+    if val < 0.0 {
+        result -= std::f64::consts::PI / (std::f64::consts::PI * val).tan();
+        val = 1.0 - val;
+    }
+
+    while val < 8.0 {
+        result -= 1.0 / val;
+        val += 1.0;
+    }
+
+    let inv_x = 1.0 / val;
+    let inv_x2 = inv_x * inv_x;
+    result += val.ln() - inv_x / 2.0 - inv_x2 / 12.0 + inv_x2 * inv_x2 / 120.0
+        - inv_x2 * inv_x2 * inv_x2 / 252.0;
+
+    result
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Combinatorial & Utility Functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Rising factorial (Pochhammer symbol): (x)_n = x(x+1)...(x+n-1).
+///
+/// Matches `scipy.special.poch`.
+pub fn poch(x: f64, n: f64) -> f64 {
+    if n == 0.0 {
+        return 1.0;
+    }
+    if n == n.floor() && n > 0.0 && n <= 20.0 {
+        let ni = n as usize;
+        let mut result = 1.0;
+        for k in 0..ni {
+            result *= x + k as f64;
+        }
+        return result;
+    }
+    let log_result = crate::gammaln_scalar(x + n, fsci_runtime::RuntimeMode::Strict)
+        .unwrap_or(f64::NAN)
+        - crate::gammaln_scalar(x, fsci_runtime::RuntimeMode::Strict).unwrap_or(f64::NAN);
+    log_result.exp()
+}
+
+/// Softmax function: exp(x_i) / Σ exp(x_j), numerically stable.
+///
+/// Matches `scipy.special.softmax`.
+pub fn softmax(x: &[f64]) -> Vec<f64> {
+    if x.is_empty() {
+        return vec![];
+    }
+    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let exp_x: Vec<f64> = x.iter().map(|&xi| (xi - max_x).exp()).collect();
+    let sum_exp: f64 = exp_x.iter().sum();
+    exp_x.iter().map(|&e| e / sum_exp).collect()
+}
+
+/// Log-softmax: log(softmax(x)), numerically stable.
+///
+/// Matches `scipy.special.log_softmax`.
+pub fn log_softmax(x: &[f64]) -> Vec<f64> {
+    if x.is_empty() {
+        return vec![];
+    }
+    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let shifted: Vec<f64> = x.iter().map(|&xi| xi - max_x).collect();
+    let log_sum_exp = shifted.iter().map(|&s| s.exp()).sum::<f64>().ln();
+    shifted.iter().map(|&s| s - log_sum_exp).collect()
+}
+
+/// Spence's function (dilogarithm): Li₂(z) via integral ∫₁ᶻ ln(t)/(1-t) dt.
+///
+/// Matches `scipy.special.spence`.
+pub fn spence(x: f64) -> f64 {
+    if x == 1.0 {
+        return 0.0;
+    }
+    if x == 0.0 {
+        return std::f64::consts::PI * std::f64::consts::PI / 6.0;
+    }
+    if x < 0.0 {
+        return f64::NAN;
+    }
+
+    // For x > 2, use transformation: spence(x) = -spence(1/x) - ln(x)²/2
+    if x > 2.0 {
+        return -spence(1.0 / x) - x.ln().powi(2) / 2.0;
+    }
+
+    // Numerical integration: ∫₁ˣ ln(t)/(1-t) dt via Simpson's rule
+    let n = 500;
+    let a = 1.0;
+    let b = x;
+    let h = (b - a) / n as f64;
+    let f = |t: f64| {
+        if (1.0 - t).abs() < 1e-15 {
+            -1.0 // L'Hôpital limit: ln(t)/(1-t) → -1 as t → 1
+        } else {
+            t.ln() / (1.0 - t)
+        }
+    };
+
+    let mut integral = f(a) + f(b);
+    for i in 1..n {
+        let t = a + i as f64 * h;
+        let w = if i % 2 == 0 { 2.0 } else { 4.0 };
+        integral += w * f(t);
+    }
+
+    integral * h / 3.0
+}

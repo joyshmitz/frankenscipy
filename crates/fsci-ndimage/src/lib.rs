@@ -457,6 +457,201 @@ fn rank_filter_impl(
     Ok(output)
 }
 
+/// Apply a generic function to each local neighborhood.
+///
+/// Matches `scipy.ndimage.generic_filter`.
+pub fn generic_filter<F>(
+    input: &NdArray,
+    function: F,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    if size == 0 {
+        return Err(NdimageError::InvalidArgument(
+            "filter size must be positive".to_string(),
+        ));
+    }
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+
+    let ndim = input.ndim();
+    let mut output = NdArray::zeros(input.shape.clone());
+    let offsets: Vec<i64> = vec![size as i64 / 2; ndim];
+    let kernel_shape: Vec<usize> = vec![size; ndim];
+    let kernel_total: usize = kernel_shape.iter().product();
+    let kernel_strides = compute_strides(&kernel_shape);
+
+    for flat_out in 0..input.size() {
+        let out_idx = input.unravel(flat_out);
+        let mut neighborhood = Vec::with_capacity(kernel_total);
+
+        for flat_k in 0..kernel_total {
+            let mut k_idx = vec![0usize; ndim];
+            let mut rem = flat_k;
+            for (d, slot) in k_idx.iter_mut().enumerate() {
+                *slot = rem / kernel_strides[d];
+                rem %= kernel_strides[d];
+            }
+
+            let mut in_idx = vec![0i64; ndim];
+            for d in 0..ndim {
+                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d];
+            }
+            neighborhood.push(input.get_boundary(&in_idx, mode, cval));
+        }
+
+        output.data[flat_out] = function(&neighborhood);
+    }
+
+    Ok(output)
+}
+
+/// Percentile filter: select the p-th percentile from each neighborhood.
+///
+/// Matches `scipy.ndimage.percentile_filter`.
+pub fn percentile_filter(
+    input: &NdArray,
+    percentile: f64,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if !(0.0..=100.0).contains(&percentile) {
+        return Err(NdimageError::InvalidArgument(
+            "percentile must be in [0, 100]".to_string(),
+        ));
+    }
+
+    generic_filter(
+        input,
+        |neighborhood| {
+            let mut sorted = neighborhood.to_vec();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let idx = (percentile / 100.0 * (sorted.len() - 1) as f64).round() as usize;
+            sorted[idx.min(sorted.len() - 1)]
+        },
+        size,
+        mode,
+        cval,
+    )
+}
+
+/// Morphological gradient: dilation minus erosion.
+///
+/// Matches `scipy.ndimage.morphological_gradient`.
+pub fn morphological_gradient(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let max_img = maximum_filter(input, size, mode, cval)?;
+    let min_img = minimum_filter(input, size, mode, cval)?;
+
+    let mut result = NdArray::zeros(input.shape.clone());
+    for i in 0..result.data.len() {
+        result.data[i] = max_img.data[i] - min_img.data[i];
+    }
+    Ok(result)
+}
+
+/// White top-hat: input minus morphological opening.
+///
+/// Matches `scipy.ndimage.white_tophat`.
+pub fn white_tophat(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let opened = {
+        let min_img = minimum_filter(input, size, mode, cval)?;
+        maximum_filter(&min_img, size, mode, cval)?
+    };
+
+    let mut result = NdArray::zeros(input.shape.clone());
+    for i in 0..result.data.len() {
+        result.data[i] = input.data[i] - opened.data[i];
+    }
+    Ok(result)
+}
+
+/// Black top-hat: morphological closing minus input.
+///
+/// Matches `scipy.ndimage.black_tophat`.
+pub fn black_tophat(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let closed = {
+        let max_img = maximum_filter(input, size, mode, cval)?;
+        minimum_filter(&max_img, size, mode, cval)?
+    };
+
+    let mut result = NdArray::zeros(input.shape.clone());
+    for i in 0..result.data.len() {
+        result.data[i] = closed.data[i] - input.data[i];
+    }
+    Ok(result)
+}
+
+/// Histogram of values in labeled regions.
+///
+/// Returns a Vec of histograms (bin counts) for each label.
+/// Matches `scipy.ndimage.histogram`.
+pub fn histogram_labels(
+    input: &NdArray,
+    labels: &NdArray,
+    num_labels: usize,
+    min_val: f64,
+    max_val: f64,
+    nbins: usize,
+) -> Vec<Vec<usize>> {
+    let bin_width = (max_val - min_val) / nbins as f64;
+    let mut histograms = vec![vec![0usize; nbins]; num_labels];
+
+    for i in 0..input.size() {
+        let lbl = labels.data[i] as usize;
+        if lbl > 0 && lbl <= num_labels {
+            let bin = ((input.data[i] - min_val) / bin_width).floor() as usize;
+            let bin = bin.min(nbins - 1);
+            histograms[lbl - 1][bin] += 1;
+        }
+    }
+
+    histograms
+}
+
+/// Minimum and maximum values in each labeled region.
+///
+/// Returns (min_values, max_values) vectors.
+/// Matches `scipy.ndimage.extrema`.
+pub fn extrema_labels(
+    input: &NdArray,
+    labels: &NdArray,
+    num_labels: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let mut mins = vec![f64::INFINITY; num_labels];
+    let mut maxs = vec![f64::NEG_INFINITY; num_labels];
+
+    for i in 0..input.size() {
+        let lbl = labels.data[i] as usize;
+        if lbl > 0 && lbl <= num_labels {
+            mins[lbl - 1] = mins[lbl - 1].min(input.data[i]);
+            maxs[lbl - 1] = maxs[lbl - 1].max(input.data[i]);
+        }
+    }
+
+    (mins, maxs)
+}
+
 /// Sobel edge detection filter along a given axis.
 ///
 /// Matches `scipy.ndimage.sobel`.
@@ -1474,5 +1669,56 @@ mod tests {
         assert_eq!(com.len(), 1);
         assert!((com[0][0] - 0.5).abs() < 1e-10);
         assert!((com[0][1] - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn generic_filter_max() {
+        let input = NdArray::new(vec![1.0, 5.0, 3.0, 2.0, 4.0], vec![5]).unwrap();
+        let result = generic_filter(
+            &input,
+            |n| n.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            3,
+            BoundaryMode::Constant,
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(result.data[1], 5.0); // max of [1, 5, 3]
+        assert_eq!(result.data[2], 5.0); // max of [5, 3, 2]
+    }
+
+    #[test]
+    fn percentile_filter_median() {
+        let input = NdArray::new(vec![1.0, 5.0, 3.0, 2.0, 4.0], vec![5]).unwrap();
+        let result =
+            percentile_filter(&input, 50.0, 3, BoundaryMode::Constant, 0.0).unwrap();
+        // 50th percentile of [0, 1, 5] = 1.0
+        assert_eq!(result.data[0], 1.0);
+    }
+
+    #[test]
+    fn morphological_gradient_detects_edges() {
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+        let result =
+            morphological_gradient(&input, 3, BoundaryMode::Constant, 0.0).unwrap();
+        // Center pixel: max-min = 1-0 = 1
+        assert_eq!(result.data[4], 1.0);
+        // Corner pixel: max-min = 0-0 = 0 (unless center is in neighborhood)
+    }
+
+    #[test]
+    fn extrema_labels_correct() {
+        let data = NdArray::new(vec![3.0, 1.0, 4.0, 1.0, 5.0, 9.0], vec![6]).unwrap();
+        let labels = NdArray::new(vec![1.0, 1.0, 1.0, 2.0, 2.0, 2.0], vec![6]).unwrap();
+        let (mins, maxs) = extrema_labels(&data, &labels, 2);
+        assert_eq!(mins[0], 1.0); // min of [3, 1, 4]
+        assert_eq!(maxs[0], 4.0); // max of [3, 1, 4]
+        assert_eq!(mins[1], 1.0); // min of [1, 5, 9]
+        assert_eq!(maxs[1], 9.0); // max of [1, 5, 9]
     }
 }
