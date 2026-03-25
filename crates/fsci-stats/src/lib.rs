@@ -5801,6 +5801,25 @@ pub struct AndersonResult {
     pub significance_level: [f64; 5],
 }
 
+/// Result of the k-sample Anderson-Darling test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AndersonKSampleResult {
+    /// Normalized k-sample Anderson-Darling statistic.
+    pub statistic: f64,
+    /// Critical values at significance levels [25%, 10%, 5%, 2.5%, 1%, 0.5%, 0.1%].
+    pub critical_values: [f64; 7],
+    /// Approximate p-value, capped to [0.001, 0.25] without permutation mode.
+    pub pvalue: f64,
+}
+
+/// Variant of the k-sample Anderson-Darling test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AndersonKSampleVariant {
+    Midrank,
+    Right,
+    Continuous,
+}
+
 /// Target distribution or reference sample for `kstest`.
 pub enum KstestTarget<'a> {
     /// One-sample KS against a reference CDF.
@@ -5815,6 +5834,255 @@ pub enum Cvm2SampleMethod {
     Auto,
     Exact,
     Asymptotic,
+}
+
+fn anderson_ksamp_statistic_midrank(
+    samples: &[Vec<f64>],
+    pooled: &[f64],
+    unique: &[f64],
+    n: &[usize],
+    total: usize,
+) -> f64 {
+    let mut statistic = 0.0;
+    let z_left: Vec<usize> = unique
+        .iter()
+        .map(|&value| pooled.partition_point(|x| *x < value))
+        .collect();
+    let lj: Vec<f64> = if total == unique.len() {
+        vec![1.0; unique.len()]
+    } else {
+        unique
+            .iter()
+            .zip(z_left.iter())
+            .map(|(&value, &left)| (pooled.partition_point(|x| *x <= value) - left) as f64)
+            .collect()
+    };
+    let bj: Vec<f64> = z_left
+        .iter()
+        .zip(lj.iter())
+        .map(|(&left, &count)| left as f64 + count / 2.0)
+        .collect();
+
+    for (sample, &sample_n) in samples.iter().zip(n.iter()) {
+        let mut sorted = sample.clone();
+        sorted.sort_by(f64::total_cmp);
+        let right_counts: Vec<usize> = unique
+            .iter()
+            .map(|&value| sorted.partition_point(|x| *x <= value))
+            .collect();
+        let left_counts: Vec<usize> = unique
+            .iter()
+            .map(|&value| sorted.partition_point(|x| *x < value))
+            .collect();
+        let mij: Vec<f64> = right_counts
+            .iter()
+            .zip(left_counts.iter())
+            .map(|(&right, &left)| right as f64 - (right - left) as f64 / 2.0)
+            .collect();
+
+        let mut inner_sum = 0.0;
+        for ((&l_j, &b_j), &m_ij) in lj.iter().zip(bj.iter()).zip(mij.iter()) {
+            let denominator = b_j * (total as f64 - b_j) - total as f64 * l_j / 4.0;
+            if denominator > 0.0 {
+                let term = l_j / total as f64
+                    * (total as f64 * m_ij - b_j * sample_n as f64).powi(2)
+                    / denominator;
+                inner_sum += term;
+            }
+        }
+        statistic += inner_sum / sample_n as f64;
+    }
+
+    statistic * (total as f64 - 1.0) / total as f64
+}
+
+fn anderson_ksamp_statistic_right(
+    samples: &[Vec<f64>],
+    pooled: &[f64],
+    unique: &[f64],
+    n: &[usize],
+    total: usize,
+) -> f64 {
+    let unique_prefix = &unique[..unique.len().saturating_sub(1)];
+    let lj: Vec<f64> = unique_prefix
+        .iter()
+        .map(|&value| {
+            let left = pooled.partition_point(|x| *x < value);
+            let right = pooled.partition_point(|x| *x <= value);
+            (right - left) as f64
+        })
+        .collect();
+    let mut bj = Vec::with_capacity(lj.len());
+    let mut running = 0.0;
+    for &count in &lj {
+        running += count;
+        bj.push(running);
+    }
+
+    let mut statistic = 0.0;
+    for (sample, &sample_n) in samples.iter().zip(n.iter()) {
+        let mut sorted = sample.clone();
+        sorted.sort_by(f64::total_cmp);
+        let mij: Vec<f64> = unique_prefix
+            .iter()
+            .map(|&value| sorted.partition_point(|x| *x <= value) as f64)
+            .collect();
+        let mut inner_sum = 0.0;
+        for ((&l_j, &b_j), &m_ij) in lj.iter().zip(bj.iter()).zip(mij.iter()) {
+            let denominator = b_j * (total as f64 - b_j);
+            if denominator > 0.0 {
+                inner_sum += l_j / total as f64
+                    * (total as f64 * m_ij - b_j * sample_n as f64).powi(2)
+                    / denominator;
+            }
+        }
+        statistic += inner_sum / sample_n as f64;
+    }
+    statistic
+}
+
+fn anderson_ksamp_statistic_continuous(
+    samples: &[Vec<f64>],
+    pooled: &[f64],
+    n: &[usize],
+    total: usize,
+) -> f64 {
+    let mut statistic = 0.0;
+    let js: Vec<f64> = (1..total).map(|j| j as f64).collect();
+
+    for (sample, &sample_n) in samples.iter().zip(n.iter()) {
+        let mut sorted = sample.clone();
+        sorted.sort_by(f64::total_cmp);
+        let mij: Vec<f64> = pooled[..pooled.len().saturating_sub(1)]
+            .iter()
+            .map(|&value| sorted.partition_point(|x| *x <= value) as f64)
+            .collect();
+        let mut inner_sum = 0.0;
+        for (&j, &m_ij) in js.iter().zip(mij.iter()) {
+            inner_sum += (total as f64 * m_ij - j * sample_n as f64).powi(2)
+                / (j * (total as f64 - j));
+        }
+        statistic += inner_sum / sample_n as f64;
+    }
+
+    statistic / total as f64
+}
+
+/// K-sample Anderson-Darling test.
+///
+/// Matches the core non-permutation behavior of `scipy.stats.anderson_ksamp`.
+pub fn anderson_ksamp(
+    samples: &[Vec<f64>],
+    variant: Option<AndersonKSampleVariant>,
+) -> Result<AndersonKSampleResult, StatsError> {
+    if samples.len() < 2 {
+        return Err(StatsError::InvalidArgument(
+            "anderson_ksamp needs at least two samples".to_string(),
+        ));
+    }
+    if samples.iter().any(Vec::is_empty) {
+        return Err(StatsError::InvalidArgument(
+            "anderson_ksamp encountered sample without observations".to_string(),
+        ));
+    }
+
+    let mut pooled: Vec<f64> = samples.iter().flat_map(|sample| sample.iter().copied()).collect();
+    pooled.sort_by(f64::total_cmp);
+    let mut unique = pooled.clone();
+    unique.dedup_by(|a, b| a.total_cmp(b).is_eq());
+    if unique.len() < 2 {
+        return Err(StatsError::InvalidArgument(
+            "anderson_ksamp needs more than one distinct observation".to_string(),
+        ));
+    }
+
+    let n: Vec<usize> = samples.iter().map(Vec::len).collect();
+    let total = pooled.len();
+    let k = samples.len();
+    let statistic_raw = match variant.unwrap_or(AndersonKSampleVariant::Midrank) {
+        AndersonKSampleVariant::Midrank => {
+            anderson_ksamp_statistic_midrank(samples, &pooled, &unique, &n, total)
+        }
+        AndersonKSampleVariant::Right => {
+            anderson_ksamp_statistic_right(samples, &pooled, &unique, &n, total)
+        }
+        AndersonKSampleVariant::Continuous => {
+            anderson_ksamp_statistic_continuous(samples, &pooled, &n, total)
+        }
+    };
+
+    let harmonic_sum: f64 = n.iter().map(|&count| 1.0 / count as f64).sum();
+    let hs_cs: Vec<f64> = (2..=(total - 1))
+        .rev()
+        .scan(0.0, |acc, value| {
+            *acc += 1.0 / value as f64;
+            Some(*acc)
+        })
+        .collect();
+    let h = hs_cs.last().copied().unwrap_or(0.0) + 1.0;
+    let g: f64 = hs_cs
+        .iter()
+        .zip(2..total)
+        .map(|(&value, denom)| value / denom as f64)
+        .sum();
+
+    let m = (k - 1) as f64;
+    let a = (4.0 * g - 6.0) * m + (10.0 - 6.0 * g) * harmonic_sum;
+    let b = (2.0 * g - 4.0) * (k * k) as f64
+        + 8.0 * h * k as f64
+        + (2.0 * g - 14.0 * h - 4.0) * harmonic_sum
+        - 8.0 * h
+        + 4.0 * g
+        - 6.0;
+    let c = (6.0 * h + 2.0 * g - 2.0) * (k * k) as f64
+        + (4.0 * h - 4.0 * g + 6.0) * k as f64
+        + (2.0 * h - 6.0) * harmonic_sum
+        + 4.0 * h;
+    let d = (2.0 * h + 6.0) * (k * k) as f64 - 4.0 * h * k as f64;
+    let total_f = total as f64;
+    let sigma_sq = (a * total_f.powi(3) + b * total_f.powi(2) + c * total_f + d)
+        / ((total_f - 1.0) * (total_f - 2.0) * (total_f - 3.0));
+    let normalized = (statistic_raw - m) / sigma_sq.sqrt();
+
+    let b0 = [0.675, 1.281, 1.645, 1.96, 2.326, 2.573, 3.085];
+    let b1 = [-0.245, 0.25, 0.678, 1.149, 1.822, 2.364, 3.615];
+    let b2 = [-0.105, -0.305, -0.362, -0.391, -0.396, -0.345, -0.154];
+    let critical_values = std::array::from_fn(|i| b0[i] + b1[i] / m.sqrt() + b2[i] / m);
+    let significance = [0.25, 0.1, 0.05, 0.025, 0.01, 0.005, 0.001];
+    let pvalue = if normalized < critical_values[0] {
+        significance[0]
+    } else if normalized > critical_values[critical_values.len() - 1] {
+        significance[significance.len() - 1]
+    } else {
+        let ys: Vec<f64> = significance.iter().map(|value| (*value).ln()).collect();
+        let xs: Vec<f64> = critical_values.to_vec();
+        let mean_x = xs.iter().sum::<f64>() / xs.len() as f64;
+        let mean_y = ys.iter().sum::<f64>() / ys.len() as f64;
+        let sxx = xs.iter().map(|x| (x - mean_x).powi(2)).sum::<f64>();
+        let sxy = xs
+            .iter()
+            .zip(ys.iter())
+            .map(|(x, y)| (x - mean_x) * (y - mean_y))
+            .sum::<f64>();
+        let sxxx = xs.iter().map(|x| (x - mean_x).powi(3)).sum::<f64>();
+        let sxxxx = xs.iter().map(|x| (x - mean_x).powi(4)).sum::<f64>();
+        let sxxy = xs
+            .iter()
+            .zip(ys.iter())
+            .map(|(x, y)| (*x - mean_x).powi(2) * (*y - mean_y))
+            .sum::<f64>();
+        let denom = sxx * sxxxx - sxxx * sxxx;
+        let quad = (sxx * sxxy - sxxx * sxy) / denom;
+        let lin = (sxy - quad * sxxx) / sxx;
+        let constant = mean_y - lin * mean_x - quad * mean_x.powi(2);
+        (constant + lin * normalized + quad * normalized.powi(2)).exp()
+    };
+
+    Ok(AndersonKSampleResult {
+        statistic: normalized,
+        critical_values,
+        pvalue: pvalue.clamp(0.001, 0.25),
+    })
 }
 
 /// One-sample Kolmogorov-Smirnov test.
@@ -8113,6 +8381,169 @@ where
     let hi = boot_stats[hi_idx.min(n_bootstrap - 1)];
 
     (lo, hi)
+}
+
+/// T-test from summary statistics (no raw data needed).
+///
+/// Matches `scipy.stats.ttest_ind_from_stats`.
+pub fn ttest_ind_from_stats(
+    mean1: f64,
+    std1: f64,
+    n1: usize,
+    mean2: f64,
+    std2: f64,
+    n2: usize,
+) -> TtestResult {
+    let n1f = n1 as f64;
+    let n2f = n2 as f64;
+    let se = (std1 * std1 / n1f + std2 * std2 / n2f).sqrt();
+
+    if se == 0.0 {
+        return TtestResult {
+            statistic: 0.0,
+            pvalue: 1.0,
+            df: (n1 + n2 - 2) as f64,
+        };
+    }
+
+    let t = (mean1 - mean2) / se;
+
+    // Welch-Satterthwaite degrees of freedom
+    let v1 = std1 * std1 / n1f;
+    let v2 = std2 * std2 / n2f;
+    let df = (v1 + v2).powi(2) / (v1 * v1 / (n1f - 1.0) + v2 * v2 / (n2f - 1.0));
+
+    let t_dist = StudentT::new(df);
+    let pvalue = 2.0 * (1.0 - t_dist.cdf(t.abs()));
+
+    TtestResult {
+        statistic: t,
+        pvalue: pvalue.clamp(0.0, 1.0),
+        df,
+    }
+}
+
+/// Yeo-Johnson power transformation.
+///
+/// Matches `scipy.stats.yeojohnson`.
+pub fn yeojohnson(x: &[f64], lam: f64) -> Vec<f64> {
+    x.iter()
+        .map(|&xi| {
+            if xi >= 0.0 {
+                if lam.abs() < 1e-15 {
+                    (xi + 1.0).ln()
+                } else {
+                    ((xi + 1.0).powf(lam) - 1.0) / lam
+                }
+            } else if (lam - 2.0).abs() < 1e-15 {
+                -((-xi + 1.0).ln())
+            } else {
+                -((-xi + 1.0).powf(2.0 - lam) - 1.0) / (2.0 - lam)
+            }
+        })
+        .collect()
+}
+
+/// Inverse Yeo-Johnson transformation.
+pub fn yeojohnson_inv(y: &[f64], lam: f64) -> Vec<f64> {
+    y.iter()
+        .map(|&yi| {
+            if yi >= 0.0 {
+                if lam.abs() < 1e-15 {
+                    yi.exp() - 1.0
+                } else {
+                    (lam * yi + 1.0).powf(1.0 / lam) - 1.0
+                }
+            } else if (lam - 2.0).abs() < 1e-15 {
+                1.0 - (-yi).exp()
+            } else {
+                1.0 - ((2.0 - lam) * (-yi) + 1.0).powf(1.0 / (2.0 - lam))
+            }
+        })
+        .collect()
+}
+
+/// Compute the median of a dataset.
+pub fn median(data: &[f64]) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+    if n % 2 == 0 {
+        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    } else {
+        sorted[n / 2]
+    }
+}
+
+/// Winsorize data: clip extreme values to specified percentiles.
+///
+/// Matches `scipy.stats.mstats.winsorize`.
+pub fn winsorize(data: &[f64], limits: (f64, f64)) -> Vec<f64> {
+    if data.is_empty() {
+        return vec![];
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+
+    let lo_idx = (limits.0 * n as f64).floor() as usize;
+    let hi_idx = n - (limits.1 * n as f64).ceil() as usize;
+    let lo_val = sorted[lo_idx.min(n - 1)];
+    let hi_val = sorted[hi_idx.max(0).min(n - 1)];
+
+    data.iter()
+        .map(|&x| x.clamp(lo_val, hi_val))
+        .collect()
+}
+
+/// Compute the interquartile range.
+///
+/// Matches `scipy.stats.iqr`.
+pub fn iqr_range(data: &[f64]) -> f64 {
+    let q = quantile(data, &[0.25, 0.75]);
+    q[1] - q[0]
+}
+
+/// Compute z-scores with optional axis and ddof.
+///
+/// Matches `scipy.stats.zscore` for 1D.
+pub fn zscore_ddof(data: &[f64], ddof: usize) -> Vec<f64> {
+    let n = data.len();
+    if n <= ddof {
+        return vec![f64::NAN; n];
+    }
+    let mean: f64 = data.iter().sum::<f64>() / n as f64;
+    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - ddof) as f64;
+    let std = var.sqrt();
+    if std == 0.0 {
+        return vec![0.0; n];
+    }
+    data.iter().map(|&x| (x - mean) / std).collect()
+}
+
+/// Compute the expected value of the order statistic for the normal distribution.
+///
+/// Used in probability plots (Q-Q plots).
+/// Matches `scipy.stats.probplot` (partially).
+pub fn probplot_quantiles(n: usize) -> Vec<f64> {
+    let normal = Normal::standard();
+    (0..n)
+        .map(|i| {
+            let p = (i as f64 + 0.5) / n as f64;
+            normal.ppf(p)
+        })
+        .collect()
+}
+
+/// Compute the expected frequency for a Chi-squared goodness-of-fit test
+/// against a uniform distribution.
+pub fn expected_freq_uniform(observed: &[f64]) -> Vec<f64> {
+    let n: f64 = observed.iter().sum();
+    let k = observed.len() as f64;
+    vec![n / k; observed.len()]
 }
 
 #[cfg(test)]
@@ -10442,6 +10873,170 @@ mod tests {
 
         let err =
             somersd(SomersDInput::Table(&[vec![0.0, 0.0], vec![0.0, 1.0]]), None).expect_err("nz");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn anderson_ksamp_midrank_matches_scipy_oracle() {
+        let samples = vec![
+            vec![
+                -0.6947284969268116,
+                0.4963174476481955,
+                -0.9670900823111159,
+                1.436653455559641,
+                0.7031564962971394,
+                -0.6109476653841658,
+                0.024649407219573916,
+                0.6588093285059897,
+                1.0908592504588038,
+                -0.7423985725278241,
+                -0.4193043734770502,
+                1.7732539029260768,
+                -1.151693349201912,
+                -0.2513915385911738,
+                1.6515461773960808,
+                0.1637626589199808,
+                0.4728397841119197,
+                -0.5722397169767986,
+                -0.40622959444711744,
+                0.2862812550115444,
+                -0.6044850665933583,
+                -0.3188449480018543,
+                -0.2942975007197502,
+                -0.23399765678280584,
+                0.6931683218520789,
+                -0.6885208255353791,
+                1.4898534267383032,
+                -0.3287697071729781,
+                0.2991549258299444,
+                0.13359764531673786,
+                0.3955262398950878,
+                0.23318322884387597,
+                -0.8860679599277484,
+                -1.321065439784562,
+                -0.439415709131537,
+                -1.2207110036875532,
+                1.3490367249364824,
+                -0.40564423216117986,
+                -0.8821761151494374,
+                -0.9713257826496288,
+                -0.5126552057931326,
+                0.16469074952829044,
+                0.6387419652973443,
+                1.1379690459013305,
+                1.696685185696353,
+                -2.5729507818506434,
+                -0.7999892635894051,
+                1.1481727554429504,
+                1.5977591334518029,
+                0.1456142476657497,
+            ],
+            vec![
+                1.8125549372539924,
+                -0.3290670546847558,
+                -1.3695312102876547,
+                1.3319437227170101,
+                1.254102551210099,
+                0.5358177254644676,
+                0.3182809576436851,
+                0.6048356185627456,
+                0.3166586510918795,
+                1.337322057057232,
+                1.1055258628813128,
+                -1.0730512523906234,
+                0.7733208526254149,
+                1.436183728122992,
+                -1.1791415382494202,
+                -0.18921381229243988,
+                -0.9554930152535846,
+                0.5156304113864132,
+                0.6003469986327579,
+                0.2909003803399354,
+                0.7090642645312579,
+                0.511885720810475,
+                0.33049390257764036,
+                0.4181173206487132,
+                -0.5677696061279298,
+                0.767014137689315,
+                1.4711540065731597,
+                0.3689168391061859,
+                0.24885361754436064,
+                0.33959506164165173,
+            ],
+        ];
+        let result =
+            anderson_ksamp(&samples, Some(AndersonKSampleVariant::Midrank)).expect("anderson");
+        assert_close(
+            result.statistic,
+            3.4444310693448936,
+            1e-10,
+            "anderson_ksamp midrank statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.01310668240672096,
+            1e-10,
+            "anderson_ksamp midrank pvalue",
+        );
+    }
+
+    #[test]
+    fn anderson_ksamp_continuous_caps_high_pvalue_like_scipy() {
+        let samples = vec![
+            vec![
+                -0.6947284969268116, 0.4963174476481955, -0.9670900823111159, 1.436653455559641,
+                0.7031564962971394, -0.6109476653841658, 0.024649407219573916, 0.6588093285059897,
+                1.0908592504588038, -0.7423985725278241, -0.4193043734770502, 1.7732539029260768,
+                -1.151693349201912, -0.2513915385911738, 1.6515461773960808, 0.1637626589199808,
+                0.4728397841119197, -0.5722397169767986, -0.40622959444711744, 0.2862812550115444,
+                -0.6044850665933583, -0.3188449480018543, -0.2942975007197502, -0.23399765678280584,
+                0.6931683218520789, -0.6885208255353791, 1.4898534267383032, -0.3287697071729781,
+                0.2991549258299444, 0.13359764531673786, 0.3955262398950878, 0.23318322884387597,
+                -0.8860679599277484, -1.321065439784562, -0.439415709131537, -1.2207110036875532,
+                1.3490367249364824, -0.40564423216117986, -0.8821761151494374, -0.9713257826496288,
+                -0.5126552057931326, 0.16469074952829044, 0.6387419652973443, 1.1379690459013305,
+                1.696685185696353, -2.5729507818506434, -0.7999892635894051, 1.1481727554429504,
+                1.5977591334518029, 0.1456142476657497,
+            ],
+            vec![
+                0.8125549372539924, -1.3290670546847558, -2.3695312102876547, 0.3319437227170101,
+                0.254102551210099, -0.4641822745355324, -0.6817190423563149, -0.3951643814372544,
+                -0.6833413489081206, 0.33732205705723195, 0.1055258628813128, -2.0730512523906234,
+                -0.22667914737458514, 0.43618372812299205, -2.17914153824942, -1.1892138122924398,
+                -1.9554930152535846, -0.4843695886135868, -0.3996530013672421, -0.7090996196600647,
+                -0.29093573546874206, -0.488114279189525, -0.6695060974223596, -0.5818826793512867,
+                -1.5677696061279297, -0.23298586231068502, 0.4711540065731597, -0.6310831608938141,
+                -0.7511463824556394, -0.6604049383583482,
+            ],
+            vec![
+                -0.35588207741803635, 1.4443378601567752, -0.4596751362611252, -0.9642484738356342,
+                -1.471388522331468, -0.07404914873847856, 0.5702675793629297, -0.26773250760437354,
+                0.9708101620372975, 0.5480673580787071, 0.8645729481839737, -1.4825537919151204,
+                -0.16172254381566852, -0.9004457032888357, 0.780413911291489, -0.30830542393700865,
+                0.7674577522114926, 1.2410370557109975, -1.1837613277232888, -2.720720805523122,
+            ],
+        ];
+        let result = anderson_ksamp(&samples, Some(AndersonKSampleVariant::Continuous))
+            .expect("anderson continuous");
+        assert_close(
+            result.statistic,
+            -0.734176422330105,
+            1e-10,
+            "anderson_ksamp continuous statistic",
+        );
+        assert_eq!(result.pvalue, 0.25);
+    }
+
+    #[test]
+    fn anderson_ksamp_rejects_invalid_input() {
+        let err = anderson_ksamp(&[vec![1.0, 2.0]], None).expect_err("need two samples");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err = anderson_ksamp(&[vec![1.0, 2.0], vec![]], None).expect_err("empty sample");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err = anderson_ksamp(&[vec![1.0, 1.0], vec![1.0, 1.0]], None)
+            .expect_err("not distinct");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 

@@ -1558,6 +1558,191 @@ pub fn array_min(input: &NdArray) -> f64 {
     input.data.iter().cloned().fold(f64::INFINITY, f64::min)
 }
 
+/// Gaussian filter with per-axis sigma.
+///
+/// Matches `scipy.ndimage.gaussian_filter` with `sigma` as array.
+pub fn gaussian_filter_multi_sigma(
+    input: &NdArray,
+    sigmas: &[f64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if sigmas.len() != input.ndim() {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "sigmas length {} != ndim {}",
+            sigmas.len(),
+            input.ndim()
+        )));
+    }
+
+    let mut current = input.clone();
+    for (axis, &sigma) in sigmas.iter().enumerate() {
+        if sigma <= 0.0 {
+            continue;
+        }
+        let radius = (4.0 * sigma).ceil() as usize;
+        let ksize = 2 * radius + 1;
+        let mut kernel_1d = vec![0.0; ksize];
+        let mut total = 0.0;
+        for (i, value) in kernel_1d.iter_mut().enumerate() {
+            let x = i as f64 - radius as f64;
+            let g = (-x * x / (2.0 * sigma * sigma)).exp();
+            *value = g;
+            total += g;
+        }
+        for v in &mut kernel_1d {
+            *v /= total;
+        }
+        let mut kernel_shape = vec![1usize; input.ndim()];
+        kernel_shape[axis] = ksize;
+        let kernel = NdArray::new(kernel_1d, kernel_shape)?;
+        current = convolve(&current, &kernel, mode, cval)?;
+    }
+
+    Ok(current)
+}
+
+/// Apply a uniform filter along a single axis.
+///
+/// Matches `scipy.ndimage.uniform_filter1d`.
+pub fn uniform_filter1d(
+    input: &NdArray,
+    size: usize,
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range for {}-dimensional input",
+            input.ndim()
+        )));
+    }
+    if size == 0 {
+        return Err(NdimageError::InvalidArgument(
+            "size must be positive".to_string(),
+        ));
+    }
+
+    let val = 1.0 / size as f64;
+    let mut kernel_shape = vec![1usize; input.ndim()];
+    kernel_shape[axis] = size;
+    let kernel = NdArray::new(vec![val; size], kernel_shape)?;
+    convolve(input, &kernel, mode, cval)
+}
+
+/// Compute the gradient magnitude of an array.
+///
+/// Uses central differences along each axis.
+/// Matches `numpy.gradient` magnitude.
+pub fn gradient_magnitude(input: &NdArray) -> Result<NdArray, NdimageError> {
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+
+    let mut result = NdArray::zeros(input.shape.clone());
+
+    for axis in 0..input.ndim() {
+        let kernel_1d = vec![-0.5, 0.0, 0.5];
+        let mut kernel_shape = vec![1usize; input.ndim()];
+        kernel_shape[axis] = 3;
+        let kernel = NdArray::new(kernel_1d, kernel_shape)?;
+        let grad = correlate(input, &kernel, BoundaryMode::Reflect, 0.0)?;
+        for i in 0..result.data.len() {
+            result.data[i] += grad.data[i] * grad.data[i];
+        }
+    }
+
+    for v in &mut result.data {
+        *v = v.sqrt();
+    }
+
+    Ok(result)
+}
+
+/// Apply a maximum filter along a single axis.
+///
+/// Matches `scipy.ndimage.maximum_filter1d`.
+pub fn maximum_filter1d(
+    input: &NdArray,
+    size: usize,
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range",
+            )));
+    }
+    // Build a structuring element along the specified axis
+    generic_filter(
+        input,
+        |neighborhood| neighborhood.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        size,
+        mode,
+        cval,
+    )
+}
+
+/// Apply a minimum filter along a single axis.
+///
+/// Matches `scipy.ndimage.minimum_filter1d`.
+pub fn minimum_filter1d(
+    input: &NdArray,
+    size: usize,
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range",
+        )));
+    }
+    generic_filter(
+        input,
+        |neighborhood| neighborhood.iter().cloned().fold(f64::INFINITY, f64::min),
+        size,
+        mode,
+        cval,
+    )
+}
+
+/// Generate a structuring element (cross/diamond shape).
+///
+/// Matches `scipy.ndimage.generate_binary_structure`.
+pub fn generate_binary_structure(ndim: usize, connectivity: usize) -> NdArray {
+    let size = 3;
+    let mut shape = vec![size; ndim];
+    let total: usize = shape.iter().product();
+    let strides = compute_strides(&shape);
+    let center = size / 2;
+
+    let mut data = vec![0.0; total];
+
+    for flat in 0..total {
+        let mut idx = vec![0usize; ndim];
+        let mut rem = flat;
+        for d in 0..ndim {
+            idx[d] = rem / strides[d];
+            rem %= strides[d];
+        }
+
+        // City-block distance from center
+        let dist: usize = idx.iter().map(|&i| if i > center { i - center } else { center - i }).sum();
+        if dist <= connectivity {
+            data[flat] = 1.0;
+        }
+    }
+
+    NdArray {
+        data,
+        shape,
+        strides: compute_strides(&vec![size; ndim]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

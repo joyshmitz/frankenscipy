@@ -1759,6 +1759,195 @@ pub fn hausdorff_distance(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
     directed_hausdorff(xa, xb).max(directed_hausdorff(xb, xa))
 }
 
+/// Mahalanobis distance between two vectors given an inverse covariance matrix.
+///
+/// d = sqrt((x-y)^T * VI * (x-y))
+/// Matches `scipy.spatial.distance.mahalanobis`.
+pub fn mahalanobis(x: &[f64], y: &[f64], vi: &[Vec<f64>]) -> f64 {
+    let n = x.len();
+    let diff: Vec<f64> = x.iter().zip(y.iter()).map(|(&a, &b)| a - b).collect();
+
+    let mut vi_diff = vec![0.0; n];
+    for i in 0..n {
+        for j in 0..n {
+            vi_diff[i] += vi[i][j] * diff[j];
+        }
+    }
+
+    let result: f64 = diff.iter().zip(vi_diff.iter()).map(|(&d, &vd)| d * vd).sum();
+    result.max(0.0).sqrt()
+}
+
+/// Standardized Euclidean distance.
+///
+/// d = sqrt(sum((x-y)² / v)) where v is the per-component variance.
+/// Matches `scipy.spatial.distance.seuclidean`.
+pub fn seuclidean(x: &[f64], y: &[f64], v: &[f64]) -> f64 {
+    x.iter()
+        .zip(y.iter())
+        .zip(v.iter())
+        .map(|((&xi, &yi), &vi)| (xi - yi).powi(2) / vi)
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// Weighted Minkowski distance.
+///
+/// Matches `scipy.spatial.distance.wminkowski`.
+pub fn wminkowski(x: &[f64], y: &[f64], p: f64, w: &[f64]) -> f64 {
+    x.iter()
+        .zip(y.iter())
+        .zip(w.iter())
+        .map(|((&xi, &yi), &wi)| (wi * (xi - yi).abs()).powf(p))
+        .sum::<f64>()
+        .powf(1.0 / p)
+}
+
+/// Yule dissimilarity for boolean vectors.
+///
+/// Matches `scipy.spatial.distance.yule`.
+pub fn yule(u: &[bool], v: &[bool]) -> f64 {
+    let mut ctf = 0usize; // true-false
+    let mut cft = 0usize; // false-true
+    let mut ctt = 0usize; // true-true
+    let mut cff = 0usize; // false-false
+
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        match (a, b) {
+            (true, true) => ctt += 1,
+            (true, false) => ctf += 1,
+            (false, true) => cft += 1,
+            (false, false) => cff += 1,
+        }
+    }
+
+    let r = ctf * cft;
+    let s = ctt * cff;
+    if r + s == 0 {
+        0.0
+    } else {
+        2.0 * r as f64 / (r + s) as f64
+    }
+}
+
+/// Dice dissimilarity for boolean vectors.
+///
+/// Matches `scipy.spatial.distance.dice`.
+pub fn dice(u: &[bool], v: &[bool]) -> f64 {
+    let mut ctf = 0usize;
+    let mut cft = 0usize;
+    let mut ctt = 0usize;
+
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        match (a, b) {
+            (true, true) => ctt += 1,
+            (true, false) => ctf += 1,
+            (false, true) => cft += 1,
+            _ => {}
+        }
+    }
+
+    let ntt = ctf + cft;
+    if ntt + 2 * ctt == 0 {
+        0.0
+    } else {
+        ntt as f64 / (ntt + 2 * ctt) as f64
+    }
+}
+
+/// Kulsinski dissimilarity for boolean vectors.
+///
+/// Matches `scipy.spatial.distance.kulsinski`.
+pub fn kulsinski(u: &[bool], v: &[bool]) -> f64 {
+    let n = u.len() as f64;
+    let mut ctf = 0usize;
+    let mut cft = 0usize;
+    let mut ctt = 0usize;
+
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        match (a, b) {
+            (true, true) => ctt += 1,
+            (true, false) => ctf += 1,
+            (false, true) => cft += 1,
+            _ => {}
+        }
+    }
+
+    let ntt = (ctf + cft) as f64;
+    if ctt == 0 && ntt == 0.0 {
+        0.0
+    } else {
+        (ntt + n - ctt as f64) / (ntt + n)
+    }
+}
+
+/// Rogerstanimoto dissimilarity for boolean vectors.
+///
+/// Matches `scipy.spatial.distance.rogerstanimoto`.
+pub fn rogerstanimoto(u: &[bool], v: &[bool]) -> f64 {
+    let mut ndiff = 0usize;
+    let mut nsame = 0usize;
+
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        if a == b {
+            nsame += 1;
+        } else {
+            ndiff += 1;
+        }
+    }
+
+    let r = 2 * ndiff;
+    (r as f64) / (nsame + r) as f64
+}
+
+/// Russell-Rao dissimilarity for boolean vectors.
+///
+/// Matches `scipy.spatial.distance.russellrao`.
+pub fn russellrao(u: &[bool], v: &[bool]) -> f64 {
+    let n = u.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let ctt = u
+        .iter()
+        .zip(v.iter())
+        .filter(|&(a, b)| *a && *b)
+        .count();
+    (n - ctt) as f64 / n as f64
+}
+
+/// Sokal-Michener dissimilarity for boolean vectors.
+///
+/// Matches `scipy.spatial.distance.sokalmichener`.
+pub fn sokalmichener(u: &[bool], v: &[bool]) -> f64 {
+    rogerstanimoto(u, v) // Same formula
+}
+
+/// Sokal-Sneath dissimilarity for boolean vectors.
+///
+/// Matches `scipy.spatial.distance.sokalsneath`.
+pub fn sokalsneath(u: &[bool], v: &[bool]) -> f64 {
+    let mut ctf = 0usize;
+    let mut cft = 0usize;
+    let mut ctt = 0usize;
+
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        match (a, b) {
+            (true, true) => ctt += 1,
+            (true, false) => ctf += 1,
+            (false, true) => cft += 1,
+            _ => {}
+        }
+    }
+
+    let r = 2 * (ctf + cft);
+    if r + ctt == 0 {
+        0.0
+    } else {
+        r as f64 / (r + ctt) as f64
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
