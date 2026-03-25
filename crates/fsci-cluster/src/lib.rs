@@ -1002,9 +1002,9 @@ pub fn homogeneity_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
         if col_sums[j] == 0 {
             continue;
         }
-        for i in 0..k1 {
-            if contingency[i][j] > 0 {
-                let p = contingency[i][j] as f64 / nf;
+        for row in contingency.iter().take(k1) {
+            if row[j] > 0 {
+                let p = row[j] as f64 / nf;
                 let pj = col_sums[j] as f64 / nf;
                 hck -= p * (p / pj).ln();
             }

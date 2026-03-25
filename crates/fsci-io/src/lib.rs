@@ -660,6 +660,118 @@ pub fn savetxt(rows: usize, cols: usize, data: &[f64], delimiter: &str) -> Strin
     out
 }
 
+/// Read a CSV file into rows of f64 values.
+///
+/// Simple CSV reader for numerical data.
+pub type CsvResult = Result<(Option<Vec<String>>, Vec<Vec<f64>>), IoError>;
+
+pub fn read_csv(content: &str, delimiter: char, has_header: bool) -> CsvResult {
+    let mut lines = content.lines();
+    let header = if has_header {
+        lines.next().map(|h| {
+            h.split(delimiter)
+                .map(|s| s.trim().to_string())
+                .collect()
+        })
+    } else {
+        None
+    };
+
+    let mut data = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let row: Result<Vec<f64>, _> = trimmed
+            .split(delimiter)
+            .map(|s| s.trim().parse::<f64>())
+            .collect();
+        match row {
+            Ok(r) => data.push(r),
+            Err(e) => {
+                return Err(IoError::InvalidFormat(format!("CSV parse error: {e}")));
+            }
+        }
+    }
+
+    Ok((header, data))
+}
+
+/// Write data to CSV format.
+pub fn write_csv(
+    header: Option<&[&str]>,
+    data: &[Vec<f64>],
+    delimiter: char,
+) -> String {
+    let mut out = String::new();
+    if let Some(h) = header {
+        out.push_str(&h.join(&delimiter.to_string()));
+        out.push('\n');
+    }
+    for row in data {
+        let row_str: Vec<String> = row.iter().map(|v| format!("{v}")).collect();
+        out.push_str(&row_str.join(&delimiter.to_string()));
+        out.push('\n');
+    }
+    out
+}
+
+/// Read a simple JSON array of numbers.
+pub fn read_json_array(content: &str) -> Result<Vec<f64>, IoError> {
+    let trimmed = content.trim();
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return Err(IoError::InvalidFormat("expected JSON array".to_string()));
+    }
+    let inner = &trimmed[1..trimmed.len() - 1];
+    inner
+        .split(',')
+        .map(|s| {
+            s.trim()
+                .parse::<f64>()
+                .map_err(|e| IoError::InvalidFormat(format!("JSON parse error: {e}")))
+        })
+        .collect()
+}
+
+/// Write a vector as a JSON array.
+pub fn write_json_array(data: &[f64]) -> String {
+    let items: Vec<String> = data.iter().map(|v| format!("{v}")).collect();
+    format!("[{}]", items.join(", "))
+}
+
+/// Read a simple NPY-like header (shape + dtype) from text representation.
+///
+/// Returns (shape, data).
+pub fn read_npy_text(content: &str) -> Result<(Vec<usize>, Vec<f64>), IoError> {
+    let mut lines = content.lines();
+
+    // Read shape line
+    let shape_line = lines
+        .next()
+        .ok_or_else(|| IoError::InvalidFormat("missing shape line".to_string()))?;
+    let shape: Result<Vec<usize>, _> = shape_line
+        .trim()
+        .split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().parse::<usize>())
+        .collect();
+    let shape = shape.map_err(|e| IoError::InvalidFormat(format!("bad shape: {e}")))?;
+
+    // Read data
+    let mut data = Vec::new();
+    for line in lines {
+        for val in line.split_whitespace() {
+            let v: f64 = val
+                .parse()
+                .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
+            data.push(v);
+        }
+    }
+
+    Ok((shape, data))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

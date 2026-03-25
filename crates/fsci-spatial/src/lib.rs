@@ -419,6 +419,12 @@ impl KDTree {
                 "points must have at least 1 dimension".to_string(),
             ));
         }
+        if let Some(actual) = data.iter().map(Vec::len).find(|&len| len != dim) {
+            return Err(SpatialError::DimensionMismatch {
+                expected: dim,
+                actual,
+            });
+        }
 
         let mut indices: Vec<usize> = (0..data.len()).collect();
         let mut nodes = Vec::with_capacity(data.len());
@@ -2018,6 +2024,19 @@ mod tests {
     fn kdtree_empty_rejected() {
         let err = KDTree::new(&[]).expect_err("empty");
         assert!(matches!(err, SpatialError::EmptyData));
+    }
+
+    #[test]
+    fn kdtree_rejects_mixed_input_dimensions() {
+        let err = KDTree::new(&[vec![0.0, 1.0], vec![2.0]])
+            .expect_err("mixed-dimension points should be rejected");
+        assert!(matches!(
+            err,
+            SpatialError::DimensionMismatch {
+                expected: 2,
+                actual: 1
+            }
+        ));
     }
 
     #[test]

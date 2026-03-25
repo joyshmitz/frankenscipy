@@ -163,12 +163,14 @@ pub fn periodogram_simple(
     Ok((freqs, power))
 }
 
+pub type CrossSpectralResult = Result<(Vec<f64>, Vec<(f64, f64)>), FftError>;
+
 /// Compute the cross-spectral density of two real signals.
 pub fn cross_spectral_density(
     x: &[f64],
     y: &[f64],
     fs: f64,
-) -> Result<(Vec<f64>, Vec<(f64, f64)>), FftError> {
+) -> CrossSpectralResult {
     if x.len() != y.len() || x.is_empty() {
         return Ok((vec![], vec![]));
     }
@@ -326,8 +328,5 @@ mod tests {
         let b = vec![1.0, 1.0, 1.0];
         let result = fftconvolve(&a, &b, "same").unwrap();
         assert_eq!(result.len(), 5); // same length as a
-    }
-}
-ame length as a
     }
 }

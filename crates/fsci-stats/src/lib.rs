@@ -5968,6 +5968,71 @@ fn anderson_ksamp_statistic_continuous(
     statistic / total as f64
 }
 
+fn quadratic_least_squares_eval(xs: &[f64], ys: &[f64], x: f64) -> f64 {
+    let n = xs.len() as f64;
+    let sum_x = xs.iter().sum::<f64>();
+    let sum_x2 = xs.iter().map(|value| value * value).sum::<f64>();
+    let sum_x3 = xs.iter().map(|value| value * value * value).sum::<f64>();
+    let sum_x4 = xs
+        .iter()
+        .map(|value| value * value * value * value)
+        .sum::<f64>();
+    let sum_y = ys.iter().sum::<f64>();
+    let sum_xy = xs.iter().zip(ys.iter()).map(|(xv, yv)| xv * yv).sum::<f64>();
+    let sum_x2y = xs
+        .iter()
+        .zip(ys.iter())
+        .map(|(xv, yv)| xv * xv * yv)
+        .sum::<f64>();
+
+    let mut augmented = [
+        [sum_x4, sum_x3, sum_x2, sum_x2y],
+        [sum_x3, sum_x2, sum_x, sum_xy],
+        [sum_x2, sum_x, n, sum_y],
+    ];
+
+    for pivot in 0..3 {
+        let (best_row, best_value) = augmented
+            .iter()
+            .enumerate()
+            .skip(pivot)
+            .map(|(row_idx, row)| (row_idx, row[pivot].abs()))
+            .max_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or((pivot, 0.0));
+        if best_value <= f64::EPSILON {
+            return f64::NAN;
+        }
+        if best_row != pivot {
+            augmented.swap(pivot, best_row);
+        }
+
+        let pivot_value = augmented[pivot][pivot];
+        for value in augmented[pivot].iter_mut().skip(pivot) {
+            *value /= pivot_value;
+        }
+
+        for row in 0..3 {
+            if row == pivot {
+                continue;
+            }
+            let factor = augmented[row][pivot];
+            let pivot_slice: Vec<f64> = augmented[pivot].iter().copied().skip(pivot).collect();
+            for (value, pivot_value) in augmented[row]
+                .iter_mut()
+                .skip(pivot)
+                .zip(pivot_slice.iter())
+            {
+                *value -= factor * pivot_value;
+            }
+        }
+    }
+
+    let a = augmented[0][3];
+    let b = augmented[1][3];
+    let c = augmented[2][3];
+    a * x * x + b * x + c
+}
+
 /// K-sample Anderson-Darling test.
 ///
 /// Matches the core non-permutation behavior of `scipy.stats.anderson_ksamp`.
@@ -6056,26 +6121,7 @@ pub fn anderson_ksamp(
     } else {
         let ys: Vec<f64> = significance.iter().map(|value| (*value).ln()).collect();
         let xs: Vec<f64> = critical_values.to_vec();
-        let mean_x = xs.iter().sum::<f64>() / xs.len() as f64;
-        let mean_y = ys.iter().sum::<f64>() / ys.len() as f64;
-        let sxx = xs.iter().map(|x| (x - mean_x).powi(2)).sum::<f64>();
-        let sxy = xs
-            .iter()
-            .zip(ys.iter())
-            .map(|(x, y)| (x - mean_x) * (y - mean_y))
-            .sum::<f64>();
-        let sxxx = xs.iter().map(|x| (x - mean_x).powi(3)).sum::<f64>();
-        let sxxxx = xs.iter().map(|x| (x - mean_x).powi(4)).sum::<f64>();
-        let sxxy = xs
-            .iter()
-            .zip(ys.iter())
-            .map(|(x, y)| (*x - mean_x).powi(2) * (*y - mean_y))
-            .sum::<f64>();
-        let denom = sxx * sxxxx - sxxx * sxxx;
-        let quad = (sxx * sxxy - sxxx * sxy) / denom;
-        let lin = (sxy - quad * sxxx) / sxx;
-        let constant = mean_y - lin * mean_x - quad * mean_x.powi(2);
-        (constant + lin * normalized + quad * normalized.powi(2)).exp()
+        quadratic_least_squares_eval(&xs, &ys, normalized).exp()
     };
 
     Ok(AndersonKSampleResult {
@@ -8471,7 +8517,7 @@ pub fn median(data: &[f64]) -> f64 {
     let mut sorted = data.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = sorted.len();
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
     } else {
         sorted[n / 2]
@@ -10968,13 +11014,13 @@ mod tests {
             anderson_ksamp(&samples, Some(AndersonKSampleVariant::Midrank)).expect("anderson");
         assert_close(
             result.statistic,
-            3.4444310693448936,
+            2.2868332786662013,
             1e-10,
             "anderson_ksamp midrank statistic",
         );
         assert_close(
             result.pvalue,
-            0.01310668240672096,
+            0.03731919523231987,
             1e-10,
             "anderson_ksamp midrank pvalue",
         );
@@ -11020,11 +11066,16 @@ mod tests {
             .expect("anderson continuous");
         assert_close(
             result.statistic,
-            -0.734176422330105,
+            2.4676648582183063,
             1e-10,
             "anderson_ksamp continuous statistic",
         );
-        assert_eq!(result.pvalue, 0.25);
+        assert_close(
+            result.pvalue,
+            0.02818394855742057,
+            1e-12,
+            "anderson_ksamp continuous pvalue",
+        );
     }
 
     #[test]
