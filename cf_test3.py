@@ -21,7 +21,8 @@ def gamma_inc_cf(a, x):
         d = 1.0 / d
         
         c = bn + an / c
-        if c == 0: c = 1e-30
+        if c == 0:
+            c = 1e-30
         
         delta = c * d
         f *= delta
@@ -35,3 +36,4 @@ a = 10.0
 x = 15.0
 print("cf:", gamma_inc_cf(a, x))
 print("scipy:", sc.gammaincc(a, x))
+x))

@@ -5080,6 +5080,13 @@ mod tests {
         let cfg = HarnessConfig::default_paths();
         let report =
             run_linalg_packet(&cfg, "FSCI-P2C-002_linalg_core.json").expect("linalg packet runs");
+        if report.failed_cases > 0 {
+            for res in &report.case_results {
+                if !res.passed {
+                    println!("FAILED CASE: {:#?}", res);
+                }
+            }
+        }
         assert_eq!(report.failed_cases, 0);
         assert!(report.passed_cases >= 1);
 

@@ -633,6 +633,9 @@ where
 {
     let (t0, tf) = options.t_span;
     let n = options.y0.len();
+    if n == 0 {
+        return Err(IntegrateValidationError::EmptyY0);
+    }
 
     validate_max_step(options.max_step)?;
     if let Some(first_step) = options.first_step {
@@ -720,6 +723,21 @@ mod tests {
             (y_final - expected).abs() < 1e-4,
             "y(10) = {y_final}, expected ≈ {expected}"
         );
+    }
+
+    #[test]
+    fn solve_ivp_rejects_empty_initial_state() {
+        let err = solve_ivp(
+            &mut |_t, _y| Vec::new(),
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[],
+                method: SolverKind::Rk45,
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect_err("empty initial state should be rejected");
+        assert_eq!(err, IntegrateValidationError::EmptyY0);
     }
 
     #[test]

@@ -13,7 +13,8 @@ def gamma_inc_cf(a, x):
         if d == 0: d = 1e-30
         d = 1.0 / d
         c = bn + an / c
-        if c == 0: c = 1e-30
+        if c == 0:
+            c = 1e-30
         delta = d * c
         f *= delta
         if abs(delta - 1.0) < 1e-15:

@@ -1926,6 +1926,239 @@ pub fn sparse_submatrix(
         .expect("submatrix should produce valid CSR")
 }
 
+/// Compute the number of connected components and their sizes.
+///
+/// Returns (n_components, component_sizes).
+pub fn connected_component_sizes(graph: &CsrMatrix) -> (usize, Vec<usize>) {
+    let n = graph.shape().rows;
+    let mut visited = vec![false; n];
+    let mut sizes = Vec::new();
+
+    for start in 0..n {
+        if visited[start] {
+            continue;
+        }
+
+        let mut size = 0;
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(start);
+        visited[start] = true;
+
+        while let Some(u) = queue.pop_front() {
+            size += 1;
+            let row_start = graph.indptr()[u];
+            let row_end = graph.indptr()[u + 1];
+            for idx in row_start..row_end {
+                let v = graph.indices()[idx];
+                if !visited[v] {
+                    visited[v] = true;
+                    queue.push_back(v);
+                }
+            }
+        }
+        sizes.push(size);
+    }
+
+    (sizes.len(), sizes)
+}
+
+/// Check if a sparse graph is connected.
+pub fn is_connected(graph: &CsrMatrix) -> bool {
+    let (n_comp, _) = connected_component_sizes(graph);
+    n_comp <= 1
+}
+
+/// Compute the degree sequence of a sparse graph.
+///
+/// Returns the degree (number of nonzero entries) for each row.
+pub fn degree_sequence(graph: &CsrMatrix) -> Vec<usize> {
+    let n = graph.shape().rows;
+    (0..n)
+        .map(|i| graph.indptr()[i + 1] - graph.indptr()[i])
+        .collect()
+}
+
+/// Find the strongly connected components of a directed graph (Tarjan's algorithm).
+///
+/// Returns a vector of component assignments (component index for each node).
+pub fn strongly_connected_components(graph: &CsrMatrix) -> Vec<usize> {
+    let n = graph.shape().rows;
+    let mut index_counter = 0usize;
+    let mut stack = Vec::new();
+    let mut on_stack = vec![false; n];
+    let mut index = vec![usize::MAX; n];
+    let mut lowlink = vec![0usize; n];
+    let mut component = vec![0usize; n];
+    let mut n_components = 0usize;
+
+    #[allow(clippy::too_many_arguments)]
+    fn strongconnect(
+        v: usize,
+        graph: &CsrMatrix,
+        index_counter: &mut usize,
+        stack: &mut Vec<usize>,
+        on_stack: &mut [bool],
+        index: &mut [usize],
+        lowlink: &mut [usize],
+        component: &mut [usize],
+        n_components: &mut usize,
+    ) {
+        index[v] = *index_counter;
+        lowlink[v] = *index_counter;
+        *index_counter += 1;
+        stack.push(v);
+        on_stack[v] = true;
+
+        let row_start = graph.indptr()[v];
+        let row_end = graph.indptr()[v + 1];
+        for idx in row_start..row_end {
+            let w = graph.indices()[idx];
+            if index[w] == usize::MAX {
+                strongconnect(
+                    w,
+                    graph,
+                    index_counter,
+                    stack,
+                    on_stack,
+                    index,
+                    lowlink,
+                    component,
+                    n_components,
+                );
+                lowlink[v] = lowlink[v].min(lowlink[w]);
+            } else if on_stack[w] {
+                lowlink[v] = lowlink[v].min(index[w]);
+            }
+        }
+
+        if lowlink[v] == index[v] {
+            while let Some(w) = stack.pop() {
+                on_stack[w] = false;
+                component[w] = *n_components;
+                if w == v {
+                    break;
+                }
+            }
+            *n_components += 1;
+        }
+    }
+
+    for v in 0..n {
+        if index[v] == usize::MAX {
+            strongconnect(
+                v,
+                graph,
+                &mut index_counter,
+                &mut stack,
+                &mut on_stack,
+                &mut index,
+                &mut lowlink,
+                &mut component,
+                &mut n_components,
+            );
+        }
+    }
+
+    component
+}
+
+/// Topological sort of a directed acyclic graph (DAG).
+///
+/// Returns None if the graph has a cycle.
+pub fn topological_sort(graph: &CsrMatrix) -> Option<Vec<usize>> {
+    let n = graph.shape().rows;
+
+    // Compute in-degrees
+    let mut in_degree = vec![0usize; n];
+    for &j in graph.indices() {
+        if j < n {
+            in_degree[j] += 1;
+        }
+    }
+
+    // Start with zero in-degree nodes
+    let mut queue: std::collections::VecDeque<usize> = (0..n)
+        .filter(|&i| in_degree[i] == 0)
+        .collect();
+
+    let mut order = Vec::with_capacity(n);
+
+    while let Some(u) = queue.pop_front() {
+        order.push(u);
+        let row_start = graph.indptr()[u];
+        let row_end = graph.indptr()[u + 1];
+        for idx in row_start..row_end {
+            let v = graph.indices()[idx];
+            if v < n {
+                in_degree[v] -= 1;
+                if in_degree[v] == 0 {
+                    queue.push_back(v);
+                }
+            }
+        }
+    }
+
+    if order.len() == n {
+        Some(order)
+    } else {
+        None // cycle detected
+    }
+}
+
+/// PageRank algorithm for a sparse graph.
+///
+/// Returns the PageRank score for each node.
+pub fn pagerank(graph: &CsrMatrix, damping: f64, max_iter: usize, tol: f64) -> Vec<f64> {
+    let n = graph.shape().rows;
+    if n == 0 {
+        return vec![];
+    }
+
+    let out_degree: Vec<usize> = (0..n)
+        .map(|i| graph.indptr()[i + 1] - graph.indptr()[i])
+        .collect();
+
+    let mut rank = vec![1.0 / n as f64; n];
+
+    for _ in 0..max_iter {
+        let mut new_rank = vec![(1.0 - damping) / n as f64; n];
+
+        for i in 0..n {
+            if out_degree[i] == 0 {
+                // Dangling node: distribute evenly
+                let contrib = damping * rank[i] / n as f64;
+                for r in &mut new_rank {
+                    *r += contrib;
+                }
+            } else {
+                let contrib = damping * rank[i] / out_degree[i] as f64;
+                let row_start = graph.indptr()[i];
+                let row_end = graph.indptr()[i + 1];
+                for idx in row_start..row_end {
+                    let j = graph.indices()[idx];
+                    if j < n {
+                        new_rank[j] += contrib;
+                    }
+                }
+            }
+        }
+
+        // Check convergence
+        let diff: f64 = rank
+            .iter()
+            .zip(new_rank.iter())
+            .map(|(&a, &b)| (a - b).abs())
+            .sum();
+
+        rank = new_rank;
+        if diff < tol {
+            break;
+        }
+    }
+
+    rank
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

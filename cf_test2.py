@@ -7,7 +7,6 @@ def gamma_inc_cf(a, x):
     # Here, Q(a,x) = exp(-x) x^a / Gamma(a) * CF
     # CF = 1 / (x + (1-a) / (1 + 1 / (x + (2-a) / (1 + 2 / (x + ...)))))
     
-    b0 = 0.0
     c = 1e-30
     d = 1.0 / x # b1 is x
     if d == 0: d = 1e-30
@@ -21,7 +20,8 @@ def gamma_inc_cf(a, x):
         if d == 0: d = 1e-30
         d = 1.0 / d
         c = bn + an / c
-        if c == 0: c = 1e-30
+        if c == 0:
+            c = 1e-30
         delta = c * d
         f *= delta
         
@@ -32,7 +32,8 @@ def gamma_inc_cf(a, x):
         if d == 0: d = 1e-30
         d = 1.0 / d
         c = bn + an / c
-        if c == 0: c = 1e-30
+        if c == 0:
+            c = 1e-30
         delta = c * d
         f *= delta
         

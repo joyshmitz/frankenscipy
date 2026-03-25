@@ -8538,7 +8538,7 @@ pub fn winsorize(data: &[f64], limits: (f64, f64)) -> Vec<f64> {
     let lo_idx = (limits.0 * n as f64).floor() as usize;
     let hi_idx = n - (limits.1 * n as f64).ceil() as usize;
     let lo_val = sorted[lo_idx.min(n - 1)];
-    let hi_val = sorted[hi_idx.max(0).min(n - 1)];
+    let hi_val = sorted[hi_idx.min(n - 1)];
 
     data.iter()
         .map(|&x| x.clamp(lo_val, hi_val))
@@ -8590,6 +8590,162 @@ pub fn expected_freq_uniform(observed: &[f64]) -> Vec<f64> {
     let n: f64 = observed.iter().sum();
     let k = observed.len() as f64;
     vec![n / k; observed.len()]
+}
+
+/// Compute the coefficient of determination R².
+///
+/// Matches `sklearn.metrics.r2_score` (for 1D).
+pub fn r2_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    let n = y_true.len();
+    if n != y_pred.len() || n == 0 {
+        return f64::NAN;
+    }
+
+    let mean_true: f64 = y_true.iter().sum::<f64>() / n as f64;
+    let ss_res: f64 = y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| (t - p).powi(2))
+        .sum();
+    let ss_tot: f64 = y_true.iter().map(|&t| (t - mean_true).powi(2)).sum();
+
+    if ss_tot == 0.0 {
+        return if ss_res == 0.0 { 1.0 } else { 0.0 };
+    }
+
+    1.0 - ss_res / ss_tot
+}
+
+/// Compute the mean absolute error.
+pub fn mean_absolute_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| (t - p).abs())
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
+/// Compute the mean squared error.
+pub fn mean_squared_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| (t - p).powi(2))
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
+/// Compute the root mean squared error.
+pub fn root_mean_squared_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    mean_squared_error(y_true, y_pred).sqrt()
+}
+
+/// Compute the mean absolute percentage error.
+pub fn mean_absolute_percentage_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| {
+            if t == 0.0 {
+                0.0
+            } else {
+                ((t - p) / t).abs()
+            }
+        })
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
+/// Compute the log-likelihood for a normal distribution.
+pub fn norm_loglikelihood(data: &[f64], mu: f64, sigma: f64) -> f64 {
+    let n = data.len() as f64;
+    let log_sigma = sigma.ln();
+    let two_sigma2 = 2.0 * sigma * sigma;
+    -n / 2.0 * (2.0 * PI).ln() - n * log_sigma
+        - data.iter().map(|&x| (x - mu).powi(2) / two_sigma2).sum::<f64>()
+}
+
+/// Compute the Akaike Information Criterion (AIC).
+pub fn aic(log_likelihood: f64, n_params: usize) -> f64 {
+    2.0 * n_params as f64 - 2.0 * log_likelihood
+}
+
+/// Compute the Bayesian Information Criterion (BIC).
+pub fn bic(log_likelihood: f64, n_params: usize, n_samples: usize) -> f64 {
+    n_params as f64 * (n_samples as f64).ln() - 2.0 * log_likelihood
+}
+
+/// Generate samples from a multivariate normal distribution.
+///
+/// Uses Box-Muller transform with Cholesky decomposition.
+pub fn multivariate_normal_rvs(
+    mean: &[f64],
+    cov: &[Vec<f64>],
+    n_samples: usize,
+    seed: u64,
+) -> Vec<Vec<f64>> {
+    let d = mean.len();
+    if d == 0 || cov.len() != d {
+        return vec![];
+    }
+
+    // Cholesky decomposition
+    let mut l = vec![vec![0.0; d]; d];
+    #[allow(clippy::needless_range_loop)]
+    for j in 0..d {
+        let mut sum = cov[j][j];
+        for k in 0..j {
+            sum -= l[j][k] * l[j][k];
+        }
+        l[j][j] = if sum > 0.0 { sum.sqrt() } else { 0.0 };
+        for i in j + 1..d {
+            let mut sum = cov[i][j];
+            for k in 0..j {
+                sum -= l[i][k] * l[j][k];
+            }
+            l[i][j] = if l[j][j] > 0.0 {
+                sum / l[j][j]
+            } else {
+                0.0
+            };
+        }
+    }
+
+    let mut rng = seed;
+    let mut samples = Vec::with_capacity(n_samples);
+
+    for _ in 0..n_samples {
+        // Generate standard normal samples via Box-Muller
+        let mut z = vec![0.0; d];
+        for item in z.iter_mut().take(d) {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u1 = ((rng >> 11) as f64 / (1u64 << 53) as f64).max(1e-15);
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u2 = (rng >> 11) as f64 / (1u64 << 53) as f64;
+            *item = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+        }
+
+        // Transform: x = mean + L * z
+        let mut x = mean.to_vec();
+        for i in 0..d {
+            for j in 0..=i {
+                x[i] += l[i][j] * z[j];
+            }
+        }
+        samples.push(x);
+    }
+
+    samples
 }
 
 #[cfg(test)]
@@ -10940,11 +11096,11 @@ mod tests {
                 1.7732539029260768,
                 -1.151693349201912,
                 -0.2513915385911738,
-                1.6515461773960808,
+                1.651_546_177_396_081,
                 0.1637626589199808,
                 0.4728397841119197,
                 -0.5722397169767986,
-                -0.40622959444711744,
+                -0.406_229_594_447_117_4,
                 0.2862812550115444,
                 -0.6044850665933583,
                 -0.3188449480018543,
@@ -10990,17 +11146,17 @@ mod tests {
                 1.337322057057232,
                 1.1055258628813128,
                 -1.0730512523906234,
-                0.7733208526254149,
+                0.773_320_852_625_415,
                 1.436183728122992,
                 -1.1791415382494202,
-                -0.18921381229243988,
+                -0.189_213_812_292_439_9,
                 -0.9554930152535846,
                 0.5156304113864132,
                 0.6003469986327579,
                 0.2909003803399354,
                 0.7090642645312579,
                 0.511885720810475,
-                0.33049390257764036,
+                0.330_493_902_577_640_4,
                 0.4181173206487132,
                 -0.5677696061279298,
                 0.767014137689315,
@@ -11033,8 +11189,8 @@ mod tests {
                 -0.6947284969268116, 0.4963174476481955, -0.9670900823111159, 1.436653455559641,
                 0.7031564962971394, -0.6109476653841658, 0.024649407219573916, 0.6588093285059897,
                 1.0908592504588038, -0.7423985725278241, -0.4193043734770502, 1.7732539029260768,
-                -1.151693349201912, -0.2513915385911738, 1.6515461773960808, 0.1637626589199808,
-                0.4728397841119197, -0.5722397169767986, -0.40622959444711744, 0.2862812550115444,
+                -1.151693349201912, -0.2513915385911738, 1.651_546_177_396_081, 0.1637626589199808,
+                0.4728397841119197, -0.5722397169767986, -0.406_229_594_447_117_4, 0.2862812550115444,
                 -0.6044850665933583, -0.3188449480018543, -0.2942975007197502, -0.23399765678280584,
                 0.6931683218520789, -0.6885208255353791, 1.4898534267383032, -0.3287697071729781,
                 0.2991549258299444, 0.13359764531673786, 0.3955262398950878, 0.23318322884387597,

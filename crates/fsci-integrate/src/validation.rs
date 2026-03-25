@@ -49,6 +49,7 @@ pub struct ValidatedTolerance {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntegrateValidationError {
+    EmptyY0,
     FirstStepMustBePositive,
     FirstStepExceedsBounds,
     MaxStepMustBePositive,
@@ -66,6 +67,7 @@ pub enum IntegrateValidationError {
 impl std::fmt::Display for IntegrateValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EmptyY0 => write!(f, "`y0` must contain at least one state variable."),
             Self::FirstStepMustBePositive => write!(f, "`first_step` must be positive."),
             Self::FirstStepExceedsBounds => write!(f, "`first_step` exceeds bounds."),
             Self::MaxStepMustBePositive => write!(f, "`max_step` must be positive."),
@@ -209,9 +211,9 @@ mod tests {
         )
         .expect("zero rtol should be clamped");
         assert!(!report.warnings.is_empty());
-        match report.rtol {
-            ToleranceValue::Scalar(v) => assert_eq!(v, MIN_RTOL),
-            _ => panic!("expected scalar"),
+        assert!(matches!(report.rtol, ToleranceValue::Scalar(_)));
+        if let ToleranceValue::Scalar(v) = report.rtol {
+            assert_eq!(v, MIN_RTOL);
         }
     }
 
@@ -374,9 +376,9 @@ mod tests {
         .expect("strict mode should clamp");
         assert_eq!(report.mode, RuntimeMode::Strict);
         assert!(!report.warnings.is_empty());
-        match report.rtol {
-            ToleranceValue::Scalar(v) => assert!(v >= MIN_RTOL),
-            _ => panic!("expected scalar"),
+        assert!(matches!(report.rtol, ToleranceValue::Scalar(_)));
+        if let ToleranceValue::Scalar(v) = report.rtol {
+            assert!(v >= MIN_RTOL);
         }
     }
 
