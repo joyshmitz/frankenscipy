@@ -342,14 +342,118 @@ pub fn value(name: &str) -> Option<f64> {
         "wien" => Some(WIEN),
         "rydberg" => Some(RYDBERG),
         "electron mass" | "m_e" => Some(ELECTRON_MASS),
-        "proton mass" | "m_p" => Some(PROTON_MASS),
-        "neutron mass" | "m_n" => Some(NEUTRON_MASS),
         "fine-structure" | "alpha" => Some(FINE_STRUCTURE),
         "bohr radius" => Some(BOHR_RADIUS),
         "electron volt" | "ev" => Some(ELECTRON_VOLT),
         "atmosphere" | "atm" => Some(ATMOSPHERE),
+        "proton mass" | "m_p" => Some(PROTON_MASS),
+        "neutron mass" | "m_n" => Some(NEUTRON_MASS),
+        "atomic mass" | "u" => Some(ATOMIC_MASS),
+        "mu_0" | "magnetic constant" => Some(MU_0),
+        "epsilon_0" | "electric constant" => Some(EPSILON_0),
         _ => None,
     }
+}
+
+/// Find a physical constant by partial name match.
+///
+/// Returns all constants whose name contains the query string.
+/// Matches `scipy.constants.find(query)`.
+pub fn find(query: &str) -> Vec<(&'static str, f64)> {
+    let q = query.to_lowercase();
+    let all = [
+        ("speed of light in vacuum", SPEED_OF_LIGHT),
+        ("Planck constant", PLANCK),
+        ("reduced Planck constant", HBAR),
+        ("Newtonian constant of gravitation", GRAVITATIONAL_CONSTANT),
+        ("standard acceleration of gravity", G_N),
+        ("elementary charge", ELEMENTARY_CHARGE),
+        ("molar gas constant", GAS_CONSTANT),
+        ("Avogadro constant", AVOGADRO),
+        ("Boltzmann constant", BOLTZMANN),
+        ("Stefan-Boltzmann constant", STEFAN_BOLTZMANN),
+        ("Wien displacement law constant", WIEN),
+        ("Rydberg constant", RYDBERG),
+        ("electron mass", ELECTRON_MASS),
+        ("proton mass", PROTON_MASS),
+        ("neutron mass", NEUTRON_MASS),
+        ("atomic mass constant", ATOMIC_MASS),
+        ("Bohr magneton", BOHR_MAGNETON),
+        ("nuclear magneton", NUCLEAR_MAGNETON),
+        ("fine-structure constant", FINE_STRUCTURE),
+        ("Bohr radius", BOHR_RADIUS),
+        ("Hartree energy", HARTREE),
+        ("electron volt", ELECTRON_VOLT),
+        ("standard atmosphere", ATMOSPHERE),
+        ("magnetic constant", MU_0),
+        ("electric constant", EPSILON_0),
+    ];
+    all.iter()
+        .filter(|(name, _)| name.to_lowercase().contains(&q))
+        .cloned()
+        .collect()
+}
+
+/// Convert between physical units.
+///
+/// Matches `scipy.constants.convert_temperature` (generalized).
+pub fn convert_temperature(val: f64, from: &str, to: &str) -> f64 {
+    // Convert to Kelvin first
+    let kelvin = match from.to_lowercase().as_str() {
+        "c" | "celsius" => celsius_to_kelvin(val),
+        "f" | "fahrenheit" => fahrenheit_to_kelvin(val),
+        "k" | "kelvin" => val,
+        "r" | "rankine" => rankine_to_kelvin(val),
+        _ => val,
+    };
+    // Convert from Kelvin to target
+    match to.to_lowercase().as_str() {
+        "c" | "celsius" => kelvin_to_celsius(kelvin),
+        "f" | "fahrenheit" => kelvin_to_fahrenheit(kelvin),
+        "k" | "kelvin" => kelvin,
+        "r" | "rankine" => kelvin_to_rankine(kelvin),
+        _ => kelvin,
+    }
+}
+
+/// Convert angle from degrees to radians.
+pub fn deg2rad(degrees: f64) -> f64 {
+    degrees * DEGREE
+}
+
+/// Convert angle from radians to degrees.
+pub fn rad2deg(radians: f64) -> f64 {
+    radians / DEGREE
+}
+
+/// Convert speed from mph to m/s.
+pub fn mph_to_mps(mph: f64) -> f64 {
+    mph * MILE / 3600.0
+}
+
+/// Convert speed from km/h to m/s.
+pub fn kmh_to_mps(kmh: f64) -> f64 {
+    kmh * 1000.0 / 3600.0
+}
+
+/// Convert speed from knots to m/s.
+pub fn knots_to_mps(knots: f64) -> f64 {
+    knots * NAUTICAL_MILE / 3600.0
+}
+
+/// Convert pressure from psi to Pa.
+pub fn psi_to_pa(psi: f64) -> f64 {
+    psi * POUND_FORCE / (INCH * INCH)
+}
+
+/// Convert mass from kg to lb.
+pub fn kg_to_lb(kg: f64) -> f64 {
+    kg / POUND
+}
+
+/// Convert mass from lb to kg.
+pub fn lb_to_kg(lb: f64) -> f64 {
+    lb * POUND
 }
 
 #[cfg(test)]

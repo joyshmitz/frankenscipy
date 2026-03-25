@@ -11,7 +11,10 @@ pub mod helpers;
 pub mod plan;
 pub mod transforms;
 
-pub use helpers::{fftconvolve, fftcorrelate, fftfreq, fftshift_1d, ifftshift_1d, rfftfreq};
+pub use helpers::{
+    apply_window, cross_spectral_density, fftconvolve, fftcorrelate, fftfreq, fftshift_1d,
+    hann_window, ifftshift_1d, periodogram_simple, rfftfreq,
+};
 pub use plan::{
     CacheAdmissionPolicy, PlanCacheBackend, PlanCacheConfig, PlanFingerprint, PlanKey,
     PlanMetadata, PlanningStrategy,

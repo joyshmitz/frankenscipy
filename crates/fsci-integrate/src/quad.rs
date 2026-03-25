@@ -1593,7 +1593,7 @@ pub fn newton_cotes(n: usize) -> Result<Vec<f64>, IntegrateValidationError> {
             // General Newton-Cotes via Lagrange integration
             let nf = n as f64;
             let mut weights = vec![0.0; n + 1];
-            for i in 0..=n {
+            for (i, item) in weights.iter_mut().enumerate() {
                 // w_i = ∫₀¹ L_i(x) dx where L_i = Π_{j≠i} (x - j/n) / (i/n - j/n)
                 // Use numerical integration with high-order quadrature
                 // Scale grid with polynomial degree to maintain accuracy
@@ -1616,7 +1616,7 @@ pub fn newton_cotes(n: usize) -> Result<Vec<f64>, IntegrateValidationError> {
                     }
                     integral += w * li;
                 }
-                weights[i] = integral / (3.0 * m as f64);
+                *item = integral / (3.0 * m as f64);
             }
             Ok(weights)
         }

@@ -2180,8 +2180,8 @@ pub fn interp2d(
 
     // Find x interval
     let mut ix = 0;
-    for i in 0..nx - 1 {
-        if xi >= x[i] {
+    for (i, &val) in x.iter().enumerate().take(nx - 1) {
+        if xi >= val {
             ix = i;
         }
     }
@@ -2189,8 +2189,8 @@ pub fn interp2d(
 
     // Find y interval
     let mut iy = 0;
-    for i in 0..ny - 1 {
-        if yi >= y[i] {
+    for (i, &val) in y.iter().enumerate().take(ny - 1) {
+        if yi >= val {
             iy = i;
         }
     }
@@ -2274,6 +2274,214 @@ pub fn splantider(
     new_t.push(t[t.len() - 1]);
 
     Ok((new_t, new_c, new_k))
+}
+
+/// Compute the definite integral of a B-spline.
+///
+/// Matches `scipy.interpolate.splint`.
+pub fn splint(
+    a: f64,
+    b: f64,
+    tck: &(Vec<f64>, Vec<f64>, usize),
+) -> Result<f64, InterpError> {
+    let antider = splantider(tck)?;
+    let bspl = BSpline::new(antider.0, antider.1, antider.2)?;
+    Ok(bspl.eval(b) - bspl.eval(a))
+}
+
+/// Find the roots of a cubic B-spline (k=3).
+///
+/// Returns x values where the spline equals zero.
+/// Matches `scipy.interpolate.sproot`.
+pub fn sproot(tck: &(Vec<f64>, Vec<f64>, usize)) -> Result<Vec<f64>, InterpError> {
+    let (t, c, k) = tck;
+    if *k != 3 {
+        return Err(InterpError::InvalidArgument {
+            detail: "sproot only supports cubic splines (k=3)".to_string(),
+        });
+    }
+
+    let bspl = BSpline::new(t.clone(), c.clone(), *k)?;
+    let mut roots = Vec::new();
+
+    // Search for roots by evaluating on a fine grid and finding sign changes
+    let x_lo = t[*k];
+    let x_hi = t[c.len()];
+    let n_search = (c.len() * 20).max(200);
+    let h = (x_hi - x_lo) / n_search as f64;
+
+    let mut prev = bspl.eval(x_lo);
+    for i in 1..=n_search {
+        let x = x_lo + i as f64 * h;
+        let curr = bspl.eval(x);
+
+        if prev.signum() != curr.signum() && prev.is_finite() && curr.is_finite() {
+            // Bisection to find root
+            let mut lo = x - h;
+            let mut hi = x;
+            for _ in 0..60 {
+                let mid = (lo + hi) / 2.0;
+                let fmid = bspl.eval(mid);
+                if fmid.signum() == bspl.eval(lo).signum() {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            roots.push((lo + hi) / 2.0);
+        }
+
+        if curr.abs() < 1e-14 {
+            roots.push(x);
+        }
+
+        prev = curr;
+    }
+
+    // Deduplicate nearby roots
+    roots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    roots.dedup_by(|a, b| (*a - *b).abs() < h * 0.5);
+
+    Ok(roots)
+}
+
+/// Evaluate a polynomial and its derivatives.
+///
+/// Returns (p(x), p'(x), p''(x), ...) up to order `der`.
+pub fn polyval_der(coeffs: &[f64], x: f64, der: usize) -> Vec<f64> {
+    let n = coeffs.len();
+    if n == 0 {
+        return vec![0.0; der + 1];
+    }
+
+    // First compute all derivatives of the polynomial at x
+    let mut result = vec![0.0; der + 1];
+
+    // Horner's method for each derivative
+    for (d, item) in result.iter_mut().enumerate().take(der + 1) {
+        if d >= n {
+            break;
+        }
+        // Coefficients of the d-th derivative
+        let mut dc = coeffs.to_vec();
+        for _ in 0..d {
+            let len = dc.len();
+            if len <= 1 {
+                dc = vec![0.0];
+                break;
+            }
+            dc = (0..len - 1)
+                .map(|i| dc[i] * (len - 1 - i) as f64)
+                .collect();
+        }
+        *item = polyval(&dc, x);
+    }
+
+    result
+}
+
+/// Fit a polynomial of degree `deg` to data points (x, y) using least squares.
+///
+/// Returns coefficients in descending order of degree.
+/// Matches `numpy.polyfit`.
+pub fn polyfit(x: &[f64], y: &[f64], deg: usize) -> Result<Vec<f64>, InterpError> {
+    let n = x.len();
+    if n != y.len() {
+        return Err(InterpError::LengthMismatch {
+            x_len: n,
+            y_len: y.len(),
+        });
+    }
+    if n <= deg {
+        return Err(InterpError::TooFewPoints {
+            minimum: deg + 1,
+            actual: n,
+        });
+    }
+
+    let ncols = deg + 1;
+
+    // Build Vandermonde matrix and solve normal equations
+    let mut ata = vec![vec![0.0; ncols]; ncols];
+    let mut atb = vec![0.0; ncols];
+
+    for i in 0..n {
+        let mut xpow = vec![1.0; ncols];
+        for j in 1..ncols {
+            xpow[j] = xpow[j - 1] * x[i];
+        }
+        // xpow[j] = x[i]^j
+
+        for j in 0..ncols {
+            atb[j] += xpow[j] * y[i];
+            for k in j..ncols {
+                ata[j][k] += xpow[j] * xpow[k];
+                if k != j {
+                    ata[k][j] = ata[j][k];
+                }
+            }
+        }
+    }
+
+    // Solve via Cholesky-like method
+    let coeffs = solve_normal(&ata, &atb)?;
+
+    // Reverse to get descending order (highest degree first)
+    let mut result = coeffs;
+    result.reverse();
+    Ok(result)
+}
+
+fn solve_normal(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, InterpError> {
+    let n = a.len();
+    let mut aug: Vec<Vec<f64>> = a.iter().map(|r| {
+        let mut row = r.clone();
+        row.push(0.0);
+        row
+    }).collect();
+    for i in 0..n {
+        aug[i][n] = b[i];
+    }
+
+    // Gaussian elimination with partial pivoting
+    for col in 0..n {
+        let max_row = (col..n)
+            .max_by(|&i, &j| {
+                aug[i][col]
+                    .abs()
+                    .partial_cmp(&aug[j][col].abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(col);
+        aug.swap(col, max_row);
+
+        if aug[col][col].abs() < 1e-15 {
+            return Err(InterpError::InvalidArgument {
+                detail: "singular system in polyfit".to_string(),
+            });
+        }
+
+        let pivot = aug[col][col];
+        for row in col + 1..n {
+            let factor = aug[row][col] / pivot;
+            #[allow(clippy::needless_range_loop)]
+            for j in col..=n {
+                let val = aug[col][j];
+                aug[row][j] -= factor * val;
+            }
+        }
+    }
+
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut sum = aug[i][n];
+        for j in i + 1..n {
+            sum -= aug[i][j] * x[j];
+        }
+        x[i] = sum / aug[i][i];
+    }
+
+    Ok(x)
 }
 
 #[cfg(test)]

@@ -4073,10 +4073,10 @@ pub fn vander(x: &[f64], n: Option<usize>, increasing: bool) -> Vec<Vec<f64>> {
     let m = x.len();
     let cols = n.unwrap_or(m);
     let mut v = vec![vec![0.0; cols]; m];
-    for i in 0..m {
-        for j in 0..cols {
+    for (i, row) in v.iter_mut().enumerate().take(m) {
+        for (j, item) in row.iter_mut().enumerate().take(cols) {
             let power = if increasing { j } else { cols - 1 - j };
-            v[i][j] = x[i].powi(power as i32);
+            *item = x[i].powi(power as i32);
         }
     }
     v
@@ -4091,10 +4091,10 @@ pub fn hankel(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
     let m = r_vals.len();
 
     let mut h = vec![vec![0.0; m]; n];
-    for i in 0..n {
-        for j in 0..m {
+    for (i, row) in h.iter_mut().enumerate().take(n) {
+        for (j, item) in row.iter_mut().enumerate().take(m) {
             let idx = i + j;
-            h[i][j] = if idx < n {
+            *item = if idx < n {
                 c[idx]
             } else if idx - n + 1 < m {
                 r_vals[idx - n + 1]
@@ -4117,17 +4117,17 @@ pub fn helmert(n: usize) -> Vec<Vec<f64>> {
 
     // First row: all 1/√n
     let inv_sqrt_n = 1.0 / (n as f64).sqrt();
-    for j in 0..n {
-        h[0][j] = inv_sqrt_n;
+    for item in h[0].iter_mut().take(n) {
+        *item = inv_sqrt_n;
     }
 
     // Row i (i >= 1): orthogonal contrasts
-    for i in 1..n {
+    for (i, row) in h.iter_mut().enumerate().take(n).skip(1) {
         let scale = 1.0 / ((i * (i + 1)) as f64).sqrt();
-        for j in 0..i {
-            h[i][j] = scale;
+        for item in row.iter_mut().take(i) {
+            *item = scale;
         }
-        h[i][i] = -(i as f64) * scale;
+        row[i] = -(i as f64) * scale;
     }
 
     h
@@ -4138,10 +4138,10 @@ pub fn helmert(n: usize) -> Vec<Vec<f64>> {
 /// Matches `numpy.eye` with `k` offset.
 pub fn eye_k(n: usize, m: usize, k: i64) -> Vec<Vec<f64>> {
     let mut result = vec![vec![0.0; m]; n];
-    for i in 0..n {
+    for (i, row) in result.iter_mut().enumerate().take(n) {
         let j = i as i64 + k;
         if j >= 0 && (j as usize) < m {
-            result[i][j as usize] = 1.0;
+            row[j as usize] = 1.0;
         }
     }
     result
@@ -4198,6 +4198,193 @@ pub fn max_abs(a: &[Vec<f64>]) -> f64 {
     a.iter()
         .flat_map(|row| row.iter())
         .fold(0.0f64, |acc, &v| acc.max(v.abs()))
+}
+
+/// Compute the 1-norm, infinity-norm, or Frobenius norm of a vector.
+pub fn vector_norm(v: &[f64], ord: f64) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    if ord == f64::INFINITY {
+        v.iter().map(|&x| x.abs()).fold(0.0f64, f64::max)
+    } else if ord == f64::NEG_INFINITY {
+        v.iter().map(|&x| x.abs()).fold(f64::INFINITY, f64::min)
+    } else if ord == 0.0 {
+        v.iter().filter(|&&x| x != 0.0).count() as f64
+    } else if ord == 1.0 {
+        v.iter().map(|&x| x.abs()).sum()
+    } else if ord == 2.0 {
+        vnorm(v)
+    } else {
+        v.iter()
+            .map(|&x| x.abs().powf(ord))
+            .sum::<f64>()
+            .powf(1.0 / ord)
+    }
+}
+
+/// Check if a matrix is positive definite (via Cholesky attempt).
+pub fn is_positive_definite(a: &[Vec<f64>]) -> bool {
+    let n = a.len();
+    if n == 0 {
+        return true;
+    }
+    for i in 0..n {
+        if a[i].len() != n {
+            return false;
+        }
+    }
+
+    // Try Cholesky decomposition
+    let mut l = vec![vec![0.0; n]; n];
+    for j in 0..n {
+        let mut sum = a[j][j];
+        for k in 0..j {
+            sum -= l[j][k] * l[j][k];
+        }
+        if sum <= 0.0 {
+            return false;
+        }
+        l[j][j] = sum.sqrt();
+        for i in j + 1..n {
+            let mut sum = a[i][j];
+            for k in 0..j {
+                sum -= l[i][k] * l[j][k];
+            }
+            l[i][j] = sum / l[j][j];
+        }
+    }
+    true
+}
+
+/// Construct a rotation matrix for 2D rotation by angle theta (radians).
+pub fn rot2d(theta: f64) -> Vec<Vec<f64>> {
+    vec![
+        vec![theta.cos(), -theta.sin()],
+        vec![theta.sin(), theta.cos()],
+    ]
+}
+
+/// Compute the permanent of a matrix (sum over all permutations).
+///
+/// Uses Ryser's formula. O(2^n * n) complexity.
+pub fn permanent(a: &[Vec<f64>]) -> f64 {
+    let n = a.len();
+    if n == 0 {
+        return 1.0;
+    }
+
+    let mut result = 0.0;
+    let total = 1usize << n;
+
+    for s in 1..total {
+        let mut prod_sum = 1.0;
+        let bits = s.count_ones() as i32;
+        let sign = if (n as i32 - bits) % 2 == 0 { 1.0 } else { -1.0 };
+
+        for i in 0..n {
+            let mut row_sum = 0.0;
+            for j in 0..n {
+                if s & (1 << j) != 0 {
+                    row_sum += a[i][j];
+                }
+            }
+            prod_sum *= row_sum;
+        }
+
+        result += sign * prod_sum;
+    }
+
+    if n % 2 == 0 {
+        result
+    } else {
+        -result
+    }
+}
+
+/// Create an anti-diagonal matrix.
+///
+/// Values are placed on the anti-diagonal (top-right to bottom-left).
+pub fn antidiag(v: &[f64]) -> Vec<Vec<f64>> {
+    let n = v.len();
+    let mut m = vec![vec![0.0; n]; n];
+    for (i, &val) in v.iter().enumerate() {
+        m[i][n - 1 - i] = val;
+    }
+    m
+}
+
+/// Compute the cofactor matrix.
+pub fn cofactor(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = a.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    let mut cof = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            // Minor: remove row i, col j
+            let mut minor = Vec::with_capacity(n - 1);
+            for r in 0..n {
+                if r == i {
+                    continue;
+                }
+                let row: Vec<f64> = (0..n).filter(|&c| c != j).map(|c| a[r][c]).collect();
+                minor.push(row);
+            }
+
+            let det_minor = if minor.is_empty() {
+                1.0
+            } else {
+                det_small(&minor)
+            };
+
+            let sign = if (i + j) % 2 == 0 { 1.0 } else { -1.0 };
+            cof[i][j] = sign * det_minor;
+        }
+    }
+    cof
+}
+
+/// Determinant of a small matrix (up to 4x4, fallback to LU).
+fn det_small(a: &[Vec<f64>]) -> f64 {
+    let n = a.len();
+    match n {
+        0 => 1.0,
+        1 => a[0][0],
+        2 => a[0][0] * a[1][1] - a[0][1] * a[1][0],
+        3 => {
+            a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+                - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+                + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])
+        }
+        _ => {
+            // Cofactor expansion along first row
+            let mut d = 0.0;
+            for j in 0..n {
+                let minor: Vec<Vec<f64>> = (1..n)
+                    .map(|r| (0..n).filter(|&c| c != j).map(|c| a[r][c]).collect())
+                    .collect();
+                let sign = if j % 2 == 0 { 1.0 } else { -1.0 };
+                d += sign * a[0][j] * det_small(&minor);
+            }
+            d
+        }
+    }
+}
+
+/// Adjugate (classical adjoint) matrix: transpose of cofactor matrix.
+pub fn adjugate(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let cof = cofactor(a);
+    let n = cof.len();
+    let mut adj = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            adj[i][j] = cof[j][i];
+        }
+    }
+    adj
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -6362,8 +6549,8 @@ mod tests {
         // DFT matrix should be unitary: F * F^H = I
         // Check first row dot first row conjugate = 1
         let mut dot = (0.0, 0.0);
-        for k in 0..4 {
-            let (r, i) = f[0][k];
+        for item in f[0].iter().take(4) {
+            let (r, i) = *item;
             dot.0 += r * r + i * i;
         }
         assert!((dot.0 - 1.0).abs() < 1e-10, "first row norm = {}", dot.0);

@@ -1733,7 +1733,7 @@ pub fn order_filter(x: &[f64], window_size: usize, rank: usize) -> Vec<f64> {
     let mut result = Vec::with_capacity(x.len());
 
     for i in 0..x.len() {
-        let start = if i >= half { i - half } else { 0 };
+        let start = i.saturating_sub(half);
         let end = (i + half + 1).min(x.len());
         let mut window: Vec<f64> = x[start..end].to_vec();
         window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -8475,7 +8475,7 @@ mod tests {
 
         // Compare with direct DFT
         let two_pi = 2.0 * std::f64::consts::PI;
-        for k in 0..n {
+        for (k, item) in result.iter().enumerate().take(n) {
             let mut re = 0.0;
             let mut im = 0.0;
             for (j, &xj) in x.iter().enumerate() {
@@ -8484,14 +8484,14 @@ mod tests {
                 im += xj * angle.sin();
             }
             assert!(
-                (result[k].0 - re).abs() < 1e-10,
+                (item.0 - re).abs() < 1e-10,
                 "CZT real[{k}] = {}, expected {re}",
-                result[k].0
+                item.0
             );
             assert!(
-                (result[k].1 - im).abs() < 1e-10,
+                (item.1 - im).abs() < 1e-10,
                 "CZT imag[{k}] = {}, expected {im}",
-                result[k].1
+                item.1
             );
         }
     }

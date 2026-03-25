@@ -1714,14 +1714,14 @@ pub fn minimum_filter1d(
 /// Matches `scipy.ndimage.generate_binary_structure`.
 pub fn generate_binary_structure(ndim: usize, connectivity: usize) -> NdArray {
     let size = 3;
-    let mut shape = vec![size; ndim];
+    let shape = vec![size; ndim];
     let total: usize = shape.iter().product();
     let strides = compute_strides(&shape);
     let center = size / 2;
 
     let mut data = vec![0.0; total];
 
-    for flat in 0..total {
+    for (flat, item) in data.iter_mut().enumerate() {
         let mut idx = vec![0usize; ndim];
         let mut rem = flat;
         for d in 0..ndim {
@@ -1730,9 +1730,9 @@ pub fn generate_binary_structure(ndim: usize, connectivity: usize) -> NdArray {
         }
 
         // City-block distance from center
-        let dist: usize = idx.iter().map(|&i| if i > center { i - center } else { center - i }).sum();
+        let dist: usize = idx.iter().map(|&i| i.abs_diff(center)).sum();
         if dist <= connectivity {
-            data[flat] = 1.0;
+            *item = 1.0;
         }
     }
 

@@ -129,6 +129,95 @@ pub fn fftcorrelate(a: &[f64], b: &[f64], mode: &str) -> Result<Vec<f64>, FftErr
     fftconvolve(a, &b_rev, mode)
 }
 
+/// Compute the power spectral density of a real signal.
+///
+/// Returns (frequencies, power) using Welch-like periodogram.
+pub fn periodogram_simple(
+    x: &[f64],
+    fs: f64,
+) -> Result<(Vec<f64>, Vec<f64>), FftError> {
+    if x.is_empty() {
+        return Ok((vec![], vec![]));
+    }
+    let n = x.len();
+    let opts = crate::FftOptions::default();
+
+    let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
+    let spectrum = crate::fft(&complex_input, &opts)?;
+
+    let n_freq = n / 2 + 1;
+    let mut power = Vec::with_capacity(n_freq);
+    let mut freqs = Vec::with_capacity(n_freq);
+
+    for (k, item) in spectrum.iter().enumerate().take(n_freq) {
+        let (re, im) = *item;
+        let mut p = (re * re + im * im) / (n as f64 * fs);
+        // Double non-DC, non-Nyquist bins for one-sided spectrum
+        if k > 0 && k < n / 2 {
+            p *= 2.0;
+        }
+        power.push(p);
+        freqs.push(k as f64 * fs / n as f64);
+    }
+
+    Ok((freqs, power))
+}
+
+/// Compute the cross-spectral density of two real signals.
+pub fn cross_spectral_density(
+    x: &[f64],
+    y: &[f64],
+    fs: f64,
+) -> Result<(Vec<f64>, Vec<(f64, f64)>), FftError> {
+    if x.len() != y.len() || x.is_empty() {
+        return Ok((vec![], vec![]));
+    }
+    let n = x.len();
+    let opts = crate::FftOptions::default();
+
+    let cx: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
+    let cy: Vec<(f64, f64)> = y.iter().map(|&v| (v, 0.0)).collect();
+
+    let fx = crate::fft(&cx, &opts)?;
+    let fy = crate::fft(&cy, &opts)?;
+
+    let n_freq = n / 2 + 1;
+    let mut csd = Vec::with_capacity(n_freq);
+    let mut freqs = Vec::with_capacity(n_freq);
+
+    for k in 0..n_freq {
+        let (xr, xi) = fx[k];
+        let (yr, yi) = fy[k];
+        // Cross-spectrum: X * conj(Y)
+        let cr = xr * yr + xi * yi;
+        let ci = xi * yr - xr * yi;
+        let scale = 1.0 / (n as f64 * fs);
+        csd.push((cr * scale, ci * scale));
+        freqs.push(k as f64 * fs / n as f64);
+    }
+
+    Ok((freqs, csd))
+}
+
+/// Apply a window function to a signal.
+pub fn apply_window(x: &[f64], window: &[f64]) -> Vec<f64> {
+    x.iter()
+        .zip(window.iter())
+        .map(|(&xi, &wi)| xi * wi)
+        .collect()
+}
+
+/// Generate a Hann window of length n.
+pub fn hann_window(n: usize) -> Vec<f64> {
+    if n <= 1 {
+        return vec![1.0; n];
+    }
+    let nf = (n - 1) as f64;
+    (0..n)
+        .map(|i| 0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / nf).cos()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{fftconvolve, fftfreq, fftshift_1d, ifftshift_1d, rfftfreq};
@@ -224,7 +313,7 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0];
         let b = vec![0.0, 1.0, 0.5];
         let result = fftconvolve(&a, &b, "full").unwrap();
-        let expected = vec![0.0, 1.0, 2.5, 4.0, 1.5];
+        let expected = [0.0, 1.0, 2.5, 4.0, 1.5];
         assert_eq!(result.len(), 5);
         for (i, (&r, &e)) in result.iter().zip(expected.iter()).enumerate() {
             assert!((r - e).abs() < 1e-10, "idx {i}: {r} != {e}");
@@ -237,5 +326,8 @@ mod tests {
         let b = vec![1.0, 1.0, 1.0];
         let result = fftconvolve(&a, &b, "same").unwrap();
         assert_eq!(result.len(), 5); // same length as a
+    }
+}
+ame length as a
     }
 }

@@ -974,6 +974,132 @@ pub fn normalized_mutual_info(labels_true: &[usize], labels_pred: &[usize]) -> f
     (mi / denom).clamp(0.0, 1.0)
 }
 
+/// Homogeneity score: each cluster contains only members of a single class.
+///
+/// Matches `sklearn.metrics.homogeneity_score`.
+pub fn homogeneity_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
+    let n = labels_true.len();
+    if n != labels_pred.len() || n == 0 {
+        return 0.0;
+    }
+    let nf = n as f64;
+    let k1 = labels_true.iter().cloned().max().unwrap_or(0) + 1;
+    let k2 = labels_pred.iter().cloned().max().unwrap_or(0) + 1;
+
+    let mut contingency = vec![vec![0usize; k2]; k1];
+    for i in 0..n {
+        contingency[labels_true[i]][labels_pred[i]] += 1;
+    }
+
+    let row_sums: Vec<usize> = contingency.iter().map(|r| r.iter().sum()).collect();
+    let col_sums: Vec<usize> = (0..k2)
+        .map(|j| contingency.iter().map(|r| r[j]).sum())
+        .collect();
+
+    // H(C|K) = conditional entropy of true labels given predicted
+    let mut hck = 0.0;
+    for j in 0..k2 {
+        if col_sums[j] == 0 {
+            continue;
+        }
+        for i in 0..k1 {
+            if contingency[i][j] > 0 {
+                let p = contingency[i][j] as f64 / nf;
+                let pj = col_sums[j] as f64 / nf;
+                hck -= p * (p / pj).ln();
+            }
+        }
+    }
+
+    // H(C) = entropy of true labels
+    let hc: f64 = row_sums
+        .iter()
+        .filter(|&&s| s > 0)
+        .map(|&s| {
+            let p = s as f64 / nf;
+            -p * p.ln()
+        })
+        .sum();
+
+    if hc < 1e-15 {
+        return 1.0;
+    }
+    1.0 - hck / hc
+}
+
+/// Completeness score: all members of a class are assigned to the same cluster.
+///
+/// Matches `sklearn.metrics.completeness_score`.
+pub fn completeness_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
+    // Completeness = homogeneity with args swapped
+    homogeneity_score(labels_pred, labels_true)
+}
+
+/// V-measure: harmonic mean of homogeneity and completeness.
+///
+/// Matches `sklearn.metrics.v_measure_score`.
+pub fn v_measure_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
+    let h = homogeneity_score(labels_true, labels_pred);
+    let c = completeness_score(labels_true, labels_pred);
+    if h + c < 1e-15 {
+        return 0.0;
+    }
+    2.0 * h * c / (h + c)
+}
+
+/// Fowlkes-Mallows index: geometric mean of precision and recall.
+///
+/// Matches `sklearn.metrics.fowlkes_mallows_score`.
+pub fn fowlkes_mallows_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
+    let n = labels_true.len();
+    if n < 2 {
+        return 0.0;
+    }
+
+    // Count pairs
+    let mut tp = 0u64; // true positive pairs (same class, same cluster)
+    let mut fp = 0u64; // false positive (diff class, same cluster)
+    let mut fn_ = 0u64; // false negative (same class, diff cluster)
+
+    for i in 0..n {
+        for j in i + 1..n {
+            let same_true = labels_true[i] == labels_true[j];
+            let same_pred = labels_pred[i] == labels_pred[j];
+            match (same_true, same_pred) {
+                (true, true) => tp += 1,
+                (false, true) => fp += 1,
+                (true, false) => fn_ += 1,
+                _ => {}
+            }
+        }
+    }
+
+    if tp == 0 {
+        return 0.0;
+    }
+
+    let precision = tp as f64 / (tp + fp) as f64;
+    let recall = tp as f64 / (tp + fn_) as f64;
+    (precision * recall).sqrt()
+}
+
+/// Elbow method helper: compute within-cluster sum of squares for k=1..max_k.
+///
+/// Returns a vector of inertia values useful for the elbow method.
+pub fn elbow_inertias(
+    data: &[Vec<f64>],
+    max_k: usize,
+    seed: u64,
+) -> Vec<f64> {
+    (1..=max_k.min(data.len()))
+        .map(|k| {
+            kmeans(data, k, 50, seed.wrapping_add(k as u64))
+                .map(|r| r.inertia)
+                .unwrap_or(f64::INFINITY)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

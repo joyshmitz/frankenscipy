@@ -2054,6 +2054,129 @@ where
     (x, fx)
 }
 
+/// Find a minimum bracket for a 1D function.
+///
+/// Returns (xa, xb, xc, fa, fb, fc) such that f(xb) < f(xa) and f(xb) < f(xc).
+/// Matches `scipy.optimize.bracket`.
+pub fn bracket<F>(f: F, xa: f64, xb: f64) -> (f64, f64, f64, f64, f64, f64)
+where
+    F: Fn(f64) -> f64,
+{
+    let golden = 1.618_033_988_749_895;
+    let limit = 100.0;
+
+    let mut xa = xa;
+    let mut xb = xb;
+    let mut fa = f(xa);
+    let mut fb = f(xb);
+
+    if fa < fb {
+        std::mem::swap(&mut xa, &mut xb);
+        std::mem::swap(&mut fa, &mut fb);
+    }
+
+    let mut xc = xb + golden * (xb - xa);
+    let mut fc = f(xc);
+
+    for _ in 0..200 {
+        if fb <= fc {
+            return (xa, xb, xc, fa, fb, fc);
+        }
+
+        // Parabolic extrapolation
+        let r = (xb - xa) * (fb - fc);
+        let q = (xb - xc) * (fb - fa);
+        let denom = 2.0 * (q - r).max(1e-20) * if q > r { 1.0 } else { -1.0 };
+        let mut w = xb - ((xb - xc) * q - (xb - xa) * r) / denom;
+        let wlim = xb + limit * (xc - xb);
+
+        if (w - xc) * (xb - w) > 0.0 {
+            let fw = f(w);
+            if fw < fc {
+                xa = xb;
+                fa = fb;
+                xb = w;
+                fb = fw;
+                return (xa, xb, xc, fa, fb, fc);
+            } else if fw > fb {
+                xc = w;
+                fc = fw;
+                return (xa, xb, xc, fa, fb, fc);
+            }
+            w = xc + golden * (xc - xb);
+        } else if (w - wlim) * (wlim - xc) >= 0.0 {
+            w = wlim;
+        } else if (w - wlim) * (xc - w) > 0.0 {
+            let fw = f(w);
+            if fw < fc {
+                xb = xc;
+                xc = w;
+                w = xc + golden * (xc - xb);
+                fb = fc;
+                fc = fw;
+            }
+        } else {
+            w = xc + golden * (xc - xb);
+        }
+
+        xa = xb;
+        xb = xc;
+        xc = w;
+        fa = fb;
+        fb = fc;
+        fc = f(xc);
+    }
+
+    (xa, xb, xc, fa, fb, fc)
+}
+
+/// Minimize a scalar function using bounded Brent's method.
+///
+/// Matches `scipy.optimize.minimize_scalar(method='bounded')`.
+pub fn minimize_scalar_bounded<F>(
+    f: F,
+    bounds: (f64, f64),
+    tol: f64,
+    maxiter: usize,
+) -> (f64, f64)
+where
+    F: Fn(f64) -> f64,
+{
+    brent_minimize(f, bounds.0, bounds.1, tol, maxiter)
+}
+
+/// Fixed-point iteration: find x such that f(x) = x.
+///
+/// Matches `scipy.optimize.fixed_point`.
+pub fn fixed_point<F>(f: F, x0: f64, tol: f64, maxiter: usize) -> Result<f64, OptError>
+where
+    F: Fn(f64) -> f64,
+{
+    let mut x = x0;
+    for _iter in 0..maxiter {
+        let x_new = f(x);
+        if (x_new - x).abs() < tol {
+            return Ok(x_new);
+        }
+
+        // Steffensen's method acceleration
+        let x_new2 = f(x_new);
+        let denom = x_new2 - 2.0 * x_new + x;
+        if denom.abs() > 1e-30 {
+            let x_acc = x - (x_new - x).powi(2) / denom;
+            if (x_acc - x).abs() < tol {
+                return Ok(x_acc);
+            }
+            x = x_acc;
+        } else {
+            x = x_new;
+        }
+    }
+    Err(OptError::InvalidArgument {
+        detail: format!("fixed_point did not converge in {maxiter} iterations"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use fsci_runtime::RuntimeMode;
@@ -2814,10 +2937,11 @@ mod tests {
     fn cobyla_with_constraint() {
         // Minimize x + y subject to x + y >= 1
         // Solution: x + y = 1 (constraint active), e.g. (0.5, 0.5)
-        let constraints: Vec<Box<dyn Fn(&[f64]) -> f64>> = vec![
+        type ConstraintFn = dyn Fn(&[f64]) -> f64;
+        let constraints: Vec<Box<ConstraintFn>> = vec![
             Box::new(|x: &[f64]| x[0] + x[1] - 1.0), // x + y >= 1
         ];
-        let constraint_fns: Vec<&dyn Fn(&[f64]) -> f64> =
+        let constraint_fns: Vec<&ConstraintFn> =
             constraints.iter().map(|b| b.as_ref()).collect();
         let result = cobyla(|x| x[0] + x[1], &[2.0, 2.0], &constraint_fns, 1000, 0.5)
             .expect("cobyla constrained");
