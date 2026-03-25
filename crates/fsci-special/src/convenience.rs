@@ -1068,7 +1068,9 @@ pub fn expn(n: usize, x: f64) -> f64 {
         if x < 1.0 {
             let gamma_em = 0.577_215_664_901_532_9;
             let mut sum = -gamma_em - x.ln();
-            let mut term = -x;
+            // Series: E_1(x) = -γ - ln(x) - Σ_{k=1}^∞ (-x)^k / (k·k!)
+            //       = -γ - ln(x) + x - x²/4 + x³/18 - ...
+            let mut term = x; // first term: +x (from -(-x)^1/(1·1!))
             sum += term;
             for k in 2..100 {
                 term *= -x / k as f64;
@@ -1272,7 +1274,9 @@ pub fn spence(x: f64) -> f64 {
     }
 
     // Numerical integration: ∫₁ˣ ln(t)/(1-t) dt via Simpson's rule
-    let n = 500;
+    // Scale grid with interval width for accuracy near singularities
+    let n = (500.0 * (1.0 + (x - 1.0).abs())).min(2000.0) as usize;
+    let n = n + (n % 2); // ensure even for Simpson
     let a = 1.0;
     let b = x;
     let h = (b - a) / n as f64;

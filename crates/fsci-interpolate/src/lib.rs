@@ -2092,6 +2092,190 @@ impl PPoly {
     }
 }
 
+/// Smoothing spline representation (splrep equivalent).
+///
+/// Returns (knots, coefficients, degree) that can be used with `splev`.
+/// Matches `scipy.interpolate.splrep`.
+pub fn splrep(
+    x: &[f64],
+    y: &[f64],
+    k: usize,
+    s: f64,
+) -> Result<(Vec<f64>, Vec<f64>, usize), InterpError> {
+    if x.len() != y.len() || x.len() < k + 1 {
+        return Err(InterpError::TooFewPoints {
+            minimum: k + 1,
+            actual: x.len(),
+        });
+    }
+
+    // For s=0 (interpolating), use make_interp_spline
+    if s <= 0.0 {
+        let bspl = make_interp_spline(x, y, k)?;
+        return Ok((bspl.knots().to_vec(), bspl.coeffs().to_vec(), k));
+    }
+
+    // For s > 0 (smoothing), use make_lsq_spline with automatic knots
+    let n = x.len();
+    let n_interior = (n as f64 / 4.0).ceil() as usize;
+    let n_interior = n_interior.max(1).min(n - k - 1);
+
+    let mut knots = Vec::with_capacity(n_interior + 2 * (k + 1));
+
+    // Repeated boundary knots
+    for _ in 0..=k {
+        knots.push(x[0]);
+    }
+    // Interior knots
+    for i in 1..=n_interior {
+        let idx = i * (n - 1) / (n_interior + 1);
+        knots.push(x[idx]);
+    }
+    for _ in 0..=k {
+        knots.push(x[n - 1]);
+    }
+
+    let bspl = make_lsq_spline(x, y, &knots, k)?;
+    Ok((bspl.knots().to_vec(), bspl.coeffs().to_vec(), k))
+}
+
+/// Evaluate a spline at given points.
+///
+/// Takes (knots, coefficients, degree) from `splrep`.
+/// Matches `scipy.interpolate.splev`.
+pub fn splev(
+    x_eval: &[f64],
+    tck: &(Vec<f64>, Vec<f64>, usize),
+) -> Result<Vec<f64>, InterpError> {
+    let (t, c, k) = tck;
+    let bspl = BSpline::new(t.clone(), c.clone(), *k)?;
+    Ok(x_eval.iter().map(|&x| bspl.eval(x)).collect())
+}
+
+/// Simple 2D interpolation on a regular grid.
+///
+/// Matches `scipy.interpolate.interp2d` (deprecated in scipy but still used).
+/// Uses bilinear interpolation.
+pub fn interp2d(
+    x: &[f64],
+    y: &[f64],
+    z: &[Vec<f64>],
+    xi: f64,
+    yi: f64,
+) -> Result<f64, InterpError> {
+    let nx = x.len();
+    let ny = y.len();
+
+    if z.len() != ny || (ny > 0 && z[0].len() != nx) {
+        return Err(InterpError::InvalidArgument {
+            detail: "z dimensions must match x and y lengths".to_string(),
+        });
+    }
+    if nx < 2 || ny < 2 {
+        return Err(InterpError::TooFewPoints {
+            minimum: 2,
+            actual: nx.min(ny),
+        });
+    }
+
+    // Find x interval
+    let mut ix = 0;
+    for i in 0..nx - 1 {
+        if xi >= x[i] {
+            ix = i;
+        }
+    }
+    ix = ix.min(nx - 2);
+
+    // Find y interval
+    let mut iy = 0;
+    for i in 0..ny - 1 {
+        if yi >= y[i] {
+            iy = i;
+        }
+    }
+    iy = iy.min(ny - 2);
+
+    // Bilinear interpolation
+    let dx = x[ix + 1] - x[ix];
+    let dy = y[iy + 1] - y[iy];
+    if dx == 0.0 || dy == 0.0 {
+        return Ok(z[iy][ix]);
+    }
+
+    let tx = (xi - x[ix]) / dx;
+    let ty = (yi - y[iy]) / dy;
+
+    let f00 = z[iy][ix];
+    let f10 = z[iy][ix + 1];
+    let f01 = z[iy + 1][ix];
+    let f11 = z[iy + 1][ix + 1];
+
+    Ok(f00 * (1.0 - tx) * (1.0 - ty)
+        + f10 * tx * (1.0 - ty)
+        + f01 * (1.0 - tx) * ty
+        + f11 * tx * ty)
+}
+
+/// Compute the derivative of a B-spline.
+///
+/// Returns new knots and coefficients for the derivative spline.
+/// Matches `scipy.interpolate.splder`.
+pub fn splder(
+    tck: &(Vec<f64>, Vec<f64>, usize),
+) -> Result<(Vec<f64>, Vec<f64>, usize), InterpError> {
+    let (t, c, k) = tck;
+    if *k == 0 {
+        return Err(InterpError::InvalidArgument {
+            detail: "cannot differentiate degree-0 spline".to_string(),
+        });
+    }
+
+    let n = c.len();
+    let new_k = k - 1;
+
+    // Derivative coefficients: c'_i = k * (c_{i+1} - c_i) / (t_{i+k+1} - t_{i+1})
+    let mut new_c = Vec::with_capacity(n - 1);
+    for i in 0..n - 1 {
+        let dt = t[i + k + 1] - t[i + 1];
+        if dt.abs() > 1e-15 {
+            new_c.push(*k as f64 * (c[i + 1] - c[i]) / dt);
+        } else {
+            new_c.push(0.0);
+        }
+    }
+
+    // Remove one knot from each end
+    let new_t = t[1..t.len() - 1].to_vec();
+
+    Ok((new_t, new_c, new_k))
+}
+
+/// Compute the antiderivative (integral) of a B-spline.
+///
+/// Matches `scipy.interpolate.splantider`.
+pub fn splantider(
+    tck: &(Vec<f64>, Vec<f64>, usize),
+) -> Result<(Vec<f64>, Vec<f64>, usize), InterpError> {
+    let (t, c, k) = tck;
+    let n = c.len();
+    let new_k = k + 1;
+
+    // Antiderivative coefficients
+    let mut new_c = vec![0.0]; // integration constant = 0
+    for i in 0..n {
+        let dt = t[i + k + 1] - t[i + 1];
+        new_c.push(new_c[i] + c[i] * dt / (k + 1) as f64);
+    }
+
+    // Add one knot at each end (repeat boundary knots)
+    let mut new_t = vec![t[0]];
+    new_t.extend_from_slice(t);
+    new_t.push(t[t.len() - 1]);
+
+    Ok((new_t, new_c, new_k))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

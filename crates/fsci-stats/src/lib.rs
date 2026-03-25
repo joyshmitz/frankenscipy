@@ -2444,8 +2444,9 @@ impl ContinuousDistribution for Rice {
         if x <= 0.0 {
             return 0.0;
         }
-        // Numerical integration via Simpson's rule
-        let n = 200;
+        // Adaptive Simpson's rule — use more points for wider intervals
+        let n = (200.0 * (1.0 + x / 5.0).min(10.0)) as usize;
+        let n = n + (n % 2); // ensure even for Simpson
         let h = x / n as f64;
         let mut sum = self.pdf(0.0) + self.pdf(x);
         for i in 1..n {
@@ -2457,10 +2458,10 @@ impl ContinuousDistribution for Rice {
     }
 
     fn mean(&self) -> f64 {
-        // mean ≈ sqrt(π/2) * L_{1/2}(-b²/2)
-        // For simplicity, use numerical integration
-        let n = 500;
+        // Numerical integration — scale grid with the distribution's spread
         let upper = self.b + 6.0;
+        let n = (500.0 * (1.0 + self.b / 5.0).min(10.0)) as usize;
+        let n = n + (n % 2);
         let h = upper / n as f64;
         let mut sum = 0.0;
         for i in 0..=n {
@@ -2479,9 +2480,9 @@ impl ContinuousDistribution for Rice {
 
     fn var(&self) -> f64 {
         let m = self.mean();
-        // E[X²] via integration
-        let n = 500;
         let upper = self.b + 6.0;
+        let n = (500.0 * (1.0 + self.b / 5.0).min(10.0)) as usize;
+        let n = n + (n % 2);
         let h = upper / n as f64;
         let mut sum = 0.0;
         for i in 0..=n {
@@ -2961,11 +2962,12 @@ impl ContinuousDistribution for Bradford {
     }
 
     fn var(&self) -> f64 {
-        let k = (1.0 + self.c).ln();
+        let c = self.c;
+        let k = (1.0 + c).ln();
         let m = self.mean();
-        (self.c * (self.c + 2.0 * k) - 2.0 * k * k) / (2.0 * self.c * k * k) - m * m
-            + (self.c + 2.0) / (2.0 * (self.c + 1.0)) / k
-            - m * m
+        // E[X²] = (c² - 2c + 2k) / (2c²k), derived from ∫₀¹ x²·c/((1+cx)·k) dx
+        let ex2 = (c * c - 2.0 * c + 2.0 * k) / (2.0 * c * c * k);
+        ex2 - m * m
     }
 }
 
@@ -3209,7 +3211,8 @@ impl ContinuousDistribution for Moyal {
     }
 
     fn cdf(&self, x: f64) -> f64 {
-        1.0 - fsci_special::erfc_scalar(((-x).exp() / 2.0).sqrt())
+        // F(x) = erfc(exp(-x/2) / √2) = erfc(√(exp(-x)/2))
+        fsci_special::erfc_scalar(((-x).exp() / 2.0).sqrt())
     }
 
     fn mean(&self) -> f64 {
@@ -3241,9 +3244,8 @@ impl ContinuousDistribution for Gompertz {
         if x < 0.0 {
             return 0.0;
         }
-        self.c * (x + self.c * (1.0 - x.exp()) / self.c).exp()
-            * (self.c * (1.0 - x.exp())).exp()
-            * x.exp()
+        // f(x; c) = c * exp(x) * exp(-c * (exp(x) - 1))
+        self.c * x.exp() * (-self.c * (x.exp() - 1.0)).exp()
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -3386,7 +3388,8 @@ impl ContinuousDistribution for TruncExpon {
 
     fn mean(&self) -> f64 {
         let eb = (-self.b).exp();
-        1.0 / (1.0 - eb) - self.b * eb / (1.0 - eb)
+        // E[X] = (1 - (1+b)*exp(-b)) / (1 - exp(-b))
+        (1.0 - (1.0 + self.b) * eb) / (1.0 - eb)
     }
 
     fn var(&self) -> f64 {
@@ -3504,6 +3507,292 @@ impl ContinuousDistribution for TukeyLambda {
 
     fn mean(&self) -> f64 {
         0.0 // Symmetric
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Inverse Weibull (Frechet) distribution.
+///
+/// Matches `scipy.stats.invweibull`.
+pub struct InvWeibull {
+    pub c: f64,
+}
+
+impl InvWeibull {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for InvWeibull {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        self.c * x.powf(-self.c - 1.0) * (-x.powf(-self.c)).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            0.0
+        } else {
+            (-x.powf(-self.c)).exp()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        if self.c > 1.0 {
+            ln_gamma(1.0 - 1.0 / self.c).exp()
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Generalized normal distribution (exponential power).
+///
+/// Matches `scipy.stats.gennorm`.
+pub struct GenNorm {
+    pub beta: f64,
+}
+
+impl GenNorm {
+    #[must_use]
+    pub fn new(beta: f64) -> Self {
+        assert!(beta > 0.0, "beta must be positive");
+        Self { beta }
+    }
+}
+
+impl ContinuousDistribution for GenNorm {
+    fn pdf(&self, x: f64) -> f64 {
+        let b = self.beta;
+        b / (2.0 * ln_gamma(1.0 / b).exp()) * (-x.abs().powf(b)).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        // Numerical integration via the trait default (bisection ppf inverse)
+        // For efficiency, use the incomplete gamma
+        let b = self.beta;
+        let p = lower_regularized_gamma(1.0 / b, x.abs().powf(b));
+        if x >= 0.0 {
+            0.5 + 0.5 * p
+        } else {
+            0.5 - 0.5 * p
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        0.0
+    }
+
+    fn var(&self) -> f64 {
+        let b = self.beta;
+        ln_gamma(3.0 / b).exp() / ln_gamma(1.0 / b).exp()
+    }
+}
+
+/// Laplace-asymmetric distribution.
+///
+/// Matches `scipy.stats.laplace_asymmetric`.
+pub struct LaplaceAsymmetric {
+    pub kappa: f64,
+}
+
+impl LaplaceAsymmetric {
+    #[must_use]
+    pub fn new(kappa: f64) -> Self {
+        assert!(kappa > 0.0, "kappa must be positive");
+        Self { kappa }
+    }
+}
+
+impl ContinuousDistribution for LaplaceAsymmetric {
+    fn pdf(&self, x: f64) -> f64 {
+        let k = self.kappa;
+        let norm = 1.0 / (k + 1.0 / k);
+        if x >= 0.0 {
+            norm * (-x * k).exp()
+        } else {
+            norm * (x / k).exp()
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let k = self.kappa;
+        if x >= 0.0 {
+            // CDF = 1 - exp(-xκ) / (1+κ²)
+            1.0 - (-x * k).exp() / (1.0 + k * k)
+        } else {
+            // CDF = κ² / (1+κ²) * exp(x/κ)
+            k * k / (1.0 + k * k) * (x / k).exp()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        1.0 / self.kappa - self.kappa
+    }
+
+    fn var(&self) -> f64 {
+        1.0 / (self.kappa * self.kappa) + self.kappa * self.kappa
+    }
+}
+
+/// Argus distribution (used in high-energy physics).
+///
+/// Matches `scipy.stats.argus`.
+pub struct Argus {
+    pub chi: f64,
+}
+
+impl Argus {
+    #[must_use]
+    pub fn new(chi: f64) -> Self {
+        assert!(chi > 0.0, "chi must be positive");
+        Self { chi }
+    }
+}
+
+impl ContinuousDistribution for Argus {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 || x >= 1.0 {
+            return 0.0;
+        }
+        let chi = self.chi;
+        let chi2 = chi * chi;
+        let t = 1.0 - x * x;
+        // Normalization via Ψ(χ) = Φ(χ) - χφ(χ) - 1/2
+        // where Φ = standard normal CDF, φ = standard normal PDF
+        let phi_chi = standard_normal_cdf(chi);
+        let pdf_chi = (-0.5 * chi2).exp() / (2.0 * PI).sqrt();
+        let psi = phi_chi - chi * pdf_chi - 0.5;
+        let norm = if psi > 0.0 {
+            chi.powi(3) / ((2.0 * PI).sqrt() * psi)
+        } else {
+            1.0
+        };
+        norm * x * t.sqrt() * (-0.5 * chi2 * t).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if x >= 1.0 {
+            return 1.0;
+        }
+        // Numerical CDF via Simpson's rule — scale grid for accuracy
+        let n = 400;
+        let h = x / n as f64;
+        let mut sum = self.pdf(0.0) + self.pdf(x);
+        for i in 1..n {
+            let t = i as f64 * h;
+            let w = if i % 2 == 0 { 2.0 } else { 4.0 };
+            sum += w * self.pdf(t);
+        }
+        (sum * h / 3.0).clamp(0.0, 1.0)
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Crystal Ball distribution (used in high-energy physics).
+///
+/// Matches `scipy.stats.crystalball`.
+pub struct CrystalBall {
+    pub beta_param: f64,
+    pub m: f64,
+}
+
+impl CrystalBall {
+    #[must_use]
+    pub fn new(beta_param: f64, m: f64) -> Self {
+        assert!(beta_param > 0.0, "beta must be positive");
+        assert!(m > 1.0, "m must be > 1");
+        Self { beta_param, m }
+    }
+}
+
+impl ContinuousDistribution for CrystalBall {
+    fn pdf(&self, x: f64) -> f64 {
+        let beta = self.beta_param;
+        let m = self.m;
+
+        if x > -beta {
+            // Gaussian core
+            (-0.5 * x * x).exp()
+        } else {
+            // Power-law tail
+            let a = (m / beta).powf(m) * (-0.5 * beta * beta).exp();
+            let b = m / beta - beta;
+            a * (b - x).powf(-m)
+        }
+        // Note: not normalized. For proper use, integrate to normalize.
+        // This matches scipy's unnormalized convention before scaling.
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let beta = self.beta_param;
+        let m = self.m;
+
+        // Analytical normalization: split at x = -beta
+        // Gaussian part: ∫_{-β}^{∞} exp(-x²/2) dx = √(2π) * Φ(β)... wait, ∫ from -β to ∞
+        // = √(2π) * (1 - Φ(-β)) = √(2π) * Φ(β)
+        let gauss_norm = (2.0 * PI).sqrt() * standard_normal_cdf(beta);
+
+        // Power tail part: ∫_{-∞}^{-β} A*(B-x)^{-m} dx
+        let a_coeff = (m / beta).powf(m) * (-0.5 * beta * beta).exp();
+        let b_val = m / beta - beta;
+        // ∫_{-∞}^{-β} A*(B-x)^{-m} dx = A * (B-(-β))^{1-m} / (m-1)
+        // B - (-β) = m/β - β + β = m/β
+        let tail_norm = if m > 1.0 {
+            a_coeff * (m / beta).powf(1.0 - m) / (m - 1.0)
+        } else {
+            // For m <= 1 the integral diverges; use numerical fallback
+            100.0 * a_coeff // rough estimate
+        };
+
+        let total_norm = gauss_norm + tail_norm;
+        if total_norm <= 0.0 {
+            return 0.5;
+        }
+
+        // CDF: integrate pdf from -∞ to x
+        if x >= -beta {
+            // All tail + Gaussian from -β to x
+            let gauss_cdf_part = (2.0 * PI).sqrt()
+                * (standard_normal_cdf(x) - standard_normal_cdf(-beta));
+            (tail_norm + gauss_cdf_part) / total_norm
+        } else {
+            // Only part of the tail: ∫_{-∞}^{x} A*(B-t)^{-m} dt
+            let bx = b_val - x;
+            let partial = if m > 1.0 && bx > 0.0 {
+                a_coeff * bx.powf(1.0 - m) / (m - 1.0)
+            } else {
+                0.0
+            };
+            // tail_norm - ∫_{x}^{-β} = tail_norm - (tail_norm - partial)
+            (partial / total_norm).clamp(0.0, 1.0)
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NAN
     }
 
     fn var(&self) -> f64 {

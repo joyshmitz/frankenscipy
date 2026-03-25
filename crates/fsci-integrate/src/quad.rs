@@ -1596,7 +1596,8 @@ pub fn newton_cotes(n: usize) -> Result<Vec<f64>, IntegrateValidationError> {
             for i in 0..=n {
                 // w_i = ∫₀¹ L_i(x) dx where L_i = Π_{j≠i} (x - j/n) / (i/n - j/n)
                 // Use numerical integration with high-order quadrature
-                let m = 200;
+                // Scale grid with polynomial degree to maintain accuracy
+                let m = (20 * (n + 1)).max(200);
                 let mut integral = 0.0;
                 for k in 0..=m {
                     let x = k as f64 / m as f64;
