@@ -742,6 +742,238 @@ pub fn silhouette_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
     total / n as f64
 }
 
+/// Calinski-Harabasz index: ratio of between-cluster to within-cluster dispersion.
+///
+/// Higher is better. Matches `sklearn.metrics.calinski_harabasz_score`.
+pub fn calinski_harabasz_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
+    let n = data.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let d = data[0].len();
+    let k = labels.iter().cloned().max().unwrap_or(0) + 1;
+    if k < 2 {
+        return 0.0;
+    }
+
+    // Global centroid
+    let mut global_centroid = vec![0.0; d];
+    for point in data {
+        for (j, &v) in point.iter().enumerate() {
+            global_centroid[j] += v;
+        }
+    }
+    for v in &mut global_centroid {
+        *v /= n as f64;
+    }
+
+    // Cluster centroids and counts
+    let mut centroids = vec![vec![0.0; d]; k];
+    let mut counts = vec![0usize; k];
+    for (i, point) in data.iter().enumerate() {
+        let c = labels[i];
+        counts[c] += 1;
+        for (j, &v) in point.iter().enumerate() {
+            centroids[c][j] += v;
+        }
+    }
+    for c in 0..k {
+        if counts[c] > 0 {
+            for v in &mut centroids[c] {
+                *v /= counts[c] as f64;
+            }
+        }
+    }
+
+    // Between-cluster dispersion
+    let mut bg = 0.0;
+    for c in 0..k {
+        bg += counts[c] as f64 * sq_dist(&centroids[c], &global_centroid);
+    }
+
+    // Within-cluster dispersion
+    let mut wg = 0.0;
+    for (i, point) in data.iter().enumerate() {
+        wg += sq_dist(point, &centroids[labels[i]]);
+    }
+
+    if wg == 0.0 {
+        return f64::INFINITY;
+    }
+
+    (bg / (k - 1) as f64) / (wg / (n - k) as f64)
+}
+
+/// Davies-Bouldin index: average similarity of clusters.
+///
+/// Lower is better. Matches `sklearn.metrics.davies_bouldin_score`.
+pub fn davies_bouldin_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
+    let n = data.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let d = data[0].len();
+    let k = labels.iter().cloned().max().unwrap_or(0) + 1;
+    if k < 2 {
+        return 0.0;
+    }
+
+    // Cluster centroids
+    let mut centroids = vec![vec![0.0; d]; k];
+    let mut counts = vec![0usize; k];
+    for (i, point) in data.iter().enumerate() {
+        let c = labels[i];
+        counts[c] += 1;
+        for (j, &v) in point.iter().enumerate() {
+            centroids[c][j] += v;
+        }
+    }
+    for c in 0..k {
+        if counts[c] > 0 {
+            for v in &mut centroids[c] {
+                *v /= counts[c] as f64;
+            }
+        }
+    }
+
+    // Average within-cluster distance for each cluster
+    let mut s = vec![0.0; k];
+    for (i, point) in data.iter().enumerate() {
+        s[labels[i]] += sq_dist(point, &centroids[labels[i]]).sqrt();
+    }
+    for c in 0..k {
+        if counts[c] > 0 {
+            s[c] /= counts[c] as f64;
+        }
+    }
+
+    // Davies-Bouldin index
+    let mut db = 0.0;
+    for i in 0..k {
+        let mut max_r = 0.0f64;
+        for j in 0..k {
+            if i != j {
+                let d_ij = sq_dist(&centroids[i], &centroids[j]).sqrt();
+                if d_ij > 0.0 {
+                    max_r = max_r.max((s[i] + s[j]) / d_ij);
+                }
+            }
+        }
+        db += max_r;
+    }
+
+    db / k as f64
+}
+
+/// Adjusted Rand Index: similarity between two clusterings, adjusted for chance.
+///
+/// Matches `sklearn.metrics.adjusted_rand_score`.
+pub fn adjusted_rand_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
+    let n = labels_true.len();
+    if n != labels_pred.len() || n < 2 {
+        return 0.0;
+    }
+
+    let k1 = labels_true.iter().cloned().max().unwrap_or(0) + 1;
+    let k2 = labels_pred.iter().cloned().max().unwrap_or(0) + 1;
+
+    // Contingency table
+    let mut contingency = vec![vec![0i64; k2]; k1];
+    for i in 0..n {
+        contingency[labels_true[i]][labels_pred[i]] += 1;
+    }
+
+    // Row and column sums
+    let row_sums: Vec<i64> = contingency.iter().map(|r| r.iter().sum()).collect();
+    let col_sums: Vec<i64> = (0..k2)
+        .map(|j| contingency.iter().map(|r| r[j]).sum())
+        .collect();
+
+    // Compute index using C(n,2) counts
+    let comb2 = |x: i64| -> i64 { x * (x - 1) / 2 };
+
+    let sum_comb_nij: i64 = contingency
+        .iter()
+        .flat_map(|r| r.iter())
+        .map(|&v| comb2(v))
+        .sum();
+    let sum_comb_a: i64 = row_sums.iter().map(|&v| comb2(v)).sum();
+    let sum_comb_b: i64 = col_sums.iter().map(|&v| comb2(v)).sum();
+    let comb_n = comb2(n as i64);
+
+    let expected = sum_comb_a as f64 * sum_comb_b as f64 / comb_n as f64;
+    let max_index = (sum_comb_a + sum_comb_b) as f64 / 2.0;
+
+    if (max_index - expected).abs() < 1e-15 {
+        return if sum_comb_nij as f64 == expected {
+            1.0
+        } else {
+            0.0
+        };
+    }
+
+    (sum_comb_nij as f64 - expected) / (max_index - expected)
+}
+
+/// Normalized Mutual Information between two clusterings.
+///
+/// Matches `sklearn.metrics.normalized_mutual_info_score`.
+pub fn normalized_mutual_info(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
+    let n = labels_true.len();
+    if n != labels_pred.len() || n == 0 {
+        return 0.0;
+    }
+
+    let k1 = labels_true.iter().cloned().max().unwrap_or(0) + 1;
+    let k2 = labels_pred.iter().cloned().max().unwrap_or(0) + 1;
+    let nf = n as f64;
+
+    // Contingency table
+    let mut contingency = vec![vec![0usize; k2]; k1];
+    for i in 0..n {
+        contingency[labels_true[i]][labels_pred[i]] += 1;
+    }
+
+    let row_sums: Vec<usize> = contingency.iter().map(|r| r.iter().sum()).collect();
+    let col_sums: Vec<usize> = (0..k2)
+        .map(|j| contingency.iter().map(|r| r[j]).sum())
+        .collect();
+
+    // Mutual information
+    let mut mi = 0.0;
+    for i in 0..k1 {
+        for j in 0..k2 {
+            if contingency[i][j] > 0 && row_sums[i] > 0 && col_sums[j] > 0 {
+                let pij = contingency[i][j] as f64 / nf;
+                let pi = row_sums[i] as f64 / nf;
+                let pj = col_sums[j] as f64 / nf;
+                mi += pij * (pij / (pi * pj)).ln();
+            }
+        }
+    }
+
+    // Entropies
+    let h1: f64 = row_sums
+        .iter()
+        .filter(|&&s| s > 0)
+        .map(|&s| {
+            let p = s as f64 / nf;
+            -p * p.ln()
+        })
+        .sum();
+    let h2: f64 = col_sums
+        .iter()
+        .filter(|&&s| s > 0)
+        .map(|&s| {
+            let p = s as f64 / nf;
+            -p * p.ln()
+        })
+        .sum();
+
+    let denom = ((h1 + h2) / 2.0).max(1e-15);
+    (mi / denom).clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

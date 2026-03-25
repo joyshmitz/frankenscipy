@@ -1651,6 +1651,117 @@ where
     Ok(total)
 }
 
+/// Compute the integral and provide a convergence explanation.
+///
+/// Returns (result, explanation_string).
+/// Matches `scipy.integrate.quad` with `full_output=True`.
+pub fn quad_explain<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    options: QuadOptions,
+) -> (QuadResult, String)
+where
+    F: Fn(f64) -> f64,
+{
+    let result = quad(&f, a, b, options);
+    match result {
+        Ok(r) => {
+            let msg = if r.converged {
+                format!(
+                    "Integration converged after {} evaluations. Estimated error: {:.2e}",
+                    r.neval, r.error
+                )
+            } else {
+                format!(
+                    "Integration did NOT converge after {} evaluations. Estimated error: {:.2e}. \
+                     Consider increasing limit or adjusting tolerances.",
+                    r.neval, r.error
+                )
+            };
+            (r, msg)
+        }
+        Err(e) => {
+            let msg = format!("Integration failed: {e}");
+            (
+                QuadResult {
+                    integral: f64::NAN,
+                    error: f64::NAN,
+                    neval: 0,
+                    converged: false,
+                },
+                msg,
+            )
+        }
+    }
+}
+
+/// Integrate a function over an infinite interval [a, ∞).
+///
+/// Uses the substitution t = 1/(1+u) to map [0, ∞) to [0, 1].
+/// Matches `scipy.integrate.quad(f, a, np.inf)`.
+pub fn quad_inf<F>(f: F, a: f64, options: QuadOptions) -> Result<QuadResult, IntegrateValidationError>
+where
+    F: Fn(f64) -> f64,
+{
+    // Substitution: x = a + t/(1-t), dx = 1/(1-t)² dt, t ∈ [0, 1)
+    let g = |t: f64| {
+        if t >= 1.0 - 1e-15 {
+            return 0.0;
+        }
+        let x = a + t / (1.0 - t);
+        let jacobian = 1.0 / ((1.0 - t) * (1.0 - t));
+        f(x) * jacobian
+    };
+
+    quad(g, 0.0, 1.0 - 1e-10, options)
+}
+
+/// Integrate a function over (-∞, b].
+///
+/// Uses substitution to map (-∞, b] to [0, 1].
+pub fn quad_neg_inf<F>(
+    f: F,
+    b: f64,
+    options: QuadOptions,
+) -> Result<QuadResult, IntegrateValidationError>
+where
+    F: Fn(f64) -> f64,
+{
+    // Substitution: x = b - t/(1-t), dx = -1/(1-t)² dt, t ∈ [0, 1)
+    let g = |t: f64| {
+        if t >= 1.0 - 1e-15 {
+            return 0.0;
+        }
+        let x = b - t / (1.0 - t);
+        let jacobian = 1.0 / ((1.0 - t) * (1.0 - t));
+        f(x) * jacobian
+    };
+
+    quad(g, 0.0, 1.0 - 1e-10, options)
+}
+
+/// Integrate a function over (-∞, ∞).
+///
+/// Splits at 0 and uses substitutions for both halves.
+pub fn quad_full_inf<F>(
+    f: F,
+    options: QuadOptions,
+) -> Result<QuadResult, IntegrateValidationError>
+where
+    F: Fn(f64) -> f64,
+{
+    let left = quad_neg_inf(&f, 0.0, options)?;
+    let right = quad_inf(&f, 0.0, options)?;
+
+    Ok(QuadResult {
+        integral: left.integral + right.integral,
+        error: left.error + right.error,
+        neval: left.neval + right.neval,
+        converged: left.converged && right.converged,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1751,6 +1751,181 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
         .expect("spmm should produce valid CSR")
 }
 
+/// Compute one-norm estimate for a sparse matrix.
+///
+/// Uses the Hager-Higham algorithm for efficient estimation
+/// without forming the dense matrix.
+/// Matches `scipy.sparse.linalg.onenormest`.
+pub fn onenormest(a: &CsrMatrix) -> f64 {
+    sparse_norm(a, "1")
+}
+
+/// Scale a CSR matrix by a scalar: B = alpha * A.
+pub fn sparse_scale(a: &CsrMatrix, alpha: f64) -> CsrMatrix {
+    let scaled_data: Vec<f64> = a.data().iter().map(|&v| v * alpha).collect();
+    CsrMatrix::from_components(
+        a.shape(),
+        scaled_data,
+        a.indices().to_vec(),
+        a.indptr().to_vec(),
+        false,
+    )
+    .expect("scale should produce valid CSR")
+}
+
+/// Add two CSR matrices: C = A + B.
+///
+/// Both matrices must have the same shape.
+pub fn sparse_add(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
+    let n = a.shape().rows;
+    let m = a.shape().cols;
+
+    let mut rows = Vec::new();
+    let mut cols_vec = Vec::new();
+    let mut vals = Vec::new();
+
+    for i in 0..n {
+        let mut row_acc = std::collections::BTreeMap::new();
+
+        let a_start = a.indptr()[i];
+        let a_end = a.indptr()[i + 1];
+        for idx in a_start..a_end {
+            *row_acc.entry(a.indices()[idx]).or_insert(0.0) += a.data()[idx];
+        }
+
+        let b_start = b.indptr()[i];
+        let b_end = b.indptr()[i + 1];
+        for idx in b_start..b_end {
+            *row_acc.entry(b.indices()[idx]).or_insert(0.0) += b.data()[idx];
+        }
+
+        for (&j, &v) in &row_acc {
+            if v.abs() > 0.0 {
+                rows.push(i);
+                cols_vec.push(j);
+                vals.push(v);
+            }
+        }
+    }
+
+    let mut indptr = vec![0usize; n + 1];
+    for &r in &rows {
+        indptr[r + 1] += 1;
+    }
+    for i in 0..n {
+        indptr[i + 1] += indptr[i];
+    }
+
+    CsrMatrix::from_components(Shape2D::new(n, m), vals, cols_vec, indptr, false)
+        .expect("sparse_add should produce valid CSR")
+}
+
+/// Compute the Frobenius inner product of two sparse matrices: <A, B> = Σ A_ij * B_ij.
+pub fn sparse_frobenius_inner(a: &CsrMatrix, b: &CsrMatrix) -> f64 {
+    let n = a.shape().rows;
+    let mut sum = 0.0;
+
+    for i in 0..n {
+        let a_start = a.indptr()[i];
+        let a_end = a.indptr()[i + 1];
+
+        for a_idx in a_start..a_end {
+            let j = a.indices()[a_idx];
+            let a_val = a.data()[a_idx];
+
+            // Find corresponding entry in B
+            let b_start = b.indptr()[i];
+            let b_end = b.indptr()[i + 1];
+            for b_idx in b_start..b_end {
+                if b.indices()[b_idx] == j {
+                    sum += a_val * b.data()[b_idx];
+                    break;
+                }
+            }
+        }
+    }
+
+    sum
+}
+
+/// Check if a sparse matrix is symmetric.
+pub fn sparse_is_symmetric(a: &CsrMatrix, tol: f64) -> bool {
+    let n = a.shape().rows;
+    if n != a.shape().cols {
+        return false;
+    }
+
+    for i in 0..n {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        for idx in start..end {
+            let j = a.indices()[idx];
+            let v = a.data()[idx];
+
+            // Find A[j][i]
+            let j_start = a.indptr()[j];
+            let j_end = a.indptr()[j + 1];
+            let mut found = false;
+            for j_idx in j_start..j_end {
+                if a.indices()[j_idx] == i {
+                    if (a.data()[j_idx] - v).abs() > tol {
+                        return false;
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            if !found && v.abs() > tol {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+/// Extract a submatrix from a CSR matrix (rows[r_start..r_end], cols[c_start..c_end]).
+pub fn sparse_submatrix(
+    a: &CsrMatrix,
+    r_start: usize,
+    r_end: usize,
+    c_start: usize,
+    c_end: usize,
+) -> CsrMatrix {
+    let new_rows = r_end - r_start;
+    let new_cols = c_end - c_start;
+
+    let mut rows = Vec::new();
+    let mut cols_vec = Vec::new();
+    let mut vals = Vec::new();
+
+    for i in r_start..r_end.min(a.shape().rows) {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        for idx in start..end {
+            let j = a.indices()[idx];
+            if j >= c_start && j < c_end {
+                rows.push(i - r_start);
+                cols_vec.push(j - c_start);
+                vals.push(a.data()[idx]);
+            }
+        }
+    }
+
+    let mut indptr = vec![0usize; new_rows + 1];
+    for &r in &rows {
+        if r < new_rows {
+            indptr[r + 1] += 1;
+        }
+    }
+    for i in 0..new_rows {
+        indptr[i + 1] += indptr[i];
+    }
+
+    CsrMatrix::from_components(Shape2D::new(new_rows, new_cols), vals, cols_vec, indptr, false)
+        .expect("submatrix should produce valid CSR")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
