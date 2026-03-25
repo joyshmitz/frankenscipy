@@ -1512,3 +1512,172 @@ pub fn erfc_conv(x: f64) -> f64 {
 pub fn erfcinv_conv(y: f64) -> f64 {
     crate::erfinv_scalar(1.0 - y, fsci_runtime::RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Additional Special Functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Scaled complementary error function: exp(x²) * erfc(x).
+///
+/// Avoids overflow for large x. Matches `scipy.special.erfcx`.
+pub fn erfcx(x: f64) -> f64 {
+    if x < 0.0 {
+        // For negative x, exp(x²) * erfc(x) = exp(x²) * (2 - erfc(-x))
+        // This can overflow, but erfc(-x) is near 2 and exp(x²) grows
+        (x * x).exp() * crate::erfc_scalar(x)
+    } else if x < 25.0 {
+        (x * x).exp() * crate::erfc_scalar(x)
+    } else {
+        // Asymptotic: erfcx(x) ≈ 1/(x√π) * (1 - 1/(2x²) + 3/(4x⁴) - ...)
+        let inv_x = 1.0 / x;
+        let inv_x2 = inv_x * inv_x;
+        inv_x / std::f64::consts::PI.sqrt()
+            * (1.0 - 0.5 * inv_x2 + 0.75 * inv_x2 * inv_x2)
+    }
+}
+
+/// Imaginary error function: erfi(x) = -i * erf(ix) = 2/√π ∫₀ˣ exp(t²) dt.
+///
+/// Matches `scipy.special.erfi`.
+pub fn erfi(x: f64) -> f64 {
+    // erfi(x) = 2x/√π * Σ_{k=0}^∞ x^{2k} / (k! * (2k+1))
+    if x.abs() < 6.0 {
+        let x2 = x * x;
+        let mut term = 1.0;
+        let mut sum = 1.0;
+        for k in 1..100 {
+            term *= x2 / k as f64;
+            let contrib = term / (2 * k + 1) as f64;
+            sum += contrib;
+            if contrib.abs() < sum.abs() * 1e-16 {
+                break;
+            }
+        }
+        2.0 * x / std::f64::consts::PI.sqrt() * sum
+    } else {
+        // For large |x|, erfi grows like exp(x²)/(x√π)
+        x.signum() * erfcx(-x.abs()) * (x * x).exp() - x.signum() / (x.abs() * std::f64::consts::PI.sqrt())
+    }
+}
+
+/// Owen's T function: T(h, a) = (1/2π) ∫₀ᵃ exp(-h²(1+t²)/2) / (1+t²) dt.
+///
+/// Used in bivariate normal distribution. Matches `scipy.special.owens_t`.
+pub fn owens_t(h: f64, a: f64) -> f64 {
+    if a == 0.0 {
+        return 0.0;
+    }
+    if h == 0.0 {
+        return a.atan() / (2.0 * std::f64::consts::PI);
+    }
+
+    // Numerical integration via Gauss-Legendre (10-point)
+    let gl_nodes = [
+        -0.973_906_528_517_171_7,
+        -0.865_063_366_688_984_5,
+        -0.679_409_568_299_024_4,
+        -0.433_395_394_129_247_2,
+        -0.148_874_338_981_631_2,
+        0.148_874_338_981_631_2,
+        0.433_395_394_129_247_2,
+        0.679_409_568_299_024_4,
+        0.865_063_366_688_984_5,
+        0.973_906_528_517_171_7,
+    ];
+    let gl_weights = [
+        0.066_671_344_308_688_1,
+        0.149_451_349_150_580_6,
+        0.219_086_362_515_982_0,
+        0.269_266_719_309_996_4,
+        0.295_524_224_714_752_9,
+        0.295_524_224_714_752_9,
+        0.269_266_719_309_996_4,
+        0.219_086_362_515_982_0,
+        0.149_451_349_150_580_6,
+        0.066_671_344_308_688_1,
+    ];
+
+    let mid = a / 2.0;
+    let half = a / 2.0;
+    let h2 = h * h;
+
+    let mut sum = 0.0;
+    for (&node, &weight) in gl_nodes.iter().zip(gl_weights.iter()) {
+        let t = mid + half * node;
+        let integrand = (-0.5 * h2 * (1.0 + t * t)).exp() / (1.0 + t * t);
+        sum += weight * integrand;
+    }
+
+    sum * half / (2.0 * std::f64::consts::PI)
+}
+
+/// Relative error exponential: (exp(x) - 1) / x, accurate near x=0.
+///
+/// Matches `scipy.special.exprel`.
+pub fn exprel(x: f64) -> f64 {
+    if x.abs() < 1e-5 {
+        // Taylor series: 1 + x/2 + x²/6 + x³/24 + ...
+        1.0 + x / 2.0 + x * x / 6.0 + x * x * x / 24.0
+    } else {
+        x.exp_m1() / x
+    }
+}
+
+/// Box-Cox transformation: (x^λ - 1) / λ for λ ≠ 0, ln(x) for λ = 0.
+///
+/// Matches `scipy.special.boxcox`.
+pub fn boxcox_transform(x: f64, lam: f64) -> f64 {
+    if x <= 0.0 {
+        return f64::NAN;
+    }
+    if lam.abs() < 1e-15 {
+        x.ln()
+    } else {
+        (x.powf(lam) - 1.0) / lam
+    }
+}
+
+/// Inverse Box-Cox transformation.
+///
+/// Matches `scipy.special.inv_boxcox`.
+pub fn inv_boxcox(y: f64, lam: f64) -> f64 {
+    if lam.abs() < 1e-15 {
+        y.exp()
+    } else {
+        (lam * y + 1.0).powf(1.0 / lam)
+    }
+}
+
+/// Box-Cox transformation with offset: ((x+1)^λ - 1) / λ.
+///
+/// Matches `scipy.special.boxcox1p`.
+pub fn boxcox1p(x: f64, lam: f64) -> f64 {
+    boxcox_transform(1.0 + x, lam)
+}
+
+/// Inverse Box-Cox transformation with offset.
+///
+/// Matches `scipy.special.inv_boxcox1p`.
+pub fn inv_boxcox1p(y: f64, lam: f64) -> f64 {
+    inv_boxcox(y, lam) - 1.0
+}
+
+/// Log of the number of combinations: ln(C(n, k)).
+///
+/// More numerically stable than computing C(n,k) directly.
+/// Matches `scipy.special.gammaln`-based combination counting.
+pub fn log_ndtr(x: f64) -> f64 {
+    // log(Φ(x)) where Φ is the standard normal CDF
+    // For large negative x, use asymptotic to avoid log(tiny)
+    if x > 6.0 {
+        // Φ(x) ≈ 1, log(1) ≈ 0 with correction
+        let t = ndtr(x);
+        if t > 0.0 { t.ln() } else { 0.0 }
+    } else if x > -20.0 {
+        let t = ndtr(x);
+        if t > 0.0 { t.ln() } else { f64::NEG_INFINITY }
+    } else {
+        // Asymptotic: log Φ(x) ≈ -x²/2 - log(-x√(2π)) for x << 0
+        -0.5 * x * x - (-x * (2.0 * std::f64::consts::PI).sqrt()).ln()
+    }
+}

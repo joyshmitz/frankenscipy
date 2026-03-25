@@ -4063,6 +4063,144 @@ pub fn kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Additional Matrix Constructors
+// ══════════════════════════════════════════════════════════════════════
+
+/// Vandermonde matrix: V[i][j] = x[i]^j.
+///
+/// Matches `numpy.vander`.
+pub fn vander(x: &[f64], n: Option<usize>, increasing: bool) -> Vec<Vec<f64>> {
+    let m = x.len();
+    let cols = n.unwrap_or(m);
+    let mut v = vec![vec![0.0; cols]; m];
+    for i in 0..m {
+        for j in 0..cols {
+            let power = if increasing { j } else { cols - 1 - j };
+            v[i][j] = x[i].powi(power as i32);
+        }
+    }
+    v
+}
+
+/// Hankel matrix from first column and (optionally) last row.
+///
+/// Matches `scipy.linalg.hankel`.
+pub fn hankel(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
+    let n = c.len();
+    let r_vals = r.unwrap_or(c);
+    let m = r_vals.len();
+
+    let mut h = vec![vec![0.0; m]; n];
+    for i in 0..n {
+        for j in 0..m {
+            let idx = i + j;
+            h[i][j] = if idx < n {
+                c[idx]
+            } else if idx - n + 1 < m {
+                r_vals[idx - n + 1]
+            } else {
+                0.0
+            };
+        }
+    }
+    h
+}
+
+/// Helmert matrix (orthogonal contrast matrix).
+///
+/// Matches `scipy.linalg.helmert`.
+pub fn helmert(n: usize) -> Vec<Vec<f64>> {
+    if n == 0 {
+        return vec![];
+    }
+    let mut h = vec![vec![0.0; n]; n];
+
+    // First row: all 1/√n
+    let inv_sqrt_n = 1.0 / (n as f64).sqrt();
+    for j in 0..n {
+        h[0][j] = inv_sqrt_n;
+    }
+
+    // Row i (i >= 1): orthogonal contrasts
+    for i in 1..n {
+        let scale = 1.0 / ((i * (i + 1)) as f64).sqrt();
+        for j in 0..i {
+            h[i][j] = scale;
+        }
+        h[i][i] = -(i as f64) * scale;
+    }
+
+    h
+}
+
+/// Create a matrix with ones on the specified diagonal.
+///
+/// Matches `numpy.eye` with `k` offset.
+pub fn eye_k(n: usize, m: usize, k: i64) -> Vec<Vec<f64>> {
+    let mut result = vec![vec![0.0; m]; n];
+    for i in 0..n {
+        let j = i as i64 + k;
+        if j >= 0 && (j as usize) < m {
+            result[i][j as usize] = 1.0;
+        }
+    }
+    result
+}
+
+/// Stack matrices horizontally.
+///
+/// Matches `numpy.hstack` for 2D arrays.
+pub fn hstack(matrices: &[&[Vec<f64>]]) -> Vec<Vec<f64>> {
+    if matrices.is_empty() {
+        return vec![];
+    }
+    let n = matrices[0].len();
+    let total_cols: usize = matrices.iter().map(|m| if m.is_empty() { 0 } else { m[0].len() }).sum();
+
+    let mut result = vec![vec![0.0; total_cols]; n];
+    let mut col_offset = 0;
+    for mat in matrices {
+        let cols = if mat.is_empty() { 0 } else { mat[0].len() };
+        for i in 0..n.min(mat.len()) {
+            for j in 0..cols {
+                result[i][col_offset + j] = mat[i][j];
+            }
+        }
+        col_offset += cols;
+    }
+    result
+}
+
+/// Stack matrices vertically.
+///
+/// Matches `numpy.vstack` for 2D arrays.
+pub fn vstack(matrices: &[&[Vec<f64>]]) -> Vec<Vec<f64>> {
+    let mut result = Vec::new();
+    for mat in matrices {
+        for row in *mat {
+            result.push(row.clone());
+        }
+    }
+    result
+}
+
+/// Compute the Frobenius norm of a matrix.
+pub fn frobenius_norm(a: &[Vec<f64>]) -> f64 {
+    a.iter()
+        .flat_map(|row| row.iter())
+        .map(|&v| v * v)
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// Compute the max absolute value (infinity norm of flattened matrix).
+pub fn max_abs(a: &[Vec<f64>]) -> f64 {
+    a.iter()
+        .flat_map(|row| row.iter())
+        .fold(0.0f64, |acc, &v| acc.max(v.abs()))
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Condition Number and Matrix Properties
 // ══════════════════════════════════════════════════════════════════════
 

@@ -27,7 +27,9 @@ pub use convenience::{
     rel_entr, sinc, sinc_squared, softmax, spence, struve, tetragamma, trigamma, wrightomega,
     xlog1py, xlogy,
     // Convenience wrappers
-    betaincinv, erfc_conv, erfcinv_conv, gammainc_conv, gammaincc_conv, gammaincinv, log_comb,
+    betaincinv, boxcox1p, boxcox_transform, erfc_conv, erfcinv_conv, erfcx, erfi, exprel,
+    gammainc_conv, gammaincc_conv, gammaincinv, inv_boxcox, inv_boxcox1p, log_comb, log_ndtr,
+    owens_t,
 };
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw,

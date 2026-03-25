@@ -1765,6 +1765,103 @@ pub fn unwrap_phase(phase: &[f64]) -> Vec<f64> {
     unwrapped
 }
 
+/// Compute the envelope of a signal via Hilbert transform.
+///
+/// Returns the magnitude of the analytic signal.
+/// Matches `scipy.signal.hilbert` → `np.abs(...)`.
+pub fn envelope(x: &[f64]) -> Result<Vec<f64>, SignalError> {
+    hilbert_envelope(x)
+}
+
+/// Zero-crossing rate: fraction of consecutive samples with sign change.
+///
+/// Useful for audio/speech analysis.
+pub fn zero_crossing_rate(x: &[f64]) -> f64 {
+    if x.len() < 2 {
+        return 0.0;
+    }
+    let crossings = x
+        .windows(2)
+        .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
+        .count();
+    crossings as f64 / (x.len() - 1) as f64
+}
+
+/// Compute the short-time energy of a signal.
+///
+/// Returns the energy in each frame of length `frame_len` with `hop_len` stride.
+pub fn short_time_energy(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<f64> {
+    if frame_len == 0 || hop_len == 0 || x.is_empty() {
+        return vec![];
+    }
+    let mut energies = Vec::new();
+    let mut start = 0;
+    while start + frame_len <= x.len() {
+        let energy: f64 = x[start..start + frame_len].iter().map(|&v| v * v).sum();
+        energies.push(energy);
+        start += hop_len;
+    }
+    energies
+}
+
+/// Compute the autocorrelation of a signal.
+///
+/// Returns the normalized autocorrelation for lags 0 to max_lag.
+pub fn autocorrelation(x: &[f64], max_lag: usize) -> Vec<f64> {
+    let n = x.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    let mean: f64 = x.iter().sum::<f64>() / n as f64;
+    let var: f64 = x.iter().map(|&v| (v - mean).powi(2)).sum();
+
+    if var == 0.0 {
+        return vec![1.0; max_lag + 1];
+    }
+
+    (0..=max_lag.min(n - 1))
+        .map(|lag| {
+            let sum: f64 = (0..n - lag)
+                .map(|i| (x[i] - mean) * (x[i + lag] - mean))
+                .sum();
+            sum / var
+        })
+        .collect()
+}
+
+/// Compute the spectral centroid of a magnitude spectrum.
+///
+/// Returns the weighted mean frequency.
+pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
+    let total: f64 = magnitudes.iter().sum();
+    if total == 0.0 {
+        return 0.0;
+    }
+    magnitudes
+        .iter()
+        .zip(freqs.iter())
+        .map(|(&m, &f)| m * f)
+        .sum::<f64>()
+        / total
+}
+
+/// Compute the spectral rolloff frequency.
+///
+/// Returns the frequency below which `rolloff_percent` of the total energy is contained.
+pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64) -> f64 {
+    let total: f64 = magnitudes.iter().sum();
+    let threshold = total * rolloff_percent / 100.0;
+    let mut cumsum = 0.0;
+    for (&m, &f) in magnitudes.iter().zip(freqs.iter()) {
+        cumsum += m;
+        if cumsum >= threshold {
+            return f;
+        }
+    }
+    freqs.last().copied().unwrap_or(0.0)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // IIR Filter Design
 // ══════════════════════════════════════════════════════════════════════

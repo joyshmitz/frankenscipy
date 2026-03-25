@@ -1714,6 +1714,149 @@ fn modified_bessel_k(order: f64, x: f64) -> f64 {
     }
 }
 
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
+}
+
+fn matvec_mul(matrix: &[Vec<f64>], vector: &[f64]) -> Vec<f64> {
+    matrix.iter().map(|row| dot(row, vector)).collect()
+}
+
+fn identity_matrix(n: usize) -> Vec<Vec<f64>> {
+    let mut out = vec![vec![0.0; n]; n];
+    for (i, row) in out.iter_mut().enumerate() {
+        row[i] = 1.0;
+    }
+    out
+}
+
+fn covariance_biased(samples: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let n = samples.len();
+    let dim = samples[0].len();
+    let mut means = vec![0.0; dim];
+    for sample in samples {
+        for (j, &value) in sample.iter().enumerate() {
+            means[j] += value;
+        }
+    }
+    for mean in &mut means {
+        *mean /= n as f64;
+    }
+
+    let mut cov = vec![vec![0.0; dim]; dim];
+    for sample in samples {
+        let centered: Vec<f64> = sample
+            .iter()
+            .zip(means.iter())
+            .map(|(&x, &m)| x - m)
+            .collect();
+        for (i, row) in cov.iter_mut().enumerate() {
+            for (j, value) in row.iter_mut().enumerate() {
+                *value += centered[i] * centered[j];
+            }
+        }
+    }
+    for row in &mut cov {
+        for value in row {
+            *value /= n as f64;
+        }
+    }
+    cov
+}
+
+fn jacobi_symmetric_eigendecomposition(a: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let n = a.len();
+    let mut matrix = a.to_vec();
+    let mut eigenvectors = identity_matrix(n);
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    for _ in 0..(n * n * 32).max(32) {
+        let mut p = 0;
+        let mut q = 1.min(n.saturating_sub(1));
+        let mut max_off = 0.0;
+        for (i, row) in matrix.iter().enumerate() {
+            for (j, value) in row.iter().enumerate().skip(i + 1) {
+                if value.abs() > max_off {
+                    max_off = value.abs();
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if max_off < 1e-12 {
+            break;
+        }
+
+        let app = matrix[p][p];
+        let aqq = matrix[q][q];
+        let apq = matrix[p][q];
+        let tau = (aqq - app) / (2.0 * apq);
+        let t = tau.signum() / (tau.abs() + (1.0 + tau * tau).sqrt());
+        let c = 1.0 / (1.0 + t * t).sqrt();
+        let s = t * c;
+
+        for row in &mut matrix {
+            let mkp = row[p];
+            let mkq = row[q];
+            row[p] = c * mkp - s * mkq;
+            row[q] = s * mkp + c * mkq;
+        }
+        let row_p_old = matrix[p].clone();
+        let row_q_old = matrix[q].clone();
+        for (j, (&mpj, &mqj)) in row_p_old.iter().zip(row_q_old.iter()).enumerate() {
+            matrix[p][j] = c * mpj - s * mqj;
+            matrix[q][j] = s * mpj + c * mqj;
+        }
+        matrix[p][q] = 0.0;
+        matrix[q][p] = 0.0;
+        matrix[p][p] = c * c * app - 2.0 * s * c * apq + s * s * aqq;
+        matrix[q][q] = s * s * app + 2.0 * s * c * apq + c * c * aqq;
+
+        for row in &mut eigenvectors {
+            let vkp = row[p];
+            let vkq = row[q];
+            row[p] = c * vkp - s * vkq;
+            row[q] = s * vkp + c * vkq;
+        }
+    }
+
+    let eigenvalues = matrix.iter().enumerate().map(|(i, row)| row[i]).collect();
+    (eigenvalues, eigenvectors)
+}
+
+fn symmetric_pseudoinverse_and_rank(matrix: &[Vec<f64>]) -> (Vec<Vec<f64>>, usize) {
+    let n = matrix.len();
+    if n == 0 {
+        return (Vec::new(), 0);
+    }
+    let (eigenvalues, eigenvectors) = jacobi_symmetric_eigendecomposition(matrix);
+    let max_eigen = eigenvalues
+        .iter()
+        .copied()
+        .fold(0.0_f64, |a, b| a.max(b.abs()));
+    let threshold = (n as f64) * f64::EPSILON * max_eigen.max(1.0);
+    let mut pinv = vec![vec![0.0; n]; n];
+    let mut rank = 0usize;
+    for (idx, &eigenvalue) in eigenvalues.iter().enumerate() {
+        if eigenvalue.abs() <= threshold {
+            continue;
+        }
+        rank += 1;
+        let inv = 1.0 / eigenvalue;
+        for (i, row) in pinv.iter_mut().enumerate() {
+            for (j, value) in row.iter_mut().enumerate() {
+                *value += inv * eigenvectors[i][idx] * eigenvectors[j][idx];
+            }
+        }
+    }
+    (pinv, rank)
+}
+
 fn cholesky_decompose(matrix: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
     let n = matrix.len();
     let mut lower = vec![vec![0.0; n]; n];
@@ -3775,8 +3918,8 @@ impl ContinuousDistribution for CrystalBall {
         // CDF: integrate pdf from -∞ to x
         if x >= -beta {
             // All tail + Gaussian from -β to x
-            let gauss_cdf_part = (2.0 * PI).sqrt()
-                * (standard_normal_cdf(x) - standard_normal_cdf(-beta));
+            let gauss_cdf_part =
+                (2.0 * PI).sqrt() * (standard_normal_cdf(x) - standard_normal_cdf(-beta));
             (tail_norm + gauss_cdf_part) / total_norm
         } else {
             // Only part of the tail: ∫_{-∞}^{x} A*(B-t)^{-m} dt
@@ -5152,6 +5295,27 @@ pub struct CorrelationResult {
     pub pvalue: f64,
 }
 
+/// Result of Somers' D ordinal association test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SomersDResult {
+    /// Somers' D statistic.
+    pub statistic: f64,
+    /// p-value for H0: D = 0.
+    pub pvalue: f64,
+    /// Contingency table used in the calculation.
+    pub table: Vec<Vec<f64>>,
+    /// Alias for `statistic`, matching SciPy's result object.
+    pub correlation: f64,
+}
+
+/// Input surface for `somersd`.
+pub enum SomersDInput<'a> {
+    /// Independent/dependent ordinal rankings.
+    Rankings(&'a [f64], &'a [f64]),
+    /// Precomputed contingency table.
+    Table(&'a [Vec<f64>]),
+}
+
 /// Calculate the Pearson correlation coefficient and p-value.
 ///
 /// Matches `scipy.stats.pearsonr(x, y)`.
@@ -5699,6 +5863,134 @@ pub fn kstest(data: &[f64], target: KstestTarget<'_>) -> GoodnessOfFitResult {
         KstestTarget::Cdf(cdf) => ks_1samp(data, cdf),
         KstestTarget::Sample(reference) => ks_2samp(data, reference),
     }
+}
+
+/// Epps-Singleton two-sample test with SciPy's default support points.
+pub fn epps_singleton_2samp(x: &[f64], y: &[f64]) -> GoodnessOfFitResult {
+    match epps_singleton_2samp_with_t(x, y, &[0.4, 0.8]) {
+        Ok(result) => result,
+        Err(_) => GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        },
+    }
+}
+
+/// Epps-Singleton two-sample test with explicit positive support points `t`.
+pub fn epps_singleton_2samp_with_t(
+    x: &[f64],
+    y: &[f64],
+    t: &[f64],
+) -> Result<GoodnessOfFitResult, StatsError> {
+    if x.len() < 5 || y.len() < 5 {
+        return Ok(GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        });
+    }
+    if t.is_empty() {
+        return Err(StatsError::InvalidArgument(
+            "t must not be empty".to_string(),
+        ));
+    }
+    if t.iter().any(|&value| value <= 0.0 || !value.is_finite()) {
+        return Err(StatsError::InvalidArgument(
+            "t must contain positive finite elements only".to_string(),
+        ));
+    }
+    for (i, &value) in t.iter().enumerate() {
+        if t.iter().skip(i + 1).any(|&other| other == value) {
+            return Err(StatsError::InvalidArgument(
+                "t must contain distinct elements".to_string(),
+            ));
+        }
+    }
+    if x.iter().any(|v| !v.is_finite()) || y.iter().any(|v| !v.is_finite()) {
+        return Ok(GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        });
+    }
+
+    let mut pooled = x.to_vec();
+    pooled.extend_from_slice(y);
+    let sigma = iqr(&pooled) / 2.0;
+    if !sigma.is_finite() || sigma == 0.0 {
+        return Ok(GoodnessOfFitResult {
+            statistic: 0.0,
+            pvalue: f64::NAN,
+        });
+    }
+
+    let scaled_t: Vec<f64> = t.iter().map(|&value| value / sigma).collect();
+    let feature_dim = 2 * scaled_t.len();
+    let feature_row = |sample: f64| -> Vec<f64> {
+        let mut row = Vec::with_capacity(feature_dim);
+        for &t_value in &scaled_t {
+            row.push((t_value * sample).cos());
+        }
+        for &t_value in &scaled_t {
+            row.push((t_value * sample).sin());
+        }
+        row
+    };
+
+    let gx: Vec<Vec<f64>> = x.iter().copied().map(feature_row).collect();
+    let gy: Vec<Vec<f64>> = y.iter().copied().map(feature_row).collect();
+    let cov_x = covariance_biased(&gx);
+    let cov_y = covariance_biased(&gy);
+
+    let nx = x.len() as f64;
+    let ny = y.len() as f64;
+    let n_total = nx + ny;
+    let mut est_cov = vec![vec![0.0; feature_dim]; feature_dim];
+    for (i, row) in est_cov.iter_mut().enumerate() {
+        for (j, value) in row.iter_mut().enumerate() {
+            *value = (n_total / nx) * cov_x[i][j] + (n_total / ny) * cov_y[i][j];
+        }
+    }
+
+    let (pinv, rank) = symmetric_pseudoinverse_and_rank(&est_cov);
+    if rank == 0 {
+        return Ok(GoodnessOfFitResult {
+            statistic: 0.0,
+            pvalue: f64::NAN,
+        });
+    }
+
+    let mut mean_x = vec![0.0; feature_dim];
+    let mut mean_y = vec![0.0; feature_dim];
+    for row in &gx {
+        for (j, value) in row.iter().enumerate() {
+            mean_x[j] += value;
+        }
+    }
+    for row in &gy {
+        for (j, value) in row.iter().enumerate() {
+            mean_y[j] += value;
+        }
+    }
+    for value in &mut mean_x {
+        *value /= nx;
+    }
+    for value in &mut mean_y {
+        *value /= ny;
+    }
+    let g_diff: Vec<f64> = mean_x
+        .iter()
+        .zip(mean_y.iter())
+        .map(|(&a, &b)| a - b)
+        .collect();
+    let pinv_times_diff = matvec_mul(&pinv, &g_diff);
+    let mut statistic = n_total * dot(&g_diff, &pinv_times_diff);
+
+    if x.len().max(y.len()) < 25 {
+        let correction = 1.0 / (1.0 + n_total.powf(-0.45) + 10.1 * (nx.powf(-1.7) + ny.powf(-1.7)));
+        statistic *= correction;
+    }
+
+    let pvalue = ChiSquared::new(rank as f64).sf(statistic).clamp(0.0, 1.0);
+    Ok(GoodnessOfFitResult { statistic, pvalue })
 }
 
 fn cvm_cdf_inf(x: f64) -> f64 {
@@ -6575,6 +6867,184 @@ fn standard_normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + fsci_special::erf_scalar(x / std::f64::consts::SQRT_2))
 }
 
+fn somers_alternative_pvalue(z: f64, alternative: &str) -> f64 {
+    let normal = Normal::standard();
+    match alternative {
+        "two-sided" => (2.0 * ContinuousDistribution::sf(&normal, z.abs())).clamp(0.0, 1.0),
+        "less" => ContinuousDistribution::cdf(&normal, z).clamp(0.0, 1.0),
+        "greater" => ContinuousDistribution::sf(&normal, z).clamp(0.0, 1.0),
+        _ => f64::NAN,
+    }
+}
+
+fn somers_validate_alternative(alternative: Option<&str>) -> Result<&'static str, StatsError> {
+    match alternative.unwrap_or("two-sided").to_ascii_lowercase().as_str() {
+        "two-sided" => Ok("two-sided"),
+        "less" => Ok("less"),
+        "greater" => Ok("greater"),
+        _ => Err(StatsError::InvalidArgument(
+            "alternative must be one of {'two-sided', 'less', 'greater'}".to_string(),
+        )),
+    }
+}
+
+fn somers_from_rankings(x: &[f64], y: &[f64]) -> Result<Vec<Vec<f64>>, StatsError> {
+    if x.len() != y.len() {
+        return Err(StatsError::InvalidArgument(
+            "Rankings must be of equal length.".to_string(),
+        ));
+    }
+
+    let mut x_levels = x.to_vec();
+    x_levels.sort_by(f64::total_cmp);
+    x_levels.dedup_by(|a, b| a.total_cmp(b).is_eq());
+
+    let mut y_levels = y.to_vec();
+    y_levels.sort_by(f64::total_cmp);
+    y_levels.dedup_by(|a, b| a.total_cmp(b).is_eq());
+
+    let mut table = vec![vec![0.0; y_levels.len()]; x_levels.len()];
+    for (&xi, &yi) in x.iter().zip(y.iter()) {
+        let row = x_levels
+            .binary_search_by(|value| value.total_cmp(&xi))
+            .expect("x level present after dedup");
+        let col = y_levels
+            .binary_search_by(|value| value.total_cmp(&yi))
+            .expect("y level present after dedup");
+        table[row][col] += 1.0;
+    }
+    Ok(table)
+}
+
+fn somers_validate_table(table: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError> {
+    if table.is_empty() {
+        return Err(StatsError::InvalidArgument(
+            "x must be either a 1D or 2D array".to_string(),
+        ));
+    }
+    let cols = table[0].len();
+    if cols == 0 || table.iter().any(|row| row.len() != cols) {
+        return Err(StatsError::InvalidArgument(
+            "contingency table must be rectangular".to_string(),
+        ));
+    }
+    if table
+        .iter()
+        .flatten()
+        .any(|&value| value < 0.0 || !value.is_finite())
+    {
+        return Err(StatsError::InvalidArgument(
+            "All elements of the contingency table must be non-negative.".to_string(),
+        ));
+    }
+    if table
+        .iter()
+        .flatten()
+        .any(|&value| (value - value.round()).abs() > 1e-12)
+    {
+        return Err(StatsError::InvalidArgument(
+            "All elements of the contingency table must be integer.".to_string(),
+        ));
+    }
+    if table.iter().flatten().filter(|&&value| value != 0.0).count() < 2 {
+        return Err(StatsError::InvalidArgument(
+            "At least two elements of the contingency table must be nonzero.".to_string(),
+        ));
+    }
+    Ok(table.to_vec())
+}
+
+fn somers_aij(table: &[Vec<f64>], i: usize, j: usize) -> f64 {
+    let upper_left: f64 = table
+        .iter()
+        .take(i)
+        .map(|row| row.iter().take(j).sum::<f64>())
+        .sum();
+    let lower_right: f64 = table
+        .iter()
+        .skip(i + 1)
+        .map(|row| row.iter().skip(j + 1).sum::<f64>())
+        .sum();
+    upper_left + lower_right
+}
+
+fn somers_dij(table: &[Vec<f64>], i: usize, j: usize) -> f64 {
+    let lower_left: f64 = table
+        .iter()
+        .skip(i + 1)
+        .map(|row| row.iter().take(j).sum::<f64>())
+        .sum();
+    let upper_right: f64 = table
+        .iter()
+        .take(i)
+        .map(|row| row.iter().skip(j + 1).sum::<f64>())
+        .sum();
+    lower_left + upper_right
+}
+
+/// Somers' D ordinal association test.
+///
+/// Matches the core behavior of `scipy.stats.somersd`.
+pub fn somersd(input: SomersDInput<'_>, alternative: Option<&str>) -> Result<SomersDResult, StatsError> {
+    let alternative = somers_validate_alternative(alternative)?;
+    let table = match input {
+        SomersDInput::Rankings(x, y) => somers_from_rankings(x, y)?,
+        SomersDInput::Table(table) => somers_validate_table(table)?,
+    };
+
+    if table.len() <= 1 || table[0].len() <= 1 {
+        return Ok(SomersDResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            table,
+            correlation: f64::NAN,
+        });
+    }
+
+    let total: f64 = table.iter().flatten().sum();
+    let total_sq = total * total;
+    let sri2: f64 = table
+        .iter()
+        .map(|row| {
+            let row_sum: f64 = row.iter().sum();
+            row_sum * row_sum
+        })
+        .sum();
+
+    let mut p = 0.0;
+    let mut q = 0.0;
+    let mut a_term = 0.0;
+    for (i, row) in table.iter().enumerate() {
+        for (j, &cell) in row.iter().enumerate() {
+            let aij = somers_aij(&table, i, j);
+            let dij = somers_dij(&table, i, j);
+            p += cell * aij;
+            q += cell * dij;
+            a_term += cell * (aij - dij).powi(2);
+        }
+    }
+
+    let statistic = (p - q) / (total_sq - sri2);
+    let s = a_term - (p - q).powi(2) / total;
+    let z = if s > 0.0 {
+        (p - q) / (4.0 * s).sqrt()
+    } else if p > q {
+        f64::INFINITY
+    } else if p < q {
+        f64::NEG_INFINITY
+    } else {
+        0.0
+    };
+    let pvalue = somers_alternative_pvalue(z, alternative);
+
+    Ok(SomersDResult {
+        statistic,
+        pvalue,
+        table,
+        correlation: statistic,
+    })
+}
+
 // ── Fisher's exact test ──────────────────────────────────────────────
 
 /// Result of Fisher's exact test.
@@ -7330,6 +7800,160 @@ pub fn false_discovery_control(
     };
 
     Ok(corrected)
+}
+
+fn poisson_quantile_bounds(mu: f64, lower_q: f64, upper_q: f64) -> (usize, usize) {
+    debug_assert!(mu > 0.0);
+    debug_assert!(lower_q >= 0.0 && upper_q <= 1.0 && lower_q <= upper_q);
+
+    let mut pmf = (-mu).exp();
+    let mut cdf = pmf;
+    let mut lower = None;
+    let mut upper = 0usize;
+
+    if cdf >= lower_q {
+        lower = Some(0);
+    }
+    if cdf >= upper_q {
+        return (lower.unwrap_or(0), 0);
+    }
+
+    for k in 1..=1_000_000usize {
+        pmf *= mu / k as f64;
+        cdf = (cdf + pmf).min(1.0);
+        if lower.is_none() && cdf >= lower_q {
+            lower = Some(k);
+        }
+        if cdf >= upper_q {
+            upper = k;
+            break;
+        }
+    }
+
+    (lower.unwrap_or(upper), upper)
+}
+
+fn poisson_pmf_at(mu: f64, k: usize) -> f64 {
+    let mut pmf = (-mu).exp();
+    if k == 0 {
+        return pmf;
+    }
+    for i in 1..=k {
+        pmf *= mu / i as f64;
+    }
+    pmf
+}
+
+fn validate_poisson_means_test(
+    k1: i64,
+    n1: f64,
+    k2: i64,
+    n2: f64,
+    diff: f64,
+    alternative: &str,
+) -> Result<&str, StatsError> {
+    if k1 < 0 || k2 < 0 {
+        return Err(StatsError::InvalidArgument(
+            "`k1` and `k2` must be greater than or equal to 0.".to_string(),
+        ));
+    }
+    if !n1.is_finite() || !n2.is_finite() || n1 <= 0.0 || n2 <= 0.0 {
+        return Err(StatsError::InvalidArgument(
+            "`n1` and `n2` must be greater than 0.".to_string(),
+        ));
+    }
+    if diff.is_nan() || diff < 0.0 {
+        return Err(StatsError::InvalidArgument(
+            "diff must be greater than or equal to 0.".to_string(),
+        ));
+    }
+
+    match alternative.to_ascii_lowercase().as_str() {
+        "two-sided" => Ok("two-sided"),
+        "less" => Ok("less"),
+        "greater" => Ok("greater"),
+        _ => Err(StatsError::InvalidArgument(
+            "Alternative must be one of '{'two-sided', 'less', 'greater'}'.".to_string(),
+        )),
+    }
+}
+
+/// Poisson means E-test for the difference between two Poisson rates.
+///
+/// Matches the core behavior of `scipy.stats.poisson_means_test`.
+pub fn poisson_means_test(
+    k1: i64,
+    n1: f64,
+    k2: i64,
+    n2: f64,
+    diff: f64,
+    alternative: Option<&str>,
+) -> Result<GoodnessOfFitResult, StatsError> {
+    let alternative = validate_poisson_means_test(
+        k1,
+        n1,
+        k2,
+        n2,
+        diff,
+        alternative.unwrap_or("two-sided"),
+    )?;
+
+    let k1f = k1 as f64;
+    let k2f = k2 as f64;
+    let lambda_hat2 = (k1f + k2f) / (n1 + n2) - diff * n1 / (n1 + n2);
+    if lambda_hat2 <= 0.0 || !lambda_hat2.is_finite() {
+        return Ok(GoodnessOfFitResult {
+            statistic: 0.0,
+            pvalue: 1.0,
+        });
+    }
+
+    let variance = k1f / (n1 * n1) + k2f / (n2 * n2);
+    let observed = (k1f / n1 - k2f / n2 - diff) / variance.sqrt();
+
+    let mu1 = n1 * (lambda_hat2 + diff);
+    let mu2 = n2 * lambda_hat2;
+    let (x1_lb, x1_ub) = poisson_quantile_bounds(mu1, 1e-10, 1.0 - 1e-16);
+    let (x2_lb, x2_ub) = poisson_quantile_bounds(mu2, 1e-10, 1.0 - 1e-16);
+
+    let mut pvalue = 0.0;
+    let mut prob_x1 = poisson_pmf_at(mu1, x1_lb);
+    for x1 in x1_lb..=x1_ub {
+        if x1 > x1_lb {
+            prob_x1 *= mu1 / x1 as f64;
+        }
+        let lambda_x1 = x1 as f64 / n1;
+
+        let mut prob_x2 = poisson_pmf_at(mu2, x2_lb);
+        for x2 in x2_lb..=x2_ub {
+            if x2 > x2_lb {
+                prob_x2 *= mu2 / x2 as f64;
+            }
+            let lambda_x2 = x2 as f64 / n2;
+            let delta = lambda_x1 - lambda_x2 - diff;
+            let var_x1x2 = lambda_x1 / n1 + lambda_x2 / n2;
+            let pivot = if var_x1x2 > 0.0 {
+                delta / var_x1x2.sqrt()
+            } else {
+                f64::NAN
+            };
+
+            let include = match alternative {
+                "two-sided" => pivot.abs() >= observed.abs(),
+                "less" => pivot <= observed,
+                "greater" => pivot >= observed,
+                _ => false,
+            };
+            if include {
+                pvalue += prob_x1 * prob_x2;
+            }
+        }
+    }
+
+    Ok(GoodnessOfFitResult {
+        statistic: observed,
+        pvalue: pvalue.clamp(0.0, 1.0),
+    })
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -9508,6 +10132,79 @@ mod tests {
         assert!(result.pvalue.is_nan());
     }
 
+    #[test]
+    fn epps_singleton_same_samples_match_scipy_oracle() {
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let result = epps_singleton_2samp(&x, &y);
+        assert_close(
+            result.statistic,
+            0.0,
+            1e-12,
+            "epps singleton same statistic",
+        );
+        assert_close(result.pvalue, 1.0, 1e-12, "epps singleton same pvalue");
+    }
+
+    #[test]
+    fn epps_singleton_nearby_samples_match_scipy_oracle() {
+        let x = [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0];
+        let y = [-1.8, -0.9, 0.2, 1.1, 1.9, 3.2];
+        let result = epps_singleton_2samp(&x, &y);
+        assert_close(
+            result.statistic,
+            0.07066079761713522,
+            5e-4,
+            "epps singleton nearby statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.999390388757499,
+            5e-4,
+            "epps singleton nearby pvalue",
+        );
+    }
+
+    #[test]
+    fn epps_singleton_discrete_samples_match_scipy_oracle() {
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = [0.0, 0.0, 1.0, 1.0, 2.0, 2.0];
+        let result = epps_singleton_2samp(&x, &y);
+        assert_close(
+            result.statistic,
+            2.315268966735134,
+            5e-4,
+            "epps singleton discrete statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.6779904963168365,
+            5e-4,
+            "epps singleton discrete pvalue",
+        );
+    }
+
+    #[test]
+    fn epps_singleton_small_sample_returns_nan() {
+        let result = epps_singleton_2samp(&[0.0, 1.0, 2.0, 3.0], &[0.0, 1.0, 2.0, 3.0, 4.0]);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
+    fn epps_singleton_invalid_t_is_rejected() {
+        let err = epps_singleton_2samp_with_t(
+            &[0.0, 1.0, 2.0, 3.0, 4.0],
+            &[0.0, 1.0, 2.0, 3.0, 4.0],
+            &[0.4, -0.8],
+        )
+        .expect_err("negative t should be rejected");
+        assert!(
+            err.to_string().contains("positive finite"),
+            "unexpected error: {err}"
+        );
+    }
+
     // ── GaussianKde tests ──────────────────────────────────────────
 
     #[test]
@@ -9686,6 +10383,66 @@ mod tests {
             result.pvalue.is_nan(),
             "p-value should be NaN for undefined tau"
         );
+    }
+
+    #[test]
+    fn somersd_matches_scipy_table_example() {
+        let table = vec![
+            vec![27.0, 25.0, 14.0, 7.0, 0.0],
+            vec![7.0, 14.0, 18.0, 35.0, 12.0],
+            vec![1.0, 3.0, 2.0, 7.0, 17.0],
+        ];
+        let result = somersd(SomersDInput::Table(&table), None).expect("somersd table");
+        assert_close(
+            result.statistic,
+            0.6032766111513396,
+            1e-12,
+            "somersd table statistic",
+        );
+        assert_close(
+            result.pvalue,
+            1.0007091191074533e-27,
+            1e-30,
+            "somersd table pvalue",
+        );
+        assert_eq!(result.correlation, result.statistic);
+        assert_eq!(result.table, table);
+    }
+
+    #[test]
+    fn somersd_matches_rankings_for_perfect_ordering() {
+        let x = [1.0, 2.0, 3.0, 4.0];
+        let y = [1.0, 2.0, 3.0, 4.0];
+        let result = somersd(SomersDInput::Rankings(&x, &y), None).expect("somersd rankings");
+        assert_close(result.statistic, 1.0, 1e-12, "somersd perfect statistic");
+        assert_eq!(result.pvalue, 0.0);
+        assert_eq!(
+            result.table,
+            vec![
+                vec![1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0, 0.0],
+                vec![0.0, 0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 0.0, 1.0]
+            ]
+        );
+    }
+
+    #[test]
+    fn somersd_rejects_invalid_input() {
+        let err =
+            somersd(SomersDInput::Rankings(&[1.0, 2.0, 3.0], &[1.0, 2.0]), None).expect_err("len");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err = somersd(
+            SomersDInput::Table(&[vec![1.0, 2.5], vec![3.0, 4.0]]),
+            None,
+        )
+        .expect_err("non-integer");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err =
+            somersd(SomersDInput::Table(&[vec![0.0, 0.0], vec![0.0, 1.0]]), None).expect_err("nz");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 
     // ── Chi-squared contingency tests ────────────────────────────────
@@ -10447,6 +11204,74 @@ mod tests {
         assert!(matches!(err, StatsError::InvalidArgument(_)));
 
         let err = false_discovery_control(&[0.01, 0.02], Some("unknown")).expect_err("bad method");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn poisson_means_test_matches_scipy_reference_example() {
+        let result =
+            poisson_means_test(0, 100.0, 3, 100.0, 0.0, None).expect("poisson_means_test");
+        assert_close(
+            result.statistic,
+            -1.7320508075688772,
+            1e-12,
+            "poisson_means_test statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.08837900945483518,
+            1e-10,
+            "poisson_means_test pvalue",
+        );
+    }
+
+    #[test]
+    fn poisson_means_test_respects_one_sided_alternatives() {
+        let less = poisson_means_test(0, 100.0, 3, 100.0, 0.0, Some("less")).expect("less");
+        let greater =
+            poisson_means_test(0, 100.0, 3, 100.0, 0.0, Some("greater")).expect("greater");
+
+        assert_close(less.pvalue, 0.04418950472741759, 1e-10, "less pvalue");
+        assert_close(greater.pvalue, 0.9340316197238716, 1e-10, "greater pvalue");
+    }
+
+    #[test]
+    fn poisson_means_test_supports_nonzero_diff() {
+        let result = poisson_means_test(10, 100.0, 5, 80.0, 0.02, None).expect("nonzero diff");
+        assert_close(
+            result.statistic,
+            0.4146442144313648,
+            1e-12,
+            "poisson_means_test nonzero diff statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.6832671240600366,
+            5e-7,
+            "poisson_means_test nonzero diff pvalue",
+        );
+    }
+
+    #[test]
+    fn poisson_means_test_returns_unit_pvalue_when_lambda_hat2_is_nonpositive() {
+        let result = poisson_means_test(1, 1.0, 0, 1.0, 10.0, None).expect("unit pvalue");
+        assert_eq!(result.statistic, 0.0);
+        assert_eq!(result.pvalue, 1.0);
+    }
+
+    #[test]
+    fn poisson_means_test_rejects_invalid_input() {
+        let err = poisson_means_test(-1, 1.0, 0, 1.0, 0.0, None).expect_err("negative count");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err = poisson_means_test(1, 0.0, 0, 1.0, 0.0, None).expect_err("nonpositive n");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err = poisson_means_test(1, 1.0, 0, 1.0, -1.0, None).expect_err("negative diff");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+
+        let err =
+            poisson_means_test(1, 1.0, 0, 1.0, 0.0, Some("sideways")).expect_err("bad alt");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 
