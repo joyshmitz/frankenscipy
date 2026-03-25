@@ -1743,6 +1743,181 @@ pub fn generate_binary_structure(ndim: usize, connectivity: usize) -> NdArray {
     }
 }
 
+/// Compute the variance filter (local variance in each neighborhood).
+///
+/// Matches `scipy.ndimage.generic_filter` with variance function.
+pub fn variance_filter(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    generic_filter(
+        input,
+        |neighborhood| {
+            let n = neighborhood.len() as f64;
+            if n == 0.0 {
+                return 0.0;
+            }
+            let mean: f64 = neighborhood.iter().sum::<f64>() / n;
+            neighborhood.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n
+        },
+        size,
+        mode,
+        cval,
+    )
+}
+
+/// Compute the standard deviation filter.
+pub fn std_filter(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let var = variance_filter(input, size, mode, cval)?;
+    let mut result = var;
+    for v in &mut result.data {
+        *v = v.sqrt();
+    }
+    Ok(result)
+}
+
+/// Compute the range filter (max - min in each neighborhood).
+pub fn range_filter(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    morphological_gradient(input, size, mode, cval)
+}
+
+/// Threshold an array: values above threshold become 1, below become 0.
+///
+/// Matches `scipy.ndimage` threshold operations.
+pub fn threshold(input: &NdArray, thresh: f64) -> NdArray {
+    let data: Vec<f64> = input
+        .data
+        .iter()
+        .map(|&v| if v > thresh { 1.0 } else { 0.0 })
+        .collect();
+    NdArray {
+        data,
+        shape: input.shape.clone(),
+        strides: input.strides.clone(),
+    }
+}
+
+/// Apply Otsu's thresholding to find optimal binary threshold.
+///
+/// Returns the optimal threshold value.
+pub fn otsu_threshold(input: &NdArray) -> f64 {
+    if input.size() == 0 {
+        return 0.0;
+    }
+
+    // Build histogram
+    let min_val = input.data.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_val = input
+        .data
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    if (max_val - min_val).abs() < 1e-15 {
+        return min_val;
+    }
+
+    let nbins = 256;
+    let bin_width = (max_val - min_val) / nbins as f64;
+    let mut hist = vec![0usize; nbins];
+
+    for &v in &input.data {
+        let bin = ((v - min_val) / bin_width).floor() as usize;
+        hist[bin.min(nbins - 1)] += 1;
+    }
+
+    let total = input.size() as f64;
+    let mut sum_total = 0.0;
+    for (i, &count) in hist.iter().enumerate() {
+        sum_total += i as f64 * count as f64;
+    }
+
+    let mut best_thresh = 0.0;
+    let mut best_var = 0.0;
+    let mut weight_bg = 0.0;
+    let mut sum_bg = 0.0;
+
+    for (i, &count) in hist.iter().enumerate() {
+        weight_bg += count as f64;
+        if weight_bg == 0.0 {
+            continue;
+        }
+        let weight_fg = total - weight_bg;
+        if weight_fg == 0.0 {
+            break;
+        }
+
+        sum_bg += i as f64 * count as f64;
+        let mean_bg = sum_bg / weight_bg;
+        let mean_fg = (sum_total - sum_bg) / weight_fg;
+        let between_var = weight_bg * weight_fg * (mean_bg - mean_fg).powi(2);
+
+        if between_var > best_var {
+            best_var = between_var;
+            best_thresh = min_val + (i as f64 + 0.5) * bin_width;
+        }
+    }
+
+    best_thresh
+}
+
+/// Affine transformation of an image (2D only).
+///
+/// `matrix` is a 2x3 affine transformation matrix [a b tx; c d ty].
+/// Matches `scipy.ndimage.affine_transform`.
+pub fn affine_transform(
+    input: &NdArray,
+    matrix: &[[f64; 3]; 2],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if input.ndim() != 2 {
+        return Err(NdimageError::InvalidArgument(
+            "affine_transform supports 2D only".to_string(),
+        ));
+    }
+
+    let rows = input.shape[0];
+    let cols = input.shape[1];
+    let mut output = NdArray::zeros(input.shape.clone());
+
+    // Invert the transformation to map output → input
+    let det = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
+    if det.abs() < 1e-15 {
+        return Ok(output);
+    }
+
+    let inv = [
+        [matrix[1][1] / det, -matrix[0][1] / det],
+        [-matrix[1][0] / det, matrix[0][0] / det],
+    ];
+    let inv_tx = -(inv[0][0] * matrix[0][2] + inv[0][1] * matrix[1][2]);
+    let inv_ty = -(inv[1][0] * matrix[0][2] + inv[1][1] * matrix[1][2]);
+
+    for r in 0..rows {
+        for c in 0..cols {
+            let src_r = inv[0][0] * r as f64 + inv[0][1] * c as f64 + inv_tx;
+            let src_c = inv[1][0] * r as f64 + inv[1][1] * c as f64 + inv_ty;
+            let idx = [src_r.round() as i64, src_c.round() as i64];
+            output.set(&[r, c], input.get_boundary(&idx, mode, cval));
+        }
+    }
+
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

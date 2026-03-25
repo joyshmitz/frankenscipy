@@ -544,16 +544,27 @@ impl KDTree {
     /// Count pairs of points within distance `r` between this tree and another.
     ///
     /// Matches `scipy.spatial.KDTree.count_neighbors(other, r)`.
-    pub fn count_neighbors(&self, other: &KDTree, r: f64) -> usize {
+    pub fn count_neighbors(&self, other: &KDTree, r: f64) -> Result<usize, SpatialError> {
+        if self.dim != other.dim {
+            return Err(SpatialError::DimensionMismatch {
+                expected: self.dim,
+                actual: other.dim,
+            });
+        }
+        if !r.is_finite() || r < 0.0 {
+            return Err(SpatialError::InvalidArgument(
+                "radius must be finite and nonnegative".to_string(),
+            ));
+        }
         if self.nodes.is_empty() || other.nodes.is_empty() {
-            return 0;
+            return Ok(0);
         }
         let r_sq = r * r;
         let mut count = 0;
         for other_node in &other.nodes {
             count += ball_search_count(&self.nodes, 0, &other_node.point, r_sq);
         }
-        count
+        Ok(count)
     }
 
     /// Compute a sparse cross-distance matrix for pairs within `max_distance`.
@@ -2328,8 +2339,28 @@ mod tests {
         let tree2 = KDTree::new(&data2).unwrap();
 
         // Within radius 1.0: (0,0)↔(0.5,0) and (1,0)↔(0.5,0) = 2 pairs
-        let count = tree1.count_neighbors(&tree2, 1.0);
+        let count = tree1.count_neighbors(&tree2, 1.0).unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn kdtree_count_neighbors_dimension_mismatch() {
+        let tree1 = KDTree::new(&[vec![0.0, 0.0]]).unwrap();
+        let tree2 = KDTree::new(&[vec![0.0, 0.0, 0.0]]).unwrap();
+        let err = tree1
+            .count_neighbors(&tree2, 1.0)
+            .expect_err("dimension mismatch");
+        assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn kdtree_count_neighbors_negative_radius_rejected() {
+        let tree1 = KDTree::new(&[vec![0.0, 0.0]]).unwrap();
+        let tree2 = KDTree::new(&[vec![0.5, 0.0]]).unwrap();
+        let err = tree1
+            .count_neighbors(&tree2, -1.0)
+            .expect_err("negative radius");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
     }
 
     #[test]

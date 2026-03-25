@@ -1862,6 +1862,123 @@ pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64)
     freqs.last().copied().unwrap_or(0.0)
 }
 
+/// Spectral bandwidth: weighted standard deviation of frequencies.
+pub fn spectral_bandwidth(magnitudes: &[f64], freqs: &[f64]) -> f64 {
+    let centroid = spectral_centroid(magnitudes, freqs);
+    let total: f64 = magnitudes.iter().sum();
+    if total == 0.0 {
+        return 0.0;
+    }
+    let var: f64 = magnitudes
+        .iter()
+        .zip(freqs.iter())
+        .map(|(&m, &f)| m * (f - centroid).powi(2))
+        .sum::<f64>()
+        / total;
+    var.sqrt()
+}
+
+/// Spectral flatness: geometric mean / arithmetic mean of power spectrum.
+///
+/// 1.0 = white noise, 0.0 = pure tone.
+pub fn spectral_flatness(magnitudes: &[f64]) -> f64 {
+    if magnitudes.is_empty() {
+        return 0.0;
+    }
+    let n = magnitudes.len() as f64;
+    let arith_mean: f64 = magnitudes.iter().sum::<f64>() / n;
+    if arith_mean == 0.0 {
+        return 0.0;
+    }
+    let log_sum: f64 = magnitudes
+        .iter()
+        .map(|&m| if m > 0.0 { m.ln() } else { -700.0 })
+        .sum();
+    let geom_mean = (log_sum / n).exp();
+    (geom_mean / arith_mean).clamp(0.0, 1.0)
+}
+
+/// Root mean square (RMS) of a signal.
+pub fn rms(x: &[f64]) -> f64 {
+    if x.is_empty() {
+        return 0.0;
+    }
+    (x.iter().map(|&v| v * v).sum::<f64>() / x.len() as f64).sqrt()
+}
+
+/// Peak-to-peak amplitude of a signal.
+pub fn peak_to_peak(x: &[f64]) -> f64 {
+    if x.is_empty() {
+        return 0.0;
+    }
+    let max = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min = x.iter().cloned().fold(f64::INFINITY, f64::min);
+    max - min
+}
+
+/// Crest factor: peak / RMS ratio.
+pub fn crest_factor(x: &[f64]) -> f64 {
+    let r = rms(x);
+    if r == 0.0 {
+        return 0.0;
+    }
+    let peak = x.iter().map(|&v| v.abs()).fold(0.0f64, f64::max);
+    peak / r
+}
+
+/// Compute the power of a signal in decibels relative to reference.
+pub fn power_db(x: &[f64], ref_power: f64) -> f64 {
+    let power: f64 = x.iter().map(|&v| v * v).sum::<f64>() / x.len().max(1) as f64;
+    if power <= 0.0 || ref_power <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    10.0 * (power / ref_power).log10()
+}
+
+/// Apply pre-emphasis filter: y[n] = x[n] - coeff * x[n-1].
+///
+/// Common in speech processing with coeff ≈ 0.97.
+pub fn preemphasis(x: &[f64], coeff: f64) -> Vec<f64> {
+    if x.is_empty() {
+        return vec![];
+    }
+    let mut y = Vec::with_capacity(x.len());
+    y.push(x[0]);
+    for i in 1..x.len() {
+        y.push(x[i] - coeff * x[i - 1]);
+    }
+    y
+}
+
+/// Apply de-emphasis filter (inverse of pre-emphasis).
+pub fn deemphasis(x: &[f64], coeff: f64) -> Vec<f64> {
+    if x.is_empty() {
+        return vec![];
+    }
+    let mut y = Vec::with_capacity(x.len());
+    y.push(x[0]);
+    for i in 1..x.len() {
+        y.push(x[i] + coeff * y[i - 1]);
+    }
+    y
+}
+
+/// Frame a signal into overlapping windows.
+///
+/// Returns frames of length `frame_len` with `hop_len` stride.
+pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>> {
+    if frame_len == 0 || hop_len == 0 || x.len() < frame_len {
+        return vec![];
+    }
+    let mut frames = Vec::new();
+    let mut start = 0;
+    while start + frame_len <= x.len() {
+        frames.push(x[start..start + frame_len].to_vec());
+        start += hop_len;
+    }
+    frames
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // IIR Filter Design
 // ══════════════════════════════════════════════════════════════════════

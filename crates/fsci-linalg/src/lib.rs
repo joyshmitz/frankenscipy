@@ -625,8 +625,8 @@ fn inv_general(a: &[Vec<f64>], n: usize, mode: RuntimeMode) -> Result<InvResult,
         });
     }
 
-    // Exact singularity
-    if rcond == 0.0 {
+    // Exact singularity or numerically effectively zero (to match LAPACK exact-zero pivot behavior on integer matrices)
+    if rcond == 0.0 || (rcond < f64::EPSILON && lu.u().diagonal().iter().any(|x| x.abs() < 1e-14)) {
         return Err(LinalgError::SingularMatrix);
     }
 
@@ -4229,14 +4229,15 @@ pub fn is_positive_definite(a: &[Vec<f64>]) -> bool {
     if n == 0 {
         return true;
     }
-    for i in 0..n {
-        if a[i].len() != n {
+    for row in a.iter().take(n) {
+        if row.len() != n {
             return false;
         }
     }
 
     // Try Cholesky decomposition
     let mut l = vec![vec![0.0; n]; n];
+    #[allow(clippy::needless_range_loop)]
     for j in 0..n {
         let mut sum = a[j][j];
         for k in 0..j {
@@ -4282,11 +4283,11 @@ pub fn permanent(a: &[Vec<f64>]) -> f64 {
         let bits = s.count_ones() as i32;
         let sign = if (n as i32 - bits) % 2 == 0 { 1.0 } else { -1.0 };
 
-        for i in 0..n {
+        for row in a.iter().take(n) {
             let mut row_sum = 0.0;
-            for j in 0..n {
+            for (j, &val) in row.iter().enumerate().take(n) {
                 if s & (1 << j) != 0 {
-                    row_sum += a[i][j];
+                    row_sum += val;
                 }
             }
             prod_sum *= row_sum;
@@ -4295,7 +4296,7 @@ pub fn permanent(a: &[Vec<f64>]) -> f64 {
         result += sign * prod_sum;
     }
 
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         result
     } else {
         -result
@@ -4322,15 +4323,15 @@ pub fn cofactor(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
     }
 
     let mut cof = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in 0..n {
+    for (i, cof_row) in cof.iter_mut().enumerate().take(n) {
+        for (j, item) in cof_row.iter_mut().enumerate().take(n) {
             // Minor: remove row i, col j
             let mut minor = Vec::with_capacity(n - 1);
-            for r in 0..n {
+            for (r, a_row) in a.iter().enumerate().take(n) {
                 if r == i {
                     continue;
                 }
-                let row: Vec<f64> = (0..n).filter(|&c| c != j).map(|c| a[r][c]).collect();
+                let row: Vec<f64> = (0..n).filter(|&c| c != j).map(|c| a_row[c]).collect();
                 minor.push(row);
             }
 
@@ -4341,7 +4342,7 @@ pub fn cofactor(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
             };
 
             let sign = if (i + j) % 2 == 0 { 1.0 } else { -1.0 };
-            cof[i][j] = sign * det_minor;
+            *item = sign * det_minor;
         }
     }
     cof
