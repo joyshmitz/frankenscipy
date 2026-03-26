@@ -2018,7 +2018,7 @@ pub fn bilinear(b_analog: &[f64], a_analog: &[f64], fs: f64) -> (Vec<f64>, Vec<f
                 if rem <= d - k {
                     let c1 = binom_coeff(k, jp);
                     let c2 = binom_coeff(d - k, rem);
-                    let sign = if (d - k - rem) % 2 == 0 { 1.0 } else { -1.0 };
+                    let sign = if (d - k - rem).is_multiple_of(2) { 1.0 } else { -1.0 };
                     coeff += c1 * c2 * sign;
                 }
             }
@@ -2058,21 +2058,25 @@ fn binom_coeff(n: usize, k: usize) -> f64 {
 ///
 /// Returns n_samples of the response to a unit impulse.
 /// Matches `scipy.signal.dimpulse` (simplified).
-pub fn impulse_response(b: &[f64], a: &[f64], n_samples: usize) -> Vec<f64> {
+pub fn impulse_response(
+    b: &[f64],
+    a: &[f64],
+    n_samples: usize,
+) -> Result<Vec<f64>, SignalError> {
     let mut impulse = vec![0.0; n_samples];
     if !impulse.is_empty() {
         impulse[0] = 1.0;
     }
-    lfilter(b, a, &impulse)
+    lfilter(b, a, &impulse, None)
 }
 
 /// Compute the step response of a digital filter.
 ///
 /// Returns n_samples of the response to a unit step.
 /// Matches `scipy.signal.dstep` (simplified).
-pub fn step_response(b: &[f64], a: &[f64], n_samples: usize) -> Vec<f64> {
+pub fn step_response(b: &[f64], a: &[f64], n_samples: usize) -> Result<Vec<f64>, SignalError> {
     let step = vec![1.0; n_samples];
-    lfilter(b, a, &step)
+    lfilter(b, a, &step, None)
 }
 
 /// Compute the group delay of a digital filter at specified frequencies.
