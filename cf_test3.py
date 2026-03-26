@@ -9,7 +9,8 @@ def gamma_inc_cf(a, x):
     b0 = x + 1.0 - a
     c = 1.0 / 1e-30 # effectively infinity, or 1e30
     d = 1.0 / b0
-    if d == 0: d = 1e-30
+    if d == 0:
+        d = 1e-30
     f = d
     
     for m in range(1, 100):
@@ -17,7 +18,8 @@ def gamma_inc_cf(a, x):
         bn = x + 1.0 - a + 2.0 * m
         
         d = bn + an * d
-        if d == 0: d = 1e-30
+        if d == 0:
+            d = 1e-30
         d = 1.0 / d
         
         c = bn + an / c
@@ -36,4 +38,3 @@ a = 10.0
 x = 15.0
 print("cf:", gamma_inc_cf(a, x))
 print("scipy:", sc.gammaincc(a, x))
-x))

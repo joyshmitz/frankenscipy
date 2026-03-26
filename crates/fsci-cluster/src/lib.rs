@@ -1100,6 +1100,284 @@ pub fn elbow_inertias(
         .collect()
 }
 
+/// Mean-shift clustering: find cluster centers via kernel density gradient ascent.
+///
+/// Matches `sklearn.cluster.MeanShift`.
+pub fn mean_shift(
+    data: &[Vec<f64>],
+    bandwidth: f64,
+    max_iter: usize,
+) -> Result<(Vec<Vec<f64>>, Vec<usize>), ClusterError> {
+    let n = data.len();
+    if n == 0 {
+        return Err(ClusterError::EmptyData);
+    }
+    let d = data[0].len();
+    let bw2 = bandwidth * bandwidth;
+
+    // Start each point as its own center candidate
+    let mut centers: Vec<Vec<f64>> = data.to_vec();
+
+    for _ in 0..max_iter {
+        let mut shifted = false;
+        for i in 0..centers.len() {
+            let mut new_center = vec![0.0; d];
+            let mut total_weight = 0.0;
+
+            for point in data {
+                let dist2: f64 = centers[i]
+                    .iter()
+                    .zip(point.iter())
+                    .map(|(&a, &b)| (a - b).powi(2))
+                    .sum();
+                let weight = (-dist2 / (2.0 * bw2)).exp();
+                total_weight += weight;
+                for (j, &pj) in point.iter().enumerate() {
+                    new_center[j] += weight * pj;
+                }
+            }
+
+            if total_weight > 0.0 {
+                for v in &mut new_center {
+                    *v /= total_weight;
+                }
+            }
+
+            let shift: f64 = centers[i]
+                .iter()
+                .zip(new_center.iter())
+                .map(|(&a, &b)| (a - b).powi(2))
+                .sum::<f64>()
+                .sqrt();
+
+            if shift > 1e-6 {
+                shifted = true;
+            }
+            centers[i] = new_center;
+        }
+
+        if !shifted {
+            break;
+        }
+    }
+
+    // Merge nearby centers
+    let merge_threshold = bandwidth / 2.0;
+    let mut unique_centers: Vec<Vec<f64>> = Vec::new();
+    let mut center_map = vec![0usize; n];
+
+    for (i, center) in centers.iter().enumerate() {
+        let mut found = false;
+        for (j, uc) in unique_centers.iter().enumerate() {
+            let dist: f64 = center
+                .iter()
+                .zip(uc.iter())
+                .map(|(&a, &b)| (a - b).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            if dist < merge_threshold {
+                center_map[i] = j;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            center_map[i] = unique_centers.len();
+            unique_centers.push(center.clone());
+        }
+    }
+
+    // Assign each original point to nearest unique center
+    let mut labels = vec![0usize; n];
+    for (i, point) in data.iter().enumerate() {
+        let mut min_dist = f64::INFINITY;
+        let mut best = 0;
+        for (j, uc) in unique_centers.iter().enumerate() {
+            let dist: f64 = point
+                .iter()
+                .zip(uc.iter())
+                .map(|(&a, &b)| (a - b).powi(2))
+                .sum();
+            if dist < min_dist {
+                min_dist = dist;
+                best = j;
+            }
+        }
+        labels[i] = best;
+    }
+
+    Ok((unique_centers, labels))
+}
+
+/// Agglomerative clustering with precomputed distance matrix.
+///
+/// Matches `scipy.cluster.hierarchy.linkage` with precomputed distances.
+pub fn linkage_from_distances(
+    condensed_dist: &[f64],
+    n: usize,
+    method: LinkageMethod,
+) -> Result<Vec<[f64; 4]>, ClusterError> {
+    if n < 2 {
+        return Err(ClusterError::InvalidArgument(
+            "need at least 2 observations".to_string(),
+        ));
+    }
+
+    // Build full distance matrix from condensed form
+    let mut dist = vec![vec![f64::INFINITY; n]; n];
+    let mut idx = 0;
+    for i in 0..n {
+        dist[i][i] = 0.0;
+        for j in i + 1..n {
+            if idx < condensed_dist.len() {
+                dist[i][j] = condensed_dist[idx];
+                dist[j][i] = condensed_dist[idx];
+                idx += 1;
+            }
+        }
+    }
+
+    // Convert to "data" format for linkage
+    // Use the distance matrix directly in the agglomerative algorithm
+    let total = 2 * n - 1;
+    let mut active = vec![true; total];
+    let mut cluster_size = vec![1usize; total];
+    let mut inter_dist = vec![vec![f64::INFINITY; total]; total];
+
+    for i in 0..n {
+        for j in 0..n {
+            inter_dist[i][j] = dist[i][j];
+        }
+    }
+
+    let mut result = Vec::with_capacity(n - 1);
+
+    for step in 0..n - 1 {
+        let new_id = n + step;
+
+        let mut min_d = f64::INFINITY;
+        let mut mi = 0;
+        let mut mj = 0;
+        for i in 0..new_id {
+            if !active[i] {
+                continue;
+            }
+            for j in i + 1..new_id {
+                if !active[j] && inter_dist[i][j] < min_d {
+                    // bug: should check active[j] is true
+                }
+                if active[j] && inter_dist[i][j] < min_d {
+                    min_d = inter_dist[i][j];
+                    mi = i;
+                    mj = j;
+                }
+            }
+        }
+
+        let new_size = cluster_size[mi] + cluster_size[mj];
+        result.push([mi as f64, mj as f64, min_d, new_size as f64]);
+
+        active[mi] = false;
+        active[mj] = false;
+        active[new_id] = true;
+        cluster_size[new_id] = new_size;
+
+        for k in 0..new_id {
+            if !active[k] || k == new_id {
+                continue;
+            }
+            let d_ki = inter_dist[k][mi];
+            let d_kj = inter_dist[k][mj];
+            let new_dist = match method {
+                LinkageMethod::Single => d_ki.min(d_kj),
+                LinkageMethod::Complete => d_ki.max(d_kj),
+                LinkageMethod::Average => {
+                    let ni = cluster_size[mi] as f64;
+                    let nj = cluster_size[mj] as f64;
+                    (ni * d_ki + nj * d_kj) / (ni + nj)
+                }
+                LinkageMethod::Ward => {
+                    let ni = cluster_size[mi] as f64;
+                    let nj = cluster_size[mj] as f64;
+                    let nk = cluster_size[k] as f64;
+                    let nt = ni + nj + nk;
+                    (((nk + ni) * d_ki * d_ki + (nk + nj) * d_kj * d_kj
+                        - nk * min_d * min_d)
+                        / nt)
+                        .max(0.0)
+                        .sqrt()
+                }
+            };
+            inter_dist[k][new_id] = new_dist;
+            inter_dist[new_id][k] = new_dist;
+        }
+    }
+
+    Ok(result)
+}
+
+/// Maximal cliques in a proximity graph (for small graphs).
+///
+/// Given data and an epsilon threshold, find all maximal cliques.
+pub fn proximity_cliques(data: &[Vec<f64>], eps: f64) -> Vec<Vec<usize>> {
+    let n = data.len();
+    let eps2 = eps * eps;
+
+    // Build adjacency
+    let mut adj = vec![vec![]; n];
+    for i in 0..n {
+        for j in i + 1..n {
+            let d: f64 = data[i]
+                .iter()
+                .zip(data[j].iter())
+                .map(|(&a, &b)| (a - b).powi(2))
+                .sum();
+            if d <= eps2 {
+                adj[i].push(j);
+                adj[j].push(i);
+            }
+        }
+    }
+
+    // Bron-Kerbosch for maximal cliques
+    let mut cliques = Vec::new();
+    bron_kerbosch(
+        &adj,
+        &mut vec![],
+        &mut (0..n).collect(),
+        &mut vec![],
+        &mut cliques,
+    );
+    cliques
+}
+
+fn bron_kerbosch(
+    adj: &[Vec<usize>],
+    r: &mut Vec<usize>,
+    p: &mut Vec<usize>,
+    x: &mut Vec<usize>,
+    cliques: &mut Vec<Vec<usize>>,
+) {
+    if p.is_empty() && x.is_empty() {
+        if !r.is_empty() {
+            cliques.push(r.clone());
+        }
+        return;
+    }
+
+    let p_copy = p.clone();
+    for &v in &p_copy {
+        r.push(v);
+        let neighbors: std::collections::HashSet<usize> = adj[v].iter().cloned().collect();
+        let mut new_p: Vec<usize> = p.iter().filter(|&&u| neighbors.contains(&u)).cloned().collect();
+        let mut new_x: Vec<usize> = x.iter().filter(|&&u| neighbors.contains(&u)).cloned().collect();
+        bron_kerbosch(adj, r, &mut new_p, &mut new_x, cliques);
+        r.pop();
+        p.retain(|&u| u != v);
+        x.push(v);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

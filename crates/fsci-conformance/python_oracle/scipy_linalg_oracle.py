@@ -229,7 +229,11 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    try:
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"Invalid JSON: {exc}", file=sys.stderr)
+        return 1
     case_outputs: List[Dict[str, Any]] = []
 
     for case in fixture.get("cases", []):

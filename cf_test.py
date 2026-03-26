@@ -10,7 +10,8 @@ def gamma_inc_cf(a, x):
         an = n * (a - n)
         bn = x + 1.0 - a + 2.0 * n
         d = bn + an * d
-        if d == 0: d = 1e-30
+        if d == 0:
+            d = 1e-30
         d = 1.0 / d
         c = bn + an / c
         if c == 0:

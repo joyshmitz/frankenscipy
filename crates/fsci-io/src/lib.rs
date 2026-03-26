@@ -340,7 +340,18 @@ pub fn mmwrite_sparse(
     out.push_str(&format!("{rows} {cols} {}\n", entries.len()));
 
     for &(r, c, v) in entries {
-        out.push_str(&format!("{} {} {v}\n", r + 1, c + 1));
+        if r >= rows || c >= cols {
+            return Err(IoError::InvalidFormat(format!(
+                "sparse entry ({r}, {c}) out of bounds for {rows}x{cols}"
+            )));
+        }
+        let row = r.checked_add(1).ok_or_else(|| {
+            IoError::InvalidFormat("sparse row index overflowed Matrix Market encoding".to_string())
+        })?;
+        let col = c.checked_add(1).ok_or_else(|| {
+            IoError::InvalidFormat("sparse col index overflowed Matrix Market encoding".to_string())
+        })?;
+        out.push_str(&format!("{row} {col} {v}\n"));
     }
 
     Ok(out)
@@ -606,6 +617,13 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
                                     }
                                 }
                             }
+                            if data.len() != rows * cols {
+                                return Err(IoError::InvalidFormat(format!(
+                                    "array '{n}' expected {} values but found {}",
+                                    rows * cols,
+                                    data.len()
+                                )));
+                            }
                             arrays.push(MatArray {
                                 name: n.clone(),
                                 rows,
@@ -789,6 +807,18 @@ pub fn read_npy_text(content: &str) -> Result<(Vec<usize>, Vec<f64>), IoError> {
         }
     }
 
+    let expected_len = shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| IoError::InvalidFormat("shape product overflowed usize".to_string()))
+    })?;
+    if data.len() != expected_len {
+        return Err(IoError::InvalidFormat(format!(
+            "shape {:?} expects {expected_len} values but found {}",
+            shape,
+            data.len()
+        )));
+    }
+
     Ok((shape, data))
 }
 
@@ -960,6 +990,16 @@ mod tests {
     }
 
     #[test]
+    fn loadmat_rejects_wrong_element_count() {
+        let text = "# name: A\n# type: matrix\n# rows: 2\n# columns: 2\n1 2\n3\n";
+        let err = loadmat_text(text).expect_err("truncated matrix payload should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("array 'A' expected 4 values but found 3".to_string())
+        );
+    }
+
+    #[test]
     fn loadtxt_basic() {
         let content = "# comment\n1 2 3\n4 5 6\n";
         let (rows, cols, data) = loadtxt(content).unwrap();
@@ -976,6 +1016,15 @@ mod tests {
     }
 
     #[test]
+    fn read_npy_text_rejects_shape_payload_mismatch() {
+        let err = read_npy_text("2,2\n1 2 3\n").expect_err("truncated payload should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("shape [2, 2] expects 4 values but found 3".to_string())
+        );
+    }
+
+    #[test]
     fn mmwrite_sparse_format() {
         let entries = vec![(0, 0, 1.0), (1, 1, 2.0)];
         let content = mmwrite_sparse(3, 3, &entries).unwrap();
@@ -983,5 +1032,15 @@ mod tests {
         let mat = mmread(&content).unwrap();
         assert_eq!(mat.data[0], 1.0);
         assert_eq!(mat.data[4], 2.0);
+    }
+
+    #[test]
+    fn mmwrite_sparse_rejects_out_of_bounds_entries() {
+        let err = mmwrite_sparse(2, 2, &[(2, 0, 1.0)])
+            .expect_err("out-of-bounds sparse entry should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("sparse entry (2, 0) out of bounds for 2x2".to_string())
+        );
     }
 }

@@ -9,7 +9,8 @@ def gamma_inc_cf(a, x):
     
     c = 1e-30
     d = 1.0 / x # b1 is x
-    if d == 0: d = 1e-30
+    if d == 0:
+        d = 1e-30
     f = d
     
     for m in range(1, 100):
@@ -17,7 +18,8 @@ def gamma_inc_cf(a, x):
         an = m
         bn = x
         d = bn + an * d
-        if d == 0: d = 1e-30
+        if d == 0:
+            d = 1e-30
         d = 1.0 / d
         c = bn + an / c
         if c == 0:
@@ -29,7 +31,8 @@ def gamma_inc_cf(a, x):
         an = m + 1 - a
         bn = 1.0
         d = bn + an * d
-        if d == 0: d = 1e-30
+        if d == 0:
+            d = 1e-30
         d = 1.0 / d
         c = bn + an / c
         if c == 0:

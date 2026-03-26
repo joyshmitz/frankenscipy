@@ -2177,6 +2177,259 @@ where
     })
 }
 
+/// Non-negative least squares: minimize ||Ax - b||² subject to x >= 0.
+///
+/// Uses the active-set method (Lawson-Hanson algorithm).
+/// Matches `scipy.optimize.nnls`.
+pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
+    let m = a.len();
+    if m == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "empty matrix".to_string(),
+        });
+    }
+    let n = a[0].len();
+    if b.len() != m {
+        return Err(OptError::InvalidArgument {
+            detail: format!("b length {} != A rows {m}", b.len()),
+        });
+    }
+
+    let mut x = vec![0.0; n];
+    let mut passive = vec![false; n]; // passive set (unconstrained)
+
+    for _ in 0..3 * n {
+        // Compute gradient: w = A^T (b - Ax)
+        let mut ax = vec![0.0; m];
+        for i in 0..m {
+            for j in 0..n {
+                ax[i] += a[i][j] * x[j];
+            }
+        }
+
+        let mut w = vec![0.0; n];
+        for j in 0..n {
+            for i in 0..m {
+                w[j] += a[i][j] * (b[i] - ax[i]);
+            }
+        }
+
+        // Find max w[j] among active (non-passive) variables
+        let mut max_w = f64::NEG_INFINITY;
+        let mut max_j = 0;
+        for j in 0..n {
+            if !passive[j] && w[j] > max_w {
+                max_w = w[j];
+                max_j = j;
+            }
+        }
+
+        if max_w <= 1e-10 {
+            break; // optimality reached
+        }
+
+        passive[max_j] = true;
+
+        // Solve unconstrained least squares on passive set
+        loop {
+            let passive_indices: Vec<usize> = (0..n).filter(|&j| passive[j]).collect();
+            let p = passive_indices.len();
+
+            if p == 0 {
+                break;
+            }
+
+            // Build sub-problem: A_P * s_P = b
+            let mut ata = vec![vec![0.0; p]; p];
+            let mut atb_sub = vec![0.0; p];
+
+            for (pi, &ji) in passive_indices.iter().enumerate() {
+                for (pj, &jj) in passive_indices.iter().enumerate() {
+                    for i in 0..m {
+                        ata[pi][pj] += a[i][ji] * a[i][jj];
+                    }
+                }
+                for i in 0..m {
+                    atb_sub[pi] += a[i][ji] * b[i];
+                }
+            }
+
+            // Solve ata * s = atb_sub
+            let s_p = solve_small_system(&ata, &atb_sub);
+
+            // Check for negative elements
+            let mut all_positive = true;
+            for (pi, &si) in s_p.iter().enumerate() {
+                if si <= 0.0 && passive[passive_indices[pi]] {
+                    all_positive = false;
+                    break;
+                }
+            }
+
+            if all_positive {
+                for (pi, &ji) in passive_indices.iter().enumerate() {
+                    x[ji] = s_p[pi];
+                }
+                break;
+            }
+
+            // Find alpha and move variables back to active set
+            let mut alpha = f64::INFINITY;
+            for (pi, &ji) in passive_indices.iter().enumerate() {
+                if s_p[pi] <= 0.0 {
+                    let a_val = x[ji] / (x[ji] - s_p[pi]);
+                    alpha = alpha.min(a_val);
+                }
+            }
+
+            for (pi, &ji) in passive_indices.iter().enumerate() {
+                x[ji] += alpha * (s_p[pi] - x[ji]);
+                if x[ji].abs() < 1e-15 {
+                    x[ji] = 0.0;
+                    passive[ji] = false;
+                }
+            }
+        }
+    }
+
+    // Compute residual
+    let mut residual = 0.0;
+    for i in 0..m {
+        let mut ax_i = 0.0;
+        for j in 0..n {
+            ax_i += a[i][j] * x[j];
+        }
+        residual += (b[i] - ax_i).powi(2);
+    }
+
+    Ok((x, residual.sqrt()))
+}
+
+fn solve_small_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+    let n = a.len();
+    let mut aug: Vec<Vec<f64>> = a
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut row = r.clone();
+            row.push(b[i]);
+            row
+        })
+        .collect();
+
+    for col in 0..n {
+        let max_row = (col..n)
+            .max_by(|&i, &j| {
+                aug[i][col]
+                    .abs()
+                    .partial_cmp(&aug[j][col].abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(col);
+        aug.swap(col, max_row);
+
+        if aug[col][col].abs() < 1e-15 {
+            continue;
+        }
+
+        let pivot = aug[col][col];
+        for row in col + 1..n {
+            let factor = aug[row][col] / pivot;
+            for j in col..=n {
+                let val = aug[col][j];
+                aug[row][j] -= factor * val;
+            }
+        }
+    }
+
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        if aug[i][i].abs() < 1e-15 {
+            continue;
+        }
+        let mut sum = aug[i][n];
+        for j in i + 1..n {
+            sum -= aug[i][j] * x[j];
+        }
+        x[i] = sum / aug[i][i];
+    }
+
+    x
+}
+
+/// Isotonic regression: fit a non-decreasing function.
+///
+/// Matches `sklearn.isotonic.IsotonicRegression` (simplified).
+pub fn isotonic_regression(y: &[f64], weights: Option<&[f64]>) -> Vec<f64> {
+    let n = y.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    let w: Vec<f64> = weights.map_or(vec![1.0; n], |w| w.to_vec());
+
+    // Pool Adjacent Violators Algorithm (PAVA)
+    let mut result = y.to_vec();
+    let mut block_weights = w.clone();
+
+    let mut i = 0;
+    while i < n - 1 {
+        if result[i] > result[i + 1] {
+            // Pool blocks i and i+1
+            let total_w = block_weights[i] + block_weights[i + 1];
+            let pooled = (result[i] * block_weights[i] + result[i + 1] * block_weights[i + 1])
+                / total_w;
+            result[i] = pooled;
+            result[i + 1] = pooled;
+            block_weights[i] = total_w;
+            block_weights[i + 1] = total_w;
+
+            // Check backwards
+            while i > 0 && result[i - 1] > result[i] {
+                let total_w = block_weights[i - 1] + block_weights[i];
+                let pooled = (result[i - 1] * block_weights[i - 1]
+                    + result[i] * block_weights[i])
+                    / total_w;
+                result[i - 1] = pooled;
+                result[i] = pooled;
+                block_weights[i - 1] = total_w;
+                block_weights[i] = total_w;
+                i -= 1;
+            }
+        }
+        i += 1;
+    }
+
+    result
+}
+
+/// Bisection method for scalar optimization: find minimum by trisection.
+///
+/// For unimodal functions on [a, b].
+pub fn minimize_trisection<F>(f: F, a: f64, b: f64, tol: f64, maxiter: usize) -> (f64, f64)
+where
+    F: Fn(f64) -> f64,
+{
+    let mut lo = a;
+    let mut hi = b;
+
+    for _ in 0..maxiter {
+        if (hi - lo).abs() < tol {
+            break;
+        }
+        let m1 = lo + (hi - lo) / 3.0;
+        let m2 = hi - (hi - lo) / 3.0;
+        if f(m1) < f(m2) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+
+    let x = (lo + hi) / 2.0;
+    (x, f(x))
+}
+
 #[cfg(test)]
 mod tests {
     use fsci_runtime::RuntimeMode;
