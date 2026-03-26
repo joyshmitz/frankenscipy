@@ -1979,6 +1979,247 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
     frames
 }
 
+/// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
+///
+/// Transforms analog numerator/denominator to digital using the bilinear transform
+/// s = 2*fs*(z-1)/(z+1).
+///
+/// Returns (b_digital, a_digital).
+/// Matches `scipy.signal.bilinear`.
+pub fn bilinear(b_analog: &[f64], a_analog: &[f64], fs: f64) -> (Vec<f64>, Vec<f64>) {
+    let n = b_analog.len().max(a_analog.len());
+    let d = n - 1;
+
+    // Pad to same length
+    let mut b = vec![0.0; n];
+    let mut a = vec![0.0; n];
+    for (i, &v) in b_analog.iter().enumerate() {
+        b[n - b_analog.len() + i] = v;
+    }
+    for (i, &v) in a_analog.iter().enumerate() {
+        a[n - a_analog.len() + i] = v;
+    }
+
+    let fs2 = 2.0 * fs;
+
+    // Apply the bilinear transform via polynomial manipulation
+    let mut b_dig = vec![0.0; n];
+    let mut a_dig = vec![0.0; n];
+
+    for j in 0..n {
+        let mut val_b = 0.0;
+        let mut val_a = 0.0;
+        for i in 0..n {
+            let k = d - i;
+            // Binomial coefficient C(k, j') and C(d-k, j-j') patterns
+            let mut coeff = 0.0;
+            for jp in 0..=j.min(k) {
+                let rem = j - jp;
+                if rem <= d - k {
+                    let c1 = binom_coeff(k, jp);
+                    let c2 = binom_coeff(d - k, rem);
+                    let sign = if (d - k - rem) % 2 == 0 { 1.0 } else { -1.0 };
+                    coeff += c1 * c2 * sign;
+                }
+            }
+            val_b += b[i] * coeff * fs2.powi(k as i32);
+            val_a += a[i] * coeff * fs2.powi(k as i32);
+        }
+        b_dig[j] = val_b;
+        a_dig[j] = val_a;
+    }
+
+    // Normalize by a[0]
+    if a_dig[0].abs() > 1e-30 {
+        let norm = a_dig[0];
+        for v in &mut b_dig {
+            *v /= norm;
+        }
+        for v in &mut a_dig {
+            *v /= norm;
+        }
+    }
+
+    (b_dig, a_dig)
+}
+
+fn binom_coeff(n: usize, k: usize) -> f64 {
+    if k > n {
+        return 0.0;
+    }
+    let mut result = 1.0;
+    for i in 0..k {
+        result *= (n - i) as f64 / (i + 1) as f64;
+    }
+    result
+}
+
+/// Compute the impulse response of a digital filter.
+///
+/// Returns n_samples of the response to a unit impulse.
+/// Matches `scipy.signal.dimpulse` (simplified).
+pub fn impulse_response(b: &[f64], a: &[f64], n_samples: usize) -> Vec<f64> {
+    let mut impulse = vec![0.0; n_samples];
+    if !impulse.is_empty() {
+        impulse[0] = 1.0;
+    }
+    lfilter(b, a, &impulse)
+}
+
+/// Compute the step response of a digital filter.
+///
+/// Returns n_samples of the response to a unit step.
+/// Matches `scipy.signal.dstep` (simplified).
+pub fn step_response(b: &[f64], a: &[f64], n_samples: usize) -> Vec<f64> {
+    let step = vec![1.0; n_samples];
+    lfilter(b, a, &step)
+}
+
+/// Compute the group delay of a digital filter at specified frequencies.
+///
+/// Returns the group delay τ(ω) = -d(phase)/dω.
+/// This is a convenience wrapper that returns (frequencies, delays).
+pub fn group_delay_from_ba(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut freqs = Vec::with_capacity(n_freqs);
+    let mut delays = Vec::with_capacity(n_freqs);
+
+    for k in 0..n_freqs {
+        let w = std::f64::consts::PI * k as f64 / n_freqs as f64;
+        freqs.push(w);
+
+        // Evaluate B(e^{jω}) and A(e^{jω})
+        let mut br = 0.0;
+        let mut bi = 0.0;
+        for (i, &coeff) in b.iter().enumerate() {
+            br += coeff * (w * i as f64).cos();
+            bi -= coeff * (w * i as f64).sin();
+        }
+
+        let mut ar = 0.0;
+        let mut ai = 0.0;
+        for (i, &coeff) in a.iter().enumerate() {
+            ar += coeff * (w * i as f64).cos();
+            ai -= coeff * (w * i as f64).sin();
+        }
+
+        // Derivative: d/dω B(e^{jω})
+        let mut dbr = 0.0;
+        let mut dbi = 0.0;
+        for (i, &coeff) in b.iter().enumerate() {
+            let n = i as f64;
+            dbr -= n * coeff * (w * n).sin();
+            dbi -= n * coeff * (w * n).cos();
+        }
+
+        let mut dar = 0.0;
+        let mut dai = 0.0;
+        for (i, &coeff) in a.iter().enumerate() {
+            let n = i as f64;
+            dar -= n * coeff * (w * n).sin();
+            dai -= n * coeff * (w * n).cos();
+        }
+
+        // Group delay: -d/dω[arg(H)] = Re[(dB*A - B*dA) / (B*A)]
+        // Using: d/dω[arg(H)] = Im[H'/H] where H = B/A
+        let h_mag2 = br * br + bi * bi;
+        if h_mag2 > 1e-30 {
+            let num_r = dbr * br + dbi * bi;
+            let gd_b = -num_r / h_mag2;
+
+            let a_mag2 = ar * ar + ai * ai;
+            let gd_a = if a_mag2 > 1e-30 {
+                let num_a = dar * ar + dai * ai;
+                -num_a / a_mag2
+            } else {
+                0.0
+            };
+
+            delays.push(gd_b - gd_a);
+        } else {
+            delays.push(0.0);
+        }
+    }
+
+    (freqs, delays)
+}
+
+/// Compute the magnitude response of a digital filter.
+///
+/// Returns (frequencies, magnitudes_db).
+pub fn magnitude_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut freqs = Vec::with_capacity(n_freqs);
+    let mut mags = Vec::with_capacity(n_freqs);
+
+    for k in 0..n_freqs {
+        let w = std::f64::consts::PI * k as f64 / n_freqs as f64;
+        freqs.push(w);
+
+        let mut br = 0.0;
+        let mut bi = 0.0;
+        for (i, &coeff) in b.iter().enumerate() {
+            br += coeff * (w * i as f64).cos();
+            bi -= coeff * (w * i as f64).sin();
+        }
+
+        let mut ar = 0.0;
+        let mut ai = 0.0;
+        for (i, &coeff) in a.iter().enumerate() {
+            ar += coeff * (w * i as f64).cos();
+            ai -= coeff * (w * i as f64).sin();
+        }
+
+        let h_mag2 = br * br + bi * bi;
+        let a_mag2 = ar * ar + ai * ai;
+        let mag = if a_mag2 > 1e-30 {
+            (h_mag2 / a_mag2).sqrt()
+        } else {
+            0.0
+        };
+
+        mags.push(if mag > 0.0 {
+            20.0 * mag.log10()
+        } else {
+            f64::NEG_INFINITY
+        });
+    }
+
+    (freqs, mags)
+}
+
+/// Compute the phase response of a digital filter.
+///
+/// Returns (frequencies, phase_radians).
+pub fn phase_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut freqs = Vec::with_capacity(n_freqs);
+    let mut phases = Vec::with_capacity(n_freqs);
+
+    for k in 0..n_freqs {
+        let w = std::f64::consts::PI * k as f64 / n_freqs as f64;
+        freqs.push(w);
+
+        let mut br = 0.0;
+        let mut bi = 0.0;
+        for (i, &coeff) in b.iter().enumerate() {
+            br += coeff * (w * i as f64).cos();
+            bi -= coeff * (w * i as f64).sin();
+        }
+
+        let mut ar = 0.0;
+        let mut ai = 0.0;
+        for (i, &coeff) in a.iter().enumerate() {
+            ar += coeff * (w * i as f64).cos();
+            ai -= coeff * (w * i as f64).sin();
+        }
+
+        // H = B/A, phase = arg(B) - arg(A)
+        let phase_b = bi.atan2(br);
+        let phase_a = ai.atan2(ar);
+        phases.push(phase_b - phase_a);
+    }
+
+    (freqs, phases)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // IIR Filter Design
 // ══════════════════════════════════════════════════════════════════════
@@ -3772,6 +4013,11 @@ pub fn group_delay(
     }
 
     let n = n_freqs.unwrap_or(512);
+    if n == 0 {
+        return Err(SignalError::InvalidArgument(
+            "n_freqs must be > 0".to_string(),
+        ));
+    }
 
     // Derivative polynomial: if B(z) = Σ b[k] z^{-k}, then
     // dB/dω = Σ (-jk) b[k] z^{-k}, so the "derivative coefficients" are
@@ -7183,6 +7429,15 @@ mod tests {
     fn phase_delay_rejects_empty_coefficients() {
         assert!(phase_delay(&[], &[1.0], Some(16)).is_err());
         assert!(phase_delay(&[1.0], &[], Some(16)).is_err());
+    }
+
+    #[test]
+    fn group_delay_rejects_zero_frequency_count() {
+        let err = group_delay(&[1.0], &[1.0], Some(0)).expect_err("n_freqs=0 should fail");
+        assert_eq!(
+            err,
+            SignalError::InvalidArgument("n_freqs must be > 0".to_string())
+        );
     }
 
     #[test]

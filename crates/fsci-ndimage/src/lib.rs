@@ -856,21 +856,29 @@ pub fn binary_dilation(
         let kernel_total: usize = kernel_shape.iter().product();
         let kernel_strides = compute_strides(&kernel_shape);
 
+        let mut kernel_deltas = Vec::with_capacity(kernel_total);
+        for flat_k in 0..kernel_total {
+            let mut k_idx = vec![0usize; ndim];
+            let mut rem = flat_k;
+            for d in 0..ndim {
+                k_idx[d] = rem / kernel_strides[d];
+                rem %= kernel_strides[d];
+            }
+            let mut delta = vec![0i64; ndim];
+            for d in 0..ndim {
+                delta[d] = k_idx[d] as i64 - offsets[d];
+            }
+            kernel_deltas.push(delta);
+        }
+
         for flat_out in 0..current.size() {
             let out_idx = current.unravel(flat_out);
             let mut any_set = false;
 
-            for flat_k in 0..kernel_total {
-                let mut k_idx = vec![0usize; ndim];
-                let mut rem = flat_k;
-                for d in 0..ndim {
-                    k_idx[d] = rem / kernel_strides[d];
-                    rem %= kernel_strides[d];
-                }
-
+            for delta in &kernel_deltas {
                 let mut in_idx = vec![0i64; ndim];
                 for d in 0..ndim {
-                    in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d];
+                    in_idx[d] = out_idx[d] as i64 + delta[d];
                 }
 
                 let val = current.get_boundary(&in_idx, BoundaryMode::Constant, 0.0);

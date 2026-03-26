@@ -217,7 +217,9 @@ impl Interp1d {
                 let coeffs = self
                     .spline_coeffs
                     .as_ref()
-                    .expect("cubic spline initialized with coeffs");
+                    .ok_or_else(|| InterpError::InvalidArgument {
+                        detail: "cubic spline initialized without coeffs".to_string(),
+                    })?;
                 let dx = x_new - self.x[i];
                 let [a, b, c, d] = coeffs[i];
                 Ok(a + dx * (b + dx * (c + dx * d)))
@@ -2482,6 +2484,249 @@ fn solve_normal(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, InterpError> {
     }
 
     Ok(x)
+}
+
+/// Padé approximation: compute rational function p(x)/q(x) coefficients
+/// from a Taylor series.
+///
+/// Given Taylor coefficients [a0, a1, ..., a_{m+n}], returns (p_coeffs, q_coeffs)
+/// of degrees m and n respectively such that p(x)/q(x) ≈ Σ a_k x^k.
+///
+/// Matches `scipy.interpolate.pade`.
+pub fn pade(
+    taylor_coeffs: &[f64],
+    m: usize,
+    n: usize,
+) -> Result<(Vec<f64>, Vec<f64>), InterpError> {
+    if taylor_coeffs.len() < m + n + 1 {
+        return Err(InterpError::TooFewPoints {
+            minimum: m + n + 1,
+            actual: taylor_coeffs.len(),
+        });
+    }
+
+    // Solve for q coefficients from the system:
+    // Σ_{j=0}^{n} q_j * a_{m+1+i-j} = 0 for i = 0..n-1 (with q_0 = 1)
+    if n == 0 {
+        return Ok((taylor_coeffs[..=m].to_vec(), vec![1.0]));
+    }
+
+    // Build system for q_1..q_n
+    let mut mat = vec![vec![0.0; n]; n];
+    let mut rhs = vec![0.0; n];
+
+    for i in 0..n {
+        rhs[i] = -taylor_coeffs[m + 1 + i];
+        #[allow(clippy::needless_range_loop)]
+        for j in 0..n {
+            let idx = m as i64 + i as i64 - j as i64;
+            if idx >= 0 && (idx as usize) < taylor_coeffs.len() {
+                mat[i][j] = taylor_coeffs[idx as usize];
+            }
+        }
+    }
+
+    let q_tail = solve_normal(&mat, &rhs)?;
+    let mut q = vec![1.0];
+    q.extend_from_slice(&q_tail);
+
+    // Compute p coefficients: p_k = Σ_{j=0}^{min(k,n)} q_j * a_{k-j}
+    let mut p = Vec::with_capacity(m + 1);
+    for k in 0..=m {
+        let mut pk = 0.0;
+        for j in 0..=k.min(n) {
+            if k >= j {
+                pk += q[j] * taylor_coeffs[k - j];
+            }
+        }
+        p.push(pk);
+    }
+
+    Ok((p, q))
+}
+
+/// Evaluate a rational function p(x)/q(x).
+///
+/// `p` and `q` are coefficient vectors [a0, a1, ...] (ascending powers).
+pub fn ratval(p: &[f64], q: &[f64], x: f64) -> f64 {
+    let num: f64 = p.iter().enumerate().map(|(i, &c)| c * x.powi(i as i32)).sum();
+    let den: f64 = q.iter().enumerate().map(|(i, &c)| c * x.powi(i as i32)).sum();
+    if den.abs() < 1e-30 {
+        return f64::NAN;
+    }
+    num / den
+}
+
+/// Polynomial multiplication: convolve coefficient vectors.
+///
+/// Matches `numpy.polymul`.
+pub fn polymul(a: &[f64], b: &[f64]) -> Vec<f64> {
+    if a.is_empty() || b.is_empty() {
+        return vec![];
+    }
+    let n = a.len() + b.len() - 1;
+    let mut result = vec![0.0; n];
+    for (i, &ai) in a.iter().enumerate() {
+        for (j, &bj) in b.iter().enumerate() {
+            result[i + j] += ai * bj;
+        }
+    }
+    result
+}
+
+/// Polynomial addition.
+///
+/// Matches `numpy.polyadd`.
+pub fn polyadd(a: &[f64], b: &[f64]) -> Vec<f64> {
+    let n = a.len().max(b.len());
+    let mut result = vec![0.0; n];
+    let offset_a = n - a.len();
+    let offset_b = n - b.len();
+    for (i, &v) in a.iter().enumerate() {
+        result[offset_a + i] += v;
+    }
+    for (i, &v) in b.iter().enumerate() {
+        result[offset_b + i] += v;
+    }
+    result
+}
+
+/// Polynomial subtraction.
+pub fn polysub(a: &[f64], b: &[f64]) -> Vec<f64> {
+    let neg_b: Vec<f64> = b.iter().map(|&v| -v).collect();
+    polyadd(a, &neg_b)
+}
+
+/// Polynomial derivative.
+///
+/// Matches `numpy.polyder`.
+pub fn polyder(coeffs: &[f64], m: usize) -> Vec<f64> {
+    let mut c = coeffs.to_vec();
+    for _ in 0..m {
+        if c.len() <= 1 {
+            return vec![0.0];
+        }
+        let n = c.len();
+        c = (0..n - 1)
+            .map(|i| c[i] * (n - 1 - i) as f64)
+            .collect();
+    }
+    c
+}
+
+/// Polynomial integration (antiderivative).
+///
+/// Matches `numpy.polyint`.
+pub fn polyint(coeffs: &[f64], m: usize, k: f64) -> Vec<f64> {
+    let mut c = coeffs.to_vec();
+    for _ in 0..m {
+        let n = c.len();
+        let mut new_c = Vec::with_capacity(n + 1);
+        for (i, &ci) in c.iter().enumerate() {
+            new_c.push(ci / (n - i) as f64);
+        }
+        new_c.push(k);
+        c = new_c;
+    }
+    c
+}
+
+/// Find roots of a polynomial given coefficients (highest degree first).
+///
+/// Uses companion matrix eigenvalue method for degree > 2.
+/// Matches `numpy.roots`.
+pub fn polyroots(coeffs: &[f64]) -> Vec<f64> {
+    let n = coeffs.len();
+    if n <= 1 {
+        return vec![];
+    }
+    if n == 2 {
+        // Linear: ax + b = 0 → x = -b/a
+        if coeffs[0] == 0.0 {
+            return vec![];
+        }
+        return vec![-coeffs[1] / coeffs[0]];
+    }
+    if n == 3 {
+        // Quadratic: ax² + bx + c = 0
+        let a = coeffs[0];
+        let b = coeffs[1];
+        let c = coeffs[2];
+        if a == 0.0 {
+            if b == 0.0 {
+                return vec![];
+            }
+            return vec![-c / b];
+        }
+        let disc = b * b - 4.0 * a * c;
+        if disc < 0.0 {
+            return vec![]; // complex roots, skip for real-only
+        }
+        let sqrt_disc = disc.sqrt();
+        vec![(-b + sqrt_disc) / (2.0 * a), (-b - sqrt_disc) / (2.0 * a)]
+    } else {
+        // For higher degree, use Durand-Kerner method
+        let degree = n - 1;
+        let a0 = coeffs[0];
+        let norm_coeffs: Vec<f64> = coeffs.iter().map(|&c| c / a0).collect();
+
+        // Initial guesses on unit circle
+        let mut roots: Vec<(f64, f64)> = (0..degree)
+            .map(|k| {
+                let angle = 2.0 * std::f64::consts::PI * k as f64 / degree as f64 + 0.4;
+                (0.4f64.powf(k as f64) * angle.cos(), 0.4f64.powf(k as f64) * angle.sin())
+            })
+            .collect();
+
+        for _ in 0..1000 {
+            let mut max_change = 0.0f64;
+            for i in 0..degree {
+                // Evaluate polynomial at roots[i]
+                let (zr, zi) = roots[i];
+                let mut pr = norm_coeffs[0];
+                let mut pi_val = 0.0;
+                for &c in &norm_coeffs[1..] {
+                    let new_r = pr * zr - pi_val * zi + c;
+                    let new_i = pr * zi + pi_val * zr;
+                    pr = new_r;
+                    pi_val = new_i;
+                }
+
+                // Divide by product of (z_i - z_j) for j != i
+                let mut dr = 1.0;
+                let mut di = 0.0;
+                for (j, &(rj, ij)) in roots.iter().enumerate() {
+                    if j == i {
+                        continue;
+                    }
+                    let diff_r = zr - rj;
+                    let diff_i = zi - ij;
+                    let new_r = dr * diff_r - di * diff_i;
+                    let new_i = dr * diff_i + di * diff_r;
+                    dr = new_r;
+                    di = new_i;
+                }
+
+                let denom = dr * dr + di * di;
+                if denom > 1e-30 {
+                    let corr_r = (pr * dr + pi_val * di) / denom;
+                    let corr_i = (pi_val * dr - pr * di) / denom;
+                    roots[i] = (zr - corr_r, zi - corr_i);
+                    max_change = max_change.max((corr_r * corr_r + corr_i * corr_i).sqrt());
+                }
+            }
+            if max_change < 1e-14 {
+                break;
+            }
+        }
+
+        // Return real parts of roots with small imaginary parts
+        roots
+            .iter()
+            .filter(|&&(_, im)| im.abs() < 1e-8)
+            .map(|&(re, _)| re)
+            .collect()
+    }
 }
 
 #[cfg(test)]

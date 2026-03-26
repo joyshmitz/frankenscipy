@@ -8748,6 +8748,239 @@ pub fn multivariate_normal_rvs(
     samples
 }
 
+/// Beta-prime (inverted beta) distribution.
+///
+/// Matches `scipy.stats.betaprime`.
+pub struct BetaPrime {
+    pub a: f64,
+    pub b: f64,
+}
+
+impl BetaPrime {
+    #[must_use]
+    pub fn new(a: f64, b: f64) -> Self {
+        assert!(a > 0.0 && b > 0.0, "a and b must be positive");
+        Self { a, b }
+    }
+}
+
+impl ContinuousDistribution for BetaPrime {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let a = self.a;
+        let b = self.b;
+        x.powf(a - 1.0) * (1.0 + x).powf(-a - b)
+            / (ln_gamma(a).exp() * ln_gamma(b).exp() / ln_gamma(a + b).exp())
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        // CDF = I_{x/(1+x)}(a, b) where I is regularized incomplete beta
+        let t = x / (1.0 + x);
+        regularized_incomplete_beta(self.a, self.b, t)
+    }
+
+    fn mean(&self) -> f64 {
+        if self.b > 1.0 {
+            self.a / (self.b - 1.0)
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.b > 2.0 {
+            self.a * (self.a + self.b - 1.0)
+                / ((self.b - 2.0) * (self.b - 1.0).powi(2))
+        } else {
+            f64::INFINITY
+        }
+    }
+}
+
+/// Exponentiated Weibull distribution.
+///
+/// Matches `scipy.stats.exponweib`.
+pub struct ExponWeibull {
+    pub a: f64,
+    pub c: f64,
+}
+
+impl ExponWeibull {
+    #[must_use]
+    pub fn new(a: f64, c: f64) -> Self {
+        assert!(a > 0.0 && c > 0.0, "a and c must be positive");
+        Self { a, c }
+    }
+}
+
+impl ContinuousDistribution for ExponWeibull {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let a = self.a;
+        let c = self.c;
+        a * c * (1.0 - (-x.powf(c)).exp()).powf(a - 1.0)
+            * (-x.powf(c)).exp()
+            * x.powf(c - 1.0)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        (1.0 - (-x.powf(self.c)).exp()).powf(self.a)
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NAN // No simple closed form
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+/// Folded Cauchy distribution.
+///
+/// Matches `scipy.stats.foldcauchy`.
+pub struct FoldedCauchy {
+    pub c: f64,
+}
+
+impl FoldedCauchy {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for FoldedCauchy {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        1.0 / (PI * (1.0 + (x - c).powi(2))) + 1.0 / (PI * (1.0 + (x + c).powi(2)))
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        ((x - c).atan() + (x + c).atan()) / PI + 0.5
+    }
+
+    fn mean(&self) -> f64 {
+        f64::INFINITY
+    }
+
+    fn var(&self) -> f64 {
+        f64::INFINITY
+    }
+}
+
+/// Folded Normal distribution.
+///
+/// Matches `scipy.stats.foldnorm`.
+pub struct FoldedNormal {
+    pub c: f64, // location parameter of underlying normal
+}
+
+impl FoldedNormal {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for FoldedNormal {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let inv_sqrt_2pi = 1.0 / (2.0 * PI).sqrt();
+        inv_sqrt_2pi * ((-0.5 * (x - self.c).powi(2)).exp() + (-0.5 * (x + self.c).powi(2)).exp())
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        standard_normal_cdf(x - self.c) + standard_normal_cdf(x + self.c) - 1.0
+    }
+
+    fn mean(&self) -> f64 {
+        // E[|X|] where X ~ N(c, 1)
+        let c = self.c;
+        let inv_sqrt_2pi = 1.0 / (2.0 * PI).sqrt();
+        c * (2.0 * standard_normal_cdf(c) - 1.0) + 2.0 * inv_sqrt_2pi * (-0.5 * c * c).exp()
+    }
+
+    fn var(&self) -> f64 {
+        let m = self.mean();
+        self.c * self.c + 1.0 - m * m
+    }
+}
+
+/// Compute the median absolute deviation (MAD) with optional scaling.
+///
+/// With scale=1.4826, gives a consistent estimator for the normal distribution std.
+pub fn mad(data: &[f64], scale: f64) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let med = median(data);
+    let abs_devs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
+    scale * median(&abs_devs)
+}
+
+/// Compute the coefficient of variation (CV = std/mean).
+pub fn coefficient_of_variation(data: &[f64]) -> f64 {
+    let n = data.len() as f64;
+    if n < 2.0 {
+        return f64::NAN;
+    }
+    let mean: f64 = data.iter().sum::<f64>() / n;
+    if mean == 0.0 {
+        return f64::INFINITY;
+    }
+    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    var.sqrt() / mean.abs()
+}
+
+/// Compute the standard error of the mean.
+pub fn standard_error_of_mean(data: &[f64]) -> f64 {
+    let n = data.len() as f64;
+    if n < 2.0 {
+        return f64::NAN;
+    }
+    let mean: f64 = data.iter().sum::<f64>() / n;
+    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    var.sqrt() / n.sqrt()
+}
+
+/// Compute the excess kurtosis (Fisher's definition).
+pub fn excess_kurtosis(data: &[f64]) -> f64 {
+    let n = data.len() as f64;
+    if n < 4.0 {
+        return f64::NAN;
+    }
+    let mean: f64 = data.iter().sum::<f64>() / n;
+    let m2: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+    let m4: f64 = data.iter().map(|&x| (x - mean).powi(4)).sum::<f64>() / n;
+    if m2 == 0.0 {
+        return 0.0;
+    }
+    m4 / (m2 * m2) - 3.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

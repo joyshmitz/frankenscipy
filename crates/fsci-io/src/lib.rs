@@ -185,14 +185,22 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 if vals.len() < 2 {
                     continue;
                 }
-                let r: usize = vals[0]
+                let r_one_based = vals[0]
                     .parse::<usize>()
-                    .map_err(|e| IoError::InvalidFormat(format!("bad row index: {e}")))?
-                    - 1;
-                let c: usize = vals[1]
+                    .map_err(|e| IoError::InvalidFormat(format!("bad row index: {e}")))?;
+                let c_one_based = vals[1]
                     .parse::<usize>()
-                    .map_err(|e| IoError::InvalidFormat(format!("bad col index: {e}")))?
-                    - 1;
+                    .map_err(|e| IoError::InvalidFormat(format!("bad col index: {e}")))?;
+                let r = r_one_based.checked_sub(1).ok_or_else(|| {
+                    IoError::InvalidFormat(
+                        "Matrix Market row indices must be 1-based and >= 1".to_string(),
+                    )
+                })?;
+                let c = c_one_based.checked_sub(1).ok_or_else(|| {
+                    IoError::InvalidFormat(
+                        "Matrix Market col indices must be 1-based and >= 1".to_string(),
+                    )
+                })?;
                 let v: f64 = if field == MmField::Pattern {
                     1.0
                 } else if vals.len() >= 3 {
@@ -250,6 +258,12 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 if trimmed.is_empty() || trimmed.starts_with('%') {
                     continue;
                 }
+                if idx >= rows * cols {
+                    return Err(IoError::InvalidFormat(format!(
+                        "array format has more than the declared {} values",
+                        rows * cols
+                    )));
+                }
                 let v: f64 = trimmed
                     .parse()
                     .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
@@ -261,6 +275,12 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                     data[row * cols + col] = v;
                 }
                 idx += 1;
+            }
+            if idx != rows * cols {
+                return Err(IoError::InvalidFormat(format!(
+                    "array format expected {} values but found {idx}",
+                    rows * cols
+                )));
             }
 
             Ok(MmMatrix {
@@ -805,6 +825,18 @@ mod tests {
     }
 
     #[test]
+    fn mmread_rejects_zero_based_coordinate_indices() {
+        let content = "%%MatrixMarket matrix coordinate real general\n\
+                        3 3 1\n\
+                        0 1 5.0\n";
+        let err = mmread(content).expect_err("zero-based row index should be rejected");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("Matrix Market row indices must be 1-based and >= 1".to_string())
+        );
+    }
+
+    #[test]
     fn mmread_array() {
         let content = "%%MatrixMarket matrix array real general\n\
                         2 3\n\
@@ -816,6 +848,30 @@ mod tests {
         assert_eq!(mat.data[0], 1.0); // (0,0)
         assert_eq!(mat.data[3], 2.0); // (1,0)
         assert_eq!(mat.data[1], 3.0); // (0,1)
+    }
+
+    #[test]
+    fn mmread_array_rejects_too_few_values() {
+        let content = "%%MatrixMarket matrix array real general\n\
+                        2 3\n\
+                        1.0\n2.0\n3.0\n4.0\n5.0\n";
+        let err = mmread(content).expect_err("underfilled array payload should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("array format expected 6 values but found 5".to_string())
+        );
+    }
+
+    #[test]
+    fn mmread_array_rejects_too_many_values() {
+        let content = "%%MatrixMarket matrix array real general\n\
+                        2 3\n\
+                        1.0\n2.0\n3.0\n4.0\n5.0\n6.0\n7.0\n";
+        let err = mmread(content).expect_err("overfilled array payload should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("array format has more than the declared 6 values".to_string())
+        );
     }
 
     #[test]
