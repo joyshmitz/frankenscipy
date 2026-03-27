@@ -2159,6 +2159,177 @@ pub fn pagerank(graph: &CsrMatrix, damping: f64, max_iter: usize, tol: f64) -> V
     rank
 }
 
+/// Compute the graph diameter (longest shortest path between any two nodes).
+///
+/// Uses Floyd-Warshall internally.
+pub fn graph_diameter(graph: &CsrMatrix) -> f64 {
+    let dist = floyd_warshall(graph);
+    let mut max_d = 0.0f64;
+    for row in &dist {
+        for &d in row {
+            if d.is_finite() {
+                max_d = max_d.max(d);
+            }
+        }
+    }
+    max_d
+}
+
+/// Compute the eccentricity of each node (max shortest path distance).
+pub fn eccentricity(graph: &CsrMatrix) -> Vec<f64> {
+    let dist = floyd_warshall(graph);
+    dist.iter()
+        .map(|row| {
+            row.iter()
+                .filter(|&&d| d.is_finite())
+                .cloned()
+                .fold(0.0f64, f64::max)
+        })
+        .collect()
+}
+
+/// Compute the clustering coefficient for each node.
+///
+/// The clustering coefficient measures how interconnected a node's neighbors are.
+pub fn clustering_coefficient(graph: &CsrMatrix) -> Vec<f64> {
+    let n = graph.shape().rows;
+    let mut cc = vec![0.0; n];
+
+    for i in 0..n {
+        let neighbors: Vec<usize> = (graph.indptr()[i]..graph.indptr()[i + 1])
+            .map(|idx| graph.indices()[idx])
+            .collect();
+
+        let k = neighbors.len();
+        if k < 2 {
+            continue;
+        }
+
+        // Count edges between neighbors
+        let mut edges = 0;
+        for &u in &neighbors {
+            for &v in &neighbors {
+                if u < v {
+                    // Check if edge (u, v) exists
+                    let u_start = graph.indptr()[u];
+                    let u_end = graph.indptr()[u + 1];
+                    for idx in u_start..u_end {
+                        if graph.indices()[idx] == v {
+                            edges += 1;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        cc[i] = 2.0 * edges as f64 / (k * (k - 1)) as f64;
+    }
+
+    cc
+}
+
+/// Average clustering coefficient of a graph.
+pub fn average_clustering(graph: &CsrMatrix) -> f64 {
+    let cc = clustering_coefficient(graph);
+    let n = cc.len() as f64;
+    if n == 0.0 {
+        return 0.0;
+    }
+    cc.iter().sum::<f64>() / n
+}
+
+/// Compute betweenness centrality for each node.
+///
+/// Uses Brandes' algorithm (O(VE) for unweighted graphs).
+pub fn betweenness_centrality(graph: &CsrMatrix) -> Vec<f64> {
+    let n = graph.shape().rows;
+    let mut bc = vec![0.0; n];
+
+    for s in 0..n {
+        // BFS from s
+        let mut stack = Vec::new();
+        let mut predecessors: Vec<Vec<usize>> = vec![vec![]; n];
+        let mut sigma = vec![0.0f64; n]; // number of shortest paths
+        sigma[s] = 1.0;
+        let mut dist = vec![-1i64; n];
+        dist[s] = 0;
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(s);
+
+        while let Some(v) = queue.pop_front() {
+            stack.push(v);
+            let row_start = graph.indptr()[v];
+            let row_end = graph.indptr()[v + 1];
+            for idx in row_start..row_end {
+                let w = graph.indices()[idx];
+                if w >= n {
+                    continue;
+                }
+                if dist[w] < 0 {
+                    queue.push_back(w);
+                    dist[w] = dist[v] + 1;
+                }
+                if dist[w] == dist[v] + 1 {
+                    sigma[w] += sigma[v];
+                    predecessors[w].push(v);
+                }
+            }
+        }
+
+        // Accumulate
+        let mut delta = vec![0.0; n];
+        while let Some(w) = stack.pop() {
+            for &v in &predecessors[w] {
+                delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w]);
+            }
+            if w != s {
+                bc[w] += delta[w];
+            }
+        }
+    }
+
+    // Normalize for undirected graphs
+    let scale = if n > 2 {
+        1.0 / ((n - 1) * (n - 2)) as f64
+    } else {
+        1.0
+    };
+    for v in &mut bc {
+        *v *= scale;
+    }
+
+    bc
+}
+
+/// Compute closeness centrality for each node.
+pub fn closeness_centrality(graph: &CsrMatrix) -> Vec<f64> {
+    let n = graph.shape().rows;
+    let dist = floyd_warshall(graph);
+
+    (0..n)
+        .map(|i| {
+            let reachable: Vec<f64> = dist[i]
+                .iter()
+                .enumerate()
+                .filter(|&(j, &d)| j != i && d.is_finite())
+                .map(|(_, &d)| d)
+                .collect();
+
+            if reachable.is_empty() {
+                0.0
+            } else {
+                let total: f64 = reachable.iter().sum();
+                if total > 0.0 {
+                    reachable.len() as f64 / total
+                } else {
+                    0.0
+                }
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

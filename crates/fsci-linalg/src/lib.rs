@@ -1762,7 +1762,7 @@ pub fn eig(a: &[Vec<f64>], options: DecompOptions) -> Result<EigResult, LinalgEr
             let det_block = a11 * a22 - a12 * a21;
             let disc = trace * trace - 4.0 * det_block;
             let re = trace / 2.0;
-            let im = (-disc).sqrt() / 2.0;
+            let im = (-disc).max(0.0).sqrt() / 2.0;
             eigenvalues_re.push(re);
             eigenvalues_im.push(im);
             eigenvalues_re.push(re);
@@ -2372,8 +2372,8 @@ pub fn sqrtm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
         let (q, t) = schur.unpack();
         let mut sqrt_t = DMatrix::<f64>::zeros(n, n);
         for i in 0..n {
-            if t[(i, i)] >= 0.0 {
-                sqrt_t[(i, i)] = t[(i, i)].sqrt();
+            if t[(i, i)] >= -1e-14 {
+                sqrt_t[(i, i)] = t[(i, i)].max(0.0).sqrt();
             } else {
                 sqrt_t[(i, i)] = f64::NAN;
             }

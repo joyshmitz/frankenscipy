@@ -1,6 +1,6 @@
 {
-  "ts_unix_ms": 1774571300690,
+  "ts_unix_ms": 1774634593356,
   "reason": "no recovery required; artifact remained intact",
   "recovered_blocks": 0,
-  "proof_hash": "e41a96a317c847f4b9304769a67c5ef1df6d8349b7585b453b6c010c4e111070"
+  "proof_hash": "976baad24c44aa881cca084410d9824ce4fff6b9ddd2e1c39773a9ae2e701536"
 }

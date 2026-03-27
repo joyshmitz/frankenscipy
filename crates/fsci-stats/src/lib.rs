@@ -3876,17 +3876,27 @@ impl ContinuousDistribution for CrystalBall {
         let beta = self.beta_param;
         let m = self.m;
 
-        if x > -beta {
-            // Gaussian core
+        let gauss_norm = (2.0 * PI).sqrt() * standard_normal_cdf(beta);
+        let a = (m / beta).powf(m) * (-0.5 * beta * beta).exp();
+        let b = m / beta - beta;
+        let tail_norm = if m > 1.0 {
+            a * (m / beta).powf(1.0 - m) / (m - 1.0)
+        } else {
+            100.0 * a // rough estimate for divergent tail
+        };
+        let total_norm = gauss_norm + tail_norm;
+
+        let unnormalized_pdf = if x > -beta {
             (-0.5 * x * x).exp()
         } else {
-            // Power-law tail
-            let a = (m / beta).powf(m) * (-0.5 * beta * beta).exp();
-            let b = m / beta - beta;
             a * (b - x).powf(-m)
+        };
+        
+        if total_norm > 0.0 {
+            unnormalized_pdf / total_norm
+        } else {
+            0.0
         }
-        // Note: not normalized. For proper use, integrate to normalize.
-        // This matches scipy's unnormalized convention before scaling.
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -9240,6 +9250,223 @@ pub fn diff(data: &[f64]) -> Vec<f64> {
         return vec![];
     }
     data.windows(2).map(|w| w[1] - w[0]).collect()
+}
+
+/// Compute a histogram of data values.
+///
+/// Returns (counts, bin_edges).
+/// Matches `numpy.histogram`.
+pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
+    if data.is_empty() || bins == 0 {
+        return (vec![], vec![]);
+    }
+
+    let min_val = data.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_val = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let range = max_val - min_val;
+    let bin_width = if range > 0.0 { range / bins as f64 } else { 1.0 };
+
+    let mut counts = vec![0usize; bins];
+    let bin_edges: Vec<f64> = (0..=bins)
+        .map(|i| min_val + i as f64 * bin_width)
+        .collect();
+
+    for &v in data {
+        let bin = ((v - min_val) / bin_width).floor() as usize;
+        counts[bin.min(bins - 1)] += 1;
+    }
+
+    (counts, bin_edges)
+}
+
+/// Compute histogram bin edges using various strategies.
+///
+/// Methods: "auto" (Sturges), "sqrt", "sturges", "rice", "scott", "fd" (Freedman-Diaconis).
+pub fn histogram_bin_edges(data: &[f64], method: &str) -> Vec<f64> {
+    let n = data.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    let min_val = data.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_val = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+    let nbins = match method {
+        "sqrt" => (n as f64).sqrt().ceil() as usize,
+        "rice" => (2.0 * (n as f64).cbrt()).ceil() as usize,
+        "scott" => {
+            let mean: f64 = data.iter().sum::<f64>() / n as f64;
+            let std: f64 = (data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+            if std > 0.0 {
+                ((max_val - min_val) / (3.5 * std / (n as f64).cbrt())).ceil() as usize
+            } else {
+                1
+            }
+        }
+        "fd" => {
+            let q = quantile(data, &[0.25, 0.75]);
+            let iqr = q[1] - q[0];
+            if iqr > 0.0 {
+                ((max_val - min_val) / (2.0 * iqr / (n as f64).cbrt())).ceil() as usize
+            } else {
+                1
+            }
+        }
+        _ => {
+            // "sturges" / "auto"
+            (1.0 + (n as f64).log2()).ceil() as usize
+        }
+    };
+
+    let nbins = nbins.max(1);
+    let bin_width = (max_val - min_val) / nbins as f64;
+    (0..=nbins)
+        .map(|i| min_val + i as f64 * bin_width)
+        .collect()
+}
+
+/// Compute the binned statistic of values.
+///
+/// Groups `values` by which bin in `x` they fall into, applies `statistic`.
+/// Matches `scipy.stats.binned_statistic`.
+pub fn binned_statistic(
+    x: &[f64],
+    values: &[f64],
+    bins: usize,
+    statistic: &str,
+) -> (Vec<f64>, Vec<f64>) {
+    if x.len() != values.len() || x.is_empty() || bins == 0 {
+        return (vec![], vec![]);
+    }
+
+    let min_x = x.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let bin_width = if max_x > min_x {
+        (max_x - min_x) / bins as f64
+    } else {
+        1.0
+    };
+
+    let bin_edges: Vec<f64> = (0..=bins)
+        .map(|i| min_x + i as f64 * bin_width)
+        .collect();
+
+    let mut bin_values: Vec<Vec<f64>> = vec![vec![]; bins];
+    for (&xi, &vi) in x.iter().zip(values.iter()) {
+        let bin = ((xi - min_x) / bin_width).floor() as usize;
+        bin_values[bin.min(bins - 1)].push(vi);
+    }
+
+    let stats: Vec<f64> = bin_values
+        .iter()
+        .map(|bv| {
+            if bv.is_empty() {
+                return f64::NAN;
+            }
+            match statistic {
+                "mean" => bv.iter().sum::<f64>() / bv.len() as f64,
+                "sum" => bv.iter().sum(),
+                "count" => bv.len() as f64,
+                "min" => bv.iter().cloned().fold(f64::INFINITY, f64::min),
+                "max" => bv.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+                "median" => {
+                    let mut sorted = bv.clone();
+                    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let n = sorted.len();
+                    if n % 2 == 0 {
+                        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+                    } else {
+                        sorted[n / 2]
+                    }
+                }
+                "std" => {
+                    let mean = bv.iter().sum::<f64>() / bv.len() as f64;
+                    (bv.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / bv.len() as f64).sqrt()
+                }
+                _ => bv.iter().sum::<f64>() / bv.len() as f64,
+            }
+        })
+        .collect();
+
+    (stats, bin_edges)
+}
+
+/// Compute the relative frequency histogram.
+///
+/// Returns (relative_frequencies, bin_edges).
+pub fn relfreq(data: &[f64], bins: usize) -> (Vec<f64>, Vec<f64>) {
+    let (counts, edges) = histogram(data, bins);
+    let n = data.len() as f64;
+    let rel: Vec<f64> = counts.iter().map(|&c| c as f64 / n).collect();
+    (rel, edges)
+}
+
+/// Compute the cumulative frequency histogram.
+///
+/// Returns (cumulative_frequencies, bin_edges).
+pub fn cumfreq(data: &[f64], bins: usize) -> (Vec<f64>, Vec<f64>) {
+    let (counts, edges) = histogram(data, bins);
+    let mut cum = Vec::with_capacity(counts.len());
+    let mut total = 0.0;
+    for &c in &counts {
+        total += c as f64;
+        cum.push(total);
+    }
+    (cum, edges)
+}
+
+/// Compute the power spectral density using Welch's method.
+///
+/// Simple wrapper around periodogram concepts.
+pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> Vec<f64> {
+    if data.is_empty() || window_size == 0 {
+        return vec![];
+    }
+
+    let hop = window_size - overlap;
+    let n_freq = window_size / 2 + 1;
+    let mut psd = vec![0.0; n_freq];
+    let mut n_segments = 0;
+
+    let win: Vec<f64> = (0..window_size)
+        .map(|i| {
+            0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (window_size - 1) as f64).cos())
+        })
+        .collect();
+
+    let mut start = 0;
+    while start + window_size <= data.len() {
+        let segment: Vec<f64> = data[start..start + window_size]
+            .iter()
+            .zip(win.iter())
+            .map(|(&d, &w)| d * w)
+            .collect();
+
+        // Compute periodogram of segment
+        let two_pi = 2.0 * std::f64::consts::PI;
+        for k in 0..n_freq {
+            let mut re = 0.0;
+            let mut im = 0.0;
+            for (n, &s) in segment.iter().enumerate() {
+                let angle = two_pi * k as f64 * n as f64 / window_size as f64;
+                re += s * angle.cos();
+                im -= s * angle.sin();
+            }
+            let power = (re * re + im * im) / (window_size as f64 * fs);
+            psd[k] += power;
+        }
+
+        n_segments += 1;
+        start += hop;
+    }
+
+    if n_segments > 0 {
+        for v in &mut psd {
+            *v /= n_segments as f64;
+        }
+    }
+
+    psd
 }
 
 #[cfg(test)]

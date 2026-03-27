@@ -209,7 +209,9 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                         .parse()
                         .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?
                 } else {
-                    1.0
+                    return Err(IoError::InvalidFormat(
+                        "coordinate entry missing value for non-pattern field".to_string(),
+                    ));
                 };
 
                 if r >= rows || c >= cols {
@@ -648,7 +650,14 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
 
         loop {
             match lines.next() {
-                None => return Ok(arrays),
+                None => {
+                    if name.is_some() || rows != 0 || cols != 0 {
+                        return Err(IoError::InvalidFormat(
+                            "incomplete MAT text block at end of file".to_string(),
+                        ));
+                    }
+                    return Ok(arrays);
+                }
                 Some(line) => {
                     let trimmed = line.trim();
                     if let Some(stripped) = trimmed.strip_prefix("# name:") {
@@ -1009,6 +1018,20 @@ mod tests {
     }
 
     #[test]
+    fn mmread_rejects_missing_coordinate_value_for_real_field() {
+        let content = "%%MatrixMarket matrix coordinate real general\n\
+                        3 3 1\n\
+                        1 1\n";
+        let err = mmread(content).expect_err("real coordinate entries need explicit values");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "coordinate entry missing value for non-pattern field".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn mmread_array() {
         let content = "%%MatrixMarket matrix array real general\n\
                         2 3\n\
@@ -1198,6 +1221,16 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("encountered matrix data before '# name:' header".to_string())
+        );
+    }
+
+    #[test]
+    fn loadmat_rejects_incomplete_trailing_header_block() {
+        let err = loadmat_text("# name: A\n# rows: 2\n# columns: 2\n")
+            .expect_err("trailing header-only block should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("incomplete MAT text block at end of file".to_string())
         );
     }
 
