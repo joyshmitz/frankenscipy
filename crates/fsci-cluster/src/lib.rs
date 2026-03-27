@@ -1379,6 +1379,229 @@ fn bron_kerbosch(
     }
 }
 
+/// Compute silhouette coefficients for each sample.
+///
+/// Matches `sklearn.metrics.silhouette_samples`.
+pub fn silhouette_samples(data: &[Vec<f64>], labels: &[usize]) -> Vec<f64> {
+    let n = data.len();
+    if n < 2 {
+        return vec![0.0; n];
+    }
+    let k = labels.iter().cloned().max().unwrap_or(0) + 1;
+
+    (0..n)
+        .map(|i| {
+            let li = labels[i];
+
+            // a(i) = mean distance to same-cluster points
+            let mut a_sum = 0.0;
+            let mut a_count = 0;
+            for j in 0..n {
+                if i != j && labels[j] == li {
+                    a_sum += sq_dist(&data[i], &data[j]).sqrt();
+                    a_count += 1;
+                }
+            }
+            let a = if a_count > 0 {
+                a_sum / a_count as f64
+            } else {
+                0.0
+            };
+
+            // b(i) = min over other clusters of mean distance
+            let mut b = f64::INFINITY;
+            for c in 0..k {
+                if c == li {
+                    continue;
+                }
+                let mut c_sum = 0.0;
+                let mut c_count = 0;
+                for j in 0..n {
+                    if labels[j] == c {
+                        c_sum += sq_dist(&data[i], &data[j]).sqrt();
+                        c_count += 1;
+                    }
+                }
+                if c_count > 0 {
+                    b = b.min(c_sum / c_count as f64);
+                }
+            }
+
+            if a.max(b) > 0.0 {
+                (b - a) / a.max(b)
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+/// Gap statistic: compare within-cluster dispersion to reference.
+///
+/// Returns gap values for k=1..max_k.
+pub fn gap_statistic(
+    data: &[Vec<f64>],
+    max_k: usize,
+    n_ref: usize,
+    seed: u64,
+) -> Vec<f64> {
+    let n = data.len();
+    if n == 0 {
+        return vec![];
+    }
+    let d = data[0].len();
+
+    // Find data bounds
+    let mut mins = vec![f64::INFINITY; d];
+    let mut maxs = vec![f64::NEG_INFINITY; d];
+    for p in data {
+        for (j, &v) in p.iter().enumerate() {
+            mins[j] = mins[j].min(v);
+            maxs[j] = maxs[j].max(v);
+        }
+    }
+
+    let mut gaps = Vec::with_capacity(max_k);
+
+    for k in 1..=max_k.min(n) {
+        // Within-cluster dispersion for real data
+        let real_result = kmeans(data, k, 50, seed);
+        let log_wk = real_result.map(|r| r.inertia.max(1e-30).ln()).unwrap_or(0.0);
+
+        // Average over reference datasets
+        let mut ref_log_wks = Vec::with_capacity(n_ref);
+        for r in 0..n_ref {
+            let ref_seed = seed.wrapping_add(1000 * r as u64 + k as u64);
+            let mut rng = ref_seed;
+
+            // Generate uniform reference data
+            let ref_data: Vec<Vec<f64>> = (0..n)
+                .map(|_| {
+                    (0..d)
+                        .map(|j| {
+                            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+                            let u = (rng >> 11) as f64 / (1u64 << 53) as f64;
+                            mins[j] + u * (maxs[j] - mins[j])
+                        })
+                        .collect()
+                })
+                .collect();
+
+            let ref_result = kmeans(&ref_data, k, 30, ref_seed);
+            let ref_wk = ref_result
+                .map(|r| r.inertia.max(1e-30).ln())
+                .unwrap_or(0.0);
+            ref_log_wks.push(ref_wk);
+        }
+
+        let mean_ref = ref_log_wks.iter().sum::<f64>() / n_ref as f64;
+        gaps.push(mean_ref - log_wk);
+    }
+
+    gaps
+}
+
+/// K-medoids (PAM) clustering.
+///
+/// Similar to K-means but uses actual data points as centers.
+pub fn kmedoids(
+    data: &[Vec<f64>],
+    k: usize,
+    max_iter: usize,
+    seed: u64,
+) -> Result<KMeansResult, ClusterError> {
+    let n = data.len();
+    if n == 0 {
+        return Err(ClusterError::EmptyData);
+    }
+    if k == 0 || k > n {
+        return Err(ClusterError::InvalidArgument(format!(
+            "k={k} must be in [1, n={n}]"
+        )));
+    }
+
+    // Initialize medoids randomly
+    let mut rng = seed;
+    let mut medoid_indices: Vec<usize> = Vec::with_capacity(k);
+    let mut used = vec![false; n];
+    for _ in 0..k {
+        loop {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let idx = (rng >> 33) as usize % n;
+            if !used[idx] {
+                used[idx] = true;
+                medoid_indices.push(idx);
+                break;
+            }
+        }
+    }
+
+    let mut labels = vec![0usize; n];
+
+    for _ in 0..max_iter {
+        // Assign to nearest medoid
+        for i in 0..n {
+            let mut min_dist = f64::INFINITY;
+            for (c, &med) in medoid_indices.iter().enumerate() {
+                let d = sq_dist(&data[i], &data[med]);
+                if d < min_dist {
+                    min_dist = d;
+                    labels[i] = c;
+                }
+            }
+        }
+
+        // Update medoids: for each cluster, find the point that minimizes total distance
+        let mut changed = false;
+        for c in 0..k {
+            let members: Vec<usize> = (0..n).filter(|&i| labels[i] == c).collect();
+            if members.is_empty() {
+                continue;
+            }
+
+            let mut best_med = medoid_indices[c];
+            let mut best_cost: f64 = members
+                .iter()
+                .map(|&i| sq_dist(&data[i], &data[best_med]).sqrt())
+                .sum();
+
+            for &candidate in &members {
+                let cost: f64 = members
+                    .iter()
+                    .map(|&i| sq_dist(&data[i], &data[candidate]).sqrt())
+                    .sum();
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_med = candidate;
+                }
+            }
+
+            if best_med != medoid_indices[c] {
+                medoid_indices[c] = best_med;
+                changed = true;
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    // Compute final inertia
+    let inertia: f64 = (0..n)
+        .map(|i| sq_dist(&data[i], &data[medoid_indices[labels[i]]]))
+        .sum();
+
+    let centroids: Vec<Vec<f64>> = medoid_indices.iter().map(|&i| data[i].clone()).collect();
+
+    Ok(KMeansResult {
+        centroids,
+        labels,
+        inertia,
+        n_iter: max_iter,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
