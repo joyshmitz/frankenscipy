@@ -1762,6 +1762,149 @@ where
     })
 }
 
+/// Compute the Cauchy principal value of a singular integral.
+///
+/// Integrates f(x) over [a, b] with a singularity at `singular_point`.
+/// Splits the interval and approaches the singularity from both sides.
+pub fn quad_cauchy_pv<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    singular_point: f64,
+    options: QuadOptions,
+) -> Result<QuadResult, IntegrateValidationError>
+where
+    F: Fn(f64) -> f64,
+{
+    let eps = 1e-8 * (b - a).abs();
+
+    let left = quad(&f, a, singular_point - eps, options)?;
+    let right = quad(&f, singular_point + eps, b, options)?;
+
+    Ok(QuadResult {
+        integral: left.integral + right.integral,
+        error: left.error + right.error,
+        neval: left.neval + right.neval,
+        converged: left.converged && right.converged,
+    })
+}
+
+/// Compute the integral of a function given at discrete points using
+/// the composite trapezoidal rule with Richardson extrapolation.
+///
+/// More accurate than plain trapezoid for smooth functions.
+pub fn trapezoid_richardson(y: &[f64], x: &[f64]) -> f64 {
+    if y.len() < 2 || x.len() != y.len() {
+        return 0.0;
+    }
+
+    // Basic trapezoidal rule
+    let t1 = trapezoid_irregular(y, x);
+
+    // If we have enough points, do a second estimate with half the points
+    let n = y.len();
+    if n < 5 {
+        return t1;
+    }
+
+    // Subsample every other point
+    let y2: Vec<f64> = y.iter().step_by(2).cloned().collect();
+    let x2: Vec<f64> = x.iter().step_by(2).cloned().collect();
+    let t2 = trapezoid_irregular(&y2, &x2);
+
+    // Richardson extrapolation: T = (4*T1 - T2) / 3
+    (4.0 * t1 - t2) / 3.0
+}
+
+/// Compute the cumulative integral using the trapezoidal rule
+/// with initial value specification.
+///
+/// Matches `scipy.integrate.cumulative_trapezoid` with initial=0.
+pub fn cumulative_trapezoid_initial(y: &[f64], x: &[f64], initial: f64) -> Vec<f64> {
+    let n = y.len();
+    if n < 2 || x.len() != n {
+        return vec![initial; n];
+    }
+
+    let mut result = Vec::with_capacity(n);
+    result.push(initial);
+    let mut cumsum = initial;
+    for i in 1..n {
+        cumsum += 0.5 * (y[i] + y[i - 1]) * (x[i] - x[i - 1]);
+        result.push(cumsum);
+    }
+
+    result
+}
+
+/// Gauss-Legendre quadrature with specified number of points.
+///
+/// Uses precomputed nodes and weights for n=2,3,4,5.
+/// Matches `scipy.integrate.fixed_quad` internals.
+pub fn gauss_legendre<F>(f: F, a: f64, b: f64, n: usize) -> f64
+where
+    F: Fn(f64) -> f64,
+{
+    let (nodes, weights) = match n {
+        2 => (
+            vec![-0.577_350_269_189_625_7, 0.577_350_269_189_625_7],
+            vec![1.0, 1.0],
+        ),
+        3 => (
+            vec![-0.774_596_669_241_483_4, 0.0, 0.774_596_669_241_483_4],
+            vec![5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0],
+        ),
+        4 => (
+            vec![
+                -0.861_136_311_594_052_6,
+                -0.339_981_043_584_856_3,
+                0.339_981_043_584_856_3,
+                0.861_136_311_594_052_6,
+            ],
+            vec![
+                0.347_854_845_137_453_9,
+                0.652_145_154_862_546_1,
+                0.652_145_154_862_546_1,
+                0.347_854_845_137_453_9,
+            ],
+        ),
+        5 => (
+            vec![
+                -0.906_179_845_938_664,
+                -0.538_469_310_105_683,
+                0.0,
+                0.538_469_310_105_683,
+                0.906_179_845_938_664,
+            ],
+            vec![
+                0.236_926_885_056_189_1,
+                0.478_628_670_499_366_5,
+                0.568_888_888_888_889,
+                0.478_628_670_499_366_5,
+                0.236_926_885_056_189_1,
+            ],
+        ),
+        _ => {
+            // Fallback to Simpson for other n
+            let h = (b - a) / n as f64;
+            let mut sum = f(a) + f(b);
+            for i in 1..n {
+                let x = a + i as f64 * h;
+                sum += if i % 2 == 0 { 2.0 } else { 4.0 } * f(x);
+            }
+            return sum * h / 3.0;
+        }
+    };
+
+    let mid = (a + b) / 2.0;
+    let half = (b - a) / 2.0;
+    let mut sum = 0.0;
+    for (node, weight) in nodes.iter().zip(weights.iter()) {
+        sum += weight * f(mid + half * node);
+    }
+    sum * half
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -684,7 +684,20 @@ pub fn loadtxt(content: &str) -> Result<(usize, usize, Vec<f64>), IoError> {
 /// Save a matrix as whitespace-delimited text.
 ///
 /// Like `numpy.savetxt`.
-pub fn savetxt(rows: usize, cols: usize, data: &[f64], delimiter: &str) -> String {
+pub fn savetxt(
+    rows: usize,
+    cols: usize,
+    data: &[f64],
+    delimiter: &str,
+) -> Result<String, IoError> {
+    if data.len() != rows * cols {
+        return Err(IoError::InvalidFormat(format!(
+            "data length {} doesn't match {}x{}",
+            data.len(),
+            rows,
+            cols
+        )));
+    }
     let mut out = String::new();
     for r in 0..rows {
         for c in 0..cols {
@@ -695,7 +708,7 @@ pub fn savetxt(rows: usize, cols: usize, data: &[f64], delimiter: &str) -> Strin
         }
         out.push('\n');
     }
-    out
+    Ok(out)
 }
 
 /// Read a CSV file into rows of f64 values.
@@ -754,18 +767,29 @@ pub fn write_csv(
     header: Option<&[&str]>,
     data: &[Vec<f64>],
     delimiter: char,
-) -> String {
+) -> Result<String, IoError> {
     let mut out = String::new();
     if let Some(h) = header {
         out.push_str(&h.join(&delimiter.to_string()));
         out.push('\n');
     }
+    let mut expected_cols = None;
     for row in data {
+        if let Some(cols) = expected_cols {
+            if row.len() != cols {
+                return Err(IoError::InvalidFormat(format!(
+                    "CSV row has {} columns, expected {cols}",
+                    row.len()
+                )));
+            }
+        } else {
+            expected_cols = Some(row.len());
+        }
         let row_str: Vec<String> = row.iter().map(|v| format!("{v}")).collect();
         out.push_str(&row_str.join(&delimiter.to_string()));
         out.push('\n');
     }
-    out
+    Ok(out)
 }
 
 /// Read a simple JSON array of numbers.
@@ -1027,8 +1051,18 @@ mod tests {
     #[test]
     fn savetxt_basic() {
         let data = vec![1.0, 2.0, 3.0, 4.0];
-        let text = savetxt(2, 2, &data, " ");
+        let text = savetxt(2, 2, &data, " ").expect("matching shape should succeed");
         assert_eq!(text, "1 2\n3 4\n");
+    }
+
+    #[test]
+    fn savetxt_rejects_shape_length_mismatch() {
+        let err = savetxt(2, 2, &[1.0, 2.0, 3.0], " ")
+            .expect_err("mismatched shape should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("data length 3 doesn't match 2x2".to_string())
+        );
     }
 
     #[test]
@@ -1043,6 +1077,23 @@ mod tests {
     #[test]
     fn read_csv_rejects_ragged_rows() {
         let err = read_csv("1,2,3\n4,5\n", ',', false).expect_err("ragged CSV should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("CSV row has 2 columns, expected 3".to_string())
+        );
+    }
+
+    #[test]
+    fn write_csv_basic() {
+        let text = write_csv(None, &[vec![1.0, 2.0], vec![3.0, 4.0]], ',')
+            .expect("rectangular CSV should serialize");
+        assert_eq!(text, "1,2\n3,4\n");
+    }
+
+    #[test]
+    fn write_csv_rejects_ragged_rows() {
+        let err = write_csv(None, &[vec![1.0, 2.0, 3.0], vec![4.0, 5.0]], ',')
+            .expect_err("ragged CSV should fail");
         assert_eq!(
             err,
             IoError::InvalidFormat("CSV row has 2 columns, expected 3".to_string())

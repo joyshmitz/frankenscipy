@@ -1965,6 +1965,172 @@ pub fn sokalsneath(u: &[bool], v: &[bool]) -> f64 {
     }
 }
 
+/// Matching dissimilarity for boolean vectors.
+///
+/// Fraction of positions where both vectors agree.
+/// Matches `scipy.spatial.distance.matching` (same as Hamming for boolean).
+pub fn matching(u: &[bool], v: &[bool]) -> f64 {
+    let n = u.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let ndiff = u
+        .iter()
+        .zip(v.iter())
+        .filter(|&(a, b)| *a != *b)
+        .count();
+    ndiff as f64 / n as f64
+}
+
+/// Compute all pairwise distances using a specified metric function.
+///
+/// Returns condensed distance vector.
+pub fn pdist_func<F>(data: &[Vec<f64>], metric: F) -> Vec<f64>
+where
+    F: Fn(&[f64], &[f64]) -> f64,
+{
+    let n = data.len();
+    let mut dists = Vec::with_capacity(n * (n - 1) / 2);
+    for i in 0..n {
+        for j in i + 1..n {
+            dists.push(metric(&data[i], &data[j]));
+        }
+    }
+    dists
+}
+
+/// Compute pairwise distances between two sets using a metric function.
+///
+/// Returns an m×n matrix.
+pub fn cdist_func<F>(xa: &[Vec<f64>], xb: &[Vec<f64>], metric: F) -> Vec<Vec<f64>>
+where
+    F: Fn(&[f64], &[f64]) -> f64,
+{
+    xa.iter()
+        .map(|a| xb.iter().map(|b| metric(a, b)).collect())
+        .collect()
+}
+
+/// Compute the nearest neighbor for each point in a dataset.
+///
+/// Returns (indices, distances) of nearest neighbors.
+pub fn nearest_neighbors(data: &[Vec<f64>]) -> (Vec<usize>, Vec<f64>) {
+    let n = data.len();
+    let mut indices = Vec::with_capacity(n);
+    let mut distances = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let mut min_dist = f64::INFINITY;
+        let mut min_idx = 0;
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let d = euclidean(&data[i], &data[j]);
+            if d < min_dist {
+                min_dist = d;
+                min_idx = j;
+            }
+        }
+        indices.push(min_idx);
+        distances.push(min_dist);
+    }
+
+    (indices, distances)
+}
+
+/// Compute the k nearest neighbors for each point.
+///
+/// Returns (indices, distances) where each inner vec has k elements.
+pub fn k_nearest_neighbors(data: &[Vec<f64>], k: usize) -> (Vec<Vec<usize>>, Vec<Vec<f64>>) {
+    let n = data.len();
+    let mut all_indices = Vec::with_capacity(n);
+    let mut all_distances = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let mut dists: Vec<(usize, f64)> = (0..n)
+            .filter(|&j| j != i)
+            .map(|j| (j, euclidean(&data[i], &data[j])))
+            .collect();
+        dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let k_actual = k.min(dists.len());
+        all_indices.push(dists[..k_actual].iter().map(|&(idx, _)| idx).collect());
+        all_distances.push(dists[..k_actual].iter().map(|&(_, d)| d).collect());
+    }
+
+    (all_indices, all_distances)
+}
+
+/// Compute the centroid of a set of points.
+pub fn centroid(points: &[Vec<f64>]) -> Vec<f64> {
+    if points.is_empty() {
+        return vec![];
+    }
+    let d = points[0].len();
+    let n = points.len() as f64;
+    let mut center = vec![0.0; d];
+    for p in points {
+        for (j, &v) in p.iter().enumerate() {
+            center[j] += v;
+        }
+    }
+    for v in &mut center {
+        *v /= n;
+    }
+    center
+}
+
+/// Compute the medoid (point minimizing sum of distances) of a set.
+pub fn medoid(points: &[Vec<f64>]) -> usize {
+    let n = points.len();
+    if n == 0 {
+        return 0;
+    }
+
+    let mut best = 0;
+    let mut best_total = f64::INFINITY;
+
+    for i in 0..n {
+        let total: f64 = (0..n)
+            .filter(|&j| j != i)
+            .map(|j| euclidean(&points[i], &points[j]))
+            .sum();
+        if total < best_total {
+            best_total = total;
+            best = i;
+        }
+    }
+
+    best
+}
+
+/// Compute the diameter of a point set (maximum pairwise distance).
+pub fn diameter(points: &[Vec<f64>]) -> f64 {
+    let n = points.len();
+    let mut max_d = 0.0f64;
+    for i in 0..n {
+        for j in i + 1..n {
+            max_d = max_d.max(euclidean(&points[i], &points[j]));
+        }
+    }
+    max_d
+}
+
+/// Compute the spread (average distance from centroid) of a point set.
+pub fn spread(points: &[Vec<f64>]) -> f64 {
+    if points.is_empty() {
+        return 0.0;
+    }
+    let center = centroid(points);
+    let n = points.len() as f64;
+    points
+        .iter()
+        .map(|p| euclidean(p, &center))
+        .sum::<f64>()
+        / n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
