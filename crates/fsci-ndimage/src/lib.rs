@@ -2179,7 +2179,6 @@ pub fn sum_axis(input: &NdArray, axis: usize) -> Result<NdArray, NdimageError> {
     }
 
     let mut result = NdArray::zeros(new_shape);
-    let axis_size = input.shape[axis];
 
     for flat in 0..input.size() {
         let idx = input.unravel(flat);
