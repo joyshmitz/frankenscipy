@@ -2338,6 +2338,136 @@ pub fn signal_power(x: &[f64]) -> f64 {
     signal_energy(x) / x.len() as f64
 }
 
+/// Compute the cross-correlation coefficient between two signals.
+///
+/// Returns a value between -1 and 1.
+pub fn xcorr_coefficient(x: &[f64], y: &[f64]) -> f64 {
+    if x.len() != y.len() || x.is_empty() {
+        return 0.0;
+    }
+    let n = x.len() as f64;
+    let mx: f64 = x.iter().sum::<f64>() / n;
+    let my: f64 = y.iter().sum::<f64>() / n;
+    let cov: f64 = x.iter().zip(y.iter()).map(|(&a, &b)| (a - mx) * (b - my)).sum();
+    let sx: f64 = x.iter().map(|&a| (a - mx).powi(2)).sum::<f64>().sqrt();
+    let sy: f64 = y.iter().map(|&b| (b - my).powi(2)).sum::<f64>().sqrt();
+    if sx * sy == 0.0 {
+        return 0.0;
+    }
+    cov / (sx * sy)
+}
+
+/// Compute the delay between two signals via cross-correlation.
+///
+/// Returns the lag (in samples) that maximizes cross-correlation.
+pub fn find_delay(x: &[f64], y: &[f64]) -> i64 {
+    let n = x.len();
+    let m = y.len();
+    if n == 0 || m == 0 {
+        return 0;
+    }
+
+    let max_lag = n.max(m) - 1;
+    let mut best_lag: i64 = 0;
+    let mut best_corr = f64::NEG_INFINITY;
+
+    for lag in -(max_lag as i64)..=(max_lag as i64) {
+        let mut sum = 0.0;
+        for i in 0..n {
+            let j = i as i64 - lag;
+            if j >= 0 && (j as usize) < m {
+                sum += x[i] * y[j as usize];
+            }
+        }
+        if sum > best_corr {
+            best_corr = sum;
+            best_lag = lag;
+        }
+    }
+
+    best_lag
+}
+
+/// Apply a moving median filter.
+pub fn medfilt1(x: &[f64], kernel_size: usize) -> Vec<f64> {
+    if x.is_empty() || kernel_size == 0 {
+        return x.to_vec();
+    }
+    let half = kernel_size / 2;
+    let n = x.len();
+
+    (0..n)
+        .map(|i| {
+            let start = if i >= half { i - half } else { 0 };
+            let end = (i + half + 1).min(n);
+            let mut window: Vec<f64> = x[start..end].to_vec();
+            window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            window[window.len() / 2]
+        })
+        .collect()
+}
+
+/// Apply exponential smoothing to a signal.
+pub fn exponential_smooth(x: &[f64], alpha: f64) -> Vec<f64> {
+    if x.is_empty() {
+        return vec![];
+    }
+    let mut result = Vec::with_capacity(x.len());
+    result.push(x[0]);
+    for i in 1..x.len() {
+        result.push(alpha * x[i] + (1.0 - alpha) * result[i - 1]);
+    }
+    result
+}
+
+/// Compute the analytic signal magnitude (envelope) via absolute value of Hilbert.
+pub fn analytic_envelope(x: &[f64]) -> Result<Vec<f64>, SignalError> {
+    hilbert_envelope(x)
+}
+
+/// Compute the frequency of maximum power in a spectrum.
+pub fn dominant_frequency(magnitudes: &[f64], freqs: &[f64]) -> f64 {
+    if magnitudes.is_empty() || freqs.is_empty() {
+        return 0.0;
+    }
+    let max_idx = magnitudes
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    freqs.get(max_idx).copied().unwrap_or(0.0)
+}
+
+/// Compute the spectral entropy.
+///
+/// Normalized Shannon entropy of the power spectrum.
+pub fn spectral_entropy(magnitudes: &[f64]) -> f64 {
+    if magnitudes.is_empty() {
+        return 0.0;
+    }
+    let total: f64 = magnitudes.iter().sum();
+    if total <= 0.0 {
+        return 0.0;
+    }
+
+    let mut entropy = 0.0;
+    for &m in magnitudes {
+        if m > 0.0 {
+            let p = m / total;
+            entropy -= p * p.ln();
+        }
+    }
+
+    // Normalize by log(N)
+    let n = magnitudes.len() as f64;
+    if n > 1.0 {
+        entropy / n.ln()
+    } else {
+        entropy
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // IIR Filter Design
 // ══════════════════════════════════════════════════════════════════════

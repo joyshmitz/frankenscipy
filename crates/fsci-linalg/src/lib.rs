@@ -4489,6 +4489,106 @@ pub fn mat_norm_inf(a: &[Vec<f64>]) -> f64 {
         .fold(0.0f64, f64::max)
 }
 
+/// Check if a matrix is diagonal.
+pub fn is_diagonal(a: &[Vec<f64>], tol: f64) -> bool {
+    for (i, row) in a.iter().enumerate() {
+        for (j, &v) in row.iter().enumerate() {
+            if i != j && v.abs() > tol {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Check if a matrix is upper triangular.
+pub fn is_upper_triangular(a: &[Vec<f64>], tol: f64) -> bool {
+    for (i, row) in a.iter().enumerate() {
+        for (j, &v) in row.iter().enumerate() {
+            if i > j && v.abs() > tol {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Check if a matrix is lower triangular.
+pub fn is_lower_triangular(a: &[Vec<f64>], tol: f64) -> bool {
+    for (i, row) in a.iter().enumerate() {
+        for (j, &v) in row.iter().enumerate() {
+            if j > i && v.abs() > tol {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Check if a matrix is orthogonal (A^T * A ≈ I).
+pub fn is_orthogonal(a: &[Vec<f64>], tol: f64) -> bool {
+    let n = a.len();
+    if n == 0 {
+        return true;
+    }
+    let m = a[0].len();
+    if n != m {
+        return false;
+    }
+
+    // Check A^T * A ≈ I
+    for i in 0..n {
+        for j in 0..n {
+            let mut dot = 0.0;
+            for k in 0..n {
+                dot += a[k][i] * a[k][j];
+            }
+            let expected = if i == j { 1.0 } else { 0.0 };
+            if (dot - expected).abs() > tol {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Compute the numerical rank of a matrix (count of singular values > tol).
+pub fn numerical_rank(a: &[Vec<f64>], tol: f64, options: DecompOptions) -> Result<usize, LinalgError> {
+    let sv = svdvals(a, options)?;
+    Ok(sv.iter().filter(|&&s| s > tol).count())
+}
+
+/// Generate a random matrix with entries from uniform [0, 1).
+pub fn random_matrix(rows: usize, cols: usize, seed: u64) -> Vec<Vec<f64>> {
+    let mut rng = seed;
+    (0..rows)
+        .map(|_| {
+            (0..cols)
+                .map(|_| {
+                    rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    (rng >> 11) as f64 / (1u64 << 53) as f64
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Generate a random symmetric positive definite matrix.
+pub fn random_spd(n: usize, seed: u64) -> Vec<Vec<f64>> {
+    let a = random_matrix(n, n, seed);
+    // A^T * A + n*I is guaranteed SPD
+    let mut result = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                result[i][j] += a[k][i] * a[k][j];
+            }
+        }
+        result[i][i] += n as f64;
+    }
+    result
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Condition Number and Matrix Properties
 // ══════════════════════════════════════════════════════════════════════

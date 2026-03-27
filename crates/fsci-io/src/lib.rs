@@ -667,41 +667,44 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
                         // Skip type line
                     } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
                         // Data line — we've hit the matrix data
-                        if let Some(ref n) = name {
-                            let mut data = Vec::with_capacity(rows * cols);
-                            // Parse this line
-                            for val_str in trimmed.split_whitespace() {
-                                let v: f64 = val_str.parse().map_err(|e| {
-                                    IoError::InvalidFormat(format!("bad value: {e}"))
-                                })?;
-                                data.push(v);
-                            }
-                            // Read remaining rows
-                            for _ in 1..rows {
-                                if let Some(line) = lines.next() {
-                                    for val_str in line.split_whitespace() {
-                                        let v: f64 = val_str.parse().map_err(|e| {
-                                            IoError::InvalidFormat(format!("bad value: {e}"))
-                                        })?;
-                                        data.push(v);
-                                    }
+                        let n = name.as_ref().ok_or_else(|| {
+                            IoError::InvalidFormat(
+                                "encountered matrix data before '# name:' header".to_string(),
+                            )
+                        })?;
+                        let mut data = Vec::with_capacity(rows * cols);
+                        // Parse this line
+                        for val_str in trimmed.split_whitespace() {
+                            let v: f64 = val_str
+                                .parse()
+                                .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
+                            data.push(v);
+                        }
+                        // Read remaining rows
+                        for _ in 1..rows {
+                            if let Some(line) = lines.next() {
+                                for val_str in line.split_whitespace() {
+                                    let v: f64 = val_str.parse().map_err(|e| {
+                                        IoError::InvalidFormat(format!("bad value: {e}"))
+                                    })?;
+                                    data.push(v);
                                 }
                             }
-                            if data.len() != rows * cols {
-                                return Err(IoError::InvalidFormat(format!(
-                                    "array '{n}' expected {} values but found {}",
-                                    rows * cols,
-                                    data.len()
-                                )));
-                            }
-                            arrays.push(MatArray {
-                                name: n.clone(),
-                                rows,
-                                cols,
-                                data,
-                            });
-                            break;
                         }
+                        if data.len() != rows * cols {
+                            return Err(IoError::InvalidFormat(format!(
+                                "array '{n}' expected {} values but found {}",
+                                rows * cols,
+                                data.len()
+                            )));
+                        }
+                        arrays.push(MatArray {
+                            name: n.clone(),
+                            rows,
+                            cols,
+                            data,
+                        });
+                        break;
                     }
                 }
             }
@@ -1185,6 +1188,16 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("array 'A' expected 4 values but found 3".to_string())
+        );
+    }
+
+    #[test]
+    fn loadmat_rejects_data_without_name_header() {
+        let err = loadmat_text("1 2\n3 4\n")
+            .expect_err("data block without a name header should fail closed");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("encountered matrix data before '# name:' header".to_string())
         );
     }
 
