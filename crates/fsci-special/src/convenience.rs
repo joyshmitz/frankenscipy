@@ -1681,3 +1681,111 @@ pub fn log_ndtr(x: f64) -> f64 {
         -0.5 * x * x - (-x * (2.0 * std::f64::consts::PI).sqrt()).ln()
     }
 }
+
+/// Compute the Dawson integral approximation for large arguments.
+///
+/// For small x, Dawson(x) ≈ x - 2x³/3 + ...
+/// Matches `scipy.special.dawsn` (scalar convenience).
+pub fn dawsn_scalar(x: f64) -> f64 {
+    dawsn(x)
+}
+
+/// Compute the Struve function H_v(x) (scalar convenience).
+pub fn struve_scalar(v: f64, x: f64) -> f64 {
+    struve(v, x)
+}
+
+/// Compute the modified Struve function L_v(x) (scalar convenience).
+pub fn modstruve_scalar(v: f64, x: f64) -> f64 {
+    modstruve(v, x)
+}
+
+/// Compute the Debye function D_n(x) = (n/x^n) ∫₀ˣ t^n/(e^t - 1) dt.
+///
+/// Matches `scipy.special.debye` for n=1,2,3,4.
+pub fn debye(n: usize, x: f64) -> f64 {
+    if x == 0.0 {
+        return 1.0;
+    }
+    if x < 0.0 {
+        return f64::NAN;
+    }
+
+    // Numerical integration via Simpson's rule
+    let npts = (200.0 * (1.0 + x / 5.0).min(10.0)) as usize;
+    let npts = npts + (npts % 2);
+    let h = x / npts as f64;
+
+    let integrand = |t: f64| -> f64 {
+        if t < 1e-15 {
+            // L'Hôpital: t^n / (e^t - 1) → t^(n-1) for small t
+            t.powi(n as i32 - 1)
+        } else {
+            t.powi(n as i32) / (t.exp() - 1.0)
+        }
+    };
+
+    let mut sum = integrand(0.0) + integrand(x);
+    for i in 1..npts {
+        let t = i as f64 * h;
+        let w = if i % 2 == 0 { 2.0 } else { 4.0 };
+        sum += w * integrand(t);
+    }
+    let integral = sum * h / 3.0;
+
+    n as f64 / x.powi(n as i32) * integral
+}
+
+/// Lambert W function principal branch W_0(x).
+///
+/// Finds w such that w * exp(w) = x.
+/// Scalar convenience wrapper matching `scipy.special.lambertw`.
+pub fn lambertw_scalar(x: f64) -> f64 {
+    if x == 0.0 {
+        return 0.0;
+    }
+    if x == -1.0 / std::f64::consts::E {
+        return -1.0;
+    }
+    if x < -1.0 / std::f64::consts::E {
+        return f64::NAN;
+    }
+
+    // Initial guess
+    let mut w = if x < 1.0 {
+        x
+    } else {
+        x.ln() - x.ln().ln()
+    };
+
+    // Halley's method
+    for _ in 0..50 {
+        let ew = w.exp();
+        let wew = w * ew;
+        let f = wew - x;
+        if f.abs() < 1e-15 * x.abs().max(1.0) {
+            break;
+        }
+        let fp = ew * (w + 1.0);
+        let fpp = ew * (w + 2.0);
+        w -= f / (fp - f * fpp / (2.0 * fp));
+    }
+
+    w
+}
+
+/// Zeta function for real s > 1 (convenience alias).
+pub fn zeta_scalar(s: f64) -> f64 {
+    if s <= 1.0 {
+        return f64::NAN;
+    }
+    let mut sum = 0.0;
+    for k in 1..=10000 {
+        let term = (k as f64).powf(-s);
+        sum += term;
+        if term < 1e-15 * sum {
+            break;
+        }
+    }
+    sum
+}

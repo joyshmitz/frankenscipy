@@ -2245,10 +2245,12 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
 
             for (pi, &ji) in passive_indices.iter().enumerate() {
                 for (pj, &jj) in passive_indices.iter().enumerate() {
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..m {
                         ata[pi][pj] += a[i][ji] * a[i][jj];
                     }
                 }
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..m {
                     atb_sub[pi] += a[i][ji] * b[i];
                 }
@@ -2277,8 +2279,11 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
             let mut alpha = f64::INFINITY;
             for (pi, &ji) in passive_indices.iter().enumerate() {
                 if s_p[pi] <= 0.0 {
-                    let a_val = x[ji] / (x[ji] - s_p[pi]);
-                    alpha = alpha.min(a_val);
+                    let denom = x[ji] - s_p[pi];
+                    if denom > 0.0 {
+                        let a_val = x[ji] / denom;
+                        alpha = alpha.min(a_val);
+                    }
                 }
             }
 
@@ -2335,6 +2340,7 @@ fn solve_small_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
         let pivot = aug[col][col];
         for row in col + 1..n {
             let factor = aug[row][col] / pivot;
+            #[allow(clippy::needless_range_loop)]
             for j in col..=n {
                 let val = aug[col][j];
                 aug[row][j] -= factor * val;

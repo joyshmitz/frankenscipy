@@ -1226,6 +1226,7 @@ pub fn linkage_from_distances(
     // Build full distance matrix from condensed form
     let mut dist = vec![vec![f64::INFINITY; n]; n];
     let mut idx = 0;
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         dist[i][i] = 0.0;
         for j in i + 1..n {

@@ -4388,6 +4388,107 @@ pub fn adjugate(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
     adj
 }
 
+/// Compute the element-wise absolute value of a matrix.
+pub fn mat_abs(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    a.iter()
+        .map(|row| row.iter().map(|&v| v.abs()).collect())
+        .collect()
+}
+
+/// Add two matrices element-wise.
+pub fn mat_add(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    a.iter()
+        .zip(b.iter())
+        .map(|(ra, rb)| ra.iter().zip(rb.iter()).map(|(&x, &y)| x + y).collect())
+        .collect()
+}
+
+/// Subtract two matrices element-wise.
+pub fn mat_sub(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    a.iter()
+        .zip(b.iter())
+        .map(|(ra, rb)| ra.iter().zip(rb.iter()).map(|(&x, &y)| x - y).collect())
+        .collect()
+}
+
+/// Scale a matrix by a scalar.
+pub fn mat_scale(a: &[Vec<f64>], s: f64) -> Vec<Vec<f64>> {
+    a.iter()
+        .map(|row| row.iter().map(|&v| v * s).collect())
+        .collect()
+}
+
+/// Element-wise multiply (Hadamard product) of two matrices.
+pub fn hadamard_product(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    a.iter()
+        .zip(b.iter())
+        .map(|(ra, rb)| ra.iter().zip(rb.iter()).map(|(&x, &y)| x * y).collect())
+        .collect()
+}
+
+/// Extract a submatrix from row r1..r2 and column c1..c2.
+pub fn submatrix(a: &[Vec<f64>], r1: usize, r2: usize, c1: usize, c2: usize) -> Vec<Vec<f64>> {
+    a[r1..r2]
+        .iter()
+        .map(|row| row[c1..c2].to_vec())
+        .collect()
+}
+
+/// Create a matrix from a flat vector given shape (row-major order).
+pub fn mat_from_flat(data: &[f64], rows: usize, cols: usize) -> Vec<Vec<f64>> {
+    let mut result = Vec::with_capacity(rows);
+    for i in 0..rows {
+        let start = i * cols;
+        let end = (start + cols).min(data.len());
+        result.push(data[start..end].to_vec());
+    }
+    result
+}
+
+/// Flatten a matrix to a vector (row-major order).
+pub fn mat_flatten(a: &[Vec<f64>]) -> Vec<f64> {
+    a.iter().flat_map(|row| row.iter().cloned()).collect()
+}
+
+/// Check if two matrices are equal within tolerance.
+pub fn mat_allclose(a: &[Vec<f64>], b: &[Vec<f64>], atol: f64, rtol: f64) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (ra, rb) in a.iter().zip(b.iter()) {
+        if ra.len() != rb.len() {
+            return false;
+        }
+        for (&va, &vb) in ra.iter().zip(rb.iter()) {
+            if (va - vb).abs() > atol + rtol * vb.abs() {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Compute the 1-norm of a matrix (maximum column sum of absolute values).
+pub fn mat_norm_1(a: &[Vec<f64>]) -> f64 {
+    if a.is_empty() {
+        return 0.0;
+    }
+    let cols = a[0].len();
+    let mut max_col_sum = 0.0f64;
+    for j in 0..cols {
+        let col_sum: f64 = a.iter().map(|row| row[j].abs()).sum();
+        max_col_sum = max_col_sum.max(col_sum);
+    }
+    max_col_sum
+}
+
+/// Compute the infinity-norm of a matrix (maximum row sum of absolute values).
+pub fn mat_norm_inf(a: &[Vec<f64>]) -> f64 {
+    a.iter()
+        .map(|row| row.iter().map(|&v| v.abs()).sum::<f64>())
+        .fold(0.0f64, f64::max)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Condition Number and Matrix Properties
 // ══════════════════════════════════════════════════════════════════════

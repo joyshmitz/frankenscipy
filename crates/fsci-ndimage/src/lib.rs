@@ -1972,7 +1972,7 @@ fn binary_erosion_with_struct(input: &NdArray, structure: &NdArray) -> Result<Nd
         ));
     }
 
-    let ndim = input.ndim();
+    let _ndim = input.ndim();
     let mut output = NdArray::zeros(input.shape.clone());
     let offsets: Vec<i64> = structure.shape.iter().map(|&s| s as i64 / 2).collect();
 
@@ -2114,6 +2114,172 @@ pub fn add_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
         shape: a.shape.clone(),
         strides: a.strides.clone(),
     })
+}
+
+/// Subtract two arrays element-wise.
+pub fn subtract_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
+    if a.shape != b.shape {
+        return Err(NdimageError::DimensionMismatch(
+            "shapes must match".to_string(),
+        ));
+    }
+    let data: Vec<f64> = a.data.iter().zip(b.data.iter()).map(|(&x, &y)| x - y).collect();
+    Ok(NdArray {
+        data,
+        shape: a.shape.clone(),
+        strides: a.strides.clone(),
+    })
+}
+
+/// Scale (multiply by scalar) an array.
+pub fn scale_array(input: &NdArray, scalar: f64) -> NdArray {
+    let data: Vec<f64> = input.data.iter().map(|&v| v * scalar).collect();
+    NdArray {
+        data,
+        shape: input.shape.clone(),
+        strides: input.strides.clone(),
+    }
+}
+
+/// Apply element-wise natural logarithm (ln).
+pub fn log_array(input: &NdArray) -> NdArray {
+    let data: Vec<f64> = input.data.iter().map(|&v| if v > 0.0 { v.ln() } else { f64::NEG_INFINITY }).collect();
+    NdArray {
+        data,
+        shape: input.shape.clone(),
+        strides: input.strides.clone(),
+    }
+}
+
+/// Apply element-wise exponential.
+pub fn exp_array(input: &NdArray) -> NdArray {
+    let data: Vec<f64> = input.data.iter().map(|&v| v.exp()).collect();
+    NdArray {
+        data,
+        shape: input.shape.clone(),
+        strides: input.strides.clone(),
+    }
+}
+
+/// Compute the sum along a specific axis, reducing that dimension.
+pub fn sum_axis(input: &NdArray, axis: usize) -> Result<NdArray, NdimageError> {
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range for {}-d array",
+            input.ndim()
+        )));
+    }
+
+    let mut new_shape = input.shape.clone();
+    new_shape.remove(axis);
+    if new_shape.is_empty() {
+        // Collapsing to scalar
+        let sum: f64 = input.data.iter().sum();
+        return NdArray::new(vec![sum], vec![1]);
+    }
+
+    let mut result = NdArray::zeros(new_shape);
+    let axis_size = input.shape[axis];
+
+    for flat in 0..input.size() {
+        let idx = input.unravel(flat);
+        let mut out_idx: Vec<usize> = idx.clone();
+        out_idx.remove(axis);
+        let out_flat = out_idx
+            .iter()
+            .zip(result.strides.iter())
+            .map(|(&i, &s)| i * s)
+            .sum::<usize>();
+        result.data[out_flat] += input.data[flat];
+    }
+
+    Ok(result)
+}
+
+/// Compute the mean along a specific axis.
+pub fn mean_axis(input: &NdArray, axis: usize) -> Result<NdArray, NdimageError> {
+    let summed = sum_axis(input, axis)?;
+    let axis_size = input.shape[axis] as f64;
+    Ok(scale_array(&summed, 1.0 / axis_size))
+}
+
+/// Pad an array with constant values.
+///
+/// `pad_width` specifies (before, after) padding for each axis.
+pub fn pad_constant(
+    input: &NdArray,
+    pad_width: &[(usize, usize)],
+    constant: f64,
+) -> Result<NdArray, NdimageError> {
+    if pad_width.len() != input.ndim() {
+        return Err(NdimageError::DimensionMismatch(
+            "pad_width must have one entry per dimension".to_string(),
+        ));
+    }
+
+    let new_shape: Vec<usize> = input
+        .shape
+        .iter()
+        .zip(pad_width.iter())
+        .map(|(&s, &(before, after))| s + before + after)
+        .collect();
+
+    let mut result = NdArray::zeros(new_shape.clone());
+    for v in &mut result.data {
+        *v = constant;
+    }
+
+    // Copy input data to padded region
+    let result_strides = compute_strides(&new_shape);
+    for flat in 0..input.size() {
+        let idx = input.unravel(flat);
+        let padded_idx: Vec<usize> = idx
+            .iter()
+            .zip(pad_width.iter())
+            .map(|(&i, &(before, _))| i + before)
+            .collect();
+        let out_flat: usize = padded_idx
+            .iter()
+            .zip(result_strides.iter())
+            .map(|(&i, &s)| i * s)
+            .sum();
+        result.data[out_flat] = input.data[flat];
+    }
+
+    Ok(result)
+}
+
+/// Create an NdArray filled with a constant value.
+pub fn full(shape: Vec<usize>, value: f64) -> NdArray {
+    let total: usize = shape.iter().product();
+    NdArray {
+        data: vec![value; total],
+        strides: compute_strides(&shape),
+        shape,
+    }
+}
+
+/// Create an NdArray filled with ones.
+pub fn ones(shape: Vec<usize>) -> NdArray {
+    full(shape, 1.0)
+}
+
+/// Reshape an NdArray (must have same total number of elements).
+pub fn reshape(input: &NdArray, new_shape: Vec<usize>) -> Result<NdArray, NdimageError> {
+    let new_total: usize = new_shape.iter().product();
+    if new_total != input.size() {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "cannot reshape {} elements into {:?}",
+            input.size(),
+            new_shape
+        )));
+    }
+    NdArray::new(input.data.clone(), new_shape)
+}
+
+/// Flatten an NdArray to 1D.
+pub fn flatten(input: &NdArray) -> NdArray {
+    NdArray::new(input.data.clone(), vec![input.size()]).unwrap()
 }
 
 #[cfg(test)]

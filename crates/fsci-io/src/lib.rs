@@ -716,6 +716,7 @@ pub fn read_csv(content: &str, delimiter: char, has_header: bool) -> CsvResult {
     };
 
     let mut data = Vec::new();
+    let mut expected_cols = None;
     for line in lines {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -726,7 +727,19 @@ pub fn read_csv(content: &str, delimiter: char, has_header: bool) -> CsvResult {
             .map(|s| s.trim().parse::<f64>())
             .collect();
         match row {
-            Ok(r) => data.push(r),
+            Ok(r) => {
+                if let Some(cols) = expected_cols {
+                    if r.len() != cols {
+                        return Err(IoError::InvalidFormat(format!(
+                            "CSV row has {} columns, expected {cols}",
+                            r.len()
+                        )));
+                    }
+                } else {
+                    expected_cols = Some(r.len());
+                }
+                data.push(r);
+            }
             Err(e) => {
                 return Err(IoError::InvalidFormat(format!("CSV parse error: {e}")));
             }
@@ -1021,6 +1034,15 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("shape [2, 2] expects 4 values but found 3".to_string())
+        );
+    }
+
+    #[test]
+    fn read_csv_rejects_ragged_rows() {
+        let err = read_csv("1,2,3\n4,5\n", ',', false).expect_err("ragged CSV should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("CSV row has 2 columns, expected 3".to_string())
         );
     }
 

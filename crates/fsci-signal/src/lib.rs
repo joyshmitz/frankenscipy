@@ -2224,6 +2224,120 @@ pub fn phase_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f6
     (freqs, phases)
 }
 
+/// Normalize a signal to have zero mean and unit variance.
+pub fn normalize_signal(x: &[f64]) -> Vec<f64> {
+    if x.is_empty() {
+        return vec![];
+    }
+    let n = x.len() as f64;
+    let mean: f64 = x.iter().sum::<f64>() / n;
+    let var: f64 = x.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
+    let std = var.sqrt();
+    if std == 0.0 {
+        return vec![0.0; x.len()];
+    }
+    x.iter().map(|&v| (v - mean) / std).collect()
+}
+
+/// Normalize a signal to range [0, 1].
+pub fn normalize_minmax(x: &[f64]) -> Vec<f64> {
+    if x.is_empty() {
+        return vec![];
+    }
+    let min = x.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let range = max - min;
+    if range == 0.0 {
+        return vec![0.5; x.len()];
+    }
+    x.iter().map(|&v| (v - min) / range).collect()
+}
+
+/// Downsample a signal by taking every n-th sample.
+pub fn downsample(x: &[f64], factor: usize) -> Vec<f64> {
+    if factor == 0 {
+        return x.to_vec();
+    }
+    x.iter().step_by(factor).cloned().collect()
+}
+
+/// Upsample a signal by inserting zeros between samples.
+pub fn upsample(x: &[f64], factor: usize) -> Vec<f64> {
+    if factor <= 1 {
+        return x.to_vec();
+    }
+    let mut result = vec![0.0; x.len() * factor];
+    for (i, &v) in x.iter().enumerate() {
+        result[i * factor] = v;
+    }
+    result
+}
+
+/// Compute the signal-to-noise ratio in dB.
+pub fn snr(signal: &[f64], noise: &[f64]) -> f64 {
+    let sig_power: f64 = signal.iter().map(|&v| v * v).sum::<f64>() / signal.len().max(1) as f64;
+    let noise_power: f64 = noise.iter().map(|&v| v * v).sum::<f64>() / noise.len().max(1) as f64;
+    if noise_power == 0.0 {
+        return f64::INFINITY;
+    }
+    10.0 * (sig_power / noise_power).log10()
+}
+
+/// Compute the total harmonic distortion (THD).
+///
+/// Given a signal and its fundamental frequency bin index, computes
+/// THD = sqrt(sum of harmonic powers / fundamental power).
+pub fn thd(magnitudes: &[f64], fundamental_bin: usize) -> f64 {
+    if fundamental_bin >= magnitudes.len() || magnitudes[fundamental_bin] == 0.0 {
+        return f64::NAN;
+    }
+
+    let fund_power = magnitudes[fundamental_bin].powi(2);
+    let mut harmonic_power = 0.0;
+
+    // Sum power at harmonics (2f, 3f, 4f, ...)
+    let mut bin = 2 * fundamental_bin;
+    while bin < magnitudes.len() {
+        harmonic_power += magnitudes[bin].powi(2);
+        bin += fundamental_bin;
+    }
+
+    (harmonic_power / fund_power).sqrt()
+}
+
+/// Add white Gaussian noise to a signal at a specified SNR (dB).
+pub fn add_noise(signal: &[f64], snr_db: f64, seed: u64) -> Vec<f64> {
+    let sig_power: f64 = signal.iter().map(|&v| v * v).sum::<f64>() / signal.len().max(1) as f64;
+    let noise_power = sig_power / 10.0f64.powf(snr_db / 10.0);
+    let noise_std = noise_power.sqrt();
+
+    let mut rng = seed;
+    signal
+        .iter()
+        .map(|&s| {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u1 = ((rng >> 11) as f64 / (1u64 << 53) as f64).max(1e-15);
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u2 = (rng >> 11) as f64 / (1u64 << 53) as f64;
+            let noise = noise_std * (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+            s + noise
+        })
+        .collect()
+}
+
+/// Compute the energy of a signal.
+pub fn signal_energy(x: &[f64]) -> f64 {
+    x.iter().map(|&v| v * v).sum()
+}
+
+/// Compute the power of a signal (energy per sample).
+pub fn signal_power(x: &[f64]) -> f64 {
+    if x.is_empty() {
+        return 0.0;
+    }
+    signal_energy(x) / x.len() as f64
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // IIR Filter Design
 // ══════════════════════════════════════════════════════════════════════
