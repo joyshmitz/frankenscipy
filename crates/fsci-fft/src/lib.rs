@@ -12,8 +12,9 @@ pub mod plan;
 pub mod transforms;
 
 pub use helpers::{
-    apply_window, cross_spectral_density, fftconvolve, fftcorrelate, fftfreq, fftshift_1d,
-    hann_window, ifftshift_1d, periodogram_simple, rfftfreq,
+    analytic_signal, apply_window, blackman_window, cross_spectral_density, fftconvolve,
+    fftcorrelate, fftfreq, fftshift_1d, hamming_window, hann_window, ifftshift_1d,
+    magnitude_spectrum, periodogram_simple, phase_spectrum_signal, rfftfreq, zero_pad_pow2,
 };
 pub use plan::{
     CacheAdmissionPolicy, PlanCacheBackend, PlanCacheConfig, PlanFingerprint, PlanKey,

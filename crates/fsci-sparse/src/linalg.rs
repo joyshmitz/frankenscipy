@@ -2330,6 +2330,135 @@ pub fn closeness_centrality(graph: &CsrMatrix) -> Vec<f64> {
         .collect()
 }
 
+/// Apply an element-wise function to all nonzero entries of a CSR matrix.
+pub fn sparse_map<F>(a: &CsrMatrix, f: F) -> CsrMatrix
+where
+    F: Fn(f64) -> f64,
+{
+    let mapped_data: Vec<f64> = a.data().iter().map(|&v| f(v)).collect();
+    CsrMatrix::from_components(
+        a.shape(),
+        mapped_data,
+        a.indices().to_vec(),
+        a.indptr().to_vec(),
+        false,
+    )
+    .expect("sparse_map should produce valid CSR")
+}
+
+/// Compute the absolute value of all entries in a CSR matrix.
+pub fn sparse_abs(a: &CsrMatrix) -> CsrMatrix {
+    sparse_map(a, |v| v.abs())
+}
+
+/// Compute the element-wise power of a CSR matrix.
+pub fn sparse_power(a: &CsrMatrix, p: f64) -> CsrMatrix {
+    sparse_map(a, |v| v.powf(p))
+}
+
+/// Compute the sum of all elements in a CSR matrix.
+pub fn sparse_sum(a: &CsrMatrix) -> f64 {
+    a.data().iter().sum()
+}
+
+/// Compute the row sums of a CSR matrix.
+pub fn sparse_row_sums(a: &CsrMatrix) -> Vec<f64> {
+    let n = a.shape().rows;
+    (0..n)
+        .map(|i| {
+            let start = a.indptr()[i];
+            let end = a.indptr()[i + 1];
+            a.data()[start..end].iter().sum()
+        })
+        .collect()
+}
+
+/// Compute the column sums of a CSR matrix.
+pub fn sparse_col_sums(a: &CsrMatrix) -> Vec<f64> {
+    let m = a.shape().cols;
+    let mut sums = vec![0.0; m];
+    let n = a.shape().rows;
+    for i in 0..n {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        for idx in start..end {
+            let j = a.indices()[idx];
+            if j < m {
+                sums[j] += a.data()[idx];
+            }
+        }
+    }
+    sums
+}
+
+/// Compute the row-wise maximum of a CSR matrix.
+pub fn sparse_row_max(a: &CsrMatrix) -> Vec<f64> {
+    let n = a.shape().rows;
+    (0..n)
+        .map(|i| {
+            let start = a.indptr()[i];
+            let end = a.indptr()[i + 1];
+            if start == end {
+                0.0 // empty row, implicit zero
+            } else {
+                a.data()[start..end]
+                    .iter()
+                    .cloned()
+                    .fold(f64::NEG_INFINITY, f64::max)
+                    .max(0.0) // account for implicit zeros
+            }
+        })
+        .collect()
+}
+
+/// Compute the row-wise minimum of a CSR matrix.
+pub fn sparse_row_min(a: &CsrMatrix) -> Vec<f64> {
+    let n = a.shape().rows;
+    (0..n)
+        .map(|i| {
+            let start = a.indptr()[i];
+            let end = a.indptr()[i + 1];
+            if start == end {
+                0.0
+            } else {
+                a.data()[start..end]
+                    .iter()
+                    .cloned()
+                    .fold(f64::INFINITY, f64::min)
+                    .min(0.0)
+            }
+        })
+        .collect()
+}
+
+/// Check if a sparse matrix has any explicit zeros (stored but zero value).
+pub fn sparse_has_explicit_zeros(a: &CsrMatrix) -> bool {
+    a.data().iter().any(|&v| v == 0.0)
+}
+
+/// Eliminate explicit zeros from a CSR matrix.
+pub fn sparse_eliminate_zeros(a: &CsrMatrix) -> CsrMatrix {
+    let n = a.shape().rows;
+    let mut new_indptr = vec![0usize; n + 1];
+    let mut new_indices = Vec::new();
+    let mut new_data = Vec::new();
+
+    for i in 0..n {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        for idx in start..end {
+            if a.data()[idx] != 0.0 {
+                new_indices.push(a.indices()[idx]);
+                new_data.push(a.data()[idx]);
+            }
+        }
+        new_indptr[i + 1] = new_data.len();
+    }
+
+    CsrMatrix::from_components(a.shape(), new_data, new_indices, new_indptr, false)
+        .expect("eliminate_zeros should produce valid CSR")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

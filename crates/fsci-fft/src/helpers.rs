@@ -220,6 +220,105 @@ pub fn hann_window(n: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Generate a Hamming window of length n.
+pub fn hamming_window(n: usize) -> Vec<f64> {
+    if n <= 1 {
+        return vec![1.0; n];
+    }
+    let nf = (n - 1) as f64;
+    (0..n)
+        .map(|i| 0.54 - 0.46 * (2.0 * std::f64::consts::PI * i as f64 / nf).cos())
+        .collect()
+}
+
+/// Generate a Blackman window of length n.
+pub fn blackman_window(n: usize) -> Vec<f64> {
+    if n <= 1 {
+        return vec![1.0; n];
+    }
+    let nf = (n - 1) as f64;
+    (0..n)
+        .map(|i| {
+            let t = 2.0 * std::f64::consts::PI * i as f64 / nf;
+            0.42 - 0.5 * t.cos() + 0.08 * (2.0 * t).cos()
+        })
+        .collect()
+}
+
+/// Compute the magnitude spectrum of a real signal.
+///
+/// Returns magnitudes (one-sided) for frequencies 0 to fs/2.
+pub fn magnitude_spectrum(x: &[f64]) -> Result<Vec<f64>, FftError> {
+    if x.is_empty() {
+        return Ok(vec![]);
+    }
+    let n = x.len();
+    let opts = crate::FftOptions::default();
+    let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
+    let spectrum = crate::fft(&complex_input, &opts)?;
+    let n_freq = n / 2 + 1;
+    Ok((0..n_freq)
+        .map(|k| {
+            let (re, im) = spectrum[k];
+            (re * re + im * im).sqrt() / n as f64
+        })
+        .collect())
+}
+
+/// Compute the phase spectrum of a real signal.
+///
+/// Returns phase angles (one-sided).
+pub fn phase_spectrum_signal(x: &[f64]) -> Result<Vec<f64>, FftError> {
+    if x.is_empty() {
+        return Ok(vec![]);
+    }
+    let n = x.len();
+    let opts = crate::FftOptions::default();
+    let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
+    let spectrum = crate::fft(&complex_input, &opts)?;
+    let n_freq = n / 2 + 1;
+    Ok((0..n_freq)
+        .map(|k| {
+            let (re, im) = spectrum[k];
+            im.atan2(re)
+        })
+        .collect())
+}
+
+/// Zero-pad a signal to the next power of 2.
+pub fn zero_pad_pow2(x: &[f64]) -> Vec<f64> {
+    let n = x.len().next_power_of_two();
+    let mut padded = x.to_vec();
+    padded.resize(n, 0.0);
+    padded
+}
+
+/// Compute the analytic signal via FFT (Hilbert-like).
+///
+/// Returns complex analytic signal as Vec<(real, imag)>.
+pub fn analytic_signal(x: &[f64]) -> Result<Vec<(f64, f64)>, FftError> {
+    let n = x.len();
+    if n == 0 {
+        return Ok(vec![]);
+    }
+    let opts = crate::FftOptions::default();
+    let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
+    let mut spectrum = crate::fft(&complex_input, &opts)?;
+
+    // Double positive frequencies, zero negative frequencies
+    if n > 1 {
+        let half = n / 2;
+        for k in 1..half {
+            spectrum[k] = (spectrum[k].0 * 2.0, spectrum[k].1 * 2.0);
+        }
+        for k in half + 1..n {
+            spectrum[k] = (0.0, 0.0);
+        }
+    }
+
+    crate::ifft(&spectrum, &opts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{fftconvolve, fftfreq, fftshift_1d, ifftshift_1d, rfftfreq};

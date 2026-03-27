@@ -2729,6 +2729,150 @@ pub fn polyroots(coeffs: &[f64]) -> Vec<f64> {
     }
 }
 
+/// Generate Chebyshev nodes of the first kind on [a, b].
+///
+/// These are optimal interpolation nodes that minimize Runge's phenomenon.
+pub fn chebyshev_nodes(n: usize, a: f64, b: f64) -> Vec<f64> {
+    let pi = std::f64::consts::PI;
+    (0..n)
+        .map(|k| {
+            let t = (pi * (2 * k + 1) as f64 / (2 * n) as f64).cos();
+            (a + b) / 2.0 + (b - a) / 2.0 * t
+        })
+        .collect()
+}
+
+/// Generate Chebyshev nodes of the second kind on [a, b].
+pub fn chebyshev_nodes2(n: usize, a: f64, b: f64) -> Vec<f64> {
+    if n <= 1 {
+        return vec![(a + b) / 2.0];
+    }
+    let pi = std::f64::consts::PI;
+    (0..n)
+        .map(|k| {
+            let t = (pi * k as f64 / (n - 1) as f64).cos();
+            (a + b) / 2.0 + (b - a) / 2.0 * t
+        })
+        .collect()
+}
+
+/// Compute barycentric interpolation weights.
+///
+/// Given nodes x_i, returns weights w_i for barycentric interpolation.
+pub fn barycentric_weights(nodes: &[f64]) -> Vec<f64> {
+    let n = nodes.len();
+    let mut weights = vec![1.0; n];
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                weights[i] /= nodes[i] - nodes[j];
+            }
+        }
+    }
+    weights
+}
+
+/// Evaluate barycentric interpolation at a point.
+///
+/// Given nodes, values, weights, evaluates the interpolant at x.
+pub fn barycentric_eval(nodes: &[f64], values: &[f64], weights: &[f64], x: f64) -> f64 {
+    // Check if x is exactly a node
+    for (i, &xi) in nodes.iter().enumerate() {
+        if (x - xi).abs() < 1e-15 {
+            return values[i];
+        }
+    }
+
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for i in 0..nodes.len() {
+        let t = weights[i] / (x - nodes[i]);
+        num += t * values[i];
+        den += t;
+    }
+    num / den
+}
+
+/// Neville's algorithm for polynomial interpolation.
+///
+/// Returns the interpolated value at x using the full Neville tableau.
+pub fn neville(nodes: &[f64], values: &[f64], x: f64) -> f64 {
+    let n = nodes.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    let mut p = values.to_vec();
+    for j in 1..n {
+        for i in (j..n).rev() {
+            let dx = nodes[i] - nodes[i - j];
+            if dx.abs() < 1e-15 {
+                continue;
+            }
+            p[i] = ((x - nodes[i - j]) * p[i] - (x - nodes[i]) * p[i - 1]) / dx;
+        }
+    }
+    p[n - 1]
+}
+
+/// Compute Hermite interpolation (values and derivatives at each node).
+///
+/// Given nodes x_i, values y_i, and derivatives dy_i, returns the
+/// interpolated value at x.
+pub fn hermite_interp(
+    nodes: &[f64],
+    values: &[f64],
+    derivatives: &[f64],
+    x: f64,
+) -> f64 {
+    let n = nodes.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+
+    // Use Hermite basis functions
+    let mut result = 0.0;
+    for i in 0..n {
+        // Compute L_i(x) and L_i'(x_i)
+        let mut li = 1.0;
+        let mut li_deriv_sum = 0.0;
+        for j in 0..n {
+            if j != i {
+                li *= (x - nodes[j]) / (nodes[i] - nodes[j]);
+                li_deriv_sum += 1.0 / (nodes[i] - nodes[j]);
+            }
+        }
+
+        let li_sq = li * li;
+        let h0 = (1.0 - 2.0 * (x - nodes[i]) * li_deriv_sum) * li_sq;
+        let h1 = (x - nodes[i]) * li_sq;
+
+        result += values[i] * h0 + derivatives[i] * h1;
+    }
+
+    result
+}
+
+/// Compute the definite integral of a polynomial (coefficients highest degree first).
+pub fn polyint_definite(coeffs: &[f64], a: f64, b: f64) -> f64 {
+    let antider = polyint(coeffs, 1, 0.0);
+    polyval(&antider, b) - polyval(&antider, a)
+}
+
+/// Evaluate a polynomial and return (value, error_estimate).
+///
+/// Error estimated via condition number of evaluation.
+pub fn polyval_with_error(coeffs: &[f64], x: f64) -> (f64, f64) {
+    let val = polyval(coeffs, x);
+    // Estimate error as |val| * machine_epsilon * condition
+    let cond: f64 = coeffs
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| c.abs() * x.abs().powi((coeffs.len() - 1 - i) as i32))
+        .sum();
+    let err = cond * 2.2e-16; // machine epsilon
+    (val, err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

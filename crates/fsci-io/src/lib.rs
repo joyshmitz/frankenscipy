@@ -85,13 +85,7 @@ pub struct MmMatrix {
     pub info: MmInfo,
 }
 
-/// Read a Matrix Market file.
-///
-/// Matches `scipy.io.mmread`.
-pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
-    let mut lines = content.lines();
-
-    // Parse header line
+fn parse_mm_info(lines: &mut std::str::Lines<'_>) -> Result<MmInfo, IoError> {
     let header = lines
         .next()
         .ok_or_else(|| IoError::InvalidFormat("empty file".to_string()))?;
@@ -142,7 +136,6 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
         other => return Err(IoError::InvalidFormat(format!("unknown symmetry: {other}"))),
     };
 
-    // Skip comment lines
     let mut size_line = None;
     for line in lines.by_ref() {
         let trimmed = line.trim();
@@ -174,6 +167,57 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 .parse()
                 .map_err(|e| IoError::InvalidFormat(format!("bad nnz: {e}")))?;
 
+            Ok(MmInfo {
+                object,
+                format,
+                field,
+                symmetry,
+                rows,
+                cols,
+                nnz,
+            })
+        }
+        MmFormat::Array => {
+            if size_parts.len() < 2 {
+                return Err(IoError::InvalidFormat(
+                    "array format requires rows cols".to_string(),
+                ));
+            }
+            let rows: usize = size_parts[0]
+                .parse()
+                .map_err(|e| IoError::InvalidFormat(format!("bad rows: {e}")))?;
+            let cols: usize = size_parts[1]
+                .parse()
+                .map_err(|e| IoError::InvalidFormat(format!("bad cols: {e}")))?;
+            let nnz = rows.checked_mul(cols).ok_or_else(|| {
+                IoError::InvalidFormat("array dimensions overflowed nnz computation".to_string())
+            })?;
+
+            Ok(MmInfo {
+                object,
+                format,
+                field,
+                symmetry,
+                rows,
+                cols,
+                nnz,
+            })
+        }
+    }
+}
+
+/// Read a Matrix Market file.
+///
+/// Matches `scipy.io.mmread`.
+pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
+    let mut lines = content.lines();
+    let info = parse_mm_info(&mut lines)?;
+
+    match info.format {
+        MmFormat::Coordinate => {
+            let rows = info.rows;
+            let cols = info.cols;
+            let nnz = info.nnz;
             let mut data = vec![0.0; rows * cols];
             let mut seen_nnz = 0usize;
 
@@ -202,7 +246,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                         "Matrix Market col indices must be 1-based and >= 1".to_string(),
                     )
                 })?;
-                let v: f64 = if field == MmField::Pattern {
+                let v: f64 = if info.field == MmField::Pattern {
                     1.0
                 } else if vals.len() >= 3 {
                     vals[2]
@@ -221,9 +265,9 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 }
 
                 data[r * cols + c] = v;
-                if symmetry == MmSymmetry::Symmetric && r != c {
+                if info.symmetry == MmSymmetry::Symmetric && r != c {
                     data[c * cols + r] = v;
-                } else if symmetry == MmSymmetry::SkewSymmetric && r != c {
+                } else if info.symmetry == MmSymmetry::SkewSymmetric && r != c {
                     data[c * cols + r] = -v;
                 }
                 seen_nnz += 1;
@@ -239,30 +283,12 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 rows,
                 cols,
                 data,
-                info: MmInfo {
-                    object,
-                    format,
-                    field,
-                    symmetry,
-                    rows,
-                    cols,
-                    nnz,
-                },
+                info,
             })
         }
         MmFormat::Array => {
-            if size_parts.len() < 2 {
-                return Err(IoError::InvalidFormat(
-                    "array format requires rows cols".to_string(),
-                ));
-            }
-            let rows: usize = size_parts[0]
-                .parse()
-                .map_err(|e| IoError::InvalidFormat(format!("bad rows: {e}")))?;
-            let cols: usize = size_parts[1]
-                .parse()
-                .map_err(|e| IoError::InvalidFormat(format!("bad cols: {e}")))?;
-
+            let rows = info.rows;
+            let cols = info.cols;
             // Array format: column-major order
             let mut data = vec![0.0; rows * cols];
             let mut idx = 0;
@@ -301,15 +327,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 rows,
                 cols,
                 data,
-                info: MmInfo {
-                    object,
-                    format,
-                    field,
-                    symmetry,
-                    rows,
-                    cols,
-                    nnz: rows * cols,
-                },
+                info,
             })
         }
     }
@@ -375,8 +393,8 @@ pub fn mmwrite_sparse(
 ///
 /// Matches `scipy.io.mminfo`.
 pub fn mminfo(content: &str) -> Result<MmInfo, IoError> {
-    let mat = mmread(content)?;
-    Ok(mat.info)
+    let mut lines = content.lines();
+    parse_mm_info(&mut lines)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -433,6 +451,11 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
             let fmt = &bytes[pos + 8..];
             audio_format = u16::from_le_bytes([fmt[0], fmt[1]]);
             channels = u16::from_le_bytes([fmt[2], fmt[3]]);
+            if channels == 0 {
+                return Err(IoError::InvalidFormat(
+                    "fmt chunk declares zero channels".to_string(),
+                ));
+            }
             sample_rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
             bits_per_sample = u16::from_le_bytes([fmt[14], fmt[15]]);
         } else if chunk_id == b"data" {
@@ -922,6 +945,11 @@ pub fn read_npy_text(content: &str) -> Result<(Vec<usize>, Vec<f64>), IoError> {
         .map(|s| s.trim().parse::<usize>())
         .collect();
     let shape = shape.map_err(|e| IoError::InvalidFormat(format!("bad shape: {e}")))?;
+    if shape.is_empty() {
+        return Err(IoError::InvalidFormat(
+            "shape declaration must contain at least one dimension".to_string(),
+        ));
+    }
 
     // Read data
     let mut data = Vec::new();
@@ -1046,6 +1074,34 @@ mod tests {
     }
 
     #[test]
+    fn mminfo_reads_coordinate_header_without_body() {
+        let content = "%%MatrixMarket matrix coordinate real general\n\
+                        3 4 2\n";
+        let info = mminfo(content).expect("header-only coordinate metadata should parse");
+        assert_eq!(info.object, MmObject::Matrix);
+        assert_eq!(info.format, MmFormat::Coordinate);
+        assert_eq!(info.field, MmField::Real);
+        assert_eq!(info.symmetry, MmSymmetry::General);
+        assert_eq!(info.rows, 3);
+        assert_eq!(info.cols, 4);
+        assert_eq!(info.nnz, 2);
+    }
+
+    #[test]
+    fn mminfo_reads_array_header_without_body() {
+        let content = "%%MatrixMarket matrix array real general\n\
+                        2 3\n";
+        let info = mminfo(content).expect("header-only array metadata should parse");
+        assert_eq!(info.object, MmObject::Matrix);
+        assert_eq!(info.format, MmFormat::Array);
+        assert_eq!(info.field, MmField::Real);
+        assert_eq!(info.symmetry, MmSymmetry::General);
+        assert_eq!(info.rows, 2);
+        assert_eq!(info.cols, 3);
+        assert_eq!(info.nnz, 6);
+    }
+
+    #[test]
     fn mmread_array_rejects_too_few_values() {
         let content = "%%MatrixMarket matrix array real general\n\
                         2 3\n\
@@ -1165,6 +1221,31 @@ mod tests {
     }
 
     #[test]
+    fn wav_read_rejects_zero_channel_fmt() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36u32 + 2u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&44_100u32.to_le_bytes());
+        bytes.extend_from_slice(&(44_100u32 * 2).to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i16.to_le_bytes());
+
+        let err = wav_read(&bytes).expect_err("zero-channel WAV should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("fmt chunk declares zero channels".to_string())
+        );
+    }
+
+    #[test]
     fn savemat_loadmat_roundtrip() {
         let arrays = vec![
             MatArray {
@@ -1266,6 +1347,15 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("shape [2, 2] expects 4 values but found 3".to_string())
+        );
+    }
+
+    #[test]
+    fn read_npy_text_rejects_empty_shape() {
+        let err = read_npy_text("\n1\n").expect_err("empty shape line should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("shape declaration must contain at least one dimension".to_string())
         );
     }
 

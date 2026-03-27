@@ -2436,6 +2436,194 @@ where
     (x, f(x))
 }
 
+/// Gradient descent with line search.
+///
+/// Minimizes f(x) starting from x0 using gradient descent with backtracking.
+pub fn gradient_descent<F, G>(
+    f: F,
+    grad: G,
+    x0: &[f64],
+    tol: f64,
+    maxiter: usize,
+    learning_rate: f64,
+) -> OptimizeResult
+where
+    F: Fn(&[f64]) -> f64,
+    G: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x0.len();
+    let mut x = x0.to_vec();
+    let mut nfev = 0;
+    let mut njev = 0;
+
+    for iter in 0..maxiter {
+        let g = grad(&x);
+        njev += 1;
+
+        let g_norm: f64 = g.iter().map(|&v| v * v).sum::<f64>().sqrt();
+        if g_norm < tol {
+            let fval = f(&x);
+            nfev += 1;
+            return OptimizeResult {
+                x,
+                fun: Some(fval),
+                success: true,
+                status: ConvergenceStatus::Success,
+                message: format!("gradient descent converged in {iter} iterations"),
+                nfev,
+                njev,
+                nhev: 0,
+                nit: iter,
+                jac: Some(g),
+                hess_inv: None,
+                maxcv: None,
+            };
+        }
+
+        // Backtracking line search (Armijo condition)
+        let mut alpha = learning_rate;
+        let f0 = f(&x);
+        nfev += 1;
+        let descent = g.iter().map(|&v| v * v).sum::<f64>();
+
+        for _ in 0..20 {
+            let x_new: Vec<f64> = x.iter().zip(g.iter()).map(|(&xi, &gi)| xi - alpha * gi).collect();
+            let f_new = f(&x_new);
+            nfev += 1;
+            if f_new <= f0 - 1e-4 * alpha * descent {
+                x = x_new;
+                break;
+            }
+            alpha *= 0.5;
+        }
+
+        // If line search didn't find improvement, take the step anyway
+        if alpha < 1e-15 {
+            for (xi, &gi) in x.iter_mut().zip(g.iter()) {
+                *xi -= learning_rate * 1e-3 * gi;
+            }
+        }
+    }
+
+    let fval = f(&x);
+    nfev += 1;
+    OptimizeResult {
+        x,
+        fun: Some(fval),
+        success: false,
+        status: ConvergenceStatus::MaxIterations,
+        message: "gradient descent did not converge".to_string(),
+        nfev,
+        njev,
+        nhev: 0,
+        nit: maxiter,
+        jac: None,
+        hess_inv: None,
+        maxcv: None,
+    }
+}
+
+/// Projected gradient descent for box-constrained optimization.
+///
+/// Minimizes f(x) subject to lb <= x <= ub.
+pub fn projected_gradient_descent<F, G>(
+    f: F,
+    grad: G,
+    x0: &[f64],
+    lb: &[f64],
+    ub: &[f64],
+    tol: f64,
+    maxiter: usize,
+    learning_rate: f64,
+) -> OptimizeResult
+where
+    F: Fn(&[f64]) -> f64,
+    G: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x0.len();
+    let mut x: Vec<f64> = x0
+        .iter()
+        .zip(lb.iter().zip(ub.iter()))
+        .map(|(&xi, (&lo, &hi))| xi.clamp(lo, hi))
+        .collect();
+    let mut nfev = 0;
+    let mut njev = 0;
+
+    for iter in 0..maxiter {
+        let g = grad(&x);
+        njev += 1;
+
+        // Projected gradient step
+        let x_new: Vec<f64> = x
+            .iter()
+            .zip(g.iter())
+            .zip(lb.iter().zip(ub.iter()))
+            .map(|((&xi, &gi), (&lo, &hi))| (xi - learning_rate * gi).clamp(lo, hi))
+            .collect();
+
+        let step_norm: f64 = x_new
+            .iter()
+            .zip(x.iter())
+            .map(|(&a, &b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+
+        x = x_new;
+
+        if step_norm < tol {
+            let fval = f(&x);
+            nfev += 1;
+            return OptimizeResult {
+                x,
+                fun: Some(fval),
+                success: true,
+                status: ConvergenceStatus::Success,
+                message: format!("projected GD converged in {iter} iterations"),
+                nfev,
+                njev,
+                nhev: 0,
+                nit: iter,
+                jac: Some(g),
+                hess_inv: None,
+                maxcv: None,
+            };
+        }
+    }
+
+    let fval = f(&x);
+    nfev += 1;
+    OptimizeResult {
+        x,
+        fun: Some(fval),
+        success: false,
+        status: ConvergenceStatus::MaxIterations,
+        message: "projected GD did not converge".to_string(),
+        nfev,
+        njev,
+        nhev: 0,
+        nit: maxiter,
+        jac: None,
+        hess_inv: None,
+        maxcv: None,
+    }
+}
+
+/// Compute numerical gradient via forward differences.
+pub fn numerical_gradient<F>(f: F, x: &[f64], eps: f64) -> Vec<f64>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let n = x.len();
+    let f0 = f(x);
+    let mut grad = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut xp = x.to_vec();
+        xp[i] += eps;
+        grad.push((f(&xp) - f0) / eps);
+    }
+    grad
+}
+
 #[cfg(test)]
 mod tests {
     use fsci_runtime::RuntimeMode;
