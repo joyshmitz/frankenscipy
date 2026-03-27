@@ -9469,6 +9469,160 @@ pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> V
     psd
 }
 
+/// Compute the Kolmogorov-Smirnov distance between a sample and a theoretical CDF.
+///
+/// Returns just the D statistic without p-value.
+pub fn ks_distance(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> f64 {
+    let n = data.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut max_d = 0.0f64;
+    for (i, &x) in sorted.iter().enumerate() {
+        let ecdf_before = i as f64 / n as f64;
+        let ecdf_after = (i + 1) as f64 / n as f64;
+        let cdf_val = cdf_func(x);
+        max_d = max_d.max((ecdf_after - cdf_val).abs());
+        max_d = max_d.max((ecdf_before - cdf_val).abs());
+    }
+    max_d
+}
+
+/// Compute the empirical CDF at given points.
+///
+/// Returns the proportion of data ≤ each value in `x_eval`.
+pub fn ecdf(data: &[f64], x_eval: &[f64]) -> Vec<f64> {
+    let n = data.len() as f64;
+    if n == 0.0 {
+        return vec![0.0; x_eval.len()];
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    x_eval
+        .iter()
+        .map(|&x| {
+            let count = sorted.partition_point(|&v| v <= x);
+            count as f64 / n
+        })
+        .collect()
+}
+
+/// Compute the Mann-Kendall trend test.
+///
+/// Tests for monotonic trend in a time series.
+/// Returns (tau, p_value, trend direction: +1, 0, -1).
+pub fn mannkendall(data: &[f64]) -> (f64, f64, i32) {
+    let n = data.len();
+    if n < 3 {
+        return (f64::NAN, f64::NAN, 0);
+    }
+
+    let mut s: i64 = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            if data[j] > data[i] {
+                s += 1;
+            } else if data[j] < data[i] {
+                s -= 1;
+            }
+        }
+    }
+
+    // Kendall's tau
+    let pairs = (n * (n - 1) / 2) as f64;
+    let tau = s as f64 / pairs;
+
+    // Variance of S
+    let var_s = (n * (n - 1) * (2 * n + 5)) as f64 / 18.0;
+
+    // Normal approximation for p-value
+    let z = if s > 0 {
+        (s as f64 - 1.0) / var_s.sqrt()
+    } else if s < 0 {
+        (s as f64 + 1.0) / var_s.sqrt()
+    } else {
+        0.0
+    };
+
+    let normal = Normal::standard();
+    let p = 2.0 * (1.0 - normal.cdf(z.abs()));
+
+    let trend = if s > 0 { 1 } else if s < 0 { -1 } else { 0 };
+
+    (tau, p.clamp(0.0, 1.0), trend)
+}
+
+/// Compute the runs test for randomness.
+///
+/// Tests whether the sequence of values above/below median is random.
+/// Returns (n_runs, z_statistic, p_value).
+pub fn runs_test(data: &[f64]) -> (usize, f64, f64) {
+    let n = data.len();
+    if n < 2 {
+        return (0, f64::NAN, f64::NAN);
+    }
+
+    let med = median(data);
+    let signs: Vec<bool> = data.iter().map(|&v| v >= med).collect();
+
+    let n1 = signs.iter().filter(|&&s| s).count();
+    let n2 = n - n1;
+
+    if n1 == 0 || n2 == 0 {
+        return (1, f64::NAN, f64::NAN);
+    }
+
+    // Count runs
+    let mut runs = 1usize;
+    for i in 1..n {
+        if signs[i] != signs[i - 1] {
+            runs += 1;
+        }
+    }
+
+    // Expected runs and variance under H0
+    let n1f = n1 as f64;
+    let n2f = n2 as f64;
+    let nf = n as f64;
+    let expected = 2.0 * n1f * n2f / nf + 1.0;
+    let var = 2.0 * n1f * n2f * (2.0 * n1f * n2f - nf) / (nf * nf * (nf - 1.0));
+
+    let z = if var > 0.0 {
+        (runs as f64 - expected) / var.sqrt()
+    } else {
+        0.0
+    };
+
+    let normal = Normal::standard();
+    let p = 2.0 * (1.0 - normal.cdf(z.abs()));
+
+    (runs, z, p.clamp(0.0, 1.0))
+}
+
+/// Compute Durbin-Watson statistic for autocorrelation in residuals.
+///
+/// DW ≈ 2 means no autocorrelation, DW < 2 means positive, DW > 2 means negative.
+pub fn durbin_watson(residuals: &[f64]) -> f64 {
+    if residuals.len() < 2 {
+        return f64::NAN;
+    }
+
+    let num: f64 = residuals
+        .windows(2)
+        .map(|w| (w[1] - w[0]).powi(2))
+        .sum();
+    let den: f64 = residuals.iter().map(|&r| r * r).sum();
+
+    if den == 0.0 {
+        return f64::NAN;
+    }
+    num / den
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
