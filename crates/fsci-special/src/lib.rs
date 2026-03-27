@@ -30,6 +30,8 @@ pub use convenience::{
     betaincinv, boxcox1p, boxcox_transform, dawsn_scalar, debye, erfc_conv, erfcinv_conv, erfcx,
     erfi, exprel, gammainc_conv, gammaincc_conv, gammaincinv, inv_boxcox, inv_boxcox1p,
     lambertw_scalar, log_comb, log_ndtr, modstruve_scalar, owens_t, struve_scalar, zeta_scalar,
+    // Numerical differentiation and AGM
+    agm, central_diff, central_diff2, clausen, gradient_approx, hessian_approx, jacobian_approx,
 };
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, exp1, expi, lambertw,

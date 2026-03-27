@@ -1789,3 +1789,125 @@ pub fn zeta_scalar(s: f64) -> f64 {
     }
     sum
 }
+
+/// Arithmetic-geometric mean of two positive numbers.
+pub fn agm(a: f64, b: f64) -> f64 {
+    if a <= 0.0 || b <= 0.0 {
+        return f64::NAN;
+    }
+    let mut an = a;
+    let mut bn = b;
+    for _ in 0..50 {
+        let next_a = (an + bn) / 2.0;
+        let next_b = (an * bn).sqrt();
+        if (next_a - next_b).abs() < 1e-15 * next_a {
+            return next_a;
+        }
+        an = next_a;
+        bn = next_b;
+    }
+    (an + bn) / 2.0
+}
+
+/// Clausen function Cl₂(θ) = Σ sin(kθ)/k².
+pub fn clausen(theta: f64) -> f64 {
+    let mut sum = 0.0;
+    for k in 1..1000 {
+        let term = (k as f64 * theta).sin() / (k as f64 * k as f64);
+        sum += term;
+        if term.abs() < 1e-15 * sum.abs().max(1e-30) {
+            break;
+        }
+    }
+    sum
+}
+
+/// Central difference derivative.
+pub fn central_diff<F>(f: F, x: f64, h: f64) -> f64
+where
+    F: Fn(f64) -> f64,
+{
+    (f(x + h) - f(x - h)) / (2.0 * h)
+}
+
+/// Second derivative via central difference.
+pub fn central_diff2<F>(f: F, x: f64, h: f64) -> f64
+where
+    F: Fn(f64) -> f64,
+{
+    (f(x + h) - 2.0 * f(x) + f(x - h)) / (h * h)
+}
+
+/// Gradient of a multivariate function via central differences.
+pub fn gradient_approx<F>(f: F, x: &[f64], h: f64) -> Vec<f64>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let n = x.len();
+    let mut grad = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut xp = x.to_vec();
+        let mut xm = x.to_vec();
+        xp[i] += h;
+        xm[i] -= h;
+        grad.push((f(&xp) - f(&xm)) / (2.0 * h));
+    }
+    grad
+}
+
+/// Jacobian of a vector function via central differences.
+pub fn jacobian_approx<F>(f: F, x: &[f64], h: f64) -> Vec<Vec<f64>>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x.len();
+    let f0 = f(x);
+    let m = f0.len();
+    let mut jac = vec![vec![0.0; n]; m];
+
+    for j in 0..n {
+        let mut xp = x.to_vec();
+        let mut xm = x.to_vec();
+        xp[j] += h;
+        xm[j] -= h;
+        let fp = f(&xp);
+        let fm = f(&xm);
+        for i in 0..m {
+            jac[i][j] = (fp[i] - fm[i]) / (2.0 * h);
+        }
+    }
+
+    jac
+}
+
+/// Hessian of a scalar function via central differences.
+pub fn hessian_approx<F>(f: F, x: &[f64], h: f64) -> Vec<Vec<f64>>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let n = x.len();
+    let mut hess = vec![vec![0.0; n]; n];
+
+    for i in 0..n {
+        for j in i..n {
+            let mut xpp = x.to_vec();
+            let mut xpm = x.to_vec();
+            let mut xmp = x.to_vec();
+            let mut xmm = x.to_vec();
+
+            xpp[i] += h;
+            xpp[j] += h;
+            xpm[i] += h;
+            xpm[j] -= h;
+            xmp[i] -= h;
+            xmp[j] += h;
+            xmm[i] -= h;
+            xmm[j] -= h;
+
+            hess[i][j] = (f(&xpp) - f(&xpm) - f(&xmp) + f(&xmm)) / (4.0 * h * h);
+            hess[j][i] = hess[i][j];
+        }
+    }
+
+    hess
+}

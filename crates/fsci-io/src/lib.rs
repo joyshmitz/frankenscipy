@@ -175,6 +175,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 .map_err(|e| IoError::InvalidFormat(format!("bad nnz: {e}")))?;
 
             let mut data = vec![0.0; rows * cols];
+            let mut seen_nnz = 0usize;
 
             for line in lines {
                 let trimmed = line.trim();
@@ -211,14 +212,25 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                     1.0
                 };
 
-                if r < rows && c < cols {
-                    data[r * cols + c] = v;
-                    if symmetry == MmSymmetry::Symmetric && r != c {
-                        data[c * cols + r] = v;
-                    } else if symmetry == MmSymmetry::SkewSymmetric && r != c {
-                        data[c * cols + r] = -v;
-                    }
+                if r >= rows || c >= cols {
+                    return Err(IoError::InvalidFormat(format!(
+                        "coordinate entry ({r}, {c}) out of bounds for {rows}x{cols}"
+                    )));
                 }
+
+                data[r * cols + c] = v;
+                if symmetry == MmSymmetry::Symmetric && r != c {
+                    data[c * cols + r] = v;
+                } else if symmetry == MmSymmetry::SkewSymmetric && r != c {
+                    data[c * cols + r] = -v;
+                }
+                seen_nnz += 1;
+            }
+
+            if seen_nnz != nnz {
+                return Err(IoError::InvalidFormat(format!(
+                    "coordinate format expected {nnz} entries but found {seen_nnz}"
+                )));
             }
 
             Ok(MmMatrix {
@@ -435,16 +447,35 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
                 )));
             }
 
-            let samples = match bits_per_sample {
-                8 => data_bytes
+            let bytes_per_sample = match bits_per_sample {
+                8 => 1usize,
+                16 => 2,
+                24 => 3,
+                32 => 4,
+                _ => {
+                    return Err(IoError::UnsupportedFeature(format!(
+                        "unsupported bits per sample: {bits_per_sample}"
+                    )));
+                }
+            };
+            if !data_bytes.len().is_multiple_of(bytes_per_sample) {
+                return Err(IoError::InvalidFormat(format!(
+                    "data chunk size {} is not aligned to {}-byte samples",
+                    data_bytes.len(),
+                    bytes_per_sample
+                )));
+            }
+
+            let samples = match (bits_per_sample, audio_format) {
+                (8, _) => data_bytes
                     .iter()
                     .map(|&b| (b as f64 - 128.0) / 128.0)
                     .collect(),
-                16 => data_bytes
+                (16, _) => data_bytes
                     .chunks_exact(2)
                     .map(|c| i16::from_le_bytes([c[0], c[1]]) as f64 / 32768.0)
                     .collect(),
-                24 => data_bytes
+                (24, _) => data_bytes
                     .chunks_exact(3)
                     .map(|c| {
                         let sign = if c[2] & 0x80 != 0 { 0xFF } else { 0x00 };
@@ -452,11 +483,11 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
                         raw as f64 / 8_388_608.0
                     })
                     .collect(),
-                32 if audio_format == 3 => data_bytes
+                (32, 3) => data_bytes
                     .chunks_exact(4)
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
                     .collect(),
-                32 => data_bytes
+                (32, _) => data_bytes
                     .chunks_exact(4)
                     .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64 / 2_147_483_648.0)
                     .collect(),
@@ -524,9 +555,14 @@ pub fn wav_write(sample_rate: u32, channels: u16, data: &[f64]) -> Result<Vec<u8
     buf.extend_from_slice(&1u16.to_le_bytes()); // PCM format
     buf.extend_from_slice(&channels.to_le_bytes());
     buf.extend_from_slice(&sample_rate.to_le_bytes());
-    let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
+    let byte_rate = sample_rate
+        .checked_mul(channels as u32)
+        .and_then(|rate| rate.checked_mul(bytes_per_sample as u32))
+        .ok_or_else(|| IoError::InvalidFormat("WAV byte rate overflowed u32".to_string()))?;
     buf.extend_from_slice(&byte_rate.to_le_bytes());
-    let block_align = channels * bytes_per_sample;
+    let block_align = channels
+        .checked_mul(bytes_per_sample)
+        .ok_or_else(|| IoError::InvalidFormat("WAV block align overflowed u16".to_string()))?;
     buf.extend_from_slice(&block_align.to_le_bytes());
     buf.extend_from_slice(&bits_per_sample.to_le_bytes());
 
@@ -847,9 +883,14 @@ pub fn read_json_array(content: &str) -> Result<Vec<f64>, IoError> {
 }
 
 /// Write a vector as a JSON array.
-pub fn write_json_array(data: &[f64]) -> String {
+pub fn write_json_array(data: &[f64]) -> Result<String, IoError> {
+    if let Some((idx, value)) = data.iter().copied().enumerate().find(|(_, v)| !v.is_finite()) {
+        return Err(IoError::InvalidFormat(format!(
+            "JSON array value at index {idx} is not finite: {value}"
+        )));
+    }
     let items: Vec<String> = data.iter().map(|v| format!("{v}")).collect();
-    format!("[{}]", items.join(", "))
+    Ok(format!("[{}]", items.join(", ")))
 }
 
 /// Read a simple NPY-like header (shape + dtype) from text representation.
@@ -941,6 +982,30 @@ mod tests {
     }
 
     #[test]
+    fn mmread_rejects_out_of_bounds_coordinate_indices() {
+        let content = "%%MatrixMarket matrix coordinate real general\n\
+                        3 3 1\n\
+                        4 1 5.0\n";
+        let err = mmread(content).expect_err("out-of-bounds row index should be rejected");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("coordinate entry (3, 0) out of bounds for 3x3".to_string())
+        );
+    }
+
+    #[test]
+    fn mmread_rejects_coordinate_nnz_mismatch() {
+        let content = "%%MatrixMarket matrix coordinate real general\n\
+                        3 3 2\n\
+                        1 1 1.0\n";
+        let err = mmread(content).expect_err("declared nnz mismatch should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("coordinate format expected 2 entries but found 1".to_string())
+        );
+    }
+
+    #[test]
     fn mmread_array() {
         let content = "%%MatrixMarket matrix array real general\n\
                         2 3\n\
@@ -1019,6 +1084,29 @@ mod tests {
             IoError::InvalidFormat(
                 "data length 3 does not contain whole frames for 2 channels".to_string()
             )
+        );
+    }
+
+    #[test]
+    fn wav_write_rejects_block_align_overflow() {
+        let err = wav_write(1, 32_768, &[])
+            .expect_err("oversized channel count should fail before header overflow");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("WAV block align overflowed u16".to_string())
+        );
+    }
+
+    #[test]
+    fn wav_read_rejects_partial_sample_bytes() {
+        let mut bytes = wav_write(44_100, 1, &[0.0, 0.5]).expect("mono samples should encode");
+        bytes[40..44].copy_from_slice(&3u32.to_le_bytes());
+        bytes.truncate(44 + 3);
+
+        let err = wav_read(&bytes).expect_err("misaligned sample bytes should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("data chunk size 3 is not aligned to 2-byte samples".to_string())
         );
     }
 
@@ -1165,6 +1253,15 @@ mod tests {
     fn read_json_array_accepts_empty_array() {
         let data = read_json_array("[]").expect("empty array should parse");
         assert!(data.is_empty());
+    }
+
+    #[test]
+    fn write_json_array_rejects_non_finite_values() {
+        let err = write_json_array(&[1.0, f64::NAN]).expect_err("NaN is not valid JSON");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("JSON array value at index 1 is not finite: NaN".to_string())
+        );
     }
 
     #[test]
