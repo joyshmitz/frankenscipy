@@ -488,11 +488,28 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
 /// Write WAV file data as bytes (16-bit PCM).
 ///
 /// Matches `scipy.io.wavfile.write`.
-pub fn wav_write(sample_rate: u32, channels: u16, data: &[f64]) -> Vec<u8> {
+pub fn wav_write(sample_rate: u32, channels: u16, data: &[f64]) -> Result<Vec<u8>, IoError> {
+    if channels == 0 {
+        return Err(IoError::InvalidFormat(
+            "WAV channel count must be nonzero".to_string(),
+        ));
+    }
+    if !data.len().is_multiple_of(channels as usize) {
+        return Err(IoError::InvalidFormat(format!(
+            "data length {} does not contain whole frames for {channels} channels",
+            data.len()
+        )));
+    }
     let bits_per_sample: u16 = 16;
     let bytes_per_sample = bits_per_sample / 8;
-    let data_size = (data.len() * bytes_per_sample as usize) as u32;
-    let file_size = 36 + data_size;
+    let data_size = data
+        .len()
+        .checked_mul(bytes_per_sample as usize)
+        .and_then(|size| u32::try_from(size).ok())
+        .ok_or_else(|| IoError::InvalidFormat("WAV data chunk too large".to_string()))?;
+    let file_size = 36u32
+        .checked_add(data_size)
+        .ok_or_else(|| IoError::InvalidFormat("WAV file too large".to_string()))?;
 
     let mut buf = Vec::with_capacity(file_size as usize + 8);
 
@@ -523,7 +540,7 @@ pub fn wav_write(sample_rate: u32, channels: u16, data: &[f64]) -> Vec<u8> {
         buf.extend_from_slice(&val.to_le_bytes());
     }
 
-    buf
+    Ok(buf)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -544,9 +561,26 @@ pub struct MatArray {
 /// This provides a basic `savemat`-like interface. Full .mat v5 binary
 /// format requires extensive implementation; this provides a portable
 /// text alternative.
-pub fn savemat_text(arrays: &[MatArray]) -> String {
+pub fn savemat_text(arrays: &[MatArray]) -> Result<String, IoError> {
     let mut out = String::new();
     for arr in arrays {
+        let expected_len = arr
+            .rows
+            .checked_mul(arr.cols)
+            .ok_or_else(|| {
+                IoError::InvalidFormat(format!(
+                    "array '{}' dimensions {}x{} overflow usize",
+                    arr.name, arr.rows, arr.cols
+                ))
+            })?;
+        if arr.data.len() != expected_len {
+            return Err(IoError::InvalidFormat(format!(
+                "array '{}' expected {} values but found {}",
+                arr.name,
+                expected_len,
+                arr.data.len()
+            )));
+        }
         out.push_str(&format!(
             "# name: {}\n# type: matrix\n# rows: {}\n# columns: {}\n",
             arr.name, arr.rows, arr.cols
@@ -562,7 +596,7 @@ pub fn savemat_text(arrays: &[MatArray]) -> String {
         }
         out.push('\n');
     }
-    out
+    Ok(out)
 }
 
 /// Load arrays from the text-based format.
@@ -962,7 +996,7 @@ mod tests {
     #[test]
     fn wav_roundtrip() {
         let samples = vec![0.0, 0.5, 1.0, -1.0, -0.5, 0.0];
-        let bytes = wav_write(44100, 1, &samples);
+        let bytes = wav_write(44100, 1, &samples).expect("mono samples should encode");
         let wav = wav_read(&bytes).unwrap();
         assert_eq!(wav.sample_rate, 44100);
         assert_eq!(wav.channels, 1);
@@ -974,6 +1008,18 @@ mod tests {
                 "sample {i}: orig={orig}, read={read}"
             );
         }
+    }
+
+    #[test]
+    fn wav_write_rejects_partial_frames() {
+        let err = wav_write(44_100, 2, &[0.0, 0.5, 1.0])
+            .expect_err("stereo data with odd sample count should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "data length 3 does not contain whole frames for 2 channels".to_string()
+            )
+        );
     }
 
     #[test]
@@ -1020,13 +1066,28 @@ mod tests {
                 data: vec![10.0, 20.0, 30.0],
             },
         ];
-        let text = savemat_text(&arrays);
+        let text = savemat_text(&arrays).expect("well-formed arrays should serialize");
         let loaded = loadmat_text(&text).unwrap();
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].name, "A");
         assert_eq!(loaded[0].data, vec![1.0, 2.0, 3.0, 4.0]);
         assert_eq!(loaded[1].name, "b");
         assert_eq!(loaded[1].data, vec![10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn savemat_rejects_wrong_element_count() {
+        let arrays = vec![MatArray {
+            name: "A".to_string(),
+            rows: 2,
+            cols: 2,
+            data: vec![1.0, 2.0, 3.0],
+        }];
+        let err = savemat_text(&arrays).expect_err("truncated matrix payload should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("array 'A' expected 4 values but found 3".to_string())
+        );
     }
 
     #[test]
