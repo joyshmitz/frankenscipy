@@ -775,6 +775,9 @@ pub fn read_json_array(content: &str) -> Result<Vec<f64>, IoError> {
         return Err(IoError::InvalidFormat("expected JSON array".to_string()));
     }
     let inner = &trimmed[1..trimmed.len() - 1];
+    if inner.trim().is_empty() {
+        return Ok(Vec::new());
+    }
     inner
         .split(',')
         .map(|s| {
@@ -1044,6 +1047,12 @@ mod tests {
             err,
             IoError::InvalidFormat("CSV row has 2 columns, expected 3".to_string())
         );
+    }
+
+    #[test]
+    fn read_json_array_accepts_empty_array() {
+        let data = read_json_array("[]").expect("empty array should parse");
+        assert!(data.is_empty());
     }
 
     #[test]

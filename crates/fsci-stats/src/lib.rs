@@ -8981,6 +8981,267 @@ pub fn excess_kurtosis(data: &[f64]) -> f64 {
     m4 / (m2 * m2) - 3.0
 }
 
+/// Compute the covariance matrix from a dataset.
+///
+/// Each row of `data` is an observation, each column is a variable.
+/// Matches `numpy.cov` (rowvar=False).
+pub fn cov_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = data.len();
+    if n < 2 {
+        return vec![];
+    }
+    let d = data[0].len();
+
+    // Compute means
+    let mut means = vec![0.0; d];
+    for row in data {
+        for (j, &v) in row.iter().enumerate() {
+            means[j] += v;
+        }
+    }
+    for m in &mut means {
+        *m /= n as f64;
+    }
+
+    // Compute covariance
+    let mut cov = vec![vec![0.0; d]; d];
+    for row in data {
+        for i in 0..d {
+            for j in i..d {
+                cov[i][j] += (row[i] - means[i]) * (row[j] - means[j]);
+            }
+        }
+    }
+    for i in 0..d {
+        for j in i..d {
+            cov[i][j] /= (n - 1) as f64;
+            cov[j][i] = cov[i][j];
+        }
+    }
+
+    cov
+}
+
+/// Compute the correlation matrix from a dataset.
+///
+/// Matches `numpy.corrcoef` (rowvar=False).
+pub fn corr_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let cov = cov_matrix(data);
+    let d = cov.len();
+    if d == 0 {
+        return vec![];
+    }
+
+    let stds: Vec<f64> = (0..d).map(|i| cov[i][i].sqrt()).collect();
+    let mut corr = vec![vec![0.0; d]; d];
+    for i in 0..d {
+        for j in 0..d {
+            if stds[i] > 0.0 && stds[j] > 0.0 {
+                corr[i][j] = cov[i][j] / (stds[i] * stds[j]);
+            } else if i == j {
+                corr[i][j] = 1.0;
+            }
+        }
+    }
+
+    corr
+}
+
+/// Compute the cross-covariance between two datasets.
+pub fn cross_cov(x: &[Vec<f64>], y: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = x.len();
+    if n < 2 || n != y.len() {
+        return vec![];
+    }
+    let dx = x[0].len();
+    let dy = y[0].len();
+
+    let mut means_x = vec![0.0; dx];
+    let mut means_y = vec![0.0; dy];
+    for row in x {
+        for (j, &v) in row.iter().enumerate() {
+            means_x[j] += v;
+        }
+    }
+    for row in y {
+        for (j, &v) in row.iter().enumerate() {
+            means_y[j] += v;
+        }
+    }
+    for m in &mut means_x {
+        *m /= n as f64;
+    }
+    for m in &mut means_y {
+        *m /= n as f64;
+    }
+
+    let mut cov = vec![vec![0.0; dy]; dx];
+    for i in 0..n {
+        for j in 0..dx {
+            for k in 0..dy {
+                cov[j][k] += (x[i][j] - means_x[j]) * (y[i][k] - means_y[k]);
+            }
+        }
+    }
+    for row in &mut cov {
+        for v in row.iter_mut() {
+            *v /= (n - 1) as f64;
+        }
+    }
+
+    cov
+}
+
+/// Compute the contingency table from two categorical arrays.
+///
+/// Returns (table, row_labels, col_labels).
+pub fn contingency_table(x: &[usize], y: &[usize]) -> (Vec<Vec<usize>>, Vec<usize>, Vec<usize>) {
+    if x.len() != y.len() || x.is_empty() {
+        return (vec![], vec![], vec![]);
+    }
+
+    let mut row_labels: Vec<usize> = x.to_vec();
+    row_labels.sort();
+    row_labels.dedup();
+
+    let mut col_labels: Vec<usize> = y.to_vec();
+    col_labels.sort();
+    col_labels.dedup();
+
+    let nr = row_labels.len();
+    let nc = col_labels.len();
+    let mut table = vec![vec![0usize; nc]; nr];
+
+    for (&xi, &yi) in x.iter().zip(y.iter()) {
+        if let Some(ri) = row_labels.iter().position(|&r| r == xi) {
+            if let Some(ci) = col_labels.iter().position(|&c| c == yi) {
+                table[ri][ci] += 1;
+            }
+        }
+    }
+
+    (table, row_labels, col_labels)
+}
+
+/// Compute the relative risk from a 2x2 contingency table.
+///
+/// RR = (a/(a+b)) / (c/(c+d)) where [[a,b],[c,d]].
+pub fn relative_risk(table: &[[usize; 2]; 2]) -> f64 {
+    let a = table[0][0] as f64;
+    let b = table[0][1] as f64;
+    let c = table[1][0] as f64;
+    let d = table[1][1] as f64;
+
+    let p1 = a / (a + b);
+    let p2 = c / (c + d);
+
+    if p2 == 0.0 {
+        return f64::INFINITY;
+    }
+    p1 / p2
+}
+
+/// Compute the odds ratio from a 2x2 contingency table.
+///
+/// OR = (a*d) / (b*c) where [[a,b],[c,d]].
+pub fn odds_ratio(table: &[[usize; 2]; 2]) -> f64 {
+    let a = table[0][0] as f64;
+    let b = table[0][1] as f64;
+    let c = table[1][0] as f64;
+    let d = table[1][1] as f64;
+
+    let denom = b * c;
+    if denom == 0.0 {
+        return f64::INFINITY;
+    }
+    (a * d) / denom
+}
+
+/// Compute the Phi coefficient from a 2x2 contingency table.
+///
+/// φ = (ad - bc) / sqrt((a+b)(c+d)(a+c)(b+d))
+pub fn phi_coefficient(table: &[[usize; 2]; 2]) -> f64 {
+    let a = table[0][0] as f64;
+    let b = table[0][1] as f64;
+    let c = table[1][0] as f64;
+    let d = table[1][1] as f64;
+
+    let num = a * d - b * c;
+    let denom = ((a + b) * (c + d) * (a + c) * (b + d)).sqrt();
+
+    if denom == 0.0 {
+        return 0.0;
+    }
+    num / denom
+}
+
+/// Compute exponentially weighted moving average.
+///
+/// Matches `pandas.DataFrame.ewm(span=span).mean()`.
+pub fn ewma(data: &[f64], span: f64) -> Vec<f64> {
+    if data.is_empty() || span <= 0.0 {
+        return data.to_vec();
+    }
+    let alpha = 2.0 / (span + 1.0);
+    let mut result = Vec::with_capacity(data.len());
+    result.push(data[0]);
+    for i in 1..data.len() {
+        result.push(alpha * data[i] + (1.0 - alpha) * result[i - 1]);
+    }
+    result
+}
+
+/// Compute simple moving average.
+pub fn moving_average(data: &[f64], window: usize) -> Vec<f64> {
+    if data.is_empty() || window == 0 {
+        return vec![];
+    }
+    let mut result = Vec::with_capacity(data.len().saturating_sub(window - 1));
+    let mut sum: f64 = data[..window.min(data.len())].iter().sum();
+
+    if window <= data.len() {
+        result.push(sum / window as f64);
+        for i in window..data.len() {
+            sum += data[i] - data[i - window];
+            result.push(sum / window as f64);
+        }
+    }
+
+    result
+}
+
+/// Compute cumulative sum.
+pub fn cumsum(data: &[f64]) -> Vec<f64> {
+    let mut result = Vec::with_capacity(data.len());
+    let mut sum = 0.0;
+    for &v in data {
+        sum += v;
+        result.push(sum);
+    }
+    result
+}
+
+/// Compute cumulative product.
+pub fn cumprod(data: &[f64]) -> Vec<f64> {
+    let mut result = Vec::with_capacity(data.len());
+    let mut prod = 1.0;
+    for &v in data {
+        prod *= v;
+        result.push(prod);
+    }
+    result
+}
+
+/// Compute differences between consecutive elements.
+///
+/// Matches `numpy.diff`.
+pub fn diff(data: &[f64]) -> Vec<f64> {
+    if data.len() < 2 {
+        return vec![];
+    }
+    data.windows(2).map(|w| w[1] - w[0]).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
