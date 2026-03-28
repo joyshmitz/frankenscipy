@@ -490,6 +490,16 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
                     bytes_per_sample
                 )));
             }
+            let frame_bytes = bytes_per_sample
+                .checked_mul(channels as usize)
+                .ok_or_else(|| IoError::InvalidFormat("WAV frame size overflowed usize".to_string()))?;
+            if !data_bytes.len().is_multiple_of(frame_bytes) {
+                return Err(IoError::InvalidFormat(format!(
+                    "data chunk size {} does not contain whole {}-channel frames",
+                    data_bytes.len(),
+                    channels
+                )));
+            }
 
             let samples = match (bits_per_sample, audio_format) {
                 (8, _) => data_bytes
@@ -832,6 +842,7 @@ pub fn read_csv(content: &str, delimiter: char, has_header: bool) -> CsvResult {
     } else {
         None
     };
+    let header_cols = header.as_ref().map(std::vec::Vec::len);
 
     let mut data = Vec::new();
     let mut expected_cols = None;
@@ -854,6 +865,12 @@ pub fn read_csv(content: &str, delimiter: char, has_header: bool) -> CsvResult {
                         )));
                     }
                 } else {
+                    if let Some(header_cols) = header_cols && r.len() != header_cols {
+                        return Err(IoError::InvalidFormat(format!(
+                            "CSV header has {header_cols} columns but first data row has {}",
+                            r.len()
+                        )));
+                    }
                     expected_cols = Some(r.len());
                 }
                 data.push(r);
@@ -874,6 +891,7 @@ pub fn write_csv(
     delimiter: char,
 ) -> Result<String, IoError> {
     let mut out = String::new();
+    let header_cols = header.map(<[&str]>::len);
     if let Some(h) = header {
         out.push_str(&h.join(&delimiter.to_string()));
         out.push('\n');
@@ -888,6 +906,12 @@ pub fn write_csv(
                 )));
             }
         } else {
+            if let Some(header_cols) = header_cols && row.len() != header_cols {
+                return Err(IoError::InvalidFormat(format!(
+                    "CSV header has {header_cols} columns but first data row has {}",
+                    row.len()
+                )));
+            }
             expected_cols = Some(row.len());
         }
         let row_str: Vec<String> = row.iter().map(|v| format!("{v}")).collect();
@@ -1193,6 +1217,22 @@ mod tests {
     }
 
     #[test]
+    fn wav_read_rejects_partial_frames() {
+        let mut bytes =
+            wav_write(44_100, 2, &[0.0, 0.5, 1.0, -1.0]).expect("stereo samples should encode");
+        bytes[40..44].copy_from_slice(&6u32.to_le_bytes());
+        bytes.truncate(44 + 6);
+
+        let err = wav_read(&bytes).expect_err("partial stereo frame should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "data chunk size 6 does not contain whole 2-channel frames".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn wav_read_24bit_pcm_sign_extends_negative_samples() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"RIFF");
@@ -1369,10 +1409,34 @@ mod tests {
     }
 
     #[test]
+    fn read_csv_rejects_header_data_column_mismatch() {
+        let err =
+            read_csv("a,b,c\n1,2\n3,4\n", ',', true).expect_err("header/data mismatch should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "CSV header has 3 columns but first data row has 2".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn write_csv_basic() {
         let text = write_csv(None, &[vec![1.0, 2.0], vec![3.0, 4.0]], ',')
             .expect("rectangular CSV should serialize");
         assert_eq!(text, "1,2\n3,4\n");
+    }
+
+    #[test]
+    fn write_csv_rejects_header_data_column_mismatch() {
+        let err = write_csv(Some(&["a", "b", "c"]), &[vec![1.0, 2.0]], ',')
+            .expect_err("header/data mismatch should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "CSV header has 3 columns but first data row has 2".to_string()
+            )
+        );
     }
 
     #[test]
