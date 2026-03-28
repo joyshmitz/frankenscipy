@@ -2281,6 +2281,120 @@ pub fn flatten(input: &NdArray) -> NdArray {
     NdArray::new(input.data.clone(), vec![input.size()]).unwrap()
 }
 
+/// Compute element-wise comparison: 1.0 where a > b, 0.0 otherwise.
+pub fn greater_than(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
+    if a.shape != b.shape {
+        return Err(NdimageError::DimensionMismatch("shapes must match".to_string()));
+    }
+    let data: Vec<f64> = a.data.iter().zip(b.data.iter())
+        .map(|(&x, &y)| if x > y { 1.0 } else { 0.0 })
+        .collect();
+    Ok(NdArray { data, shape: a.shape.clone(), strides: a.strides.clone() })
+}
+
+/// Compute element-wise comparison: 1.0 where a == b within tolerance.
+pub fn equal_within(a: &NdArray, b: &NdArray, tol: f64) -> Result<NdArray, NdimageError> {
+    if a.shape != b.shape {
+        return Err(NdimageError::DimensionMismatch("shapes must match".to_string()));
+    }
+    let data: Vec<f64> = a.data.iter().zip(b.data.iter())
+        .map(|(&x, &y)| if (x - y).abs() <= tol { 1.0 } else { 0.0 })
+        .collect();
+    Ok(NdArray { data, shape: a.shape.clone(), strides: a.strides.clone() })
+}
+
+/// Compute where: select from a where condition is true, from b otherwise.
+pub fn where_cond(condition: &NdArray, a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
+    if condition.shape != a.shape || a.shape != b.shape {
+        return Err(NdimageError::DimensionMismatch("shapes must match".to_string()));
+    }
+    let data: Vec<f64> = condition.data.iter()
+        .zip(a.data.iter().zip(b.data.iter()))
+        .map(|(&c, (&x, &y))| if c != 0.0 { x } else { y })
+        .collect();
+    Ok(NdArray { data, shape: a.shape.clone(), strides: a.strides.clone() })
+}
+
+/// Compute argmax: index of maximum element.
+pub fn argmax(input: &NdArray) -> usize {
+    input.data.iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+
+/// Compute argmin: index of minimum element.
+pub fn argmin(input: &NdArray) -> usize {
+    input.data.iter()
+        .enumerate()
+        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+
+/// Compute the cumulative sum along a flattened array.
+pub fn cumsum_array(input: &NdArray) -> NdArray {
+    let mut sum = 0.0;
+    let data: Vec<f64> = input.data.iter().map(|&v| { sum += v; sum }).collect();
+    NdArray { data, shape: input.shape.clone(), strides: input.strides.clone() }
+}
+
+/// Compute the cumulative product along a flattened array.
+pub fn cumprod_array(input: &NdArray) -> NdArray {
+    let mut prod = 1.0;
+    let data: Vec<f64> = input.data.iter().map(|&v| { prod *= v; prod }).collect();
+    NdArray { data, shape: input.shape.clone(), strides: input.strides.clone() }
+}
+
+/// Compute the difference between consecutive elements (first difference).
+pub fn diff_array(input: &NdArray) -> NdArray {
+    if input.size() < 2 {
+        return NdArray::zeros(vec![0]);
+    }
+    let data: Vec<f64> = input.data.windows(2).map(|w| w[1] - w[0]).collect();
+    NdArray { data: data.clone(), shape: vec![data.len()], strides: vec![1] }
+}
+
+/// Apply a boolean mask: return elements where mask is nonzero.
+pub fn masked_select(input: &NdArray, mask: &NdArray) -> Vec<f64> {
+    input.data.iter()
+        .zip(mask.data.iter())
+        .filter(|&(_, m)| *m != 0.0)
+        .map(|(&v, _)| v)
+        .collect()
+}
+
+/// Set elements where mask is nonzero to a given value.
+pub fn masked_fill(input: &NdArray, mask: &NdArray, value: f64) -> NdArray {
+    let data: Vec<f64> = input.data.iter()
+        .zip(mask.data.iter())
+        .map(|(&v, &m)| if m != 0.0 { value } else { v })
+        .collect();
+    NdArray { data, shape: input.shape.clone(), strides: input.strides.clone() }
+}
+
+/// Compute the histogram of an NdArray.
+pub fn array_histogram(input: &NdArray, bins: usize) -> (Vec<usize>, Vec<f64>) {
+    if input.size() == 0 || bins == 0 {
+        return (vec![], vec![]);
+    }
+    let min_val = array_min(input);
+    let max_val = array_max(input);
+    let range = max_val - min_val;
+    let bw = if range > 0.0 { range / bins as f64 } else { 1.0 };
+
+    let mut counts = vec![0usize; bins];
+    let edges: Vec<f64> = (0..=bins).map(|i| min_val + i as f64 * bw).collect();
+
+    for &v in &input.data {
+        let bin = ((v - min_val) / bw).floor() as usize;
+        counts[bin.min(bins - 1)] += 1;
+    }
+
+    (counts, edges)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

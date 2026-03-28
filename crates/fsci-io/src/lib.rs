@@ -635,6 +635,12 @@ pub struct MatArray {
 pub fn savemat_text(arrays: &[MatArray]) -> Result<String, IoError> {
     let mut out = String::new();
     for arr in arrays {
+        if arr.name.contains(['\n', '\r']) {
+            return Err(IoError::InvalidFormat(format!(
+                "array name '{}' contains a newline and cannot be encoded safely",
+                arr.name.escape_debug()
+            )));
+        }
         let expected_len = arr
             .rows
             .checked_mul(arr.cols)
@@ -714,6 +720,11 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
                                 "encountered matrix data before '# name:' header".to_string(),
                             )
                         })?;
+                        if rows == 0 || cols == 0 {
+                            return Err(IoError::InvalidFormat(format!(
+                                "array '{n}' is missing nonzero '# rows:' and '# columns:' headers before data"
+                            )));
+                        }
                         let mut data = Vec::with_capacity(rows * cols);
                         // Parse this line
                         for val_str in trimmed.split_whitespace() {
@@ -1326,6 +1337,24 @@ mod tests {
     }
 
     #[test]
+    fn savemat_rejects_multiline_names() {
+        let arrays = vec![MatArray {
+            name: "bad\nname".to_string(),
+            rows: 1,
+            cols: 1,
+            data: vec![1.0],
+        }];
+        let err = savemat_text(&arrays).expect_err("multiline names should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "array name 'bad\\nname' contains a newline and cannot be encoded safely"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
     fn loadmat_rejects_wrong_element_count() {
         let text = "# name: A\n# type: matrix\n# rows: 2\n# columns: 2\n1 2\n3\n";
         let err = loadmat_text(text).expect_err("truncated matrix payload should fail");
@@ -1352,6 +1381,19 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("incomplete MAT text block at end of file".to_string())
+        );
+    }
+
+    #[test]
+    fn loadmat_rejects_data_before_dimension_headers_are_complete() {
+        let err = loadmat_text("# name: A\n# rows: 2\n1 2\n3 4\n")
+            .expect_err("data before full dimension metadata should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "array 'A' is missing nonzero '# rows:' and '# columns:' headers before data"
+                    .to_string()
+            )
         );
     }
 

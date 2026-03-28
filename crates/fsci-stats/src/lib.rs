@@ -9623,6 +9623,392 @@ pub fn durbin_watson(residuals: &[f64]) -> f64 {
     num / den
 }
 
+/// Compute the autocorrelation function of a time series.
+///
+/// Returns autocorrelation at lags 0, 1, ..., max_lag.
+pub fn acf(data: &[f64], max_lag: usize) -> Vec<f64> {
+    let n = data.len();
+    if n < 2 {
+        return vec![1.0];
+    }
+    let mean: f64 = data.iter().sum::<f64>() / n as f64;
+    let var: f64 = data.iter().map(|&v| (v - mean).powi(2)).sum();
+
+    if var == 0.0 {
+        return vec![1.0; max_lag + 1];
+    }
+
+    (0..=max_lag.min(n - 1))
+        .map(|lag| {
+            let sum: f64 = (0..n - lag)
+                .map(|i| (data[i] - mean) * (data[i + lag] - mean))
+                .sum();
+            sum / var
+        })
+        .collect()
+}
+
+/// Compute the partial autocorrelation function.
+///
+/// Uses the Durbin-Levinson recursion.
+pub fn pacf(data: &[f64], max_lag: usize) -> Vec<f64> {
+    let autocorr = acf(data, max_lag);
+    let nlags = autocorr.len() - 1;
+    if nlags == 0 {
+        return vec![1.0];
+    }
+
+    let mut result = vec![1.0]; // lag 0
+
+    // Durbin-Levinson
+    let mut phi = vec![vec![0.0; nlags + 1]; nlags + 1];
+    phi[1][1] = autocorr[1];
+    result.push(phi[1][1]);
+
+    for k in 2..=nlags {
+        let mut num = autocorr[k];
+        for j in 1..k {
+            num -= phi[k - 1][j] * autocorr[k - j];
+        }
+        let mut den = 1.0;
+        for j in 1..k {
+            den -= phi[k - 1][j] * autocorr[j];
+        }
+        phi[k][k] = if den.abs() > 1e-15 { num / den } else { 0.0 };
+
+        for j in 1..k {
+            phi[k][j] = phi[k - 1][j] - phi[k][k] * phi[k - 1][k - j];
+        }
+
+        result.push(phi[k][k]);
+    }
+
+    result
+}
+
+/// Ljung-Box test for autocorrelation in residuals.
+///
+/// Returns (statistic, p_value).
+pub fn ljung_box(data: &[f64], lags: usize) -> (f64, f64) {
+    let n = data.len();
+    if n < 3 || lags == 0 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let autocorr = acf(data, lags);
+    let nf = n as f64;
+
+    let q: f64 = (1..=lags.min(autocorr.len() - 1))
+        .map(|k| autocorr[k].powi(2) / (nf - k as f64))
+        .sum::<f64>()
+        * nf
+        * (nf + 2.0);
+
+    let df = lags as f64;
+    let chi2 = ChiSquared::new(df);
+    let p = chi2.sf(q);
+
+    (q, p.clamp(0.0, 1.0))
+}
+
+/// Multiple linear regression: y = X * beta + epsilon.
+///
+/// Returns (coefficients, residuals, r_squared, std_errors).
+pub fn multiple_regression(
+    x: &[Vec<f64>],
+    y: &[f64],
+) -> (Vec<f64>, Vec<f64>, f64, Vec<f64>) {
+    let n = x.len();
+    if n == 0 || n != y.len() {
+        return (vec![], vec![], f64::NAN, vec![]);
+    }
+    let p = x[0].len();
+
+    // Add intercept column
+    let p1 = p + 1;
+    let mut xtx = vec![vec![0.0; p1]; p1];
+    let mut xty = vec![0.0; p1];
+
+    for i in 0..n {
+        let mut row = vec![1.0]; // intercept
+        row.extend_from_slice(&x[i]);
+
+        for j in 0..p1 {
+            xty[j] += row[j] * y[i];
+            for k in j..p1 {
+                xtx[j][k] += row[j] * row[k];
+                if k != j {
+                    xtx[k][j] = xtx[j][k];
+                }
+            }
+        }
+    }
+
+    // Solve XtX * beta = Xty via Cholesky
+    let beta = solve_regression_system(&xtx, &xty);
+
+    // Compute residuals
+    let mut residuals = Vec::with_capacity(n);
+    let mut ss_res = 0.0;
+    let y_mean: f64 = y.iter().sum::<f64>() / n as f64;
+    let mut ss_tot = 0.0;
+
+    for i in 0..n {
+        let mut pred = beta[0]; // intercept
+        for j in 0..p {
+            pred += beta[j + 1] * x[i][j];
+        }
+        let r = y[i] - pred;
+        residuals.push(r);
+        ss_res += r * r;
+        ss_tot += (y[i] - y_mean).powi(2);
+    }
+
+    let r_squared = if ss_tot > 0.0 { 1.0 - ss_res / ss_tot } else { 1.0 };
+
+    // Standard errors of coefficients
+    let mse = if n > p1 { ss_res / (n - p1) as f64 } else { 0.0 };
+    let std_errors = compute_std_errors(&xtx, mse);
+
+    (beta, residuals, r_squared, std_errors)
+}
+
+fn solve_regression_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+    let n = a.len();
+    let mut aug: Vec<Vec<f64>> = a.iter().enumerate().map(|(i, r)| {
+        let mut row = r.clone();
+        row.push(b[i]);
+        row
+    }).collect();
+
+    for col in 0..n {
+        let max_row = (col..n)
+            .max_by(|&i, &j| aug[i][col].abs().partial_cmp(&aug[j][col].abs()).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(col);
+        aug.swap(col, max_row);
+        if aug[col][col].abs() < 1e-15 { continue; }
+        let pivot = aug[col][col];
+        for row in col + 1..n {
+            let factor = aug[row][col] / pivot;
+            for j in col..=n {
+                let val = aug[col][j];
+                aug[row][j] -= factor * val;
+            }
+        }
+    }
+
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        if aug[i][i].abs() < 1e-15 { continue; }
+        let mut sum = aug[i][n];
+        for j in i + 1..n {
+            sum -= aug[i][j] * x[j];
+        }
+        x[i] = sum / aug[i][i];
+    }
+    x
+}
+
+fn compute_std_errors(xtx: &[Vec<f64>], mse: f64) -> Vec<f64> {
+    let n = xtx.len();
+    // Compute inverse of XtX via Gauss-Jordan
+    let mut aug: Vec<Vec<f64>> = xtx.iter().enumerate().map(|(i, r)| {
+        let mut row = r.clone();
+        row.extend(vec![0.0; n]);
+        row[n + i] = 1.0;
+        row
+    }).collect();
+
+    for col in 0..n {
+        let max_row = (col..n)
+            .max_by(|&i, &j| aug[i][col].abs().partial_cmp(&aug[j][col].abs()).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(col);
+        aug.swap(col, max_row);
+        if aug[col][col].abs() < 1e-15 { continue; }
+        let pivot = aug[col][col];
+        for j in 0..2 * n {
+            aug[col][j] /= pivot;
+        }
+        for row in 0..n {
+            if row == col { continue; }
+            let factor = aug[row][col];
+            for j in 0..2 * n {
+                let val = aug[col][j];
+                aug[row][j] -= factor * val;
+            }
+        }
+    }
+
+    (0..n).map(|i| (mse * aug[i][n + i]).max(0.0).sqrt()).collect()
+}
+
+/// Ridge regression: minimize ||Xβ - y||² + α||β||².
+///
+/// Returns coefficients (including intercept as first element).
+pub fn ridge_regression(x: &[Vec<f64>], y: &[f64], alpha: f64) -> Vec<f64> {
+    let n = x.len();
+    if n == 0 || n != y.len() {
+        return vec![];
+    }
+    let p = x[0].len();
+    let p1 = p + 1;
+
+    // Build XtX + alpha*I and Xty
+    let mut xtx = vec![vec![0.0; p1]; p1];
+    let mut xty = vec![0.0; p1];
+
+    for i in 0..n {
+        let mut row = vec![1.0];
+        row.extend_from_slice(&x[i]);
+        for j in 0..p1 {
+            xty[j] += row[j] * y[i];
+            for k in 0..p1 {
+                xtx[j][k] += row[j] * row[k];
+            }
+        }
+    }
+
+    // Add regularization (skip intercept at index 0)
+    for j in 1..p1 {
+        xtx[j][j] += alpha;
+    }
+
+    solve_regression_system(&xtx, &xty)
+}
+
+/// Polynomial regression: fit y = β₀ + β₁x + β₂x² + ... + βₖx^k.
+///
+/// Returns coefficients [β₀, β₁, ..., βₖ].
+pub fn polynomial_regression(x: &[f64], y: &[f64], degree: usize) -> Vec<f64> {
+    let n = x.len();
+    if n == 0 || n != y.len() {
+        return vec![];
+    }
+
+    // Build design matrix: each row is [1, x, x², ..., x^degree]
+    let x_poly: Vec<Vec<f64>> = x.iter().map(|&xi| {
+        (1..=degree).map(|d| xi.powi(d as i32)).collect()
+    }).collect();
+
+    let (beta, _, _, _) = multiple_regression(&x_poly, y);
+    beta
+}
+
+/// Exponential regression: fit y = a * exp(b * x).
+///
+/// Uses log-linear regression: ln(y) = ln(a) + b*x.
+/// Returns (a, b).
+pub fn exponential_regression(x: &[f64], y: &[f64]) -> (f64, f64) {
+    let n = x.len();
+    if n < 2 || n != y.len() {
+        return (f64::NAN, f64::NAN);
+    }
+
+    // Filter positive y values (log requires y > 0)
+    let valid: Vec<(f64, f64)> = x.iter().zip(y.iter())
+        .filter(|(_, &yi)| yi > 0.0)
+        .map(|(&xi, &yi)| (xi, yi.ln()))
+        .collect();
+
+    if valid.len() < 2 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let x_valid: Vec<f64> = valid.iter().map(|&(xi, _)| xi).collect();
+    let ln_y: Vec<f64> = valid.iter().map(|&(_, ly)| ly).collect();
+
+    let result = linregress(&x_valid, &ln_y);
+    (result.intercept.exp(), result.slope)
+}
+
+/// Power regression: fit y = a * x^b.
+///
+/// Uses log-log regression: ln(y) = ln(a) + b*ln(x).
+/// Returns (a, b).
+pub fn power_regression(x: &[f64], y: &[f64]) -> (f64, f64) {
+    let n = x.len();
+    if n < 2 || n != y.len() {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let valid: Vec<(f64, f64)> = x.iter().zip(y.iter())
+        .filter(|(&xi, &yi)| xi > 0.0 && yi > 0.0)
+        .map(|(&xi, &yi)| (xi.ln(), yi.ln()))
+        .collect();
+
+    if valid.len() < 2 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let ln_x: Vec<f64> = valid.iter().map(|&(lx, _)| lx).collect();
+    let ln_y: Vec<f64> = valid.iter().map(|&(_, ly)| ly).collect();
+
+    let result = linregress(&ln_x, &ln_y);
+    (result.intercept.exp(), result.slope)
+}
+
+/// Theil-Sen robust regression estimator.
+///
+/// Uses median of all pairwise slopes. Resistant to outliers.
+/// Matches `scipy.stats.theilslopes`.
+pub fn theil_sen(x: &[f64], y: &[f64]) -> (f64, f64) {
+    let n = x.len();
+    if n < 2 || n != y.len() {
+        return (f64::NAN, f64::NAN);
+    }
+
+    // Compute all pairwise slopes
+    let mut slopes = Vec::with_capacity(n * (n - 1) / 2);
+    for i in 0..n {
+        for j in i + 1..n {
+            let dx = x[j] - x[i];
+            if dx.abs() > 1e-15 {
+                slopes.push((y[j] - y[i]) / dx);
+            }
+        }
+    }
+
+    if slopes.is_empty() {
+        return (0.0, median(y));
+    }
+
+    let slope = median(&slopes);
+    // Intercept: median of y_i - slope * x_i
+    let intercepts: Vec<f64> = x.iter().zip(y.iter()).map(|(&xi, &yi)| yi - slope * xi).collect();
+    let intercept = median(&intercepts);
+
+    (slope, intercept)
+}
+
+/// Compute the Spearman footrule distance between two rankings.
+pub fn spearman_footrule(rank1: &[usize], rank2: &[usize]) -> f64 {
+    if rank1.len() != rank2.len() {
+        return f64::NAN;
+    }
+    rank1.iter().zip(rank2.iter())
+        .map(|(&a, &b)| (a as f64 - b as f64).abs())
+        .sum()
+}
+
+/// Compute the Kendall distance (number of discordant pairs) between two rankings.
+pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
+    let n = rank1.len();
+    if n != rank2.len() {
+        return 0;
+    }
+    let mut count = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            let a = (rank1[i] as i64 - rank1[j] as i64).signum();
+            let b = (rank2[i] as i64 - rank2[j] as i64).signum();
+            if a != b && a != 0 && b != 0 {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
