@@ -308,11 +308,11 @@ pub fn analytic_signal(x: &[f64]) -> Result<Vec<(f64, f64)>, FftError> {
     // Double positive frequencies, zero negative frequencies
     if n > 1 {
         let half = n / 2;
-        for k in 1..half {
-            spectrum[k] = (spectrum[k].0 * 2.0, spectrum[k].1 * 2.0);
+        for item in &mut spectrum[1..half] {
+            *item = (item.0 * 2.0, item.1 * 2.0);
         }
-        for k in half + 1..n {
-            spectrum[k] = (0.0, 0.0);
+        for item in &mut spectrum[half + 1..n] {
+            *item = (0.0, 0.0);
         }
     }
 

@@ -1120,12 +1120,12 @@ pub fn mean_shift(
 
     for _ in 0..max_iter {
         let mut shifted = false;
-        for i in 0..centers.len() {
+        for center in &mut centers {
             let mut new_center = vec![0.0; d];
             let mut total_weight = 0.0;
 
             for point in data {
-                let dist2: f64 = centers[i]
+                let dist2: f64 = center
                     .iter()
                     .zip(point.iter())
                     .map(|(&a, &b)| (a - b).powi(2))
@@ -1143,7 +1143,7 @@ pub fn mean_shift(
                 }
             }
 
-            let shift: f64 = centers[i]
+            let shift: f64 = center
                 .iter()
                 .zip(new_center.iter())
                 .map(|(&a, &b)| (a - b).powi(2))
@@ -1153,7 +1153,7 @@ pub fn mean_shift(
             if shift > 1e-6 {
                 shifted = true;
             }
-            centers[i] = new_center;
+            *center = new_center;
         }
 
         if !shifted {
@@ -1553,13 +1553,13 @@ pub fn kmedoids(
 
         // Update medoids: for each cluster, find the point that minimizes total distance
         let mut changed = false;
-        for c in 0..k {
+        for (c, medoid_index) in medoid_indices.iter_mut().enumerate().take(k) {
             let members: Vec<usize> = (0..n).filter(|&i| labels[i] == c).collect();
             if members.is_empty() {
                 continue;
             }
 
-            let mut best_med = medoid_indices[c];
+            let mut best_med = *medoid_index;
             let mut best_cost: f64 = members
                 .iter()
                 .map(|&i| sq_dist(&data[i], &data[best_med]).sqrt())
@@ -1576,8 +1576,8 @@ pub fn kmedoids(
                 }
             }
 
-            if best_med != medoid_indices[c] {
-                medoid_indices[c] = best_med;
+            if best_med != *medoid_index {
+                *medoid_index = best_med;
                 changed = true;
             }
         }

@@ -2195,7 +2195,7 @@ pub fn clustering_coefficient(graph: &CsrMatrix) -> Vec<f64> {
     let n = graph.shape().rows;
     let mut cc = vec![0.0; n];
 
-    for i in 0..n {
+    for (i, cc_val) in cc.iter_mut().enumerate() {
         let neighbors: Vec<usize> = (graph.indptr()[i]..graph.indptr()[i + 1])
             .map(|idx| graph.indices()[idx])
             .collect();
@@ -2213,17 +2213,14 @@ pub fn clustering_coefficient(graph: &CsrMatrix) -> Vec<f64> {
                     // Check if edge (u, v) exists
                     let u_start = graph.indptr()[u];
                     let u_end = graph.indptr()[u + 1];
-                    for idx in u_start..u_end {
-                        if graph.indices()[idx] == v {
-                            edges += 1;
-                            break;
-                        }
+                    if graph.indices()[u_start..u_end].binary_search(&v).is_ok() {
+                        edges += 1;
                     }
                 }
             }
         }
 
-        cc[i] = 2.0 * edges as f64 / (k * (k - 1)) as f64;
+        *cc_val = 2.0 * edges as f64 / (k * (k - 1)) as f64;
     }
 
     cc
@@ -2433,7 +2430,7 @@ pub fn sparse_row_min(a: &CsrMatrix) -> Vec<f64> {
 
 /// Check if a sparse matrix has any explicit zeros (stored but zero value).
 pub fn sparse_has_explicit_zeros(a: &CsrMatrix) -> bool {
-    a.data().iter().any(|&v| v == 0.0)
+    a.data().contains(&0.0)
 }
 
 /// Eliminate explicit zeros from a CSR matrix.

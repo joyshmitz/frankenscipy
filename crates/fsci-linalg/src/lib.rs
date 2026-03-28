@@ -4540,8 +4540,8 @@ pub fn is_orthogonal(a: &[Vec<f64>], tol: f64) -> bool {
     for i in 0..n {
         for j in 0..n {
             let mut dot = 0.0;
-            for k in 0..n {
-                dot += a[k][i] * a[k][j];
+            for row in a.iter().take(n) {
+                dot += row[i] * row[j];
             }
             let expected = if i == j { 1.0 } else { 0.0 };
             if (dot - expected).abs() > tol {
@@ -4580,8 +4580,8 @@ pub fn random_spd(n: usize, seed: u64) -> Vec<Vec<f64>> {
     let mut result = vec![vec![0.0; n]; n];
     for i in 0..n {
         for j in 0..n {
-            for k in 0..n {
-                result[i][j] += a[k][i] * a[k][j];
+            for row in a.iter().take(n) {
+                result[i][j] += row[i] * row[j];
             }
         }
         result[i][i] += n as f64;

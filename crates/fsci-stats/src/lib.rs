@@ -9123,8 +9123,8 @@ pub fn contingency_table(x: &[usize], y: &[usize]) -> (Vec<Vec<usize>>, Vec<usiz
     let mut table = vec![vec![0usize; nc]; nr];
 
     for (&xi, &yi) in x.iter().zip(y.iter()) {
-        if let Some(ri) = row_labels.iter().position(|&r| r == xi) {
-            if let Some(ci) = col_labels.iter().position(|&c| c == yi) {
+        if let Ok(ri) = row_labels.binary_search(&xi) {
+            if let Ok(ci) = col_labels.binary_search(&yi) {
                 table[ri][ci] += 1;
             }
         }
@@ -9809,6 +9809,7 @@ fn solve_regression_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     x
 }
 
+#[allow(clippy::needless_range_loop)]
 fn compute_std_errors(xtx: &[Vec<f64>], mse: f64) -> Vec<f64> {
     let n = xtx.len();
     // Compute inverse of XtX via Gauss-Jordan
@@ -9906,7 +9907,7 @@ pub fn exponential_regression(x: &[f64], y: &[f64]) -> (f64, f64) {
 
     // Filter positive y values (log requires y > 0)
     let valid: Vec<(f64, f64)> = x.iter().zip(y.iter())
-        .filter(|(_, &yi)| yi > 0.0)
+        .filter(|&(_, yi)| *yi > 0.0)
         .map(|(&xi, &yi)| (xi, yi.ln()))
         .collect();
 
@@ -9932,7 +9933,7 @@ pub fn power_regression(x: &[f64], y: &[f64]) -> (f64, f64) {
     }
 
     let valid: Vec<(f64, f64)> = x.iter().zip(y.iter())
-        .filter(|(&xi, &yi)| xi > 0.0 && yi > 0.0)
+        .filter(|&(xi, yi)| *xi > 0.0 && *yi > 0.0)
         .map(|(&xi, &yi)| (xi.ln(), yi.ln()))
         .collect();
 
