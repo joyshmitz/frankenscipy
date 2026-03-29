@@ -816,6 +816,12 @@ pub fn savetxt(
     data: &[f64],
     delimiter: &str,
 ) -> Result<String, IoError> {
+    if delimiter.contains(['\n', '\r']) {
+        return Err(IoError::InvalidFormat(format!(
+            "delimiter {:?} contains a newline and cannot be encoded safely",
+            delimiter
+        )));
+    }
     if data.len() != rows * cols {
         return Err(IoError::InvalidFormat(format!(
             "data length {} doesn't match {}x{}",
@@ -1420,6 +1426,18 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("data length 3 doesn't match 2x2".to_string())
+        );
+    }
+
+    #[test]
+    fn savetxt_rejects_multiline_delimiter() {
+        let err = savetxt(1, 2, &[1.0, 2.0], "\n")
+            .expect_err("multiline delimiters should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "delimiter \"\\n\" contains a newline and cannot be encoded safely".to_string()
+            )
         );
     }
 

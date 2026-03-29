@@ -1402,7 +1402,7 @@ pub fn find_peaks(x: &[f64], options: FindPeaksOptions) -> FindPeaksResult {
             let filtered = filter_by_distance(&peaks, &peak_heights, min_dist);
             let final_proms: Vec<f64> = filtered
                 .iter()
-                .map(|&pk| proms[peaks.iter().position(|&p| p == pk).unwrap_or(0)])
+                .map(|&pk| proms[peaks.binary_search(&pk).unwrap_or(0)])
                 .collect();
             let final_heights: Vec<f64> = filtered.iter().map(|&i| x[i]).collect();
             return FindPeaksResult {
@@ -2373,10 +2373,10 @@ pub fn find_delay(x: &[f64], y: &[f64]) -> i64 {
 
     for lag in -(max_lag as i64)..=(max_lag as i64) {
         let mut sum = 0.0;
-        for i in 0..n {
+        for (i, &x_i) in x.iter().enumerate().take(n) {
             let j = i as i64 - lag;
             if j >= 0 && (j as usize) < m {
-                sum += x[i] * y[j as usize];
+                sum += x_i * y[j as usize];
             }
         }
         if sum > best_corr {
@@ -2398,7 +2398,7 @@ pub fn medfilt1(x: &[f64], kernel_size: usize) -> Vec<f64> {
 
     (0..n)
         .map(|i| {
-            let start = if i >= half { i - half } else { 0 };
+            let start = i.saturating_sub(half);
             let end = (i + half + 1).min(n);
             let mut window: Vec<f64> = x[start..end].to_vec();
             window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

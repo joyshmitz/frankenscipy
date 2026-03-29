@@ -1366,7 +1366,7 @@ where
 
             if f_new < f_best {
                 f_best = f_new;
-                x_best = result.x.clone();
+                x_best.clone_from(&result.x);
             }
 
             if accept {
@@ -1479,7 +1479,7 @@ where
         }
 
         if f_current < f_best {
-            x_best = x_current.clone();
+            x_best.clone_from(&x_current);
             f_best = f_current;
         }
 
@@ -1502,15 +1502,15 @@ where
                     if fp < fm && fp < f_best {
                         x_local[d] += h;
                         f_best = fp;
-                        x_best = x_local.clone();
+                        x_best.clone_from(&x_local);
                     } else if fm < f_best {
                         x_local[d] -= h;
                         f_best = fm;
-                        x_best = x_local.clone();
+                        x_best.clone_from(&x_local);
                     }
                 }
             }
-            x_current = x_best.clone();
+            x_current.clone_from(&x_best);
             f_current = f_best;
         }
     }
@@ -2451,7 +2451,6 @@ where
     F: Fn(&[f64]) -> f64,
     G: Fn(&[f64]) -> Vec<f64>,
 {
-    let n = x0.len();
     let mut x = x0.to_vec();
     let mut nfev = 0;
     let mut njev = 0;
@@ -2486,19 +2485,21 @@ where
         nfev += 1;
         let descent = g.iter().map(|&v| v * v).sum::<f64>();
 
+        let mut found = false;
         for _ in 0..20 {
             let x_new: Vec<f64> = x.iter().zip(g.iter()).map(|(&xi, &gi)| xi - alpha * gi).collect();
             let f_new = f(&x_new);
             nfev += 1;
             if f_new <= f0 - 1e-4 * alpha * descent {
                 x = x_new;
+                found = true;
                 break;
             }
             alpha *= 0.5;
         }
 
-        // If line search didn't find improvement, take the step anyway
-        if alpha < 1e-15 {
+        // If line search didn't find improvement, take a small step anyway
+        if !found {
             for (xi, &gi) in x.iter_mut().zip(g.iter()) {
                 *xi -= learning_rate * 1e-3 * gi;
             }
@@ -2526,6 +2527,7 @@ where
 /// Projected gradient descent for box-constrained optimization.
 ///
 /// Minimizes f(x) subject to lb <= x <= ub.
+#[allow(clippy::too_many_arguments)]
 pub fn projected_gradient_descent<F, G>(
     f: F,
     grad: G,
@@ -2540,7 +2542,6 @@ where
     F: Fn(&[f64]) -> f64,
     G: Fn(&[f64]) -> Vec<f64>,
 {
-    let n = x0.len();
     let mut x: Vec<f64> = x0
         .iter()
         .zip(lb.iter().zip(ub.iter()))
@@ -2622,6 +2623,211 @@ where
         grad.push((f(&xp) - f0) / eps);
     }
     grad
+}
+
+/// Numerical Hessian via central differences.
+pub fn numerical_hessian<F>(f: F, x: &[f64], eps: f64) -> Vec<Vec<f64>>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let n = x.len();
+    let mut hess = vec![vec![0.0; n]; n];
+    let mut scratch = x.to_vec();
+
+    for i in 0..n {
+        for j in i..n {
+            // f(x + eps_i + eps_j)
+            scratch[i] += eps;
+            scratch[j] += eps;
+            let f_pp = f(&scratch);
+
+            // f(x + eps_i - eps_j)
+            scratch[j] -= 2.0 * eps;
+            let f_pm = f(&scratch);
+
+            // f(x - eps_i + eps_j)
+            scratch[i] -= 2.0 * eps;
+            scratch[j] += 2.0 * eps;
+            let f_mp = f(&scratch);
+
+            // f(x - eps_i - eps_j)
+            scratch[j] -= 2.0 * eps;
+            let f_mm = f(&scratch);
+
+            // Restore scratch to original x
+            scratch[i] += eps;
+            scratch[j] += eps;
+
+            hess[i][j] = (f_pp - f_pm - f_mp + f_mm) / (4.0 * eps * eps);
+            hess[j][i] = hess[i][j];
+        }
+    }
+    hess
+}
+
+/// Compute the numerical Jacobian of a vector function.
+pub fn numerical_jacobian<F>(f: F, x: &[f64], eps: f64) -> Vec<Vec<f64>>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x.len();
+    let f0 = f(x);
+    let m = f0.len();
+    let mut jac = vec![vec![0.0; n]; m];
+    for j in 0..n {
+        let mut xp = x.to_vec();
+        xp[j] += eps;
+        let fp = f(&xp);
+        for i in 0..m {
+            jac[i][j] = (fp[i] - f0[i]) / eps;
+        }
+    }
+    jac
+}
+
+/// Simulated annealing for combinatorial optimization.
+///
+/// Minimizes a function over discrete states using neighbor generation.
+pub fn simulated_annealing<S, F, N>(
+    initial: S,
+    cost: F,
+    neighbor: N,
+    temp_initial: f64,
+    temp_final: f64,
+    max_iter: usize,
+    seed: u64,
+) -> (S, f64)
+where
+    S: Clone,
+    F: Fn(&S) -> f64,
+    N: Fn(&S, u64) -> S,
+{
+    let mut current = initial;
+    let mut current_cost = cost(&current);
+    let mut best = current.clone();
+    let mut best_cost = current_cost;
+    let mut rng = seed;
+
+    let cooling_rate = if max_iter > 1 {
+        (temp_final / temp_initial).powf(1.0 / max_iter as f64)
+    } else {
+        1.0
+    };
+    let mut temp = temp_initial;
+
+    for _ in 0..max_iter {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let candidate = neighbor(&current, rng);
+        let candidate_cost = cost(&candidate);
+
+        let delta = candidate_cost - current_cost;
+        let accept = if delta < 0.0 {
+            true
+        } else {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let r = (rng >> 11) as f64 / (1u64 << 53) as f64;
+            r < (-delta / temp).exp()
+        };
+
+        if accept {
+            current = candidate;
+            current_cost = candidate_cost;
+            if current_cost < best_cost {
+                best = current.clone();
+                best_cost = current_cost;
+            }
+        }
+
+        temp *= cooling_rate;
+    }
+
+    (best, best_cost)
+}
+
+/// Particle Swarm Optimization.
+///
+/// Minimizes f(x) over [lb, ub] using a swarm of particles.
+pub fn pso<F>(
+    f: F,
+    lb: &[f64],
+    ub: &[f64],
+    n_particles: usize,
+    max_iter: usize,
+    seed: u64,
+) -> (Vec<f64>, f64)
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let d = lb.len();
+    let w = 0.7298; // inertia
+    let c1 = 1.4962; // cognitive
+    let c2 = 1.4962; // social
+
+    let mut rng = seed;
+    let next_rand = |rng: &mut u64| -> f64 {
+        *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (*rng >> 11) as f64 / (1u64 << 53) as f64
+    };
+
+    // Initialize particles
+    let mut positions: Vec<Vec<f64>> = (0..n_particles)
+        .map(|_| {
+            (0..d)
+                .map(|j| lb[j] + next_rand(&mut rng) * (ub[j] - lb[j]))
+                .collect()
+        })
+        .collect();
+
+    let mut velocities: Vec<Vec<f64>> = (0..n_particles)
+        .map(|_| {
+            (0..d)
+                .map(|j| (next_rand(&mut rng) - 0.5) * (ub[j] - lb[j]) * 0.1)
+                .collect()
+        })
+        .collect();
+
+    let mut personal_best = positions.clone();
+    let mut personal_best_cost: Vec<f64> = positions.iter().map(|p| f(p)).collect();
+
+    let global_best_idx = personal_best_cost
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let mut global_best = personal_best[global_best_idx].clone();
+    let mut global_best_cost = personal_best_cost[global_best_idx];
+
+    for _ in 0..max_iter {
+        for i in 0..n_particles {
+            // Update velocity
+            for j in 0..d {
+                let r1 = next_rand(&mut rng);
+                let r2 = next_rand(&mut rng);
+                velocities[i][j] = w * velocities[i][j]
+                    + c1 * r1 * (personal_best[i][j] - positions[i][j])
+                    + c2 * r2 * (global_best[j] - positions[i][j]);
+            }
+
+            // Update position
+            for j in 0..d {
+                positions[i][j] = (positions[i][j] + velocities[i][j]).clamp(lb[j], ub[j]);
+            }
+
+            // Evaluate
+            let cost = f(&positions[i]);
+            if cost < personal_best_cost[i] {
+                personal_best_cost[i] = cost;
+                personal_best[i].clone_from(&positions[i]);
+                if cost < global_best_cost {
+                    global_best_cost = cost;
+                    global_best.clone_from(&positions[i]);
+                }
+            }
+        }
+    }
+
+    (global_best, global_best_cost)
 }
 
 #[cfg(test)]
