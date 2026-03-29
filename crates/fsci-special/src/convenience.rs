@@ -1482,7 +1482,8 @@ pub fn gammaincinv(a: f64, y: f64) -> f64 {
         }
         // Derivative of P(a,x) w.r.t. x is x^(a-1) * e^(-x) / Gamma(a)
         let mode = fsci_runtime::RuntimeMode::Strict;
-        let dpx = x.powf(a - 1.0) * (-x).exp() / crate::gammaln_scalar(a, mode).unwrap_or(f64::NAN).exp();
+        let dpx =
+            x.powf(a - 1.0) * (-x).exp() / crate::gammaln_scalar(a, mode).unwrap_or(f64::NAN).exp();
         if dpx.abs() > 1e-30 {
             x -= err / dpx;
             x = x.max(0.0);
@@ -1531,8 +1532,7 @@ pub fn erfcx(x: f64) -> f64 {
         // Asymptotic: erfcx(x) ≈ 1/(x√π) * (1 - 1/(2x²) + 3/(4x⁴) - ...)
         let inv_x = 1.0 / x;
         let inv_x2 = inv_x * inv_x;
-        inv_x / std::f64::consts::PI.sqrt()
-            * (1.0 - 0.5 * inv_x2 + 0.75 * inv_x2 * inv_x2)
+        inv_x / std::f64::consts::PI.sqrt() * (1.0 - 0.5 * inv_x2 + 0.75 * inv_x2 * inv_x2)
     }
 }
 
@@ -1556,7 +1556,8 @@ pub fn erfi(x: f64) -> f64 {
         2.0 * x / std::f64::consts::PI.sqrt() * sum
     } else {
         // For large |x|, erfi grows like exp(x²)/(x√π)
-        x.signum() * erfcx(-x.abs()) * (x * x).exp() - x.signum() / (x.abs() * std::f64::consts::PI.sqrt())
+        x.signum() * erfcx(-x.abs()) * (x * x).exp()
+            - x.signum() / (x.abs() * std::f64::consts::PI.sqrt())
     }
 }
 
@@ -1752,11 +1753,7 @@ pub fn lambertw_scalar(x: f64) -> f64 {
     }
 
     // Initial guess
-    let mut w = if x < 1.0 {
-        x
-    } else {
-        x.ln() - x.ln().ln()
-    };
+    let mut w = if x < 1.0 { x } else { x.ln() - x.ln().ln() };
 
     // Halley's method
     for _ in 0..50 {

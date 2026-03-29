@@ -1086,11 +1086,7 @@ pub fn fowlkes_mallows_score(labels_true: &[usize], labels_pred: &[usize]) -> f6
 /// Elbow method helper: compute within-cluster sum of squares for k=1..max_k.
 ///
 /// Returns a vector of inertia values useful for the elbow method.
-pub fn elbow_inertias(
-    data: &[Vec<f64>],
-    max_k: usize,
-    seed: u64,
-) -> Vec<f64> {
+pub fn elbow_inertias(data: &[Vec<f64>], max_k: usize, seed: u64) -> Vec<f64> {
     (1..=max_k.min(data.len()))
         .map(|k| {
             kmeans(data, k, 50, seed.wrapping_add(k as u64))
@@ -1302,9 +1298,7 @@ pub fn linkage_from_distances(
                     let nj = cluster_size[mj] as f64;
                     let nk = cluster_size[k] as f64;
                     let nt = ni + nj + nk;
-                    (((nk + ni) * d_ki * d_ki + (nk + nj) * d_kj * d_kj
-                        - nk * min_d * min_d)
-                        / nt)
+                    (((nk + ni) * d_ki * d_ki + (nk + nj) * d_kj * d_kj - nk * min_d * min_d) / nt)
                         .max(0.0)
                         .sqrt()
                 }
@@ -1370,8 +1364,16 @@ fn bron_kerbosch(
     for &v in &p_copy {
         r.push(v);
         let neighbors: std::collections::HashSet<usize> = adj[v].iter().cloned().collect();
-        let mut new_p: Vec<usize> = p.iter().filter(|&&u| neighbors.contains(&u)).cloned().collect();
-        let mut new_x: Vec<usize> = x.iter().filter(|&&u| neighbors.contains(&u)).cloned().collect();
+        let mut new_p: Vec<usize> = p
+            .iter()
+            .filter(|&&u| neighbors.contains(&u))
+            .cloned()
+            .collect();
+        let mut new_x: Vec<usize> = x
+            .iter()
+            .filter(|&&u| neighbors.contains(&u))
+            .cloned()
+            .collect();
         bron_kerbosch(adj, r, &mut new_p, &mut new_x, cliques);
         r.pop();
         p.retain(|&u| u != v);
@@ -1439,12 +1441,7 @@ pub fn silhouette_samples(data: &[Vec<f64>], labels: &[usize]) -> Vec<f64> {
 /// Gap statistic: compare within-cluster dispersion to reference.
 ///
 /// Returns gap values for k=1..max_k.
-pub fn gap_statistic(
-    data: &[Vec<f64>],
-    max_k: usize,
-    n_ref: usize,
-    seed: u64,
-) -> Vec<f64> {
+pub fn gap_statistic(data: &[Vec<f64>], max_k: usize, n_ref: usize, seed: u64) -> Vec<f64> {
     let n = data.len();
     if n == 0 {
         return vec![];
@@ -1466,7 +1463,9 @@ pub fn gap_statistic(
     for k in 1..=max_k.min(n) {
         // Within-cluster dispersion for real data
         let real_result = kmeans(data, k, 50, seed);
-        let log_wk = real_result.map(|r| r.inertia.max(1e-30).ln()).unwrap_or(0.0);
+        let log_wk = real_result
+            .map(|r| r.inertia.max(1e-30).ln())
+            .unwrap_or(0.0);
 
         // Average over reference datasets
         let mut ref_log_wks = Vec::with_capacity(n_ref);
@@ -1488,9 +1487,7 @@ pub fn gap_statistic(
                 .collect();
 
             let ref_result = kmeans(&ref_data, k, 30, ref_seed);
-            let ref_wk = ref_result
-                .map(|r| r.inertia.max(1e-30).ln())
-                .unwrap_or(0.0);
+            let ref_wk = ref_result.map(|r| r.inertia.max(1e-30).ln()).unwrap_or(0.0);
             ref_log_wks.push(ref_wk);
         }
 

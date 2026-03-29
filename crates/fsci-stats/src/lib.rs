@@ -3891,7 +3891,7 @@ impl ContinuousDistribution for CrystalBall {
         } else {
             a * (b - x).powf(-m)
         };
-        
+
         if total_norm > 0.0 {
             unnormalized_pdf / total_norm
         } else {
@@ -3965,7 +3965,7 @@ pub fn quantile(data: &[f64], q: &[f64]) -> Vec<f64> {
         return vec![f64::NAN; q.len()];
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
 
     q.iter()
@@ -4140,7 +4140,7 @@ fn sample_median(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let mid = sorted.len() / 2;
     if sorted.len().is_multiple_of(2) {
         0.5 * (sorted[mid - 1] + sorted[mid])
@@ -4322,8 +4322,8 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
     // Sort both distributions
     let mut u_sorted = u.to_vec();
     let mut v_sorted = v.to_vec();
-    u_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    v_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    u_sorted.sort_by(|a, b| a.total_cmp(b));
+    v_sorted.sort_by(|a, b| a.total_cmp(b));
 
     // Merge and compute the area between CDFs
     let nu = u.len() as f64;
@@ -4331,7 +4331,7 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
 
     // Combine all unique values and compute CDF difference at each
     let mut all_vals: Vec<f64> = u_sorted.iter().chain(v_sorted.iter()).copied().collect();
-    all_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_vals.sort_by(|a, b| a.total_cmp(b));
     all_vals.dedup();
 
     let mut distance = 0.0;
@@ -4649,7 +4649,7 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
             .enumerate()
             .map(|(j, g)| (g[block], j))
             .collect();
-        vals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        vals.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         // Average ranks for ties
         let mut i = 0;
@@ -4703,7 +4703,7 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
 
     for group in groups {
         let mut sorted = group.to_vec();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| a.total_cmp(b));
         let median = quantile_sorted(&sorted, 0.5);
         let deviations: Vec<f64> = group.iter().map(|&x| (x - median).abs()).collect();
         all_scores.extend_from_slice(&deviations);
@@ -4718,7 +4718,7 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
         .enumerate()
         .map(|(i, v)| (v, i))
         .collect();
-    indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut ranks = vec![0.0; n_total];
     for (rank, &(_, idx)) in indexed.iter().enumerate() {
         ranks[idx] = rank as f64 + 1.0;
@@ -4781,7 +4781,7 @@ pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
         .map(|&v| (v, true))
         .chain(y.iter().map(|&v| (v, false)))
         .collect();
-    pooled.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    pooled.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     // Mood statistic: M = Σ (rank_i - (n+1)/2)² for x observations
     let center = (nf + 1.0) / 2.0;
@@ -4833,7 +4833,7 @@ pub fn median_test(groups: &[&[f64]]) -> TtestResult {
 
     // Pool all data and find grand median
     let mut all_data: Vec<f64> = groups.iter().flat_map(|g| g.iter().copied()).collect();
-    all_data.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_data.sort_by(|a, b| a.total_cmp(b));
     let grand_median = quantile_sorted(&all_data, 0.5);
 
     // Count observations above/below median per group
@@ -4886,7 +4886,7 @@ pub fn ansari(x: &[f64], y: &[f64]) -> TtestResult {
 
     let repeats = {
         let mut sorted = pooled.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| a.total_cmp(b));
         sorted.windows(2).any(|w| w[0] == w[1])
     };
 
@@ -5415,7 +5415,7 @@ fn rankdata(data: &[f64]) -> Vec<f64> {
         .enumerate()
         .map(|(i, v)| (v, i))
         .collect();
-    indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let mut ranks = vec![0.0; n];
     let mut i = 0;
@@ -5559,11 +5559,11 @@ pub fn median_abs_deviation(data: &[f64], scale: f64) -> f64 {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let med = quantile_sorted(&sorted, 0.5);
 
     let mut diffs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
-    diffs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    diffs.sort_by(|a, b| a.total_cmp(b));
     let mad = quantile_sorted(&diffs, 0.5);
     mad * scale
 }
@@ -5577,7 +5577,7 @@ pub fn mode(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
 
     let mut best_val = sorted[0];
     let mut best_count = 1usize;
@@ -5642,7 +5642,7 @@ pub fn iqr(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     quantile_sorted(&sorted, 0.75) - quantile_sorted(&sorted, 0.25)
 }
 
@@ -5690,7 +5690,7 @@ pub fn percentile(data: &[f64], q: f64) -> f64 {
     }
     let q_frac = (q / 100.0).clamp(0.0, 1.0);
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     quantile_sorted(&sorted, q_frac)
 }
 
@@ -5708,7 +5708,7 @@ pub fn trim_mean(data: &[f64], proportiontocut: f64) -> f64 {
     let prop = proportiontocut.clamp(0.0, 0.5);
     let n = data.len();
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
 
     let ncut = (n as f64 * prop).floor() as usize;
     let trimmed = &sorted[ncut..n - ncut];
@@ -5969,8 +5969,8 @@ fn anderson_ksamp_statistic_continuous(
             .collect();
         let mut inner_sum = 0.0;
         for (&j, &m_ij) in js.iter().zip(mij.iter()) {
-            inner_sum += (total as f64 * m_ij - j * sample_n as f64).powi(2)
-                / (j * (total as f64 - j));
+            inner_sum +=
+                (total as f64 * m_ij - j * sample_n as f64).powi(2) / (j * (total as f64 - j));
         }
         statistic += inner_sum / sample_n as f64;
     }
@@ -5988,7 +5988,11 @@ fn quadratic_least_squares_eval(xs: &[f64], ys: &[f64], x: f64) -> f64 {
         .map(|value| value * value * value * value)
         .sum::<f64>();
     let sum_y = ys.iter().sum::<f64>();
-    let sum_xy = xs.iter().zip(ys.iter()).map(|(xv, yv)| xv * yv).sum::<f64>();
+    let sum_xy = xs
+        .iter()
+        .zip(ys.iter())
+        .map(|(xv, yv)| xv * yv)
+        .sum::<f64>();
     let sum_x2y = xs
         .iter()
         .zip(ys.iter())
@@ -6007,7 +6011,7 @@ fn quadratic_least_squares_eval(xs: &[f64], ys: &[f64], x: f64) -> f64 {
             .enumerate()
             .skip(pivot)
             .map(|(row_idx, row)| (row_idx, row[pivot].abs()))
-            .max_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|left, right| left.1.total_cmp(&right.1))
             .unwrap_or((pivot, 0.0));
         if best_value <= f64::EPSILON {
             return f64::NAN;
@@ -6061,7 +6065,10 @@ pub fn anderson_ksamp(
         ));
     }
 
-    let mut pooled: Vec<f64> = samples.iter().flat_map(|sample| sample.iter().copied()).collect();
+    let mut pooled: Vec<f64> = samples
+        .iter()
+        .flat_map(|sample| sample.iter().copied())
+        .collect();
     pooled.sort_by(f64::total_cmp);
     let mut unique = pooled.clone();
     unique.dedup_by(|a, b| a.total_cmp(b).is_eq());
@@ -6158,7 +6165,7 @@ pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitRes
     let nf = n as f64;
 
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
 
     // D = max_i { max(|i/n - F(x_i)|, |(i-1)/n - F(x_i)|) }
     let mut d_stat = 0.0_f64;
@@ -6379,7 +6386,7 @@ pub fn cramervonmises(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOf
     }
 
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let nf = n as f64;
     let statistic = sorted
         .iter()
@@ -6507,8 +6514,8 @@ pub fn cramervonmises_2samp_with_method(
 
     let mut xa = x.to_vec();
     let mut ya = y.to_vec();
-    xa.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    ya.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    xa.sort_by(|a, b| a.total_cmp(b));
+    ya.sort_by(|a, b| a.total_cmp(b));
 
     let mut pooled = xa.clone();
     pooled.extend_from_slice(&ya);
@@ -6562,8 +6569,8 @@ pub fn ks_2samp(data1: &[f64], data2: &[f64]) -> GoodnessOfFitResult {
 
     let mut sorted1 = data1.to_vec();
     let mut sorted2 = data2.to_vec();
-    sorted1.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    sorted2.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted1.sort_by(|a, b| a.total_cmp(b));
+    sorted2.sort_by(|a, b| a.total_cmp(b));
 
     // Walk both sorted arrays, computing max |F1(x) - F2(x)|
     let n1f = n1 as f64;
@@ -6621,7 +6628,7 @@ pub fn shapiro(data: &[f64]) -> GoodnessOfFitResult {
     let mean_val = data.iter().sum::<f64>() / nf;
 
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
 
     // Compute the Shapiro-Wilk W statistic.
     // W = (sum(a_i * x_(i))^2) / (sum(x_i - mean)^2)
@@ -6815,7 +6822,7 @@ pub fn anderson(data: &[f64], dist: &str) -> AndersonResult {
 
     // Sort and standardize
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
 
     let norm = Normal::standard();
 
@@ -7202,7 +7209,11 @@ fn somers_alternative_pvalue(z: f64, alternative: &str) -> f64 {
 }
 
 fn somers_validate_alternative(alternative: Option<&str>) -> Result<&'static str, StatsError> {
-    match alternative.unwrap_or("two-sided").to_ascii_lowercase().as_str() {
+    match alternative
+        .unwrap_or("two-sided")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "two-sided" => Ok("two-sided"),
         "less" => Ok("less"),
         "greater" => Ok("greater"),
@@ -7270,7 +7281,13 @@ fn somers_validate_table(table: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, StatsError
             "All elements of the contingency table must be integer.".to_string(),
         ));
     }
-    if table.iter().flatten().filter(|&&value| value != 0.0).count() < 2 {
+    if table
+        .iter()
+        .flatten()
+        .filter(|&&value| value != 0.0)
+        .count()
+        < 2
+    {
         return Err(StatsError::InvalidArgument(
             "At least two elements of the contingency table must be nonzero.".to_string(),
         ));
@@ -7309,7 +7326,10 @@ fn somers_dij(table: &[Vec<f64>], i: usize, j: usize) -> f64 {
 /// Somers' D ordinal association test.
 ///
 /// Matches the core behavior of `scipy.stats.somersd`.
-pub fn somersd(input: SomersDInput<'_>, alternative: Option<&str>) -> Result<SomersDResult, StatsError> {
+pub fn somersd(
+    input: SomersDInput<'_>,
+    alternative: Option<&str>,
+) -> Result<SomersDResult, StatsError> {
     let alternative = somers_validate_alternative(alternative)?;
     let table = match input {
         SomersDInput::Rankings(x, y) => somers_from_rankings(x, y)?,
@@ -7734,7 +7754,7 @@ pub fn brunnermunzel(x: &[f64], y: &[f64]) -> TtestResult {
         .map(|(i, &v)| (v, i))
         .chain(y.iter().enumerate().map(|(i, &v)| (v, nx + i)))
         .collect();
-    combined.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    combined.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let mut ranks = vec![0.0; nx + ny];
     let mut i = 0;
@@ -7756,7 +7776,7 @@ pub fn brunnermunzel(x: &[f64], y: &[f64]) -> TtestResult {
     // Within-group ranks
     let rank_within = |data: &[f64]| -> Vec<f64> {
         let mut indexed: Vec<(usize, f64)> = data.iter().cloned().enumerate().collect();
-        indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
         let mut r = vec![0.0; data.len()];
         let mut k = 0;
         while k < indexed.len() {
@@ -7907,7 +7927,7 @@ fn fdr_adjusted_pvalues(pvalues: &[f64], scale: f64) -> Vec<f64> {
     }
 
     let mut indexed: Vec<(usize, f64)> = pvalues.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     let mut corrected = vec![0.0; n];
     let mut running_min = 1.0f64;
@@ -7964,7 +7984,7 @@ pub fn multipletests_holm(pvalues: &[f64], alpha: f64) -> MultitestResult {
 
     // Sort p-values, keeping track of original indices
     let mut indexed: Vec<(usize, f64)> = pvalues.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     let mut corrected = vec![0.0; n];
     let mut running_max = 0.0f64;
@@ -7998,7 +8018,7 @@ pub fn multipletests_fdr_bh(pvalues: &[f64], alpha: f64) -> MultitestResult {
     }
 
     let mut indexed: Vec<(usize, f64)> = pvalues.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     let mut corrected = vec![0.0; n];
     let mut running_min = 1.0f64;
@@ -8213,14 +8233,8 @@ pub fn poisson_means_test(
     diff: f64,
     alternative: Option<&str>,
 ) -> Result<GoodnessOfFitResult, StatsError> {
-    let alternative = validate_poisson_means_test(
-        k1,
-        n1,
-        k2,
-        n2,
-        diff,
-        alternative.unwrap_or("two-sided"),
-    )?;
+    let alternative =
+        validate_poisson_means_test(k1, n1, k2, n2, diff, alternative.unwrap_or("two-sided"))?;
 
     let k1f = k1 as f64;
     let k2f = k2 as f64;
@@ -8427,7 +8441,7 @@ where
         boot_stats.push(stat_fn(&sample));
     }
 
-    boot_stats.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    boot_stats.sort_by(|a, b| a.total_cmp(b));
 
     let alpha = 1.0 - confidence;
     let lo_idx = ((alpha / 2.0) * n_bootstrap as f64).floor() as usize;
@@ -8525,7 +8539,7 @@ pub fn median(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
@@ -8542,7 +8556,7 @@ pub fn winsorize(data: &[f64], limits: (f64, f64)) -> Vec<f64> {
         return vec![];
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
 
     let lo_idx = (limits.0 * n as f64).floor() as usize;
@@ -8550,9 +8564,7 @@ pub fn winsorize(data: &[f64], limits: (f64, f64)) -> Vec<f64> {
     let lo_val = sorted[lo_idx.min(n - 1)];
     let hi_val = sorted[hi_idx.min(n - 1)];
 
-    data.iter()
-        .map(|&x| x.clamp(lo_val, hi_val))
-        .collect()
+    data.iter().map(|&x| x.clamp(lo_val, hi_val)).collect()
 }
 
 /// Compute the interquartile range.
@@ -8665,13 +8677,7 @@ pub fn mean_absolute_percentage_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
     y_true
         .iter()
         .zip(y_pred.iter())
-        .map(|(&t, &p)| {
-            if t == 0.0 {
-                0.0
-            } else {
-                ((t - p) / t).abs()
-            }
-        })
+        .map(|(&t, &p)| if t == 0.0 { 0.0 } else { ((t - p) / t).abs() })
         .sum::<f64>()
         / y_true.len() as f64
 }
@@ -8681,8 +8687,12 @@ pub fn norm_loglikelihood(data: &[f64], mu: f64, sigma: f64) -> f64 {
     let n = data.len() as f64;
     let log_sigma = sigma.ln();
     let two_sigma2 = 2.0 * sigma * sigma;
-    -n / 2.0 * (2.0 * PI).ln() - n * log_sigma
-        - data.iter().map(|&x| (x - mu).powi(2) / two_sigma2).sum::<f64>()
+    -n / 2.0 * (2.0 * PI).ln()
+        - n * log_sigma
+        - data
+            .iter()
+            .map(|&x| (x - mu).powi(2) / two_sigma2)
+            .sum::<f64>()
 }
 
 /// Compute the Akaike Information Criterion (AIC).
@@ -8723,11 +8733,7 @@ pub fn multivariate_normal_rvs(
             for k in 0..j {
                 sum -= l[i][k] * l[j][k];
             }
-            l[i][j] = if l[j][j] > 0.0 {
-                sum / l[j][j]
-            } else {
-                0.0
-            };
+            l[i][j] = if l[j][j] > 0.0 { sum / l[j][j] } else { 0.0 };
         }
     }
 
@@ -8804,8 +8810,7 @@ impl ContinuousDistribution for BetaPrime {
 
     fn var(&self) -> f64 {
         if self.b > 2.0 {
-            self.a * (self.a + self.b - 1.0)
-                / ((self.b - 2.0) * (self.b - 1.0).powi(2))
+            self.a * (self.a + self.b - 1.0) / ((self.b - 2.0) * (self.b - 1.0).powi(2))
         } else {
             f64::INFINITY
         }
@@ -8835,9 +8840,7 @@ impl ContinuousDistribution for ExponWeibull {
         }
         let a = self.a;
         let c = self.c;
-        a * c * (1.0 - (-x.powf(c)).exp()).powf(a - 1.0)
-            * (-x.powf(c)).exp()
-            * x.powf(c - 1.0)
+        a * c * (1.0 - (-x.powf(c)).exp()).powf(a - 1.0) * (-x.powf(c)).exp() * x.powf(c - 1.0)
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -9022,6 +9025,7 @@ pub fn cov_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
             }
         }
     }
+    #[allow(clippy::needless_range_loop)]
     for i in 0..d {
         for j in i..d {
             cov[i][j] /= (n - 1) as f64;
@@ -9123,10 +9127,10 @@ pub fn contingency_table(x: &[usize], y: &[usize]) -> (Vec<Vec<usize>>, Vec<usiz
     let mut table = vec![vec![0usize; nc]; nr];
 
     for (&xi, &yi) in x.iter().zip(y.iter()) {
-        if let Ok(ri) = row_labels.binary_search(&xi) {
-            if let Ok(ci) = col_labels.binary_search(&yi) {
-                table[ri][ci] += 1;
-            }
+        if let Ok(ri) = row_labels.binary_search(&xi)
+            && let Ok(ci) = col_labels.binary_search(&yi)
+        {
+            table[ri][ci] += 1;
         }
     }
 
@@ -9264,12 +9268,14 @@ pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
     let min_val = data.iter().cloned().fold(f64::INFINITY, f64::min);
     let max_val = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let range = max_val - min_val;
-    let bin_width = if range > 0.0 { range / bins as f64 } else { 1.0 };
+    let bin_width = if range > 0.0 {
+        range / bins as f64
+    } else {
+        1.0
+    };
 
     let mut counts = vec![0usize; bins];
-    let bin_edges: Vec<f64> = (0..=bins)
-        .map(|i| min_val + i as f64 * bin_width)
-        .collect();
+    let bin_edges: Vec<f64> = (0..=bins).map(|i| min_val + i as f64 * bin_width).collect();
 
     for &v in data {
         let bin = ((v - min_val) / bin_width).floor() as usize;
@@ -9296,7 +9302,8 @@ pub fn histogram_bin_edges(data: &[f64], method: &str) -> Vec<f64> {
         "rice" => (2.0 * (n as f64).cbrt()).ceil() as usize,
         "scott" => {
             let mean: f64 = data.iter().sum::<f64>() / n as f64;
-            let std: f64 = (data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+            let std: f64 =
+                (data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
             if std > 0.0 {
                 ((max_val - min_val) / (3.5 * std / (n as f64).cbrt())).ceil() as usize
             } else {
@@ -9347,9 +9354,7 @@ pub fn binned_statistic(
         1.0
     };
 
-    let bin_edges: Vec<f64> = (0..=bins)
-        .map(|i| min_x + i as f64 * bin_width)
-        .collect();
+    let bin_edges: Vec<f64> = (0..=bins).map(|i| min_x + i as f64 * bin_width).collect();
 
     let mut bin_values: Vec<Vec<f64>> = vec![vec![]; bins];
     for (&xi, &vi) in x.iter().zip(values.iter()) {
@@ -9371,7 +9376,7 @@ pub fn binned_statistic(
                 "max" => bv.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
                 "median" => {
                     let mut sorted = bv.clone();
-                    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    sorted.sort_by(|a, b| a.total_cmp(b));
                     let n = sorted.len();
                     if n % 2 == 0 {
                         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
@@ -9444,7 +9449,7 @@ pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> V
 
         // Compute periodogram of segment
         let two_pi = 2.0 * std::f64::consts::PI;
-        for k in 0..n_freq {
+        for (k, psd_k) in psd.iter_mut().enumerate().take(n_freq) {
             let mut re = 0.0;
             let mut im = 0.0;
             for (n, &s) in segment.iter().enumerate() {
@@ -9453,7 +9458,7 @@ pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> V
                 im -= s * angle.sin();
             }
             let power = (re * re + im * im) / (window_size as f64 * fs);
-            psd[k] += power;
+            *psd_k += power;
         }
 
         n_segments += 1;
@@ -9478,7 +9483,7 @@ pub fn ks_distance(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> f64 {
         return 0.0;
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
 
     let mut max_d = 0.0f64;
     for (i, &x) in sorted.iter().enumerate() {
@@ -9500,7 +9505,7 @@ pub fn ecdf(data: &[f64], x_eval: &[f64]) -> Vec<f64> {
         return vec![0.0; x_eval.len()];
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
 
     x_eval
         .iter()
@@ -9551,7 +9556,13 @@ pub fn mannkendall(data: &[f64]) -> (f64, f64, i32) {
     let normal = Normal::standard();
     let p = 2.0 * (1.0 - normal.cdf(z.abs()));
 
-    let trend = if s > 0 { 1 } else if s < 0 { -1 } else { 0 };
+    let trend = if s > 0 {
+        1
+    } else if s < 0 {
+        -1
+    } else {
+        0
+    };
 
     (tau, p.clamp(0.0, 1.0), trend)
 }
@@ -9611,10 +9622,7 @@ pub fn durbin_watson(residuals: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    let num: f64 = residuals
-        .windows(2)
-        .map(|w| (w[1] - w[0]).powi(2))
-        .sum();
+    let num: f64 = residuals.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
     let den: f64 = residuals.iter().map(|&r| r * r).sum();
 
     if den == 0.0 {
@@ -9714,10 +9722,7 @@ pub fn ljung_box(data: &[f64], lags: usize) -> (f64, f64) {
 /// Multiple linear regression: y = X * beta + epsilon.
 ///
 /// Returns (coefficients, residuals, r_squared, std_errors).
-pub fn multiple_regression(
-    x: &[Vec<f64>],
-    y: &[f64],
-) -> (Vec<f64>, Vec<f64>, f64, Vec<f64>) {
+pub fn multiple_regression(x: &[Vec<f64>], y: &[f64]) -> (Vec<f64>, Vec<f64>, f64, Vec<f64>) {
     let n = x.len();
     if n == 0 || n != y.len() {
         return (vec![], vec![], f64::NAN, vec![]);
@@ -9764,29 +9769,44 @@ pub fn multiple_regression(
         ss_tot += (y[i] - y_mean).powi(2);
     }
 
-    let r_squared = if ss_tot > 0.0 { 1.0 - ss_res / ss_tot } else { 1.0 };
+    let r_squared = if ss_tot > 0.0 {
+        1.0 - ss_res / ss_tot
+    } else {
+        1.0
+    };
 
     // Standard errors of coefficients
-    let mse = if n > p1 { ss_res / (n - p1) as f64 } else { 0.0 };
+    let mse = if n > p1 {
+        ss_res / (n - p1) as f64
+    } else {
+        0.0
+    };
     let std_errors = compute_std_errors(&xtx, mse);
 
     (beta, residuals, r_squared, std_errors)
 }
 
+#[allow(clippy::needless_range_loop)]
 fn solve_regression_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     let n = a.len();
-    let mut aug: Vec<Vec<f64>> = a.iter().enumerate().map(|(i, r)| {
-        let mut row = r.clone();
-        row.push(b[i]);
-        row
-    }).collect();
+    let mut aug: Vec<Vec<f64>> = a
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut row = r.clone();
+            row.push(b[i]);
+            row
+        })
+        .collect();
 
     for col in 0..n {
         let max_row = (col..n)
-            .max_by(|&i, &j| aug[i][col].abs().partial_cmp(&aug[j][col].abs()).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|&i, &j| aug[i][col].abs().total_cmp(&aug[j][col].abs()))
             .unwrap_or(col);
         aug.swap(col, max_row);
-        if aug[col][col].abs() < 1e-15 { continue; }
+        if aug[col][col].abs() < 1e-15 {
+            continue;
+        }
         let pivot = aug[col][col];
         for row in col + 1..n {
             let factor = aug[row][col] / pivot;
@@ -9799,7 +9819,9 @@ fn solve_regression_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
 
     let mut x = vec![0.0; n];
     for i in (0..n).rev() {
-        if aug[i][i].abs() < 1e-15 { continue; }
+        if aug[i][i].abs() < 1e-15 {
+            continue;
+        }
         let mut sum = aug[i][n];
         for j in i + 1..n {
             sum -= aug[i][j] * x[j];
@@ -9813,25 +9835,33 @@ fn solve_regression_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
 fn compute_std_errors(xtx: &[Vec<f64>], mse: f64) -> Vec<f64> {
     let n = xtx.len();
     // Compute inverse of XtX via Gauss-Jordan
-    let mut aug: Vec<Vec<f64>> = xtx.iter().enumerate().map(|(i, r)| {
-        let mut row = r.clone();
-        row.extend(vec![0.0; n]);
-        row[n + i] = 1.0;
-        row
-    }).collect();
+    let mut aug: Vec<Vec<f64>> = xtx
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut row = r.clone();
+            row.extend(vec![0.0; n]);
+            row[n + i] = 1.0;
+            row
+        })
+        .collect();
 
     for col in 0..n {
         let max_row = (col..n)
-            .max_by(|&i, &j| aug[i][col].abs().partial_cmp(&aug[j][col].abs()).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|&i, &j| aug[i][col].abs().total_cmp(&aug[j][col].abs()))
             .unwrap_or(col);
         aug.swap(col, max_row);
-        if aug[col][col].abs() < 1e-15 { continue; }
+        if aug[col][col].abs() < 1e-15 {
+            continue;
+        }
         let pivot = aug[col][col];
         for j in 0..2 * n {
             aug[col][j] /= pivot;
         }
         for row in 0..n {
-            if row == col { continue; }
+            if row == col {
+                continue;
+            }
             let factor = aug[row][col];
             for j in 0..2 * n {
                 let val = aug[col][j];
@@ -9840,7 +9870,9 @@ fn compute_std_errors(xtx: &[Vec<f64>], mse: f64) -> Vec<f64> {
         }
     }
 
-    (0..n).map(|i| (mse * aug[i][n + i]).max(0.0).sqrt()).collect()
+    (0..n)
+        .map(|i| (mse * aug[i][n + i]).max(0.0).sqrt())
+        .collect()
 }
 
 /// Ridge regression: minimize ||Xβ - y||² + α||β||².
@@ -9870,8 +9902,8 @@ pub fn ridge_regression(x: &[Vec<f64>], y: &[f64], alpha: f64) -> Vec<f64> {
     }
 
     // Add regularization (skip intercept at index 0)
-    for j in 1..p1 {
-        xtx[j][j] += alpha;
+    for (j, item) in xtx.iter_mut().enumerate().take(p1).skip(1) {
+        item[j] += alpha;
     }
 
     solve_regression_system(&xtx, &xty)
@@ -9887,9 +9919,10 @@ pub fn polynomial_regression(x: &[f64], y: &[f64], degree: usize) -> Vec<f64> {
     }
 
     // Build design matrix: each row is [1, x, x², ..., x^degree]
-    let x_poly: Vec<Vec<f64>> = x.iter().map(|&xi| {
-        (1..=degree).map(|d| xi.powi(d as i32)).collect()
-    }).collect();
+    let x_poly: Vec<Vec<f64>> = x
+        .iter()
+        .map(|&xi| (1..=degree).map(|d| xi.powi(d as i32)).collect())
+        .collect();
 
     let (beta, _, _, _) = multiple_regression(&x_poly, y);
     beta
@@ -9906,7 +9939,9 @@ pub fn exponential_regression(x: &[f64], y: &[f64]) -> (f64, f64) {
     }
 
     // Filter positive y values (log requires y > 0)
-    let valid: Vec<(f64, f64)> = x.iter().zip(y.iter())
+    let valid: Vec<(f64, f64)> = x
+        .iter()
+        .zip(y.iter())
         .filter(|&(_, yi)| *yi > 0.0)
         .map(|(&xi, &yi)| (xi, yi.ln()))
         .collect();
@@ -9932,7 +9967,9 @@ pub fn power_regression(x: &[f64], y: &[f64]) -> (f64, f64) {
         return (f64::NAN, f64::NAN);
     }
 
-    let valid: Vec<(f64, f64)> = x.iter().zip(y.iter())
+    let valid: Vec<(f64, f64)> = x
+        .iter()
+        .zip(y.iter())
         .filter(|&(xi, yi)| *xi > 0.0 && *yi > 0.0)
         .map(|(&xi, &yi)| (xi.ln(), yi.ln()))
         .collect();
@@ -9975,7 +10012,11 @@ pub fn theil_sen(x: &[f64], y: &[f64]) -> (f64, f64) {
 
     let slope = median(&slopes);
     // Intercept: median of y_i - slope * x_i
-    let intercepts: Vec<f64> = x.iter().zip(y.iter()).map(|(&xi, &yi)| yi - slope * xi).collect();
+    let intercepts: Vec<f64> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(&xi, &yi)| yi - slope * xi)
+        .collect();
     let intercept = median(&intercepts);
 
     (slope, intercept)
@@ -9986,7 +10027,9 @@ pub fn spearman_footrule(rank1: &[usize], rank2: &[usize]) -> f64 {
     if rank1.len() != rank2.len() {
         return f64::NAN;
     }
-    rank1.iter().zip(rank2.iter())
+    rank1
+        .iter()
+        .zip(rank2.iter())
         .map(|(&a, &b)| (a as f64 - b as f64).abs())
         .sum()
 }
@@ -12328,11 +12371,8 @@ mod tests {
             somersd(SomersDInput::Rankings(&[1.0, 2.0, 3.0], &[1.0, 2.0]), None).expect_err("len");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
 
-        let err = somersd(
-            SomersDInput::Table(&[vec![1.0, 2.5], vec![3.0, 4.0]]),
-            None,
-        )
-        .expect_err("non-integer");
+        let err = somersd(SomersDInput::Table(&[vec![1.0, 2.5], vec![3.0, 4.0]]), None)
+            .expect_err("non-integer");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
 
         let err =
@@ -12448,36 +12488,110 @@ mod tests {
     fn anderson_ksamp_continuous_caps_high_pvalue_like_scipy() {
         let samples = vec![
             vec![
-                -0.6947284969268116, 0.4963174476481955, -0.9670900823111159, 1.436653455559641,
-                0.7031564962971394, -0.6109476653841658, 0.024649407219573916, 0.6588093285059897,
-                1.0908592504588038, -0.7423985725278241, -0.4193043734770502, 1.7732539029260768,
-                -1.151693349201912, -0.2513915385911738, 1.651_546_177_396_081, 0.1637626589199808,
-                0.4728397841119197, -0.5722397169767986, -0.406_229_594_447_117_4, 0.2862812550115444,
-                -0.6044850665933583, -0.3188449480018543, -0.2942975007197502, -0.23399765678280584,
-                0.6931683218520789, -0.6885208255353791, 1.4898534267383032, -0.3287697071729781,
-                0.2991549258299444, 0.13359764531673786, 0.3955262398950878, 0.23318322884387597,
-                -0.8860679599277484, -1.321065439784562, -0.439415709131537, -1.2207110036875532,
-                1.3490367249364824, -0.40564423216117986, -0.8821761151494374, -0.9713257826496288,
-                -0.5126552057931326, 0.16469074952829044, 0.6387419652973443, 1.1379690459013305,
-                1.696685185696353, -2.5729507818506434, -0.7999892635894051, 1.1481727554429504,
-                1.5977591334518029, 0.1456142476657497,
+                -0.6947284969268116,
+                0.4963174476481955,
+                -0.9670900823111159,
+                1.436653455559641,
+                0.7031564962971394,
+                -0.6109476653841658,
+                0.024649407219573916,
+                0.6588093285059897,
+                1.0908592504588038,
+                -0.7423985725278241,
+                -0.4193043734770502,
+                1.7732539029260768,
+                -1.151693349201912,
+                -0.2513915385911738,
+                1.651_546_177_396_081,
+                0.1637626589199808,
+                0.4728397841119197,
+                -0.5722397169767986,
+                -0.406_229_594_447_117_4,
+                0.2862812550115444,
+                -0.6044850665933583,
+                -0.3188449480018543,
+                -0.2942975007197502,
+                -0.23399765678280584,
+                0.6931683218520789,
+                -0.6885208255353791,
+                1.4898534267383032,
+                -0.3287697071729781,
+                0.2991549258299444,
+                0.13359764531673786,
+                0.3955262398950878,
+                0.23318322884387597,
+                -0.8860679599277484,
+                -1.321065439784562,
+                -0.439415709131537,
+                -1.2207110036875532,
+                1.3490367249364824,
+                -0.40564423216117986,
+                -0.8821761151494374,
+                -0.9713257826496288,
+                -0.5126552057931326,
+                0.16469074952829044,
+                0.6387419652973443,
+                1.1379690459013305,
+                1.696685185696353,
+                -2.5729507818506434,
+                -0.7999892635894051,
+                1.1481727554429504,
+                1.5977591334518029,
+                0.1456142476657497,
             ],
             vec![
-                0.8125549372539924, -1.3290670546847558, -2.3695312102876547, 0.3319437227170101,
-                0.254102551210099, -0.4641822745355324, -0.6817190423563149, -0.3951643814372544,
-                -0.6833413489081206, 0.33732205705723195, 0.1055258628813128, -2.0730512523906234,
-                -0.22667914737458514, 0.43618372812299205, -2.17914153824942, -1.1892138122924398,
-                -1.9554930152535846, -0.4843695886135868, -0.3996530013672421, -0.7090996196600647,
-                -0.290_935_735_468_742_1, -0.488114279189525, -0.6695060974223596, -0.5818826793512867,
-                -1.5677696061279297, -0.23298586231068502, 0.4711540065731597, -0.6310831608938141,
-                -0.7511463824556394, -0.6604049383583482,
+                0.8125549372539924,
+                -1.3290670546847558,
+                -2.3695312102876547,
+                0.3319437227170101,
+                0.254102551210099,
+                -0.4641822745355324,
+                -0.6817190423563149,
+                -0.3951643814372544,
+                -0.6833413489081206,
+                0.33732205705723195,
+                0.1055258628813128,
+                -2.0730512523906234,
+                -0.22667914737458514,
+                0.43618372812299205,
+                -2.17914153824942,
+                -1.1892138122924398,
+                -1.9554930152535846,
+                -0.4843695886135868,
+                -0.3996530013672421,
+                -0.7090996196600647,
+                -0.290_935_735_468_742_1,
+                -0.488114279189525,
+                -0.6695060974223596,
+                -0.5818826793512867,
+                -1.5677696061279297,
+                -0.23298586231068502,
+                0.4711540065731597,
+                -0.6310831608938141,
+                -0.7511463824556394,
+                -0.6604049383583482,
             ],
             vec![
-                -0.35588207741803635, 1.4443378601567752, -0.4596751362611252, -0.9642484738356342,
-                -1.471388522331468, -0.07404914873847856, 0.5702675793629297, -0.26773250760437354,
-                0.9708101620372975, 0.5480673580787071, 0.8645729481839737, -1.4825537919151204,
-                -0.16172254381566852, -0.9004457032888357, 0.780413911291489, -0.30830542393700865,
-                0.7674577522114926, 1.2410370557109975, -1.1837613277232888, -2.720720805523122,
+                -0.35588207741803635,
+                1.4443378601567752,
+                -0.4596751362611252,
+                -0.9642484738356342,
+                -1.471388522331468,
+                -0.07404914873847856,
+                0.5702675793629297,
+                -0.26773250760437354,
+                0.9708101620372975,
+                0.5480673580787071,
+                0.8645729481839737,
+                -1.4825537919151204,
+                -0.16172254381566852,
+                -0.9004457032888357,
+                0.780413911291489,
+                -0.30830542393700865,
+                0.7674577522114926,
+                1.2410370557109975,
+                -1.1837613277232888,
+                -2.720720805523122,
             ],
         ];
         let result = anderson_ksamp(&samples, Some(AndersonKSampleVariant::Continuous))
@@ -12504,8 +12618,8 @@ mod tests {
         let err = anderson_ksamp(&[vec![1.0, 2.0], vec![]], None).expect_err("empty sample");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
 
-        let err = anderson_ksamp(&[vec![1.0, 1.0], vec![1.0, 1.0]], None)
-            .expect_err("not distinct");
+        let err =
+            anderson_ksamp(&[vec![1.0, 1.0], vec![1.0, 1.0]], None).expect_err("not distinct");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 
@@ -13273,8 +13387,7 @@ mod tests {
 
     #[test]
     fn poisson_means_test_matches_scipy_reference_example() {
-        let result =
-            poisson_means_test(0, 100.0, 3, 100.0, 0.0, None).expect("poisson_means_test");
+        let result = poisson_means_test(0, 100.0, 3, 100.0, 0.0, None).expect("poisson_means_test");
         assert_close(
             result.statistic,
             -1.7320508075688772,
@@ -13334,8 +13447,7 @@ mod tests {
         let err = poisson_means_test(1, 1.0, 0, 1.0, -1.0, None).expect_err("negative diff");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
 
-        let err =
-            poisson_means_test(1, 1.0, 0, 1.0, 0.0, Some("sideways")).expect_err("bad alt");
+        let err = poisson_means_test(1, 1.0, 0, 1.0, 0.0, Some("sideways")).expect_err("bad alt");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 

@@ -465,6 +465,11 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
                 ));
             }
             let data_bytes = &bytes[pos + 8..pos + 8 + chunk_size];
+            if sample_rate == 0 || channels == 0 || bits_per_sample == 0 {
+                return Err(IoError::InvalidFormat(
+                    "encountered data chunk before a valid fmt chunk".to_string(),
+                ));
+            }
 
             if audio_format != 1 && audio_format != 3 {
                 return Err(IoError::UnsupportedFeature(format!(
@@ -492,7 +497,9 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
             }
             let frame_bytes = bytes_per_sample
                 .checked_mul(channels as usize)
-                .ok_or_else(|| IoError::InvalidFormat("WAV frame size overflowed usize".to_string()))?;
+                .ok_or_else(|| {
+                    IoError::InvalidFormat("WAV frame size overflowed usize".to_string())
+                })?;
             if !data_bytes.len().is_multiple_of(frame_bytes) {
                 return Err(IoError::InvalidFormat(format!(
                     "data chunk size {} does not contain whole {}-channel frames",
@@ -641,15 +648,12 @@ pub fn savemat_text(arrays: &[MatArray]) -> Result<String, IoError> {
                 arr.name.escape_debug()
             )));
         }
-        let expected_len = arr
-            .rows
-            .checked_mul(arr.cols)
-            .ok_or_else(|| {
-                IoError::InvalidFormat(format!(
-                    "array '{}' dimensions {}x{} overflow usize",
-                    arr.name, arr.rows, arr.cols
-                ))
-            })?;
+        let expected_len = arr.rows.checked_mul(arr.cols).ok_or_else(|| {
+            IoError::InvalidFormat(format!(
+                "array '{}' dimensions {}x{} overflow usize",
+                arr.name, arr.rows, arr.cols
+            ))
+        })?;
         if arr.data.len() != expected_len {
             return Err(IoError::InvalidFormat(format!(
                 "array '{}' expected {} values but found {}",
@@ -810,12 +814,7 @@ pub fn loadtxt(content: &str) -> Result<(usize, usize, Vec<f64>), IoError> {
 /// Save a matrix as whitespace-delimited text.
 ///
 /// Like `numpy.savetxt`.
-pub fn savetxt(
-    rows: usize,
-    cols: usize,
-    data: &[f64],
-    delimiter: &str,
-) -> Result<String, IoError> {
+pub fn savetxt(rows: usize, cols: usize, data: &[f64], delimiter: &str) -> Result<String, IoError> {
     if delimiter.contains(['\n', '\r']) {
         return Err(IoError::InvalidFormat(format!(
             "delimiter {:?} contains a newline and cannot be encoded safely",
@@ -851,11 +850,18 @@ pub type CsvResult = Result<(Option<Vec<String>>, Vec<Vec<f64>>), IoError>;
 pub fn read_csv(content: &str, delimiter: char, has_header: bool) -> CsvResult {
     let mut lines = content.lines();
     let header = if has_header {
-        lines.next().map(|h| {
-            h.split(delimiter)
+        Some(
+            lines
+                .next()
+                .ok_or_else(|| {
+                    IoError::InvalidFormat(
+                        "CSV header row is required but the input is empty".to_string(),
+                    )
+                })?
+                .split(delimiter)
                 .map(|s| s.trim().to_string())
-                .collect()
-        })
+                .collect(),
+        )
     } else {
         None
     };
@@ -882,7 +888,9 @@ pub fn read_csv(content: &str, delimiter: char, has_header: bool) -> CsvResult {
                         )));
                     }
                 } else {
-                    if let Some(header_cols) = header_cols && r.len() != header_cols {
+                    if let Some(header_cols) = header_cols
+                        && r.len() != header_cols
+                    {
                         return Err(IoError::InvalidFormat(format!(
                             "CSV header has {header_cols} columns but first data row has {}",
                             r.len()
@@ -923,7 +931,9 @@ pub fn write_csv(
                 )));
             }
         } else {
-            if let Some(header_cols) = header_cols && row.len() != header_cols {
+            if let Some(header_cols) = header_cols
+                && row.len() != header_cols
+            {
                 return Err(IoError::InvalidFormat(format!(
                     "CSV header has {header_cols} columns but first data row has {}",
                     row.len()
@@ -960,7 +970,12 @@ pub fn read_json_array(content: &str) -> Result<Vec<f64>, IoError> {
 
 /// Write a vector as a JSON array.
 pub fn write_json_array(data: &[f64]) -> Result<String, IoError> {
-    if let Some((idx, value)) = data.iter().copied().enumerate().find(|(_, v)| !v.is_finite()) {
+    if let Some((idx, value)) = data
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, v)| !v.is_finite())
+    {
         return Err(IoError::InvalidFormat(format!(
             "JSON array value at index {idx} is not finite: {value}"
         )));
@@ -979,19 +994,26 @@ pub fn read_npy_text(content: &str) -> Result<(Vec<usize>, Vec<f64>), IoError> {
     let shape_line = lines
         .next()
         .ok_or_else(|| IoError::InvalidFormat("missing shape line".to_string()))?;
-    let shape: Result<Vec<usize>, _> = shape_line
-        .trim()
-        .split(',')
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| s.trim().parse::<usize>())
-        .collect();
-    let shape = shape.map_err(|e| IoError::InvalidFormat(format!("bad shape: {e}")))?;
-    if shape.is_empty() {
+    let trimmed_shape = shape_line.trim();
+    if trimmed_shape.is_empty() {
         return Err(IoError::InvalidFormat(
             "shape declaration must contain at least one dimension".to_string(),
         ));
     }
-
+    if trimmed_shape
+        .split(',')
+        .any(|segment| segment.trim().is_empty())
+    {
+        return Err(IoError::InvalidFormat(
+            "shape declaration contains an empty dimension".to_string(),
+        ));
+    }
+    let shape: Result<Vec<usize>, _> = shape_line
+        .trim()
+        .split(',')
+        .map(|s| s.trim().parse::<usize>())
+        .collect();
+    let shape = shape.map_err(|e| IoError::InvalidFormat(format!("bad shape: {e}")))?;
     // Read data
     let mut data = Vec::new();
     for line in lines {
@@ -1058,7 +1080,9 @@ mod tests {
         let err = mmread(content).expect_err("zero-based row index should be rejected");
         assert_eq!(
             err,
-            IoError::InvalidFormat("Matrix Market row indices must be 1-based and >= 1".to_string())
+            IoError::InvalidFormat(
+                "Matrix Market row indices must be 1-based and >= 1".to_string()
+            )
         );
     }
 
@@ -1229,7 +1253,9 @@ mod tests {
         let err = wav_read(&bytes).expect_err("misaligned sample bytes should fail");
         assert_eq!(
             err,
-            IoError::InvalidFormat("data chunk size 3 is not aligned to 2-byte samples".to_string())
+            IoError::InvalidFormat(
+                "data chunk size 3 is not aligned to 2-byte samples".to_string()
+            )
         );
     }
 
@@ -1299,6 +1325,24 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("fmt chunk declares zero channels".to_string())
+        );
+    }
+
+    #[test]
+    fn wav_read_rejects_data_before_fmt_chunk() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36u32 + 2u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i16.to_le_bytes());
+        bytes.resize(44, 0);
+
+        let err = wav_read(&bytes).expect_err("data before fmt should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("encountered data chunk before a valid fmt chunk".to_string())
         );
     }
 
@@ -1421,8 +1465,7 @@ mod tests {
 
     #[test]
     fn savetxt_rejects_shape_length_mismatch() {
-        let err = savetxt(2, 2, &[1.0, 2.0, 3.0], " ")
-            .expect_err("mismatched shape should fail");
+        let err = savetxt(2, 2, &[1.0, 2.0, 3.0], " ").expect_err("mismatched shape should fail");
         assert_eq!(
             err,
             IoError::InvalidFormat("data length 3 doesn't match 2x2".to_string())
@@ -1431,8 +1474,7 @@ mod tests {
 
     #[test]
     fn savetxt_rejects_multiline_delimiter() {
-        let err = savetxt(1, 2, &[1.0, 2.0], "\n")
-            .expect_err("multiline delimiters should fail");
+        let err = savetxt(1, 2, &[1.0, 2.0], "\n").expect_err("multiline delimiters should fail");
         assert_eq!(
             err,
             IoError::InvalidFormat(
@@ -1455,7 +1497,19 @@ mod tests {
         let err = read_npy_text("\n1\n").expect_err("empty shape line should fail");
         assert_eq!(
             err,
-            IoError::InvalidFormat("shape declaration must contain at least one dimension".to_string())
+            IoError::InvalidFormat(
+                "shape declaration must contain at least one dimension".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn read_npy_text_rejects_empty_shape_dimension() {
+        let err = read_npy_text("2,,2\n1 2 3 4\n")
+            .expect_err("shape declarations with empty dimensions should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("shape declaration contains an empty dimension".to_string())
         );
     }
 
@@ -1469,14 +1523,21 @@ mod tests {
     }
 
     #[test]
+    fn read_csv_rejects_empty_input_when_header_is_required() {
+        let err = read_csv("", ',', true).expect_err("empty input with required header should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("CSV header row is required but the input is empty".to_string())
+        );
+    }
+
+    #[test]
     fn read_csv_rejects_header_data_column_mismatch() {
         let err =
             read_csv("a,b,c\n1,2\n3,4\n", ',', true).expect_err("header/data mismatch should fail");
         assert_eq!(
             err,
-            IoError::InvalidFormat(
-                "CSV header has 3 columns but first data row has 2".to_string()
-            )
+            IoError::InvalidFormat("CSV header has 3 columns but first data row has 2".to_string())
         );
     }
 
@@ -1493,9 +1554,7 @@ mod tests {
             .expect_err("header/data mismatch should fail");
         assert_eq!(
             err,
-            IoError::InvalidFormat(
-                "CSV header has 3 columns but first data row has 2".to_string()
-            )
+            IoError::InvalidFormat("CSV header has 3 columns but first data row has 2".to_string())
         );
     }
 

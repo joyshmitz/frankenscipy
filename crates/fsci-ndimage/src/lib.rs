@@ -374,7 +374,7 @@ pub fn median_filter(
             neighborhood.push(input.get_boundary(&in_idx, mode, cval));
         }
 
-        neighborhood.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        neighborhood.sort_by(|a, b| a.total_cmp(b));
         let mid = neighborhood.len() / 2;
         output.data[flat_out] = if neighborhood.len() % 2 == 0 {
             (neighborhood[mid - 1] + neighborhood[mid]) / 2.0
@@ -453,7 +453,7 @@ fn rank_filter_impl(
             neighborhood.push(input.get_boundary(&in_idx, mode, cval));
         }
 
-        neighborhood.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        neighborhood.sort_by(|a, b| a.total_cmp(b));
         output.data[flat_out] = neighborhood[rank.min(neighborhood.len() - 1)];
     }
 
@@ -534,7 +534,7 @@ pub fn percentile_filter(
         input,
         |neighborhood| {
             let mut sorted = neighborhood.to_vec();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted.sort_by(|a, b| a.total_cmp(b));
             let idx = (percentile / 100.0 * (sorted.len() - 1) as f64).round() as usize;
             sorted[idx.min(sorted.len() - 1)]
         },
@@ -1681,12 +1681,17 @@ pub fn maximum_filter1d(
     if axis >= input.ndim() {
         return Err(NdimageError::InvalidArgument(format!(
             "axis {axis} out of range",
-            )));
+        )));
     }
     // Build a structuring element along the specified axis
     generic_filter(
         input,
-        |neighborhood| neighborhood.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        |neighborhood| {
+            neighborhood
+                .iter()
+                .cloned()
+                .fold(f64::NEG_INFINITY, f64::max)
+        },
         size,
         mode,
         cval,
@@ -1768,7 +1773,11 @@ pub fn variance_filter(
                 return 0.0;
             }
             let mean: f64 = neighborhood.iter().sum::<f64>() / n;
-            neighborhood.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n
+            neighborhood
+                .iter()
+                .map(|&v| (v - mean).powi(2))
+                .sum::<f64>()
+                / n
         },
         size,
         mode,
@@ -1827,11 +1836,7 @@ pub fn otsu_threshold(input: &NdArray) -> f64 {
 
     // Build histogram
     let min_val = input.data.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_val = input
-        .data
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let max_val = input.data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
     if (max_val - min_val).abs() < 1e-15 {
         return min_val;
@@ -1939,7 +1944,11 @@ pub fn binary_hit_or_miss(
     let hit = binary_erosion_with_struct(input, structure1)?;
 
     // Complement of input
-    let complement: Vec<f64> = input.data.iter().map(|&v| if v == 0.0 { 1.0 } else { 0.0 }).collect();
+    let complement: Vec<f64> = input
+        .data
+        .iter()
+        .map(|&v| if v == 0.0 { 1.0 } else { 0.0 })
+        .collect();
     let comp = NdArray::new(complement, input.shape.clone())?;
 
     // Erode complement with structure2 (or complement of structure1)
@@ -1965,7 +1974,10 @@ pub fn binary_hit_or_miss(
     Ok(result)
 }
 
-fn binary_erosion_with_struct(input: &NdArray, structure: &NdArray) -> Result<NdArray, NdimageError> {
+fn binary_erosion_with_struct(
+    input: &NdArray,
+    structure: &NdArray,
+) -> Result<NdArray, NdimageError> {
     if input.ndim() != structure.ndim() {
         return Err(NdimageError::DimensionMismatch(
             "input and structure must have same dimensions".to_string(),
@@ -2093,7 +2105,12 @@ pub fn multiply_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError
             "shapes must match for element-wise multiply".to_string(),
         ));
     }
-    let data: Vec<f64> = a.data.iter().zip(b.data.iter()).map(|(&x, &y)| x * y).collect();
+    let data: Vec<f64> = a
+        .data
+        .iter()
+        .zip(b.data.iter())
+        .map(|(&x, &y)| x * y)
+        .collect();
     Ok(NdArray {
         data,
         shape: a.shape.clone(),
@@ -2108,7 +2125,12 @@ pub fn add_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
             "shapes must match for element-wise add".to_string(),
         ));
     }
-    let data: Vec<f64> = a.data.iter().zip(b.data.iter()).map(|(&x, &y)| x + y).collect();
+    let data: Vec<f64> = a
+        .data
+        .iter()
+        .zip(b.data.iter())
+        .map(|(&x, &y)| x + y)
+        .collect();
     Ok(NdArray {
         data,
         shape: a.shape.clone(),
@@ -2123,7 +2145,12 @@ pub fn subtract_arrays(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError
             "shapes must match".to_string(),
         ));
     }
-    let data: Vec<f64> = a.data.iter().zip(b.data.iter()).map(|(&x, &y)| x - y).collect();
+    let data: Vec<f64> = a
+        .data
+        .iter()
+        .zip(b.data.iter())
+        .map(|(&x, &y)| x - y)
+        .collect();
     Ok(NdArray {
         data,
         shape: a.shape.clone(),
@@ -2143,7 +2170,11 @@ pub fn scale_array(input: &NdArray, scalar: f64) -> NdArray {
 
 /// Apply element-wise natural logarithm (ln).
 pub fn log_array(input: &NdArray) -> NdArray {
-    let data: Vec<f64> = input.data.iter().map(|&v| if v > 0.0 { v.ln() } else { f64::NEG_INFINITY }).collect();
+    let data: Vec<f64> = input
+        .data
+        .iter()
+        .map(|&v| if v > 0.0 { v.ln() } else { f64::NEG_INFINITY })
+        .collect();
     NdArray {
         data,
         shape: input.shape.clone(),
@@ -2284,51 +2315,81 @@ pub fn flatten(input: &NdArray) -> NdArray {
 /// Compute element-wise comparison: 1.0 where a > b, 0.0 otherwise.
 pub fn greater_than(a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
     if a.shape != b.shape {
-        return Err(NdimageError::DimensionMismatch("shapes must match".to_string()));
+        return Err(NdimageError::DimensionMismatch(
+            "shapes must match".to_string(),
+        ));
     }
-    let data: Vec<f64> = a.data.iter().zip(b.data.iter())
+    let data: Vec<f64> = a
+        .data
+        .iter()
+        .zip(b.data.iter())
         .map(|(&x, &y)| if x > y { 1.0 } else { 0.0 })
         .collect();
-    Ok(NdArray { data, shape: a.shape.clone(), strides: a.strides.clone() })
+    Ok(NdArray {
+        data,
+        shape: a.shape.clone(),
+        strides: a.strides.clone(),
+    })
 }
 
 /// Compute element-wise comparison: 1.0 where a == b within tolerance.
 pub fn equal_within(a: &NdArray, b: &NdArray, tol: f64) -> Result<NdArray, NdimageError> {
     if a.shape != b.shape {
-        return Err(NdimageError::DimensionMismatch("shapes must match".to_string()));
+        return Err(NdimageError::DimensionMismatch(
+            "shapes must match".to_string(),
+        ));
     }
-    let data: Vec<f64> = a.data.iter().zip(b.data.iter())
+    let data: Vec<f64> = a
+        .data
+        .iter()
+        .zip(b.data.iter())
         .map(|(&x, &y)| if (x - y).abs() <= tol { 1.0 } else { 0.0 })
         .collect();
-    Ok(NdArray { data, shape: a.shape.clone(), strides: a.strides.clone() })
+    Ok(NdArray {
+        data,
+        shape: a.shape.clone(),
+        strides: a.strides.clone(),
+    })
 }
 
 /// Compute where: select from a where condition is true, from b otherwise.
 pub fn where_cond(condition: &NdArray, a: &NdArray, b: &NdArray) -> Result<NdArray, NdimageError> {
     if condition.shape != a.shape || a.shape != b.shape {
-        return Err(NdimageError::DimensionMismatch("shapes must match".to_string()));
+        return Err(NdimageError::DimensionMismatch(
+            "shapes must match".to_string(),
+        ));
     }
-    let data: Vec<f64> = condition.data.iter()
+    let data: Vec<f64> = condition
+        .data
+        .iter()
         .zip(a.data.iter().zip(b.data.iter()))
         .map(|(&c, (&x, &y))| if c != 0.0 { x } else { y })
         .collect();
-    Ok(NdArray { data, shape: a.shape.clone(), strides: a.strides.clone() })
+    Ok(NdArray {
+        data,
+        shape: a.shape.clone(),
+        strides: a.strides.clone(),
+    })
 }
 
 /// Compute argmax: index of maximum element.
 pub fn argmax(input: &NdArray) -> usize {
-    input.data.iter()
+    input
+        .data
+        .iter()
         .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i)
         .unwrap_or(0)
 }
 
 /// Compute argmin: index of minimum element.
 pub fn argmin(input: &NdArray) -> usize {
-    input.data.iter()
+    input
+        .data
+        .iter()
         .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i)
         .unwrap_or(0)
 }
@@ -2336,15 +2397,37 @@ pub fn argmin(input: &NdArray) -> usize {
 /// Compute the cumulative sum along a flattened array.
 pub fn cumsum_array(input: &NdArray) -> NdArray {
     let mut sum = 0.0;
-    let data: Vec<f64> = input.data.iter().map(|&v| { sum += v; sum }).collect();
-    NdArray { data, shape: input.shape.clone(), strides: input.strides.clone() }
+    let data: Vec<f64> = input
+        .data
+        .iter()
+        .map(|&v| {
+            sum += v;
+            sum
+        })
+        .collect();
+    NdArray {
+        data,
+        shape: input.shape.clone(),
+        strides: input.strides.clone(),
+    }
 }
 
 /// Compute the cumulative product along a flattened array.
 pub fn cumprod_array(input: &NdArray) -> NdArray {
     let mut prod = 1.0;
-    let data: Vec<f64> = input.data.iter().map(|&v| { prod *= v; prod }).collect();
-    NdArray { data, shape: input.shape.clone(), strides: input.strides.clone() }
+    let data: Vec<f64> = input
+        .data
+        .iter()
+        .map(|&v| {
+            prod *= v;
+            prod
+        })
+        .collect();
+    NdArray {
+        data,
+        shape: input.shape.clone(),
+        strides: input.strides.clone(),
+    }
 }
 
 /// Compute the difference between consecutive elements (first difference).
@@ -2353,12 +2436,18 @@ pub fn diff_array(input: &NdArray) -> NdArray {
         return NdArray::zeros(vec![0]);
     }
     let data: Vec<f64> = input.data.windows(2).map(|w| w[1] - w[0]).collect();
-    NdArray { data: data.clone(), shape: vec![data.len()], strides: vec![1] }
+    NdArray {
+        data: data.clone(),
+        shape: vec![data.len()],
+        strides: vec![1],
+    }
 }
 
 /// Apply a boolean mask: return elements where mask is nonzero.
 pub fn masked_select(input: &NdArray, mask: &NdArray) -> Vec<f64> {
-    input.data.iter()
+    input
+        .data
+        .iter()
         .zip(mask.data.iter())
         .filter(|&(_, m)| *m != 0.0)
         .map(|(&v, _)| v)
@@ -2367,11 +2456,17 @@ pub fn masked_select(input: &NdArray, mask: &NdArray) -> Vec<f64> {
 
 /// Set elements where mask is nonzero to a given value.
 pub fn masked_fill(input: &NdArray, mask: &NdArray, value: f64) -> NdArray {
-    let data: Vec<f64> = input.data.iter()
+    let data: Vec<f64> = input
+        .data
+        .iter()
         .zip(mask.data.iter())
         .map(|(&v, &m)| if m != 0.0 { value } else { v })
         .collect();
-    NdArray { data, shape: input.shape.clone(), strides: input.strides.clone() }
+    NdArray {
+        data,
+        shape: input.shape.clone(),
+        strides: input.strides.clone(),
+    }
 }
 
 /// Compute the histogram of an NdArray.
@@ -2382,7 +2477,11 @@ pub fn array_histogram(input: &NdArray, bins: usize) -> (Vec<usize>, Vec<f64>) {
     let min_val = array_min(input);
     let max_val = array_max(input);
     let range = max_val - min_val;
-    let bw = if range > 0.0 { range / bins as f64 } else { 1.0 };
+    let bw = if range > 0.0 {
+        range / bins as f64
+    } else {
+        1.0
+    };
 
     let mut counts = vec![0usize; bins];
     let edges: Vec<f64> = (0..=bins).map(|i| min_val + i as f64 * bw).collect();

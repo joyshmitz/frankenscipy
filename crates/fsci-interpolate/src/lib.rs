@@ -214,12 +214,12 @@ impl Interp1d {
                 })
             }
             InterpKind::CubicSpline => {
-                let coeffs = self
-                    .spline_coeffs
-                    .as_ref()
-                    .ok_or_else(|| InterpError::InvalidArgument {
-                        detail: "cubic spline initialized without coeffs".to_string(),
-                    })?;
+                let coeffs =
+                    self.spline_coeffs
+                        .as_ref()
+                        .ok_or_else(|| InterpError::InvalidArgument {
+                            detail: "cubic spline initialized without coeffs".to_string(),
+                        })?;
                 let dx = x_new - self.x[i];
                 let [a, b, c, d] = coeffs[i];
                 Ok(a + dx * (b + dx * (c + dx * d)))
@@ -2145,10 +2145,7 @@ pub fn splrep(
 ///
 /// Takes (knots, coefficients, degree) from `splrep`.
 /// Matches `scipy.interpolate.splev`.
-pub fn splev(
-    x_eval: &[f64],
-    tck: &(Vec<f64>, Vec<f64>, usize),
-) -> Result<Vec<f64>, InterpError> {
+pub fn splev(x_eval: &[f64], tck: &(Vec<f64>, Vec<f64>, usize)) -> Result<Vec<f64>, InterpError> {
     let (t, c, k) = tck;
     let bspl = BSpline::new(t.clone(), c.clone(), *k)?;
     Ok(x_eval.iter().map(|&x| bspl.eval(x)).collect())
@@ -2281,11 +2278,7 @@ pub fn splantider(
 /// Compute the definite integral of a B-spline.
 ///
 /// Matches `scipy.interpolate.splint`.
-pub fn splint(
-    a: f64,
-    b: f64,
-    tck: &(Vec<f64>, Vec<f64>, usize),
-) -> Result<f64, InterpError> {
+pub fn splint(a: f64, b: f64, tck: &(Vec<f64>, Vec<f64>, usize)) -> Result<f64, InterpError> {
     let antider = splantider(tck)?;
     let bspl = BSpline::new(antider.0, antider.1, antider.2)?;
     Ok(bspl.eval(b) - bspl.eval(a))
@@ -2341,7 +2334,7 @@ pub fn sproot(tck: &(Vec<f64>, Vec<f64>, usize)) -> Result<Vec<f64>, InterpError
     }
 
     // Deduplicate nearby roots
-    roots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    roots.sort_by(|a, b| a.total_cmp(b));
     roots.dedup_by(|a, b| (*a - *b).abs() < h * 0.5);
 
     Ok(roots)
@@ -2372,9 +2365,7 @@ pub fn polyval_der(coeffs: &[f64], x: f64, der: usize) -> Vec<f64> {
                 dc = vec![0.0];
                 break;
             }
-            dc = (0..len - 1)
-                .map(|i| dc[i] * (len - 1 - i) as f64)
-                .collect();
+            dc = (0..len - 1).map(|i| dc[i] * (len - 1 - i) as f64).collect();
         }
         *item = polyval(&dc, x);
     }
@@ -2436,11 +2427,14 @@ pub fn polyfit(x: &[f64], y: &[f64], deg: usize) -> Result<Vec<f64>, InterpError
 
 fn solve_normal(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, InterpError> {
     let n = a.len();
-    let mut aug: Vec<Vec<f64>> = a.iter().map(|r| {
-        let mut row = r.clone();
-        row.push(0.0);
-        row
-    }).collect();
+    let mut aug: Vec<Vec<f64>> = a
+        .iter()
+        .map(|r| {
+            let mut row = r.clone();
+            row.push(0.0);
+            row
+        })
+        .collect();
     for i in 0..n {
         aug[i][n] = b[i];
     }
@@ -2448,12 +2442,7 @@ fn solve_normal(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, InterpError> {
     // Gaussian elimination with partial pivoting
     for col in 0..n {
         let max_row = (col..n)
-            .max_by(|&i, &j| {
-                aug[i][col]
-                    .abs()
-                    .partial_cmp(&aug[j][col].abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .max_by(|&i, &j| aug[i][col].abs().total_cmp(&aug[j][col].abs()))
             .unwrap_or(col);
         aug.swap(col, max_row);
 
@@ -2549,8 +2538,16 @@ pub fn pade(
 ///
 /// `p` and `q` are coefficient vectors [a0, a1, ...] (ascending powers).
 pub fn ratval(p: &[f64], q: &[f64], x: f64) -> f64 {
-    let num: f64 = p.iter().enumerate().map(|(i, &c)| c * x.powi(i as i32)).sum();
-    let den: f64 = q.iter().enumerate().map(|(i, &c)| c * x.powi(i as i32)).sum();
+    let num: f64 = p
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| c * x.powi(i as i32))
+        .sum();
+    let den: f64 = q
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| c * x.powi(i as i32))
+        .sum();
     if den.abs() < 1e-30 {
         return f64::NAN;
     }
@@ -2607,9 +2604,7 @@ pub fn polyder(coeffs: &[f64], m: usize) -> Vec<f64> {
             return vec![0.0];
         }
         let n = c.len();
-        c = (0..n - 1)
-            .map(|i| c[i] * (n - 1 - i) as f64)
-            .collect();
+        c = (0..n - 1).map(|i| c[i] * (n - 1 - i) as f64).collect();
     }
     c
 }
@@ -2674,7 +2669,10 @@ pub fn polyroots(coeffs: &[f64]) -> Vec<f64> {
         let mut roots: Vec<(f64, f64)> = (0..degree)
             .map(|k| {
                 let angle = 2.0 * std::f64::consts::PI * k as f64 / degree as f64 + 0.4;
-                (0.4f64.powf(k as f64) * angle.cos(), 0.4f64.powf(k as f64) * angle.sin())
+                (
+                    0.4f64.powf(k as f64) * angle.cos(),
+                    0.4f64.powf(k as f64) * angle.sin(),
+                )
             })
             .collect();
 
@@ -2818,12 +2816,7 @@ pub fn neville(nodes: &[f64], values: &[f64], x: f64) -> f64 {
 ///
 /// Given nodes x_i, values y_i, and derivatives dy_i, returns the
 /// interpolated value at x.
-pub fn hermite_interp(
-    nodes: &[f64],
-    values: &[f64],
-    derivatives: &[f64],
-    x: f64,
-) -> f64 {
+pub fn hermite_interp(nodes: &[f64], values: &[f64], derivatives: &[f64], x: f64) -> f64 {
     let n = nodes.len();
     if n == 0 {
         return f64::NAN;

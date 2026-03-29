@@ -471,7 +471,7 @@ impl KDTree {
         knn_search(&self.nodes, 0, query, k, &mut results);
 
         // Sort by distance and convert from squared to actual distance
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| a.1.total_cmp(&b.1));
         for r in &mut results {
             r.1 = r.1.sqrt();
         }
@@ -659,9 +659,7 @@ fn build_kdtree(
 
     // Partition by the split dimension to find the median in O(N) time
     indices.select_nth_unstable_by(median, |&a, &b| {
-        data[a][split_dim]
-            .partial_cmp(&data[b][split_dim])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        data[a][split_dim].total_cmp(&data[b][split_dim])
     });
 
     let node_idx = nodes.len();
@@ -737,12 +735,7 @@ fn knn_search(
         .is_none_or(|&(_, worst_dist)| dist_sq < worst_dist);
     if results.len() < k || is_better {
         let pos = results
-            .binary_search_by(|probe| {
-                probe
-                    .1
-                    .partial_cmp(&dist_sq)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .binary_search_by(|probe| probe.1.total_cmp(&dist_sq))
             .unwrap_or_else(|e| e);
         if results.len() < k {
             results.insert(pos, (node.index, dist_sq));
@@ -849,14 +842,8 @@ impl ConvexHull {
         sorted_indices.sort_by(|&a, &b| {
             points[a]
                 .0
-                .partial_cmp(&points[b].0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(
-                    points[a]
-                        .1
-                        .partial_cmp(&points[b].1)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
+                .total_cmp(&points[b].0)
+                .then(points[a].1.total_cmp(&points[b].1))
         });
 
         // Build lower hull
@@ -1173,9 +1160,7 @@ impl Voronoi {
                 let b = vertices[rhs];
                 let angle_a = (a.1 - point.1).atan2(a.0 - point.0);
                 let angle_b = (b.1 - point.1).atan2(b.0 - point.0);
-                angle_a
-                    .partial_cmp(&angle_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                angle_a.total_cmp(&angle_b)
             });
 
             let mut region: Vec<isize> = incident.into_iter().map(|idx| idx as isize).collect();
@@ -1376,9 +1361,7 @@ fn sort_spherical_region(
         let rhs_dir = normalize3(project_to_tangent(sub3(vertices[rhs], center), point_dir));
         let lhs_angle = dot3(lhs_dir, ortho).atan2(dot3(lhs_dir, first));
         let rhs_angle = dot3(rhs_dir, ortho).atan2(dot3(rhs_dir, first));
-        lhs_angle
-            .partial_cmp(&rhs_angle)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        lhs_angle.total_cmp(&rhs_angle)
     });
 }
 
@@ -1791,7 +1774,11 @@ pub fn mahalanobis(x: &[f64], y: &[f64], vi: &[Vec<f64>]) -> f64 {
         }
     }
 
-    let result: f64 = diff.iter().zip(vi_diff.iter()).map(|(&d, &vd)| d * vd).sum();
+    let result: f64 = diff
+        .iter()
+        .zip(vi_diff.iter())
+        .map(|(&d, &vd)| d * vd)
+        .sum();
     result.max(0.0).sqrt()
 }
 
@@ -1925,11 +1912,7 @@ pub fn russellrao(u: &[bool], v: &[bool]) -> f64 {
     if n == 0 {
         return 0.0;
     }
-    let ctt = u
-        .iter()
-        .zip(v.iter())
-        .filter(|&(a, b)| *a && *b)
-        .count();
+    let ctt = u.iter().zip(v.iter()).filter(|&(a, b)| *a && *b).count();
     (n - ctt) as f64 / n as f64
 }
 
@@ -1974,11 +1957,7 @@ pub fn matching(u: &[bool], v: &[bool]) -> f64 {
     if n == 0 {
         return 0.0;
     }
-    let ndiff = u
-        .iter()
-        .zip(v.iter())
-        .filter(|&(a, b)| *a != *b)
-        .count();
+    let ndiff = u.iter().zip(v.iter()).filter(|&(a, b)| *a != *b).count();
     ndiff as f64 / n as f64
 }
 
@@ -2052,7 +2031,7 @@ pub fn k_nearest_neighbors(data: &[Vec<f64>], k: usize) -> (Vec<Vec<usize>>, Vec
             .filter(|&j| j != i)
             .map(|j| (j, euclidean(&data[i], &data[j])))
             .collect();
-        dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        dists.sort_by(|a, b| a.1.total_cmp(&b.1));
 
         let k_actual = k.min(dists.len());
         all_indices.push(dists[..k_actual].iter().map(|&(idx, _)| idx).collect());
@@ -2124,11 +2103,7 @@ pub fn spread(points: &[Vec<f64>]) -> f64 {
     }
     let center = centroid(points);
     let n = points.len() as f64;
-    points
-        .iter()
-        .map(|p| euclidean(p, &center))
-        .sum::<f64>()
-        / n
+    points.iter().map(|p| euclidean(p, &center)).sum::<f64>() / n
 }
 
 #[cfg(test)]
@@ -2394,7 +2369,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, p)| (i, euclidean(p, &query)))
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
             .unwrap();
 
         assert_eq!(tree_idx, brute_idx);

@@ -1835,7 +1835,7 @@ pub fn eigh(a: &[Vec<f64>], options: DecompOptions) -> Result<EighResult, Linalg
             (val, col)
         })
         .collect();
-    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let eigenvalues: Vec<f64> = pairs.iter().map(|(v, _)| *v).collect();
     // Reconstruct eigenvector matrix from sorted columns
@@ -3556,7 +3556,7 @@ pub fn subspace_angles(
     // SVD of the product to get cosines of principal angles.
     let sv = svdvals(&product, options)?;
     let mut angles: Vec<f64> = sv.iter().map(|&s| s.clamp(0.0, 1.0).acos()).collect();
-    angles.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)); // descending
+    angles.sort_by(|a, b| b.total_cmp(a)); // descending
     Ok(angles)
 }
 
@@ -4155,7 +4155,10 @@ pub fn hstack(matrices: &[&[Vec<f64>]]) -> Vec<Vec<f64>> {
         return vec![];
     }
     let n = matrices[0].len();
-    let total_cols: usize = matrices.iter().map(|m| if m.is_empty() { 0 } else { m[0].len() }).sum();
+    let total_cols: usize = matrices
+        .iter()
+        .map(|m| if m.is_empty() { 0 } else { m[0].len() })
+        .sum();
 
     let mut result = vec![vec![0.0; total_cols]; n];
     let mut col_offset = 0;
@@ -4281,7 +4284,11 @@ pub fn permanent(a: &[Vec<f64>]) -> f64 {
     for s in 1..total {
         let mut prod_sum = 1.0;
         let bits = s.count_ones() as i32;
-        let sign = if (n as i32 - bits) % 2 == 0 { 1.0 } else { -1.0 };
+        let sign = if (n as i32 - bits) % 2 == 0 {
+            1.0
+        } else {
+            -1.0
+        };
 
         for row in a.iter().take(n) {
             let mut row_sum = 0.0;
@@ -4296,11 +4303,7 @@ pub fn permanent(a: &[Vec<f64>]) -> f64 {
         result += sign * prod_sum;
     }
 
-    if n.is_multiple_of(2) {
-        result
-    } else {
-        -result
-    }
+    if n.is_multiple_of(2) { result } else { -result }
 }
 
 /// Create an anti-diagonal matrix.
@@ -4428,10 +4431,7 @@ pub fn hadamard_product(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
 
 /// Extract a submatrix from row r1..r2 and column c1..c2.
 pub fn submatrix(a: &[Vec<f64>], r1: usize, r2: usize, c1: usize, c2: usize) -> Vec<Vec<f64>> {
-    a[r1..r2]
-        .iter()
-        .map(|row| row[c1..c2].to_vec())
-        .collect()
+    a[r1..r2].iter().map(|row| row[c1..c2].to_vec()).collect()
 }
 
 /// Create a matrix from a flat vector given shape (row-major order).
@@ -4553,7 +4553,11 @@ pub fn is_orthogonal(a: &[Vec<f64>], tol: f64) -> bool {
 }
 
 /// Compute the numerical rank of a matrix (count of singular values > tol).
-pub fn numerical_rank(a: &[Vec<f64>], tol: f64, options: DecompOptions) -> Result<usize, LinalgError> {
+pub fn numerical_rank(
+    a: &[Vec<f64>],
+    tol: f64,
+    options: DecompOptions,
+) -> Result<usize, LinalgError> {
     let sv = svdvals(a, options)?;
     Ok(sv.iter().filter(|&&s| s > tol).count())
 }

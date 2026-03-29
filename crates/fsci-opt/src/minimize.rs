@@ -592,14 +592,9 @@ where
         nit = iteration + 1;
 
         // Sort simplex by function values
-        let mut indices: Vec<usize> = (0..=n).collect();
-        indices.sort_by(|&a, &b| {
-            f_values[a]
-                .partial_cmp(&f_values[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let sorted_simplex: Vec<Vec<f64>> = indices.iter().map(|&i| simplex[i].clone()).collect();
-        let sorted_f: Vec<f64> = indices.iter().map(|&i| f_values[i]).collect();
+        let mut pairs: Vec<(f64, Vec<f64>)> = f_values.into_iter().zip(simplex).collect();
+        pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (sorted_f, sorted_simplex): (Vec<f64>, Vec<Vec<f64>>) = pairs.into_iter().unzip();
         simplex = sorted_simplex;
         f_values = sorted_f;
 
@@ -770,11 +765,7 @@ where
 
     // Max iterations reached
     let mut indices: Vec<usize> = (0..=n).collect();
-    indices.sort_by(|&a, &b| {
-        f_values[a]
-            .partial_cmp(&f_values[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| f_values[a].total_cmp(&f_values[b]));
     let best_idx = indices[0];
 
     let result = OptimizeResult {

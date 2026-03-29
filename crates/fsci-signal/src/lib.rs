@@ -1483,7 +1483,7 @@ fn filter_by_distance(peaks: &[usize], heights: &[f64], min_dist: usize) -> Vec<
         .enumerate()
         .map(|(i, (&p, &h))| (i, p, h))
         .collect();
-    indexed.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|a, b| b.2.total_cmp(&a.2));
 
     let mut selected = Vec::new();
     let mut excluded = vec![false; peaks.len()];
@@ -1736,7 +1736,7 @@ pub fn order_filter(x: &[f64], window_size: usize, rank: usize) -> Vec<f64> {
         let start = i.saturating_sub(half);
         let end = (i + half + 1).min(x.len());
         let mut window: Vec<f64> = x[start..end].to_vec();
-        window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        window.sort_by(|a, b| a.total_cmp(b));
         let idx = rank.min(window.len() - 1);
         result.push(window[idx]);
     }
@@ -2018,7 +2018,11 @@ pub fn bilinear(b_analog: &[f64], a_analog: &[f64], fs: f64) -> (Vec<f64>, Vec<f
                 if rem <= d - k {
                     let c1 = binom_coeff(k, jp);
                     let c2 = binom_coeff(d - k, rem);
-                    let sign = if (d - k - rem).is_multiple_of(2) { 1.0 } else { -1.0 };
+                    let sign = if (d - k - rem).is_multiple_of(2) {
+                        1.0
+                    } else {
+                        -1.0
+                    };
                     coeff += c1 * c2 * sign;
                 }
             }
@@ -2058,11 +2062,7 @@ fn binom_coeff(n: usize, k: usize) -> f64 {
 ///
 /// Returns n_samples of the response to a unit impulse.
 /// Matches `scipy.signal.dimpulse` (simplified).
-pub fn impulse_response(
-    b: &[f64],
-    a: &[f64],
-    n_samples: usize,
-) -> Result<Vec<f64>, SignalError> {
+pub fn impulse_response(b: &[f64], a: &[f64], n_samples: usize) -> Result<Vec<f64>, SignalError> {
     let mut impulse = vec![0.0; n_samples];
     if !impulse.is_empty() {
         impulse[0] = 1.0;
@@ -2319,7 +2319,8 @@ pub fn add_noise(signal: &[f64], snr_db: f64, seed: u64) -> Vec<f64> {
             let u1 = ((rng >> 11) as f64 / (1u64 << 53) as f64).max(1e-15);
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
             let u2 = (rng >> 11) as f64 / (1u64 << 53) as f64;
-            let noise = noise_std * (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+            let noise =
+                noise_std * (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
             s + noise
         })
         .collect()
@@ -2348,7 +2349,11 @@ pub fn xcorr_coefficient(x: &[f64], y: &[f64]) -> f64 {
     let n = x.len() as f64;
     let mx: f64 = x.iter().sum::<f64>() / n;
     let my: f64 = y.iter().sum::<f64>() / n;
-    let cov: f64 = x.iter().zip(y.iter()).map(|(&a, &b)| (a - mx) * (b - my)).sum();
+    let cov: f64 = x
+        .iter()
+        .zip(y.iter())
+        .map(|(&a, &b)| (a - mx) * (b - my))
+        .sum();
     let sx: f64 = x.iter().map(|&a| (a - mx).powi(2)).sum::<f64>().sqrt();
     let sy: f64 = y.iter().map(|&b| (b - my).powi(2)).sum::<f64>().sqrt();
     if sx * sy == 0.0 {
@@ -2401,7 +2406,7 @@ pub fn medfilt1(x: &[f64], kernel_size: usize) -> Vec<f64> {
             let start = i.saturating_sub(half);
             let end = (i + half + 1).min(n);
             let mut window: Vec<f64> = x[start..end].to_vec();
-            window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            window.sort_by(|a, b| a.total_cmp(b));
             window[window.len() / 2]
         })
         .collect()
@@ -2433,7 +2438,7 @@ pub fn dominant_frequency(magnitudes: &[f64], freqs: &[f64]) -> f64 {
     let max_idx = magnitudes
         .iter()
         .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i)
         .unwrap_or(0);
     freqs.get(max_idx).copied().unwrap_or(0.0)
@@ -2461,11 +2466,7 @@ pub fn spectral_entropy(magnitudes: &[f64]) -> f64 {
 
     // Normalize by log(N)
     let n = magnitudes.len() as f64;
-    if n > 1.0 {
-        entropy / n.ln()
-    } else {
-        entropy
-    }
+    if n > 1.0 { entropy / n.ln() } else { entropy }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3858,7 +3859,7 @@ fn roots_to_sos_factors(re: &[f64], im: &[f64]) -> Vec<(f64, f64, f64)> {
     }
 
     // Pair real roots into biquad sections
-    real_roots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    real_roots.sort_by(|a, b| a.total_cmp(b));
     let mut i = 0;
     while i + 1 < real_roots.len() {
         let r1 = real_roots[i];
@@ -7346,12 +7347,7 @@ mod tests {
     fn nearest_freq_index(w: &[f64], omega: f64) -> usize {
         w.iter()
             .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                ((**a) - omega)
-                    .abs()
-                    .partial_cmp(&((**b) - omega).abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .min_by(|(_, a), (_, b)| ((**a) - omega).abs().total_cmp(&((**b) - omega).abs()))
             .map(|(i, _)| i)
             .unwrap_or(0)
     }
@@ -8617,7 +8613,7 @@ mod tests {
         let peak_idx = result
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
             .unwrap()
             .0;
         // v is shifted right by 1 relative to a, so peak should be at center-1
@@ -9019,7 +9015,7 @@ mod tests {
         let peak_idx = power
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
             .unwrap()
             .0;
         assert!(

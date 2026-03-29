@@ -1922,8 +1922,14 @@ pub fn sparse_submatrix(
         indptr[i + 1] += indptr[i];
     }
 
-    CsrMatrix::from_components(Shape2D::new(new_rows, new_cols), vals, cols_vec, indptr, false)
-        .expect("submatrix should produce valid CSR")
+    CsrMatrix::from_components(
+        Shape2D::new(new_rows, new_cols),
+        vals,
+        cols_vec,
+        indptr,
+        false,
+    )
+    .expect("submatrix should produce valid CSR")
 }
 
 /// Compute the number of connected components and their sizes.
@@ -2077,9 +2083,8 @@ pub fn topological_sort(graph: &CsrMatrix) -> Option<Vec<usize>> {
     }
 
     // Start with zero in-degree nodes
-    let mut queue: std::collections::VecDeque<usize> = (0..n)
-        .filter(|&i| in_degree[i] == 0)
-        .collect();
+    let mut queue: std::collections::VecDeque<usize> =
+        (0..n).filter(|&i| in_degree[i] == 0).collect();
 
     let mut order = Vec::with_capacity(n);
 
@@ -3925,11 +3930,7 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
 
     // Sort by magnitude (largest first) and take top k
     let mut indexed: Vec<(usize, f64)> = eig_vals.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| {
-        b.1.abs()
-            .partial_cmp(&a.1.abs())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indexed.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()));
 
     let k_actual = k.min(indexed.len());
     let mut eigenvalues = Vec::with_capacity(k_actual);
@@ -4260,6 +4261,29 @@ pub struct ShortestPathResult {
     pub predecessors: Vec<i64>,
 }
 
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+
+#[derive(Copy, Clone, PartialEq)]
+struct DijkstraState {
+    cost: f64,
+    position: usize,
+}
+
+impl Eq for DijkstraState {}
+
+impl PartialOrd for DijkstraState {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DijkstraState {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.cost.total_cmp(&self.cost)
+    }
+}
+
 /// Single-source shortest paths using Dijkstra's algorithm.
 ///
 /// Matches `scipy.sparse.csgraph.dijkstra(graph, indices=source)`.
@@ -4280,31 +4304,22 @@ pub fn dijkstra(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathRe
 
     let mut dist = vec![f64::INFINITY; n];
     let mut pred = vec![-1_i64; n];
-    let mut visited = vec![false; n];
 
     dist[source] = 0.0;
 
-    // Use a simple O(V²) implementation (BinaryHeap would be O(E log V) but
-    // requires Ord on f64 which is messy without a wrapper)
-    for _ in 0..n {
-        // Find unvisited node with minimum distance
-        let mut u = usize::MAX;
-        let mut min_dist = f64::INFINITY;
-        for i in 0..n {
-            if !visited[i] && dist[i] < min_dist {
-                min_dist = dist[i];
-                u = i;
-            }
+    let mut heap = BinaryHeap::new();
+    heap.push(DijkstraState {
+        cost: 0.0,
+        position: source,
+    });
+
+    while let Some(DijkstraState { cost, position }) = heap.pop() {
+        if cost > dist[position] {
+            continue;
         }
 
-        if u == usize::MAX {
-            break; // All remaining nodes unreachable
-        }
-
-        visited[u] = true;
-
-        // Relax edges from u
-        for idx in indptr[u]..indptr[u + 1] {
+        // Relax edges from position
+        for idx in indptr[position]..indptr[position + 1] {
             let v = indices[idx];
             let weight = data[idx];
             if weight < 0.0 {
@@ -4312,10 +4327,14 @@ pub fn dijkstra(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathRe
                     message: "Dijkstra requires non-negative edge weights".to_string(),
                 });
             }
-            let alt = dist[u] + weight;
+            let alt = cost + weight;
             if alt < dist[v] {
                 dist[v] = alt;
-                pred[v] = u as i64;
+                pred[v] = position as i64;
+                heap.push(DijkstraState {
+                    cost: alt,
+                    position: v,
+                });
             }
         }
     }
@@ -4570,7 +4589,7 @@ pub fn minimum_spanning_tree(graph: &CsrMatrix) -> SparseResult<MstResult> {
     }
 
     // Sort edges by weight (Kruskal's)
-    edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    edges.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     // Union-Find
     let mut parent: Vec<usize> = (0..n).collect();

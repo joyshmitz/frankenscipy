@@ -1046,12 +1046,7 @@ fn solve_dense(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     for col in 0..n {
         // Partial pivoting.
         let max_row = (col..n)
-            .max_by(|&i, &j| {
-                aug[i][col]
-                    .abs()
-                    .partial_cmp(&aug[j][col].abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .max_by(|&i, &j| aug[i][col].abs().total_cmp(&aug[j][col].abs()))
             .unwrap_or(col);
         aug.swap(col, max_row);
 

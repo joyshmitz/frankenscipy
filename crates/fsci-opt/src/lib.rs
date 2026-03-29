@@ -1582,11 +1582,7 @@ where
         });
     }
 
-    ranked.sort_by(|lhs, rhs| {
-        lhs.0
-            .partial_cmp(&rhs.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    ranked.sort_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0));
     let starts = select_shgo_starts(&ranked, bounds, 8);
     let bound_tuples: Vec<Bound> = bounds
         .iter()
@@ -2133,12 +2129,7 @@ where
 /// Minimize a scalar function using bounded Brent's method.
 ///
 /// Matches `scipy.optimize.minimize_scalar(method='bounded')`.
-pub fn minimize_scalar_bounded<F>(
-    f: F,
-    bounds: (f64, f64),
-    tol: f64,
-    maxiter: usize,
-) -> (f64, f64)
+pub fn minimize_scalar_bounded<F>(f: F, bounds: (f64, f64), tol: f64, maxiter: usize) -> (f64, f64)
 where
     F: Fn(f64) -> f64,
 {
@@ -2324,12 +2315,7 @@ fn solve_small_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
 
     for col in 0..n {
         let max_row = (col..n)
-            .max_by(|&i, &j| {
-                aug[i][col]
-                    .abs()
-                    .partial_cmp(&aug[j][col].abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .max_by(|&i, &j| aug[i][col].abs().total_cmp(&aug[j][col].abs()))
             .unwrap_or(col);
         aug.swap(col, max_row);
 
@@ -2383,8 +2369,8 @@ pub fn isotonic_regression(y: &[f64], weights: Option<&[f64]>) -> Vec<f64> {
         if result[i] > result[i + 1] {
             // Pool blocks i and i+1
             let total_w = block_weights[i] + block_weights[i + 1];
-            let pooled = (result[i] * block_weights[i] + result[i + 1] * block_weights[i + 1])
-                / total_w;
+            let pooled =
+                (result[i] * block_weights[i] + result[i + 1] * block_weights[i + 1]) / total_w;
             result[i] = pooled;
             result[i + 1] = pooled;
             block_weights[i] = total_w;
@@ -2393,9 +2379,8 @@ pub fn isotonic_regression(y: &[f64], weights: Option<&[f64]>) -> Vec<f64> {
             // Check backwards
             while i > 0 && result[i - 1] > result[i] {
                 let total_w = block_weights[i - 1] + block_weights[i];
-                let pooled = (result[i - 1] * block_weights[i - 1]
-                    + result[i] * block_weights[i])
-                    / total_w;
+                let pooled =
+                    (result[i - 1] * block_weights[i - 1] + result[i] * block_weights[i]) / total_w;
                 result[i - 1] = pooled;
                 result[i] = pooled;
                 block_weights[i - 1] = total_w;
@@ -2487,7 +2472,11 @@ where
 
         let mut found = false;
         for _ in 0..20 {
-            let x_new: Vec<f64> = x.iter().zip(g.iter()).map(|(&xi, &gi)| xi - alpha * gi).collect();
+            let x_new: Vec<f64> = x
+                .iter()
+                .zip(g.iter())
+                .map(|(&xi, &gi)| xi - alpha * gi)
+                .collect();
             let f_new = f(&x_new);
             nfev += 1;
             if f_new <= f0 - 1e-4 * alpha * descent {
@@ -2792,7 +2781,7 @@ where
     let global_best_idx = personal_best_cost
         .iter()
         .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i)
         .unwrap_or(0);
     let mut global_best = personal_best[global_best_idx].clone();
@@ -3594,8 +3583,7 @@ mod tests {
         let constraints: Vec<Box<ConstraintFn>> = vec![
             Box::new(|x: &[f64]| x[0] + x[1] - 1.0), // x + y >= 1
         ];
-        let constraint_fns: Vec<&ConstraintFn> =
-            constraints.iter().map(|b| b.as_ref()).collect();
+        let constraint_fns: Vec<&ConstraintFn> = constraints.iter().map(|b| b.as_ref()).collect();
         let result = cobyla(|x| x[0] + x[1], &[2.0, 2.0], &constraint_fns, 1000, 0.5)
             .expect("cobyla constrained");
         // x + y should be approximately 1

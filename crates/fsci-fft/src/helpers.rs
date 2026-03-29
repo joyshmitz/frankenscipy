@@ -132,10 +132,7 @@ pub fn fftcorrelate(a: &[f64], b: &[f64], mode: &str) -> Result<Vec<f64>, FftErr
 /// Compute the power spectral density of a real signal.
 ///
 /// Returns (frequencies, power) using Welch-like periodogram.
-pub fn periodogram_simple(
-    x: &[f64],
-    fs: f64,
-) -> Result<(Vec<f64>, Vec<f64>), FftError> {
+pub fn periodogram_simple(x: &[f64], fs: f64) -> Result<(Vec<f64>, Vec<f64>), FftError> {
     if x.is_empty() {
         return Ok((vec![], vec![]));
     }
@@ -166,11 +163,7 @@ pub fn periodogram_simple(
 pub type CrossSpectralResult = Result<(Vec<f64>, Vec<(f64, f64)>), FftError>;
 
 /// Compute the cross-spectral density of two real signals.
-pub fn cross_spectral_density(
-    x: &[f64],
-    y: &[f64],
-    fs: f64,
-) -> CrossSpectralResult {
+pub fn cross_spectral_density(x: &[f64], y: &[f64], fs: f64) -> CrossSpectralResult {
     if x.len() != y.len() || x.is_empty() {
         return Ok((vec![], vec![]));
     }

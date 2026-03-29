@@ -296,7 +296,7 @@ pub fn roots_chebyt(n: usize) -> (Vec<f64>, Vec<f64>) {
         let theta = PI * (2.0 * k as f64 + 1.0) / (2.0 * n as f64);
         nodes.push(theta.cos());
     }
-    nodes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    nodes.sort_by(|a, b| a.total_cmp(b));
 
     (nodes, weights)
 }

@@ -1214,7 +1214,7 @@ fn gauss_legendre_nodes_weights(n: usize) -> (Vec<f64>, Vec<f64>) {
 
     // Sort by node value
     let mut pairs: Vec<(f64, f64)> = full_nodes.into_iter().zip(full_weights).collect();
-    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
     let sorted_nodes = pairs.iter().map(|p| p.0).collect();
     let sorted_weights = pairs.iter().map(|p| p.1).collect();
 
@@ -1655,12 +1655,7 @@ where
 ///
 /// Returns (result, explanation_string).
 /// Matches `scipy.integrate.quad` with `full_output=True`.
-pub fn quad_explain<F>(
-    f: F,
-    a: f64,
-    b: f64,
-    options: QuadOptions,
-) -> (QuadResult, String)
+pub fn quad_explain<F>(f: F, a: f64, b: f64, options: QuadOptions) -> (QuadResult, String)
 where
     F: Fn(f64) -> f64,
 {
@@ -1700,7 +1695,11 @@ where
 ///
 /// Uses the substitution t = 1/(1+u) to map [0, ∞) to [0, 1].
 /// Matches `scipy.integrate.quad(f, a, np.inf)`.
-pub fn quad_inf<F>(f: F, a: f64, options: QuadOptions) -> Result<QuadResult, IntegrateValidationError>
+pub fn quad_inf<F>(
+    f: F,
+    a: f64,
+    options: QuadOptions,
+) -> Result<QuadResult, IntegrateValidationError>
 where
     F: Fn(f64) -> f64,
 {
@@ -1744,10 +1743,7 @@ where
 /// Integrate a function over (-∞, ∞).
 ///
 /// Splits at 0 and uses substitutions for both halves.
-pub fn quad_full_inf<F>(
-    f: F,
-    options: QuadOptions,
-) -> Result<QuadResult, IntegrateValidationError>
+pub fn quad_full_inf<F>(f: F, options: QuadOptions) -> Result<QuadResult, IntegrateValidationError>
 where
     F: Fn(f64) -> f64,
 {
