@@ -215,7 +215,7 @@ fn ellipkinc_scalar(phi: f64, m: f64, mode: RuntimeMode) -> Result<f64, SpecialE
     if phi == 0.0 {
         return Ok(0.0);
     }
-    if phi == PI / 2.0 {
+    if (phi - PI / 2.0).abs() < 1e-15 {
         return ellipk_scalar(m, mode);
     }
 
@@ -234,7 +234,7 @@ fn ellipeinc_scalar(phi: f64, m: f64, mode: RuntimeMode) -> Result<f64, SpecialE
     if phi == 0.0 {
         return Ok(0.0);
     }
-    if phi == PI / 2.0 {
+    if (phi - PI / 2.0).abs() < 1e-15 {
         return ellipe_scalar(m, mode);
     }
 
@@ -257,7 +257,7 @@ fn lambertw_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if x == 0.0 {
         return Ok(0.0);
     }
-    if x == std::f64::consts::E {
+    if (x - std::f64::consts::E).abs() < f64::EPSILON {
         return Ok(1.0);
     }
 

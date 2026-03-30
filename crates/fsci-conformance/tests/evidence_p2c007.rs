@@ -201,10 +201,16 @@ fn evidence_p2c007_final_pack() {
                 total_fixtures: grouped.len(),
                 passed: grouped.iter().filter(|gate| gate.pass_fail).count(),
                 failed: grouped.iter().filter(|gate| !gate.pass_fail).count(),
-                max_abs_diff_across_all: grouped
-                    .iter()
-                    .map(|gate| gate.max_abs_diff)
-                    .fold(0.0_f64, f64::max),
+                max_abs_diff_across_all: grouped.iter().map(|gate| gate.max_abs_diff).fold(
+                    0.0_f64,
+                    |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    },
+                ),
             }
         })
         .collect::<Vec<_>>();

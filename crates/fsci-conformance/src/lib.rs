@@ -1651,7 +1651,13 @@ fn compare_sparse_outcome(
                 .iter()
                 .zip(values.iter())
                 .map(|(g, e)| (g - e).abs())
-                .fold(0.0_f64, f64::max);
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
             let pass = got
                 .iter()
                 .zip(values.iter())
@@ -1891,7 +1897,13 @@ fn compare_fft_outcome(expected: &FftExpectedOutcome, observed: &FftObserved) ->
                     let di = (g[1] - e[1]).abs();
                     dr.max(di)
                 })
-                .fold(0.0_f64, f64::max);
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
             let pass = got.iter().zip(values.iter()).all(|(g, e)| {
                 allclose_scalar(g[0], e[0], a, r) && allclose_scalar(g[1], e[1], a, r)
             });
@@ -1926,7 +1938,13 @@ fn compare_fft_outcome(expected: &FftExpectedOutcome, observed: &FftObserved) ->
                 .iter()
                 .zip(values.iter())
                 .map(|(g, e)| (g - e).abs())
-                .fold(0.0_f64, f64::max);
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
             let pass = got
                 .iter()
                 .zip(values.iter())
@@ -4212,7 +4230,13 @@ fn fixture_max_diff_seq(
         .iter()
         .zip(expected.iter())
         .map(|(a, e)| fixture_scalar_diff(a, e))
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
@@ -4753,7 +4777,13 @@ fn max_diff_vec(a: &[f64], b: &[f64]) -> f64 {
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| (x - y).abs())
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 /// Compute the maximum absolute difference between two matrices.
@@ -4761,7 +4791,13 @@ fn max_diff_matrix(a: &[Vec<f64>], b: &[Vec<f64>]) -> f64 {
     a.iter()
         .zip(b.iter())
         .map(|(ar, br)| max_diff_vec(ar, br))
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 /// Probe whether the oracle is available without running a full test.

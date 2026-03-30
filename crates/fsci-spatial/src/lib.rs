@@ -59,7 +59,13 @@ pub fn chebyshev(a: &[f64], b: &[f64]) -> f64 {
     a.iter()
         .zip(b.iter())
         .map(|(ai, bi)| (ai - bi).abs())
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 /// Cosine distance: 1 - cosine_similarity(a, b).

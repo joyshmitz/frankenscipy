@@ -1934,7 +1934,16 @@ mod tests {
         let result = fsolve(f, &[0.5, 0.5]).expect("fsolve should converge");
         if result.converged {
             let residual = f(&result.x);
-            let max_residual = residual.iter().map(|r| r.abs()).fold(0.0_f64, f64::max);
+            let max_residual = residual
+                .iter()
+                .map(|r| r.abs())
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
             assert!(max_residual < 1e-6, "residual too large: {max_residual}");
         }
     }

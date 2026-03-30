@@ -526,14 +526,26 @@ fn evidence_p2c002_final_pack() {
                 total_fixtures: op_gates.len(),
                 passed: op_gates.iter().filter(|g| g.pass).count(),
                 failed: op_gates.iter().filter(|g| !g.pass).count(),
-                max_abs_diff_across_all: op_gates
-                    .iter()
-                    .map(|g| g.max_abs_diff)
-                    .fold(0.0_f64, f64::max),
-                max_rel_diff_across_all: op_gates
-                    .iter()
-                    .map(|g| g.max_rel_diff)
-                    .fold(0.0_f64, f64::max),
+                max_abs_diff_across_all: op_gates.iter().map(|g| g.max_abs_diff).fold(
+                    0.0_f64,
+                    |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    },
+                ),
+                max_rel_diff_across_all: op_gates.iter().map(|g| g.max_rel_diff).fold(
+                    0.0_f64,
+                    |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    },
+                ),
             }
         })
         .collect();

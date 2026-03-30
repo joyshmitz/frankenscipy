@@ -118,11 +118,18 @@ fn check_spmv_identity(n: usize) -> ParityGate {
     let id = eye(n).expect("eye");
     let v = make_vector(n);
     let result = spmv_csr(&id, &v).expect("spmv");
-    let max_abs: f64 = result
-        .iter()
-        .zip(&v)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
+    let max_abs: f64 =
+        result
+            .iter()
+            .zip(&v)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
     ParityGate {
         fixture_id: format!("identity_{n}x{n}"),
         operation: "spmv_csr",
@@ -141,11 +148,17 @@ fn check_format_roundtrip(n: usize, density: f64) -> ParityGate {
     let v = make_vector(n);
     let orig = spmv_csr(&csr, &v).expect("spmv orig");
     let rt = spmv_csr(&roundtrip, &v).expect("spmv roundtrip");
-    let max_abs: f64 = orig
-        .iter()
-        .zip(&rt)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
+    let max_abs: f64 =
+        orig.iter()
+            .zip(&rt)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
     ParityGate {
         fixture_id: format!("roundtrip_{n}x{n}_d{}", (density * 100.0) as u32),
         operation: "format_conversion",
@@ -165,11 +178,17 @@ fn check_add_commutativity(n: usize, density: f64) -> ParityGate {
     let v = make_vector(n);
     let ab_v = spmv_csr(&ab, &v).expect("spmv a+b");
     let ba_v = spmv_csr(&ba, &v).expect("spmv b+a");
-    let max_abs: f64 = ab_v
-        .iter()
-        .zip(&ba_v)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
+    let max_abs: f64 =
+        ab_v.iter()
+            .zip(&ba_v)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
     ParityGate {
         fixture_id: format!("add_commute_{n}x{n}_d{}", (density * 100.0) as u32),
         operation: "add_csr",
@@ -187,11 +206,17 @@ fn check_scale_identity(n: usize, density: f64) -> ParityGate {
     let v = make_vector(n);
     let orig = spmv_csr(&a, &v).expect("spmv a");
     let sc = spmv_csr(&scaled, &v).expect("spmv scaled");
-    let max_abs: f64 = orig
-        .iter()
-        .zip(&sc)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
+    let max_abs: f64 =
+        orig.iter()
+            .zip(&sc)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
     ParityGate {
         fixture_id: format!("scale_id_{n}x{n}_d{}", (density * 100.0) as u32),
         operation: "scale_csr",
@@ -316,10 +341,16 @@ fn evidence_p2c004_final_pack() {
                 total_fixtures: matched.len(),
                 passed: matched.iter().filter(|g| g.pass).count(),
                 failed: matched.iter().filter(|g| !g.pass).count(),
-                max_abs_diff_across_all: matched
-                    .iter()
-                    .map(|g| g.max_abs_diff)
-                    .fold(0.0_f64, f64::max),
+                max_abs_diff_across_all: matched.iter().map(|g| g.max_abs_diff).fold(
+                    0.0_f64,
+                    |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    },
+                ),
             }
         })
         .collect();

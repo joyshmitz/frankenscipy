@@ -675,7 +675,12 @@ impl RkSolver {
                 .iter()
                 .zip(y_new.iter())
                 .zip(atol_vec.iter())
-                .map(|((yi, yni), ai)| ai + yi.abs().max(yni.abs()) * self.rtol)
+                .map(|((yi, yni), ai)| {
+                    let a = yi.abs();
+                    let b = yni.abs();
+                    let max_val = if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) };
+                    ai + max_val * self.rtol
+                })
                 .collect(),
         }
     }

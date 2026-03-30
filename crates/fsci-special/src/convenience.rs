@@ -96,7 +96,16 @@ pub fn logsumexp(data: &[f64]) -> f64 {
     if data.is_empty() {
         return f64::NEG_INFINITY;
     }
-    let max_val = data.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let max_val = data
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     if max_val.is_infinite() {
         return max_val;
     }
@@ -1235,7 +1244,13 @@ pub fn softmax(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
-    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    });
     let exp_x: Vec<f64> = x.iter().map(|&xi| (xi - max_x).exp()).collect();
     let sum_exp: f64 = exp_x.iter().sum();
     exp_x.iter().map(|&e| e / sum_exp).collect()
@@ -1248,7 +1263,13 @@ pub fn log_softmax(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
-    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    });
     let shifted: Vec<f64> = x.iter().map(|&xi| xi - max_x).collect();
     let log_sum_exp = shifted.iter().map(|&s| s.exp()).sum::<f64>().ln();
     shifted.iter().map(|&s| s - log_sum_exp).collect()
@@ -1745,7 +1766,7 @@ pub fn lambertw_scalar(x: f64) -> f64 {
     if x == 0.0 {
         return 0.0;
     }
-    if x == -1.0 / std::f64::consts::E {
+    if (x - (-1.0 / std::f64::consts::E)).abs() < f64::EPSILON {
         return -1.0;
     }
     if x < -1.0 / std::f64::consts::E {

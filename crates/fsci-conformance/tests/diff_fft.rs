@@ -73,7 +73,13 @@ fn max_abs_diff_complex(a: &[Complex64], b: &[Complex64]) -> f64 {
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| ((x.0 - y.0).abs()).max((x.1 - y.1).abs()))
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 fn max_abs_diff_real(a: &[f64], b: &[f64]) -> f64 {
@@ -81,7 +87,13 @@ fn max_abs_diff_real(a: &[f64], b: &[f64]) -> f64 {
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| (x - y).abs())
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 /// Naive DFT reference implementation for oracle comparison.

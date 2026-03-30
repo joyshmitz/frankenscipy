@@ -138,7 +138,17 @@ fn sin_root(x: f64) -> f64 {
 fn check_bfgs_quadratic(dim: usize) -> ParityGate {
     let x0: Vec<f64> = vec![1.0; dim];
     let result = bfgs(&quadratic, &x0, minimize_opts(OptimizeMethod::Bfgs)).unwrap();
-    let max_abs = result.x.iter().map(|xi| xi.abs()).fold(0.0_f64, f64::max);
+    let max_abs = result
+        .x
+        .iter()
+        .map(|xi| xi.abs())
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     ParityGate {
         fixture_id: format!("bfgs_quadratic_dim{dim}"),
         operation: "bfgs",
@@ -156,7 +166,13 @@ fn check_bfgs_rosenbrock() -> ParityGate {
         .x
         .iter()
         .map(|xi| (xi - 1.0).abs())
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let pass = matches!(result.status, ConvergenceStatus::Success) && err_x < 0.1;
     ParityGate {
         fixture_id: "bfgs_rosenbrock_2d".into(),
@@ -176,7 +192,17 @@ fn check_cg_quadratic(dim: usize) -> ParityGate {
         minimize_opts(OptimizeMethod::ConjugateGradient),
     )
     .unwrap();
-    let max_abs = result.x.iter().map(|xi| xi.abs()).fold(0.0_f64, f64::max);
+    let max_abs = result
+        .x
+        .iter()
+        .map(|xi| xi.abs())
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     ParityGate {
         fixture_id: format!("cg_quadratic_dim{dim}"),
         operation: "cg",
@@ -190,7 +216,17 @@ fn check_cg_quadratic(dim: usize) -> ParityGate {
 fn check_powell_quadratic(dim: usize) -> ParityGate {
     let x0: Vec<f64> = vec![1.0; dim];
     let result = powell(&quadratic, &x0, minimize_opts(OptimizeMethod::Powell)).unwrap();
-    let max_abs = result.x.iter().map(|xi| xi.abs()).fold(0.0_f64, f64::max);
+    let max_abs = result
+        .x
+        .iter()
+        .map(|xi| xi.abs())
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     ParityGate {
         fixture_id: format!("powell_quadratic_dim{dim}"),
         operation: "powell",
@@ -274,7 +310,13 @@ fn check_root_methods_agree() -> ParityGate {
     let max_diff = [bq.root, bs.root, bh.root, rd.root]
         .windows(2)
         .map(|w| (w[0] - w[1]).abs())
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     ParityGate {
         fixture_id: "root_methods_agreement".into(),
         operation: "root_agreement",
@@ -302,7 +344,13 @@ fn check_minimize_methods_agree() -> ParityGate {
     ]
     .windows(2)
     .map(|w| (w[0] - w[1]).abs())
-    .fold(0.0_f64, f64::max);
+    .fold(0.0_f64, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    });
     let all_near_zero = bfgs_r.fun.unwrap_or(1.0) < 1e-3
         && cg_r.fun.unwrap_or(1.0) < 1e-3
         && pw_r.fun.unwrap_or(1.0) < 1e-3;
@@ -461,10 +509,16 @@ fn evidence_p2c003_final_pack() {
                 total_fixtures: matched.len(),
                 passed: matched.iter().filter(|g| g.pass).count(),
                 failed: matched.iter().filter(|g| !g.pass).count(),
-                max_abs_diff_across_all: matched
-                    .iter()
-                    .map(|g| g.max_abs_diff)
-                    .fold(0.0_f64, f64::max),
+                max_abs_diff_across_all: matched.iter().map(|g| g.max_abs_diff).fold(
+                    0.0_f64,
+                    |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    },
+                ),
             }
         })
         .collect();

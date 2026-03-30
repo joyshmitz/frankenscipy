@@ -280,7 +280,11 @@ impl BdfSolver {
             let mut error_norm = 0.0;
             for j in 0..self.n {
                 let err = error_const * (y_new[j] - y_predict[j]);
-                let scale = self.atol[j] + self.rtol * y_new[j].abs().max(self.y[j].abs());
+                let scale = self.atol[j] + self.rtol * {
+                    let a = y_new[j].abs();
+                    let b = self.y[j].abs();
+                    if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) }
+                };
                 error_norm += (err / scale) * (err / scale);
             }
             error_norm = (error_norm / self.n as f64).sqrt();
@@ -555,6 +559,13 @@ mod tests {
         solver.step_with(&mut fun).expect("BDF step");
 
         assert!(solver.t_old().is_some());
+        assert!(solver.y_old().is_some());
+    }
+}
+is_some());
+    }
+}
+t_old().is_some());
         assert!(solver.y_old().is_some());
     }
 }

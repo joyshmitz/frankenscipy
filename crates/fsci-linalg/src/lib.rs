@@ -711,7 +711,16 @@ pub fn lstsq(a: &[Vec<f64>], b: &[f64], options: LstsqOptions) -> Result<LstsqRe
     let rhs = DVector::from_column_slice(b);
     let svd = SVD::new(matrix.clone(), true, true);
     let singular_values: Vec<f64> = svd.singular_values.iter().copied().collect();
-    let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let max_s = singular_values
+        .iter()
+        .copied()
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let cond = options.cond.unwrap_or(f64::EPSILON);
     let threshold = cond * max_s;
     let rank = singular_values.iter().filter(|s| **s > threshold).count();
@@ -763,7 +772,16 @@ pub fn pinv(a: &[Vec<f64>], options: PinvOptions) -> Result<PinvResult, LinalgEr
     let matrix = dmatrix_from_rows(a)?;
     let svd = SVD::new(matrix, true, true);
     let singular_values = &svd.singular_values;
-    let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let max_s = singular_values
+        .iter()
+        .copied()
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let threshold = atol + rtol * max_s;
     let rank = singular_values.iter().filter(|s| **s > threshold).count();
     let pinv_matrix = pseudo_inverse_from_svd(&svd, threshold)?;
@@ -848,7 +866,7 @@ fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, a_norm: f64, n: usize) -> f64 {
     }
 
     let rcond = 1.0 / (a_norm * inv_a_norm);
-    rcond.min(1.0)
+    if rcond.is_nan() { 0.0 } else { rcond.min(1.0) }
 }
 
 /// Map linalg assumption to runtime structural evidence for CASP.
@@ -960,7 +978,17 @@ fn solve_svd_fallback(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgEr
     let matrix = dmatrix_from_rows(a)?;
     let rhs = DVector::from_column_slice(b);
     let svd = SVD::new(matrix.clone(), true, true);
-    let max_s = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let max_s = svd
+        .singular_values
+        .iter()
+        .copied()
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let threshold = (matrix.nrows().max(matrix.ncols()) as f64) * f64::EPSILON * max_s;
     let rank = svd
         .singular_values
@@ -971,9 +999,9 @@ fn solve_svd_fallback(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgEr
         return Err(LinalgError::SingularMatrix);
     }
 
-    let x = svd
-        .solve(&rhs, threshold)
-        .map_err(|_| LinalgError::SingularMatrix)?;
+    let pinv = pseudo_inverse_from_svd(&svd, threshold)?;
+    let x = pinv * rhs.clone();
+
     let min_s = svd
         .singular_values
         .iter()
@@ -1182,7 +1210,13 @@ fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
             x[i] = (b_i - sum) / a[i][i];
         }
     }
-    let a_inv_norm: f64 = x.iter().map(|v| v.abs()).fold(0.0, f64::max);
+    let a_inv_norm: f64 = x.iter().map(|v| v.abs()).fold(0.0, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    });
 
     let rcond = 1.0 / (a_norm * a_inv_norm);
     if rcond.is_nan() { 0.0 } else { rcond.min(1.0) }
@@ -2183,7 +2217,13 @@ fn matrix_one_norm(m: &DMatrix<f64>) -> f64 {
     let (rows, cols) = (m.nrows(), m.ncols());
     (0..cols)
         .map(|j| (0..rows).map(|i| m[(i, j)].abs()).sum::<f64>())
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2802,19 +2842,37 @@ pub fn norm(a: &[Vec<f64>], kind: NormKind, options: DecompOptions) -> Result<f6
                 .singular_values
                 .iter()
                 .copied()
-                .fold(0.0_f64, f64::max)
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                })
         }
         NormKind::One => {
             // 1-norm: max column sum of absolute values
             (0..cols)
                 .map(|j| (0..rows).map(|i| matrix[(i, j)].abs()).sum::<f64>())
-                .fold(0.0_f64, f64::max)
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                })
         }
         NormKind::Inf => {
             // Infinity norm: max row sum of absolute values
             (0..rows)
                 .map(|i| (0..cols).map(|j| matrix[(i, j)].abs()).sum::<f64>())
-                .fold(0.0_f64, f64::max)
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                })
         }
     };
 
@@ -2849,7 +2907,16 @@ pub fn matrix_rank(
     let matrix = dmatrix_from_rows(a)?;
     let svd_decomp = SVD::new(matrix, false, false);
     let singular_values = &svd_decomp.singular_values;
-    let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let max_s = singular_values
+        .iter()
+        .copied()
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let threshold = tol.unwrap_or_else(|| (rows.max(cols) as f64) * f64::EPSILON * max_s);
     let rank = singular_values.iter().filter(|s| **s > threshold).count();
 
@@ -3097,7 +3164,9 @@ fn pseudo_inverse_from_svd(
 
     let mut sigma_pinv = DMatrix::zeros(p, p);
     for (i, s) in svd.singular_values.iter().enumerate() {
-        if *s > threshold {
+        if s.is_nan() {
+            sigma_pinv[(i, i)] = f64::NAN;
+        } else if *s > threshold {
             sigma_pinv[(i, i)] = 1.0 / *s;
         }
     }
@@ -3354,7 +3423,16 @@ pub fn orth(
         .ok_or(LinalgError::UnsupportedAssumption)?;
     let singular_values = &svd_decomp.singular_values;
 
-    let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let max_s = singular_values
+        .iter()
+        .copied()
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let tol = rcond.unwrap_or_else(|| (m.max(n) as f64) * f64::EPSILON) * max_s;
 
     let rank = singular_values.iter().filter(|&&s| s > tol).count();
@@ -3411,7 +3489,16 @@ pub fn null_space(
         .ok_or(LinalgError::UnsupportedAssumption)?;
     let singular_values = &svd_decomp.singular_values;
 
-    let max_s = singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let max_s = singular_values
+        .iter()
+        .copied()
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let tol = rcond.unwrap_or_else(|| (m.max(n) as f64) * f64::EPSILON) * max_s;
 
     let rank = singular_values.iter().filter(|&&s| s > tol).count();
@@ -4209,9 +4296,23 @@ pub fn vector_norm(v: &[f64], ord: f64) -> f64 {
         return 0.0;
     }
     if ord == f64::INFINITY {
-        v.iter().map(|&x| x.abs()).fold(0.0f64, f64::max)
+        v.iter().map(|&x| x.abs()).fold(0.0f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
     } else if ord == f64::NEG_INFINITY {
-        v.iter().map(|&x| x.abs()).fold(f64::INFINITY, f64::min)
+        v.iter()
+            .map(|&x| x.abs())
+            .fold(f64::INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.min(b)
+                }
+            })
     } else if ord == 0.0 {
         v.iter().filter(|&&x| x != 0.0).count() as f64
     } else if ord == 1.0 {
@@ -4486,7 +4587,13 @@ pub fn mat_norm_1(a: &[Vec<f64>]) -> f64 {
 pub fn mat_norm_inf(a: &[Vec<f64>]) -> f64 {
     a.iter()
         .map(|row| row.iter().map(|&v| v.abs()).sum::<f64>())
-        .fold(0.0f64, f64::max)
+        .fold(0.0f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 /// Check if a matrix is diagonal.

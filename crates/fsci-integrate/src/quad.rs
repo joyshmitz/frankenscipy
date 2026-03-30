@@ -425,7 +425,13 @@ where
         .iter()
         .zip(result_gauss.iter())
         .map(|(kronrod, gauss)| (kronrod - gauss).abs())
-        .fold(0.0, f64::max);
+        .fold(0.0, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     if error.is_nan() {
         error = f64::INFINITY;
     }
@@ -434,7 +440,16 @@ where
 }
 
 fn max_abs_component(values: &[f64]) -> f64 {
-    values.iter().map(|value| value.abs()).fold(0.0, f64::max)
+    values
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 /// Options for double integration.

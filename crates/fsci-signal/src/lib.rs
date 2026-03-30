@@ -1911,8 +1911,20 @@ pub fn peak_to_peak(x: &[f64]) -> f64 {
     if x.is_empty() {
         return 0.0;
     }
-    let max = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let min = x.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = x.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    });
+    let min = x.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.min(b)
+        }
+    });
     max - min
 }
 
@@ -1922,7 +1934,13 @@ pub fn crest_factor(x: &[f64]) -> f64 {
     if r == 0.0 {
         return 0.0;
     }
-    let peak = x.iter().map(|&v| v.abs()).fold(0.0f64, f64::max);
+    let peak = x.iter().map(|&v| v.abs()).fold(0.0f64, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    });
     peak / r
 }
 
@@ -2244,8 +2262,20 @@ pub fn normalize_minmax(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
-    let min = x.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min = x.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.min(b)
+        }
+    });
+    let max = x.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    });
     let range = max - min;
     if range == 0.0 {
         return vec![0.5; x.len()];
@@ -6239,7 +6269,13 @@ pub fn minimum_phase(h: &[f64]) -> Result<Vec<f64>, SignalError> {
         .iter()
         .copied()
         .filter(|&value| value > 0.0)
-        .fold(f64::INFINITY, f64::min);
+        .fold(f64::INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.min(b)
+            }
+        });
     let epsilon = if min_positive.is_finite() {
         1e-7 * min_positive
     } else {
@@ -6841,8 +6877,23 @@ mod tests {
         let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
         let passband_end = nearest_freq_index(&result.w, 0.3 * std::f64::consts::PI);
         let passband = &result.h_mag[..=passband_end];
-        let max_mag = passband.iter().copied().fold(0.0_f64, f64::max);
-        let min_mag = passband.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_mag = passband.iter().copied().fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
+        let min_mag = passband
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.min(b)
+                }
+            });
         assert!(
             max_mag - min_mag > 0.01,
             "Chebyshev-I passband should ripple, got range {}",
@@ -7312,8 +7363,26 @@ mod tests {
     }
 
     fn gd_span(values: &[f64]) -> f64 {
-        let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-        let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let min = values
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.min(b)
+                }
+            });
+        let max = values
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
         max - min
     }
 
@@ -7740,7 +7809,13 @@ mod tests {
             y.iter().all(|v| v.is_finite()),
             "sosfilt output should be finite for stable filter"
         );
-        let max_abs = y.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+        let max_abs = y.iter().map(|v| v.abs()).fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
         assert!(max_abs < 2.0, "output should be bounded (max={max_abs})");
     }
 
@@ -8085,7 +8160,16 @@ mod tests {
             .collect();
         let result = detrend(&data, DetrendType::Linear).unwrap();
         // Residuals should be close to the noise (within tolerance of linear fit error)
-        let max_residual = result.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+        let max_residual = result
+            .iter()
+            .map(|v| v.abs())
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
         assert!(max_residual < 0.5, "max residual: {max_residual}");
     }
 
@@ -8222,7 +8306,13 @@ mod tests {
         let w = get_window("flattop", 11).unwrap();
         assert_eq!(w.len(), 11);
         // Flattop peak is ~1.0 but slightly different due to coeffs
-        let peak = w.iter().copied().fold(0.0_f64, f64::max);
+        let peak = w.iter().copied().fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
         assert!((peak - 1.0).abs() < 0.01);
     }
 
@@ -8834,7 +8924,16 @@ mod tests {
         let w = morlet(200, 5.5, 10.0, false);
         assert_eq!(w.len(), 200);
         // With wider s, the Gaussian envelope is broader and oscillations are visible
-        let max_im = w.iter().map(|&(_, im)| im.abs()).fold(0.0_f64, f64::max);
+        let max_im = w
+            .iter()
+            .map(|&(_, im)| im.abs())
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
         assert!(
             max_im > 0.01,
             "morlet should have nonzero imaginary part, max_im = {max_im}"
@@ -9049,7 +9148,13 @@ mod tests {
         // Envelope should decay away from center
         let t: Vec<f64> = (0..100).map(|i| i as f64 * 0.001).collect();
         let y = gausspulse(&t, 100.0, 0.5);
-        let max_abs = y.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+        let max_abs = y.iter().map(|v| v.abs()).fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
         assert!(y[0].abs() >= max_abs * 0.99, "peak should be at t=0");
     }
 
@@ -9171,7 +9276,13 @@ mod tests {
             .iter()
             .map(|&(r, i)| (r * r + i * i).sqrt())
             .collect();
-        let max_mag = mags.iter().cloned().fold(0.0f64, f64::max);
+        let max_mag = mags.iter().cloned().fold(0.0f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
         let peaks: Vec<usize> = mags
             .iter()
             .enumerate()

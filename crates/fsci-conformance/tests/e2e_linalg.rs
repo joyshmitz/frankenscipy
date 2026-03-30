@@ -131,14 +131,26 @@ fn max_abs_diff_matrix(a: &[Vec<f64>], b: &[Vec<f64>]) -> f64 {
     a.iter()
         .zip(b.iter())
         .flat_map(|(ar, br)| ar.iter().zip(br.iter()).map(|(x, y)| (x - y).abs()))
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 fn max_abs_diff_vec(a: &[f64], b: &[f64]) -> f64 {
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| (x - y).abs())
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 fn identity_matrix(n: usize) -> Vec<Vec<f64>> {

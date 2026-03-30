@@ -343,11 +343,18 @@ fn perf_p2c004_full_profile() {
         let id = eye(100).expect("eye");
         let v = make_vector(100);
         let result = spmv_csr(&id, &v).expect("spmv");
-        let max_err: f64 = result
-            .iter()
-            .zip(&v)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
+        let max_err: f64 =
+            result
+                .iter()
+                .zip(&v)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
         iso_details.push(IsomorphismDetail {
             operation: "spmv_identity".into(),
             passes: max_err < 1e-12,
@@ -362,11 +369,17 @@ fn perf_p2c004_full_profile() {
         let v = make_vector(100);
         let orig = spmv_csr(&csr, &v).expect("spmv orig");
         let rt = spmv_csr(&roundtrip, &v).expect("spmv roundtrip");
-        let max_err: f64 = orig
-            .iter()
-            .zip(&rt)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
+        let max_err: f64 =
+            orig.iter()
+                .zip(&rt)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
         iso_details.push(IsomorphismDetail {
             operation: "format_roundtrip".into(),
             passes: max_err < 1e-12,
@@ -385,11 +398,17 @@ fn perf_p2c004_full_profile() {
         let v = make_vector(100);
         let orig = spmv_csr(&a, &v).expect("spmv a");
         let sum_v = spmv_csr(&sum, &v).expect("spmv sum");
-        let max_err: f64 = orig
-            .iter()
-            .zip(&sum_v)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
+        let max_err: f64 =
+            orig.iter()
+                .zip(&sum_v)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
         iso_details.push(IsomorphismDetail {
             operation: "add_zero_identity".into(),
             passes: max_err < 1e-12,
@@ -404,11 +423,17 @@ fn perf_p2c004_full_profile() {
         let v = make_vector(100);
         let orig = spmv_csr(&a, &v).expect("spmv a");
         let sc = spmv_csr(&scaled, &v).expect("spmv scaled");
-        let max_err: f64 = orig
-            .iter()
-            .zip(&sc)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
+        let max_err: f64 =
+            orig.iter()
+                .zip(&sc)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
         iso_details.push(IsomorphismDetail {
             operation: "scale_identity".into(),
             passes: max_err < 1e-12,

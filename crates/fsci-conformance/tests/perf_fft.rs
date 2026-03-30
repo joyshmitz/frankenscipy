@@ -290,7 +290,13 @@ fn perf_p2c005_full_profile() {
             .iter()
             .zip(&recovered)
             .map(|(a, b)| complex_abs((a.0 - b.0, a.1 - b.1)))
-            .fold(0.0_f64, f64::max);
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
         iso_details.push(IsomorphismDetail {
             operation: "fft_ifft_roundtrip".into(),
             passes: max_err < 1e-10,
@@ -307,7 +313,13 @@ fn perf_p2c005_full_profile() {
             .iter()
             .zip(&recovered)
             .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
         iso_details.push(IsomorphismDetail {
             operation: "rfft_irfft_roundtrip".into(),
             passes: max_err < 1e-10,

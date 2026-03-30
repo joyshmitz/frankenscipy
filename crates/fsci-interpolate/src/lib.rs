@@ -1227,7 +1227,13 @@ fn make_smoothing_spline_impl(
     let scale = y
         .iter()
         .map(|value| value.abs())
-        .fold(0.0_f64, f64::max)
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
         .max(1.0);
     let lambda = s / ((n as f64) * scale * scale);
     if lambda > 0.0 {

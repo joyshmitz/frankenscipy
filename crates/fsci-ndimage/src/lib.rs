@@ -1558,12 +1558,32 @@ pub fn map_coordinates(
 
 /// Compute the maximum of the input array.
 pub fn array_max(input: &NdArray) -> f64 {
-    input.data.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+    input
+        .data
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        })
 }
 
 /// Compute the minimum of the input array.
 pub fn array_min(input: &NdArray) -> f64 {
-    input.data.iter().cloned().fold(f64::INFINITY, f64::min)
+    input
+        .data
+        .iter()
+        .cloned()
+        .fold(f64::INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.min(b)
+            }
+        })
 }
 
 /// Gaussian filter with per-axis sigma.
@@ -1690,7 +1710,13 @@ pub fn maximum_filter1d(
             neighborhood
                 .iter()
                 .cloned()
-                .fold(f64::NEG_INFINITY, f64::max)
+                .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                })
         },
         size,
         mode,
@@ -1715,7 +1741,18 @@ pub fn minimum_filter1d(
     }
     generic_filter(
         input,
-        |neighborhood| neighborhood.iter().cloned().fold(f64::INFINITY, f64::min),
+        |neighborhood| {
+            neighborhood
+                .iter()
+                .cloned()
+                .fold(f64::INFINITY, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.min(b)
+                    }
+                })
+        },
         size,
         mode,
         cval,
@@ -1835,8 +1872,28 @@ pub fn otsu_threshold(input: &NdArray) -> f64 {
     }
 
     // Build histogram
-    let min_val = input.data.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_val = input.data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min_val = input
+        .data
+        .iter()
+        .cloned()
+        .fold(f64::INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.min(b)
+            }
+        });
+    let max_val = input
+        .data
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
 
     if (max_val - min_val).abs() < 1e-15 {
         return min_val;
@@ -2708,7 +2765,15 @@ mod tests {
         let input = NdArray::new(vec![1.0, 5.0, 3.0, 2.0, 4.0], vec![5]).unwrap();
         let result = generic_filter(
             &input,
-            |n| n.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            |n| {
+                n.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                })
+            },
             3,
             BoundaryMode::Constant,
             0.0,

@@ -100,7 +100,16 @@ fn journey_01_linalg_pipeline() {
             .sum::<f64>()
             - bi;
     }
-    let max_residual: f64 = residual.iter().map(|r| r.abs()).fold(0.0_f64, f64::max);
+    let max_residual: f64 = residual
+        .iter()
+        .map(|r| r.abs())
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     assert!(max_residual < 1e-10, "residual too large: {max_residual}");
 
     write_journey(&JourneyResult {
@@ -156,12 +165,24 @@ fn journey_02_optimization_workflow() {
         .x
         .iter()
         .map(|xi| xi.abs())
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let cg_err: f64 = cg_result
         .x
         .iter()
         .map(|xi| xi.abs())
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     assert!(bfgs_err < 1e-3 && cg_err < 1e-3, "both near zero");
 
     write_journey(&JourneyResult {
@@ -246,7 +267,13 @@ fn journey_04_fft_analysis() {
         .iter()
         .zip(&recovered)
         .map(|(a, b)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt())
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     assert!(max_err < 1e-10, "fft-ifft roundtrip error: {max_err}");
 
     write_journey(&JourneyResult {
@@ -277,11 +304,17 @@ fn journey_05_sparse_operations() {
 
     // spmv with identity should give same vector
     let y = spmv_csr(&identity, &x).expect("spmv");
-    let max_err: f64 = x
-        .iter()
-        .zip(&y)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
+    let max_err: f64 =
+        x.iter()
+            .zip(&y)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
     assert!(max_err < 1e-15, "identity spmv error: {max_err}");
 
     // Create random sparse (COO) → convert to CSR → scale
@@ -454,7 +487,13 @@ fn journey_09_lstsq_pinv() {
         ls.x.iter()
             .zip(&pinv_x)
             .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
     assert!(diff < 1e-8, "lstsq vs pinv@b diff: {diff}");
 
     write_journey(&JourneyResult {
@@ -495,7 +534,13 @@ fn journey_10_real_fft() {
         .iter()
         .zip(&recovered)
         .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     assert!(max_err < 1e-10, "rfft-irfft roundtrip error: {max_err}");
 
     write_journey(&JourneyResult {
@@ -594,7 +639,13 @@ fn journey_12_cross_packet_integration() {
         .iter()
         .zip(&recovered)
         .map(|(a, b)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt())
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     assert!(fft_err < 1e-10);
 
     // Step 4: CASP decision on the system

@@ -5478,8 +5478,23 @@ pub fn describe(data: &[f64]) -> DescribeResult {
 
     let nf = n as f64;
     let mean_val = data.iter().sum::<f64>() / nf;
-    let min_val = data.iter().copied().fold(f64::INFINITY, f64::min);
-    let max_val = data.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let min_val = data.iter().copied().fold(f64::INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.min(b)
+        }
+    });
+    let max_val = data
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
 
     let mut m2 = 0.0;
     let mut m3 = 0.0;
@@ -8071,7 +8086,16 @@ pub fn combine_pvalues(
             GoodnessOfFitResult { statistic, pvalue }
         }
         "tippett" => {
-            let statistic = pvalues.iter().copied().fold(f64::INFINITY, f64::min);
+            let statistic = pvalues
+                .iter()
+                .copied()
+                .fold(f64::INFINITY, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.min(b)
+                    }
+                });
             let pvalue = (1.0 - (1.0 - statistic).powf(k)).clamp(0.0, 1.0);
             GoodnessOfFitResult { statistic, pvalue }
         }
@@ -9265,8 +9289,23 @@ pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
         return (vec![], vec![]);
     }
 
-    let min_val = data.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_val = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min_val = data.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.min(b)
+        }
+    });
+    let max_val = data
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let range = max_val - min_val;
     let bin_width = if range > 0.0 {
         range / bins as f64
@@ -9294,8 +9333,23 @@ pub fn histogram_bin_edges(data: &[f64], method: &str) -> Vec<f64> {
         return vec![];
     }
 
-    let min_val = data.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_val = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min_val = data.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.min(b)
+        }
+    });
+    let max_val = data
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
 
     let nbins = match method {
         "sqrt" => (n as f64).sqrt().ceil() as usize,
@@ -9346,8 +9400,20 @@ pub fn binned_statistic(
         return (vec![], vec![]);
     }
 
-    let min_x = x.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min_x = x.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.min(b)
+        }
+    });
+    let max_x = x.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    });
     let bin_width = if max_x > min_x {
         (max_x - min_x) / bins as f64
     } else {
@@ -9372,8 +9438,23 @@ pub fn binned_statistic(
                 "mean" => bv.iter().sum::<f64>() / bv.len() as f64,
                 "sum" => bv.iter().sum(),
                 "count" => bv.len() as f64,
-                "min" => bv.iter().cloned().fold(f64::INFINITY, f64::min),
-                "max" => bv.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+                "min" => bv.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.min(b)
+                    }
+                }),
+                "max" => bv
+                    .iter()
+                    .cloned()
+                    .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    }),
                 "median" => {
                     let mut sorted = bv.clone();
                     sorted.sort_by(|a, b| a.total_cmp(b));

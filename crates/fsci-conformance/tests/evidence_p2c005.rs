@@ -133,7 +133,13 @@ fn check_fft_ifft_roundtrip(n: usize) -> ParityGate {
         .iter()
         .zip(&recovered)
         .map(|(a, b)| complex_abs((a.0 - b.0, a.1 - b.1)))
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     ParityGate {
         fixture_id: format!("fft_ifft_n{n}"),
         operation: "fft_ifft_roundtrip",
@@ -152,7 +158,13 @@ fn check_rfft_irfft_roundtrip(n: usize) -> ParityGate {
         .iter()
         .zip(&recovered)
         .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     ParityGate {
         fixture_id: format!("rfft_irfft_n{n}"),
         operation: "rfft_irfft_roundtrip",
@@ -209,7 +221,13 @@ fn check_normalization_modes(n: usize) -> ParityGate {
             let expected = (b.0 / scale, b.1 / scale);
             complex_abs((expected.0 - o.0, expected.1 - o.1))
         })
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     ParityGate {
         fixture_id: format!("normalization_n{n}"),
         operation: "normalization",
@@ -303,10 +321,16 @@ fn evidence_p2c005_final_pack() {
                 total_fixtures: matched.len(),
                 passed: matched.iter().filter(|g| g.pass).count(),
                 failed: matched.iter().filter(|g| !g.pass).count(),
-                max_abs_diff_across_all: matched
-                    .iter()
-                    .map(|g| g.max_abs_diff)
-                    .fold(0.0_f64, f64::max),
+                max_abs_diff_across_all: matched.iter().map(|g| g.max_abs_diff).fold(
+                    0.0_f64,
+                    |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    },
+                ),
             }
         })
         .collect();

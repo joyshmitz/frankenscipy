@@ -490,10 +490,16 @@ fn evidence_p2c001_final_pack() {
                 total_fixtures: matched.len(),
                 passed: matched.iter().filter(|g| g.pass).count(),
                 failed: matched.iter().filter(|g| !g.pass).count(),
-                max_abs_diff_across_all: matched
-                    .iter()
-                    .map(|g| g.max_abs_diff)
-                    .fold(0.0_f64, f64::max),
+                max_abs_diff_across_all: matched.iter().map(|g| g.max_abs_diff).fold(
+                    0.0_f64,
+                    |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    },
+                ),
             }
         })
         .collect();

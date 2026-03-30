@@ -1137,7 +1137,13 @@ fn e2e_008_large_system() {
             let expected = (1.0 + 0.001 * i as f64) * (-0.1_f64).exp();
             (yi - expected).abs()
         })
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
     let pass = max_err < 1e-4;
     if !pass {
         all_pass = false;

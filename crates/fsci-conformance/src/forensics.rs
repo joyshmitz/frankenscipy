@@ -131,8 +131,26 @@ impl NumericDiffView {
             })
             .collect();
 
-        let max_abs_diff = entries.iter().map(|e| e.abs_diff).fold(0.0_f64, f64::max);
-        let max_rel_diff = entries.iter().map(|e| e.rel_diff).fold(0.0_f64, f64::max);
+        let max_abs_diff = entries
+            .iter()
+            .map(|e| e.abs_diff)
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
+        let max_rel_diff = entries
+            .iter()
+            .map(|e| e.rel_diff)
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
         let failed_count = entries.iter().filter(|e| !e.pass).count();
 
         Self {

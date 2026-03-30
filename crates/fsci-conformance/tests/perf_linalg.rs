@@ -521,7 +521,13 @@ fn perf_p2c002_full_profile() {
             .iter()
             .zip(&lstsq_r.x)
             .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
+            .fold(0.0_f64, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
         iso_details.push(IsomorphismDetail {
             operation: "pinv".into(),
             passes: diff < 1e-8,

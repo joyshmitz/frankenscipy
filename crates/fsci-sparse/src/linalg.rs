@@ -487,7 +487,7 @@ pub fn cg(
 
     // Compute b_norm for relative tolerance
     let b_norm: f64 = b.iter().map(|v| v * v).sum::<f64>().sqrt();
-    if b_norm == 0.0 {
+    if b_norm <= f64::EPSILON {
         // b is zero, solution is zero
         return Ok(IterativeSolveResult {
             solution: vec![0.0; n],
@@ -610,7 +610,7 @@ pub fn pcg(
     };
 
     let b_norm: f64 = b.iter().map(|v| v * v).sum::<f64>().sqrt();
-    if b_norm == 0.0 {
+    if b_norm <= f64::EPSILON {
         return Ok(IterativeSolveResult {
             solution: vec![0.0; n],
             converged: true,
@@ -727,7 +727,7 @@ pub fn gmres(
     };
 
     let b_norm = vec_norm(b);
-    if b_norm == 0.0 {
+    if b_norm <= f64::EPSILON {
         return Ok(IterativeSolveResult {
             solution: vec![0.0; n],
             converged: true,
@@ -977,7 +977,7 @@ pub fn bicgstab(
     };
 
     let b_norm = vec_norm(b);
-    if b_norm == 0.0 {
+    if b_norm <= f64::EPSILON {
         return Ok(IterativeSolveResult {
             solution: vec![0.0; n],
             converged: true,
@@ -1133,7 +1133,7 @@ pub fn minres(
     }
 
     let b_norm = vec_norm(b);
-    if b_norm == 0.0 {
+    if b_norm <= f64::EPSILON {
         return Ok(IterativeSolveResult {
             solution: vec![0.0; n],
             converged: true,
@@ -1175,7 +1175,7 @@ pub fn lsqr(
 
     let max_iter = options.max_iter.unwrap_or(n * 10);
     let b_norm = vec_norm(b);
-    if b_norm == 0.0 {
+    if b_norm <= f64::EPSILON {
         return Ok(IterativeSolveResult {
             solution: vec![0.0; n],
             converged: true,
@@ -1576,7 +1576,13 @@ pub fn sparse_norm(a: &CsrMatrix, kind: &str) -> f64 {
                     }
                 }
             }
-            col_sums.iter().cloned().fold(0.0, f64::max)
+            col_sums.iter().cloned().fold(0.0, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            })
         }
         "inf" => {
             let mut max_row = 0.0f64;
@@ -2188,7 +2194,13 @@ pub fn eccentricity(graph: &CsrMatrix) -> Vec<f64> {
             row.iter()
                 .filter(|&&d| d.is_finite())
                 .cloned()
-                .fold(0.0f64, f64::max)
+                .fold(0.0f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                })
         })
         .collect()
 }
@@ -2406,7 +2418,13 @@ pub fn sparse_row_max(a: &CsrMatrix) -> Vec<f64> {
                 a.data()[start..end]
                     .iter()
                     .cloned()
-                    .fold(f64::NEG_INFINITY, f64::max)
+                    .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                        if a.is_nan() || b.is_nan() {
+                            f64::NAN
+                        } else {
+                            a.max(b)
+                        }
+                    })
                     .max(0.0) // account for implicit zeros
             }
         })
@@ -2423,11 +2441,22 @@ pub fn sparse_row_min(a: &CsrMatrix) -> Vec<f64> {
             if start == end {
                 0.0
             } else {
-                a.data()[start..end]
-                    .iter()
-                    .cloned()
-                    .fold(f64::INFINITY, f64::min)
-                    .min(0.0)
+                let row_min =
+                    a.data()[start..end]
+                        .iter()
+                        .cloned()
+                        .fold(f64::INFINITY, |a: f64, b: f64| {
+                            if a.is_nan() || b.is_nan() {
+                                f64::NAN
+                            } else {
+                                a.min(b)
+                            }
+                        });
+                if row_min.is_nan() {
+                    f64::NAN
+                } else {
+                    row_min.min(0.0)
+                }
             }
         })
         .collect()

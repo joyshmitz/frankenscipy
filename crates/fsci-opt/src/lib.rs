@@ -1169,8 +1169,26 @@ where
         }
 
         // Check convergence: spread of fitness values.
-        let fmin = fitness.iter().cloned().fold(f64::INFINITY, f64::min);
-        let fmax = fitness.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let fmin = fitness
+            .iter()
+            .cloned()
+            .fold(f64::INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.min(b)
+                }
+            });
+        let fmax = fitness
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
         if (fmax - fmin).abs() <= opts.tol * (1.0 + fmin.abs()) {
             converged = true;
             break;

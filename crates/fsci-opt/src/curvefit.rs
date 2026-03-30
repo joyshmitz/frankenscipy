@@ -177,7 +177,13 @@ where
         let jtr = jt_vec(&jac, &r);
 
         // Check gradient convergence: ||J^T r||_inf <= gtol
-        let grad_inf = jtr.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+        let grad_inf = jtr.iter().map(|v| v.abs()).fold(0.0_f64, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
         if grad_inf <= options.gtol {
             return Ok(LeastSquaresResult {
                 x,

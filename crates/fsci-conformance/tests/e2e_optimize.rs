@@ -423,14 +423,26 @@ fn e2e_p2c003_02_multi_algorithm_comparison() {
                 terminal_values.len()
             ));
         }
-        let min_f = terminal_values
-            .iter()
-            .map(|(_, value)| *value)
-            .fold(f64::INFINITY, f64::min);
-        let max_f = terminal_values
-            .iter()
-            .map(|(_, value)| *value)
-            .fold(f64::NEG_INFINITY, f64::max);
+        let min_f = terminal_values.iter().map(|(_, value)| *value).fold(
+            f64::INFINITY,
+            |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.min(b)
+                }
+            },
+        );
+        let max_f = terminal_values.iter().map(|(_, value)| *value).fold(
+            f64::NEG_INFINITY,
+            |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            },
+        );
         let spread = max_f - min_f;
         if spread > 1.0e-4 {
             return Err(format!(

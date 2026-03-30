@@ -85,6 +85,14 @@ pub struct MmMatrix {
     pub info: MmInfo,
 }
 
+fn checked_matrix_len(rows: usize, cols: usize, context: &str) -> Result<usize, IoError> {
+    rows.checked_mul(cols).ok_or_else(|| {
+        IoError::InvalidFormat(format!(
+            "{context} dimensions {rows}x{cols} overflowed usize"
+        ))
+    })
+}
+
 fn parse_mm_info(lines: &mut std::str::Lines<'_>) -> Result<MmInfo, IoError> {
     let header = lines
         .next()
@@ -218,7 +226,8 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
             let rows = info.rows;
             let cols = info.cols;
             let nnz = info.nnz;
-            let mut data = vec![0.0; rows * cols];
+            let dense_len = checked_matrix_len(rows, cols, "Matrix Market matrix")?;
+            let mut data = vec![0.0; dense_len];
             let mut seen_nnz = 0usize;
 
             for line in lines {
@@ -337,7 +346,8 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
 ///
 /// Matches `scipy.io.mmwrite`.
 pub fn mmwrite(rows: usize, cols: usize, data: &[f64]) -> Result<String, IoError> {
-    if data.len() != rows * cols {
+    let expected_len = checked_matrix_len(rows, cols, "Matrix Market matrix")?;
+    if data.len() != expected_len {
         return Err(IoError::InvalidFormat(format!(
             "data length {} doesn't match {}x{}",
             data.len(),
@@ -562,6 +572,11 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
 ///
 /// Matches `scipy.io.wavfile.write`.
 pub fn wav_write(sample_rate: u32, channels: u16, data: &[f64]) -> Result<Vec<u8>, IoError> {
+    if sample_rate == 0 {
+        return Err(IoError::InvalidFormat(
+            "WAV sample rate must be nonzero".to_string(),
+        ));
+    }
     if channels == 0 {
         return Err(IoError::InvalidFormat(
             "WAV channel count must be nonzero".to_string(),
@@ -918,6 +933,20 @@ pub fn write_csv(
     let mut out = String::new();
     let header_cols = header.map(<[&str]>::len);
     if let Some(h) = header {
+        for cell in h {
+            if cell.contains(['\n', '\r']) {
+                return Err(IoError::InvalidFormat(format!(
+                    "CSV header cell {:?} contains a newline and cannot be encoded safely",
+                    cell
+                )));
+            }
+            if cell.contains(delimiter) {
+                return Err(IoError::InvalidFormat(format!(
+                    "CSV header cell {:?} contains the delimiter {:?} and cannot be encoded safely",
+                    cell, delimiter
+                )));
+            }
+        }
         out.push_str(&h.join(&delimiter.to_string()));
         out.push('\n');
     }
@@ -1191,6 +1220,22 @@ mod tests {
     }
 
     #[test]
+    fn mmread_rejects_dense_size_overflow() {
+        let content = format!(
+            "%%MatrixMarket matrix coordinate real general\n{} 2 0\n",
+            usize::MAX
+        );
+        let err = mmread(&content).expect_err("overflowing dense dimensions should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(format!(
+                "Matrix Market matrix dimensions {}x2 overflowed usize",
+                usize::MAX
+            ))
+        );
+    }
+
+    #[test]
     fn mmwrite_roundtrip() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let content = mmwrite(2, 3, &data).unwrap();
@@ -1203,6 +1248,19 @@ mod tests {
                 "mismatch at {i}: orig={orig}, read={read}"
             );
         }
+    }
+
+    #[test]
+    fn mmwrite_rejects_dense_size_overflow() {
+        let err = mmwrite(usize::MAX, 2, &[])
+            .expect_err("overflowing dense dimensions should fail before length comparison");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(format!(
+                "Matrix Market matrix dimensions {}x2 overflowed usize",
+                usize::MAX
+            ))
+        );
     }
 
     #[test]
@@ -1231,6 +1289,16 @@ mod tests {
             IoError::InvalidFormat(
                 "data length 3 does not contain whole frames for 2 channels".to_string()
             )
+        );
+    }
+
+    #[test]
+    fn wav_write_rejects_zero_sample_rate() {
+        let err =
+            wav_write(0, 1, &[0.0]).expect_err("zero sample rate should fail before encoding");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("WAV sample rate must be nonzero".to_string())
         );
     }
 
@@ -1524,7 +1592,8 @@ mod tests {
 
     #[test]
     fn read_csv_rejects_empty_input_when_header_is_required() {
-        let err = read_csv("", ',', true).expect_err("empty input with required header should fail");
+        let err =
+            read_csv("", ',', true).expect_err("empty input with required header should fail");
         assert_eq!(
             err,
             IoError::InvalidFormat("CSV header row is required but the input is empty".to_string())
@@ -1555,6 +1624,32 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("CSV header has 3 columns but first data row has 2".to_string())
+        );
+    }
+
+    #[test]
+    fn write_csv_rejects_header_cells_with_delimiters() {
+        let err = write_csv(Some(&["bad,header"]), &[vec![1.0]], ',')
+            .expect_err("header cells containing the delimiter should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "CSV header cell \"bad,header\" contains the delimiter ',' and cannot be encoded safely"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn write_csv_rejects_header_cells_with_newlines() {
+        let err = write_csv(Some(&["bad\nheader"]), &[vec![1.0]], ',')
+            .expect_err("header cells containing newlines should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(
+                "CSV header cell \"bad\\nheader\" contains a newline and cannot be encoded safely"
+                    .to_string()
+            )
         );
     }
 
