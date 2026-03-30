@@ -744,7 +744,8 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
                                 "array '{n}' is missing nonzero '# rows:' and '# columns:' headers before data"
                             )));
                         }
-                        let mut data = Vec::with_capacity(rows * cols);
+                        let expected_len = checked_matrix_len(rows, cols, "MAT text matrix")?;
+                        let mut data = Vec::with_capacity(expected_len);
                         // Parse this line
                         for val_str in trimmed.split_whitespace() {
                             let v: f64 = val_str
@@ -763,10 +764,10 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
                                 }
                             }
                         }
-                        if data.len() != rows * cols {
+                        if data.len() != expected_len {
                             return Err(IoError::InvalidFormat(format!(
                                 "array '{n}' expected {} values but found {}",
-                                rows * cols,
+                                expected_len,
                                 data.len()
                             )));
                         }
@@ -836,7 +837,8 @@ pub fn savetxt(rows: usize, cols: usize, data: &[f64], delimiter: &str) -> Resul
             delimiter
         )));
     }
-    if data.len() != rows * cols {
+    let expected_len = checked_matrix_len(rows, cols, "text matrix")?;
+    if data.len() != expected_len {
         return Err(IoError::InvalidFormat(format!(
             "data length {} doesn't match {}x{}",
             data.len(),
@@ -1516,6 +1518,22 @@ mod tests {
     }
 
     #[test]
+    fn loadmat_rejects_dimension_overflow() {
+        let text = format!(
+            "# name: A\n# type: matrix\n# rows: {}\n# columns: 2\n1 2\n",
+            usize::MAX
+        );
+        let err = loadmat_text(&text).expect_err("overflowing MAT dimensions should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(format!(
+                "MAT text matrix dimensions {}x2 overflowed usize",
+                usize::MAX
+            ))
+        );
+    }
+
+    #[test]
     fn loadtxt_basic() {
         let content = "# comment\n1 2 3\n4 5 6\n";
         let (rows, cols, data) = loadtxt(content).unwrap();
@@ -1537,6 +1555,19 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("data length 3 doesn't match 2x2".to_string())
+        );
+    }
+
+    #[test]
+    fn savetxt_rejects_dimension_overflow() {
+        let err = savetxt(usize::MAX, 2, &[], " ")
+            .expect_err("overflowing savetxt dimensions should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(format!(
+                "text matrix dimensions {}x2 overflowed usize",
+                usize::MAX
+            ))
         );
     }
 

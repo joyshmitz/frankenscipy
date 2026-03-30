@@ -7774,7 +7774,7 @@ pub fn brunnermunzel(x: &[f64], y: &[f64]) -> TtestResult {
     let mut ranks = vec![0.0; nx + ny];
     let mut i = 0;
     while i < combined.len() {
-        let mut j = i;
+        let mut j = i + 1;
         while j < combined.len() && combined[j].0 == combined[i].0 {
             j += 1;
         }

@@ -2344,9 +2344,10 @@ fn logm_general(
                 correction += t[(i, k)] * log_t[(k, j)] - log_t[(i, k)] * t[(k, j)];
             }
             let eigen_gap = tjj - tii;
-            if eigen_gap.abs() > 1e-15 {
+            if eigen_gap.abs() > f64::EPSILON * tii.abs().max(tjj.abs()).max(1.0) {
                 let numerator = t[(i, j)] * (dj - di) + correction;
-                log_t[(i, j)] = numerator / eigen_gap;
+                let val = numerator / eigen_gap;
+                log_t[(i, j)] = if val.is_finite() { val } else { f64::NAN };
             } else {
                 // Near-degenerate case: T[i,i] ≈ T[j,j]
                 // Use the first-derivative limit for log(λI + N).
@@ -2354,10 +2355,11 @@ fn logm_general(
                 for k in (i + 1)..j {
                     jordan_sum += t[(i, k)] * log_t[(k, j)] - log_t[(i, k)] * t[(k, j)];
                 }
-                if tii.abs() > 1e-15 {
-                    log_t[(i, j)] = jordan_sum / tii;
+                if tii.abs() > f64::EPSILON {
+                    let val = jordan_sum / tii;
+                    log_t[(i, j)] = if val.is_finite() { val } else { f64::NAN };
                 } else {
-                    log_t[(i, j)] = 0.0;
+                    log_t[(i, j)] = f64::NAN; // Singularity
                 }
             }
         }
@@ -2639,12 +2641,14 @@ pub fn funm(
                 sum += t[(i, k)] * ft[(k, j)] - ft[(i, k)] * t[(k, j)];
             }
             let denom = t[(j, j)] - t[(i, i)];
-            ft[(i, j)] = if denom.abs() > 1e-15 {
-                sum / denom
-            } else if t[(i, i)].abs() > 1e-15 {
-                sum / t[(i, i)]
+            ft[(i, j)] = if denom.abs() > f64::EPSILON * t[(j, j)].abs().max(t[(i, i)].abs()).max(1.0) {
+                let val = sum / denom;
+                if val.is_finite() { val } else { f64::NAN }
+            } else if t[(i, i)].abs() > f64::EPSILON {
+                let val = sum / t[(i, i)];
+                if val.is_finite() { val } else { f64::NAN }
             } else {
-                0.0
+                f64::NAN // Singularity
             };
         }
     }
@@ -3060,7 +3064,7 @@ fn compute_backward_error_dense(a: &[Vec<f64>], x: &[f64], b: &[f64]) -> f64 {
     let b_norm = b_sum_sq.sqrt();
 
     let denom = a_norm * x_norm + b_norm;
-    if denom > 0.0 {
+    if denom > 0.0 && denom.is_finite() {
         residual_norm / denom
     } else {
         0.0
