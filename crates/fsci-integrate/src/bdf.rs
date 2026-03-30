@@ -562,10 +562,3 @@ mod tests {
         assert!(solver.y_old().is_some());
     }
 }
-is_some());
-    }
-}
-t_old().is_some());
-        assert!(solver.y_old().is_some());
-    }
-}
