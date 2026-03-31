@@ -614,7 +614,7 @@ where
         _ => MSG_FAILED.to_owned(),
     };
 
-    let sol = options.dense_output.then(|| OdeSolution {
+    let sol = options.dense_output.then_some(OdeSolution {
         knots: dense_knots,
         values: dense_values,
         alt_segment: matches!(options.method, SolverKind::Bdf | SolverKind::Lsoda),
@@ -874,7 +874,10 @@ mod tests {
         .expect("dense output solve should succeed");
 
         let sol = result.sol.expect("dense_output should populate result.sol");
-        assert!(!sol.alt_segment, "RK dense output should not use alt_segment");
+        assert!(
+            !sol.alt_segment,
+            "RK dense output should not use alt_segment"
+        );
         assert_eq!(sol.knots.first().copied(), Some(0.0));
         assert_eq!(sol.values.first().cloned(), Some(vec![2.0]));
         assert!(
