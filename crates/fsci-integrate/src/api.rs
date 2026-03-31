@@ -474,6 +474,9 @@ where
 
     let mut ts = Vec::new();
     let mut ys: Vec<Vec<f64>> = Vec::new();
+    // Dense output uses solver-chosen knots even when t_eval is supplied.
+    let mut dense_knots = vec![t0];
+    let mut dense_values = vec![options.y0.to_vec()];
     let mut next_t_eval_index = 0usize;
 
     let mut t_events: Option<Vec<Vec<f64>>> = options
@@ -542,6 +545,9 @@ where
                 }
 
                 if let Some(t_ev) = t_event_triggered {
+                    dense_knots.push(t_ev);
+                    dense_values.push(y_event_triggered.clone().unwrap_or_default());
+
                     if let Some(t_eval) = options.t_eval {
                         while let Some(&te) = t_eval.get(next_t_eval_index) {
                             let in_range = if direction > 0.0 {
@@ -567,6 +573,9 @@ where
                     status = 1;
                     break;
                 }
+
+                dense_knots.push(t);
+                dense_values.push(y.clone());
 
                 if let Some(t_eval) = options.t_eval {
                     while let Some(&te) = t_eval.get(next_t_eval_index) {
@@ -605,10 +614,16 @@ where
         _ => MSG_FAILED.to_owned(),
     };
 
+    let sol = options.dense_output.then(|| OdeSolution {
+        knots: dense_knots,
+        values: dense_values,
+        alt_segment: matches!(options.method, SolverKind::Bdf | SolverKind::Lsoda),
+    });
+
     Ok(SolveIvpResult {
         t: ts,
         y: ys,
-        sol: None,
+        sol,
         t_events,
         y_events,
         nfev: solver.nfev(),
@@ -839,6 +854,61 @@ mod tests {
         assert_eq!(result.t.len(), 4);
         assert!((result.t[3] - 0.4).abs() < 1e-8);
         assert!((result.y[3][0] - 0.4).abs() < 1e-8);
+    }
+
+    #[test]
+    fn solve_ivp_dense_output_returns_solver_knots_with_t_eval_present() {
+        let result = solve_ivp(
+            &mut |_t, y| vec![-0.5 * y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[2.0],
+                method: SolverKind::Rk45,
+                t_eval: Some(&[0.25, 0.5, 0.75, 1.0]),
+                dense_output: true,
+                rtol: 1e-6,
+                atol: ToleranceValue::Scalar(1e-8),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("dense output solve should succeed");
+
+        let sol = result.sol.expect("dense_output should populate result.sol");
+        assert!(!sol.alt_segment, "RK dense output should not use alt_segment");
+        assert_eq!(sol.knots.first().copied(), Some(0.0));
+        assert_eq!(sol.values.first().cloned(), Some(vec![2.0]));
+        assert!(
+            sol.knots.len() > result.t.len(),
+            "dense-output knots should be solver-chosen, not just t_eval points"
+        );
+        assert_eq!(result.t, vec![0.25, 0.5, 0.75, 1.0]);
+    }
+
+    #[test]
+    fn solve_ivp_dense_output_uses_alt_segment_for_lsoda() {
+        let result = solve_ivp(
+            &mut |_t, y| vec![-0.5 * y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[2.0],
+                method: SolverKind::Lsoda,
+                dense_output: true,
+                rtol: 1e-6,
+                atol: ToleranceValue::Scalar(1e-8),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("LSODA dense output solve should succeed");
+
+        let sol = result.sol.expect("dense_output should populate result.sol");
+        assert!(sol.alt_segment, "LSODA should set alt_segment");
+        assert_eq!(sol.knots.first().copied(), Some(0.0));
+        assert_eq!(sol.values.first().cloned(), Some(vec![2.0]));
+        assert_eq!(
+            sol.knots.last().copied(),
+            result.t.last().copied(),
+            "dense-output knots should end at the final solver time"
+        );
     }
 
     #[test]
