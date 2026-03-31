@@ -1916,6 +1916,190 @@ where
     sum * half
 }
 
+/// Compute the double integral of a function over a rectangular region.
+///
+/// Uses iterated Simpson's rule.
+/// Matches `scipy.integrate.dblquad` behavior.
+pub fn dblquad_rect<F>(
+    f: F,
+    x_lo: f64,
+    x_hi: f64,
+    y_lo: f64,
+    y_hi: f64,
+    nx: usize,
+    ny: usize,
+) -> f64
+where
+    F: Fn(f64, f64) -> f64,
+{
+    let nx = nx.max(2) | 1; // ensure odd
+    let ny = ny.max(2) | 1;
+    let hx = (x_hi - x_lo) / (nx - 1) as f64;
+    let hy = (y_hi - y_lo) / (ny - 1) as f64;
+
+    let mut total = 0.0;
+    for i in 0..nx {
+        let x = x_lo + i as f64 * hx;
+        let wx = if i == 0 || i == nx - 1 {
+            1.0
+        } else if i % 2 == 0 {
+            2.0
+        } else {
+            4.0
+        };
+
+        for j in 0..ny {
+            let y = y_lo + j as f64 * hy;
+            let wy = if j == 0 || j == ny - 1 {
+                1.0
+            } else if j % 2 == 0 {
+                2.0
+            } else {
+                4.0
+            };
+
+            total += wx * wy * f(x, y);
+        }
+    }
+
+    total * hx * hy / 9.0
+}
+
+/// Compute the triple integral of a function over a rectangular region.
+#[allow(clippy::too_many_arguments)]
+pub fn tplquad_rect<F>(
+    f: F,
+    x_lo: f64,
+    x_hi: f64,
+    y_lo: f64,
+    y_hi: f64,
+    z_lo: f64,
+    z_hi: f64,
+    n: usize,
+) -> f64
+where
+    F: Fn(f64, f64, f64) -> f64,
+{
+    let n = n.max(2) | 1;
+    let hx = (x_hi - x_lo) / (n - 1) as f64;
+    let hy = (y_hi - y_lo) / (n - 1) as f64;
+    let hz = (z_hi - z_lo) / (n - 1) as f64;
+
+    let simpson_weight = |i: usize, max: usize| -> f64 {
+        if i == 0 || i == max - 1 {
+            1.0
+        } else if i.is_multiple_of(2) {
+            2.0
+        } else {
+            4.0
+        }
+    };
+
+    let mut total = 0.0;
+    for i in 0..n {
+        let x = x_lo + i as f64 * hx;
+        let wx = simpson_weight(i, n);
+        for j in 0..n {
+            let y = y_lo + j as f64 * hy;
+            let wy = simpson_weight(j, n);
+            for k in 0..n {
+                let z = z_lo + k as f64 * hz;
+                let wz = simpson_weight(k, n);
+                total += wx * wy * wz * f(x, y, z);
+            }
+        }
+    }
+
+    total * hx * hy * hz / 27.0
+}
+
+/// Compute the line integral ∫ f(x,y) ds along a parametric curve.
+///
+/// `curve_x(t)` and `curve_y(t)` define the curve, `f(x,y)` is the integrand.
+pub fn line_integral<F, Cx, Cy>(
+    f: F,
+    curve_x: Cx,
+    curve_y: Cy,
+    t_lo: f64,
+    t_hi: f64,
+    n: usize,
+) -> f64
+where
+    F: Fn(f64, f64) -> f64,
+    Cx: Fn(f64) -> f64,
+    Cy: Fn(f64) -> f64,
+{
+    let n = n.max(2) | 1;
+    let h = (t_hi - t_lo) / (n - 1) as f64;
+
+    let mut total = 0.0;
+    for i in 0..n {
+        let t = t_lo + i as f64 * h;
+        let x = curve_x(t);
+        let y = curve_y(t);
+
+        // Approximate ds = sqrt(dx² + dy²) via central differences
+        let dt = h * 0.01;
+        let dx = curve_x(t + dt) - curve_x(t - dt);
+        let dy = curve_y(t + dt) - curve_y(t - dt);
+        let ds = (dx * dx + dy * dy).sqrt() / (2.0 * dt);
+
+        let w = if i == 0 || i == n - 1 {
+            1.0
+        } else if i % 2 == 0 {
+            2.0
+        } else {
+            4.0
+        };
+
+        total += w * f(x, y) * ds;
+    }
+
+    total * h / 3.0
+}
+
+/// Monte Carlo integration of a function over [a,b]^d.
+///
+/// Uses random sampling to estimate the integral.
+pub fn monte_carlo_integrate<F>(
+    f: F,
+    bounds: &[(f64, f64)],
+    n_samples: usize,
+    seed: u64,
+) -> (f64, f64)
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let d = bounds.len();
+    if d == 0 || n_samples == 0 {
+        return (0.0, 0.0);
+    }
+
+    let volume: f64 = bounds.iter().map(|&(a, b)| b - a).product();
+    let mut rng = seed;
+    let mut sum = 0.0;
+    let mut sum_sq = 0.0;
+    let mut point = vec![0.0; d];
+
+    for _ in 0..n_samples {
+        for j in 0..d {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u = (rng >> 11) as f64 / (1u64 << 53) as f64;
+            point[j] = bounds[j].0 + u * (bounds[j].1 - bounds[j].0);
+        }
+        let fval = f(&point);
+        sum += fval;
+        sum_sq += fval * fval;
+    }
+
+    let nf = n_samples as f64;
+    let mean = sum / nf;
+    let variance = sum_sq / nf - mean * mean;
+    let std_err = (variance / nf).sqrt() * volume;
+
+    (mean * volume, std_err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

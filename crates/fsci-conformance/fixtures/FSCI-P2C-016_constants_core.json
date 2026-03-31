@@ -1,0 +1,79 @@
+{
+  "packet_id": "FSCI-P2C-016",
+  "family": "constants_core",
+  "cases": [
+    {
+      "fixture_id": "constants_exact_values",
+      "category": "fundamental_values",
+      "operation": "fundamental_constants",
+      "description": "Exact or tightly specified constants match their expected CODATA-backed values.",
+      "expected_properties": [
+        "speed of light is exact",
+        "Planck constant remains in the expected order of magnitude",
+        "degree is pi/180"
+      ]
+    },
+    {
+      "fixture_id": "lookup_aliases",
+      "category": "lookup",
+      "operation": "value",
+      "description": "Named and aliased lookups resolve the expected constants while unknown names fail closed.",
+      "expected_properties": [
+        "value('speed of light') returns c",
+        "value('Planck') returns h",
+        "value('nonexistent') returns null"
+      ]
+    },
+    {
+      "fixture_id": "partial_find",
+      "category": "lookup",
+      "operation": "find",
+      "description": "Partial-name search returns stable hits for known constants.",
+      "expected_properties": [
+        "find('planck') returns at least one Planck-related constant",
+        "find('charge') returns elementary charge"
+      ]
+    },
+    {
+      "fixture_id": "temperature_roundtrip",
+      "category": "unit_conversion",
+      "operation": "convert_temperature",
+      "description": "Temperature conversions preserve freezing/boiling references and round-trip across unit systems.",
+      "expected_properties": [
+        "0 C -> 273.15 K",
+        "212 F -> 100 C",
+        "C -> F -> C round-trip is stable"
+      ]
+    },
+    {
+      "fixture_id": "energy_roundtrip",
+      "category": "unit_conversion",
+      "operation": "ev_joules",
+      "description": "Electron-volt to joule conversion round-trips with negligible numerical drift.",
+      "expected_properties": [
+        "1 eV equals ELECTRON_VOLT joules",
+        "joules_to_ev(ev_to_joules(x)) ~= x"
+      ]
+    },
+    {
+      "fixture_id": "wave_frequency_roundtrip",
+      "category": "unit_conversion",
+      "operation": "wave_frequency",
+      "description": "Wavelength/frequency helpers remain inverse to each other for finite positive inputs.",
+      "expected_properties": [
+        "freq_to_wavelength(wavelength_to_freq(x)) ~= x"
+      ]
+    },
+    {
+      "fixture_id": "angle_and_mass_helpers",
+      "category": "derived_units",
+      "operation": "deg_rad_mass",
+      "description": "Angle and mass helper conversions stay internally consistent.",
+      "expected_properties": [
+        "deg2rad(180) = pi",
+        "rad2deg(pi/2) = 90",
+        "lb_to_kg(kg_to_lb(x)) ~= x"
+      ]
+    }
+  ]
+}

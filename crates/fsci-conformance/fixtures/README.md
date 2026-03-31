@@ -17,6 +17,10 @@ This folder stores normalized oracle-vs-target fixtures for fsci-conformance.
   adversarial conformance cases for:
   - `minimize` (`BFGS`, `CG`, `Powell`) on Rosenbrock/Ackley/Rastrigin + invariance quadratics
   - `root_scalar` (`brentq`, `brenth`, `bisect`, `ridder`) with scalar root contracts
+- `FSCI-P2C-016_constants_core.json`: constants/core helper evidence fixture for:
+  - exact fundamental values
+  - name/alias lookup via `value` and `find`
+  - temperature, energy, wavelength/frequency, angle, and mass conversion invariants
 - `artifacts/`: generated parity reports, RaptorQ sidecars, and decode-proof logs.
 
 Expected per-packet durable artifacts:

@@ -577,6 +577,7 @@ dependencies = [
  "asupersync",
  "blake3",
  "fsci-arrayapi",
+ "fsci-constants",
  "fsci-fft",
  "fsci-integrate",
  "fsci-linalg",

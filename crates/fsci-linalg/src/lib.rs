@@ -2641,15 +2641,16 @@ pub fn funm(
                 sum += t[(i, k)] * ft[(k, j)] - ft[(i, k)] * t[(k, j)];
             }
             let denom = t[(j, j)] - t[(i, i)];
-            ft[(i, j)] = if denom.abs() > f64::EPSILON * t[(j, j)].abs().max(t[(i, i)].abs()).max(1.0) {
-                let val = sum / denom;
-                if val.is_finite() { val } else { f64::NAN }
-            } else if t[(i, i)].abs() > f64::EPSILON {
-                let val = sum / t[(i, i)];
-                if val.is_finite() { val } else { f64::NAN }
-            } else {
-                f64::NAN // Singularity
-            };
+            ft[(i, j)] =
+                if denom.abs() > f64::EPSILON * t[(j, j)].abs().max(t[(i, i)].abs()).max(1.0) {
+                    let val = sum / denom;
+                    if val.is_finite() { val } else { f64::NAN }
+                } else if t[(i, i)].abs() > f64::EPSILON {
+                    let val = sum / t[(i, i)];
+                    if val.is_finite() { val } else { f64::NAN }
+                } else {
+                    f64::NAN // Singularity
+                };
         }
     }
 

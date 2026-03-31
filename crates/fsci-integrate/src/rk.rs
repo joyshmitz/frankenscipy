@@ -678,7 +678,11 @@ impl RkSolver {
                 .map(|((yi, yni), ai)| {
                     let a = yi.abs();
                     let b = yni.abs();
-                    let max_val = if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) };
+                    let max_val = if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    };
                     ai + max_val * self.rtol
                 })
                 .collect(),

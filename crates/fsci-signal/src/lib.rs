@@ -2524,10 +2524,7 @@ pub fn mel_filterbank(n_mels: usize, n_fft: usize, sr: f64, fmin: f64, fmax: f64
     let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz(m)).collect();
 
     // Convert to FFT bin indices
-    let bin_points: Vec<f64> = hz_points
-        .iter()
-        .map(|&hz| hz * n_fft as f64 / sr)
-        .collect();
+    let bin_points: Vec<f64> = hz_points.iter().map(|&hz| hz * n_fft as f64 / sr).collect();
 
     let mut filterbank = vec![vec![0.0; n_freq]; n_mels];
 
@@ -2570,7 +2567,9 @@ pub fn mfcc(
 
     // Window
     let window: Vec<f64> = (0..frame_len)
-        .map(|i| 0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (frame_len - 1) as f64).cos()))
+        .map(|i| {
+            0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (frame_len - 1) as f64).cos())
+        })
         .collect();
 
     let mut mfccs = Vec::new();
@@ -2602,7 +2601,11 @@ pub fn mfcc(
         let mel_energies: Vec<f64> = fb
             .iter()
             .map(|filter| {
-                let energy: f64 = filter.iter().zip(power_spec.iter()).map(|(&f, &p)| f * p).sum();
+                let energy: f64 = filter
+                    .iter()
+                    .zip(power_spec.iter())
+                    .map(|(&f, &p)| f * p)
+                    .sum();
                 energy.max(1e-10).ln() // log Mel energies
             })
             .collect();
@@ -2612,7 +2615,8 @@ pub fn mfcc(
         for i in 0..n_mfcc {
             let mut sum = 0.0;
             for (j, &e) in mel_energies.iter().enumerate() {
-                sum += e * (std::f64::consts::PI * i as f64 * (j as f64 + 0.5) / n_mels as f64).cos();
+                sum +=
+                    e * (std::f64::consts::PI * i as f64 * (j as f64 + 0.5) / n_mels as f64).cos();
             }
             coeffs.push(sum * (2.0 / n_mels as f64).sqrt());
         }
@@ -2631,15 +2635,15 @@ pub fn chroma(magnitudes: &[f64], sr: f64, n_fft: usize) -> [f64; 12] {
     let n_freq = magnitudes.len();
     let mut chroma_vec = [0.0f64; 12];
 
-    for k in 1..n_freq {
+    for (k, magnitude) in magnitudes.iter().enumerate().take(n_freq).skip(1) {
         let freq = k as f64 * sr / n_fft as f64;
-        if freq < 20.0 || freq > 5000.0 {
+        if !(20.0..=5000.0).contains(&freq) {
             continue;
         }
         // Map frequency to pitch class: pitch = 12 * log2(f / 440) + 69
         let midi = 12.0 * (freq / 440.0).log2() + 69.0;
         let pitch_class = ((midi.round() as i64 % 12 + 12) % 12) as usize;
-        chroma_vec[pitch_class] += magnitudes[k];
+        chroma_vec[pitch_class] += *magnitude;
     }
 
     // Normalize
