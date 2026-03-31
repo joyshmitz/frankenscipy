@@ -2366,7 +2366,8 @@ pub fn reshape(input: &NdArray, new_shape: Vec<usize>) -> Result<NdArray, Ndimag
 
 /// Flatten an NdArray to 1D.
 pub fn flatten(input: &NdArray) -> NdArray {
-    NdArray::new(input.data.clone(), vec![input.size()]).unwrap()
+    NdArray::new(input.data.clone(), vec![input.size()])
+        .expect("flatten shape strictly matches data length")
 }
 
 /// Compute element-wise comparison: 1.0 where a > b, 0.0 otherwise.

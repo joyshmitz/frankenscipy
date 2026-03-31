@@ -141,6 +141,12 @@ fn interpolate_state(
         .collect()
 }
 
+fn is_new_time_point(points: &[f64], candidate: f64) -> bool {
+    points
+        .last()
+        .is_none_or(|&last| (last - candidate).abs() > 1e-14)
+}
+
 fn solve_event_equation(
     event_fn: EventFn,
     t_old: f64,
@@ -545,8 +551,10 @@ where
                 }
 
                 if let Some(t_ev) = t_event_triggered {
-                    dense_knots.push(t_ev);
-                    dense_values.push(y_event_triggered.clone().unwrap_or_default());
+                    if is_new_time_point(&dense_knots, t_ev) {
+                        dense_knots.push(t_ev);
+                        dense_values.push(y_event_triggered.clone().unwrap_or_default());
+                    }
 
                     if let Some(t_eval) = options.t_eval {
                         while let Some(&te) = t_eval.get(next_t_eval_index) {
@@ -574,8 +582,10 @@ where
                     break;
                 }
 
-                dense_knots.push(t);
-                dense_values.push(y.clone());
+                if is_new_time_point(&dense_knots, t) {
+                    dense_knots.push(t);
+                    dense_values.push(y.clone());
+                }
 
                 if let Some(t_eval) = options.t_eval {
                     while let Some(&te) = t_eval.get(next_t_eval_index) {
@@ -593,8 +603,10 @@ where
                         next_t_eval_index += 1;
                     }
                 } else {
-                    ts.push(t);
-                    ys.push(y);
+                    if is_new_time_point(&ts, t) {
+                        ts.push(t);
+                        ys.push(y);
+                    }
                 }
 
                 if outcome.state == OdeSolverState::Finished {
@@ -912,6 +924,30 @@ mod tests {
             result.t.last().copied(),
             "dense-output knots should end at the final solver time"
         );
+    }
+
+    #[test]
+    fn solve_ivp_zero_length_interval_returns_single_point() {
+        let result = solve_ivp(
+            &mut |_t, y| vec![-0.5 * y[0]],
+            &SolveIvpOptions {
+                t_span: (1.0, 1.0),
+                y0: &[2.0],
+                method: SolverKind::Rk45,
+                dense_output: true,
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("zero-length solve should succeed");
+
+        assert!(result.success);
+        assert_eq!(result.status, 0);
+        assert_eq!(result.t, vec![1.0]);
+        assert_eq!(result.y, vec![vec![2.0]]);
+
+        let sol = result.sol.expect("dense output should still be populated");
+        assert_eq!(sol.knots, vec![1.0]);
+        assert_eq!(sol.values, vec![vec![2.0]]);
     }
 
     #[test]
