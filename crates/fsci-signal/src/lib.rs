@@ -2499,6 +2499,193 @@ pub fn spectral_entropy(magnitudes: &[f64]) -> f64 {
     if n > 1.0 { entropy / n.ln() } else { entropy }
 }
 
+/// Convert frequency in Hz to Mel scale.
+pub fn hz_to_mel(hz: f64) -> f64 {
+    2595.0 * (1.0 + hz / 700.0).ln() / std::f64::consts::LN_10
+}
+
+/// Convert Mel scale to frequency in Hz.
+pub fn mel_to_hz(mel: f64) -> f64 {
+    700.0 * (10.0f64.powf(mel / 2595.0) - 1.0)
+}
+
+/// Generate Mel filterbank matrix.
+///
+/// Returns a matrix of shape (n_mels, n_fft/2+1) for applying to a magnitude spectrum.
+pub fn mel_filterbank(n_mels: usize, n_fft: usize, sr: f64, fmin: f64, fmax: f64) -> Vec<Vec<f64>> {
+    let n_freq = n_fft / 2 + 1;
+    let mel_min = hz_to_mel(fmin);
+    let mel_max = hz_to_mel(fmax.min(sr / 2.0));
+
+    // Mel-spaced center frequencies
+    let mel_points: Vec<f64> = (0..n_mels + 2)
+        .map(|i| mel_min + (mel_max - mel_min) * i as f64 / (n_mels + 1) as f64)
+        .collect();
+    let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz(m)).collect();
+
+    // Convert to FFT bin indices
+    let bin_points: Vec<f64> = hz_points
+        .iter()
+        .map(|&hz| hz * n_fft as f64 / sr)
+        .collect();
+
+    let mut filterbank = vec![vec![0.0; n_freq]; n_mels];
+
+    for m in 0..n_mels {
+        let start = bin_points[m];
+        let center = bin_points[m + 1];
+        let end = bin_points[m + 2];
+
+        for (k, val) in filterbank[m].iter_mut().enumerate().take(n_freq) {
+            let kf = k as f64;
+            if kf >= start && kf <= center && center > start {
+                *val = (kf - start) / (center - start);
+            } else if kf > center && kf <= end && end > center {
+                *val = (end - kf) / (end - center);
+            }
+        }
+    }
+
+    filterbank
+}
+
+/// Compute Mel-frequency cepstral coefficients (MFCCs).
+///
+/// Returns a matrix of shape (n_frames, n_mfcc).
+pub fn mfcc(
+    signal: &[f64],
+    sr: f64,
+    n_mfcc: usize,
+    n_mels: usize,
+    frame_len: usize,
+    hop_len: usize,
+) -> Vec<Vec<f64>> {
+    if signal.is_empty() || frame_len == 0 || hop_len == 0 {
+        return vec![];
+    }
+
+    let n_fft = frame_len;
+    let n_freq = n_fft / 2 + 1;
+    let fb = mel_filterbank(n_mels, n_fft, sr, 0.0, sr / 2.0);
+
+    // Window
+    let window: Vec<f64> = (0..frame_len)
+        .map(|i| 0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (frame_len - 1) as f64).cos()))
+        .collect();
+
+    let mut mfccs = Vec::new();
+    let mut start = 0;
+
+    while start + frame_len <= signal.len() {
+        // Windowed frame
+        let frame: Vec<f64> = signal[start..start + frame_len]
+            .iter()
+            .zip(window.iter())
+            .map(|(&s, &w)| s * w)
+            .collect();
+
+        // Power spectrum via DFT
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut power_spec = vec![0.0; n_freq];
+        for (k, spec_val) in power_spec.iter_mut().enumerate().take(n_freq) {
+            let mut re = 0.0;
+            let mut im = 0.0;
+            for (n, &s) in frame.iter().enumerate() {
+                let angle = two_pi * k as f64 * n as f64 / n_fft as f64;
+                re += s * angle.cos();
+                im -= s * angle.sin();
+            }
+            *spec_val = (re * re + im * im) / n_fft as f64;
+        }
+
+        // Apply Mel filterbank
+        let mel_energies: Vec<f64> = fb
+            .iter()
+            .map(|filter| {
+                let energy: f64 = filter.iter().zip(power_spec.iter()).map(|(&f, &p)| f * p).sum();
+                energy.max(1e-10).ln() // log Mel energies
+            })
+            .collect();
+
+        // DCT (type-II) to get MFCCs
+        let mut coeffs = Vec::with_capacity(n_mfcc);
+        for i in 0..n_mfcc {
+            let mut sum = 0.0;
+            for (j, &e) in mel_energies.iter().enumerate() {
+                sum += e * (std::f64::consts::PI * i as f64 * (j as f64 + 0.5) / n_mels as f64).cos();
+            }
+            coeffs.push(sum * (2.0 / n_mels as f64).sqrt());
+        }
+
+        mfccs.push(coeffs);
+        start += hop_len;
+    }
+
+    mfccs
+}
+
+/// Compute the chroma feature (pitch class profile) from a magnitude spectrum.
+///
+/// Maps frequency bins to 12 pitch classes (C, C#, D, ..., B).
+pub fn chroma(magnitudes: &[f64], sr: f64, n_fft: usize) -> [f64; 12] {
+    let n_freq = magnitudes.len();
+    let mut chroma_vec = [0.0f64; 12];
+
+    for k in 1..n_freq {
+        let freq = k as f64 * sr / n_fft as f64;
+        if freq < 20.0 || freq > 5000.0 {
+            continue;
+        }
+        // Map frequency to pitch class: pitch = 12 * log2(f / 440) + 69
+        let midi = 12.0 * (freq / 440.0).log2() + 69.0;
+        let pitch_class = ((midi.round() as i64 % 12 + 12) % 12) as usize;
+        chroma_vec[pitch_class] += magnitudes[k];
+    }
+
+    // Normalize
+    let max_val = chroma_vec.iter().cloned().fold(0.0f64, f64::max);
+    if max_val > 0.0 {
+        for v in &mut chroma_vec {
+            *v /= max_val;
+        }
+    }
+
+    chroma_vec
+}
+
+/// Compute the spectral contrast between peaks and valleys.
+pub fn spectral_contrast(magnitudes: &[f64], n_bands: usize) -> Vec<f64> {
+    if magnitudes.is_empty() || n_bands == 0 {
+        return vec![];
+    }
+
+    let n = magnitudes.len();
+    let band_size = n / n_bands;
+    if band_size == 0 {
+        return vec![0.0; n_bands];
+    }
+
+    (0..n_bands)
+        .map(|b| {
+            let start = b * band_size;
+            let end = ((b + 1) * band_size).min(n);
+            let band = &magnitudes[start..end];
+            if band.is_empty() {
+                return 0.0;
+            }
+            let mut sorted = band.to_vec();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let peak = sorted[sorted.len() - 1];
+            let valley = sorted[0];
+            if valley > 0.0 {
+                (peak / valley).log10() * 20.0
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // IIR Filter Design
 // ══════════════════════════════════════════════════════════════════════
