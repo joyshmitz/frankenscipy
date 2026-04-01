@@ -2715,8 +2715,8 @@ where
     let mut best_cost = current_cost;
     let mut rng = seed;
 
-    let cooling_rate = if max_iter > 1 {
-        (temp_final / temp_initial).powf(1.0 / max_iter as f64)
+    let cooling_rate = if max_iter > 1 && temp_initial > 0.0 {
+        (temp_final.max(1e-12) / temp_initial.max(1e-12)).powf(1.0 / max_iter as f64)
     } else {
         1.0
     };
@@ -2758,13 +2758,14 @@ pub fn pso<F>(
     f: F,
     lb: &[f64],
     ub: &[f64],
-    n_particles: usize,
+    mut n_particles: usize,
     max_iter: usize,
     seed: u64,
 ) -> (Vec<f64>, f64)
 where
     F: Fn(&[f64]) -> f64,
 {
+    n_particles = n_particles.max(1);
     let d = lb.len();
     let w = 0.7298; // inertia
     let c1 = 1.4962; // cognitive

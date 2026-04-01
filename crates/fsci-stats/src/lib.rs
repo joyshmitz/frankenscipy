@@ -7795,7 +7795,7 @@ pub fn brunnermunzel(x: &[f64], y: &[f64]) -> TtestResult {
         let mut r = vec![0.0; data.len()];
         let mut k = 0;
         while k < indexed.len() {
-            let mut l = k;
+            let mut l = k + 1;
             while l < indexed.len() && indexed[l].1 == indexed[k].1 {
                 l += 1;
             }
@@ -7826,23 +7826,34 @@ pub fn brunnermunzel(x: &[f64], y: &[f64]) -> TtestResult {
         / (nyf - 1.0);
 
     let nf = nxf + nyf;
+    let rank_delta = mean_ry - mean_rx;
     let denom = (nxf * sx2 + nyf * sy2).sqrt();
-    let w = if denom > 0.0 {
-        nxf * nyf * (mean_ry - mean_rx) / (nf * denom)
-    } else {
-        0.0
-    };
-
-    let df = if denom > 0.0 {
+    let (w, df, pvalue) = if denom > 0.0 {
+        let w = nxf * nyf * rank_delta / (nf * denom);
         let df_num = (nxf * sx2 + nyf * sy2).powi(2);
         let df_den = (nxf * sx2).powi(2) / (nxf - 1.0) + (nyf * sy2).powi(2) / (nyf - 1.0);
-        if df_den > 0.0 { df_num / df_den } else { 1.0 }
+        let df = if df_den > 0.0 {
+            df_num / df_den
+        } else {
+            f64::NAN
+        };
+        let pvalue = if df.is_finite() {
+            let t_dist = StudentT::new(df);
+            2.0 * (1.0 - t_dist.cdf(w.abs()))
+        } else {
+            f64::NAN
+        };
+        (w, df, pvalue)
     } else {
-        1.0
+        let w = if rank_delta > 0.0 {
+            f64::INFINITY
+        } else if rank_delta < 0.0 {
+            f64::NEG_INFINITY
+        } else {
+            f64::NAN
+        };
+        (w, f64::NAN, f64::NAN)
     };
-
-    let t_dist = StudentT::new(df);
-    let pvalue = 2.0 * (1.0 - t_dist.cdf(w.abs()));
 
     TtestResult {
         statistic: w,
@@ -12149,6 +12160,70 @@ mod tests {
         let result = ansari(&[], &[1.0, 2.0]);
         assert!(result.statistic.is_nan());
         assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
+    fn brunnermunzel_tied_samples_match_scipy_oracle() {
+        let x = [1.0, 1.0, 2.0, 2.0, 3.0, 3.0];
+        let y = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let result = brunnermunzel(&x, &y);
+        assert_close(
+            result.statistic,
+            1.6269784336399216,
+            1e-12,
+            "brunnermunzel tied statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.14903722001764458,
+            1e-12,
+            "brunnermunzel tied pvalue",
+        );
+        assert!(result.df.is_finite(), "expected finite degrees of freedom");
+    }
+
+    #[test]
+    fn brunnermunzel_fully_separated_samples_match_scipy_shape() {
+        let x = [1.0, 1.0, 1.0, 1.0];
+        let y = [2.0, 2.0, 2.0, 2.0];
+        let result = brunnermunzel(&x, &y);
+        assert!(
+            result.statistic.is_infinite() && result.statistic.is_sign_positive(),
+            "expected positive infinite statistic for separated samples, got {}",
+            result.statistic
+        );
+        assert!(
+            result.pvalue.is_nan(),
+            "expected NaN pvalue, got {}",
+            result.pvalue
+        );
+        assert!(
+            result.df.is_nan(),
+            "expected NaN degrees of freedom, got {}",
+            result.df
+        );
+    }
+
+    #[test]
+    fn brunnermunzel_identical_constant_samples_match_scipy_shape() {
+        let x = [1.0, 1.0, 1.0, 1.0];
+        let y = [1.0, 1.0, 1.0, 1.0];
+        let result = brunnermunzel(&x, &y);
+        assert!(
+            result.statistic.is_nan(),
+            "expected NaN statistic, got {}",
+            result.statistic
+        );
+        assert!(
+            result.pvalue.is_nan(),
+            "expected NaN pvalue, got {}",
+            result.pvalue
+        );
+        assert!(
+            result.df.is_nan(),
+            "expected NaN degrees of freedom, got {}",
+            result.df
+        );
     }
 
     #[test]

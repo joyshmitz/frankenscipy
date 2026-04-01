@@ -1260,9 +1260,6 @@ pub fn linkage_from_distances(
                 continue;
             }
             for j in i + 1..new_id {
-                if !active[j] && inter_dist[i][j] < min_d {
-                    // bug: should check active[j] is true
-                }
                 if active[j] && inter_dist[i][j] < min_d {
                     min_d = inter_dist[i][j];
                     mi = i;
@@ -1670,6 +1667,146 @@ mod tests {
         assert_eq!(z[0][0], 0.0);
         assert_eq!(z[0][1], 1.0);
         assert!((z[0][2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn linkage_from_distances_skips_inactive_clusters_after_merge() {
+        let condensed = vec![10.0, 4.0, 9.0, 8.0, 8.0, 1.0];
+        let z = linkage_from_distances(&condensed, 4, LinkageMethod::Complete)
+            .expect("complete linkage from condensed distances");
+        assert_eq!(z.len(), 3);
+
+        assert_eq!(z[0][0], 2.0);
+        assert_eq!(z[0][1], 3.0);
+        assert!((z[0][2] - 1.0).abs() < 1e-12);
+
+        assert_eq!(z[1][0], 1.0);
+        assert_eq!(z[1][1], 4.0);
+        assert!((z[1][2] - 8.0).abs() < 1e-12);
+
+        assert_eq!(z[2][0], 0.0);
+        assert_eq!(z[2][1], 5.0);
+        assert!((z[2][2] - 10.0).abs() < 1e-12);
+    }
+
+    /// Regression: verify that `linkage` never picks a merged (inactive) cluster
+    /// as a merge candidate. With 5 collinear points at [0, 1, 3, 6, 10] using
+    /// single linkage, each step must merge the closest *active* pair. If inactive
+    /// clusters leaked into the nearest-pair search, merge distances would be wrong.
+    ///
+    /// Expected SciPy-equivalent merge sequence (single linkage):
+    ///   step 0: (0,1) dist=1, size=2          -> cluster 5
+    ///   step 1: (2,5) dist=2, size=3          -> cluster 6  (cluster 5 active, not 0 or 1)
+    ///   step 2: (3,6) dist=3, size=4          -> cluster 7
+    ///   step 3: (4,7) dist=4, size=5          -> cluster 8
+    #[test]
+    fn linkage_single_inactive_cluster_regression() {
+        let data = vec![
+            vec![0.0],
+            vec![1.0],
+            vec![3.0],
+            vec![6.0],
+            vec![10.0],
+        ];
+        let z = linkage(&data, LinkageMethod::Single).unwrap();
+        assert_eq!(z.len(), 4);
+
+        // Step 0: merge points 0 and 1 (distance 1)
+        assert_eq!(z[0][0], 0.0);
+        assert_eq!(z[0][1], 1.0);
+        assert!((z[0][2] - 1.0).abs() < 1e-12, "step 0 dist = {}", z[0][2]);
+        assert_eq!(z[0][3], 2.0);
+
+        // Step 1: merge point 2 with new cluster 5={0,1} (distance 2)
+        assert_eq!(z[1][0], 2.0);
+        assert_eq!(z[1][1], 5.0);
+        assert!((z[1][2] - 2.0).abs() < 1e-12, "step 1 dist = {}", z[1][2]);
+        assert_eq!(z[1][3], 3.0);
+
+        // Step 2: merge point 3 with cluster 6={0,1,2} (distance 3)
+        assert_eq!(z[2][0], 3.0);
+        assert_eq!(z[2][1], 6.0);
+        assert!((z[2][2] - 3.0).abs() < 1e-12, "step 2 dist = {}", z[2][2]);
+        assert_eq!(z[2][3], 4.0);
+
+        // Step 3: merge point 4 with cluster 7={0,1,2,3} (distance 4)
+        assert_eq!(z[3][0], 4.0);
+        assert_eq!(z[3][1], 7.0);
+        assert!((z[3][2] - 4.0).abs() < 1e-12, "step 3 dist = {}", z[3][2]);
+        assert_eq!(z[3][3], 5.0);
+    }
+
+    /// Regression: complete linkage with 5 points where merged-cluster distances
+    /// differ significantly from original point distances. If inactive clusters
+    /// pollute the search, the wrong pair gets picked.
+    ///
+    /// Points: [0, 1, 10, 11, 50]
+    /// Complete linkage uses max distance, so merged cluster distances grow.
+    #[test]
+    fn linkage_complete_inactive_cluster_regression() {
+        let data = vec![
+            vec![0.0],
+            vec![1.0],
+            vec![10.0],
+            vec![11.0],
+            vec![50.0],
+        ];
+        let z = linkage(&data, LinkageMethod::Complete).unwrap();
+        assert_eq!(z.len(), 4);
+
+        // Step 0: closest pair is (0,1) dist=1 or (2,3) dist=1; either valid
+        assert!((z[0][2] - 1.0).abs() < 1e-12, "step 0 dist = {}", z[0][2]);
+        assert_eq!(z[0][3], 2.0);
+
+        // Step 1: next closest active pair, also dist=1
+        assert!((z[1][2] - 1.0).abs() < 1e-12, "step 1 dist = {}", z[1][2]);
+        assert_eq!(z[1][3], 2.0);
+
+        // Step 2: merge the two size-2 clusters; complete linkage dist = max(11-0)=11
+        assert!((z[2][2] - 11.0).abs() < 1e-12, "step 2 dist = {}", z[2][2]);
+        assert_eq!(z[2][3], 4.0);
+
+        // Step 3: merge point 4 with the size-4 cluster; complete dist = max(50-0)=50
+        assert!((z[3][2] - 50.0).abs() < 1e-12, "step 3 dist = {}", z[3][2]);
+        assert_eq!(z[3][3], 5.0);
+    }
+
+    /// Regression: `linkage_from_distances` with average method; ensures
+    /// that after each merge step, only active clusters participate in
+    /// distance updates and nearest-pair selection.
+    #[test]
+    fn linkage_from_distances_average_inactive_regression() {
+        // 4 points with condensed distances: d(0,1)=2, d(0,2)=6, d(0,3)=10,
+        //                                    d(1,2)=4, d(1,3)=8, d(2,3)=4
+        let condensed = vec![2.0, 6.0, 10.0, 4.0, 8.0, 4.0];
+        let z = linkage_from_distances(&condensed, 4, LinkageMethod::Average).unwrap();
+        assert_eq!(z.len(), 3);
+
+        // Step 0: closest pair is (0,1) dist=2
+        assert_eq!(z[0][0], 0.0);
+        assert_eq!(z[0][1], 1.0);
+        assert!((z[0][2] - 2.0).abs() < 1e-12);
+        assert_eq!(z[0][3], 2.0);
+
+        // Step 1: cluster 4={0,1}. Average distances:
+        //   d(4, 2) = (1*6 + 1*4)/2 = 5.0
+        //   d(4, 3) = (1*10 + 1*8)/2 = 9.0
+        //   d(2, 3) = 4.0  <- minimum among active pairs
+        assert_eq!(z[1][0], 2.0);
+        assert_eq!(z[1][1], 3.0);
+        assert!((z[1][2] - 4.0).abs() < 1e-12);
+        assert_eq!(z[1][3], 2.0);
+
+        // Step 2: merge cluster 4={0,1} with cluster 5={2,3}
+        //   d(4, 5) = average of (d(0,2), d(0,3), d(1,2), d(1,3)) via Lance-Williams:
+        //   = (2*5.0 + 2*9.0) / (2+2) = 7.0
+        // But Lance-Williams UPGMA: d(4,5) = (n4*d(4,2_merged) + n4_already?
+        // Actually: d(new_cluster_4, k) was computed as average above.
+        // d(4, 5={2,3}) = average(d(4,2), d(4,3)) weighted = (2*5 + 2*9)/4 = 7.0
+        assert_eq!(z[2][0], 4.0);
+        assert_eq!(z[2][1], 5.0);
+        assert!((z[2][2] - 7.0).abs() < 1e-12, "step 2 dist = {}", z[2][2]);
+        assert_eq!(z[2][3], 4.0);
     }
 
     #[test]

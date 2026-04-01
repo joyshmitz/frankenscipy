@@ -195,6 +195,85 @@ fn e2e_orchestrator_runs_arrayapi_packet_with_minimum_scenarios() {
 }
 
 #[test]
+fn e2e_orchestrator_runs_direct_e2e_json_layout_and_ignores_runs() {
+    let temp_root = unique_temp_dir("direct_layout");
+    let artifact_root = temp_root.join("artifacts");
+    let packet_dir = artifact_root.join("FSCI-P2C-008");
+    let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let target_e2e_dir = packet_dir.join("e2e");
+    let target_runs_dir = target_e2e_dir.join("runs/existing-run/ignored");
+    let sentinel_path = packet_dir.join("sentinel.txt");
+
+    write_file(&sentinel_path, "sentinel");
+    write_file(
+        &target_e2e_dir.join("direct_layout_scenario.json"),
+        r#"{
+  "scenario_id": "direct_layout_scenario",
+  "seed": 8008,
+  "steps": [
+    {
+      "step_name": "ensure_sentinel_present",
+      "kind": "check_path_exists",
+      "path": "FSCI-P2C-008/sentinel.txt"
+    },
+    {
+      "step_name": "run_validate_tol_fixture",
+      "kind": "run_differential_fixture",
+      "fixture": "FSCI-P2C-001_validate_tol.json"
+    }
+  ]
+}"#,
+    );
+
+    write_file(
+        &target_runs_dir.join("summary.json"),
+        r#"{"scenario_id":"should_not_be_discovered","passed":true}"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_e2e_orchestrator"))
+        .arg("--artifact-root")
+        .arg(&artifact_root)
+        .arg("--fixture-root")
+        .arg(&fixture_root)
+        .arg("--packet")
+        .arg("FSCI-P2C-008")
+        .output()
+        .expect("failed to execute e2e_orchestrator");
+
+    assert!(
+        output.status.success(),
+        "expected success for direct-layout packet run; stdout={}; stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut summary_files = Vec::new();
+    collect_named_files(
+        &packet_dir.join("e2e/runs"),
+        "summary.json",
+        &mut summary_files,
+    );
+    assert_eq!(
+        summary_files.len(),
+        2,
+        "expected one new scenario bundle plus the pre-existing ignored run artifact"
+    );
+
+    let scenario_summaries = summary_files
+        .iter()
+        .filter(|path| {
+            !path
+                .components()
+                .any(|component| component.as_os_str() == "existing-run")
+        })
+        .count();
+    assert_eq!(
+        scenario_summaries, 1,
+        "orchestrator should only execute the direct-layout scenario file"
+    );
+}
+
+#[test]
 fn e2e_orchestrator_runs_scenario_and_emits_forensic_bundle() {
     let temp_root = unique_temp_dir("pass");
     let artifact_root = temp_root.join("artifacts");

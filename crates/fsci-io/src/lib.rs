@@ -220,6 +220,11 @@ fn parse_mm_info(lines: &mut std::str::Lines<'_>) -> Result<MmInfo, IoError> {
 pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
     let mut lines = content.lines();
     let info = parse_mm_info(&mut lines)?;
+    if info.field == MmField::Complex {
+        return Err(IoError::UnsupportedFeature(
+            "Matrix Market complex field is not supported".to_string(),
+        ));
+    }
 
     match info.format {
         MmFormat::Coordinate => {
@@ -1156,6 +1161,18 @@ mod tests {
     }
 
     #[test]
+    fn mmread_rejects_complex_coordinate_payloads() {
+        let content = "%%MatrixMarket matrix coordinate complex general\n\
+                        2 2 1\n\
+                        1 1 1.0 2.0\n";
+        let err = mmread(content).expect_err("complex Matrix Market payloads should fail closed");
+        assert_eq!(
+            err,
+            IoError::UnsupportedFeature("Matrix Market complex field is not supported".to_string())
+        );
+    }
+
+    #[test]
     fn mmread_array() {
         let content = "%%MatrixMarket matrix array real general\n\
                         2 3\n\
@@ -1195,6 +1212,19 @@ mod tests {
         assert_eq!(info.rows, 2);
         assert_eq!(info.cols, 3);
         assert_eq!(info.nnz, 6);
+    }
+
+    #[test]
+    fn mmread_rejects_complex_array_payloads() {
+        let content = "%%MatrixMarket matrix array complex general\n\
+                        2 1\n\
+                        1.0 2.0\n\
+                        3.0 4.0\n";
+        let err = mmread(content).expect_err("complex Matrix Market payloads should fail closed");
+        assert_eq!(
+            err,
+            IoError::UnsupportedFeature("Matrix Market complex field is not supported".to_string())
+        );
     }
 
     #[test]

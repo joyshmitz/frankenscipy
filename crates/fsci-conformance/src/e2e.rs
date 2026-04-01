@@ -195,12 +195,12 @@ pub fn discover_scenarios(
             continue;
         }
 
-        let scenario_dir = packet_dir.join("e2e").join("scenarios");
-        if !scenario_dir.exists() || !scenario_dir.is_dir() {
+        let scenario_paths = discover_packet_scenario_files(&packet_dir)?;
+        if scenario_paths.is_empty() {
             continue;
         }
 
-        for scenario_path in discover_json_files(&scenario_dir)? {
+        for scenario_path in scenario_paths {
             let raw = fs::read_to_string(&scenario_path).map_err(|source| {
                 E2eOrchestratorError::ScenarioRead {
                     path: scenario_path.clone(),
@@ -234,6 +234,42 @@ pub fn discover_scenarios(
     });
 
     Ok(scenarios)
+}
+
+fn discover_packet_scenario_files(packet_dir: &Path) -> Result<Vec<PathBuf>, E2eOrchestratorError> {
+    let e2e_dir = packet_dir.join("e2e");
+    if !e2e_dir.exists() || !e2e_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut scenario_files = Vec::new();
+    let nested_scenarios_dir = e2e_dir.join("scenarios");
+    if nested_scenarios_dir.exists() && nested_scenarios_dir.is_dir() {
+        scenario_files.extend(discover_json_files(&nested_scenarios_dir)?);
+    }
+
+    for entry in fs::read_dir(&e2e_dir).map_err(|source| E2eOrchestratorError::ReadDir {
+        path: e2e_dir.clone(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| E2eOrchestratorError::ReadDir {
+            path: e2e_dir.clone(),
+            source,
+        })?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        {
+            scenario_files.push(path);
+        }
+    }
+
+    scenario_files.sort();
+    scenario_files.dedup();
+    Ok(scenario_files)
 }
 
 pub fn run_orchestrator(
