@@ -752,7 +752,7 @@ pub fn calinski_harabasz_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
     }
     let d = data[0].len();
     let k = labels.iter().cloned().max().unwrap_or(0) + 1;
-    if k < 2 {
+    if k < 2 || n == k {
         return 0.0;
     }
 

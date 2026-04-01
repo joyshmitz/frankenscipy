@@ -8594,8 +8594,8 @@ pub fn winsorize(data: &[f64], limits: (f64, f64)) -> Vec<f64> {
     sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
 
-    let lo_idx = (limits.0 * n as f64).floor() as usize;
-    let hi_idx = n - (limits.1 * n as f64).ceil() as usize;
+    let lo_idx = (limits.0.clamp(0.0, 1.0) * n as f64).floor() as usize;
+    let hi_idx = n.saturating_sub((limits.1.clamp(0.0, 1.0) * n as f64).ceil() as usize);
     let lo_val = sorted[lo_idx.min(n - 1)];
     let hi_val = sorted[hi_idx.min(n - 1)];
 
