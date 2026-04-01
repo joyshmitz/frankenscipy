@@ -201,7 +201,13 @@ fn solve_symmetric_positive(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, Signa
         for j in i + 1..n {
             sum -= aug[i][j] * x[j];
         }
-        x[i] = sum / aug[i][i];
+        let diag = aug[i][i];
+        if diag.abs() < 1e-18 {
+            return Err(SignalError::InvalidArgument(
+                "linear system is singular during back-substitution".to_string(),
+            ));
+        }
+        x[i] = sum / diag;
     }
     Ok(x)
 }
@@ -7794,8 +7800,7 @@ mod tests {
             .min_by(|(_, a), (_, b)| {
                 ((**a) - cutoff_omega)
                     .abs()
-                    .partial_cmp(&((**b) - cutoff_omega).abs())
-                    .unwrap()
+                    .total_cmp(&((**b) - cutoff_omega).abs())
             })
             .map(|(i, _)| i)
             .unwrap();

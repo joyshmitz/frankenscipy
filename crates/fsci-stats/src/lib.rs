@@ -85,13 +85,19 @@ fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
     let mut hi = center + half_width;
     let mut step = half_width;
 
-    // Expand bracket if needed
-    while cdf(lo) > q {
+    // Expand bracket if needed (bounded to prevent infinite loops)
+    for _ in 0..60 {
+        if cdf(lo) <= q {
+            break;
+        }
         step *= 2.0;
         lo -= step;
     }
     step = half_width;
-    while cdf(hi) < q {
+    for _ in 0..60 {
+        if cdf(hi) >= q {
+            break;
+        }
         step *= 2.0;
         hi += step;
     }
@@ -1795,6 +1801,11 @@ fn jacobi_symmetric_eigendecomposition(a: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64
         let app = matrix[p][p];
         let aqq = matrix[q][q];
         let apq = matrix[p][q];
+        // apq is the max off-diagonal element (abs >= 1e-12 from convergence check),
+        // but guard explicitly against pathological zero to prevent NaN propagation.
+        if apq.abs() < f64::MIN_POSITIVE {
+            break;
+        }
         let tau = (aqq - app) / (2.0 * apq);
         let t = tau.signum() / (tau.abs() + (1.0 + tau * tau).sqrt());
         let c = 1.0 / (1.0 + t * t).sqrt();
@@ -8596,8 +8607,16 @@ pub fn winsorize(data: &[f64], limits: (f64, f64)) -> Vec<f64> {
 
     let lo_idx = (limits.0.clamp(0.0, 1.0) * n as f64).floor() as usize;
     let hi_idx = n.saturating_sub((limits.1.clamp(0.0, 1.0) * n as f64).ceil() as usize);
-    let lo_val = sorted[lo_idx.min(n - 1)];
-    let hi_val = sorted[hi_idx.min(n - 1)];
+    let lo_idx = lo_idx.min(n - 1);
+    let hi_idx = hi_idx.min(n - 1);
+    let (lo_val, hi_val) = if lo_idx > hi_idx {
+        // When the clipping windows overlap, SciPy collapses everything to the
+        // lower-window boundary instead of panicking on an inverted clamp range.
+        let collapsed = sorted[lo_idx];
+        (collapsed, collapsed)
+    } else {
+        (sorted[lo_idx], sorted[hi_idx])
+    };
 
     data.iter().map(|&x| x.clamp(lo_val, hi_val)).collect()
 }
@@ -13641,5 +13660,17 @@ mod tests {
             lo < true_mean && hi > true_mean,
             "CI [{lo}, {hi}] should contain {true_mean}"
         );
+    }
+
+    #[test]
+    fn winsorize_overlapping_windows_match_scipy_shape() {
+        let result = winsorize(&[1.0, 2.0, 3.0], (0.8, 0.8));
+        assert_eq!(result, vec![3.0, 3.0, 3.0]);
+    }
+
+    #[test]
+    fn winsorize_out_of_range_limits_fail_closed() {
+        let result = winsorize(&[1.0, 2.0, 3.0], (0.0, 1.1));
+        assert_eq!(result, vec![1.0, 1.0, 1.0]);
     }
 }
