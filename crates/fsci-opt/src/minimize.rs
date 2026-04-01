@@ -2788,20 +2788,35 @@ mod tests {
 
     #[test]
     fn trace_log_contains_iteration_and_completion_events() {
+        const FIXTURE_ID: &str = "trace-log-bfgs-iter";
+        let _ = take_optimize_traces(); // clear stale traces from parallel tests
         let options = MinimizeOptions {
             method: Some(OptimizeMethod::Bfgs),
             tol: Some(1.0e-6),
             maxiter: Some(40),
             maxfev: Some(20_000),
             mode: RuntimeMode::Strict,
+            fixture_id: Some(FIXTURE_ID),
             ..MinimizeOptions::default()
         };
         let _ = minimize(sphere, &[1.0, 1.0], options).expect("execution succeeds");
         let traces = take_optimize_traces();
-        assert!(!traces.is_empty());
-        assert!(traces.iter().any(|entry| entry.event == "iteration"));
-        assert!(traces.iter().any(|entry| entry.event == "completion"));
-        let completion = traces
+        // Filter to only our BFGS traces to avoid interference from parallel tests
+        let bfgs_traces: Vec<_> = traces
+            .iter()
+            .filter(|entry| {
+                entry.method == OptimizeMethod::Bfgs
+                    && entry.fixture_id.as_deref() == Some(FIXTURE_ID)
+            })
+            .collect();
+        assert!(!bfgs_traces.is_empty(), "expected BFGS traces but found none");
+        assert!(
+            bfgs_traces.iter().any(|entry| entry.event == "iteration"),
+            "expected iteration trace, found events: {:?}",
+            bfgs_traces.iter().map(|entry| &entry.event).collect::<Vec<_>>()
+        );
+        assert!(bfgs_traces.iter().any(|entry| entry.event == "completion"));
+        let completion = bfgs_traces
             .iter()
             .find(|entry| entry.event == "completion")
             .expect("completion trace exists");
