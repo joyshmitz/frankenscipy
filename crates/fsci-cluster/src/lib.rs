@@ -1701,13 +1701,7 @@ mod tests {
     ///   step 3: (4,7) dist=4, size=5          -> cluster 8
     #[test]
     fn linkage_single_inactive_cluster_regression() {
-        let data = vec![
-            vec![0.0],
-            vec![1.0],
-            vec![3.0],
-            vec![6.0],
-            vec![10.0],
-        ];
+        let data = vec![vec![0.0], vec![1.0], vec![3.0], vec![6.0], vec![10.0]];
         let z = linkage(&data, LinkageMethod::Single).unwrap();
         assert_eq!(z.len(), 4);
 
@@ -1744,13 +1738,7 @@ mod tests {
     /// Complete linkage uses max distance, so merged cluster distances grow.
     #[test]
     fn linkage_complete_inactive_cluster_regression() {
-        let data = vec![
-            vec![0.0],
-            vec![1.0],
-            vec![10.0],
-            vec![11.0],
-            vec![50.0],
-        ];
+        let data = vec![vec![0.0], vec![1.0], vec![10.0], vec![11.0], vec![50.0]];
         let z = linkage(&data, LinkageMethod::Complete).unwrap();
         assert_eq!(z.len(), 4);
 

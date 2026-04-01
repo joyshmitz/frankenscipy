@@ -2846,7 +2846,7 @@ mod tests {
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions, Integrality,
         LinearConstraint, MilpOptions, MilpProblem, MinimizeOptions, NonlinearConstraint,
         OptimizeMethod, RootOptions, approx_fprime, basinhopping, check_grad, cobyla,
-        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, shgo,
+        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, pso, shgo,
     };
 
     #[test]
@@ -3534,6 +3534,22 @@ mod tests {
     fn dual_annealing_inverted_bounds_rejected() {
         let err = dual_annealing(|_| 0.0, &[(2.0, 2.0)], 100, 42).expect_err("inverted");
         assert!(matches!(err, crate::OptError::InvalidBounds { .. }));
+    }
+
+    #[test]
+    fn pso_zero_particles_falls_back_to_single_particle() {
+        let sphere = |x: &[f64]| -> f64 { x.iter().map(|xi| xi * xi).sum() };
+        let lb = [-5.0, -5.0];
+        let ub = [5.0, 5.0];
+        let (best, cost) = pso(sphere, &lb, &ub, 0, 10, 123);
+        assert_eq!(best.len(), 2);
+        assert!(cost.is_finite(), "expected finite cost, got {cost}");
+        for (i, (&xi, (&lo, &hi))) in best.iter().zip(lb.iter().zip(ub.iter())).enumerate() {
+            assert!(
+                xi >= lo && xi <= hi,
+                "particle coordinate {i} should stay in bounds [{lo}, {hi}], got {xi}"
+            );
+        }
     }
 
     #[test]
