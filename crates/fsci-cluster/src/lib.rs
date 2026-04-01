@@ -490,7 +490,11 @@ pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
     unique.dedup();
     leaf_labels
         .iter()
-        .map(|&l| unique.binary_search(&l).unwrap())
+        .map(|&l| {
+            unique
+                .binary_search(&l)
+                .expect("label must exist in deduplicated set built from the same data")
+        })
         .collect()
 }
 

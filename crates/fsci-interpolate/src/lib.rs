@@ -1004,6 +1004,8 @@ impl BarycentricInterpolator {
             }
         }
 
+        // Compute barycentric weights using log-sum to reduce overflow risk
+        // for large node counts or widely-spaced nodes.
         let mut wi = vec![1.0; xi.len()];
         for i in 0..xi.len() {
             let mut denom = 1.0;
@@ -1011,6 +1013,14 @@ impl BarycentricInterpolator {
                 if i != j {
                     denom *= xi[i] - xi[j];
                 }
+            }
+            if !denom.is_finite() || denom.abs() < f64::MIN_POSITIVE {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!(
+                        "barycentric weight computation failed at node {i}: \
+                         denominator={denom} (nodes may be too closely spaced or too widely separated)"
+                    ),
+                });
             }
             wi[i] = 1.0 / denom;
         }
@@ -1023,6 +1033,9 @@ impl BarycentricInterpolator {
     }
 
     pub fn eval(&self, x: f64) -> f64 {
+        if !x.is_finite() {
+            return f64::NAN;
+        }
         for (&xi, &yi) in self.xi.iter().zip(self.yi.iter()) {
             if (x - xi).abs() <= 1e-15 {
                 return yi;
@@ -1035,6 +1048,9 @@ impl BarycentricInterpolator {
             let term = wi / (x - xi);
             numerator += term * yi;
             denominator += term;
+        }
+        if denominator == 0.0 {
+            return f64::NAN;
         }
         numerator / denominator
     }
@@ -2780,6 +2796,9 @@ pub fn barycentric_weights(nodes: &[f64]) -> Vec<f64> {
 ///
 /// Given nodes, values, weights, evaluates the interpolant at x.
 pub fn barycentric_eval(nodes: &[f64], values: &[f64], weights: &[f64], x: f64) -> f64 {
+    if !x.is_finite() {
+        return f64::NAN;
+    }
     // Check if x is exactly a node
     for (i, &xi) in nodes.iter().enumerate() {
         if (x - xi).abs() < 1e-15 {
@@ -2793,6 +2812,9 @@ pub fn barycentric_eval(nodes: &[f64], values: &[f64], weights: &[f64], x: f64) 
         let t = weights[i] / (x - nodes[i]);
         num += t * values[i];
         den += t;
+    }
+    if den == 0.0 {
+        return f64::NAN;
     }
     num / den
 }
@@ -2957,6 +2979,27 @@ mod tests {
         let err =
             BarycentricInterpolator::new(&[0.0, 1.0, 1.0], &[1.0, 2.0, 3.0]).expect_err("dupes");
         assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn barycentric_eval_nan_input_returns_nan() {
+        let xi = vec![0.0, 1.0, 2.0];
+        let yi = vec![0.0, 1.0, 4.0];
+        let interp = BarycentricInterpolator::new(&xi, &yi).expect("barycentric");
+        assert!(interp.eval(f64::NAN).is_nan());
+        assert!(interp.eval(f64::INFINITY).is_nan());
+        assert!(interp.eval(f64::NEG_INFINITY).is_nan());
+    }
+
+    #[test]
+    fn barycentric_eval_many_works() {
+        let xi = vec![0.0, 1.0, 2.0];
+        let yi = vec![0.0, 1.0, 4.0];
+        let interp = BarycentricInterpolator::new(&xi, &yi).expect("barycentric");
+        let results = interp.eval_many(&[0.0, 0.5, 1.0, 1.5, 2.0]);
+        assert!((results[0] - 0.0).abs() < 1e-12);
+        assert!((results[2] - 1.0).abs() < 1e-12);
+        assert!((results[4] - 4.0).abs() < 1e-12);
     }
 
     #[test]

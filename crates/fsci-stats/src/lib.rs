@@ -4887,7 +4887,7 @@ pub fn ansari(x: &[f64], y: &[f64]) -> TtestResult {
     let repeats = {
         let mut sorted = pooled.clone();
         sorted.sort_by(|a, b| a.total_cmp(b));
-        sorted.windows(2).any(|w| w[0] == w[1])
+        sorted.windows(2).any(|w| w[0].total_cmp(&w[1]).is_eq())
     };
 
     let n_f = n as f64;
@@ -7796,7 +7796,7 @@ pub fn brunnermunzel(x: &[f64], y: &[f64]) -> TtestResult {
         let mut k = 0;
         while k < indexed.len() {
             let mut l = k + 1;
-            while l < indexed.len() && indexed[l].1 == indexed[k].1 {
+            while l < indexed.len() && indexed[l].1.total_cmp(&indexed[k].1).is_eq() {
                 l += 1;
             }
             let avg = (k + l + 1) as f64 / 2.0;

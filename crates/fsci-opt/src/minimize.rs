@@ -2809,11 +2809,17 @@ mod tests {
                     && entry.fixture_id.as_deref() == Some(FIXTURE_ID)
             })
             .collect();
-        assert!(!bfgs_traces.is_empty(), "expected BFGS traces but found none");
+        assert!(
+            !bfgs_traces.is_empty(),
+            "expected BFGS traces but found none"
+        );
         assert!(
             bfgs_traces.iter().any(|entry| entry.event == "iteration"),
             "expected iteration trace, found events: {:?}",
-            bfgs_traces.iter().map(|entry| &entry.event).collect::<Vec<_>>()
+            bfgs_traces
+                .iter()
+                .map(|entry| &entry.event)
+                .collect::<Vec<_>>()
         );
         assert!(bfgs_traces.iter().any(|entry| entry.event == "completion"));
         let completion = bfgs_traces

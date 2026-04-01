@@ -2921,4 +2921,51 @@ mod tests {
         let err = geometric_slerp(&[1.0, 0.0], &[1.0, 0.0, 0.0], &[0.5]).expect_err("dim");
         assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
     }
+
+    // ── Distance metric edge case tests ───────────────────────────
+
+    #[test]
+    fn cosine_zero_vector_returns_zero() {
+        assert_eq!(cosine(&[0.0, 0.0], &[1.0, 2.0]), 0.0);
+        assert_eq!(cosine(&[1.0, 2.0], &[0.0, 0.0]), 0.0);
+        assert_eq!(cosine(&[0.0, 0.0], &[0.0, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn euclidean_identical_points() {
+        assert_eq!(euclidean(&[3.0, 4.0], &[3.0, 4.0]), 0.0);
+    }
+
+    #[test]
+    fn hamming_identical_vectors() {
+        assert_eq!(hamming(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]), 0.0);
+    }
+
+    #[test]
+    fn hamming_completely_different() {
+        assert!((hamming(&[1.0, 2.0], &[3.0, 4.0]) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn chebyshev_single_dimension() {
+        assert!((chebyshev(&[5.0], &[2.0]) - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn minkowski_special_cases() {
+        let a = [1.0, 2.0];
+        let b = [4.0, 6.0];
+        // p=1 should equal cityblock
+        assert!((minkowski(&a, &b, 1.0) - cityblock(&a, &b)).abs() < 1e-12);
+        // p=2 should equal euclidean
+        assert!((minkowski(&a, &b, 2.0) - euclidean(&a, &b)).abs() < 1e-12);
+        // p=inf should equal chebyshev
+        assert!((minkowski(&a, &b, f64::INFINITY) - chebyshev(&a, &b)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn canberra_single_zero_pair() {
+        // When both elements are zero at same index, that term contributes 0
+        assert_eq!(canberra(&[0.0], &[0.0]), 0.0);
+    }
 }

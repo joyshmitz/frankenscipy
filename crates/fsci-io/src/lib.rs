@@ -1758,4 +1758,26 @@ mod tests {
             IoError::InvalidFormat("sparse entry (2, 0) out of bounds for 2x2".to_string())
         );
     }
+
+    #[test]
+    fn read_csv_single_column_no_header() {
+        let (header, data) = read_csv("1\n2\n3\n", ',', false).expect("single column CSV");
+        assert_eq!(data.len(), 3);
+        assert!(header.is_none());
+        assert_eq!(data[0], vec![1.0]);
+        assert_eq!(data[2], vec![3.0]);
+    }
+
+    #[test]
+    fn read_csv_with_tab_delimiter() {
+        let (header, data) = read_csv("a\tb\n1\t2\n3\t4\n", '\t', true).expect("TSV");
+        assert_eq!(header, Some(vec!["a".to_string(), "b".to_string()]));
+        assert_eq!(data[0], vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn read_csv_empty_no_header() {
+        let (_header, data) = read_csv("", ',', false).expect("empty without header is ok");
+        assert!(data.is_empty());
+    }
 }
