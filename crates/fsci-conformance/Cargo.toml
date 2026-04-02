@@ -29,6 +29,7 @@ fsci-opt = { workspace = true }
 fsci-runtime = { workspace = true }
 fsci-sparse = { workspace = true }
 fsci-special = { workspace = true }
+fsci-stats = { workspace = true }
 ftui = { workspace = true, features = ["runtime", "crossterm"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

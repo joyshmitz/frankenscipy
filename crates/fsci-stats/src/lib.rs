@@ -1616,26 +1616,28 @@ fn standard_normal_ppf(p: f64) -> f64 {
     let r = if q < 0.0 { p } else { 1.0 - p };
     let r = (-r.ln()).sqrt();
 
+    #[allow(clippy::excessive_precision)]
     let result = if r <= 5.0 {
+        // Wichura (1988) AS241 coefficients for intermediate tail region
         let r = r - 1.6;
-        let num = ((((((7.745_450_142_783_414e-4 * r + 2.272_384_498_926_918e-2) * r
-            + 2.220_727_511_804_781_3e-1)
+        let num = ((((((7.745_450_142_772_702_5e-4 * r + 2.272_388_412_100_731_05e-2) * r
+            + 2.417_807_251_774_506_12e-1)
             * r
-            + 1.463_707_218_484_560_5)
+            + 1.270_458_252_452_368_38)
             * r
-            + 2.776_978_183_929_534_3)
+            + 3.647_848_324_763_204_60)
             * r
-            + 4.306_198_189_809_908)
+            + 5.769_497_221_460_691_41)
             * r
-            + 3.188_362_175_188_116)
+            + 4.630_337_846_156_545_30)
             * r
-            + 1.340_343_015_652_349_8;
-        let den = ((((((1.050_750_071_644_416_9e-9 * r + 5.475_938_084_995_345e-4) * r
-            + 1.538_262_409_926_517_2e-2)
+            + 1.423_437_110_749_683_58;
+        let den = ((((((1.050_750_071_644_416_84e-9 * r + 5.475_938_084_995_344_95e-4) * r
+            + 1.519_866_656_361_645_72e-2)
             * r
-            + 1.487_536_129_085_061_5e-1)
+            + 1.481_039_764_274_800_75e-1)
             * r
-            + 6.897_673_349_851e-1)
+            + 6.897_673_349_851_000_05e-1)
             * r
             + 1.676_384_830_183_803_8)
             * r
@@ -13672,5 +13674,15 @@ mod tests {
     fn winsorize_out_of_range_limits_fail_closed() {
         let result = winsorize(&[1.0, 2.0, 3.0], (0.0, 1.1));
         assert_eq!(result, vec![1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn ppf_bisection_non_bracketing_cdf_returns_bounded_value() {
+        let result = ppf_bisection(|_| 0.0, 0.5, 0.0, 1.0);
+        assert!(result.is_finite(), "expected finite fallback, got {result}");
+        assert!(
+            result > 1.0e18,
+            "expected expanded upper bound, got {result}"
+        );
     }
 }

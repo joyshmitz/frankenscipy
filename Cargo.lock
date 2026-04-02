@@ -585,6 +585,7 @@ dependencies = [
  "fsci-runtime",
  "fsci-sparse",
  "fsci-special",
+ "fsci-stats",
  "ftui",
  "serde",
  "serde_json",

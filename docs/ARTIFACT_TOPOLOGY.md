@@ -38,7 +38,24 @@ crates/fsci-conformance/fixtures/
     parity_report.decode_proof.json         # decode proof artifact
     oracle_capture.json                     # Python oracle output (optional)
     oracle_capture.error.txt                # oracle fallback log (when scipy absent)
+    e2e/
+      scenarios/
+        *.json                              # packet-aware E2E scenario descriptors
+      runs/
+        {run_id}/
+          {scenario_id}/
+            events.jsonl                    # forensic event stream for one scenario run
+            summary.json                    # deterministic replay + pass/fail summary
 ```
+
+Legacy exception:
+
+```
+crates/fsci-conformance/fixtures/
+  artifacts/P2C-003/e2e/runs/*.json         # optimize forensic bundles emitted by legacy test path
+```
+
+New packet E2E outputs should use the canonical `artifacts/FSCI-P2C-{NNN}/e2e/...` layout.
 
 ### Packet Documentation Artifacts
 
