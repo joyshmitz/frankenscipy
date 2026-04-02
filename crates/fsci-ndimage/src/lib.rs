@@ -2366,8 +2366,12 @@ pub fn reshape(input: &NdArray, new_shape: Vec<usize>) -> Result<NdArray, Ndimag
 
 /// Flatten an NdArray to 1D.
 pub fn flatten(input: &NdArray) -> NdArray {
-    NdArray::new(input.data.clone(), vec![input.size()])
-        .expect("flatten shape strictly matches data length")
+    let size = input.size();
+    NdArray {
+        data: input.data.clone(),
+        shape: vec![size],
+        strides: vec![1],
+    }
 }
 
 /// Compute element-wise comparison: 1.0 where a > b, 0.0 otherwise.

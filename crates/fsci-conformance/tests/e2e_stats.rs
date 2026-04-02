@@ -122,16 +122,20 @@ fn replay_cmd(scenario_id: &str) -> String {
     format!("cargo test -p fsci-conformance --test e2e_stats -- {scenario_id} --nocapture")
 }
 
-fn write_topology_artifacts(scenario_id: &str, steps: &[ForensicStep], all_pass: bool) {
+fn write_topology_artifacts(
+    scenario_id: &str,
+    steps: &[ForensicStep],
+    all_pass: bool,
+) -> Result<(), String> {
     let rid = run_id();
     let dir = e2e_runs_dir(&rid, scenario_id);
     fs::create_dir_all(&dir)
-        .unwrap_or_else(|e| panic!("failed to create run dir {}: {e}", dir.display()));
+        .map_err(|e| format!("failed to create run dir {}: {e}", dir.display()))?;
 
     // Write events.jsonl — one JSON line per step
     let events_path = dir.join("events.jsonl");
     let file = fs::File::create(&events_path)
-        .unwrap_or_else(|e| panic!("failed to create {}: {e}", events_path.display()));
+        .map_err(|e| format!("failed to create {}: {e}", events_path.display()))?;
     let mut writer = BufWriter::new(file);
     let env = make_env();
     for step in steps {
@@ -145,10 +149,15 @@ fn write_topology_artifacts(scenario_id: &str, steps: &[ForensicStep], all_pass:
             environment: env.clone(),
             artifact_refs: vec![],
         };
-        serde_json::to_writer(&mut writer, &entry).expect("serialize event");
-        writer.write_all(b"\n").expect("write newline");
+        serde_json::to_writer(&mut writer, &entry)
+            .map_err(|e| format!("failed to serialize event for {scenario_id}: {e}"))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|e| format!("failed to write newline to {}: {e}", events_path.display()))?;
     }
-    writer.flush().expect("flush events");
+    writer
+        .flush()
+        .map_err(|e| format!("failed to flush {}: {e}", events_path.display()))?;
 
     // Write summary.json
     let first_fail = steps
@@ -165,9 +174,11 @@ fn write_topology_artifacts(scenario_id: &str, steps: &[ForensicStep], all_pass:
         generated_unix_ms: now_unix_ms(),
     };
     let summary_path = dir.join("summary.json");
-    let json = serde_json::to_vec_pretty(&summary).expect("serialize summary");
+    let json = serde_json::to_vec_pretty(&summary)
+        .map_err(|e| format!("failed to serialize summary for {scenario_id}: {e}"))?;
     fs::write(&summary_path, &json)
-        .unwrap_or_else(|e| panic!("failed to write {}: {e}", summary_path.display()));
+        .map_err(|e| format!("failed to write {}: {e}", summary_path.display()))?;
+    Ok(())
 }
 
 const TOL: f64 = 1e-8;
@@ -191,6 +202,22 @@ fn make_step(
         mode: "strict".to_string(),
         outcome: outcome.to_string(),
     }
+}
+
+fn assert_artifacts_written(
+    scenario_id: &str,
+    steps: &[ForensicStep],
+    all_pass: bool,
+) {
+    let artifact_write = write_topology_artifacts(scenario_id, steps, all_pass);
+    assert!(
+        artifact_write.is_ok(),
+        "artifact write failed for {scenario_id}: {}",
+        artifact_write
+            .as_ref()
+            .err()
+            .map_or("unknown error", String::as_str)
+    );
 }
 
 // ======================================================================
@@ -296,7 +323,7 @@ fn e2e_001_normal_distribution_chain() {
         if pass { "pass" } else { "FAIL" },
     ));
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
@@ -428,7 +455,7 @@ fn e2e_002_multi_distribution_roundtrip() {
         ));
     }
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
@@ -525,7 +552,7 @@ fn e2e_003_moments_verification() {
         if pass { "pass" } else { "FAIL" },
     ));
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
@@ -619,7 +646,7 @@ fn e2e_004_boundary_quantiles() {
         if pass { "pass" } else { "FAIL" },
     ));
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
@@ -672,7 +699,7 @@ fn e2e_005_cdf_monotonicity() {
         ));
     }
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
@@ -739,7 +766,7 @@ fn e2e_006_pdf_normalization() {
         if pass { "pass" } else { "FAIL" },
     ));
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
@@ -817,7 +844,7 @@ fn e2e_007_extreme_tails() {
         if pass { "pass" } else { "FAIL" },
     ));
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
@@ -880,7 +907,7 @@ fn e2e_008_rapid_sequential() {
         if pass { "pass" } else { "FAIL" },
     ));
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
@@ -919,7 +946,7 @@ fn e2e_009_location_scale_invariance() {
         if pass { "pass" } else { "FAIL" },
     ));
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
@@ -961,6 +988,6 @@ fn e2e_010_maxwell_mode() {
         if pass { "pass" } else { "FAIL" },
     ));
 
-    write_topology_artifacts(scenario_id, &steps, all_pass);
+    assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }

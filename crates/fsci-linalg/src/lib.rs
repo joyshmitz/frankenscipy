@@ -751,7 +751,7 @@ pub fn lstsq(a: &[Vec<f64>], b: &[f64], options: LstsqOptions) -> Result<LstsqRe
 
     let matrix = dmatrix_from_rows(a)?;
     let rhs = DVector::from_column_slice(b);
-    let svd = SVD::new(matrix.clone(), true, true);
+    let svd = safe_svd(matrix.clone(), true, true)?;
     let singular_values: Vec<f64> = svd.singular_values.iter().copied().collect();
     let max_s = singular_values
         .iter()
@@ -828,7 +828,7 @@ pub fn pinv(a: &[Vec<f64>], options: PinvOptions) -> Result<PinvResult, LinalgEr
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    let svd = SVD::new(matrix, true, true);
+    let svd = safe_svd(matrix, true, true)?;
     let singular_values = &svd.singular_values;
     let max_s = singular_values
         .iter()
@@ -1035,7 +1035,7 @@ fn solve_qr(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError> {
 fn solve_svd_fallback(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError> {
     let matrix = dmatrix_from_rows(a)?;
     let rhs = DVector::from_column_slice(b);
-    let svd = SVD::new(matrix.clone(), true, true);
+    let svd = safe_svd(matrix.clone(), true, true)?;
     let max_s = svd
         .singular_values
         .iter()
@@ -1546,7 +1546,7 @@ pub fn svd(a: &[Vec<f64>], options: DecompOptions) -> Result<SvdResult, LinalgEr
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    let svd_decomp = SVD::new(matrix, true, true);
+    let svd_decomp = safe_svd(matrix, true, true)?;
 
     let u_mat = svd_decomp
         .u
@@ -1591,7 +1591,7 @@ pub fn svdvals(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Linal
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    let svd_decomp = SVD::new(matrix, false, false);
+    let svd_decomp = safe_svd(matrix, false, false)?;
     let s: Vec<f64> = svd_decomp.singular_values.iter().copied().collect();
 
     emit_trace(LinalgTrace {
@@ -2900,7 +2900,7 @@ pub fn norm(a: &[Vec<f64>], kind: NormKind, options: DecompOptions) -> Result<f6
         }
         NormKind::Spectral => {
             // Spectral norm: largest singular value
-            let svd_decomp = SVD::new(matrix, false, false);
+            let svd_decomp = safe_svd(matrix, false, false)?;
             svd_decomp
                 .singular_values
                 .iter()
@@ -2968,7 +2968,7 @@ pub fn matrix_rank(
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    let svd_decomp = SVD::new(matrix, false, false);
+    let svd_decomp = safe_svd(matrix, false, false)?;
     let singular_values = &svd_decomp.singular_values;
     let max_s = singular_values
         .iter()
@@ -3193,6 +3193,19 @@ fn validate_finite_matrix_and_vector(
         return Err(LinalgError::NonFiniteInput);
     }
     Ok(())
+}
+
+
+fn safe_svd(
+    matrix: DMatrix<f64>,
+    compute_u: bool,
+    compute_v: bool,
+) -> Result<SVD<f64, Dyn, Dyn>, LinalgError> {
+    std::panic::catch_unwind(|| nalgebra::linalg::SVD::new(matrix, compute_u, compute_v)).map_err(|_| {
+        LinalgError::ConvergenceFailure {
+            detail: "SVD computation panicked, likely due to non-finite inputs".into(),
+        }
+    })
 }
 
 fn dmatrix_from_rows(rows: &[Vec<f64>]) -> Result<DMatrix<f64>, LinalgError> {
@@ -3479,7 +3492,7 @@ pub fn orth(
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    let svd_decomp = SVD::new(matrix, true, false);
+    let svd_decomp = safe_svd(matrix, true, false)?;
     let u = svd_decomp
         .u
         .as_ref()
@@ -3545,7 +3558,7 @@ pub fn null_space(
     // To get the full V matrix (n×n), compute SVD of A^T (n×m).
     // The U of A^T equals V of A, giving us all n right singular vectors.
     let at = matrix.transpose();
-    let svd_decomp = SVD::new(at, true, false);
+    let svd_decomp = safe_svd(at, true, false)?;
     let u_of_at = svd_decomp
         .u
         .as_ref()

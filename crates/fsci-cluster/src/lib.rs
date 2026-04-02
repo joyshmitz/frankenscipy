@@ -493,7 +493,7 @@ pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
         .map(|&l| {
             unique
                 .binary_search(&l)
-                .expect("label must exist in deduplicated set built from the same data")
+                .unwrap_or(0)
         })
         .collect()
 }

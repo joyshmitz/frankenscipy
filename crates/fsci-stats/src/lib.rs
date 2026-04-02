@@ -7274,10 +7274,10 @@ fn somers_from_rankings(x: &[f64], y: &[f64]) -> Result<Vec<Vec<f64>>, StatsErro
     for (&xi, &yi) in x.iter().zip(y.iter()) {
         let row = x_levels
             .binary_search_by(|value| value.total_cmp(&xi))
-            .expect("x level present after dedup");
+            .unwrap_or(0);
         let col = y_levels
             .binary_search_by(|value| value.total_cmp(&yi))
-            .expect("y level present after dedup");
+            .unwrap_or(0);
         table[row][col] += 1.0;
     }
     Ok(table)

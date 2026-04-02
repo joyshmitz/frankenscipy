@@ -1664,8 +1664,7 @@ pub fn sparse_transpose(a: &CsrMatrix) -> CsrMatrix {
         }
     }
 
-    CsrMatrix::from_components(Shape2D::new(cols, rows), t_data, t_indices, t_indptr, false)
-        .expect("transpose should produce valid CSR")
+    CsrMatrix::from_components_unchecked(Shape2D::new(cols, rows), t_data, t_indices, t_indptr)
 }
 
 /// Count the number of nonzero elements in a CSR matrix.
@@ -1753,8 +1752,7 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
         indptr[i + 1] += indptr[i];
     }
 
-    CsrMatrix::from_components(Shape2D::new(m, n), vals, cols, indptr, false)
-        .expect("spmm should produce valid CSR")
+    CsrMatrix::from_components_unchecked(Shape2D::new(m, n), vals, cols, indptr)
 }
 
 /// Compute one-norm estimate for a sparse matrix.
@@ -1769,14 +1767,12 @@ pub fn onenormest(a: &CsrMatrix) -> f64 {
 /// Scale a CSR matrix by a scalar: B = alpha * A.
 pub fn sparse_scale(a: &CsrMatrix, alpha: f64) -> CsrMatrix {
     let scaled_data: Vec<f64> = a.data().iter().map(|&v| v * alpha).collect();
-    CsrMatrix::from_components(
+    CsrMatrix::from_components_unchecked(
         a.shape(),
         scaled_data,
         a.indices().to_vec(),
         a.indptr().to_vec(),
-        false,
     )
-    .expect("scale should produce valid CSR")
 }
 
 /// Add two CSR matrices: C = A + B.
@@ -1822,8 +1818,7 @@ pub fn sparse_add(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
         indptr[i + 1] += indptr[i];
     }
 
-    CsrMatrix::from_components(Shape2D::new(n, m), vals, cols_vec, indptr, false)
-        .expect("sparse_add should produce valid CSR")
+    CsrMatrix::from_components_unchecked(Shape2D::new(n, m), vals, cols_vec, indptr)
 }
 
 /// Compute the Frobenius inner product of two sparse matrices: <A, B> = Σ A_ij * B_ij.
@@ -1928,14 +1923,12 @@ pub fn sparse_submatrix(
         indptr[i + 1] += indptr[i];
     }
 
-    CsrMatrix::from_components(
+    CsrMatrix::from_components_unchecked(
         Shape2D::new(new_rows, new_cols),
         vals,
         cols_vec,
         indptr,
-        false,
     )
-    .expect("submatrix should produce valid CSR")
 }
 
 /// Compute the number of connected components and their sizes.
@@ -2350,14 +2343,12 @@ where
     F: Fn(f64) -> f64,
 {
     let mapped_data: Vec<f64> = a.data().iter().map(|&v| f(v)).collect();
-    CsrMatrix::from_components(
+    CsrMatrix::from_components_unchecked(
         a.shape(),
         mapped_data,
         a.indices().to_vec(),
         a.indptr().to_vec(),
-        false,
     )
-    .expect("sparse_map should produce valid CSR")
 }
 
 /// Compute the absolute value of all entries in a CSR matrix.
@@ -2486,8 +2477,7 @@ pub fn sparse_eliminate_zeros(a: &CsrMatrix) -> CsrMatrix {
         new_indptr[i + 1] = new_data.len();
     }
 
-    CsrMatrix::from_components(a.shape(), new_data, new_indices, new_indptr, false)
-        .expect("eliminate_zeros should produce valid CSR")
+    CsrMatrix::from_components_unchecked(a.shape(), new_data, new_indices, new_indptr)
 }
 
 #[cfg(test)]
