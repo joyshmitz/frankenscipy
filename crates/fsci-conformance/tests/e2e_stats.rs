@@ -14,6 +14,7 @@ use std::f64::consts::PI;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_stats::{
@@ -95,9 +96,20 @@ fn e2e_runs_dir(run_id: &str, scenario_id: &str) -> PathBuf {
         .join(scenario_id)
 }
 
+fn rustc_version_string() -> String {
+    Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|stdout| stdout.trim().to_string())
+        .filter(|version| !version.is_empty())
+        .unwrap_or_else(|| String::from("unknown"))
+}
+
 fn make_env() -> EnvironmentInfo {
     EnvironmentInfo {
-        rust_version: String::from(env!("CARGO_PKG_VERSION")),
+        rust_version: rustc_version_string(),
         os: String::from(std::env::consts::OS),
         cpu_count: std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)

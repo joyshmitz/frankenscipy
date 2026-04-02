@@ -6569,15 +6569,16 @@ pub fn cramervonmises_2samp_with_method(
     let n_total = (nx + ny) as f64;
     let statistic = u_stat / (k * n_total) - (4.0 * k - 1.0) / (6.0 * n_total);
 
-    let method = match method {
-        Cvm2SampleMethod::Auto if nx.max(ny) > 20 => Cvm2SampleMethod::Asymptotic,
-        Cvm2SampleMethod::Auto => Cvm2SampleMethod::Exact,
-        explicit => explicit,
-    };
     let pvalue = match method {
         Cvm2SampleMethod::Exact => cvm_2samp_exact_pvalue(u_stat.round() as u64, nx, ny),
         Cvm2SampleMethod::Asymptotic => cvm_2samp_asymptotic_pvalue(statistic, nx, ny),
-        Cvm2SampleMethod::Auto => unreachable!(),
+        Cvm2SampleMethod::Auto => {
+            if nx.max(ny) > 20 {
+                cvm_2samp_asymptotic_pvalue(statistic, nx, ny)
+            } else {
+                cvm_2samp_exact_pvalue(u_stat.round() as u64, nx, ny)
+            }
+        }
     };
 
     GoodnessOfFitResult { statistic, pvalue }
