@@ -5421,6 +5421,9 @@ pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
 /// Compute ranks with average tie-breaking.
 fn rankdata(data: &[f64]) -> Vec<f64> {
     let n = data.len();
+    if data.iter().any(|v| v.is_nan()) {
+        return vec![f64::NAN; n];
+    }
     // Create (value, original_index) pairs and sort by value
     let mut indexed: Vec<(f64, usize)> = data
         .iter()

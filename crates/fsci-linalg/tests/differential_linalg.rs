@@ -455,11 +455,11 @@ fn adv_hilbert_matrix() {
 
 // A5: Empty matrix — nalgebra panics on empty, so this tests that path
 #[test]
-#[should_panic]
 fn adv_empty_matrix() {
     let a: Vec<Vec<f64>> = vec![];
     let b: Vec<f64> = vec![];
-    let _ = solve(&a, &b, SolveOptions::default());
+    let res = solve(&a, &b, SolveOptions::default());
+    assert!(res.is_ok());
 }
 
 // A6: Mismatched dimensions

@@ -452,6 +452,14 @@ pub fn solve(a: &[Vec<f64>], b: &[f64], options: SolveOptions) -> Result<SolveRe
     hardened_dimension_check(options.mode, rows, cols)?;
     validate_finite_matrix_and_vector(a, b, options.mode, options.check_finite)?;
 
+    if rows == 0 {
+        return Ok(SolveResult {
+            x: Vec::new(),
+            warning: None,
+            backward_error: None,
+        });
+    }
+
     let matrix = if options.transposed {
         transpose(a)
     } else {
@@ -519,6 +527,22 @@ pub fn solve_triangular(
     }
     hardened_dimension_check(options.mode, rows, cols)?;
     validate_finite_matrix_and_vector(a, b, options.mode, options.check_finite)?;
+    if rows == 0 {
+        let result = Ok(SolveResult {
+            x: Vec::new(),
+            warning: None,
+            backward_error: None,
+        });
+        emit_trace(LinalgTrace {
+            operation: "solve_triangular",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return result;
+    }
     let result =
         solve_triangular_internal(a, b, options.trans, options.lower, options.unit_diagonal);
     emit_trace(LinalgTrace {
@@ -707,6 +731,24 @@ pub fn lstsq(a: &[Vec<f64>], b: &[f64], options: LstsqOptions) -> Result<LstsqRe
     hardened_dimension_check(options.mode, rows, cols)?;
     validate_finite_matrix_and_vector(a, b, options.mode, options.check_finite)?;
 
+    if rows == 0 || cols == 0 {
+        let result = Ok(LstsqResult {
+            x: vec![0.0; cols],
+            residuals: Vec::new(),
+            rank: 0,
+            singular_values: Vec::new(),
+        });
+        emit_trace(LinalgTrace {
+            operation: "lstsq",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return result;
+    }
+
     let matrix = dmatrix_from_rows(a)?;
     let rhs = DVector::from_column_slice(b);
     let svd = SVD::new(matrix.clone(), true, true);
@@ -767,6 +809,22 @@ pub fn pinv(a: &[Vec<f64>], options: PinvOptions) -> Result<PinvResult, LinalgEr
         .unwrap_or((rows.max(cols) as f64) * f64::EPSILON);
     if atol < 0.0 || rtol < 0.0 {
         return Err(LinalgError::InvalidPinvThreshold);
+    }
+
+    if rows == 0 || cols == 0 {
+        let result = Ok(PinvResult {
+            pseudo_inverse: vec![vec![0.0; rows]; cols],
+            rank: 0,
+        });
+        emit_trace(LinalgTrace {
+            operation: "pinv",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return result;
     }
 
     let matrix = dmatrix_from_rows(a)?;
