@@ -15,6 +15,8 @@ use std::f64::consts::{FRAC_1_SQRT_2, PI};
 use fsci_runtime::RuntimeMode;
 use rand::Rng;
 
+const EULER_MASCHERONI: f64 = 0.577_215_664_901_532_9;
+
 /// Error type for stats APIs that validate structured inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatsError {
@@ -3255,7 +3257,16 @@ impl ContinuousDistribution for Burr12 {
     }
 
     fn var(&self) -> f64 {
-        f64::NAN // Complex formula, return NaN for now
+        let c = self.c;
+        let d = self.d;
+        if c * d <= 2.0 {
+            return f64::NAN;
+        }
+
+        let mean = self.mean();
+        let second_moment =
+            d * ln_gamma(d - 2.0 / c).exp() * ln_gamma(1.0 + 2.0 / c).exp() / ln_gamma(d + 1.0).exp();
+        second_moment - mean * mean
     }
 }
 
@@ -3412,11 +3423,29 @@ impl ContinuousDistribution for Gompertz {
     }
 
     fn mean(&self) -> f64 {
-        f64::NAN // No simple closed form
+        -(self.c.exp() * fsci_special::expi_scalar(-self.c))
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let mean = self.mean();
+        let upper = (1.0 - (1.0 - 1e-12).ln() / self.c).ln();
+        let n = 4_000;
+        let h = upper / n as f64;
+        let mut second_moment = 0.0;
+
+        for i in 0..=n {
+            let x = i as f64 * h;
+            let weight = if i == 0 || i == n {
+                1.0
+            } else if i % 2 == 0 {
+                2.0
+            } else {
+                4.0
+            };
+            second_moment += weight * x * x * self.pdf(x);
+        }
+
+        (second_moment * h / 3.0 - mean * mean).max(0.0)
     }
 }
 
@@ -3456,11 +3485,11 @@ impl ContinuousDistribution for GenLogistic {
     }
 
     fn mean(&self) -> f64 {
-        f64::NAN
+        fsci_special::digamma_scalar(self.c) + EULER_MASCHERONI
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        PI * PI / 6.0 + fsci_special::trigamma(self.c)
     }
 }
 
@@ -3597,11 +3626,12 @@ impl ContinuousDistribution for GenHalfLogistic {
     }
 
     fn mean(&self) -> f64 {
-        f64::NAN
+        let c = self.c;
+        (fsci_special::digamma_scalar(1.0 / c + 1.0) + EULER_MASCHERONI) / c
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        fsci_special::trigamma(1.0 / self.c + 1.0) / (self.c * self.c)
     }
 }
 
@@ -3666,7 +3696,16 @@ impl ContinuousDistribution for TukeyLambda {
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let lam = self.lam;
+        if lam.abs() < 1e-15 {
+            return PI * PI / 3.0;
+        }
+        if lam <= -0.5 {
+            return f64::NAN;
+        }
+
+        let gamma_ratio = (2.0 * ln_gamma(lam + 1.0) - ln_gamma(2.0 * lam + 2.0)).exp();
+        2.0 * (1.0 / (1.0 + 2.0 * lam) - gamma_ratio) / (lam * lam)
     }
 }
 
@@ -3710,7 +3749,13 @@ impl ContinuousDistribution for InvWeibull {
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        if self.c <= 2.0 {
+            return f64::NAN;
+        }
+
+        let g1 = ln_gamma(1.0 - 1.0 / self.c).exp();
+        let g2 = ln_gamma(1.0 - 2.0 / self.c).exp();
+        g2 - g1 * g1
     }
 }
 
@@ -13361,6 +13406,104 @@ mod tests {
         let c = ig.cdf(1.0);
         assert!(c > 0.0 && c < 1.0);
         assert!((ig.mean() - 0.5).abs() < 1e-10); // 1/(a-1) = 1/2
+    }
+
+    #[test]
+    fn burr12_variance_matches_scipy_reference_values() {
+        let cases = [
+            ((2.0, 3.0), (0.589_048_622_548_086_1, 0.153_021_720_274_202_2)),
+            ((3.0, 2.5), (0.727_057_387_946_532_4, 0.110_180_038_392_808_1)),
+            ((1.5, 4.0), (0.417_994_915_214_470_2, 0.123_848_047_436_612_57)),
+        ];
+
+        for &((c, d), (mean, var)) in &cases {
+            let dist = Burr12::new(c, d);
+            assert_close(dist.mean(), mean, 1e-12, "Burr12 mean");
+            assert_close(dist.var(), var, 1e-12, "Burr12 variance");
+        }
+    }
+
+    #[test]
+    fn burr12_variance_returns_nan_at_boundary_or_below() {
+        assert!(Burr12::new(1.0, 2.0).var().is_nan());
+        assert!(Burr12::new(1.5, 4.0 / 3.0).var().is_nan());
+    }
+
+    #[test]
+    fn invweibull_variance_matches_scipy_reference_values() {
+        let cases = [
+            (3.0, (1.354_117_939_426_400_2, 0.845_303_140_831_346_9)),
+            (4.5, (1.190_151_186_912_873, 0.184_256_270_703_863_52)),
+            (2.2, (1.628_998_124_608_686, 7.852_239_966_100_065)),
+        ];
+
+        for &(c, (mean, var)) in &cases {
+            let dist = InvWeibull::new(c);
+            assert_close(dist.mean(), mean, 1e-12, "InvWeibull mean");
+            assert_close(dist.var(), var, 1e-10, "InvWeibull variance");
+        }
+    }
+
+    #[test]
+    fn invweibull_variance_returns_nan_at_boundary_or_below() {
+        assert!(InvWeibull::new(2.0).var().is_nan());
+        assert!(InvWeibull::new(1.9).var().is_nan());
+    }
+
+    #[test]
+    fn tukey_lambda_variance_matches_scipy_reference_values() {
+        let cases = [
+            (0.0, 3.289_868_133_696_453),
+            (0.14, 2.110_297_022_214_417),
+            (0.5, 0.858_407_346_410_206_9),
+            (-0.25, 9.778_362_573_185_369),
+        ];
+
+        for &(lam, var) in &cases {
+            let dist = TukeyLambda::new(lam);
+            assert_close(dist.var(), var, 1e-12, "TukeyLambda variance");
+        }
+    }
+
+    #[test]
+    fn tukey_lambda_variance_returns_nan_when_undefined() {
+        assert!(TukeyLambda::new(-0.5).var().is_nan());
+        assert!(TukeyLambda::new(-0.75).var().is_nan());
+    }
+
+    #[test]
+    fn gen_half_logistic_moments_match_scipy_reference_values() {
+        let cases = [
+            (0.5, (3.0, 1.579_736_267_392_905_8)),
+            (1.0, (1.0, 0.644_934_066_848_226_6)),
+            (2.0, (0.306_852_819_440_054_7, 0.233_700_550_136_169_83)),
+            (3.5, (0.111_913_624_175_919_25, 0.094_010_019_668_303_19)),
+        ];
+
+        for &(c, (mean, var)) in &cases {
+            let dist = GenHalfLogistic::new(c);
+            assert_close(dist.mean(), mean, 1e-9, "GenHalfLogistic mean");
+            assert_close(dist.var(), var, 1e-9, "GenHalfLogistic variance");
+        }
+    }
+
+    #[test]
+    fn closed_form_variances_stay_nonnegative_for_valid_parameters() {
+        for &(c, d) in &[(2.0, 3.0), (3.0, 2.5), (1.5, 4.0)] {
+            assert!(Burr12::new(c, d).var() >= 0.0, "Burr12({c}, {d}) variance");
+        }
+        for &c in &[2.2, 3.0, 4.5] {
+            assert!(InvWeibull::new(c).var() >= 0.0, "InvWeibull({c}) variance");
+        }
+        for &lam in &[-0.25, 0.0, 0.14, 0.5] {
+            assert!(TukeyLambda::new(lam).var() >= 0.0, "TukeyLambda({lam}) variance");
+        }
+        for &c in &[0.5, 1.0, 2.0, 3.5] {
+            assert!(
+                GenHalfLogistic::new(c).var() >= 0.0,
+                "GenHalfLogistic({c}) variance"
+            );
+        }
     }
 
     #[test]

@@ -610,6 +610,11 @@ pub fn dbscan(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "dbscan input must be finite".to_string(),
+        ));
+    }
 
     let eps2 = eps * eps;
     let mut labels = vec![-1i64; n];
@@ -1111,6 +1116,11 @@ pub fn mean_shift(
     let n = data.len();
     if n == 0 {
         return Err(ClusterError::EmptyData);
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "mean_shift input must be finite".to_string(),
+        ));
     }
     let d = data[0].len();
     let bw2 = bandwidth * bandwidth;

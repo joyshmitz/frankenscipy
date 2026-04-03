@@ -464,7 +464,11 @@ fn max_diag_jtj(jac: &[Vec<f64>]) -> f64 {
         for row in jac {
             diag += row[j] * row[j];
         }
-        max_val = max_val.max(diag);
+        if max_val.is_nan() || diag.is_nan() {
+            max_val = f64::NAN;
+        } else {
+            max_val = max_val.max(diag);
+        }
     }
     max_val
 }

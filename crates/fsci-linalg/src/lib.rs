@@ -4363,7 +4363,14 @@ pub fn frobenius_norm(a: &[Vec<f64>]) -> f64 {
 pub fn max_abs(a: &[Vec<f64>]) -> f64 {
     a.iter()
         .flat_map(|row| row.iter())
-        .fold(0.0f64, |acc, &v| acc.max(v.abs()))
+        .fold(0.0f64, |acc, &v| {
+            let v_abs = v.abs();
+            if acc.is_nan() || v_abs.is_nan() {
+                f64::NAN
+            } else {
+                acc.max(v_abs)
+            }
+        })
 }
 
 /// Compute the 1-norm, infinity-norm, or Frobenius norm of a vector.

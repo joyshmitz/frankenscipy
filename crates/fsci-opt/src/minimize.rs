@@ -1072,6 +1072,9 @@ where
 /// Project x onto box constraints.
 fn project_onto_bounds(x: &mut [f64], bounds: &[Bound]) {
     for (xi, bound) in x.iter_mut().zip(bounds.iter()) {
+        if xi.is_nan() {
+            continue;
+        }
         if let Some(lo) = bound.0 {
             *xi = xi.max(lo);
         }

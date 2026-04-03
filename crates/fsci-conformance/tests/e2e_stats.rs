@@ -18,8 +18,9 @@ use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_stats::{
-    BetaDist, ChiSquared, ContinuousDistribution, Exponential, GammaDist, Gumbel, Logistic,
-    Lognormal, Maxwell, Normal, Pareto, Rayleigh, StudentT, Uniform, Weibull,
+    BetaDist, Burr12, ChiSquared, ContinuousDistribution, Exponential, GammaDist,
+    GenHalfLogistic, Gumbel, InvWeibull, Logistic, Lognormal, Maxwell, Normal, Pareto, Rayleigh,
+    StudentT, TukeyLambda, Uniform, Weibull,
 };
 use serde::Serialize;
 
@@ -984,6 +985,91 @@ fn e2e_010_maxwell_mode() {
         "scan Maxwell PDF for mode",
         &format!("sigma={sigma}"),
         &format!("mode={mode_x:.4}, expected={expected_mode:.4}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 11: Closed-form moments for newly remediated distributions.
+#[test]
+fn e2e_011_closed_form_moments() {
+    let scenario_id = "e2e_stats_011_closed_form_moments";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let burr = Burr12::new(2.0, 3.0);
+    let pass = (burr.mean() - 0.589_048_622_548_086_1).abs() < 1e-12
+        && (burr.var() - 0.153_021_720_274_202_2).abs() < 1e-12
+        && Burr12::new(1.0, 2.0).var().is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "burr12_closed_form_moments",
+        "Burr12::mean/var",
+        "c=2, d=3 and boundary c*d=2",
+        &format!("mean={}, var={}", burr.mean(), burr.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let inv_weibull = InvWeibull::new(3.0);
+    let pass = (inv_weibull.mean() - 1.354_117_939_426_400_2).abs() < 1e-12
+        && (inv_weibull.var() - 0.845_303_140_831_346_9).abs() < 1e-10
+        && InvWeibull::new(2.0).var().is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "invweibull_closed_form_moments",
+        "InvWeibull::mean/var",
+        "c=3 and boundary c=2",
+        &format!("mean={}, var={}", inv_weibull.mean(), inv_weibull.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let tukey = TukeyLambda::new(0.14);
+    let pass = tukey.mean().abs() < TOL
+        && (tukey.var() - 2.110_297_022_214_417).abs() < 1e-12
+        && (TukeyLambda::new(0.0).var() - PI * PI / 3.0).abs() < 1e-12
+        && TukeyLambda::new(-0.5).var().is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "tukey_lambda_closed_form_moments",
+        "TukeyLambda::mean/var",
+        "lam=0.14, logistic special case, undefined boundary",
+        &format!("mean={}, var={}", tukey.mean(), tukey.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let gen_half = GenHalfLogistic::new(2.0);
+    let pass = (gen_half.mean() - 0.306_852_819_440_054_7).abs() < 1e-9
+        && (gen_half.var() - 0.233_700_550_136_169_83).abs() < 1e-9
+        && gen_half.pdf(0.1).is_finite()
+        && (0.0..=1.0).contains(&gen_half.cdf(0.1));
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "gen_half_logistic_closed_form_moments",
+        "GenHalfLogistic::mean/var",
+        "c=2 with pdf/cdf sanity",
+        &format!("mean={}, var={}", gen_half.mean(), gen_half.var()),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));

@@ -597,7 +597,7 @@ pub fn ellipj(u: f64, m: f64) -> (f64, f64, f64, f64) {
     // Compute amplitude by back-substitution
     let mut phi = (1u64 << n) as f64 * a[n] * u;
     for k in (1..=n).rev() {
-        phi = (phi + (c[k] / a[k] * phi.sin()).asin()) / 2.0;
+        phi = (phi + (c[k] / a[k] * phi.sin()).clamp(-1.0, 1.0).asin()) / 2.0;
     }
 
     let sn = phi.sin();

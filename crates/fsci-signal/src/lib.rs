@@ -1840,7 +1840,11 @@ pub fn autocorrelation(x: &[f64], max_lag: usize) -> Vec<f64> {
 ///
 /// Returns the weighted mean frequency.
 pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
-    let total: f64 = magnitudes.iter().sum();
+    let total: f64 = magnitudes
+        .iter()
+        .zip(freqs.iter())
+        .map(|(&m, _)| m)
+        .sum();
     if total == 0.0 {
         return 0.0;
     }
@@ -1856,7 +1860,11 @@ pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
 ///
 /// Returns the frequency below which `rolloff_percent` of the total energy is contained.
 pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64) -> f64 {
-    let total: f64 = magnitudes.iter().sum();
+    let total: f64 = magnitudes
+        .iter()
+        .zip(freqs.iter())
+        .map(|(&m, _)| m)
+        .sum();
     let threshold = total * rolloff_percent / 100.0;
     let mut cumsum = 0.0;
     for (&m, &f) in magnitudes.iter().zip(freqs.iter()) {
@@ -1871,7 +1879,11 @@ pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64)
 /// Spectral bandwidth: weighted standard deviation of frequencies.
 pub fn spectral_bandwidth(magnitudes: &[f64], freqs: &[f64]) -> f64 {
     let centroid = spectral_centroid(magnitudes, freqs);
-    let total: f64 = magnitudes.iter().sum();
+    let total: f64 = magnitudes
+        .iter()
+        .zip(freqs.iter())
+        .map(|(&m, _)| m)
+        .sum();
     if total == 0.0 {
         return 0.0;
     }
@@ -7343,6 +7355,42 @@ mod tests {
         assert!(
             chroma_vec.iter().any(|value| value.is_nan()),
             "NaN input should remain visible in at least one chroma bin"
+        );
+    }
+
+    #[test]
+    fn spectral_centroid_ignores_unpaired_tail_magnitudes() {
+        let magnitudes = [1.0, 3.0, 100.0];
+        let freqs = [10.0, 30.0];
+        let centroid = spectral_centroid(&magnitudes, &freqs);
+
+        assert!(
+            (centroid - 25.0).abs() < 1e-12,
+            "expected paired-sample centroid, got {centroid}"
+        );
+    }
+
+    #[test]
+    fn spectral_rolloff_ignores_unpaired_tail_magnitudes() {
+        let magnitudes = [1.0, 3.0, 100.0];
+        let freqs = [10.0, 30.0];
+        let rolloff = spectral_rolloff(&magnitudes, &freqs, 75.0);
+
+        assert!(
+            (rolloff - 30.0).abs() < 1e-12,
+            "expected paired-sample rolloff, got {rolloff}"
+        );
+    }
+
+    #[test]
+    fn spectral_bandwidth_ignores_unpaired_tail_magnitudes() {
+        let magnitudes = [1.0, 3.0, 100.0];
+        let freqs = [10.0, 30.0];
+        let bandwidth = spectral_bandwidth(&magnitudes, &freqs);
+
+        assert!(
+            (bandwidth - 8.660_254_037_844_387).abs() < 1e-12,
+            "expected paired-sample bandwidth, got {bandwidth}"
         );
     }
 

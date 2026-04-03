@@ -1243,6 +1243,11 @@ impl SphericalVoronoi {
                 "spherical voronoi requires at least 4 points".to_string(),
             ));
         }
+        if points.iter().flatten().any(|v| !v.is_finite()) || !center.iter().all(|v| v.is_finite()) {
+            return Err(SpatialError::InvalidArgument(
+                "spherical voronoi points and center must be finite".to_string(),
+            ));
+        }
         if !radius.is_finite() || radius <= 0.0 {
             return Err(SpatialError::InvalidArgument(
                 "spherical voronoi requires a positive finite radius".to_string(),
@@ -1660,7 +1665,7 @@ pub fn spherical_to_cartesian(r: f64, theta: f64, phi: f64) -> (f64, f64, f64) {
 /// Convert Cartesian (x, y, z) to spherical (r, θ, φ).
 pub fn cartesian_to_spherical(x: f64, y: f64, z: f64) -> (f64, f64, f64) {
     let r = (x * x + y * y + z * z).sqrt();
-    let theta = if r > 0.0 { (z / r).acos() } else { 0.0 };
+    let theta = if r > 0.0 { (z / r).clamp(-1.0, 1.0).acos() } else { 0.0 };
     let phi = y.atan2(x);
     (r, theta, phi)
 }

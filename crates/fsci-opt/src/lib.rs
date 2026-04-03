@@ -1506,26 +1506,32 @@ where
             // Simple coordinate descent as local search
             for d in 0..ndim {
                 let (lo, hi) = bounds[d];
-                let h = (hi - lo) * 0.01;
+                let mut h = (hi - lo) * 0.01;
                 let mut x_local = x_best.clone();
+                let original_val = x_local[d];
                 for _ in 0..10 {
-                    x_local[d] = (x_local[d] + h).min(hi);
+                    x_local[d] = (original_val + h).min(hi);
                     let fp = func(&x_local);
                     nfev += 1;
-                    x_local[d] -= 2.0 * h;
-                    x_local[d] = x_local[d].max(lo);
+                    
+                    x_local[d] = (original_val - h).max(lo);
                     let fm = func(&x_local);
                     nfev += 1;
-                    x_local[d] += h; // restore
+                    
+                    x_local[d] = original_val; // restore
+                    
                     if fp < fm && fp < f_best {
-                        x_local[d] += h;
+                        x_local[d] = (original_val + h).min(hi);
                         f_best = fp;
                         x_best.clone_from(&x_local);
+                        break; // Step successful
                     } else if fm < f_best {
-                        x_local[d] -= h;
+                        x_local[d] = (original_val - h).max(lo);
                         f_best = fm;
                         x_best.clone_from(&x_local);
+                        break; // Step successful
                     }
+                    h /= 2.0; // Reduce step size if neither improved
                 }
             }
             x_current.clone_from(&x_best);
