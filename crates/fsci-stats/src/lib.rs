@@ -4328,7 +4328,7 @@ pub fn chisquare(f_obs: &[f64], f_exp: Option<&[f64]>) -> (f64, f64) {
 ///
 /// Matches `scipy.stats.wasserstein_distance(u_values, v_values)`.
 pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
-    if u.is_empty() || v.is_empty() {
+    if u.is_empty() || v.is_empty() || u.iter().any(|&val| val.is_nan()) || v.iter().any(|&val| val.is_nan()) {
         return f64::NAN;
     }
 
@@ -4345,7 +4345,7 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
     // Combine all unique values and compute CDF difference at each
     let mut all_vals: Vec<f64> = u_sorted.iter().chain(v_sorted.iter()).copied().collect();
     all_vals.sort_by(|a, b| a.total_cmp(b));
-    all_vals.dedup();
+    all_vals.dedup_by(|a, b| a.total_cmp(b).is_eq());
 
     let mut distance = 0.0;
     let mut prev_val = all_vals[0];
@@ -4371,7 +4371,7 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
 ///
 /// Matches `scipy.stats.energy_distance(u_values, v_values)`.
 pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
-    if u.is_empty() || v.is_empty() {
+    if u.is_empty() || v.is_empty() || u.iter().any(|&val| val.is_nan()) || v.iter().any(|&val| val.is_nan()) {
         return f64::NAN;
     }
 
@@ -13152,6 +13152,12 @@ mod tests {
         assert!(wasserstein_distance(&[], &[1.0]).is_nan());
     }
 
+    #[test]
+    fn wasserstein_nan_input_returns_nan() {
+        assert!(wasserstein_distance(&[1.0, f64::NAN], &[1.0, 2.0]).is_nan());
+        assert!(wasserstein_distance(&[1.0, 2.0], &[1.0, f64::NAN]).is_nan());
+    }
+
     // ── energy_distance tests ────────────────────────────────────────
 
     #[test]
@@ -13175,6 +13181,12 @@ mod tests {
     #[test]
     fn energy_distance_empty() {
         assert!(energy_distance(&[], &[1.0]).is_nan());
+    }
+
+    #[test]
+    fn energy_distance_nan_input_returns_nan() {
+        assert!(energy_distance(&[1.0, f64::NAN], &[1.0, 2.0]).is_nan());
+        assert!(energy_distance(&[1.0, 2.0], &[1.0, f64::NAN]).is_nan());
     }
 
     // ── Friedman test ────────────────────────────────────────────────

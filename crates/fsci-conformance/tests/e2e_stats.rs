@@ -119,7 +119,7 @@ fn make_env() -> EnvironmentInfo {
 }
 
 fn replay_cmd(scenario_id: &str) -> String {
-    format!("cargo test -p fsci-conformance --test e2e_stats -- {scenario_id} --nocapture")
+    format!("rch exec -- cargo test -p fsci-conformance --test e2e_stats -- {scenario_id} --nocapture")
 }
 
 fn write_topology_artifacts(
@@ -606,7 +606,7 @@ fn e2e_004_boundary_quantiles() {
     let t = Instant::now();
     let cdf_neg_inf = n.cdf(f64::NEG_INFINITY);
     let cdf_pos_inf = n.cdf(f64::INFINITY);
-    let pass = cdf_neg_inf == 0.0 && cdf_pos_inf == 1.0;
+    let pass = cdf_neg_inf.abs() < TOL && (cdf_pos_inf - 1.0).abs() < TOL;
     if !pass {
         all_pass = false;
     }

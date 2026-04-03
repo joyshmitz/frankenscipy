@@ -2653,7 +2653,13 @@ pub fn chroma(magnitudes: &[f64], sr: f64, n_fft: usize) -> [f64; 12] {
     }
 
     // Normalize
-    let max_val = chroma_vec.iter().cloned().fold(0.0f64, f64::max);
+    let max_val = chroma_vec.iter().cloned().fold(0.0_f64, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    });
     if max_val > 0.0 {
         for v in &mut chroma_vec {
             *v /= max_val;
@@ -2684,7 +2690,7 @@ pub fn spectral_contrast(magnitudes: &[f64], n_bands: usize) -> Vec<f64> {
                 return 0.0;
             }
             let mut sorted = band.to_vec();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted.sort_by(|a, b| a.total_cmp(b));
             let peak = sorted[sorted.len() - 1];
             let valley = sorted[0];
             if valley > 0.0 {
