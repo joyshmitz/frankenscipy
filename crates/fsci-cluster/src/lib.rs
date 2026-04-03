@@ -490,11 +490,7 @@ pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
     unique.dedup();
     leaf_labels
         .iter()
-        .map(|&l| {
-            unique
-                .binary_search(&l)
-                .unwrap_or(0)
-        })
+        .map(|&l| unique.binary_search(&l).unwrap_or(0))
         .collect()
 }
 

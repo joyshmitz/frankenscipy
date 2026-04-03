@@ -1840,11 +1840,7 @@ pub fn autocorrelation(x: &[f64], max_lag: usize) -> Vec<f64> {
 ///
 /// Returns the weighted mean frequency.
 pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
-    let total: f64 = magnitudes
-        .iter()
-        .zip(freqs.iter())
-        .map(|(&m, _)| m)
-        .sum();
+    let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
     if total == 0.0 {
         return 0.0;
     }
@@ -1860,11 +1856,7 @@ pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
 ///
 /// Returns the frequency below which `rolloff_percent` of the total energy is contained.
 pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64) -> f64 {
-    let total: f64 = magnitudes
-        .iter()
-        .zip(freqs.iter())
-        .map(|(&m, _)| m)
-        .sum();
+    let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
     let threshold = total * rolloff_percent / 100.0;
     let mut cumsum = 0.0;
     for (&m, &f) in magnitudes.iter().zip(freqs.iter()) {
@@ -1879,11 +1871,7 @@ pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64)
 /// Spectral bandwidth: weighted standard deviation of frequencies.
 pub fn spectral_bandwidth(magnitudes: &[f64], freqs: &[f64]) -> f64 {
     let centroid = spectral_centroid(magnitudes, freqs);
-    let total: f64 = magnitudes
-        .iter()
-        .zip(freqs.iter())
-        .map(|(&m, _)| m)
-        .sum();
+    let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
     if total == 0.0 {
         return 0.0;
     }

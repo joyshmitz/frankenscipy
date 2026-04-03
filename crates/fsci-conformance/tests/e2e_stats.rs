@@ -18,9 +18,9 @@ use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_stats::{
-    BetaDist, Burr12, ChiSquared, ContinuousDistribution, Exponential, GammaDist,
-    GenHalfLogistic, Gumbel, InvWeibull, Logistic, Lognormal, Maxwell, Normal, Pareto, Rayleigh,
-    StudentT, TukeyLambda, Uniform, Weibull,
+    BetaDist, Burr12, ChiSquared, ContinuousDistribution, Exponential, FrechetR, GammaDist,
+    GenHalfLogistic, GenLogistic, Gompertz, Gumbel, InvWeibull, LogLaplace, Logistic, Lognormal,
+    Maxwell, Mielke, Normal, Pareto, Rayleigh, StudentT, TukeyLambda, Uniform, Weibull,
 };
 use serde::Serialize;
 
@@ -120,7 +120,9 @@ fn make_env() -> EnvironmentInfo {
 }
 
 fn replay_cmd(scenario_id: &str) -> String {
-    format!("rch exec -- cargo test -p fsci-conformance --test e2e_stats -- {scenario_id} --nocapture")
+    format!(
+        "rch exec -- cargo test -p fsci-conformance --test e2e_stats -- {scenario_id} --nocapture"
+    )
 }
 
 fn write_topology_artifacts(
@@ -205,11 +207,7 @@ fn make_step(
     }
 }
 
-fn assert_artifacts_written(
-    scenario_id: &str,
-    steps: &[ForensicStep],
-    all_pass: bool,
-) {
+fn assert_artifacts_written(scenario_id: &str, steps: &[ForensicStep], all_pass: bool) {
     let artifact_write = write_topology_artifacts(scenario_id, steps, all_pass);
     assert!(
         artifact_write.is_ok(),
@@ -1070,6 +1068,109 @@ fn e2e_011_closed_form_moments() {
         "GenHalfLogistic::mean/var",
         "c=2 with pdf/cdf sanity",
         &format!("mean={}, var={}", gen_half.mean(), gen_half.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 12: Special-function-backed moments for GenLogistic and Gompertz.
+#[test]
+fn e2e_012_special_function_moments() {
+    let scenario_id = "e2e_stats_012_special_function_moments";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let gen_logistic = GenLogistic::new(5.0);
+    let pass = (gen_logistic.mean() - 2.083_333_333_333_333).abs() < 1e-9
+        && (gen_logistic.var() - 1.866_257_022_585_341_7).abs() < 1e-9
+        && (GenLogistic::new(1.0).mean() - Logistic::new(0.0, 1.0).mean()).abs() < TOL
+        && (GenLogistic::new(1.0).var() - Logistic::new(0.0, 1.0).var()).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "gen_logistic_special_function_moments",
+        "GenLogistic::mean/var",
+        "c=5 and logistic identity at c=1",
+        &format!("mean={}, var={}", gen_logistic.mean(), gen_logistic.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let gompertz = Gompertz::new(3.0);
+    let pass = (gompertz.mean() - 0.262_083_740_252_362_75).abs() < 1e-10
+        && (gompertz.var() - 0.046_960_406_809_075_47).abs() < 1e-10
+        && gompertz.pdf(0.1).is_finite()
+        && (0.0..=1.0).contains(&gompertz.cdf(0.1));
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "gompertz_special_function_moments",
+        "Gompertz::mean/var",
+        "c=3 with pdf/cdf sanity",
+        &format!("mean={}, var={}", gompertz.mean(), gompertz.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let log_laplace = LogLaplace::new(3.0);
+    let pass = (log_laplace.mean() - 1.125).abs() < TOL
+        && (log_laplace.var() - 0.534_375).abs() < TOL
+        && LogLaplace::new(1.5).var().is_infinite();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "log_laplace_moments",
+        "LogLaplace::mean/var",
+        "c=3 and divergent second moment at c=1.5",
+        &format!("mean={}, var={}", log_laplace.mean(), log_laplace.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let mielke = Mielke::new(2.0, 2.5);
+    let pass = (mielke.mean() - 1.174_450_160_620_581_7).abs() < 1e-12
+        && (mielke.var() - 2.144_017_302_080_036_4).abs() < 1e-10
+        && Mielke::new(3.5, 1.2).var().is_infinite();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "mielke_moments",
+        "Mielke::mean/var",
+        "k=2, s=2.5 and divergent variance at s=1.2",
+        &format!("mean={}, var={}", mielke.mean(), mielke.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let frechet_r = FrechetR::new(3.0);
+    let pass = (frechet_r.mean() + 0.892_979_511_569_248_9).abs() < 1e-12
+        && (frechet_r.var() - 0.105_332_884_868_479_14).abs() < 1e-12
+        && frechet_r.cdf(-0.5).is_finite();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        5,
+        "frechet_r_moments",
+        "FrechetR::mean/var",
+        "c=3 with support sanity",
+        &format!("mean={}, var={}", frechet_r.mean(), frechet_r.var()),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));

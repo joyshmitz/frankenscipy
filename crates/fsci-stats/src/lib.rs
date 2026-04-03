@@ -3264,8 +3264,8 @@ impl ContinuousDistribution for Burr12 {
         }
 
         let mean = self.mean();
-        let second_moment =
-            d * ln_gamma(d - 2.0 / c).exp() * ln_gamma(1.0 + 2.0 / c).exp() / ln_gamma(d + 1.0).exp();
+        let second_moment = d * ln_gamma(d - 2.0 / c).exp() * ln_gamma(1.0 + 2.0 / c).exp()
+            / ln_gamma(d + 1.0).exp();
         second_moment - mean * mean
     }
 }
@@ -3319,7 +3319,13 @@ impl ContinuousDistribution for LogLaplace {
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let c = self.c;
+        if c > 2.0 {
+            let second_moment = c * c / (c * c - 4.0);
+            second_moment - self.mean().powi(2)
+        } else {
+            f64::INFINITY
+        }
     }
 }
 
@@ -3358,11 +3364,22 @@ impl ContinuousDistribution for Mielke {
     }
 
     fn mean(&self) -> f64 {
-        f64::NAN // Complex
+        if self.s <= 1.0 {
+            return f64::INFINITY;
+        }
+        let log_moment = ln_gamma((self.k + 1.0) / self.s) + ln_gamma(1.0 - 1.0 / self.s)
+            - ln_gamma(self.k / self.s);
+        log_moment.exp()
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        if self.s <= 2.0 {
+            return f64::INFINITY;
+        }
+        let mean = self.mean();
+        let log_second_moment = ln_gamma((self.k + 2.0) / self.s) + ln_gamma(1.0 - 2.0 / self.s)
+            - ln_gamma(self.k / self.s);
+        log_second_moment.exp() - mean * mean
     }
 }
 
@@ -3428,7 +3445,8 @@ impl ContinuousDistribution for Gompertz {
 
     fn var(&self) -> f64 {
         let mean = self.mean();
-        let upper = (1.0 - (1.0 - 1e-12).ln() / self.c).ln();
+        let tail_prob = 1e-12_f64;
+        let upper = (1.0_f64 - tail_prob.ln() / self.c).ln();
         let n = 4_000;
         let h = upper / n as f64;
         let mut second_moment = 0.0;
@@ -3525,15 +3543,13 @@ impl ContinuousDistribution for FrechetR {
     }
 
     fn mean(&self) -> f64 {
-        if self.c > 1.0 {
-            -ln_gamma(1.0 - 1.0 / self.c).exp()
-        } else {
-            f64::NEG_INFINITY
-        }
+        -ln_gamma(1.0 + 1.0 / self.c).exp()
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let first = ln_gamma(1.0 + 1.0 / self.c).exp();
+        let second = ln_gamma(1.0 + 2.0 / self.c).exp();
+        second - first * first
     }
 }
 
@@ -4373,7 +4389,11 @@ pub fn chisquare(f_obs: &[f64], f_exp: Option<&[f64]>) -> (f64, f64) {
 ///
 /// Matches `scipy.stats.wasserstein_distance(u_values, v_values)`.
 pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
-    if u.is_empty() || v.is_empty() || u.iter().any(|&val| val.is_nan()) || v.iter().any(|&val| val.is_nan()) {
+    if u.is_empty()
+        || v.is_empty()
+        || u.iter().any(|&val| val.is_nan())
+        || v.iter().any(|&val| val.is_nan())
+    {
         return f64::NAN;
     }
 
@@ -4416,7 +4436,11 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
 ///
 /// Matches `scipy.stats.energy_distance(u_values, v_values)`.
 pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
-    if u.is_empty() || v.is_empty() || u.iter().any(|&val| val.is_nan()) || v.iter().any(|&val| val.is_nan()) {
+    if u.is_empty()
+        || v.is_empty()
+        || u.iter().any(|&val| val.is_nan())
+        || v.iter().any(|&val| val.is_nan())
+    {
         return f64::NAN;
     }
 
@@ -13411,9 +13435,18 @@ mod tests {
     #[test]
     fn burr12_variance_matches_scipy_reference_values() {
         let cases = [
-            ((2.0, 3.0), (0.589_048_622_548_086_1, 0.153_021_720_274_202_2)),
-            ((3.0, 2.5), (0.727_057_387_946_532_4, 0.110_180_038_392_808_1)),
-            ((1.5, 4.0), (0.417_994_915_214_470_2, 0.123_848_047_436_612_57)),
+            (
+                (2.0, 3.0),
+                (0.589_048_622_548_086_1, 0.153_021_720_274_202_2),
+            ),
+            (
+                (3.0, 2.5),
+                (0.727_057_387_946_532_4, 0.110_180_038_392_808_1),
+            ),
+            (
+                (1.5, 4.0),
+                (0.417_994_915_214_470_2, 0.123_848_047_436_612_57),
+            ),
         ];
 
         for &((c, d), (mean, var)) in &cases {
@@ -13488,6 +13521,102 @@ mod tests {
     }
 
     #[test]
+    fn gen_logistic_moments_match_scipy_reference_values() {
+        let cases = [
+            (0.5, (-1.386_294_361_119_890_8, 6.579_736_267_392_906_5)),
+            (1.0, (0.0, 3.289_868_133_696_453_3)),
+            (5.0, (2.083_333_333_333_333, 1.866_257_022_585_341_7)),
+        ];
+
+        for &(c, (mean, var)) in &cases {
+            let dist = GenLogistic::new(c);
+            assert_close(dist.mean(), mean, 1e-9, "GenLogistic mean");
+            assert_close(dist.var(), var, 1e-9, "GenLogistic variance");
+        }
+    }
+
+    #[test]
+    fn gompertz_moments_match_scipy_reference_values() {
+        let cases = [
+            (0.5, (0.922_910_632_477_416_4, 0.329_627_827_869_170_1)),
+            (1.0, (0.596_347_362_317_641_5, 0.176_300_593_521_657_72)),
+            (3.0, (0.262_083_740_252_362_75, 0.046_960_406_809_075_47)),
+        ];
+
+        for &(c, (mean, var)) in &cases {
+            let dist = Gompertz::new(c);
+            assert_close(dist.mean(), mean, 1e-6, "Gompertz mean");
+            assert_close(dist.var(), var, 1e-6, "Gompertz variance");
+        }
+    }
+
+    #[test]
+    fn log_laplace_variance_matches_scipy_reference_values() {
+        let cases = [
+            (3.0, (1.125, 0.534_375)),
+            (5.0, (1.041_666_666_666_666_7, 0.105_406_746_031_745_82)),
+        ];
+
+        for &(c, (mean, var)) in &cases {
+            let dist = LogLaplace::new(c);
+            assert_close(dist.mean(), mean, 1e-12, "LogLaplace mean");
+            assert_close(dist.var(), var, 1e-12, "LogLaplace variance");
+        }
+    }
+
+    #[test]
+    fn log_laplace_variance_is_infinite_when_second_moment_diverges() {
+        assert!(LogLaplace::new(1.5).var().is_infinite());
+        assert!(LogLaplace::new(2.0).var().is_infinite());
+    }
+
+    #[test]
+    fn mielke_moments_match_scipy_reference_values() {
+        let cases = [
+            (
+                (1.5, 3.0),
+                (0.862_369_853_076_597_1, 0.658_500_341_830_102_8),
+            ),
+            (
+                (2.0, 2.5),
+                (1.174_450_160_620_581_7, 2.144_017_302_080_036_4),
+            ),
+            (
+                (4.0, 3.5),
+                (1.208_661_176_745_414_5, 0.553_573_454_404_080_7),
+            ),
+        ];
+
+        for &((k, s), (mean, var)) in &cases {
+            let dist = Mielke::new(k, s);
+            assert_close(dist.mean(), mean, 1e-12, "Mielke mean");
+            assert_close(dist.var(), var, 1e-10, "Mielke variance");
+        }
+    }
+
+    #[test]
+    fn mielke_moments_are_infinite_when_they_do_not_exist() {
+        assert!(Mielke::new(3.5, 1.0).mean().is_infinite());
+        assert!(Mielke::new(3.5, 1.2).var().is_infinite());
+        assert!(Mielke::new(2.0, 2.0).var().is_infinite());
+    }
+
+    #[test]
+    fn frechet_r_moments_match_scipy_reference_values() {
+        let cases = [
+            (3.0, (-0.892_979_511_569_248_9, 0.105_332_884_868_479_14)),
+            (5.0, (-0.918_168_742_399_760_8, 0.044_229_977_983_117_01)),
+            (1.5, (-0.902_745_292_950_933_5, 0.375_690_284_813_931_96)),
+        ];
+
+        for &(c, (mean, var)) in &cases {
+            let dist = FrechetR::new(c);
+            assert_close(dist.mean(), mean, 1e-12, "FrechetR mean");
+            assert_close(dist.var(), var, 1e-12, "FrechetR variance");
+        }
+    }
+
+    #[test]
     fn closed_form_variances_stay_nonnegative_for_valid_parameters() {
         for &(c, d) in &[(2.0, 3.0), (3.0, 2.5), (1.5, 4.0)] {
             assert!(Burr12::new(c, d).var() >= 0.0, "Burr12({c}, {d}) variance");
@@ -13496,13 +13625,34 @@ mod tests {
             assert!(InvWeibull::new(c).var() >= 0.0, "InvWeibull({c}) variance");
         }
         for &lam in &[-0.25, 0.0, 0.14, 0.5] {
-            assert!(TukeyLambda::new(lam).var() >= 0.0, "TukeyLambda({lam}) variance");
+            assert!(
+                TukeyLambda::new(lam).var() >= 0.0,
+                "TukeyLambda({lam}) variance"
+            );
         }
         for &c in &[0.5, 1.0, 2.0, 3.5] {
             assert!(
                 GenHalfLogistic::new(c).var() >= 0.0,
                 "GenHalfLogistic({c}) variance"
             );
+        }
+        for &c in &[0.5, 1.0, 5.0] {
+            assert!(
+                GenLogistic::new(c).var() >= 0.0,
+                "GenLogistic({c}) variance"
+            );
+        }
+        for &c in &[0.5, 1.0, 3.0] {
+            assert!(Gompertz::new(c).var() >= 0.0, "Gompertz({c}) variance");
+        }
+        for &c in &[3.0, 5.0] {
+            assert!(LogLaplace::new(c).var() >= 0.0, "LogLaplace({c}) variance");
+        }
+        for &(k, s) in &[(1.5, 3.0), (2.0, 2.5), (4.0, 3.5)] {
+            assert!(Mielke::new(k, s).var() >= 0.0, "Mielke({k}, {s}) variance");
+        }
+        for &c in &[1.5, 3.0, 5.0] {
+            assert!(FrechetR::new(c).var() >= 0.0, "FrechetR({c}) variance");
         }
     }
 

@@ -1513,13 +1513,13 @@ where
                     x_local[d] = (original_val + h).min(hi);
                     let fp = func(&x_local);
                     nfev += 1;
-                    
+
                     x_local[d] = (original_val - h).max(lo);
                     let fm = func(&x_local);
                     nfev += 1;
-                    
+
                     x_local[d] = original_val; // restore
-                    
+
                     if fp < fm && fp < f_best {
                         x_local[d] = (original_val + h).min(hi);
                         f_best = fp;

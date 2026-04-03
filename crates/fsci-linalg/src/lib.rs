@@ -3195,17 +3195,16 @@ fn validate_finite_matrix_and_vector(
     Ok(())
 }
 
-
 fn safe_svd(
     matrix: DMatrix<f64>,
     compute_u: bool,
     compute_v: bool,
 ) -> Result<SVD<f64, Dyn, Dyn>, LinalgError> {
-    std::panic::catch_unwind(|| nalgebra::linalg::SVD::new(matrix, compute_u, compute_v)).map_err(|_| {
-        LinalgError::ConvergenceFailure {
+    std::panic::catch_unwind(|| nalgebra::linalg::SVD::new(matrix, compute_u, compute_v)).map_err(
+        |_| LinalgError::ConvergenceFailure {
             detail: "SVD computation panicked, likely due to non-finite inputs".into(),
-        }
-    })
+        },
+    )
 }
 
 fn dmatrix_from_rows(rows: &[Vec<f64>]) -> Result<DMatrix<f64>, LinalgError> {
@@ -4361,16 +4360,14 @@ pub fn frobenius_norm(a: &[Vec<f64>]) -> f64 {
 
 /// Compute the max absolute value (infinity norm of flattened matrix).
 pub fn max_abs(a: &[Vec<f64>]) -> f64 {
-    a.iter()
-        .flat_map(|row| row.iter())
-        .fold(0.0f64, |acc, &v| {
-            let v_abs = v.abs();
-            if acc.is_nan() || v_abs.is_nan() {
-                f64::NAN
-            } else {
-                acc.max(v_abs)
-            }
-        })
+    a.iter().flat_map(|row| row.iter()).fold(0.0f64, |acc, &v| {
+        let v_abs = v.abs();
+        if acc.is_nan() || v_abs.is_nan() {
+            f64::NAN
+        } else {
+            acc.max(v_abs)
+        }
+    })
 }
 
 /// Compute the 1-norm, infinity-norm, or Frobenius norm of a vector.

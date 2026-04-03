@@ -1,4 +1,4 @@
-use fsci_linalg::{svd, DecompOptions};
+use fsci_linalg::{DecompOptions, svd};
 use fsci_runtime::RuntimeMode;
 
 #[test]

@@ -1923,12 +1923,7 @@ pub fn sparse_submatrix(
         indptr[i + 1] += indptr[i];
     }
 
-    CsrMatrix::from_components_unchecked(
-        Shape2D::new(new_rows, new_cols),
-        vals,
-        cols_vec,
-        indptr,
-    )
+    CsrMatrix::from_components_unchecked(Shape2D::new(new_rows, new_cols), vals, cols_vec, indptr)
 }
 
 /// Compute the number of connected components and their sizes.

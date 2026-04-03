@@ -1,4 +1,4 @@
-use fsci_linalg::{eig, DecompOptions};
+use fsci_linalg::{DecompOptions, eig};
 use fsci_runtime::RuntimeMode;
 
 #[test]
