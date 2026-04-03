@@ -2653,13 +2653,11 @@ pub fn chroma(magnitudes: &[f64], sr: f64, n_fft: usize) -> [f64; 12] {
     }
 
     // Normalize
-    let max_val = chroma_vec.iter().cloned().fold(0.0_f64, |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.max(b)
-        }
-    });
+    let max_val = chroma_vec
+        .iter()
+        .copied()
+        .filter(|value| !value.is_nan())
+        .fold(0.0_f64, f64::max);
     if max_val > 0.0 {
         for v in &mut chroma_vec {
             *v /= max_val;
@@ -7322,6 +7320,30 @@ mod tests {
         )
         .expect("iirfilter elliptic");
         assert_ba_close(&direct, &dispatch, 1e-10, "elliptic");
+    }
+
+    #[test]
+    fn chroma_normalizes_finite_bins_even_with_nan_input() {
+        let mut magnitudes = vec![0.0; 12];
+        magnitudes[1] = 1.0;
+        magnitudes[2] = f64::NAN;
+        magnitudes[3] = 2.0;
+
+        let chroma_vec = chroma(&magnitudes, 12_000.0, 12);
+        let finite_max = chroma_vec
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+            .fold(0.0_f64, f64::max);
+
+        assert!(
+            (finite_max - 1.0).abs() < 1e-12,
+            "finite bins should remain normalized, got max {finite_max}"
+        );
+        assert!(
+            chroma_vec.iter().any(|value| value.is_nan()),
+            "NaN input should remain visible in at least one chroma bin"
+        );
     }
 
     // ── lfilter tests ──────────────────────────────────────────────
