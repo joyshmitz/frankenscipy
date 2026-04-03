@@ -18,9 +18,10 @@ use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_stats::{
-    BetaDist, Burr12, ChiSquared, ContinuousDistribution, Exponential, FrechetR, GammaDist,
-    GenHalfLogistic, GenLogistic, Gompertz, Gumbel, InvWeibull, LogLaplace, Logistic, Lognormal,
-    Maxwell, Mielke, Normal, Pareto, Rayleigh, StudentT, TukeyLambda, Uniform, Weibull,
+    Argus, BetaDist, Burr12, ChiSquared, ContinuousDistribution, CrystalBall, ExponWeibull,
+    Exponential, FrechetR, GammaDist, GenHalfLogistic, GenLogistic, Gompertz, Gumbel, InvWeibull,
+    LogLaplace, Logistic, Lognormal, Maxwell, Mielke, Normal, Pareto, Rayleigh, StudentT,
+    TukeyLambda, Uniform, Weibull,
 };
 use serde::Serialize;
 
@@ -1171,6 +1172,72 @@ fn e2e_012_special_function_moments() {
         "FrechetR::mean/var",
         "c=3 with support sanity",
         &format!("mean={}, var={}", frechet_r.mean(), frechet_r.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 13: Piecewise and numerical-integral moments for remaining stats distributions.
+#[test]
+fn e2e_013_piecewise_integral_moments() {
+    let scenario_id = "e2e_stats_013_piecewise_integral_moments";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let crystal_ball = CrystalBall::new(2.0, 4.0);
+    let pass = (crystal_ball.mean() + 0.053_285_264_688_121_33).abs() < 1e-10
+        && (crystal_ball.var() - 1.281_348_758_903_764).abs() < 1e-10
+        && CrystalBall::new(1.0, 2.0).mean().is_infinite()
+        && CrystalBall::new(2.0, 3.0).var().is_infinite();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "crystal_ball_piecewise_moments",
+        "CrystalBall::mean/var",
+        "finite m=4 case plus divergent guards",
+        &format!("mean={}, var={}", crystal_ball.mean(), crystal_ball.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let argus = Argus::new(2.0);
+    let pass = (argus.mean() - 0.705_658_515_503_037_3).abs() < 1e-8
+        && (argus.var() - 0.044_467_693_721_274_79).abs() < 1e-8
+        && argus.pdf(0.5).is_finite();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "argus_integral_moments",
+        "Argus::mean/var",
+        "chi=2 bounded-support integral",
+        &format!("mean={}, var={}", argus.mean(), argus.var()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let expon_weibull = ExponWeibull::new(2.0, 0.5);
+    let pass = (expon_weibull.mean() - 3.499_999_999_874_901_4).abs() < 1e-6
+        && (expon_weibull.var() - 34.250_000_000_307_45).abs() < 1e-5
+        && expon_weibull.cdf(1.0).is_finite();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "expon_weibull_integral_moments",
+        "ExponWeibull::mean/var",
+        "a=2, c=0.5 quantile-integral moments",
+        &format!("mean={}, var={}", expon_weibull.mean(), expon_weibull.var()),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));

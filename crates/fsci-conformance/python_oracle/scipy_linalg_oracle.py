@@ -232,7 +232,7 @@ def main() -> int:
     try:
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        print(f"Invalid JSON: {exc}", file=sys.stderr)
+        print(f"Invalid JSON in fixture: {exc}", file=sys.stderr)
         return 1
     case_outputs: List[Dict[str, Any]] = []
 

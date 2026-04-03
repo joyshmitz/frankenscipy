@@ -119,6 +119,44 @@ fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
+fn simpson_integrate(f: impl Fn(f64) -> f64, a: f64, b: f64, n: usize) -> f64 {
+    let n = n + (n % 2);
+    let h = (b - a) / n as f64;
+    let mut sum = f(a) + f(b);
+    for i in 1..n {
+        let x = a + i as f64 * h;
+        let w = if i % 2 == 0 { 2.0 } else { 4.0 };
+        sum += w * f(x);
+    }
+    sum * h / 3.0
+}
+
+fn simpson_integrate_adaptive(
+    f: impl Fn(f64) -> f64,
+    a: f64,
+    b: f64,
+    initial_n: usize,
+    rel_tol: f64,
+    abs_tol: f64,
+    max_refinements: usize,
+) -> f64 {
+    let mut n = initial_n.max(2);
+    n += n % 2;
+    let mut prev = simpson_integrate(&f, a, b, n);
+    for _ in 0..max_refinements {
+        n *= 2;
+        let curr = simpson_integrate(&f, a, b, n);
+        let refined = curr + (curr - prev) / 15.0;
+        let err = (refined - curr).abs();
+        let tol = abs_tol.max(rel_tol * refined.abs());
+        if err <= tol {
+            return refined;
+        }
+        prev = curr;
+    }
+    prev
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Normal (Gaussian) Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -3920,11 +3958,32 @@ impl ContinuousDistribution for Argus {
     }
 
     fn mean(&self) -> f64 {
-        f64::NAN
+        let a = 0.5 * self.chi * self.chi;
+        let gamma_half3 = ln_gamma(1.5).exp();
+        let p = fsci_special::gammainc_scalar(1.5, a, RuntimeMode::Strict).unwrap_or(f64::NAN);
+        let norm = 2.0 * a.powf(1.5) / (gamma_half3 * p);
+        norm * simpson_integrate_adaptive(
+            |t| (1.0 - t * t).sqrt() * t * t * (-(a * t * t)).exp(),
+            0.0,
+            1.0,
+            1_024,
+            1e-12,
+            1e-12,
+            8,
+        )
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let a = 0.5 * self.chi * self.chi;
+        let gamma_half3 = ln_gamma(1.5).exp();
+        let gamma_half5 = ln_gamma(2.5).exp();
+        let p3 = fsci_special::gammainc_scalar(1.5, a, RuntimeMode::Strict).unwrap_or(f64::NAN);
+        let p5 = fsci_special::gammainc_scalar(2.5, a, RuntimeMode::Strict).unwrap_or(f64::NAN);
+        let mean = self.mean();
+        let gamma3 = p3 * gamma_half3;
+        let gamma5 = p5 * gamma_half5;
+        let second_moment = 1.0 - gamma5 / (a * gamma3);
+        (second_moment - mean * mean).max(0.0)
     }
 }
 
@@ -4019,11 +4078,47 @@ impl ContinuousDistribution for CrystalBall {
     }
 
     fn mean(&self) -> f64 {
-        f64::NAN
+        let beta = self.beta_param;
+        let m = self.m;
+        if m <= 2.0 {
+            return f64::INFINITY;
+        }
+
+        let gauss_norm = (2.0 * PI).sqrt() * standard_normal_cdf(beta);
+        let a = (m / beta).powf(m) * (-0.5 * beta * beta).exp();
+        let b = m / beta - beta;
+        let y0 = m / beta;
+        let tail_norm = a * y0.powf(1.0 - m) / (m - 1.0);
+        let total_norm = gauss_norm + tail_norm;
+
+        let gauss_first = (-0.5 * beta * beta).exp();
+        let tail_first = a * (b * y0.powf(1.0 - m) / (m - 1.0) - y0.powf(2.0 - m) / (m - 2.0));
+
+        (gauss_first + tail_first) / total_norm
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let beta = self.beta_param;
+        let m = self.m;
+        if m <= 3.0 {
+            return f64::INFINITY;
+        }
+
+        let mean = self.mean();
+        let gauss_norm = (2.0 * PI).sqrt() * standard_normal_cdf(beta);
+        let a = (m / beta).powf(m) * (-0.5 * beta * beta).exp();
+        let b = m / beta - beta;
+        let y0 = m / beta;
+        let tail_norm = a * y0.powf(1.0 - m) / (m - 1.0);
+        let total_norm = gauss_norm + tail_norm;
+
+        let gauss_second = gauss_norm - beta * (-0.5 * beta * beta).exp();
+        let tail_second = a
+            * (b * b * y0.powf(1.0 - m) / (m - 1.0) - 2.0 * b * y0.powf(2.0 - m) / (m - 2.0)
+                + y0.powf(3.0 - m) / (m - 3.0));
+        let second_moment = (gauss_second + tail_second) / total_norm;
+
+        (second_moment - mean * mean).max(0.0)
     }
 }
 
@@ -4905,7 +5000,11 @@ pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
 ///
 /// Matches `scipy.stats.median_test(*groups)`.
 pub fn median_test(groups: &[&[f64]]) -> TtestResult {
-    if groups.len() < 2 || groups.iter().any(|g| g.is_empty()) {
+    if groups.len() < 2
+        || groups
+            .iter()
+            .any(|g| g.is_empty() || g.iter().any(|v| v.is_nan()))
+    {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -5673,7 +5772,7 @@ pub fn median_abs_deviation(data: &[f64], scale: f64) -> f64 {
 /// For continuous data, returns the smallest value among those with the
 /// highest frequency. Returns NaN for empty input.
 pub fn mode(data: &[f64]) -> f64 {
-    if data.is_empty() {
+    if data.is_empty() || data.iter().any(|v| v.is_nan()) {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
@@ -5738,7 +5837,7 @@ pub fn sem(data: &[f64]) -> f64 {
 ///
 /// Matches `scipy.stats.iqr(a)`.
 pub fn iqr(data: &[f64]) -> f64 {
-    if data.is_empty() {
+    if data.is_empty() || data.iter().any(|v| v.is_nan()) {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
@@ -5785,7 +5884,7 @@ pub fn zscore(data: &[f64]) -> Vec<f64> {
 ///
 /// Matches `numpy.percentile(data, q)`.
 pub fn percentile(data: &[f64], q: f64) -> f64 {
-    if data.is_empty() || q.is_nan() {
+    if data.is_empty() || q.is_nan() || data.iter().any(|v| v.is_nan()) {
         return f64::NAN;
     }
     let q_frac = (q / 100.0).clamp(0.0, 1.0);
@@ -5802,7 +5901,7 @@ pub fn percentile(data: &[f64], q: f64) -> f64 {
 /// * `data` — Input array
 /// * `proportiontocut` — Fraction to trim from each end (0.0 to 0.5)
 pub fn trim_mean(data: &[f64], proportiontocut: f64) -> f64 {
-    if data.is_empty() {
+    if data.is_empty() || data.iter().any(|v| v.is_nan()) {
         return f64::NAN;
     }
     let prop = proportiontocut.clamp(0.0, 0.5);
@@ -7837,7 +7936,7 @@ where
 pub fn brunnermunzel(x: &[f64], y: &[f64]) -> TtestResult {
     let nx = x.len();
     let ny = y.len();
-    if nx < 2 || ny < 2 {
+    if nx < 2 || ny < 2 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -8979,12 +9078,53 @@ impl ContinuousDistribution for ExponWeibull {
         (1.0 - (-x.powf(self.c)).exp()).powf(self.a)
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        let u = q.powf(1.0 / self.a);
+        (-(1.0 - u).ln()).powf(1.0 / self.c)
+    }
+
     fn mean(&self) -> f64 {
-        f64::NAN // No simple closed form
+        let eps = 1e-12;
+        let upper = 64.0;
+        self.a
+            * simpson_integrate_adaptive(
+                |t| {
+                    let exp_neg_t = (-t).exp();
+                    t.powf(1.0 / self.c) * exp_neg_t * (1.0 - exp_neg_t).powf(self.a - 1.0)
+                },
+                eps,
+                upper,
+                1_024,
+                1e-11,
+                1e-11,
+                8,
+            )
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let eps = 1e-12;
+        let upper = 64.0;
+        let mean = self.mean();
+        let second_moment = self.a
+            * simpson_integrate_adaptive(
+                |t| {
+                    let exp_neg_t = (-t).exp();
+                    t.powf(2.0 / self.c) * exp_neg_t * (1.0 - exp_neg_t).powf(self.a - 1.0)
+                },
+                eps,
+                upper,
+                1_024,
+                1e-11,
+                1e-11,
+                8,
+            );
+        (second_moment - mean * mean).max(0.0)
     }
 }
 
@@ -13617,6 +13757,74 @@ mod tests {
     }
 
     #[test]
+    fn crystal_ball_moments_match_scipy_reference_values() {
+        let finite_cases = [
+            (
+                (2.0, 4.0),
+                (-0.053_285_264_688_121_33, 1.281_348_758_903_764),
+            ),
+            (
+                (3.0, 5.0),
+                (-0.002_132_793_568_842_121, 1.009_333_258_932_100_2),
+            ),
+        ];
+
+        for &((beta_param, m), (mean, var)) in &finite_cases {
+            let dist = CrystalBall::new(beta_param, m);
+            assert_close(dist.mean(), mean, 1e-10, "CrystalBall mean");
+            assert_close(dist.var(), var, 1e-10, "CrystalBall variance");
+        }
+    }
+
+    #[test]
+    fn crystal_ball_divergent_moments_match_scipy_shape() {
+        assert!(CrystalBall::new(1.0, 2.0).mean().is_infinite());
+        assert!(CrystalBall::new(1.0, 2.0).var().is_infinite());
+        assert!(CrystalBall::new(2.0, 3.0).var().is_infinite());
+    }
+
+    #[test]
+    fn argus_moments_match_scipy_reference_values() {
+        let cases = [
+            (1.0, (0.618_702_668_355_183_7, 0.052_156_512_541_978_56)),
+            (2.0, (0.705_658_515_503_037_3, 0.044_467_693_721_274_79)),
+            (5.0, (0.936_445_797_957_029_3, 0.003_084_134_913_330_483)),
+        ];
+
+        for &(chi, (mean, var)) in &cases {
+            let dist = Argus::new(chi);
+            assert_close(dist.mean(), mean, 1e-8, "Argus mean");
+            assert_close(dist.var(), var, 1e-8, "Argus variance");
+        }
+    }
+
+    #[test]
+    fn argus_extreme_chi_values_remain_well_behaved() {
+        let low = Argus::new(0.1);
+        let high = Argus::new(10.0);
+        assert!(low.mean().is_finite() && low.var() >= 0.0);
+        assert!(high.mean().is_finite() && high.var() >= 0.0);
+    }
+
+    #[test]
+    fn expon_weibull_moments_match_scipy_reference_values() {
+        let cases = [
+            ((1.0, 1.0), (1.0, 1.0)),
+            ((2.0, 0.5), (3.499_999_999_874_901_4, 34.250_000_000_307_45)),
+            (
+                (1.5, 2.0),
+                (1.039_415_461_769_554_6, 0.199_987_803_381_160_18),
+            ),
+        ];
+
+        for &((a, c), (mean, var)) in &cases {
+            let dist = ExponWeibull::new(a, c);
+            assert_close(dist.mean(), mean, 1e-6, "ExponWeibull mean");
+            assert_close(dist.var(), var, 1e-5, "ExponWeibull variance");
+        }
+    }
+
+    #[test]
     fn closed_form_variances_stay_nonnegative_for_valid_parameters() {
         for &(c, d) in &[(2.0, 3.0), (3.0, 2.5), (1.5, 4.0)] {
             assert!(Burr12::new(c, d).var() >= 0.0, "Burr12({c}, {d}) variance");
@@ -13653,6 +13861,21 @@ mod tests {
         }
         for &c in &[1.5, 3.0, 5.0] {
             assert!(FrechetR::new(c).var() >= 0.0, "FrechetR({c}) variance");
+        }
+        for &(beta_param, m) in &[(2.0, 4.0), (3.0, 5.0)] {
+            assert!(
+                CrystalBall::new(beta_param, m).var() >= 0.0,
+                "CrystalBall({beta_param}, {m}) variance"
+            );
+        }
+        for &chi in &[1.0, 2.0, 5.0] {
+            assert!(Argus::new(chi).var() >= 0.0, "Argus({chi}) variance");
+        }
+        for &(a, c) in &[(1.0, 1.0), (2.0, 0.5), (1.5, 2.0)] {
+            assert!(
+                ExponWeibull::new(a, c).var() >= 0.0,
+                "ExponWeibull({a}, {c}) variance"
+            );
         }
     }
 

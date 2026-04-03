@@ -9,6 +9,8 @@
 //! - Interpolation: shift, rotate, zoom, map_coordinates
 //! - Distance transforms: distance_transform_edt
 
+use fsci_interpolate::make_interp_spline;
+
 /// Error type for ndimage operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NdimageError {
@@ -171,6 +173,262 @@ fn compute_strides(shape: &[usize]) -> Vec<usize> {
         strides[d] = strides[d + 1] * shape[d + 1];
     }
     strides
+}
+
+fn unravel_with_shape(mut flat: usize, shape: &[usize]) -> Vec<usize> {
+    if shape.is_empty() {
+        return Vec::new();
+    }
+    let strides = compute_strides(shape);
+    let mut idx = vec![0usize; shape.len()];
+    for (d, slot) in idx.iter_mut().enumerate() {
+        *slot = flat / strides[d];
+        flat %= strides[d];
+    }
+    idx
+}
+
+const SPLINE_NEAREST_PAD: usize = 12;
+
+#[derive(Debug, Clone)]
+struct SplinePrefilter {
+    coeffs: NdArray,
+    coord_offsets: Vec<f64>,
+}
+
+fn uniform_interpolation_knots(len: usize, order: usize) -> Vec<f64> {
+    let mut knots = Vec::with_capacity(len + order + 1);
+    knots.extend(std::iter::repeat_n(0.0, order + 1));
+    for i in 0..len.saturating_sub(order + 1) {
+        knots.push((i + 1 + (order - 1) / 2) as f64);
+    }
+    knots.extend(std::iter::repeat_n((len - 1) as f64, order + 1));
+    knots
+}
+
+fn eval_bspline_basis_all(knots: &[f64], x: f64, order: usize, len: usize) -> Vec<f64> {
+    let mut basis = vec![0.0; len];
+    for i in 0..len {
+        if i + 1 < knots.len() {
+            basis[i] = if (knots[i] <= x && x < knots[i + 1])
+                || (x == knots[i + 1] && i + 1 == knots.len() - order - 1)
+            {
+                1.0
+            } else {
+                0.0
+            };
+        }
+    }
+    for p in 1..=order {
+        let prev = basis.clone();
+        for i in 0..len {
+            let mut val = 0.0;
+            if i + p < knots.len() {
+                let denom_left = knots[i + p] - knots[i];
+                if denom_left > 0.0 {
+                    val += (x - knots[i]) / denom_left * prev[i];
+                }
+            }
+            if i + p + 1 < knots.len() && i + 1 < len {
+                let denom_right = knots[i + p + 1] - knots[i + 1];
+                if denom_right > 0.0 {
+                    val += (knots[i + p + 1] - x) / denom_right * prev[i + 1];
+                }
+            }
+            basis[i] = val;
+        }
+    }
+    basis
+}
+
+fn map_coordinate(coord: f64, len: usize, mode: BoundaryMode) -> Option<f64> {
+    let max = (len.saturating_sub(1)) as f64;
+    match mode {
+        BoundaryMode::Constant => {
+            if coord < 0.0 || coord > max {
+                None
+            } else {
+                Some(coord)
+            }
+        }
+        BoundaryMode::Nearest => Some(coord.clamp(0.0, max)),
+        BoundaryMode::Wrap => {
+            if len == 0 {
+                None
+            } else {
+                Some(coord.rem_euclid(len as f64))
+            }
+        }
+        BoundaryMode::Reflect => {
+            if len <= 1 {
+                Some(0.0)
+            } else {
+                let period = 2.0 * len as f64;
+                let mut reflected = coord.rem_euclid(period);
+                if reflected >= len as f64 {
+                    reflected = period - reflected - 1.0;
+                }
+                Some(reflected.clamp(0.0, max))
+            }
+        }
+    }
+}
+
+fn spline_coefficients_for_line(line: &[f64], order: usize) -> Result<Vec<f64>, NdimageError> {
+    if line.len() <= 1 || order <= 1 {
+        return Ok(line.to_vec());
+    }
+    let effective_order = order.min(line.len() - 1);
+    if effective_order <= 1 {
+        return Ok(line.to_vec());
+    }
+    let x: Vec<f64> = (0..line.len()).map(|i| i as f64).collect();
+    let spline = make_interp_spline(&x, line, effective_order).map_err(|err| {
+        NdimageError::InvalidArgument(format!("failed to compute spline coefficients: {err}"))
+    })?;
+    Ok(spline.coeffs().to_vec())
+}
+
+fn pad_array_nearest(input: &NdArray, pad: usize) -> Result<NdArray, NdimageError> {
+    if input.shape.contains(&0) {
+        return Err(NdimageError::EmptyInput);
+    }
+    let padded_shape: Vec<usize> = input.shape.iter().map(|&dim| dim + 2 * pad).collect();
+    let mut padded = NdArray::zeros(padded_shape.clone());
+    for flat in 0..padded.size() {
+        let padded_idx = unravel_with_shape(flat, &padded_shape);
+        let src_idx: Vec<usize> = padded_idx
+            .iter()
+            .enumerate()
+            .map(|(axis, &idx)| idx.saturating_sub(pad).min(input.shape[axis] - 1))
+            .collect();
+        padded.data[flat] = input.get(&src_idx);
+    }
+    Ok(padded)
+}
+
+fn prefilter_spline_coefficients(
+    input: &NdArray,
+    order: usize,
+    mode: BoundaryMode,
+) -> Result<SplinePrefilter, NdimageError> {
+    if order <= 1 {
+        return Ok(SplinePrefilter {
+            coeffs: input.clone(),
+            coord_offsets: vec![0.0; input.ndim()],
+        });
+    }
+    let ndim = input.ndim();
+    let (mut current, coord_offsets) = if mode == BoundaryMode::Nearest {
+        (
+            pad_array_nearest(input, SPLINE_NEAREST_PAD)?,
+            vec![SPLINE_NEAREST_PAD as f64; ndim],
+        )
+    } else {
+        (input.clone(), vec![0.0; ndim])
+    };
+    for axis in 0..ndim {
+        let axis_len = current.shape[axis];
+        if axis_len <= 1 {
+            continue;
+        }
+        let reduced_shape: Vec<usize> = current
+            .shape
+            .iter()
+            .enumerate()
+            .filter_map(|(d, &size)| (d != axis).then_some(size))
+            .collect();
+        let line_count = reduced_shape.iter().product::<usize>().max(1);
+        let mut next = current.clone();
+        for line_flat in 0..line_count {
+            let reduced_idx = unravel_with_shape(line_flat, &reduced_shape);
+            let mut idx = vec![0usize; ndim];
+            let mut src = 0usize;
+            for (d, slot) in idx.iter_mut().enumerate() {
+                if d == axis {
+                    continue;
+                }
+                *slot = reduced_idx[src];
+                src += 1;
+            }
+            let mut line = Vec::with_capacity(axis_len);
+            for i in 0..axis_len {
+                idx[axis] = i;
+                line.push(current.get(&idx));
+            }
+            let coeffs = spline_coefficients_for_line(&line, order)?;
+            for (i, coeff) in coeffs.into_iter().enumerate() {
+                idx[axis] = i;
+                next.set(&idx, coeff);
+            }
+        }
+        current = next;
+    }
+    Ok(SplinePrefilter {
+        coeffs: current,
+        coord_offsets,
+    })
+}
+
+fn sample_spline_recursive(
+    coeffs: &NdArray,
+    bases: &[Vec<(usize, f64)>],
+    dim: usize,
+    idx: &mut [usize],
+) -> f64 {
+    if dim == bases.len() {
+        return coeffs.get(idx);
+    }
+    let mut acc = 0.0;
+    for &(coord_idx, weight) in &bases[dim] {
+        idx[dim] = coord_idx;
+        acc += weight * sample_spline_recursive(coeffs, bases, dim + 1, idx);
+    }
+    acc
+}
+
+fn sample_interpolated(
+    input: &NdArray,
+    coeffs: &NdArray,
+    coords: &[f64],
+    order: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> f64 {
+    if order == 0 {
+        let idx: Vec<i64> = coords.iter().map(|coord| coord.round() as i64).collect();
+        return input.get_boundary(&idx, mode, cval);
+    }
+
+    let mut bases = Vec::with_capacity(coords.len());
+    for (axis, &coord) in coords.iter().enumerate() {
+        let len = coeffs.shape[axis];
+        let Some(mapped) = map_coordinate(coord, len, mode) else {
+            return cval;
+        };
+        let effective_order = order.min(len.saturating_sub(1));
+        if effective_order == 0 {
+            bases.push(vec![(
+                mapped.round().clamp(0.0, (len - 1) as f64) as usize,
+                1.0,
+            )]);
+            continue;
+        }
+        let knots = uniform_interpolation_knots(len, effective_order);
+        let weights = eval_bspline_basis_all(&knots, mapped, effective_order, len);
+        let support: Vec<(usize, f64)> = weights
+            .into_iter()
+            .enumerate()
+            .filter(|(_, weight)| weight.abs() > 1e-12)
+            .collect();
+        if support.is_empty() {
+            return cval;
+        }
+        bases.push(support);
+    }
+
+    let mut idx = vec![0usize; coeffs.ndim()];
+    sample_spline_recursive(coeffs, &bases, 0, &mut idx)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1289,15 +1547,21 @@ pub fn distance_transform_edt(input: &NdArray) -> Result<NdArray, NdimageError> 
 // Interpolation
 // ══════════════════════════════════════════════════════════════════════
 
-/// Shift an array using spline interpolation (nearest-neighbor for now).
+/// Shift an array using spline interpolation.
 ///
 /// Matches `scipy.ndimage.shift`.
 pub fn shift(
     input: &NdArray,
     shift_values: &[f64],
+    order: usize,
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
+    if order > 5 {
+        return Err(NdimageError::InvalidArgument(format!(
+            "spline order must be in 0..=5, got {order}"
+        )));
+    }
     if shift_values.len() != input.ndim() {
         return Err(NdimageError::DimensionMismatch(format!(
             "shift has {} values but input has {} dimensions",
@@ -1306,16 +1570,17 @@ pub fn shift(
         )));
     }
 
+    let spline = prefilter_spline_coefficients(input, order, mode)?;
     let mut output = NdArray::zeros(input.shape.clone());
 
     for flat in 0..input.size() {
         let out_idx = input.unravel(flat);
-        let in_idx: Vec<i64> = out_idx
+        let coords: Vec<f64> = out_idx
             .iter()
-            .zip(shift_values.iter())
-            .map(|(&o, &s)| (o as f64 - s).round() as i64)
+            .enumerate()
+            .map(|(axis, &o)| o as f64 - shift_values[axis] + spline.coord_offsets[axis])
             .collect();
-        output.data[flat] = input.get_boundary(&in_idx, mode, cval);
+        output.data[flat] = sample_interpolated(input, &spline.coeffs, &coords, order, mode, cval);
     }
 
     Ok(output)
@@ -1327,9 +1592,15 @@ pub fn shift(
 pub fn zoom(
     input: &NdArray,
     zoom_factors: &[f64],
+    order: usize,
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
+    if order > 5 {
+        return Err(NdimageError::InvalidArgument(format!(
+            "spline order must be in 0..=5, got {order}"
+        )));
+    }
     if zoom_factors.len() != input.ndim() {
         return Err(NdimageError::DimensionMismatch(format!(
             "zoom has {} values but input has {} dimensions",
@@ -1345,16 +1616,24 @@ pub fn zoom(
         .map(|(&s, &z)| ((s as f64 * z).round() as usize).max(1))
         .collect();
 
+    let spline = prefilter_spline_coefficients(input, order, mode)?;
     let mut output = NdArray::zeros(new_shape.clone());
 
     for flat in 0..output.size() {
         let out_idx = output.unravel(flat);
-        let in_idx: Vec<i64> = out_idx
+        let coords: Vec<f64> = out_idx
             .iter()
-            .zip(zoom_factors.iter())
-            .map(|(&o, &z)| (o as f64 / z).round() as i64)
+            .enumerate()
+            .map(|(axis, &o)| {
+                if output.shape[axis] <= 1 || input.shape[axis] <= 1 {
+                    spline.coord_offsets[axis]
+                } else {
+                    o as f64 * (input.shape[axis] - 1) as f64 / (output.shape[axis] - 1) as f64
+                        + spline.coord_offsets[axis]
+                }
+            })
             .collect();
-        output.data[flat] = input.get_boundary(&in_idx, mode, cval);
+        output.data[flat] = sample_interpolated(input, &spline.coeffs, &coords, order, mode, cval);
     }
 
     Ok(output)
@@ -1367,9 +1646,15 @@ pub fn rotate(
     input: &NdArray,
     angle: f64,
     reshape: bool,
+    order: usize,
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
+    if order > 5 {
+        return Err(NdimageError::InvalidArgument(format!(
+            "spline order must be in 0..=5, got {order}"
+        )));
+    }
     if input.ndim() != 2 {
         return Err(NdimageError::InvalidArgument(
             "rotate currently supports 2D arrays only".to_string(),
@@ -1414,11 +1699,12 @@ pub fn rotate(
         (rows, cols)
     };
 
+    let spline = prefilter_spline_coefficients(input, order, mode)?;
     let mut output = NdArray::zeros(vec![out_rows, out_cols]);
-    let cy_in = rows as f64 / 2.0;
-    let cx_in = cols as f64 / 2.0;
-    let cy_out = out_rows as f64 / 2.0;
-    let cx_out = out_cols as f64 / 2.0;
+    let cy_in = (rows as f64 - 1.0) / 2.0;
+    let cx_in = (cols as f64 - 1.0) / 2.0;
+    let cy_out = (out_rows as f64 - 1.0) / 2.0;
+    let cx_out = (out_cols as f64 - 1.0) / 2.0;
 
     for r in 0..out_rows {
         for c in 0..out_cols {
@@ -1428,8 +1714,18 @@ pub fn rotate(
             let src_y = cy_in + cos_a * dy + sin_a * dx;
             let src_x = cx_in - sin_a * dy + cos_a * dx;
 
-            let in_idx = [src_y.round() as i64, src_x.round() as i64];
-            output.set(&[r, c], input.get_boundary(&in_idx, mode, cval));
+            let value = sample_interpolated(
+                input,
+                &spline.coeffs,
+                &[
+                    src_y + spline.coord_offsets[0],
+                    src_x + spline.coord_offsets[1],
+                ],
+                order,
+                mode,
+                cval,
+            );
+            output.set(&[r, c], value);
         }
     }
 
@@ -1518,14 +1814,19 @@ pub fn grey_closing(
 
 /// Map coordinates: evaluate input at arbitrary (non-integer) coordinates.
 ///
-/// Uses nearest-neighbor interpolation.
 /// Matches `scipy.ndimage.map_coordinates`.
 pub fn map_coordinates(
     input: &NdArray,
     coordinates: &[Vec<f64>],
+    order: usize,
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<Vec<f64>, NdimageError> {
+    if order > 5 {
+        return Err(NdimageError::InvalidArgument(format!(
+            "spline order must be in 0..=5, got {order}"
+        )));
+    }
     if coordinates.is_empty() {
         return Ok(vec![]);
     }
@@ -1547,10 +1848,22 @@ pub fn map_coordinates(
         }
     }
 
+    let spline = prefilter_spline_coefficients(input, order, mode)?;
     let mut result = Vec::with_capacity(npts);
     for p in 0..npts {
-        let idx: Vec<i64> = coordinates.iter().map(|c| c[p].round() as i64).collect();
-        result.push(input.get_boundary(&idx, mode, cval));
+        let coords: Vec<f64> = coordinates
+            .iter()
+            .enumerate()
+            .map(|(axis, c)| c[p] + spline.coord_offsets[axis])
+            .collect();
+        result.push(sample_interpolated(
+            input,
+            &spline.coeffs,
+            &coords,
+            order,
+            mode,
+            cval,
+        ));
     }
 
     Ok(result)
@@ -2698,7 +3011,7 @@ mod tests {
             3.0, 4.0,
         ];
         let input = NdArray::new(data, vec![2, 2]).unwrap();
-        let result = rotate(&input, 90.0, false, BoundaryMode::Constant, 0.0).unwrap();
+        let result = rotate(&input, 90.0, false, 0, BoundaryMode::Constant, 0.0).unwrap();
         assert_eq!(result.shape, vec![2, 2]);
         // After 90° rotation: top-right becomes top-left, etc.
         // Due to rounding, just check it doesn't crash and produces valid output
@@ -2708,17 +3021,87 @@ mod tests {
     #[test]
     fn zoom_upscale() {
         let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
-        let result = zoom(&input, &[2.0, 2.0], BoundaryMode::Nearest, 0.0).unwrap();
+        let result = zoom(&input, &[2.0, 2.0], 0, BoundaryMode::Nearest, 0.0).unwrap();
         assert_eq!(result.shape, vec![4, 4]);
     }
 
     #[test]
     fn shift_moves_data() {
         let input = NdArray::new(vec![0.0, 0.0, 1.0, 0.0, 0.0], vec![5]).unwrap();
-        let result = shift(&input, &[1.0], BoundaryMode::Constant, 0.0).unwrap();
+        let result = shift(&input, &[1.0], 0, BoundaryMode::Constant, 0.0).unwrap();
         // Shifted right by 1: pixel at index 2 should now be at index 3
         assert_eq!(result.data[3], 1.0);
         assert_eq!(result.data[2], 0.0);
+    }
+
+    #[test]
+    fn shift_order_zero_matches_existing_nearest_behavior() {
+        let input = NdArray::new(vec![0.0, 1.0, 2.0, 3.0], vec![4]).unwrap();
+        let result = shift(&input, &[0.49], 0, BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(result.data, vec![0.0, 1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn map_coordinates_order_one_matches_bilinear_center_value() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let result = map_coordinates(
+            &input,
+            &[vec![0.5], vec![0.5]],
+            1,
+            BoundaryMode::Nearest,
+            0.0,
+        )
+        .unwrap();
+        assert!((result[0] - 2.5).abs() < 1e-10, "got {}", result[0]);
+    }
+
+    #[test]
+    fn shift_order_one_half_pixel_matches_linear_reference() {
+        let input = NdArray::new(vec![0.0, 10.0, 20.0, 30.0], vec![4]).unwrap();
+        let result = shift(&input, &[0.5], 1, BoundaryMode::Nearest, 0.0).unwrap();
+        let expected = [0.0, 5.0, 15.0, 25.0];
+        for (got, want) in result.data.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-10, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn shift_order_three_half_pixel_matches_scipy_nearest_reference() {
+        let input = NdArray::new(vec![0.0, 10.0, 20.0, 30.0], vec![4]).unwrap();
+        let result = shift(&input, &[0.5], 3, BoundaryMode::Nearest, 0.0).unwrap();
+        let expected = [
+            -0.807_713_659_400_537_9,
+            4.264_428_414_850_133_5,
+            15.0,
+            25.735_571_585_149_867,
+        ];
+        for (got, want) in result.data.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn rotate_full_turn_preserves_image_for_higher_order() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let result = rotate(&input, 360.0, false, 3, BoundaryMode::Nearest, 0.0).unwrap();
+        for (got, want) in result.data.iter().zip(input.data.iter()) {
+            assert!((got - want).abs() < 1e-8, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn map_coordinates_order_three_hits_sample_points_exactly() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let result = map_coordinates(
+            &input,
+            &[vec![0.0, 1.0], vec![1.0, 0.0]],
+            3,
+            BoundaryMode::Nearest,
+            0.0,
+        )
+        .unwrap();
+        assert!((result[0] - 2.0).abs() < 1e-8, "got {}", result[0]);
+        assert!((result[1] - 3.0).abs() < 1e-8, "got {}", result[1]);
     }
 
     #[test]

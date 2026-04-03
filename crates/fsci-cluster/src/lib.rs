@@ -62,6 +62,11 @@ pub fn kmeans(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "kmeans input must be finite".to_string(),
+        ));
+    }
     if k == 0 || k > n {
         return Err(ClusterError::InvalidArgument(format!(
             "k={k} must be in [1, n={n}]"
@@ -357,6 +362,11 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
     if n < 2 {
         return Err(ClusterError::InvalidArgument(
             "need at least 2 observations".to_string(),
+        ));
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "linkage input must be finite".to_string(),
         ));
     }
 
@@ -1517,6 +1527,11 @@ pub fn kmedoids(
     let n = data.len();
     if n == 0 {
         return Err(ClusterError::EmptyData);
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "kmedoids input must be finite".to_string(),
+        ));
     }
     if k == 0 || k > n {
         return Err(ClusterError::InvalidArgument(format!(

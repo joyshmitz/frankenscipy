@@ -25,6 +25,7 @@ fsci-constants = { workspace = true }
 fsci-fft = { workspace = true }
 fsci-integrate = { workspace = true }
 fsci-linalg = { workspace = true }
+fsci-ndimage = { workspace = true }
 fsci-opt = { workspace = true }
 fsci-runtime = { workspace = true }
 fsci-sparse = { workspace = true }
