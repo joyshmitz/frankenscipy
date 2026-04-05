@@ -3701,22 +3701,94 @@ impl TukeyLambda {
     pub fn new(lam: f64) -> Self {
         Self { lam }
     }
+
+    fn logistic_cdf(x: f64) -> f64 {
+        if x >= 0.0 {
+            1.0 / (1.0 + (-x).exp())
+        } else {
+            let ex = x.exp();
+            ex / (1.0 + ex)
+        }
+    }
+
+    fn quantile_derivative(&self, p: f64) -> f64 {
+        let lam = self.lam;
+        if lam.abs() < 1e-15 {
+            1.0 / p + 1.0 / (1.0 - p)
+        } else {
+            p.powf(lam - 1.0) + (1.0 - p).powf(lam - 1.0)
+        }
+    }
 }
 
 impl ContinuousDistribution for TukeyLambda {
     fn pdf(&self, x: f64) -> f64 {
-        // PDF via numerical derivative of CDF
-        let h = 1e-7;
-        let c1 = self.cdf(x + h);
-        let c0 = self.cdf(x - h);
-        (c1 - c0) / (2.0 * h)
+        if x.is_nan() {
+            return f64::NAN;
+        }
+
+        if self.lam.abs() < 1e-15 {
+            let cdf = Self::logistic_cdf(x);
+            return cdf * (1.0 - cdf);
+        }
+
+        let cdf = self.cdf(x);
+        if !cdf.is_finite() {
+            return f64::NAN;
+        }
+        if cdf <= 0.0 || cdf >= 1.0 {
+            return 0.0;
+        }
+
+        1.0 / self.quantile_derivative(cdf)
     }
 
     fn cdf(&self, x: f64) -> f64 {
-        // PPF is Q(p) = (p^λ - (1-p)^λ) / λ for λ ≠ 0
-        // CDF is the inverse of PPF, found by bisection
+        if x.is_nan() {
+            return f64::NAN;
+        }
+
+        if self.lam > 0.0 {
+            let bound = 1.0 / self.lam;
+            if x <= -bound {
+                return 0.0;
+            }
+            if x >= bound {
+                return 1.0;
+            }
+        }
+
         let mut lo = 0.0f64;
         let mut hi = 1.0f64;
+        let eps = 1e-12;
+        let mut p = Self::logistic_cdf(x).clamp(eps, 1.0 - eps);
+
+        for _ in 0..10 {
+            let q = self.ppf(p);
+            if !q.is_finite() {
+                break;
+            }
+            if q < x {
+                lo = p;
+            } else {
+                hi = p;
+            }
+            if (q - x).abs() <= 1e-14 * (1.0 + x.abs()) {
+                return p;
+            }
+
+            let derivative = self.quantile_derivative(p);
+            if !derivative.is_finite() || derivative <= 0.0 {
+                break;
+            }
+
+            let next = p - (q - x) / derivative;
+            if !next.is_finite() || next <= lo || next >= hi {
+                break;
+            }
+            p = next.clamp(eps, 1.0 - eps);
+        }
+
         for _ in 0..60 {
             let mid = (lo + hi) / 2.0;
             let q = self.ppf(mid);
@@ -9574,7 +9646,7 @@ pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
 /// Methods: "auto" (Sturges), "sqrt", "sturges", "rice", "scott", "fd" (Freedman-Diaconis).
 pub fn histogram_bin_edges(data: &[f64], method: &str) -> Vec<f64> {
     let n = data.len();
-    if n == 0 {
+    if n == 0 || data.iter().any(|v| !v.is_finite()) {
         return vec![];
     }
 
@@ -13642,6 +13714,92 @@ mod tests {
     fn tukey_lambda_variance_returns_nan_when_undefined() {
         assert!(TukeyLambda::new(-0.5).var().is_nan());
         assert!(TukeyLambda::new(-0.75).var().is_nan());
+    }
+
+    fn legacy_tukey_lambda_cdf(dist: &TukeyLambda, x: f64) -> f64 {
+        let mut lo = 0.0f64;
+        let mut hi = 1.0f64;
+        for _ in 0..60 {
+            let mid = (lo + hi) / 2.0;
+            let q = dist.ppf(mid);
+            if q < x {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo + hi) / 2.0
+    }
+
+    fn legacy_tukey_lambda_pdf(dist: &TukeyLambda, x: f64) -> f64 {
+        let h = 1e-7;
+        let c1 = legacy_tukey_lambda_cdf(dist, x + h);
+        let c0 = legacy_tukey_lambda_cdf(dist, x - h);
+        (c1 - c0) / (2.0 * h)
+    }
+
+    #[test]
+    fn tukey_lambda_pdf_matches_previous_numerical_reference_values() {
+        let lambdas: [f64; 6] = [-1.0, -0.5, 0.0, 0.5, 1.0, 2.0];
+        let xs: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
+
+        for &lam in &lambdas {
+            let dist = TukeyLambda::new(lam);
+            for &x in &xs {
+                if lam > 0.0 && x.abs() >= 1.0 / lam {
+                    continue;
+                }
+                assert_close(
+                    dist.pdf(x),
+                    legacy_tukey_lambda_pdf(&dist, x),
+                    1e-8,
+                    &format!("TukeyLambda({lam}) pdf({x})"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tukey_lambda_cdf_ppf_roundtrip_matches_quantiles() {
+        let lambdas = [-1.0, -0.5, 0.0, 0.5, 1.0, 2.0];
+        let quantiles = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
+
+        for &lam in &lambdas {
+            let dist = TukeyLambda::new(lam);
+            for &q in &quantiles {
+                assert_close(
+                    dist.cdf(dist.ppf(q)),
+                    q,
+                    1e-10,
+                    &format!("TukeyLambda({lam}) cdf(ppf({q}))"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tukey_lambda_pdf_trapezoid_integrates_to_one() {
+        for &lam in &[0.0, 0.5, 1.0, 2.0] {
+            let dist = TukeyLambda::new(lam);
+            let lower = dist.ppf(1e-8);
+            let upper = dist.ppf(1.0 - 1e-8);
+            let n = 20_000usize;
+            let h = (upper - lower) / n as f64;
+            let integral = (0..=n)
+                .map(|i| {
+                    let x = lower + i as f64 * h;
+                    let weight = if i == 0 || i == n { 0.5 } else { 1.0 };
+                    weight * dist.pdf(x)
+                })
+                .sum::<f64>()
+                * h;
+            assert_close(
+                integral,
+                1.0,
+                1e-6,
+                &format!("TukeyLambda({lam}) trapezoid integral"),
+            );
+        }
     }
 
     #[test]
