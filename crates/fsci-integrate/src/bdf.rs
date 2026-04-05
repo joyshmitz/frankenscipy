@@ -8,7 +8,7 @@
 use crate::solver::{OdeSolverState, StepFailure, StepOutcome};
 use crate::validation::ToleranceValue;
 use fsci_runtime::RuntimeMode;
-use nalgebra::{DMatrix, Dyn, LU};
+use nalgebra::{DMatrix, DVector, Dyn, LU};
 
 /// BDF coefficients (gamma) for orders 1 through 5.
 const BDF_GAMMA: [f64; 5] = [1.0, 2.0 / 3.0, 6.0 / 11.0, 12.0 / 25.0, 60.0 / 137.0];
@@ -65,10 +65,19 @@ pub struct BdfSolver {
     pub(crate) lu: Option<LU<f64, Dyn, Dyn>>,
     #[allow(dead_code)]
     pub(crate) h_abs_last: Option<f64>,
+    jacobian_age: usize,
 
     // Previous step values for interpolation
     t_old: Option<f64>,
     y_old: Option<Vec<f64>>,
+}
+
+struct NewtonStep<'a> {
+    t_new: f64,
+    h_used: f64,
+    gamma: f64,
+    y_prev: &'a [f64],
+    y_predict: &'a [f64],
 }
 
 impl BdfSolver {
@@ -139,6 +148,7 @@ impl BdfSolver {
             current_jac: None,
             lu: None,
             h_abs_last: None,
+            jacobian_age: 0,
             t_old: None,
             y_old: None,
         })
@@ -162,6 +172,14 @@ impl BdfSolver {
 
     pub fn nfev(&self) -> usize {
         self.nfev
+    }
+
+    pub fn njev(&self) -> usize {
+        self.njev
+    }
+
+    pub fn nlu(&self) -> usize {
+        self.nlu
     }
 
     pub fn f(&self) -> &[f64] {
@@ -212,9 +230,7 @@ impl BdfSolver {
     {
         let max_retries = 10;
 
-        // Evaluate f at current state once (reused across retries)
-        let f_curr = fun(self.t, &self.y);
-        self.nfev += 1;
+        let f_curr = self.f.clone();
 
         let gamma = BDF_GAMMA[self.order - 1];
         let error_const = BDF_ERROR_CONST[self.order - 1];
@@ -241,31 +257,19 @@ impl BdfSolver {
                 .zip(f_curr.iter())
                 .map(|(yi, fi)| yi + h_used * fi)
                 .collect();
+            let y_prev = self.y.clone();
 
-            // Corrector via functional iteration
             let mut y_new = y_predict.clone();
-            let mut converged = false;
-
-            for _ in 0..6 {
-                let f_new = fun(t_new, &y_new);
-                self.nfev += 1;
-
-                let mut max_delta = 0.0_f64;
-                let mut y_next = vec![0.0; self.n];
-                for j in 0..self.n {
-                    y_next[j] = self.y[j] + gamma * h_used * f_new[j];
-                    let delta = (y_next[j] - y_new[j]).abs();
-                    let scale = self.atol[j] + self.rtol * y_new[j].abs().max(1e-10);
-                    max_delta = max_delta.max(delta / scale);
-                }
-                y_new = y_next;
-
-                // Convergence when Newton correction is small relative to error tolerances
-                if max_delta < 1.0 {
-                    converged = true;
-                    break;
-                }
-            }
+            let mut f_new = fun(t_new, &y_new);
+            self.nfev += 1;
+            let step = NewtonStep {
+                t_new,
+                h_used,
+                gamma,
+                y_prev: &y_prev,
+                y_predict: &y_predict,
+            };
+            let converged = self.solve_newton_system(fun, &step, &mut y_new, &mut f_new)?;
 
             if !converged {
                 self.h *= 0.5;
@@ -309,8 +313,6 @@ impl BdfSolver {
             self.y_old = Some(self.y.clone());
             self.f_old = Some(self.f.clone());
 
-            let f_new = fun(t_new, &y_new);
-            self.nfev += 1;
             self.f = f_new.clone();
 
             self.d[0] = y_new.clone();
@@ -320,6 +322,7 @@ impl BdfSolver {
 
             self.t = t_new;
             self.y = y_new;
+            self.jacobian_age = self.jacobian_age.saturating_add(1);
 
             let factor =
                 (1.5_f64).min(0.9 / error_norm.max(1e-10).powf(1.0 / (self.order as f64 + 1.0)));
@@ -340,6 +343,120 @@ impl BdfSolver {
 
         self.state = OdeSolverState::Failed;
         Err(StepFailure::ConvergenceFailure)
+    }
+
+    fn should_refresh_jacobian(&self, h_abs: f64) -> bool {
+        let Some(previous_h_abs) = self.h_abs_last else {
+            return true;
+        };
+        if self.current_jac.is_none() || self.lu.is_none() {
+            return true;
+        }
+        if previous_h_abs == 0.0 {
+            return true;
+        }
+        let ratio = h_abs / previous_h_abs;
+        !((1.0 / 1.2)..=1.2).contains(&ratio) || self.jacobian_age >= 5
+    }
+
+    fn compute_jacobian<F>(&mut self, fun: &mut F, t: f64, y: &[f64], f0: &[f64]) -> DMatrix<f64>
+    where
+        F: FnMut(f64, &[f64]) -> Vec<f64>,
+    {
+        let eps = f64::EPSILON.sqrt();
+        let mut jac = DMatrix::<f64>::zeros(self.n, self.n);
+        let mut y_perturbed = y.to_vec();
+
+        for col in 0..self.n {
+            let perturb = eps * y[col].abs().max(1.0);
+            y_perturbed[col] += perturb;
+            let f_perturbed = fun(t, &y_perturbed);
+            self.nfev += 1;
+            for row in 0..self.n {
+                jac[(row, col)] = (f_perturbed[row] - f0[row]) / perturb;
+            }
+            y_perturbed[col] = y[col];
+        }
+
+        self.njev += 1;
+        jac
+    }
+
+    fn refresh_linearization<F>(
+        &mut self,
+        fun: &mut F,
+        t: f64,
+        y: &[f64],
+        f: &[f64],
+        gamma_h: f64,
+        h_abs: f64,
+    ) where
+        F: FnMut(f64, &[f64]) -> Vec<f64>,
+    {
+        let jac = self.compute_jacobian(fun, t, y, f);
+        let system = DMatrix::<f64>::identity(self.n, self.n) - jac.scale(gamma_h);
+        self.current_jac = Some(jac);
+        self.lu = Some(system.lu());
+        self.h_abs_last = Some(h_abs);
+        self.jacobian_age = 0;
+        self.nlu += 1;
+    }
+
+    fn solve_newton_system<F>(
+        &mut self,
+        fun: &mut F,
+        step: &NewtonStep<'_>,
+        y_new: &mut [f64],
+        f_new: &mut Vec<f64>,
+    ) -> Result<bool, StepFailure>
+    where
+        F: FnMut(f64, &[f64]) -> Vec<f64>,
+    {
+        let h_abs = step.h_used.abs();
+        let gamma_h = step.gamma * step.h_used;
+        let mut force_refresh = self.should_refresh_jacobian(h_abs);
+
+        for refresh_attempt in 0..2 {
+            if force_refresh || refresh_attempt > 0 {
+                self.refresh_linearization(fun, step.t_new, y_new, f_new, gamma_h, h_abs);
+                force_refresh = false;
+            }
+
+            for _ in 0..8 {
+                let residual =
+                    DVector::from_iterator(
+                        self.n,
+                        y_new.iter().zip(step.y_prev.iter()).zip(f_new.iter()).map(
+                            |((&y_curr, &y_base), &f_curr)| -(y_curr - y_base - gamma_h * f_curr),
+                        ),
+                    );
+                let Some(delta) = self.lu.as_ref().and_then(|lu| lu.solve(&residual)) else {
+                    return Err(StepFailure::SolverError);
+                };
+
+                let mut max_delta = 0.0_f64;
+                for j in 0..self.n {
+                    let dy = delta[j];
+                    y_new[j] += dy;
+                    let scale = self.atol[j]
+                        + self.rtol * step.y_predict[j].abs().max(y_new[j].abs()).max(1e-10);
+                    max_delta = max_delta.max(dy.abs() / scale);
+                }
+
+                if !y_new.iter().all(|value| value.is_finite()) {
+                    return Err(StepFailure::NonFiniteState);
+                }
+
+                *f_new = fun(step.t_new, y_new);
+                self.nfev += 1;
+
+                if max_delta < 1.0 {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
     }
 }
 
@@ -482,6 +599,115 @@ mod tests {
             (y_final - expected).abs() < 0.01,
             "y(0.1) = {y_final}, expected ~{expected}"
         );
+        assert!(solver.njev() > 0, "should record Jacobian evaluations");
+        assert!(solver.nlu() > 0, "should record LU factorizations");
+    }
+
+    #[test]
+    fn bdf_linear_stiff_decay_uses_newton_counters() {
+        let mut fun = |_t: f64, y: &[f64]| vec![-1000.0 * y[0]];
+        let config = BdfSolverConfig {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 0.01,
+            rtol: 1e-6,
+            atol: ToleranceValue::Scalar(1e-8),
+            max_step: 1e-3,
+            first_step: Some(1e-6),
+            mode: RuntimeMode::Strict,
+            max_order: 5,
+        };
+        let mut solver = BdfSolver::new(&mut fun, config).expect("BDF init");
+
+        while solver.state() == OdeSolverState::Running {
+            solver.step_with(&mut fun).expect("BDF step");
+        }
+
+        let expected = (-10.0_f64).exp();
+        assert!(
+            (solver.y()[0] - expected).abs() < 5e-3,
+            "y(0.01) = {}, expected {}",
+            solver.y()[0],
+            expected
+        );
+        assert!(solver.njev() > 0, "should record Jacobian evaluations");
+        assert!(solver.nlu() > 0, "should record LU factorizations");
+    }
+
+    #[test]
+    fn bdf_robertson_problem_preserves_mass() {
+        let mut fun = |_t: f64, y: &[f64]| {
+            vec![
+                -0.04 * y[0] + 1.0e4 * y[1] * y[2],
+                0.04 * y[0] - 1.0e4 * y[1] * y[2] - 3.0e7 * y[1] * y[1],
+                3.0e7 * y[1] * y[1],
+            ]
+        };
+        let config = BdfSolverConfig {
+            t0: 0.0,
+            y0: &[1.0, 0.0, 0.0],
+            t_bound: 1.0e-2,
+            rtol: 1.0e-5,
+            atol: ToleranceValue::Vector(vec![1.0e-8, 1.0e-12, 1.0e-8]),
+            max_step: 1.0e-3,
+            first_step: Some(1.0e-8),
+            mode: RuntimeMode::Strict,
+            max_order: 5,
+        };
+        let mut solver = BdfSolver::new(&mut fun, config).expect("BDF init");
+
+        while solver.state() == OdeSolverState::Running {
+            solver.step_with(&mut fun).expect("BDF step");
+        }
+
+        let total: f64 = solver.y().iter().sum();
+        assert!(
+            (total - 1.0).abs() < 1.0e-6,
+            "Robertson mass drifted: total={total}"
+        );
+        assert!(
+            solver
+                .y()
+                .iter()
+                .all(|&value| value.is_finite() && value >= -1.0e-10),
+            "Robertson state must stay finite and nonnegative: {:?}",
+            solver.y()
+        );
+        assert!(solver.njev() > 0, "should record Jacobian evaluations");
+    }
+
+    #[test]
+    fn bdf_van_der_pol_mu_1000_stays_finite() {
+        let mu = 1000.0;
+        let mut fun = move |_t: f64, y: &[f64]| vec![y[1], mu * (1.0 - y[0] * y[0]) * y[1] - y[0]];
+        let config = BdfSolverConfig {
+            t0: 0.0,
+            y0: &[2.0, 0.0],
+            t_bound: 0.1,
+            rtol: 1.0e-4,
+            atol: ToleranceValue::Vector(vec![1.0e-6, 1.0e-6]),
+            max_step: 1.0e-2,
+            first_step: Some(1.0e-6),
+            mode: RuntimeMode::Strict,
+            max_order: 5,
+        };
+        let mut solver = BdfSolver::new(&mut fun, config).expect("BDF init");
+
+        while solver.state() == OdeSolverState::Running {
+            solver.step_with(&mut fun).expect("BDF step");
+        }
+
+        assert!(
+            solver.y().iter().all(|value| value.is_finite()),
+            "Van der Pol state must stay finite: {:?}",
+            solver.y()
+        );
+        assert!(
+            (solver.y()[0] - 2.0).abs() < 0.5,
+            "Van der Pol drifted unexpectedly over short interval: {:?}",
+            solver.y()
+        );
+        assert!(solver.njev() > 0, "should record Jacobian evaluations");
     }
 
     #[test]

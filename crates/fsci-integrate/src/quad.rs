@@ -1787,6 +1787,11 @@ pub fn quad_cauchy_pv<F>(
 where
     F: Fn(f64) -> f64,
 {
+    if !a.is_finite() || !b.is_finite() || !singular_point.is_finite() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "integration bounds and singular point must be finite".to_string(),
+        });
+    }
     let eps = 1e-8 * (b - a).abs();
 
     let left = quad(&f, a, singular_point - eps, options)?;

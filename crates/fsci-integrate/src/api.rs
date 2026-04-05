@@ -183,6 +183,8 @@ trait IvpSolver<F> {
     fn y_old(&self) -> Option<&[f64]>;
     fn f_old(&self) -> Option<&[f64]>;
     fn nfev(&self) -> usize;
+    fn njev(&self) -> usize;
+    fn nlu(&self) -> usize;
     fn ivp_state(&self) -> OdeSolverState;
 }
 
@@ -213,6 +215,12 @@ where
     }
     fn nfev(&self) -> usize {
         self.nfev()
+    }
+    fn njev(&self) -> usize {
+        0
+    }
+    fn nlu(&self) -> usize {
+        0
     }
     fn ivp_state(&self) -> OdeSolverState {
         self.state()
@@ -246,6 +254,12 @@ where
     }
     fn nfev(&self) -> usize {
         self.nfev()
+    }
+    fn njev(&self) -> usize {
+        self.njev()
+    }
+    fn nlu(&self) -> usize {
+        self.nlu()
     }
     fn ivp_state(&self) -> OdeSolverState {
         self.state()
@@ -458,6 +472,20 @@ where
             }
     }
 
+    fn njev(&self) -> usize {
+        match &self.mode {
+            LsodaMode::Adams(_) => 0,
+            LsodaMode::Bdf(bdf) => bdf.njev(),
+        }
+    }
+
+    fn nlu(&self) -> usize {
+        match &self.mode {
+            LsodaMode::Adams(_) => 0,
+            LsodaMode::Bdf(bdf) => bdf.nlu(),
+        }
+    }
+
     fn ivp_state(&self) -> OdeSolverState {
         match &self.mode {
             LsodaMode::Adams(rk) => rk.state(),
@@ -639,8 +667,8 @@ where
         t_events,
         y_events,
         nfev: solver.nfev(),
-        njev: 0,
-        nlu: 0,
+        njev: solver.njev(),
+        nlu: solver.nlu(),
         status,
         message,
         success: status >= 0,
@@ -658,6 +686,12 @@ where
     let n = options.y0.len();
     if n == 0 {
         return Err(IntegrateValidationError::EmptyY0);
+    }
+    if !t0.is_finite() || !tf.is_finite() {
+        return Err(IntegrateValidationError::NonFiniteSpan);
+    }
+    if options.y0.iter().any(|v| !v.is_finite()) {
+        return Err(IntegrateValidationError::NonFiniteY0);
     }
 
     validate_max_step(options.max_step)?;
@@ -761,6 +795,28 @@ mod tests {
         )
         .expect_err("empty initial state should be rejected");
         assert_eq!(err, IntegrateValidationError::EmptyY0);
+    }
+
+    #[test]
+    fn solve_ivp_bdf_reports_newton_diagnostics() {
+        let result = solve_ivp(
+            &mut |_t, y| vec![-1000.0 * y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 0.01),
+                y0: &[1.0],
+                method: SolverKind::Bdf,
+                rtol: 1e-6,
+                atol: ToleranceValue::Scalar(1e-8),
+                first_step: Some(1e-6),
+                max_step: 1e-3,
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("BDF solve should succeed");
+
+        assert!(result.success);
+        assert!(result.njev > 0, "BDF should report Jacobian evaluations");
+        assert!(result.nlu > 0, "BDF should report LU factorizations");
     }
 
     #[test]
