@@ -1245,3 +1245,83 @@ fn e2e_013_piecewise_integral_moments() {
     assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
+
+/// Scenario 14: TukeyLambda analytical pdf and Newton-backed cdf inversion.
+#[test]
+fn e2e_014_tukey_lambda_analytical() {
+    let scenario_id = "e2e_stats_014_tukey_lambda_analytical";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let logistic = TukeyLambda::new(0.0);
+    let tukey = TukeyLambda::new(0.5);
+    let pdf_logistic_zero = logistic.pdf(0.0);
+    let pdf_pos = tukey.pdf(1.0);
+    let pdf_neg = tukey.pdf(-1.0);
+    let pass = (pdf_logistic_zero - 0.25).abs() < 1e-12
+        && (pdf_pos - pdf_neg).abs() < 1e-12
+        && pdf_pos > 0.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "tukey_lambda_analytical_pdf",
+        "TukeyLambda::pdf",
+        "lam=0.0 at x=0 and lam=0.5 at +/-1",
+        &format!(
+            "logistic pdf(0)={pdf_logistic_zero}, pdf(1)={}, pdf(-1)={}",
+            pdf_pos, pdf_neg
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let quantiles = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
+    let logistic = TukeyLambda::new(0.0);
+    let pass = quantiles
+        .iter()
+        .all(|&q| (logistic.cdf(logistic.ppf(q)) - q).abs() < 1e-10);
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "tukey_lambda_newton_roundtrip",
+        "TukeyLambda::cdf(ppf(q))",
+        "lam=0.0, q in {0.01,0.1,0.25,0.5,0.75,0.9,0.99}",
+        "all roundtrips within 1e-10",
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let bounded = TukeyLambda::new(2.0);
+    let pass = bounded.cdf(-0.5) == 0.0
+        && bounded.cdf(0.5) == 1.0
+        && bounded.pdf(-1.0) == 0.0
+        && bounded.pdf(1.0) == 0.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "tukey_lambda_support_bounds",
+        "TukeyLambda support guard",
+        "lam=2.0 at and beyond support edges",
+        &format!(
+            "cdf(-0.5)={}, cdf(0.5)={}, pdf(-1)={}, pdf(1)={}",
+            bounded.cdf(-0.5),
+            bounded.cdf(0.5),
+            bounded.pdf(-1.0),
+            bounded.pdf(1.0)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}

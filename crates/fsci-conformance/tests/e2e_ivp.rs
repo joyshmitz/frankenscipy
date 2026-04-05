@@ -85,16 +85,32 @@ fn make_env() -> EnvironmentInfo {
 }
 
 fn replay_cmd(scenario_id: &str) -> String {
-    format!("cargo test -p fsci-conformance --test e2e_ivp -- {scenario_id} --nocapture")
+    format!(
+        "rch exec -- cargo test -p fsci-conformance --test e2e_ivp -- {scenario_id} --nocapture"
+    )
 }
 
-fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
+fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) -> Result<(), String> {
     let dir = e2e_output_dir();
     fs::create_dir_all(&dir)
-        .unwrap_or_else(|e| panic!("failed to create e2e dir {}: {e}", dir.display()));
+        .map_err(|e| format!("failed to create e2e dir {}: {e}", dir.display()))?;
     let path = dir.join(format!("{scenario_id}.json"));
-    let json = serde_json::to_vec_pretty(bundle).expect("serialize bundle");
-    fs::write(&path, &json).unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
+    let json = serde_json::to_vec_pretty(bundle)
+        .map_err(|e| format!("failed to serialize bundle: {e}"))?;
+    fs::write(&path, &json).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    Ok(())
+}
+
+fn assert_bundle_written(scenario_id: &str, bundle: &ForensicLogBundle) {
+    let bundle_write = write_bundle(scenario_id, bundle);
+    assert!(
+        bundle_write.is_ok(),
+        "bundle write failed for {scenario_id}: {}",
+        bundle_write
+            .as_ref()
+            .err()
+            .map_or("unknown error", String::as_str)
+    );
 }
 
 fn make_step(
@@ -140,6 +156,10 @@ fn lotka_volterra(_t: f64, y: &[f64]) -> Vec<f64> {
         alpha * y[0] - beta * y[0] * y[1],
         delta * y[0] * y[1] - gamma_val * y[1],
     ]
+}
+
+fn stiff_decay(_t: f64, y: &[f64]) -> Vec<f64> {
+    vec![-1000.0 * y[0]]
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -278,7 +298,7 @@ fn e2e_001_full_ivp_workflow() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 1 failed");
 }
 
@@ -400,7 +420,7 @@ fn e2e_002_tolerance_cascade() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 2 failed");
 }
 
@@ -534,7 +554,7 @@ fn e2e_003_multi_step_validation() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 3 failed");
 }
 
@@ -661,7 +681,7 @@ fn e2e_004_invalid_tolerance_recovery() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 4 failed");
 }
 
@@ -806,7 +826,7 @@ fn e2e_005_mode_switch() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 5 failed");
 }
 
@@ -936,7 +956,7 @@ fn e2e_006_boundary_tolerance() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 6 failed");
 }
 
@@ -1053,7 +1073,7 @@ fn e2e_007_rapid_sequential_validations() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 7 failed");
 }
 
@@ -1174,7 +1194,7 @@ fn e2e_008_large_system() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 8 failed");
 }
 
@@ -1300,7 +1320,7 @@ fn e2e_009_rk23_vs_rk45() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 9 failed");
 }
 
@@ -1396,6 +1416,104 @@ fn e2e_010_first_step_exceeds_interval() {
             error_chain: None,
         },
     };
-    write_bundle(scenario_id, &bundle);
+    assert_bundle_written(scenario_id, &bundle);
     assert!(all_pass, "Scenario 10 failed");
+}
+
+/// Scenario 11: BDF Newton corrector on a stiff decay problem
+#[test]
+fn e2e_011_bdf_newton_stiff_decay() {
+    let scenario_id = "e2e_ivp_011_bdf_newton";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let mut fun = stiff_decay;
+    let result = solve_ivp(
+        &mut fun,
+        &SolveIvpOptions {
+            t_span: (0.0, 0.01),
+            y0: &[1.0],
+            method: SolverKind::Bdf,
+            rtol: 1e-6,
+            atol: ToleranceValue::Scalar(1e-8),
+            first_step: Some(1e-6),
+            max_step: 1e-3,
+            ..Default::default()
+        },
+    )
+    .expect("BDF stiff solve");
+    let pass = result.success;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "solve_bdf_stiff_decay",
+        "solve",
+        "BDF, dy/dt=-1000y, t=[0,0.01], y0=1",
+        &format!(
+            "success={}, nfev={}, njev={}, nlu={}, steps={}",
+            result.success,
+            result.nfev,
+            result.njev,
+            result.nlu,
+            result.t.len()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    let t = Instant::now();
+    let final_y = result.y.last().unwrap()[0];
+    let expected = (-10.0_f64).exp();
+    let abs_err = (final_y - expected).abs();
+    let pass = abs_err < 5e-3;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "verify_stiff_solution",
+        "check",
+        &format!("final_y={final_y:.8e}"),
+        &format!("expected={expected:.8e}, abs_err={abs_err:.2e}"),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    let t = Instant::now();
+    let pass = result.njev > 0 && result.nlu > 0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "verify_newton_diagnostics",
+        "check",
+        "BDF should evaluate Jacobians and factorize Newton systems",
+        &format!("njev={}, nlu={}", result.njev, result.nlu),
+        t.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if all_pass {
+                "pass".into()
+            } else {
+                "fail".into()
+            },
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    assert_bundle_written(scenario_id, &bundle);
+    assert!(all_pass, "Scenario 11 failed");
 }
