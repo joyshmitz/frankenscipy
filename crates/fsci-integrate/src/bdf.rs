@@ -298,8 +298,12 @@ impl BdfSolver {
             }
             error_norm = (error_norm / self.n as f64).sqrt();
 
-            if error_norm > 1.0 {
-                let factor = (0.5_f64).max(0.9 / error_norm.powf(1.0 / (self.order as f64 + 1.0)));
+            if error_norm.is_nan() || error_norm > 1.0 {
+                let factor = if error_norm.is_nan() {
+                    0.5
+                } else {
+                    (0.5_f64).max(0.9 / error_norm.powf(1.0 / (self.order as f64 + 1.0)))
+                };
                 self.h *= factor;
                 if self.h.abs() < 1e-14 {
                     self.state = OdeSolverState::Failed;
@@ -505,13 +509,14 @@ where
     }
     d2 = (d2 / n as f64).sqrt() / h0;
 
-    let h1 = if d1.max(d2) <= 1e-15 {
-        (h0 * 1e-3).max(1e-6)
+    let max_d = if d1.is_nan() || d2.is_nan() { f64::NAN } else { d1.max(d2) };
+    let h1 = if max_d <= 1e-15 || max_d.is_nan() {
+        if h0.is_nan() { f64::NAN } else { (h0 * 1e-3).max(1e-6) }
     } else {
-        (0.01 / d1.max(d2)).powf(0.5)
+        (0.01 / max_d).powf(0.5)
     };
 
-    (100.0 * h0).min(h1)
+    if h0.is_nan() || h1.is_nan() { f64::NAN } else { (100.0 * h0).min(h1) }
 }
 
 #[cfg(test)]

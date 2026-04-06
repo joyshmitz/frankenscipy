@@ -30,6 +30,11 @@ impl Complex64 {
     }
 
     #[must_use]
+    pub fn is_finite(self) -> bool {
+        self.re.is_finite() && self.im.is_finite()
+    }
+
+    #[must_use]
     pub fn norm_sqr(self) -> f64 {
         self.re * self.re + self.im * self.im
     }

@@ -1198,7 +1198,6 @@ pub fn bohman_window(m: usize) -> Vec<f64> {
         .collect()
 }
 
-
 // ══════════════════════════════════════════════════════════════════════
 // Peak Detection
 // ══════════════════════════════════════════════════════════════════════
@@ -1968,11 +1967,12 @@ fn binom_coeff(n: usize, k: usize) -> f64 {
 /// Returns n_samples of the response to a unit impulse.
 /// Matches `scipy.signal.dimpulse` (simplified).
 pub fn impulse_response(b: &[f64], a: &[f64], n_samples: usize) -> Result<Vec<f64>, SignalError> {
+    let tf_num = normalize_discrete_tf_numerator(b, a)?;
     let mut impulse = vec![0.0; n_samples];
     if !impulse.is_empty() {
         impulse[0] = 1.0;
     }
-    lfilter(b, a, &impulse, None)
+    lfilter(&tf_num, a, &impulse, None)
 }
 
 /// Compute the step response of a digital filter.
@@ -1980,8 +1980,27 @@ pub fn impulse_response(b: &[f64], a: &[f64], n_samples: usize) -> Result<Vec<f6
 /// Returns n_samples of the response to a unit step.
 /// Matches `scipy.signal.dstep` (simplified).
 pub fn step_response(b: &[f64], a: &[f64], n_samples: usize) -> Result<Vec<f64>, SignalError> {
+    let tf_num = normalize_discrete_tf_numerator(b, a)?;
     let step = vec![1.0; n_samples];
-    lfilter(b, a, &step, None)
+    lfilter(&tf_num, a, &step, None)
+}
+
+fn normalize_discrete_tf_numerator(b: &[f64], a: &[f64]) -> Result<Vec<f64>, SignalError> {
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".to_string(),
+        ));
+    }
+    if b.len() > a.len() {
+        return Err(SignalError::InvalidArgument(
+            "improper transfer function: numerator order must not exceed denominator order"
+                .to_string(),
+        ));
+    }
+
+    let mut padded = vec![0.0; a.len() - b.len()];
+    padded.extend_from_slice(b);
+    Ok(padded)
 }
 
 /// Compute the group delay of a digital filter at specified frequencies.
@@ -7254,6 +7273,34 @@ mod tests {
         let y = lfilter(&coeffs.b, &coeffs.a, &x, None).expect("lfilter");
         assert_eq!(y.len(), x.len());
         assert!(y.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn impulse_response_matches_scipy_transfer_function_convention() {
+        let response = impulse_response(&[1.0], &[1.0, -0.5], 6).expect("impulse response");
+        let expected = [0.0, 1.0, 0.5, 0.25, 0.125, 0.0625];
+        for (got, want) in response.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-12, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn step_response_matches_scipy_transfer_function_convention() {
+        let response = step_response(&[1.0], &[1.0, -0.5], 6).expect("step response");
+        let expected = [0.0, 1.0, 1.5, 1.75, 1.875, 1.9375];
+        for (got, want) in response.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-12, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn impulse_response_rejects_improper_transfer_function() {
+        let err = impulse_response(&[1.0, 2.0, 3.0], &[1.0, -0.5], 6)
+            .expect_err("improper transfer functions should be rejected");
+        assert!(
+            err.to_string().contains("improper transfer function"),
+            "unexpected error: {err}"
+        );
     }
 
     // ── filtfilt tests ─────────────────────────────────────────────

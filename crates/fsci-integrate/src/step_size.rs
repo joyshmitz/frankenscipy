@@ -140,16 +140,17 @@ where
 
     // Compute h1
     let h1 = if d1 <= 1e-15 && d2 <= 1e-15 {
-        (1e-6_f64).max(h0 * 1e-3)
+        if h0.is_nan() { f64::NAN } else { (1e-6_f64).max(h0 * 1e-3) }
     } else {
-        (0.01 / d1.max(d2)).powf(1.0 / (request.order + 1.0))
+        let max_d = if d1.is_nan() || d2.is_nan() { f64::NAN } else { d1.max(d2) };
+        (0.01 / max_d).powf(1.0 / (request.order + 1.0))
     };
 
     // Return min(100 * h0, h1, interval_length, max_step)
-    Ok((100.0 * h0)
-        .min(h1)
-        .min(interval_length)
-        .min(request.max_step))
+    let min_h1 = if h0.is_nan() || h1.is_nan() { f64::NAN } else { (100.0 * h0).min(h1) };
+    let min_interval = if min_h1.is_nan() || interval_length.is_nan() { f64::NAN } else { min_h1.min(interval_length) };
+    let final_h = if min_interval.is_nan() || request.max_step.is_nan() { f64::NAN } else { min_interval.min(request.max_step) };
+    Ok(final_h)
 }
 
 #[cfg(test)]

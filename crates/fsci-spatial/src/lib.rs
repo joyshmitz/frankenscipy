@@ -1772,7 +1772,9 @@ pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
 
 /// Hausdorff distance between two point sets (symmetric).
 pub fn hausdorff_distance(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
-    directed_hausdorff(xa, xb).max(directed_hausdorff(xb, xa))
+    let d1 = directed_hausdorff(xa, xb);
+    let d2 = directed_hausdorff(xb, xa);
+    if d1.is_nan() || d2.is_nan() { f64::NAN } else { d1.max(d2) }
 }
 
 /// Mahalanobis distance between two vectors given an inverse covariance matrix.
@@ -2106,7 +2108,8 @@ pub fn diameter(points: &[Vec<f64>]) -> f64 {
     let mut max_d = 0.0f64;
     for i in 0..n {
         for j in i + 1..n {
-            max_d = max_d.max(euclidean(&points[i], &points[j]));
+            let d = euclidean(&points[i], &points[j]);
+            max_d = if max_d.is_nan() || d.is_nan() { f64::NAN } else { max_d.max(d) };
         }
     }
     max_d

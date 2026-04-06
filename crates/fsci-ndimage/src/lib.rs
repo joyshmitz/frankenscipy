@@ -269,6 +269,44 @@ fn map_coordinate(coord: f64, len: usize, mode: BoundaryMode) -> Option<f64> {
     }
 }
 
+fn map_interpolation_coordinate(coord: f64, len: usize, mode: BoundaryMode) -> Option<f64> {
+    if mode != BoundaryMode::Wrap {
+        return map_coordinate(coord, len, mode);
+    }
+    if len <= 1 {
+        return Some(0.0);
+    }
+    let max = (len - 1) as f64;
+    if (0.0..=max).contains(&coord) {
+        Some(coord)
+    } else {
+        Some(coord.rem_euclid(max))
+    }
+}
+
+fn wrap_interpolation_index(idx: i64, len: usize) -> usize {
+    if len <= 1 {
+        return 0;
+    }
+    let period = (len - 1) as i64;
+    if (0..len as i64).contains(&idx) {
+        idx as usize
+    } else {
+        idx.rem_euclid(period) as usize
+    }
+}
+
+fn fold_wrap_cubic_index(idx: isize, max: usize) -> usize {
+    let max = max as isize;
+    if idx < 0 {
+        (-idx) as usize
+    } else if idx > max {
+        (2 * max - idx) as usize
+    } else {
+        idx as usize
+    }
+}
+
 fn spline_coefficients_for_line(line: &[f64], order: usize) -> Result<Vec<f64>, NdimageError> {
     if line.len() <= 1 || order <= 1 {
         return Ok(line.to_vec());
@@ -282,6 +320,39 @@ fn spline_coefficients_for_line(line: &[f64], order: usize) -> Result<Vec<f64>, 
         NdimageError::InvalidArgument(format!("failed to compute spline coefficients: {err}"))
     })?;
     Ok(spline.coeffs().to_vec())
+}
+
+fn cubic_constant_wrap_coefficients(line: &[f64]) -> Vec<f64> {
+    let n = line.len();
+    if n <= 1 {
+        return line.to_vec();
+    }
+    let mut diag: Vec<f64> = vec![2.0 / 3.0; n];
+    let mut rhs: Vec<f64> = line.to_vec();
+    let mut lower: Vec<f64> = vec![0.0; n];
+    let mut upper: Vec<f64> = vec![0.0; n];
+    if n >= 2 {
+        upper[0] = 1.0 / 3.0;
+        lower[n - 1] = 1.0 / 3.0;
+    }
+    for i in 1..n.saturating_sub(1) {
+        lower[i] = 1.0 / 6.0;
+        diag[i] = 2.0 / 3.0;
+        upper[i] = 1.0 / 6.0;
+    }
+    for i in 1..n {
+        if diag[i - 1].abs() < 1e-18 {
+            continue;
+        }
+        let w = lower[i] / diag[i - 1];
+        diag[i] -= w * upper[i - 1];
+        rhs[i] -= w * rhs[i - 1];
+    }
+    rhs[n - 1] /= diag[n - 1];
+    for i in (0..n - 1).rev() {
+        rhs[i] = (rhs[i] - upper[i] * rhs[i + 1]) / diag[i];
+    }
+    rhs
 }
 
 fn pad_array_mode(
@@ -324,7 +395,7 @@ fn prefilter_spline_coefficients(
     }
     let ndim = input.ndim();
     let (mut current, coord_offsets) =
-        if matches!(mode, BoundaryMode::Nearest | BoundaryMode::Reflect | BoundaryMode::Wrap) {
+        if matches!(mode, BoundaryMode::Nearest | BoundaryMode::Reflect) {
             (
                 pad_array_mode(input, SPLINE_NEAREST_PAD, mode)?,
                 vec![SPLINE_NEAREST_PAD as f64; ndim],
@@ -361,7 +432,12 @@ fn prefilter_spline_coefficients(
                 idx[axis] = i;
                 line.push(current.get(&idx));
             }
-            let coeffs = spline_coefficients_for_line(&line, order)?;
+            let coeffs =
+                if order == 3 && matches!(mode, BoundaryMode::Constant | BoundaryMode::Wrap) {
+                    cubic_constant_wrap_coefficients(&line)
+                } else {
+                    spline_coefficients_for_line(&line, order)?
+                };
             for (i, coeff) in coeffs.into_iter().enumerate() {
                 idx[axis] = i;
                 next.set(&idx, coeff);
@@ -402,6 +478,16 @@ fn sample_interpolated(
     cval: f64,
 ) -> f64 {
     if order == 0 {
+        if mode == BoundaryMode::Wrap {
+            let idx: Vec<usize> = coords
+                .iter()
+                .enumerate()
+                .map(|(axis, coord)| {
+                    wrap_interpolation_index(coord.round() as i64, input.shape[axis])
+                })
+                .collect();
+            return input.get(&idx);
+        }
         let idx: Vec<i64> = coords.iter().map(|coord| coord.round() as i64).collect();
         return input.get_boundary(&idx, mode, cval);
     }
@@ -409,7 +495,7 @@ fn sample_interpolated(
     let mut bases = Vec::with_capacity(coords.len());
     for (axis, &coord) in coords.iter().enumerate() {
         let coeff_len = coeffs.shape[axis];
-        let Some(mapped) = map_coordinate(coord, input.shape[axis], mode) else {
+        let Some(mapped) = map_interpolation_coordinate(coord, input.shape[axis], mode) else {
             return cval;
         };
         let spline_coord = if coord_offsets[axis] > 0.0 {
@@ -435,6 +521,26 @@ fn sample_interpolated(
             mapped
         };
         let effective_order = order.min(coeff_len.saturating_sub(1));
+        if mode == BoundaryMode::Wrap && effective_order == 3 {
+            let base = spline_coord.floor() as isize - 1;
+            let t = spline_coord - spline_coord.floor();
+            let omt = 1.0 - t;
+            let max = coeff_len - 1;
+            let support = vec![
+                (fold_wrap_cubic_index(base, max), omt * omt * omt / 6.0),
+                (
+                    fold_wrap_cubic_index(base + 1, max),
+                    (3.0 * t * t * t - 6.0 * t * t + 4.0) / 6.0,
+                ),
+                (
+                    fold_wrap_cubic_index(base + 2, max),
+                    (-3.0 * t * t * t + 3.0 * t * t + 3.0 * t + 1.0) / 6.0,
+                ),
+                (fold_wrap_cubic_index(base + 3, max), t * t * t / 6.0),
+            ];
+            bases.push(support);
+            continue;
+        }
         if effective_order == 0 {
             bases.push(vec![(
                 spline_coord.round().clamp(0.0, (coeff_len - 1) as f64) as usize,
@@ -3124,18 +3230,16 @@ mod tests {
     #[test]
     fn shift_order_three_half_pixel_matches_scipy_boundary_references() {
         let input = NdArray::new(vec![0.0, 10.0, 20.0, 30.0], vec![4]).unwrap();
-        let cases = [
-            (
-                BoundaryMode::Reflect,
-                1e-4,
-                [
-                    -1.607_191_365_221_785_7,
-                    4.464_266_599_578_032,
-                    15.000_003_786_876_048,
-                    25.535_713_203_749_697,
-                ],
-            ),
-        ];
+        let cases = [(
+            BoundaryMode::Reflect,
+            1e-4,
+            [
+                -1.607_191_365_221_785_7,
+                4.464_266_599_578_032,
+                15.000_003_786_876_048,
+                25.535_713_203_749_697,
+            ],
+        )];
         for (mode, tol, expected) in cases {
             let result = shift(&input, &[0.5], 3, mode, 0.0).unwrap();
             for (got, want) in result.data.iter().zip(expected.iter()) {
@@ -3175,18 +3279,16 @@ mod tests {
     fn map_coordinates_order_three_matches_scipy_boundary_references() {
         let input = NdArray::new(vec![0.0, 10.0, 20.0, 30.0], vec![4]).unwrap();
         let coordinates = [vec![-0.25, 0.5, 2.5, 3.25]];
-        let cases = [
-            (
-                BoundaryMode::Reflect,
-                1e-4,
-                [
-                    -1.205_403_622_252_472_2,
-                    4.464_266_599_578_032,
-                    25.535_713_203_749_697,
-                    31.205_357_548_593_86,
-                ],
-            ),
-        ];
+        let cases = [(
+            BoundaryMode::Reflect,
+            1e-4,
+            [
+                -1.205_403_622_252_472_2,
+                4.464_266_599_578_032,
+                25.535_713_203_749_697,
+                31.205_357_548_593_86,
+            ],
+        )];
         for (mode, tol, expected) in cases {
             let result = map_coordinates(&input, &coordinates, 3, mode, 0.0).unwrap();
             for (got, want) in result.iter().zip(expected.iter()) {

@@ -669,7 +669,16 @@ impl RkSolver {
             ToleranceValue::Scalar(atol) => y
                 .iter()
                 .zip(y_new.iter())
-                .map(|(yi, yni)| atol + yi.abs().max(yni.abs()) * self.rtol)
+                .map(|(yi, yni)| {
+                    let a = yi.abs();
+                    let b = yni.abs();
+                    let max_val = if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    };
+                    atol + max_val * self.rtol
+                })
                 .collect(),
             ToleranceValue::Vector(atol_vec) => y
                 .iter()

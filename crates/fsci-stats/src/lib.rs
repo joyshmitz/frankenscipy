@@ -4645,7 +4645,7 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
     e_yy *= 2.0 / (nv * nv);
 
     let d_sq = 2.0 * e_xy - e_xx - e_yy;
-    d_sq.max(0.0).sqrt()
+    if d_sq.is_nan() { f64::NAN } else { d_sq.max(0.0).sqrt() }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -4659,7 +4659,7 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
 /// Tests H0: all group means are equal.
 /// Assumes normality and equal variances within groups.
 pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
-    if groups.len() < 2 {
+    if groups.len() < 2 || groups.iter().any(|g| g.iter().any(|v| v.is_nan())) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -4751,7 +4751,10 @@ pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
 ///
 /// Matches the robust default behavior of `scipy.stats.levene(*groups)`.
 pub fn levene(groups: &[&[f64]]) -> VarianceTestResult {
-    if groups.len() < 2 || groups.iter().any(|group| group.len() < 2) {
+    if groups.len() < 2
+        || groups.iter().any(|group| group.len() < 2)
+        || groups.iter().any(|g| g.iter().any(|v| v.is_nan()))
+    {
         return invalid_variance_test_result();
     }
 
@@ -4885,7 +4888,7 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
         };
     }
     let n = groups[0].len();
-    if n < 2 || groups.iter().any(|g| g.len() != n) {
+    if n < 2 || groups.iter().any(|g| g.len() != n || g.iter().any(|v| v.is_nan())) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -5123,7 +5126,7 @@ pub fn median_test(groups: &[&[f64]]) -> TtestResult {
 pub fn ansari(x: &[f64], y: &[f64]) -> TtestResult {
     let n = x.len();
     let m = y.len();
-    if n < 1 || m < 1 {
+    if n < 1 || m < 1 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -5261,7 +5264,7 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
 ///
 /// Non-parametric test: H0: median of x - y is zero.
 pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
-    if x.len() != y.len() || x.len() < 10 {
+    if x.len() != y.len() || x.len() < 10 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -6430,7 +6433,7 @@ pub fn anderson_ksamp(
 /// Matches `scipy.stats.ks_1samp(data, cdf_func)`.
 pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitResult {
     let n = data.len();
-    if n == 0 {
+    if n == 0 || data.iter().any(|v| v.is_nan()) {
         return GoodnessOfFitResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -6447,7 +6450,11 @@ pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitRes
         let f_x = cdf_func(x);
         let d_plus = ((i + 1) as f64 / nf - f_x).abs();
         let d_minus = (f_x - i as f64 / nf).abs();
-        d_stat = d_stat.max(d_plus).max(d_minus);
+        d_stat = if d_stat.is_nan() || d_plus.is_nan() || d_minus.is_nan() {
+            f64::NAN
+        } else {
+            d_stat.max(d_plus).max(d_minus)
+        };
     }
 
     let pvalue = kolmogorov_pvalue(d_stat, nf);
@@ -6779,7 +6786,7 @@ pub fn cramervonmises_2samp_with_method(
 ) -> GoodnessOfFitResult {
     let nx = x.len();
     let ny = y.len();
-    if nx <= 1 || ny <= 1 {
+    if nx <= 1 || ny <= 1 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return GoodnessOfFitResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -9829,6 +9836,7 @@ pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> V
         return vec![];
     }
 
+    let overlap = overlap.min(window_size.saturating_sub(1));
     let hop = window_size - overlap;
     let n_freq = window_size / 2 + 1;
     let mut psd = vec![0.0; n_freq];
@@ -9836,7 +9844,11 @@ pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> V
 
     let win: Vec<f64> = (0..window_size)
         .map(|i| {
-            0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (window_size - 1) as f64).cos())
+            if window_size == 1 {
+                1.0
+            } else {
+                0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (window_size - 1) as f64).cos())
+            }
         })
         .collect();
 
@@ -9880,8 +9892,8 @@ pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> V
 /// Returns just the D statistic without p-value.
 pub fn ks_distance(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> f64 {
     let n = data.len();
-    if n == 0 {
-        return 0.0;
+    if n == 0 || data.iter().any(|v| v.is_nan()) {
+        return f64::NAN;
     }
     let mut sorted = data.to_vec();
     sorted.sort_by(|a, b| a.total_cmp(b));
@@ -9891,8 +9903,14 @@ pub fn ks_distance(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> f64 {
         let ecdf_before = i as f64 / n as f64;
         let ecdf_after = (i + 1) as f64 / n as f64;
         let cdf_val = cdf_func(x);
-        max_d = max_d.max((ecdf_after - cdf_val).abs());
-        max_d = max_d.max((ecdf_before - cdf_val).abs());
+        let d1 = (ecdf_after - cdf_val).abs();
+        let d2 = (ecdf_before - cdf_val).abs();
+        
+        max_d = if max_d.is_nan() || d1.is_nan() || d2.is_nan() {
+            f64::NAN
+        } else {
+            max_d.max(d1).max(d2)
+        };
     }
     max_d
 }
@@ -10272,7 +10290,10 @@ fn compute_std_errors(xtx: &[Vec<f64>], mse: f64) -> Vec<f64> {
     }
 
     (0..n)
-        .map(|i| (mse * aug[i][n + i]).max(0.0).sqrt())
+        .map(|i| {
+            let var = mse * aug[i][n + i];
+            if var.is_nan() { f64::NAN } else { var.max(0.0).sqrt() }
+        })
         .collect()
 }
 

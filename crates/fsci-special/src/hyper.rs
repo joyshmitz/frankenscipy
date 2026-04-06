@@ -3,8 +3,8 @@
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor,
+    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor,
 };
 
 pub const HYPER_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -53,7 +53,7 @@ pub const HYPER_DISPATCH_PLAN: &[DispatchPlan] = &[
 /// Confluent hypergeometric function 1F1(a; b; z).
 ///
 /// Also known as Kummer's function M(a, b, z).
-/// Computed via direct series summation for real scalar inputs.
+/// Supports real parameters with real or complex scalar/vector `z` inputs.
 /// Matches `scipy.special.hyp1f1(a, b, z)`.
 pub fn hyp1f1(
     a: &SpecialTensor,
@@ -81,19 +81,38 @@ pub fn hyp1f1(
             }
             Ok(SpecialTensor::RealVec(results))
         }
+        (
+            SpecialTensor::RealScalar(a_val),
+            SpecialTensor::RealScalar(b_val),
+            SpecialTensor::ComplexScalar(z_val),
+        ) => {
+            let result = hyp1f1_complex_z(*a_val, *b_val, *z_val, mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        }
+        (
+            SpecialTensor::RealScalar(a_val),
+            SpecialTensor::RealScalar(b_val),
+            SpecialTensor::ComplexVec(z_vec),
+        ) => {
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp1f1_complex_z(*a_val, *b_val, zi, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
         _ => Err(SpecialError {
             function: "hyp1f1",
             kind: SpecialErrorKind::NotYetImplemented,
             mode,
-            detail: "complex hyp1f1 not yet implemented",
+            detail: "complex parameter support for hyp1f1 is not yet implemented",
         }),
     }
 }
 
 /// Gauss hypergeometric function 2F1(a, b; c; z).
 ///
-/// Computed via direct series summation for |z| < 1 and transformation
-/// formulas for |z| >= 1.
+/// Supports real parameters with real or complex scalar/vector `z` inputs.
+/// Complex `z` currently uses the convergent `|z| < 1` series path.
 /// Matches `scipy.special.hyp2f1(a, b, c, z)`.
 pub fn hyp2f1(
     a: &SpecialTensor,
@@ -124,11 +143,32 @@ pub fn hyp2f1(
             }
             Ok(SpecialTensor::RealVec(results))
         }
+        (
+            SpecialTensor::RealScalar(a_val),
+            SpecialTensor::RealScalar(b_val),
+            SpecialTensor::RealScalar(c_val),
+            SpecialTensor::ComplexScalar(z_val),
+        ) => {
+            let result = hyp2f1_complex_z(*a_val, *b_val, *c_val, *z_val, mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        }
+        (
+            SpecialTensor::RealScalar(a_val),
+            SpecialTensor::RealScalar(b_val),
+            SpecialTensor::RealScalar(c_val),
+            SpecialTensor::ComplexVec(z_vec),
+        ) => {
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp2f1_complex_z(*a_val, *b_val, *c_val, zi, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
         _ => Err(SpecialError {
             function: "hyp2f1",
             kind: SpecialErrorKind::NotYetImplemented,
             mode,
-            detail: "complex hyp2f1 not yet implemented",
+            detail: "complex parameter support for hyp2f1 is not yet implemented",
         }),
     }
 }
@@ -187,6 +227,77 @@ fn hyp1f1_series(a: f64, b: f64, z: f64) -> Result<f64, SpecialError> {
         sum += term;
 
         if term.abs() < eps * sum.abs() {
+            return Ok(sum);
+        }
+    }
+
+    Ok(sum)
+}
+
+fn complex_nan() -> Complex64 {
+    Complex64::new(f64::NAN, f64::NAN)
+}
+
+fn hyp1f1_complex_z(
+    a: f64,
+    b: f64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    if z.im == 0.0 {
+        return Ok(Complex64::from_real(hyp1f1_scalar(a, b, z.re, mode)?));
+    }
+
+    if b == 0.0 || (b < 0.0 && b == b.floor()) {
+        if mode == RuntimeMode::Hardened {
+            return Err(SpecialError {
+                function: "hyp1f1",
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "b must not be zero or a negative integer",
+            });
+        }
+        return Ok(complex_nan());
+    }
+
+    if z == Complex64::from_real(0.0) || a == 0.0 {
+        return Ok(Complex64::from_real(1.0));
+    }
+
+    hyp1f1_series_complex(a, b, z, mode)
+}
+
+fn hyp1f1_series_complex(
+    a: f64,
+    b: f64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    let max_terms = 2_000;
+    let tol = 1.0e-14;
+
+    let mut sum = Complex64::from_real(1.0);
+    let mut term = Complex64::from_real(1.0);
+
+    for n in 0..max_terms {
+        let nf = n as f64;
+        let scale = (a + nf) / ((b + nf) * (nf + 1.0));
+        term = term * z * scale;
+
+        if !term.is_finite() || !sum.is_finite() {
+            if mode == RuntimeMode::Hardened {
+                return Err(SpecialError {
+                    function: "hyp1f1",
+                    kind: SpecialErrorKind::OverflowRisk,
+                    mode,
+                    detail: "series evaluation overflowed for complex z",
+                });
+            }
+            return Ok(complex_nan());
+        }
+
+        sum = sum + term;
+        if term.abs() <= tol * sum.abs().max(1.0) {
             return Ok(sum);
         }
     }
@@ -305,6 +416,88 @@ fn hyp2f1_series(a: f64, b: f64, c: f64, z: f64) -> Result<f64, SpecialError> {
     Ok(sum)
 }
 
+fn hyp2f1_complex_z(
+    a: f64,
+    b: f64,
+    c: f64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    if z.im == 0.0 {
+        return Ok(Complex64::from_real(hyp2f1_scalar(a, b, c, z.re, mode)?));
+    }
+
+    if c == 0.0 || (c < 0.0 && c == c.floor()) {
+        if mode == RuntimeMode::Hardened {
+            return Err(SpecialError {
+                function: "hyp2f1",
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "c must not be zero or a negative integer",
+            });
+        }
+        return Ok(complex_nan());
+    }
+
+    if z == Complex64::from_real(0.0) || a == 0.0 || b == 0.0 {
+        return Ok(Complex64::from_real(1.0));
+    }
+
+    if z.abs() < 1.0 {
+        return hyp2f1_series_complex(a, b, c, z, mode);
+    }
+
+    if mode == RuntimeMode::Hardened {
+        return Err(SpecialError {
+            function: "hyp2f1",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "complex z currently requires |z| < 1 for stable hyp2f1 evaluation",
+        });
+    }
+
+    Ok(complex_nan())
+}
+
+fn hyp2f1_series_complex(
+    a: f64,
+    b: f64,
+    c: f64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    let max_terms = 2_000;
+    let tol = 1.0e-14;
+
+    let mut sum = Complex64::from_real(1.0);
+    let mut term = Complex64::from_real(1.0);
+
+    for n in 0..max_terms {
+        let nf = n as f64;
+        let scale = ((a + nf) * (b + nf)) / ((c + nf) * (nf + 1.0));
+        term = term * z * scale;
+
+        if !term.is_finite() || !sum.is_finite() {
+            if mode == RuntimeMode::Hardened {
+                return Err(SpecialError {
+                    function: "hyp2f1",
+                    kind: SpecialErrorKind::OverflowRisk,
+                    mode,
+                    detail: "series evaluation overflowed for complex z",
+                });
+            }
+            return Ok(complex_nan());
+        }
+
+        sum = sum + term;
+        if term.abs() <= tol * sum.abs().max(1.0) {
+            return Ok(sum);
+        }
+    }
+
+    Ok(sum)
+}
+
 /// Compute Gamma(c)*Gamma(c-a-b) / (Gamma(c-a)*Gamma(c-b)) for the Gauss sum.
 fn gamma_ratio_for_hyp2f1(c: f64, cab: f64, ca: f64, cb: f64) -> f64 {
     // Use log-gamma via Stirling for numerical stability
@@ -357,11 +550,34 @@ mod tests {
         SpecialTensor::RealScalar(v)
     }
 
+    fn complex(re: f64, im: f64) -> SpecialTensor {
+        SpecialTensor::ComplexScalar(Complex64::new(re, im))
+    }
+
     fn get_scalar(r: &SpecialResult) -> f64 {
         match r.as_ref().expect("should succeed") {
             SpecialTensor::RealScalar(v) => *v,
             _ => panic!("expected RealScalar"),
         }
+    }
+
+    fn get_complex_scalar(r: &SpecialResult) -> Complex64 {
+        match r.as_ref().expect("should succeed") {
+            SpecialTensor::ComplexScalar(v) => *v,
+            _ => panic!("expected ComplexScalar"),
+        }
+    }
+
+    fn assert_complex_close(actual: Complex64, expected: Complex64, tol: f64) {
+        let delta = (actual - expected).abs();
+        assert!(
+            delta <= tol,
+            "expected {}+{}i, got {}+{}i (|delta|={delta})",
+            expected.re,
+            expected.im,
+            actual.re,
+            actual.im
+        );
     }
 
     // ── hyp1f1 tests ────────────────────────────────────────────────
@@ -483,6 +699,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hyp1f1_complex_matches_exp_identity() {
+        let z = Complex64::new(0.5, 0.75);
+        let r = hyp1f1(
+            &scalar(2.0),
+            &scalar(2.0),
+            &complex(z.re, z.im),
+            RuntimeMode::Strict,
+        );
+        assert_complex_close(get_complex_scalar(&r), z.exp(), 1.0e-10);
+    }
+
+    #[test]
+    fn hyp1f1_complex_vector_preserves_conjugation_symmetry() {
+        let z = Complex64::new(0.3, 0.4);
+        let input = SpecialTensor::ComplexVec(vec![z, z.conj()]);
+        let r = hyp1f1(&scalar(1.0), &scalar(1.0), &input, RuntimeMode::Strict);
+        match r.expect("complex vector hyp1f1") {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_complex_close(values[1], values[0].conj(), 1.0e-10);
+            }
+            _ => panic!("expected ComplexVec"),
+        }
+    }
+
     // ── hyp2f1 tests ────────────────────────────────────────────────
 
     #[test]
@@ -596,5 +838,52 @@ mod tests {
             (val - expected).abs() < 1e-10,
             "2F1(1,1;2;-0.5): got {val} expected {expected}"
         );
+    }
+
+    #[test]
+    fn hyp2f1_complex_matches_inverse_linear_identity_inside_unit_disk() {
+        let z = Complex64::new(0.25, 0.25);
+        let r = hyp2f1(
+            &scalar(1.0),
+            &scalar(2.0),
+            &scalar(2.0),
+            &complex(z.re, z.im),
+            RuntimeMode::Strict,
+        );
+        let expected = Complex64::from_real(1.0) / (Complex64::from_real(1.0) - z);
+        assert_complex_close(get_complex_scalar(&r), expected, 1.0e-10);
+    }
+
+    #[test]
+    fn hyp2f1_complex_vector_preserves_conjugation_symmetry() {
+        let z = Complex64::new(0.2, 0.3);
+        let input = SpecialTensor::ComplexVec(vec![z, z.conj()]);
+        let r = hyp2f1(
+            &scalar(1.0),
+            &scalar(2.0),
+            &scalar(2.0),
+            &input,
+            RuntimeMode::Strict,
+        );
+        match r.expect("complex vector hyp2f1") {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_complex_close(values[1], values[0].conj(), 1.0e-10);
+            }
+            _ => panic!("expected ComplexVec"),
+        }
+    }
+
+    #[test]
+    fn hyp2f1_complex_outside_unit_disk_errors_in_hardened_mode() {
+        let err = hyp2f1(
+            &scalar(1.0),
+            &scalar(2.0),
+            &scalar(2.0),
+            &complex(1.25, 0.5),
+            RuntimeMode::Hardened,
+        )
+        .expect_err("hardened mode should reject unsupported complex domains");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
     }
 }

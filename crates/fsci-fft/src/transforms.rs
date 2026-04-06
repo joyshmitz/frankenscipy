@@ -1450,6 +1450,9 @@ pub fn next_fast_len(target: usize) -> usize {
 /// Check if n is composed only of factors 2, 3, 5 (Hamming numbers / regular numbers).
 #[allow(clippy::manual_is_multiple_of)]
 fn is_fast_len(mut n: usize) -> bool {
+    if n == 0 {
+        return false;
+    }
     while n % 2 == 0 {
         n /= 2;
     }
