@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_ndimage::{BoundaryMode, NdArray, map_coordinates, shift, zoom};
+use fsci_ndimage::{map_coordinates, shift, zoom, BoundaryMode, NdArray};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -309,7 +309,7 @@ fn e2e_ndimage_interpolation() {
         all_pass = false;
     }
     steps.push(make_step(
-        4,
+        6,
         "map_coordinates_order3_reference",
         "ndimage::map_coordinates(order=3)",
         "10x10 linear ramp, coords=[[4.25,5.5],[6.5,3.75]], mode=nearest",
