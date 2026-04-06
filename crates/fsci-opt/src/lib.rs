@@ -12,8 +12,8 @@ pub use curvefit::{
 };
 pub use linesearch::{LineSearchResult, WolfeParams, line_search_wolfe1, line_search_wolfe2};
 pub use minimize::{
-    Bound, MinimizeScalarOptions, MinimizeScalarResult, bfgs, cg_pr_plus, lbfgsb, minimize,
-    minimize_scalar, nelder_mead, newton_cg, powell, take_optimize_traces,
+    Bound, MinimizeScalarOptions, MinimizeScalarResult, bfgs, cg_pr_plus, get_optimize_traces,
+    lbfgsb, minimize, minimize_scalar, nelder_mead, newton_cg, powell,
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, bisect,
@@ -1898,8 +1898,19 @@ where
         let cvec = constraints(&x);
         let mut max_violation = 0.0f64;
         for (i, &ci) in cvec.iter().enumerate() {
-            lambda[i] = (lambda[i] - mu * ci).max(0.0);
-            max_violation = max_violation.max((-ci).max(0.0));
+            let unconstrained_lambda = lambda[i] - mu * ci;
+            lambda[i] = if unconstrained_lambda.is_nan() {
+                f64::NAN
+            } else {
+                unconstrained_lambda.max(0.0)
+            };
+
+            let violation = -ci;
+            max_violation = if max_violation.is_nan() || violation.is_nan() {
+                f64::NAN
+            } else {
+                max_violation.max(violation.max(0.0))
+            };
         }
 
         // Check convergence

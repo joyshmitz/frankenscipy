@@ -613,7 +613,11 @@ where
                         a.max(b)
                     }
                 });
-            max_delta = max_delta.max(delta);
+            max_delta = if max_delta.is_nan() || delta.is_nan() {
+                f64::NAN
+            } else {
+                max_delta.max(delta)
+            };
         }
 
         if f_range <= fatol && max_delta <= xatol {
@@ -1416,9 +1420,9 @@ where
     Ok(hv)
 }
 
-pub fn take_optimize_traces() -> Vec<OptimizeTraceEntry> {
+pub fn get_optimize_traces() -> Vec<OptimizeTraceEntry> {
     match trace_log().lock() {
-        Ok(mut guard) => std::mem::take(&mut *guard),
+        Ok(guard) => guard.clone(),
         Err(_) => Vec::new(),
     }
 }
@@ -2054,7 +2058,7 @@ mod tests {
     use super::{Objective, golden_section_direction_search};
     use crate::{
         ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptError, OptimizeMethod,
-        OptimizeResult, bfgs, cg_pr_plus, minimize, minimize_scalar, powell, take_optimize_traces,
+        OptimizeResult, bfgs, cg_pr_plus, get_optimize_traces, minimize, minimize_scalar, powell,
     };
 
     #[derive(Debug, Serialize)]
@@ -2792,7 +2796,7 @@ mod tests {
     #[test]
     fn trace_log_contains_iteration_and_completion_events() {
         const FIXTURE_ID: &str = "trace-log-bfgs-iter";
-        let _ = take_optimize_traces(); // clear stale traces from parallel tests
+        let _ = get_optimize_traces(); // clear stale traces from parallel tests
         let options = MinimizeOptions {
             method: Some(OptimizeMethod::Bfgs),
             tol: Some(1.0e-6),
@@ -2803,7 +2807,7 @@ mod tests {
             ..MinimizeOptions::default()
         };
         let _ = minimize(sphere, &[1.0, 1.0], options).expect("execution succeeds");
-        let traces = take_optimize_traces();
+        let traces = get_optimize_traces();
         // Filter to only our BFGS traces to avoid interference from parallel tests
         let bfgs_traces: Vec<_> = traces
             .iter()
@@ -2983,7 +2987,7 @@ mod tests {
         ) {
             let norm = (x0[0] * x0[0] + x0[1] * x0[1]).sqrt();
             prop_assume!(norm > 0.2);
-            let _ = take_optimize_traces();
+            let _ = get_optimize_traces();
             let options = MinimizeOptions {
                 method: Some(OptimizeMethod::ConjugateGradient),
                 tol: Some(1.0e-6),
@@ -2995,7 +2999,7 @@ mod tests {
             };
             let initial = sphere(&x0);
             let result = cg_pr_plus(&sphere, &x0, options).expect("cg executes");
-            let traces = take_optimize_traces();
+            let traces = get_optimize_traces();
             let first_iteration = traces
                 .iter()
                 .find(|entry| {
@@ -3255,14 +3259,14 @@ mod tests {
 
     #[test]
     fn nelder_mead_traces_are_emitted() {
-        let _ = take_optimize_traces(); // clear
+        let _ = get_optimize_traces(); // clear
         let options = MinimizeOptions {
             method: Some(OptimizeMethod::NelderMead),
             maxiter: Some(10),
             ..MinimizeOptions::default()
         };
         let _ = minimize(sphere, &[1.0, 1.0], options);
-        let traces = take_optimize_traces();
+        let traces = get_optimize_traces();
         let nm_traces: Vec<_> = traces
             .iter()
             .filter(|t| t.method == OptimizeMethod::NelderMead)

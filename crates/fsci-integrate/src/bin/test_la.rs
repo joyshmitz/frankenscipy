@@ -1,4 +1,4 @@
-use fsci_integrate::{solve_ivp, SolveIvpOptions, SolverKind, ToleranceValue};
+use fsci_integrate::{SolveIvpOptions, SolverKind, ToleranceValue, solve_ivp};
 use fsci_runtime::RuntimeMode;
 
 fn main() {
@@ -15,9 +15,6 @@ fn main() {
         max_step: f64::INFINITY,
         mode: RuntimeMode::Strict,
     };
-    let res = solve_ivp(
-        &mut |_t: f64, _y: &[f64]| vec![0.0],
-        &opts
-    );
+    let res = solve_ivp(&mut |_t: f64, _y: &[f64]| vec![0.0], &opts);
     println!("{:?}", res.map(|r| r.y.last().unwrap().clone()));
 }

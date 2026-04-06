@@ -509,14 +509,26 @@ where
     }
     d2 = (d2 / n as f64).sqrt() / h0;
 
-    let max_d = if d1.is_nan() || d2.is_nan() { f64::NAN } else { d1.max(d2) };
+    let max_d = if d1.is_nan() || d2.is_nan() {
+        f64::NAN
+    } else {
+        d1.max(d2)
+    };
     let h1 = if max_d <= 1e-15 || max_d.is_nan() {
-        if h0.is_nan() { f64::NAN } else { (h0 * 1e-3).max(1e-6) }
+        if h0.is_nan() {
+            f64::NAN
+        } else {
+            (h0 * 1e-3).max(1e-6)
+        }
     } else {
         (0.01 / max_d).powf(0.5)
     };
 
-    if h0.is_nan() || h1.is_nan() { f64::NAN } else { (100.0 * h0).min(h1) }
+    if h0.is_nan() || h1.is_nan() {
+        f64::NAN
+    } else {
+        (100.0 * h0).min(h1)
+    }
 }
 
 #[cfg(test)]
