@@ -1639,11 +1639,13 @@ pub fn unwrap_phase(phase: &[f64]) -> Vec<f64> {
     let mut unwrapped = vec![phase[0]];
     for i in 1..phase.len() {
         let mut diff = phase[i] - phase[i - 1];
-        while diff > std::f64::consts::PI {
-            diff -= 2.0 * std::f64::consts::PI;
-        }
-        while diff < -std::f64::consts::PI {
-            diff += 2.0 * std::f64::consts::PI;
+        if diff.is_finite() {
+            while diff > std::f64::consts::PI {
+                diff -= 2.0 * std::f64::consts::PI;
+            }
+            while diff < -std::f64::consts::PI {
+                diff += 2.0 * std::f64::consts::PI;
+            }
         }
         unwrapped.push(unwrapped[i - 1] + diff);
     }

@@ -1146,6 +1146,11 @@ pub fn trigamma(x: f64) -> f64 {
     if x <= 0.0 && x == x.floor() {
         return f64::INFINITY;
     }
+    if x < 0.0 {
+        let pi = std::f64::consts::PI;
+        let sin_pi_x = (pi * x).sin();
+        return (pi * pi) / (sin_pi_x * sin_pi_x) - trigamma(1.0 - x);
+    }
 
     let mut val = x;
     let mut result = 0.0;
@@ -1168,6 +1173,12 @@ pub fn trigamma(x: f64) -> f64 {
 pub fn tetragamma(x: f64) -> f64 {
     if x <= 0.0 && x == x.floor() {
         return f64::NAN;
+    }
+    if x < 0.0 {
+        let pi = std::f64::consts::PI;
+        let sin_pi_x = (pi * x).sin();
+        let cos_pi_x = (pi * x).cos();
+        return tetragamma(1.0 - x) - 2.0 * pi * pi * pi * cos_pi_x / (sin_pi_x * sin_pi_x * sin_pi_x);
     }
 
     let mut val = x;

@@ -1238,6 +1238,11 @@ pub fn linkage_from_distances(
             "need at least 2 observations".to_string(),
         ));
     }
+    if condensed_dist.iter().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "linkage_from_distances input must be finite".to_string(),
+        ));
+    }
 
     // Build full distance matrix from condensed form
     let mut dist = vec![vec![f64::INFINITY; n]; n];
