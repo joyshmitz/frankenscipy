@@ -2,7 +2,7 @@ use fsci_integrate::{solve_ivp, SolveIvpOptions, SolverKind, ToleranceValue};
 use fsci_runtime::RuntimeMode;
 
 fn main() {
-    let mut opts = SolveIvpOptions {
+    let opts = SolveIvpOptions {
         t_span: (0.0, f64::NAN),
         y0: &[1.0],
         method: SolverKind::Rk45,
@@ -16,12 +16,12 @@ fn main() {
         mode: RuntimeMode::Strict,
     };
     let res = solve_ivp(
-        &mut |t: f64, y: &[f64]| vec![y[0]],
+        &mut |_t: f64, y: &[f64]| vec![y[0]],
         &opts
     );
     println!("res with tf=NaN: {:?}", res.is_err());
 
-    let mut opts2 = SolveIvpOptions {
+    let opts2 = SolveIvpOptions {
         t_span: (0.0, 1.0),
         y0: &[f64::NAN],
         method: SolverKind::Rk45,
@@ -35,7 +35,7 @@ fn main() {
         mode: RuntimeMode::Strict,
     };
     let res2 = solve_ivp(
-        &mut |t: f64, y: &[f64]| vec![y[0]],
+        &mut |_t: f64, y: &[f64]| vec![y[0]],
         &opts2
     );
     println!("res with y0=NaN: {:?}", res2.is_err());

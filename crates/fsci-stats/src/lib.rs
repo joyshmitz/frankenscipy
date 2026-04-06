@@ -1891,7 +1891,10 @@ fn symmetric_pseudoinverse_and_rank(matrix: &[Vec<f64>]) -> (Vec<Vec<f64>>, usiz
     let max_eigen = eigenvalues
         .iter()
         .copied()
-        .fold(0.0_f64, |a, b| a.max(b.abs()));
+        .fold(0.0_f64, |a, b| if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b.abs()) });
+    if max_eigen.is_nan() {
+        return (vec![vec![f64::NAN; n]; n], 0);
+    }
     let threshold = (n as f64) * f64::EPSILON * max_eigen.max(1.0);
     let mut pinv = vec![vec![0.0; n]; n];
     let mut rank = 0usize;
@@ -6832,7 +6835,7 @@ pub fn cramervonmises_2samp_with_method(
 pub fn ks_2samp(data1: &[f64], data2: &[f64]) -> GoodnessOfFitResult {
     let n1 = data1.len();
     let n2 = data2.len();
-    if n1 == 0 || n2 == 0 {
+    if n1 == 0 || n2 == 0 || data1.iter().any(|v| v.is_nan()) || data2.iter().any(|v| v.is_nan()) {
         return GoodnessOfFitResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
