@@ -397,22 +397,22 @@ pub fn find(query: &str) -> Vec<(&'static str, f64)> {
 /// Convert between physical units.
 ///
 /// Matches `scipy.constants.convert_temperature` (generalized).
-pub fn convert_temperature(val: f64, from: &str, to: &str) -> f64 {
+pub fn convert_temperature(val: f64, from: &str, to: &str) -> Result<f64, String> {
     // Convert to Kelvin first
     let kelvin = match from.to_lowercase().as_str() {
         "c" | "celsius" => celsius_to_kelvin(val),
         "f" | "fahrenheit" => fahrenheit_to_kelvin(val),
         "k" | "kelvin" => val,
         "r" | "rankine" => rankine_to_kelvin(val),
-        _ => val,
+        s => return Err(format!("unsupported temperature scale: {}", s)),
     };
     // Convert from Kelvin to target
     match to.to_lowercase().as_str() {
-        "c" | "celsius" => kelvin_to_celsius(kelvin),
-        "f" | "fahrenheit" => kelvin_to_fahrenheit(kelvin),
-        "k" | "kelvin" => kelvin,
-        "r" | "rankine" => kelvin_to_rankine(kelvin),
-        _ => kelvin,
+        "c" | "celsius" => Ok(kelvin_to_celsius(kelvin)),
+        "f" | "fahrenheit" => Ok(kelvin_to_fahrenheit(kelvin)),
+        "k" | "kelvin" => Ok(kelvin),
+        "r" | "rankine" => Ok(kelvin_to_rankine(kelvin)),
+        s => Err(format!("unsupported temperature scale: {}", s)),
     }
 }
 

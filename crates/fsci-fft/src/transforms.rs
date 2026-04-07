@@ -1481,7 +1481,13 @@ pub fn hfft(
             detail: "input length must be greater than zero",
         });
     }
-    let out_len = n.unwrap_or_else(|| 2 * (input.len() - 1));
+    let out_len = n.unwrap_or_else(|| {
+        if input.len() == 1 {
+            1
+        } else {
+            input.len().saturating_sub(1).saturating_mul(2)
+        }
+    });
     let mut result = irfft(input, Some(out_len), options)?;
     let scale = out_len as f64;
     for v in &mut result {

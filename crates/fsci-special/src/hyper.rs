@@ -500,16 +500,26 @@ fn hyp2f1_series_complex(
 
 /// Compute Gamma(c)*Gamma(c-a-b) / (Gamma(c-a)*Gamma(c-b)) for the Gauss sum.
 fn gamma_ratio_for_hyp2f1(c: f64, cab: f64, ca: f64, cb: f64) -> f64 {
-    // Use log-gamma via Stirling for numerical stability
-    let ln_num = ln_gamma(c) + ln_gamma(cab);
-    let ln_den = ln_gamma(ca) + ln_gamma(cb);
-    (ln_num - ln_den).exp()
+    let (ln_c, sign_c) = ln_gamma_with_sign(c);
+    let (ln_cab, sign_cab) = ln_gamma_with_sign(cab);
+    let (ln_ca, sign_ca) = ln_gamma_with_sign(ca);
+    let (ln_cb, sign_cb) = ln_gamma_with_sign(cb);
+
+    if !ln_c.is_finite() || !ln_cab.is_finite() || sign_c == 0.0 || sign_cab == 0.0 {
+        return f64::NAN;
+    }
+    if !ln_ca.is_finite() || !ln_cb.is_finite() || sign_ca == 0.0 || sign_cb == 0.0 {
+        return 0.0;
+    }
+
+    let sign = sign_c * sign_cab * sign_ca * sign_cb;
+    sign * (ln_c + ln_cab - ln_ca - ln_cb).exp()
 }
 
-/// Simple log-gamma via Lanczos approximation for positive real arguments.
-fn ln_gamma(x: f64) -> f64 {
-    if x <= 0.0 {
-        return f64::INFINITY;
+/// Computes (ln(|Gamma(x)|), sign(Gamma(x))) via Lanczos approximation.
+fn ln_gamma_with_sign(x: f64) -> (f64, f64) {
+    if x <= 0.0 && x == x.floor() {
+        return (f64::INFINITY, 0.0);
     }
     // Lanczos coefficients (g=7, n=9)
     #[allow(clippy::excessive_precision, clippy::inconsistent_digit_grouping)]
@@ -529,7 +539,11 @@ fn ln_gamma(x: f64) -> f64 {
     if x < 0.5 {
         // Reflection formula
         let pi = std::f64::consts::PI;
-        return (pi / (pi * x).sin()).ln() - ln_gamma(1.0 - x);
+        let sin_pi_x = (pi * x).sin();
+        let sign = if sin_pi_x < 0.0 { -1.0 } else { 1.0 };
+        let (ln_1_minus_x, _) = ln_gamma_with_sign(1.0 - x);
+        let ln_abs = (pi / sin_pi_x.abs()).ln() - ln_1_minus_x;
+        return (ln_abs, sign);
     }
 
     let x = x - 1.0;
@@ -539,7 +553,8 @@ fn ln_gamma(x: f64) -> f64 {
     }
 
     let t = x + G + 0.5;
-    0.5 * (2.0 * std::f64::consts::PI).ln() + (x + 0.5) * t.ln() - t + sum.ln()
+    let val = 0.5 * (2.0 * std::f64::consts::PI).ln() + (x + 0.5) * t.ln() - t + sum.ln();
+    (val, 1.0)
 }
 
 #[cfg(test)]

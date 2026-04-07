@@ -493,14 +493,14 @@ pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
         cluster_of[new_id] = label;
     }
 
-    // Renumber labels to be contiguous 0..k-1
+    // Renumber labels to be contiguous 1..k
     let leaf_labels: Vec<usize> = cluster_of[..n].to_vec();
     let mut unique: Vec<usize> = leaf_labels.clone();
     unique.sort_unstable();
     unique.dedup();
     leaf_labels
         .iter()
-        .map(|&l| unique.binary_search(&l).unwrap_or(0))
+        .map(|&l| unique.binary_search(&l).unwrap_or(0) + 1)
         .collect()
 }
 
