@@ -3233,6 +3233,25 @@ impl ContinuousDistribution for DoubleWeibull {
         }
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        let c = self.c;
+        if q < 0.5 {
+            // x < 0: CDF = 0.5*exp(-|x|^c), so |x| = (-ln(2q))^(1/c)
+            -(-(2.0 * q).ln()).powf(1.0 / c)
+        } else if q > 0.5 {
+            // x >= 0: CDF = 1 - 0.5*exp(-x^c), so x = (-ln(2*(1-q)))^(1/c)
+            (-(2.0 * (1.0 - q)).ln()).powf(1.0 / c)
+        } else {
+            0.0
+        }
+    }
+
     fn mean(&self) -> f64 {
         0.0 // symmetric about 0
     }
@@ -3628,6 +3647,17 @@ impl ContinuousDistribution for Burr12 {
         1.0 - (1.0 + x.powf(self.c)).powf(-self.d)
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // CDF = 1 - (1+x^c)^(-d), so x = ((1-q)^(-1/d) - 1)^(1/c)
+        ((1.0 - q).powf(-1.0 / self.d) - 1.0).powf(1.0 / self.c)
+    }
+
     fn mean(&self) -> f64 {
         if self.c * self.d > 1.0 {
             let c = self.c;
@@ -3970,6 +4000,17 @@ impl ContinuousDistribution for TruncExpon {
         }
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return self.b;
+        }
+        // CDF = (1-exp(-x))/(1-exp(-b)), so x = -ln(1 - q*(1-exp(-b)))
+        -(1.0 - q * (1.0 - (-self.b).exp())).ln()
+    }
+
     fn mean(&self) -> f64 {
         let eb = (-self.b).exp();
         // E[X] = (1 - (1+b)*exp(-b)) / (1 - exp(-b))
@@ -4209,6 +4250,17 @@ impl ContinuousDistribution for InvWeibull {
         } else {
             (-x.powf(-self.c)).exp()
         }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // CDF = exp(-x^(-c)), so x^(-c) = -ln(q), x = (-ln(q))^(-1/c)
+        (-q.ln()).powf(-1.0 / self.c)
     }
 
     fn mean(&self) -> f64 {
@@ -9462,6 +9514,32 @@ impl ContinuousDistribution for BetaPrime {
         // CDF = I_{x/(1+x)}(a, b) where I is regularized incomplete beta
         let t = x / (1.0 + x);
         regularized_incomplete_beta(self.a, self.b, t)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // CDF = I_{x/(1+x)}(a,b), so t = betaincinv(a,b,q), x = t/(1-t)
+        let t = fsci_special::betaincinv(self.a, self.b, q);
+        if t >= 1.0 {
+            return f64::INFINITY;
+        }
+        let mut x = t / (1.0 - t);
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).max(0.0);
+            }
+        }
+        x
     }
 
     fn mean(&self) -> f64 {
