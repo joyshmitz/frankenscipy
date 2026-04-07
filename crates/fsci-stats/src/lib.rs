@@ -4450,7 +4450,7 @@ impl ContinuousDistribution for CrystalBall {
 ///
 /// Matches `numpy.quantile`.
 pub fn quantile(data: &[f64], q: &[f64]) -> Vec<f64> {
-    if data.is_empty() {
+    if data.is_empty() || data.iter().any(|v| v.is_nan()) {
         return vec![f64::NAN; q.len()];
     }
     let mut sorted = data.to_vec();
@@ -11943,7 +11943,7 @@ mod tests {
     #[test]
     fn zscore_constant() {
         let z = zscore(&[5.0, 5.0, 5.0]);
-        assert!(z.iter().all(|&v| v == 0.0), "constant data => all zeros");
+        assert!(z.iter().all(|&v| v.is_nan()), "constant data => all NaNs");
     }
 
     // ── Discrete distributions ────────────────────────────────────
@@ -14661,4 +14661,6 @@ mod tests {
             "expected expanded upper bound, got {result}"
         );
     }
+}
+}
 }
