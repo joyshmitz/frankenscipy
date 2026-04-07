@@ -1516,28 +1516,55 @@ pub fn gammaincinv(a: f64, y: f64) -> f64 {
         return f64::INFINITY;
     }
 
-    // Newton's method with bisection fallback
-    let mut x = a; // initial guess
+    let mode = fsci_runtime::RuntimeMode::Strict;
+    let ln_gamma_a = crate::gammaln_scalar(a, mode).unwrap_or(f64::NAN);
+
+    // Initial guess using Wilson-Hilferty approximation for chi-squared quantiles
+    let x0 = if y < 0.5 {
+        // For small y, use inverse of the leading term: P(a,x) ~ x^a / (a * Gamma(a))
+        // x ~ (y * a * Gamma(a))^(1/a)
+        (y * a * ln_gamma_a.exp()).powf(1.0 / a)
+    } else {
+        // For larger y, start near a (the mean of Gamma(a,1))
+        a
+    };
+
+    // Bracketed Newton: maintain [lo, hi] where P(a, lo) < y < P(a, hi)
+    let mut lo = 0.0_f64;
+    let mut hi = a + 4.0 * a.sqrt() + 10.0; // generous upper bound
+    // Expand hi if needed
+    while gammainc_conv(a, hi) < y {
+        hi *= 2.0;
+    }
+
+    let mut x = x0.clamp(lo + 1e-300, hi);
+
     for _ in 0..100 {
         let p = gammainc_conv(a, x);
         let err = p - y;
         if err.abs() < 1e-14 {
             break;
         }
-        // Derivative of P(a,x) w.r.t. x is x^(a-1) * e^(-x) / Gamma(a)
-        let mode = fsci_runtime::RuntimeMode::Strict;
-        let dpx =
-            x.powf(a - 1.0) * (-x).exp() / crate::gammaln_scalar(a, mode).unwrap_or(f64::NAN).exp();
-        if dpx.abs() > 1e-30 {
-            x -= err / dpx;
-            x = x.max(0.0);
+
+        // Update brackets
+        if p < y {
+            lo = x;
         } else {
-            // Bisection step
-            if err > 0.0 {
-                x *= 0.5;
+            hi = x;
+        }
+
+        // Newton step: dP/dx = x^(a-1) * e^(-x) / Gamma(a)
+        let dpx = x.powf(a - 1.0) * (-x).exp() / ln_gamma_a.exp();
+        if dpx.abs() > 1e-30 {
+            let x_new = x - err / dpx;
+            // Accept Newton step only if it stays in bracket
+            if x_new > lo && x_new < hi {
+                x = x_new;
             } else {
-                x *= 2.0;
+                x = 0.5 * (lo + hi);
             }
+        } else {
+            x = 0.5 * (lo + hi);
         }
     }
     x
