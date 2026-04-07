@@ -92,8 +92,12 @@ pub fn ellipe(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 /// F(φ, m) = ∫₀^φ dθ / sqrt(1 - m sin²θ)
 ///
 /// Uses Carlson's RF form via Gauss transformation.
-pub fn ellipkinc(phi_tensor: &SpecialTensor, m: f64, mode: RuntimeMode) -> SpecialResult {
-    map_real("ellipkinc", phi_tensor, mode, |phi| {
+pub fn ellipkinc(
+    phi_tensor: &SpecialTensor,
+    m_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("ellipkinc", phi_tensor, m_tensor, mode, |phi, m| {
         ellipkinc_scalar(phi, m, mode)
     })
 }
@@ -101,8 +105,12 @@ pub fn ellipkinc(phi_tensor: &SpecialTensor, m: f64, mode: RuntimeMode) -> Speci
 /// Incomplete elliptic integral of the second kind E(φ, m).
 ///
 /// E(φ, m) = ∫₀^φ sqrt(1 - m sin²θ) dθ
-pub fn ellipeinc(phi_tensor: &SpecialTensor, m: f64, mode: RuntimeMode) -> SpecialResult {
-    map_real("ellipeinc", phi_tensor, mode, |phi| {
+pub fn ellipeinc(
+    phi_tensor: &SpecialTensor,
+    m_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("ellipeinc", phi_tensor, m_tensor, mode, |phi, m| {
         ellipeinc_scalar(phi, m, mode)
     })
 }
@@ -436,6 +444,97 @@ where
     }
 }
 
+fn map_real_binary<F>(
+    function: &'static str,
+    lhs: &SpecialTensor,
+    rhs: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+) -> SpecialResult
+where
+    F: Fn(f64, f64) -> Result<f64, SpecialError>,
+{
+    match (lhs, rhs) {
+        (SpecialTensor::RealScalar(left), SpecialTensor::RealScalar(right)) => {
+            kernel(*left, *right).map(SpecialTensor::RealScalar)
+        }
+        (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => left
+            .iter()
+            .copied()
+            .map(|value| kernel(value, *right))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => right
+            .iter()
+            .copied()
+            .map(|value| kernel(*left, value))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
+            if left.len() != right.len() {
+                record_special_trace(
+                    function,
+                    mode,
+                    "domain_error",
+                    format!("lhs_len={},rhs_len={}", left.len(), right.len()),
+                    "fail_closed",
+                    "vector inputs must have matching lengths",
+                    false,
+                );
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            left.iter()
+                .copied()
+                .zip(right.iter().copied())
+                .map(|(left_value, right_value)| kernel(left_value, right_value))
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::ComplexScalar(_), _)
+        | (SpecialTensor::ComplexVec(_), _)
+        | (_, SpecialTensor::ComplexScalar(_))
+        | (_, SpecialTensor::ComplexVec(_)) => {
+            record_special_trace(
+                function,
+                mode,
+                "not_implemented",
+                "input=complex",
+                "fail_closed",
+                "complex-valued path pending",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "complex-valued path pending",
+            })
+        }
+        _ => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid special-function input",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid special-function input",
+            })
+        }
+    }
+}
+
 fn domain_error(
     function: &'static str,
     mode: RuntimeMode,
@@ -690,26 +789,83 @@ mod tests {
     #[test]
     fn ellipkinc_at_pi_half_equals_complete() {
         let phi = SpecialTensor::RealScalar(PI / 2.0);
-        let m = 0.5;
-        let incomplete = eval_scalar(ellipkinc(&phi, m, RuntimeMode::Strict));
-        let complete = eval_scalar(ellipk(&SpecialTensor::RealScalar(m), RuntimeMode::Strict));
+        let m = SpecialTensor::RealScalar(0.5);
+        let incomplete = eval_scalar(ellipkinc(&phi, &m, RuntimeMode::Strict));
+        let complete = eval_scalar(ellipk(&m, RuntimeMode::Strict));
         assert_close(incomplete, complete, 1e-6, "F(π/2, m) = K(m)");
     }
 
     #[test]
     fn ellipeinc_at_pi_half_equals_complete() {
         let phi = SpecialTensor::RealScalar(PI / 2.0);
-        let m = 0.5;
-        let incomplete = eval_scalar(ellipeinc(&phi, m, RuntimeMode::Strict));
-        let complete = eval_scalar(ellipe(&SpecialTensor::RealScalar(m), RuntimeMode::Strict));
+        let m = SpecialTensor::RealScalar(0.5);
+        let incomplete = eval_scalar(ellipeinc(&phi, &m, RuntimeMode::Strict));
+        let complete = eval_scalar(ellipe(&m, RuntimeMode::Strict));
         assert_close(incomplete, complete, 1e-6, "E(π/2, m) = E(m)");
     }
 
     #[test]
     fn ellipkinc_at_zero_phi() {
         let phi = SpecialTensor::RealScalar(0.0);
-        let result = eval_scalar(ellipkinc(&phi, 0.5, RuntimeMode::Strict));
+        let m = SpecialTensor::RealScalar(0.5);
+        let result = eval_scalar(ellipkinc(&phi, &m, RuntimeMode::Strict));
         assert_close(result, 0.0, 1e-12, "F(0, m) = 0");
+    }
+
+    #[test]
+    fn ellipkinc_broadcasts_scalar_phi_over_m_vector() {
+        let phi = SpecialTensor::RealScalar(PI / 2.0);
+        let m = SpecialTensor::RealVec(vec![0.0, 0.5]);
+        let result =
+            ellipkinc(&phi, &m, RuntimeMode::Strict).expect("scalar phi should broadcast over m");
+        match result {
+            SpecialTensor::RealVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_close(values[0], PI / 2.0, 1e-12, "F(π/2, 0) = K(0)");
+                assert_close(values[1], 1.854_074_677, 1e-6, "F(π/2, 0.5) = K(0.5)");
+            }
+            other => panic!("expected RealVec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ellipkinc_broadcasts_vector_phi_over_scalar_m() {
+        let phi = SpecialTensor::RealVec(vec![0.0, PI / 2.0]);
+        let m = SpecialTensor::RealScalar(0.5);
+        let result = ellipkinc(&phi, &m, RuntimeMode::Strict)
+            .expect("vector phi should broadcast over scalar m");
+        match result {
+            SpecialTensor::RealVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_close(values[0], 0.0, 1e-12, "F(0, m) = 0");
+                assert_close(values[1], 1.854_074_677, 1e-6, "F(π/2, 0.5) = K(0.5)");
+            }
+            other => panic!("expected RealVec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ellipeinc_supports_pairwise_vector_inputs() {
+        let phi = SpecialTensor::RealVec(vec![0.0, PI / 2.0]);
+        let m = SpecialTensor::RealVec(vec![0.0, 0.5]);
+        let result = ellipeinc(&phi, &m, RuntimeMode::Strict).expect("pairwise vector ellipeinc");
+        match result {
+            SpecialTensor::RealVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_close(values[0], 0.0, 1e-12, "E(0, 0) = 0");
+                assert_close(values[1], 1.350_643_881, 1e-6, "E(π/2, 0.5) = E(0.5)");
+            }
+            other => panic!("expected RealVec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ellipkinc_rejects_mismatched_vector_lengths() {
+        let phi = SpecialTensor::RealVec(vec![0.0, PI / 2.0]);
+        let m = SpecialTensor::RealVec(vec![0.5]);
+        let err = ellipkinc(&phi, &m, RuntimeMode::Strict)
+            .expect_err("mismatched vector lengths should error");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
     }
 
     // ── Lambert W function ────────────────────────────────────────

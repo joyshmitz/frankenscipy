@@ -153,11 +153,10 @@ pub fn polygamma(n: usize, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResul
     match n {
         0 => digamma(z, mode),
         1 => map_real_input("polygamma", z, mode, |x| trigamma_scalar(x, mode)),
-        _ => not_yet_implemented(
-            "polygamma",
-            mode,
-            "orders greater than 1 are pending D2 follow-up",
-        ),
+        2 => map_real_input("polygamma", z, mode, |x| tetragamma_scalar(x, mode)),
+        _ => map_real_input("polygamma", z, mode, |x| {
+            polygamma_higher_scalar(n, x, mode)
+        }),
     }
 }
 
@@ -509,6 +508,72 @@ fn trigamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     Ok(value)
 }
 
+fn tetragamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if matches!(mode, RuntimeMode::Hardened) && is_negative_integer_pole(x) {
+        record_special_trace(
+            "polygamma",
+            mode,
+            "pole_input",
+            format!("input={x}"),
+            "fail_closed",
+            "tetragamma pole at nonpositive integer",
+            false,
+        );
+        return Err(SpecialError {
+            function: "polygamma",
+            kind: SpecialErrorKind::PoleInput,
+            mode,
+            detail: "tetragamma pole at nonpositive integer",
+        });
+    }
+    let value = crate::convenience::tetragamma(x);
+    if !value.is_finite() {
+        record_special_trace(
+            "polygamma",
+            mode,
+            "non_finite_output",
+            format!("input={x}"),
+            "returned_non_finite",
+            format!("output={value}"),
+            false,
+        );
+    }
+    Ok(value)
+}
+
+fn polygamma_higher_scalar(order: usize, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if matches!(mode, RuntimeMode::Hardened) && is_negative_integer_pole(x) {
+        record_special_trace(
+            "polygamma",
+            mode,
+            "pole_input",
+            format!("order={order},input={x}"),
+            "fail_closed",
+            "higher-order polygamma pole at nonpositive integer",
+            false,
+        );
+        return Err(SpecialError {
+            function: "polygamma",
+            kind: SpecialErrorKind::PoleInput,
+            mode,
+            detail: "higher-order polygamma pole at nonpositive integer",
+        });
+    }
+    let value = polygamma_higher_core(order, x);
+    if !value.is_finite() {
+        record_special_trace(
+            "polygamma",
+            mode,
+            "non_finite_output",
+            format!("order={order},input={x}"),
+            "returned_non_finite",
+            format!("output={value}"),
+            false,
+        );
+    }
+    Ok(value)
+}
+
 fn rgamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     let gamma_value = gamma_scalar(x, mode)?;
     let value = 1.0 / gamma_value;
@@ -808,6 +873,42 @@ fn trigamma_core(x: f64) -> f64 {
     acc + inv + 0.5 * inv2 + inv3 / 6.0 - inv5 / 30.0 + inv7 / 42.0
 }
 
+fn polygamma_higher_core(order: usize, x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return polygamma_sign(order) * f64::INFINITY;
+    }
+    if x.is_infinite() {
+        return if x.is_sign_positive() { 0.0 } else { f64::NAN };
+    }
+    if is_negative_integer_pole(x) {
+        return f64::NAN;
+    }
+
+    let sign = polygamma_sign(order);
+    let factorial = factorial_f64(order);
+    let order_plus_one = order as f64 + 1.0;
+
+    let mut shifted = x;
+    let mut correction = 0.0;
+    while shifted < 8.0 {
+        correction += sign * factorial / shifted.powf(order_plus_one);
+        shifted += 1.0;
+    }
+
+    correction + sign * factorial * crate::convenience::hurwitz_zeta(order_plus_one, shifted)
+}
+
+fn polygamma_sign(order: usize) -> f64 {
+    if order % 2 == 1 { 1.0 } else { -1.0 }
+}
+
+fn factorial_f64(order: usize) -> f64 {
+    (1..=order).fold(1.0, |acc, value| acc * value as f64)
+}
+
 fn is_negative_integer_pole(x: f64) -> bool {
     x.is_finite() && x < 0.0 && x.fract() == 0.0
 }
@@ -1017,4 +1118,93 @@ fn dirichlet_eta(s: f64) -> f64 {
         sum += sign * (k as f64).powf(-s);
     }
     sum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scalar(value: f64) -> SpecialTensor {
+        SpecialTensor::RealScalar(value)
+    }
+
+    fn get_scalar(result: SpecialResult) -> f64 {
+        match result.expect("polygamma should succeed") {
+            SpecialTensor::RealScalar(value) => value,
+            _ => panic!("expected real scalar"),
+        }
+    }
+
+    #[test]
+    fn polygamma_order_two_matches_tetragamma_scalar() {
+        let x = 1.5;
+        let actual = get_scalar(polygamma(2, &scalar(x), RuntimeMode::Strict));
+        let expected = crate::convenience::tetragamma(x);
+        assert!((actual - expected).abs() <= 1.0e-12);
+    }
+
+    #[test]
+    fn polygamma_order_two_supports_real_vectors() {
+        let input = SpecialTensor::RealVec(vec![0.5, 1.0, 2.5]);
+        let result = polygamma(2, &input, RuntimeMode::Strict).expect("vector order-2 polygamma");
+        match result {
+            SpecialTensor::RealVec(values) => {
+                let expected = [
+                    crate::convenience::tetragamma(0.5),
+                    crate::convenience::tetragamma(1.0),
+                    crate::convenience::tetragamma(2.5),
+                ];
+                assert_eq!(values.len(), expected.len());
+                for (actual, expected_value) in values.iter().zip(expected.iter()) {
+                    assert!((*actual - *expected_value).abs() <= 1.0e-12);
+                }
+            }
+            _ => panic!("expected real vector"),
+        }
+    }
+
+    #[test]
+    fn polygamma_order_two_hardened_rejects_poles() {
+        let err = polygamma(2, &scalar(-1.0), RuntimeMode::Hardened)
+            .expect_err("hardened mode should reject tetragamma poles");
+        assert_eq!(err.kind, SpecialErrorKind::PoleInput);
+    }
+
+    #[test]
+    fn polygamma_order_three_matches_known_value_at_one() {
+        let actual = get_scalar(polygamma(3, &scalar(1.0), RuntimeMode::Strict));
+        let expected = PI.powi(4) / 15.0;
+        assert!((actual - expected).abs() <= 1.0e-11);
+    }
+
+    #[test]
+    fn polygamma_higher_orders_support_real_vectors() {
+        let input = SpecialTensor::RealVec(vec![1.0, 2.0, 0.5]);
+        let result = polygamma(3, &input, RuntimeMode::Strict).expect("vector order-3 polygamma");
+        match result {
+            SpecialTensor::RealVec(values) => {
+                let expected = [PI.powi(4) / 15.0, PI.powi(4) / 15.0 - 6.0, PI.powi(4)];
+                assert_eq!(values.len(), expected.len());
+                for (actual, expected_value) in values.iter().zip(expected.iter()) {
+                    assert!((*actual - *expected_value).abs() <= 1.0e-10);
+                }
+            }
+            _ => panic!("expected real vector"),
+        }
+    }
+
+    #[test]
+    fn polygamma_order_four_satisfies_recurrence_off_negative_axis() {
+        let x = -0.25;
+        let lhs = get_scalar(polygamma(4, &scalar(x + 1.0), RuntimeMode::Strict));
+        let rhs = get_scalar(polygamma(4, &scalar(x), RuntimeMode::Strict)) + 24.0 / x.powi(5);
+        assert!((lhs - rhs).abs() <= 1.0e-10);
+    }
+
+    #[test]
+    fn polygamma_higher_orders_hardened_reject_poles() {
+        let err = polygamma(3, &scalar(-1.0), RuntimeMode::Hardened)
+            .expect_err("hardened mode should reject higher-order poles");
+        assert_eq!(err.kind, SpecialErrorKind::PoleInput);
+    }
 }

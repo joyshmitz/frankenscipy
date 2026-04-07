@@ -431,6 +431,11 @@ impl KDTree {
                 actual,
             });
         }
+        if data.iter().flatten().any(|value| !value.is_finite()) {
+            return Err(SpatialError::InvalidArgument(
+                "points must be finite".to_string(),
+            ));
+        }
 
         let mut indices: Vec<usize> = (0..data.len()).collect();
         let mut nodes = Vec::with_capacity(data.len());
@@ -952,6 +957,14 @@ impl Delaunay {
         if n < 3 {
             return Err(SpatialError::InvalidArgument(
                 "delaunay triangulation requires at least 3 points".to_string(),
+            ));
+        }
+        if points
+            .iter()
+            .any(|&(x, y)| !x.is_finite() || !y.is_finite())
+        {
+            return Err(SpatialError::InvalidArgument(
+                "delaunay triangulation requires finite points".to_string(),
             ));
         }
 
@@ -1774,7 +1787,11 @@ pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
 pub fn hausdorff_distance(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
     let d1 = directed_hausdorff(xa, xb);
     let d2 = directed_hausdorff(xb, xa);
-    if d1.is_nan() || d2.is_nan() { f64::NAN } else { d1.max(d2) }
+    if d1.is_nan() || d2.is_nan() {
+        f64::NAN
+    } else {
+        d1.max(d2)
+    }
 }
 
 /// Mahalanobis distance between two vectors given an inverse covariance matrix.
@@ -2109,7 +2126,11 @@ pub fn diameter(points: &[Vec<f64>]) -> f64 {
     for i in 0..n {
         for j in i + 1..n {
             let d = euclidean(&points[i], &points[j]);
-            max_d = if max_d.is_nan() || d.is_nan() { f64::NAN } else { max_d.max(d) };
+            max_d = if max_d.is_nan() || d.is_nan() {
+                f64::NAN
+            } else {
+                max_d.max(d)
+            };
         }
     }
     max_d
@@ -2208,6 +2229,13 @@ mod tests {
                 actual: 1
             }
         ));
+    }
+
+    #[test]
+    fn kdtree_rejects_non_finite_points() {
+        let err = KDTree::new(&[vec![0.0, 1.0], vec![f64::NAN, 2.0]])
+            .expect_err("non-finite points should be rejected");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
     }
 
     #[test]
@@ -2732,6 +2760,13 @@ mod tests {
     fn delaunay_too_few_points_rejected() {
         let points = [(0.0, 0.0), (1.0, 0.0)];
         let err = Delaunay::new(&points).expect_err("too few");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn delaunay_non_finite_points_rejected() {
+        let points = [(0.0, 0.0), (1.0, 0.0), (f64::NAN, f64::NAN)];
+        let err = Delaunay::new(&points).expect_err("non-finite points");
         assert!(matches!(err, SpatialError::InvalidArgument(_)));
     }
 

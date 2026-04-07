@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_ndimage::{map_coordinates, shift, zoom, BoundaryMode, NdArray};
+use fsci_ndimage::{BoundaryMode, NdArray, map_coordinates, shift, zoom};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]

@@ -549,8 +549,8 @@ where
                 let y_old = solver.y_old().unwrap_or(options.y0).to_vec();
                 let f_old = solver.f_old().unwrap_or(&f).to_vec();
 
-                let mut t_event_triggered = None;
-                let mut y_event_triggered = None;
+                let mut t_event_triggered: Option<f64> = None;
+                let mut y_event_triggered: Option<Vec<f64>> = None;
 
                 if let (Some(evs), Some(old_vals)) = (options.events.as_ref(), event_vals.as_mut())
                 {
@@ -569,9 +569,15 @@ where
                                 yes[i].push(y_ev.clone());
                             }
 
-                            if t_event_triggered.is_none() {
+                            let is_earlier = match t_event_triggered {
+                                None => true,
+                                Some(current_t_ev) => {
+                                    (t_ev - t_old).abs() < (current_t_ev - t_old).abs()
+                                }
+                            };
+                            if is_earlier {
                                 t_event_triggered = Some(t_ev);
-                                y_event_triggered = Some(y_ev);
+                                y_event_triggered = Some(y_ev.clone());
                             }
                         }
                         old_vals[i] = val;

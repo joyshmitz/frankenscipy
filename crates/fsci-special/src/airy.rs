@@ -5,8 +5,8 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, not_yet_implemented, record_special_trace,
+    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor, record_special_trace,
 };
 
 pub const AIRY_DISPATCH_PLAN: &[DispatchPlan] = &[DispatchPlan {
@@ -31,6 +31,36 @@ pub struct AiryResult {
     pub aip: f64,
     pub bi: f64,
     pub bip: f64,
+}
+
+/// Result of the complex Airy function evaluation: (Ai, Ai', Bi, Bi').
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct ComplexAiryResult {
+    ai: Complex64,
+    aip: Complex64,
+    bi: Complex64,
+    bip: Complex64,
+}
+
+impl ComplexAiryResult {
+    fn from_real(result: AiryResult) -> Self {
+        Self {
+            ai: Complex64::from_real(result.ai),
+            aip: Complex64::from_real(result.aip),
+            bi: Complex64::from_real(result.bi),
+            bip: Complex64::from_real(result.bip),
+        }
+    }
+
+    fn nan() -> Self {
+        let nan = Complex64::new(f64::NAN, f64::NAN);
+        Self {
+            ai: nan,
+            aip: nan,
+            bi: nan,
+            bip: nan,
+        }
+    }
 }
 
 /// Compute Airy functions Ai(x), Ai'(x), Bi(x), Bi'(x).
@@ -66,12 +96,34 @@ pub fn airy(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>, 
                 SpecialTensor::RealVec(bip_vec),
             ])
         }
-        SpecialTensor::ComplexScalar(_) | SpecialTensor::ComplexVec(_) => Err(SpecialError {
-            function: "airy",
-            kind: SpecialErrorKind::DomainError,
-            mode,
-            detail: "complex-valued Airy not yet implemented",
-        }),
+        SpecialTensor::ComplexScalar(val) => {
+            let result = airy_complex_scalar(*val, mode)?;
+            Ok(vec![
+                SpecialTensor::ComplexScalar(result.ai),
+                SpecialTensor::ComplexScalar(result.aip),
+                SpecialTensor::ComplexScalar(result.bi),
+                SpecialTensor::ComplexScalar(result.bip),
+            ])
+        }
+        SpecialTensor::ComplexVec(values) => {
+            let mut ai_vec = Vec::with_capacity(values.len());
+            let mut aip_vec = Vec::with_capacity(values.len());
+            let mut bi_vec = Vec::with_capacity(values.len());
+            let mut bip_vec = Vec::with_capacity(values.len());
+            for &val in values {
+                let result = airy_complex_scalar(val, mode)?;
+                ai_vec.push(result.ai);
+                aip_vec.push(result.aip);
+                bi_vec.push(result.bi);
+                bip_vec.push(result.bip);
+            }
+            Ok(vec![
+                SpecialTensor::ComplexVec(ai_vec),
+                SpecialTensor::ComplexVec(aip_vec),
+                SpecialTensor::ComplexVec(bi_vec),
+                SpecialTensor::ComplexVec(bip_vec),
+            ])
+        }
         SpecialTensor::Empty => Err(SpecialError {
             function: "airy",
             kind: SpecialErrorKind::DomainError,
@@ -83,18 +135,12 @@ pub fn airy(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>, 
 
 /// Scalar convenience: compute just Ai(x).
 pub fn ai(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("ai", x, mode, |val| {
-        let result = airy_scalar(val, mode)?;
-        Ok(result.ai)
-    })
+    map_airy_component("ai", x, mode, |result| result.ai, |result| result.ai)
 }
 
 /// Scalar convenience: compute just Bi(x).
 pub fn bi(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("bi", x, mode, |val| {
-        let result = airy_scalar(val, mode)?;
-        Ok(result.bi)
-    })
+    map_airy_component("bi", x, mode, |result| result.bi, |result| result.bi)
 }
 
 fn airy_scalar(x: f64, mode: RuntimeMode) -> Result<AiryResult, SpecialError> {
@@ -131,6 +177,26 @@ fn airy_scalar(x: f64, mode: RuntimeMode) -> Result<AiryResult, SpecialError> {
     } else {
         airy_asymptotic(x, mode)
     }
+}
+
+fn airy_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<ComplexAiryResult, SpecialError> {
+    if z.im == 0.0 {
+        return airy_scalar(z.re, mode).map(ComplexAiryResult::from_real);
+    }
+
+    if !z.is_finite() {
+        if mode == RuntimeMode::Hardened {
+            return Err(SpecialError {
+                function: "airy",
+                kind: SpecialErrorKind::NonFiniteInput,
+                mode,
+                detail: "complex-valued Airy requires finite real and imaginary parts",
+            });
+        }
+        return Ok(ComplexAiryResult::nan());
+    }
+
+    airy_series_complex(z, mode)
 }
 
 /// Taylor series for Airy functions around x=0.
@@ -184,6 +250,95 @@ fn airy_series(x: f64, _mode: RuntimeMode) -> Result<AiryResult, SpecialError> {
     let bip = sqrt3 * (c1 * fp + c2 * gp);
 
     Ok(AiryResult { ai, aip, bi, bip })
+}
+
+fn airy_series_complex(z: Complex64, mode: RuntimeMode) -> Result<ComplexAiryResult, SpecialError> {
+    let c1 = 0.355_028_053_887_817_2; // 1 / (3^(2/3) * Gamma(2/3))
+    let c2 = 0.258_819_403_792_806_8; // 1 / (3^(1/3) * Gamma(1/3))
+    let sqrt3 = 3.0_f64.sqrt();
+    let zero = Complex64::from_real(0.0);
+    let one = Complex64::from_real(1.0);
+
+    if z == zero {
+        return Ok(ComplexAiryResult {
+            ai: Complex64::from_real(c1),
+            aip: Complex64::from_real(-c2),
+            bi: Complex64::from_real(sqrt3 * c1),
+            bip: Complex64::from_real(sqrt3 * c2),
+        });
+    }
+
+    let z3 = z * z * z;
+    let max_terms = 256;
+    let tol = 1.0e-14;
+
+    let mut f = one;
+    let mut fp = zero;
+    let mut g = z;
+    let mut gp = one;
+    let mut t_f = one;
+    let mut t_g = z;
+
+    for k in 1..=max_terms {
+        let k3 = (3 * k) as f64;
+
+        t_f = t_f * z3 / ((k3 - 1.0) * k3);
+        let delta_fp = (t_f * k3) / z;
+        f = f + t_f;
+        fp = fp + delta_fp;
+
+        t_g = t_g * z3 / (k3 * (k3 + 1.0));
+        let delta_gp = (t_g * (k3 + 1.0)) / z;
+        g = g + t_g;
+        gp = gp + delta_gp;
+
+        if !t_f.is_finite()
+            || !t_g.is_finite()
+            || !delta_fp.is_finite()
+            || !delta_gp.is_finite()
+            || !f.is_finite()
+            || !g.is_finite()
+            || !fp.is_finite()
+            || !gp.is_finite()
+        {
+            if mode == RuntimeMode::Hardened {
+                return Err(SpecialError {
+                    function: "airy",
+                    kind: SpecialErrorKind::OverflowRisk,
+                    mode,
+                    detail: "complex Airy series evaluation overflowed",
+                });
+            }
+            return Ok(ComplexAiryResult::nan());
+        }
+
+        if t_f.abs() <= tol * f.abs().max(1.0)
+            && t_g.abs() <= tol * g.abs().max(1.0)
+            && delta_fp.abs() <= tol * fp.abs().max(1.0)
+            && delta_gp.abs() <= tol * gp.abs().max(1.0)
+        {
+            let ai = f * c1 - g * c2;
+            let aip = fp * c1 - gp * c2;
+            let bi = (f * c1 + g * c2) * sqrt3;
+            let bip = (fp * c1 + gp * c2) * sqrt3;
+            return Ok(ComplexAiryResult { ai, aip, bi, bip });
+        }
+    }
+
+    if mode == RuntimeMode::Hardened {
+        return Err(SpecialError {
+            function: "airy",
+            kind: SpecialErrorKind::CancellationRisk,
+            mode,
+            detail: "complex Airy series did not converge within the term budget",
+        });
+    }
+
+    let ai = f * c1 - g * c2;
+    let aip = fp * c1 - gp * c2;
+    let bi = (f * c1 + g * c2) * sqrt3;
+    let bip = (fp * c1 + gp * c2) * sqrt3;
+    Ok(ComplexAiryResult { ai, aip, bi, bip })
 }
 
 /// Asymptotic expansion for |x| >= 4.
@@ -281,26 +436,36 @@ fn oscillatory_coefficients(zeta: f64) -> (f64, f64, f64, f64) {
     (l, m, n, o)
 }
 
-fn map_real_input<F>(
+fn map_airy_component<F, G>(
     function: &'static str,
     input: &SpecialTensor,
     mode: RuntimeMode,
-    kernel: F,
+    real_kernel: F,
+    complex_kernel: G,
 ) -> SpecialResult
 where
-    F: Fn(f64) -> Result<f64, SpecialError>,
+    F: Fn(AiryResult) -> f64,
+    G: Fn(ComplexAiryResult) -> Complex64,
 {
     match input {
-        SpecialTensor::RealScalar(x) => kernel(*x).map(SpecialTensor::RealScalar),
+        SpecialTensor::RealScalar(x) => airy_scalar(*x, mode)
+            .map(real_kernel)
+            .map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => values
             .iter()
             .copied()
-            .map(kernel)
+            .map(|x| airy_scalar(x, mode).map(&real_kernel))
             .collect::<Result<Vec<_>, _>>()
             .map(SpecialTensor::RealVec),
-        SpecialTensor::ComplexScalar(_) | SpecialTensor::ComplexVec(_) => {
-            not_yet_implemented(function, mode, "complex-valued path pending")
-        }
+        SpecialTensor::ComplexScalar(value) => airy_complex_scalar(*value, mode)
+            .map(complex_kernel)
+            .map(SpecialTensor::ComplexScalar),
+        SpecialTensor::ComplexVec(values) => values
+            .iter()
+            .copied()
+            .map(|x| airy_complex_scalar(x, mode).map(&complex_kernel))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
         SpecialTensor::Empty => {
             record_special_trace(
                 function,
@@ -331,6 +496,22 @@ mod tests {
             "{msg}: expected {expected}, got {actual} (diff={})",
             (actual - expected).abs()
         );
+    }
+
+    fn assert_complex_close(actual: Complex64, expected: Complex64, tol: f64, msg: &str) {
+        let delta = (actual - expected).abs();
+        assert!(
+            delta <= tol,
+            "{msg}: expected {}+{}i, got {}+{}i (|delta|={delta})",
+            expected.re,
+            expected.im,
+            actual.re,
+            actual.im,
+        );
+    }
+
+    fn complex_scalar(value: Complex64) -> SpecialTensor {
+        SpecialTensor::ComplexScalar(value)
     }
 
     #[test]
@@ -529,5 +710,100 @@ mod tests {
         };
         assert_close(ai, 0.040_241_238_482_703_7, 1e-6, "Ai(-10)");
         assert_close(bi, -0.314_680_808_611_115, 1e-6, "Bi(-10)");
+    }
+
+    #[test]
+    fn airy_complex_zero_matches_known_constants() {
+        let z = complex_scalar(Complex64::new(0.0, 0.0));
+        let result = airy(&z, RuntimeMode::Strict).expect("airy(0+0i)");
+        match &result[0] {
+            SpecialTensor::ComplexScalar(value) => {
+                assert_complex_close(
+                    *value,
+                    Complex64::from_real(0.355_028_053_887_817_2),
+                    1.0e-12,
+                    "Ai(0+0i)",
+                );
+            }
+            _ => panic!("expected complex scalar"),
+        }
+        match &result[2] {
+            SpecialTensor::ComplexScalar(value) => {
+                assert_complex_close(
+                    *value,
+                    Complex64::from_real(0.614_926_627_446_001),
+                    1.0e-10,
+                    "Bi(0+0i)",
+                );
+            }
+            _ => panic!("expected complex scalar"),
+        }
+    }
+
+    #[test]
+    fn airy_complex_real_axis_matches_real_path() {
+        let real = airy(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict).expect("airy(1)");
+        let complex = airy(
+            &complex_scalar(Complex64::new(1.0, 0.0)),
+            RuntimeMode::Strict,
+        )
+        .expect("airy(1+0i)");
+
+        for index in 0..4 {
+            let expected = match &real[index] {
+                SpecialTensor::RealScalar(value) => Complex64::from_real(*value),
+                _ => panic!("expected real scalar"),
+            };
+            match &complex[index] {
+                SpecialTensor::ComplexScalar(value) => {
+                    assert_complex_close(*value, expected, 1.0e-12, "real-axis consistency");
+                }
+                _ => panic!("expected complex scalar"),
+            }
+        }
+    }
+
+    #[test]
+    fn airy_complex_vector_preserves_conjugation_symmetry() {
+        let z = Complex64::new(0.5, 0.75);
+        let input = SpecialTensor::ComplexVec(vec![z, z.conj()]);
+        let result = airy(&input, RuntimeMode::Strict).expect("airy complex vector");
+
+        for output in result {
+            match output {
+                SpecialTensor::ComplexVec(values) => {
+                    assert_eq!(values.len(), 2);
+                    assert_complex_close(
+                        values[1],
+                        values[0].conj(),
+                        1.0e-10,
+                        "conjugation symmetry",
+                    );
+                }
+                _ => panic!("expected complex vector"),
+            }
+        }
+    }
+
+    #[test]
+    fn ai_and_bi_support_complex_inputs() {
+        let z = complex_scalar(Complex64::new(0.25, -0.5));
+        let ai_result = ai(&z, RuntimeMode::Strict).expect("ai complex");
+        let bi_result = bi(&z, RuntimeMode::Strict).expect("bi complex");
+        let airy_result = airy(&z, RuntimeMode::Strict).expect("airy complex");
+
+        match (&ai_result, &airy_result[0]) {
+            (SpecialTensor::ComplexScalar(ai_value), SpecialTensor::ComplexScalar(airy_ai)) => {
+                assert_complex_close(*ai_value, *airy_ai, 1.0e-12, "ai convenience");
+            }
+            _ => panic!("expected complex scalar"),
+        }
+
+        match (&bi_result, &airy_result[2]) {
+            (SpecialTensor::ComplexScalar(bi_value), SpecialTensor::ComplexScalar(airy_bi)) => {
+                assert_complex_close(*bi_value, *airy_bi, 1.0e-12, "bi convenience");
+            }
+            _ => panic!("expected complex scalar"),
+        }
     }
 }

@@ -13,8 +13,8 @@
 
 use fsci_opt::types::OptimizeTraceEntry;
 use fsci_opt::{
-    ConvergenceStatus, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, minimize,
-    root_scalar, take_optimize_traces,
+    ConvergenceStatus, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions,
+    get_optimize_traces, minimize, root_scalar,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -261,10 +261,10 @@ where
     let _guard = trace_capture_lock()
         .lock()
         .expect("trace capture lock poisoned");
-    let _ = take_optimize_traces();
+    let _ = get_optimize_traces();
     let result =
         minimize(fun, x0, options).map_err(|error| format!("minimize call failed: {error}"))?;
-    let trace = to_convergence_trace(algorithm, take_optimize_traces());
+    let trace = to_convergence_trace(algorithm, get_optimize_traces());
     Ok((result, trace))
 }
 

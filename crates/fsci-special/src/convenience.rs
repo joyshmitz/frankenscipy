@@ -1178,7 +1178,8 @@ pub fn tetragamma(x: f64) -> f64 {
         let pi = std::f64::consts::PI;
         let sin_pi_x = (pi * x).sin();
         let cos_pi_x = (pi * x).cos();
-        return tetragamma(1.0 - x) - 2.0 * pi * pi * pi * cos_pi_x / (sin_pi_x * sin_pi_x * sin_pi_x);
+        return tetragamma(1.0 - x)
+            - 2.0 * pi * pi * pi * cos_pi_x / (sin_pi_x * sin_pi_x * sin_pi_x);
     }
 
     let mut val = x;
@@ -1418,7 +1419,8 @@ pub fn gamma_mod_squared(a: f64, b: f64) -> f64 {
         let cos_pi_a = (pi * a).cos();
         let sinh_pi_b = (pi * b).sinh();
         let cosh_pi_b = (pi * b).cosh();
-        let sin_mod_sq = sin_pi_a * sin_pi_a * cosh_pi_b * cosh_pi_b + cos_pi_a * cos_pi_a * sinh_pi_b * sinh_pi_b;
+        let sin_mod_sq = sin_pi_a * sin_pi_a * cosh_pi_b * cosh_pi_b
+            + cos_pi_a * cos_pi_a * sinh_pi_b * sinh_pi_b;
         return (pi * pi) / (sin_mod_sq * gamma_mod_squared(1.0 - a, -b));
     }
 

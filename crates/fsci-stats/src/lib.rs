@@ -1888,10 +1888,13 @@ fn symmetric_pseudoinverse_and_rank(matrix: &[Vec<f64>]) -> (Vec<Vec<f64>>, usiz
         return (Vec::new(), 0);
     }
     let (eigenvalues, eigenvectors) = jacobi_symmetric_eigendecomposition(matrix);
-    let max_eigen = eigenvalues
-        .iter()
-        .copied()
-        .fold(0.0_f64, |a, b| if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b.abs()) });
+    let max_eigen = eigenvalues.iter().copied().fold(0.0_f64, |a, b| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b.abs())
+        }
+    });
     if max_eigen.is_nan() {
         return (vec![vec![f64::NAN; n]; n], 0);
     }
@@ -4645,7 +4648,11 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
     e_yy *= 2.0 / (nv * nv);
 
     let d_sq = 2.0 * e_xy - e_xx - e_yy;
-    if d_sq.is_nan() { f64::NAN } else { d_sq.max(0.0).sqrt() }
+    if d_sq.is_nan() {
+        f64::NAN
+    } else {
+        d_sq.max(0.0).sqrt()
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -4888,7 +4895,11 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
         };
     }
     let n = groups[0].len();
-    if n < 2 || groups.iter().any(|g| g.len() != n || g.iter().any(|v| v.is_nan())) {
+    if n < 2
+        || groups
+            .iter()
+            .any(|g| g.len() != n || g.iter().any(|v| v.is_nan()))
+    {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -5264,7 +5275,11 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
 ///
 /// Non-parametric test: H0: median of x - y is zero.
 pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
-    if x.len() != y.len() || x.len() < 10 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
+    if x.len() != y.len()
+        || x.len() < 10
+        || x.iter().any(|v| v.is_nan())
+        || y.iter().any(|v| v.is_nan())
+    {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -9847,7 +9862,8 @@ pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> V
             if window_size == 1 {
                 1.0
             } else {
-                0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (window_size - 1) as f64).cos())
+                0.5 * (1.0
+                    - (2.0 * std::f64::consts::PI * i as f64 / (window_size - 1) as f64).cos())
             }
         })
         .collect();
@@ -9905,7 +9921,7 @@ pub fn ks_distance(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> f64 {
         let cdf_val = cdf_func(x);
         let d1 = (ecdf_after - cdf_val).abs();
         let d2 = (ecdf_before - cdf_val).abs();
-        
+
         max_d = if max_d.is_nan() || d1.is_nan() || d2.is_nan() {
             f64::NAN
         } else {
@@ -10292,7 +10308,11 @@ fn compute_std_errors(xtx: &[Vec<f64>], mse: f64) -> Vec<f64> {
     (0..n)
         .map(|i| {
             let var = mse * aug[i][n + i];
-            if var.is_nan() { f64::NAN } else { var.max(0.0).sqrt() }
+            if var.is_nan() {
+                f64::NAN
+            } else {
+                var.max(0.0).sqrt()
+            }
         })
         .collect()
 }
