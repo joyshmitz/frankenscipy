@@ -240,6 +240,13 @@ pub struct ArtifactIndexSummary {
     pub failures_by_category: BTreeMap<String, usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct IndexedRunSummaryProbe {
+    packet_id: String,
+    scenario_id: String,
+    replay_command: String,
+}
+
 // ─── Replay Pointer ───────────────────────────────────────────────────
 
 /// Build a replay command for a specific test.
@@ -261,6 +268,8 @@ fn test_file_for_packet(packet_id: &str) -> &str {
         "P2C-006" | "FSCI-P2C-006" => "e2e_special",
         "P2C-007" | "FSCI-P2C-007" => "e2e_orchestrator",
         "P2C-008" | "FSCI-P2C-008" => "e2e_casp",
+        "P2C-009" | "FSCI-P2C-009" => "e2e_stats",
+        "P2C-013" | "FSCI-P2C-013" => "e2e_ndimage",
         _ => "golden_journeys",
     }
 }
@@ -474,45 +483,53 @@ fn scan_artifact_dir(
             scan_artifact_dir(root, &path, entries, total_artifacts, total_bytes)?;
         } else if path.extension().is_some_and(|ext| ext == "json") {
             let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            let Some(packet_id) = classify_packet_for_index(&path, &rel) else {
+                continue;
+            };
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             *total_artifacts += 1;
             *total_bytes += size;
 
-            // Extract packet ID from path structure: artifacts/{packet}/{stage}/{file}
-            if let Some(packet_id) = extract_packet_from_path(&rel) {
-                let test_id = rel
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let purpose = infer_artifact_purpose(&rel);
-                let hash = fs::read(&path)
-                    .ok()
-                    .map(|data| blake3::hash(&data).to_hex().to_string());
+            let test_id = rel
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let purpose = infer_artifact_purpose(&rel);
+            let hash = fs::read(&path)
+                .ok()
+                .map(|data| blake3::hash(&data).to_hex().to_string());
 
-                let entry_key = format!("{packet_id}/{test_id}");
-                let idx_entry =
-                    entries
-                        .entry(entry_key.clone())
-                        .or_insert_with(|| ArtifactIndexEntry {
-                            test_id: test_id.clone(),
-                            packet_id: packet_id.clone(),
-                            artifact_dir: path.parent().unwrap_or(dir).to_path_buf(),
-                            files: Vec::new(),
-                            replay_cmd: build_replay_cmd(&packet_id, &test_id),
-                            passed: true,
-                            failure_category: None,
-                        });
+            let entry_key = format!("{packet_id}/{test_id}");
+            let idx_entry =
+                entries
+                    .entry(entry_key.clone())
+                    .or_insert_with(|| ArtifactIndexEntry {
+                        test_id: test_id.clone(),
+                        packet_id: packet_id.clone(),
+                        artifact_dir: path.parent().unwrap_or(dir).to_path_buf(),
+                        files: Vec::new(),
+                        replay_cmd: build_replay_cmd(&packet_id, &test_id),
+                        passed: true,
+                        failure_category: None,
+                    });
 
-                idx_entry.files.push(ArtifactFile {
-                    relative_path: rel,
-                    purpose,
-                    blake3_hash: hash,
-                    size_bytes: size,
-                });
-            }
+            idx_entry.files.push(ArtifactFile {
+                relative_path: rel,
+                purpose,
+                blake3_hash: hash,
+                size_bytes: size,
+            });
         }
     }
     Ok(())
+}
+
+fn classify_packet_for_index(path: &Path, rel: &Path) -> Option<String> {
+    let packet_id = extract_packet_from_path(rel)?;
+    if should_quarantine_legacy_ndimage_summary(path, rel, &packet_id) {
+        return None;
+    }
+    Some(packet_id)
 }
 
 /// Extract packet ID from a relative path like "P2C-002/e2e/scenario.json".
@@ -525,6 +542,39 @@ fn extract_packet_from_path(rel: &Path) -> Option<String> {
             None
         }
     })
+}
+
+fn should_quarantine_legacy_ndimage_summary(path: &Path, rel: &Path, packet_id: &str) -> bool {
+    if packet_id != "FSCI-P2C-010" {
+        return false;
+    }
+    if rel.file_name().and_then(|name| name.to_str()) != Some("summary.json") {
+        return false;
+    }
+
+    let rel_str = rel.to_string_lossy();
+    if !rel_str.contains("e2e/runs/") {
+        return false;
+    }
+
+    let rel_lower = rel_str.to_ascii_lowercase();
+    if rel_lower.contains("e2e_ndimage") {
+        return true;
+    }
+
+    let Ok(raw) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(summary) = serde_json::from_str::<IndexedRunSummaryProbe>(&raw) else {
+        return false;
+    };
+
+    summary.packet_id.eq_ignore_ascii_case("FSCI-P2C-013")
+        || summary.scenario_id.to_ascii_lowercase().contains("ndimage")
+        || summary
+            .replay_command
+            .to_ascii_lowercase()
+            .contains("--test e2e_ndimage")
 }
 
 /// Infer the purpose of an artifact file from its path.
@@ -573,6 +623,14 @@ pub fn write_failure_summaries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        std::env::temp_dir().join(format!("fsci-forensics-{tag}-{ts}"))
+    }
 
     #[test]
     fn failure_category_classifies_tolerance_exceeded() {
@@ -662,6 +720,9 @@ mod tests {
 
         let cmd2 = build_replay_cmd("P2C-005", "test_fft");
         assert!(cmd2.contains("e2e_fft"));
+
+        let cmd3 = build_replay_cmd("FSCI-P2C-013", "e2e_ndimage_interpolation");
+        assert!(cmd3.contains("e2e_ndimage"));
     }
 
     #[test]
@@ -684,11 +745,68 @@ mod tests {
 
     #[test]
     fn artifact_index_builder_handles_empty_dir() {
-        let tmp = std::env::temp_dir().join("fsci_forensics_test_empty");
+        let tmp = temp_dir("empty");
         let _ = fs::create_dir_all(&tmp);
         let index = build_artifact_index(&tmp, "test-run").unwrap();
         assert_eq!(index.summary.total_tests, 0);
         assert_eq!(index.summary.total_artifacts, 0);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn artifact_index_builder_quarantines_legacy_ndimage_summary_misfile() {
+        let tmp = temp_dir("legacy-ndimage");
+        let summary_dir = tmp.join("FSCI-P2C-010/e2e/runs/run-1/e2e_ndimage_interpolation");
+        fs::create_dir_all(&summary_dir).expect("create legacy summary dir");
+        fs::write(
+            summary_dir.join("summary.json"),
+            r#"{
+  "packet_id": "FSCI-P2C-010",
+  "scenario_id": "e2e_ndimage_interpolation",
+  "run_id": "run-1",
+  "passed": true,
+  "failed_step": null,
+  "replay_command": "rch exec -- cargo test -p fsci-conformance --test e2e_ndimage -- e2e_ndimage_interpolation --nocapture",
+  "generated_unix_ms": 1775501229596
+}"#,
+        )
+        .expect("write legacy summary");
+
+        let index = build_artifact_index(&tmp, "test-run").expect("build artifact index");
+        assert!(
+            index.entries.is_empty(),
+            "legacy ndimage bundle should be quarantined"
+        );
+        assert_eq!(index.summary.total_tests, 0);
+        assert_eq!(index.summary.total_artifacts, 0);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn artifact_index_builder_keeps_non_ndimage_signal_summary() {
+        let tmp = temp_dir("signal-summary");
+        let summary_dir = tmp.join("FSCI-P2C-010/e2e/runs/run-1/e2e_signal_smoke");
+        fs::create_dir_all(&summary_dir).expect("create signal summary dir");
+        fs::write(
+            summary_dir.join("summary.json"),
+            r#"{
+  "packet_id": "FSCI-P2C-010",
+  "scenario_id": "e2e_signal_smoke",
+  "run_id": "run-1",
+  "passed": true,
+  "failed_step": null,
+  "replay_command": "cargo test -p fsci-conformance --test e2e_signal -- e2e_signal_smoke --nocapture",
+  "generated_unix_ms": 1775501229596
+}"#,
+        )
+        .expect("write signal summary");
+
+        let index = build_artifact_index(&tmp, "test-run").expect("build artifact index");
+        assert_eq!(index.summary.total_tests, 1);
+        assert_eq!(index.summary.total_artifacts, 1);
+        assert!(index.entries.contains_key("FSCI-P2C-010/summary"));
+
         let _ = fs::remove_dir_all(&tmp);
     }
 

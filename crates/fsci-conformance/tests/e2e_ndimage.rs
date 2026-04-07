@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! E2E scenario tests for FSCI-P2C-010 (ndimage interpolation).
+//! E2E scenario tests for FSCI-P2C-013 (ndimage interpolation).
 //!
 //! Each scenario emits topology-compliant artifacts to
-//! `fixtures/artifacts/FSCI-P2C-010/e2e/runs/{run_id}/{scenario_id}/`
+//! `fixtures/artifacts/FSCI-P2C-013/e2e/runs/{run_id}/{scenario_id}/`
 //! containing `events.jsonl` and `summary.json`.
 
 use std::fs;
@@ -57,7 +57,7 @@ struct EnvironmentInfo {
     total_memory_mb: String,
 }
 
-const PACKET_ID: &str = "FSCI-P2C-010";
+const PACKET_ID: &str = "FSCI-P2C-013";
 const TOL: f64 = 1e-6;
 
 fn now_unix_ms() -> u128 {
