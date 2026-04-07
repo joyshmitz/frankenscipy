@@ -472,6 +472,16 @@ impl ContinuousDistribution for Uniform {
         }
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return self.loc;
+        }
+        if q >= 1.0 {
+            return self.loc + self.scale;
+        }
+        self.loc + q * self.scale
+    }
+
     fn mean(&self) -> f64 {
         self.loc + 0.5 * self.scale
     }
@@ -943,6 +953,18 @@ impl ContinuousDistribution for Lognormal {
         }
         let z = (x / self.scale).ln() / self.s;
         0.5 * (1.0 + fsci_special::erf_scalar(z * FRAC_1_SQRT_2))
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // If X ~ Lognormal(mu, sigma), then ln(X) ~ Normal(mu, sigma)
+        // ppf(q) = exp(mu + sigma * ndtri(q)) where mu = ln(scale)
+        self.scale * (self.s * fsci_special::ndtri(q)).exp()
     }
 
     fn mean(&self) -> f64 {
@@ -2381,6 +2403,33 @@ impl ContinuousDistribution for InverseGamma {
         upper_regularized_gamma(self.a, 1.0 / x)
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // CDF = Q(a, 1/x) = 1 - P(a, 1/x), so P(a, 1/x) = 1 - q
+        // 1/x = gammaincinv(a, 1 - q), x = 1 / gammaincinv(a, 1 - q)
+        let g = fsci_special::gammaincinv(self.a, 1.0 - q);
+        if g <= 0.0 {
+            return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
+        }
+        let mut x = 1.0 / g;
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).max(0.0);
+            }
+        }
+        x
+    }
+
     fn mean(&self) -> f64 {
         if self.a > 1.0 {
             1.0 / (self.a - 1.0)
@@ -2653,6 +2702,17 @@ impl ContinuousDistribution for HalfNormal {
         } else {
             fsci_special::erf_scalar(x / std::f64::consts::SQRT_2)
         }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // HalfNormal is the positive half of N(0,1), so ppf(q) = ndtri((1+q)/2)
+        fsci_special::ndtri((1.0 + q) / 2.0)
     }
 
     fn mean(&self) -> f64 {
@@ -3224,6 +3284,32 @@ impl ContinuousDistribution for Erlang {
             return 0.0;
         }
         lower_regularized_gamma(self.k as f64, self.rate * x)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // CDF = P(k, rate*x), so rate*x = gammaincinv(k, q), x = gammaincinv(k, q) / rate
+        let k = self.k as f64;
+        let mut x = fsci_special::gammaincinv(k, q) / self.rate;
+        if x <= 0.0 || (self.cdf(x) - q).abs() > 0.1 {
+            return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
+        }
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).max(0.0);
+            }
+        }
+        x
     }
 
     fn mean(&self) -> f64 {
