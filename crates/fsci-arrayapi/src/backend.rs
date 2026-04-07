@@ -3,7 +3,10 @@ use crate::dtype::default_float_dtype;
 use crate::error::{ArrayApiError, ArrayApiErrorKind, ArrayApiResult};
 use crate::types::{DType, ExecutionMode, IndexExpr, MemoryOrder, ScalarValue, Shape, SliceSpec};
 use nalgebra::{DMatrix, DVector};
+use std::collections::VecDeque;
 use std::sync::Mutex;
+
+const MAX_DIAGNOSTIC_LOGS: usize = 256;
 
 pub trait ArrayApiArray {
     fn shape(&self) -> &Shape;
@@ -231,8 +234,8 @@ impl ArrayApiArray for CoreArray {
 #[derive(Debug)]
 pub struct CoreArrayBackend {
     mode: ExecutionMode,
-    dtype_dispatch_logs: Mutex<Vec<DTypeDispatchLog>>,
-    shape_mismatch_logs: Mutex<Vec<ShapeMismatchLog>>,
+    dtype_dispatch_logs: Mutex<VecDeque<DTypeDispatchLog>>,
+    shape_mismatch_logs: Mutex<VecDeque<ShapeMismatchLog>>,
 }
 
 impl CoreArrayBackend {
@@ -240,8 +243,8 @@ impl CoreArrayBackend {
     pub fn new(mode: ExecutionMode) -> Self {
         Self {
             mode,
-            dtype_dispatch_logs: Mutex::new(Vec::new()),
-            shape_mismatch_logs: Mutex::new(Vec::new()),
+            dtype_dispatch_logs: Mutex::new(VecDeque::new()),
+            shape_mismatch_logs: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -255,7 +258,9 @@ impl CoreArrayBackend {
         self.dtype_dispatch_logs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
+            .iter()
+            .cloned()
+            .collect()
     }
 
     #[must_use]
@@ -263,18 +268,24 @@ impl CoreArrayBackend {
         self.shape_mismatch_logs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
+            .iter()
+            .cloned()
+            .collect()
     }
 
     fn record_dtype_dispatch(&self, requested_dtype: Option<DType>, resolved_dtype: DType) {
-        self.dtype_dispatch_logs
+        let mut logs = self
+            .dtype_dispatch_logs
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(DTypeDispatchLog {
+            .unwrap_or_else(|e| e.into_inner());
+        push_bounded_log(
+            &mut logs,
+            DTypeDispatchLog {
                 requested_dtype,
                 resolved_dtype,
                 mode: self.mode,
-            });
+            },
+        );
     }
 
     fn record_shape_mismatch(
@@ -283,14 +294,18 @@ impl CoreArrayBackend {
         expected_shape: Shape,
         actual_shape: Shape,
     ) {
-        self.shape_mismatch_logs
+        let mut logs = self
+            .shape_mismatch_logs
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(ShapeMismatchLog {
+            .unwrap_or_else(|e| e.into_inner());
+        push_bounded_log(
+            &mut logs,
+            ShapeMismatchLog {
                 operation,
                 expected_shape,
                 actual_shape,
-            });
+            },
+        );
     }
 
     fn resolve_supported_dtype(&self, requested: Option<DType>) -> ArrayApiResult<DType> {
@@ -700,6 +715,13 @@ fn checked_size(shape: &Shape) -> ArrayApiResult<usize> {
     shape.element_count().ok_or_else(|| {
         ArrayApiError::new(ArrayApiErrorKind::Overflow, "shape element count overflow")
     })
+}
+
+fn push_bounded_log<T>(logs: &mut VecDeque<T>, entry: T) {
+    if logs.len() == MAX_DIAGNOSTIC_LOGS {
+        logs.pop_front();
+    }
+    logs.push_back(entry);
 }
 
 fn filled_values(
@@ -1139,6 +1161,71 @@ mod tests {
         assert_eq!(logs[0].operation, "reshape");
         assert_eq!(logs[0].expected_shape, Shape::new(vec![3, 2]));
         assert_eq!(logs[0].actual_shape, Shape::new(vec![2, 2]));
+    }
+
+    #[test]
+    fn dtype_dispatch_logs_are_bounded_to_recent_entries() {
+        let backend = strict_backend();
+        let dtypes = [
+            DType::Float32,
+            DType::Float64,
+            DType::Complex64,
+            DType::Complex128,
+        ];
+        let total = MAX_DIAGNOSTIC_LOGS + 5;
+
+        for idx in 0..total {
+            let request = CreationRequest {
+                shape: Shape::new(vec![1]),
+                dtype: dtypes[idx % dtypes.len()],
+                order: MemoryOrder::C,
+            };
+            let _array = zeros(&backend, &request).expect("zeros should succeed");
+        }
+
+        let logs = backend.dtype_dispatch_logs();
+        assert_eq!(logs.len(), MAX_DIAGNOSTIC_LOGS);
+        assert_eq!(
+            logs[0].requested_dtype,
+            Some(dtypes[(total - MAX_DIAGNOSTIC_LOGS) % dtypes.len()])
+        );
+        assert_eq!(
+            logs[MAX_DIAGNOSTIC_LOGS - 1].requested_dtype,
+            Some(dtypes[(total - 1) % dtypes.len()])
+        );
+    }
+
+    #[test]
+    fn shape_mismatch_logs_are_bounded_to_recent_entries() {
+        let backend = strict_backend();
+        let request = CreationRequest {
+            shape: Shape::new(vec![2, 2]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        };
+        let values = [
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(2.0),
+            ScalarValue::F64(3.0),
+            ScalarValue::F64(4.0),
+        ];
+        let array = from_slice(&backend, &values, &request).expect("from_slice should succeed");
+        let total = MAX_DIAGNOSTIC_LOGS + 3;
+
+        for idx in 0..total {
+            let target_rows = idx + 3;
+            let err = reshape(&backend, &array, &Shape::new(vec![target_rows, 2]))
+                .expect_err("reshape mismatch should fail");
+            assert_eq!(err.kind, ArrayApiErrorKind::InvalidShape);
+        }
+
+        let logs = backend.shape_mismatch_logs();
+        assert_eq!(logs.len(), MAX_DIAGNOSTIC_LOGS);
+        assert_eq!(logs[0].expected_shape, Shape::new(vec![6, 2]));
+        assert_eq!(
+            logs[MAX_DIAGNOSTIC_LOGS - 1].expected_shape,
+            Shape::new(vec![total + 2, 2])
+        );
     }
 
     #[test]
