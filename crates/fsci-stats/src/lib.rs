@@ -2540,6 +2540,29 @@ impl ContinuousDistribution for GenExtreme {
         }
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return if self.c > 0.0 {
+                -1.0 / self.c
+            } else {
+                f64::NEG_INFINITY
+            };
+        }
+        if q >= 1.0 {
+            return if self.c < 0.0 {
+                -1.0 / self.c
+            } else {
+                f64::INFINITY
+            };
+        }
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            -(-q.ln()).ln()
+        } else {
+            ((-q.ln()).powf(-c) - 1.0) / c
+        }
+    }
+
     fn mean(&self) -> f64 {
         let c = self.c;
         if c.abs() < 1e-15 {
@@ -2609,6 +2632,25 @@ impl ContinuousDistribution for GenPareto {
                 return if c > 0.0 { 0.0 } else { 1.0 };
             }
             1.0 - t.powf(-1.0 / c)
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return if self.c < 0.0 {
+                -1.0 / self.c
+            } else {
+                f64::INFINITY
+            };
+        }
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            -(1.0 - q).ln()
+        } else {
+            ((1.0 - q).powf(-c) - 1.0) / c
         }
     }
 
@@ -2820,6 +2862,32 @@ impl ContinuousDistribution for Chi {
         }
         // CDF of chi with k df = regularized lower incomplete gamma(k/2, x²/2)
         lower_regularized_gamma(self.df / 2.0, x * x / 2.0)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // CDF = P(df/2, x²/2), so x²/2 = gammaincinv(df/2, q), x = sqrt(2*gammaincinv(df/2, q))
+        let g = fsci_special::gammaincinv(self.df / 2.0, q);
+        let mut x = (2.0 * g).sqrt();
+        if x <= 0.0 || (self.cdf(x) - q).abs() > 0.1 {
+            return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
+        }
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).max(0.0);
+            }
+        }
+        x
     }
 
     fn mean(&self) -> f64 {
@@ -3437,6 +3505,17 @@ impl ContinuousDistribution for Gilbrat {
         }
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // CDF = Φ(ln(x)), so ln(x) = ndtri(q), x = exp(ndtri(q))
+        fsci_special::ndtri(q).exp()
+    }
+
     fn mean(&self) -> f64 {
         std::f64::consts::E.sqrt() // exp(1/2)
     }
@@ -3486,6 +3565,24 @@ impl ContinuousDistribution for Levy {
             return 0.0;
         }
         fsci_special::erfc_scalar((self.scale / (2.0 * z)).sqrt())
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return self.loc;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // CDF(x) = erfc(sqrt(scale/(2*(x-loc))))
+        // erfcinv(q) = sqrt(scale/(2*z)) where z = x - loc
+        // z = scale / (2 * erfcinv(q)²)
+        // erfcinv(q) = -ndtri(q/2) / sqrt(2)
+        let erfcinv_q = -fsci_special::ndtri(q / 2.0) * FRAC_1_SQRT_2;
+        if erfcinv_q <= 0.0 {
+            return f64::INFINITY;
+        }
+        self.loc + self.scale / (2.0 * erfcinv_q * erfcinv_q)
     }
 
     fn mean(&self) -> f64 {
@@ -6207,7 +6304,7 @@ pub fn zscore(data: &[f64]) -> Vec<f64> {
     let mean_val = data.iter().sum::<f64>() / n;
     let std_val = (data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / n).sqrt();
     if std_val == 0.0 {
-        return vec![0.0; data.len()];
+        return vec![f64::NAN; data.len()];
     }
     data.iter().map(|&x| (x - mean_val) / std_val).collect()
 }
@@ -6286,7 +6383,7 @@ pub fn binomtest(k: u64, n: u64, p: f64) -> f64 {
 // Internal helpers for skewness and kurtosis
 fn skew_from_moments(n: f64, m2: f64, m3: f64) -> f64 {
     if m2 == 0.0 {
-        return 0.0;
+        return f64::NAN;
     }
     let m2_n = m2 / n;
     let m3_n = m3 / n;
@@ -14661,6 +14758,4 @@ mod tests {
             "expected expanded upper bound, got {result}"
         );
     }
-}
-}
 }
