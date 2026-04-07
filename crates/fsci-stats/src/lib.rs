@@ -288,6 +288,38 @@ impl ContinuousDistribution for StudentT {
         if x > 0.0 { 0.5 * ib } else { 1.0 - 0.5 * ib }
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        if q == 0.5 {
+            return 0.0;
+        }
+        let v = self.df;
+        let (p, sign) = if q < 0.5 {
+            (2.0 * q, -1.0)
+        } else {
+            (2.0 * (1.0 - q), 1.0)
+        };
+        let w = fsci_special::betaincinv(0.5 * v, 0.5, p);
+        let mut x = sign * (v * (1.0 - w) / w).sqrt();
+        // Newton refinement for accuracy
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x -= err / dx;
+            }
+        }
+        x
+    }
+
     fn mean(&self) -> f64 {
         if self.df > 1.0 { 0.0 } else { f64::NAN }
     }
@@ -355,6 +387,31 @@ impl ContinuousDistribution for ChiSquared {
             return 1.0;
         }
         upper_regularized_gamma(0.5 * self.df, 0.5 * x)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        let mut x = 2.0 * fsci_special::gammaincinv(0.5 * self.df, q);
+        // Fall back to bisection if gammaincinv gave a degenerate result
+        if x <= 0.0 || !x.is_finite() || (self.cdf(x) - q).abs() > 0.1 {
+            return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
+        }
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).max(0.0);
+            }
+        }
+        x
     }
 
     fn mean(&self) -> f64 {
@@ -554,6 +611,36 @@ impl ContinuousDistribution for FDistribution {
         regularized_incomplete_beta(0.5 * d1, 0.5 * d2, w)
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        let w = fsci_special::betaincinv(0.5 * d1, 0.5 * d2, q);
+        if w >= 1.0 {
+            return f64::INFINITY;
+        }
+        let mut x = d2 * w / (d1 * (1.0 - w));
+        if !x.is_finite() || (self.cdf(x) - q).abs() > 0.1 {
+            return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
+        }
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).max(0.0);
+            }
+        }
+        x
+    }
+
     fn mean(&self) -> f64 {
         if self.dfd > 2.0 {
             self.dfd / (self.dfd - 2.0)
@@ -614,6 +701,27 @@ impl ContinuousDistribution for BetaDist {
             return 1.0;
         }
         regularized_incomplete_beta(self.a, self.b, x)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return 1.0;
+        }
+        let mut x = fsci_special::betaincinv(self.a, self.b, q);
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).clamp(0.0, 1.0);
+            }
+        }
+        x
     }
 
     fn mean(&self) -> f64 {
@@ -680,6 +788,30 @@ impl ContinuousDistribution for GammaDist {
             return 1.0;
         }
         upper_regularized_gamma(self.a, x / self.scale)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        let mut x = self.scale * fsci_special::gammaincinv(self.a, q);
+        if x <= 0.0 || !x.is_finite() || (self.cdf(x) - q).abs() > 0.1 {
+            return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
+        }
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).max(0.0);
+            }
+        }
+        x
     }
 
     fn mean(&self) -> f64 {
@@ -1092,6 +1224,30 @@ impl ContinuousDistribution for Maxwell {
                     * (x / self.scale)
                     * (-(x * x) / (2.0 * self.scale * self.scale)).exp()
         }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        let mut x = self.scale * (2.0 * fsci_special::gammaincinv(1.5, q)).sqrt();
+        if x <= 0.0 || !x.is_finite() || (self.cdf(x) - q).abs() > 0.1 {
+            return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
+        }
+        for _ in 0..8 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).max(0.0);
+            }
+        }
+        x
     }
 
     fn mean(&self) -> f64 {
