@@ -1,5 +1,5 @@
 {
-  "generated_at": "unix:1775502084",
+  "generated_at": "unix:1775579505",
   "packet_id": "FSCI-P2C-001",
   "optimization_name": "remove_intermediate_rms_vectors_in_select_initial_step",
   "benchmark_rows": [
@@ -7,20 +7,20 @@
       "hotspot_function": "validate_tol",
       "scenario": "scalar_n128",
       "before": {
-        "p50_ns": 70,
-        "p95_ns": 120,
-        "p99_ns": 121,
-        "min_ns": 70,
-        "max_ns": 121,
-        "mean_ns": 77
+        "p50_ns": 60,
+        "p95_ns": 70,
+        "p99_ns": 150,
+        "min_ns": 50,
+        "max_ns": 150,
+        "mean_ns": 62
       },
       "after": {
-        "p50_ns": 70,
-        "p95_ns": 120,
-        "p99_ns": 121,
-        "min_ns": 70,
-        "max_ns": 121,
-        "mean_ns": 77
+        "p50_ns": 60,
+        "p95_ns": 70,
+        "p99_ns": 150,
+        "min_ns": 50,
+        "max_ns": 150,
+        "mean_ns": 62
       },
       "p95_delta_pct": 0.0
     },
@@ -28,20 +28,20 @@
       "hotspot_function": "validate_tol",
       "scenario": "vector_n256",
       "before": {
-        "p50_ns": 2335,
-        "p95_ns": 2405,
-        "p99_ns": 2415,
-        "min_ns": 2294,
-        "max_ns": 2415,
-        "mean_ns": 2340
+        "p50_ns": 1873,
+        "p95_ns": 1894,
+        "p99_ns": 1904,
+        "min_ns": 1853,
+        "max_ns": 1904,
+        "mean_ns": 1874
       },
       "after": {
-        "p50_ns": 2335,
-        "p95_ns": 2405,
-        "p99_ns": 2415,
-        "min_ns": 2294,
-        "max_ns": 2415,
-        "mean_ns": 2340
+        "p50_ns": 1873,
+        "p95_ns": 1894,
+        "p99_ns": 1904,
+        "min_ns": 1853,
+        "max_ns": 1904,
+        "mean_ns": 1874
       },
       "p95_delta_pct": 0.0
     },
@@ -49,20 +49,20 @@
       "hotspot_function": "validate_first_step",
       "scenario": "positive_within_bounds",
       "before": {
-        "p50_ns": 30,
-        "p95_ns": 40,
-        "p99_ns": 50,
-        "min_ns": 30,
-        "max_ns": 50,
-        "mean_ns": 31
+        "p50_ns": 20,
+        "p95_ns": 30,
+        "p99_ns": 160,
+        "min_ns": 20,
+        "max_ns": 160,
+        "mean_ns": 29
       },
       "after": {
-        "p50_ns": 30,
-        "p95_ns": 40,
-        "p99_ns": 50,
-        "min_ns": 30,
-        "max_ns": 50,
-        "mean_ns": 31
+        "p50_ns": 20,
+        "p95_ns": 30,
+        "p99_ns": 160,
+        "min_ns": 20,
+        "max_ns": 160,
+        "mean_ns": 29
       },
       "p95_delta_pct": 0.0
     },
@@ -70,20 +70,20 @@
       "hotspot_function": "validate_max_step",
       "scenario": "finite_positive",
       "before": {
-        "p50_ns": 30,
+        "p50_ns": 20,
         "p95_ns": 31,
-        "p99_ns": 31,
+        "p99_ns": 120,
         "min_ns": 20,
-        "max_ns": 31,
-        "mean_ns": 29
+        "max_ns": 120,
+        "mean_ns": 27
       },
       "after": {
-        "p50_ns": 30,
+        "p50_ns": 20,
         "p95_ns": 31,
-        "p99_ns": 31,
+        "p99_ns": 120,
         "min_ns": 20,
-        "max_ns": 31,
-        "mean_ns": 29
+        "max_ns": 120,
+        "mean_ns": 27
       },
       "p95_delta_pct": 0.0
     },
@@ -91,41 +91,41 @@
       "hotspot_function": "select_initial_step",
       "scenario": "lorenz_vector_atol",
       "before": {
-        "p50_ns": 1323,
-        "p95_ns": 1333,
-        "p99_ns": 1422,
-        "min_ns": 1322,
-        "max_ns": 1422,
-        "mean_ns": 1329
+        "p50_ns": 1012,
+        "p95_ns": 1042,
+        "p99_ns": 1122,
+        "min_ns": 1002,
+        "max_ns": 1122,
+        "mean_ns": 1014
       },
       "after": {
-        "p50_ns": 691,
-        "p95_ns": 752,
-        "p99_ns": 851,
-        "min_ns": 681,
-        "max_ns": 851,
-        "mean_ns": 700
+        "p50_ns": 561,
+        "p95_ns": 571,
+        "p99_ns": 671,
+        "min_ns": 551,
+        "max_ns": 671,
+        "mean_ns": 561
       },
-      "p95_delta_pct": -43.58589647411853
+      "p95_delta_pct": -45.201535508637235
     },
     {
       "hotspot_function": "RkSolver::step_with",
       "scenario": "lorenz_20_steps",
       "before": {
-        "p50_ns": 56867,
-        "p95_ns": 63039,
-        "p99_ns": 70504,
-        "min_ns": 56587,
-        "max_ns": 70504,
-        "mean_ns": 57694
+        "p50_ns": 57007,
+        "p95_ns": 67277,
+        "p99_ns": 79791,
+        "min_ns": 45706,
+        "max_ns": 79791,
+        "mean_ns": 57537
       },
       "after": {
-        "p50_ns": 56867,
-        "p95_ns": 63039,
-        "p99_ns": 70504,
-        "min_ns": 56587,
-        "max_ns": 70504,
-        "mean_ns": 57694
+        "p50_ns": 57007,
+        "p95_ns": 67277,
+        "p99_ns": 79791,
+        "min_ns": 45706,
+        "max_ns": 79791,
+        "mean_ns": 57537
       },
       "p95_delta_pct": 0.0
     }
@@ -135,52 +135,52 @@
       "rank": 1,
       "hotspot_function": "RkSolver::step_with",
       "scenario": "lorenz_20_steps",
-      "after_p95_ns": 63039,
-      "share_of_total_p95": 0.9495684396041394
+      "after_p95_ns": 67277,
+      "share_of_total_p95": 0.9628468793382279
     },
     {
       "rank": 2,
       "hotspot_function": "validate_tol",
       "scenario": "vector_n256",
-      "after_p95_ns": 2405,
-      "share_of_total_p95": 0.036226972148161535
+      "after_p95_ns": 1894,
+      "share_of_total_p95": 0.02710632146895081
     },
     {
       "rank": 3,
       "hotspot_function": "select_initial_step",
       "scenario": "lorenz_vector_atol",
-      "after_p95_ns": 752,
-      "share_of_total_p95": 0.011327518941961528
+      "after_p95_ns": 571,
+      "share_of_total_p95": 0.008171969144018434
     },
     {
       "rank": 4,
       "hotspot_function": "validate_tol",
       "scenario": "scalar_n128",
-      "after_p95_ns": 120,
-      "share_of_total_p95": 0.001807582809887478
+      "after_p95_ns": 70,
+      "share_of_total_p95": 0.0010018175833297555
     },
     {
       "rank": 5,
-      "hotspot_function": "validate_first_step",
-      "scenario": "positive_within_bounds",
-      "after_p95_ns": 40,
-      "share_of_total_p95": 0.000602527603295826
-    },
-    {
-      "rank": 6,
       "hotspot_function": "validate_max_step",
       "scenario": "finite_positive",
       "after_p95_ns": 31,
-      "share_of_total_p95": 0.00046695889255426515
+      "share_of_total_p95": 0.0004436620726174631
+    },
+    {
+      "rank": 6,
+      "hotspot_function": "validate_first_step",
+      "scenario": "positive_within_bounds",
+      "after_p95_ns": 30,
+      "share_of_total_p95": 0.0004293503928556095
     }
   ],
   "optimization_attempts": [
     {
       "optimization_name": "remove_intermediate_rms_vectors_in_select_initial_step",
       "hotspot_function": "select_initial_step",
-      "before_p95_ns": 1333,
-      "after_p95_ns": 752,
-      "delta_pct": -43.58589647411853
+      "before_p95_ns": 1042,
+      "after_p95_ns": 571,
+      "delta_pct": -45.201535508637235
     }
   ],
   "failed_optimization_attempts": [],
