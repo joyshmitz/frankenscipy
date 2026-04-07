@@ -3862,6 +3862,25 @@ impl ContinuousDistribution for Moyal {
         fsci_special::erfc_scalar(((-x).exp() / 2.0).sqrt())
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        // CDF = erfc(sqrt(exp(-x)/2))
+        // erfcinv(q) = sqrt(exp(-x)/2)
+        // exp(-x) = 2 * erfcinv(q)^2
+        // x = -ln(2 * erfcinv(q)^2)
+        // erfcinv(q) = -ndtri(q/2) / sqrt(2)
+        let erfcinv_q = -fsci_special::ndtri(q / 2.0) * FRAC_1_SQRT_2;
+        if erfcinv_q <= 0.0 {
+            return f64::INFINITY;
+        }
+        -(2.0 * erfcinv_q * erfcinv_q).ln()
+    }
+
     fn mean(&self) -> f64 {
         0.577_215_664_901_532_9 + (2.0f64).ln() // γ + ln(2)
     }
@@ -4003,6 +4022,17 @@ impl ContinuousDistribution for FrechetR {
             return 1.0;
         }
         (-(-x).powf(self.c)).exp()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q >= 1.0 {
+            return 0.0;
+        }
+        // CDF = exp(-(-x)^c), so (-x)^c = -ln(q), x = -(-ln(q))^(1/c)
+        -(-q.ln()).powf(1.0 / self.c)
     }
 
     fn mean(&self) -> f64 {
