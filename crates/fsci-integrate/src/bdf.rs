@@ -46,9 +46,7 @@ pub struct BdfSolver {
     max_order: usize,
     state: OdeSolverState,
     nfev: usize,
-    #[allow(dead_code)]
     njev: usize,
-    #[allow(dead_code)]
     nlu: usize,
     mode: RuntimeMode,
 
@@ -58,12 +56,9 @@ pub struct BdfSolver {
     // Nordsieck-style array: d[k] for k = 0..order
     d: Vec<Vec<f64>>,
 
-    // Newton state (placeholder fields)
-    #[allow(dead_code)]
+    // Newton solver state
     pub(crate) current_jac: Option<DMatrix<f64>>,
-    #[allow(dead_code)]
     pub(crate) lu: Option<LU<f64, Dyn, Dyn>>,
-    #[allow(dead_code)]
     pub(crate) h_abs_last: Option<f64>,
     jacobian_age: usize,
 
