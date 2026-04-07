@@ -205,12 +205,13 @@ fn check_partial_find(fixture: &PacketFixture) -> ParityGate {
 
 fn check_temperature_roundtrip(fixture: &PacketFixture) -> ParityGate {
     let freezing_diff = (celsius_to_kelvin(0.0) - 273.15).abs();
-    let boiling_diff = (convert_temperature(212.0, "fahrenheit", "celsius") - 100.0).abs();
+    let boiling_diff = (convert_temperature(212.0, "fahrenheit", "celsius").unwrap() - 100.0).abs();
     let roundtrip = convert_temperature(
-        convert_temperature(37.5, "celsius", "fahrenheit"),
+        convert_temperature(37.5, "celsius", "fahrenheit").unwrap(),
         "fahrenheit",
         "celsius",
-    );
+    )
+    .unwrap();
     let roundtrip_diff = (roundtrip - 37.5).abs();
     let max_abs_diff = fold_max([freezing_diff, boiling_diff, roundtrip_diff].into_iter());
     gate_from_case(

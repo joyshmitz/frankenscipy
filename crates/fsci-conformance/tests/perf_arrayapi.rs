@@ -59,6 +59,35 @@ struct BenchmarkRow {
     alloc_count_delta: i64,
 }
 
+impl BenchmarkRow {
+    fn new(
+        hotspot_function: &str,
+        array_size: usize,
+        output_elements: usize,
+        dtype: DType,
+        before_stats: BenchStats,
+        after_stats: BenchStats,
+        alloc_count_delta: i64,
+    ) -> Self {
+        let before_p95_i128 =
+            i128::try_from(before_stats.p95_ns).expect("before p95 should fit i128");
+        let after_p95_i128 = i128::try_from(after_stats.p95_ns).expect("after p95 should fit i128");
+
+        Self {
+            hotspot_function: hotspot_function.to_string(),
+            array_size,
+            output_elements,
+            dtype: format!("{dtype:?}"),
+            before_p95_ns: before_stats.p95_ns,
+            after_p95_ns: after_stats.p95_ns,
+            before_median_ns: before_stats.median_ns,
+            after_median_ns: after_stats.median_ns,
+            p95_improvement_ns: before_p95_i128 - after_p95_i128,
+            alloc_count_delta,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct IsomorphismCheck {
     all_cases_pass: bool,
@@ -392,33 +421,6 @@ fn estimated_alloc_count_delta(output_elements: usize) -> i64 {
     after_i64 - before_i64
 }
 
-fn push_row(
-    rows: &mut Vec<BenchmarkRow>,
-    hotspot_function: &str,
-    array_size: usize,
-    output_elements: usize,
-    dtype: DType,
-    before_stats: BenchStats,
-    after_stats: BenchStats,
-    alloc_count_delta: i64,
-) {
-    let before_p95_i128 = i128::try_from(before_stats.p95_ns).expect("before p95 should fit i128");
-    let after_p95_i128 = i128::try_from(after_stats.p95_ns).expect("after p95 should fit i128");
-
-    rows.push(BenchmarkRow {
-        hotspot_function: hotspot_function.to_string(),
-        array_size,
-        output_elements,
-        dtype: format!("{dtype:?}"),
-        before_p95_ns: before_stats.p95_ns,
-        after_p95_ns: after_stats.p95_ns,
-        before_median_ns: before_stats.median_ns,
-        after_median_ns: after_stats.median_ns,
-        p95_improvement_ns: before_p95_i128 - after_p95_i128,
-        alloc_count_delta,
-    });
-}
-
 fn bench_broadcast_profile(rows: &mut Vec<BenchmarkRow>, iso_details: &mut Vec<IsomorphismDetail>) {
     let backend = strict_backend();
 
@@ -459,8 +461,7 @@ fn bench_broadcast_profile(rows: &mut Vec<BenchmarkRow>, iso_details: &mut Vec<I
                 note,
             });
 
-            push_row(
-                rows,
+            rows.push(BenchmarkRow::new(
                 HOTSPOT_BROADCAST,
                 size,
                 output_elements,
@@ -468,7 +469,7 @@ fn bench_broadcast_profile(rows: &mut Vec<BenchmarkRow>, iso_details: &mut Vec<I
                 before_stats,
                 after_stats,
                 estimated_alloc_count_delta(output_elements),
-            );
+            ));
         }
     }
 }
@@ -519,8 +520,7 @@ fn bench_creation_profile(rows: &mut Vec<BenchmarkRow>, iso_details: &mut Vec<Is
                 passes: zero_isomorphic,
                 note: zero_note,
             });
-            push_row(
-                rows,
+            rows.push(BenchmarkRow::new(
                 HOTSPOT_ZEROS,
                 size,
                 size,
@@ -528,7 +528,7 @@ fn bench_creation_profile(rows: &mut Vec<BenchmarkRow>, iso_details: &mut Vec<Is
                 before_zero,
                 after_zero,
                 0,
-            );
+            ));
 
             let before_full = time_operation(|| {
                 let _ = full(&backend, &request.shape, &full_request).expect("full should succeed");
@@ -561,8 +561,7 @@ fn bench_creation_profile(rows: &mut Vec<BenchmarkRow>, iso_details: &mut Vec<Is
                 passes: full_isomorphic,
                 note: full_note,
             });
-            push_row(
-                rows,
+            rows.push(BenchmarkRow::new(
                 HOTSPOT_FULL,
                 size,
                 size,
@@ -570,7 +569,7 @@ fn bench_creation_profile(rows: &mut Vec<BenchmarkRow>, iso_details: &mut Vec<Is
                 before_full,
                 after_full,
                 0,
-            );
+            ));
         }
     }
 }

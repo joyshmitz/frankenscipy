@@ -3286,6 +3286,28 @@ impl ContinuousDistribution for Semicircular {
         }
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return -1.0;
+        }
+        if q >= 1.0 {
+            return 1.0;
+        }
+        // No closed form — use Newton with initial guess from arcsine approximation
+        let mut x = (PI * (q - 0.5)).sin(); // rough initial guess
+        for _ in 0..12 {
+            let err = self.cdf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x - err / dx).clamp(-1.0, 1.0);
+            }
+        }
+        x
+    }
+
     fn mean(&self) -> f64 {
         0.0
     }
@@ -3432,6 +3454,17 @@ impl ContinuousDistribution for Anglit {
         } else {
             ((2.0 * x).sin() + 1.0) / 2.0
         }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return -PI / 4.0;
+        }
+        if q >= 1.0 {
+            return PI / 4.0;
+        }
+        // CDF = (sin(2x)+1)/2, so x = asin(2q-1)/2
+        (2.0 * q - 1.0).asin() / 2.0
     }
 
     fn mean(&self) -> f64 {
@@ -3720,6 +3753,23 @@ impl ContinuousDistribution for LogLaplace {
             0.5 * x.powf(c)
         } else {
             1.0 - 0.5 * x.powf(-c)
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if q <= 0.0 {
+            return 0.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        let c = self.c;
+        if q < 0.5 {
+            // CDF = 0.5*x^c, so x = (2q)^(1/c)
+            (2.0 * q).powf(1.0 / c)
+        } else {
+            // CDF = 1 - 0.5*x^(-c), so x = (2(1-q))^(-1/c)
+            (2.0 * (1.0 - q)).powf(-1.0 / c)
         }
     }
 
@@ -14154,6 +14204,116 @@ mod tests {
     fn invweibull_variance_returns_nan_at_boundary_or_below() {
         assert!(InvWeibull::new(2.0).var().is_nan());
         assert!(InvWeibull::new(1.9).var().is_nan());
+    }
+
+    #[test]
+    fn doubleweibull_ppf_matches_scipy_reference_values() {
+        let dist = DoubleWeibull::new(2.5);
+        let qs = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999];
+        let expected = [
+            -2.076_660_482_588_982_5,
+            -1.209_677_745_531_848_8,
+            -0.863_634_900_602_374_8,
+            0.0,
+            0.863_634_900_602_374_8,
+            1.209_677_745_531_848_8,
+            2.076_660_482_588_982_5,
+        ];
+
+        assert!(dist.ppf(0.0).is_infinite() && dist.ppf(0.0).is_sign_negative());
+        assert!(dist.ppf(1.0).is_infinite() && dist.ppf(1.0).is_sign_positive());
+
+        for (&q, &want) in qs.iter().zip(expected.iter()) {
+            assert_close(dist.ppf(q), want, 1e-12, &format!("DoubleWeibull ppf({q})"));
+        }
+    }
+
+    #[test]
+    fn burr12_ppf_matches_scipy_reference_values() {
+        let dist = Burr12::new(2.0, 3.0);
+        let qs = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999];
+        let expected = [
+            0.018_263_508_111_510_767,
+            0.189_061_282_792_871_93,
+            0.317_241_889_255_200_47,
+            0.509_824_528_533_958_5,
+            0.766_420_936_540_88,
+            1.074_446_224_820_9,
+            2.999_999_999_999_998_7,
+        ];
+
+        assert_eq!(dist.ppf(0.0), 0.0);
+        assert!(dist.ppf(1.0).is_infinite());
+
+        for (&q, &want) in qs.iter().zip(expected.iter()) {
+            assert_close(dist.ppf(q), want, 1e-12, &format!("Burr12 ppf({q})"));
+        }
+    }
+
+    #[test]
+    fn truncexpon_ppf_matches_scipy_reference_values() {
+        let dist = TruncExpon::new(2.5);
+        let qs = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999];
+        let expected = [
+            0.000_918_336_543_330_507_7,
+            0.096_281_301_341_612_72,
+            0.260_688_045_554_922_53,
+            0.614_257_446_267_395_8,
+            1.166_151_310_110_486_6,
+            1.749_410_009_011_430_4,
+            2.488_879_567_882_692_7,
+        ];
+
+        assert_eq!(dist.ppf(0.0), 0.0);
+        assert_close(dist.ppf(1.0), 2.5, 1e-15, "TruncExpon ppf(1)");
+
+        for (&q, &want) in qs.iter().zip(expected.iter()) {
+            assert_close(dist.ppf(q), want, 1e-12, &format!("TruncExpon ppf({q})"));
+        }
+    }
+
+    #[test]
+    fn invweibull_ppf_matches_scipy_reference_values() {
+        let dist = InvWeibull::new(3.0);
+        let qs = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999];
+        let expected = [
+            0.525_074_610_470_846_1,
+            0.757_288_631_330_907_7,
+            0.896_839_747_563_287_4,
+            1.129_947_276_337_390_1,
+            1.514_824_778_579_371_6,
+            2.117_259_243_124_697,
+            9.998_332_777_468_924,
+        ];
+
+        assert_eq!(dist.ppf(0.0), 0.0);
+        assert!(dist.ppf(1.0).is_infinite());
+
+        for (&q, &want) in qs.iter().zip(expected.iter()) {
+            assert_close(dist.ppf(q), want, 1e-12, &format!("InvWeibull ppf({q})"));
+        }
+    }
+
+    #[test]
+    fn betaprime_ppf_matches_scipy_reference_values() {
+        let dist = BetaPrime::new(2.5, 4.0);
+        let qs = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999];
+        let expected = [
+            0.022_604_407_194_587_128,
+            0.187_166_336_074_701_37,
+            0.330_285_130_036_205_63,
+            0.592_692_551_169_090_9,
+            1.035_938_736_458_164,
+            1.704_029_322_119_078_5,
+            8.427_930_904_530_811,
+        ];
+
+        assert_eq!(dist.ppf(0.0), 0.0);
+        assert!(dist.ppf(1.0).is_infinite());
+
+        for (&q, &want) in qs.iter().zip(expected.iter()) {
+            assert_close(dist.ppf(q), want, 1e-10, &format!("BetaPrime ppf({q})"));
+        }
     }
 
     #[test]
