@@ -1475,19 +1475,49 @@ pub fn betaincinv(a: f64, b: f64, y: f64) -> f64 {
         return 1.0;
     }
 
-    // Bisection
-    let mut lo = 0.0f64;
-    let mut hi = 1.0f64;
+    let mode = fsci_runtime::RuntimeMode::Strict;
+    let ln_beta = crate::betaln_scalar(a, b, mode).unwrap_or(f64::NAN);
+
+    // Initial guess: use mean of Beta distribution as starting point
+    let mut x = a / (a + b);
+
+    // Bracketed Newton with bisection fallback
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+
     for _ in 0..100 {
-        let mid = (lo + hi) / 2.0;
-        let val = betainc_conv(a, b, mid);
+        let val = betainc_conv(a, b, x);
+        let err = val - y;
+        if err.abs() < 1e-15 {
+            break;
+        }
+
+        // Update brackets
         if val < y {
-            lo = mid;
+            lo = x;
         } else {
-            hi = mid;
+            hi = x;
+        }
+
+        // Newton step: dI_x/dx = x^(a-1) * (1-x)^(b-1) / B(a,b)
+        let dpx = if x > 0.0 && x < 1.0 {
+            ((a - 1.0) * x.ln() + (b - 1.0) * (1.0 - x).ln() - ln_beta).exp()
+        } else {
+            0.0
+        };
+
+        if dpx > 1e-30 {
+            let x_new = x - err / dpx;
+            if x_new > lo && x_new < hi {
+                x = x_new;
+            } else {
+                x = 0.5 * (lo + hi);
+            }
+        } else {
+            x = 0.5 * (lo + hi);
         }
     }
-    (lo + hi) / 2.0
+    x
 }
 
 /// Regularized incomplete gamma function P(a, x).
