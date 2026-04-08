@@ -894,7 +894,7 @@ fn basic_slice_indices(
             cur += step;
         }
     } else {
-        start = start.clamp(0, len_i.saturating_sub(1));
+        start = start.clamp(0, (len_i - 1).max(0));
         // stop for negative step can be -1 to include index 0
         let mut cur = start;
         while cur > stop && cur >= 0 {
