@@ -46,10 +46,13 @@ pub trait ContinuousDistribution {
     /// Percent point function (inverse CDF) via bisection.
     /// Override for distributions with analytic inverses.
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         ppf_bisection(|x| self.cdf(x), q, self.mean(), self.std())
@@ -197,10 +200,13 @@ impl Normal {
     ///
     /// Matches `scipy.stats.norm.ppf(q)`.
     pub fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         self.loc + self.scale * standard_normal_ppf(q)
@@ -289,10 +295,13 @@ impl ContinuousDistribution for StudentT {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         if q == 0.5 {
@@ -390,10 +399,13 @@ impl ContinuousDistribution for ChiSquared {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         let mut x = 2.0 * fsci_special::gammaincinv(0.5 * self.df, q);
@@ -473,10 +485,13 @@ impl ContinuousDistribution for Uniform {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return self.loc;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return self.loc + self.scale;
         }
         self.loc + q * self.scale
@@ -528,10 +543,13 @@ impl Exponential {
 
     /// Percent point function (inverse CDF).
     pub fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         -(1.0 - q).ln() / self.lambda
@@ -622,10 +640,13 @@ impl ContinuousDistribution for FDistribution {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         let d1 = self.dfn;
@@ -714,10 +735,13 @@ impl ContinuousDistribution for BetaDist {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return 1.0;
         }
         let mut x = fsci_special::betaincinv(self.a, self.b, q);
@@ -801,10 +825,13 @@ impl ContinuousDistribution for GammaDist {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         let mut x = self.scale * fsci_special::gammaincinv(self.a, q);
@@ -857,10 +884,13 @@ impl Weibull {
 
     /// Inverse CDF (analytic).
     pub fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         self.scale * (-(1.0 - q).ln()).powf(1.0 / self.c)
@@ -956,10 +986,13 @@ impl ContinuousDistribution for Lognormal {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // If X ~ Lognormal(mu, sigma), then ln(X) ~ Normal(mu, sigma)
@@ -1017,10 +1050,13 @@ impl ContinuousDistribution for Pareto {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return self.scale;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         self.scale / (1.0 - q).powf(1.0 / self.b)
@@ -1082,10 +1118,13 @@ impl ContinuousDistribution for Rayleigh {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         self.scale * (-2.0 * (1.0 - q).ln()).sqrt()
@@ -1134,10 +1173,13 @@ impl ContinuousDistribution for Gumbel {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         self.loc - self.scale * (-q.ln()).ln()
@@ -1187,10 +1229,13 @@ impl ContinuousDistribution for Logistic {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         self.loc + self.scale * (q / (1.0 - q)).ln()
@@ -1249,10 +1294,13 @@ impl ContinuousDistribution for Maxwell {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         let mut x = self.scale * (2.0 * fsci_special::gammaincinv(1.5, q)).sqrt();
@@ -2189,10 +2237,13 @@ impl ContinuousDistribution for Cauchy {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         self.loc + self.scale * (PI * (q - 0.5)).tan()
@@ -2254,10 +2305,13 @@ impl ContinuousDistribution for Laplace {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         if q < 0.5 {
@@ -2341,10 +2395,13 @@ impl ContinuousDistribution for Triangular {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return self.left;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return self.right;
         }
         let (a, c, b) = (self.left, self.mode, self.right);
@@ -2404,10 +2461,13 @@ impl ContinuousDistribution for InverseGamma {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // CDF = Q(a, 1/x) = 1 - P(a, 1/x), so P(a, 1/x) = 1 - q
@@ -2541,14 +2601,17 @@ impl ContinuousDistribution for GenExtreme {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return if self.c > 0.0 {
                 -1.0 / self.c
             } else {
                 f64::NEG_INFINITY
             };
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return if self.c < 0.0 {
                 -1.0 / self.c
             } else {
@@ -2636,10 +2699,13 @@ impl ContinuousDistribution for GenPareto {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return if self.c < 0.0 {
                 -1.0 / self.c
             } else {
@@ -2706,9 +2772,12 @@ impl ContinuousDistribution for PowerLaw {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             0.0
-        } else if q >= 1.0 {
+        } else if q == 1.0 {
             1.0
         } else {
             q.powf(1.0 / self.a)
@@ -2747,10 +2816,13 @@ impl ContinuousDistribution for HalfNormal {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // HalfNormal is the positive half of N(0,1), so ppf(q) = ndtri((1+q)/2)
@@ -2865,10 +2937,13 @@ impl ContinuousDistribution for Chi {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // CDF = P(df/2, x²/2), so x²/2 = gammaincinv(df/2, q), x = sqrt(2*gammaincinv(df/2, q))
@@ -3061,10 +3136,13 @@ impl ContinuousDistribution for Fisk {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         (q / (1.0 - q)).powf(1.0 / self.c)
@@ -3126,10 +3204,13 @@ impl ContinuousDistribution for Loguniform {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return self.a;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return self.b;
         }
         self.a * (self.b / self.a).powf(q)
@@ -3234,10 +3315,13 @@ impl ContinuousDistribution for DoubleWeibull {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         let c = self.c;
@@ -3287,10 +3371,13 @@ impl ContinuousDistribution for Semicircular {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return -1.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return 1.0;
         }
         // No closed form — use Newton with initial guess from arcsine approximation
@@ -3396,10 +3483,13 @@ impl ContinuousDistribution for Erlang {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // CDF = P(k, rate*x), so rate*x = gammaincinv(k, q), x = gammaincinv(k, q) / rate
@@ -3457,10 +3547,13 @@ impl ContinuousDistribution for Anglit {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return -PI / 4.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return PI / 4.0;
         }
         // CDF = (sin(2x)+1)/2, so x = asin(2q-1)/2
@@ -3511,10 +3604,13 @@ impl ContinuousDistribution for Bradford {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return 1.0;
         }
         ((1.0 + self.c).powf(q) - 1.0) / self.c
@@ -3558,10 +3654,13 @@ impl ContinuousDistribution for Gilbrat {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // CDF = Φ(ln(x)), so ln(x) = ndtri(q), x = exp(ndtri(q))
@@ -3620,10 +3719,13 @@ impl ContinuousDistribution for Levy {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return self.loc;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // CDF(x) = erfc(sqrt(scale/(2*(x-loc))))
@@ -3681,10 +3783,13 @@ impl ContinuousDistribution for Burr12 {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // CDF = 1 - (1+x^c)^(-d), so x = ((1-q)^(-1/d) - 1)^(1/c)
@@ -3757,10 +3862,13 @@ impl ContinuousDistribution for LogLaplace {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         let c = self.c;
@@ -3863,10 +3971,13 @@ impl ContinuousDistribution for Moyal {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // CDF = erfc(sqrt(exp(-x)/2))
@@ -3975,10 +4086,13 @@ impl ContinuousDistribution for GenLogistic {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         -(q.powf(-1.0 / self.c) - 1.0).ln()
@@ -4025,10 +4139,13 @@ impl ContinuousDistribution for FrechetR {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return 0.0;
         }
         // CDF = exp(-(-x)^c), so (-x)^c = -ln(q), x = -(-ln(q))^(1/c)
@@ -4081,10 +4198,13 @@ impl ContinuousDistribution for TruncExpon {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return self.b;
         }
         // CDF = (1-exp(-x))/(1-exp(-b)), so x = -ln(1 - q*(1-exp(-b)))
@@ -4268,10 +4388,13 @@ impl ContinuousDistribution for TukeyLambda {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return f64::NEG_INFINITY;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         let lam = self.lam;
@@ -4333,10 +4456,13 @@ impl ContinuousDistribution for InvWeibull {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // CDF = exp(-x^(-c)), so x^(-c) = -ln(q), x = (-ln(q))^(-1/c)
@@ -6524,7 +6650,7 @@ fn skew_from_moments(n: f64, m2: f64, m3: f64) -> f64 {
 
 fn kurtosis_from_moments(n: f64, m2: f64, m4: f64) -> f64 {
     if m2 == 0.0 {
-        return -3.0; // Degenerate: all values identical
+        return f64::NAN; // Degenerate: all values identical
     }
     let m2_n = m2 / n;
     let m4_n = m4 / n;
@@ -9383,7 +9509,7 @@ pub fn zscore_ddof(data: &[f64], ddof: usize) -> Vec<f64> {
     let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - ddof) as f64;
     let std = var.sqrt();
     if std == 0.0 {
-        return vec![0.0; n];
+        return vec![f64::NAN; n];
     }
     data.iter().map(|&x| (x - mean) / std).collect()
 }
@@ -9597,10 +9723,13 @@ impl ContinuousDistribution for BetaPrime {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         // CDF = I_{x/(1+x)}(a,b), so t = betaincinv(a,b,q), x = t/(1-t)
@@ -9673,10 +9802,13 @@ impl ContinuousDistribution for ExponWeibull {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if q <= 0.0 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
             return 0.0;
         }
-        if q >= 1.0 {
+        if q == 1.0 {
             return f64::INFINITY;
         }
         let u = q.powf(1.0 / self.a);

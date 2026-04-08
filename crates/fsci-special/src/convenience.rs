@@ -1539,10 +1539,13 @@ pub fn gammaincc_conv(a: f64, x: f64) -> f64 {
 /// Finds x such that P(a, x) = y.
 /// Matches `scipy.special.gammaincinv`.
 pub fn gammaincinv(a: f64, y: f64) -> f64 {
-    if y <= 0.0 {
+    if !(0.0..=1.0).contains(&y) {
+        return f64::NAN;
+    }
+    if y == 0.0 {
         return 0.0;
     }
-    if y >= 1.0 {
+    if y == 1.0 {
         return f64::INFINITY;
     }
 
