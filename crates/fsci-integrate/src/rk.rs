@@ -622,6 +622,11 @@ impl RkSolver {
             let err = estimate_error(&self.k, self.tableau.e, h, self.n);
             let err_norm = error_norm(&err, &scale);
 
+            if !err_norm.is_finite() {
+                self.state = OdeSolverState::Failed;
+                return Err(StepFailure::NonFiniteState);
+            }
+
             if err_norm < 1.0 {
                 // Step accepted
                 let factor = if err_norm == 0.0 {

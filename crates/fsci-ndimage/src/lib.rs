@@ -1539,7 +1539,7 @@ pub fn variance_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> 
             if counts[l] > 0 {
                 var_sums[l] / counts[l] as f64
             } else {
-                0.0
+                f64::NAN
             }
         })
         .collect()
