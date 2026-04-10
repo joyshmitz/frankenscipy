@@ -5437,6 +5437,17 @@ mod tests {
         }
     }
 
+    fn rotated_diagonal(lambda1: f64, lambda2: f64) -> Vec<Vec<f64>> {
+        let diag = 0.5 * (lambda1 + lambda2);
+        let off_diag = 0.5 * (lambda1 - lambda2);
+        vec![vec![diag, off_diag], vec![off_diag, diag]]
+    }
+
+    fn assert_certificate_populated(certificate: &SolveCertificate) {
+        assert_eq!(certificate.posterior.len(), 4);
+        assert_eq!(certificate.expected_losses.len(), 5);
+    }
+
     #[test]
     fn solve_general_happy_path() {
         let a = vec![vec![3.0, 2.0], vec![1.0, 2.0]];
@@ -5720,6 +5731,125 @@ mod tests {
             .expect("solve must work");
         assert_close_slice(&result.x, &[0.0, 2.5], 1e-12, 1e-12);
         assert_eq!(portfolio.evidence_len(), 1);
+    }
+
+    #[test]
+    fn casp_selects_diagonal_fast_path() {
+        let a = vec![
+            vec![2.0, 0.0, 0.0],
+            vec![0.0, 3.0, 0.0],
+            vec![0.0, 0.0, 4.0],
+        ];
+        let b = vec![4.0, 9.0, 16.0];
+        let result = solve(&a, &b, SolveOptions::default()).expect("solve works");
+        assert_close_slice(&result.x, &[2.0, 3.0, 4.0], 1e-14, 1e-14);
+        let certificate = result.certificate.expect("certificate populated");
+        assert_eq!(certificate.action, SolverAction::DiagonalFastPath);
+        assert_eq!(
+            certificate.structural_evidence,
+            StructuralEvidence::Diagonal
+        );
+        assert_certificate_populated(&certificate);
+    }
+
+    #[test]
+    fn casp_selects_triangular_fast_path() {
+        let a = vec![
+            vec![2.0, 3.0, 1.0],
+            vec![0.0, 4.0, 5.0],
+            vec![0.0, 0.0, 6.0],
+        ];
+        let b = vec![7.0, 8.0, 9.0];
+        let result = solve(&a, &b, SolveOptions::default()).expect("solve works");
+        assert_close_slice(&result.x, &[2.5625, 0.125, 1.5], 1e-12, 1e-12);
+        let certificate = result.certificate.expect("certificate populated");
+        assert_eq!(certificate.action, SolverAction::TriangularFastPath);
+        assert_eq!(
+            certificate.structural_evidence,
+            StructuralEvidence::Triangular
+        );
+        assert_certificate_populated(&certificate);
+    }
+
+    #[test]
+    fn casp_selects_lu_for_well_conditioned() {
+        let a = vec![vec![4.0, 1.0], vec![2.0, 3.0]];
+        let b = vec![1.0, 2.0];
+        let report = condition_diagnostics(&a).expect("condition diagnostics");
+        assert!(
+            report.rcond_estimate > 1e-2,
+            "expected well-conditioned rcond, got {}",
+            report.rcond_estimate
+        );
+        let result = solve(&a, &b, SolveOptions::default()).expect("solve works");
+        let certificate = result.certificate.expect("certificate populated");
+        assert_eq!(certificate.action, SolverAction::DirectLU);
+        assert_eq!(certificate.structural_evidence, StructuralEvidence::General);
+        assert_certificate_populated(&certificate);
+    }
+
+    #[test]
+    fn casp_selects_qr_for_moderate_condition() {
+        let a = rotated_diagonal(1.0, 1e-4);
+        let b = vec![1.0, -1.0];
+        let report = condition_diagnostics(&a).expect("condition diagnostics");
+        assert!(
+            report.rcond_estimate < 1e-2 && report.rcond_estimate > 1e-6,
+            "expected moderate rcond, got {}",
+            report.rcond_estimate
+        );
+        assert_eq!(report.structural_evidence, StructuralEvidence::General);
+        let result = solve(&a, &b, SolveOptions::default()).expect("solve works");
+        let certificate = result.certificate.expect("certificate populated");
+        assert_eq!(certificate.action, SolverAction::PivotedQR);
+        assert_certificate_populated(&certificate);
+    }
+
+    #[test]
+    fn casp_selects_svd_for_ill_conditioned() {
+        let a = rotated_diagonal(1.0, 1e-12);
+        let b = vec![1.0, -1.0];
+        let report = condition_diagnostics(&a).expect("condition diagnostics");
+        assert!(
+            report.rcond_estimate < 1e-9,
+            "expected ill-conditioned rcond, got {}",
+            report.rcond_estimate
+        );
+        let result = solve(&a, &b, SolveOptions::default()).expect("solve works");
+        let certificate = result.certificate.expect("certificate populated");
+        assert_eq!(certificate.action, SolverAction::SVDFallback);
+        assert_certificate_populated(&certificate);
+    }
+
+    #[test]
+    fn casp_certificate_populated_for_core_entrypoints() {
+        let a = vec![vec![2.0, 1.0], vec![1.0, 2.0]];
+        let b = vec![3.0, 1.0];
+
+        let solve_cert = solve(&a, &b, SolveOptions::default())
+            .expect("solve works")
+            .certificate
+            .expect("solve certificate");
+        assert_certificate_populated(&solve_cert);
+
+        let inv_cert = inv(&a, InvOptions::default())
+            .expect("inv works")
+            .certificate
+            .expect("inv certificate");
+        assert_certificate_populated(&inv_cert);
+
+        let lstsq_cert = lstsq(&a, &b, LstsqOptions::default())
+            .expect("lstsq works")
+            .certificate
+            .expect("lstsq certificate");
+        assert_certificate_populated(&lstsq_cert);
+
+        let pinv_cert = pinv(&a, PinvOptions::default())
+            .expect("pinv works")
+            .certificate
+            .expect("pinv certificate");
+        assert_eq!(pinv_cert.action, SolverAction::SVDFallback);
+        assert_certificate_populated(&pinv_cert);
     }
 
     #[test]
