@@ -205,6 +205,7 @@ pub struct SolveResult {
 pub struct InvResult {
     pub inverse: Vec<Vec<f64>>,
     pub warning: Option<LinalgWarning>,
+    pub certificate: Option<SolveCertificate>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -213,12 +214,14 @@ pub struct LstsqResult {
     pub residuals: Vec<f64>,
     pub rank: usize,
     pub singular_values: Vec<f64>,
+    pub certificate: Option<SolveCertificate>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PinvResult {
     pub pseudo_inverse: Vec<Vec<f64>>,
     pub rank: usize,
+    pub certificate: Option<SolveCertificate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -577,109 +580,8 @@ pub fn solve_banded(
 }
 
 pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError> {
-    let (rows, cols) = matrix_shape(a)?;
-    if rows != cols {
-        return Err(LinalgError::ExpectedSquareMatrix);
-    }
-    hardened_dimension_check(options.mode, rows, cols)?;
-    validate_finite_matrix(a, options.mode, options.check_finite)?;
-
-    if rows == 0 {
-        return Ok(InvResult {
-            inverse: Vec::new(),
-            warning: None,
-        });
-    }
-
-    let result = match options.assume_a.unwrap_or(MatrixAssumption::General) {
-        MatrixAssumption::General
-        | MatrixAssumption::Symmetric
-        | MatrixAssumption::Hermitian
-        | MatrixAssumption::PositiveDefinite => inv_general(a, rows, options.mode),
-        _ => inv_column_by_column(a, rows, cols, options),
-    };
-
-    emit_trace(LinalgTrace {
-        operation: "inv",
-        matrix_size: (rows, cols),
-        mode: options.mode,
-        rcond: result.as_ref().ok().and_then(|r| {
-            r.warning.as_ref().map(|w| match w {
-                LinalgWarning::IllConditioned {
-                    reciprocal_condition,
-                } => *reciprocal_condition,
-            })
-        }),
-        warning: result
-            .as_ref()
-            .ok()
-            .and_then(|r| r.warning.as_ref().map(|w| format!("{w:?}"))),
-        error: result.as_ref().err().map(|e| e.to_string()),
-    });
-
-    result
-}
-
-/// Single LU factorization + solve against identity. O(n³) instead of O(n⁴).
-fn inv_general(a: &[Vec<f64>], n: usize, mode: RuntimeMode) -> Result<InvResult, LinalgError> {
-    let matrix = dmatrix_from_rows(a)?;
-    let a_norm_1 = matrix.lp_norm(1);
-    let lu: LU<f64, Dyn, Dyn> = matrix.lu();
-    let rcond = fast_rcond_from_lu(&lu, a_norm_1, n);
-
-    // Hardened mode: reject if condition number is too high
-    if mode == RuntimeMode::Hardened && rcond < HARDENED_RCOND_THRESHOLD && rcond > 0.0 {
-        return Err(LinalgError::ConditionTooHigh {
-            rcond,
-            threshold: HARDENED_RCOND_THRESHOLD,
-        });
-    }
-
-    // Exact singularity or numerically effectively zero (to match LAPACK exact-zero pivot behavior on integer matrices)
-    if rcond == 0.0 || (rcond < f64::EPSILON && lu.u().diagonal().iter().any(|x| x.abs() < 1e-14)) {
-        return Err(LinalgError::SingularMatrix);
-    }
-
-    let identity = DMatrix::identity(n, n);
-    let inv_matrix = lu.solve(&identity).ok_or(LinalgError::SingularMatrix)?;
-
-    Ok(InvResult {
-        inverse: rows_from_dmatrix(&inv_matrix),
-        warning: rcond_warning(rcond),
-    })
-}
-
-/// Fallback for diagonal/triangular assumptions: solve column by column.
-fn inv_column_by_column(
-    a: &[Vec<f64>],
-    rows: usize,
-    cols: usize,
-    options: InvOptions,
-) -> Result<InvResult, LinalgError> {
-    let mut warning = None;
-    let mut inverse = vec![vec![0.0; cols]; rows];
-    for col in 0..cols {
-        let mut e = vec![0.0; rows];
-        e[col] = 1.0;
-        let solve_result = solve(
-            a,
-            &e,
-            SolveOptions {
-                mode: options.mode,
-                check_finite: options.check_finite,
-                assume_a: options.assume_a,
-                lower: options.lower,
-                transposed: false,
-            },
-        )?;
-        if warning.is_none() {
-            warning = solve_result.warning;
-        }
-        for (row_idx, value) in solve_result.x.iter().enumerate() {
-            inverse[row_idx][col] = *value;
-        }
-    }
-    Ok(InvResult { inverse, warning })
+    let mut portfolio = SolverPortfolio::new(options.mode, 1);
+    inv_with_casp(a, options, &mut portfolio)
 }
 
 pub fn det(a: &[Vec<f64>], mode: RuntimeMode, check_finite: bool) -> Result<f64, LinalgError> {
@@ -707,142 +609,13 @@ pub fn det(a: &[Vec<f64>], mode: RuntimeMode, check_finite: bool) -> Result<f64,
 }
 
 pub fn lstsq(a: &[Vec<f64>], b: &[f64], options: LstsqOptions) -> Result<LstsqResult, LinalgError> {
-    let (rows, cols) = matrix_shape(a)?;
-    if b.len() != rows {
-        return Err(LinalgError::IncompatibleShapes {
-            a_shape: (rows, cols),
-            b_len: b.len(),
-        });
-    }
-    hardened_dimension_check(options.mode, rows, cols)?;
-    validate_finite_matrix_and_vector(a, b, options.mode, options.check_finite)?;
-
-    if rows == 0 || cols == 0 {
-        let result = Ok(LstsqResult {
-            x: vec![0.0; cols],
-            residuals: Vec::new(),
-            rank: 0,
-            singular_values: Vec::new(),
-        });
-        emit_trace(LinalgTrace {
-            operation: "lstsq",
-            matrix_size: (rows, cols),
-            mode: options.mode,
-            rcond: None,
-            warning: None,
-            error: None,
-        });
-        return result;
-    }
-
-    let matrix = dmatrix_from_rows(a)?;
-    let rhs = DVector::from_column_slice(b);
-    let svd = safe_svd(matrix.clone(), true, true)?;
-    let singular_values: Vec<f64> = svd.singular_values.iter().copied().collect();
-    let max_s = singular_values
-        .iter()
-        .copied()
-        .fold(0.0_f64, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
-        });
-    let cond = options.cond.unwrap_or(f64::EPSILON);
-    let threshold = cond * max_s;
-    let rank = singular_values.iter().filter(|s| **s > threshold).count();
-
-    let pinv = pseudo_inverse_from_svd(&svd, threshold)?;
-    let x = pinv * rhs.clone();
-    // Only compute residuals when rows > cols AND full column rank (matches scipy behavior)
-    let residuals = if rows > cols && rank == cols {
-        let residual = rhs - matrix * x.clone();
-        vec![residual.dot(&residual)]
-    } else {
-        Vec::new()
-    };
-
-    emit_trace(LinalgTrace {
-        operation: "lstsq",
-        matrix_size: (rows, cols),
-        mode: options.mode,
-        rcond: Some(if max_s > 0.0 {
-            singular_values.last().copied().unwrap_or(0.0) / max_s
-        } else {
-            0.0
-        }),
-        warning: None,
-        error: None,
-    });
-
-    Ok(LstsqResult {
-        x: x.iter().copied().collect(),
-        residuals,
-        rank,
-        singular_values,
-    })
+    let mut portfolio = SolverPortfolio::new(options.mode, 1);
+    lstsq_with_casp(a, b, options, &mut portfolio)
 }
 
 pub fn pinv(a: &[Vec<f64>], options: PinvOptions) -> Result<PinvResult, LinalgError> {
-    let (rows, cols) = matrix_shape(a)?;
-    hardened_dimension_check(options.mode, rows, cols)?;
-    validate_finite_matrix(a, options.mode, options.check_finite)?;
-
-    let atol = options.atol.unwrap_or(0.0);
-    let rtol = options
-        .rtol
-        .unwrap_or((rows.max(cols) as f64) * f64::EPSILON);
-    if atol < 0.0 || rtol < 0.0 {
-        return Err(LinalgError::InvalidPinvThreshold);
-    }
-
-    if rows == 0 || cols == 0 {
-        let result = Ok(PinvResult {
-            pseudo_inverse: vec![vec![0.0; rows]; cols],
-            rank: 0,
-        });
-        emit_trace(LinalgTrace {
-            operation: "pinv",
-            matrix_size: (rows, cols),
-            mode: options.mode,
-            rcond: None,
-            warning: None,
-            error: None,
-        });
-        return result;
-    }
-
-    let matrix = dmatrix_from_rows(a)?;
-    let svd = safe_svd(matrix, true, true)?;
-    let singular_values = &svd.singular_values;
-    let max_s = singular_values
-        .iter()
-        .copied()
-        .fold(0.0_f64, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
-        });
-    let threshold = atol + rtol * max_s;
-    let rank = singular_values.iter().filter(|s| **s > threshold).count();
-    let pinv_matrix = pseudo_inverse_from_svd(&svd, threshold)?;
-
-    emit_trace(LinalgTrace {
-        operation: "pinv",
-        matrix_size: (rows, cols),
-        mode: options.mode,
-        rcond: None,
-        warning: None,
-        error: None,
-    });
-
-    Ok(PinvResult {
-        pseudo_inverse: rows_from_dmatrix(&pinv_matrix),
-        rank,
-    })
+    let mut portfolio = SolverPortfolio::new(options.mode, 1);
+    pinv_with_casp(a, options, &mut portfolio)
 }
 
 /// Solve Aᵀ x = b using LU factorization PA = LU => Aᵀ = Uᵀ Lᵀ P.
@@ -1116,6 +889,7 @@ fn hardened_dimension_check(
 }
 
 /// General solver with hardened-mode condition number rejection.
+#[allow(dead_code)] // Used by test-only solve_general
 fn solve_general_with_hardening(
     a: &[Vec<f64>],
     b: &[f64],
@@ -1346,13 +1120,24 @@ fn solve_with_portfolio_internal(
         mut matrix_cache,
         mut lu_cache,
     } = diagnostics;
+
+    // Hardened mode: reject ill-conditioned matrices upfront
+    if options.mode == RuntimeMode::Hardened
+        && report.rcond_estimate < HARDENED_RCOND_THRESHOLD
+        && report.rcond_estimate > 0.0
+    {
+        return Err(LinalgError::ConditionTooHigh {
+            rcond: report.rcond_estimate,
+            threshold: HARDENED_RCOND_THRESHOLD,
+        });
+    }
+
     let (selected_action, posterior, expected_losses, _) =
         portfolio.select_action(report.rcond_estimate, Some(report.structural_evidence));
 
     let mut actions = candidate_actions(report.structural_evidence);
-    actions.sort_by(|lhs, rhs| {
-        expected_losses[lhs.index()].total_cmp(&expected_losses[rhs.index()])
-    });
+    actions
+        .sort_by(|lhs, rhs| expected_losses[lhs.index()].total_cmp(&expected_losses[rhs.index()]));
     if let Some(position) = actions.iter().position(|action| *action == selected_action) {
         actions.swap(0, position);
     }
@@ -1396,17 +1181,22 @@ fn solve_with_portfolio_internal(
         matrix_size: (rows, cols),
         mode: options.mode,
         rcond: Some(report.rcond_estimate),
-        warning: result
-            .as_ref()
-            .ok()
-            .and_then(|solve_result| solve_result.warning.as_ref().map(|warning| format!("{warning:?}"))),
+        warning: result.as_ref().ok().and_then(|solve_result| {
+            solve_result
+                .warning
+                .as_ref()
+                .map(|warning| format!("{warning:?}"))
+        }),
         error: result.as_ref().err().map(|e| e.to_string()),
     });
 
     if record_evidence {
         let fallback_active =
             actual_action != selected_action || !matches!(actual_action, SolverAction::DirectLU);
-        let backward_error = result.as_ref().ok().and_then(|solve_result| solve_result.backward_error);
+        let backward_error = result
+            .as_ref()
+            .ok()
+            .and_then(|solve_result| solve_result.backward_error);
         portfolio.record_evidence(SolverEvidenceEntry {
             component: "solver_portfolio",
             matrix_shape: (rows, cols),
@@ -1430,6 +1220,456 @@ pub fn solve_with_casp(
     portfolio: &mut SolverPortfolio,
 ) -> Result<SolveResult, LinalgError> {
     solve_with_portfolio_internal(a, b, options, portfolio, "solve_with_casp", true)
+}
+
+/// Compute matrix inverse with CASP-driven algorithm selection.
+///
+/// Uses condition diagnostics to select between LU (fast, well-conditioned),
+/// QR (stable, moderate conditioning), or SVD (robust, ill-conditioned) paths.
+pub fn inv_with_casp(
+    a: &[Vec<f64>],
+    options: InvOptions,
+    portfolio: &mut SolverPortfolio,
+) -> Result<InvResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok(InvResult {
+            inverse: Vec::new(),
+            warning: None,
+            certificate: None,
+        });
+    }
+
+    let diagnostics = condition_diagnostics_with_assumption(a, options.assume_a)?;
+    let ConditionDiagnosticsWork {
+        report,
+        matrix_cache,
+        lu_cache,
+    } = diagnostics;
+
+    // For truly singular matrices, error immediately - inv() should not fall back to pinv
+    if report.rcond_estimate == 0.0 {
+        return Err(LinalgError::SingularMatrix);
+    }
+
+    let (selected_action, posterior, expected_losses, _) =
+        portfolio.select_action(report.rcond_estimate, Some(report.structural_evidence));
+
+    // For inv, we try actions in order of expected loss
+    let mut actions = vec![
+        SolverAction::DirectLU,
+        SolverAction::PivotedQR,
+        SolverAction::SVDFallback,
+    ];
+    actions
+        .sort_by(|lhs, rhs| expected_losses[lhs.index()].total_cmp(&expected_losses[rhs.index()]));
+    if let Some(position) = actions.iter().position(|action| *action == selected_action) {
+        actions.swap(0, position);
+    }
+
+    let mut last_error = None;
+    let mut actual_action = selected_action;
+
+    let result = actions
+        .into_iter()
+        .find_map(|action| {
+            match dispatch_inv_action(action, a, rows, options.mode, &matrix_cache, &lu_cache) {
+                Ok(mut inv_result) => {
+                    let fallback_active = action != selected_action;
+                    inv_result.certificate = Some(SolveCertificate {
+                        action,
+                        matrix_shape: (rows, cols),
+                        rcond_estimate: report.rcond_estimate,
+                        structural_evidence: report.structural_evidence,
+                        posterior: posterior.to_vec(),
+                        expected_losses: expected_losses.to_vec(),
+                        chosen_expected_loss: expected_losses[action.index()],
+                        fallback_active,
+                    });
+                    actual_action = action;
+                    Some(Ok(inv_result))
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                    None
+                }
+            }
+        })
+        .unwrap_or_else(|| Err(last_error.unwrap_or(LinalgError::SingularMatrix)));
+
+    emit_trace(LinalgTrace {
+        operation: "inv_with_casp",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: Some(report.rcond_estimate),
+        warning: result
+            .as_ref()
+            .ok()
+            .and_then(|r| r.warning.as_ref().map(|w| format!("{w:?}"))),
+        error: result.as_ref().err().map(|e| e.to_string()),
+    });
+
+    portfolio.record_evidence(SolverEvidenceEntry {
+        component: "inv_with_casp",
+        matrix_shape: (rows, cols),
+        rcond_estimate: report.rcond_estimate,
+        chosen_action: actual_action,
+        posterior: posterior.to_vec(),
+        expected_losses: expected_losses.to_vec(),
+        chosen_expected_loss: expected_losses[actual_action.index()],
+        fallback_active: actual_action != selected_action,
+        backward_error: None,
+    });
+
+    result
+}
+
+fn dispatch_inv_action(
+    action: SolverAction,
+    a: &[Vec<f64>],
+    n: usize,
+    mode: RuntimeMode,
+    matrix_cache: &Option<DMatrix<f64>>,
+    lu_cache: &Option<LU<f64, Dyn, Dyn>>,
+) -> Result<InvResult, LinalgError> {
+    match action {
+        SolverAction::DirectLU
+        | SolverAction::DiagonalFastPath
+        | SolverAction::TriangularFastPath => {
+            // Use cached LU if available
+            let (matrix, lu) = match (matrix_cache, lu_cache) {
+                (Some(m), Some(lu)) => (m.clone(), lu.clone()),
+                _ => {
+                    let m = dmatrix_from_rows(a)?;
+                    let lu = m.clone().lu();
+                    (m, lu)
+                }
+            };
+            let a_norm_1 = matrix.lp_norm(1);
+            let rcond = fast_rcond_from_lu(&lu, a_norm_1, n);
+
+            if mode == RuntimeMode::Hardened && rcond < HARDENED_RCOND_THRESHOLD && rcond > 0.0 {
+                return Err(LinalgError::ConditionTooHigh {
+                    rcond,
+                    threshold: HARDENED_RCOND_THRESHOLD,
+                });
+            }
+
+            if rcond == 0.0
+                || (rcond < f64::EPSILON && lu.u().diagonal().iter().any(|x| x.abs() < 1e-14))
+            {
+                return Err(LinalgError::SingularMatrix);
+            }
+
+            let identity = DMatrix::identity(n, n);
+            let inv_matrix = lu.solve(&identity).ok_or(LinalgError::SingularMatrix)?;
+
+            Ok(InvResult {
+                inverse: rows_from_dmatrix(&inv_matrix),
+                warning: rcond_warning(rcond),
+                certificate: None,
+            })
+        }
+        SolverAction::PivotedQR => {
+            // QR-based inverse: solve A*X = I via QR
+            let matrix = match matrix_cache {
+                Some(m) => m.clone(),
+                None => dmatrix_from_rows(a)?,
+            };
+            let qr = matrix.clone().qr();
+            let identity = DMatrix::identity(n, n);
+            let inv_matrix = qr.solve(&identity).ok_or(LinalgError::SingularMatrix)?;
+            let a_norm_1 = matrix.lp_norm(1);
+            let inv_norm_1 = inv_matrix.lp_norm(1);
+            let rcond = if a_norm_1 > 0.0 && inv_norm_1 > 0.0 {
+                1.0 / (a_norm_1 * inv_norm_1)
+            } else {
+                0.0
+            };
+
+            Ok(InvResult {
+                inverse: rows_from_dmatrix(&inv_matrix),
+                warning: rcond_warning(rcond),
+                certificate: None,
+            })
+        }
+        SolverAction::SVDFallback => {
+            // SVD-based inverse via pseudoinverse
+            let matrix = match matrix_cache {
+                Some(m) => m.clone(),
+                None => dmatrix_from_rows(a)?,
+            };
+            let svd = safe_svd(matrix.clone(), true, true)?;
+            let threshold = f64::EPSILON
+                * (n as f64)
+                * svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+            let pinv = pseudo_inverse_from_svd(&svd, threshold)?;
+            let a_norm_1 = matrix.lp_norm(1);
+            let inv_norm_1 = pinv.lp_norm(1);
+            let rcond = if a_norm_1 > 0.0 && inv_norm_1 > 0.0 {
+                1.0 / (a_norm_1 * inv_norm_1)
+            } else {
+                0.0
+            };
+
+            Ok(InvResult {
+                inverse: rows_from_dmatrix(&pinv),
+                warning: rcond_warning(rcond),
+                certificate: None,
+            })
+        }
+    }
+}
+
+/// Compute least squares solution with CASP-driven algorithm selection.
+///
+/// Uses condition diagnostics to select between QR (fast, well-conditioned)
+/// or SVD (robust, rank-deficient/ill-conditioned) paths.
+pub fn lstsq_with_casp(
+    a: &[Vec<f64>],
+    b: &[f64],
+    options: LstsqOptions,
+    portfolio: &mut SolverPortfolio,
+) -> Result<LstsqResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    if b.len() != rows {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (rows, cols),
+            b_len: b.len(),
+        });
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix_and_vector(a, b, options.mode, options.check_finite)?;
+
+    if rows == 0 || cols == 0 {
+        return Ok(LstsqResult {
+            x: vec![0.0; cols],
+            residuals: Vec::new(),
+            rank: 0,
+            singular_values: Vec::new(),
+            certificate: None,
+        });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let rhs = DVector::from_column_slice(b);
+
+    // Compute condition estimate for lstsq
+    let svd_for_cond = safe_svd(matrix.clone(), false, false)?;
+    let singular_values: Vec<f64> = svd_for_cond.singular_values.iter().copied().collect();
+    let max_s = singular_values.iter().copied().fold(0.0_f64, |acc, v| {
+        if acc.is_nan() || v.is_nan() {
+            f64::NAN
+        } else {
+            acc.max(v)
+        }
+    });
+    let min_s = singular_values.iter().copied().fold(f64::MAX, |acc, v| {
+        if acc.is_nan() || v.is_nan() {
+            f64::NAN
+        } else if v > 1e-15 {
+            acc.min(v)
+        } else {
+            acc
+        }
+    });
+    let rcond_estimate = if max_s > 0.0 { min_s / max_s } else { 0.0 };
+
+    let (selected_action, posterior, expected_losses, _) =
+        portfolio.select_action(rcond_estimate, None);
+
+    // For lstsq, QR can only solve square systems in nalgebra; use SVD for non-square
+    // Also prefer SVD for ill-conditioned or rank-deficient cases
+    let action = if rows == cols
+        && matches!(
+            selected_action,
+            SolverAction::PivotedQR
+                | SolverAction::DirectLU
+                | SolverAction::DiagonalFastPath
+                | SolverAction::TriangularFastPath
+        )
+        && rcond_estimate > f64::EPSILON
+    {
+        SolverAction::PivotedQR
+    } else {
+        SolverAction::SVDFallback
+    };
+
+    let cond = options.cond.unwrap_or(f64::EPSILON);
+    let threshold = cond * max_s;
+
+    let (x, rank, singular_values_out) = match action {
+        SolverAction::PivotedQR => {
+            // QR solve (only for square, well-conditioned systems)
+            let qr = matrix.clone().qr();
+            let x_qr = qr.solve(&rhs).ok_or(LinalgError::SingularMatrix)?;
+            let rank = singular_values.iter().filter(|s| **s > threshold).count();
+            (x_qr, rank, singular_values)
+        }
+        _ => {
+            // SVD solve (standard lstsq path)
+            let svd = safe_svd(matrix.clone(), true, true)?;
+            let pinv = pseudo_inverse_from_svd(&svd, threshold)?;
+            let x_svd = pinv * rhs.clone();
+            let rank = svd
+                .singular_values
+                .iter()
+                .filter(|s| **s > threshold)
+                .count();
+            let sv: Vec<f64> = svd.singular_values.iter().copied().collect();
+            (x_svd, rank, sv)
+        }
+    };
+
+    let residuals = if rows > cols && rank == cols {
+        let residual = rhs - matrix * x.clone();
+        vec![residual.dot(&residual)]
+    } else {
+        Vec::new()
+    };
+
+    let certificate = SolveCertificate {
+        action,
+        matrix_shape: (rows, cols),
+        rcond_estimate,
+        structural_evidence: StructuralEvidence::General,
+        posterior: posterior.to_vec(),
+        expected_losses: expected_losses.to_vec(),
+        chosen_expected_loss: expected_losses[action.index()],
+        fallback_active: action != selected_action,
+    };
+
+    emit_trace(LinalgTrace {
+        operation: "lstsq_with_casp",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: Some(rcond_estimate),
+        warning: None,
+        error: None,
+    });
+
+    portfolio.record_evidence(SolverEvidenceEntry {
+        component: "lstsq_with_casp",
+        matrix_shape: (rows, cols),
+        rcond_estimate,
+        chosen_action: action,
+        posterior: posterior.to_vec(),
+        expected_losses: expected_losses.to_vec(),
+        chosen_expected_loss: expected_losses[action.index()],
+        fallback_active: action != selected_action,
+        backward_error: None,
+    });
+
+    Ok(LstsqResult {
+        x: x.iter().copied().collect(),
+        residuals,
+        rank,
+        singular_values: singular_values_out,
+        certificate: Some(certificate),
+    })
+}
+
+/// Compute pseudoinverse with CASP-driven threshold selection.
+///
+/// Always uses SVD but records conditioning diagnostics and stability certificate
+/// for audit trail and threshold tuning.
+pub fn pinv_with_casp(
+    a: &[Vec<f64>],
+    options: PinvOptions,
+    portfolio: &mut SolverPortfolio,
+) -> Result<PinvResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    let atol = options.atol.unwrap_or(0.0);
+    let rtol = options
+        .rtol
+        .unwrap_or((rows.max(cols) as f64) * f64::EPSILON);
+    if atol < 0.0 || rtol < 0.0 {
+        return Err(LinalgError::InvalidPinvThreshold);
+    }
+
+    if rows == 0 || cols == 0 {
+        return Ok(PinvResult {
+            pseudo_inverse: vec![vec![0.0; rows]; cols],
+            rank: 0,
+            certificate: None,
+        });
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let svd = safe_svd(matrix, true, true)?;
+    let singular_values = &svd.singular_values;
+    let max_s = singular_values.iter().copied().fold(0.0_f64, |acc, v| {
+        if acc.is_nan() || v.is_nan() {
+            f64::NAN
+        } else {
+            acc.max(v)
+        }
+    });
+    let min_s = singular_values.iter().copied().fold(f64::MAX, |acc, v| {
+        if acc.is_nan() || v.is_nan() {
+            f64::NAN
+        } else if v > 1e-15 {
+            acc.min(v)
+        } else {
+            acc
+        }
+    });
+    let rcond_estimate = if max_s > 0.0 { min_s / max_s } else { 0.0 };
+
+    let threshold = atol + rtol * max_s;
+    let rank = singular_values.iter().filter(|s| **s > threshold).count();
+    let pinv_matrix = pseudo_inverse_from_svd(&svd, threshold)?;
+
+    // For pinv, always SVD but record the portfolio decision for audit
+    let (_, posterior, expected_losses, _) = portfolio.select_action(rcond_estimate, None);
+    let action = SolverAction::SVDFallback;
+
+    let certificate = SolveCertificate {
+        action,
+        matrix_shape: (rows, cols),
+        rcond_estimate,
+        structural_evidence: StructuralEvidence::General,
+        posterior: posterior.to_vec(),
+        expected_losses: expected_losses.to_vec(),
+        chosen_expected_loss: expected_losses[action.index()],
+        fallback_active: false,
+    };
+
+    emit_trace(LinalgTrace {
+        operation: "pinv_with_casp",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: Some(rcond_estimate),
+        warning: None,
+        error: None,
+    });
+
+    portfolio.record_evidence(SolverEvidenceEntry {
+        component: "pinv_with_casp",
+        matrix_shape: (rows, cols),
+        rcond_estimate,
+        chosen_action: action,
+        posterior: posterior.to_vec(),
+        expected_losses: expected_losses.to_vec(),
+        chosen_expected_loss: expected_losses[action.index()],
+        fallback_active: false,
+        backward_error: None,
+    });
+
+    Ok(PinvResult {
+        pseudo_inverse: rows_from_dmatrix(&pinv_matrix),
+        rank,
+        certificate: Some(certificate),
+    })
 }
 
 fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
