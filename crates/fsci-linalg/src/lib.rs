@@ -1353,6 +1353,11 @@ fn dispatch_inv_action(
             };
             let a_norm_1 = matrix.lp_norm(1);
             let rcond = fast_rcond_from_lu(&lu, a_norm_1, n);
+            let pivot_tiny = lu
+                .u()
+                .diagonal()
+                .iter()
+                .any(|x| x.abs() <= f64::EPSILON * a_norm_1.max(1.0));
 
             if mode == RuntimeMode::Hardened && rcond < HARDENED_RCOND_THRESHOLD && rcond > 0.0 {
                 return Err(LinalgError::ConditionTooHigh {
@@ -1361,9 +1366,7 @@ fn dispatch_inv_action(
                 });
             }
 
-            if rcond == 0.0
-                || (rcond < f64::EPSILON && lu.u().diagonal().iter().any(|x| x.abs() < 1e-14))
-            {
+            if rcond == 0.0 || rcond < f64::EPSILON || pivot_tiny {
                 return Err(LinalgError::SingularMatrix);
             }
 
@@ -1392,6 +1395,9 @@ fn dispatch_inv_action(
             } else {
                 0.0
             };
+            if rcond == 0.0 || rcond < f64::EPSILON {
+                return Err(LinalgError::SingularMatrix);
+            }
 
             Ok(InvResult {
                 inverse: rows_from_dmatrix(&inv_matrix),
@@ -1406,9 +1412,16 @@ fn dispatch_inv_action(
                 None => dmatrix_from_rows(a)?,
             };
             let svd = safe_svd(matrix.clone(), true, true)?;
-            let threshold = f64::EPSILON
-                * (n as f64)
-                * svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+            let max_s = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+            let threshold = f64::EPSILON * (n as f64) * max_s;
+            let rank = svd
+                .singular_values
+                .iter()
+                .filter(|s| **s > threshold)
+                .count();
+            if rank < n {
+                return Err(LinalgError::SingularMatrix);
+            }
             let pinv = pseudo_inverse_from_svd(&svd, threshold)?;
             let a_norm_1 = matrix.lp_norm(1);
             let inv_norm_1 = pinv.lp_norm(1);
@@ -1473,13 +1486,16 @@ pub fn lstsq_with_casp(
     let min_s = singular_values.iter().copied().fold(f64::MAX, |acc, v| {
         if acc.is_nan() || v.is_nan() {
             f64::NAN
-        } else if v > 1e-15 {
-            acc.min(v)
         } else {
-            acc
+            acc.min(v)
         }
     });
     let rcond_estimate = if max_s > 0.0 { min_s / max_s } else { 0.0 };
+
+    let cond = options.cond.unwrap_or(f64::EPSILON);
+    let threshold = cond * max_s;
+    let rank = singular_values.iter().filter(|s| **s > threshold).count();
+    let full_rank = rank == rows.min(cols);
 
     let (selected_action, posterior, expected_losses, _) =
         portfolio.select_action(rcond_estimate, None);
@@ -1487,6 +1503,7 @@ pub fn lstsq_with_casp(
     // For lstsq, QR can only solve square systems in nalgebra; use SVD for non-square
     // Also prefer SVD for ill-conditioned or rank-deficient cases
     let action = if rows == cols
+        && full_rank
         && matches!(
             selected_action,
             SolverAction::PivotedQR
@@ -1500,9 +1517,6 @@ pub fn lstsq_with_casp(
     } else {
         SolverAction::SVDFallback
     };
-
-    let cond = options.cond.unwrap_or(f64::EPSILON);
-    let threshold = cond * max_s;
 
     let (x, rank, singular_values_out) = match action {
         SolverAction::PivotedQR => {
