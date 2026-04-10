@@ -24,6 +24,15 @@ def _as_float(value: Any) -> float:
     return float(value)
 
 
+def _to_float_list(value: Any) -> List[float]:
+    converted = _to_list(value)
+    if converted is None:
+        return []
+    if isinstance(converted, (float, int)):
+        return [float(converted)]
+    return [float(v) for v in converted]
+
+
 def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
     operation = case["operation"]
     case_id = case["case_id"]
@@ -158,10 +167,10 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
                 "status": "ok",
                 "result_kind": "lstsq",
                 "result": {
-                    "x": [float(v) for v in _to_list(x)],
-                    "residuals": [float(v) for v in _to_list(residuals)],
+                    "x": _to_float_list(x),
+                    "residuals": _to_float_list(residuals),
                     "rank": int(rank),
-                    "singular_values": [float(v) for v in _to_list(singular_values)],
+                    "singular_values": _to_float_list(singular_values),
                 },
                 "error": None,
             }
@@ -243,6 +252,11 @@ def main() -> int:
         "packet_id": fixture.get("packet_id", "unknown"),
         "family": fixture.get("family", "unknown"),
         "generated_unix_ms": int(time.time() * 1000),
+        "runtime": {
+            "python_version": sys.version.split()[0],
+            "numpy_version": getattr(np, "__version__", "unknown"),
+            "scipy_version": getattr(sys.modules.get("scipy"), "__version__", "unknown"),
+        },
         "case_outputs": case_outputs,
     }
 

@@ -43,7 +43,7 @@ use fsci_special::{
 };
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -124,6 +124,8 @@ pub enum HarnessError {
         path: PathBuf,
         source: serde_json::Error,
     },
+    #[error("oracle capture mismatch: {detail}")]
+    OracleCaptureMismatch { detail: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1152,7 +1154,25 @@ pub struct OracleCapture {
     pub packet_id: String,
     pub family: String,
     pub generated_unix_ms: u128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<OracleRuntimeInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<OracleCaptureProvenance>,
     pub case_outputs: Vec<OracleCaseOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OracleRuntimeInfo {
+    pub python_version: String,
+    pub numpy_version: String,
+    pub scipy_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OracleCaptureProvenance {
+    pub fixture_input_blake3: String,
+    pub oracle_output_blake3: String,
+    pub capture_blake3: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1334,6 +1354,63 @@ pub fn run_linalg_packet(
     for case in &fixture.cases {
         let observed = execute_linalg_case(case);
         let (passed, message) = compare_linalg_case(case.expected(), &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+fn run_linalg_packet_against_oracle_capture(
+    config: &HarnessConfig,
+    fixture_name: &str,
+    oracle_capture: &OracleCapture,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: LinalgPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    if oracle_capture.packet_id != fixture.packet_id {
+        return Err(HarnessError::OracleCaptureMismatch {
+            detail: format!(
+                "packet id mismatch: fixture={} oracle={}",
+                fixture.packet_id, oracle_capture.packet_id
+            ),
+        });
+    }
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_linalg_case(case);
+        let Some(oracle_case) = oracle_capture
+            .case_outputs
+            .iter()
+            .find(|entry| entry.case_id == case.case_id())
+        else {
+            case_results.push(CaseResult {
+                case_id: case.case_id().to_owned(),
+                passed: false,
+                message: "missing oracle capture output".to_owned(),
+            });
+            continue;
+        };
+
+        let (passed, message, _, _) =
+            compare_linalg_case_against_oracle(case, oracle_case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
             passed,
@@ -2170,28 +2247,36 @@ pub fn run_linalg_packet_with_oracle_capture(
     fixture_name: &str,
     oracle: &PythonOracleConfig,
 ) -> Result<PacketReport, HarnessError> {
-    let report = run_linalg_packet(config, fixture_name)?;
-    let oracle_result = capture_linalg_oracle(config, fixture_name, oracle);
-    if let Err(err) = oracle_result {
-        if oracle.required {
-            return Err(err);
+    match capture_linalg_oracle(config, fixture_name, oracle) {
+        Ok(output_path) => {
+            let capture = load_oracle_capture(&output_path)?;
+            run_linalg_packet_against_oracle_capture(config, fixture_name, &capture)
         }
-        let failure_path = config
-            .artifact_dir_for(&report.packet_id)
-            .join("oracle_capture.error.txt");
-        fs::create_dir_all(config.artifact_dir_for(&report.packet_id)).map_err(|source| {
-            HarnessError::ArtifactIo {
-                path: config.artifact_dir_for(&report.packet_id),
-                source,
+        Err(err) => {
+            if oracle.required {
+                return Err(err);
             }
-        })?;
-        fs::write(&failure_path, format!("{err}")).map_err(|source| HarnessError::ArtifactIo {
-            path: failure_path,
-            source,
-        })?;
-    }
 
-    Ok(report)
+            let report = run_linalg_packet(config, fixture_name)?;
+            let failure_path = config
+                .artifact_dir_for(&report.packet_id)
+                .join("oracle_capture.error.txt");
+            fs::create_dir_all(config.artifact_dir_for(&report.packet_id)).map_err(|source| {
+                HarnessError::ArtifactIo {
+                    path: config.artifact_dir_for(&report.packet_id),
+                    source,
+                }
+            })?;
+            fs::write(&failure_path, format!("{err}")).map_err(|source| {
+                HarnessError::ArtifactIo {
+                    path: failure_path,
+                    source,
+                }
+            })?;
+
+            Ok(report)
+        }
+    }
 }
 
 pub fn capture_linalg_oracle(
@@ -2246,7 +2331,8 @@ pub fn capture_linalg_oracle(
         return Err(HarnessError::PythonFailed { python_bin, stderr });
     }
 
-    let parsed = load_oracle_capture(&output_path)?;
+    let mut parsed = load_oracle_capture(&output_path)?;
+    attach_oracle_capture_provenance(&mut parsed, raw.as_bytes())?;
     let normalized =
         serde_json::to_vec_pretty(&parsed).map_err(|e| HarnessError::RaptorQ(e.to_string()))?;
     fs::write(&output_path, normalized).map_err(|source| HarnessError::ArtifactIo {
@@ -2266,6 +2352,157 @@ pub fn load_oracle_capture(path: &Path) -> Result<OracleCapture, HarnessError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+fn attach_oracle_capture_provenance(
+    capture: &mut OracleCapture,
+    fixture_input: &[u8],
+) -> Result<(), HarnessError> {
+    let oracle_output = serde_json::to_vec(&capture.case_outputs)
+        .map_err(|e| HarnessError::RaptorQ(e.to_string()))?;
+    let fixture_input_blake3 = hash(fixture_input).to_hex().to_string();
+    let oracle_output_blake3 = hash(&oracle_output).to_hex().to_string();
+    let mut capture_hasher = blake3::Hasher::new();
+    if let Some(runtime) = &capture.runtime {
+        capture_hasher.update(runtime.python_version.as_bytes());
+        capture_hasher.update(runtime.numpy_version.as_bytes());
+        capture_hasher.update(runtime.scipy_version.as_bytes());
+    }
+    capture_hasher.update(fixture_input);
+    capture_hasher.update(&oracle_output);
+    capture.provenance = Some(OracleCaptureProvenance {
+        fixture_input_blake3,
+        oracle_output_blake3,
+        capture_blake3: capture_hasher.finalize().to_hex().to_string(),
+    });
+    Ok(())
+}
+
+fn oracle_result_field<T: DeserializeOwned>(
+    result: &serde_json::Value,
+    field: &str,
+    case_id: &str,
+) -> Result<T, String> {
+    let value = result
+        .get(field)
+        .cloned()
+        .ok_or_else(|| format!("oracle result for {case_id} missing field `{field}`"))?;
+    serde_json::from_value(value)
+        .map_err(|e| format!("oracle result for {case_id} has invalid `{field}`: {e}"))
+}
+
+fn linalg_expected_tolerance(expected: &LinalgExpectedOutcome) -> Option<(f64, f64)> {
+    match expected {
+        LinalgExpectedOutcome::Vector { atol, rtol, .. }
+        | LinalgExpectedOutcome::Matrix { atol, rtol, .. }
+        | LinalgExpectedOutcome::Scalar { atol, rtol, .. }
+        | LinalgExpectedOutcome::Lstsq { atol, rtol, .. }
+        | LinalgExpectedOutcome::Pinv { atol, rtol, .. } => Some((*atol, *rtol)),
+        LinalgExpectedOutcome::Error { .. } => None,
+    }
+}
+
+fn linalg_expected_warning(expected: &LinalgExpectedOutcome) -> Option<bool> {
+    match expected {
+        LinalgExpectedOutcome::Vector {
+            expect_warning_ill_conditioned,
+            ..
+        } => *expect_warning_ill_conditioned,
+        _ => None,
+    }
+}
+
+fn oracle_case_to_expected(
+    case: &LinalgCase,
+    oracle_case: &OracleCaseOutput,
+) -> Result<LinalgExpectedOutcome, String> {
+    let (atol, rtol) = linalg_expected_tolerance(case.expected()).ok_or_else(|| {
+        format!(
+            "case {} cannot use oracle numeric comparison for error-only expectation",
+            case.case_id()
+        )
+    })?;
+
+    match oracle_case.result_kind.as_str() {
+        "vector" => Ok(LinalgExpectedOutcome::Vector {
+            values: oracle_result_field(&oracle_case.result, "values", case.case_id())?,
+            atol,
+            rtol,
+            expect_warning_ill_conditioned: linalg_expected_warning(case.expected()),
+        }),
+        "matrix" => Ok(LinalgExpectedOutcome::Matrix {
+            values: oracle_result_field(&oracle_case.result, "values", case.case_id())?,
+            atol,
+            rtol,
+        }),
+        "scalar" => Ok(LinalgExpectedOutcome::Scalar {
+            value: oracle_result_field(&oracle_case.result, "value", case.case_id())?,
+            atol,
+            rtol,
+        }),
+        "lstsq" => Ok(LinalgExpectedOutcome::Lstsq {
+            x: oracle_result_field(&oracle_case.result, "x", case.case_id())?,
+            residuals: oracle_result_field(&oracle_case.result, "residuals", case.case_id())?,
+            rank: oracle_result_field(&oracle_case.result, "rank", case.case_id())?,
+            singular_values: oracle_result_field(
+                &oracle_case.result,
+                "singular_values",
+                case.case_id(),
+            )?,
+            atol,
+            rtol,
+        }),
+        "pinv" => Ok(LinalgExpectedOutcome::Pinv {
+            values: oracle_result_field(&oracle_case.result, "values", case.case_id())?,
+            rank: oracle_result_field(&oracle_case.result, "rank", case.case_id())?,
+            atol,
+            rtol,
+        }),
+        other => Err(format!(
+            "oracle result for {} has unsupported result_kind `{other}`",
+            case.case_id()
+        )),
+    }
+}
+
+fn compare_linalg_case_against_oracle(
+    case: &LinalgCase,
+    oracle_case: &OracleCaseOutput,
+    observed: &Result<LinalgObservedOutcome, LinalgError>,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    if oracle_case.status != "ok" {
+        return match observed {
+            Err(actual) => (
+                true,
+                format!(
+                    "both raised errors (oracle=`{}`, rust=`{actual}`)",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+            Ok(_) => (
+                false,
+                format!(
+                    "oracle errored (`{}`) but rust succeeded",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+        };
+    }
+
+    match oracle_case_to_expected(case, oracle_case) {
+        Ok(expected) => compare_linalg_case_differential(&expected, observed),
+        Err(message) => (false, message, None, None),
+    }
 }
 
 pub fn load_packet_reports(config: &HarnessConfig) -> Result<Vec<PacketReport>, HarnessError> {
@@ -5067,12 +5304,15 @@ mod tests {
     use super::style_for_case_result;
     use super::{
         AggregateParityReport, ArrayApiPacketFixture, ConformanceReport, DifferentialOracleConfig,
-        HarnessConfig, LinalgPacketFixture, OptimizePacketFixture, OracleStatus, PacketFamily,
-        PythonOracleConfig, SpecialPacketFixture, aggregate_packet_reports, discover_fixtures,
-        ensure_artifact_layout, load_oracle_capture, run_array_api_packet, run_casp_packet,
-        run_differential_test, run_fft_packet, run_linalg_packet, run_optimize_packet, run_smoke,
-        run_sparse_packet, run_special_packet, run_validate_tol_packet, write_parity_artifacts,
+        HarnessConfig, LinalgCase, LinalgExpectedOutcome, LinalgPacketFixture,
+        OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
+        SpecialPacketFixture, aggregate_packet_reports, discover_fixtures, ensure_artifact_layout,
+        load_oracle_capture, run_array_api_packet, run_casp_packet, run_differential_test,
+        run_fft_packet, run_linalg_packet, run_linalg_packet_with_oracle_capture,
+        run_optimize_packet, run_smoke, run_sparse_packet, run_special_packet,
+        run_validate_tol_packet, write_parity_artifacts,
     };
+    use fsci_runtime::RuntimeMode;
     use serde::Serialize;
     use std::fs;
     use std::path::PathBuf;
@@ -5164,6 +5404,11 @@ result = {
     "packet_id": fixture["packet_id"],
     "family": fixture["family"],
     "generated_unix_ms": 0,
+    "runtime": {
+        "python_version": "3.11.0",
+        "numpy_version": "2.0.0",
+        "scipy_version": "mock-1.0",
+    },
     "case_outputs": [
         {
             "case_id": c["case_id"],
@@ -5196,11 +5441,122 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let parsed = load_oracle_capture(&output_path).expect("oracle capture parse succeeds");
         assert_eq!(parsed.packet_id, "FSCI-P2C-002");
         assert!(!parsed.case_outputs.is_empty());
+        assert_eq!(
+            parsed
+                .runtime
+                .as_ref()
+                .expect("runtime metadata should be present")
+                .scipy_version,
+            "mock-1.0"
+        );
+        let provenance = parsed
+            .provenance
+            .as_ref()
+            .expect("provenance must be attached after capture");
+        assert!(!provenance.fixture_input_blake3.is_empty());
+        assert!(!provenance.oracle_output_blake3.is_empty());
+        assert!(!provenance.capture_blake3.is_empty());
 
         let fixture_raw = fs::read_to_string(fixture_dst).expect("read fixture");
         let fixture: LinalgPacketFixture =
             serde_json::from_str(&fixture_raw).expect("fixture parse");
         assert_eq!(parsed.case_outputs.len(), fixture.cases.len());
+    }
+
+    #[test]
+    fn run_linalg_packet_with_mock_oracle_uses_oracle_values() {
+        let unique = format!("fsci-conformance-mock-run-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let fixtures = root.join("fixtures");
+        fs::create_dir_all(&fixtures).expect("create fixtures");
+
+        let fixture_dst = fixtures.join("FSCI-P2C-002_linalg_core.json");
+        let fixture = LinalgPacketFixture {
+            packet_id: "FSCI-P2C-002".to_owned(),
+            family: "linalg_core".to_owned(),
+            cases: vec![LinalgCase::Solve {
+                case_id: "solve_general_2x2".to_owned(),
+                mode: RuntimeMode::Strict,
+                a: vec![vec![3.0, 2.0], vec![1.0, 2.0]],
+                b: vec![5.0, 5.0],
+                assume_a: None,
+                lower: None,
+                transposed: None,
+                check_finite: None,
+                expected: LinalgExpectedOutcome::Vector {
+                    values: vec![999.0, -999.0],
+                    atol: 1e-12,
+                    rtol: 1e-12,
+                    expect_warning_ill_conditioned: None,
+                },
+            }],
+        };
+        fs::write(
+            &fixture_dst,
+            serde_json::to_vec_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let script_path = root.join("mock_oracle.py");
+        let script = r#"
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--fixture", required=True)
+parser.add_argument("--output", required=True)
+parser.add_argument("--oracle-root", required=True)
+args = parser.parse_args()
+
+fixture = json.loads(Path(args.fixture).read_text())
+result = {
+    "packet_id": fixture["packet_id"],
+    "family": fixture["family"],
+    "generated_unix_ms": 0,
+    "runtime": {
+        "python_version": "3.11.0",
+        "numpy_version": "2.0.0",
+        "scipy_version": "mock-1.0",
+    },
+    "case_outputs": [
+        {
+            "case_id": "solve_general_2x2",
+            "status": "ok",
+            "result_kind": "vector",
+            "result": {"values": [0.0, 2.5]},
+            "error": None,
+        }
+    ],
+}
+Path(args.output).write_text(json.dumps(result, indent=2))
+"#;
+        fs::write(&script_path, script).expect("write mock script");
+
+        let cfg = HarnessConfig {
+            oracle_root: PathBuf::from("/tmp/nonexistent-oracle"),
+            fixture_root: fixtures,
+            strict_mode: true,
+        };
+        let oracle = PythonOracleConfig {
+            python_bin: PathBuf::from("python3"),
+            script_path,
+            required: true,
+        };
+
+        let report =
+            run_linalg_packet_with_oracle_capture(&cfg, "FSCI-P2C-002_linalg_core.json", &oracle)
+                .expect("oracle-backed linalg packet runs");
+        assert_eq!(report.failed_cases, 0);
+        assert_eq!(report.passed_cases, 1);
+
+        let capture_path = cfg
+            .artifact_dir_for("FSCI-P2C-002")
+            .join("oracle_capture.json");
+        let capture = load_oracle_capture(&capture_path).expect("load captured oracle output");
+        assert_eq!(capture.case_outputs.len(), 1);
+        assert!(capture.provenance.is_some());
     }
 
     #[test]
@@ -5237,9 +5593,13 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             ..PythonOracleConfig::default()
         };
 
-        let output_path =
-            super::capture_linalg_oracle(&cfg, "FSCI-P2C-002_linalg_core.json", &oracle)
-                .expect("scipy oracle capture succeeds");
+        let report =
+            run_linalg_packet_with_oracle_capture(&cfg, "FSCI-P2C-002_linalg_core.json", &oracle)
+                .expect("scipy-backed linalg packet runs");
+        assert_eq!(report.failed_cases, 0);
+        let output_path = cfg
+            .artifact_dir_for("FSCI-P2C-002")
+            .join("oracle_capture.json");
         let parsed = load_oracle_capture(&output_path).expect("oracle capture parse succeeds");
 
         let fixture_raw = fs::read_to_string(fixture_dst).expect("read fixture");
@@ -5247,6 +5607,15 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             serde_json::from_str(&fixture_raw).expect("fixture parse");
         assert_eq!(parsed.packet_id, "FSCI-P2C-002");
         assert_eq!(parsed.case_outputs.len(), fixture.cases.len());
+        assert!(
+            parsed
+                .provenance
+                .as_ref()
+                .expect("scipy capture should include provenance")
+                .capture_blake3
+                .len()
+                >= 10
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════

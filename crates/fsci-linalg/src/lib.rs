@@ -41,6 +41,23 @@ pub enum MatrixAssumption {
     TriDiagonal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum MatrixSizeCategory {
+    Small,
+    Medium,
+    Large,
+}
+
+impl MatrixSizeCategory {
+    fn from_shape(rows: usize, cols: usize) -> Self {
+        match rows.max(cols) {
+            0..=32 => Self::Small,
+            33..=256 => Self::Medium,
+            _ => Self::Large,
+        }
+    }
+}
+
 /// LAPACK driver selection for least-squares problems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LstsqDriver {
@@ -164,11 +181,24 @@ pub enum LinalgWarning {
     IllConditioned { reciprocal_condition: f64 },
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SolveCertificate {
+    pub action: SolverAction,
+    pub matrix_shape: (usize, usize),
+    pub rcond_estimate: f64,
+    pub structural_evidence: StructuralEvidence,
+    pub posterior: Vec<f64>,
+    pub expected_losses: Vec<f64>,
+    pub chosen_expected_loss: f64,
+    pub fallback_active: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SolveResult {
     pub x: Vec<f64>,
     pub warning: Option<LinalgWarning>,
     pub backward_error: Option<f64>,
+    pub certificate: Option<SolveCertificate>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -189,6 +219,28 @@ pub struct LstsqResult {
 pub struct PinvResult {
     pub pseudo_inverse: Vec<Vec<f64>>,
     pub rank: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ConditionReport {
+    pub matrix_shape: (usize, usize),
+    pub rcond_estimate: f64,
+    pub structural_evidence: StructuralEvidence,
+    pub diagonal: bool,
+    pub upper_triangular: bool,
+    pub lower_triangular: bool,
+    pub symmetric: bool,
+    pub positive_definite: bool,
+    pub banded: bool,
+    pub bandwidth: (usize, usize),
+    pub size_category: MatrixSizeCategory,
+    pub sparsity_ratio: f64,
+}
+
+struct ConditionDiagnosticsWork {
+    report: ConditionReport,
+    matrix_cache: Option<DMatrix<f64>>,
+    lu_cache: Option<LU<f64, Dyn, Dyn>>,
 }
 
 /// Result of LU decomposition with partial pivoting.
@@ -439,75 +491,8 @@ impl std::fmt::Display for LinalgError {
 impl std::error::Error for LinalgError {}
 
 pub fn solve(a: &[Vec<f64>], b: &[f64], options: SolveOptions) -> Result<SolveResult, LinalgError> {
-    let (rows, cols) = matrix_shape(a)?;
-    if rows != cols {
-        return Err(LinalgError::ExpectedSquareMatrix);
-    }
-    if b.len() != rows {
-        return Err(LinalgError::IncompatibleShapes {
-            a_shape: (rows, cols),
-            b_len: b.len(),
-        });
-    }
-    hardened_dimension_check(options.mode, rows, cols)?;
-    validate_finite_matrix_and_vector(a, b, options.mode, options.check_finite)?;
-
-    if rows == 0 {
-        return Ok(SolveResult {
-            x: Vec::new(),
-            warning: None,
-            backward_error: None,
-        });
-    }
-
-    let matrix = if options.transposed {
-        transpose(a)
-    } else {
-        a.to_vec()
-    };
-
-    let result = match options.assume_a.unwrap_or(MatrixAssumption::General) {
-        MatrixAssumption::General
-        | MatrixAssumption::Symmetric
-        | MatrixAssumption::Hermitian
-        | MatrixAssumption::PositiveDefinite => {
-            solve_general_with_hardening(&matrix, b, options.mode)
-        }
-        MatrixAssumption::Diagonal => solve_diagonal(&matrix, b),
-        MatrixAssumption::UpperTriangular => {
-            let lower = options.transposed; // Upper^T is Lower
-            solve_triangular_internal(&matrix, b, TriangularTranspose::NoTranspose, lower, false)
-        }
-        MatrixAssumption::LowerTriangular => {
-            let lower = !options.transposed; // Lower^T is Upper
-            solve_triangular_internal(&matrix, b, TriangularTranspose::NoTranspose, lower, false)
-        }
-        MatrixAssumption::Banded | MatrixAssumption::TriDiagonal => {
-            // Banded/tridiagonal structure in solve() falls back to general LU.
-            // Use solve_banded() for explicit banded storage format.
-            solve_general_with_hardening(&matrix, b, options.mode)
-        }
-    };
-
-    emit_trace(LinalgTrace {
-        operation: "solve",
-        matrix_size: (rows, cols),
-        mode: options.mode,
-        rcond: result.as_ref().ok().and_then(|r| {
-            r.warning.as_ref().map(|w| match w {
-                LinalgWarning::IllConditioned {
-                    reciprocal_condition,
-                } => *reciprocal_condition,
-            })
-        }),
-        warning: result
-            .as_ref()
-            .ok()
-            .and_then(|r| r.warning.as_ref().map(|w| format!("{w:?}"))),
-        error: result.as_ref().err().map(|e| e.to_string()),
-    });
-
-    result
+    let mut portfolio = SolverPortfolio::new(options.mode, 1);
+    solve_with_portfolio_internal(a, b, options, &mut portfolio, "solve", false)
 }
 
 pub fn solve_triangular(
@@ -532,6 +517,7 @@ pub fn solve_triangular(
             x: Vec::new(),
             warning: None,
             backward_error: None,
+            certificate: None,
         });
         emit_trace(LinalgTrace {
             operation: "solve_triangular",
@@ -938,6 +924,152 @@ fn assumption_to_evidence(a: MatrixAssumption) -> fsci_runtime::StructuralEviden
     }
 }
 
+fn normalize_assumption_for_effective_matrix(
+    assumption: Option<MatrixAssumption>,
+    transposed: bool,
+) -> Option<MatrixAssumption> {
+    if !transposed {
+        return assumption;
+    }
+
+    match assumption {
+        Some(MatrixAssumption::UpperTriangular) => Some(MatrixAssumption::LowerTriangular),
+        Some(MatrixAssumption::LowerTriangular) => Some(MatrixAssumption::UpperTriangular),
+        other => other,
+    }
+}
+
+fn structure_tolerance(a: &[Vec<f64>]) -> f64 {
+    let max_abs = a
+        .iter()
+        .flat_map(|row| row.iter())
+        .fold(0.0_f64, |acc, &value| acc.max(value.abs()));
+    (64.0 * f64::EPSILON * max_abs.max(1.0)).max(1e-15)
+}
+
+fn bandwidth_with_tolerance(a: &[Vec<f64>], tol: f64) -> (usize, usize) {
+    let n = a.len();
+    if n == 0 {
+        return (0, 0);
+    }
+    let m = a[0].len();
+    let mut lower = 0usize;
+    let mut upper = 0usize;
+
+    for (i, row) in a.iter().enumerate().take(n) {
+        for (j, &value) in row.iter().enumerate().take(m) {
+            if value.abs() > tol {
+                if i > j {
+                    lower = lower.max(i - j);
+                }
+                if j > i {
+                    upper = upper.max(j - i);
+                }
+            }
+        }
+    }
+
+    (lower, upper)
+}
+
+fn condition_diagnostics_with_assumption(
+    a: &[Vec<f64>],
+    assumption: Option<MatrixAssumption>,
+) -> Result<ConditionDiagnosticsWork, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    let tol = structure_tolerance(a);
+
+    let diagonal = assumption == Some(MatrixAssumption::Diagonal) || is_diagonal(a, tol);
+    let upper_triangular = diagonal
+        || assumption == Some(MatrixAssumption::UpperTriangular)
+        || is_upper_triangular(a, tol);
+    let lower_triangular = diagonal
+        || assumption == Some(MatrixAssumption::LowerTriangular)
+        || is_lower_triangular(a, tol);
+    let symmetric = matches!(
+        assumption,
+        Some(
+            MatrixAssumption::Symmetric
+                | MatrixAssumption::Hermitian
+                | MatrixAssumption::PositiveDefinite
+        )
+    ) || issymmetric(a, tol, tol)?;
+    let positive_definite = assumption == Some(MatrixAssumption::PositiveDefinite)
+        || (symmetric && is_positive_definite(a));
+    let bandwidth = bandwidth_with_tolerance(a, tol);
+    let banded = rows > 0
+        && cols > 0
+        && (diagonal
+            || upper_triangular
+            || lower_triangular
+            || bandwidth.0 + bandwidth.1 + 1 < rows.max(cols));
+    let total_values = rows.saturating_mul(cols);
+    let near_zero_values = a
+        .iter()
+        .flat_map(|row| row.iter())
+        .filter(|&&value| value.abs() <= tol)
+        .count();
+    let sparsity_ratio = if total_values == 0 {
+        1.0
+    } else {
+        near_zero_values as f64 / total_values as f64
+    };
+
+    let structural_evidence = if diagonal {
+        StructuralEvidence::Diagonal
+    } else if upper_triangular || lower_triangular {
+        StructuralEvidence::Triangular
+    } else {
+        assumption
+            .map(assumption_to_evidence)
+            .unwrap_or(StructuralEvidence::General)
+    };
+
+    let mut matrix_cache = None;
+    let mut lu_cache = None;
+    let rcond_estimate = if rows == 0 || cols == 0 {
+        1.0
+    } else if rows != cols {
+        0.0
+    } else if diagonal {
+        fast_rcond_diagonal(a)
+    } else if lower_triangular && !upper_triangular {
+        fast_rcond_triangular(a, true)
+    } else if upper_triangular && !lower_triangular {
+        fast_rcond_triangular(a, false)
+    } else {
+        let matrix = dmatrix_from_rows(a)?;
+        let lu = matrix.clone().lu();
+        let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), rows);
+        matrix_cache = Some(matrix);
+        lu_cache = Some(lu);
+        rcond
+    };
+
+    Ok(ConditionDiagnosticsWork {
+        report: ConditionReport {
+            matrix_shape: (rows, cols),
+            rcond_estimate,
+            structural_evidence,
+            diagonal,
+            upper_triangular,
+            lower_triangular,
+            symmetric,
+            positive_definite,
+            banded,
+            bandwidth,
+            size_category: MatrixSizeCategory::from_shape(rows, cols),
+            sparsity_ratio,
+        },
+        matrix_cache,
+        lu_cache,
+    })
+}
+
+pub fn condition_diagnostics(a: &[Vec<f64>]) -> Result<ConditionReport, LinalgError> {
+    Ok(condition_diagnostics_with_assumption(a, None)?.report)
+}
+
 /// Compute backward error: ||Ax - b|| / (||A|| × ||x|| + ||b||).
 /// Returns 0.0 when the denominator is zero.
 fn compute_backward_error(matrix: &DMatrix<f64>, x: &DVector<f64>, rhs: &DVector<f64>) -> f64 {
@@ -1010,6 +1142,7 @@ fn solve_general_with_hardening(
         x: x.iter().copied().collect(),
         warning: rcond_warning(rcond),
         backward_error: Some(backward_err),
+        certificate: None,
     })
 }
 
@@ -1029,6 +1162,7 @@ fn solve_qr(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError> {
         x: x.iter().copied().collect(),
         warning: None,
         backward_error: Some(backward_err),
+        certificate: None,
     })
 }
 
@@ -1077,16 +1211,95 @@ fn solve_svd_fallback(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgEr
         x: x.iter().copied().collect(),
         warning: rcond_warning(rcond),
         backward_error: Some(backward_err),
+        certificate: None,
     })
 }
 
 /// Solve with CASP: condition-aware solver portfolio selects optimal solver.
 /// The portfolio is updated with evidence from this solve call.
-pub fn solve_with_casp(
+fn build_solve_certificate(
+    report: &ConditionReport,
+    action: SolverAction,
+    posterior: [f64; 4],
+    expected_losses: [f64; 5],
+    fallback_active: bool,
+) -> SolveCertificate {
+    SolveCertificate {
+        action,
+        matrix_shape: report.matrix_shape,
+        rcond_estimate: report.rcond_estimate,
+        structural_evidence: report.structural_evidence,
+        posterior: posterior.to_vec(),
+        expected_losses: expected_losses.to_vec(),
+        chosen_expected_loss: expected_losses[action.index()],
+        fallback_active,
+    }
+}
+
+fn candidate_actions(structural_evidence: StructuralEvidence) -> Vec<SolverAction> {
+    let mut actions = vec![
+        SolverAction::DirectLU,
+        SolverAction::PivotedQR,
+        SolverAction::SVDFallback,
+    ];
+    match structural_evidence {
+        StructuralEvidence::Diagonal => actions.push(SolverAction::DiagonalFastPath),
+        StructuralEvidence::Triangular => actions.push(SolverAction::TriangularFastPath),
+        StructuralEvidence::General => {}
+    }
+    actions
+}
+
+fn dispatch_solve_action(
+    action: SolverAction,
+    effective_a: &[Vec<f64>],
+    b: &[f64],
+    report: &ConditionReport,
+    matrix_cache: &mut Option<DMatrix<f64>>,
+    lu_cache: &mut Option<LU<f64, Dyn, Dyn>>,
+) -> Result<SolveResult, LinalgError> {
+    match action {
+        SolverAction::DirectLU => {
+            let matrix = if let Some(matrix) = matrix_cache.take() {
+                matrix
+            } else {
+                dmatrix_from_rows(effective_a)?
+            };
+            let lu = if let Some(lu) = lu_cache.take() {
+                lu
+            } else {
+                matrix.clone().lu()
+            };
+            let rhs = DVector::from_column_slice(b);
+            let x = lu.solve(&rhs).ok_or(LinalgError::SingularMatrix)?;
+            let backward_err = compute_backward_error(&matrix, &x, &rhs);
+            Ok(SolveResult {
+                x: x.iter().copied().collect(),
+                warning: rcond_warning(report.rcond_estimate),
+                backward_error: Some(backward_err),
+                certificate: None,
+            })
+        }
+        SolverAction::PivotedQR => solve_qr(effective_a, b),
+        SolverAction::SVDFallback => solve_svd_fallback(effective_a, b),
+        SolverAction::DiagonalFastPath => solve_diagonal(effective_a, b),
+        SolverAction::TriangularFastPath => solve_triangular_internal(
+            effective_a,
+            b,
+            TriangularTranspose::NoTranspose,
+            report.lower_triangular,
+            false,
+        ),
+    }
+}
+
+fn solve_with_portfolio_internal(
     a: &[Vec<f64>],
     b: &[f64],
     options: SolveOptions,
     portfolio: &mut SolverPortfolio,
+    trace_operation: &'static str,
+    record_evidence: bool,
 ) -> Result<SolveResult, LinalgError> {
     let (rows, cols) = matrix_shape(a)?;
     if rows != cols {
@@ -1098,115 +1311,125 @@ pub fn solve_with_casp(
             b_len: b.len(),
         });
     }
+    hardened_dimension_check(options.mode, rows, cols)?;
     validate_finite_matrix_and_vector(a, b, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        let result = Ok(SolveResult {
+            x: Vec::new(),
+            warning: None,
+            backward_error: None,
+            certificate: None,
+        });
+        emit_trace(LinalgTrace {
+            operation: trace_operation,
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return result;
+    }
 
     let effective_a = if options.transposed {
         transpose(a)
     } else {
         a.to_vec()
     };
+    let diagnostics = condition_diagnostics_with_assumption(
+        &effective_a,
+        normalize_assumption_for_effective_matrix(options.assume_a, options.transposed),
+    )?;
+    let ConditionDiagnosticsWork {
+        report,
+        mut matrix_cache,
+        mut lu_cache,
+    } = diagnostics;
+    let (selected_action, posterior, expected_losses, _) =
+        portfolio.select_action(report.rcond_estimate, Some(report.structural_evidence));
 
-    let mut matrix_cache: Option<DMatrix<f64>> = None;
-    let mut lu_cache: Option<LU<f64, Dyn, Dyn>> = None;
+    let mut actions = candidate_actions(report.structural_evidence);
+    actions.sort_by(|lhs, rhs| {
+        expected_losses[lhs.index()].total_cmp(&expected_losses[rhs.index()])
+    });
+    if let Some(position) = actions.iter().position(|action| *action == selected_action) {
+        actions.swap(0, position);
+    }
 
-    // Determine rcond and action, deferring expensive LU if possible.
-    let (action, rcond, posterior, expected_losses, chosen_loss) =
-        if options.assume_a == Some(MatrixAssumption::Diagonal) {
-            let rcond = fast_rcond_diagonal(&effective_a);
-            let (act, post, losses, choice) =
-                portfolio.select_action(rcond, Some(StructuralEvidence::Diagonal));
-            (act, rcond, post, losses, choice)
-        } else if options.assume_a == Some(MatrixAssumption::LowerTriangular)
-            || options.assume_a == Some(MatrixAssumption::UpperTriangular)
-        {
-            let is_upper = options.assume_a == Some(MatrixAssumption::UpperTriangular);
-            let lower = if options.transposed {
-                is_upper
-            } else {
-                !is_upper
-            };
-            let rcond = fast_rcond_triangular(&effective_a, lower);
-            let (act, post, losses, choice) =
-                portfolio.select_action(rcond, Some(StructuralEvidence::Triangular));
-            (act, rcond, post, losses, choice)
-        } else {
-            let matrix = dmatrix_from_rows(&effective_a)?;
-            let lu: LU<f64, Dyn, Dyn> = matrix.clone().lu();
-            let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), rows);
-            let evidence = options.assume_a.map(assumption_to_evidence);
-            let (act, post, losses, choice) = portfolio.select_action(rcond, evidence);
-            matrix_cache = Some(matrix);
-            lu_cache = Some(lu);
-            (act, rcond, post, losses, choice)
-        };
-
-    // Dispatch to chosen solver
-    let result = match action {
-        SolverAction::DirectLU => {
-            let matrix = if let Some(m) = matrix_cache {
-                m
-            } else {
-                dmatrix_from_rows(&effective_a)?
-            };
-            let lu = if let Some(l) = lu_cache {
-                l
-            } else {
-                matrix.clone().lu()
-            };
-            let rhs = DVector::from_column_slice(b);
-            let x = lu.solve(&rhs).ok_or(LinalgError::SingularMatrix)?;
-            let backward_err = compute_backward_error(&matrix, &x, &rhs);
-            Ok(SolveResult {
-                x: x.iter().copied().collect(),
-                warning: rcond_warning(rcond),
-                backward_error: Some(backward_err),
-            })
-        }
-        SolverAction::PivotedQR => solve_qr(&effective_a, b),
-        SolverAction::SVDFallback => solve_svd_fallback(&effective_a, b),
-        SolverAction::DiagonalFastPath => solve_diagonal(&effective_a, b),
-        SolverAction::TriangularFastPath => {
-            let is_upper = options.assume_a == Some(MatrixAssumption::UpperTriangular);
-            let lower = if options.transposed {
-                is_upper
-            } else {
-                !is_upper
-            };
-            solve_triangular_internal(
+    let mut last_error = None;
+    let mut actual_action = selected_action;
+    let result = actions
+        .into_iter()
+        .find_map(|action| {
+            match dispatch_solve_action(
+                action,
                 &effective_a,
                 b,
-                TriangularTranspose::NoTranspose,
-                lower,
-                false,
-            )
-        }
-    };
+                &report,
+                &mut matrix_cache,
+                &mut lu_cache,
+            ) {
+                Ok(mut solve_result) => {
+                    let fallback_active =
+                        action != selected_action || !matches!(action, SolverAction::DirectLU);
+                    solve_result.certificate = Some(build_solve_certificate(
+                        &report,
+                        action,
+                        posterior,
+                        expected_losses,
+                        fallback_active,
+                    ));
+                    actual_action = action;
+                    Some(Ok(solve_result))
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                    None
+                }
+            }
+        })
+        .unwrap_or_else(|| Err(last_error.unwrap_or(LinalgError::SingularMatrix)));
 
     emit_trace(LinalgTrace {
-        operation: "solve_with_casp",
+        operation: trace_operation,
         matrix_size: (rows, cols),
         mode: options.mode,
-        rcond: Some(rcond),
-        warning: rcond_warning(rcond).map(|w| format!("{w:?}")),
+        rcond: Some(report.rcond_estimate),
+        warning: result
+            .as_ref()
+            .ok()
+            .and_then(|solve_result| solve_result.warning.as_ref().map(|warning| format!("{warning:?}"))),
         error: result.as_ref().err().map(|e| e.to_string()),
     });
 
-    // Record evidence regardless of outcome
-    let fallback_active = !matches!(action, SolverAction::DirectLU);
-    let backward_error = result.as_ref().ok().and_then(|r| r.backward_error);
-    portfolio.record_evidence(SolverEvidenceEntry {
-        component: "solver_portfolio",
-        matrix_shape: (rows, cols),
-        rcond_estimate: rcond,
-        chosen_action: action,
-        posterior: posterior.to_vec(),
-        expected_losses: expected_losses.to_vec(),
-        chosen_expected_loss: chosen_loss,
-        fallback_active,
-        backward_error,
-    });
+    if record_evidence {
+        let fallback_active =
+            actual_action != selected_action || !matches!(actual_action, SolverAction::DirectLU);
+        let backward_error = result.as_ref().ok().and_then(|solve_result| solve_result.backward_error);
+        portfolio.record_evidence(SolverEvidenceEntry {
+            component: "solver_portfolio",
+            matrix_shape: (rows, cols),
+            rcond_estimate: report.rcond_estimate,
+            chosen_action: actual_action,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[actual_action.index()],
+            fallback_active,
+            backward_error,
+        });
+    }
 
     result
+}
+
+pub fn solve_with_casp(
+    a: &[Vec<f64>],
+    b: &[f64],
+    options: SolveOptions,
+    portfolio: &mut SolverPortfolio,
+) -> Result<SolveResult, LinalgError> {
+    solve_with_portfolio_internal(a, b, options, portfolio, "solve_with_casp", true)
 }
 
 fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
@@ -1489,6 +1712,7 @@ pub fn lu_solve(lu_factor: &LuFactorResult, b: &[f64]) -> Result<SolveResult, Li
         x: x.iter().copied().collect(),
         warning: rcond_warning(rcond),
         backward_error: None,
+        certificate: None,
     })
 }
 
@@ -1711,6 +1935,7 @@ pub fn cho_solve(cho: &ChoFactorResult, b: &[f64]) -> Result<SolveResult, Linalg
         x: x.iter().copied().collect(),
         warning: None,
         backward_error: None,
+        certificate: None,
     })
 }
 
@@ -3029,6 +3254,7 @@ fn solve_diagonal(a: &[Vec<f64>], b: &[f64]) -> Result<SolveResult, LinalgError>
         x,
         warning,
         backward_error: Some(backward_error),
+        certificate: None,
     })
 }
 
@@ -3080,6 +3306,7 @@ fn solve_triangular_internal(
         x,
         warning: None,
         backward_error: Some(backward_error),
+        certificate: None,
     })
 }
 
@@ -5153,6 +5380,81 @@ mod tests {
             rcond < 1e-12,
             "ill-conditioned matrix should have low rcond, got {rcond}"
         );
+    }
+
+    #[test]
+    fn condition_diagnostics_identity_reports_diagonal_spd() {
+        let a = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let report = condition_diagnostics(&a).expect("identity diagnostics");
+        assert_eq!(report.matrix_shape, (3, 3));
+        assert_eq!(report.structural_evidence, StructuralEvidence::Diagonal);
+        assert!(report.diagonal);
+        assert!(report.upper_triangular);
+        assert!(report.lower_triangular);
+        assert!(report.symmetric);
+        assert!(report.positive_definite);
+        assert_eq!(report.bandwidth, (0, 0));
+        assert_eq!(report.size_category, MatrixSizeCategory::Small);
+        assert!((report.rcond_estimate - 1.0).abs() < 1e-12);
+        assert!(report.sparsity_ratio > 0.6);
+    }
+
+    #[test]
+    fn condition_diagnostics_triangular_reports_fast_path_shape() {
+        let a = vec![
+            vec![4.0, -2.0, 1.0],
+            vec![0.0, 3.0, 5.0],
+            vec![0.0, 0.0, 2.0],
+        ];
+        let report = condition_diagnostics(&a).expect("triangular diagnostics");
+        assert_eq!(report.structural_evidence, StructuralEvidence::Triangular);
+        assert!(!report.diagonal);
+        assert!(report.upper_triangular);
+        assert!(!report.lower_triangular);
+        assert_eq!(report.bandwidth, (0, 2));
+        assert!(report.banded);
+        assert!(report.rcond_estimate > 0.0);
+    }
+
+    #[test]
+    fn condition_diagnostics_hilbert_reports_ill_conditioning() {
+        let a = hilbert(6);
+        let report = condition_diagnostics(&a).expect("hilbert diagnostics");
+        assert_eq!(report.structural_evidence, StructuralEvidence::General);
+        assert!(report.symmetric);
+        assert!(report.positive_definite);
+        assert!(report.rcond_estimate < 1e-6);
+    }
+
+    #[test]
+    fn condition_diagnostics_general_matrix_has_no_special_structure() {
+        let a = vec![
+            vec![2.0, 1.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 10.0],
+        ];
+        let report = condition_diagnostics(&a).expect("general diagnostics");
+        assert_eq!(report.structural_evidence, StructuralEvidence::General);
+        assert!(!report.diagonal);
+        assert!(!report.upper_triangular);
+        assert!(!report.lower_triangular);
+        assert!(!report.symmetric);
+        assert!(!report.positive_definite);
+        assert!(report.rcond_estimate > 0.0);
+    }
+
+    #[test]
+    fn condition_diagnostics_rectangular_matrix_is_conservative() {
+        let a = vec![vec![1.0, 0.0, 0.0], vec![0.0, 2.0, 0.0]];
+        let report = condition_diagnostics(&a).expect("rectangular diagnostics");
+        assert_eq!(report.matrix_shape, (2, 3));
+        assert_eq!(report.structural_evidence, StructuralEvidence::Diagonal);
+        assert_eq!(report.rcond_estimate, 0.0);
+        assert!(report.diagonal);
     }
 
     #[test]
