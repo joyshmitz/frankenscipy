@@ -15,6 +15,30 @@ use std::path::Path;
 
 const SYMBOL_SIZE: usize = 128;
 
+fn hex_decode(input: &str) -> Option<Vec<u8>> {
+    if !input.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(input.len() / 2);
+    let bytes = input.as_bytes();
+    let hex_val = |b: u8| -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(10 + (b - b'a')),
+            b'A'..=b'F' => Some(10 + (b - b'A')),
+            _ => None,
+        }
+    };
+    let mut idx = 0;
+    while idx < bytes.len() {
+        let hi = hex_val(bytes[idx])?;
+        let lo = hex_val(bytes[idx + 1])?;
+        out.push((hi << 4) | lo);
+        idx += 2;
+    }
+    Some(out)
+}
+
 // ── Sidecar consistency ────────────────────────────────────────────────────────
 
 #[test]
@@ -60,6 +84,7 @@ fn sidecar_repair_symbols_present() {
     let payload = vec![42u8; 2560]; // 20 source symbols → 4 repair symbols
     let s = generate_raptorq_sidecar(&payload).unwrap();
     assert_eq!(s.repair_symbol_hashes.len(), s.repair_symbols);
+    assert_eq!(s.repair_symbol_payloads_hex.len(), s.repair_symbols);
     assert!(
         !s.repair_symbol_hashes.is_empty(),
         "must have at least one repair symbol hash"
@@ -67,6 +92,15 @@ fn sidecar_repair_symbols_present() {
     // All hashes should be valid hex strings
     for h in &s.repair_symbol_hashes {
         assert_eq!(h.len(), 64, "blake3 hex hash should be 64 chars");
+    }
+    for (payload_hex, hash_hex) in s
+        .repair_symbol_payloads_hex
+        .iter()
+        .zip(s.repair_symbol_hashes.iter())
+    {
+        let payload = hex_decode(payload_hex).expect("repair symbol payload should be valid hex");
+        let computed = hash(&payload).to_hex().to_string();
+        assert_eq!(computed, *hash_hex, "repair symbol payload must match hash");
     }
 }
 

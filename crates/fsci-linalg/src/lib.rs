@@ -651,14 +651,14 @@ fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, a_norm: f64, n: usize) -> f64 {
     for _ in 0..5 {
         let x_old = x.clone();
         // 1. Solve Aᵀ w = sign(x)
-        let sign_x = x.map(|val| val.signum());
+        let sign_x = x.map(|val| if val >= 0.0 { 1.0 } else { -1.0 });
         let w = match solve_lu_transpose(lu, &sign_x) {
             Some(w) => w,
             None => return 0.0,
         };
 
         // 2. Solve A x_new = sign(w)
-        let sign_w = w.map(|val| val.signum());
+        let sign_w = w.map(|val| if val >= 0.0 { 1.0 } else { -1.0 });
         let x_new = match lu.solve(&sign_w) {
             Some(x) => x,
             None => return 0.0,

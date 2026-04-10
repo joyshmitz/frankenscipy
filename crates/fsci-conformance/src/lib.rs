@@ -1132,6 +1132,8 @@ pub struct RaptorQSidecar {
     pub source_symbols: usize,
     pub repair_symbols: usize,
     pub repair_symbol_hashes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repair_symbol_payloads_hex: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3419,9 +3421,11 @@ pub fn generate_raptorq_sidecar(payload: &[u8]) -> Result<RaptorQSidecar, Harnes
     })?;
 
     let mut repair_hashes = Vec::with_capacity(repair_symbols);
+    let mut repair_payloads = Vec::with_capacity(repair_symbols);
     for esi in k as u32..(k as u32 + repair_symbols as u32) {
         let symbol = encoder.repair_symbol(esi);
         repair_hashes.push(hash(&symbol).to_hex().to_string());
+        repair_payloads.push(hex_encode(&symbol));
     }
 
     Ok(RaptorQSidecar {
@@ -3431,7 +3435,18 @@ pub fn generate_raptorq_sidecar(payload: &[u8]) -> Result<RaptorQSidecar, Harnes
         source_symbols: k,
         repair_symbols,
         repair_symbol_hashes: repair_hashes,
+        repair_symbol_payloads_hex: repair_payloads,
     })
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 pub fn chunk_payload(payload: &[u8], symbol_size: usize) -> Vec<Vec<u8>> {
