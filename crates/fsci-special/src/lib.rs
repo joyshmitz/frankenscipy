@@ -1307,6 +1307,9 @@ mod tests {
     fn ndtr_contract_points() {
         assert!((ndtr(0.0) - 0.5).abs() <= 1.0e-12);
         assert!((ndtr(1.959_963_984_540_054) - 0.975).abs() <= 5.0e-5);
+        let tail = ndtr(-8.0);
+        assert!(tail > 0.0 && tail < 1.0e-14, "ndtr(-8) tail={tail}");
+        assert!(ndtr(8.0) > 1.0 - 1.0e-12, "ndtr(8) should be ~1");
         assert_eq!(ndtr(f64::NEG_INFINITY), 0.0);
         assert_eq!(ndtr(f64::INFINITY), 1.0);
     }

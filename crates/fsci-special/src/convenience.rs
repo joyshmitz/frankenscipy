@@ -13,7 +13,7 @@
 //! - `ndtr` / `ndtri` — Standard normal CDF and inverse CDF
 //! - `kl_div` — KL divergence element with the `-x + y` correction
 
-use std::f64::consts::PI;
+use std::f64::consts::{FRAC_1_SQRT_2, PI, SQRT_2};
 
 use fsci_runtime::RuntimeMode;
 
@@ -154,7 +154,8 @@ pub fn rel_entr(
 /// Matches `scipy.special.ndtr(x)`.
 #[must_use]
 pub fn ndtr(x: f64) -> f64 {
-    0.5 * (1.0 + crate::error::erf_scalar(x / 2.0_f64.sqrt()))
+    // Use erfc for improved tail accuracy (avoids catastrophic cancellation for x << 0).
+    0.5 * crate::error::erfc_scalar(-x * FRAC_1_SQRT_2)
 }
 
 /// Inverse standard normal cumulative distribution function Φ⁻¹(y).
@@ -174,8 +175,7 @@ pub fn ndtri(y: f64) -> f64 {
     if y == 1.0 {
         return f64::INFINITY;
     }
-    2.0_f64.sqrt()
-        * crate::error::erfinv_scalar(2.0 * y - 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
+    SQRT_2 * crate::error::erfinv_scalar(2.0 * y - 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
 /// KL divergence element `x * log(x / y) - x + y`.
