@@ -1129,6 +1129,8 @@ pub struct RaptorQSidecar {
     pub schema_version: u8,
     pub source_hash: String,
     pub symbol_size: usize,
+    #[serde(default)]
+    pub seed: u64,
     pub source_symbols: usize,
     pub repair_symbols: usize,
     pub repair_symbol_hashes: Vec<String>,
@@ -3432,6 +3434,7 @@ pub fn generate_raptorq_sidecar(payload: &[u8]) -> Result<RaptorQSidecar, Harnes
         schema_version: 1,
         source_hash: hash(payload).to_hex().to_string(),
         symbol_size,
+        seed,
         source_symbols: k,
         repair_symbols,
         repair_symbol_hashes: repair_hashes,

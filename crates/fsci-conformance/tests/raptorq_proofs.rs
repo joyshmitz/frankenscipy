@@ -9,7 +9,10 @@
 use asupersync::raptorq::decoder::{InactivationDecoder, ReceivedSymbol};
 use asupersync::raptorq::systematic::SystematicEncoder;
 use blake3::hash;
-use fsci_conformance::{RaptorQSidecar, chunk_payload, generate_raptorq_sidecar};
+use fsci_conformance::{
+    CaseResult, DecodeProofArtifact, PacketReport, RaptorQSidecar, chunk_payload,
+    generate_raptorq_sidecar,
+};
 use serde::Serialize;
 use std::path::Path;
 
@@ -37,6 +40,10 @@ fn hex_decode(input: &str) -> Option<Vec<u8>> {
         idx += 2;
     }
     Some(out)
+}
+
+fn seed_from_payload(payload: &[u8]) -> u64 {
+    hash(payload).as_bytes()[0] as u64 + 1337
 }
 
 // ── Sidecar consistency ────────────────────────────────────────────────────────
@@ -83,6 +90,7 @@ fn sidecar_repair_ratio() {
 fn sidecar_repair_symbols_present() {
     let payload = vec![42u8; 2560]; // 20 source symbols → 4 repair symbols
     let s = generate_raptorq_sidecar(&payload).unwrap();
+    assert_eq!(s.seed, seed_from_payload(&payload));
     assert_eq!(s.repair_symbol_hashes.len(), s.repair_symbols);
     assert_eq!(s.repair_symbol_payloads_hex.len(), s.repair_symbols);
     assert!(
@@ -106,7 +114,7 @@ fn sidecar_repair_symbols_present() {
 
 // ── Decode-proof pipeline ──────────────────────────────────────────────────────
 
-/// Encode payload, simulate 5% data loss, recover via decoder, verify.
+/// Encode payload, simulate a single-symbol loss, recover via decoder, verify.
 fn run_decode_proof(payload: &[u8]) -> DecodeProofResult {
     let source_symbols = chunk_payload(payload, SYMBOL_SIZE);
     let k = source_symbols.len();
@@ -207,6 +215,64 @@ struct DecodeProofResult {
     proof_hash: String,
 }
 
+fn recover_payload_with_sidecar(
+    payload: &[u8],
+    sidecar: &RaptorQSidecar,
+    drop_indices: &[usize],
+) -> Result<Vec<u8>, String> {
+    let source_symbols = chunk_payload(payload, sidecar.symbol_size);
+    let k = source_symbols.len();
+    if k != sidecar.source_symbols {
+        return Err(format!(
+            "sidecar k mismatch: expected {}, got {}",
+            sidecar.source_symbols, k
+        ));
+    }
+    if sidecar.repair_symbol_payloads_hex.len() != sidecar.repair_symbols {
+        return Err(format!(
+            "repair payload count mismatch: expected {}, got {}",
+            sidecar.repair_symbols,
+            sidecar.repair_symbol_payloads_hex.len()
+        ));
+    }
+
+    let mut dropped = vec![false; k];
+    for &idx in drop_indices {
+        if idx < k {
+            dropped[idx] = true;
+        }
+    }
+
+    let mut received = Vec::new();
+    for (idx, symbol) in source_symbols.iter().enumerate() {
+        if !dropped[idx] {
+            received.push(ReceivedSymbol::source(idx as u32, symbol.clone()));
+        }
+    }
+
+    let decoder = InactivationDecoder::new(k, sidecar.symbol_size, sidecar.seed);
+    for (offset, payload_hex) in sidecar.repair_symbol_payloads_hex.iter().enumerate() {
+        let esi = k as u32 + offset as u32;
+        let payload = hex_decode(payload_hex)
+            .ok_or_else(|| format!("repair symbol {offset} payload not valid hex"))?;
+        let (cols, coefs) = decoder.repair_equation(esi);
+        received.push(ReceivedSymbol::repair(esi, cols, coefs, payload));
+    }
+
+    received.extend(decoder.constraint_symbols());
+
+    let result = decoder
+        .decode(&received)
+        .map_err(|e| format!("decode failed: {e:?}"))?;
+
+    let mut recovered = Vec::with_capacity(payload.len());
+    for symbol in result.source.iter().take(k) {
+        recovered.extend_from_slice(symbol);
+    }
+    recovered.truncate(payload.len());
+    Ok(recovered)
+}
+
 #[test]
 fn decode_proof_small_payload() {
     // 1024 bytes = 8 source symbols
@@ -231,6 +297,72 @@ fn decode_proof_large_payload() {
     let result = run_decode_proof(&payload);
     assert!(result.success, "decode must succeed: {result:?}");
     assert!(result.recovered_match, "recovered data must match original");
+}
+
+#[test]
+fn recovery_drill_parity_report() {
+    let mut case_results = Vec::new();
+    for idx in 0..64 {
+        case_results.push(CaseResult {
+            case_id: format!("case_{idx:03}"),
+            passed: idx % 3 != 0,
+            message: format!("synthetic parity case {idx}"),
+        });
+    }
+    let passed_cases = case_results.iter().filter(|c| c.passed).count();
+    let failed_cases = case_results.len() - passed_cases;
+    let report = PacketReport {
+        packet_id: "RECOVERY-DRILL".to_string(),
+        family: "linalg".to_string(),
+        case_results,
+        passed_cases,
+        failed_cases,
+        generated_unix_ms: now_unix_ms(),
+    };
+
+    let report_bytes = serde_json::to_vec_pretty(&report).unwrap();
+    let sidecar = generate_raptorq_sidecar(&report_bytes).unwrap();
+    assert_eq!(sidecar.seed, seed_from_payload(&report_bytes));
+
+    let mut drop_indices = vec![0usize];
+    if sidecar.source_symbols > 1 {
+        drop_indices.push(sidecar.source_symbols - 1);
+    }
+
+    let recovered = recover_payload_with_sidecar(&report_bytes, &sidecar, &drop_indices).unwrap();
+    let proof_hash = hash(&recovered).to_hex().to_string();
+    assert_eq!(proof_hash, hash(&report_bytes).to_hex().to_string());
+
+    let decode_proof = DecodeProofArtifact {
+        ts_unix_ms: now_unix_ms(),
+        reason: format!(
+            "recovered from simulated corruption of {} block(s)",
+            drop_indices.len()
+        ),
+        recovered_blocks: drop_indices.len(),
+        proof_hash,
+    };
+
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "frankenscipy_raptorq_recovery_drill_{}",
+        now_unix_ms()
+    ));
+    std::fs::create_dir_all(&artifact_dir).unwrap();
+    std::fs::write(
+        artifact_dir.join("parity_report.json"),
+        serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        artifact_dir.join("parity_report.raptorq.json"),
+        serde_json::to_vec_pretty(&sidecar).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        artifact_dir.join("parity_report.decode_proof.json"),
+        serde_json::to_vec_pretty(&decode_proof).unwrap(),
+    )
+    .unwrap();
 }
 
 // ── Fixture bundle sidecars ────────────────────────────────────────────────────

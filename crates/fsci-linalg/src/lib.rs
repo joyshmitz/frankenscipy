@@ -566,6 +566,7 @@ pub fn solve_banded(
             b_len: b.len(),
         });
     }
+    hardened_dimension_check(options.mode, cols, cols)?;
     validate_finite_matrix_and_vector(ab, b, options.mode, options.check_finite)?;
 
     let dense = dense_from_banded(nlower, nupper, ab, cols);
@@ -867,9 +868,23 @@ fn rcond_warning(rcond: f64) -> Option<LinalgWarning> {
 
 /// Emit a structured JSON log entry to stderr for audit trail compatibility.
 fn emit_trace(trace: LinalgTrace) {
+    if !trace_enabled() {
+        return;
+    }
     if let Ok(json) = serde_json::to_string(&trace) {
         eprintln!("{json}");
     }
+}
+
+/// Trace output is opt-in to avoid flooding benches/tests.
+/// Enable with `FSCI_LINALG_TRACE=1`.
+fn trace_enabled() -> bool {
+    static TRACE_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACE_ENABLED.get_or_init(|| {
+        std::env::var("FSCI_LINALG_TRACE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    })
 }
 
 /// Hardened-mode dimension guard: reject matrices exceeding resource limits.

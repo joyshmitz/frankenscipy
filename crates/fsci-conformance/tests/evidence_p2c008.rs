@@ -1055,6 +1055,7 @@ fn generate_sidecar_resilient(payload: &[u8]) -> Result<RaptorQSidecar, String> 
                 schema_version: 1,
                 source_hash: hash(payload).to_hex().to_string(),
                 symbol_size,
+                seed: base_seed + offset,
                 source_symbols: k,
                 repair_symbols,
                 repair_symbol_hashes: repair_hashes,
