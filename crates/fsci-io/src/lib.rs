@@ -769,23 +769,38 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
                         }
                         let expected_len = checked_matrix_len(rows, cols, "MAT text matrix")?;
                         let mut data = Vec::with_capacity(expected_len);
-                        // Parse this line
-                        for val_str in trimmed.split_whitespace() {
-                            let v: f64 = val_str
-                                .parse()
-                                .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
-                            data.push(v);
-                        }
-                        // Read remaining rows
-                        for _ in 1..rows {
-                            if let Some(line) = lines.next() {
-                                for val_str in line.split_whitespace() {
-                                    let v: f64 = val_str.parse().map_err(|e| {
+                        let parse_row = |line: &str| -> Result<Vec<f64>, IoError> {
+                            line.split_whitespace()
+                                .map(|val_str| {
+                                    val_str.parse::<f64>().map_err(|e| {
                                         IoError::InvalidFormat(format!("bad value: {e}"))
-                                    })?;
-                                    data.push(v);
-                                }
+                                    })
+                                })
+                                .collect()
+                        };
+                        let first_vals = parse_row(trimmed)?;
+                        if first_vals.len() != cols {
+                            return Err(IoError::InvalidFormat(format!(
+                                "array '{n}' row 0 has {} columns, expected {cols}",
+                                first_vals.len()
+                            )));
+                        }
+                        data.extend_from_slice(&first_vals);
+                        // Read remaining rows
+                        for row_idx in 1..rows {
+                            let line = lines.next().ok_or_else(|| {
+                                IoError::InvalidFormat(format!(
+                                    "array '{n}' expected {rows} rows but found {row_idx}"
+                                ))
+                            })?;
+                            let row_vals = parse_row(line)?;
+                            if row_vals.len() != cols {
+                                return Err(IoError::InvalidFormat(format!(
+                                    "array '{n}' row {row_idx} has {} columns, expected {cols}",
+                                    row_vals.len()
+                                )));
                             }
+                            data.extend_from_slice(&row_vals);
                         }
                         if data.len() != expected_len {
                             return Err(IoError::InvalidFormat(format!(
@@ -1568,11 +1583,21 @@ mod tests {
 
     #[test]
     fn loadmat_rejects_wrong_element_count() {
-        let text = "# name: A\n# type: matrix\n# rows: 2\n# columns: 2\n1 2\n3\n";
+        let text = "# name: A\n# type: matrix\n# rows: 2\n# columns: 2\n1 2\n";
         let err = loadmat_text(text).expect_err("truncated matrix payload should fail");
         assert_eq!(
             err,
-            IoError::InvalidFormat("array 'A' expected 4 values but found 3".to_string())
+            IoError::InvalidFormat("array 'A' expected 2 rows but found 1".to_string())
+        );
+    }
+
+    #[test]
+    fn loadmat_rejects_ragged_rows() {
+        let text = "# name: A\n# type: matrix\n# rows: 2\n# columns: 2\n1 2 3\n4\n";
+        let err = loadmat_text(text).expect_err("ragged rows should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("array 'A' row 0 has 3 columns, expected 2".to_string())
         );
     }
 
