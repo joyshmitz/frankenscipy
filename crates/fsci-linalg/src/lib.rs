@@ -771,7 +771,7 @@ fn bandwidth_with_tolerance(a: &[Vec<f64>], tol: f64) -> (usize, usize) {
 
     for (i, row) in a.iter().enumerate().take(n) {
         for (j, &value) in row.iter().enumerate().take(m) {
-            if value.abs() > tol {
+            if !value.is_finite() || value.abs() > tol {
                 if i > j {
                     lower = lower.max(i - j);
                 }
@@ -1761,11 +1761,19 @@ fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
         let mut col_sum = 0.0;
         if lower {
             for row in a.iter().take(n).skip(j) {
-                col_sum += row[j].abs();
+                let value = row[j];
+                if !value.is_finite() {
+                    return 0.0;
+                }
+                col_sum += value.abs();
             }
         } else {
             for row in a.iter().take(j + 1) {
-                col_sum += row[j].abs();
+                let value = row[j];
+                if !value.is_finite() {
+                    return 0.0;
+                }
+                col_sum += value.abs();
             }
         }
         if col_sum > a_norm {
@@ -1788,7 +1796,7 @@ fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
             for j in (i + 1)..n {
                 sum += a[j][i] * x[j]; // A^T_ij = A_ji
             }
-            if a[i][i].abs() < 1e-18 {
+            if !a[i][i].is_finite() || a[i][i].abs() < 1e-18 {
                 return 0.0;
             }
             let b_i = if sum < 0.0 { 1.0 } else { -1.0 };
@@ -1801,7 +1809,7 @@ fn fast_rcond_triangular(a: &[Vec<f64>], lower: bool) -> f64 {
             for j in 0..i {
                 sum += a[j][i] * x[j]; // A^T_ij = A_ji
             }
-            if a[i][i].abs() < 1e-18 {
+            if !a[i][i].is_finite() || a[i][i].abs() < 1e-18 {
                 return 0.0;
             }
             let b_i = if sum < 0.0 { 1.0 } else { -1.0 };
@@ -1831,7 +1839,11 @@ fn fast_rcond_diagonal(a: &[Vec<f64>]) -> f64 {
         if i >= row.len() {
             return 0.0; // Ragged matrix treated as singular
         }
-        let val = row[i].abs();
+        let raw = row[i];
+        if !raw.is_finite() {
+            return 0.0;
+        }
+        let val = raw.abs();
         if val > max_abs {
             max_abs = val;
         }
@@ -3398,6 +3410,9 @@ pub fn issymmetric(a: &[Vec<f64>], atol: f64, rtol: f64) -> Result<bool, LinalgE
     for (i, row) in a.iter().enumerate().take(rows) {
         for (j, &upper) in row.iter().enumerate().skip(i + 1).take(cols - (i + 1)) {
             let lower = a[j][i];
+            if !upper.is_finite() || !lower.is_finite() {
+                return Ok(false);
+            }
             let diff = (upper - lower).abs();
             let scale = upper.abs().max(lower.abs());
             if diff > atol + rtol * scale {
@@ -4964,6 +4979,9 @@ pub fn is_positive_definite(a: &[Vec<f64>]) -> bool {
         if row.len() != n {
             return false;
         }
+        if row.iter().take(n).any(|value| !value.is_finite()) {
+            return false;
+        }
     }
 
     // Try Cholesky decomposition
@@ -4974,7 +4992,7 @@ pub fn is_positive_definite(a: &[Vec<f64>]) -> bool {
         for k in 0..j {
             sum -= l[j][k] * l[j][k];
         }
-        if sum <= 0.0 {
+        if !sum.is_finite() || sum <= 0.0 {
             return false;
         }
         l[j][j] = sum.sqrt();
@@ -4983,7 +5001,13 @@ pub fn is_positive_definite(a: &[Vec<f64>]) -> bool {
             for k in 0..j {
                 sum -= l[i][k] * l[j][k];
             }
+            if !sum.is_finite() {
+                return false;
+            }
             l[i][j] = sum / l[j][j];
+            if !l[i][j].is_finite() {
+                return false;
+            }
         }
     }
     true
@@ -5202,9 +5226,19 @@ pub fn mat_norm_1(a: &[Vec<f64>]) -> f64 {
         return 0.0;
     }
     let cols = a[0].len();
+    if a.iter().any(|row| row.len() != cols) {
+        return f64::NAN;
+    }
     let mut max_col_sum = 0.0f64;
     for j in 0..cols {
-        let col_sum: f64 = a.iter().map(|row| row[j].abs()).sum();
+        let mut col_sum = 0.0_f64;
+        for row in a.iter() {
+            let value = row[j].abs();
+            if !value.is_finite() {
+                return f64::NAN;
+            }
+            col_sum += value;
+        }
         max_col_sum = max_col_sum.max(col_sum);
     }
     max_col_sum
@@ -5225,9 +5259,15 @@ pub fn mat_norm_inf(a: &[Vec<f64>]) -> f64 {
 
 /// Check if a matrix is diagonal.
 pub fn is_diagonal(a: &[Vec<f64>], tol: f64) -> bool {
+    if let Some(first) = a.first() {
+        let cols = first.len();
+        if a.iter().any(|row| row.len() != cols) {
+            return false;
+        }
+    }
     for (i, row) in a.iter().enumerate() {
         for (j, &v) in row.iter().enumerate() {
-            if i != j && v.abs() > tol {
+            if i != j && (!v.is_finite() || v.abs() > tol) {
                 return false;
             }
         }
@@ -5237,9 +5277,15 @@ pub fn is_diagonal(a: &[Vec<f64>], tol: f64) -> bool {
 
 /// Check if a matrix is upper triangular.
 pub fn is_upper_triangular(a: &[Vec<f64>], tol: f64) -> bool {
+    if let Some(first) = a.first() {
+        let cols = first.len();
+        if a.iter().any(|row| row.len() != cols) {
+            return false;
+        }
+    }
     for (i, row) in a.iter().enumerate() {
         for (j, &v) in row.iter().enumerate() {
-            if i > j && v.abs() > tol {
+            if i > j && (!v.is_finite() || v.abs() > tol) {
                 return false;
             }
         }
@@ -5249,9 +5295,15 @@ pub fn is_upper_triangular(a: &[Vec<f64>], tol: f64) -> bool {
 
 /// Check if a matrix is lower triangular.
 pub fn is_lower_triangular(a: &[Vec<f64>], tol: f64) -> bool {
+    if let Some(first) = a.first() {
+        let cols = first.len();
+        if a.iter().any(|row| row.len() != cols) {
+            return false;
+        }
+    }
     for (i, row) in a.iter().enumerate() {
         for (j, &v) in row.iter().enumerate() {
-            if j > i && v.abs() > tol {
+            if j > i && (!v.is_finite() || v.abs() > tol) {
                 return false;
             }
         }
@@ -5268,6 +5320,14 @@ pub fn is_orthogonal(a: &[Vec<f64>], tol: f64) -> bool {
     let m = a[0].len();
     if n != m {
         return false;
+    }
+    for row in a.iter().take(n) {
+        if row.len() != m {
+            return false;
+        }
+        if row.iter().take(m).any(|value| !value.is_finite()) {
+            return false;
+        }
     }
 
     // Check A^T * A ≈ I
@@ -5804,6 +5864,32 @@ mod tests {
     }
 
     #[test]
+    fn is_diagonal_rejects_nan_off_diagonal() {
+        let a = vec![vec![1.0, f64::NAN], vec![0.0, 2.0]];
+        assert!(!is_diagonal(&a, 0.0));
+    }
+
+    #[test]
+    fn is_upper_triangular_rejects_nan_below_diagonal() {
+        let a = vec![vec![1.0, 2.0], vec![f64::NAN, 3.0]];
+        assert!(!is_upper_triangular(&a, 0.0));
+    }
+
+    #[test]
+    fn is_lower_triangular_rejects_nan_above_diagonal() {
+        let a = vec![vec![1.0, f64::NAN], vec![2.0, 3.0]];
+        assert!(!is_lower_triangular(&a, 0.0));
+    }
+
+    #[test]
+    fn structural_checks_reject_ragged_input() {
+        let ragged = vec![vec![1.0, 0.0], vec![0.0]];
+        assert!(!is_diagonal(&ragged, 0.0));
+        assert!(!is_upper_triangular(&ragged, 0.0));
+        assert!(!is_lower_triangular(&ragged, 0.0));
+    }
+
+    #[test]
     fn solve_with_casp_well_conditioned_uses_lu() {
         let a = vec![vec![3.0, 2.0], vec![1.0, 2.0]];
         let b = vec![5.0, 5.0];
@@ -5993,6 +6079,20 @@ mod tests {
             (rcond - 0.25).abs() < 1e-12,
             "expected exact reciprocal condition 0.25, got {rcond}"
         );
+    }
+
+    #[test]
+    fn fast_rcond_triangular_nan_returns_zero() {
+        let a = vec![vec![1.0, 0.0], vec![f64::NAN, 2.0]];
+        let rcond = fast_rcond_triangular(&a, true);
+        assert_eq!(rcond, 0.0);
+    }
+
+    #[test]
+    fn fast_rcond_diagonal_nan_returns_zero() {
+        let a = vec![vec![f64::NAN, 0.0], vec![0.0, 2.0]];
+        let rcond = fast_rcond_diagonal(&a);
+        assert_eq!(rcond, 0.0);
     }
 
     #[test]
@@ -8432,6 +8532,12 @@ mod proptest_tests {
     }
 
     #[test]
+    fn issymmetric_rejects_non_finite_entries() {
+        let a = vec![vec![1.0, f64::NAN], vec![f64::NAN, 2.0]];
+        assert!(!issymmetric(&a, 0.0, 0.0).expect("non-finite"));
+    }
+
+    #[test]
     fn ishermitian_matches_symmetric_for_real_matrix() {
         let a = vec![vec![2.0, -1.0], vec![-1.0, 3.0]];
         assert!(ishermitian(&a, 0.0, 0.0).expect("ishermitian"));
@@ -8441,6 +8547,30 @@ mod proptest_tests {
     fn ishermitian_false_for_real_asymmetric_matrix() {
         let a = vec![vec![1.0, 4.0], vec![2.0, 3.0]];
         assert!(!ishermitian(&a, 0.0, 0.0).expect("ishermitian"));
+    }
+
+    #[test]
+    fn is_positive_definite_rejects_non_finite_entries() {
+        let a = vec![vec![f64::INFINITY, 0.0], vec![0.0, 1.0]];
+        assert!(!is_positive_definite(&a));
+    }
+
+    #[test]
+    fn is_orthogonal_rejects_ragged_or_non_finite() {
+        let ragged = vec![vec![1.0, 0.0], vec![0.0]];
+        assert!(!is_orthogonal(&ragged, 1e-12));
+
+        let non_finite = vec![vec![1.0, f64::NAN], vec![0.0, 1.0]];
+        assert!(!is_orthogonal(&non_finite, 1e-12));
+    }
+
+    #[test]
+    fn mat_norm_1_rejects_ragged_or_non_finite() {
+        let ragged = vec![vec![1.0, 2.0], vec![3.0]];
+        assert!(mat_norm_1(&ragged).is_nan());
+
+        let non_finite = vec![vec![1.0, f64::NAN], vec![0.0, 1.0]];
+        assert!(mat_norm_1(&non_finite).is_nan());
     }
 
     #[test]
