@@ -86,3 +86,30 @@ storage.sqlite3-wal.corrupt-*
 # Scratch test binaries and scripts
 /test_canberra
 /test_canberra.rs
+
+# NTM session state
+.ntm/
+
+# Root-level agent scratch (test rigs, fix scripts, bug repros)
+/test_*.rs
+/test_*.py
+/test_*.sh
+/test_*.out
+/tests_*.rs
+/tests_*.out
+/test_[a-z]*
+/tests_[a-z]*
+/reproduce_*.rs
+/reproduce_*.py
+/fix_*.py
+/patch_*.py
+/ndimage_patch.diff
+/fails.txt
+/ubs_*.txt
+/test.out
+
+# Scratch scan binaries inside crate src/bin (agent-dropped test harnesses)
+crates/fsci-fft/src/bin/test_*.rs
+crates/fsci-integrate/src/bin/test_*.rs
+crates/fsci-spatial/src/bin/test_*.rs
+crates/fsci-special/src/bin/
