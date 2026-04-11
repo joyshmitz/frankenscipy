@@ -1509,6 +1509,9 @@ impl RegularGridInterpolator {
                 detail: format!("expected {ndim}D, got {}D", xi.len()),
             });
         }
+        if xi.iter().any(|x| x.is_nan()) {
+            return Ok(f64::NAN);
+        }
         for (dim, &x) in xi.iter().enumerate() {
             let axis = &self.points[dim];
             if x < axis[0] || x > axis[axis.len() - 1] {
@@ -3170,5 +3173,15 @@ mod tests {
     fn rbf_empty_rejected() {
         let err = RbfInterpolator::new(&[], &[], RbfKernel::Gaussian, 1.0).expect_err("empty");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn regular_grid_nearest_nan_query_returns_nan() {
+        let points = vec![vec![0.0, 1.0, 2.0]];
+        let values = vec![0.0, 1.0, 2.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Nearest, false, None)
+                .expect("regular grid");
+        assert!(interp.eval(&[f64::NAN]).unwrap().is_nan());
     }
 }
