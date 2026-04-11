@@ -635,13 +635,52 @@ fn solve_lu_transpose(lu: &LU<f64, Dyn, Dyn>, b: &DVector<f64>) -> Option<DVecto
     Some(x)
 }
 
+/// Induced 1-norm for a matrix (max column sum).
+fn matrix_norm1(matrix: &DMatrix<f64>) -> f64 {
+    if matrix.ncols() == 0 || matrix.nrows() == 0 {
+        return 0.0;
+    }
+    let mut max_col_sum = 0.0_f64;
+    for col in 0..matrix.ncols() {
+        let mut sum = 0.0_f64;
+        for row in 0..matrix.nrows() {
+            let value = matrix[(row, col)].abs();
+            if !value.is_finite() {
+                return f64::NAN;
+            }
+            sum += value;
+        }
+        if sum > max_col_sum {
+            max_col_sum = sum;
+        }
+    }
+    max_col_sum
+}
+
+fn rcond_from_singular_values(values: &DVector<f64>) -> f64 {
+    let mut max_s = 0.0_f64;
+    let mut min_s = f64::MAX;
+    for &value in values.iter() {
+        if !value.is_finite() {
+            return 0.0;
+        }
+        if value > max_s {
+            max_s = value;
+        }
+        if value < min_s {
+            min_s = value;
+        }
+    }
+    if max_s > 0.0 { min_s / max_s } else { 0.0 }
+}
+
 /// O(n²) reciprocal condition estimate from LU — 1-norm Higham estimator.
 /// Cost: 2 solves (O(n²)) vs O(n³) for full SVD.
 fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, a_norm: f64, n: usize) -> f64 {
     if n == 0 {
         return 1.0;
     }
-    if a_norm == 0.0 {
+    if a_norm == 0.0 || !a_norm.is_finite() {
         return 0.0;
     }
 
@@ -814,7 +853,14 @@ fn condition_diagnostics_with_assumption(
     } else {
         let matrix = dmatrix_from_rows(a)?;
         let lu = matrix.clone().lu();
-        let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), rows);
+        let rcond = if rows <= 4 {
+            match safe_svd(matrix.clone(), false, false) {
+                Ok(svd) => rcond_from_singular_values(&svd.singular_values),
+                Err(_) => fast_rcond_from_lu(&lu, matrix_norm1(&matrix), rows),
+            }
+        } else {
+            fast_rcond_from_lu(&lu, matrix_norm1(&matrix), rows)
+        };
         matrix_cache = Some(matrix);
         lu_cache = Some(lu);
         rcond
@@ -848,9 +894,13 @@ pub fn condition_diagnostics(a: &[Vec<f64>]) -> Result<ConditionReport, LinalgEr
 /// Returns 0.0 when the denominator is zero.
 fn compute_backward_error(matrix: &DMatrix<f64>, x: &DVector<f64>, rhs: &DVector<f64>) -> f64 {
     let residual = matrix * x - rhs;
+    let residual_norm = residual.norm();
     let denom = matrix.norm() * x.norm() + rhs.norm();
+    if !residual_norm.is_finite() || !denom.is_finite() {
+        return f64::INFINITY;
+    }
     if denom > 0.0 {
-        residual.norm() / denom
+        residual_norm / denom
     } else {
         0.0
     }
@@ -914,7 +964,7 @@ fn solve_general_with_hardening(
     let rhs = DVector::from_column_slice(b);
     let lu: LU<f64, Dyn, Dyn> = matrix.clone().lu();
     let n = a.len();
-    let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), n);
+    let rcond = fast_rcond_from_lu(&lu, matrix_norm1(&matrix), n);
 
     // Hardened mode: reject if condition number is too high
     if mode == RuntimeMode::Hardened && rcond < HARDENED_RCOND_THRESHOLD && rcond > 0.0 {
@@ -1366,7 +1416,7 @@ fn dispatch_inv_action(
                     (m, lu)
                 }
             };
-            let a_norm_1 = matrix.lp_norm(1);
+            let a_norm_1 = matrix_norm1(&matrix);
             let rcond = fast_rcond_from_lu(&lu, a_norm_1, n);
             let pivot_tiny = lu
                 .u()
@@ -1403,8 +1453,8 @@ fn dispatch_inv_action(
             let qr = matrix.clone().qr();
             let identity = DMatrix::identity(n, n);
             let inv_matrix = qr.solve(&identity).ok_or(LinalgError::SingularMatrix)?;
-            let a_norm_1 = matrix.lp_norm(1);
-            let inv_norm_1 = inv_matrix.lp_norm(1);
+            let a_norm_1 = matrix_norm1(&matrix);
+            let inv_norm_1 = matrix_norm1(&inv_matrix);
             let rcond = if a_norm_1 > 0.0 && inv_norm_1 > 0.0 {
                 1.0 / (a_norm_1 * inv_norm_1)
             } else {
@@ -1438,8 +1488,8 @@ fn dispatch_inv_action(
                 return Err(LinalgError::SingularMatrix);
             }
             let pinv = pseudo_inverse_from_svd(&svd, threshold)?;
-            let a_norm_1 = matrix.lp_norm(1);
-            let inv_norm_1 = pinv.lp_norm(1);
+            let a_norm_1 = matrix_norm1(&matrix);
+            let inv_norm_1 = matrix_norm1(&pinv);
             let rcond = if a_norm_1 > 0.0 && inv_norm_1 > 0.0 {
                 1.0 / (a_norm_1 * inv_norm_1)
             } else {
@@ -1930,7 +1980,7 @@ pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResul
     validate_finite_matrix(a, options.mode, options.check_finite)?;
 
     let matrix = dmatrix_from_rows(a)?;
-    let a_norm_1 = matrix.lp_norm(1);
+    let a_norm_1 = matrix_norm1(&matrix);
     let lu_decomp: LU<f64, Dyn, Dyn> = matrix.lu();
 
     emit_trace(LinalgTrace {
@@ -3619,7 +3669,10 @@ fn compute_backward_error_dense(a: &[Vec<f64>], x: &[f64], b: &[f64]) -> f64 {
     let b_norm = b_sum_sq.sqrt();
 
     let denom = a_norm * x_norm + b_norm;
-    if denom > 0.0 && denom.is_finite() {
+    if !residual_norm.is_finite() || !denom.is_finite() {
+        return f64::INFINITY;
+    }
+    if denom > 0.0 {
         residual_norm / denom
     } else {
         0.0
@@ -5616,6 +5669,21 @@ mod tests {
     }
 
     #[test]
+    fn backward_error_nonfinite_is_infinite() {
+        let matrix = DMatrix::from_row_slice(2, 2, &[1.0, 0.0, 0.0, 1.0]);
+        let rhs = DVector::from_column_slice(&[1.0, 1.0]);
+        let x = DVector::from_column_slice(&[f64::NAN, 1.0]);
+        let backward = compute_backward_error(&matrix, &x, &rhs);
+        assert!(backward.is_infinite());
+
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let x_dense = vec![f64::NAN, 1.0];
+        let b = vec![1.0, 1.0];
+        let backward_dense = compute_backward_error_dense(&a, &x_dense, &b);
+        assert!(backward_dense.is_infinite());
+    }
+
+    #[test]
     fn inv_general_single_lu_matches_column_by_column() {
         let a = vec![
             vec![4.0, 7.0, 2.0],
@@ -5644,7 +5712,7 @@ mod tests {
     fn fast_rcond_from_lu_well_conditioned() {
         let matrix = DMatrix::from_row_slice(2, 2, &[3.0, 2.0, 1.0, 2.0]);
         let lu = matrix.clone().lu();
-        let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), 2);
+        let rcond = fast_rcond_from_lu(&lu, matrix_norm1(&matrix), 2);
         assert!(
             rcond > 0.1,
             "well-conditioned matrix should have high rcond, got {rcond}"
@@ -5655,7 +5723,7 @@ mod tests {
     fn fast_rcond_from_lu_ill_conditioned() {
         let matrix = DMatrix::from_row_slice(2, 2, &[1.0, 0.0, 0.0, 1e-15]);
         let lu = matrix.clone().lu();
-        let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), 2);
+        let rcond = fast_rcond_from_lu(&lu, matrix_norm1(&matrix), 2);
         assert!(
             rcond < 1e-12,
             "ill-conditioned matrix should have low rcond, got {rcond}"
@@ -7778,7 +7846,7 @@ mod proptest_tests {
         fn rcond_is_bounded(a in arb_invertible_2x2()) {
             let matrix = dmatrix_from_rows(&a).expect("valid matrix");
             let lu = matrix.clone().lu();
-            let rcond = fast_rcond_from_lu(&lu, matrix.lp_norm(1), 2);
+            let rcond = fast_rcond_from_lu(&lu, matrix_norm1(&matrix), 2);
             prop_assert!(rcond >= 0.0, "rcond should be >= 0, got {rcond}");
             prop_assert!(rcond <= 1.0, "rcond should be <= 1, got {rcond}");
         }

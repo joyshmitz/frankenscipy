@@ -1356,6 +1356,16 @@ fn portfolio_calibrator_fallback_overrides() {
 }
 
 #[test]
+fn portfolio_calibrator_nan_backward_error_falls_back() {
+    let mut p = SolverPortfolio::new(RuntimeMode::Strict, 64);
+    for _ in 0..10 {
+        p.observe_backward_error(f64::NAN);
+    }
+    let (action, _, _, _) = p.select_action(1e-2, None);
+    assert_eq!(action, SolverAction::SVDFallback);
+}
+
+#[test]
 fn portfolio_deterministic_selection() {
     let p1 = SolverPortfolio::new(RuntimeMode::Strict, 64);
     let p2 = SolverPortfolio::new(RuntimeMode::Strict, 64);

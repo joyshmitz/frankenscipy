@@ -329,6 +329,12 @@ impl ConformalCalibrator {
 
     /// Record a nonconformity score (e.g., backward error).
     pub fn observe(&mut self, score: f64) {
+        let normalized = if score.is_finite() && score >= 0.0 {
+            score
+        } else {
+            // Treat invalid scores as violations to fail closed.
+            f64::INFINITY
+        };
         if self.scores.len() >= self.capacity {
             // Remove oldest and adjust violation count
             if let Some(old) = self.scores.pop_front()
@@ -338,10 +344,10 @@ impl ConformalCalibrator {
             }
         }
         self.total_predictions += 1;
-        if score > self.violation_threshold {
+        if normalized > self.violation_threshold {
             self.coverage_violations += 1;
         }
-        self.scores.push_back(score);
+        self.scores.push_back(normalized);
     }
 
     /// Check if empirical miscoverage rate exceeds alpha + epsilon.
