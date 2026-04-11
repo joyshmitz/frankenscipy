@@ -509,6 +509,11 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
                     "unsupported audio format: {audio_format} (only PCM=1 and IEEE_FLOAT=3 supported)"
                 )));
             }
+            if audio_format == 3 && bits_per_sample != 32 {
+                return Err(IoError::UnsupportedFeature(format!(
+                    "unsupported IEEE float bits per sample: {bits_per_sample}"
+                )));
+            }
 
             let bytes_per_sample = match bits_per_sample {
                 8 => 1usize,
@@ -1520,6 +1525,18 @@ mod tests {
         assert_eq!(
             err,
             IoError::InvalidFormat("encountered data chunk before a valid fmt chunk".to_string())
+        );
+    }
+
+    #[test]
+    fn wav_read_rejects_float_with_non_32bit_samples() {
+        let mut bytes = wav_write(44_100, 1, &[0.0]).expect("mono samples should encode");
+        bytes[20..22].copy_from_slice(&3u16.to_le_bytes());
+
+        let err = wav_read(&bytes).expect_err("float WAV with 16-bit samples should fail");
+        assert_eq!(
+            err,
+            IoError::UnsupportedFeature("unsupported IEEE float bits per sample: 16".to_string())
         );
     }
 
