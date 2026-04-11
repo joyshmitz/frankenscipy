@@ -453,6 +453,11 @@ impl KDTree {
                 actual: query.len(),
             });
         }
+        if query.iter().any(|value| !value.is_finite()) {
+            return Err(SpatialError::InvalidArgument(
+                "query must be finite".to_string(),
+            ));
+        }
         if self.nodes.is_empty() {
             return Err(SpatialError::EmptyData);
         }
@@ -472,6 +477,11 @@ impl KDTree {
                 expected: self.dim,
                 actual: query.len(),
             });
+        }
+        if query.iter().any(|value| !value.is_finite()) {
+            return Err(SpatialError::InvalidArgument(
+                "query must be finite".to_string(),
+            ));
         }
 
         let k = k.min(self.nodes.len());
@@ -506,6 +516,11 @@ impl KDTree {
                 expected: self.dim,
                 actual: query.len(),
             });
+        }
+        if query.iter().any(|value| !value.is_finite()) {
+            return Err(SpatialError::InvalidArgument(
+                "query must be finite".to_string(),
+            ));
         }
         if !r.is_finite() || r < 0.0 {
             return Err(SpatialError::InvalidArgument(
@@ -2244,6 +2259,22 @@ mod tests {
         let tree = KDTree::new(&data).expect("kdtree");
         let err = tree.query(&[1.0]).expect_err("dim mismatch");
         assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn kdtree_rejects_non_finite_query() {
+        let data = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let tree = KDTree::new(&data).expect("kdtree");
+        let err = tree.query(&[f64::NAN, 0.0]).expect_err("nan query");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+        let err = tree
+            .query_k(&[f64::INFINITY, 0.0], 1)
+            .expect_err("inf query");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+        let err = tree
+            .query_ball_point(&[0.0, f64::NEG_INFINITY], 1.0)
+            .expect_err("inf query");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
     }
 
     #[test]
