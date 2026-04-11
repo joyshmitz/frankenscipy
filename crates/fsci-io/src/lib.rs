@@ -1018,6 +1018,15 @@ pub fn read_json_array(content: &str) -> Result<Vec<f64>, IoError> {
             s.trim()
                 .parse::<f64>()
                 .map_err(|e| IoError::InvalidFormat(format!("JSON parse error: {e}")))
+                .and_then(|v| {
+                    if v.is_finite() {
+                        Ok(v)
+                    } else {
+                        Err(IoError::InvalidFormat(format!(
+                            "JSON parse error: non-finite value {v}"
+                        )))
+                    }
+                })
         })
         .collect()
 }
@@ -1781,6 +1790,15 @@ mod tests {
     fn read_json_array_accepts_empty_array() {
         let data = read_json_array("[]").expect("empty array should parse");
         assert!(data.is_empty());
+    }
+
+    #[test]
+    fn read_json_array_rejects_non_finite_values() {
+        let err = read_json_array("[1.0, NaN]").expect_err("NaN is not valid JSON");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("JSON parse error: non-finite value NaN".to_string())
+        );
     }
 
     #[test]
