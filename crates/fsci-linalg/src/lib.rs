@@ -1221,8 +1221,7 @@ fn solve_with_portfolio_internal(
                 &mut lu_cache,
             ) {
                 Ok(mut solve_result) => {
-                    let fallback_active =
-                        action != selected_action || !matches!(action, SolverAction::DirectLU);
+                    let fallback_active = action != selected_action;
                     solve_result.certificate = Some(build_solve_certificate(
                         &report,
                         action,
@@ -1256,8 +1255,7 @@ fn solve_with_portfolio_internal(
     });
 
     if record_evidence {
-        let fallback_active =
-            actual_action != selected_action || !matches!(actual_action, SolverAction::DirectLU);
+        let fallback_active = actual_action != selected_action;
         let backward_error = result
             .as_ref()
             .ok()
@@ -5832,6 +5830,7 @@ mod tests {
             certificate.structural_evidence,
             StructuralEvidence::Diagonal
         );
+        assert!(!certificate.fallback_active);
         assert_certificate_populated(&certificate);
     }
 
@@ -5851,6 +5850,7 @@ mod tests {
             certificate.structural_evidence,
             StructuralEvidence::Triangular
         );
+        assert!(!certificate.fallback_active);
         assert_certificate_populated(&certificate);
     }
 
@@ -5868,6 +5868,7 @@ mod tests {
         let certificate = result.certificate.expect("certificate populated");
         assert_eq!(certificate.action, SolverAction::DirectLU);
         assert_eq!(certificate.structural_evidence, StructuralEvidence::General);
+        assert!(!certificate.fallback_active);
         assert_certificate_populated(&certificate);
     }
 
@@ -5885,6 +5886,7 @@ mod tests {
         let result = solve(&a, &b, SolveOptions::default()).expect("solve works");
         let certificate = result.certificate.expect("certificate populated");
         assert_eq!(certificate.action, SolverAction::PivotedQR);
+        assert!(!certificate.fallback_active);
         assert_certificate_populated(&certificate);
     }
 
@@ -5901,6 +5903,7 @@ mod tests {
         let result = solve(&a, &b, SolveOptions::default()).expect("solve works");
         let certificate = result.certificate.expect("certificate populated");
         assert_eq!(certificate.action, SolverAction::SVDFallback);
+        assert!(!certificate.fallback_active);
         assert_certificate_populated(&certificate);
     }
 
