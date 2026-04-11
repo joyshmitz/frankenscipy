@@ -483,6 +483,9 @@ impl KDTree {
                 "query must be finite".to_string(),
             ));
         }
+        if k == 0 {
+            return Ok(Vec::new());
+        }
 
         let k = k.min(self.nodes.len());
         let mut results: Vec<(usize, f64)> = Vec::with_capacity(k);
@@ -2225,6 +2228,14 @@ mod tests {
         // Nearest to 1.5: 1.0 (dist=0.5), 2.0 (dist=0.5), 0.0 (dist=1.5) or 3.0 (dist=1.5)
         assert!(results[0].1 < 0.6);
         assert!(results[1].1 < 0.6);
+    }
+
+    #[test]
+    fn kdtree_query_k_zero_returns_empty() {
+        let data = vec![vec![0.0], vec![1.0]];
+        let tree = KDTree::new(&data).expect("kdtree");
+        let results = tree.query_k(&[0.0], 0).expect("query_k");
+        assert!(results.is_empty());
     }
 
     #[test]
