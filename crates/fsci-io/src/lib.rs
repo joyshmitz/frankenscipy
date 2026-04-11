@@ -278,11 +278,29 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                     )));
                 }
 
-                data[r * cols + c] = v;
-                if info.symmetry == MmSymmetry::Symmetric && r != c {
-                    data[c * cols + r] = v;
-                } else if info.symmetry == MmSymmetry::SkewSymmetric && r != c {
-                    data[c * cols + r] = -v;
+                let idx = r * cols + c;
+                match info.symmetry {
+                    MmSymmetry::General => {
+                        data[idx] += v;
+                    }
+                    MmSymmetry::Symmetric | MmSymmetry::Hermitian => {
+                        data[idx] += v;
+                        if r != c {
+                            data[c * cols + r] += v;
+                        }
+                    }
+                    MmSymmetry::SkewSymmetric => {
+                        if r == c {
+                            if v != 0.0 {
+                                return Err(IoError::InvalidFormat(
+                                    "skew-symmetric diagonal entries must be zero".to_string(),
+                                ));
+                            }
+                        } else {
+                            data[idx] += v;
+                            data[c * cols + r] -= v;
+                        }
+                    }
                 }
                 seen_nnz += 1;
             }
@@ -1106,6 +1124,41 @@ mod tests {
         assert_eq!(mat.data[0], 5.0); // (0,0)
         assert_eq!(mat.data[3], 3.0); // (1,0)
         assert_eq!(mat.data[1], 3.0); // (0,1) = symmetric
+    }
+
+    #[test]
+    fn mmread_coordinate_sums_duplicates() {
+        let content = "%%MatrixMarket matrix coordinate real general\n\
+                        2 2 3\n\
+                        1 1 1.0\n\
+                        1 1 2.5\n\
+                        2 1 -1.0\n";
+        let mat = mmread(content).unwrap();
+        assert_eq!(mat.data[0], 3.5);
+        assert_eq!(mat.data[2], -1.0);
+        assert_eq!(mat.data[1], 0.0);
+    }
+
+    #[test]
+    fn mmread_skew_symmetric() {
+        let content = "%%MatrixMarket matrix coordinate real skew-symmetric\n\
+                        3 3 1\n\
+                        1 3 2.0\n";
+        let mat = mmread(content).unwrap();
+        assert_eq!(mat.data[2], 2.0); // (0,2)
+        assert_eq!(mat.data[6], -2.0); // (2,0)
+    }
+
+    #[test]
+    fn mmread_skew_symmetric_rejects_nonzero_diagonal() {
+        let content = "%%MatrixMarket matrix coordinate real skew-symmetric\n\
+                        2 2 1\n\
+                        1 1 1.0\n";
+        let err = mmread(content).expect_err("skew-symmetric diagonal must be zero");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("skew-symmetric diagonal entries must be zero".to_string())
+        );
     }
 
     #[test]
