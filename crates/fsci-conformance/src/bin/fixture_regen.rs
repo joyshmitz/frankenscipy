@@ -75,10 +75,18 @@ fn main() {
         match args[i].as_str() {
             "--fixture" => {
                 i += 1;
+                if i >= args.len() {
+                    eprintln!("--fixture requires a value");
+                    std::process::exit(1);
+                }
                 fixture_path = Some(PathBuf::from(&args[i]));
             }
             "--oracle" => {
                 i += 1;
+                if i >= args.len() {
+                    eprintln!("--oracle requires a value");
+                    std::process::exit(1);
+                }
                 oracle_path = Some(PathBuf::from(&args[i]));
             }
             "--dry-run" => {
@@ -111,6 +119,19 @@ fn main() {
     // Load fixture as generic JSON
     let fixture_raw = fs::read_to_string(&fixture_path).expect("read fixture");
     let mut fixture: Value = serde_json::from_str(&fixture_raw).expect("parse fixture");
+
+    // Validate packet id matches to avoid corrupting unrelated fixtures.
+    let fixture_packet_id = fixture
+        .get("packet_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if fixture_packet_id != oracle.packet_id {
+        eprintln!(
+            "Packet id mismatch: fixture={} oracle={}",
+            fixture_packet_id, oracle.packet_id
+        );
+        std::process::exit(1);
+    }
 
     // Build case_id -> oracle output mapping
     let oracle_map: HashMap<&str, &OracleCaseOutput> = oracle
@@ -167,7 +188,19 @@ fn main() {
             .expect("expected object");
 
         // Handle based on oracle status
+        let expected_kind = expected
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+
         if oracle_output.status == "ok" {
+            if expected_kind == "error" {
+                eprintln!(
+                    "  WARN {case_id}: oracle succeeded but fixture expects error; skipping"
+                );
+                skipped_count += 1;
+                continue;
+            }
             match oracle_output.result_kind.as_str() {
                 "vector" => {
                     if let Some(values) = oracle_output.result.get("values") {
@@ -238,7 +271,7 @@ fn main() {
             }
         } else if oracle_output.status == "error" {
             // Oracle returned error - keep fixture expected.kind="error"
-            if expected.get("kind").and_then(Value::as_str) == Some("error") {
+            if expected_kind == "error" {
                 // Update error message from oracle if available
                 if let Some(err) = &oracle_output.error {
                     expected.insert("error".to_owned(), Value::String(err.clone()));
