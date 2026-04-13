@@ -96,7 +96,6 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "log_softmax": special.log_softmax,
             "logsumexp": special.logsumexp,
             "exprel": special.exprel,
-            "sinc": special.sinc,
             "airy": special.airy,
             "airye": special.airye,
             "ai_zeros": special.ai_zeros,
