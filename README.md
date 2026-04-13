@@ -91,6 +91,8 @@ These four docs are now the canonical porting-to-rust workflow for this repo.
 
 ## Python Oracle Capture
 
+- Full workflow (capture, regen, provenance, CI lane):
+  - `docs/ORACLE_WORKFLOW.md`
 - Oracle script path:
   - `crates/fsci-conformance/python_oracle/scipy_linalg_oracle.py`
 - The Rust harness can run this script via:
