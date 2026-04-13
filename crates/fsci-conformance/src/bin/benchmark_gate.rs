@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 const SPEC_BUDGETS_MS: &[(&str, f64)] = &[
     ("linalg", 650.0),    // dense solve 4k-8k class p95
     ("sparse", 220.0),    // sparse matvec p95
-    ("optimize", 180.0),  // optimizer iteration p95
+    ("opt", 180.0),       // optimizer iteration p95 (matches baseline_opt.json)
     ("integrate", 320.0), // IVP solve step p95
     ("fft", 210.0),       // FFT transform p95
 ];
@@ -274,7 +274,7 @@ fn main() {
     }
     println!();
 
-    if check_spec || baselines.len() > 0 {
+    if check_spec || !baselines.is_empty() {
         let results = check_spec_compliance(&baselines);
         let pass = print_report(&results);
         std::process::exit(if pass { 0 } else { 1 });
