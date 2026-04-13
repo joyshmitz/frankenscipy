@@ -39,6 +39,24 @@
       }
     },
     {
+      "case_id": "fft_forward_dc_4pt",
+      "category": "fft",
+      "mode": "Strict",
+      "transform": "fft",
+      "normalization": "forward",
+      "real_input": null,
+      "complex_input": [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
       "case_id": "ifft_dc_4pt",
       "category": "ifft",
       "mode": "Strict",
@@ -52,6 +70,24 @@
       "expected": {
         "kind": "complex_vector",
         "values": [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "ifft_forward_dc_4pt",
+      "category": "ifft",
+      "mode": "Strict",
+      "transform": "ifft",
+      "normalization": "forward",
+      "real_input": null,
+      "complex_input": [[4.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[4.0, 0.0], [4.0, 0.0], [4.0, 0.0], [4.0, 0.0]],
         "atol": 1e-12,
         "rtol": 1e-10
       }
@@ -90,6 +126,24 @@
         "values": [[10.0, 0.0], [-2.0, 2.0], [-2.0, 0.0]],
         "atol": 1e-10,
         "rtol": 1e-8
+      }
+    },
+    {
+      "case_id": "rfft_ortho_impulse_4pt",
+      "category": "rfft",
+      "mode": "Strict",
+      "transform": "rfft",
+      "normalization": "ortho",
+      "real_input": [1.0, 0.0, 0.0, 0.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[0.5, 0.0], [0.5, 0.0], [0.5, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
       }
     },
     {
@@ -178,6 +232,42 @@
       "expected": {
         "kind": "real_vector",
         "values": [0.0, 0.2, 0.4],
+        "atol": 1e-15,
+        "rtol": 1e-15
+      }
+    },
+    {
+      "case_id": "fftfreq_4pt_spacing_half",
+      "category": "fftfreq",
+      "mode": "Strict",
+      "transform": "fftfreq",
+      "normalization": null,
+      "real_input": [0.0, 0.0, 0.0, 0.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": 0.5,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [0.0, 0.5, -1.0, -0.5],
+        "atol": 1e-15,
+        "rtol": 1e-15
+      }
+    },
+    {
+      "case_id": "rfftfreq_4pt_spacing_half",
+      "category": "rfftfreq",
+      "mode": "Strict",
+      "transform": "rfftfreq",
+      "normalization": null,
+      "real_input": [0.0, 0.0, 0.0, 0.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": 0.5,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [0.0, 0.5, 1.0],
         "atol": 1e-15,
         "rtol": 1e-15
       }
