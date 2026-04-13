@@ -679,10 +679,26 @@ pub enum FftTransformKind {
     Fft2,
     Ifft2,
     Fftn,
+    Ifftn,
+    Rfft2,
+    Irfft2,
+    Rfftn,
+    Irfftn,
     Fftfreq,
     Rfftfreq,
     Fftshift,
     Ifftshift,
+    Hfft,
+    Ihfft,
+    Dct,
+    Idct,
+    DctI,
+    DctIii,
+    DctIv,
+    DstI,
+    DstIi,
+    DstIii,
+    DstIv,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1886,6 +1902,68 @@ fn execute_fft_case(case: &FftCase) -> FftObserved {
                 Err(e) => FftObserved::Error(format!("{e}")),
             }
         }
+        FftTransformKind::Rfft2 => {
+            let input = match &case.real_input {
+                Some(v) => v.as_slice(),
+                None => return FftObserved::Error("rfft2 requires real_input".to_owned()),
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("rfft2 requires shape".to_owned()),
+            };
+            if shape.len() != 2 {
+                return FftObserved::Error("rfft2 requires 2D shape".to_owned());
+            }
+            match fsci_fft::rfft2(input, (shape[0], shape[1]), &opts) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Irfft2 => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("irfft2 requires complex_input".to_owned()),
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("irfft2 requires shape".to_owned()),
+            };
+            if shape.len() != 2 {
+                return FftObserved::Error("irfft2 requires 2D shape".to_owned());
+            }
+            match fsci_fft::irfft2(&input, (shape[0], shape[1]), &opts) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Rfftn => {
+            let input = match &case.real_input {
+                Some(v) => v.as_slice(),
+                None => return FftObserved::Error("rfftn requires real_input".to_owned()),
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("rfftn requires shape".to_owned()),
+            };
+            match fsci_fft::rfftn(input, &shape, &opts) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Irfftn => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("irfftn requires complex_input".to_owned()),
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("irfftn requires shape".to_owned()),
+            };
+            match fsci_fft::irfftn(&input, &shape, &opts) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
         FftTransformKind::Fftfreq => {
             let n = case.real_input.as_ref().map_or(0, |v| v.len());
             let spacing = case.sample_spacing.unwrap_or(1.0);
@@ -1916,7 +1994,54 @@ fn execute_fft_case(case: &FftCase) -> FftObserved {
             };
             FftObserved::RealVector(fsci_fft::ifftshift_1d(&input))
         }
-        FftTransformKind::Fft2 | FftTransformKind::Ifft2 | FftTransformKind::Fftn => {
+        FftTransformKind::Hfft => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("hfft requires complex_input".to_owned()),
+            };
+            match fsci_fft::hfft(&input, case.output_len, &opts) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Ihfft => {
+            let input = match &case.real_input {
+                Some(v) => v.as_slice(),
+                None => return FftObserved::Error("ihfft requires real_input".to_owned()),
+            };
+            match fsci_fft::ihfft(input, case.output_len, &opts) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Dct | FftTransformKind::Idct | FftTransformKind::DctI
+        | FftTransformKind::DctIii | FftTransformKind::DctIv | FftTransformKind::DstI
+        | FftTransformKind::DstIi | FftTransformKind::DstIii | FftTransformKind::DstIv => {
+            let input = match &case.real_input {
+                Some(v) => v.as_slice(),
+                None => return FftObserved::Error("dct/dst requires real_input".to_owned()),
+            };
+            let result = match case.transform {
+                FftTransformKind::Dct => fsci_fft::dct(input, &opts),
+                FftTransformKind::Idct => fsci_fft::idct(input, &opts),
+                FftTransformKind::DctI => fsci_fft::dct_i(input, &opts),
+                FftTransformKind::DctIii => fsci_fft::dct_iii(input, &opts),
+                FftTransformKind::DctIv => fsci_fft::dct_iv(input, &opts),
+                FftTransformKind::DstI => fsci_fft::dst_i(input, &opts),
+                FftTransformKind::DstIi => fsci_fft::dst_ii(input, &opts),
+                FftTransformKind::DstIii => fsci_fft::dst_iii(input, &opts),
+                FftTransformKind::DstIv => fsci_fft::dst_iv(input, &opts),
+                _ => return FftObserved::Error("Unexpected transform kind".to_owned()),
+            };
+            match result {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Fft2
+        | FftTransformKind::Ifft2
+        | FftTransformKind::Fftn
+        | FftTransformKind::Ifftn => {
             // Multi-dimensional transforms: require complex_input and shape
             let input: Vec<(f64, f64)> = match &case.complex_input {
                 Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
@@ -1942,6 +2067,7 @@ fn execute_fft_case(case: &FftCase) -> FftObserved {
                     fsci_fft::ifft2(&input, (shape[0], shape[1]), &opts)
                 }
                 FftTransformKind::Fftn => fsci_fft::fftn(&input, &shape, &opts),
+                FftTransformKind::Ifftn => fsci_fft::ifftn(&input, &shape, &opts),
                 _ => return FftObserved::Error("Unsupported FFT transform kind".to_owned()),
             };
             match result {
