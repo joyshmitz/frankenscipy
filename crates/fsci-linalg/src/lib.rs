@@ -8386,6 +8386,69 @@ mod proptest_tests {
         assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
     }
 
+    // ── matrix_power tests ─────────────────────────────────────────────
+
+    #[test]
+    fn matrix_power_zero_returns_identity() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = matrix_power(&a, 0, DecompOptions::default()).expect("A^0");
+        assert_eq!(result.len(), 2);
+        assert!((result[0][0] - 1.0).abs() < 1e-12);
+        assert!((result[0][1] - 0.0).abs() < 1e-12);
+        assert!((result[1][0] - 0.0).abs() < 1e-12);
+        assert!((result[1][1] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn matrix_power_one_returns_original() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = matrix_power(&a, 1, DecompOptions::default()).expect("A^1");
+        assert!((result[0][0] - 1.0).abs() < 1e-12);
+        assert!((result[0][1] - 2.0).abs() < 1e-12);
+        assert!((result[1][0] - 3.0).abs() < 1e-12);
+        assert!((result[1][1] - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn matrix_power_two_matches_multiply() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = matrix_power(&a, 2, DecompOptions::default()).expect("A^2");
+        // A² = [[7,10],[15,22]]
+        assert!((result[0][0] - 7.0).abs() < 1e-10);
+        assert!((result[0][1] - 10.0).abs() < 1e-10);
+        assert!((result[1][0] - 15.0).abs() < 1e-10);
+        assert!((result[1][1] - 22.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn matrix_power_negative_one_is_inverse() {
+        let a = vec![vec![4.0, 7.0], vec![2.0, 6.0]];
+        let result = matrix_power(&a, -1, DecompOptions::default()).expect("A^-1");
+        // inv([[4,7],[2,6]]) = [[0.6,-0.7],[-0.2,0.4]]
+        assert!((result[0][0] - 0.6).abs() < 1e-10);
+        assert!((result[0][1] - (-0.7)).abs() < 1e-10);
+        assert!((result[1][0] - (-0.2)).abs() < 1e-10);
+        assert!((result[1][1] - 0.4).abs() < 1e-10);
+    }
+
+    #[test]
+    fn matrix_power_negative_two() {
+        let a = vec![vec![2.0, 0.0], vec![0.0, 3.0]];
+        // For diagonal: A^-2 = [[1/4,0],[0,1/9]]
+        let result = matrix_power(&a, -2, DecompOptions::default()).expect("A^-2");
+        assert!((result[0][0] - 0.25).abs() < 1e-10);
+        assert!((result[0][1] - 0.0).abs() < 1e-10);
+        assert!((result[1][0] - 0.0).abs() < 1e-10);
+        assert!((result[1][1] - 1.0 / 9.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn matrix_power_rejects_non_square() {
+        let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+        let err = matrix_power(&a, 2, DecompOptions::default()).expect_err("non-square");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
     // ── khatri_rao tests ─────────────────────────────────────────────
 
     #[test]
