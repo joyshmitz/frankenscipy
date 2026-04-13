@@ -1512,6 +1512,7 @@ impl RegularGridInterpolator {
         if xi.iter().any(|x| x.is_nan()) {
             return Ok(f64::NAN);
         }
+        let mut out_of_bounds = false;
         for (dim, &x) in xi.iter().enumerate() {
             let axis = &self.points[dim];
             if x < axis[0] || x > axis[axis.len() - 1] {
@@ -1524,7 +1525,12 @@ impl RegularGridInterpolator {
                         ),
                     });
                 }
-                return Ok(self.fill_value.unwrap_or(f64::NAN));
+                out_of_bounds = true;
+            }
+        }
+        if out_of_bounds {
+            if let Some(fill) = self.fill_value {
+                return Ok(fill);
             }
         }
         match self.method {
@@ -3173,6 +3179,79 @@ mod tests {
     fn rbf_empty_rejected() {
         let err = RbfInterpolator::new(&[], &[], RbfKernel::Gaussian, 1.0).expect_err("empty");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn regular_grid_linear_2d_bilinear() {
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0]];
+        // values[i0][i1] = x + y with axis0=x, axis1=y
+        let values = vec![0.0, 1.0, 1.0, 2.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
+                .expect("regular grid");
+        let value = interp.eval(&[0.25, 0.75]).expect("eval");
+        assert!((value - 1.0).abs() < 1e-12, "bilinear got {value}");
+    }
+
+    #[test]
+    fn regular_grid_linear_3d_trilinear() {
+        let points = vec![vec![0.0, 1.0], vec![0.0, 1.0], vec![0.0, 1.0]];
+        let mut values = Vec::new();
+        for &x in &points[0] {
+            for &y in &points[1] {
+                for &z in &points[2] {
+                    values.push(x + y + z);
+                }
+            }
+        }
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
+                .expect("regular grid");
+        let value = interp.eval(&[0.5, 0.25, 0.75]).expect("eval");
+        assert!((value - 1.5).abs() < 1e-12, "trilinear got {value}");
+    }
+
+    #[test]
+    fn regular_grid_nearest_returns_closest() {
+        let points = vec![vec![0.0, 1.0, 2.0]];
+        let values = vec![0.0, 1.0, 2.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Nearest, false, None)
+                .expect("regular grid");
+        assert_eq!(interp.eval(&[1.6]).unwrap(), 2.0);
+        assert_eq!(interp.eval(&[-0.4]).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn regular_grid_extrapolates_when_fill_value_none() {
+        let points = vec![vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0];
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
+                .expect("regular grid");
+        let value = interp.eval(&[-0.5]).expect("eval");
+        assert!((value + 0.5).abs() < 1e-12, "extrapolated got {value}");
+    }
+
+    #[test]
+    fn regular_grid_out_of_bounds_fill_value_and_error() {
+        let points = vec![vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0];
+        let interp = RegularGridInterpolator::new(
+            points.clone(),
+            values.clone(),
+            RegularGridMethod::Linear,
+            false,
+            Some(9.5),
+        )
+        .expect("regular grid");
+        assert_eq!(interp.eval(&[2.0]).unwrap(), 9.5);
+
+        let err_interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, true, None)
+                .expect("regular grid");
+        let err = err_interp.eval(&[2.0]).expect_err("bounds error");
+        assert!(matches!(err, InterpError::OutOfBounds { .. }));
     }
 
     #[test]
