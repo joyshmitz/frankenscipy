@@ -1,0 +1,55 @@
+{
+  "baseline_version": "1.0.0",
+  "generated_at": "2026-04-13T18:43:22Z",
+  "spec_ref": "SPEC §17 - Optimizer iteration p95 <= 180ms",
+  "notes": "Initial baseline capture. All sizes well within spec.",
+  "machine": {
+    "cpu": "unknown (via rch remote)",
+    "build_profile": "release (--bench)"
+  },
+  "benchmarks": {
+    "bfgs": {
+      "rosenbrock_dim2": {
+        "median_us": 2.900,
+        "lower_us": 2.800,
+        "upper_us": 3.000,
+        "sample_size": 100
+      },
+      "rosenbrock_dim5": {
+        "median_us": 20.616,
+        "lower_us": 20.317,
+        "upper_us": 20.908,
+        "sample_size": 100
+      },
+      "rosenbrock_dim10": {
+        "median_us": 76.571,
+        "lower_us": 75.552,
+        "upper_us": 77.680,
+        "sample_size": 100
+      },
+      "quadratic_dim2": {
+        "median_ns": 597.49,
+        "lower_ns": 540.54,
+        "upper_ns": 671.75,
+        "sample_size": 100
+      },
+      "quadratic_dim5": {
+        "median_ns": 649.22,
+        "lower_ns": 641.90,
+        "upper_ns": 656.10,
+        "sample_size": 100
+      },
+      "quadratic_dim10": {
+        "median_ns": 938.20,
+        "lower_ns": 929.61,
+        "upper_ns": 946.46,
+        "sample_size": 100
+      }
+    }
+  },
+  "status": {
+    "meets_spec": true,
+    "largest_test_us": 76.571,
+    "headroom": "180ms target / 0.077ms actual = 2337x headroom"
+  }
+}

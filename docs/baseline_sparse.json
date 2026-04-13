@@ -1,0 +1,37 @@
+{
+  "baseline_version": "1.0.0",
+  "generated_at": "2026-04-13T18:41:55Z",
+  "spec_ref": "SPEC §17 - Sparse matvec p95 <= 220ms",
+  "notes": "Initial baseline capture. All sizes well within spec.",
+  "machine": {
+    "cpu": "unknown (via rch remote)",
+    "build_profile": "release (--bench)"
+  },
+  "benchmarks": {
+    "sparse_spmv": {
+      "100x100_d5_nnz500": {
+        "median_ns": 656.06,
+        "lower_ns": 647.40,
+        "upper_ns": 664.75,
+        "sample_size": 100
+      },
+      "1000x1000_d1_nnz10126": {
+        "median_us": 13.229,
+        "lower_us": 13.053,
+        "upper_us": 13.428,
+        "sample_size": 100
+      },
+      "10000x10000_d0_nnz99930": {
+        "median_us": 153.32,
+        "lower_us": 152.05,
+        "upper_us": 154.50,
+        "sample_size": 100
+      }
+    }
+  },
+  "status": {
+    "meets_spec": true,
+    "largest_test_ms": 0.154,
+    "headroom": "220ms target / 0.154ms actual = 1428x headroom"
+  }
+}

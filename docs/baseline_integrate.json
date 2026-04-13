@@ -1,0 +1,47 @@
+{
+  "baseline_version": "1.0.0",
+  "generated_at": "2026-04-13T18:44:25Z",
+  "spec_ref": "SPEC §17 - IVP solve step p95 <= 320ms",
+  "notes": "Initial baseline capture. All sizes well within spec.",
+  "machine": {
+    "cpu": "unknown (via rch remote)",
+    "build_profile": "release (--bench)"
+  },
+  "benchmarks": {
+    "solve_ivp": {
+      "exponential_rk45": {
+        "median_us": 18.325,
+        "lower_us": 18.129,
+        "upper_us": 18.514,
+        "sample_size": 100,
+        "notes": "Exponential decay y' = -y, t_span [0, 10]"
+      },
+      "lorenz_rk45": {
+        "median_us": 25.412,
+        "lower_us": 25.072,
+        "upper_us": 25.765,
+        "sample_size": 100,
+        "notes": "Lorenz system (3D chaotic), t_span [0, 1]"
+      }
+    },
+    "validate_tol": {
+      "scalar": {
+        "median_ns": 12.475,
+        "lower_ns": 12.291,
+        "upper_ns": 12.670,
+        "sample_size": 100
+      },
+      "vector_100": {
+        "median_ns": 66.301,
+        "lower_ns": 65.363,
+        "upper_ns": 67.092,
+        "sample_size": 100
+      }
+    }
+  },
+  "status": {
+    "meets_spec": true,
+    "largest_test_us": 25.412,
+    "headroom": "320ms target / 0.025ms actual = 12800x headroom"
+  }
+}
