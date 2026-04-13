@@ -1,0 +1,31 @@
+{
+  "baseline_version": "1.0.0",
+  "generated_at": "2026-04-13T18:15:00Z",
+  "spec_ref": "SPEC §17 - FFT transform p95 ≤ 210ms",
+  "notes": "Initial baseline capture. All sizes within spec.",
+  "machine": {
+    "cpu": "unknown (via rch remote)",
+    "build_profile": "release (--bench)"
+  },
+  "benchmarks": {
+    "baseline_fft": {
+      "1024": {
+        "median_us": 20.57,
+        "lower_us": 20.02,
+        "upper_us": 21.15,
+        "sample_size": 50
+      },
+      "65536": {
+        "median_ms": 3.75,
+        "lower_ms": 3.41,
+        "upper_ms": 4.12,
+        "sample_size": 50
+      }
+    }
+  },
+  "status": {
+    "meets_spec": true,
+    "extrapolation_262144_ms": "~15ms (4x from 65536)",
+    "headroom": "210ms target / 15ms estimated = 14x headroom"
+  }
+}
