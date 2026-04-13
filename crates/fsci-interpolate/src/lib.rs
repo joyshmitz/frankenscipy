@@ -33,6 +33,8 @@ pub enum SplineBc {
     NotAKnot,
     /// Clamped: S'(x_0) = deriv_left, S'(x_n) = deriv_right.
     Clamped(f64, f64),
+    /// Periodic: y[0] == y[n-1], S'(x_0)=S'(x_n), S''(x_0)=S''(x_n).
+    Periodic,
 }
 
 /// Error type for interpolation operations.
@@ -269,6 +271,15 @@ fn compute_cubic_spline(x: &[f64], y: &[f64], bc: SplineBc) -> Result<Vec<[f64; 
         SplineBc::Natural => solve_spline_natural(n, &h, y),
         SplineBc::NotAKnot => solve_spline_not_a_knot(n, &h, y),
         SplineBc::Clamped(dl, dr) => solve_spline_clamped(n, &h, y, dl, dr),
+        SplineBc::Periodic => {
+            let scale = y[0].abs().max(y[n - 1].abs()).max(1.0);
+            if (y[0] - y[n - 1]).abs() > 1e-12 * scale {
+                return Err(InterpError::InvalidArgument {
+                    detail: "periodic spline requires y[0] == y[n-1]".to_string(),
+                });
+            }
+            solve_spline_periodic(n, &h, y)
+        }
     };
 
     let mut coeffs = Vec::with_capacity(m);
@@ -373,6 +384,45 @@ fn solve_spline_clamped(
     rhs
 }
 
+fn solve_spline_periodic(n: usize, h: &[f64], y: &[f64]) -> Vec<f64> {
+    let m = n - 1;
+    let mut sub = vec![0.0; m];
+    let mut diag = vec![0.0; m];
+    let mut sup = vec![0.0; m];
+    let mut rhs = vec![0.0; m];
+
+    if m == 1 {
+        let mut c = vec![0.0; n];
+        c[0] = 0.0;
+        c[n - 1] = 0.0;
+        return c;
+    }
+
+    let last_h = h[m - 1];
+
+    // i = 0 boundary row (couples to c_{n-2}).
+    sub[0] = last_h;
+    diag[0] = 2.0 * (h[0] + last_h);
+    sup[0] = h[0];
+    rhs[0] = 3.0 * ((y[1] - y[0]) / h[0] - (y[0] - y[m - 1]) / last_h);
+
+    // Interior rows i = 1..m-1 (i corresponds to original index).
+    for i in 1..m {
+        sub[i] = h[i - 1];
+        diag[i] = 2.0 * (h[i - 1] + h[i]);
+        sup[i] = h[i];
+        rhs[i] = 3.0 * ((y[i + 1] - y[i]) / h[i] - (y[i] - y[i - 1]) / h[i - 1]);
+    }
+
+    let solution = solve_cyclic_tridiagonal(&sub, &diag, &sup, &rhs);
+    let mut c = vec![0.0; n];
+    for i in 0..m {
+        c[i] = solution[i];
+    }
+    c[n - 1] = c[0];
+    c
+}
+
 fn thomas_solve(sub: &[f64], diag: &mut [f64], sup: &[f64], rhs: &mut [f64]) {
     let n = diag.len();
     if n == 0 {
@@ -394,6 +444,56 @@ fn thomas_solve(sub: &[f64], diag: &mut [f64], sup: &[f64], rhs: &mut [f64]) {
             rhs[i] = (rhs[i] - sup[i] * rhs[i + 1]) / diag[i];
         }
     }
+}
+
+fn solve_cyclic_tridiagonal(
+    sub: &[f64],
+    diag: &[f64],
+    sup: &[f64],
+    rhs: &[f64],
+) -> Vec<f64> {
+    let n = diag.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![if diag[0].abs() > 1e-18 {
+            rhs[0] / diag[0]
+        } else {
+            0.0
+        }];
+    }
+
+    let a0 = sub[0];
+    let c_last = sup[n - 1];
+    let gamma = -diag[0];
+
+    let mut bb = diag.to_vec();
+    bb[0] = diag[0] - gamma;
+    bb[n - 1] = diag[n - 1] - a0 * c_last / gamma;
+
+    let mut a = sub.to_vec();
+    let mut c = sup.to_vec();
+    a[0] = 0.0;
+    c[n - 1] = 0.0;
+
+    let mut x = rhs.to_vec();
+    thomas_solve(&a, &mut bb, &c, &mut x);
+
+    let mut u = vec![0.0; n];
+    u[0] = gamma;
+    u[n - 1] = a0;
+    let mut z = u.clone();
+    let mut bb2 = bb.clone();
+    thomas_solve(&a, &mut bb2, &c, &mut z);
+
+    let numerator = x[0] + c_last * x[n - 1] / gamma;
+    let denominator = 1.0 + z[0] + c_last * z[n - 1] / gamma;
+    let factor = numerator / denominator;
+    for i in 0..n {
+        x[i] -= factor * z[i];
+    }
+    x
 }
 
 /// PCHIP (Piecewise Cubic Hermite Interpolating Polynomial) interpolator.
@@ -3262,5 +3362,23 @@ mod tests {
             RegularGridInterpolator::new(points, values, RegularGridMethod::Nearest, false, None)
                 .expect("regular grid");
         assert!(interp.eval(&[f64::NAN]).unwrap().is_nan());
+    }
+
+    #[test]
+    fn cubic_spline_periodic_matches_endpoints_and_derivative() {
+        let x = vec![0.0, 0.5, 1.0, 1.5, 2.0];
+        let y: Vec<f64> = x.iter().map(|&t| (std::f64::consts::PI * t).sin()).collect();
+        let spline = CubicSplineStandalone::new(&x, &y, SplineBc::Periodic).expect("periodic");
+        assert!((spline.eval(0.0) - spline.eval(2.0)).abs() < 1e-10);
+        let d = spline.derivative(1);
+        assert!((d.eval(0.0) - d.eval(2.0)).abs() < 1e-8);
+    }
+
+    #[test]
+    fn cubic_spline_periodic_rejects_mismatched_endpoints() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 0.5, 0.25];
+        let err = CubicSplineStandalone::new(&x, &y, SplineBc::Periodic).expect_err("periodic");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
     }
 }
