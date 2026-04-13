@@ -1508,6 +1508,43 @@ pub fn hfft(
     Ok(result)
 }
 
+/// Inverse of the Hermitian FFT (hfft).
+///
+/// Matches `scipy.fft.ihfft(x, n)`.
+///
+/// Takes a real signal and returns the Hermitian-symmetric spectrum.
+/// This is the inverse of `hfft`: `ihfft(hfft(x)) ≈ x`.
+pub fn ihfft(
+    input: &[f64],
+    n: Option<usize>,
+    options: &FftOptions,
+) -> Result<Vec<Complex64>, FftError> {
+    if input.is_empty() {
+        return Err(FftError::InvalidShape {
+            detail: "input length must be greater than zero",
+        });
+    }
+    validate_finite_real(input, options)?;
+
+    let in_len = n.unwrap_or(input.len());
+    // Pad or truncate input to length n
+    let mut padded = vec![0.0; in_len];
+    let copy_len = input.len().min(in_len);
+    padded[..copy_len].copy_from_slice(&input[..copy_len]);
+
+    // rfft gives us the Hermitian-symmetric half
+    let mut result = rfft(&padded, options)?;
+
+    // Scale by 1/n to invert the hfft scaling
+    let scale = 1.0 / in_len as f64;
+    for c in &mut result {
+        c.0 *= scale;
+        c.1 *= scale;
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use fsci_runtime::RuntimeMode;
@@ -1980,5 +2017,41 @@ mod tests {
                 detail: "input length must be greater than zero",
             }
         );
+    }
+
+    #[test]
+    fn ihfft_basic() {
+        use super::ihfft;
+        // ihfft should produce a Hermitian-symmetric spectrum
+        let opts = FftOptions::default();
+        let input = vec![1.0, 2.0, 3.0, 4.0];
+        let result = ihfft(&input, None, &opts).expect("ihfft");
+        // For n=4 real input, rfft gives n/2+1 = 3 complex outputs
+        assert_eq!(result.len(), 3);
+        for &(re, im) in &result {
+            assert!(re.is_finite() && im.is_finite(), "ihfft produced non-finite");
+        }
+    }
+
+    #[test]
+    fn ihfft_hfft_roundtrip() {
+        use super::ihfft;
+        // ihfft(hfft(spectrum)) should recover the original spectrum (with scaling)
+        let opts = FftOptions::default();
+        let spectrum: Vec<(f64, f64)> = vec![(4.0, 0.0), (1.0, -1.0), (0.0, 0.0)];
+        let n = 4; // output length for hfft
+        let real_signal = hfft(&spectrum, Some(n), &opts).expect("hfft");
+        let recovered = ihfft(&real_signal, None, &opts).expect("ihfft");
+        // recovered should approximately equal spectrum
+        for (i, (&(re1, im1), &(re2, im2))) in spectrum.iter().zip(recovered.iter()).enumerate() {
+            assert!(
+                (re1 - re2).abs() < 1e-9,
+                "re mismatch at {i}: {re1} vs {re2}"
+            );
+            assert!(
+                (im1 - im2).abs() < 1e-9,
+                "im mismatch at {i}: {im1} vs {im2}"
+            );
+        }
     }
 }
