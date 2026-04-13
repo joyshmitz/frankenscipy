@@ -8369,6 +8369,86 @@ mod proptest_tests {
         );
     }
 
+    // ── sqrtm tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn sqrtm_identity() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let result = sqrtm(&a, DecompOptions::default()).expect("sqrtm(I)");
+        // sqrt(I) = I
+        assert!((result[0][0] - 1.0).abs() < 1e-12);
+        assert!((result[0][1] - 0.0).abs() < 1e-12);
+        assert!((result[1][0] - 0.0).abs() < 1e-12);
+        assert!((result[1][1] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn sqrtm_diagonal() {
+        let a = vec![vec![4.0, 0.0], vec![0.0, 9.0]];
+        let result = sqrtm(&a, DecompOptions::default()).expect("sqrtm(diag)");
+        // sqrt(diag(4,9)) = diag(2,3)
+        assert!((result[0][0] - 2.0).abs() < 1e-10);
+        assert!((result[0][1] - 0.0).abs() < 1e-10);
+        assert!((result[1][0] - 0.0).abs() < 1e-10);
+        assert!((result[1][1] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn sqrtm_squared_equals_original() {
+        let a = vec![vec![5.0, 2.0], vec![2.0, 8.0]];
+        let sqrt_a = sqrtm(&a, DecompOptions::default()).expect("sqrtm");
+        // sqrt(A) @ sqrt(A) ≈ A
+        let n = sqrt_a.len();
+        for i in 0..n {
+            for j in 0..n {
+                let product_ij: f64 = (0..n).map(|k| sqrt_a[i][k] * sqrt_a[k][j]).sum();
+                assert!(
+                    (product_ij - a[i][j]).abs() < 1e-8,
+                    "sqrtm(A)²[{i},{j}] = {product_ij}, expected {}",
+                    a[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sqrtm_3x3_spd() {
+        let a = vec![
+            vec![4.0, 1.0, 0.5],
+            vec![1.0, 5.0, 1.0],
+            vec![0.5, 1.0, 6.0],
+        ];
+        let sqrt_a = sqrtm(&a, DecompOptions::default()).expect("sqrtm 3x3");
+        // Verify sqrt(A) @ sqrt(A) ≈ A
+        let n = sqrt_a.len();
+        for i in 0..n {
+            for j in 0..n {
+                let product_ij: f64 = (0..n).map(|k| sqrt_a[i][k] * sqrt_a[k][j]).sum();
+                assert!(
+                    (product_ij - a[i][j]).abs() < 1e-8,
+                    "sqrtm(A)²[{i},{j}] = {product_ij}, expected {}",
+                    a[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sqrtm_negative_eigenvalue_returns_nan() {
+        // Symmetric matrix with negative eigenvalue: [[1, 0], [0, -1]]
+        let a = vec![vec![1.0, 0.0], vec![0.0, -1.0]];
+        let result = sqrtm(&a, DecompOptions::default()).expect("sqrtm with neg ev");
+        // Result should contain NaN for the negative eigenvalue element
+        assert!(result[1][1].is_nan());
+    }
+
+    #[test]
+    fn sqrtm_rejects_non_square() {
+        let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+        let err = sqrtm(&a, DecompOptions::default()).expect_err("non-square");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
     #[test]
     fn fractional_matrix_power_integer() {
         // A^2 should match A * A
