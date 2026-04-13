@@ -12,6 +12,49 @@ use crate::{IntegrateValidationError, validate_first_step, validate_max_step};
 
 pub type EventFn = fn(f64, &[f64]) -> f64;
 
+#[derive(Debug, Clone, Copy)]
+pub struct EventSpec {
+    pub func: EventFn,
+    pub direction: f64,
+    pub max_events: Option<usize>,
+}
+
+impl PartialEq for EventSpec {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::fn_addr_eq(self.func, other.func)
+            && self.direction.to_bits() == other.direction.to_bits()
+            && self.max_events == other.max_events
+    }
+}
+
+impl EventSpec {
+    pub fn new(func: EventFn) -> Self {
+        Self {
+            func,
+            direction: 0.0,
+            max_events: None,
+        }
+    }
+
+    pub fn terminal(func: EventFn) -> Self {
+        Self {
+            func,
+            direction: 0.0,
+            max_events: Some(1),
+        }
+    }
+
+    pub fn with_direction(mut self, direction: f64) -> Self {
+        self.direction = direction;
+        self
+    }
+
+    pub fn with_max_events(mut self, max_events: usize) -> Self {
+        self.max_events = Some(max_events.max(1));
+        self
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SolverKind {
     Rk23,
@@ -36,7 +79,7 @@ pub struct SolveIvpOptions<'a> {
     pub method: SolverKind,
     pub t_eval: Option<&'a [f64]>,
     pub dense_output: bool,
-    pub events: Option<Vec<EventFn>>,
+    pub events: Option<Vec<EventSpec>>,
     pub rtol: f64,
     pub atol: ToleranceValue,
     pub first_step: Option<f64>,
@@ -80,13 +123,15 @@ pub struct SolveIvpResult {
 const MSG_SUCCESS: &str = "The solver successfully reached the end of the integration interval.";
 const MSG_FAILED: &str = "Integration step failed.";
 
-fn sign(x: f64) -> i8 {
-    if x > 0.0 {
-        1
-    } else if x < 0.0 {
-        -1
+fn event_active(old_val: f64, new_val: f64, direction: f64) -> bool {
+    let up = old_val <= 0.0 && new_val >= 0.0;
+    let down = old_val >= 0.0 && new_val <= 0.0;
+    if direction > 0.0 {
+        up
+    } else if direction < 0.0 {
+        down
     } else {
-        0
+        up || down
     }
 }
 
@@ -145,6 +190,15 @@ fn is_new_time_point(points: &[f64], candidate: f64) -> bool {
     points
         .last()
         .is_none_or(|&last| (last - candidate).abs() > 1e-14)
+}
+
+fn eval_time_in_range(t_eval: f64, t_old: f64, t_new: f64, direction: f64) -> bool {
+    let eps = 1e-12_f64.max(1e-12 * t_new.abs());
+    if direction > 0.0 {
+        t_eval > t_old + eps && t_eval <= t_new + eps
+    } else {
+        t_eval < t_old - eps && t_eval >= t_new - eps
+    }
 }
 
 fn solve_event_equation(
@@ -521,10 +575,18 @@ where
         .events
         .as_ref()
         .map(|evs| vec![Vec::new(); evs.len()]);
+    let mut event_counts: Option<Vec<usize>> = options
+        .events
+        .as_ref()
+        .map(|evs| vec![0; evs.len()]);
     let mut event_vals = options
         .events
         .as_ref()
-        .map(|evs| evs.iter().map(|&ev| ev(t0, options.y0)).collect::<Vec<_>>());
+        .map(|evs| {
+            evs.iter()
+                .map(|ev| (ev.func)(t0, options.y0))
+                .collect::<Vec<_>>()
+        });
 
     if let Some(t_eval) = options.t_eval {
         if matches!(t_eval.first(), Some(&first) if (first - t0).abs() < 1e-14) {
@@ -549,17 +611,25 @@ where
                 let y_old = solver.y_old().unwrap_or(options.y0).to_vec();
                 let f_old = solver.f_old().unwrap_or(&f).to_vec();
 
-                let mut t_event_triggered: Option<f64> = None;
-                let mut y_event_triggered: Option<Vec<f64>> = None;
+                let mut terminal_event: Option<(f64, Vec<f64>)> = None;
 
-                if let (Some(evs), Some(old_vals)) = (options.events.as_ref(), event_vals.as_mut())
-                {
-                    for (i, &ev_fn) in evs.iter().enumerate() {
-                        let val = ev_fn(t, &y);
-                        // Use custom sign() to fix asymmetric zero-crossing detection bug
-                        if sign(old_vals[i]) != sign(val) && old_vals[i] != 0.0 {
-                            let t_ev =
-                                solve_event_equation(ev_fn, t_old, t, &y_old, &y, &f_old, &f);
+                if let (Some(evs), Some(old_vals), Some(counts)) = (
+                    options.events.as_ref(),
+                    event_vals.as_mut(),
+                    event_counts.as_mut(),
+                ) {
+                    for (i, ev_spec) in evs.iter().enumerate() {
+                        let val = (ev_spec.func)(t, &y);
+                        if event_active(old_vals[i], val, ev_spec.direction) {
+                            let t_ev = solve_event_equation(
+                                ev_spec.func,
+                                t_old,
+                                t,
+                                &y_old,
+                                &y,
+                                &f_old,
+                                &f,
+                            );
                             let y_ev = interpolate_state(&y_old, &y, &f_old, &f, t_old, t, t_ev);
 
                             if let Some(tes) = t_events.as_mut() {
@@ -569,35 +639,35 @@ where
                                 yes[i].push(y_ev.clone());
                             }
 
-                            let is_earlier = match t_event_triggered {
-                                None => true,
-                                Some(current_t_ev) => {
-                                    (t_ev - t_old).abs() < (current_t_ev - t_old).abs()
+                            counts[i] += 1;
+                            let terminal_hit = ev_spec
+                                .max_events
+                                .is_some_and(|max_events| counts[i] >= max_events);
+                            if terminal_hit {
+                                let select = match terminal_event.as_ref() {
+                                    None => true,
+                                    Some((current_t_ev, _)) => {
+                                        (t_ev - t_old).abs() < (current_t_ev - t_old).abs()
+                                    }
+                                };
+                                if select {
+                                    terminal_event = Some((t_ev, y_ev.clone()));
                                 }
-                            };
-                            if is_earlier {
-                                t_event_triggered = Some(t_ev);
-                                y_event_triggered = Some(y_ev.clone());
                             }
                         }
                         old_vals[i] = val;
                     }
                 }
 
-                if let Some(t_ev) = t_event_triggered {
+                if let Some((t_ev, y_ev)) = terminal_event {
                     if is_new_time_point(&dense_knots, t_ev) {
                         dense_knots.push(t_ev);
-                        dense_values.push(y_event_triggered.clone().unwrap_or_default());
+                        dense_values.push(y_ev.clone());
                     }
 
                     if let Some(t_eval) = options.t_eval {
                         while let Some(&te) = t_eval.get(next_t_eval_index) {
-                            let in_range = if direction > 0.0 {
-                                te > t_old && te <= t_ev
-                            } else {
-                                te < t_old && te >= t_ev
-                            };
-                            if !in_range {
+                            if !eval_time_in_range(te, t_old, t_ev, direction) {
                                 break;
                             }
                             ts.push(te);
@@ -605,12 +675,13 @@ where
                             next_t_eval_index += 1;
                         }
                     }
+                    // Always add the event time itself when terminal event triggers
                     if ts
                         .last()
                         .is_none_or(|&last_t| (last_t - t_ev).abs() > 1e-14)
                     {
                         ts.push(t_ev);
-                        ys.push(y_event_triggered.unwrap_or_default());
+                        ys.push(y_ev);
                     }
                     status = 1;
                     break;
@@ -623,12 +694,7 @@ where
 
                 if let Some(t_eval) = options.t_eval {
                     while let Some(&te) = t_eval.get(next_t_eval_index) {
-                        let in_range = if direction > 0.0 {
-                            te > t_old && te <= t
-                        } else {
-                            te < t_old && te >= t
-                        };
-                        if !in_range {
+                        if !eval_time_in_range(te, t_old, t, direction) {
                             break;
                         }
 
@@ -837,7 +903,7 @@ mod tests {
                 t_span: (0.0, 10.0),
                 y0: &[0.0],
                 method: SolverKind::Rk45,
-                events: Some(vec![event_at_5]),
+                events: Some(vec![EventSpec::terminal(event_at_5)]),
                 ..SolveIvpOptions::default()
             },
         )
@@ -867,7 +933,7 @@ mod tests {
                 y0: &[0.0],
                 method: SolverKind::Rk45,
                 t_eval: Some(&t_eval),
-                events: Some(vec![event_at_0_3]),
+                events: Some(vec![EventSpec::terminal(event_at_0_3)]),
                 ..SolveIvpOptions::default()
             },
         )
@@ -916,7 +982,7 @@ mod tests {
                 t_span: (0.0, 1.0),
                 y0: &[0.0],
                 method: SolverKind::Lsoda,
-                events: Some(vec![event_at_0_4]),
+                events: Some(vec![EventSpec::terminal(event_at_0_4)]),
                 t_eval: Some(&[0.1, 0.2, 0.3, 0.4, 0.5]),
                 ..SolveIvpOptions::default()
             },
@@ -928,6 +994,112 @@ mod tests {
         assert_eq!(result.t.len(), 4);
         assert!((result.t[3] - 0.4).abs() < 1e-8);
         assert!((result.y[3][0] - 0.4).abs() < 1e-8);
+    }
+
+    #[test]
+    fn solve_ivp_event_direction_filters_crossings() {
+        fn event_at_half(_t: f64, y: &[f64]) -> f64 {
+            y[0] - 0.5
+        }
+
+        let upward = solve_ivp(
+            &mut |_t, _y| vec![-1.0],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[1.0],
+                method: SolverKind::Rk45,
+                events: Some(vec![EventSpec::terminal(event_at_half).with_direction(1.0)]),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("direction +1 should skip downward crossing");
+
+        assert_eq!(upward.status, 0);
+        assert!(upward.t_events.as_ref().unwrap()[0].is_empty());
+
+        let downward = solve_ivp(
+            &mut |_t, _y| vec![-1.0],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[1.0],
+                method: SolverKind::Rk45,
+                events: Some(vec![EventSpec::terminal(event_at_half).with_direction(-1.0)]),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("direction -1 should capture downward crossing");
+
+        assert_eq!(downward.status, 1);
+        assert!(
+            (downward.t_events.as_ref().unwrap()[0][0] - 0.5).abs() < 1e-6,
+            "expected event near t=0.5"
+        );
+    }
+
+    #[test]
+    fn solve_ivp_nonterminal_event_does_not_stop_integration() {
+        fn event_at_half(_t: f64, y: &[f64]) -> f64 {
+            y[0] - 0.5
+        }
+
+        let result = solve_ivp(
+            &mut |_t, _y| vec![1.0],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[0.0],
+                method: SolverKind::Rk45,
+                events: Some(vec![EventSpec::new(event_at_half)]),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("non-terminal event should not stop integration");
+
+        assert_eq!(result.status, 0);
+        let t_events = result.t_events.expect("t_events should be populated");
+        assert_eq!(t_events.len(), 1);
+        assert_eq!(t_events[0].len(), 1);
+        assert!(
+            (t_events[0][0] - 0.5).abs() < 1e-6,
+            "expected non-terminal event near t=0.5"
+        );
+    }
+
+    #[test]
+    fn solve_ivp_event_max_events_stops_after_limit() {
+        fn periodic_event(t: f64, _y: &[f64]) -> f64 {
+            (2.0 * std::f64::consts::PI * t).sin()
+        }
+
+        let result = solve_ivp(
+            &mut |_t, _y| vec![0.0],
+            &SolveIvpOptions {
+                t_span: (0.1, 2.0),
+                y0: &[0.0],
+                method: SolverKind::Rk45,
+                events: Some(vec![EventSpec::new(periodic_event).with_max_events(2)]),
+                max_step: 0.1,
+                first_step: Some(0.05),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect("periodic event solve should succeed");
+
+        assert_eq!(result.status, 1, "expected termination after max_events");
+        let t_events = result.t_events.expect("t_events should be present");
+        assert_eq!(t_events.len(), 1);
+        assert_eq!(t_events[0].len(), 2);
+        assert!(
+            (t_events[0][0] - 0.5).abs() < 1e-6,
+            "expected first event near t=0.5"
+        );
+        assert!(
+            (t_events[0][1] - 1.0).abs() < 1e-6,
+            "expected second event near t=1.0"
+        );
+        assert!(
+            (result.t.last().unwrap() - 1.0).abs() < 1e-6,
+            "solver should stop at the second event"
+        );
     }
 
     #[test]

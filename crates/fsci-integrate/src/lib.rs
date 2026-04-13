@@ -9,7 +9,9 @@ pub mod solver;
 pub mod step_size;
 pub mod validation;
 
-pub use api::{EventFn, OdeSolution, SolveIvpOptions, SolveIvpResult, SolverKind, solve_ivp};
+pub use api::{
+    EventFn, EventSpec, OdeSolution, SolveIvpOptions, SolveIvpResult, SolverKind, solve_ivp,
+};
 pub use bdf::{BdfSolver, BdfSolverConfig};
 pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
 pub use quad::{
