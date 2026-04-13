@@ -30,6 +30,34 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
     args = case.get("args", [])
 
     try:
+        def rel_erf_erfc_identity(x: Any) -> Any:
+            return special.erf(x) + special.erfc(x)
+
+        def rel_gamma_recurrence(x: Any) -> Any:
+            x_arr = np.asarray(x, dtype=float)
+            return special.gamma(x_arr + 1.0) - x_arr * special.gamma(x_arr)
+
+        def rel_beta_symmetry(a: Any, b: Any) -> Any:
+            a_arr = np.asarray(a, dtype=float)
+            b_arr = np.asarray(b, dtype=float)
+            return special.beta(a_arr, b_arr) - special.beta(b_arr, a_arr)
+
+        def rel_gammainc_complement(a: Any, x: Any) -> Any:
+            a_arr = np.asarray(a, dtype=float)
+            x_arr = np.asarray(x, dtype=float)
+            return special.gammainc(a_arr, x_arr) + special.gammaincc(a_arr, x_arr)
+
+        def rel_jn_recurrence(n: Any, x: Any) -> Any:
+            n_val = np.asarray(n, dtype=float)
+            x_arr = np.asarray(x, dtype=float)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                denom = np.where(x_arr == 0, np.nan, x_arr)
+                return (
+                    special.jv(n_val - 1.0, x_arr)
+                    - (2.0 * n_val / denom) * special.jv(n_val, x_arr)
+                    + special.jv(n_val + 1.0, x_arr)
+                )
+
         # Map function name to scipy.special function
         func_map = {
             "gamma": special.gamma,
@@ -100,6 +128,11 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "airye": special.airye,
             "ai_zeros": special.ai_zeros,
             "bi_zeros": special.bi_zeros,
+            "rel_erf_erfc_identity": rel_erf_erfc_identity,
+            "rel_gamma_recurrence": rel_gamma_recurrence,
+            "rel_beta_symmetry": rel_beta_symmetry,
+            "rel_gammainc_complement": rel_gammainc_complement,
+            "rel_jn_recurrence": rel_jn_recurrence,
             "ellipk": special.ellipk,
             "ellipkm1": special.ellipkm1,
             "ellipe": special.ellipe,

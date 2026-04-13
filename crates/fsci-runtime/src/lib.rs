@@ -18,7 +18,10 @@ pub mod policy;
 pub mod signals;
 
 // ── Re-exports: preserve the flat public API ────────────────────────
-pub use evidence::{DecisionEvidenceEntry, PolicyEvidenceLedger};
+pub use evidence::{
+    AuditAction, AuditEvent, AuditLedger, DecisionEvidenceEntry, PolicyEvidenceLedger,
+    SharedAuditLedger,
+};
 pub use mode::RuntimeMode;
 pub use policy::{PolicyAction, PolicyController, PolicyDecision, RiskState};
 pub use signals::{DecisionSignals, SignalSequence};
@@ -677,7 +680,13 @@ mod tests {
         });
         let jsonl = portfolio.serialize_jsonl();
         assert!(!jsonl.is_empty());
-        let parsed: serde_json::Value = serde_json::from_str(&jsonl).expect("valid JSON");
+        let parsed: serde_json::Value = match serde_json::from_str(&jsonl) {
+            Ok(payload) => payload,
+            Err(err) => {
+                assert!(false, "invalid JSON: {err}");
+                return;
+            }
+        };
         assert_eq!(parsed["component"], "test");
     }
 
@@ -803,7 +812,13 @@ mod tests {
             .with_seed(42)
             .with_mode(RuntimeMode::Strict);
         let json = entry.to_json_line();
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let parsed: serde_json::Value = match serde_json::from_str(&json) {
+            Ok(payload) => payload,
+            Err(err) => {
+                assert!(false, "invalid JSON: {err}");
+                return;
+            }
+        };
         assert_eq!(parsed["test_id"], "test_foo");
         assert_eq!(parsed["result"], "pass");
         assert_eq!(parsed["seed"], 42);
@@ -814,7 +829,13 @@ mod tests {
     fn test_helpers_log_entry_omits_none_fields() {
         let entry = TestLogEntry::new("test_bar", "fsci_integrate", "quad converged");
         let json = entry.to_json_line();
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let parsed: serde_json::Value = match serde_json::from_str(&json) {
+            Ok(payload) => payload,
+            Err(err) => {
+                assert!(false, "invalid JSON: {err}");
+                return;
+            }
+        };
         assert!(parsed.get("seed").is_none());
         assert!(parsed.get("fixture_id").is_none());
         assert!(parsed.get("mode").is_none());

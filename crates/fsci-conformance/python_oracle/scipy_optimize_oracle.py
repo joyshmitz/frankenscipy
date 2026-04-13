@@ -64,6 +64,49 @@ def _ackley(x: Any) -> float:
     return -20 * np.exp(-0.2 * np.sqrt(sum(xi**2 for xi in x) / n)) - np.exp(sum(np.cos(2 * np.pi * xi) for xi in x) / n) + 20 + np.e
 
 
+def _scaled_quadratic(x: Any) -> float:
+    """Scaled quadratic with minimum at (1, -2)."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    return (x[0] - 1.0) ** 2 + 4.0 * (x[1] + 2.0) ** 2
+
+
+def _translated_quadratic(x: Any) -> float:
+    """Translated quadratic with minimum at (4, -3)."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    return (x[0] - 4.0) ** 2 + (x[1] + 3.0) ** 2
+
+
+def _rotated_quadratic(x: Any) -> float:
+    """Rotated quadratic with minimum at (1, -2)."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    dx0 = x[0] - 1.0
+    dx1 = x[1] + 2.0
+    # 45-degree rotation
+    inv_sqrt2 = 1.0 / np.sqrt(2.0)
+    u = (dx0 + dx1) * inv_sqrt2
+    v = (-dx0 + dx1) * inv_sqrt2
+    return u ** 2 + 2.0 * v ** 2
+
+
+def _nan_branch(x: Any) -> float:
+    """Return NaN for near-origin inputs to trigger adversarial handling."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    if np.any(~np.isfinite(x)) or np.all(np.abs(x) <= 0.5):
+        return float('nan')
+    return float(np.sum(x ** 2))
+
+
+def _flat_quartic(x: Any) -> float:
+    """Flat quartic landscape to stress maxfev handling."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    return float(np.sum(x ** 4))
+
+
 def _get_objective(name: str) -> Callable:
     """Get objective function by name."""
     objectives = {
@@ -81,6 +124,11 @@ def _get_objective(name: str) -> Callable:
         "rastrigin2": _rastrigin,
         "ackley": _ackley,
         "ackley2": _ackley,
+        "scaled_quadratic": _scaled_quadratic,
+        "translated_quadratic": _translated_quadratic,
+        "rotated_quadratic": _rotated_quadratic,
+        "nan_branch": _nan_branch,
+        "flat_quartic": _flat_quartic,
     }
     return objectives.get(name, lambda x: float('nan'))
 
@@ -90,11 +138,16 @@ def _get_root_function(name: str, np: Any) -> Callable:
     funcs = {
         "linear_shift_03": lambda x: x - 0.3,
         "linear_shift": lambda x: x - 0.3,
+        "linear_shift03": lambda x: x - 0.3,
         "cubic_root": lambda x: x**3 - 1,
+        "cubic_minus_two": lambda x: x**3 - 2,
         "sin_root": lambda x: np.sin(x),
+        "sin_minus_half": lambda x: np.sin(x) - 0.5,
         "cos_root": lambda x: np.cos(x),
+        "cos_minus_x": lambda x: np.cos(x) - x,
         "poly_root": lambda x: x**2 - 2,
         "exp_root": lambda x: np.exp(x) - 2,
+        "nan_branch": lambda x: np.nan,
     }
     return funcs.get(name, lambda x: float('nan'))
 

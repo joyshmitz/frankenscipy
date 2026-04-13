@@ -32,6 +32,22 @@ def _complex_input_to_numpy(data: List[List[float]], np: Any) -> Any:
     return np.array([complex(r, i) for r, i in data], dtype=np.complex128)
 
 
+def _reshape_input(case: Dict[str, Any], x: Any, np: Any) -> Any:
+    """Reshape flat inputs for multi-dimensional transforms when possible."""
+    input_shape = case.get("input_shape")
+    if input_shape:
+        return x.reshape(tuple(input_shape))
+    shape = case.get("shape")
+    if shape:
+        try:
+            expected = int(np.prod(shape))
+            if x.size == expected:
+                return x.reshape(tuple(shape))
+        except Exception:  # noqa: BLE001
+            pass
+    return x
+
+
 def _run_case(case: Dict[str, Any], fft: Any, np: Any) -> Dict[str, Any]:
     case_id = case["case_id"]
     transform = case.get("transform", "fft")
@@ -77,16 +93,16 @@ def _run_case(case: Dict[str, Any], fft: Any, np: Any) -> Dict[str, Any]:
             result = fft.idst(x.real if np.iscomplexobj(x) else x, type=dst_type, norm=normalization)
         elif transform == "fft2":
             shape = tuple(case["shape"]) if case.get("shape") else None
-            result = fft.fft2(x.reshape(case.get("input_shape", x.shape)), s=shape, norm=normalization)
+            result = fft.fft2(_reshape_input(case, x, np), s=shape, norm=normalization)
         elif transform == "ifft2":
             shape = tuple(case["shape"]) if case.get("shape") else None
-            result = fft.ifft2(x.reshape(case.get("input_shape", x.shape)), s=shape, norm=normalization)
+            result = fft.ifft2(_reshape_input(case, x, np), s=shape, norm=normalization)
         elif transform == "fftn":
             shape = tuple(case["shape"]) if case.get("shape") else None
-            result = fft.fftn(x.reshape(case.get("input_shape", x.shape)), s=shape, norm=normalization)
+            result = fft.fftn(_reshape_input(case, x, np), s=shape, norm=normalization)
         elif transform == "ifftn":
             shape = tuple(case["shape"]) if case.get("shape") else None
-            result = fft.ifftn(x.reshape(case.get("input_shape", x.shape)), s=shape, norm=normalization)
+            result = fft.ifftn(_reshape_input(case, x, np), s=shape, norm=normalization)
         elif transform == "fftfreq":
             n_pts = int(case.get("n_points", len(x)))
             d = case.get("sample_spacing", 1.0)
