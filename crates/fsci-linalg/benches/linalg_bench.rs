@@ -5,7 +5,10 @@ use fsci_linalg::{
 };
 use fsci_runtime::RuntimeMode;
 
+// Per SPEC §17, baseline sizes for dense solve family.
+// SIZES: quick smoke tests; BASELINE_SIZES: full p50/p95/p99 capture
 const SIZES: &[usize] = &[4, 16, 64, 256];
+const BASELINE_SIZES: &[usize] = &[100, 500, 1000, 2000, 4000];
 
 /// Diagonally-dominant matrix: guaranteed non-singular, well-conditioned.
 fn make_diag_dominant(n: usize) -> Vec<Vec<f64>> {
@@ -171,6 +174,63 @@ fn bench_pinv(c: &mut Criterion) {
     group.finish();
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// BASELINE BENCHMARKS - Per SPEC §17, capture p50/p95/p99 at standard sizes
+// Run with: cargo bench --bench linalg_bench -- baseline
+// ══════════════════════════════════════════════════════════════════════════════
+
+fn bench_baseline_solve(c: &mut Criterion) {
+    let mut group = c.benchmark_group("baseline_solve");
+    group.sample_size(100);
+    for &n in BASELINE_SIZES {
+        let a = make_diag_dominant(n);
+        let b = make_rhs(n);
+        group.bench_function(format!("{n}x{n}"), |bencher| {
+            bencher.iter(|| solve(&a, &b, SolveOptions::default()).unwrap());
+        });
+    }
+    group.finish();
+}
+
+fn bench_baseline_inv(c: &mut Criterion) {
+    let mut group = c.benchmark_group("baseline_inv");
+    group.sample_size(100);
+    for &n in BASELINE_SIZES {
+        let a = make_diag_dominant(n);
+        group.bench_function(format!("{n}x{n}"), |bencher| {
+            bencher.iter(|| inv(&a, InvOptions::default()).unwrap());
+        });
+    }
+    group.finish();
+}
+
+fn bench_baseline_lstsq(c: &mut Criterion) {
+    let mut group = c.benchmark_group("baseline_lstsq");
+    group.sample_size(100);
+    for &n in BASELINE_SIZES {
+        let rows = n * 2;
+        let a = make_overdetermined(rows, n);
+        let b = make_rhs(rows);
+        group.bench_function(format!("{rows}x{n}"), |bencher| {
+            bencher.iter(|| lstsq(&a, &b, LstsqOptions::default()).unwrap());
+        });
+    }
+    group.finish();
+}
+
+fn bench_baseline_pinv(c: &mut Criterion) {
+    let mut group = c.benchmark_group("baseline_pinv");
+    group.sample_size(100);
+    for &n in BASELINE_SIZES {
+        let rows = n * 2;
+        let a = make_overdetermined(rows, n);
+        group.bench_function(format!("{rows}x{n}"), |bencher| {
+            bencher.iter(|| pinv(&a, PinvOptions::default()).unwrap());
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_solve,
@@ -181,4 +241,13 @@ criterion_group!(
     bench_lstsq,
     bench_pinv
 );
-criterion_main!(benches);
+
+criterion_group!(
+    baseline_benches,
+    bench_baseline_solve,
+    bench_baseline_inv,
+    bench_baseline_lstsq,
+    bench_baseline_pinv
+);
+
+criterion_main!(benches, baseline_benches);

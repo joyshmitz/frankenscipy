@@ -1,0 +1,38 @@
+{
+  "baseline_version": "1.0.0",
+  "generated_at": "2026-04-13T18:02:00Z",
+  "spec_ref": "SPEC §17 - dense solve 4k-8k class p95 ≤ 650ms",
+  "notes": "Initial partial baseline capture. Large sizes pending due to O(n³) scaling.",
+  "machine": {
+    "cpu": "unknown (via rch remote)",
+    "build_profile": "release (--bench)"
+  },
+  "benchmarks": {
+    "baseline_solve": {
+      "100x100": {
+        "median_us": 300.71,
+        "lower_us": 295.71,
+        "upper_us": 305.73,
+        "sample_size": 100
+      },
+      "500x500": {
+        "median_ms": 30.980,
+        "lower_ms": 30.564,
+        "upper_ms": 31.411,
+        "sample_size": 100
+      },
+      "1000x1000": {
+        "median_ms": 344.93,
+        "lower_ms": 303.35,
+        "upper_ms": 390.25,
+        "sample_size": 100,
+        "note": "High variance (20% outliers)"
+      }
+    }
+  },
+  "extrapolation": {
+    "4000x4000_estimate_ms": "~22000 (64x from 1000x1000, O(n³))",
+    "meets_spec_650ms": false,
+    "action_required": "BLAS/LAPACK acceleration or algorithm optimization needed"
+  }
+}
