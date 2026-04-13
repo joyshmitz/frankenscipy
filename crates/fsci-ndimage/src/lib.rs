@@ -1706,6 +1706,11 @@ pub fn shift(
             input.ndim()
         )));
     }
+    if shift_values.iter().any(|&v| !v.is_finite()) {
+        return Err(NdimageError::InvalidArgument(
+            "shift values must be finite (no NaN or Inf)".to_string(),
+        ));
+    }
 
     let spline = prefilter_spline_coefficients(input, order, mode)?;
     let mut output = NdArray::zeros(input.shape.clone());
@@ -1752,6 +1757,11 @@ pub fn zoom(
             zoom_factors.len(),
             input.ndim()
         )));
+    }
+    if zoom_factors.iter().any(|&v| !v.is_finite() || v <= 0.0) {
+        return Err(NdimageError::InvalidArgument(
+            "zoom factors must be finite and positive".to_string(),
+        ));
     }
 
     let new_shape: Vec<usize> = input
@@ -1810,6 +1820,11 @@ pub fn rotate(
     if input.ndim() != 2 {
         return Err(NdimageError::InvalidArgument(
             "rotate currently supports 2D arrays only".to_string(),
+        ));
+    }
+    if !angle.is_finite() {
+        return Err(NdimageError::InvalidArgument(
+            "angle must be finite (no NaN or Inf)".to_string(),
         ));
     }
 
@@ -3399,5 +3414,61 @@ mod tests {
         assert_eq!(maxs[0], 4.0); // max of [3, 1, 4]
         assert_eq!(mins[1], 1.0); // min of [1, 5, 9]
         assert_eq!(maxs[1], 9.0); // max of [1, 5, 9]
+    }
+
+    #[test]
+    fn shift_rejects_nan_shift_values() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let err = shift(&input, &[f64::NAN, 0.0], 1, BoundaryMode::Constant, 0.0)
+            .expect_err("should reject NaN");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn shift_rejects_inf_shift_values() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let err = shift(&input, &[0.0, f64::INFINITY], 1, BoundaryMode::Constant, 0.0)
+            .expect_err("should reject Inf");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn zoom_rejects_nan_zoom_factors() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let err = zoom(&input, &[f64::NAN, 1.0], 1, BoundaryMode::Constant, 0.0)
+            .expect_err("should reject NaN");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn zoom_rejects_negative_zoom_factors() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let err = zoom(&input, &[-1.0, 1.0], 1, BoundaryMode::Constant, 0.0)
+            .expect_err("should reject negative");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn zoom_rejects_zero_zoom_factors() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let err = zoom(&input, &[0.0, 1.0], 1, BoundaryMode::Constant, 0.0)
+            .expect_err("should reject zero");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn rotate_rejects_nan_angle() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let err = rotate(&input, f64::NAN, false, 1, BoundaryMode::Constant, 0.0)
+            .expect_err("should reject NaN");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn rotate_rejects_inf_angle() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
+        let err = rotate(&input, f64::INFINITY, false, 1, BoundaryMode::Constant, 0.0)
+            .expect_err("should reject Inf");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
     }
 }
