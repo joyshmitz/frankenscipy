@@ -101,7 +101,7 @@ where
     validate_bracket_finite(bracket)?;
     let mut eval = RootEvaluator::new(&f, options);
     let mut state = prepare_bracket(&mut eval, bracket, RootMethod::Brentq)?;
-    if state.fa.abs() <= options.xtol {
+    if state.fa == 0.0 {
         return Ok(RootResult::terminal(
             RootMethod::Brentq,
             state.a,
@@ -112,7 +112,7 @@ where
             "brentq accepted bracket start as root",
         ));
     }
-    if state.fb.abs() <= options.xtol {
+    if state.fb == 0.0 {
         return Ok(RootResult::terminal(
             RootMethod::Brentq,
             state.b,
@@ -130,7 +130,7 @@ where
     let mut e = d;
 
     for iter in 1..=options.maxiter {
-        if state.fb.abs() <= options.xtol {
+        if state.fb == 0.0 {
             return Ok(RootResult::terminal(
                 RootMethod::Brentq,
                 state.b,
@@ -138,7 +138,7 @@ where
                 ConvergenceStatus::Success,
                 iter,
                 eval.function_calls,
-                "brentq converged (|f(x)| <= xtol)",
+                "brentq converged (f(x) == 0)",
             ));
         }
 
@@ -243,7 +243,7 @@ where
     validate_bracket_finite(bracket)?;
     let mut eval = RootEvaluator::new(&f, options);
     let mut state = prepare_bracket(&mut eval, bracket, RootMethod::Bisect)?;
-    if state.fa.abs() <= options.xtol {
+    if state.fa == 0.0 {
         return Ok(RootResult::terminal(
             RootMethod::Bisect,
             state.a,
@@ -254,7 +254,7 @@ where
             "bisection accepted bracket start as root",
         ));
     }
-    if state.fb.abs() <= options.xtol {
+    if state.fb == 0.0 {
         return Ok(RootResult::terminal(
             RootMethod::Bisect,
             state.b,
@@ -270,7 +270,7 @@ where
         let mid = 0.5 * (state.a + state.b);
         let f_mid = eval.evaluate(mid)?;
         let interval_tol = options.xtol + options.rtol * mid.abs();
-        if f_mid.abs() <= options.xtol || (state.b - state.a).abs() <= interval_tol {
+        if f_mid == 0.0 || (state.b - state.a).abs() <= interval_tol {
             return Ok(RootResult::terminal(
                 RootMethod::Bisect,
                 mid,
@@ -310,7 +310,7 @@ where
     validate_bracket_finite(bracket)?;
     let mut eval = RootEvaluator::new(&f, options);
     let mut state = prepare_bracket(&mut eval, bracket, RootMethod::Ridder)?;
-    if state.fa.abs() <= options.xtol {
+    if state.fa == 0.0 {
         return Ok(RootResult::terminal(
             RootMethod::Ridder,
             state.a,
@@ -321,7 +321,7 @@ where
             "ridder accepted bracket start as root",
         ));
     }
-    if state.fb.abs() <= options.xtol {
+    if state.fb == 0.0 {
         return Ok(RootResult::terminal(
             RootMethod::Ridder,
             state.b,
@@ -336,7 +336,7 @@ where
     for iter in 1..=options.maxiter {
         let mid = 0.5 * (state.a + state.b);
         let f_mid = eval.evaluate(mid)?;
-        if f_mid.abs() <= options.xtol {
+        if f_mid == 0.0 {
             return Ok(RootResult::terminal(
                 RootMethod::Ridder,
                 mid,
@@ -344,7 +344,7 @@ where
                 ConvergenceStatus::Success,
                 iter,
                 eval.function_calls,
-                "ridder converged (|f(mid)| <= xtol)",
+                "ridder converged (f(mid) == 0)",
             ));
         }
         let disc = f_mid * f_mid - state.fa * state.fb;
@@ -369,7 +369,7 @@ where
         let f_new = eval.evaluate(x_new)?;
 
         let interval_tol = options.xtol + options.rtol * x_new.abs();
-        if f_new.abs() <= options.xtol || (state.b - state.a).abs() <= interval_tol {
+        if f_new == 0.0 || (state.b - state.a).abs() <= interval_tol {
             return Ok(RootResult::terminal(
                 RootMethod::Ridder,
                 x_new,
@@ -868,7 +868,7 @@ where
 {
     let fa = eval.evaluate(bracket.0)?;
     let fb = eval.evaluate(bracket.1)?;
-    if same_sign(fa, fb) && fa.abs() > eval.options.xtol && fb.abs() > eval.options.xtol {
+    if same_sign(fa, fb) && fa != 0.0 && fb != 0.0 {
         return Err(OptError::SignChangeRequired {
             detail: String::from("bracketing methods require f(a) and f(b) to have opposite signs"),
         });
