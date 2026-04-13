@@ -7370,6 +7370,58 @@ mod tests {
         assert_close_matrix(&result, &expected, 1e-12, 1e-12);
     }
 
+    #[test]
+    fn logm_identity_is_zero() {
+        // logm(I) = 0 for identity matrix
+        let eye = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let result = logm(&eye, DecompOptions::default()).expect("logm works");
+        let zero = vec![vec![0.0, 0.0], vec![0.0, 0.0]];
+        assert_close_matrix(&result, &zero, 1e-14, 1e-14);
+    }
+
+    #[test]
+    fn logm_diagonal_is_log_of_diagonal() {
+        // logm(diag(d)) = diag(log(d))
+        let d = vec![vec![2.0, 0.0, 0.0], vec![0.0, 5.0, 0.0], vec![0.0, 0.0, 7.0]];
+        let result = logm(&d, DecompOptions::default()).expect("logm works");
+        let expected = vec![
+            vec![2.0_f64.ln(), 0.0, 0.0],
+            vec![0.0, 5.0_f64.ln(), 0.0],
+            vec![0.0, 0.0, 7.0_f64.ln()],
+        ];
+        assert_close_matrix(&result, &expected, 1e-12, 1e-12);
+    }
+
+    #[test]
+    fn logm_inverse_of_expm() {
+        // logm(expm(A)) ≈ A for well-conditioned A
+        let a = vec![vec![0.5, 0.1], vec![0.1, 0.3]];
+        let exp_a = expm(&a, DecompOptions::default()).expect("expm works");
+        let log_exp_a = logm(&exp_a, DecompOptions::default()).expect("logm works");
+        assert_close_matrix(&log_exp_a, &a, 1e-10, 1e-10);
+    }
+
+    #[test]
+    fn logm_rejects_non_square() {
+        let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+        let err = logm(&a, DecompOptions::default()).unwrap_err();
+        assert_eq!(err, LinalgError::ExpectedSquareMatrix);
+    }
+
+    #[test]
+    fn logm_3x3_spd() {
+        // Test on a symmetric positive definite matrix
+        let a = vec![
+            vec![4.0, 1.0, 0.5],
+            vec![1.0, 3.0, 0.25],
+            vec![0.5, 0.25, 2.0],
+        ];
+        let log_a = logm(&a, DecompOptions::default()).expect("logm works");
+        // Verify by computing expm(logm(A)) ≈ A
+        let exp_log_a = expm(&log_a, DecompOptions::default()).expect("expm works");
+        assert_close_matrix(&exp_log_a, &a, 1e-10, 1e-10);
+    }
+
     // ── Norm and rank tests ─────────────────────────────────────────
 
     #[test]
