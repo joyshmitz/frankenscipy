@@ -4207,6 +4207,15 @@ fn validate_csgraph(graph: &CsrMatrix) -> SparseResult<()> {
         }
     }
 
+    // Check for non-finite edge weights (NaN/Inf)
+    for &weight in graph.data() {
+        if !weight.is_finite() {
+            return Err(SparseError::NonFiniteInput {
+                message: "graph contains NaN or Inf edge weights".to_string(),
+            });
+        }
+    }
+
     Ok(())
 }
 
