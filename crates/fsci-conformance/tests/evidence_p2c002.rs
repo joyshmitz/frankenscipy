@@ -10,6 +10,7 @@
 //! 4. parity_report.json — max_abs_diff, max_rel_diff per operation per fixture
 //! 5. evidence_bundle.raptorq.json — RaptorQ sidecar for the bundle
 
+use blake3::hash;
 use fsci_conformance::{
     HarnessConfig, PythonOracleConfig, RaptorQSidecar, generate_raptorq_sidecar,
     load_oracle_capture, run_linalg_packet_with_oracle_capture,
@@ -598,6 +599,8 @@ fn evidence_p2c002_final_pack() {
         serde_json::to_string_pretty(&external_sidecar).unwrap(),
     )
     .unwrap();
+    let bundle_hash = hash(final_json.as_bytes()).to_hex().to_string();
+    std::fs::write(evidence_dir.join("evidence_bundle.blake3"), &bundle_hash).unwrap();
 
     // Assertions
     assert!(
@@ -627,14 +630,7 @@ fn evidence_p2c002_final_pack() {
             s.max_rel_diff_across_all
         );
     }
-    eprintln!(
-        "  RaptorQ sidecar: {}",
-        if final_bundle.sidecar.is_some() {
-            "generated"
-        } else {
-            "skipped (encoder limitation)"
-        }
-    );
+    eprintln!("  RaptorQ sidecar: generated (external)");
     eprintln!(
         "  Risk notes: {} categories",
         final_bundle.risk_notes.notes.len()
