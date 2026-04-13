@@ -37,9 +37,12 @@ use fsci_special::{
     SpecialError as FsciSpecialError, SpecialErrorKind as FsciSpecialErrorKind,
     SpecialTensor as FsciSpecialTensor, beta as special_beta, betainc as special_betainc,
     betaln as special_betaln, erf as special_erf, erfc as special_erfc, erfcinv as special_erfcinv,
-    erfinv as special_erfinv, gamma as special_gamma, gammainc as special_gammainc,
-    gammaincc as special_gammaincc, gammaln as special_gammaln, j0 as special_j0, j1 as special_j1,
-    jn as special_jn, y0 as special_y0, y1 as special_y1, yn as special_yn,
+    erfinv as special_erfinv, expit as special_expit, exprel as special_exprel,
+    gamma as special_gamma, gammainc as special_gammainc, gammaincc as special_gammaincc,
+    gammaln as special_gammaln, iv as special_iv, j0 as special_j0, j1 as special_j1,
+    jn as special_jn, kv as special_kv, logit as special_logit, sinc as special_sinc,
+    spherical_jn as special_spherical_jn, spherical_yn as special_spherical_yn,
+    xlogy as special_xlogy, y0 as special_y0, y1 as special_y1, yn as special_yn,
 };
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};
@@ -524,6 +527,15 @@ pub enum SpecialCaseFunction {
     Y0,
     Y1,
     Yn,
+    Iv,
+    Kv,
+    SphericalJn,
+    SphericalYn,
+    Sinc,
+    Xlogy,
+    Expit,
+    Logit,
+    Exprel,
     RelErfErfcIdentity,
     RelGammaRecurrence,
     RelBetaSymmetry,
@@ -4774,6 +4786,92 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 "yn",
                 mode,
             )
+        }
+        SpecialCaseFunction::Iv => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("iv", mode));
+            }
+            special_scalar_from_tensor(
+                special_iv(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "iv",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Kv => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("kv", mode));
+            }
+            special_scalar_from_tensor(
+                special_kv(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "kv",
+                mode,
+            )
+        }
+        SpecialCaseFunction::SphericalJn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("spherical_jn", mode));
+            }
+            special_scalar_from_tensor(
+                special_spherical_jn(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "spherical_jn",
+                mode,
+            )
+        }
+        SpecialCaseFunction::SphericalYn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("spherical_yn", mode));
+            }
+            special_scalar_from_tensor(
+                special_spherical_yn(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "spherical_yn",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Sinc => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("sinc", mode));
+            }
+            special_scalar_from_tensor(
+                special_sinc(&special_scalar(args[0]), mode)?,
+                "sinc",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Xlogy => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("xlogy", mode));
+            }
+            special_scalar_from_tensor(
+                special_xlogy(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "xlogy",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Expit => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("expit", mode));
+            }
+            special_scalar_from_tensor(
+                special_expit(&special_scalar(args[0]), mode)?,
+                "expit",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Logit => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("logit", mode));
+            }
+            special_scalar_from_tensor(
+                special_logit(&special_scalar(args[0]), mode)?,
+                "logit",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Exprel => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("exprel", mode));
+            }
+            Ok(special_exprel(args[0]))
         }
         SpecialCaseFunction::RelErfErfcIdentity => {
             if args.len() != 1 {
