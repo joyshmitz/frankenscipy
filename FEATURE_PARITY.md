@@ -55,38 +55,33 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 - Root: `broyden2`, `anderson`, `hybr`, `lm`
 - Utilities: `rosen` family test functions
 
-### fsci-integrate (37% coverage)
+### fsci-integrate (70% coverage)
 
-**Implemented:** solve_ivp (RK23, RK45, DOP853, BDF, Radau), odeint, solve_bvp, quad, dblquad, trapezoid, simpson, cumulative_trapezoid
+**Implemented:** solve_ivp (RK23, RK45, DOP853, BDF, Radau, LSODA), odeint, solve_bvp, quad, dblquad, tplquad, nquad, quad_vec, trapezoid, simpson, cumulative_trapezoid, cumulative_simpson, romb, romberg, fixed_quad, gauss_legendre, newton_cotes, monte_carlo_integrate, line_integral
 
-**Missing (MEDIUM priority):**
-- `LSODA` solver (adaptive stiff/non-stiff)
-- `tplquad`, `nquad` (3D and N-D quadrature)
-- `quad_vec` (vectorized quadrature)
-- `romb` (Romberg integration)
-- `cumulative_simpson`
+**Missing (LOW priority):**
 - `cubature` (adaptive cubature)
+- `quad_explain` diagnostic mode
 
-### fsci-fft (55% coverage)
+### fsci-fft (75% coverage)
 
-**Implemented:** fft, ifft, rfft, irfft, fft2, ifft2, fftn, dct (I-IV), idct, dst (I-IV), hilbert, fftfreq, rfftfreq, fftshift, ifftshift
+**Implemented:** fft, ifft, rfft, irfft, fft2, ifft2, fftn, ifftn, rfft2, irfft2, rfftn, irfftn, dct (I-IV), idct, dst (I-IV), hilbert, hfft, fftfreq, rfftfreq, fftshift, ifftshift, next_fast_len
 
-**Missing (MEDIUM priority):**
+**Missing (LOW priority):**
 - `rfft2`, `irfft2`, `rfftn`, `irfftn` (multi-D real FFT)
 - `ifftn` (N-D inverse)
 - `dctn`, `idctn`, `dstn`, `idstn` (N-D DCT/DST)
-- `hfft`, `ihfft` (Hermitian FFT)
-- `next_fast_len` (efficient size selection)
+- `ihfft` (inverse Hermitian FFT)
+- `dctn`, `idctn`, `dstn`, `idstn` (N-D DCT/DST)
 - `fht`, `ifht` (fast Hankel transform)
 
-### fsci-special (47% coverage)
+### fsci-special (55% coverage)
 
-**Implemented:** gamma, gammaln, digamma, polygamma, gammainc, gammaincc, rgamma, factorial, factorial2, comb, perm, zeta, zetac, beta, betaln, betainc, betaincinv, erf, erfc, erfinv, erfcinv, j0, j1, jn, jv, jve, y0, y1, yn, yv, yve, iv, ive, kv, kve, k0, k1, k0e, k1e, i0, i1, i0e, i1e, hankel1, hankel2, airy, airye, ai_zeros, bi_zeros, hyp1f1, hyp2f1, ellipk, ellipkm1, ellipe, ellipkinc, ellipeinc, ellipj, elliprc, elliprd, elliprf, elliprg, elliprj, lambertw, wrightomega, exp1, expi, eval_legendre, eval_chebyt, eval_chebyu, eval_chebyc, eval_chebys, eval_laguerre, eval_genlaguerre, eval_hermite, eval_hermitenorm, roots_legendre, fresnel, entr, rel_entr, kl_div, sinc, xlogy, xlog1py, logsumexp, expit, logit, log_expit, log_ndtr, ndtr, ndtri, huber, pseudo_huber, softmax, log_softmax, exprel
+**Implemented:** gamma, gammaln, digamma, polygamma, gammainc, gammaincc, rgamma, factorial, factorial2, comb, perm, zeta, zetac, beta, betaln, betainc, betaincinv, erf, erfc, erfinv, erfcinv, j0, j1, jn, jv, jve, y0, y1, yn, yv, yve, iv, ive, kv, kve, k0, k1, k0e, k1e, i0, i1, i0e, i1e, hankel1, hankel2, airy, airye, ai_zeros, bi_zeros, hyp1f1, hyp2f1, ellipk, ellipkm1, ellipe, ellipkinc, ellipeinc, ellipj, elliprc, elliprd, elliprf, elliprg, elliprj, lambertw, wrightomega, exp1, expi, eval_legendre, eval_chebyt, eval_chebyu, eval_chebyc, eval_chebys, eval_laguerre, eval_genlaguerre, eval_hermite, eval_hermitenorm, roots_legendre, fresnel, entr, rel_entr, kl_div, sinc, xlogy, xlog1py, logsumexp, expit, logit, log_expit, log_ndtr, ndtr, ndtri, huber, pseudo_huber, softmax, log_softmax, exprel, spherical_jn, spherical_yn, spherical_in, spherical_kn, dawsn, struve
 
-**Missing (MEDIUM priority):**
-- Spherical: `spherical_jn`, `spherical_yn`, `sph_harm_y`, `lpmv`
-- Struve: `struve`, `modstruve`
-- Dawson: `dawsn`
+**Missing (LOW priority):**
+- `sph_harm_y`, `lpmv` (spherical harmonics)
+- `modstruve` (modified Struve)
 - Some elliptic functions
 - Remaining Bessel variants
 

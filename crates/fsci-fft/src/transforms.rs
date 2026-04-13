@@ -537,6 +537,17 @@ pub fn fftn(
     run_complex_nd(TransformKind::Fftn, input, shape, options, false)
 }
 
+/// N-dimensional inverse complex FFT.
+///
+/// Matches `scipy.fft.ifftn(x, s)`.
+pub fn ifftn(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+) -> Result<Vec<Complex64>, FftError> {
+    run_complex_nd(TransformKind::Ifftn, input, shape, options, true)
+}
+
 /// N-dimensional real-input FFT.
 ///
 /// Matches `scipy.fft.rfftn(x, s)`.
@@ -1368,6 +1379,7 @@ fn transform_kind_name(kind: TransformKind) -> &'static str {
         TransformKind::Fft2 => "fft2",
         TransformKind::Ifft2 => "ifft2",
         TransformKind::Fftn => "fftn",
+        TransformKind::Ifftn => "ifftn",
         TransformKind::Rfftn => "rfftn",
         TransformKind::Irfftn => "irfftn",
     }

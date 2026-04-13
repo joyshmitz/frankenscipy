@@ -23,7 +23,7 @@ pub use plan::{
 pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, TransformTrace, WorkerPolicy, dct, dct_i,
     dct_iii, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, fft2, fftn, hfft, hilbert, idct, ifft,
-    ifft2, irfft, irfft2, irfftn, next_fast_len, rfft, rfft2, rfftn, take_transform_traces,
+    ifft2, ifftn, irfft, irfft2, irfftn, next_fast_len, rfft, rfft2, rfftn, take_transform_traces,
 };
 
 /// FFT normalization modes matching SciPy/PocketFFT conventions.
@@ -45,6 +45,7 @@ pub enum TransformKind {
     Fft2,
     Ifft2,
     Fftn,
+    Ifftn,
     Rfftn,
     Irfftn,
 }
@@ -367,6 +368,41 @@ mod tests {
                 (val - expected).abs() < 1e-9,
                 "DST-I[{k}] = {val}, expected {expected}"
             );
+        }
+    }
+
+    // ── N-D FFT tests ────────────────────────────────────────────────
+
+    #[test]
+    fn ifftn_fftn_roundtrip_2d() {
+        use super::transforms::{fftn, ifftn};
+        // 2x3 complex array
+        let input: Vec<Complex64> = vec![
+            (1.0, 0.0), (2.0, 0.0), (3.0, 0.0),
+            (4.0, 0.0), (5.0, 0.0), (6.0, 0.0),
+        ];
+        let shape = vec![2, 3];
+        let opts = FftOptions::default();
+        let spectrum = fftn(&input, &shape, &opts).expect("fftn");
+        let recovered = ifftn(&spectrum, &shape, &opts).expect("ifftn");
+        for (i, (&a, &b)) in recovered.iter().zip(&input).enumerate() {
+            assert!((a.0 - b.0).abs() < 1e-9, "re[{i}]: {} vs {}", a.0, b.0);
+            assert!((a.1 - b.1).abs() < 1e-9, "im[{i}]: {} vs {}", a.1, b.1);
+        }
+    }
+
+    #[test]
+    fn ifftn_fftn_roundtrip_3d() {
+        use super::transforms::{fftn, ifftn};
+        // 2x2x2 complex array
+        let input: Vec<Complex64> = (0..8).map(|i| (i as f64, 0.0)).collect();
+        let shape = vec![2, 2, 2];
+        let opts = FftOptions::default();
+        let spectrum = fftn(&input, &shape, &opts).expect("fftn");
+        let recovered = ifftn(&spectrum, &shape, &opts).expect("ifftn");
+        for (i, (&a, &b)) in recovered.iter().zip(&input).enumerate() {
+            assert!((a.0 - b.0).abs() < 1e-9, "re[{i}]: {} vs {}", a.0, b.0);
+            assert!((a.1 - b.1).abs() < 1e-9, "im[{i}]: {} vs {}", a.1, b.1);
         }
     }
 
