@@ -57,6 +57,24 @@
       }
     },
     {
+      "case_id": "fft_forward_impulse_4pt",
+      "category": "fft",
+      "mode": "Strict",
+      "transform": "fft",
+      "normalization": "forward",
+      "real_input": null,
+      "complex_input": [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[0.25, 0.0], [0.25, 0.0], [0.25, 0.0], [0.25, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
       "case_id": "ifft_dc_4pt",
       "category": "ifft",
       "mode": "Strict",
@@ -124,6 +142,24 @@
       "expected": {
         "kind": "complex_vector",
         "values": [[10.0, 0.0], [-2.0, 2.0], [-2.0, 0.0]],
+        "atol": 1e-10,
+        "rtol": 1e-8
+      }
+    },
+    {
+      "case_id": "rfft_forward_ramp_4pt",
+      "category": "rfft",
+      "mode": "Strict",
+      "transform": "rfft",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[2.5, 0.0], [-0.5, 0.5], [-0.5, 0.0]],
         "atol": 1e-10,
         "rtol": 1e-8
       }
@@ -822,6 +858,78 @@
       "expected": {
         "kind": "real_vector",
         "values": [0.7653668647301796, 1.4142135623730951, 1.8477590650225735, 2.0],
+        "atol": 1e-10,
+        "rtol": 1e-8
+      }
+    },
+    {
+      "case_id": "dct_iii_8pt",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_iii",
+      "normalization": "backward",
+      "real_input": [4.0, 0.0, 2.0, 0.0, 1.0, 0.0, 0.5, 0.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [9.492415124783331, 3.1926406345759775, 1.978932240677833, 1.3360119999628584, 1.3360119999628584, 1.978932240677833, 3.1926406345759775, 9.492415124783331],
+        "atol": 1e-10,
+        "rtol": 1e-8
+      }
+    },
+    {
+      "case_id": "dct_iv_8pt",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_iv",
+      "normalization": "backward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [34.92669541964912, -34.95974779121125, 16.047132284026702, -14.358997786055063, 10.465137398070324, -9.941086491948298, 8.723978231943331, -8.590611845769022],
+        "atol": 1e-10,
+        "rtol": 1e-8
+      }
+    },
+    {
+      "case_id": "dst_iii_8pt",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_iii",
+      "normalization": "backward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 0.5],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [22.057096385769487, 13.825093506027432, -4.932159908585909, -1.0146087489103275, 0.8465960310634193, 1.051979789229275, -0.8181837941269023, -0.7091158322262849],
+        "atol": 1e-10,
+        "rtol": 1e-8
+      }
+    },
+    {
+      "case_id": "dst_iv_8pt",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_iv",
+      "normalization": "backward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [56.89397971675582, -3.9557000229212322, 3.0450660637995535, -0.17221456393256607, 1.1776547024095079, 0.263906134746142, 0.6809968369710742, 0.45293530561777695],
         "atol": 1e-10,
         "rtol": 1e-8
       }
