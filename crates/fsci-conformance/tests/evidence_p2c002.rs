@@ -10,7 +10,10 @@
 //! 4. parity_report.json — max_abs_diff, max_rel_diff per operation per fixture
 //! 5. evidence_bundle.raptorq.json — RaptorQ sidecar for the bundle
 
-use fsci_conformance::{RaptorQSidecar, generate_raptorq_sidecar};
+use fsci_conformance::{
+    HarnessConfig, PythonOracleConfig, RaptorQSidecar, generate_raptorq_sidecar,
+    load_oracle_capture, run_linalg_packet_with_oracle_capture,
+};
 use fsci_linalg::{
     InvOptions, LstsqOptions, PinvOptions, SolveOptions, TriangularSolveOptions, det, inv, lstsq,
     pinv, solve, solve_banded, solve_triangular,
@@ -18,6 +21,7 @@ use fsci_linalg::{
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
 use std::path::Path;
+use std::process::Command;
 
 // ── Fixture data structures ────────────────────────────────────────────────────
 
@@ -645,4 +649,121 @@ fn now_str() -> String {
         .unwrap()
         .as_secs();
     format!("unix:{secs}")
+}
+
+// ── Python Oracle Capture Test ─────────────────────────────────────────────────
+
+/// Generates oracle_capture.json for P2C-002 by invoking the Python SciPy oracle.
+///
+/// This test:
+/// 1. Checks if SciPy is available in the environment
+/// 2. If available, runs the oracle capture against FSCI-P2C-002_linalg_core.json
+/// 3. Writes oracle_capture.json to fixtures/artifacts/FSCI-P2C-002/
+/// 4. Verifies provenance (blake3 hashes) is recorded
+///
+/// Skips gracefully when SciPy is not installed.
+#[test]
+fn oracle_capture_p2c002_linalg() {
+    // Check if SciPy is available
+    let scipy_check = Command::new("python3")
+        .arg("-c")
+        .arg("import scipy; import numpy")
+        .status();
+
+    if !matches!(scipy_check, Ok(status) if status.success()) {
+        eprintln!(
+            "SciPy/NumPy not available in this environment; \
+             skipping oracle capture for P2C-002"
+        );
+        return;
+    }
+
+    let cfg = HarnessConfig::default();
+    let oracle = PythonOracleConfig {
+        required: true,
+        ..PythonOracleConfig::default()
+    };
+
+    // Run oracle capture — this invokes python_oracle/scipy_linalg_oracle.py
+    let report =
+        run_linalg_packet_with_oracle_capture(&cfg, "FSCI-P2C-002_linalg_core.json", &oracle)
+            .expect("oracle capture should succeed when SciPy is available");
+
+    // Verify no failures
+    assert_eq!(
+        report.failed_cases, 0,
+        "all cases should pass against SciPy oracle"
+    );
+
+    // Verify oracle_capture.json was written to artifact directory
+    let oracle_capture_path = cfg
+        .artifact_dir_for("FSCI-P2C-002")
+        .join("oracle_capture.json");
+    assert!(
+        oracle_capture_path.exists(),
+        "oracle_capture.json should be written to {}",
+        oracle_capture_path.display()
+    );
+
+    // Load and verify the oracle capture
+    let capture = load_oracle_capture(&oracle_capture_path)
+        .expect("oracle_capture.json should be valid JSON");
+
+    assert_eq!(capture.packet_id, "FSCI-P2C-002");
+    assert!(
+        !capture.case_outputs.is_empty(),
+        "oracle capture should have case outputs"
+    );
+
+    // Verify provenance hash is recorded
+    let provenance = capture
+        .provenance
+        .expect("oracle capture should include provenance");
+    assert!(
+        !provenance.fixture_input_blake3.is_empty(),
+        "fixture_input_blake3 should be recorded"
+    );
+    assert!(
+        !provenance.oracle_output_blake3.is_empty(),
+        "oracle_output_blake3 should be recorded"
+    );
+    assert!(
+        !provenance.capture_blake3.is_empty(),
+        "capture_blake3 should be recorded"
+    );
+
+    // Verify runtime info is recorded
+    let runtime = capture
+        .runtime
+        .expect("oracle capture should include runtime info");
+    assert!(
+        !runtime.python_version.is_empty(),
+        "python_version should be recorded"
+    );
+    assert!(
+        !runtime.numpy_version.is_empty(),
+        "numpy_version should be recorded"
+    );
+    assert!(
+        !runtime.scipy_version.is_empty(),
+        "scipy_version should be recorded"
+    );
+
+    // Print summary
+    eprintln!("\n── P2C-002 Oracle Capture ──");
+    eprintln!("  Packet: {}", capture.packet_id);
+    eprintln!("  Cases: {}", capture.case_outputs.len());
+    eprintln!("  Python: {}", runtime.python_version);
+    eprintln!("  NumPy: {}", runtime.numpy_version);
+    eprintln!("  SciPy: {}", runtime.scipy_version);
+    eprintln!(
+        "  Fixture hash: {}...",
+        &provenance.fixture_input_blake3[..16]
+    );
+    eprintln!(
+        "  Output hash: {}...",
+        &provenance.oracle_output_blake3[..16]
+    );
+    eprintln!("  Capture hash: {}...", &provenance.capture_blake3[..16]);
+    eprintln!("  Written to: {}", oracle_capture_path.display());
 }
