@@ -251,6 +251,96 @@
       }
     },
     {
+      "case_id": "rfft2_ramp_2x2",
+      "category": "rfft2",
+      "mode": "Strict",
+      "transform": "rfft2",
+      "normalization": "backward",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 2],
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[10.0, 0.0], [-2.0, 0.0], [-4.0, 0.0], [0.0, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "irfft2_ramp_2x2",
+      "category": "irfft2",
+      "mode": "Strict",
+      "transform": "irfft2",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [[10.0, 0.0], [-2.0, 0.0], [-4.0, 0.0], [0.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 2],
+      "expected": {
+        "kind": "real_vector",
+        "values": [1.0, 2.0, 3.0, 4.0],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "rfftn_impulse_2x2x2",
+      "category": "rfftn",
+      "mode": "Strict",
+      "transform": "rfftn",
+      "normalization": "backward",
+      "real_input": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 2, 2],
+      "expected": {
+        "kind": "complex_vector",
+        "values": [
+          [1.0, 0.0],
+          [1.0, 0.0],
+          [1.0, 0.0],
+          [1.0, 0.0],
+          [1.0, 0.0],
+          [1.0, 0.0],
+          [1.0, 0.0],
+          [1.0, 0.0]
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "irfftn_impulse_2x2x2",
+      "category": "irfftn",
+      "mode": "Strict",
+      "transform": "irfftn",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [
+        [1.0, 0.0],
+        [1.0, 0.0],
+        [1.0, 0.0],
+        [1.0, 0.0],
+        [1.0, 0.0],
+        [1.0, 0.0],
+        [1.0, 0.0],
+        [1.0, 0.0]
+      ],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 2, 2],
+      "expected": {
+        "kind": "real_vector",
+        "values": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
       "case_id": "fft_single_element",
       "category": "fft",
       "mode": "Strict",
@@ -264,6 +354,78 @@
       "expected": {
         "kind": "complex_vector",
         "values": [[42.0, -7.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "hfft_from_rfft_impulse_4",
+      "category": "hfft",
+      "mode": "Strict",
+      "transform": "hfft",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
+      "output_len": 4,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [4.0, 0.0, 0.0, 0.0],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "fftn_2x3_impulse",
+      "category": "fftn",
+      "mode": "Strict",
+      "transform": "fftn",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 3],
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "ifftn_2x3_constant",
+      "category": "ifftn",
+      "mode": "Strict",
+      "transform": "ifftn",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [[6.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 3],
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "ifftn_2x2x2_dc",
+      "category": "ifftn",
+      "mode": "Strict",
+      "transform": "ifftn",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [[8.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 2, 2],
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
         "atol": 1e-12,
         "rtol": 1e-10
       }
