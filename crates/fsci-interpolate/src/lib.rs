@@ -42,6 +42,7 @@ pub enum SplineBc {
 pub enum InterpError {
     TooFewPoints { minimum: usize, actual: usize },
     UnsortedX,
+    NonFiniteX,
     LengthMismatch { x_len: usize, y_len: usize },
     OutOfBounds { value: String },
     InvalidArgument { detail: String },
@@ -54,6 +55,7 @@ impl std::fmt::Display for InterpError {
                 write!(f, "need at least {minimum} points, got {actual}")
             }
             Self::UnsortedX => write!(f, "x values must be strictly increasing"),
+            Self::NonFiniteX => write!(f, "x values must be finite (no NaN or Inf)"),
             Self::LengthMismatch { x_len, y_len } => {
                 write!(f, "x and y must have same length (x={x_len}, y={y_len})")
             }
@@ -119,6 +121,12 @@ impl Interp1d {
                 minimum: min_points,
                 actual: x.len(),
             });
+        }
+
+        // Check for non-finite x values (NaN/Inf) - must check before sortedness
+        // because NaN comparisons always return false, bypassing the sort check
+        if x.iter().any(|&v| !v.is_finite()) {
+            return Err(InterpError::NonFiniteX);
         }
 
         // Check strictly increasing
@@ -517,6 +525,9 @@ impl PchipInterpolator {
                 actual: x.len(),
             });
         }
+        if x.iter().any(|&v| !v.is_finite()) {
+            return Err(InterpError::NonFiniteX);
+        }
         if x.windows(2).any(|w| w[1] <= w[0]) {
             return Err(InterpError::UnsortedX);
         }
@@ -637,6 +648,9 @@ impl CubicSplineStandalone {
                 minimum: 4,
                 actual: x.len(),
             });
+        }
+        if x.iter().any(|&v| !v.is_finite()) {
+            return Err(InterpError::NonFiniteX);
         }
         if x.windows(2).any(|w| w[1] <= w[0]) {
             return Err(InterpError::UnsortedX);
@@ -776,6 +790,9 @@ impl Akima1DInterpolator {
                 minimum: 2,
                 actual: x.len(),
             });
+        }
+        if x.iter().any(|&v| !v.is_finite()) {
+            return Err(InterpError::NonFiniteX);
         }
         if x.windows(2).any(|w| w[1] <= w[0]) {
             return Err(InterpError::UnsortedX);
@@ -1179,6 +1196,9 @@ impl UnivariateSpline {
                 minimum: 4,
                 actual: x.len(),
             });
+        }
+        if x.iter().any(|&v| !v.is_finite()) {
+            return Err(InterpError::NonFiniteX);
         }
         if x.windows(2).any(|w| w[1] <= w[0]) {
             return Err(InterpError::UnsortedX);
@@ -3380,5 +3400,37 @@ mod tests {
         let y = vec![0.0, 1.0, 0.5, 0.25];
         let err = CubicSplineStandalone::new(&x, &y, SplineBc::Periodic).expect_err("periodic");
         assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn interp1d_rejects_nan_in_x_coordinates() {
+        let x = vec![1.0, f64::NAN, 3.0];
+        let y = vec![0.0, 1.0, 2.0];
+        let err = Interp1d::new(&x, &y, Interp1dOptions::default()).expect_err("nan in x");
+        assert!(matches!(err, InterpError::NonFiniteX));
+    }
+
+    #[test]
+    fn interp1d_rejects_infinity_in_x_coordinates() {
+        let x = vec![1.0, f64::INFINITY, 3.0];
+        let y = vec![0.0, 1.0, 2.0];
+        let err = Interp1d::new(&x, &y, Interp1dOptions::default()).expect_err("inf in x");
+        assert!(matches!(err, InterpError::NonFiniteX));
+    }
+
+    #[test]
+    fn pchip_rejects_nan_in_x_coordinates() {
+        let x = vec![1.0, f64::NAN, 3.0];
+        let y = vec![0.0, 1.0, 2.0];
+        let err = PchipInterpolator::new(&x, &y).expect_err("nan in x");
+        assert!(matches!(err, InterpError::NonFiniteX));
+    }
+
+    #[test]
+    fn akima_rejects_nan_in_x_coordinates() {
+        let x = vec![1.0, f64::NAN, 3.0];
+        let y = vec![0.0, 1.0, 2.0];
+        let err = Akima1DInterpolator::new(&x, &y).expect_err("nan in x");
+        assert!(matches!(err, InterpError::NonFiniteX));
     }
 }
