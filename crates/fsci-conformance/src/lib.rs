@@ -1659,7 +1659,12 @@ fn execute_sparse_case(case: &SparseCase) -> SparseObserved {
                 Ok(c) => c,
                 Err(e) => return SparseObserved::Error(format!("{e}")),
             };
-            match fsci_sparse::spsolve(&csr, rhs, SolveOptions::default()) {
+            // Use case.mode to respect Hardened vs Strict from fixture
+            let options = SolveOptions {
+                mode: case.mode,
+                ..SolveOptions::default()
+            };
+            match fsci_sparse::spsolve(&csr, rhs, options) {
                 Ok(result) => SparseObserved::Vector(result.solution),
                 Err(e) => SparseObserved::Error(format!("{e}")),
             }
