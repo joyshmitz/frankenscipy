@@ -3427,8 +3427,14 @@ mod tests {
     #[test]
     fn shift_rejects_inf_shift_values() {
         let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
-        let err = shift(&input, &[0.0, f64::INFINITY], 1, BoundaryMode::Constant, 0.0)
-            .expect_err("should reject Inf");
+        let err = shift(
+            &input,
+            &[0.0, f64::INFINITY],
+            1,
+            BoundaryMode::Constant,
+            0.0,
+        )
+        .expect_err("should reject Inf");
         assert!(matches!(err, NdimageError::InvalidArgument(_)));
     }
 

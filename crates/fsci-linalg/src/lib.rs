@@ -7382,7 +7382,11 @@ mod tests {
     #[test]
     fn logm_diagonal_is_log_of_diagonal() {
         // logm(diag(d)) = diag(log(d))
-        let d = vec![vec![2.0, 0.0, 0.0], vec![0.0, 5.0, 0.0], vec![0.0, 0.0, 7.0]];
+        let d = vec![
+            vec![2.0, 0.0, 0.0],
+            vec![0.0, 5.0, 0.0],
+            vec![0.0, 0.0, 7.0],
+        ];
         let result = logm(&d, DecompOptions::default()).expect("logm works");
         let expected = vec![
             vec![2.0_f64.ln(), 0.0, 0.0],

@@ -577,6 +577,7 @@ dependencies = [
  "asupersync",
  "blake3",
  "fsci-arrayapi",
+ "fsci-cluster",
  "fsci-constants",
  "fsci-fft",
  "fsci-integrate",
@@ -584,7 +585,9 @@ dependencies = [
  "fsci-ndimage",
  "fsci-opt",
  "fsci-runtime",
+ "fsci-signal",
  "fsci-sparse",
+ "fsci-spatial",
  "fsci-special",
  "fsci-stats",
  "ftui",
@@ -698,6 +701,7 @@ name = "fsci-sparse"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "fsci-linalg",
  "fsci-runtime",
  "nalgebra",
  "proptest",

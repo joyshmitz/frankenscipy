@@ -424,8 +424,8 @@ fn solve_spline_periodic(n: usize, h: &[f64], y: &[f64]) -> Vec<f64> {
 
     let solution = solve_cyclic_tridiagonal(&sub, &diag, &sup, &rhs);
     let mut c = vec![0.0; n];
-    for i in 0..m {
-        c[i] = solution[i];
+    if m > 0 {
+        c[..m].copy_from_slice(&solution[..m]);
     }
     c[n - 1] = c[0];
     c
@@ -454,12 +454,7 @@ fn thomas_solve(sub: &[f64], diag: &mut [f64], sup: &[f64], rhs: &mut [f64]) {
     }
 }
 
-fn solve_cyclic_tridiagonal(
-    sub: &[f64],
-    diag: &[f64],
-    sup: &[f64],
-    rhs: &[f64],
-) -> Vec<f64> {
+fn solve_cyclic_tridiagonal(sub: &[f64], diag: &[f64], sup: &[f64], rhs: &[f64]) -> Vec<f64> {
     let n = diag.len();
     if n == 0 {
         return Vec::new();
@@ -1648,10 +1643,8 @@ impl RegularGridInterpolator {
                 out_of_bounds = true;
             }
         }
-        if out_of_bounds {
-            if let Some(fill) = self.fill_value {
-                return Ok(fill);
-            }
+        if out_of_bounds && let Some(fill) = self.fill_value {
+            return Ok(fill);
         }
         match self.method {
             RegularGridMethod::Linear => self.eval_linear(xi),
@@ -3387,7 +3380,10 @@ mod tests {
     #[test]
     fn cubic_spline_periodic_matches_endpoints_and_derivative() {
         let x = vec![0.0, 0.5, 1.0, 1.5, 2.0];
-        let y: Vec<f64> = x.iter().map(|&t| (std::f64::consts::PI * t).sin()).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .map(|&t| (std::f64::consts::PI * t).sin())
+            .collect();
         let spline = CubicSplineStandalone::new(&x, &y, SplineBc::Periodic).expect("periodic");
         assert!((spline.eval(0.0) - spline.eval(2.0)).abs() < 1e-10);
         let d = spline.derivative(1);

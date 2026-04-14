@@ -683,8 +683,7 @@ mod tests {
         let parsed: serde_json::Value = match serde_json::from_str(&jsonl) {
             Ok(payload) => payload,
             Err(err) => {
-                assert!(false, "invalid JSON: {err}");
-                return;
+                panic!("invalid JSON: {err}");
             }
         };
         assert_eq!(parsed["component"], "test");
@@ -815,8 +814,7 @@ mod tests {
         let parsed: serde_json::Value = match serde_json::from_str(&json) {
             Ok(payload) => payload,
             Err(err) => {
-                assert!(false, "invalid JSON: {err}");
-                return;
+                panic!("invalid JSON: {err}");
             }
         };
         assert_eq!(parsed["test_id"], "test_foo");
@@ -832,8 +830,7 @@ mod tests {
         let parsed: serde_json::Value = match serde_json::from_str(&json) {
             Ok(payload) => payload,
             Err(err) => {
-                assert!(false, "invalid JSON: {err}");
-                return;
+                panic!("invalid JSON: {err}");
             }
         };
         assert!(parsed.get("seed").is_none());

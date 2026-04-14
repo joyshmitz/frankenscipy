@@ -1,3 +1,4 @@
+use fsci_linalg::{DecompOptions, LinalgError, expm as dense_expm};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
@@ -70,6 +71,21 @@ impl Default for IluOptions {
             ordering: PermutationOrdering::Colamd,
             drop_tol: 1e-4,
             fill_factor: 10.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExpmOptions {
+    pub mode: RuntimeMode,
+    pub check_finite: bool,
+}
+
+impl Default for ExpmOptions {
+    fn default() -> Self {
+        Self {
+            mode: RuntimeMode::Strict,
+            check_finite: true,
         }
     }
 }
@@ -384,6 +400,89 @@ pub fn spilu(a: &CscMatrix, options: IluOptions) -> SparseResult<SparseIluFactor
         u_indptr,
         n,
     })
+}
+
+/// Sparse matrix exponential via dense fallback.
+///
+/// Matches `scipy.sparse.linalg.expm(A)` semantics for V1 by delegating to
+/// `fsci_linalg::expm` after densifying the input matrix.
+pub fn expm(a: &CsrMatrix, options: ExpmOptions) -> SparseResult<Vec<Vec<f64>>> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "expm requires a square matrix".to_string(),
+        });
+    }
+
+    let must_check = options.check_finite || options.mode == RuntimeMode::Hardened;
+    if must_check && a.data().iter().any(|v| !v.is_finite()) {
+        return Err(SparseError::NonFiniteInput {
+            message: "matrix contains NaN or Inf".to_string(),
+        });
+    }
+
+    if shape.rows == 0 {
+        return Ok(Vec::new());
+    }
+
+    let dense = csr_to_dense(a);
+    let mut rows = Vec::with_capacity(shape.rows);
+    for i in 0..shape.rows {
+        let start = i * shape.cols;
+        let end = start + shape.cols;
+        rows.push(dense[start..end].to_vec());
+    }
+
+    let decomp = DecompOptions {
+        mode: options.mode,
+        check_finite: options.check_finite,
+    };
+    dense_expm(&rows, decomp).map_err(map_linalg_error)
+}
+
+fn map_linalg_error(err: LinalgError) -> SparseError {
+    match err {
+        LinalgError::RaggedMatrix => SparseError::InvalidArgument {
+            message: "ragged matrix rows".to_string(),
+        },
+        LinalgError::ExpectedSquareMatrix => SparseError::InvalidShape {
+            message: "expm requires a square matrix".to_string(),
+        },
+        LinalgError::IncompatibleShapes { a_shape, b_len } => SparseError::IncompatibleShape {
+            message: format!("incompatible shapes: a_shape={a_shape:?}, b_len={b_len}"),
+        },
+        LinalgError::NonFiniteInput => SparseError::NonFiniteInput {
+            message: "matrix contains NaN or Inf".to_string(),
+        },
+        LinalgError::SingularMatrix => SparseError::SingularMatrix {
+            message: "singular matrix".to_string(),
+        },
+        LinalgError::UnsupportedAssumption => SparseError::Unsupported {
+            feature: "unsupported matrix assumption".to_string(),
+        },
+        LinalgError::InvalidBandShape {
+            expected_rows,
+            actual_rows,
+        } => SparseError::InvalidArgument {
+            message: format!(
+                "invalid band shape: expected {expected_rows} rows, got {actual_rows}"
+            ),
+        },
+        LinalgError::InvalidPinvThreshold => SparseError::InvalidArgument {
+            message: "invalid pinv threshold".to_string(),
+        },
+        LinalgError::NotSupported { detail } => SparseError::Unsupported { feature: detail },
+        LinalgError::ConvergenceFailure { detail } => {
+            SparseError::InvalidArgument { message: detail }
+        }
+        LinalgError::ConditionTooHigh { rcond, threshold } => SparseError::InvalidArgument {
+            message: format!("condition too high: rcond={rcond} threshold={threshold}"),
+        },
+        LinalgError::ResourceExhausted { detail } => SparseError::InvalidArgument {
+            message: format!("resource exhausted: {detail}"),
+        },
+        LinalgError::InvalidArgument { detail } => SparseError::InvalidArgument { message: detail },
+    }
 }
 
 /// Find the value at position (row, col) in CSR data.
@@ -2714,6 +2813,53 @@ mod tests {
     }
 
     #[test]
+    fn expm_identity_returns_exp_one() {
+        let a = identity_csr(3);
+        let result = expm(&a, ExpmOptions::default()).expect("expm works");
+        let e = std::f64::consts::E;
+        let expected = vec![vec![e, 0.0, 0.0], vec![0.0, e, 0.0], vec![0.0, 0.0, e]];
+        assert_close_matrix(&result, &expected, 1e-12);
+    }
+
+    #[test]
+    fn expm_zero_matrix_returns_identity() {
+        let zero = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let result = expm(&zero, ExpmOptions::default()).expect("expm works");
+        let expected = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        assert_close_matrix(&result, &expected, 1e-12);
+    }
+
+    #[test]
+    fn expm_rejects_non_square_matrix() {
+        let a = non_square_csr();
+        let err = expm(&a, ExpmOptions::default()).expect_err("non-square");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn expm_rejects_non_finite_input() {
+        let a = CsrMatrix::from_components(
+            Shape2D::new(1, 1),
+            vec![f64::NAN],
+            vec![0],
+            vec![0, 1],
+            false,
+        )
+        .expect("csr");
+        let err = expm(&a, ExpmOptions::default()).expect_err("non-finite");
+        assert!(matches!(err, SparseError::NonFiniteInput { .. }));
+    }
+
+    #[test]
     fn splu_solve_roundtrip() {
         let a = CooMatrix::from_triplets(
             Shape2D::new(2, 2),
@@ -2746,6 +2892,24 @@ mod tests {
                 "index={i} actual={a} expected={e} diff={}",
                 (a - e).abs()
             );
+        }
+    }
+
+    fn assert_close_matrix(actual: &[Vec<f64>], expected: &[Vec<f64>], tol: f64) {
+        assert_eq!(actual.len(), expected.len(), "row count differs");
+        for (row_idx, (a_row, e_row)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                a_row.len(),
+                e_row.len(),
+                "column count differs at row {row_idx}"
+            );
+            for (col_idx, (a, e)) in a_row.iter().zip(e_row.iter()).enumerate() {
+                assert!(
+                    (a - e).abs() < tol,
+                    "row={row_idx} col={col_idx} actual={a} expected={e} diff={}",
+                    (a - e).abs()
+                );
+            }
         }
     }
 

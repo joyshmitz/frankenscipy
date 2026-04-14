@@ -121,7 +121,9 @@ pub struct AuditLedger {
 impl AuditLedger {
     #[must_use]
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// Record an audit event (append-only).
@@ -211,15 +213,13 @@ mod tests {
         let json = match ledger.to_json() {
             Ok(payload) => payload,
             Err(err) => {
-                assert!(false, "serialize failed: {err}");
-                return;
+                panic!("serialize failed: {err}");
             }
         };
         let decoded = match AuditLedger::from_json(&json) {
             Ok(payload) => payload,
             Err(err) => {
-                assert!(false, "deserialize failed: {err}");
-                return;
+                panic!("deserialize failed: {err}");
             }
         };
 
@@ -240,7 +240,7 @@ mod tests {
         if let AuditAction::FailClosed { ref reason } = event.action {
             assert_eq!(reason, "invalid_metadata");
         } else {
-            assert!(false, "expected fail closed action");
+            panic!("expected fail closed action");
         }
     }
 
@@ -254,10 +254,13 @@ mod tests {
             },
             "recovered",
         );
-        if let AuditAction::BoundedRecovery { ref recovery_action } = event.action {
+        if let AuditAction::BoundedRecovery {
+            ref recovery_action,
+        } = event.action
+        {
             assert_eq!(recovery_action, "drop_outliers");
         } else {
-            assert!(false, "expected bounded recovery action");
+            panic!("expected bounded recovery action");
         }
         assert_eq!(event.outcome, "recovered");
     }

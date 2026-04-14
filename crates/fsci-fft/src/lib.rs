@@ -379,8 +379,12 @@ mod tests {
         use super::transforms::{fftn, ifftn};
         // 2x3 complex array
         let input: Vec<Complex64> = vec![
-            (1.0, 0.0), (2.0, 0.0), (3.0, 0.0),
-            (4.0, 0.0), (5.0, 0.0), (6.0, 0.0),
+            (1.0, 0.0),
+            (2.0, 0.0),
+            (3.0, 0.0),
+            (4.0, 0.0),
+            (5.0, 0.0),
+            (6.0, 0.0),
         ];
         let shape = vec![2, 3];
         let opts = FftOptions::default();

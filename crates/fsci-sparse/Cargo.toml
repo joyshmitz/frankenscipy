@@ -7,6 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+fsci-linalg = { workspace = true }
 fsci-runtime = { workspace = true }
 nalgebra = { version = "0.33.2", features = ["sparse"] }
 thiserror = { workspace = true }

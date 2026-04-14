@@ -575,18 +575,13 @@ where
         .events
         .as_ref()
         .map(|evs| vec![Vec::new(); evs.len()]);
-    let mut event_counts: Option<Vec<usize>> = options
-        .events
-        .as_ref()
-        .map(|evs| vec![0; evs.len()]);
-    let mut event_vals = options
-        .events
-        .as_ref()
-        .map(|evs| {
-            evs.iter()
-                .map(|ev| (ev.func)(t0, options.y0))
-                .collect::<Vec<_>>()
-        });
+    let mut event_counts: Option<Vec<usize>> =
+        options.events.as_ref().map(|evs| vec![0; evs.len()]);
+    let mut event_vals = options.events.as_ref().map(|evs| {
+        evs.iter()
+            .map(|ev| (ev.func)(t0, options.y0))
+            .collect::<Vec<_>>()
+    });
 
     if let Some(t_eval) = options.t_eval {
         if matches!(t_eval.first(), Some(&first) if (first - t0).abs() < 1e-14) {
@@ -1023,7 +1018,9 @@ mod tests {
                 t_span: (0.0, 1.0),
                 y0: &[1.0],
                 method: SolverKind::Rk45,
-                events: Some(vec![EventSpec::terminal(event_at_half).with_direction(-1.0)]),
+                events: Some(vec![
+                    EventSpec::terminal(event_at_half).with_direction(-1.0),
+                ]),
                 ..SolveIvpOptions::default()
             },
         )

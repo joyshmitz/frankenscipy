@@ -2029,7 +2029,10 @@ mod tests {
         // For n=4 real input, rfft gives n/2+1 = 3 complex outputs
         assert_eq!(result.len(), 3);
         for &(re, im) in &result {
-            assert!(re.is_finite() && im.is_finite(), "ihfft produced non-finite");
+            assert!(
+                re.is_finite() && im.is_finite(),
+                "ihfft produced non-finite"
+            );
         }
     }
 
