@@ -1484,7 +1484,16 @@ pub fn label(input: &NdArray) -> Result<(NdArray, usize), NdimageError> {
 /// Sum of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.sum_labels`.
+///
+/// # Panics
+/// Panics if `input` and `labels` have different shapes.
 pub fn sum_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f64> {
+    assert!(
+        input.shape == labels.shape,
+        "input shape {:?} != labels shape {:?}",
+        input.shape,
+        labels.shape
+    );
     let mut sums = vec![0.0; num_labels + 1];
     for i in 0..input.size() {
         let lbl = labels.data[i] as usize;
@@ -1498,7 +1507,16 @@ pub fn sum_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f
 /// Mean of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.mean`.
+///
+/// # Panics
+/// Panics if `input` and `labels` have different shapes.
 pub fn mean_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f64> {
+    assert!(
+        input.shape == labels.shape,
+        "input shape {:?} != labels shape {:?}",
+        input.shape,
+        labels.shape
+    );
     let mut sums = vec![0.0; num_labels + 1];
     let mut counts = vec![0usize; num_labels + 1];
     for i in 0..input.size() {
@@ -1513,7 +1531,8 @@ pub fn mean_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<
             if counts[l] > 0 {
                 sums[l] / counts[l] as f64
             } else {
-                0.0
+                // SciPy returns NaN for labels with no pixels
+                f64::NAN
             }
         })
         .collect()
@@ -1522,7 +1541,16 @@ pub fn mean_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<
 /// Variance of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.variance`.
+///
+/// # Panics
+/// Panics if `input` and `labels` have different shapes.
 pub fn variance_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f64> {
+    assert!(
+        input.shape == labels.shape,
+        "input shape {:?} != labels shape {:?}",
+        input.shape,
+        labels.shape
+    );
     let means = mean_labels(input, labels, num_labels);
     let mut var_sums = vec![0.0; num_labels + 1];
     let mut counts = vec![0usize; num_labels + 1];
@@ -1548,6 +1576,9 @@ pub fn variance_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> 
 /// Standard deviation of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.standard_deviation`.
+///
+/// # Panics
+/// Panics if `input` and `labels` have different shapes.
 pub fn standard_deviation_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f64> {
     variance_labels(input, labels, num_labels)
         .into_iter()
@@ -1591,7 +1622,16 @@ pub fn find_objects(labels: &NdArray, num_labels: usize) -> Vec<Option<(Vec<usiz
 /// Center of mass for each labeled region.
 ///
 /// Matches `scipy.ndimage.center_of_mass`.
+///
+/// # Panics
+/// Panics if `input` and `labels` have different shapes.
 pub fn center_of_mass(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<Vec<f64>> {
+    assert!(
+        input.shape == labels.shape,
+        "input shape {:?} != labels shape {:?}",
+        input.shape,
+        labels.shape
+    );
     let ndim = input.ndim();
     let mut weighted_sums = vec![vec![0.0; ndim]; num_labels + 1];
     let mut total_weights = vec![0.0; num_labels + 1];
@@ -1616,7 +1656,8 @@ pub fn center_of_mass(input: &NdArray, labels: &NdArray, num_labels: usize) -> V
                     .map(|&s| s / total_weights[l])
                     .collect()
             } else {
-                vec![0.0; ndim]
+                // SciPy returns NaN for labels with zero total weight
+                vec![f64::NAN; ndim]
             }
         })
         .collect()
@@ -2421,13 +2462,20 @@ pub fn otsu_threshold(input: &NdArray) -> f64 {
 /// Affine transformation of an image (2D only).
 ///
 /// `matrix` is a 2x3 affine transformation matrix [a b tx; c d ty].
+/// `order` controls interpolation: 0=nearest, 1=linear, 3=cubic (spline).
 /// Matches `scipy.ndimage.affine_transform`.
 pub fn affine_transform(
     input: &NdArray,
     matrix: &[[f64; 3]; 2],
+    order: usize,
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
+    if order > 5 {
+        return Err(NdimageError::InvalidArgument(format!(
+            "spline order must be in 0..=5, got {order}"
+        )));
+    }
     if input.ndim() != 2 {
         return Err(NdimageError::InvalidArgument(
             "affine_transform supports 2D only".to_string(),
@@ -2436,12 +2484,11 @@ pub fn affine_transform(
 
     let rows = input.shape[0];
     let cols = input.shape[1];
-    let mut output = NdArray::zeros(input.shape.clone());
 
     // Invert the transformation to map output → input
     let det = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
     if det.abs() < 1e-15 {
-        return Ok(output);
+        return Ok(NdArray::zeros(input.shape.clone()));
     }
 
     let inv = [
@@ -2451,12 +2498,23 @@ pub fn affine_transform(
     let inv_tx = -(inv[0][0] * matrix[0][2] + inv[0][1] * matrix[1][2]);
     let inv_ty = -(inv[1][0] * matrix[0][2] + inv[1][1] * matrix[1][2]);
 
+    let spline = prefilter_spline_coefficients(input, order, mode)?;
+    let mut output = NdArray::zeros(input.shape.clone());
+
     for r in 0..rows {
         for c in 0..cols {
             let src_r = inv[0][0] * r as f64 + inv[0][1] * c as f64 + inv_tx;
             let src_c = inv[1][0] * r as f64 + inv[1][1] * c as f64 + inv_ty;
-            let idx = [src_r.round() as i64, src_c.round() as i64];
-            output.set(&[r, c], input.get_boundary(&idx, mode, cval));
+            let value = sample_interpolated(
+                input,
+                &spline.coeffs,
+                &[src_r, src_c],
+                &spline.coord_offsets,
+                order,
+                mode,
+                cval,
+            );
+            output.set(&[r, c], value);
         }
     }
 
