@@ -385,6 +385,70 @@
       }
     },
     {
+      "case_id": "add_self_shape_2x2",
+      "category": "add",
+      "mode": "Strict",
+      "operation": "add",
+      "format": "csr",
+      "rows": 2,
+      "cols": 2,
+      "data": [
+        1.0,
+        2.0
+      ],
+      "row_indices": [
+        0,
+        1
+      ],
+      "col_indices": [
+        0,
+        1
+      ],
+      "rhs": null,
+      "scalar": null,
+      "expected": {
+        "kind": "shape",
+        "rows": 2,
+        "cols": 2,
+        "nnz": 2
+      }
+    },
+    {
+      "case_id": "add_self_vector_2x2",
+      "category": "add",
+      "mode": "Strict",
+      "operation": "add",
+      "format": "csr",
+      "rows": 2,
+      "cols": 2,
+      "data": [
+        1.0,
+        2.0
+      ],
+      "row_indices": [
+        0,
+        1
+      ],
+      "col_indices": [
+        0,
+        1
+      ],
+      "rhs": [
+        1.0,
+        1.0
+      ],
+      "scalar": null,
+      "expected": {
+        "kind": "vector",
+        "values": [
+          2.0,
+          4.0
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
       "case_id": "scale_by_minus_two",
       "category": "scale",
       "mode": "Strict",
@@ -455,6 +519,76 @@
       }
     },
     {
+      "case_id": "scale_shape_preserves_nnz",
+      "category": "scale",
+      "mode": "Strict",
+      "operation": "scale",
+      "format": "csr",
+      "rows": 3,
+      "cols": 3,
+      "data": [
+        1.0,
+        2.0,
+        3.0
+      ],
+      "row_indices": [
+        0,
+        1,
+        2
+      ],
+      "col_indices": [
+        0,
+        1,
+        2
+      ],
+      "rhs": null,
+      "scalar": 2.0,
+      "expected": {
+        "kind": "shape",
+        "rows": 3,
+        "cols": 3,
+        "nnz": 3
+      }
+    },
+    {
+      "case_id": "scale_vector_2x2",
+      "category": "scale",
+      "mode": "Strict",
+      "operation": "scale",
+      "format": "csr",
+      "rows": 2,
+      "cols": 2,
+      "data": [
+        1.0,
+        -1.0,
+        2.0
+      ],
+      "row_indices": [
+        0,
+        0,
+        1
+      ],
+      "col_indices": [
+        0,
+        1,
+        1
+      ],
+      "rhs": [
+        1.0,
+        2.0
+      ],
+      "scalar": 3.0,
+      "expected": {
+        "kind": "vector",
+        "values": [
+          -3.0,
+          12.0
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
       "case_id": "spsolve_identity_2x2",
       "category": "spsolve",
       "mode": "Strict",
@@ -490,6 +624,72 @@
       }
     },
     {
+      "case_id": "spsolve_non_square_error",
+      "category": "spsolve_error",
+      "mode": "Strict",
+      "operation": "spsolve",
+      "format": "csr",
+      "rows": 2,
+      "cols": 3,
+      "data": [
+        1.0,
+        1.0
+      ],
+      "row_indices": [
+        0,
+        1
+      ],
+      "col_indices": [
+        0,
+        2
+      ],
+      "rhs": [
+        1.0,
+        2.0
+      ],
+      "scalar": null,
+      "expected": {
+        "kind": "error",
+        "error": "square matrix"
+      }
+    },
+    {
+      "case_id": "spsolve_singular_error",
+      "category": "spsolve_error",
+      "mode": "Strict",
+      "operation": "spsolve",
+      "format": "csr",
+      "rows": 2,
+      "cols": 2,
+      "data": [
+        1.0,
+        2.0,
+        2.0,
+        4.0
+      ],
+      "row_indices": [
+        0,
+        0,
+        1,
+        1
+      ],
+      "col_indices": [
+        0,
+        1,
+        0,
+        1
+      ],
+      "rhs": [
+        1.0,
+        2.0
+      ],
+      "scalar": null,
+      "expected": {
+        "kind": "error",
+        "error": "singular matrix"
+      }
+    },
+    {
       "case_id": "spmv_csr_dimension_mismatch",
       "category": "spmv_error",
       "mode": "Strict",
@@ -514,6 +714,62 @@
       "expected": {
         "kind": "error",
         "error": "incompatible shape"
+      }
+    },
+    {
+      "case_id": "spsolve_rhs_mismatch_error",
+      "category": "spsolve_error",
+      "mode": "Strict",
+      "operation": "spsolve",
+      "format": "csr",
+      "rows": 2,
+      "cols": 2,
+      "data": [
+        1.0,
+        1.0
+      ],
+      "row_indices": [
+        0,
+        1
+      ],
+      "col_indices": [
+        0,
+        1
+      ],
+      "rhs": [
+        1.0
+      ],
+      "scalar": null,
+      "expected": {
+        "kind": "error",
+        "error": "rhs length"
+      }
+    },
+    {
+      "case_id": "spsolve_hardened_empty_row_error",
+      "category": "spsolve_error",
+      "mode": "Hardened",
+      "operation": "spsolve",
+      "format": "csr",
+      "rows": 2,
+      "cols": 2,
+      "data": [
+        1.0
+      ],
+      "row_indices": [
+        0
+      ],
+      "col_indices": [
+        0
+      ],
+      "rhs": [
+        1.0,
+        0.0
+      ],
+      "scalar": null,
+      "expected": {
+        "kind": "error",
+        "error": "empty structural row"
       }
     },
     {

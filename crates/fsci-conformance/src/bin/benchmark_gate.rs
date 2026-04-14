@@ -27,9 +27,6 @@ const SPEC_BUDGETS_MS: &[(&str, f64)] = &[
     ("fft", 210.0),       // FFT transform p95
 ];
 
-/// Maximum allowed regression percentage at p99
-const MAX_REGRESSION_PCT: f64 = 8.0;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BaselineFile {
     baseline_version: String,
@@ -122,7 +119,6 @@ struct GateResult {
 enum GateStatus {
     Pass,
     SpecViolation { actual_ms: f64 },
-    Regression { delta_pct: f64 },
 }
 
 fn load_baselines(dir: &Path) -> Result<HashMap<String, BaselineFile>, String> {
@@ -164,13 +160,19 @@ fn check_spec_compliance(baselines: &HashMap<String, BaselineFile>) -> Vec<GateR
     let budgets: HashMap<&str, f64> = SPEC_BUDGETS_MS.iter().copied().collect();
 
     for (family, baseline) in baselines {
-        let budget_ms = budgets.get(family.as_str()).copied().unwrap_or(f64::INFINITY);
+        let budget_ms = budgets
+            .get(family.as_str())
+            .copied()
+            .unwrap_or(f64::INFINITY);
 
         for (group, benchmarks) in &baseline.benchmarks {
             for (name, entry) in benchmarks {
-                if let Some(upper) = entry.upper_ms() {
-                    let status = if upper > budget_ms {
-                        GateStatus::SpecViolation { actual_ms: upper }
+                let baseline_ms = entry.upper_ms().or_else(|| entry.median_ms());
+                if let Some(baseline_ms) = baseline_ms {
+                    let status = if baseline_ms > budget_ms {
+                        GateStatus::SpecViolation {
+                            actual_ms: baseline_ms,
+                        }
                     } else {
                         GateStatus::Pass
                     };
@@ -178,7 +180,7 @@ fn check_spec_compliance(baselines: &HashMap<String, BaselineFile>) -> Vec<GateR
                     results.push(GateResult {
                         family: family.clone(),
                         benchmark: format!("{group}/{name}"),
-                        baseline_ms: upper,
+                        baseline_ms,
                         spec_budget_ms: budget_ms,
                         status,
                     });
@@ -215,18 +217,14 @@ fn print_report(results: &[GateResult]) -> bool {
                 GateStatus::Pass => "PASS".to_string(),
                 GateStatus::SpecViolation { actual_ms } => {
                     all_pass = false;
-                    format!("FAIL: {:.3}ms > {:.3}ms budget", actual_ms, r.spec_budget_ms)
-                }
-                GateStatus::Regression { delta_pct } => {
-                    all_pass = false;
-                    format!("FAIL: {:.1}% regression (>{:.1}% threshold)", delta_pct, MAX_REGRESSION_PCT)
+                    format!(
+                        "FAIL: {:.3}ms > {:.3}ms budget",
+                        actual_ms, r.spec_budget_ms
+                    )
                 }
             };
 
-            println!(
-                "  {}: {:.3}ms [{}]",
-                r.benchmark, r.baseline_ms, status_str
-            );
+            println!("  {}: {:.3}ms [{}]", r.benchmark, r.baseline_ms, status_str);
         }
         println!();
     }
@@ -252,7 +250,9 @@ fn main() {
         println!("Usage: benchmark_gate [OPTIONS]");
         println!();
         println!("Options:");
-        println!("  --baselines-dir DIR  Directory containing baseline_*.json files (default: docs)");
+        println!(
+            "  --baselines-dir DIR  Directory containing baseline_*.json files (default: docs)"
+        );
         println!("  --check-spec         Validate baselines against SPEC §17 budgets");
         println!("  -h, --help           Show this help");
         std::process::exit(0);

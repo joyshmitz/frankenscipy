@@ -23,7 +23,7 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 | stats | 182 | 136 fn + 24 dist | 88% | parity_green |
 | signal | 159 | 137 | 86% | parity_green |
 | interpolate | 63 | 32 | 51% | parity_gap |
-| spatial | 23 + distance | 15 | 45% | parity_gap |
+| spatial | 23 + distance | 55+ | 85% | parity_green |
 
 ## Detailed Gap Analysis
 
@@ -114,16 +114,14 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 - RBF: `RBFInterpolator`
 - `CloughTocher2DInterpolator`
 
-### fsci-spatial (45% coverage for distance, ~20% overall)
+### fsci-spatial (85% coverage)
 
-**Implemented:** KDTree (query, query_k), euclidean, sqeuclidean, cityblock, chebyshev, cosine, minkowski, correlation, pdist, squareform, cdist, cdist_metric
+**Implemented:** KDTree (query, query_k, query_ball_point, query_ball_tree, count_neighbors, sparse_distance_matrix), euclidean, sqeuclidean, cityblock, chebyshev, cosine, minkowski, correlation, hamming, jaccard, canberra, braycurtis, mahalanobis, seuclidean, wminkowski, pdist, squareform_to_matrix, squareform_to_condensed, cdist, cdist_metric, distance_matrix, directed_hausdorff, hausdorff_distance, ConvexHull, Delaunay, Voronoi, SphericalVoronoi, procrustes, geometric_slerp, boolean metrics (yule, dice, kulsinski, rogerstanimoto, russellrao, sokalmichener, sokalsneath, matching), coordinate transforms (spherical, cylindrical), rotation_matrix, nearest_neighbors, k_nearest_neighbors, centroid, medoid, diameter, spread
 
-**Missing (HIGH priority):**
-- Geometry: `ConvexHull`, `Delaunay`, `Voronoi`, `SphericalVoronoi`
-- More metrics: `hamming`, `jaccard`, `mahalanobis`, `canberra`, `braycurtis`, `wminkowski`
-- KDTree: `query_ball_point`, `query_ball_tree`, `count_neighbors`, `sparse_distance_matrix`
-- Transform: `procrustes`, `geometric_slerp`
-- `distance_matrix` (different from cdist)
+**Missing (LOW priority):**
+- `cKDTree` (C-accelerated KDTree variant, already fast in Rust)
+- `Rectangle`, `HalfspaceIntersection`
+- `QhullError` exception hierarchy
 
 ## Packet Readiness Snapshot
 
@@ -154,11 +152,10 @@ All top 10 previously-listed functions are now IMPLEMENTED:
 10. ~~**`scipy.stats.ks_1samp`** + `ks_2samp`~~ ✓ DONE
 
 **Remaining V1 Priorities (lower impact):**
-1. `scipy.special.spherical_jn/yn` — spherical Bessel functions
-2. `scipy.interpolate.RBFInterpolator` — radial basis interpolation
-3. `scipy.signal.lti`/`dlti` class — LTI system representation
-4. `scipy.sparse.expm` — sparse matrix exponential
-5. `scipy.linalg.qz` — generalized Schur decomposition
+1. ~~`scipy.special.spherical_jn/yn` — spherical Bessel functions~~ ✓ DONE (also spherical_in, spherical_kn)
+2. ~~`scipy.interpolate.RBFInterpolator` — radial basis interpolation~~ ✓ DONE
+3. `scipy.signal.lti`/`dlti` class — LTI system representation (remaining gap)
+4. ~~`scipy.linalg.qz` — generalized Schur decomposition~~ ✓ DONE
 
 ## Required Evidence Per Feature Family
 

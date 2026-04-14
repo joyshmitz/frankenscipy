@@ -75,6 +75,42 @@
       }
     },
     {
+      "case_id": "fft_forward_dc_5pt",
+      "category": "fft",
+      "mode": "Strict",
+      "transform": "fft",
+      "normalization": "forward",
+      "real_input": null,
+      "complex_input": [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "fft_forward_impulse_5pt",
+      "category": "fft",
+      "mode": "Strict",
+      "transform": "fft",
+      "normalization": "forward",
+      "real_input": null,
+      "complex_input": [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[0.2, 0.0], [0.2, 0.0], [0.2, 0.0], [0.2, 0.0], [0.2, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
       "case_id": "ifft_dc_4pt",
       "category": "ifft",
       "mode": "Strict",
@@ -165,6 +201,24 @@
       }
     },
     {
+      "case_id": "rfft_forward_impulse_5pt",
+      "category": "rfft",
+      "mode": "Strict",
+      "transform": "rfft",
+      "normalization": "forward",
+      "real_input": [1.0, 0.0, 0.0, 0.0, 0.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "complex_vector",
+        "values": [[0.2, 0.0], [0.2, 0.0], [0.2, 0.0]],
+        "atol": 1e-12,
+        "rtol": 1e-10
+      }
+    },
+    {
       "case_id": "rfft_ortho_impulse_4pt",
       "category": "rfft",
       "mode": "Strict",
@@ -219,6 +273,24 @@
       }
     },
     {
+      "case_id": "fftfreq_1pt",
+      "category": "fftfreq",
+      "mode": "Strict",
+      "transform": "fftfreq",
+      "normalization": null,
+      "real_input": [0.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": 1.0,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [0.0],
+        "atol": 1e-15,
+        "rtol": 1e-15
+      }
+    },
+    {
       "case_id": "fftfreq_5pt",
       "category": "fftfreq",
       "mode": "Strict",
@@ -250,6 +322,24 @@
       "expected": {
         "kind": "real_vector",
         "values": [0.0, 0.25, 0.5],
+        "atol": 1e-15,
+        "rtol": 1e-15
+      }
+    },
+    {
+      "case_id": "rfftfreq_1pt",
+      "category": "rfftfreq",
+      "mode": "Strict",
+      "transform": "rfftfreq",
+      "normalization": null,
+      "real_input": [0.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": 1.0,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [0.0],
         "atol": 1e-15,
         "rtol": 1e-15
       }

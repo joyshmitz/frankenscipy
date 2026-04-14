@@ -2712,6 +2712,372 @@ pub fn run_cluster_packet(
     ))
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Spatial Conformance Harness
+// ══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct SpatialPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<SpatialCase>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SpatialCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: String,
+    pub function: String,
+    pub args: Vec<serde_json::Value>,
+    pub expected: SpatialExpected,
+}
+
+impl SpatialCase {
+    pub fn case_id(&self) -> &str {
+        &self.case_id
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SpatialExpected {
+    pub kind: String,
+    pub value: Option<serde_json::Value>,
+    pub index: Option<usize>,
+    pub distance: Option<f64>,
+    pub vertices: Option<Vec<usize>>,
+    pub area: Option<f64>,
+    pub disparity: Option<f64>,
+    pub atol: Option<f64>,
+    pub rtol: Option<f64>,
+    #[serde(default)]
+    pub contract_ref: String,
+}
+
+#[derive(Debug)]
+enum SpatialObserved {
+    Scalar(f64),
+    Array1D(Vec<f64>),
+    Array2D(Vec<Vec<f64>>),
+    KdTreeQuery { index: usize, distance: f64 },
+    ConvexHull { vertices: Vec<usize>, area: f64 },
+    Procrustes { disparity: f64 },
+    Error(String),
+}
+
+fn execute_spatial_case(case: &SpatialCase) -> SpatialObserved {
+    match case.function.as_str() {
+        "euclidean" | "cityblock" | "chebyshev" | "cosine" | "correlation" => {
+            execute_distance_metric(case)
+        }
+        "pdist" => execute_pdist(case),
+        "cdist" => execute_cdist(case),
+        "squareform_to_matrix" => execute_squareform_to_matrix(case),
+        "kdtree_query" => execute_kdtree_query(case),
+        "directed_hausdorff" => execute_directed_hausdorff(case),
+        "convex_hull" => execute_convex_hull(case),
+        "procrustes" => execute_procrustes(case),
+        "geometric_slerp" => execute_geometric_slerp(case),
+        _ => SpatialObserved::Error(format!("unknown function: {}", case.function)),
+    }
+}
+
+fn execute_distance_metric(case: &SpatialCase) -> SpatialObserved {
+    let a: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse a: {e}")),
+    };
+    let b: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse b: {e}")),
+    };
+    let result = match case.function.as_str() {
+        "euclidean" => fsci_spatial::euclidean(&a, &b),
+        "cityblock" => fsci_spatial::cityblock(&a, &b),
+        "chebyshev" => fsci_spatial::chebyshev(&a, &b),
+        "cosine" => fsci_spatial::cosine(&a, &b),
+        "correlation" => fsci_spatial::correlation(&a, &b),
+        _ => return SpatialObserved::Error(format!("unknown metric: {}", case.function)),
+    };
+    SpatialObserved::Scalar(result)
+}
+
+fn execute_pdist(case: &SpatialCase) -> SpatialObserved {
+    let data: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data: {e}")),
+    };
+    let metric_str: String = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse metric: {e}")),
+    };
+    let metric = match metric_str.as_str() {
+        "euclidean" => fsci_spatial::DistanceMetric::Euclidean,
+        "cityblock" => fsci_spatial::DistanceMetric::Cityblock,
+        "chebyshev" => fsci_spatial::DistanceMetric::Chebyshev,
+        "cosine" => fsci_spatial::DistanceMetric::Cosine,
+        "correlation" => fsci_spatial::DistanceMetric::Correlation,
+        _ => return SpatialObserved::Error(format!("unknown metric: {metric_str}")),
+    };
+    match fsci_spatial::pdist(&data, metric) {
+        Ok(d) => SpatialObserved::Array1D(d),
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_cdist(case: &SpatialCase) -> SpatialObserved {
+    let xa: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse xa: {e}")),
+    };
+    let xb: Vec<Vec<f64>> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse xb: {e}")),
+    };
+    let metric_str: String = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse metric: {e}")),
+    };
+    let metric = match metric_str.as_str() {
+        "euclidean" => fsci_spatial::DistanceMetric::Euclidean,
+        "cityblock" => fsci_spatial::DistanceMetric::Cityblock,
+        "chebyshev" => fsci_spatial::DistanceMetric::Chebyshev,
+        "cosine" => fsci_spatial::DistanceMetric::Cosine,
+        "correlation" => fsci_spatial::DistanceMetric::Correlation,
+        _ => return SpatialObserved::Error(format!("unknown metric: {metric_str}")),
+    };
+    match fsci_spatial::cdist_metric(&xa, &xb, metric) {
+        Ok(d) => SpatialObserved::Array2D(d),
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_squareform_to_matrix(case: &SpatialCase) -> SpatialObserved {
+    let condensed: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse condensed: {e}")),
+    };
+    match fsci_spatial::squareform_to_matrix(&condensed) {
+        Ok(m) => SpatialObserved::Array2D(m),
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_kdtree_query(case: &SpatialCase) -> SpatialObserved {
+    let data: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data: {e}")),
+    };
+    let query: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse query: {e}")),
+    };
+    let tree = match fsci_spatial::KDTree::new(&data) {
+        Ok(t) => t,
+        Err(e) => return SpatialObserved::Error(format!("build tree: {e:?}")),
+    };
+    match tree.query(&query) {
+        Ok((index, distance)) => SpatialObserved::KdTreeQuery { index, distance },
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_directed_hausdorff(case: &SpatialCase) -> SpatialObserved {
+    let xa: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse xa: {e}")),
+    };
+    let xb: Vec<Vec<f64>> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse xb: {e}")),
+    };
+    match fsci_spatial::directed_hausdorff(&xa, &xb) {
+        Ok(d) => SpatialObserved::Scalar(d),
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_convex_hull(case: &SpatialCase) -> SpatialObserved {
+    let points: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse points: {e}")),
+    };
+    let points_2d: Vec<(f64, f64)> = points.iter().map(|p| (p[0], p[1])).collect();
+    match fsci_spatial::ConvexHull::new(&points_2d) {
+        Ok(hull) => {
+            let mut vertices = hull.vertices.clone();
+            vertices.sort();
+            SpatialObserved::ConvexHull {
+                vertices,
+                area: hull.area,
+            }
+        }
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_procrustes(case: &SpatialCase) -> SpatialObserved {
+    let data1: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data1: {e}")),
+    };
+    let data2: Vec<Vec<f64>> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data2: {e}")),
+    };
+    match fsci_spatial::procrustes(&data1, &data2) {
+        Ok(result) => SpatialObserved::Procrustes {
+            disparity: result.disparity,
+        },
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_geometric_slerp(case: &SpatialCase) -> SpatialObserved {
+    let start: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse start: {e}")),
+    };
+    let end: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse end: {e}")),
+    };
+    let t_values: Vec<f64> = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse t_values: {e}")),
+    };
+    match fsci_spatial::geometric_slerp(&start, &end, &t_values) {
+        Ok(result) => SpatialObserved::Array2D(result),
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (bool, String) {
+    let atol = case.expected.atol.unwrap_or(1e-10);
+    let rtol = case.expected.rtol.unwrap_or(1e-10);
+
+    match (case.expected.kind.as_str(), observed) {
+        ("scalar", SpatialObserved::Scalar(got)) => {
+            let expected = case.expected.value.as_ref().and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let diff = (got - expected).abs();
+            let tol = atol + rtol * expected.abs();
+            if diff <= tol {
+                (true, format!("scalar match: {got}"))
+            } else {
+                (false, format!("scalar mismatch: got {got}, expected {expected}, diff {diff}"))
+            }
+        }
+        ("array", SpatialObserved::Array1D(got)) => {
+            let expected: Vec<f64> = case.expected.value.as_ref()
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            if got.len() != expected.len() {
+                return (false, format!("length mismatch: got {}, expected {}", got.len(), expected.len()));
+            }
+            for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
+                let diff = (g - e).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("array[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            (true, format!("array match ({} elements)", got.len()))
+        }
+        ("matrix", SpatialObserved::Array2D(got)) => {
+            let expected: Vec<Vec<f64>> = case.expected.value.as_ref()
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            if got.len() != expected.len() {
+                return (false, format!("row count mismatch: got {}, expected {}", got.len(), expected.len()));
+            }
+            for (i, (grow, erow)) in got.iter().zip(expected.iter()).enumerate() {
+                if grow.len() != erow.len() {
+                    return (false, format!("row[{i}] length mismatch"));
+                }
+                for (j, (&g, &e)) in grow.iter().zip(erow.iter()).enumerate() {
+                    let diff = (g - e).abs();
+                    let tol = atol + rtol * e.abs();
+                    if diff > tol {
+                        return (false, format!("matrix[{i}][{j}] mismatch: got {g}, expected {e}"));
+                    }
+                }
+            }
+            (true, format!("matrix match ({}x{})", got.len(), got.first().map_or(0, |r| r.len())))
+        }
+        ("kdtree_query_result", SpatialObserved::KdTreeQuery { index, distance }) => {
+            let exp_idx = case.expected.index.unwrap_or(usize::MAX);
+            let exp_dist = case.expected.distance.unwrap_or(0.0);
+            if *index != exp_idx {
+                return (false, format!("index mismatch: got {index}, expected {exp_idx}"));
+            }
+            let diff = (distance - exp_dist).abs();
+            let tol = atol + rtol * exp_dist.abs();
+            if diff > tol {
+                return (false, format!("distance mismatch: got {distance}, expected {exp_dist}"));
+            }
+            (true, format!("kdtree query match: idx={index}, dist={distance}"))
+        }
+        ("convex_hull", SpatialObserved::ConvexHull { vertices, area }) => {
+            let exp_vertices = case.expected.vertices.as_ref().cloned().unwrap_or_default();
+            let exp_area = case.expected.area.unwrap_or(0.0);
+            if *vertices != exp_vertices {
+                return (false, format!("vertices mismatch: got {vertices:?}, expected {exp_vertices:?}"));
+            }
+            let diff = (area - exp_area).abs();
+            let tol = atol + rtol * exp_area.abs();
+            if diff > tol {
+                return (false, format!("area mismatch: got {area}, expected {exp_area}"));
+            }
+            (true, format!("convex hull match: vertices={vertices:?}, area={area}"))
+        }
+        ("procrustes_result", SpatialObserved::Procrustes { disparity }) => {
+            let exp_disparity = case.expected.disparity.unwrap_or(0.0);
+            let diff = (disparity - exp_disparity).abs();
+            let tol = atol + rtol * exp_disparity.abs();
+            if diff > tol {
+                return (false, format!("disparity mismatch: got {disparity}, expected {exp_disparity}"));
+            }
+            (true, format!("procrustes match: disparity={disparity}"))
+        }
+        (_, SpatialObserved::Error(e)) => (false, format!("execution error: {e}")),
+        (kind, obs) => (false, format!("type mismatch: expected {kind}, got {obs:?}")),
+    }
+}
+
+/// Run the spatial conformance packet.
+pub fn run_spatial_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: SpatialPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_spatial_case(case);
+        let (passed, message) = compare_spatial_outcome(case, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
 pub fn run_linalg_packet_with_oracle_capture(
     config: &HarnessConfig,
     fixture_name: &str,
@@ -5662,11 +6028,13 @@ pub enum PacketFamily {
     RuntimeCasp,
     /// P2C-009: Cluster analysis (linkage, vq, metrics)
     Cluster,
+    /// P2C-010: Spatial algorithms and distance metrics
+    Spatial,
 }
 
 impl PacketFamily {
     /// All known packet families for enumeration.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::ValidateTol,
         Self::LinalgCore,
         Self::Optimize,
@@ -5676,6 +6044,7 @@ impl PacketFamily {
         Self::ArrayApi,
         Self::RuntimeCasp,
         Self::Cluster,
+        Self::Spatial,
     ];
 
     /// Canonical packet ID for this family (e.g., "FSCI-P2C-001").
@@ -5691,6 +6060,7 @@ impl PacketFamily {
             Self::ArrayApi => "FSCI-P2C-007",
             Self::RuntimeCasp => "FSCI-P2C-008",
             Self::Cluster => "FSCI-P2C-009",
+            Self::Spatial => "FSCI-P2C-010",
         }
     }
 
@@ -5707,6 +6077,7 @@ impl PacketFamily {
             Self::ArrayApi => "array_api",
             Self::RuntimeCasp => "runtime_casp",
             Self::Cluster => "cluster_core",
+            Self::Spatial => "spatial_core",
         }
     }
 
@@ -5731,6 +6102,8 @@ impl PacketFamily {
             Some(Self::RuntimeCasp)
         } else if s.contains("cluster") {
             Some(Self::Cluster)
+        } else if s.contains("spatial") {
+            Some(Self::Spatial)
         } else {
             None
         }
@@ -5750,6 +6123,7 @@ impl PacketFamily {
                 | Self::ArrayApi
                 | Self::RuntimeCasp
                 | Self::Cluster
+                | Self::Spatial
         )
     }
 
@@ -5866,6 +6240,7 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
             PacketFamily::ArrayApi => run_array_api_packet(config, fixture_name)?,
             PacketFamily::RuntimeCasp => run_casp_packet(config, fixture_name)?,
             PacketFamily::Cluster => run_cluster_packet(config, fixture_name)?,
+            PacketFamily::Spatial => run_spatial_packet(config, fixture_name)?,
         };
         reports.push(report);
     }
@@ -5885,7 +6260,7 @@ mod tests {
         load_oracle_capture, run_array_api_packet, run_casp_packet, run_cluster_packet,
         run_differential_test, run_fft_packet, run_linalg_packet,
         run_linalg_packet_with_oracle_capture, run_optimize_packet, run_smoke, run_sparse_packet,
-        run_special_packet, run_validate_tol_packet, write_parity_artifacts,
+        run_spatial_packet, run_special_packet, run_validate_tol_packet, write_parity_artifacts,
     };
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
@@ -6500,6 +6875,29 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn spatial_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_spatial_packet(&cfg, "FSCI-P2C-010_spatial_core.json")
+            .expect("spatial packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one spatial test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("spatial parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
     fn differential_test_optimize_fixture() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root
@@ -6864,8 +7262,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn packet_family_all_has_8_entries() {
-        assert_eq!(PacketFamily::ALL.len(), 8);
+    fn packet_family_all_has_10_entries() {
+        assert_eq!(PacketFamily::ALL.len(), 10);
     }
 
     #[test]

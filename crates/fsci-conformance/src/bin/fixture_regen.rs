@@ -195,9 +195,7 @@ fn main() {
 
         if oracle_output.status == "ok" {
             if expected_kind == "error" {
-                eprintln!(
-                    "  WARN {case_id}: oracle succeeded but fixture expects error; skipping"
-                );
+                eprintln!("  WARN {case_id}: oracle succeeded but fixture expects error; skipping");
                 skipped_count += 1;
                 continue;
             }

@@ -1,0 +1,446 @@
+{
+  "packet_id": "FSCI-P2C-010",
+  "family": "spatial_core",
+  "cases": [
+    {
+      "case_id": "pdist_euclidean_3pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "pdist",
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0
+          ]
+        ],
+        "euclidean"
+      ],
+      "expected": {
+        "kind": "array",
+        "value": [
+          1.0,
+          1.0,
+          1.4142135623730951
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::pdist"
+      }
+    },
+    {
+      "case_id": "cdist_euclidean_2x2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cdist",
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            0.0
+          ]
+        ],
+        [
+          [
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            1.0
+          ]
+        ],
+        "euclidean"
+      ],
+      "expected": {
+        "kind": "matrix",
+        "value": [
+          [
+            1.0,
+            1.4142135623730951
+          ],
+          [
+            1.4142135623730951,
+            1.0
+          ]
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::cdist"
+      }
+    },
+    {
+      "case_id": "squareform_to_matrix",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "squareform_to_matrix",
+      "args": [
+        [
+          1.0,
+          2.0,
+          3.0
+        ]
+      ],
+      "expected": {
+        "kind": "matrix",
+        "value": [
+          [
+            0.0,
+            1.0,
+            2.0
+          ],
+          [
+            1.0,
+            0.0,
+            3.0
+          ],
+          [
+            2.0,
+            3.0,
+            0.0
+          ]
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::squareform_to_matrix"
+      }
+    },
+    {
+      "case_id": "kdtree_query_nearest",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kdtree_query",
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            1.0
+          ]
+        ],
+        [
+          0.6,
+          0.6
+        ]
+      ],
+      "expected": {
+        "kind": "kdtree_query_result",
+        "index": 3,
+        "distance": 0.5656854249492381,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::KDTree::query"
+      }
+    },
+    {
+      "case_id": "directed_hausdorff_basic",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "directed_hausdorff",
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            0.0
+          ]
+        ],
+        [
+          [
+            0.0,
+            2.0
+          ],
+          [
+            1.0,
+            2.0
+          ]
+        ]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::directed_hausdorff"
+      }
+    },
+    {
+      "case_id": "convex_hull_with_interior",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "convex_hull",
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            0.0
+          ],
+          [
+            1.0,
+            1.0
+          ],
+          [
+            0.0,
+            1.0
+          ],
+          [
+            0.5,
+            0.5
+          ]
+        ]
+      ],
+      "expected": {
+        "kind": "convex_hull",
+        "vertices": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "area": 1.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::ConvexHull"
+      }
+    },
+    {
+      "case_id": "procrustes_scaled",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "procrustes",
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0
+          ]
+        ],
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            2.0,
+            0.0
+          ],
+          [
+            0.0,
+            2.0
+          ]
+        ]
+      ],
+      "expected": {
+        "kind": "procrustes_result",
+        "disparity": 6.347865096700329e-31,
+        "atol": 1e-06,
+        "rtol": 1e-06,
+        "contract_ref": "fsci_spatial::procrustes"
+      }
+    },
+    {
+      "case_id": "geometric_slerp_2d",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "geometric_slerp",
+      "args": [
+        [
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          0.5,
+          1.0
+        ]
+      ],
+      "expected": {
+        "kind": "matrix",
+        "value": [
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.7071067811865476,
+            0.7071067811865475
+          ],
+          [
+            6.123233995736766e-17,
+            1.0
+          ]
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::geometric_slerp"
+      }
+    },
+    {
+      "case_id": "distance_euclidean",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "euclidean",
+      "args": [
+        [
+          1.0,
+          2.0,
+          3.0
+        ],
+        [
+          4.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 4.123105625617661,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::euclidean"
+      }
+    },
+    {
+      "case_id": "distance_cityblock",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cityblock",
+      "args": [
+        [
+          1.0,
+          2.0,
+          3.0
+        ],
+        [
+          4.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 7.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::cityblock"
+      }
+    },
+    {
+      "case_id": "distance_chebyshev",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "chebyshev",
+      "args": [
+        [
+          1.0,
+          2.0,
+          3.0
+        ],
+        [
+          4.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::chebyshev"
+      }
+    },
+    {
+      "case_id": "distance_cosine",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cosine",
+      "args": [
+        [
+          1.0,
+          2.0,
+          3.0
+        ],
+        [
+          4.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5462573935134849,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::cosine"
+      }
+    },
+    {
+      "case_id": "distance_correlation",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "correlation",
+      "args": [
+        [
+          1.0,
+          2.0,
+          3.0
+        ],
+        [
+          4.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.7205766921228922,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::correlation"
+      }
+    }
+  ]
+}
