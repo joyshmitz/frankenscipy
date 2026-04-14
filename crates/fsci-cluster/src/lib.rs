@@ -62,6 +62,7 @@ pub fn kmeans(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
+    let d = validate_feature_dimensions(data, "kmeans")?;
     if data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "kmeans input must be finite".to_string(),
@@ -72,7 +73,6 @@ pub fn kmeans(
             "k={k} must be in [1, n={n}]"
         )));
     }
-    let d = data[0].len();
 
     // K-means++ initialization
     let mut centroids = kmeans_plusplus_init(data, k, seed);
@@ -201,12 +201,22 @@ pub fn mini_batch_kmeans(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
+    let d = validate_feature_dimensions(data, "mini_batch_kmeans")?;
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "mini_batch_kmeans input must be finite".to_string(),
+        ));
+    }
     if k == 0 || k > n {
         return Err(ClusterError::InvalidArgument(format!(
             "k={k} must be in [1, n={n}]"
         )));
     }
-    let d = data[0].len();
+    if batch_size == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "batch_size must be at least 1".to_string(),
+        ));
+    }
     let batch = batch_size.min(n);
 
     let mut centroids = kmeans_plusplus_init(data, k, seed);
@@ -276,7 +286,29 @@ pub fn mini_batch_kmeans(
 /// Vector quantization: assign each observation to the nearest centroid.
 ///
 /// Matches `scipy.cluster.vq.vq`.
-pub fn vq(data: &[Vec<f64>], centroids: &[Vec<f64>]) -> (Vec<usize>, Vec<f64>) {
+pub fn vq(
+    data: &[Vec<f64>],
+    centroids: &[Vec<f64>],
+) -> Result<(Vec<usize>, Vec<f64>), ClusterError> {
+    if data.is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    if centroids.is_empty() {
+        return Err(ClusterError::InvalidArgument(
+            "vq requires at least one centroid".to_string(),
+        ));
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "vq data must be finite".to_string(),
+        ));
+    }
+    if centroids.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "vq centroids must be finite".to_string(),
+        ));
+    }
+
     let mut labels = Vec::with_capacity(data.len());
     let mut dists = Vec::with_capacity(data.len());
 
@@ -294,15 +326,20 @@ pub fn vq(data: &[Vec<f64>], centroids: &[Vec<f64>]) -> (Vec<usize>, Vec<f64>) {
         dists.push(min_dist);
     }
 
-    (labels, dists)
+    Ok((labels, dists))
 }
 
 /// Whiten observations by dividing by per-feature standard deviation.
 ///
 /// Matches `scipy.cluster.vq.whiten`.
-pub fn whiten(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
+pub fn whiten(data: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, ClusterError> {
     if data.is_empty() {
-        return vec![];
+        return Ok(vec![]);
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "whiten input must be finite".to_string(),
+        ));
     }
     let n = data.len();
     let d = data[0].len();
@@ -327,7 +364,8 @@ pub fn whiten(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
 
     let stds: Vec<f64> = vars.iter().map(|&v| (v / n as f64).sqrt()).collect();
 
-    data.iter()
+    Ok(data
+        .iter()
         .map(|point| {
             point
                 .iter()
@@ -335,7 +373,7 @@ pub fn whiten(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
                 .map(|(&v, &s)| if s > 0.0 { v / s } else { v })
                 .collect()
         })
-        .collect()
+        .collect())
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -616,6 +654,16 @@ pub fn dbscan(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
+    if !eps.is_finite() || eps <= 0.0 {
+        return Err(ClusterError::InvalidArgument(
+            "eps must be finite and positive".to_string(),
+        ));
+    }
+    if min_samples == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "min_samples must be at least 1".to_string(),
+        ));
+    }
     if data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "dbscan input must be finite".to_string(),
@@ -688,6 +736,28 @@ pub fn dbscan(
 // ══════════════════════════════════════════════════════════════════════
 // Helpers
 // ══════════════════════════════════════════════════════════════════════
+
+fn validate_feature_dimensions(
+    data: &[Vec<f64>],
+    context: &str,
+) -> Result<usize, ClusterError> {
+    let first = data.first().ok_or(ClusterError::EmptyData)?;
+    let d = first.len();
+    if d == 0 {
+        return Err(ClusterError::InvalidArgument(format!(
+            "{context} input must have at least one feature"
+        )));
+    }
+    for (i, row) in data.iter().enumerate() {
+        if row.len() != d {
+            return Err(ClusterError::InvalidArgument(format!(
+                "{context} input rows must have consistent length; row 0 has {d} but row {i} has {}",
+                row.len()
+            )));
+        }
+    }
+    Ok(d)
+}
 
 fn sq_dist(a: &[f64], b: &[f64]) -> f64 {
     a.iter()
@@ -1658,10 +1728,24 @@ mod tests {
     }
 
     #[test]
+    fn kmeans_rejects_ragged_input() {
+        let data = vec![vec![1.0, 2.0], vec![3.0]];
+        let err = kmeans(&data, 1, 10, 42).expect_err("ragged input");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn mini_batch_kmeans_rejects_ragged_input() {
+        let data = vec![vec![1.0, 2.0], vec![3.0]];
+        let err = mini_batch_kmeans(&data, 1, 5, 1, 7).expect_err("ragged input");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
     fn vq_assigns_nearest() {
         let centroids = vec![vec![0.0, 0.0], vec![10.0, 10.0]];
         let data = vec![vec![1.0, 1.0], vec![9.0, 9.0]];
-        let (labels, dists) = vq(&data, &centroids);
+        let (labels, dists) = vq(&data, &centroids).unwrap();
         assert_eq!(labels[0], 0);
         assert_eq!(labels[1], 1);
         assert!(dists[0] < 2.0);
@@ -1670,7 +1754,7 @@ mod tests {
     #[test]
     fn whiten_normalizes_std() {
         let data = vec![vec![1.0, 100.0], vec![2.0, 200.0], vec![3.0, 300.0]];
-        let whitened = whiten(&data);
+        let whitened = whiten(&data).unwrap();
         // After whitening, std of each column should be ~1
         let n = whitened.len() as f64;
         for col in 0..2 {
@@ -1864,6 +1948,72 @@ mod tests {
         ];
         let result = dbscan(&data, 0.5, 2).unwrap();
         assert_eq!(result.labels[3], -1); // should be noise
+    }
+
+    #[test]
+    fn dbscan_rejects_zero_eps() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let err = dbscan(&data, 0.0, 2).expect_err("should reject zero eps");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn dbscan_rejects_negative_eps() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let err = dbscan(&data, -1.0, 2).expect_err("should reject negative eps");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn dbscan_rejects_nan_eps() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let err = dbscan(&data, f64::NAN, 2).expect_err("should reject NaN eps");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn dbscan_rejects_zero_min_samples() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let err = dbscan(&data, 0.5, 0).expect_err("should reject zero min_samples");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn vq_rejects_nan_data() {
+        let data = vec![vec![f64::NAN, 0.0]];
+        let centroids = vec![vec![0.0, 0.0]];
+        let err = vq(&data, &centroids).expect_err("should reject NaN data");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn vq_rejects_nan_centroids() {
+        let data = vec![vec![0.0, 0.0]];
+        let centroids = vec![vec![f64::NAN, 0.0]];
+        let err = vq(&data, &centroids).expect_err("should reject NaN centroids");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn vq_rejects_empty_centroids() {
+        let data = vec![vec![0.0, 0.0]];
+        let centroids: Vec<Vec<f64>> = vec![];
+        let err = vq(&data, &centroids).expect_err("should reject empty centroids");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn whiten_rejects_nan_input() {
+        let data = vec![vec![1.0, f64::NAN]];
+        let err = whiten(&data).expect_err("should reject NaN input");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn whiten_rejects_inf_input() {
+        let data = vec![vec![f64::INFINITY, 1.0]];
+        let err = whiten(&data).expect_err("should reject Inf input");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 
     #[test]
