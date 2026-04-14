@@ -772,7 +772,7 @@ fn sq_dist(a: &[f64], b: &[f64]) -> f64 {
 /// Matches `sklearn.metrics.silhouette_score`.
 pub fn silhouette_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
     let n = data.len();
-    if n < 2 {
+    if n < 2 || labels.len() != n {
         return 0.0;
     }
 
@@ -832,7 +832,7 @@ pub fn silhouette_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
 /// Higher is better. Matches `sklearn.metrics.calinski_harabasz_score`.
 pub fn calinski_harabasz_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
     let n = data.len();
-    if n < 2 {
+    if n < 2 || labels.len() != n {
         return 0.0;
     }
     let d = data[0].len();
@@ -894,7 +894,7 @@ pub fn calinski_harabasz_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
 /// Lower is better. Matches `sklearn.metrics.davies_bouldin_score`.
 pub fn davies_bouldin_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
     let n = data.len();
-    if n < 2 {
+    if n < 2 || labels.len() != n {
         return 0.0;
     }
     let d = data[0].len();
@@ -1193,6 +1193,11 @@ pub fn mean_shift(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
+    if !bandwidth.is_finite() || bandwidth <= 0.0 {
+        return Err(ClusterError::InvalidArgument(
+            "bandwidth must be finite and positive".to_string(),
+        ));
+    }
     if data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "mean_shift input must be finite".to_string(),
@@ -1478,7 +1483,7 @@ fn bron_kerbosch(
 /// Matches `sklearn.metrics.silhouette_samples`.
 pub fn silhouette_samples(data: &[Vec<f64>], labels: &[usize]) -> Vec<f64> {
     let n = data.len();
-    if n < 2 {
+    if n < 2 || labels.len() != n {
         return vec![0.0; n];
     }
     let k = labels.iter().cloned().max().unwrap_or(0) + 1;
@@ -2037,5 +2042,58 @@ mod tests {
         assert_eq!(d.len(), 3); // C(3,2)
         // cophenetic distance between 0 and 1 = merge distance = 1.0
         assert!((d[0] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn silhouette_handles_length_mismatch() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let labels = vec![0, 0]; // too short
+        let score = silhouette_score(&data, &labels);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn calinski_harabasz_handles_length_mismatch() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let labels = vec![0, 0]; // too short
+        let score = calinski_harabasz_score(&data, &labels);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn davies_bouldin_handles_length_mismatch() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let labels = vec![0, 0]; // too short
+        let score = davies_bouldin_score(&data, &labels);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn silhouette_samples_handles_length_mismatch() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let labels = vec![0, 0]; // too short
+        let samples = silhouette_samples(&data, &labels);
+        assert_eq!(samples, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn mean_shift_rejects_zero_bandwidth() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let err = mean_shift(&data, 0.0, 10).expect_err("should reject zero bandwidth");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn mean_shift_rejects_negative_bandwidth() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let err = mean_shift(&data, -1.0, 10).expect_err("should reject negative bandwidth");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn mean_shift_rejects_nan_bandwidth() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let err = mean_shift(&data, f64::NAN, 10).expect_err("should reject NaN bandwidth");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 }
