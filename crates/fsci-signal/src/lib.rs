@@ -4189,7 +4189,9 @@ pub fn freqz(b: &[f64], a: &[f64], n_freqs: Option<usize>) -> Result<FreqzResult
     let mut h_phase = Vec::with_capacity(n);
 
     for i in 0..n {
-        let omega = std::f64::consts::PI * i as f64 / (n - 1).max(1) as f64;
+        // scipy uses endpoint=False: w = np.linspace(0, pi, n, endpoint=False)
+        // so w[i] = i * pi / n, not i * pi / (n-1)
+        let omega = std::f64::consts::PI * i as f64 / n as f64;
         w.push(omega);
 
         // Evaluate B(e^{jω}) and A(e^{jω}) using Horner's method
@@ -4238,7 +4240,8 @@ pub fn freqz_sos(sos: &[SosSection], n_freqs: Option<usize>) -> Result<FreqzResu
     let mut h_phase = Vec::with_capacity(n);
 
     for i in 0..n {
-        let omega = std::f64::consts::PI * i as f64 / (n - 1).max(1) as f64;
+        // Match scipy endpoint=False: w[i] = i * pi / n
+        let omega = std::f64::consts::PI * i as f64 / n as f64;
         w.push(omega);
 
         // Multiply frequency responses of each section
@@ -4360,7 +4363,8 @@ pub fn group_delay(
     let mut gd_out = Vec::with_capacity(n);
 
     for i in 0..n {
-        let omega = std::f64::consts::PI * i as f64 / (n - 1).max(1) as f64;
+        // Match scipy endpoint=False: w[i] = i * pi / n
+        let omega = std::f64::consts::PI * i as f64 / n as f64;
         w_out.push(omega);
         gd_out.push(group_delay_at_frequency(b, a, omega));
     }

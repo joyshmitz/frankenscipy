@@ -3078,6 +3078,412 @@ pub fn run_spatial_packet(
     ))
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Signal Conformance Harness
+// ══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct SignalPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<SignalCase>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SignalCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: String,
+    pub function: String,
+    pub args: Vec<serde_json::Value>,
+    pub expected: SignalExpected,
+}
+
+impl SignalCase {
+    pub fn case_id(&self) -> &str {
+        &self.case_id
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SignalExpected {
+    pub kind: String,
+    pub value: Option<Vec<f64>>,
+    pub b: Option<Vec<f64>>,
+    pub a: Option<Vec<f64>>,
+    pub w: Option<Vec<f64>>,
+    pub h_mag: Option<Vec<f64>>,
+    pub h_phase: Option<Vec<f64>>,
+    pub real: Option<Vec<f64>>,
+    pub imag: Option<Vec<f64>>,
+    pub atol: Option<f64>,
+    pub rtol: Option<f64>,
+    #[serde(default)]
+    pub contract_ref: String,
+}
+
+#[derive(Debug)]
+enum SignalObserved {
+    Array(Vec<f64>),
+    Indices(Vec<usize>),
+    IirCoeffs { b: Vec<f64>, a: Vec<f64> },
+    Freqz { w: Vec<f64>, h_mag: Vec<f64>, h_phase: Vec<f64> },
+    ComplexArray { real: Vec<f64>, imag: Vec<f64> },
+    Error(String),
+}
+
+fn execute_signal_case(case: &SignalCase) -> SignalObserved {
+    match case.function.as_str() {
+        "savgol_filter" => execute_savgol_filter(case),
+        "hann" | "hamming" | "blackman" => execute_window(case),
+        "kaiser" => execute_kaiser(case),
+        "convolve" => execute_convolve(case),
+        "correlate" => execute_correlate(case),
+        "find_peaks" => execute_find_peaks(case),
+        "butter" => execute_butter(case),
+        "freqz" => execute_freqz(case),
+        "hilbert" => execute_hilbert(case),
+        "detrend" => execute_detrend(case),
+        _ => SignalObserved::Error(format!("unknown function: {}", case.function)),
+    }
+}
+
+fn execute_savgol_filter(case: &SignalCase) -> SignalObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse x: {e}")),
+    };
+    let window_length: usize = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse window_length: {e}")),
+    };
+    let polyorder: usize = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse polyorder: {e}")),
+    };
+    match fsci_signal::savgol_filter(&x, window_length, polyorder) {
+        Ok(result) => SignalObserved::Array(result),
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_window(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let result = match case.function.as_str() {
+        "hann" => fsci_signal::hann(n),
+        "hamming" => fsci_signal::hamming(n),
+        "blackman" => fsci_signal::blackman(n),
+        _ => return SignalObserved::Error(format!("unknown window: {}", case.function)),
+    };
+    SignalObserved::Array(result)
+}
+
+fn execute_kaiser(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let beta: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse beta: {e}")),
+    };
+    SignalObserved::Array(fsci_signal::kaiser(n, beta))
+}
+
+fn execute_convolve(case: &SignalCase) -> SignalObserved {
+    let a: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse a: {e}")),
+    };
+    let b: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse b: {e}")),
+    };
+    let mode: String = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse mode: {e}")),
+    };
+    let conv_mode = match mode.as_str() {
+        "full" => fsci_signal::ConvolveMode::Full,
+        "same" => fsci_signal::ConvolveMode::Same,
+        "valid" => fsci_signal::ConvolveMode::Valid,
+        _ => return SignalObserved::Error(format!("unknown mode: {mode}")),
+    };
+    match fsci_signal::convolve(&a, &b, conv_mode) {
+        Ok(result) => SignalObserved::Array(result),
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_correlate(case: &SignalCase) -> SignalObserved {
+    let a: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse a: {e}")),
+    };
+    let b: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse b: {e}")),
+    };
+    let mode: String = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse mode: {e}")),
+    };
+    // correlate uses ConvolveMode, same as convolve
+    let corr_mode = match mode.as_str() {
+        "full" => fsci_signal::ConvolveMode::Full,
+        "same" => fsci_signal::ConvolveMode::Same,
+        "valid" => fsci_signal::ConvolveMode::Valid,
+        _ => return SignalObserved::Error(format!("unknown mode: {mode}")),
+    };
+    match fsci_signal::correlate(&a, &b, corr_mode) {
+        Ok(result) => SignalObserved::Array(result),
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_find_peaks(case: &SignalCase) -> SignalObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse x: {e}")),
+    };
+    let options = fsci_signal::FindPeaksOptions {
+        height: None,
+        distance: None,
+        prominence: None,
+        width: None,
+    };
+    let result = fsci_signal::find_peaks(&x, options);
+    SignalObserved::Indices(result.peaks)
+}
+
+fn execute_butter(case: &SignalCase) -> SignalObserved {
+    let order: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse order: {e}")),
+    };
+    let wn: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse wn: {e}")),
+    };
+    let btype: String = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse btype: {e}")),
+    };
+    let filter_type = match btype.as_str() {
+        "low" | "lowpass" => fsci_signal::FilterType::Lowpass,
+        "high" | "highpass" => fsci_signal::FilterType::Highpass,
+        "band" | "bandpass" => fsci_signal::FilterType::Bandpass,
+        "stop" | "bandstop" => fsci_signal::FilterType::Bandstop,
+        _ => return SignalObserved::Error(format!("unknown filter type: {btype}")),
+    };
+    match fsci_signal::butter(order, &[wn], filter_type) {
+        Ok(coeffs) => SignalObserved::IirCoeffs { b: coeffs.b, a: coeffs.a },
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_freqz(case: &SignalCase) -> SignalObserved {
+    let b: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse b: {e}")),
+    };
+    let a: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse a: {e}")),
+    };
+    let wor_n: usize = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse worN: {e}")),
+    };
+    match fsci_signal::freqz(&b, &a, Some(wor_n)) {
+        Ok(result) => SignalObserved::Freqz {
+            w: result.w,
+            h_mag: result.h_mag,
+            h_phase: result.h_phase,
+        },
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_hilbert(case: &SignalCase) -> SignalObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse x: {e}")),
+    };
+    match fsci_signal::hilbert(&x) {
+        Ok(result) => SignalObserved::ComplexArray {
+            real: result.iter().map(|c| c.0).collect(),
+            imag: result.iter().map(|c| c.1).collect(),
+        },
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_detrend(case: &SignalCase) -> SignalObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse x: {e}")),
+    };
+    let dtype: String = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse type: {e}")),
+    };
+    let detrend_type = match dtype.as_str() {
+        "linear" => fsci_signal::DetrendType::Linear,
+        "constant" => fsci_signal::DetrendType::Constant,
+        _ => return SignalObserved::Error(format!("unknown detrend type: {dtype}")),
+    };
+    match fsci_signal::detrend(&x, detrend_type) {
+        Ok(result) => SignalObserved::Array(result),
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool, String) {
+    let atol = case.expected.atol.unwrap_or(1e-10);
+    let rtol = case.expected.rtol.unwrap_or(1e-10);
+
+    match (case.expected.kind.as_str(), observed) {
+        ("array", SignalObserved::Array(got)) => {
+            let expected = case.expected.value.as_ref().cloned().unwrap_or_default();
+            if got.len() != expected.len() {
+                return (false, format!("length mismatch: got {}, expected {}", got.len(), expected.len()));
+            }
+            for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
+                let diff = (g - e).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("array[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            (true, format!("array match ({} elements)", got.len()))
+        }
+        ("indices", SignalObserved::Indices(got)) => {
+            let expected: Vec<usize> = case.expected.value.as_ref()
+                .map(|v| v.iter().map(|&x| x as usize).collect())
+                .unwrap_or_default();
+            if *got == expected {
+                (true, format!("indices match: {got:?}"))
+            } else {
+                (false, format!("indices mismatch: got {got:?}, expected {expected:?}"))
+            }
+        }
+        ("iir_coeffs", SignalObserved::IirCoeffs { b, a }) => {
+            let exp_b = case.expected.b.as_ref().cloned().unwrap_or_default();
+            let exp_a = case.expected.a.as_ref().cloned().unwrap_or_default();
+            if b.len() != exp_b.len() || a.len() != exp_a.len() {
+                return (false, format!("length mismatch: b({}/{}), a({}/{})", b.len(), exp_b.len(), a.len(), exp_a.len()));
+            }
+            for (i, (&g, &e)) in b.iter().zip(exp_b.iter()).enumerate() {
+                let diff = (g - e).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("b[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            for (i, (&g, &e)) in a.iter().zip(exp_a.iter()).enumerate() {
+                let diff = (g - e).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("a[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            (true, format!("iir coeffs match"))
+        }
+        ("freqz_result", SignalObserved::Freqz { w, h_mag, h_phase }) => {
+            let exp_w = case.expected.w.as_ref().cloned().unwrap_or_default();
+            let exp_h_mag = case.expected.h_mag.as_ref().cloned().unwrap_or_default();
+            let exp_h_phase = case.expected.h_phase.as_ref().cloned().unwrap_or_default();
+            if w.len() != exp_w.len() {
+                return (false, format!("w length mismatch: {}/{}", w.len(), exp_w.len()));
+            }
+            for (i, (&g, &e)) in w.iter().zip(exp_w.iter()).enumerate() {
+                let diff = (g - e).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("w[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            for (i, (&g, &e)) in h_mag.iter().zip(exp_h_mag.iter()).enumerate() {
+                let diff = (g - e).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("h_mag[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            for (i, (&g, &e)) in h_phase.iter().zip(exp_h_phase.iter()).enumerate() {
+                let diff = (g - e).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("h_phase[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            (true, format!("freqz match ({} points)", w.len()))
+        }
+        ("complex_array", SignalObserved::ComplexArray { real, imag }) => {
+            let exp_real = case.expected.real.as_ref().cloned().unwrap_or_default();
+            let exp_imag = case.expected.imag.as_ref().cloned().unwrap_or_default();
+            if real.len() != exp_real.len() {
+                return (false, format!("real length mismatch: {}/{}", real.len(), exp_real.len()));
+            }
+            for (i, (&g, &e)) in real.iter().zip(exp_real.iter()).enumerate() {
+                let diff = (g - e).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("real[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            for (i, (&g, &e)) in imag.iter().zip(exp_imag.iter()).enumerate() {
+                let diff = (g - e).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("imag[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            (true, format!("complex array match ({} elements)", real.len()))
+        }
+        (_, SignalObserved::Error(e)) => (false, format!("execution error: {e}")),
+        (kind, obs) => (false, format!("type mismatch: expected {kind}, got {obs:?}")),
+    }
+}
+
+/// Run the signal conformance packet.
+pub fn run_signal_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: SignalPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_signal_case(case);
+        let (passed, message) = compare_signal_outcome(case, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
 pub fn run_linalg_packet_with_oracle_capture(
     config: &HarnessConfig,
     fixture_name: &str,
@@ -6030,11 +6436,13 @@ pub enum PacketFamily {
     Cluster,
     /// P2C-010: Spatial algorithms and distance metrics
     Spatial,
+    /// P2C-011: Signal processing (filters, windows, transforms)
+    Signal,
 }
 
 impl PacketFamily {
     /// All known packet families for enumeration.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::ValidateTol,
         Self::LinalgCore,
         Self::Optimize,
@@ -6045,6 +6453,7 @@ impl PacketFamily {
         Self::RuntimeCasp,
         Self::Cluster,
         Self::Spatial,
+        Self::Signal,
     ];
 
     /// Canonical packet ID for this family (e.g., "FSCI-P2C-001").
@@ -6061,6 +6470,7 @@ impl PacketFamily {
             Self::RuntimeCasp => "FSCI-P2C-008",
             Self::Cluster => "FSCI-P2C-009",
             Self::Spatial => "FSCI-P2C-010",
+            Self::Signal => "FSCI-P2C-011",
         }
     }
 
@@ -6078,6 +6488,7 @@ impl PacketFamily {
             Self::RuntimeCasp => "runtime_casp",
             Self::Cluster => "cluster_core",
             Self::Spatial => "spatial_core",
+            Self::Signal => "signal_core",
         }
     }
 
@@ -6104,6 +6515,8 @@ impl PacketFamily {
             Some(Self::Cluster)
         } else if s.contains("spatial") {
             Some(Self::Spatial)
+        } else if s.contains("signal") {
+            Some(Self::Signal)
         } else {
             None
         }
@@ -6124,6 +6537,7 @@ impl PacketFamily {
                 | Self::RuntimeCasp
                 | Self::Cluster
                 | Self::Spatial
+                | Self::Signal
         )
     }
 
@@ -6241,6 +6655,7 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
             PacketFamily::RuntimeCasp => run_casp_packet(config, fixture_name)?,
             PacketFamily::Cluster => run_cluster_packet(config, fixture_name)?,
             PacketFamily::Spatial => run_spatial_packet(config, fixture_name)?,
+            PacketFamily::Signal => run_signal_packet(config, fixture_name)?,
         };
         reports.push(report);
     }
@@ -6259,8 +6674,9 @@ mod tests {
         SpecialPacketFixture, aggregate_packet_reports, discover_fixtures, ensure_artifact_layout,
         load_oracle_capture, run_array_api_packet, run_casp_packet, run_cluster_packet,
         run_differential_test, run_fft_packet, run_linalg_packet,
-        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_smoke, run_sparse_packet,
-        run_spatial_packet, run_special_packet, run_validate_tol_packet, write_parity_artifacts,
+        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_signal_packet,
+        run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
+        run_validate_tol_packet, write_parity_artifacts,
     };
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
@@ -6898,6 +7314,29 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn signal_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_signal_packet(&cfg, "FSCI-P2C-011_signal_core.json")
+            .expect("signal packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one signal test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("signal parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
     fn differential_test_optimize_fixture() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root
@@ -7262,8 +7701,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn packet_family_all_has_10_entries() {
-        assert_eq!(PacketFamily::ALL.len(), 10);
+    fn packet_family_all_has_11_entries() {
+        assert_eq!(PacketFamily::ALL.len(), 11);
     }
 
     #[test]

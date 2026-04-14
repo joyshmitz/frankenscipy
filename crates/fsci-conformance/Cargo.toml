@@ -36,6 +36,7 @@ fsci-linalg = { workspace = true }
 fsci-ndimage = { workspace = true }
 fsci-opt = { workspace = true }
 fsci-runtime = { workspace = true }
+fsci-signal = { workspace = true }
 fsci-sparse = { workspace = true }
 fsci-special = { workspace = true }
 fsci-stats = { workspace = true }
