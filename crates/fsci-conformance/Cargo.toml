@@ -27,6 +27,7 @@ workspace = true
 asupersync = { workspace = true }
 blake3 = { workspace = true }
 fsci-arrayapi = { workspace = true }
+fsci-cluster = { workspace = true }
 fsci-constants = { workspace = true }
 fsci-fft = { workspace = true }
 fsci-integrate = { workspace = true }

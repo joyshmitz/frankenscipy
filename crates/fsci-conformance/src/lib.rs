@@ -2026,9 +2026,15 @@ fn execute_fft_case(case: &FftCase) -> FftObserved {
                 Err(e) => FftObserved::Error(format!("{e}")),
             }
         }
-        FftTransformKind::Dct | FftTransformKind::Idct | FftTransformKind::DctI
-        | FftTransformKind::DctIii | FftTransformKind::DctIv | FftTransformKind::DstI
-        | FftTransformKind::DstIi | FftTransformKind::DstIii | FftTransformKind::DstIv => {
+        FftTransformKind::Dct
+        | FftTransformKind::Idct
+        | FftTransformKind::DctI
+        | FftTransformKind::DctIii
+        | FftTransformKind::DctIv
+        | FftTransformKind::DstI
+        | FftTransformKind::DstIi
+        | FftTransformKind::DstIii
+        | FftTransformKind::DstIv => {
             let input = match &case.real_input {
                 Some(v) => v.as_slice(),
                 None => return FftObserved::Error("dct/dst requires real_input".to_owned()),
@@ -2382,6 +2388,328 @@ fn compare_casp_outcome(expected: &CaspExpectedOutcome, observed: &CaspObserved)
         (_, CaspObserved::Error(e)) => (false, format!("unexpected error: {e}")),
         _ => (false, "outcome type mismatch".to_owned()),
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Cluster Conformance Harness
+// ══════════════════════════════════════════════════════════════════════
+
+/// Fixture for cluster conformance testing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<ClusterCase>,
+}
+
+/// A single cluster conformance test case.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: String,
+    pub function: String,
+    pub args: serde_json::Value,
+    pub expected: ClusterExpected,
+}
+
+impl ClusterCase {
+    fn case_id(&self) -> &str {
+        &self.case_id
+    }
+}
+
+/// Expected outcome for a cluster conformance case.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterExpected {
+    pub kind: String,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+    #[serde(default)]
+    pub codes: Option<Vec<usize>>,
+    #[serde(default)]
+    pub dists: Option<Vec<f64>>,
+    #[serde(default)]
+    pub atol: Option<f64>,
+    #[serde(default)]
+    pub rtol: Option<f64>,
+    #[serde(default)]
+    pub contract_ref: Option<String>,
+}
+
+#[derive(Debug)]
+enum ClusterObserved {
+    Scalar(f64),
+    Array1D(Vec<f64>),
+    Array2D(Vec<Vec<f64>>),
+    Labels(Vec<usize>),
+    Linkage(Vec<[f64; 4]>),
+    VqResult { codes: Vec<usize>, dists: Vec<f64> },
+    Error(String),
+}
+
+fn execute_cluster_case(case: &ClusterCase) -> ClusterObserved {
+    match case.function.as_str() {
+        "linkage" => execute_linkage(case),
+        "fcluster" => execute_fcluster(case),
+        "vq" => execute_vq(case),
+        "whiten" => execute_whiten(case),
+        "cophenet" => execute_cophenet(case),
+        "inconsistent" => execute_inconsistent(case),
+        "silhouette_score" => execute_silhouette_score(case),
+        "adjusted_rand_score" => execute_adjusted_rand_score(case),
+        _ => ClusterObserved::Error(format!("unknown function: {}", case.function)),
+    }
+}
+
+fn execute_linkage(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let data: Vec<Vec<f64>> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse data: {e}")),
+    };
+    let method_str: String = match serde_json::from_value(args[1].clone()) {
+        Ok(m) => m,
+        Err(e) => return ClusterObserved::Error(format!("parse method: {e}")),
+    };
+    let method = match method_str.as_str() {
+        "single" => fsci_cluster::LinkageMethod::Single,
+        "complete" => fsci_cluster::LinkageMethod::Complete,
+        "average" => fsci_cluster::LinkageMethod::Average,
+        "ward" => fsci_cluster::LinkageMethod::Ward,
+        _ => return ClusterObserved::Error(format!("unknown linkage method: {method_str}")),
+    };
+    match fsci_cluster::linkage(&data, method) {
+        Ok(z) => ClusterObserved::Linkage(z),
+        Err(e) => ClusterObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_fcluster(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let z: Vec<[f64; 4]> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse Z: {e}")),
+    };
+    let max_clusters: usize = match serde_json::from_value(args[1].clone()) {
+        Ok(k) => k,
+        Err(e) => return ClusterObserved::Error(format!("parse max_clusters: {e}")),
+    };
+    ClusterObserved::Labels(fsci_cluster::fcluster(&z, max_clusters))
+}
+
+fn execute_vq(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let data: Vec<Vec<f64>> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse data: {e}")),
+    };
+    let centroids: Vec<Vec<f64>> = match serde_json::from_value(args[1].clone()) {
+        Ok(c) => c,
+        Err(e) => return ClusterObserved::Error(format!("parse centroids: {e}")),
+    };
+    match fsci_cluster::vq(&data, &centroids) {
+        Ok((codes, dists)) => ClusterObserved::VqResult { codes, dists },
+        Err(e) => ClusterObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_whiten(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let data: Vec<Vec<f64>> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse data: {e}")),
+    };
+    match fsci_cluster::whiten(&data) {
+        Ok(w) => ClusterObserved::Array2D(w),
+        Err(e) => ClusterObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_cophenet(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let z: Vec<[f64; 4]> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse Z: {e}")),
+    };
+    ClusterObserved::Array1D(fsci_cluster::cophenet(&z))
+}
+
+fn execute_inconsistent(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let z: Vec<[f64; 4]> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse Z: {e}")),
+    };
+    let depth: usize = match serde_json::from_value(args[1].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse depth: {e}")),
+    };
+    let result = fsci_cluster::inconsistent(&z, depth);
+    ClusterObserved::Array2D(result.iter().map(|r| r.to_vec()).collect())
+}
+
+fn execute_silhouette_score(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let data: Vec<Vec<f64>> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse data: {e}")),
+    };
+    let labels: Vec<usize> = match serde_json::from_value(args[1].clone()) {
+        Ok(l) => l,
+        Err(e) => return ClusterObserved::Error(format!("parse labels: {e}")),
+    };
+    ClusterObserved::Scalar(fsci_cluster::silhouette_score(&data, &labels))
+}
+
+fn execute_adjusted_rand_score(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let labels_true: Vec<usize> = match serde_json::from_value(args[0].clone()) {
+        Ok(l) => l,
+        Err(e) => return ClusterObserved::Error(format!("parse labels_true: {e}")),
+    };
+    let labels_pred: Vec<usize> = match serde_json::from_value(args[1].clone()) {
+        Ok(l) => l,
+        Err(e) => return ClusterObserved::Error(format!("parse labels_pred: {e}")),
+    };
+    ClusterObserved::Scalar(fsci_cluster::adjusted_rand_score(&labels_true, &labels_pred))
+}
+
+fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (bool, String) {
+    let atol = case.expected.atol.unwrap_or(1e-10);
+    let rtol = case.expected.rtol.unwrap_or(1e-10);
+
+    match (&case.expected.kind.as_str(), observed) {
+        (&"scalar", ClusterObserved::Scalar(got)) => {
+            let exp = case.expected.value.as_ref().and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let diff = (exp - got).abs();
+            let tol = atol + rtol * exp.abs();
+            if diff <= tol {
+                (true, format!("scalar matched: {got}"))
+            } else {
+                (false, format!("scalar mismatch: expected {exp}, got {got}, diff {diff}"))
+            }
+        }
+        (&"array", ClusterObserved::Array1D(got)) => {
+            let exp: Vec<f64> = case.expected.value.as_ref()
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            if exp.len() != got.len() {
+                return (false, format!("array length mismatch: {} vs {}", exp.len(), got.len()));
+            }
+            for (i, (&e, &g)) in exp.iter().zip(got.iter()).enumerate() {
+                let diff = (e - g).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("array mismatch at [{i}]: expected {e}, got {g}"));
+                }
+            }
+            (true, "array matched".to_string())
+        }
+        (&"array" | &"matrix", ClusterObserved::Array2D(got)) => {
+            let exp: Vec<Vec<f64>> = case.expected.value.as_ref()
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            if exp.len() != got.len() {
+                return (false, format!("matrix rows mismatch: {} vs {}", exp.len(), got.len()));
+            }
+            for (i, (er, gr)) in exp.iter().zip(got.iter()).enumerate() {
+                if er.len() != gr.len() {
+                    return (false, format!("matrix cols mismatch at row {i}"));
+                }
+                for (j, (&e, &g)) in er.iter().zip(gr.iter()).enumerate() {
+                    let diff = (e - g).abs();
+                    let tol = atol + rtol * e.abs();
+                    if diff > tol {
+                        return (false, format!("matrix mismatch at [{i},{j}]: expected {e}, got {g}"));
+                    }
+                }
+            }
+            (true, "matrix matched".to_string())
+        }
+        (&"labels", ClusterObserved::Labels(got)) => {
+            let exp: Vec<usize> = case.expected.value.as_ref()
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            if exp == *got {
+                (true, format!("labels matched: {got:?}"))
+            } else {
+                (false, format!("labels mismatch: expected {exp:?}, got {got:?}"))
+            }
+        }
+        (&"linkage", ClusterObserved::Linkage(got)) => {
+            let exp: Vec<[f64; 4]> = case.expected.value.as_ref()
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            if exp.len() != got.len() {
+                return (false, format!("linkage rows mismatch: {} vs {}", exp.len(), got.len()));
+            }
+            for (i, (er, gr)) in exp.iter().zip(got.iter()).enumerate() {
+                for j in 0..4 {
+                    let diff = (er[j] - gr[j]).abs();
+                    let tol = atol + rtol * er[j].abs();
+                    if diff > tol {
+                        return (false, format!("linkage mismatch at [{i},{j}]: expected {}, got {}", er[j], gr[j]));
+                    }
+                }
+            }
+            (true, "linkage matched".to_string())
+        }
+        (&"vq_result", ClusterObserved::VqResult { codes, dists }) => {
+            let exp_codes = case.expected.codes.clone().unwrap_or_default();
+            let exp_dists = case.expected.dists.clone().unwrap_or_default();
+            if exp_codes != *codes {
+                return (false, format!("vq codes mismatch: expected {exp_codes:?}, got {codes:?}"));
+            }
+            if exp_dists.len() != dists.len() {
+                return (false, format!("vq dists length mismatch"));
+            }
+            for (i, (&e, &g)) in exp_dists.iter().zip(dists.iter()).enumerate() {
+                let diff = (e - g).abs();
+                let tol = atol + rtol * e.abs();
+                if diff > tol {
+                    return (false, format!("vq dists mismatch at [{i}]: expected {e}, got {g}"));
+                }
+            }
+            (true, "vq_result matched".to_string())
+        }
+        (_, ClusterObserved::Error(e)) => (false, format!("execution error: {e}")),
+        _ => (false, format!("unexpected observed type for kind '{}'", case.expected.kind)),
+    }
+}
+
+/// Run the cluster conformance packet.
+pub fn run_cluster_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: ClusterPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_cluster_case(case);
+        let (passed, message) = compare_cluster_outcome(case, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
 }
 
 pub fn run_linalg_packet_with_oracle_capture(
@@ -4831,11 +5159,7 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("sinc", mode));
             }
-            special_scalar_from_tensor(
-                special_sinc(&special_scalar(args[0]), mode)?,
-                "sinc",
-                mode,
-            )
+            special_scalar_from_tensor(special_sinc(&special_scalar(args[0]), mode)?, "sinc", mode)
         }
         SpecialCaseFunction::Xlogy => {
             if args.len() != 2 {
@@ -5336,11 +5660,13 @@ pub enum PacketFamily {
     ArrayApi,
     /// P2C-008: CASP runtime (PolicyController, SolverPortfolio, ConformalCalibrator)
     RuntimeCasp,
+    /// P2C-009: Cluster analysis (linkage, vq, metrics)
+    Cluster,
 }
 
 impl PacketFamily {
     /// All known packet families for enumeration.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::ValidateTol,
         Self::LinalgCore,
         Self::Optimize,
@@ -5349,6 +5675,7 @@ impl PacketFamily {
         Self::Special,
         Self::ArrayApi,
         Self::RuntimeCasp,
+        Self::Cluster,
     ];
 
     /// Canonical packet ID for this family (e.g., "FSCI-P2C-001").
@@ -5363,6 +5690,7 @@ impl PacketFamily {
             Self::Special => "FSCI-P2C-006",
             Self::ArrayApi => "FSCI-P2C-007",
             Self::RuntimeCasp => "FSCI-P2C-008",
+            Self::Cluster => "FSCI-P2C-009",
         }
     }
 
@@ -5378,6 +5706,7 @@ impl PacketFamily {
             Self::Special => "special",
             Self::ArrayApi => "array_api",
             Self::RuntimeCasp => "runtime_casp",
+            Self::Cluster => "cluster_core",
         }
     }
 
@@ -5400,6 +5729,8 @@ impl PacketFamily {
             Some(Self::ArrayApi)
         } else if s.contains("runtime") || s.contains("casp") {
             Some(Self::RuntimeCasp)
+        } else if s.contains("cluster") {
+            Some(Self::Cluster)
         } else {
             None
         }
@@ -5418,6 +5749,7 @@ impl PacketFamily {
                 | Self::Special
                 | Self::ArrayApi
                 | Self::RuntimeCasp
+                | Self::Cluster
         )
     }
 
@@ -5533,6 +5865,7 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
             PacketFamily::Special => run_special_packet(config, fixture_name)?,
             PacketFamily::ArrayApi => run_array_api_packet(config, fixture_name)?,
             PacketFamily::RuntimeCasp => run_casp_packet(config, fixture_name)?,
+            PacketFamily::Cluster => run_cluster_packet(config, fixture_name)?,
         };
         reports.push(report);
     }
@@ -5549,10 +5882,10 @@ mod tests {
         HarnessConfig, LinalgCase, LinalgExpectedOutcome, LinalgPacketFixture,
         OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
         SpecialPacketFixture, aggregate_packet_reports, discover_fixtures, ensure_artifact_layout,
-        load_oracle_capture, run_array_api_packet, run_casp_packet, run_differential_test,
-        run_fft_packet, run_linalg_packet, run_linalg_packet_with_oracle_capture,
-        run_optimize_packet, run_smoke, run_sparse_packet, run_special_packet,
-        run_validate_tol_packet, write_parity_artifacts,
+        load_oracle_capture, run_array_api_packet, run_casp_packet, run_cluster_packet,
+        run_differential_test, run_fft_packet, run_linalg_packet,
+        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_smoke, run_sparse_packet,
+        run_special_packet, run_validate_tol_packet, write_parity_artifacts,
     };
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
@@ -6138,6 +6471,29 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
         let artifacts =
             write_parity_artifacts(&cfg, &report).expect("casp parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn cluster_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_cluster_packet(&cfg, "FSCI-P2C-009_cluster_core.json")
+            .expect("cluster packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one cluster test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("cluster parity artifacts must be written");
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());
