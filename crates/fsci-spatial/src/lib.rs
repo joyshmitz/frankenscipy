@@ -1788,7 +1788,25 @@ pub fn normalize(v: &[f64]) -> Vec<f64> {
 ///
 /// Returns max_{a in A} min_{b in B} ||a - b||.
 /// Matches `scipy.spatial.distance.directed_hausdorff`.
-pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
+pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<f64, SpatialError> {
+    if xa.is_empty() || xb.is_empty() {
+        return Err(SpatialError::EmptyData);
+    }
+    let dim = xa[0].len();
+    if xb[0].len() != dim {
+        return Err(SpatialError::DimensionMismatch {
+            expected: dim,
+            actual: xb[0].len(),
+        });
+    }
+    if xa.iter().flatten().any(|v| !v.is_finite())
+        || xb.iter().flatten().any(|v| !v.is_finite())
+    {
+        return Err(SpatialError::InvalidArgument(
+            "hausdorff distance requires finite points".to_string(),
+        ));
+    }
+
     let mut max_dist = 0.0f64;
     for a in xa {
         let mut min_dist = f64::INFINITY;
@@ -1798,18 +1816,14 @@ pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
         }
         max_dist = max_dist.max(min_dist);
     }
-    max_dist
+    Ok(max_dist)
 }
 
 /// Hausdorff distance between two point sets (symmetric).
-pub fn hausdorff_distance(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> f64 {
-    let d1 = directed_hausdorff(xa, xb);
-    let d2 = directed_hausdorff(xb, xa);
-    if d1.is_nan() || d2.is_nan() {
-        f64::NAN
-    } else {
-        d1.max(d2)
-    }
+pub fn hausdorff_distance(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<f64, SpatialError> {
+    let d1 = directed_hausdorff(xa, xb)?;
+    let d2 = directed_hausdorff(xb, xa)?;
+    Ok(d1.max(d2))
 }
 
 /// Mahalanobis distance between two vectors given an inverse covariance matrix.
@@ -2046,14 +2060,22 @@ where
 /// Compute the nearest neighbor for each point in a dataset.
 ///
 /// Returns (indices, distances) of nearest neighbors.
-pub fn nearest_neighbors(data: &[Vec<f64>]) -> (Vec<usize>, Vec<f64>) {
+/// For empty input, returns empty vectors.
+/// For single-element input, returns `(vec![None], vec![])` conceptually,
+/// but since each point needs at least one other point to have a neighbor,
+/// the index is undefined and the distance is `INFINITY`.
+pub fn nearest_neighbors(data: &[Vec<f64>]) -> (Vec<Option<usize>>, Vec<f64>) {
     let n = data.len();
+    if n == 0 {
+        return (vec![], vec![]);
+    }
+
     let mut indices = Vec::with_capacity(n);
     let mut distances = Vec::with_capacity(n);
 
     for i in 0..n {
         let mut min_dist = f64::INFINITY;
-        let mut min_idx = 0;
+        let mut min_idx: Option<usize> = None;
         for j in 0..n {
             if i == j {
                 continue;
@@ -2061,7 +2083,7 @@ pub fn nearest_neighbors(data: &[Vec<f64>]) -> (Vec<usize>, Vec<f64>) {
             let d = euclidean(&data[i], &data[j]);
             if d < min_dist {
                 min_dist = d;
-                min_idx = j;
+                min_idx = Some(j);
             }
         }
         indices.push(min_idx);
@@ -2114,10 +2136,12 @@ pub fn centroid(points: &[Vec<f64>]) -> Vec<f64> {
 }
 
 /// Compute the medoid (point minimizing sum of distances) of a set.
-pub fn medoid(points: &[Vec<f64>]) -> usize {
+///
+/// Returns `None` for an empty point set.
+pub fn medoid(points: &[Vec<f64>]) -> Option<usize> {
     let n = points.len();
     if n == 0 {
-        return 0;
+        return None;
     }
 
     let mut best = 0;
@@ -2134,7 +2158,7 @@ pub fn medoid(points: &[Vec<f64>]) -> usize {
         }
     }
 
-    best
+    Some(best)
 }
 
 /// Compute the diameter of a point set (maximum pairwise distance).
@@ -3057,5 +3081,116 @@ mod tests {
     fn canberra_single_zero_pair() {
         // When both elements are zero at same index, that term contributes 0
         assert_eq!(canberra(&[0.0], &[0.0]), 0.0);
+    }
+
+    // ── Hausdorff distance validation tests ─────────────────────────────
+
+    #[test]
+    fn directed_hausdorff_basic() {
+        let xa = vec![vec![0.0, 0.0], vec![1.0, 0.0]];
+        let xb = vec![vec![0.0, 1.0], vec![1.0, 1.0]];
+        let d = directed_hausdorff(&xa, &xb).expect("valid input");
+        assert!((d - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn directed_hausdorff_empty_xa_rejected() {
+        let err = directed_hausdorff(&[], &[vec![1.0]]).expect_err("empty xa");
+        assert!(matches!(err, SpatialError::EmptyData));
+    }
+
+    #[test]
+    fn directed_hausdorff_empty_xb_rejected() {
+        let err = directed_hausdorff(&[vec![1.0]], &[]).expect_err("empty xb");
+        assert!(matches!(err, SpatialError::EmptyData));
+    }
+
+    #[test]
+    fn directed_hausdorff_nan_rejected() {
+        let xa = vec![vec![1.0, 2.0]];
+        let xb = vec![vec![3.0, f64::NAN]];
+        let err = directed_hausdorff(&xa, &xb).expect_err("NaN input");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn directed_hausdorff_dimension_mismatch_rejected() {
+        let xa = vec![vec![1.0, 2.0]];
+        let xb = vec![vec![3.0]];
+        let err = directed_hausdorff(&xa, &xb).expect_err("dimension mismatch");
+        assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn hausdorff_distance_basic() {
+        let xa = vec![vec![0.0, 0.0]];
+        let xb = vec![vec![3.0, 4.0]];
+        let d = hausdorff_distance(&xa, &xb).expect("valid input");
+        assert!((d - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn hausdorff_distance_symmetric() {
+        let xa = vec![vec![0.0, 0.0], vec![1.0, 0.0]];
+        let xb = vec![vec![0.0, 2.0]];
+        let d1 = hausdorff_distance(&xa, &xb).expect("valid");
+        let d2 = hausdorff_distance(&xb, &xa).expect("valid");
+        assert!((d1 - d2).abs() < 1e-10);
+    }
+
+    // ── Medoid validation tests ─────────────────────────────────────────
+
+    #[test]
+    fn medoid_basic() {
+        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.5, 0.0]];
+        // Point 2 (0.5, 0) minimizes total distance
+        let idx = medoid(&points).expect("non-empty");
+        assert_eq!(idx, 2);
+    }
+
+    #[test]
+    fn medoid_empty_returns_none() {
+        let points: Vec<Vec<f64>> = vec![];
+        assert!(medoid(&points).is_none());
+    }
+
+    #[test]
+    fn medoid_single_point() {
+        let points = vec![vec![5.0, 5.0]];
+        let idx = medoid(&points).expect("single point");
+        assert_eq!(idx, 0);
+    }
+
+    // ── Nearest neighbors validation tests ──────────────────────────────
+
+    #[test]
+    fn nearest_neighbors_basic() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![10.0, 0.0]];
+        let (indices, distances) = nearest_neighbors(&data);
+        assert_eq!(indices.len(), 3);
+        assert_eq!(distances.len(), 3);
+        // Point 0's nearest is point 1
+        assert_eq!(indices[0], Some(1));
+        assert!((distances[0] - 1.0).abs() < 1e-10);
+        // Point 1's nearest is point 0
+        assert_eq!(indices[1], Some(0));
+        // Point 2's nearest is point 1
+        assert_eq!(indices[2], Some(1));
+    }
+
+    #[test]
+    fn nearest_neighbors_empty() {
+        let (indices, distances) = nearest_neighbors(&[]);
+        assert!(indices.is_empty());
+        assert!(distances.is_empty());
+    }
+
+    #[test]
+    fn nearest_neighbors_single_point() {
+        let data = vec![vec![5.0, 5.0]];
+        let (indices, distances) = nearest_neighbors(&data);
+        assert_eq!(indices.len(), 1);
+        assert!(indices[0].is_none());
+        assert_eq!(distances[0], f64::INFINITY);
     }
 }
