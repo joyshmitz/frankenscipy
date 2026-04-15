@@ -2,9 +2,13 @@
   "schema_version": 1,
   "source_hash": "b962b8ca8801e195d269b7b94af0f35600e7b4b32d8c26305fce2b3d81e5f983",
   "symbol_size": 128,
+  "seed": 1522,
   "source_symbols": 6,
   "repair_symbols": 1,
   "repair_symbol_hashes": [
     "566f42cd35e098793ab2861342da1b7dccf0de6ffba7fe875a1bc61c81c0734a"
+  ],
+  "repair_symbol_payloads_hex": [
+    "09b30da7e70d306887ffe8357f2737faa91bdc765c7c782f123e34bda57291ba6b7e1bc17ea60cca49a8fe608e91ec35dbd04f8a058f0ff4e27e26761206b4b24941d99ce2157c55b55bf574a7b0238d3c9a78dd450c092eeb0a7e1fbd516fb3268f2d12e3e3ce200ce201d5c2abc573bac7f157ba256be3d00512841bcace7c"
   ]
 }

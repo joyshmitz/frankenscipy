@@ -1,10 +1,14 @@
 {
   "schema_version": 1,
-  "source_hash": "30175a74709e89b7e1fe5f5c91a0730064a03f12234a30341a98f1a906bcbf5a",
+  "source_hash": "e37aef27ed35c5d4e2b36612e9cf3d5e446e6ffff5c07f90aaae21a8be5f1efd",
   "symbol_size": 128,
+  "seed": 1564,
   "source_symbols": 6,
   "repair_symbols": 1,
   "repair_symbol_hashes": [
-    "cd2a67c955250b29566aa9bafcb8ab40786e9fc5bb5daaaafb20e32d183e4e22"
+    "533d97e17f1c9d6afb55af6197a335940b5c57d3082d8e4f0e88eb9767dc22dc"
+  ],
+  "repair_symbol_payloads_hex": [
+    "5be16e7e17652446aa8af9473e562463af00e54568eb57db71079dfc26de2c809cb652afce28cc2652e42943ad5180da3197a502532af47ec9b36f3270fdf1c183e1fcfce23d739b23222178fa1018da24e24ae4c987e2fc85b13cd6125f693997e2effe2a0b0fafaefc90d81be676fa64f93a17ee420a2ff275a8217e0b1d11"
   ]
 }
