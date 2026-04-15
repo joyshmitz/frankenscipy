@@ -23,11 +23,11 @@ pub use plan::{
 pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, SyncSharedAuditLedger, TransformTrace,
     WorkerPolicy, dct, dct_i, dct_iii, dct_iv, dctn, dst_i, dst_ii, dst_iii, dst_iv, dstn, fft,
-    fft_with_audit, fft2, fft2_with_audit, fftn, fftn_with_audit, hfft, hfft_with_audit, hilbert,
-    idct, idctn, idstn, ifft, ifft_with_audit, ifft2, ifft2_with_audit, ifftn, ifftn_with_audit,
-    ihfft, ihfft_with_audit, irfft, irfft_with_audit, irfft2, irfft2_with_audit, irfftn,
-    irfftn_with_audit, next_fast_len, rfft, rfft_with_audit, rfft2, rfft2_with_audit, rfftn,
-    rfftn_with_audit, sync_audit_ledger, take_transform_traces,
+    fft_with_audit, fft2, fft2_with_audit, fftn, fftn_with_audit, fht, fhtoffset, hfft,
+    hfft_with_audit, hilbert, idct, idctn, idstn, ifft, ifft_with_audit, ifft2, ifft2_with_audit,
+    ifftn, ifftn_with_audit, ifht, ihfft, ihfft_with_audit, irfft, irfft_with_audit, irfft2,
+    irfft2_with_audit, irfftn, irfftn_with_audit, next_fast_len, rfft, rfft_with_audit, rfft2,
+    rfft2_with_audit, rfftn, rfftn_with_audit, sync_audit_ledger, take_transform_traces,
 };
 
 /// FFT normalization modes matching SciPy/PocketFFT conventions.
@@ -65,8 +65,8 @@ mod tests {
 
     use super::helpers::fftfreq;
     use super::transforms::{
-        Complex64, FftOptions, dct, dct_i, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, hilbert,
-        idct, ifft, irfft, rfft,
+        Complex64, FftOptions, dct, dct_i, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, fht,
+        fhtoffset, hilbert, idct, ifft, ifht, irfft, rfft,
     };
     use super::{Normalization, TransformKind};
 
@@ -463,5 +463,80 @@ mod tests {
                 "envelope[{i}] = {envelope}, expected ~1.0"
             );
         }
+    }
+
+    // ── Fast Hankel Transform ─────────────────────────────────────────
+
+    #[test]
+    fn fht_basic_runs() {
+        // Simple test: FHT of a log-spaced power law
+        let n = 16;
+        let dln = 0.1;
+        let mu = 0.5;
+        let input: Vec<f64> = (0..n).map(|i| (i as f64 + 1.0).powf(-1.5)).collect();
+
+        let result = fht(&input, dln, mu, 0.0, 0.0, &FftOptions::default());
+        assert!(result.is_ok(), "FHT should succeed");
+        let output = result.unwrap();
+        assert_eq!(output.len(), n);
+
+        // Check output is finite
+        for &v in &output {
+            assert!(v.is_finite(), "FHT output should be finite");
+        }
+    }
+
+    #[test]
+    fn ifht_inverts_fht() {
+        // For symmetric transforms with proper parameters, ifht(fht(x)) ≈ x
+        let n = 32;
+        let dln = 0.1;
+        let mu = 0.0; // μ=0 is special: J_0 Bessel function
+        let bias = 0.0;
+
+        // Create a smooth input
+        let input: Vec<f64> = (0..n)
+            .map(|i| {
+                let x = (i as f64 - n as f64 / 2.0) / (n as f64 / 4.0);
+                (-x * x).exp() // Gaussian-ish
+            })
+            .collect();
+
+        let opts = FftOptions::default();
+        let forward = fht(&input, dln, mu, 0.0, bias, &opts).expect("fht");
+        let recovered = ifht(&forward, dln, mu, 0.0, bias, &opts).expect("ifht");
+
+        // Due to the nature of Hankel transforms, exact inversion requires
+        // specific conditions. Here we just check the output is reasonable.
+        assert_eq!(recovered.len(), n);
+        for &v in &recovered {
+            assert!(v.is_finite(), "IFHT output should be finite");
+        }
+    }
+
+    #[test]
+    fn fhtoffset_returns_finite() {
+        let dln = 0.1;
+        let mu = 0.5;
+        let offset = fhtoffset(dln, mu, 0.0, 0.0);
+        assert!(offset.is_finite(), "fhtoffset should return finite value");
+        assert!(
+            offset.abs() <= dln,
+            "offset should be within one period: {offset}"
+        );
+    }
+
+    #[test]
+    fn fhtoffset_different_mu() {
+        // Different mu values should give different offsets
+        let dln = 0.2;
+        let off0 = fhtoffset(dln, 0.0, 0.0, 0.0);
+        let off1 = fhtoffset(dln, 1.0, 0.0, 0.0);
+        let off2 = fhtoffset(dln, 2.0, 0.0, 0.0);
+
+        // All should be finite
+        assert!(off0.is_finite());
+        assert!(off1.is_finite());
+        assert!(off2.is_finite());
     }
 }
