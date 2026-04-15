@@ -17,8 +17,8 @@ pub use minimize::{
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, bisect,
-    brenth, brentq, broyden1, fsolve, halley, newton_scalar, ridder, root, root_scalar, secant,
-    toms748,
+    brenth, brentq, broyden1, broyden2, fsolve, halley, newton_scalar, ridder, root, root_scalar,
+    secant, toms748,
 };
 pub use types::{
     Bounds, ConvergenceStatus, LinearConstraint, MinimizeOptions, NonlinearConstraint, OptError,

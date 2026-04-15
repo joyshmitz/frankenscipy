@@ -1254,6 +1254,125 @@ where
     })
 }
 
+/// Broyden's second ("bad") method for root finding.
+///
+/// Matches `scipy.optimize.broyden2`.
+///
+/// Quasi-Newton method that maintains an approximate inverse Jacobian H and
+/// updates it using:
+///   H_{k+1} = H_k + (Δx - H_k Δf) Δf^T / ||Δf||²
+///
+/// This is the "bad" Broyden method (as opposed to broyden1 which is "good").
+/// It tends to be slightly less robust but can work well on some problems.
+pub fn broyden2<F>(
+    func: F,
+    x0: &[f64],
+    tol: f64,
+    maxiter: usize,
+) -> Result<MultivariateRootResult, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x0.len();
+    if n == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "x0 must not be empty".to_string(),
+        });
+    }
+
+    let mut x = x0.to_vec();
+    let mut fx = func(&x);
+    let mut nfev = 1usize;
+
+    // Initialize approximate inverse Jacobian as identity
+    let mut h: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            let mut row = vec![0.0; n];
+            row[i] = 1.0;
+            row
+        })
+        .collect();
+
+    for iteration in 0..maxiter {
+        let norm_fx: f64 = fx.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if norm_fx < tol {
+            return Ok(MultivariateRootResult {
+                x,
+                fun: fx,
+                converged: true,
+                message: "broyden2 converged".to_string(),
+                iterations: iteration,
+                function_calls: nfev,
+            });
+        }
+
+        // Compute step: dx = -H * F(x)
+        let dx: Vec<f64> = (0..n)
+            .map(|i| {
+                -h[i]
+                    .iter()
+                    .zip(fx.iter())
+                    .map(|(hi, fi)| hi * fi)
+                    .sum::<f64>()
+            })
+            .collect();
+
+        // Update x
+        let x_new: Vec<f64> = x.iter().zip(dx.iter()).map(|(xi, di)| xi + di).collect();
+        let fx_new = func(&x_new);
+        nfev += 1;
+
+        // Broyden's "bad" update: H_{k+1} = H_k + (Δx - H_k Δf) Δf^T / ||Δf||²
+        let df: Vec<f64> = fx_new
+            .iter()
+            .zip(fx.iter())
+            .map(|(fn_, fo)| fn_ - fo)
+            .collect();
+
+        // ||Δf||²
+        let df_norm_sq: f64 = df.iter().map(|d| d * d).sum();
+
+        if df_norm_sq > 1e-30 {
+            // H_k Δf
+            let h_df: Vec<f64> = (0..n)
+                .map(|i| {
+                    h[i]
+                        .iter()
+                        .zip(df.iter())
+                        .map(|(hi, dfi)| hi * dfi)
+                        .sum::<f64>()
+                })
+                .collect();
+
+            // numerator = Δx - H_k Δf
+            let numer: Vec<f64> = dx
+                .iter()
+                .zip(h_df.iter())
+                .map(|(dxi, hdf)| dxi - hdf)
+                .collect();
+
+            // Update H: H_{k+1}[i][j] = H_k[i][j] + numer[i] * df[j] / ||Δf||²
+            for i in 0..n {
+                for j in 0..n {
+                    h[i][j] += numer[i] * df[j] / df_norm_sq;
+                }
+            }
+        }
+
+        x = x_new;
+        fx = fx_new;
+    }
+
+    Ok(MultivariateRootResult {
+        x,
+        fun: fx,
+        converged: false,
+        message: format!("broyden2 failed to converge within {maxiter} iterations"),
+        iterations: maxiter,
+        function_calls: nfev,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};
@@ -1263,7 +1382,7 @@ mod tests {
     use proptest::prelude::*;
     use serde::Serialize;
 
-    use super::{MultivariateRootMethod, MultivariateRootOptions, broyden1, fsolve, root};
+    use super::{MultivariateRootMethod, MultivariateRootOptions, broyden1, broyden2, fsolve, root};
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, halley, newton_scalar,
         ridder, root_scalar, secant, toms748,
@@ -2016,6 +2135,44 @@ mod tests {
     fn broyden1_empty_x0_rejected() {
         let f = |_x: &[f64]| vec![];
         let err = broyden1(f, &[], 1e-10, 200).expect_err("empty");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn broyden2_nonlinear_circle() {
+        // x² + y² = 1, x - y = 0 → x=y=1/√2
+        let f = |x: &[f64]| vec![x[0] * x[0] + x[1] * x[1] - 1.0, x[0] - x[1]];
+        let result = broyden2(f, &[0.5, 0.5], 1e-10, 200).expect("broyden2");
+        assert!(result.converged, "broyden2 failed: {}", result.message);
+        let s2 = std::f64::consts::FRAC_1_SQRT_2;
+        assert!(
+            (result.x[0] - s2).abs() < 0.01,
+            "x = {}, expected {}",
+            result.x[0],
+            s2
+        );
+    }
+
+    #[test]
+    fn broyden2_3d_system() {
+        let f = |x: &[f64]| {
+            vec![
+                x[0] + x[1] + x[2] - 6.0,
+                x[0] - x[1] + 2.0 * x[2] - 5.0,
+                2.0 * x[0] + x[1] - x[2] - 1.0,
+            ]
+        };
+        let result = broyden2(f, &[0.0, 0.0, 0.0], 1e-10, 200).expect("broyden2 3d");
+        assert!(result.converged, "broyden2 3d failed: {}", result.message);
+        assert!((result.x[0] - 1.0).abs() < 0.1, "x = {}", result.x[0]);
+        assert!((result.x[1] - 2.0).abs() < 0.1, "y = {}", result.x[1]);
+        assert!((result.x[2] - 3.0).abs() < 0.1, "z = {}", result.x[2]);
+    }
+
+    #[test]
+    fn broyden2_empty_x0_rejected() {
+        let f = |_x: &[f64]| vec![];
+        let err = broyden2(f, &[], 1e-10, 200).expect_err("empty");
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
     }
 
