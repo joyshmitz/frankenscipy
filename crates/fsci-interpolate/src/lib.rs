@@ -3151,6 +3151,338 @@ pub fn polyval_with_error(coeffs: &[f64], x: f64) -> (f64, f64) {
     (val, err)
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// RectBivariateSpline — 2D spline interpolation on rectangular grids
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Bivariate spline approximation over a rectangular mesh.
+///
+/// Matches `scipy.interpolate.RectBivariateSpline`.
+///
+/// Given 1-D arrays `x` and `y` and a 2-D array `z` of shape `(len(y), len(x))`,
+/// constructs a spline that can be evaluated at arbitrary points.
+///
+/// # Example
+///
+/// ```ignore
+/// let x = vec![0.0, 1.0, 2.0, 3.0];
+/// let y = vec![0.0, 1.0, 2.0];
+/// let z = vec![
+///     vec![0.0, 1.0, 2.0, 3.0],
+///     vec![1.0, 2.0, 3.0, 4.0],
+///     vec![2.0, 3.0, 4.0, 5.0],
+/// ];
+/// let spline = RectBivariateSpline::new(&x, &y, &z, 3, 3).unwrap();
+/// let val = spline.eval(1.5, 0.5);
+/// ```
+#[derive(Debug, Clone)]
+pub struct RectBivariateSpline {
+    /// Spline degree in x direction (typically 3 for cubic)
+    kx: usize,
+    /// Spline degree in y direction (typically 3 for cubic)
+    ky: usize,
+    /// Knot vector in x direction
+    tx: Vec<f64>,
+    /// Knot vector in y direction
+    ty: Vec<f64>,
+    /// 2D coefficient array, shape (len(ty) - ky - 1, len(tx) - kx - 1)
+    coeffs: Vec<Vec<f64>>,
+    /// Original x grid for bounds checking
+    x_bounds: (f64, f64),
+    /// Original y grid for bounds checking
+    y_bounds: (f64, f64),
+}
+
+impl RectBivariateSpline {
+    /// Create a new bivariate spline over a rectangular mesh.
+    ///
+    /// # Arguments
+    /// * `x` - 1-D array of x coordinates (must be strictly increasing)
+    /// * `y` - 1-D array of y coordinates (must be strictly increasing)
+    /// * `z` - 2-D array of values, shape `(len(y), len(x))`
+    /// * `kx` - Spline degree in x direction (1 <= kx <= 5, typically 3)
+    /// * `ky` - Spline degree in y direction (1 <= ky <= 5, typically 3)
+    pub fn new(
+        x: &[f64],
+        y: &[f64],
+        z: &[Vec<f64>],
+        kx: usize,
+        ky: usize,
+    ) -> Result<Self, InterpError> {
+        let nx = x.len();
+        let ny = y.len();
+
+        // Validate dimensions
+        if nx < 2 || ny < 2 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 2,
+                actual: nx.min(ny),
+            });
+        }
+        if z.len() != ny {
+            return Err(InterpError::InvalidArgument {
+                detail: format!(
+                    "z has {} rows but y has {} points",
+                    z.len(),
+                    ny
+                ),
+            });
+        }
+        for (i, row) in z.iter().enumerate() {
+            if row.len() != nx {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!(
+                        "z row {} has {} columns but x has {} points",
+                        i,
+                        row.len(),
+                        nx
+                    ),
+                });
+            }
+        }
+
+        // Validate degree
+        if kx < 1 || kx > 5 || ky < 1 || ky > 5 {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("spline degree must be 1-5, got kx={}, ky={}", kx, ky),
+            });
+        }
+
+        // Need at least k+1 points in each direction
+        if nx < kx + 1 {
+            return Err(InterpError::TooFewPoints {
+                minimum: kx + 1,
+                actual: nx,
+            });
+        }
+        if ny < ky + 1 {
+            return Err(InterpError::TooFewPoints {
+                minimum: ky + 1,
+                actual: ny,
+            });
+        }
+
+        // Validate strictly increasing
+        for i in 1..nx {
+            if x[i] <= x[i - 1] {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!("x[{}] = {} <= x[{}] = {}", i, x[i], i - 1, x[i - 1]),
+                });
+            }
+        }
+        for i in 1..ny {
+            if y[i] <= y[i - 1] {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!("y[{}] = {} <= y[{}] = {}", i, y[i], i - 1, y[i - 1]),
+                });
+            }
+        }
+
+        // Build knot vectors using the same formula as make_interp_spline
+        let tx = interpolation_knots(x, kx);
+        let ty = interpolation_knots(y, ky);
+
+        // Compute spline coefficients using tensor product approach
+        let coeffs = Self::compute_coefficients(x, y, z, kx, ky)?;
+
+        Ok(Self {
+            kx,
+            ky,
+            tx,
+            ty,
+            coeffs,
+            x_bounds: (x[0], x[nx - 1]),
+            y_bounds: (y[0], y[ny - 1]),
+        })
+    }
+
+    /// Compute the 2D spline coefficients.
+    ///
+    /// Uses the tensor product approach: fit 1D splines along each row,
+    /// then fit 1D splines along each column of coefficients.
+    fn compute_coefficients(
+        x: &[f64],
+        y: &[f64],
+        z: &[Vec<f64>],
+        kx: usize,
+        ky: usize,
+    ) -> Result<Vec<Vec<f64>>, InterpError> {
+        let nx = x.len();
+        let ny = y.len();
+
+        // Step 1: Fit 1D splines along x for each row of z
+        // This gives us an intermediate coefficient matrix of shape (ny, nx)
+        // (make_interp_spline returns nx coefficients for nx data points)
+        let mut row_coeffs: Vec<Vec<f64>> = Vec::with_capacity(ny);
+
+        for row in z {
+            let spline_x = make_interp_spline(x, row, kx)?;
+            row_coeffs.push(spline_x.coeffs().to_vec());
+        }
+
+        // Step 2: For each column of row_coeffs, fit a 1D spline along y
+        // Final coefficients have shape (ny, nx)
+        let mut final_coeffs: Vec<Vec<f64>> = vec![vec![0.0; nx]; ny];
+
+        for col_idx in 0..nx {
+            // Extract this column
+            let col_values: Vec<f64> = row_coeffs.iter().map(|row| row[col_idx]).collect();
+            let spline_y = make_interp_spline(y, &col_values, ky)?;
+            let y_coeffs = spline_y.coeffs();
+
+            for (row_idx, &coeff) in y_coeffs.iter().enumerate() {
+                final_coeffs[row_idx][col_idx] = coeff;
+            }
+        }
+
+        Ok(final_coeffs)
+    }
+
+    /// Evaluate the spline at a single point.
+    pub fn eval(&self, xi: f64, yi: f64) -> f64 {
+        self.eval_impl(xi, yi, 0, 0)
+    }
+
+    /// Evaluate the spline at multiple points.
+    pub fn eval_many(&self, xi: &[f64], yi: &[f64]) -> Result<Vec<f64>, InterpError> {
+        if xi.len() != yi.len() {
+            return Err(InterpError::InvalidArgument {
+                detail: format!(
+                    "xi and yi must have same length, got {} and {}",
+                    xi.len(),
+                    yi.len()
+                ),
+            });
+        }
+        Ok(xi.iter().zip(yi).map(|(&x, &y)| self.eval(x, y)).collect())
+    }
+
+    /// Evaluate the spline on a grid and return a 2D array.
+    ///
+    /// Returns values at all combinations of xi and yi, shape `(len(yi), len(xi))`.
+    pub fn eval_grid(&self, xi: &[f64], yi: &[f64]) -> Vec<Vec<f64>> {
+        yi.iter()
+            .map(|&yv| xi.iter().map(|&xv| self.eval(xv, yv)).collect())
+            .collect()
+    }
+
+    /// Evaluate the partial derivative d^(dx+dy)f / dx^dx dy^dy.
+    pub fn eval_derivative(&self, xi: f64, yi: f64, dx: usize, dy: usize) -> f64 {
+        self.eval_impl(xi, yi, dx, dy)
+    }
+
+    /// Internal evaluation with derivatives.
+    fn eval_impl(&self, xi: f64, yi: f64, dx: usize, dy: usize) -> f64 {
+        // Clamp to bounds
+        let xi_clamped = xi.clamp(self.x_bounds.0, self.x_bounds.1);
+        let yi_clamped = yi.clamp(self.y_bounds.0, self.y_bounds.1);
+
+        // Use tensor product evaluation via 1D BSplines:
+        // 1. For each row of coefficients, create a 1D x-spline and evaluate at xi
+        // 2. Create a 1D y-spline from those intermediate values and evaluate at yi
+
+        let ny = self.coeffs.len();
+        let mut intermediate = Vec::with_capacity(ny);
+
+        for row in &self.coeffs {
+            // Create x-direction spline for this row of coefficients
+            let mut x_spline = BSpline::new(self.tx.clone(), row.clone(), self.kx)
+                .expect("x spline construction");
+
+            // Apply x derivative if needed
+            for _ in 0..dx {
+                x_spline = x_spline.derivative(1).expect("x derivative");
+            }
+
+            intermediate.push(x_spline.eval(xi_clamped));
+        }
+
+        // Create y-direction spline from intermediate values
+        let mut y_spline = BSpline::new(self.ty.clone(), intermediate, self.ky)
+            .expect("y spline construction");
+
+        // Apply y derivative if needed
+        for _ in 0..dy {
+            y_spline = y_spline.derivative(1).expect("y derivative");
+        }
+
+        y_spline.eval(yi_clamped)
+    }
+
+    /// Compute the integral over a rectangular region.
+    ///
+    /// Matches `scipy.interpolate.RectBivariateSpline.integral(xa, xb, ya, yb)`.
+    pub fn integral(&self, xa: f64, xb: f64, ya: f64, yb: f64) -> f64 {
+        // Use Gaussian quadrature for integration
+        // 5-point Gauss-Legendre on [-1, 1]
+        let gauss_points = [
+            -0.906_179_845_938_664,
+            -0.538_469_310_105_683,
+            0.0,
+            0.538_469_310_105_683,
+            0.906_179_845_938_664,
+        ];
+        let gauss_weights = [
+            0.236_926_885_056_189,
+            0.478_628_670_499_366,
+            0.568_888_888_888_889,
+            0.478_628_670_499_366,
+            0.236_926_885_056_189,
+        ];
+
+        let xmid = (xa + xb) / 2.0;
+        let xscale = (xb - xa) / 2.0;
+        let ymid = (ya + yb) / 2.0;
+        let yscale = (yb - ya) / 2.0;
+
+        let mut result = 0.0;
+        for (i, &gx) in gauss_points.iter().enumerate() {
+            let xi = xmid + xscale * gx;
+            let wx = gauss_weights[i];
+            for (j, &gy) in gauss_points.iter().enumerate() {
+                let yi = ymid + yscale * gy;
+                let wy = gauss_weights[j];
+                result += wx * wy * self.eval(xi, yi);
+            }
+        }
+
+        result * xscale * yscale
+    }
+
+    /// Get spline degrees.
+    pub fn degrees(&self) -> (usize, usize) {
+        (self.kx, self.ky)
+    }
+
+    /// Get knot vectors.
+    pub fn knots(&self) -> (&[f64], &[f64]) {
+        (&self.tx, &self.ty)
+    }
+
+    /// Get coefficient array.
+    pub fn coefficients(&self) -> &[Vec<f64>] {
+        &self.coeffs
+    }
+}
+
+/// Convenience constructor for bicubic spline (kx=ky=3).
+pub fn rect_bivariate_spline(
+    x: &[f64],
+    y: &[f64],
+    z: &[Vec<f64>],
+) -> Result<RectBivariateSpline, InterpError> {
+    RectBivariateSpline::new(x, y, z, 3, 3)
+}
+
+/// Convenience constructor for bilinear spline (kx=ky=1).
+pub fn rect_bilinear_spline(
+    x: &[f64],
+    y: &[f64],
+    z: &[Vec<f64>],
+) -> Result<RectBivariateSpline, InterpError> {
+    RectBivariateSpline::new(x, y, z, 1, 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3665,5 +3997,172 @@ mod tests {
         let y = vec![0.0, 1.0, 2.0];
         let err = Akima1DInterpolator::new(&x, &y).expect_err("nan in x");
         assert!(matches!(err, InterpError::NonFiniteX));
+    }
+
+    // ── RectBivariateSpline tests ────────────────────────────────────
+
+    #[test]
+    fn rect_bivariate_spline_linear_plane() {
+        // z = x + y should be interpolated exactly by any spline
+        // Use 4 points in each direction for cubic (k=3 needs k+1=4 points)
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 2.0, 3.0];
+        let z = vec![
+            vec![0.0, 1.0, 2.0, 3.0], // y=0
+            vec![1.0, 2.0, 3.0, 4.0], // y=1
+            vec![2.0, 3.0, 4.0, 5.0], // y=2
+            vec![3.0, 4.0, 5.0, 6.0], // y=3
+        ];
+        let spline = RectBivariateSpline::new(&x, &y, &z, 3, 3).expect("bicubic");
+
+        // Test at grid points
+        for (yi, yval) in y.iter().enumerate() {
+            for (xi, xval) in x.iter().enumerate() {
+                let val = spline.eval(*xval, *yval);
+                let expected = z[yi][xi];
+                assert!(
+                    (val - expected).abs() < 1e-10,
+                    "at ({}, {}): got {}, expected {}",
+                    xval, yval, val, expected
+                );
+            }
+        }
+
+        // Test at midpoints
+        let val = spline.eval(0.5, 0.5);
+        assert!((val - 1.0).abs() < 0.1, "at (0.5, 0.5): got {}, expected 1.0", val);
+
+        let val = spline.eval(1.5, 1.0);
+        assert!((val - 2.5).abs() < 0.1, "at (1.5, 1.0): got {}, expected 2.5", val);
+    }
+
+    #[test]
+    fn rect_bivariate_spline_bilinear() {
+        // Test bilinear spline (kx=ky=1)
+        let x = vec![0.0, 1.0];
+        let y = vec![0.0, 1.0];
+        let z = vec![
+            vec![0.0, 1.0],
+            vec![1.0, 2.0],
+        ];
+        let spline = rect_bilinear_spline(&x, &y, &z).expect("bilinear");
+
+        // Corners
+        assert!((spline.eval(0.0, 0.0) - 0.0).abs() < 1e-10);
+        assert!((spline.eval(1.0, 0.0) - 1.0).abs() < 1e-10);
+        assert!((spline.eval(0.0, 1.0) - 1.0).abs() < 1e-10);
+        assert!((spline.eval(1.0, 1.0) - 2.0).abs() < 1e-10);
+
+        // Center
+        let center = spline.eval(0.5, 0.5);
+        assert!((center - 1.0).abs() < 1e-10, "center: got {}, expected 1.0", center);
+    }
+
+    #[test]
+    fn rect_bivariate_spline_quadratic_surface() {
+        // z = x^2 + y^2
+        let x: Vec<f64> = (0..5).map(|i| i as f64).collect();
+        let y: Vec<f64> = (0..5).map(|i| i as f64).collect();
+        let z: Vec<Vec<f64>> = y
+            .iter()
+            .map(|&yv| x.iter().map(|&xv| xv * xv + yv * yv).collect())
+            .collect();
+
+        let spline = rect_bivariate_spline(&x, &y, &z).expect("bicubic");
+
+        // Test at grid points
+        for (yi, &yv) in y.iter().enumerate() {
+            for (xi, &xv) in x.iter().enumerate() {
+                let val = spline.eval(xv, yv);
+                let expected = z[yi][xi];
+                assert!(
+                    (val - expected).abs() < 1e-8,
+                    "at ({}, {}): got {}, expected {}",
+                    xv, yv, val, expected
+                );
+            }
+        }
+
+        // Test at a midpoint (2.5, 2.5) - expected 12.5
+        let val = spline.eval(2.5, 2.5);
+        assert!((val - 12.5).abs() < 0.5, "at (2.5, 2.5): got {}, expected 12.5", val);
+    }
+
+    #[test]
+    fn rect_bivariate_spline_eval_grid() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 2.0, 3.0];
+        let z: Vec<Vec<f64>> = y
+            .iter()
+            .map(|&yv| x.iter().map(|&xv| xv + yv).collect())
+            .collect();
+
+        let spline = rect_bivariate_spline(&x, &y, &z).expect("bicubic");
+
+        let xi = vec![0.5, 1.5];
+        let yi = vec![0.5, 1.5];
+        let result = spline.eval_grid(&xi, &yi);
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].len(), 2);
+
+        // Check corners of result grid
+        assert!((result[0][0] - 1.0).abs() < 0.2, "got {}", result[0][0]); // (0.5, 0.5)
+        assert!((result[0][1] - 2.0).abs() < 0.2, "got {}", result[0][1]); // (1.5, 0.5)
+        assert!((result[1][0] - 2.0).abs() < 0.2, "got {}", result[1][0]); // (0.5, 1.5)
+        assert!((result[1][1] - 3.0).abs() < 0.2, "got {}", result[1][1]); // (1.5, 1.5)
+    }
+
+    #[test]
+    fn rect_bivariate_spline_integral() {
+        // Constant function z = 1 over [0,1] x [0,1] should integrate to 1
+        let x = vec![0.0, 0.5, 1.0];
+        let y = vec![0.0, 0.5, 1.0];
+        let z = vec![
+            vec![1.0, 1.0, 1.0],
+            vec![1.0, 1.0, 1.0],
+            vec![1.0, 1.0, 1.0],
+        ];
+
+        let spline = rect_bilinear_spline(&x, &y, &z).expect("bilinear");
+        let integral = spline.integral(0.0, 1.0, 0.0, 1.0);
+        assert!((integral - 1.0).abs() < 0.01, "integral: got {}, expected 1.0", integral);
+    }
+
+    #[test]
+    fn rect_bivariate_spline_rejects_mismatched_dimensions() {
+        let x = vec![0.0, 1.0, 2.0];
+        let y = vec![0.0, 1.0];
+        let z = vec![
+            vec![0.0, 1.0], // Wrong: should have 3 columns
+        ];
+        let err = RectBivariateSpline::new(&x, &y, &z, 1, 1).expect_err("dimension mismatch");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn rect_bivariate_spline_rejects_non_monotonic_x() {
+        let x = vec![0.0, 2.0, 1.0]; // Not strictly increasing
+        let y = vec![0.0, 1.0];
+        let z = vec![
+            vec![0.0, 1.0, 2.0],
+            vec![1.0, 2.0, 3.0],
+        ];
+        let err = RectBivariateSpline::new(&x, &y, &z, 1, 1).expect_err("non-monotonic");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn rect_bivariate_spline_too_few_points() {
+        let x = vec![0.0, 1.0]; // Only 2 points, need 4 for cubic
+        let y = vec![0.0, 1.0, 2.0, 3.0];
+        let z = vec![
+            vec![0.0, 1.0],
+            vec![1.0, 2.0],
+            vec![2.0, 3.0],
+            vec![3.0, 4.0],
+        ];
+        let err = RectBivariateSpline::new(&x, &y, &z, 3, 3).expect_err("too few points");
+        assert!(matches!(err, InterpError::TooFewPoints { .. }));
     }
 }
