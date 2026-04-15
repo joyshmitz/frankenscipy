@@ -2,6 +2,7 @@
 
 use crate::{DifferentialOracleConfig, HarnessConfig, run_differential_test};
 use blake3::hash;
+use fsci_runtime::AuditLedger;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -701,4 +702,86 @@ fn write_log_entry(
             path: events_path.to_path_buf(),
             source,
         })
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Audit Ledger Emission (§0.19)
+// ═══════════════════════════════════════════════════════════════════
+
+/// Write an AuditLedger to a .jsonl file in the specified directory.
+///
+/// The output file is named `audit_ledger.jsonl` and contains one JSON
+/// object per line (JSON Lines format).
+pub fn emit_audit_ledger(
+    artifact_dir: &Path,
+    ledger: &AuditLedger,
+) -> Result<PathBuf, E2eOrchestratorError> {
+    fs::create_dir_all(artifact_dir).map_err(|source| E2eOrchestratorError::LogWrite {
+        path: artifact_dir.to_path_buf(),
+        source,
+    })?;
+
+    let output_path = artifact_dir.join("audit_ledger.jsonl");
+    let file = File::create(&output_path).map_err(|source| E2eOrchestratorError::LogWrite {
+        path: output_path.clone(),
+        source,
+    })?;
+    let mut writer = BufWriter::new(file);
+
+    for entry in ledger.entries() {
+        serde_json::to_writer(&mut writer, entry)?;
+        writer
+            .write_all(b"\n")
+            .map_err(|source| E2eOrchestratorError::LogWrite {
+                path: output_path.clone(),
+                source,
+            })?;
+    }
+
+    writer
+        .flush()
+        .map_err(|source| E2eOrchestratorError::LogWrite {
+            path: output_path.clone(),
+            source,
+        })?;
+
+    Ok(output_path)
+}
+
+/// Write an AuditLedger to a .jsonl file with a custom filename.
+pub fn emit_audit_ledger_named(
+    artifact_dir: &Path,
+    filename: &str,
+    ledger: &AuditLedger,
+) -> Result<PathBuf, E2eOrchestratorError> {
+    fs::create_dir_all(artifact_dir).map_err(|source| E2eOrchestratorError::LogWrite {
+        path: artifact_dir.to_path_buf(),
+        source,
+    })?;
+
+    let output_path = artifact_dir.join(filename);
+    let file = File::create(&output_path).map_err(|source| E2eOrchestratorError::LogWrite {
+        path: output_path.clone(),
+        source,
+    })?;
+    let mut writer = BufWriter::new(file);
+
+    for entry in ledger.entries() {
+        serde_json::to_writer(&mut writer, entry)?;
+        writer
+            .write_all(b"\n")
+            .map_err(|source| E2eOrchestratorError::LogWrite {
+                path: output_path.clone(),
+                source,
+            })?;
+    }
+
+    writer
+        .flush()
+        .map_err(|source| E2eOrchestratorError::LogWrite {
+            path: output_path.clone(),
+            source,
+        })?;
+
+    Ok(output_path)
 }
