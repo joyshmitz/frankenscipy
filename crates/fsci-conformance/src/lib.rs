@@ -4759,6 +4759,99 @@ fn compare_signal_case_differential(
     }
 }
 
+fn compare_spatial_case_differential(
+    case: &SpatialCase,
+    observed: &SpatialObserved,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    let (passed, message) = compare_spatial_outcome(case, observed);
+    let tolerance = || ToleranceUsed {
+        atol: case.expected.atol.unwrap_or(1e-10),
+        rtol: case.expected.rtol.unwrap_or(1e-10),
+        comparison_mode: "allclose".to_owned(),
+    };
+
+    match (case.expected.kind.as_str(), observed) {
+        ("scalar", SpatialObserved::Scalar(actual)) => {
+            let expected = case
+                .expected
+                .value
+                .as_ref()
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
+            (
+                passed,
+                message,
+                Some((actual - expected).abs()),
+                Some(tolerance()),
+            )
+        }
+        ("array", SpatialObserved::Array1D(actual)) => {
+            let expected: Vec<f64> = case
+                .expected
+                .value
+                .as_ref()
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default();
+            (
+                passed,
+                message,
+                Some(max_diff_vec(actual, &expected)),
+                Some(tolerance()),
+            )
+        }
+        ("matrix", SpatialObserved::Array2D(actual)) => {
+            let expected: Vec<Vec<f64>> = case
+                .expected
+                .value
+                .as_ref()
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default();
+            (
+                passed,
+                message,
+                Some(max_diff_matrix(actual, &expected)),
+                Some(tolerance()),
+            )
+        }
+        (
+            "kdtree_query_result",
+            SpatialObserved::KdTreeQuery {
+                index: actual_index,
+                distance: actual_distance,
+            },
+        ) => {
+            let expected_distance = case.expected.distance.unwrap_or(0.0);
+            let diff = if *actual_index == case.expected.index.unwrap_or(usize::MAX) {
+                (actual_distance - expected_distance).abs()
+            } else {
+                f64::INFINITY
+            };
+            (passed, message, Some(diff), Some(tolerance()))
+        }
+        ("convex_hull", SpatialObserved::ConvexHull { vertices, area }) => {
+            let expected_vertices = case.expected.vertices.as_deref().unwrap_or(&[]);
+            let expected_area = case.expected.area.unwrap_or(0.0);
+            let vertex_diff = if vertices.as_slice() == expected_vertices {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+            let diff = vertex_diff.max((area - expected_area).abs());
+            (passed, message, Some(diff), Some(tolerance()))
+        }
+        ("procrustes_result", SpatialObserved::Procrustes { disparity }) => {
+            let expected_disparity = case.expected.disparity.unwrap_or(0.0);
+            (
+                passed,
+                message,
+                Some((disparity - expected_disparity).abs()),
+                Some(tolerance()),
+            )
+        }
+        _ => (passed, message, None, None),
+    }
+}
+
 pub fn run_integrate_packet(
     config: &HarnessConfig,
     fixture_name: &str,
@@ -6160,6 +6253,8 @@ pub fn run_differential_test(
         run_differential_special(fixture_path, &raw, oracle_config)
     } else if family.contains("optim") {
         run_differential_optimize(fixture_path, &raw, oracle_config)
+    } else if family.contains("spatial") {
+        run_differential_spatial(fixture_path, &raw, oracle_config)
     } else if family.contains("signal") {
         run_differential_signal(fixture_path, &raw, oracle_config)
     } else if family.contains("stats") {
@@ -6556,6 +6651,53 @@ fn run_differential_signal(
     }
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+fn run_differential_spatial(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: SpatialPacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+
+    for case in &fixture.cases {
+        let observed = execute_spatial_case(case);
+        let (passed, message, max_diff, tolerance_used) =
+            compare_spatial_case_differential(case, &observed);
+
+        per_case_results.push(DifferentialCaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+            max_diff,
+            tolerance_used,
+            oracle_status: oracle_status.clone(),
+        });
+    }
+
+    let pass_count = per_case_results
+        .iter()
+        .filter(|result| result.passed)
+        .count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
 
     Ok(ConformanceReport {
@@ -8135,12 +8277,13 @@ mod tests {
         AggregateParityReport, ArrayApiPacketFixture, ConformanceReport, DifferentialOracleConfig,
         HarnessConfig, IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome,
         LinalgPacketFixture, OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
-        SignalPacketFixture, SpecialPacketFixture, StatsPacketFixture, aggregate_packet_reports,
-        discover_fixtures, ensure_artifact_layout, load_oracle_capture, run_array_api_packet,
-        run_casp_packet, run_cluster_packet, run_differential_test, run_fft_packet,
-        run_integrate_packet, run_linalg_packet, run_linalg_packet_with_oracle_capture,
-        run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet,
-        run_special_packet, run_stats_packet, run_validate_tol_packet, write_parity_artifacts,
+        SignalPacketFixture, SpatialPacketFixture, SpecialPacketFixture, StatsPacketFixture,
+        aggregate_packet_reports, discover_fixtures, ensure_artifact_layout, load_oracle_capture,
+        run_array_api_packet, run_casp_packet, run_cluster_packet, run_differential_test,
+        run_fft_packet, run_integrate_packet, run_linalg_packet,
+        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_signal_packet, run_smoke,
+        run_sparse_packet, run_spatial_packet, run_special_packet, run_stats_packet,
+        run_validate_tol_packet, write_parity_artifacts,
     };
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
@@ -8575,6 +8718,17 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     fn signal_case_expected_summary(expected: &super::SignalExpected) -> String {
+        format!("{expected:?}")
+    }
+
+    fn spatial_case_input_summary(case: &super::SpatialCase) -> String {
+        format!(
+            "function={} mode={} args={:?}",
+            case.function, case.mode, case.args
+        )
+    }
+
+    fn spatial_case_expected_summary(expected: &super::SpatialExpected) -> String {
         format!("{expected:?}")
     }
 
@@ -9452,6 +9606,95 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let output_path = output_dir.join("structured_case_logs.json");
         let payload = serde_json::to_vec_pretty(&logs).expect("serialize signal logs");
         fs::write(&output_path, payload).expect("write signal structured logs");
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn differential_test_spatial_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-010_spatial_core.json");
+        let oracle = default_test_oracle();
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("differential spatial runs");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-010");
+        assert_eq!(report.family, "spatial_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 20);
+    }
+
+    #[test]
+    fn differential_spatial_quota_and_structured_logs() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-010_spatial_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read spatial fixture");
+        let fixture: SpatialPacketFixture =
+            serde_json::from_str(&raw).expect("parse spatial fixture");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle).expect("spatial differential");
+
+        let mut by_case = std::collections::BTreeMap::new();
+        for case in &fixture.cases {
+            by_case.insert(case.case_id().to_owned(), case);
+        }
+
+        let mut differential_count = 0usize;
+        let mut logs = Vec::with_capacity(report.per_case_results.len());
+
+        for case_result in &report.per_case_results {
+            let case = by_case
+                .get(&case_result.case_id)
+                .expect("every report case should exist in fixture");
+            if case.category == "differential" {
+                differential_count += 1;
+            }
+
+            let log = StructuredCaseLog {
+                test_id: case_result.case_id.clone(),
+                category: case.category.clone(),
+                input_summary: spatial_case_input_summary(case),
+                expected: spatial_case_expected_summary(&case.expected),
+                actual: case_result.message.clone(),
+                diff: case_result.max_diff,
+                tolerance: case_result.tolerance_used.clone(),
+                pass: case_result.passed,
+            };
+
+            let payload =
+                serde_json::to_string(&log).expect("structured conformance log should serialize");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&payload).expect("structured log should parse");
+            assert!(parsed.get("test_id").is_some());
+            assert!(parsed.get("category").is_some());
+            assert!(parsed.get("input_summary").is_some());
+            assert!(parsed.get("expected").is_some());
+            assert!(parsed.get("actual").is_some());
+            assert!(parsed.get("diff").is_some());
+            assert!(parsed.get("tolerance").is_some());
+            assert!(parsed.get("pass").is_some());
+            logs.push(log);
+        }
+
+        assert_eq!(
+            differential_count, 20,
+            "expected 20 differential cases, got {differential_count}"
+        );
+        assert_eq!(report.fail_count, 0);
+
+        let output_dir = HarnessConfig::default_paths()
+            .artifact_dir_for("P2C-010")
+            .join("differential");
+        fs::create_dir_all(&output_dir).expect("create spatial differential artifact directory");
+        let output_path = output_dir.join("structured_case_logs.json");
+        let payload = serde_json::to_vec_pretty(&logs).expect("serialize spatial logs");
+        fs::write(&output_path, payload).expect("write spatial structured logs");
         assert!(output_path.exists());
     }
 
