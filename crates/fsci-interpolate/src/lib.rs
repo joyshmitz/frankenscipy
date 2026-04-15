@@ -1571,7 +1571,8 @@ pub struct RegularGridInterpolator {
     fill_value: Option<f64>,
     /// Per-axis spline coefficients for Cubic/Quintic methods.
     /// Each inner Vec contains spline coefficients for that axis.
-    spline_coeffs_per_axis: Option<Vec<Vec<[f64; 4]>>>,
+    /// Reserved for future precomputation optimization.
+    _spline_coeffs_per_axis: Option<Vec<Vec<[f64; 4]>>>,
 }
 
 impl RegularGridInterpolator {
@@ -1641,7 +1642,7 @@ impl RegularGridInterpolator {
             method,
             bounds_error,
             fill_value,
-            spline_coeffs_per_axis: None,
+            _spline_coeffs_per_axis: None,
         })
     }
 
@@ -1755,8 +1756,6 @@ impl RegularGridInterpolator {
     /// Uses successive 1D cubic spline interpolations along each axis.
     /// For degree k, we need k+1 points per axis.
     fn eval_spline(&self, xi: &[f64], _degree: usize) -> Result<f64, InterpError> {
-        let ndim = self.ndim();
-
         // For tensor-product interpolation, we apply 1D spline interpolation
         // successively along each dimension. Start with a hypercube of values
         // and reduce dimension by interpolating along one axis at a time.
@@ -1773,8 +1772,7 @@ impl RegularGridInterpolator {
         // For cubic spline, we use 4 points per dimension (local cubic).
         // This is the "not-a-knot" style local cubic that scipy uses.
 
-        let mut result = self.eval_spline_tensor_product(xi)?;
-        Ok(result)
+        self.eval_spline_tensor_product(xi)
     }
 
     /// Compute tensor product cubic spline interpolation.
@@ -1786,7 +1784,7 @@ impl RegularGridInterpolator {
         // For each dimension, compute interpolation indices and weights
         let mut interp_data: Vec<(usize, [f64; 4])> = Vec::with_capacity(ndim);
 
-        for (dim, (axis, &x)) in self.points.iter().zip(xi).enumerate() {
+        for (axis, &x) in self.points.iter().zip(xi) {
             let n = axis.len();
 
             // Find the interval: we want 4 points centered around x
