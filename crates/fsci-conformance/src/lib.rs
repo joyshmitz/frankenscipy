@@ -22,6 +22,7 @@ use fsci_arrayapi::{
     ones as arrayapi_ones, reshape as arrayapi_reshape, result_type as arrayapi_result_type,
     transpose as arrayapi_transpose, zeros as arrayapi_zeros,
 };
+use fsci_fft::sync_audit_ledger as fft_sync_audit_ledger;
 use fsci_integrate::{
     ToleranceValue, cumulative_simpson, cumulative_trapezoid, fixed_quad, gauss_legendre,
     newton_cotes, romb, simpson, sync_audit_ledger as integrate_sync_audit_ledger, trapezoid,
@@ -2103,6 +2104,188 @@ fn execute_fft_case(case: &FftCase) -> FftObserved {
                 Err(e) => FftObserved::Error(format!("{e}")),
             }
         }
+    }
+}
+
+fn execute_fft_case_with_differential_audit(
+    case: &FftCase,
+    audit_ledger: &fsci_fft::SyncSharedAuditLedger,
+) -> FftObserved {
+    use fsci_fft::{FftOptions, Normalization};
+
+    let mut opts = FftOptions::default().with_mode(case.mode);
+    if let Some(norm) = &case.normalization {
+        opts = opts.with_normalization(match norm {
+            FftNormalization::Forward => Normalization::Forward,
+            FftNormalization::Backward => Normalization::Backward,
+            FftNormalization::Ortho => Normalization::Ortho,
+        });
+    }
+
+    match case.transform {
+        FftTransformKind::Fft => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("fft requires complex_input".to_owned()),
+            };
+            match fsci_fft::fft_with_audit(&input, &opts, audit_ledger) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Ifft => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("ifft requires complex_input".to_owned()),
+            };
+            match fsci_fft::ifft_with_audit(&input, &opts, audit_ledger) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Rfft => {
+            let input = match &case.real_input {
+                Some(v) => v.as_slice(),
+                None => return FftObserved::Error("rfft requires real_input".to_owned()),
+            };
+            match fsci_fft::rfft_with_audit(input, &opts, audit_ledger) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Irfft => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("irfft requires complex_input".to_owned()),
+            };
+            match fsci_fft::irfft_with_audit(&input, case.output_len, &opts, audit_ledger) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Rfft2 => {
+            let input = match &case.real_input {
+                Some(v) => v.as_slice(),
+                None => return FftObserved::Error("rfft2 requires real_input".to_owned()),
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("rfft2 requires shape".to_owned()),
+            };
+            if shape.len() != 2 {
+                return FftObserved::Error("rfft2 requires 2D shape".to_owned());
+            }
+            match fsci_fft::rfft2_with_audit(input, (shape[0], shape[1]), &opts, audit_ledger) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Irfft2 => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("irfft2 requires complex_input".to_owned()),
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("irfft2 requires shape".to_owned()),
+            };
+            if shape.len() != 2 {
+                return FftObserved::Error("irfft2 requires 2D shape".to_owned());
+            }
+            match fsci_fft::irfft2_with_audit(&input, (shape[0], shape[1]), &opts, audit_ledger) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Rfftn => {
+            let input = match &case.real_input {
+                Some(v) => v.as_slice(),
+                None => return FftObserved::Error("rfftn requires real_input".to_owned()),
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("rfftn requires shape".to_owned()),
+            };
+            match fsci_fft::rfftn_with_audit(input, &shape, &opts, audit_ledger) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Irfftn => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("irfftn requires complex_input".to_owned()),
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("irfftn requires shape".to_owned()),
+            };
+            match fsci_fft::irfftn_with_audit(&input, &shape, &opts, audit_ledger) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Hfft => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => return FftObserved::Error("hfft requires complex_input".to_owned()),
+            };
+            match fsci_fft::hfft_with_audit(&input, case.output_len, &opts, audit_ledger) {
+                Ok(v) => FftObserved::RealVector(v),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Ihfft => {
+            let input = match &case.real_input {
+                Some(v) => v.as_slice(),
+                None => return FftObserved::Error("ihfft requires real_input".to_owned()),
+            };
+            match fsci_fft::ihfft_with_audit(input, case.output_len, &opts, audit_ledger) {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        FftTransformKind::Fft2
+        | FftTransformKind::Ifft2
+        | FftTransformKind::Fftn
+        | FftTransformKind::Ifftn => {
+            let input: Vec<(f64, f64)> = match &case.complex_input {
+                Some(v) => v.iter().map(|c| (c[0], c[1])).collect(),
+                None => {
+                    return FftObserved::Error("nd transforms require complex_input".to_owned());
+                }
+            };
+            let shape = match &case.shape {
+                Some(s) => s.clone(),
+                None => return FftObserved::Error("nd transforms require shape".to_owned()),
+            };
+            let result = match case.transform {
+                FftTransformKind::Fft2 => {
+                    if shape.len() != 2 {
+                        return FftObserved::Error("fft2 requires 2D shape".to_owned());
+                    }
+                    fsci_fft::fft2_with_audit(&input, (shape[0], shape[1]), &opts, audit_ledger)
+                }
+                FftTransformKind::Ifft2 => {
+                    if shape.len() != 2 {
+                        return FftObserved::Error("ifft2 requires 2D shape".to_owned());
+                    }
+                    fsci_fft::ifft2_with_audit(&input, (shape[0], shape[1]), &opts, audit_ledger)
+                }
+                FftTransformKind::Fftn => {
+                    fsci_fft::fftn_with_audit(&input, &shape, &opts, audit_ledger)
+                }
+                FftTransformKind::Ifftn => {
+                    fsci_fft::ifftn_with_audit(&input, &shape, &opts, audit_ledger)
+                }
+                _ => return FftObserved::Error("Unsupported FFT transform kind".to_owned()),
+            };
+            match result {
+                Ok(v) => FftObserved::ComplexVector(v.iter().map(|c| [c.0, c.1]).collect()),
+                Err(e) => FftObserved::Error(format!("{e}")),
+            }
+        }
+        _ => execute_fft_case(case),
     }
 }
 
@@ -7172,9 +7355,10 @@ fn run_differential_fft(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = fft_sync_audit_ledger();
 
     for case in &fixture.cases {
-        let observed = execute_fft_case(case);
+        let observed = execute_fft_case_with_differential_audit(case, &audit_ledger);
         let (passed, message, max_diff, tolerance_used) =
             compare_fft_case_differential(case, &observed);
 
@@ -7193,6 +7377,16 @@ fn run_differential_fft(
         .filter(|result| result.passed)
         .count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    if let Ok(ledger) = audit_ledger.lock() {
+        if !ledger.is_empty() {
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
+        }
+    } else {
+        return Err(HarnessError::RaptorQ(
+            "fft audit ledger poisoned".to_owned(),
+        ));
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -10482,6 +10676,55 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             serde_json::to_string_pretty(&report).unwrap()
         );
         assert!(report.pass_count >= 56);
+    }
+
+    #[test]
+    fn differential_test_fft_hardened_audit_emission() {
+        let unique = format!("fsci-conformance-fft-audit-{}", super::now_unix_ms());
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).expect("create temp fixture root");
+        let fixture_path = root.join("FSCI-P2C-005_fft_audit.json");
+        let fixture = serde_json::json!({
+            "packet_id": "P2C-005-AUDIT",
+            "family": "fft_core",
+            "cases": [{
+                "case_id": "irfft_hardened_length_mismatch",
+                "category": "irfft",
+                "mode": "Hardened",
+                "transform": "irfft",
+                "normalization": "backward",
+                "real_input": null,
+                "complex_input": [[1.0, 0.0], [0.0, 0.0]],
+                "output_len": 8,
+                "sample_spacing": null,
+                "shape": null,
+                "expected": {
+                    "kind": "error",
+                    "error": "length mismatch"
+                }
+            }]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize fft audit fixture"),
+        )
+        .expect("write fft audit fixture");
+
+        let oracle = default_test_oracle();
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("differential fft audit runs");
+
+        assert_eq!(report.packet_id, "P2C-005-AUDIT");
+        assert_eq!(report.fail_count, 0);
+        assert_eq!(report.pass_count, 1);
+
+        let audit_path =
+            super::differential_audit_ledger_path_for_fixture(&fixture_path, &report.packet_id);
+        let audit_jsonl = fs::read_to_string(&audit_path).expect("read fft audit ledger");
+        assert!(audit_path.exists());
+        assert!(audit_jsonl.contains("\"kind\":\"mode_decision\""));
+        assert!(audit_jsonl.contains("\"kind\":\"fail_closed\""));
+        assert!(audit_jsonl.contains("length_mismatch"));
     }
 
     #[test]

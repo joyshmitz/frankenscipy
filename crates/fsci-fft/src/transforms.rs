@@ -1,10 +1,11 @@
 use std::f64::consts::PI;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use fsci_runtime::RuntimeMode;
+use fsci_runtime::{AuditAction, AuditEvent, AuditLedger, RuntimeMode, casp_now_unix_ms};
 
 use crate::plan::{
     PlanFingerprint, PlanKey, PlanMetadata, PlanningStrategy, lookup_shared_plan, store_shared_plan,
@@ -99,6 +100,15 @@ impl FftBackend for CooleyTukeyBackend {
 }
 
 static COOLEY_TUKEY_BACKEND: CooleyTukeyBackend = CooleyTukeyBackend;
+
+/// Thread-safe audit ledger handle for synchronous FFT entrypoints.
+pub type SyncSharedAuditLedger = Arc<Mutex<AuditLedger>>;
+
+/// Create a new shared audit ledger for synchronous FFT operations.
+#[must_use]
+pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
+    Arc::new(Mutex::new(AuditLedger::new()))
+}
 
 /// Radix-2 Cooley-Tukey FFT for power-of-2 lengths.
 /// Iterative (bottom-up) implementation for better cache behavior.
@@ -407,19 +417,90 @@ pub fn take_transform_traces() -> Vec<TransformTrace> {
 
 /// 1D forward complex FFT.
 pub fn fft(input: &[Complex64], options: &FftOptions) -> Result<Vec<Complex64>, FftError> {
-    run_complex_1d(TransformKind::Fft, input, options, false)
+    fft_impl(input, options, None)
+}
+
+/// 1D forward complex FFT with audit logging.
+pub fn fft_with_audit(
+    input: &[Complex64],
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    fft_impl(input, options, Some(audit_ledger))
 }
 
 /// 1D inverse complex FFT.
 pub fn ifft(input: &[Complex64], options: &FftOptions) -> Result<Vec<Complex64>, FftError> {
-    run_complex_1d(TransformKind::Ifft, input, options, true)
+    ifft_impl(input, options, None)
+}
+
+/// 1D inverse complex FFT with audit logging.
+pub fn ifft_with_audit(
+    input: &[Complex64],
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    ifft_impl(input, options, Some(audit_ledger))
 }
 
 /// 1D real-input FFT.
 pub fn rfft(input: &[f64], options: &FftOptions) -> Result<Vec<Complex64>, FftError> {
-    ensure_non_empty(input.len())?;
-    validate_workers(options.workers)?;
-    validate_finite_real(input, options)?;
+    rfft_impl(input, options, None)
+}
+
+/// 1D real-input FFT with audit logging.
+pub fn rfft_with_audit(
+    input: &[f64],
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    rfft_impl(input, options, Some(audit_ledger))
+}
+
+/// 1D inverse real FFT.
+pub fn irfft(
+    input: &[Complex64],
+    output_len: Option<usize>,
+    options: &FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    irfft_impl(input, output_len, options, None)
+}
+
+/// 1D inverse real FFT with audit logging.
+pub fn irfft_with_audit(
+    input: &[Complex64],
+    output_len: Option<usize>,
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<f64>, FftError> {
+    irfft_impl(input, output_len, options, Some(audit_ledger))
+}
+
+fn fft_impl(
+    input: &[Complex64],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    run_complex_1d(TransformKind::Fft, input, options, false, audit_ledger)
+}
+
+fn ifft_impl(
+    input: &[Complex64],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    run_complex_1d(TransformKind::Ifft, input, options, true, audit_ledger)
+}
+
+fn rfft_impl(
+    input: &[f64],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    let fingerprint = real_fingerprint(input);
+    ensure_non_empty_with_audit(input.len(), &fingerprint, audit_ledger)?;
+    validate_workers_with_audit(options.workers, &fingerprint, audit_ledger)?;
+    validate_finite_real_with_audit(input, options, &fingerprint, audit_ledger)?;
 
     let backend = resolve_backend(options.backend);
     let key = PlanKey::new(
@@ -449,15 +530,16 @@ pub fn rfft(input: &[f64], options: &FftOptions) -> Result<Vec<Complex64>, FftEr
     Ok(output)
 }
 
-/// 1D inverse real FFT.
-pub fn irfft(
+fn irfft_impl(
     input: &[Complex64],
     output_len: Option<usize>,
     options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<f64>, FftError> {
-    ensure_non_empty(input.len())?;
-    validate_workers(options.workers)?;
-    validate_finite_complex(input, options)?;
+    let fingerprint = complex_fingerprint(input);
+    ensure_non_empty_with_audit(input.len(), &fingerprint, audit_ledger)?;
+    validate_workers_with_audit(options.workers, &fingerprint, audit_ledger)?;
+    validate_finite_complex_with_audit(input, options, &fingerprint, audit_ledger)?;
 
     let n = output_len.unwrap_or_else(|| {
         if input.len() == 1 {
@@ -467,6 +549,12 @@ pub fn irfft(
         }
     });
     if n == 0 {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "invalid_output_len",
+            "rejected: output_len cannot be zero",
+        );
         return Err(FftError::InvalidShape {
             detail: "output_len cannot be zero",
         });
@@ -474,6 +562,15 @@ pub fn irfft(
 
     let expected_len = n / 2 + 1;
     if input.len() != expected_len {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "length_mismatch",
+            format!(
+                "rejected: expected spectrum length {expected_len}, got {}",
+                input.len()
+            ),
+        );
         return Err(FftError::LengthMismatch {
             expected: expected_len,
             actual: input.len(),
@@ -515,7 +612,18 @@ pub fn fft2(
     options: &FftOptions,
 ) -> Result<Vec<Complex64>, FftError> {
     let dims = [shape.0, shape.1];
-    run_complex_nd(TransformKind::Fft2, input, &dims, options, false)
+    fft2_impl(input, &dims, options, None)
+}
+
+/// 2D forward complex FFT with audit logging.
+pub fn fft2_with_audit(
+    input: &[Complex64],
+    shape: (usize, usize),
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    let dims = [shape.0, shape.1];
+    fft2_impl(input, &dims, options, Some(audit_ledger))
 }
 
 /// 2D inverse complex FFT via row/column decomposition.
@@ -525,7 +633,18 @@ pub fn ifft2(
     options: &FftOptions,
 ) -> Result<Vec<Complex64>, FftError> {
     let dims = [shape.0, shape.1];
-    run_complex_nd(TransformKind::Ifft2, input, &dims, options, true)
+    ifft2_impl(input, &dims, options, None)
+}
+
+/// 2D inverse complex FFT with audit logging.
+pub fn ifft2_with_audit(
+    input: &[Complex64],
+    shape: (usize, usize),
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    let dims = [shape.0, shape.1];
+    ifft2_impl(input, &dims, options, Some(audit_ledger))
 }
 
 /// N-dimensional forward complex FFT.
@@ -534,7 +653,17 @@ pub fn fftn(
     shape: &[usize],
     options: &FftOptions,
 ) -> Result<Vec<Complex64>, FftError> {
-    run_complex_nd(TransformKind::Fftn, input, shape, options, false)
+    fftn_impl(input, shape, options, None)
+}
+
+/// N-dimensional forward complex FFT with audit logging.
+pub fn fftn_with_audit(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    fftn_impl(input, shape, options, Some(audit_ledger))
 }
 
 /// N-dimensional inverse complex FFT.
@@ -545,7 +674,17 @@ pub fn ifftn(
     shape: &[usize],
     options: &FftOptions,
 ) -> Result<Vec<Complex64>, FftError> {
-    run_complex_nd(TransformKind::Ifftn, input, shape, options, true)
+    ifftn_impl(input, shape, options, None)
+}
+
+/// N-dimensional inverse complex FFT with audit logging.
+pub fn ifftn_with_audit(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    ifftn_impl(input, shape, options, Some(audit_ledger))
 }
 
 /// N-dimensional real-input FFT.
@@ -556,7 +695,90 @@ pub fn rfftn(
     shape: &[usize],
     options: &FftOptions,
 ) -> Result<Vec<Complex64>, FftError> {
-    run_real_nd_forward(TransformKind::Rfftn, input, shape, options)
+    rfftn_impl(input, shape, options, None)
+}
+
+/// N-dimensional real-input FFT with audit logging.
+pub fn rfftn_with_audit(
+    input: &[f64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    rfftn_impl(input, shape, options, Some(audit_ledger))
+}
+
+fn fft2_impl(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    run_complex_nd(
+        TransformKind::Fft2,
+        input,
+        shape,
+        options,
+        false,
+        audit_ledger,
+    )
+}
+
+fn ifft2_impl(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    run_complex_nd(
+        TransformKind::Ifft2,
+        input,
+        shape,
+        options,
+        true,
+        audit_ledger,
+    )
+}
+
+fn fftn_impl(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    run_complex_nd(
+        TransformKind::Fftn,
+        input,
+        shape,
+        options,
+        false,
+        audit_ledger,
+    )
+}
+
+fn ifftn_impl(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    run_complex_nd(
+        TransformKind::Ifftn,
+        input,
+        shape,
+        options,
+        true,
+        audit_ledger,
+    )
+}
+
+fn rfftn_impl(
+    input: &[f64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    run_real_nd_forward(TransformKind::Rfftn, input, shape, options, audit_ledger)
 }
 
 /// Discrete Cosine Transform (Type II).
@@ -887,10 +1109,12 @@ fn run_complex_1d(
     input: &[Complex64],
     options: &FftOptions,
     inverse: bool,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<Complex64>, FftError> {
-    ensure_non_empty(input.len())?;
-    validate_workers(options.workers)?;
-    validate_finite_complex(input, options)?;
+    let fingerprint = complex_fingerprint(input);
+    ensure_non_empty_with_audit(input.len(), &fingerprint, audit_ledger)?;
+    validate_workers_with_audit(options.workers, &fingerprint, audit_ledger)?;
+    validate_finite_complex_with_audit(input, options, &fingerprint, audit_ledger)?;
 
     let backend = resolve_backend(options.backend);
     let key = PlanKey::new(
@@ -926,20 +1150,39 @@ fn run_complex_nd(
     shape: &[usize],
     options: &FftOptions,
     inverse: bool,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<Complex64>, FftError> {
-    validate_shape(shape)?;
-    let expected_len = checked_product(shape).ok_or(FftError::InvalidShape {
-        detail: "nd shape product overflow",
+    let fingerprint = complex_shape_fingerprint(input, shape);
+    validate_shape_with_audit(shape, &fingerprint, audit_ledger)?;
+    let expected_len = checked_product(shape).ok_or_else(|| {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "shape_product_overflow",
+            "rejected: nd shape product overflow",
+        );
+        FftError::InvalidShape {
+            detail: "nd shape product overflow",
+        }
     })?;
     if input.len() != expected_len {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "length_mismatch",
+            format!(
+                "rejected: expected input length {expected_len}, got {}",
+                input.len()
+            ),
+        );
         return Err(FftError::LengthMismatch {
             expected: expected_len,
             actual: input.len(),
         });
     }
 
-    validate_workers(options.workers)?;
-    validate_finite_complex(input, options)?;
+    validate_workers_with_audit(options.workers, &fingerprint, audit_ledger)?;
+    validate_finite_complex_with_audit(input, options, &fingerprint, audit_ledger)?;
 
     let backend = resolve_backend(options.backend);
     let axes = (0..shape.len()).collect::<Vec<_>>();
@@ -969,20 +1212,39 @@ fn run_real_nd_forward(
     input: &[f64],
     shape: &[usize],
     options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<Complex64>, FftError> {
-    validate_shape(shape)?;
-    let expected_len = checked_product(shape).ok_or(FftError::InvalidShape {
-        detail: "nd shape product overflow",
+    let fingerprint = real_shape_fingerprint(input, shape);
+    validate_shape_with_audit(shape, &fingerprint, audit_ledger)?;
+    let expected_len = checked_product(shape).ok_or_else(|| {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "shape_product_overflow",
+            "rejected: nd shape product overflow",
+        );
+        FftError::InvalidShape {
+            detail: "nd shape product overflow",
+        }
     })?;
     if input.len() != expected_len {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "length_mismatch",
+            format!(
+                "rejected: expected input length {expected_len}, got {}",
+                input.len()
+            ),
+        );
         return Err(FftError::LengthMismatch {
             expected: expected_len,
             actual: input.len(),
         });
     }
 
-    validate_workers(options.workers)?;
-    validate_finite_real(input, options)?;
+    validate_workers_with_audit(options.workers, &fingerprint, audit_ledger)?;
+    validate_finite_real_with_audit(input, options, &fingerprint, audit_ledger)?;
 
     let last_len = *shape.last().ok_or(FftError::InvalidShape {
         detail: "empty shape",
@@ -1042,30 +1304,65 @@ fn run_real_nd_inverse(
     input: &[Complex64],
     shape: &[usize],
     options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<f64>, FftError> {
-    validate_shape(shape)?;
-    let expected_len = checked_product(shape).ok_or(FftError::InvalidShape {
-        detail: "nd shape product overflow",
+    let fingerprint = complex_shape_fingerprint(input, shape);
+    validate_shape_with_audit(shape, &fingerprint, audit_ledger)?;
+    let expected_len = checked_product(shape).ok_or_else(|| {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "shape_product_overflow",
+            "rejected: nd shape product overflow",
+        );
+        FftError::InvalidShape {
+            detail: "nd shape product overflow",
+        }
     })?;
-    let last_len = *shape.last().ok_or(FftError::InvalidShape {
-        detail: "empty shape",
+    let last_len = *shape.last().ok_or_else(|| {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "empty_shape",
+            "rejected: nd shape cannot be empty",
+        );
+        FftError::InvalidShape {
+            detail: "empty shape",
+        }
     })?;
     let reduced_last = last_len / 2 + 1;
     let complex_len = shape[..shape.len() - 1]
         .iter()
         .try_fold(reduced_last, |acc, &dim| acc.checked_mul(dim))
-        .ok_or(FftError::InvalidShape {
-            detail: "nd shape product overflow",
+        .ok_or_else(|| {
+            record_fail_closed(
+                audit_ledger,
+                &fingerprint,
+                "shape_product_overflow",
+                "rejected: nd shape product overflow",
+            );
+            FftError::InvalidShape {
+                detail: "nd shape product overflow",
+            }
         })?;
     if input.len() != complex_len {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "length_mismatch",
+            format!(
+                "rejected: expected input length {complex_len}, got {}",
+                input.len()
+            ),
+        );
         return Err(FftError::LengthMismatch {
             expected: complex_len,
             actual: input.len(),
         });
     }
 
-    validate_workers(options.workers)?;
-    validate_finite_complex(input, options)?;
+    validate_workers_with_audit(options.workers, &fingerprint, audit_ledger)?;
+    validate_finite_complex_with_audit(input, options, &fingerprint, audit_ledger)?;
 
     let backend = resolve_backend(options.backend);
     let axes = (0..shape.len()).collect::<Vec<_>>();
@@ -1300,6 +1597,202 @@ fn ensure_non_empty(len: usize) -> Result<(), FftError> {
     Ok(())
 }
 
+fn record_audit_event(
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+    input_bytes: &[u8],
+    action: AuditAction,
+    outcome: impl Into<String>,
+) {
+    let Some(audit_ledger) = audit_ledger else {
+        return;
+    };
+    let event = AuditEvent::new(
+        casp_now_unix_ms(),
+        AuditLedger::fingerprint_bytes(input_bytes),
+        action,
+        outcome,
+    );
+    if let Ok(mut guard) = audit_ledger.lock() {
+        guard.record(event);
+    }
+}
+
+fn record_mode_decision(
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+    input_bytes: &[u8],
+    mode: RuntimeMode,
+    outcome: impl Into<String>,
+) {
+    record_audit_event(
+        audit_ledger,
+        input_bytes,
+        AuditAction::ModeDecision { mode },
+        outcome,
+    );
+}
+
+fn record_fail_closed(
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+    input_bytes: &[u8],
+    reason: &str,
+    outcome: impl Into<String>,
+) {
+    record_audit_event(
+        audit_ledger,
+        input_bytes,
+        AuditAction::FailClosed {
+            reason: reason.to_owned(),
+        },
+        outcome,
+    );
+}
+
+fn ensure_non_empty_with_audit(
+    len: usize,
+    fingerprint: &[u8],
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<(), FftError> {
+    if len == 0 {
+        record_fail_closed(
+            audit_ledger,
+            fingerprint,
+            "empty_input",
+            "rejected: input length must be greater than zero",
+        );
+    }
+    ensure_non_empty(len)
+}
+
+fn validate_workers_with_audit(
+    policy: WorkerPolicy,
+    fingerprint: &[u8],
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<(), FftError> {
+    if matches!(policy, WorkerPolicy::Exact(0) | WorkerPolicy::Max(0)) {
+        record_fail_closed(
+            audit_ledger,
+            fingerprint,
+            "invalid_workers",
+            "rejected: worker count must be greater than zero",
+        );
+    }
+    validate_workers(policy)
+}
+
+fn validate_finite_complex_with_audit(
+    input: &[Complex64],
+    options: &FftOptions,
+    fingerprint: &[u8],
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<(), FftError> {
+    if options.mode == RuntimeMode::Hardened && !options.check_finite {
+        record_mode_decision(
+            audit_ledger,
+            fingerprint,
+            RuntimeMode::Hardened,
+            "promoted finite-check policy for complex FFT input",
+        );
+    }
+    if input
+        .iter()
+        .any(|&(re, im)| !re.is_finite() || !im.is_finite())
+        && (options.check_finite || options.mode == RuntimeMode::Hardened)
+    {
+        record_fail_closed(
+            audit_ledger,
+            fingerprint,
+            "non_finite_input",
+            "rejected: complex input contains NaN or Inf",
+        );
+    }
+    validate_finite_complex(input, options)
+}
+
+fn validate_finite_real_with_audit(
+    input: &[f64],
+    options: &FftOptions,
+    fingerprint: &[u8],
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<(), FftError> {
+    if options.mode == RuntimeMode::Hardened && !options.check_finite {
+        record_mode_decision(
+            audit_ledger,
+            fingerprint,
+            RuntimeMode::Hardened,
+            "promoted finite-check policy for real FFT input",
+        );
+    }
+    if input.iter().any(|value| !value.is_finite())
+        && (options.check_finite || options.mode == RuntimeMode::Hardened)
+    {
+        record_fail_closed(
+            audit_ledger,
+            fingerprint,
+            "non_finite_input",
+            "rejected: real input contains NaN or Inf",
+        );
+    }
+    validate_finite_real(input, options)
+}
+
+fn validate_shape_with_audit(
+    shape: &[usize],
+    fingerprint: &[u8],
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<(), FftError> {
+    if shape.is_empty() {
+        record_fail_closed(
+            audit_ledger,
+            fingerprint,
+            "empty_shape",
+            "rejected: nd shape cannot be empty",
+        );
+    } else if shape.contains(&0) {
+        record_fail_closed(
+            audit_ledger,
+            fingerprint,
+            "zero_dimension",
+            "rejected: nd shape dimensions must be greater than zero",
+        );
+    }
+    validate_shape(shape)
+}
+
+fn real_fingerprint(input: &[f64]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(input.len().min(64) * std::mem::size_of::<f64>());
+    for &value in input.iter().take(64) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn complex_fingerprint(input: &[Complex64]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(input.len().min(32) * 2 * std::mem::size_of::<f64>());
+    for &(re, im) in input.iter().take(32) {
+        bytes.extend_from_slice(&re.to_le_bytes());
+        bytes.extend_from_slice(&im.to_le_bytes());
+    }
+    bytes
+}
+
+fn append_shape_fingerprint(bytes: &mut Vec<u8>, shape: &[usize]) {
+    for &dim in shape.iter().take(16) {
+        bytes.extend_from_slice(&dim.to_le_bytes());
+    }
+}
+
+fn real_shape_fingerprint(input: &[f64], shape: &[usize]) -> Vec<u8> {
+    let mut bytes = real_fingerprint(input);
+    append_shape_fingerprint(&mut bytes, shape);
+    bytes
+}
+
+fn complex_shape_fingerprint(input: &[Complex64], shape: &[usize]) -> Vec<u8> {
+    let mut bytes = complex_fingerprint(input);
+    append_shape_fingerprint(&mut bytes, shape);
+    bytes
+}
+
 fn normalization_scale(normalization: Normalization, n: usize, inverse: bool) -> f64 {
     if n == 0 {
         return 1.0;
@@ -1414,7 +1907,18 @@ pub fn rfft2(
     options: &FftOptions,
 ) -> Result<Vec<Complex64>, FftError> {
     let dims = [shape.0, shape.1];
-    rfftn(input, &dims, options)
+    rfft2_impl(input, &dims, options, None)
+}
+
+/// 2D real-input FFT with audit logging.
+pub fn rfft2_with_audit(
+    input: &[f64],
+    shape: (usize, usize),
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    let dims = [shape.0, shape.1];
+    rfft2_impl(input, &dims, options, Some(audit_ledger))
 }
 
 /// 2D inverse real FFT.
@@ -1426,7 +1930,18 @@ pub fn irfft2(
     options: &FftOptions,
 ) -> Result<Vec<f64>, FftError> {
     let dims = [shape.0, shape.1];
-    irfftn(input, &dims, options)
+    irfft2_impl(input, &dims, options, None)
+}
+
+/// 2D inverse real FFT with audit logging.
+pub fn irfft2_with_audit(
+    input: &[Complex64],
+    shape: (usize, usize),
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<f64>, FftError> {
+    let dims = [shape.0, shape.1];
+    irfft2_impl(input, &dims, options, Some(audit_ledger))
 }
 
 /// N-dimensional inverse real FFT.
@@ -1437,7 +1952,17 @@ pub fn irfftn(
     shape: &[usize],
     options: &FftOptions,
 ) -> Result<Vec<f64>, FftError> {
-    run_real_nd_inverse(TransformKind::Irfftn, input, shape, options)
+    irfftn_impl(input, shape, options, None)
+}
+
+/// N-dimensional inverse real FFT with audit logging.
+pub fn irfftn_with_audit(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<f64>, FftError> {
+    irfftn_impl(input, shape, options, Some(audit_ledger))
 }
 
 /// Find the next fast length for FFT computation.
@@ -1488,24 +2013,17 @@ pub fn hfft(
     n: Option<usize>,
     options: &FftOptions,
 ) -> Result<Vec<f64>, FftError> {
-    if input.is_empty() {
-        return Err(FftError::InvalidShape {
-            detail: "input length must be greater than zero",
-        });
-    }
-    let out_len = n.unwrap_or_else(|| {
-        if input.len() == 1 {
-            1
-        } else {
-            input.len().saturating_sub(1).saturating_mul(2)
-        }
-    });
-    let mut result = irfft(input, Some(out_len), options)?;
-    let scale = out_len as f64;
-    for v in &mut result {
-        *v *= scale;
-    }
-    Ok(result)
+    hfft_impl(input, n, options, None)
+}
+
+/// Hermitian FFT with audit logging.
+pub fn hfft_with_audit(
+    input: &[Complex64],
+    n: Option<usize>,
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<f64>, FftError> {
+    hfft_impl(input, n, options, Some(audit_ledger))
 }
 
 /// Inverse of the Hermitian FFT (hfft).
@@ -1519,23 +2037,85 @@ pub fn ihfft(
     n: Option<usize>,
     options: &FftOptions,
 ) -> Result<Vec<Complex64>, FftError> {
-    if input.is_empty() {
-        return Err(FftError::InvalidShape {
-            detail: "input length must be greater than zero",
-        });
+    ihfft_impl(input, n, options, None)
+}
+
+/// Inverse Hermitian FFT with audit logging.
+pub fn ihfft_with_audit(
+    input: &[f64],
+    n: Option<usize>,
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    ihfft_impl(input, n, options, Some(audit_ledger))
+}
+
+fn rfft2_impl(
+    input: &[f64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    rfftn_impl(input, shape, options, audit_ledger)
+}
+
+fn irfft2_impl(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<f64>, FftError> {
+    irfftn_impl(input, shape, options, audit_ledger)
+}
+
+fn irfftn_impl(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<f64>, FftError> {
+    run_real_nd_inverse(TransformKind::Irfftn, input, shape, options, audit_ledger)
+}
+
+fn hfft_impl(
+    input: &[Complex64],
+    n: Option<usize>,
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<f64>, FftError> {
+    let fingerprint = complex_fingerprint(input);
+    ensure_non_empty_with_audit(input.len(), &fingerprint, audit_ledger)?;
+    let out_len = n.unwrap_or_else(|| {
+        if input.len() == 1 {
+            1
+        } else {
+            input.len().saturating_sub(1).saturating_mul(2)
+        }
+    });
+    let mut result = irfft_impl(input, Some(out_len), options, audit_ledger)?;
+    let scale = out_len as f64;
+    for v in &mut result {
+        *v *= scale;
     }
-    validate_finite_real(input, options)?;
+    Ok(result)
+}
+
+fn ihfft_impl(
+    input: &[f64],
+    n: Option<usize>,
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    let fingerprint = real_fingerprint(input);
+    ensure_non_empty_with_audit(input.len(), &fingerprint, audit_ledger)?;
+    validate_finite_real_with_audit(input, options, &fingerprint, audit_ledger)?;
 
     let in_len = n.unwrap_or(input.len());
-    // Pad or truncate input to length n
     let mut padded = vec![0.0; in_len];
     let copy_len = input.len().min(in_len);
     padded[..copy_len].copy_from_slice(&input[..copy_len]);
 
-    // rfft gives us the Hermitian-symmetric half
-    let mut result = rfft(&padded, options)?;
-
-    // Scale by 1/n to invert the hfft scaling
+    let mut result = rfft_impl(&padded, options, audit_ledger)?;
     let scale = 1.0 / in_len as f64;
     for c in &mut result {
         c.0 *= scale;
@@ -1547,11 +2127,12 @@ pub fn ihfft(
 
 #[cfg(test)]
 mod tests {
-    use fsci_runtime::RuntimeMode;
+    use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        FftError, FftOptions, TransformKind, WorkerPolicy, fft, fft2, fftn, hfft, ifft, ifft2,
-        irfft, irfft2, irfftn, next_fast_len, rfft, rfft2, rfftn, take_transform_traces,
+        FftError, FftOptions, TransformKind, WorkerPolicy, fft, fft_with_audit, fft2, fftn, hfft,
+        ifft, ifft2, irfft, irfft2, irfftn, next_fast_len, rfft, rfft_with_audit, rfft2, rfftn,
+        sync_audit_ledger, take_transform_traces,
     };
     use crate::Normalization;
     use crate::plan::clear_shared_plan_cache;
@@ -1634,6 +2215,46 @@ mod tests {
         let opts = FftOptions::default().with_mode(RuntimeMode::Hardened);
         let err = rfft(&[1.0, f64::NAN], &opts).expect_err("hardened mode should reject NaN");
         assert_eq!(err, FftError::NonFiniteInput);
+    }
+
+    #[test]
+    fn hardened_audit_records_mode_decision_and_fail_closed() {
+        let audit_ledger = sync_audit_ledger();
+        let opts = FftOptions::default().with_mode(RuntimeMode::Hardened);
+        let err = rfft_with_audit(&[1.0, f64::NAN], &opts, &audit_ledger)
+            .expect_err("hardened mode should reject NaN");
+        assert_eq!(err, FftError::NonFiniteInput);
+
+        let ledger = audit_ledger.lock().expect("audit ledger lock");
+        assert!(ledger.entries().iter().any(|entry| matches!(
+            entry.action,
+            AuditAction::ModeDecision {
+                mode: RuntimeMode::Hardened
+            }
+        )));
+        assert!(ledger.entries().iter().any(|entry| matches!(
+            &entry.action,
+            AuditAction::FailClosed { reason } if reason == "non_finite_input"
+        )));
+    }
+
+    #[test]
+    fn fft_with_audit_records_empty_input_fail_closed() {
+        let audit_ledger = sync_audit_ledger();
+        let err = fft_with_audit(&[], &FftOptions::default(), &audit_ledger)
+            .expect_err("empty input should be rejected");
+        assert_eq!(
+            err,
+            FftError::InvalidShape {
+                detail: "input length must be greater than zero",
+            }
+        );
+
+        let ledger = audit_ledger.lock().expect("audit ledger lock");
+        assert!(ledger.entries().iter().any(|entry| matches!(
+            &entry.action,
+            AuditAction::FailClosed { reason } if reason == "empty_input"
+        )));
     }
 
     #[test]
