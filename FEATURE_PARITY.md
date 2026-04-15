@@ -29,12 +29,12 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ### fsci-linalg (105% coverage - exceeds SciPy core)
 
-**Implemented:** solve, solve_triangular, solve_banded, inv, det, lstsq, pinv, lu, lu_factor, lu_solve, qr, svd, svdvals, cholesky, cho_factor, cho_solve, ldl, eig, eigvals, eigh, eigvalsh, schur, hessenberg, expm, norm, matrix_rank, solve_with_casp, logm, sqrtm, matrix_power, solve_sylvester, solve_continuous_lyapunov, solve_discrete_lyapunov, solve_circulant, solve_toeplitz, khatri_rao, hadamard, block_diag, companion, issymmetric, ishermitian, is_positive_definite, is_diagonal, is_upper_triangular, is_lower_triangular, is_orthogonal, mat_norm_1, mat_norm_inf, bandwidth, and 60+ more
+**Implemented:** solve, solve_triangular, solve_banded, inv, det, lstsq, pinv, lu, lu_factor, lu_solve, qr, svd, svdvals, cholesky, cho_factor, cho_solve, ldl, eig, eigvals, eigh, eigvalsh, schur, hessenberg, expm, norm, matrix_rank, solve_with_casp, logm, sqrtm, matrix_power, solve_sylvester, solve_continuous_lyapunov, solve_discrete_lyapunov, solve_circulant, solve_toeplitz, khatri_rao, hadamard, block_diag, companion, issymmetric, ishermitian, is_positive_definite, is_diagonal, is_upper_triangular, is_lower_triangular, is_orthogonal, mat_norm_1, mat_norm_inf, bandwidth, orth, null_space, subspace_angles, polar, and 60+ more
 
 **Missing (LOW priority):**
 - Matrix functions: `fractional_matrix_power`, `funm`, `signm`
 - Generalized decompositions: `qz`, `ordqz`
-- Subspace: `orth`, `null_space`, `subspace_angles`, `polar`
+- ~~Subspace: `orth`, `null_space`, `subspace_angles`, `polar`~~ ✓ Already implemented
 - Banded: `eig_banded`, `eigh_tridiagonal`, `cho_solve_banded`, `solveh_banded`
 
 ### fsci-sparse (44% coverage)
@@ -46,12 +46,12 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ### fsci-opt (55% coverage)
 
-**Implemented:** minimize (BFGS, CG, Powell, NM, L-BFGS-B, Newton-CG, TNC, COBYLA, SLSQP, trust-ncg, trust-krylov, trust-constr, dogleg), minimize_scalar, brentq, brenth, bisect, ridder, toms748, halley, newton_scalar, secant, root_scalar, root, fsolve, broyden1, curve_fit, least_squares, line_search, Bounds, LinearConstraint, NonlinearConstraint, differential_evolution, basinhopping, dual_annealing, shgo, pso, linprog, milp, linear_sum_assignment, approx_fprime, check_grad, cobyla
+**Implemented:** minimize (BFGS, CG, Powell, NM, L-BFGS-B, Newton-CG, TNC, COBYLA, SLSQP, trust-ncg, trust-krylov, trust-constr, dogleg), minimize_scalar, brentq, brenth, bisect, ridder, toms748, halley, newton_scalar, secant, root_scalar, root, fsolve, broyden1, curve_fit, least_squares, line_search, Bounds, LinearConstraint, NonlinearConstraint, differential_evolution, basinhopping, dual_annealing, shgo, pso, linprog, milp, linear_sum_assignment, approx_fprime, check_grad, cobyla, rosen, rosen_der, rosen_hess, rosen_hess_prod
 
 **Missing (LOW priority):**
 - `minimize` methods: `trust-exact`, `Newton-CG` hessian product
 - Root: `broyden2`, `anderson`, `hybr`, `lm`
-- Utilities: `rosen` family test functions
+- ~~Utilities: `rosen` family test functions~~ ✓ DONE
 
 ### fsci-integrate (80% coverage)
 
