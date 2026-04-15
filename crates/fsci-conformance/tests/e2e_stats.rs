@@ -1329,3 +1329,849 @@ fn e2e_014_tukey_lambda_analytical() {
     assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
+
+// ======================================================================
+// HYPOTHESIS TESTING SCENARIOS (15-23)
+// ======================================================================
+
+/// Scenario 15: T-tests (ttest_1samp, ttest_ind, ttest_rel).
+/// Verifies t-statistics and p-values for standard test cases.
+#[test]
+fn e2e_015_t_tests() {
+    let scenario_id = "e2e_stats_015_ttests";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // One-sample t-test: sample from N(1, 1) tested against μ=0
+    let t = Instant::now();
+    let sample: Vec<f64> = vec![1.2, 0.8, 1.5, 0.9, 1.1, 1.3, 0.7, 1.4, 1.0, 0.95];
+    let result = ttest_1samp(&sample, 0.0);
+    // With mean ≈ 1.085 and n=10, t-statistic should be positive and significant
+    let pass = result.statistic > 0.0 && result.pvalue < 0.05 && result.df == 9.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "ttest_1samp",
+        "ttest_1samp(sample, 0)",
+        "10 samples from N(1,1), μ0=0",
+        &format!("t={:.4}, p={:.4}, df={}", result.statistic, result.pvalue, result.df),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Independent two-sample t-test: comparing two different populations
+    let t = Instant::now();
+    let group_a: Vec<f64> = vec![5.1, 5.3, 5.0, 4.9, 5.2, 5.4, 5.1, 5.0];
+    let group_b: Vec<f64> = vec![4.2, 4.0, 4.3, 3.9, 4.1, 4.4, 4.0, 4.2];
+    let result = ttest_ind(&group_a, &group_b);
+    // Group A has higher mean, so statistic should be positive
+    let pass = result.statistic > 0.0 && result.pvalue < 0.001 && result.df > 0.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "ttest_ind",
+        "ttest_ind(A, B)",
+        "8 samples each, distinct means",
+        &format!("t={:.4}, p={:.6}, df={}", result.statistic, result.pvalue, result.df),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Paired t-test: before/after measurements
+    let t = Instant::now();
+    let before: Vec<f64> = vec![10.0, 12.0, 11.0, 13.0, 9.0, 14.0, 12.0, 11.0];
+    let after: Vec<f64> = vec![12.0, 14.0, 13.0, 15.0, 11.0, 15.0, 13.0, 12.0];
+    let result = ttest_rel(&before, &after);
+    // After values are higher, so difference (before - after) is negative, t < 0
+    let pass = result.statistic < 0.0 && result.pvalue < 0.01 && result.df == 7.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "ttest_rel",
+        "ttest_rel(before, after)",
+        "8 paired measurements",
+        &format!("t={:.4}, p={:.4}, df={}", result.statistic, result.pvalue, result.df),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Null hypothesis should not be rejected when data is from same distribution
+    let t = Instant::now();
+    let null_sample: Vec<f64> = vec![0.1, -0.2, 0.15, -0.05, 0.08, -0.1, 0.12, -0.08];
+    let result = ttest_1samp(&null_sample, 0.0);
+    // p-value should be high (not significant)
+    let pass = result.pvalue > 0.1;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "ttest_null_hypothesis",
+        "ttest_1samp(centered, 0)",
+        "8 samples centered around 0",
+        &format!("t={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 16: ANOVA and variance tests (f_oneway, chisquare).
+/// Verifies F-statistics and chi-square statistics.
+#[test]
+fn e2e_016_anova_chisquare() {
+    let scenario_id = "e2e_stats_016_anova";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // One-way ANOVA: three groups with different means
+    let t = Instant::now();
+    let group1: [f64; 6] = [1.0, 1.2, 0.9, 1.1, 1.0, 0.8];
+    let group2: [f64; 6] = [2.0, 2.1, 1.9, 2.2, 2.0, 1.8];
+    let group3: [f64; 6] = [3.0, 3.2, 2.9, 3.1, 3.0, 2.8];
+    let result = f_oneway(&[&group1, &group2, &group3]);
+    // Groups are clearly different, F should be large and p small
+    let pass = result.statistic > 50.0 && result.pvalue < 0.001;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "f_oneway",
+        "f_oneway(g1, g2, g3)",
+        "3 groups with means ~1, ~2, ~3",
+        &format!("F={:.2}, p={:.6}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Chi-square goodness of fit: observed vs expected uniform
+    let t = Instant::now();
+    let observed: [f64; 4] = [50.0, 45.0, 55.0, 50.0];
+    let (chi2, pvalue) = chisquare(&observed, None);
+    // Close to uniform, so chi2 should be small and p large
+    let pass = chi2 < 5.0 && pvalue > 0.1;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "chisquare_uniform",
+        "chisquare(obs, None)",
+        "observed=[50,45,55,50]",
+        &format!("chi2={:.4}, p={:.4}", chi2, pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Chi-square with custom expected frequencies
+    let t = Instant::now();
+    let observed: [f64; 3] = [100.0, 50.0, 50.0];
+    let expected: [f64; 3] = [100.0, 50.0, 50.0];
+    let (chi2, pvalue) = chisquare(&observed, Some(&expected));
+    // Perfect match, chi2 = 0
+    let pass = chi2.abs() < TOL && pvalue > 0.999;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "chisquare_perfect",
+        "chisquare(obs, exp)",
+        "obs=exp=[100,50,50]",
+        &format!("chi2={:.6}, p={:.4}", chi2, pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // ANOVA with no difference between groups
+    let t = Instant::now();
+    let g1: [f64; 5] = [5.0, 5.1, 4.9, 5.2, 4.8];
+    let g2: [f64; 5] = [5.1, 4.9, 5.0, 5.2, 4.8];
+    let g3: [f64; 5] = [4.9, 5.0, 5.1, 4.8, 5.2];
+    let result = f_oneway(&[&g1, &g2, &g3]);
+    // No real difference, p should be high
+    let pass = result.pvalue > 0.5;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "f_oneway_null",
+        "f_oneway(similar groups)",
+        "3 groups with ~same mean",
+        &format!("F={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 17: Non-parametric tests (mannwhitneyu, wilcoxon, kruskal).
+/// Tests rank-based methods for comparing distributions.
+#[test]
+fn e2e_017_nonparametric_tests() {
+    let scenario_id = "e2e_stats_017_nonparametric";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Mann-Whitney U: comparing two groups with shift
+    let t = Instant::now();
+    let x: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let y: Vec<f64> = vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0];
+    let result = mannwhitneyu(&x, &y);
+    // Clear separation, U should be 0 (all x < all y) and p very small
+    let pass = result.statistic < 5.0 && result.pvalue < 0.001;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "mannwhitneyu_distinct",
+        "mannwhitneyu(x, y)",
+        "x=[1..8], y=[9..16]",
+        &format!("U={:.2}, p={:.6}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Wilcoxon signed-rank: paired comparison (needs n >= 10)
+    let t = Instant::now();
+    let before: Vec<f64> = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0];
+    let after: Vec<f64> = vec![15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0, 95.0, 105.0];
+    let result = wilcoxon(&before, &after);
+    // All after > before, so significant (with enough pairs)
+    let pass = result.pvalue < 0.2;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "wilcoxon_paired",
+        "wilcoxon(before, after)",
+        "10 pairs, all show increase",
+        &format!("statistic={:.2}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Kruskal-Wallis: non-parametric ANOVA
+    let t = Instant::now();
+    let g1: [f64; 5] = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let g2: [f64; 5] = [6.0, 7.0, 8.0, 9.0, 10.0];
+    let g3: [f64; 5] = [11.0, 12.0, 13.0, 14.0, 15.0];
+    let result = kruskal(&[&g1, &g2, &g3]);
+    // Clear separation, H should be large
+    let pass = result.statistic > 10.0 && result.pvalue < 0.01;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "kruskal_distinct",
+        "kruskal(g1, g2, g3)",
+        "3 non-overlapping groups",
+        &format!("H={:.2}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Mann-Whitney with overlapping groups
+    let t = Instant::now();
+    let a: Vec<f64> = vec![1.0, 3.0, 5.0, 7.0, 9.0];
+    let b: Vec<f64> = vec![2.0, 4.0, 6.0, 8.0, 10.0];
+    let result = mannwhitneyu(&a, &b);
+    // Interleaved, no significant difference expected
+    let pass = result.pvalue > 0.1;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "mannwhitneyu_overlap",
+        "mannwhitneyu(odd, even)",
+        "interleaved sequences",
+        &format!("U={:.2}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 18: Correlation tests (pearsonr, spearmanr, kendalltau).
+/// Verifies correlation coefficients for known relationships.
+#[test]
+fn e2e_018_correlation_tests() {
+    let scenario_id = "e2e_stats_018_correlation";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Perfect positive linear correlation
+    let t = Instant::now();
+    let x: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+    let y: Vec<f64> = vec![2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0];
+    let result = pearsonr(&x, &y);
+    let pass = (result.statistic - 1.0).abs() < TOL && result.pvalue < 0.001;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "pearsonr_perfect",
+        "pearsonr(x, 2x)",
+        "perfect linear",
+        &format!("r={:.6}, p={:.6}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Spearman rank correlation: monotonic but non-linear
+    let t = Instant::now();
+    let x: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let y: Vec<f64> = vec![1.0, 4.0, 9.0, 16.0, 25.0, 36.0, 49.0, 64.0]; // y = x^2
+    let result = spearmanr(&x, &y);
+    // Perfect monotonic relationship
+    let pass = (result.statistic - 1.0).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "spearmanr_monotonic",
+        "spearmanr(x, x^2)",
+        "quadratic but monotonic",
+        &format!("rho={:.6}, p={:.6}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Kendall tau: concordance measure
+    let t = Instant::now();
+    let x: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+    let y: Vec<f64> = vec![5.0, 4.0, 3.0, 2.0, 1.0]; // perfectly negative
+    let result = kendalltau(&x, &y);
+    let pass = (result.statistic + 1.0).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "kendalltau_negative",
+        "kendalltau(asc, desc)",
+        "perfectly negative",
+        &format!("tau={:.6}, p={:.6}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // No correlation
+    let t = Instant::now();
+    let x: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let y: Vec<f64> = vec![5.0, 2.0, 8.0, 1.0, 6.0, 3.0, 7.0, 4.0]; // scrambled
+    let result = pearsonr(&x, &y);
+    // Low correlation expected
+    let pass = result.statistic.abs() < 0.5 && result.pvalue > 0.1;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "pearsonr_uncorrelated",
+        "pearsonr(x, scrambled)",
+        "no linear relationship",
+        &format!("r={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 19: Linear regression (linregress).
+/// Verifies slope, intercept, and regression statistics.
+#[test]
+fn e2e_019_linear_regression() {
+    let scenario_id = "e2e_stats_019_regression";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Perfect linear fit: y = 2x + 3
+    let t = Instant::now();
+    let x: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+    let y: Vec<f64> = vec![3.0, 5.0, 7.0, 9.0, 11.0, 13.0];
+    let result = linregress(&x, &y);
+    let pass = (result.slope - 2.0).abs() < TOL
+        && (result.intercept - 3.0).abs() < TOL
+        && (result.rvalue - 1.0).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "linregress_perfect",
+        "linregress(x, 2x+3)",
+        "perfect linear",
+        &format!(
+            "slope={:.4}, intercept={:.4}, r={:.4}",
+            result.slope, result.intercept, result.rvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Regression with noise
+    let t = Instant::now();
+    let x: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+    let y: Vec<f64> = vec![2.1, 3.9, 6.2, 7.8, 10.1, 11.9, 14.2, 15.8, 18.1, 19.9];
+    let result = linregress(&x, &y);
+    // Slope should be close to 2, intercept close to 0
+    let pass = (result.slope - 2.0).abs() < 0.1
+        && result.intercept.abs() < 0.5
+        && result.rvalue > 0.99
+        && result.pvalue < 0.001;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "linregress_noisy",
+        "linregress with noise",
+        "y ≈ 2x with small noise",
+        &format!(
+            "slope={:.4}, intercept={:.4}, r={:.4}, p={:.6}",
+            result.slope, result.intercept, result.rvalue, result.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Negative slope
+    let t = Instant::now();
+    let x: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+    let y: Vec<f64> = vec![10.0, 8.0, 6.0, 4.0, 2.0];
+    let result = linregress(&x, &y);
+    let pass = (result.slope + 2.0).abs() < TOL
+        && (result.intercept - 12.0).abs() < TOL
+        && (result.rvalue + 1.0).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "linregress_negative",
+        "linregress(x, -2x+12)",
+        "negative slope",
+        &format!(
+            "slope={:.4}, intercept={:.4}, r={:.4}",
+            result.slope, result.intercept, result.rvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Stderr should be small for good fit
+    let t = Instant::now();
+    let pass = result.stderr < 0.01;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "linregress_stderr",
+        "check stderr",
+        "stderr for perfect fit",
+        &format!("stderr={:.6}", result.stderr),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 20: Descriptive statistics (describe, skew, kurtosis).
+/// Verifies summary statistics computation.
+#[test]
+fn e2e_020_descriptive_stats() {
+    let scenario_id = "e2e_stats_020_descriptive";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Basic describe
+    let t = Instant::now();
+    let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+    let result = describe(&data);
+    let expected_mean = 5.5;
+    let expected_var = 9.166_666_666_666_666; // sample variance with ddof=1
+    let pass = result.nobs == 10
+        && (result.mean - expected_mean).abs() < TOL
+        && (result.variance - expected_var).abs() < 0.001
+        && result.minmax == (1.0, 10.0);
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "describe_basic",
+        "describe([1..10])",
+        "n=10, uniform spacing",
+        &format!(
+            "n={}, mean={:.4}, var={:.4}, minmax={:?}",
+            result.nobs, result.mean, result.variance, result.minmax
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Skewness: symmetric distribution should have skew ≈ 0
+    let t = Instant::now();
+    let symmetric: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+    let sk = skew(&symmetric);
+    let pass = sk.abs() < 0.01;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "skew_symmetric",
+        "skew(symmetric)",
+        "palindromic data",
+        &format!("skew={:.6}", sk),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Skewness: right-skewed distribution
+    let t = Instant::now();
+    let right_skewed: Vec<f64> = vec![1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 10.0];
+    let sk = skew(&right_skewed);
+    let pass = sk > 1.0; // positive skew
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "skew_right",
+        "skew(right-skewed)",
+        "long right tail",
+        &format!("skew={:.4}", sk),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Kurtosis: normal distribution should have excess kurtosis ≈ 0
+    // Heavy-tailed should have positive kurtosis
+    let t = Instant::now();
+    let heavy_tailed: Vec<f64> = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 100.0];
+    let kurt = kurtosis(&heavy_tailed);
+    let pass = kurt > 3.0; // heavy tails -> high kurtosis
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "kurtosis_heavy",
+        "kurtosis(heavy-tailed)",
+        "one extreme outlier",
+        &format!("kurtosis={:.4}", kurt),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 21: Normality tests (shapiro, normaltest, jarque_bera).
+/// Verifies detection of normal vs non-normal distributions.
+#[test]
+fn e2e_021_normality_tests() {
+    let scenario_id = "e2e_stats_021_normality";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Shapiro-Wilk: uniform data should fail normality
+    let t = Instant::now();
+    let uniform_data: Vec<f64> = (0..50).map(|i| i as f64).collect();
+    let result = shapiro(&uniform_data);
+    // Uniform should reject normality (low p-value or W < 1)
+    let pass = result.statistic < 0.98 || result.pvalue < 0.05;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "shapiro_uniform",
+        "shapiro(uniform)",
+        "50 evenly spaced points",
+        &format!("W={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // D'Agostino-Pearson normaltest: bimodal should fail
+    let t = Instant::now();
+    let mut bimodal: Vec<f64> = vec![];
+    for _ in 0..25 {
+        bimodal.push(0.0);
+    }
+    for _ in 0..25 {
+        bimodal.push(10.0);
+    }
+    let result = normaltest(&bimodal);
+    // Bimodal should reject normality
+    let pass = result.pvalue < 0.05;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "normaltest_bimodal",
+        "normaltest(bimodal)",
+        "25 at 0, 25 at 10",
+        &format!("statistic={:.4}, p={:.6}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Jarque-Bera: check skewness and kurtosis
+    let t = Instant::now();
+    let skewed: Vec<f64> = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0, 100.0];
+    let result = jarque_bera(&skewed);
+    // Highly skewed should reject normality
+    let pass = result.statistic > 1.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "jarque_bera_skewed",
+        "jarque_bera(skewed)",
+        "right-skewed data",
+        &format!("JB={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Shapiro should give high p-value for nearly-normal data
+    let t = Instant::now();
+    // Approximate normal samples (actually generated, but pretend they're from N(0,1))
+    let normal_ish: Vec<f64> = vec![
+        -1.5, -1.0, -0.5, -0.3, -0.1, 0.0, 0.1, 0.3, 0.5, 1.0, 1.5,
+    ];
+    let result = shapiro(&normal_ish);
+    // Should not reject normality
+    let pass = result.pvalue > 0.05;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "shapiro_normal",
+        "shapiro(normal-like)",
+        "roughly bell-shaped",
+        &format!("W={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 22: Kolmogorov-Smirnov tests (ks_1samp, ks_2samp).
+/// Verifies goodness-of-fit testing.
+#[test]
+fn e2e_022_ks_tests() {
+    let scenario_id = "e2e_stats_022_ks";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // KS one-sample: test against uniform CDF
+    let t = Instant::now();
+    let uniform_samples: Vec<f64> = (0..100).map(|i| (i as f64 + 0.5) / 100.0).collect();
+    let result = ks_1samp(&uniform_samples, |x| x.clamp(0.0, 1.0)); // uniform CDF
+    // Should match well (small D, high p)
+    let pass = result.statistic < 0.1 && result.pvalue > 0.1;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "ks_1samp_uniform",
+        "ks_1samp(uniform, F_uniform)",
+        "100 uniform samples",
+        &format!("D={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // KS one-sample: non-uniform data against uniform CDF
+    let t = Instant::now();
+    let skewed_samples: Vec<f64> = (0..50).map(|i| (i as f64 / 50.0).powi(2)).collect();
+    let result = ks_1samp(&skewed_samples, |x| x.clamp(0.0, 1.0));
+    // Should reject (large D, small p)
+    let pass = result.statistic > 0.1;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "ks_1samp_reject",
+        "ks_1samp(x^2, F_uniform)",
+        "squared samples vs uniform",
+        &format!("D={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // KS two-sample: same distribution
+    let t = Instant::now();
+    let sample1: Vec<f64> = (0..30).map(|i| i as f64).collect();
+    let sample2: Vec<f64> = (0..30).map(|i| i as f64 + 0.5).collect();
+    let result = ks_2samp(&sample1, &sample2);
+    // Similar distributions, small D
+    let pass = result.statistic < 0.2;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "ks_2samp_similar",
+        "ks_2samp(shifted)",
+        "same shape, slight offset",
+        &format!("D={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // KS two-sample: different distributions
+    let t = Instant::now();
+    let normal_like: Vec<f64> = vec![-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0];
+    let uniform_like: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let result = ks_2samp(&normal_like, &uniform_like);
+    // Different distributions, should have larger D
+    let pass = result.statistic > 0.3;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "ks_2samp_different",
+        "ks_2samp(normal, uniform)",
+        "different distributions",
+        &format!("D={:.4}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 23: Contingency table tests (fisher_exact, chi2_contingency).
+/// Verifies tests for independence in categorical data.
+#[test]
+fn e2e_023_contingency_tests() {
+    let scenario_id = "e2e_stats_023_contingency";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Fisher's exact test: 2x2 table with strong association
+    let t = Instant::now();
+    let table = [[10.0, 2.0], [1.0, 12.0]];
+    let result = fisher_exact(&table);
+    // Strong association, p should be small
+    let pass = result.pvalue < 0.01;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "fisher_exact_assoc",
+        "fisher_exact([[10,2],[1,12]])",
+        "strong association",
+        &format!("odds_ratio={:.4}, p={:.6}", result.odds_ratio, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Fisher's exact test: independent (null)
+    let t = Instant::now();
+    let table = [[5.0, 5.0], [5.0, 5.0]];
+    let result = fisher_exact(&table);
+    // No association, p should be high
+    let pass = result.pvalue > 0.5 && (result.odds_ratio - 1.0).abs() < 0.01;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "fisher_exact_null",
+        "fisher_exact([[5,5],[5,5]])",
+        "no association",
+        &format!("odds_ratio={:.4}, p={:.4}", result.odds_ratio, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Chi-square test of independence: larger table
+    let t = Instant::now();
+    let observed = vec![
+        vec![20.0, 30.0, 50.0],
+        vec![30.0, 40.0, 30.0],
+    ];
+    let result = chi2_contingency(&observed);
+    // Some deviation from independence expected
+    let pass = result.statistic > 0.0 && result.dof == 2;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "chi2_contingency",
+        "chi2_contingency(2x3)",
+        "2x3 contingency table",
+        &format!("chi2={:.4}, p={:.4}, dof={}", result.statistic, result.pvalue, result.dof),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Chi-square: perfectly proportional (independence)
+    let t = Instant::now();
+    let observed = vec![
+        vec![10.0, 20.0, 30.0],
+        vec![10.0, 20.0, 30.0],
+    ];
+    let result = chi2_contingency(&observed);
+    // Perfect independence, chi2 ≈ 0
+    let pass = result.statistic < 0.01 && result.pvalue > 0.99;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "chi2_independent",
+        "chi2_contingency(proportional)",
+        "perfectly proportional rows",
+        &format!("chi2={:.6}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
