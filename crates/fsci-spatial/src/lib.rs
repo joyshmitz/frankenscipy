@@ -4,6 +4,7 @@
 //!
 //! Matches `scipy.spatial` core types:
 //! - `KDTree` — k-d tree for fast nearest-neighbor queries
+//! - `Rectangle` — hyperrectangle utility used by SciPy spatial search
 //! - `distance` — pairwise distance computations
 
 /// Error type for spatial operations.
@@ -387,6 +388,217 @@ pub fn cdist_metric(
 /// This is an explicit convenience wrapper around Euclidean `cdist`.
 pub fn distance_matrix(x: &[Vec<f64>], y: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, SpatialError> {
     cdist_metric(x, y, DistanceMetric::Euclidean)
+}
+
+fn rectangle_norm(components: &[f64], p: f64) -> Result<f64, SpatialError> {
+    if components.iter().any(|value| !value.is_finite()) {
+        return Err(SpatialError::InvalidArgument(
+            "rectangle distances require finite components".to_owned(),
+        ));
+    }
+    if p == f64::INFINITY {
+        return Ok(components
+            .iter()
+            .copied()
+            .fold(0.0_f64, |a: f64, b: f64| a.max(b.abs())));
+    }
+    if !p.is_finite() || p <= 0.0 {
+        return Err(SpatialError::InvalidArgument(
+            "rectangle distances require p > 0 or infinity".to_owned(),
+        ));
+    }
+    Ok(components
+        .iter()
+        .map(|value| value.abs().powf(p))
+        .sum::<f64>()
+        .powf(1.0 / p))
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Rectangle
+// ══════════════════════════════════════════════════════════════════════
+
+/// Hyperrectangle utility matching `scipy.spatial.Rectangle`.
+///
+/// Represents a Cartesian product of intervals with normalized bounds:
+/// `mins[i] <= maxes[i]` for every axis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rectangle {
+    pub maxes: Vec<f64>,
+    pub mins: Vec<f64>,
+    pub m: usize,
+}
+
+impl Rectangle {
+    /// Construct a hyperrectangle from per-axis maxima and minima.
+    pub fn new(maxes: &[f64], mins: &[f64]) -> Result<Self, SpatialError> {
+        if maxes.is_empty() || mins.is_empty() {
+            return Err(SpatialError::EmptyData);
+        }
+        if maxes.len() != mins.len() {
+            return Err(SpatialError::DimensionMismatch {
+                expected: maxes.len(),
+                actual: mins.len(),
+            });
+        }
+        if maxes
+            .iter()
+            .chain(mins.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err(SpatialError::InvalidArgument(
+                "rectangle bounds must be finite".to_owned(),
+            ));
+        }
+
+        let mut norm_maxes = Vec::with_capacity(maxes.len());
+        let mut norm_mins = Vec::with_capacity(maxes.len());
+        for (&max_v, &min_v) in maxes.iter().zip(mins.iter()) {
+            norm_maxes.push(max_v.max(min_v));
+            norm_mins.push(max_v.min(min_v));
+        }
+
+        Ok(Self {
+            m: norm_maxes.len(),
+            maxes: norm_maxes,
+            mins: norm_mins,
+        })
+    }
+
+    /// Total volume of the hyperrectangle.
+    #[must_use]
+    pub fn volume(&self) -> f64 {
+        self.maxes
+            .iter()
+            .zip(self.mins.iter())
+            .map(|(max_v, min_v)| max_v - min_v)
+            .product()
+    }
+
+    /// Split the hyperrectangle along axis `d` at coordinate `split`.
+    pub fn split(&self, d: usize, split: f64) -> Result<(Self, Self), SpatialError> {
+        if d >= self.m {
+            return Err(SpatialError::InvalidArgument(format!(
+                "split axis {d} out of bounds for dimension {}",
+                self.m
+            )));
+        }
+        if !split.is_finite() {
+            return Err(SpatialError::InvalidArgument(
+                "split coordinate must be finite".to_owned(),
+            ));
+        }
+
+        let mut lower_maxes = self.maxes.clone();
+        lower_maxes[d] = split;
+        let lower = Self::new(&lower_maxes, &self.mins)?;
+
+        let mut upper_mins = self.mins.clone();
+        upper_mins[d] = split;
+        let upper = Self::new(&self.maxes, &upper_mins)?;
+
+        Ok((lower, upper))
+    }
+
+    /// Minimum distance between the rectangle and a point under Minkowski `p`.
+    pub fn min_distance_point(&self, x: &[f64], p: f64) -> Result<f64, SpatialError> {
+        if x.len() != self.m {
+            return Err(SpatialError::DimensionMismatch {
+                expected: self.m,
+                actual: x.len(),
+            });
+        }
+        if x.iter().any(|value| !value.is_finite()) {
+            return Err(SpatialError::InvalidArgument(
+                "point coordinates must be finite".to_owned(),
+            ));
+        }
+
+        let components: Vec<f64> = self
+            .mins
+            .iter()
+            .zip(self.maxes.iter())
+            .zip(x.iter())
+            .map(|((&min_v, &max_v), &coord)| {
+                if coord < min_v {
+                    min_v - coord
+                } else if coord > max_v {
+                    coord - max_v
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        rectangle_norm(&components, p)
+    }
+
+    /// Maximum distance between the rectangle and a point under Minkowski `p`.
+    pub fn max_distance_point(&self, x: &[f64], p: f64) -> Result<f64, SpatialError> {
+        if x.len() != self.m {
+            return Err(SpatialError::DimensionMismatch {
+                expected: self.m,
+                actual: x.len(),
+            });
+        }
+        if x.iter().any(|value| !value.is_finite()) {
+            return Err(SpatialError::InvalidArgument(
+                "point coordinates must be finite".to_owned(),
+            ));
+        }
+
+        let components: Vec<f64> = self
+            .mins
+            .iter()
+            .zip(self.maxes.iter())
+            .zip(x.iter())
+            .map(|((&min_v, &max_v), &coord)| (max_v - coord).abs().max((coord - min_v).abs()))
+            .collect();
+        rectangle_norm(&components, p)
+    }
+
+    /// Minimum distance between two rectangles under Minkowski `p`.
+    pub fn min_distance_rectangle(&self, other: &Self, p: f64) -> Result<f64, SpatialError> {
+        if self.m != other.m {
+            return Err(SpatialError::DimensionMismatch {
+                expected: self.m,
+                actual: other.m,
+            });
+        }
+
+        let components: Vec<f64> = self
+            .mins
+            .iter()
+            .zip(self.maxes.iter())
+            .zip(other.mins.iter().zip(other.maxes.iter()))
+            .map(|((&self_min, &self_max), (&other_min, &other_max))| {
+                0.0_f64.max((self_min - other_max).max(other_min - self_max))
+            })
+            .collect();
+        rectangle_norm(&components, p)
+    }
+
+    /// Maximum distance between two rectangles under Minkowski `p`.
+    pub fn max_distance_rectangle(&self, other: &Self, p: f64) -> Result<f64, SpatialError> {
+        if self.m != other.m {
+            return Err(SpatialError::DimensionMismatch {
+                expected: self.m,
+                actual: other.m,
+            });
+        }
+
+        let components: Vec<f64> = self
+            .mins
+            .iter()
+            .zip(self.maxes.iter())
+            .zip(other.mins.iter().zip(other.maxes.iter()))
+            .map(|((&self_min, &self_max), (&other_min, &other_max))| {
+                (self_max - other_min)
+                    .abs()
+                    .max((other_max - self_min).abs())
+            })
+            .collect();
+        rectangle_norm(&components, p)
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2453,6 +2665,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn rectangle_normalizes_bounds_and_volume() {
+        let rect = Rectangle::new(&[0.0, 1.0], &[1.0, 0.0]).expect("rectangle");
+        assert_eq!(rect.mins, vec![0.0, 0.0]);
+        assert_eq!(rect.maxes, vec![1.0, 1.0]);
+        assert_eq!(rect.m, 2);
+        assert!((rect.volume() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rectangle_split_matches_scipy_semantics() {
+        let rect = Rectangle::new(&[1.0, 2.0], &[0.0, -1.0]).expect("rectangle");
+        let (lower, upper) = rect.split(0, 0.5).expect("split");
+        assert_eq!(lower.mins, vec![0.0, -1.0]);
+        assert_eq!(lower.maxes, vec![0.5, 2.0]);
+        assert_eq!(upper.mins, vec![0.5, -1.0]);
+        assert_eq!(upper.maxes, vec![1.0, 2.0]);
+
+        let (outside_lower, outside_upper) = rect.split(0, -1.0).expect("outside split");
+        assert_eq!(outside_lower.mins, vec![-1.0, -1.0]);
+        assert_eq!(outside_lower.maxes, vec![0.0, 2.0]);
+        assert_eq!(outside_upper.mins, vec![-1.0, -1.0]);
+        assert_eq!(outside_upper.maxes, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn rectangle_point_distances_match_scipy() {
+        let rect = Rectangle::new(&[1.0, 2.0], &[0.0, -1.0]).expect("rectangle");
+        assert!(rect.min_distance_point(&[0.5, 0.0], 2.0).unwrap().abs() < 1e-12);
+        assert!(
+            (rect.max_distance_point(&[0.5, 0.0], 2.0).unwrap() - 2.0615528128088303).abs() < 1e-12
+        );
+        assert!((rect.min_distance_point(&[3.0, 0.0], 1.0).unwrap() - 2.0).abs() < 1e-12);
+        assert!((rect.max_distance_point(&[3.0, 0.0], f64::INFINITY).unwrap() - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rectangle_rectangle_distances_match_scipy() {
+        let rect = Rectangle::new(&[1.0, 2.0], &[0.0, -1.0]).expect("rectangle");
+        let other = Rectangle::new(&[2.0, 1.0], &[1.5, -2.0]).expect("other");
+        assert!((rect.min_distance_rectangle(&other, 2.0).unwrap() - 0.5).abs() < 1e-12);
+        assert!(
+            (rect.max_distance_rectangle(&other, 2.0).unwrap() - 4.47213595499958).abs() < 1e-12
+        );
+
+        let far = Rectangle::new(&[4.0, 4.0], &[2.0, 1.0]).expect("far");
+        assert!((rect.min_distance_rectangle(&far, 1.0).unwrap() - 1.0).abs() < 1e-12);
+        assert!((rect.max_distance_rectangle(&far, f64::INFINITY).unwrap() - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rectangle_rejects_invalid_inputs() {
+        let err = Rectangle::new(&[1.0, 2.0], &[0.0]).expect_err("dimension mismatch");
+        assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
+
+        let rect = Rectangle::new(&[1.0], &[0.0]).expect("rectangle");
+        let err = rect.split(2, 0.5).expect_err("bad axis");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+
+        let err = rect
+            .min_distance_point(&[0.0], 0.0)
+            .expect_err("invalid p should be rejected");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
     }
 
     #[test]
