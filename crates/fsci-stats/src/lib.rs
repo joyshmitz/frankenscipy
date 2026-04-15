@@ -2882,6 +2882,48 @@ impl ContinuousDistribution for HalfLogistic {
     }
 }
 
+/// Half-Cauchy distribution.
+///
+/// Matches `scipy.stats.halfcauchy`.
+pub struct HalfCauchy;
+
+impl ContinuousDistribution for HalfCauchy {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        2.0 / (PI * (1.0 + x * x))
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        2.0 * x.atan() / PI
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        (PI * q / 2.0).tan()
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
 /// Truncated normal distribution on [a, b].
 ///
 /// Matches `scipy.stats.truncnorm`.
@@ -4101,6 +4143,60 @@ impl ContinuousDistribution for Gompertz {
         }
 
         (second_moment * h / 3.0 - mean * mean).max(0.0)
+    }
+}
+
+/// Arcsine distribution on [0, 1].
+///
+/// Matches `scipy.stats.arcsine`. The arcsine distribution has PDF:
+/// f(x) = 1 / (π * sqrt(x * (1-x))) for x in (0, 1)
+///
+/// This is a special case of the Beta distribution with α = β = 0.5.
+pub struct Arcsine;
+
+impl ContinuousDistribution for Arcsine {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 || x >= 1.0 {
+            return 0.0;
+        }
+        1.0 / (PI * (x * (1.0 - x)).sqrt())
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if x >= 1.0 {
+            return 1.0;
+        }
+        2.0 / PI * x.sqrt().asin()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return 1.0;
+        }
+        // F(x) = 2/π * arcsin(sqrt(x))
+        // q = 2/π * arcsin(sqrt(x))
+        // arcsin(sqrt(x)) = q * π / 2
+        // sqrt(x) = sin(q * π / 2)
+        // x = sin²(q * π / 2)
+        let s = (q * PI / 2.0).sin();
+        s * s
+    }
+
+    fn mean(&self) -> f64 {
+        0.5
+    }
+
+    fn var(&self) -> f64 {
+        0.125 // 1/8
     }
 }
 
@@ -15034,6 +15130,24 @@ mod tests {
             1e-12,
             "HalfLogistic variance",
         );
+    }
+
+    #[test]
+    fn half_cauchy_pdf_cdf_ppf_roundtrip() {
+        let hc = HalfCauchy;
+        assert_close(hc.pdf(0.0), 2.0 / PI, 1e-12, "HalfCauchy pdf(0)");
+        assert_eq!(hc.cdf(-1.0), 0.0);
+        for q in [0.1, 0.25, 0.5, 0.75, 0.9] {
+            let x = hc.ppf(q);
+            assert_close(hc.cdf(x), q, 1e-10, &format!("HalfCauchy ppf at q={q}"));
+        }
+    }
+
+    #[test]
+    fn half_cauchy_mean_var_are_undefined() {
+        let hc = HalfCauchy;
+        assert!(hc.mean().is_nan());
+        assert!(hc.var().is_nan());
     }
 
     #[test]
