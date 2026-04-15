@@ -22,12 +22,12 @@ pub use plan::{
 };
 pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, SyncSharedAuditLedger, TransformTrace,
-    WorkerPolicy, dct, dct_i, dct_iii, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, fft_with_audit,
-    fft2, fft2_with_audit, fftn, fftn_with_audit, hfft, hfft_with_audit, hilbert, idct, ifft,
-    ifft_with_audit, ifft2, ifft2_with_audit, ifftn, ifftn_with_audit, ihfft, ihfft_with_audit,
-    irfft, irfft_with_audit, irfft2, irfft2_with_audit, irfftn, irfftn_with_audit, next_fast_len,
-    rfft, rfft_with_audit, rfft2, rfft2_with_audit, rfftn, rfftn_with_audit, sync_audit_ledger,
-    take_transform_traces,
+    WorkerPolicy, dct, dct_i, dct_iii, dct_iv, dctn, dst_i, dst_ii, dst_iii, dst_iv, dstn, fft,
+    fft_with_audit, fft2, fft2_with_audit, fftn, fftn_with_audit, hfft, hfft_with_audit, hilbert,
+    idct, idctn, idstn, ifft, ifft_with_audit, ifft2, ifft2_with_audit, ifftn, ifftn_with_audit,
+    ihfft, ihfft_with_audit, irfft, irfft_with_audit, irfft2, irfft2_with_audit, irfftn,
+    irfftn_with_audit, next_fast_len, rfft, rfft_with_audit, rfft2, rfft2_with_audit, rfftn,
+    rfftn_with_audit, sync_audit_ledger, take_transform_traces,
 };
 
 /// FFT normalization modes matching SciPy/PocketFFT conventions.

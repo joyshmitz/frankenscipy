@@ -1053,6 +1053,286 @@ pub fn dst_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
     Ok(result)
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// N-Dimensional DCT/DST
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// N-dimensional Discrete Cosine Transform.
+///
+/// Matches `scipy.fft.dctn`. Applies the DCT-II transform along each axis.
+///
+/// # Arguments
+/// * `input` - Input array (flattened, row-major order)
+/// * `shape` - Shape of the N-D array
+/// * `options` - FFT options (normalization, etc.)
+///
+/// # Returns
+/// DCT coefficients (flattened, same shape as input)
+pub fn dctn(input: &[f64], shape: &[usize], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    if shape.is_empty() {
+        return Err(FftError::InvalidShape {
+            detail: "shape cannot be empty",
+        });
+    }
+    let total: usize = shape.iter().product();
+    if total != input.len() {
+        return Err(FftError::LengthMismatch {
+            expected: total,
+            actual: input.len(),
+        });
+    }
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+
+    validate_finite_real(input, options)?;
+
+    // Apply DCT along each axis in sequence
+    let mut data = input.to_vec();
+    let ndim = shape.len();
+
+    for axis in (0..ndim).rev() {
+        data = apply_dct_along_axis(&data, shape, axis, options, false)?;
+    }
+
+    Ok(data)
+}
+
+/// Inverse N-dimensional Discrete Cosine Transform.
+///
+/// Matches `scipy.fft.idctn`. Applies the inverse DCT-II (DCT-III) along each axis.
+pub fn idctn(input: &[f64], shape: &[usize], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    if shape.is_empty() {
+        return Err(FftError::InvalidShape {
+            detail: "shape cannot be empty",
+        });
+    }
+    let total: usize = shape.iter().product();
+    if total != input.len() {
+        return Err(FftError::LengthMismatch {
+            expected: total,
+            actual: input.len(),
+        });
+    }
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+
+    validate_finite_real(input, options)?;
+
+    // Apply IDCT along each axis in sequence
+    let mut data = input.to_vec();
+    let ndim = shape.len();
+
+    for axis in 0..ndim {
+        data = apply_dct_along_axis(&data, shape, axis, options, true)?;
+    }
+
+    Ok(data)
+}
+
+/// N-dimensional Discrete Sine Transform.
+///
+/// Matches `scipy.fft.dstn`. Applies the DST-II transform along each axis.
+pub fn dstn(input: &[f64], shape: &[usize], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    if shape.is_empty() {
+        return Err(FftError::InvalidShape {
+            detail: "shape cannot be empty",
+        });
+    }
+    let total: usize = shape.iter().product();
+    if total != input.len() {
+        return Err(FftError::LengthMismatch {
+            expected: total,
+            actual: input.len(),
+        });
+    }
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+
+    validate_finite_real(input, options)?;
+
+    // Apply DST along each axis in sequence
+    let mut data = input.to_vec();
+    let ndim = shape.len();
+
+    for axis in (0..ndim).rev() {
+        data = apply_dst_along_axis(&data, shape, axis, options, false)?;
+    }
+
+    Ok(data)
+}
+
+/// Inverse N-dimensional Discrete Sine Transform.
+///
+/// Matches `scipy.fft.idstn`. Applies the inverse DST-II (DST-III) along each axis.
+pub fn idstn(input: &[f64], shape: &[usize], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    if shape.is_empty() {
+        return Err(FftError::InvalidShape {
+            detail: "shape cannot be empty",
+        });
+    }
+    let total: usize = shape.iter().product();
+    if total != input.len() {
+        return Err(FftError::LengthMismatch {
+            expected: total,
+            actual: input.len(),
+        });
+    }
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+
+    validate_finite_real(input, options)?;
+
+    // Apply IDST along each axis in sequence
+    let mut data = input.to_vec();
+    let ndim = shape.len();
+
+    for axis in 0..ndim {
+        data = apply_dst_along_axis(&data, shape, axis, options, true)?;
+    }
+
+    Ok(data)
+}
+
+/// Apply 1-D DCT along a specific axis of an N-D array.
+fn apply_dct_along_axis(
+    data: &[f64],
+    shape: &[usize],
+    axis: usize,
+    options: &FftOptions,
+    inverse: bool,
+) -> Result<Vec<f64>, FftError> {
+    let ndim = shape.len();
+    let axis_len = shape[axis];
+
+    if axis_len == 0 {
+        return Ok(data.to_vec());
+    }
+
+    // Calculate strides for the input array
+    let mut strides = vec![1usize; ndim];
+    for i in (0..ndim - 1).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    let total: usize = shape.iter().product();
+    let outer_size = total / axis_len;
+    let mut result = vec![0.0; total];
+
+    // For each "fiber" along the axis
+    let mut temp = vec![0.0; axis_len];
+    let mut temp_out = vec![0.0; axis_len];
+
+    for outer_idx in 0..outer_size {
+        // Convert outer_idx to multi-index (excluding axis)
+        let mut multi_idx = vec![0usize; ndim];
+        let mut remaining = outer_idx;
+        for d in (0..ndim).rev() {
+            if d == axis {
+                continue;
+            }
+            let dim_size = if d == axis { 1 } else { shape[d] };
+            multi_idx[d] = remaining % dim_size;
+            remaining /= dim_size;
+        }
+
+        // Extract the fiber
+        for i in 0..axis_len {
+            multi_idx[axis] = i;
+            let flat_idx: usize = multi_idx.iter().zip(strides.iter()).map(|(m, s)| m * s).sum();
+            temp[i] = data[flat_idx];
+        }
+
+        // Apply DCT or IDCT
+        let transformed = if inverse {
+            idct(&temp, options)?
+        } else {
+            dct(&temp, options)?
+        };
+        temp_out.copy_from_slice(&transformed);
+
+        // Store back
+        for i in 0..axis_len {
+            multi_idx[axis] = i;
+            let flat_idx: usize = multi_idx.iter().zip(strides.iter()).map(|(m, s)| m * s).sum();
+            result[flat_idx] = temp_out[i];
+        }
+    }
+
+    Ok(result)
+}
+
+/// Apply 1-D DST along a specific axis of an N-D array.
+fn apply_dst_along_axis(
+    data: &[f64],
+    shape: &[usize],
+    axis: usize,
+    options: &FftOptions,
+    inverse: bool,
+) -> Result<Vec<f64>, FftError> {
+    let ndim = shape.len();
+    let axis_len = shape[axis];
+
+    if axis_len == 0 {
+        return Ok(data.to_vec());
+    }
+
+    // Calculate strides for the input array
+    let mut strides = vec![1usize; ndim];
+    for i in (0..ndim - 1).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    let total: usize = shape.iter().product();
+    let outer_size = total / axis_len;
+    let mut result = vec![0.0; total];
+
+    // For each "fiber" along the axis
+    let mut temp = vec![0.0; axis_len];
+    let mut temp_out = vec![0.0; axis_len];
+
+    for outer_idx in 0..outer_size {
+        // Convert outer_idx to multi-index (excluding axis)
+        let mut multi_idx = vec![0usize; ndim];
+        let mut remaining = outer_idx;
+        for d in (0..ndim).rev() {
+            if d == axis {
+                continue;
+            }
+            let dim_size = if d == axis { 1 } else { shape[d] };
+            multi_idx[d] = remaining % dim_size;
+            remaining /= dim_size;
+        }
+
+        // Extract the fiber
+        for i in 0..axis_len {
+            multi_idx[axis] = i;
+            let flat_idx: usize = multi_idx.iter().zip(strides.iter()).map(|(m, s)| m * s).sum();
+            temp[i] = data[flat_idx];
+        }
+
+        // Apply DST or IDST (DST-II forward, DST-III inverse)
+        let transformed = if inverse {
+            dst_iii(&temp, options)?
+        } else {
+            dst_ii(&temp, options)?
+        };
+        temp_out.copy_from_slice(&transformed);
+
+        // Store back
+        for i in 0..axis_len {
+            multi_idx[axis] = i;
+            let flat_idx: usize = multi_idx.iter().zip(strides.iter()).map(|(m, s)| m * s).sum();
+            result[flat_idx] = temp_out[i];
+        }
+    }
+
+    Ok(result)
+}
+
 /// Compute the analytic signal using the Hilbert transform.
 ///
 /// Matches `scipy.signal.hilbert(x)`. Returns the analytic signal
