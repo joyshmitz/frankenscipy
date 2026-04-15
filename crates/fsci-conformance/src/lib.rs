@@ -5038,6 +5038,77 @@ fn compare_casp_case_differential(
     }
 }
 
+fn compare_fft_case_differential(
+    case: &FftCase,
+    observed: &FftObserved,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    let (passed, message) = compare_fft_outcome(&case.expected, observed);
+
+    match (&case.expected, observed) {
+        (
+            FftExpectedOutcome::ComplexVector { values, atol, rtol },
+            FftObserved::ComplexVector(actual),
+        ) => {
+            let diff = actual
+                .iter()
+                .zip(values.iter())
+                .map(|(got, expected)| {
+                    (got[0] - expected[0])
+                        .abs()
+                        .max((got[1] - expected[1]).abs())
+                })
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
+            (
+                passed,
+                message,
+                Some(diff),
+                Some(ToleranceUsed {
+                    atol: atol.unwrap_or(1.0e-10),
+                    rtol: rtol.unwrap_or(1.0e-8),
+                    comparison_mode: "allclose".to_owned(),
+                }),
+            )
+        }
+        (
+            FftExpectedOutcome::RealVector { values, atol, rtol },
+            FftObserved::RealVector(actual),
+        ) => (
+            passed,
+            message,
+            Some(max_diff_vec(actual, values)),
+            Some(ToleranceUsed {
+                atol: atol.unwrap_or(1.0e-10),
+                rtol: rtol.unwrap_or(1.0e-8),
+                comparison_mode: "allclose".to_owned(),
+            }),
+        ),
+        (FftExpectedOutcome::Error { error }, FftObserved::Error(actual)) => {
+            let diff = if actual.contains(error) {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+            (
+                passed,
+                message,
+                Some(diff),
+                Some(ToleranceUsed {
+                    atol: 0.0,
+                    rtol: 0.0,
+                    comparison_mode: "substring".to_owned(),
+                }),
+            )
+        }
+        _ => (passed, message, None, None),
+    }
+}
+
 pub fn run_integrate_packet(
     config: &HarnessConfig,
     fixture_name: &str,
@@ -6437,6 +6508,8 @@ pub fn run_differential_test(
         run_differential_array_api(fixture_path, &raw, oracle_config)
     } else if family.contains("special") {
         run_differential_special(fixture_path, &raw, oracle_config)
+    } else if family.contains("fft") {
+        run_differential_fft(fixture_path, &raw, oracle_config)
     } else if family.contains("optim") {
         run_differential_optimize(fixture_path, &raw, oracle_config)
     } else if family.contains("casp") {
@@ -6967,6 +7040,53 @@ fn run_differential_casp(
         let observed = execute_casp_case(case);
         let (passed, message, max_diff, tolerance_used) =
             compare_casp_case_differential(case, &observed);
+
+        per_case_results.push(DifferentialCaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+            max_diff,
+            tolerance_used,
+            oracle_status: oracle_status.clone(),
+        });
+    }
+
+    let pass_count = per_case_results
+        .iter()
+        .filter(|result| result.passed)
+        .count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+fn run_differential_fft(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: FftPacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+
+    for case in &fixture.cases {
+        let observed = execute_fft_case(case);
+        let (passed, message, max_diff, tolerance_used) =
+            compare_fft_case_differential(case, &observed);
 
         per_case_results.push(DifferentialCaseResult {
             case_id: case.case_id().to_owned(),
@@ -8559,15 +8679,15 @@ mod tests {
     use super::style_for_case_result;
     use super::{
         AggregateParityReport, ArrayApiPacketFixture, CaspPacketFixture, ClusterPacketFixture,
-        ConformanceReport, DifferentialOracleConfig, HarnessConfig, IntegratePacketFixture,
-        LinalgCase, LinalgExpectedOutcome, LinalgPacketFixture, OptimizePacketFixture,
-        OracleStatus, PacketFamily, PythonOracleConfig, SignalPacketFixture, SpatialPacketFixture,
-        SpecialPacketFixture, StatsPacketFixture, aggregate_packet_reports, discover_fixtures,
-        ensure_artifact_layout, load_oracle_capture, run_array_api_packet, run_casp_packet,
-        run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
-        run_linalg_packet, run_linalg_packet_with_oracle_capture, run_optimize_packet,
-        run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
-        run_stats_packet, run_validate_tol_packet, write_parity_artifacts,
+        ConformanceReport, DifferentialOracleConfig, FftPacketFixture, HarnessConfig,
+        IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome, LinalgPacketFixture,
+        OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig, SignalPacketFixture,
+        SpatialPacketFixture, SpecialPacketFixture, StatsPacketFixture, aggregate_packet_reports,
+        discover_fixtures, ensure_artifact_layout, load_oracle_capture, run_array_api_packet,
+        run_casp_packet, run_cluster_packet, run_differential_test, run_fft_packet,
+        run_integrate_packet, run_linalg_packet, run_linalg_packet_with_oracle_capture,
+        run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet,
+        run_special_packet, run_stats_packet, run_validate_tol_packet, write_parity_artifacts,
     };
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
@@ -9041,6 +9161,24 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     fn casp_case_expected_summary(expected: &super::CaspExpectedOutcome) -> String {
+        format!("{expected:?}")
+    }
+
+    fn fft_case_input_summary(case: &super::FftCase) -> String {
+        format!(
+            "transform={:?} mode={:?} normalization={:?} real_input={:?} complex_input={:?} output_len={:?} sample_spacing={:?} shape={:?}",
+            case.transform,
+            case.mode,
+            case.normalization,
+            case.real_input,
+            case.complex_input,
+            case.output_len,
+            case.sample_spacing,
+            case.shape
+        )
+    }
+
+    fn fft_case_expected_summary(expected: &super::FftExpectedOutcome) -> String {
         format!("{expected:?}")
     }
 
@@ -10178,6 +10316,88 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let output_path = output_dir.join("structured_case_logs.json");
         let payload = serde_json::to_vec_pretty(&logs).expect("serialize casp logs");
         fs::write(&output_path, payload).expect("write casp structured logs");
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn differential_test_fft_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-005_fft_core.json");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle).expect("differential fft runs");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-005");
+        assert_eq!(report.family, "fft_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 56);
+    }
+
+    #[test]
+    fn differential_fft_quota_and_structured_logs() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-005_fft_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read fft fixture");
+        let fixture: FftPacketFixture = serde_json::from_str(&raw).expect("parse fft fixture");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle).expect("fft differential");
+
+        let mut by_case = std::collections::BTreeMap::new();
+        for case in &fixture.cases {
+            by_case.insert(case.case_id().to_owned(), case);
+        }
+
+        let mut case_count = 0usize;
+        let mut logs = Vec::with_capacity(report.per_case_results.len());
+
+        for case_result in &report.per_case_results {
+            let case = by_case
+                .get(&case_result.case_id)
+                .expect("every report case should exist in fixture");
+            case_count += 1;
+
+            let log = StructuredCaseLog {
+                test_id: case_result.case_id.clone(),
+                category: case.category.clone(),
+                input_summary: fft_case_input_summary(case),
+                expected: fft_case_expected_summary(&case.expected),
+                actual: case_result.message.clone(),
+                diff: case_result.max_diff,
+                tolerance: case_result.tolerance_used.clone(),
+                pass: case_result.passed,
+            };
+
+            let payload =
+                serde_json::to_string(&log).expect("structured conformance log should serialize");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&payload).expect("structured log should parse");
+            assert!(parsed.get("test_id").is_some());
+            assert!(parsed.get("category").is_some());
+            assert!(parsed.get("input_summary").is_some());
+            assert!(parsed.get("expected").is_some());
+            assert!(parsed.get("actual").is_some());
+            assert!(parsed.get("diff").is_some());
+            assert!(parsed.get("tolerance").is_some());
+            assert!(parsed.get("pass").is_some());
+            logs.push(log);
+        }
+
+        assert_eq!(case_count, 56, "expected 56 cases, got {case_count}");
+        assert_eq!(report.fail_count, 0);
+
+        let output_dir = HarnessConfig::default_paths()
+            .artifact_dir_for("P2C-005")
+            .join("differential");
+        fs::create_dir_all(&output_dir).expect("create fft differential artifact directory");
+        let output_path = output_dir.join("structured_case_logs.json");
+        let payload = serde_json::to_vec_pretty(&logs).expect("serialize fft logs");
+        fs::write(&output_path, payload).expect("write fft structured logs");
         assert!(output_path.exists());
     }
 
