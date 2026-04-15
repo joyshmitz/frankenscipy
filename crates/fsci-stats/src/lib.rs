@@ -10,7 +10,7 @@
 //!
 //! Each distribution implements pdf, cdf, sf, ppf (inverse CDF), mean, var, std.
 
-use std::f64::consts::{FRAC_1_SQRT_2, PI};
+use std::f64::consts::{FRAC_1_SQRT_2, LN_2, PI};
 
 use fsci_runtime::RuntimeMode;
 use rand::Rng;
@@ -2835,6 +2835,50 @@ impl ContinuousDistribution for HalfNormal {
 
     fn var(&self) -> f64 {
         1.0 - 2.0 / PI
+    }
+}
+
+/// Half-logistic distribution.
+///
+/// Matches `scipy.stats.halflogistic`.
+pub struct HalfLogistic;
+
+impl ContinuousDistribution for HalfLogistic {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let exp_neg_x = (-x).exp();
+        2.0 * exp_neg_x / (1.0 + exp_neg_x).powi(2)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let exp_neg_x = (-x).exp();
+        (1.0 - exp_neg_x) / (1.0 + exp_neg_x)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        ((1.0 + q) / (1.0 - q)).ln()
+    }
+
+    fn mean(&self) -> f64 {
+        2.0 * LN_2
+    }
+
+    fn var(&self) -> f64 {
+        PI * PI / 3.0 - 4.0 * LN_2 * LN_2
     }
 }
 
@@ -14967,6 +15011,29 @@ mod tests {
         let c = hn.cdf(1.0);
         assert!(c > 0.0 && c < 1.0);
         assert!((hn.mean() - (2.0 / PI).sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn half_logistic_pdf_cdf_ppf_roundtrip() {
+        let hl = HalfLogistic;
+        assert_close(hl.pdf(0.0), 0.5, 1e-12, "HalfLogistic pdf(0)");
+        assert_eq!(hl.cdf(-1.0), 0.0);
+        for q in [0.1, 0.25, 0.5, 0.75, 0.9] {
+            let x = hl.ppf(q);
+            assert_close(hl.cdf(x), q, 1e-10, &format!("HalfLogistic ppf at q={q}"));
+        }
+    }
+
+    #[test]
+    fn half_logistic_mean_var_match_closed_form() {
+        let hl = HalfLogistic;
+        assert_close(hl.mean(), 2.0 * LN_2, 1e-12, "HalfLogistic mean");
+        assert_close(
+            hl.var(),
+            PI * PI / 3.0 - 4.0 * LN_2 * LN_2,
+            1e-12,
+            "HalfLogistic variance",
+        );
     }
 
     #[test]
