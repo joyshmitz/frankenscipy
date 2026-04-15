@@ -1373,6 +1373,208 @@ where
     })
 }
 
+/// Anderson acceleration for root finding.
+///
+/// Matches `scipy.optimize.anderson`.
+///
+/// Anderson acceleration (also known as Anderson mixing or DIIS) accelerates
+/// the convergence of fixed-point iterations by using a history of previous
+/// iterates to compute an optimal linear combination.
+///
+/// For solving f(x) = 0, it reformulates as a fixed-point problem x = x + f(x)
+/// and applies mixing to accelerate convergence.
+///
+/// # Arguments
+/// * `func` - Function f(x) whose root is sought
+/// * `x0` - Initial guess
+/// * `tol` - Convergence tolerance on ||f(x)||
+/// * `maxiter` - Maximum iterations
+/// * `m` - Number of previous iterates to store (mixing memory)
+/// * `beta` - Mixing parameter (step size, typically 1.0)
+pub fn anderson<F>(
+    func: F,
+    x0: &[f64],
+    tol: f64,
+    maxiter: usize,
+    m: usize,
+    beta: f64,
+) -> Result<MultivariateRootResult, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x0.len();
+    if n == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "x0 must not be empty".to_string(),
+        });
+    }
+    let m = m.max(1); // At least 1 history element
+
+    let mut x = x0.to_vec();
+    let mut fx = func(&x);
+    let mut nfev = 1usize;
+
+    // History storage: stores (x_k, f_k) pairs
+    let mut x_hist: Vec<Vec<f64>> = Vec::with_capacity(m);
+    let mut f_hist: Vec<Vec<f64>> = Vec::with_capacity(m);
+
+    for iteration in 0..maxiter {
+        let norm_fx: f64 = fx.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if norm_fx < tol {
+            return Ok(MultivariateRootResult {
+                x,
+                fun: fx,
+                converged: true,
+                message: "anderson converged".to_string(),
+                iterations: iteration,
+                function_calls: nfev,
+            });
+        }
+
+        // Store current iterate in history
+        if x_hist.len() >= m {
+            x_hist.remove(0);
+            f_hist.remove(0);
+        }
+        x_hist.push(x.clone());
+        f_hist.push(fx.clone());
+
+        // Compute the Anderson mixing coefficients
+        let mk = x_hist.len();
+        if mk == 1 {
+            // Simple fixed-point step: x_{k+1} = x_k + beta * f(x_k)
+            for i in 0..n {
+                x[i] += beta * fx[i];
+            }
+        } else {
+            // Build the residual difference matrix ΔF
+            // ΔF_j = f_{k-mk+j+1} - f_{k-mk+j} for j = 0..mk-1
+            let num_cols = mk - 1;
+
+            // Compute residual differences
+            let mut delta_f: Vec<Vec<f64>> = Vec::with_capacity(num_cols);
+            for j in 0..num_cols {
+                let df: Vec<f64> = f_hist[j + 1]
+                    .iter()
+                    .zip(f_hist[j].iter())
+                    .map(|(a, b)| a - b)
+                    .collect();
+                delta_f.push(df);
+            }
+
+            // Solve least squares: min ||ΔF * γ - f_k||²
+            // Using normal equations: (ΔF^T ΔF) γ = ΔF^T f_k
+            let mut ata = vec![vec![0.0; num_cols]; num_cols];
+            let mut atb = vec![0.0; num_cols];
+
+            for i in 0..num_cols {
+                for j in 0..num_cols {
+                    ata[i][j] = delta_f[i]
+                        .iter()
+                        .zip(delta_f[j].iter())
+                        .map(|(a, b)| a * b)
+                        .sum();
+                }
+                atb[i] = delta_f[i]
+                    .iter()
+                    .zip(fx.iter())
+                    .map(|(a, b)| a * b)
+                    .sum();
+            }
+
+            // Solve the small linear system using simple Gaussian elimination
+            let gamma = solve_small_system(&ata, &atb);
+
+            // Compute mixed iterate:
+            // x_{k+1} = x_k + beta*f_k - sum_j gamma_j * (Δx_j + beta*Δf_j)
+            let mut x_new = x.clone();
+            for i in 0..n {
+                x_new[i] += beta * fx[i];
+            }
+
+            for j in 0..num_cols {
+                for i in 0..n {
+                    let dx_ji = x_hist[j + 1][i] - x_hist[j][i];
+                    let df_ji = delta_f[j][i];
+                    x_new[i] -= gamma[j] * (dx_ji + beta * df_ji);
+                }
+            }
+
+            x = x_new;
+        }
+
+        fx = func(&x);
+        nfev += 1;
+    }
+
+    Ok(MultivariateRootResult {
+        x,
+        fun: fx,
+        converged: false,
+        message: format!("anderson failed to converge within {maxiter} iterations"),
+        iterations: maxiter,
+        function_calls: nfev,
+    })
+}
+
+/// Solve a small linear system Ax = b using Gaussian elimination with partial pivoting.
+fn solve_small_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+    let n = b.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    // Create augmented matrix
+    let mut aug: Vec<Vec<f64>> = a.iter().map(|row| row.clone()).collect();
+    let mut rhs = b.to_vec();
+
+    // Forward elimination with partial pivoting
+    for col in 0..n {
+        // Find pivot
+        let mut max_row = col;
+        let mut max_val = aug[col][col].abs();
+        for row in (col + 1)..n {
+            if aug[row][col].abs() > max_val {
+                max_val = aug[row][col].abs();
+                max_row = row;
+            }
+        }
+
+        // Swap rows
+        if max_row != col {
+            aug.swap(col, max_row);
+            rhs.swap(col, max_row);
+        }
+
+        // Check for singularity
+        if aug[col][col].abs() < 1e-14 {
+            // Return zero coefficients for singular matrix
+            return vec![0.0; n];
+        }
+
+        // Eliminate
+        for row in (col + 1)..n {
+            let factor = aug[row][col] / aug[col][col];
+            for j in col..n {
+                aug[row][j] -= factor * aug[col][j];
+            }
+            rhs[row] -= factor * rhs[col];
+        }
+    }
+
+    // Back substitution
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut sum = rhs[i];
+        for j in (i + 1)..n {
+            sum -= aug[i][j] * x[j];
+        }
+        x[i] = sum / aug[i][i];
+    }
+
+    x
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};
@@ -1382,7 +1584,9 @@ mod tests {
     use proptest::prelude::*;
     use serde::Serialize;
 
-    use super::{MultivariateRootMethod, MultivariateRootOptions, broyden1, broyden2, fsolve, root};
+    use super::{
+        MultivariateRootMethod, MultivariateRootOptions, anderson, broyden1, broyden2, fsolve, root,
+    };
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, halley, newton_scalar,
         ridder, root_scalar, secant, toms748,
@@ -2173,6 +2377,54 @@ mod tests {
     fn broyden2_empty_x0_rejected() {
         let f = |_x: &[f64]| vec![];
         let err = broyden2(f, &[], 1e-10, 200).expect_err("empty");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn anderson_linear_system() {
+        // Simple linear system: x + y = 3, x - y = 1 → x=2, y=1
+        let f = |x: &[f64]| vec![x[0] + x[1] - 3.0, x[0] - x[1] - 1.0];
+        let result = anderson(f, &[0.0, 0.0], 1e-8, 100, 5, 0.5).expect("anderson");
+        assert!(result.converged, "anderson failed: {}", result.message);
+        assert!(
+            (result.x[0] - 2.0).abs() < 0.1,
+            "x = {}, expected 2.0",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 1.0).abs() < 0.1,
+            "y = {}, expected 1.0",
+            result.x[1]
+        );
+    }
+
+    #[test]
+    fn anderson_nonlinear() {
+        // x² + y² = 1, x - y = 0 → x=y=±1/√2
+        let f = |x: &[f64]| vec![x[0] * x[0] + x[1] * x[1] - 1.0, x[0] - x[1]];
+        let result = anderson(f, &[0.5, 0.5], 1e-8, 200, 5, 0.3).expect("anderson nonlinear");
+        assert!(result.converged, "anderson failed: {}", result.message);
+        let s2 = std::f64::consts::FRAC_1_SQRT_2;
+        // Either root is valid
+        assert!(
+            (result.x[0].abs() - s2).abs() < 0.05,
+            "|x| = {}, expected {}",
+            result.x[0].abs(),
+            s2
+        );
+        // x should equal y (up to sign)
+        assert!(
+            (result.x[0] - result.x[1]).abs() < 0.01,
+            "x={}, y={} should be equal",
+            result.x[0],
+            result.x[1]
+        );
+    }
+
+    #[test]
+    fn anderson_empty_x0_rejected() {
+        let f = |_x: &[f64]| vec![];
+        let err = anderson(f, &[], 1e-10, 200, 5, 1.0).expect_err("empty");
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
     }
 

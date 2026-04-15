@@ -16,9 +16,9 @@ pub use minimize::{
     lbfgsb, minimize, minimize_scalar, nelder_mead, newton_cg, powell,
 };
 pub use root::{
-    MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, bisect,
-    brenth, brentq, broyden1, broyden2, fsolve, halley, newton_scalar, ridder, root, root_scalar,
-    secant, toms748,
+    MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, anderson,
+    bisect, brenth, brentq, broyden1, broyden2, fsolve, halley, newton_scalar, ridder, root,
+    root_scalar, secant, toms748,
 };
 pub use types::{
     Bounds, ConvergenceStatus, LinearConstraint, MinimizeOptions, NonlinearConstraint, OptError,
