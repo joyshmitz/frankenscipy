@@ -15443,4 +15443,53 @@ mod tests {
             "expected expanded upper bound, got {result}"
         );
     }
+
+    // ── Arcsine distribution ──────────────────────────────────────────
+
+    #[test]
+    fn arcsine_pdf_at_half() {
+        // PDF at x=0.5: 1 / (π * sqrt(0.5*0.5)) = 1 / (π * 0.5) = 2/π ≈ 0.6366
+        let a = Arcsine;
+        let expected = 2.0 / PI;
+        assert_close(a.pdf(0.5), expected, 1e-10, "arcsine pdf(0.5)");
+    }
+
+    #[test]
+    fn arcsine_pdf_boundaries() {
+        let a = Arcsine;
+        // PDF is 0 outside [0, 1]
+        assert_eq!(a.pdf(-0.1), 0.0);
+        assert_eq!(a.pdf(1.1), 0.0);
+        // At boundaries, PDF should be 0 (singularity)
+        assert_eq!(a.pdf(0.0), 0.0);
+        assert_eq!(a.pdf(1.0), 0.0);
+    }
+
+    #[test]
+    fn arcsine_cdf_known_values() {
+        let a = Arcsine;
+        // CDF(0.5) = 2/π * arcsin(sqrt(0.5)) = 2/π * π/4 = 0.5
+        assert_close(a.cdf(0.5), 0.5, 1e-10, "arcsine cdf(0.5)");
+        // CDF boundaries
+        assert_eq!(a.cdf(0.0), 0.0);
+        assert_eq!(a.cdf(1.0), 1.0);
+    }
+
+    #[test]
+    fn arcsine_ppf_roundtrip() {
+        let a = Arcsine;
+        for &q in &[0.1, 0.25, 0.5, 0.75, 0.9] {
+            let x = a.ppf(q);
+            let q2 = a.cdf(x);
+            assert_close(q2, q, 1e-10, &format!("arcsine ppf-cdf roundtrip at q={q}"));
+        }
+    }
+
+    #[test]
+    fn arcsine_mean_var() {
+        let a = Arcsine;
+        // Mean = 0.5, Var = 1/8 = 0.125
+        assert_eq!(a.mean(), 0.5);
+        assert_eq!(a.var(), 0.125);
+    }
 }

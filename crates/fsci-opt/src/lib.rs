@@ -3000,8 +3000,8 @@ mod tests {
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions, Integrality,
         LinearConstraint, MilpOptions, MilpProblem, MinimizeOptions, NonlinearConstraint,
         OptimizeMethod, RootOptions, approx_fprime, basinhopping, check_grad, cobyla,
-        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, pso,
-        rosen, rosen_der, rosen_hess, rosen_hess_prod, shgo,
+        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, pso, rosen,
+        rosen_der, rosen_hess, rosen_hess_prod, shgo,
     };
 
     #[test]

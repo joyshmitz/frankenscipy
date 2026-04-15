@@ -1242,7 +1242,11 @@ fn apply_dct_along_axis(
         // Extract the fiber
         for i in 0..axis_len {
             multi_idx[axis] = i;
-            let flat_idx: usize = multi_idx.iter().zip(strides.iter()).map(|(m, s)| m * s).sum();
+            let flat_idx: usize = multi_idx
+                .iter()
+                .zip(strides.iter())
+                .map(|(m, s)| m * s)
+                .sum();
             temp[i] = data[flat_idx];
         }
 
@@ -1257,7 +1261,11 @@ fn apply_dct_along_axis(
         // Store back
         for i in 0..axis_len {
             multi_idx[axis] = i;
-            let flat_idx: usize = multi_idx.iter().zip(strides.iter()).map(|(m, s)| m * s).sum();
+            let flat_idx: usize = multi_idx
+                .iter()
+                .zip(strides.iter())
+                .map(|(m, s)| m * s)
+                .sum();
             result[flat_idx] = temp_out[i];
         }
     }
@@ -1310,7 +1318,11 @@ fn apply_dst_along_axis(
         // Extract the fiber
         for i in 0..axis_len {
             multi_idx[axis] = i;
-            let flat_idx: usize = multi_idx.iter().zip(strides.iter()).map(|(m, s)| m * s).sum();
+            let flat_idx: usize = multi_idx
+                .iter()
+                .zip(strides.iter())
+                .map(|(m, s)| m * s)
+                .sum();
             temp[i] = data[flat_idx];
         }
 
@@ -1325,7 +1337,11 @@ fn apply_dst_along_axis(
         // Store back
         for i in 0..axis_len {
             multi_idx[axis] = i;
-            let flat_idx: usize = multi_idx.iter().zip(strides.iter()).map(|(m, s)| m * s).sum();
+            let flat_idx: usize = multi_idx
+                .iter()
+                .zip(strides.iter())
+                .map(|(m, s)| m * s)
+                .sum();
             result[flat_idx] = temp_out[i];
         }
     }
