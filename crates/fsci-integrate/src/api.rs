@@ -4,11 +4,14 @@ use fsci_opt::root::brentq;
 use fsci_opt::types::RootOptions;
 use fsci_runtime::RuntimeMode;
 
+use crate::IntegrateValidationError;
 use crate::bdf::{BdfSolver, BdfSolverConfig};
 use crate::rk::{RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig};
 use crate::solver::{OdeSolver, OdeSolverState, StepFailure, StepOutcome};
-use crate::validation::{ToleranceValue, validate_tol};
-use crate::{IntegrateValidationError, validate_first_step, validate_max_step};
+use crate::validation::{
+    SyncSharedAuditLedger, ToleranceValue, audit_fingerprint, record_fail_closed,
+    validate_first_step_with_audit, validate_max_step_with_audit, validate_tol_with_audit,
+};
 
 pub type EventFn = fn(f64, &[f64]) -> f64;
 
@@ -135,10 +138,20 @@ fn event_active(old_val: f64, new_val: f64, direction: f64) -> bool {
     }
 }
 
-fn validate_t_eval(t_eval: &[f64], t0: f64, tf: f64) -> Result<(), IntegrateValidationError> {
+fn validate_t_eval_with_audit(
+    t_eval: &[f64],
+    t0: f64,
+    tf: f64,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<(), IntegrateValidationError> {
+    let fingerprint = audit_fingerprint(
+        "validate_t_eval",
+        format!("t_eval={t_eval:?};t0={t0};tf={tf}"),
+    );
     let t_min = t0.min(tf);
     let t_max = t0.max(tf);
     if t_eval.iter().any(|&te| te < t_min || te > t_max) {
+        record_fail_closed(audit_ledger, &fingerprint, "t_eval_out_of_span", "rejected");
         return Err(IntegrateValidationError::TEvalOutOfSpan);
     }
 
@@ -148,6 +161,7 @@ fn validate_t_eval(t_eval: &[f64], t0: f64, tf: f64) -> Result<(), IntegrateVali
         t_eval.windows(2).all(|window| window[1] < window[0])
     };
     if !is_sorted {
+        record_fail_closed(audit_ledger, &fingerprint, "t_eval_not_sorted", "rejected");
         return Err(IntegrateValidationError::TEvalNotSorted);
     }
 
@@ -749,72 +763,127 @@ pub fn solve_ivp<F>(
 where
     F: FnMut(f64, &[f64]) -> Vec<f64>,
 {
+    solve_ivp_impl(fun, options, None)
+}
+
+pub fn solve_ivp_with_audit<F>(
+    fun: &mut F,
+    options: &SolveIvpOptions<'_>,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<SolveIvpResult, IntegrateValidationError>
+where
+    F: FnMut(f64, &[f64]) -> Vec<f64>,
+{
+    solve_ivp_impl(fun, options, Some(audit_ledger))
+}
+
+fn solve_ivp_impl<F>(
+    fun: &mut F,
+    options: &SolveIvpOptions<'_>,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<SolveIvpResult, IntegrateValidationError>
+where
+    F: FnMut(f64, &[f64]) -> Vec<f64>,
+{
     let (t0, tf) = options.t_span;
     let n = options.y0.len();
     if n == 0 {
+        let fingerprint = audit_fingerprint(
+            "solve_ivp",
+            format!("reason=empty_y0;t_span=({t0},{tf});mode={:?}", options.mode),
+        );
+        record_fail_closed(audit_ledger, &fingerprint, "empty_y0", "rejected");
         return Err(IntegrateValidationError::EmptyY0);
     }
     if !t0.is_finite() || !tf.is_finite() {
+        let fingerprint = audit_fingerprint(
+            "solve_ivp",
+            format!(
+                "reason=non_finite_span;t_span=({t0},{tf});mode={:?}",
+                options.mode
+            ),
+        );
+        record_fail_closed(audit_ledger, &fingerprint, "non_finite_span", "rejected");
         return Err(IntegrateValidationError::NonFiniteSpan);
     }
     if options.y0.iter().any(|v| !v.is_finite()) {
+        let fingerprint = audit_fingerprint(
+            "solve_ivp",
+            format!(
+                "reason=non_finite_y0;y0={:?};mode={:?}",
+                options.y0, options.mode
+            ),
+        );
+        record_fail_closed(audit_ledger, &fingerprint, "non_finite_y0", "rejected");
         return Err(IntegrateValidationError::NonFiniteY0);
     }
 
-    validate_max_step(options.max_step)?;
-    if let Some(first_step) = options.first_step {
-        validate_first_step(first_step, t0, tf)?;
-    }
-    let _ = validate_tol(
+    let max_step = validate_max_step_with_audit(options.max_step, audit_ledger)?;
+    let first_step = options
+        .first_step
+        .map(|value| validate_first_step_with_audit(value, t0, tf, audit_ledger))
+        .transpose()?;
+    let validated_tol = validate_tol_with_audit(
         ToleranceValue::Scalar(options.rtol),
         options.atol.clone(),
         n,
         options.mode,
+        audit_ledger,
     )?;
+    let rtol = validated_tol
+        .rtol
+        .into_scalar()
+        .expect("solve_ivp always carries scalar rtol");
+    let atol = validated_tol.atol;
+    let mut resolved_options = options.clone();
+    resolved_options.rtol = rtol;
+    resolved_options.atol = atol.clone();
+    resolved_options.first_step = first_step;
+    resolved_options.max_step = max_step;
 
-    if let Some(t_eval) = options.t_eval {
-        validate_t_eval(t_eval, t0, tf)?;
+    if let Some(t_eval) = resolved_options.t_eval {
+        validate_t_eval_with_audit(t_eval, t0, tf, audit_ledger)?;
     }
 
-    match options.method {
+    match resolved_options.method {
         SolverKind::Rk45 | SolverKind::Rk23 | SolverKind::Dop853 => {
-            let tableau = match options.method {
+            let tableau = match resolved_options.method {
                 SolverKind::Rk45 => &RK45_TABLEAU,
                 SolverKind::Rk23 => &RK23_TABLEAU,
                 _ => &crate::rk::DOP853_TABLEAU,
             };
             let config = RkSolverConfig {
                 t0,
-                y0: options.y0,
+                y0: resolved_options.y0,
                 t_bound: tf,
-                rtol: options.rtol,
-                atol: options.atol.clone(),
-                max_step: options.max_step,
-                first_step: options.first_step,
-                mode: options.mode,
+                rtol,
+                atol: atol.clone(),
+                max_step,
+                first_step,
+                mode: resolved_options.mode,
                 tableau,
             };
             let solver = RkSolver::new(fun, config)?;
-            solve_ivp_core(fun, solver, options)
+            solve_ivp_core(fun, solver, &resolved_options)
         }
         SolverKind::Radau | SolverKind::Bdf => {
             let config = BdfSolverConfig {
                 t0,
-                y0: options.y0,
+                y0: resolved_options.y0,
                 t_bound: tf,
-                rtol: options.rtol,
-                atol: options.atol.clone(),
-                max_step: options.max_step,
-                first_step: options.first_step,
-                mode: options.mode,
+                rtol,
+                atol,
+                max_step,
+                first_step,
+                mode: resolved_options.mode,
                 max_order: 5,
             };
             let solver = BdfSolver::new(fun, config)?;
-            solve_ivp_core(fun, solver, options)
+            solve_ivp_core(fun, solver, &resolved_options)
         }
         SolverKind::Lsoda => {
-            let solver = LsodaSolver::new(fun, options)?;
-            solve_ivp_core(fun, solver, options)
+            let solver = LsodaSolver::new(fun, &resolved_options)?;
+            solve_ivp_core(fun, solver, &resolved_options)
         }
     }
 }
@@ -822,6 +891,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fsci_runtime::AuditAction;
 
     #[test]
     fn solve_ivp_exponential_decay() {
@@ -862,6 +932,65 @@ mod tests {
         )
         .expect_err("empty initial state should be rejected");
         assert_eq!(err, IntegrateValidationError::EmptyY0);
+    }
+
+    #[test]
+    fn solve_ivp_with_audit_records_fail_closed_on_empty_initial_state() {
+        let audit_ledger = crate::sync_audit_ledger();
+        let err = solve_ivp_with_audit(
+            &mut |_t, _y| Vec::new(),
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[],
+                method: SolverKind::Rk45,
+                ..SolveIvpOptions::default()
+            },
+            &audit_ledger,
+        )
+        .expect_err("empty initial state should be rejected");
+        assert_eq!(err, IntegrateValidationError::EmptyY0);
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        assert!(matches!(
+            ledger.entries()[0].action,
+            AuditAction::FailClosed { ref reason } if reason == "empty_y0"
+        ));
+    }
+
+    #[test]
+    fn solve_ivp_with_audit_records_hardened_tolerance_clamp() {
+        let audit_ledger = crate::sync_audit_ledger();
+        let result = solve_ivp_with_audit(
+            &mut |_t, y| vec![-0.5 * y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[2.0],
+                method: SolverKind::Rk45,
+                rtol: 0.0,
+                atol: ToleranceValue::Scalar(1e-8),
+                first_step: Some(1e-3),
+                max_step: 0.1,
+                mode: RuntimeMode::Hardened,
+                ..SolveIvpOptions::default()
+            },
+            &audit_ledger,
+        )
+        .expect("hardened solve should succeed with clamped tolerance");
+        assert!(result.success);
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert!(
+            ledger.entries().iter().any(|event| {
+                matches!(
+                    event.action,
+                    AuditAction::BoundedRecovery {
+                        ref recovery_action
+                    } if recovery_action == "clamp_rtol_to_min"
+                )
+            }),
+            "expected bounded recovery entry for rtol clamp"
+        );
     }
 
     #[test]

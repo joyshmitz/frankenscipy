@@ -1,6 +1,67 @@
 #![forbid(unsafe_code)]
 
-use fsci_runtime::RuntimeMode;
+use std::sync::{Arc, Mutex as StdMutex};
+
+use fsci_runtime::{AuditAction, AuditEvent, AuditLedger, RuntimeMode, casp_now_unix_ms};
+
+/// Thread-safe audit ledger handle for synchronous integrate validation paths.
+pub type SyncSharedAuditLedger = Arc<StdMutex<AuditLedger>>;
+
+/// Create a shared audit ledger for integrate validation APIs.
+#[must_use]
+pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
+    Arc::new(StdMutex::new(AuditLedger::new()))
+}
+
+pub(crate) fn audit_fingerprint(context: &str, detail: impl Into<String>) -> Vec<u8> {
+    format!("{context}:{}", detail.into()).into_bytes()
+}
+
+pub(crate) fn record_fail_closed(
+    ledger: Option<&SyncSharedAuditLedger>,
+    input_bytes: &[u8],
+    reason: &str,
+    outcome: &str,
+) {
+    let Some(ledger) = ledger else {
+        return;
+    };
+
+    let event = AuditEvent::new(
+        casp_now_unix_ms(),
+        AuditLedger::fingerprint_bytes(input_bytes),
+        AuditAction::FailClosed {
+            reason: reason.to_string(),
+        },
+        outcome,
+    );
+    if let Ok(mut guard) = ledger.lock() {
+        guard.record(event);
+    }
+}
+
+pub(crate) fn record_bounded_recovery(
+    ledger: Option<&SyncSharedAuditLedger>,
+    input_bytes: &[u8],
+    recovery_action: &str,
+    outcome: &str,
+) {
+    let Some(ledger) = ledger else {
+        return;
+    };
+
+    let event = AuditEvent::new(
+        casp_now_unix_ms(),
+        AuditLedger::fingerprint_bytes(input_bytes),
+        AuditAction::BoundedRecovery {
+            recovery_action: recovery_action.to_string(),
+        },
+        outcome,
+    );
+    if let Ok(mut guard) = ledger.lock() {
+        guard.record(event);
+    }
+}
 
 pub const EPS: f64 = f64::EPSILON;
 pub const MIN_RTOL: f64 = 100.0 * EPS;
@@ -30,6 +91,13 @@ impl ToleranceValue {
         match self {
             Self::Scalar(_) => None,
             Self::Vector(values) => Some(values.len()),
+        }
+    }
+
+    pub(crate) fn into_scalar(self) -> Option<f64> {
+        match self {
+            Self::Scalar(value) => Some(value),
+            Self::Vector(_) => None,
         }
     }
 }
@@ -95,17 +163,60 @@ pub fn validate_first_step(
     t0: f64,
     t_bound: f64,
 ) -> Result<f64, IntegrateValidationError> {
+    validate_first_step_with_audit(first_step, t0, t_bound, None)
+}
+
+pub fn validate_first_step_with_audit(
+    first_step: f64,
+    t0: f64,
+    t_bound: f64,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<f64, IntegrateValidationError> {
     if first_step <= 0.0 {
+        let fingerprint = audit_fingerprint(
+            "validate_first_step",
+            format!("first_step={first_step};t0={t0};t_bound={t_bound}"),
+        );
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "first_step_must_be_positive",
+            "rejected",
+        );
         return Err(IntegrateValidationError::FirstStepMustBePositive);
     }
     if first_step > (t_bound - t0).abs() {
+        let fingerprint = audit_fingerprint(
+            "validate_first_step",
+            format!("first_step={first_step};t0={t0};t_bound={t_bound}"),
+        );
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "first_step_exceeds_bounds",
+            "rejected",
+        );
         return Err(IntegrateValidationError::FirstStepExceedsBounds);
     }
     Ok(first_step)
 }
 
 pub fn validate_max_step(max_step: f64) -> Result<f64, IntegrateValidationError> {
+    validate_max_step_with_audit(max_step, None)
+}
+
+pub fn validate_max_step_with_audit(
+    max_step: f64,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<f64, IntegrateValidationError> {
     if max_step <= 0.0 {
+        let fingerprint = audit_fingerprint("validate_max_step", format!("max_step={max_step}"));
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "max_step_must_be_positive",
+            "rejected",
+        );
         return Err(IntegrateValidationError::MaxStepMustBePositive);
     }
     Ok(max_step)
@@ -117,10 +228,32 @@ pub fn validate_tol(
     n: usize,
     mode: RuntimeMode,
 ) -> Result<ValidatedTolerance, IntegrateValidationError> {
+    validate_tol_with_audit(rtol, atol, n, mode, None)
+}
+
+pub fn validate_tol_with_audit(
+    rtol: ToleranceValue,
+    atol: ToleranceValue,
+    n: usize,
+    mode: RuntimeMode,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<ValidatedTolerance, IntegrateValidationError> {
     let mut warnings = Vec::new();
+    let fingerprint = audit_fingerprint(
+        "validate_tol",
+        format!("rtol={rtol:?};atol={atol:?};n={n};mode={mode:?}"),
+    );
     let needs_clamp = rtol.clone().any(|x| x < MIN_RTOL);
     let rtol = if needs_clamp {
         warnings.push(ToleranceWarning::RtolClamped { minimum: MIN_RTOL });
+        if mode == RuntimeMode::Hardened {
+            record_bounded_recovery(
+                audit_ledger,
+                &fingerprint,
+                "clamp_rtol_to_min",
+                &format!("clamped_rtol_to_{MIN_RTOL:.3e}"),
+            );
+        }
         rtol.map(|x| x.max(MIN_RTOL))
     } else {
         rtol
@@ -129,6 +262,7 @@ pub fn validate_tol(
     if let Some(len) = atol.len_if_vector()
         && len != n
     {
+        record_fail_closed(audit_ledger, &fingerprint, "atol_wrong_shape", "rejected");
         return Err(IntegrateValidationError::AtolWrongShape {
             expected: n,
             actual: len,
@@ -136,6 +270,12 @@ pub fn validate_tol(
     }
 
     if atol.clone().any(|x| x < 0.0) {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "atol_must_be_positive",
+            "rejected",
+        );
         return Err(IntegrateValidationError::AtolMustBePositive);
     }
 
@@ -491,5 +631,43 @@ mod tests {
         )
         .expect("zero atol element should be valid");
         assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validation_tol_hardened_clamp_records_bounded_recovery() {
+        let audit_ledger = sync_audit_ledger();
+        let report = validate_tol_with_audit(
+            ToleranceValue::Scalar(0.0),
+            ToleranceValue::Scalar(1e-6),
+            1,
+            RuntimeMode::Hardened,
+            Some(&audit_ledger),
+        )
+        .expect("hardened clamp should succeed");
+        assert_eq!(report.rtol, ToleranceValue::Scalar(MIN_RTOL));
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        assert!(matches!(
+            ledger.entries()[0].action,
+            AuditAction::BoundedRecovery {
+                ref recovery_action
+            } if recovery_action == "clamp_rtol_to_min"
+        ));
+    }
+
+    #[test]
+    fn test_validation_first_step_records_fail_closed() {
+        let audit_ledger = sync_audit_ledger();
+        let err = validate_first_step_with_audit(0.0, 0.0, 1.0, Some(&audit_ledger))
+            .expect_err("zero first_step must fail");
+        assert_eq!(err, IntegrateValidationError::FirstStepMustBePositive);
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        assert!(matches!(
+            ledger.entries()[0].action,
+            AuditAction::FailClosed { ref reason } if reason == "first_step_must_be_positive"
+        ));
     }
 }

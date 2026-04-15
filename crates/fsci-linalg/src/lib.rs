@@ -8206,7 +8206,13 @@ mod tests {
         let audit_ledger = sync_audit_ledger();
         let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 16);
 
-        let result = solve_with_audit(&a, &b, SolveOptions::default(), &mut portfolio, &audit_ledger);
+        let result = solve_with_audit(
+            &a,
+            &b,
+            SolveOptions::default(),
+            &mut portfolio,
+            &audit_ledger,
+        );
         assert!(result.is_ok());
 
         let ledger = audit_ledger.lock().expect("lock");
@@ -8217,7 +8223,10 @@ mod tests {
             AuditAction::ModeDecision { .. } => {}
             other => panic!("expected ModeDecision, got {other:?}"),
         }
-        assert!(entry.outcome.contains("CASP"), "outcome should mention CASP");
+        assert!(
+            entry.outcome.contains("CASP"),
+            "outcome should mention CASP"
+        );
     }
 
     #[test]
@@ -8297,7 +8306,13 @@ mod tests {
         let audit_ledger = sync_audit_ledger();
         let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 16);
 
-        let result = solve_with_audit(&a, &b, SolveOptions::default(), &mut portfolio, &audit_ledger);
+        let result = solve_with_audit(
+            &a,
+            &b,
+            SolveOptions::default(),
+            &mut portfolio,
+            &audit_ledger,
+        );
         assert!(result.is_err());
 
         let ledger = audit_ledger.lock().expect("lock");
@@ -8319,7 +8334,13 @@ mod tests {
         let audit_ledger = sync_audit_ledger();
         let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 16);
 
-        let result = solve_with_audit(&a, &b, SolveOptions::default(), &mut portfolio, &audit_ledger);
+        let result = solve_with_audit(
+            &a,
+            &b,
+            SolveOptions::default(),
+            &mut portfolio,
+            &audit_ledger,
+        );
         assert!(result.is_err());
 
         let ledger = audit_ledger.lock().expect("lock");

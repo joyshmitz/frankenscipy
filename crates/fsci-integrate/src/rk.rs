@@ -448,12 +448,17 @@ impl RkSolver {
         let n = config.y0.len();
 
         // Validate tolerances
-        let _ = validate_tol(
+        let validated_tol = validate_tol(
             ToleranceValue::Scalar(config.rtol),
             config.atol.clone(),
             n,
             config.mode,
         )?;
+        let rtol = validated_tol
+            .rtol
+            .into_scalar()
+            .expect("RkSolverConfig always carries scalar rtol");
+        let atol = validated_tol.atol;
 
         // Validate max_step
         if config.max_step.is_finite() {
@@ -482,8 +487,8 @@ impl RkSolver {
                 f0: &f0,
                 direction,
                 order: config.tableau.error_estimator_order as f64,
-                rtol: config.rtol,
-                atol: config.atol.clone(),
+                rtol,
+                atol: atol.clone(),
                 mode: config.mode,
             };
             select_initial_step(fun, &step_request)?
@@ -505,8 +510,8 @@ impl RkSolver {
             y_old: None,
             t_bound: config.t_bound,
             direction,
-            rtol: config.rtol,
-            atol: config.atol,
+            rtol,
+            atol,
             max_step: config.max_step,
             f: f0,
             f_old: None,

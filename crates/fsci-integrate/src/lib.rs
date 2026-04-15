@@ -11,6 +11,7 @@ pub mod validation;
 
 pub use api::{
     EventFn, EventSpec, OdeSolution, SolveIvpOptions, SolveIvpResult, SolverKind, solve_ivp,
+    solve_ivp_with_audit,
 };
 pub use bdf::{BdfSolver, BdfSolverConfig};
 pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
@@ -29,8 +30,10 @@ pub use rk::{
 pub use solver::{OdeSolver, OdeSolverState, StepFailure, StepOutcome};
 pub use step_size::{InitialStepRequest, StepRhsFn, select_initial_step};
 pub use validation::{
-    EPS, IntegrateValidationError, MIN_RTOL, ToleranceValue, ToleranceWarning, ValidatedTolerance,
-    validate_first_step, validate_max_step, validate_tol,
+    EPS, IntegrateValidationError, MIN_RTOL, SyncSharedAuditLedger, ToleranceValue,
+    ToleranceWarning, ValidatedTolerance, sync_audit_ledger, validate_first_step,
+    validate_first_step_with_audit, validate_max_step, validate_max_step_with_audit, validate_tol,
+    validate_tol_with_audit,
 };
 
 /// Legacy `odeint`-style interface.

@@ -3221,11 +3221,7 @@ impl RectBivariateSpline {
         }
         if z.len() != ny {
             return Err(InterpError::InvalidArgument {
-                detail: format!(
-                    "z has {} rows but y has {} points",
-                    z.len(),
-                    ny
-                ),
+                detail: format!("z has {} rows but y has {} points", z.len(), ny),
             });
         }
         for (i, row) in z.iter().enumerate() {
@@ -3386,8 +3382,8 @@ impl RectBivariateSpline {
 
         for row in &self.coeffs {
             // Create x-direction spline for this row of coefficients
-            let mut x_spline = BSpline::new(self.tx.clone(), row.clone(), self.kx)
-                .expect("x spline construction");
+            let mut x_spline =
+                BSpline::new(self.tx.clone(), row.clone(), self.kx).expect("x spline construction");
 
             // Apply x derivative if needed
             for _ in 0..dx {
@@ -3398,8 +3394,8 @@ impl RectBivariateSpline {
         }
 
         // Create y-direction spline from intermediate values
-        let mut y_spline = BSpline::new(self.ty.clone(), intermediate, self.ky)
-            .expect("y spline construction");
+        let mut y_spline =
+            BSpline::new(self.ty.clone(), intermediate, self.ky).expect("y spline construction");
 
         // Apply y derivative if needed
         for _ in 0..dy {
@@ -3905,10 +3901,7 @@ mod tests {
     #[test]
     fn regular_grid_cubic_2d_smooth() {
         // 2D cubic interpolation on a 4x4 grid
-        let points = vec![
-            vec![0.0, 1.0, 2.0, 3.0],
-            vec![0.0, 1.0, 2.0, 3.0],
-        ];
+        let points = vec![vec![0.0, 1.0, 2.0, 3.0], vec![0.0, 1.0, 2.0, 3.0]];
         // values = x + y
         let mut values = Vec::new();
         for &x in &points[0] {
@@ -4023,17 +4016,28 @@ mod tests {
                 assert!(
                     (val - expected).abs() < 1e-10,
                     "at ({}, {}): got {}, expected {}",
-                    xval, yval, val, expected
+                    xval,
+                    yval,
+                    val,
+                    expected
                 );
             }
         }
 
         // Test at midpoints
         let val = spline.eval(0.5, 0.5);
-        assert!((val - 1.0).abs() < 0.1, "at (0.5, 0.5): got {}, expected 1.0", val);
+        assert!(
+            (val - 1.0).abs() < 0.1,
+            "at (0.5, 0.5): got {}, expected 1.0",
+            val
+        );
 
         let val = spline.eval(1.5, 1.0);
-        assert!((val - 2.5).abs() < 0.1, "at (1.5, 1.0): got {}, expected 2.5", val);
+        assert!(
+            (val - 2.5).abs() < 0.1,
+            "at (1.5, 1.0): got {}, expected 2.5",
+            val
+        );
     }
 
     #[test]
@@ -4041,10 +4045,7 @@ mod tests {
         // Test bilinear spline (kx=ky=1)
         let x = vec![0.0, 1.0];
         let y = vec![0.0, 1.0];
-        let z = vec![
-            vec![0.0, 1.0],
-            vec![1.0, 2.0],
-        ];
+        let z = vec![vec![0.0, 1.0], vec![1.0, 2.0]];
         let spline = rect_bilinear_spline(&x, &y, &z).expect("bilinear");
 
         // Corners
@@ -4055,7 +4056,11 @@ mod tests {
 
         // Center
         let center = spline.eval(0.5, 0.5);
-        assert!((center - 1.0).abs() < 1e-10, "center: got {}, expected 1.0", center);
+        assert!(
+            (center - 1.0).abs() < 1e-10,
+            "center: got {}, expected 1.0",
+            center
+        );
     }
 
     #[test]
@@ -4078,14 +4083,21 @@ mod tests {
                 assert!(
                     (val - expected).abs() < 1e-8,
                     "at ({}, {}): got {}, expected {}",
-                    xv, yv, val, expected
+                    xv,
+                    yv,
+                    val,
+                    expected
                 );
             }
         }
 
         // Test at a midpoint (2.5, 2.5) - expected 12.5
         let val = spline.eval(2.5, 2.5);
-        assert!((val - 12.5).abs() < 0.5, "at (2.5, 2.5): got {}, expected 12.5", val);
+        assert!(
+            (val - 12.5).abs() < 0.5,
+            "at (2.5, 2.5): got {}, expected 12.5",
+            val
+        );
     }
 
     #[test]
@@ -4126,7 +4138,11 @@ mod tests {
 
         let spline = rect_bilinear_spline(&x, &y, &z).expect("bilinear");
         let integral = spline.integral(0.0, 1.0, 0.0, 1.0);
-        assert!((integral - 1.0).abs() < 0.01, "integral: got {}, expected 1.0", integral);
+        assert!(
+            (integral - 1.0).abs() < 0.01,
+            "integral: got {}, expected 1.0",
+            integral
+        );
     }
 
     #[test]
@@ -4144,10 +4160,7 @@ mod tests {
     fn rect_bivariate_spline_rejects_non_monotonic_x() {
         let x = vec![0.0, 2.0, 1.0]; // Not strictly increasing
         let y = vec![0.0, 1.0];
-        let z = vec![
-            vec![0.0, 1.0, 2.0],
-            vec![1.0, 2.0, 3.0],
-        ];
+        let z = vec![vec![0.0, 1.0, 2.0], vec![1.0, 2.0, 3.0]];
         let err = RectBivariateSpline::new(&x, &y, &z, 1, 1).expect_err("non-monotonic");
         assert!(matches!(err, InterpError::InvalidArgument { .. }));
     }
