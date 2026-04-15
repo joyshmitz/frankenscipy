@@ -6425,6 +6425,458 @@ fn gcd(mut a: usize, mut b: usize) -> usize {
     a
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Linear Time-Invariant (LTI) System Classes
+// ═══════════════════════════════════════════════════════════════════
+
+/// Continuous-time Linear Time-Invariant system representation.
+///
+/// Matches `scipy.signal.lti`. Represents a continuous-time LTI system
+/// in transfer function form (numerator/denominator polynomials).
+///
+/// The transfer function is: H(s) = num(s) / den(s)
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lti {
+    /// Numerator polynomial coefficients (highest power first).
+    pub num: Vec<f64>,
+    /// Denominator polynomial coefficients (highest power first).
+    pub den: Vec<f64>,
+}
+
+impl Lti {
+    /// Create a new continuous-time LTI system from transfer function coefficients.
+    ///
+    /// # Arguments
+    /// * `num` - Numerator polynomial coefficients (highest power first)
+    /// * `den` - Denominator polynomial coefficients (highest power first)
+    pub fn new(num: Vec<f64>, den: Vec<f64>) -> Result<Self, SignalError> {
+        if num.is_empty() {
+            return Err(SignalError::InvalidArgument(
+                "numerator cannot be empty".to_string(),
+            ));
+        }
+        if den.is_empty() {
+            return Err(SignalError::InvalidArgument(
+                "denominator cannot be empty".to_string(),
+            ));
+        }
+        if den.iter().all(|&x| x == 0.0) {
+            return Err(SignalError::InvalidArgument(
+                "denominator cannot be all zeros".to_string(),
+            ));
+        }
+        Ok(Self { num, den })
+    }
+
+    /// Create an LTI system from zeros, poles, and gain.
+    ///
+    /// H(s) = k * prod(s - z_i) / prod(s - p_j)
+    pub fn from_zpk(zeros: &[f64], poles: &[f64], gain: f64) -> Result<Self, SignalError> {
+        let num = zpk_to_poly(zeros, gain);
+        let den = zpk_to_poly(poles, 1.0);
+        Self::new(num, den)
+    }
+
+    /// Evaluate the transfer function at a complex frequency s.
+    pub fn eval_at(&self, s_re: f64, s_im: f64) -> (f64, f64) {
+        let num_val = poly_eval_complex(&self.num, s_re, s_im);
+        let den_val = poly_eval_complex(&self.den, s_re, s_im);
+        complex_div(num_val.0, num_val.1, den_val.0, den_val.1)
+    }
+
+    /// Compute the frequency response H(jω) at angular frequencies.
+    ///
+    /// Returns (magnitude, phase) arrays.
+    pub fn freqresp(&self, w: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let mut mag = Vec::with_capacity(w.len());
+        let mut phase = Vec::with_capacity(w.len());
+
+        for &omega in w {
+            let (re, im) = self.eval_at(0.0, omega);
+            mag.push((re * re + im * im).sqrt());
+            phase.push(im.atan2(re));
+        }
+
+        (mag, phase)
+    }
+
+    /// Compute the step response of the system.
+    ///
+    /// Uses numerical simulation with RK4 integration.
+    pub fn step(&self, t: &[f64]) -> Result<Vec<f64>, SignalError> {
+        if t.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Convert to state-space and simulate
+        let (a, b, c, d) = tf2ss(&self.num, &self.den)?;
+        simulate_lti_step(&a, &b, &c, d, t)
+    }
+
+    /// Compute the impulse response of the system.
+    pub fn impulse(&self, t: &[f64]) -> Result<Vec<f64>, SignalError> {
+        if t.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (a, b, c, d) = tf2ss(&self.num, &self.den)?;
+        simulate_lti_impulse(&a, &b, &c, d, t)
+    }
+
+    /// Get the system's poles (roots of denominator).
+    pub fn poles(&self) -> Result<Vec<(f64, f64)>, SignalError> {
+        let (re, im) = poly_roots(&self.den)?;
+        Ok(re.into_iter().zip(im).collect())
+    }
+
+    /// Get the system's zeros (roots of numerator).
+    pub fn zeros(&self) -> Result<Vec<(f64, f64)>, SignalError> {
+        let (re, im) = poly_roots(&self.num)?;
+        Ok(re.into_iter().zip(im).collect())
+    }
+}
+
+/// Discrete-time Linear Time-Invariant system representation.
+///
+/// Matches `scipy.signal.dlti`. Represents a discrete-time LTI system
+/// in transfer function form.
+///
+/// The transfer function is: H(z) = num(z) / den(z)
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dlti {
+    /// Numerator polynomial coefficients (highest power first).
+    pub num: Vec<f64>,
+    /// Denominator polynomial coefficients (highest power first).
+    pub den: Vec<f64>,
+    /// Sampling period (dt > 0).
+    pub dt: f64,
+}
+
+impl Dlti {
+    /// Create a new discrete-time LTI system.
+    ///
+    /// # Arguments
+    /// * `num` - Numerator polynomial coefficients
+    /// * `den` - Denominator polynomial coefficients
+    /// * `dt` - Sampling period (must be > 0)
+    pub fn new(num: Vec<f64>, den: Vec<f64>, dt: f64) -> Result<Self, SignalError> {
+        if num.is_empty() {
+            return Err(SignalError::InvalidArgument(
+                "numerator cannot be empty".to_string(),
+            ));
+        }
+        if den.is_empty() {
+            return Err(SignalError::InvalidArgument(
+                "denominator cannot be empty".to_string(),
+            ));
+        }
+        if den.iter().all(|&x| x == 0.0) {
+            return Err(SignalError::InvalidArgument(
+                "denominator cannot be all zeros".to_string(),
+            ));
+        }
+        if dt <= 0.0 {
+            return Err(SignalError::InvalidArgument(
+                "sampling period dt must be positive".to_string(),
+            ));
+        }
+        Ok(Self { num, den, dt })
+    }
+
+    /// Create a DLTI system from zeros, poles, gain, and sampling period.
+    pub fn from_zpk(zeros: &[f64], poles: &[f64], gain: f64, dt: f64) -> Result<Self, SignalError> {
+        let num = zpk_to_poly(zeros, gain);
+        let den = zpk_to_poly(poles, 1.0);
+        Self::new(num, den, dt)
+    }
+
+    /// Evaluate the transfer function at z = exp(jω*dt).
+    pub fn eval_at_freq(&self, omega: f64) -> (f64, f64) {
+        let angle = omega * self.dt;
+        let z_re = angle.cos();
+        let z_im = angle.sin();
+        let num_val = poly_eval_complex(&self.num, z_re, z_im);
+        let den_val = poly_eval_complex(&self.den, z_re, z_im);
+        complex_div(num_val.0, num_val.1, den_val.0, den_val.1)
+    }
+
+    /// Compute the frequency response H(e^{jω}) at angular frequencies.
+    pub fn freqresp(&self, w: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let mut mag = Vec::with_capacity(w.len());
+        let mut phase = Vec::with_capacity(w.len());
+
+        for &omega in w {
+            let (re, im) = self.eval_at_freq(omega);
+            mag.push((re * re + im * im).sqrt());
+            phase.push(im.atan2(re));
+        }
+
+        (mag, phase)
+    }
+
+    /// Compute the step response of the discrete system.
+    pub fn step(&self, n_samples: usize) -> Result<Vec<f64>, SignalError> {
+        if n_samples == 0 {
+            return Ok(Vec::new());
+        }
+        // Unit step input
+        let x: Vec<f64> = vec![1.0; n_samples];
+        self.lfilter(&x)
+    }
+
+    /// Compute the impulse response of the discrete system.
+    pub fn impulse(&self, n_samples: usize) -> Result<Vec<f64>, SignalError> {
+        if n_samples == 0 {
+            return Ok(Vec::new());
+        }
+        // Unit impulse input
+        let mut x = vec![0.0; n_samples];
+        x[0] = 1.0;
+        self.lfilter(&x)
+    }
+
+    /// Filter a signal using this discrete system (direct form II transposed).
+    pub fn lfilter(&self, x: &[f64]) -> Result<Vec<f64>, SignalError> {
+        lfilter(&self.num, &self.den, x, None)
+    }
+
+    /// Get the system's poles (roots of denominator).
+    pub fn poles(&self) -> Result<Vec<(f64, f64)>, SignalError> {
+        let (re, im) = poly_roots(&self.den)?;
+        Ok(re.into_iter().zip(im).collect())
+    }
+
+    /// Get the system's zeros (roots of numerator).
+    pub fn zeros(&self) -> Result<Vec<(f64, f64)>, SignalError> {
+        let (re, im) = poly_roots(&self.num)?;
+        Ok(re.into_iter().zip(im).collect())
+    }
+
+    /// Check if the system is stable (all poles inside unit circle).
+    pub fn is_stable(&self) -> Result<bool, SignalError> {
+        let poles = self.poles()?;
+        Ok(poles.iter().all(|&(re, im)| re * re + im * im < 1.0))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LTI Helper Functions
+// ═══════════════════════════════════════════════════════════════════
+
+/// Convert zeros/poles to polynomial coefficients.
+fn zpk_to_poly(roots: &[f64], gain: f64) -> Vec<f64> {
+    if roots.is_empty() {
+        return vec![gain];
+    }
+    // Start with [1]
+    let mut poly = vec![1.0];
+    for &root in roots {
+        // Multiply by (x - root)
+        let mut new_poly = vec![0.0; poly.len() + 1];
+        for (i, &c) in poly.iter().enumerate() {
+            new_poly[i] += c;
+            new_poly[i + 1] -= c * root;
+        }
+        poly = new_poly;
+    }
+    // Apply gain
+    for c in &mut poly {
+        *c *= gain;
+    }
+    poly
+}
+
+/// Evaluate polynomial with complex argument.
+fn poly_eval_complex(coeffs: &[f64], z_re: f64, z_im: f64) -> (f64, f64) {
+    if coeffs.is_empty() {
+        return (0.0, 0.0);
+    }
+    // Horner's method for complex evaluation
+    let mut re = coeffs[0];
+    let mut im = 0.0;
+    for &c in &coeffs[1..] {
+        // (re, im) = (re, im) * (z_re, z_im) + (c, 0)
+        let new_re = re * z_re - im * z_im + c;
+        let new_im = re * z_im + im * z_re;
+        re = new_re;
+        im = new_im;
+    }
+    (re, im)
+}
+
+/// Convert transfer function to state-space (controllable canonical form).
+fn tf2ss(
+    num: &[f64],
+    den: &[f64],
+) -> Result<(Vec<Vec<f64>>, Vec<f64>, Vec<f64>, f64), SignalError> {
+    if den.is_empty() || den[0] == 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "denominator leading coefficient cannot be zero".to_string(),
+        ));
+    }
+
+    let n = den.len() - 1; // System order
+    if n == 0 {
+        // Static gain
+        let d = if num.is_empty() { 0.0 } else { num[0] / den[0] };
+        return Ok((Vec::new(), Vec::new(), Vec::new(), d));
+    }
+
+    // Normalize denominator
+    let a0 = den[0];
+    let den_norm: Vec<f64> = den.iter().map(|&x| x / a0).collect();
+
+    // Pad numerator to match denominator length
+    let mut num_padded = vec![0.0; den.len()];
+    let offset = den.len().saturating_sub(num.len());
+    for (i, &c) in num.iter().enumerate() {
+        if offset + i < num_padded.len() {
+            num_padded[offset + i] = c / a0;
+        }
+    }
+
+    // Controllable canonical form
+    // A matrix (n x n)
+    let mut a = vec![vec![0.0; n]; n];
+    for i in 0..n - 1 {
+        a[i][i + 1] = 1.0;
+    }
+    for i in 0..n {
+        a[n - 1][i] = -den_norm[n - i];
+    }
+
+    // B vector (n x 1)
+    let mut b = vec![0.0; n];
+    b[n - 1] = 1.0;
+
+    // C vector (1 x n)
+    let mut c = vec![0.0; n];
+    for i in 0..n {
+        c[i] = num_padded[n - i] - num_padded[0] * den_norm[n - i];
+    }
+
+    // D scalar
+    let d = num_padded[0];
+
+    Ok((a, b, c, d))
+}
+
+/// Simulate step response using RK4 integration.
+fn simulate_lti_step(
+    a: &[Vec<f64>],
+    b: &[f64],
+    c: &[f64],
+    d: f64,
+    t: &[f64],
+) -> Result<Vec<f64>, SignalError> {
+    let n = b.len();
+    if n == 0 {
+        // Static system
+        return Ok(vec![d; t.len()]);
+    }
+
+    let mut x = vec![0.0; n];
+    let mut y = Vec::with_capacity(t.len());
+
+    for i in 0..t.len() {
+        // Output: y = c'x + d*u (u = 1 for step)
+        let output: f64 = c
+            .iter()
+            .zip(x.iter())
+            .map(|(&ci, &xi)| ci * xi)
+            .sum::<f64>()
+            + d;
+        y.push(output);
+
+        if i + 1 < t.len() {
+            let dt = t[i + 1] - t[i];
+            // RK4 step with u = 1
+            x = rk4_step(a, b, &x, 1.0, dt);
+        }
+    }
+
+    Ok(y)
+}
+
+/// Simulate impulse response.
+fn simulate_lti_impulse(
+    a: &[Vec<f64>],
+    b: &[f64],
+    c: &[f64],
+    d: f64,
+    t: &[f64],
+) -> Result<Vec<f64>, SignalError> {
+    let n = b.len();
+    if n == 0 {
+        // Static system - impulse response is delta * d
+        let mut y = vec![0.0; t.len()];
+        if !y.is_empty() {
+            y[0] = d;
+        }
+        return Ok(y);
+    }
+
+    // Initial condition: x(0+) = b (from impulse)
+    let mut x = b.to_vec();
+    let mut y = Vec::with_capacity(t.len());
+
+    for i in 0..t.len() {
+        // Output: y = c'x (no feedthrough for impulse after t=0)
+        let output: f64 = c.iter().zip(x.iter()).map(|(&ci, &xi)| ci * xi).sum();
+        y.push(output);
+
+        if i + 1 < t.len() {
+            let dt = t[i + 1] - t[i];
+            // RK4 step with u = 0 (no input after initial impulse)
+            x = rk4_step(a, b, &x, 0.0, dt);
+        }
+    }
+
+    // Add direct feedthrough at t=0
+    if !y.is_empty() && d != 0.0 {
+        // The impulse contribution at t=0 should include d*delta(0)
+        // For discrete representation, we add d to y[0]
+        y[0] += d;
+    }
+
+    Ok(y)
+}
+
+/// Single RK4 integration step for x' = Ax + Bu.
+fn rk4_step(a: &[Vec<f64>], b: &[f64], x: &[f64], u: f64, dt: f64) -> Vec<f64> {
+    let n = x.len();
+
+    let f = |x: &[f64]| -> Vec<f64> {
+        let mut dx = vec![0.0; n];
+        for i in 0..n {
+            for j in 0..n {
+                dx[i] += a[i][j] * x[j];
+            }
+            dx[i] += b[i] * u;
+        }
+        dx
+    };
+
+    let k1 = f(x);
+    let x1: Vec<f64> = x
+        .iter()
+        .zip(&k1)
+        .map(|(&xi, &ki)| xi + 0.5 * dt * ki)
+        .collect();
+    let k2 = f(&x1);
+    let x2: Vec<f64> = x
+        .iter()
+        .zip(&k2)
+        .map(|(&xi, &ki)| xi + 0.5 * dt * ki)
+        .collect();
+    let k3 = f(&x2);
+    let x3: Vec<f64> = x.iter().zip(&k3).map(|(&xi, &ki)| xi + dt * ki).collect();
+    let k4 = f(&x3);
+
+    x.iter()
+        .enumerate()
+        .map(|(i, &xi)| xi + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9471,5 +9923,148 @@ mod tests {
         // Sum of coefficients should approximate passband gain (1.0)
         let sum: f64 = h.iter().sum();
         assert!(sum > 0.5 && sum < 1.5, "filter sum = {sum}, expected ~1.0");
+    }
+
+    // ── LTI/DLTI system tests ───────────────────────────────────────
+
+    #[test]
+    fn lti_new_valid() {
+        let sys = Lti::new(vec![1.0], vec![1.0, 2.0]).expect("valid system");
+        assert_eq!(sys.num, vec![1.0]);
+        assert_eq!(sys.den, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn lti_new_empty_num_rejected() {
+        let err = Lti::new(vec![], vec![1.0]).expect_err("empty num");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn lti_new_empty_den_rejected() {
+        let err = Lti::new(vec![1.0], vec![]).expect_err("empty den");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn lti_new_zero_den_rejected() {
+        let err = Lti::new(vec![1.0], vec![0.0, 0.0]).expect_err("zero den");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn lti_from_zpk_no_roots() {
+        // H(s) = 2 / 1 = 2
+        let sys = Lti::from_zpk(&[], &[], 2.0).expect("valid");
+        assert_eq!(sys.num, vec![2.0]);
+        assert_eq!(sys.den, vec![1.0]);
+    }
+
+    #[test]
+    fn lti_from_zpk_simple_pole() {
+        // H(s) = 1 / (s + 1)
+        let sys = Lti::from_zpk(&[], &[-1.0], 1.0).expect("valid");
+        assert_eq!(sys.num, vec![1.0]);
+        assert!((sys.den[0] - 1.0).abs() < 1e-10);
+        assert!((sys.den[1] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn lti_freqresp_dc_gain() {
+        // H(s) = 2 / (s + 1), DC gain = H(0) = 2
+        let sys = Lti::new(vec![2.0], vec![1.0, 1.0]).expect("valid");
+        let (mag, _phase) = sys.freqresp(&[0.0]);
+        assert!((mag[0] - 2.0).abs() < 1e-10, "DC gain = {}", mag[0]);
+    }
+
+    #[test]
+    fn lti_step_response_converges() {
+        // H(s) = 1 / (s + 1), step response converges to 1
+        let sys = Lti::new(vec![1.0], vec![1.0, 1.0]).expect("valid");
+        let t: Vec<f64> = (0..100).map(|i| i as f64 * 0.1).collect();
+        let y = sys.step(&t).expect("step");
+        // Final value should be close to 1 (DC gain)
+        let final_val = y.last().unwrap();
+        assert!(
+            (final_val - 1.0).abs() < 0.1,
+            "final step value = {final_val}"
+        );
+    }
+
+    #[test]
+    fn lti_poles_first_order() {
+        // H(s) = 1 / (s + 2), pole at s = -2
+        let sys = Lti::new(vec![1.0], vec![1.0, 2.0]).expect("valid");
+        let poles = sys.poles().expect("poles");
+        assert_eq!(poles.len(), 1);
+        assert!((poles[0].0 + 2.0).abs() < 1e-10, "pole real = {}", poles[0].0);
+        assert!(poles[0].1.abs() < 1e-10, "pole imag = {}", poles[0].1);
+    }
+
+    #[test]
+    fn dlti_new_valid() {
+        let sys = Dlti::new(vec![1.0], vec![1.0, 0.5], 0.1).expect("valid");
+        assert_eq!(sys.dt, 0.1);
+    }
+
+    #[test]
+    fn dlti_new_negative_dt_rejected() {
+        let err = Dlti::new(vec![1.0], vec![1.0], -0.1).expect_err("negative dt");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn dlti_new_zero_dt_rejected() {
+        let err = Dlti::new(vec![1.0], vec![1.0], 0.0).expect_err("zero dt");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn dlti_step_response() {
+        // H(z) = 1 / (1 - 0.5*z^-1), step response grows to 2
+        let sys = Dlti::new(vec![1.0], vec![1.0, -0.5], 0.01).expect("valid");
+        let y = sys.step(50).expect("step");
+        // Should converge toward 1/(1-0.5) = 2
+        let final_val = y.last().unwrap();
+        assert!(
+            (final_val - 2.0).abs() < 0.1,
+            "final step value = {final_val}"
+        );
+    }
+
+    #[test]
+    fn dlti_impulse_response_first_sample() {
+        // H(z) = 1 / (1 - 0.5*z^-1), impulse h[0] = 1
+        let sys = Dlti::new(vec![1.0], vec![1.0, -0.5], 0.01).expect("valid");
+        let h = sys.impulse(10).expect("impulse");
+        assert!((h[0] - 1.0).abs() < 1e-10, "h[0] = {}", h[0]);
+        // h[n] = 0.5^n for this system
+        assert!((h[1] - 0.5).abs() < 1e-10, "h[1] = {}", h[1]);
+    }
+
+    #[test]
+    fn dlti_is_stable_inside_unit_circle() {
+        // Pole at z = 0.5 (inside unit circle) -> stable
+        let sys = Dlti::new(vec![1.0], vec![1.0, -0.5], 0.01).expect("valid");
+        assert!(sys.is_stable().expect("stable check"));
+    }
+
+    #[test]
+    fn dlti_is_unstable_outside_unit_circle() {
+        // Pole at z = 1.5 (outside unit circle) -> unstable
+        let sys = Dlti::new(vec![1.0], vec![1.0, -1.5], 0.01).expect("valid");
+        assert!(!sys.is_stable().expect("stable check"));
+    }
+
+    #[test]
+    fn dlti_lfilter_matches_direct() {
+        // Verify DLTI.lfilter matches direct lfilter call
+        let sys = Dlti::new(vec![1.0, 0.5], vec![1.0, -0.3], 0.01).expect("valid");
+        let x: Vec<f64> = (0..20).map(|i| (i as f64 * 0.5).sin()).collect();
+        let y1 = sys.lfilter(&x).expect("dlti lfilter");
+        let y2 = lfilter(&sys.num, &sys.den, &x, None).expect("direct lfilter");
+        for (i, (a, b)) in y1.iter().zip(y2.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-12, "y[{i}]: {} vs {}", a, b);
+        }
     }
 }
