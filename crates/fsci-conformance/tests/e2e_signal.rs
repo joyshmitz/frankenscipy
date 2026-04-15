@@ -11,11 +11,10 @@
 //! `fixtures/artifacts/FSCI-P2C-010/e2e/`.
 
 use fsci_signal::{
-    BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection,
-    autocorrelation, blackman, butter, convolve, correlate, filtfilt, find_peaks, firwin,
-    freqz, gausspulse, hamming, hann, hilbert_envelope, kaiser, lfilter, peak_prominences,
-    resample, ricker, rms, savgol_coeffs, savgol_filter, sosfilt, spectral_centroid,
-    spectral_flatness, stft, tf2sos,
+    BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, autocorrelation,
+    blackman, butter, convolve, correlate, filtfilt, find_peaks, firwin, freqz, gausspulse,
+    hamming, hann, hilbert_envelope, kaiser, lfilter, peak_prominences, resample, ricker, rms,
+    savgol_coeffs, savgol_filter, sosfilt, spectral_centroid, spectral_flatness, stft, tf2sos,
 };
 use serde::Serialize;
 use std::f64::consts::PI;
@@ -1114,10 +1113,7 @@ fn scenario_16_sosfilt() {
             let energy_first_half: f64 = h[..50].iter().map(|x| x * x).sum();
             let energy_second_half: f64 = h[50..].iter().map(|x| x * x).sum();
             if energy_second_half < energy_first_half {
-                Ok(format!(
-                    "h[0]={:.4}, decaying response verified",
-                    h[0]
-                ))
+                Ok(format!("h[0]={:.4}, decaying response verified", h[0]))
             } else {
                 Err("impulse response not decaying".to_string())
             }
@@ -1131,9 +1127,7 @@ fn scenario_16_sosfilt() {
         "Strict",
         || {
             // High frequency sine (0.4 normalized = above cutoff of 0.2)
-            let high_freq: Vec<f64> = (0..n)
-                .map(|i| (2.0 * PI * 0.4 * i as f64).sin())
-                .collect();
+            let high_freq: Vec<f64> = (0..n).map(|i| (2.0 * PI * 0.4 * i as f64).sin()).collect();
             let filtered = sosfilt(&sos, &high_freq).map_err(|e| format!("{e}"))?;
 
             // Steady-state should be attenuated (skip transient)
@@ -1306,8 +1300,8 @@ fn scenario_19_stft() {
         "compute STFT of chirp signal",
         "Strict",
         || {
-            let result =
-                stft(&signal, fs, Some("hann"), Some(256), Some(128)).map_err(|e| format!("{e}"))?;
+            let result = stft(&signal, fs, Some("hann"), Some(256), Some(128))
+                .map_err(|e| format!("{e}"))?;
 
             // Check dimensions
             let n_freqs = result.frequencies.len();
@@ -1437,10 +1431,7 @@ fn scenario_21_freqz() {
             let nyq_mag = resp.h_mag[511];
 
             if (dc_mag - 1.0).abs() < 0.01 && nyq_mag < 0.1 {
-                Ok(format!(
-                    "DC mag={:.4}, Nyquist mag={:.4}",
-                    dc_mag, nyq_mag
-                ))
+                Ok(format!("DC mag={:.4}, Nyquist mag={:.4}", dc_mag, nyq_mag))
             } else {
                 Err(format!(
                     "unexpected response: DC={:.4}, Nyquist={:.4}",
@@ -1506,7 +1497,11 @@ fn scenario_22_tf2sos() {
             // Each section should have 6 coefficients
             for (i, section) in sos.iter().enumerate() {
                 if section.len() != 6 {
-                    return Err(format!("section {} has {} coeffs, expected 6", i, section.len()));
+                    return Err(format!(
+                        "section {} has {} coeffs, expected 6",
+                        i,
+                        section.len()
+                    ));
                 }
                 // a0 should be 1.0
                 if (section[3] - 1.0).abs() > 1e-10 {
@@ -1514,7 +1509,10 @@ fn scenario_22_tf2sos() {
                 }
             }
 
-            Ok(format!("{} SOS sections, each properly normalized", sos.len()))
+            Ok(format!(
+                "{} SOS sections, each properly normalized",
+                sos.len()
+            ))
         },
     );
 
@@ -1537,7 +1535,10 @@ fn scenario_22_tf2sos() {
 
             let max_diff = max_abs_diff(&tf_result, &sos_result);
             if max_diff < 1e-10 {
-                Ok(format!("TF and SOS forms equivalent, max_diff={:.2e}", max_diff))
+                Ok(format!(
+                    "TF and SOS forms equivalent, max_diff={:.2e}",
+                    max_diff
+                ))
             } else {
                 Err(format!("TF and SOS differ by {:.2e}", max_diff))
             }

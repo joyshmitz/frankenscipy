@@ -342,7 +342,8 @@ fn scenario_02_pdist() {
         "4 points in 2D",
         "Strict",
         || {
-            let condensed = pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
+            let condensed =
+                pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
             // For 4 points: n*(n-1)/2 = 6 distances
             if condensed.len() != 6 {
                 return Err(format!("expected 6 distances, got {}", condensed.len()));
@@ -364,7 +365,8 @@ fn scenario_02_pdist() {
         "4 points in 2D",
         "Strict",
         || {
-            let condensed = pdist(&points, DistanceMetric::Cityblock).map_err(|e| format!("{e}"))?;
+            let condensed =
+                pdist(&points, DistanceMetric::Cityblock).map_err(|e| format!("{e}"))?;
             // d(0,1) = 1.0, d(0,2) = 1.0, d(0,3) = 2.0, d(1,2) = 2.0, d(1,3) = 1.0, d(2,3) = 1.0
             let expected = [1.0, 1.0, 2.0, 2.0, 1.0, 1.0];
             for (i, (&c, &e)) in condensed.iter().zip(expected.iter()).enumerate() {
@@ -400,7 +402,8 @@ fn scenario_03_squareform() {
         "4 points",
         "Strict",
         || {
-            let condensed = pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
+            let condensed =
+                pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
             let matrix = squareform_to_matrix(&condensed).map_err(|e| format!("{e}"))?;
 
             // Check dimensions
@@ -473,7 +476,11 @@ fn scenario_04_cdist() {
             let dm = cdist(&xa, &xb).map_err(|e| format!("{e}"))?;
 
             if dm.len() != 2 || dm[0].len() != 3 {
-                return Err(format!("expected 2x3 matrix, got {}x{}", dm.len(), dm[0].len()));
+                return Err(format!(
+                    "expected 2x3 matrix, got {}x{}",
+                    dm.len(),
+                    dm[0].len()
+                ));
             }
 
             // dm[0][0] = d([0,0], [1,0]) = 1.0
@@ -482,10 +489,7 @@ fn scenario_04_cdist() {
             // dm[1][0] = d([1,1], [1,0]) = 1.0
             // dm[1][1] = d([1,1], [0,1]) = 1.0
             // dm[1][2] = d([1,1], [2,2]) = sqrt(2) ≈ 1.414
-            let expected = [
-                [1.0, 1.0, 8.0_f64.sqrt()],
-                [1.0, 1.0, 2.0_f64.sqrt()],
-            ];
+            let expected = [[1.0, 1.0, 8.0_f64.sqrt()], [1.0, 1.0, 2.0_f64.sqrt()]];
 
             for (i, row) in dm.iter().enumerate() {
                 for (j, &val) in row.iter().enumerate() {
@@ -508,7 +512,8 @@ fn scenario_04_cdist() {
         "2 vs 3 points",
         "Strict",
         || {
-            let dm = cdist_metric(&xa, &xb, DistanceMetric::Cityblock).map_err(|e| format!("{e}"))?;
+            let dm =
+                cdist_metric(&xa, &xb, DistanceMetric::Cityblock).map_err(|e| format!("{e}"))?;
             // dm[0][2] = |0-2| + |0-2| = 4
             // dm[1][2] = |1-2| + |1-2| = 2
             if !approx_eq(dm[0][2], 4.0, 1e-10) {
@@ -619,7 +624,10 @@ fn scenario_05_kdtree_basic() {
                     return Err("results not sorted by distance".to_string());
                 }
             }
-            Ok(format!("3-NN indices: {:?}", results.iter().map(|r| r.0).collect::<Vec<_>>()))
+            Ok(format!(
+                "3-NN indices: {:?}",
+                results.iter().map(|r| r.0).collect::<Vec<_>>()
+            ))
         },
     );
 
@@ -630,7 +638,9 @@ fn scenario_05_kdtree_basic() {
         "Strict",
         || {
             let tree = KDTree::new(&points).map_err(|e| format!("{e}"))?;
-            let indices = tree.query_ball_point(&[0.5, 0.5], 1.0).map_err(|e| format!("{e}"))?;
+            let indices = tree
+                .query_ball_point(&[0.5, 0.5], 1.0)
+                .map_err(|e| format!("{e}"))?;
             // Points within distance 1.0 of [0.5, 0.5]:
             // [0,0]: d=0.707, [1,0]: d=0.707, [0,1]: d=0.707, [1,1]: d=0.707, [0.5,0.5]: d=0
             // So should include indices 0,1,2,3,4
@@ -859,10 +869,7 @@ fn scenario_09_metric_properties() {
             let dbc = euclidean(&b, &c);
             let dac = euclidean(&a, &c);
             if dac <= dab + dbc + 1e-10 {
-                Ok(format!(
-                    "d(a,c)={dac:.4} <= d(a,b)+d(b,c)={:.4}",
-                    dab + dbc
-                ))
+                Ok(format!("d(a,c)={dac:.4} <= d(a,b)+d(b,c)={:.4}", dab + dbc))
             } else {
                 Err("triangle inequality violated".to_string())
             }
@@ -1040,7 +1047,9 @@ fn scenario_10_kdtree_vs_bruteforce() {
             let radius = 3.0;
 
             for (qi, query) in queries.iter().enumerate() {
-                let tree_indices = tree.query_ball_point(query, radius).map_err(|e| format!("{e}"))?;
+                let tree_indices = tree
+                    .query_ball_point(query, radius)
+                    .map_err(|e| format!("{e}"))?;
 
                 // Brute force
                 let brute_indices: Vec<usize> = points
@@ -1087,7 +1096,8 @@ fn scenario_11_pdist_cdist_consistency() {
         "should give same distances",
         "Strict",
         || {
-            let condensed = pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
+            let condensed =
+                pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
             let matrix = cdist(&points, &points).map_err(|e| format!("{e}"))?;
 
             // Convert condensed to matrix and compare
@@ -1116,7 +1126,8 @@ fn scenario_11_pdist_cdist_consistency() {
         "full matrix comparison",
         "Strict",
         || {
-            let condensed = pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
+            let condensed =
+                pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
             let from_pdist = squareform_to_matrix(&condensed).map_err(|e| format!("{e}"))?;
             let from_cdist = cdist(&points, &points).map_err(|e| format!("{e}"))?;
 
@@ -1157,7 +1168,8 @@ fn scenario_12_large_pdist() {
         "Strict",
         || {
             let start = Instant::now();
-            let condensed = pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
+            let condensed =
+                pdist(&points, DistanceMetric::Euclidean).map_err(|e| format!("{e}"))?;
             let elapsed = start.elapsed();
 
             let expected_len = n * (n - 1) / 2;
@@ -1311,10 +1323,7 @@ fn scenario_14_large_cdist() {
                 return Err(format!("too slow: {:?}", elapsed));
             }
 
-            Ok(format!(
-                "time={:?}, 60000 distances computed",
-                elapsed
-            ))
+            Ok(format!("time={:?}, 60000 distances computed", elapsed))
         },
     );
 

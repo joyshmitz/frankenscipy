@@ -18,14 +18,56 @@ use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_stats::{
-    Argus, BetaDist, Burr12, ChiSquared, ContinuousDistribution, CrystalBall, ExponWeibull,
-    Exponential, FrechetR, GammaDist, GenHalfLogistic, GenLogistic, Gompertz, Gumbel, InvWeibull,
-    LogLaplace, Logistic, Lognormal, Maxwell, Mielke, Normal, Pareto, Rayleigh, StudentT,
-    TukeyLambda, Uniform, Weibull,
+    Argus,
+    BetaDist,
+    Burr12,
+    ChiSquared,
+    ContinuousDistribution,
+    CrystalBall,
+    ExponWeibull,
+    Exponential,
+    FrechetR,
+    GammaDist,
+    GenHalfLogistic,
+    GenLogistic,
+    Gompertz,
+    Gumbel,
+    InvWeibull,
+    LogLaplace,
+    Logistic,
+    Lognormal,
+    Maxwell,
+    Mielke,
+    Normal,
+    Pareto,
+    Rayleigh,
+    StudentT,
+    TukeyLambda,
+    Uniform,
+    Weibull,
+    chi2_contingency,
     // Hypothesis tests
-    chisquare, describe, f_oneway, jarque_bera, kendalltau, ks_1samp, ks_2samp, kruskal, kurtosis,
-    linregress, mannwhitneyu, normaltest, pearsonr, shapiro, skew, spearmanr, ttest_1samp,
-    ttest_ind, ttest_rel, wilcoxon, fisher_exact, chi2_contingency,
+    chisquare,
+    describe,
+    f_oneway,
+    fisher_exact,
+    jarque_bera,
+    kendalltau,
+    kruskal,
+    ks_1samp,
+    ks_2samp,
+    kurtosis,
+    linregress,
+    mannwhitneyu,
+    normaltest,
+    pearsonr,
+    shapiro,
+    skew,
+    spearmanr,
+    ttest_1samp,
+    ttest_ind,
+    ttest_rel,
+    wilcoxon,
 };
 use serde::Serialize;
 
@@ -1356,7 +1398,10 @@ fn e2e_015_t_tests() {
         "ttest_1samp",
         "ttest_1samp(sample, 0)",
         "10 samples from N(1,1), μ0=0",
-        &format!("t={:.4}, p={:.4}, df={}", result.statistic, result.pvalue, result.df),
+        &format!(
+            "t={:.4}, p={:.4}, df={}",
+            result.statistic, result.pvalue, result.df
+        ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));
@@ -1376,7 +1421,10 @@ fn e2e_015_t_tests() {
         "ttest_ind",
         "ttest_ind(A, B)",
         "8 samples each, distinct means",
-        &format!("t={:.4}, p={:.6}, df={}", result.statistic, result.pvalue, result.df),
+        &format!(
+            "t={:.4}, p={:.6}, df={}",
+            result.statistic, result.pvalue, result.df
+        ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));
@@ -1396,7 +1444,10 @@ fn e2e_015_t_tests() {
         "ttest_rel",
         "ttest_rel(before, after)",
         "8 paired measurements",
-        &format!("t={:.4}, p={:.4}, df={}", result.statistic, result.pvalue, result.df),
+        &format!(
+            "t={:.4}, p={:.4}, df={}",
+            result.statistic, result.pvalue, result.df
+        ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));
@@ -1969,9 +2020,7 @@ fn e2e_021_normality_tests() {
     // Shapiro should give high p-value for nearly-normal data
     let t = Instant::now();
     // Approximate normal samples (actually generated, but pretend they're from N(0,1))
-    let normal_ish: Vec<f64> = vec![
-        -1.5, -1.0, -0.5, -0.3, -0.1, 0.0, 0.1, 0.3, 0.5, 1.0, 1.5,
-    ];
+    let normal_ish: Vec<f64> = vec![-1.5, -1.0, -0.5, -0.3, -0.1, 0.0, 0.1, 0.3, 0.5, 1.0, 1.5];
     let result = shapiro(&normal_ish);
     // Should not reject normality
     let pass = result.pvalue > 0.05;
@@ -2104,7 +2153,10 @@ fn e2e_023_contingency_tests() {
         "fisher_exact_assoc",
         "fisher_exact([[10,2],[1,12]])",
         "strong association",
-        &format!("odds_ratio={:.4}, p={:.6}", result.odds_ratio, result.pvalue),
+        &format!(
+            "odds_ratio={:.4}, p={:.6}",
+            result.odds_ratio, result.pvalue
+        ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));
@@ -2123,17 +2175,17 @@ fn e2e_023_contingency_tests() {
         "fisher_exact_null",
         "fisher_exact([[5,5],[5,5]])",
         "no association",
-        &format!("odds_ratio={:.4}, p={:.4}", result.odds_ratio, result.pvalue),
+        &format!(
+            "odds_ratio={:.4}, p={:.4}",
+            result.odds_ratio, result.pvalue
+        ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));
 
     // Chi-square test of independence: larger table
     let t = Instant::now();
-    let observed = vec![
-        vec![20.0, 30.0, 50.0],
-        vec![30.0, 40.0, 30.0],
-    ];
+    let observed = vec![vec![20.0, 30.0, 50.0], vec![30.0, 40.0, 30.0]];
     let result = chi2_contingency(&observed);
     // Some deviation from independence expected
     let pass = result.statistic > 0.0 && result.dof == 2;
@@ -2145,17 +2197,17 @@ fn e2e_023_contingency_tests() {
         "chi2_contingency",
         "chi2_contingency(2x3)",
         "2x3 contingency table",
-        &format!("chi2={:.4}, p={:.4}, dof={}", result.statistic, result.pvalue, result.dof),
+        &format!(
+            "chi2={:.4}, p={:.4}, dof={}",
+            result.statistic, result.pvalue, result.dof
+        ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));
 
     // Chi-square: perfectly proportional (independence)
     let t = Instant::now();
-    let observed = vec![
-        vec![10.0, 20.0, 30.0],
-        vec![10.0, 20.0, 30.0],
-    ];
+    let observed = vec![vec![10.0, 20.0, 30.0], vec![10.0, 20.0, 30.0]];
     let result = chi2_contingency(&observed);
     // Perfect independence, chi2 ≈ 0
     let pass = result.statistic < 0.01 && result.pvalue > 0.99;

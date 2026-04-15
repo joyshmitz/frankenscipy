@@ -113,10 +113,12 @@ fn generate_clusters(n_per_cluster: usize, n_clusters: usize, seed: u64) -> Vec<
         let center_y = (c as f64) * 10.0;
         for i in 0..n_per_cluster {
             // Simple deterministic "noise" based on seed and index
-            let noise_x = ((seed.wrapping_mul(i as u64 + 1).wrapping_mul(c as u64 + 1)) % 1000) as f64
+            let noise_x = ((seed.wrapping_mul(i as u64 + 1).wrapping_mul(c as u64 + 1)) % 1000)
+                as f64
                 / 1000.0
                 - 0.5;
-            let noise_y = ((seed.wrapping_mul(i as u64 + 2).wrapping_mul(c as u64 + 1)) % 1000) as f64
+            let noise_y = ((seed.wrapping_mul(i as u64 + 2).wrapping_mul(c as u64 + 1)) % 1000)
+                as f64
                 / 1000.0
                 - 0.5;
             data.push(vec![center_x + noise_x, center_y + noise_y]);
@@ -389,10 +391,7 @@ fn scenario_03_dbscan() {
             let n_noise = result.labels.iter().filter(|&&l| l == -1).count();
             // With well-separated data and reasonable eps, should find ~3 clusters
             if n_clusters >= 2 && n_clusters <= 5 {
-                Ok(format!(
-                    "n_clusters={}, n_noise={}",
-                    n_clusters, n_noise
-                ))
+                Ok(format!("n_clusters={}, n_noise={}", n_clusters, n_noise))
             } else {
                 Err(format!("unexpected n_clusters={}", n_clusters))
             }
@@ -480,9 +479,13 @@ fn scenario_05_external_validation() {
     runner.set_cluster_meta("external_metrics", 30, 2, 3);
 
     // True and predicted labels for comparison
-    let labels_true: Vec<usize> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2];
+    let labels_true: Vec<usize> = vec![
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    ];
     // Slightly perturbed predictions
-    let labels_pred: Vec<usize> = vec![0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2];
+    let labels_pred: Vec<usize> = vec![
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    ];
 
     runner.record_step(
         "adjusted_rand",
@@ -564,9 +567,9 @@ fn scenario_06_whiten() {
     let data: Vec<Vec<f64>> = (0..20)
         .map(|i| {
             vec![
-                i as f64 * 0.1,        // scale 0.1
-                i as f64 * 10.0,       // scale 10
-                i as f64 * 0.001,      // scale 0.001
+                i as f64 * 0.1,   // scale 0.1
+                i as f64 * 10.0,  // scale 10
+                i as f64 * 0.001, // scale 0.001
             ]
         })
         .collect();
@@ -583,8 +586,11 @@ fn scenario_06_whiten() {
             let n_features = 3;
             for f in 0..n_features {
                 let mean: f64 = whitened.iter().map(|row| row[f]).sum::<f64>() / n;
-                let var: f64 =
-                    whitened.iter().map(|row| (row[f] - mean).powi(2)).sum::<f64>() / n;
+                let var: f64 = whitened
+                    .iter()
+                    .map(|row| (row[f] - mean).powi(2))
+                    .sum::<f64>()
+                    / n;
                 // Variance should be close to 1 (within tolerance)
                 if (var - 1.0).abs() > 0.1 {
                     return Err(format!("feature {f} variance={var:.4}, expected ~1.0"));
@@ -606,7 +612,9 @@ fn scenario_07_perfect_match() {
     let mut runner = ScenarioRunner::new("scenario_07_perfect_match");
     runner.set_cluster_meta("perfect", 30, 2, 3);
 
-    let labels: Vec<usize> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2];
+    let labels: Vec<usize> = vec![
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    ];
 
     runner.record_step(
         "perfect_ari",
@@ -708,7 +716,10 @@ fn scenario_09_metric_relationships() {
 
     let labels_true: Vec<usize> = (0..4).flat_map(|c| vec![c; 10]).collect();
     // Shuffled predictions
-    let labels_pred: Vec<usize> = vec![0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0];
+    let labels_pred: Vec<usize> = vec![
+        0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,
+        3, 3, 3, 3, 3, 3, 0, 0, 0, 0,
+    ];
 
     runner.record_step(
         "vmeasure_harmonic_mean",

@@ -11,9 +11,9 @@
 //! `fixtures/artifacts/FSCI-P2C-013/e2e/`.
 
 use fsci_io::{
-    MmField, MmFormat, MmObject, MmSymmetry, loadmat_text, loadtxt, mminfo, mmread, mmwrite,
-    mmwrite_sparse, read_csv, read_json_array, savemat_text, savetxt, wav_read, wav_write,
-    write_csv, write_json_array, MatArray,
+    MatArray, MmField, MmFormat, MmObject, MmSymmetry, loadmat_text, loadtxt, mminfo, mmread,
+    mmwrite, mmwrite_sparse, read_csv, read_json_array, savemat_text, savetxt, wav_read, wav_write,
+    write_csv, write_json_array,
 };
 use serde::Serialize;
 use std::fs;
@@ -299,10 +299,10 @@ fn scenario_01_matrix_market() {
             }
             // Stored row-major: data[row*3 + col]
             // m[0,0]=1.0 at idx=0, m[1,1]=2.0 at idx=4, m[2,2]=3.0 at idx=8, m[0,2]=0.5 at idx=2
-            let m00 = result.data[0];     // (0,0)
-            let m11 = result.data[4];     // (1,1)
-            let m22 = result.data[8];     // (2,2)
-            let m02 = result.data[2];     // (0,2) = 0*3 + 2 = 2
+            let m00 = result.data[0]; // (0,0)
+            let m11 = result.data[4]; // (1,1)
+            let m22 = result.data[8]; // (2,2)
+            let m02 = result.data[2]; // (0,2) = 0*3 + 2 = 2
             if !approx_eq(m00, 1.0, 1e-10)
                 || !approx_eq(m11, 2.0, 1e-10)
                 || !approx_eq(m22, 3.0, 1e-10)
@@ -387,9 +387,7 @@ fn scenario_02_wav_audio() {
         "Strict",
         || {
             let sample_rate = 22050u32;
-            let data: Vec<f64> = (0..1000)
-                .map(|i| (i as f64 * 0.01).sin() * 0.5)
-                .collect();
+            let data: Vec<f64> = (0..1000).map(|i| (i as f64 * 0.01).sin() * 0.5).collect();
 
             let bytes = wav_write(sample_rate, 1, &data).map_err(|e| format!("{e}"))?;
             let wav = wav_read(&bytes).map_err(|e| format!("{e}"))?;
@@ -407,9 +405,7 @@ fn scenario_02_wav_audio() {
             // Check samples (allow some quantization error from int16 encoding)
             for (i, (&orig, &read)) in data.iter().zip(wav.data.iter()).enumerate() {
                 if (orig - read).abs() > 0.001 {
-                    return Err(format!(
-                        "sample {i} mismatch: wrote {orig}, read {read}"
-                    ));
+                    return Err(format!("sample {i} mismatch: wrote {orig}, read {read}"));
                 }
             }
 
@@ -554,7 +550,10 @@ fn scenario_04_csv_files() {
             for (i, row) in data.iter().enumerate() {
                 for (j, &val) in row.iter().enumerate() {
                     if !approx_eq(val, expected[i][j], 1e-10) {
-                        return Err(format!("data[{i}][{j}]: expected {}, got {val}", expected[i][j]));
+                        return Err(format!(
+                            "data[{i}][{j}]: expected {}, got {val}",
+                            expected[i][j]
+                        ));
                     }
                 }
             }
@@ -616,7 +615,11 @@ fn scenario_04_csv_files() {
             let (_, data) = read_csv(&content, ',', false).map_err(|e| format!("{e}"))?;
 
             if data.len() != 2 || data[0].len() != 2 {
-                return Err(format!("dimension mismatch: {}x{}", data.len(), data[0].len()));
+                return Err(format!(
+                    "dimension mismatch: {}x{}",
+                    data.len(),
+                    data[0].len()
+                ));
             }
             for (i, row) in original.iter().enumerate() {
                 for (j, &orig_val) in row.iter().enumerate() {
@@ -729,7 +732,10 @@ fn scenario_05_json_and_mat() {
             // Check first array
             let x = &loaded[0];
             if x.name != "x" || x.rows != 2 || x.cols != 3 {
-                return Err(format!("array x mismatch: {} {}x{}", x.name, x.rows, x.cols));
+                return Err(format!(
+                    "array x mismatch: {} {}x{}",
+                    x.name, x.rows, x.cols
+                ));
             }
 
             Ok("MAT text roundtrip verified".to_string())
@@ -902,10 +908,7 @@ fn scenario_07_malformed_input() {
             let result = read_csv(ragged, ',', false);
             // Should error on inconsistent column count
             match result {
-                Ok((_, data)) => Ok(format!(
-                    "accepted ragged CSV: {} rows",
-                    data.len()
-                )),
+                Ok((_, data)) => Ok(format!("accepted ragged CSV: {} rows", data.len())),
                 Err(e) => Ok(format!("correctly rejected ragged CSV: {e}")),
             }
         },
@@ -934,7 +937,10 @@ fn scenario_08_special_values() {
             match result {
                 Ok(content) => {
                     // Check if it encodes as null or strings
-                    Ok(format!("encoded specials: {}", &content[..content.len().min(50)]))
+                    Ok(format!(
+                        "encoded specials: {}",
+                        &content[..content.len().min(50)]
+                    ))
                 }
                 Err(e) => Ok(format!("rejected specials: {e}")),
             }
@@ -1034,7 +1040,10 @@ fn scenario_09_format_conversion() {
             if csv_result.len() != rows || csv_result[0].len() != cols {
                 return Err(format!(
                     "dimension mismatch: {}x{} vs {}x{}",
-                    rows, cols, csv_result.len(), csv_result[0].len()
+                    rows,
+                    cols,
+                    csv_result.len(),
+                    csv_result[0].len()
                 ));
             }
 
@@ -1162,9 +1171,7 @@ fn scenario_11_wav_bit_depth() {
         "Strict",
         || {
             // Test full range: -1.0 to 1.0
-            let data: Vec<f64> = (-100..=100)
-                .map(|i| i as f64 / 100.0)
-                .collect();
+            let data: Vec<f64> = (-100..=100).map(|i| i as f64 / 100.0).collect();
 
             let bytes = wav_write(44100, 1, &data).map_err(|e| format!("{e}"))?;
             let wav = wav_read(&bytes).map_err(|e| format!("{e}"))?;
@@ -1224,9 +1231,7 @@ fn scenario_12_large_mm() {
     runner.set_io_meta("Matrix Market", "large", n * n * 8);
 
     // Generate deterministic data
-    let data: Vec<f64> = (0..n * n)
-        .map(|i| (i as f64 * 1.23456).sin())
-        .collect();
+    let data: Vec<f64> = (0..n * n).map(|i| (i as f64 * 1.23456).sin()).collect();
 
     runner.step(
         "write_large_mm",
@@ -1242,11 +1247,7 @@ fn scenario_12_large_mm() {
                 return Err(format!("too slow: {:?}", elapsed));
             }
 
-            Ok(format!(
-                "wrote {} bytes in {:?}",
-                content.len(),
-                elapsed
-            ))
+            Ok(format!("wrote {} bytes in {:?}", content.len(), elapsed))
         },
     );
 
@@ -1273,7 +1274,10 @@ fn scenario_12_large_mm() {
                 return Err(format!("too slow: {:?}", elapsed));
             }
 
-            Ok(format!("read {}x{} in {:?}", result.rows, result.cols, elapsed))
+            Ok(format!(
+                "read {}x{} in {:?}",
+                result.rows, result.cols, elapsed
+            ))
         },
     );
 
@@ -1414,7 +1418,8 @@ fn scenario_14_large_csv() {
             if result.len() != rows || result[0].len() != cols {
                 return Err(format!(
                     "dimension mismatch: {}x{}",
-                    result.len(), result[0].len()
+                    result.len(),
+                    result[0].len()
                 ));
             }
 
@@ -1422,7 +1427,12 @@ fn scenario_14_large_csv() {
                 return Err(format!("too slow: {:?}", elapsed));
             }
 
-            Ok(format!("read {}x{} in {:?}", result.len(), result[0].len(), elapsed))
+            Ok(format!(
+                "read {}x{} in {:?}",
+                result.len(),
+                result[0].len(),
+                elapsed
+            ))
         },
     );
 

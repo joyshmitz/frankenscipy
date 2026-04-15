@@ -16,9 +16,9 @@ use std::time::Instant;
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
     CooMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D, SolveOptions,
-    SparseError, add_csr, bicgstab, cg, csr_to_csc_with_mode, diags, eye, gmres,
-    connected_component_sizes, is_connected, pagerank, scale_csr, spmv_csr, spsolve, sub_csr,
-    topological_sort, strongly_connected_components, sparse_norm, sparse_diagonal,
+    SparseError, add_csr, bicgstab, cg, connected_component_sizes, csr_to_csc_with_mode, diags,
+    eye, gmres, is_connected, pagerank, scale_csr, sparse_diagonal, sparse_norm, spmv_csr, spsolve,
+    strongly_connected_components, sub_csr, topological_sort,
 };
 use serde::Serialize;
 
@@ -1047,7 +1047,11 @@ fn e2e_012_gmres_general_system() {
         },
     };
     write_bundle(scenario_id, &bundle);
-    assert!(pass, "GMRES solver: converged={}, diff={diff:.4e}", converged);
+    assert!(
+        pass,
+        "GMRES solver: converged={}, diff={diff:.4e}",
+        converged
+    );
 }
 
 /// Scenario 13: BiCGSTAB for non-symmetric system
@@ -1136,7 +1140,11 @@ fn e2e_013_bicgstab_asymmetric() {
         },
     };
     write_bundle(scenario_id, &bundle);
-    assert!(pass, "BiCGSTAB solver: converged={}, diff={diff:.4e}", converged);
+    assert!(
+        pass,
+        "BiCGSTAB solver: converged={}, diff={diff:.4e}",
+        converged
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1159,8 +1167,8 @@ fn e2e_014_connected_components() {
     let rows = vec![0, 0, 1, 1, 2, 2, 3, 4];
     let cols = vec![1, 2, 0, 2, 0, 1, 4, 3];
     let data = vec![1.0; 8];
-    let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
-        .expect("graph coo");
+    let coo =
+        CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false).expect("graph coo");
     let graph = coo.to_csr().expect("graph csr");
     steps.push(make_step(
         1,
@@ -1214,7 +1222,11 @@ fn e2e_014_connected_components() {
         },
     };
     write_bundle(scenario_id, &bundle);
-    assert!(overall_pass, "connected components: num={}, sizes={:?}", num_components, sizes);
+    assert!(
+        overall_pass,
+        "connected components: num={}, sizes={:?}",
+        num_components, sizes
+    );
 }
 
 /// Scenario 15: PageRank on simple graph
@@ -1232,8 +1244,8 @@ fn e2e_015_pagerank() {
     let rows = vec![0, 1, 2, 0];
     let cols = vec![1, 2, 3, 2];
     let data = vec![1.0; 4];
-    let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
-        .expect("graph coo");
+    let coo =
+        CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false).expect("graph coo");
     let graph = coo.to_csr().expect("graph csr");
     steps.push(make_step(
         1,
@@ -1299,7 +1311,11 @@ fn e2e_015_pagerank() {
         },
     };
     write_bundle(scenario_id, &bundle);
-    assert!(overall_pass, "PageRank: normalized={}, max_node={}", normalized, max_rank_node);
+    assert!(
+        overall_pass,
+        "PageRank: normalized={}, max_node={}",
+        normalized, max_rank_node
+    );
 }
 
 /// Scenario 16: Topological sort on DAG
@@ -1316,8 +1332,8 @@ fn e2e_016_topological_sort() {
     let rows = vec![0, 0, 1, 2];
     let cols = vec![1, 2, 3, 3];
     let data = vec![1.0; 4];
-    let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
-        .expect("dag coo");
+    let coo =
+        CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false).expect("dag coo");
     let dag = coo.to_csr().expect("dag csr");
     steps.push(make_step(
         1,
@@ -1482,7 +1498,11 @@ fn e2e_017_sparse_norms() {
         },
     };
     write_bundle(scenario_id, &bundle);
-    assert!(overall_pass, "sparse norms: fro={}, 1={}, inf={}", fro, norm1, norm_inf);
+    assert!(
+        overall_pass,
+        "sparse norms: fro={}, 1={}, inf={}",
+        fro, norm1, norm_inf
+    );
 }
 
 /// Scenario 18: Strongly connected components
@@ -1542,7 +1562,10 @@ fn e2e_018_strongly_connected_components() {
         "verify_membership",
         "check SCC groups",
         "0,1 same; 2,3 same; groups different",
-        &format!("same_01={}, same_23={}, diff={}", same_01, same_23, different_groups),
+        &format!(
+            "same_01={}, same_23={}, diff={}",
+            same_01, same_23, different_groups
+        ),
         t_start.elapsed().as_nanos(),
         if membership_pass { "ok" } else { "fail" },
     ));

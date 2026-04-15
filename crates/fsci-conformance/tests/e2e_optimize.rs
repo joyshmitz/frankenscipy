@@ -13,13 +13,10 @@
 
 use fsci_opt::types::OptimizeTraceEntry;
 use fsci_opt::{
-    ConvergenceStatus, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions,
-    get_optimize_traces, minimize, root_scalar,
-    curve_fit, least_squares, CurveFitOptions, LeastSquaresOptions,
-    differential_evolution, DifferentialEvolutionOptions,
-    linprog, LinprogResult,
-    ridder, toms748, newton_scalar, secant, halley,
-    fsolve,
+    ConvergenceStatus, CurveFitOptions, DifferentialEvolutionOptions, LeastSquaresOptions,
+    LinprogResult, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, curve_fit,
+    differential_evolution, fsolve, get_optimize_traces, halley, least_squares, linprog, minimize,
+    newton_scalar, ridder, root_scalar, secant, toms748,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -934,7 +931,9 @@ fn e2e_p2c003_10_least_squares_levenberg_marquardt() {
     runner.record_step("solve_circle_fitting", "least_squares", || {
         // Fit a circle to noisy points: find (cx, cy, r) minimizing distance residuals
         // True circle: center (1, 2), radius 3
-        let angles: Vec<f64> = (0..8).map(|i| i as f64 * std::f64::consts::PI / 4.0).collect();
+        let angles: Vec<f64> = (0..8)
+            .map(|i| i as f64 * std::f64::consts::PI / 4.0)
+            .collect();
         let points: Vec<(f64, f64)> = angles
             .iter()
             .map(|&t| (1.0 + 3.0 * t.cos(), 2.0 + 3.0 * t.sin()))
@@ -1134,8 +1133,7 @@ fn e2e_p2c003_13_root_methods_comparison() {
 
     // Test ridder
     runner.record_step("ridder_root", "ridder", || {
-        let result = ridder(target_fn, bracket, opts)
-            .map_err(|e| format!("ridder failed: {e}"))?;
+        let result = ridder(target_fn, bracket, opts).map_err(|e| format!("ridder failed: {e}"))?;
         if !result.converged {
             return Err(format!("ridder did not converge: {}", result.message));
         }
@@ -1152,8 +1150,8 @@ fn e2e_p2c003_13_root_methods_comparison() {
 
     // Test toms748
     runner.record_step("toms748_root", "toms748", || {
-        let result = toms748(target_fn, bracket, opts)
-            .map_err(|e| format!("toms748 failed: {e}"))?;
+        let result =
+            toms748(target_fn, bracket, opts).map_err(|e| format!("toms748 failed: {e}"))?;
         if !result.converged {
             return Err(format!("toms748 did not converge: {}", result.message));
         }
@@ -1172,8 +1170,8 @@ fn e2e_p2c003_13_root_methods_comparison() {
     runner.record_step("newton_root", "newton", || {
         let f = |x: f64| x * x * x - x - 2.0;
         let fprime = |x: f64| 3.0 * x * x - 1.0;
-        let result = newton_scalar(f, fprime, 1.5, opts)
-            .map_err(|e| format!("newton failed: {e}"))?;
+        let result =
+            newton_scalar(f, fprime, 1.5, opts).map_err(|e| format!("newton failed: {e}"))?;
         if !result.converged {
             return Err(format!("newton did not converge: {}", result.message));
         }
@@ -1190,8 +1188,8 @@ fn e2e_p2c003_13_root_methods_comparison() {
 
     // Test secant
     runner.record_step("secant_root", "secant", || {
-        let result = secant(target_fn, 1.0, Some(2.0), opts)
-            .map_err(|e| format!("secant failed: {e}"))?;
+        let result =
+            secant(target_fn, 1.0, Some(2.0), opts).map_err(|e| format!("secant failed: {e}"))?;
         if !result.converged {
             return Err(format!("secant did not converge: {}", result.message));
         }
@@ -1211,8 +1209,8 @@ fn e2e_p2c003_13_root_methods_comparison() {
         let f = |x: f64| x * x * x - x - 2.0;
         let fprime = |x: f64| 3.0 * x * x - 1.0;
         let fprime2 = |x: f64| 6.0 * x;
-        let result = halley(f, fprime, fprime2, 1.5, opts)
-            .map_err(|e| format!("halley failed: {e}"))?;
+        let result =
+            halley(f, fprime, fprime2, 1.5, opts).map_err(|e| format!("halley failed: {e}"))?;
         if !result.converged {
             return Err(format!("halley did not converge: {}", result.message));
         }
@@ -1260,16 +1258,10 @@ fn e2e_p2c003_14_fsolve_multivariate() {
         // System: x^2 + y^2 = 1
         //         x - y = 0
         // Solutions: (±1/√2, ±1/√2)
-        let system = |x: &[f64]| {
-            vec![
-                x[0] * x[0] + x[1] * x[1] - 1.0,
-                x[0] - x[1],
-            ]
-        };
+        let system = |x: &[f64]| vec![x[0] * x[0] + x[1] * x[1] - 1.0, x[0] - x[1]];
 
         let x0 = vec![0.5, 0.5];
-        let result = fsolve(system, &x0)
-            .map_err(|e| format!("fsolve failed: {e}"))?;
+        let result = fsolve(system, &x0).map_err(|e| format!("fsolve failed: {e}"))?;
 
         if !result.converged {
             return Err(format!("fsolve did not converge: {}", result.message));
@@ -1311,8 +1303,7 @@ fn e2e_p2c003_14_fsolve_multivariate() {
         };
 
         let x0 = vec![1.0, 3.0, 2.0];
-        let result = fsolve(system, &x0)
-            .map_err(|e| format!("fsolve failed: {e}"))?;
+        let result = fsolve(system, &x0).map_err(|e| format!("fsolve failed: {e}"))?;
 
         if !result.converged {
             return Err(format!("fsolve did not converge: {}", result.message));

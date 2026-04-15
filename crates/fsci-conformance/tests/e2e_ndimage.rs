@@ -393,11 +393,8 @@ fn e2e_ndimage_convolution() {
     let t = Instant::now();
     let image = NdArray::new(
         vec![
-            0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 1.0, 1.0, 0.0,
-            0.0, 1.0, 1.0, 1.0, 0.0,
-            0.0, 1.0, 1.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
+            1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ],
         vec![5, 5],
     )
@@ -421,7 +418,10 @@ fn e2e_ndimage_convolution() {
         "5x5 image with 3x3 center block",
         &format!(
             "center_val={}",
-            uniform_result.as_ref().map(|r| r.data[12]).unwrap_or(f64::NAN)
+            uniform_result
+                .as_ref()
+                .map(|r| r.data[12])
+                .unwrap_or(f64::NAN)
         ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
@@ -448,7 +448,10 @@ fn e2e_ndimage_convolution() {
         "5x5 image with 3x3 center block",
         &format!(
             "center_val={}",
-            gauss_result.as_ref().map(|r| r.data[12]).unwrap_or(f64::NAN)
+            gauss_result
+                .as_ref()
+                .map(|r| r.data[12])
+                .unwrap_or(f64::NAN)
         ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
@@ -468,8 +471,7 @@ fn e2e_ndimage_rank_filters() {
     // Image with an outlier
     let image = NdArray::new(
         vec![
-            1.0, 1.0, 1.0,
-            1.0, 100.0, 1.0,  // outlier in center
+            1.0, 1.0, 1.0, 1.0, 100.0, 1.0, // outlier in center
             1.0, 1.0, 1.0,
         ],
         vec![3, 3],
@@ -497,7 +499,10 @@ fn e2e_ndimage_rank_filters() {
         "3x3 image with outlier at center",
         &format!(
             "center_val={}",
-            median_result.as_ref().map(|r| r.data[4]).unwrap_or(f64::NAN)
+            median_result
+                .as_ref()
+                .map(|r| r.data[4])
+                .unwrap_or(f64::NAN)
         ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
@@ -563,12 +568,9 @@ fn e2e_ndimage_edge_detection() {
     // Simple step edge image (left half black, right half white)
     let image = NdArray::new(
         vec![
-            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
-            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
-            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
-            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
-            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
-            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, 1.0,
         ],
         vec![6, 6],
     )
@@ -662,11 +664,8 @@ fn e2e_ndimage_binary_morphology() {
     // Small binary image with a 3x3 square
     let image = NdArray::new(
         vec![
-            0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 1.0, 1.0, 0.0,
-            0.0, 1.0, 1.0, 1.0, 0.0,
-            0.0, 1.0, 1.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
+            1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ],
         vec![5, 5],
     )
@@ -774,11 +773,8 @@ fn e2e_ndimage_labeling() {
     // Image with two separate objects
     let image = NdArray::new(
         vec![
-            1.0, 1.0, 0.0, 0.0, 2.0, 2.0,
-            1.0, 1.0, 0.0, 0.0, 2.0, 2.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 3.0, 3.0, 0.0, 0.0,
-            0.0, 0.0, 3.0, 3.0, 0.0, 0.0,
+            1.0, 1.0, 0.0, 0.0, 2.0, 2.0, 1.0, 1.0, 0.0, 0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 3.0, 3.0, 0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 0.0, 0.0,
         ],
         vec![5, 6],
     )
@@ -786,7 +782,11 @@ fn e2e_ndimage_labeling() {
 
     // Binarize for labeling
     let binary = NdArray::new(
-        image.data.iter().map(|&v| if v > 0.0 { 1.0 } else { 0.0 }).collect(),
+        image
+            .data
+            .iter()
+            .map(|&v| if v > 0.0 { 1.0 } else { 0.0 })
+            .collect(),
         image.shape.clone(),
     )
     .unwrap();
@@ -864,7 +864,10 @@ fn e2e_ndimage_labeling() {
             "find_objects",
             "ndimage::find_objects()",
             "bounding boxes for each label",
-            &format!("num_objects={}", objects.iter().filter(|o| o.is_some()).count()),
+            &format!(
+                "num_objects={}",
+                objects.iter().filter(|o| o.is_some()).count()
+            ),
             t.elapsed().as_nanos(),
             if pass { "pass" } else { "FAIL" },
         ));
@@ -901,11 +904,9 @@ fn e2e_ndimage_distance_transform() {
     // Binary image with a hole in center
     let image = NdArray::new(
         vec![
-            1.0, 1.0, 1.0, 1.0, 1.0,
-            1.0, 1.0, 1.0, 1.0, 1.0,
-            1.0, 1.0, 0.0, 1.0, 1.0,  // hole at center
-            1.0, 1.0, 1.0, 1.0, 1.0,
-            1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0,
+            1.0, // hole at center
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
         ],
         vec![5, 5],
     )
@@ -986,10 +987,7 @@ fn e2e_ndimage_geometric() {
     // Simple 4x4 image with pattern
     let image = NdArray::new(
         vec![
-            1.0, 2.0, 3.0, 4.0,
-            5.0, 6.0, 7.0, 8.0,
-            9.0, 10.0, 11.0, 12.0,
-            13.0, 14.0, 15.0, 16.0,
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
         vec![4, 4],
     )

@@ -1162,7 +1162,9 @@ fn e2e_p2c002_14_svd_decomposition() {
                     res.s
                 ))
             } else {
-                Err(format!("SVD reconstruction failed: max_diff={max_diff:.2e}"))
+                Err(format!(
+                    "SVD reconstruction failed: max_diff={max_diff:.2e}"
+                ))
             }
         },
     );
@@ -1506,9 +1508,7 @@ fn e2e_p2c002_18_matrix_exponential() {
             ];
             let max_diff = max_abs_diff_matrix(&result, &expected);
             if max_diff < 1e-10 {
-                Ok(format!(
-                    "expm(nilpotent) verified: max_diff={max_diff:.2e}"
-                ))
+                Ok(format!("expm(nilpotent) verified: max_diff={max_diff:.2e}"))
             } else {
                 Err(format!(
                     "expm(nilpotent) incorrect: max_diff={max_diff:.2e}"
@@ -1647,8 +1647,7 @@ fn e2e_p2c002_20_norm_and_condition() {
         "diagonal matrix condition number",
         "strict",
         || {
-            let c =
-                cond(&a_good, DecompOptions::default()).map_err(|e| format!("{e}"))?;
+            let c = cond(&a_good, DecompOptions::default()).map_err(|e| format!("{e}"))?;
             // cond = max(sv) / min(sv) = 3 / 1 = 3
             let expected = 3.0;
             let diff = (c - expected).abs();
@@ -1670,8 +1669,7 @@ fn e2e_p2c002_20_norm_and_condition() {
         "ill-conditioned matrix",
         "strict",
         || {
-            let c =
-                cond(&a_bad, DecompOptions::default()).map_err(|e| format!("{e}"))?;
+            let c = cond(&a_bad, DecompOptions::default()).map_err(|e| format!("{e}"))?;
             // cond = max(sv) / min(sv) = 1 / 1e-10 = 1e10
             if c > 1e9 {
                 Ok(format!("cond(A_bad) = {c:.2e} (large, ill-conditioned)"))
