@@ -595,6 +595,7 @@ dependencies = [
  "ftui",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "toml",
 ]

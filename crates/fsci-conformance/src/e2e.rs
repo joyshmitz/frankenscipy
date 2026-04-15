@@ -785,3 +785,71 @@ pub fn emit_audit_ledger_named(
 
     Ok(output_path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fsci_runtime::{AuditAction, AuditEvent, casp_now_unix_ms};
+    use std::io::BufRead;
+    use tempfile::TempDir;
+
+    #[test]
+    fn emit_audit_ledger_writes_jsonl() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let mut ledger = AuditLedger::new();
+
+        ledger.record(AuditEvent::new(
+            casp_now_unix_ms(),
+            AuditLedger::fingerprint_bytes(b"test1"),
+            AuditAction::FailClosed {
+                reason: "test_fail".to_string(),
+            },
+            "rejected",
+        ));
+        ledger.record(AuditEvent::new(
+            casp_now_unix_ms(),
+            AuditLedger::fingerprint_bytes(b"test2"),
+            AuditAction::BoundedRecovery {
+                recovery_action: "test_recovery".to_string(),
+            },
+            "recovered",
+        ));
+
+        let output_path = emit_audit_ledger(tmp.path(), &ledger).expect("emit works");
+
+        assert!(output_path.exists());
+        assert_eq!(output_path.file_name().unwrap(), "audit_ledger.jsonl");
+
+        let file = File::open(&output_path).expect("open output");
+        let reader = io::BufReader::new(file);
+        let lines: Vec<String> = reader.lines().map(|l| l.unwrap()).collect();
+
+        assert_eq!(lines.len(), 2, "should have 2 entries");
+        assert!(lines[0].contains("test_fail"));
+        assert!(lines[1].contains("test_recovery"));
+    }
+
+    #[test]
+    fn emit_audit_ledger_named_uses_custom_filename() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let ledger = AuditLedger::new();
+
+        let output_path =
+            emit_audit_ledger_named(tmp.path(), "custom_audit.jsonl", &ledger).expect("emit works");
+
+        assert!(output_path.exists());
+        assert_eq!(output_path.file_name().unwrap(), "custom_audit.jsonl");
+    }
+
+    #[test]
+    fn emit_audit_ledger_creates_directory() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let nested_dir = tmp.path().join("nested").join("artifact").join("dir");
+        let ledger = AuditLedger::new();
+
+        let output_path = emit_audit_ledger(&nested_dir, &ledger).expect("emit works");
+
+        assert!(output_path.exists());
+        assert!(nested_dir.exists());
+    }
+}
