@@ -91,10 +91,10 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ### fsci-signal (86% coverage - near-complete)
 
-**Implemented:** savgol_coeffs, savgol_filter, all window functions (hann, hamming, blackman, kaiser, nuttall, bohman, bartlett, flattop, cosine, tukey), convolve, fftconvolve, correlate, correlate2d, find_peaks, butter, cheby1, cheby2, ellip, bessel, iirfilter, iirnotch, iirpeak, firwin, firwin2, remez, kaiserord, lfilter, filtfilt, sosfilt, sosfiltfilt, sosfilt_zi, tf2sos, sos2tf, sos2zpk, zpk2sos, tf2zpk, zpk2tf, freqz, freqz_sos, group_delay, phase_delay, spectrogram, stft, istft, csd, coherence, welch, periodogram, lombscargle, resample, resample_poly, decimate, upfirdn, chirp, sawtooth, square, gausspulse, sweep_poly, unit_impulse, impulse, step, hilbert, detrend, get_window, medfilt, wiener, deconvolve, minimum_phase, cwt, morlet, ricker, max_len_seq, czt, zoom_fft, matched_filter, chroma, spectral_centroid, spectral_bandwidth, spectral_rolloff
+**Implemented:** savgol_coeffs, savgol_filter, all window functions (hann, hamming, blackman, kaiser, nuttall, bohman, bartlett, flattop, cosine, tukey), convolve, fftconvolve, correlate, correlate2d, find_peaks, butter, cheby1, cheby2, ellip, bessel, iirfilter, iirnotch, iirpeak, firwin, firwin2, remez, kaiserord, lfilter, filtfilt, sosfilt, sosfiltfilt, sosfilt_zi, tf2sos, sos2tf, sos2zpk, zpk2sos, tf2zpk, zpk2tf, freqz, freqz_sos, group_delay, phase_delay, spectrogram, stft, istft, csd, coherence, welch, periodogram, lombscargle, resample, resample_poly, decimate, upfirdn, chirp, sawtooth, square, gausspulse, sweep_poly, unit_impulse, impulse, step, hilbert, detrend, get_window, medfilt, wiener, deconvolve, minimum_phase, cwt, morlet, ricker, max_len_seq, czt, zoom_fft, matched_filter, chroma, spectral_centroid, spectral_bandwidth, spectral_rolloff, Lti, Dlti
 
 **Missing (LOW priority):**
-- LTI systems: `lti`, `dlti` classes, `lsim`
+- LTI systems: `lsim` (simulation helper)
 - `freqs` (analog frequency response)
 - Some exotic windows
 
@@ -146,7 +146,7 @@ All top 10 previously-listed functions are now IMPLEMENTED:
 **Remaining V1 Priorities (lower impact):**
 1. ~~`scipy.special.spherical_jn/yn` — spherical Bessel functions~~ ✓ DONE (also spherical_in, spherical_kn)
 2. ~~`scipy.interpolate.RBFInterpolator` — radial basis interpolation~~ ✓ DONE
-3. `scipy.signal.lti`/`dlti` class — LTI system representation (remaining gap)
+3. ~~`scipy.signal.lti`/`dlti` class — LTI system representation~~ ✓ DONE (Lti, Dlti structs with freq/step/impulse response)
 4. ~~`scipy.linalg.qz` — generalized Schur decomposition~~ ✓ DONE
 
 ## Required Evidence Per Feature Family
