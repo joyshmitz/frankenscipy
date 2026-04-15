@@ -24,18 +24,20 @@ use fsci_arrayapi::{
 };
 use fsci_integrate::{
     ToleranceValue, cumulative_simpson, cumulative_trapezoid, fixed_quad, gauss_legendre,
-    newton_cotes, romb, simpson, trapezoid, validate_tol,
+    newton_cotes, romb, simpson, sync_audit_ledger as integrate_sync_audit_ledger, trapezoid,
+    validate_tol, validate_tol_with_audit,
 };
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
     SolveOptions, TriangularSolveOptions, TriangularTranspose, det, inv, lstsq, pinv, solve,
-    solve_banded, solve_triangular,
+    solve_banded, solve_triangular, solve_with_audit,
+    sync_audit_ledger as linalg_sync_audit_ledger,
 };
 use fsci_opt::{
     ConvergenceStatus as OptConvergenceStatus, MinimizeOptions, OptError, OptimizeMethod,
     RootMethod, RootOptions, minimize, root_scalar,
 };
-use fsci_runtime::RuntimeMode;
+use fsci_runtime::{AuditLedger, RuntimeMode, SolverPortfolio};
 use fsci_special::{
     SpecialError as FsciSpecialError, SpecialErrorKind as FsciSpecialErrorKind,
     SpecialTensor as FsciSpecialTensor, beta as special_beta, betainc as special_betainc,
@@ -5688,6 +5690,44 @@ fn execute_linalg_case(case: &LinalgCase) -> Result<LinalgObservedOutcome, Linal
     }
 }
 
+fn execute_linalg_case_with_differential_audit(
+    case: &LinalgCase,
+    audit_ledger: &fsci_linalg::SyncSharedAuditLedger,
+) -> Result<LinalgObservedOutcome, LinalgError> {
+    match case {
+        LinalgCase::Solve {
+            mode,
+            a,
+            b,
+            assume_a,
+            lower,
+            transposed,
+            check_finite,
+            ..
+        } => {
+            let mut portfolio = SolverPortfolio::new(*mode, 64);
+            let result = solve_with_audit(
+                a,
+                b,
+                SolveOptions {
+                    mode: *mode,
+                    check_finite: check_finite.unwrap_or(true),
+                    assume_a: assume_a.clone().map(Into::into),
+                    lower: lower.unwrap_or(false),
+                    transposed: transposed.unwrap_or(false),
+                },
+                &mut portfolio,
+                audit_ledger,
+            )?;
+            Ok(LinalgObservedOutcome::Vector {
+                values: result.x,
+                warning_ill_conditioned: result.warning.is_some(),
+            })
+        }
+        _ => execute_linalg_case(case),
+    }
+}
+
 fn execute_optimize_case(case: &OptimizeCase) -> Result<OptimizeObservedOutcome, OptError> {
     match case {
         OptimizeCase::Minimize {
@@ -6472,6 +6512,39 @@ struct FixtureEnvelope {
     family: String,
 }
 
+fn differential_artifact_dir_for_fixture(fixture_path: &Path, packet_id: &str) -> PathBuf {
+    fixture_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("artifacts")
+        .join(packet_id)
+        .join("differential")
+}
+
+pub(crate) fn differential_audit_ledger_path_for_fixture(
+    fixture_path: &Path,
+    packet_id: &str,
+) -> PathBuf {
+    differential_artifact_dir_for_fixture(fixture_path, packet_id).join("audit_ledger.jsonl")
+}
+
+fn emit_differential_audit_ledger_for_fixture(
+    fixture_path: &Path,
+    packet_id: &str,
+    ledger: &AuditLedger,
+) -> Result<PathBuf, HarnessError> {
+    let output_dir = differential_artifact_dir_for_fixture(fixture_path, packet_id);
+    crate::e2e::emit_audit_ledger(&output_dir, ledger).map_err(|error| match error {
+        crate::e2e::E2eOrchestratorError::LogWrite { path, source } => {
+            HarnessError::ArtifactIo { path, source }
+        }
+        crate::e2e::E2eOrchestratorError::LogSerialize(source) => {
+            HarnessError::RaptorQ(source.to_string())
+        }
+        other => HarnessError::RaptorQ(other.to_string()),
+    })
+}
+
 /// Run a differential conformance test against a fixture file.
 ///
 /// This is the generic entry point for the conformance harness. It:
@@ -6545,13 +6618,15 @@ fn run_differential_validate_tol(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = integrate_sync_audit_ledger();
 
     for case in &fixture.cases {
-        let outcome = validate_tol(
+        let outcome = validate_tol_with_audit(
             case.rtol.clone().into(),
             case.atol.clone().into(),
             case.n,
             case.mode,
+            Some(&audit_ledger),
         );
 
         let (passed, message, max_diff, tolerance_used) = match (&case.expected, outcome) {
@@ -6608,6 +6683,13 @@ fn run_differential_validate_tol(
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+    {
+        let ledger = audit_ledger
+            .lock()
+            .map_err(|error| HarnessError::RaptorQ(format!("audit ledger poisoned: {error}")))?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -6634,9 +6716,10 @@ fn run_differential_linalg(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = linalg_sync_audit_ledger();
 
     for case in &fixture.cases {
-        let observed = execute_linalg_case(case);
+        let observed = execute_linalg_case_with_differential_audit(case, &audit_ledger);
         let (passed, message, max_diff, tolerance_used) =
             compare_linalg_case_differential(case.expected(), &observed);
 
@@ -6652,6 +6735,13 @@ fn run_differential_linalg(
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+    {
+        let ledger = audit_ledger
+            .lock()
+            .map_err(|error| HarnessError::RaptorQ(format!("audit ledger poisoned: {error}")))?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -9199,6 +9289,54 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             report.per_case_results.len(),
             report.pass_count + report.fail_count
         );
+
+        let audit_path =
+            super::differential_audit_ledger_path_for_fixture(&fixture_path, &report.packet_id);
+        let audit_jsonl = fs::read_to_string(&audit_path).expect("read validate_tol audit ledger");
+        assert!(audit_path.exists());
+        assert!(audit_jsonl.lines().count() >= 2);
+        assert!(audit_jsonl.contains("\"kind\":\"fail_closed\""));
+    }
+
+    #[test]
+    fn differential_test_validate_tol_hardened_clamp_emits_bounded_recovery() {
+        let unique = format!("fsci-conformance-audit-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let fixture_path = root.join("FSCI-P2C-001_validate_tol_audit.json");
+        let fixture = super::PacketFixture {
+            packet_id: "FSCI-P2C-001-AUDIT".to_owned(),
+            family: "integrate.validate_tol".to_owned(),
+            cases: vec![super::ValidateTolCase {
+                case_id: "hardened_clamp".to_owned(),
+                mode: RuntimeMode::Hardened,
+                n: 1,
+                rtol: super::FixtureToleranceValue::Scalar(1.0e-16),
+                atol: super::FixtureToleranceValue::Scalar(1.0e-8),
+                expected: super::ExpectedOutcome::Ok {
+                    rtol: super::FixtureToleranceValue::Scalar(2.220446049250313e-14),
+                    atol: super::FixtureToleranceValue::Scalar(1.0e-8),
+                    warning_rtol_clamped: true,
+                },
+            }],
+        };
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let report =
+            run_differential_test(&fixture_path, &default_test_oracle()).expect("fixture runs");
+        assert_eq!(report.fail_count, 0);
+
+        let audit_path =
+            super::differential_audit_ledger_path_for_fixture(&fixture_path, &report.packet_id);
+        let audit_jsonl =
+            fs::read_to_string(&audit_path).expect("read hardened clamp audit ledger");
+        assert!(audit_path.exists());
+        assert!(audit_jsonl.contains("\"kind\":\"bounded_recovery\""));
     }
 
     #[test]
@@ -9231,6 +9369,14 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 );
             }
         }
+
+        let audit_path =
+            super::differential_audit_ledger_path_for_fixture(&fixture_path, &report.packet_id);
+        let audit_jsonl = fs::read_to_string(&audit_path).expect("read linalg audit ledger");
+        assert!(audit_path.exists());
+        assert!(!audit_jsonl.trim().is_empty());
+        assert!(audit_jsonl.contains("\"kind\":\"mode_decision\""));
+        assert!(audit_jsonl.contains("\"kind\":\"fail_closed\""));
     }
 
     #[test]

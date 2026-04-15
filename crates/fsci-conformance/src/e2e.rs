@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
-use crate::{DifferentialOracleConfig, HarnessConfig, run_differential_test};
+use crate::{
+    DifferentialOracleConfig, HarnessConfig, differential_audit_ledger_path_for_fixture,
+    run_differential_test,
+};
 use blake3::hash;
 use fsci_runtime::AuditLedger;
 use serde::{Deserialize, Serialize};
@@ -519,13 +522,21 @@ fn execute_step(config: &E2eOrchestratorConfig, step: &E2eStep) -> StepExecution
             match run_differential_test(&fixture_path, &oracle) {
                 Ok(report) => {
                     let passed = report.fail_count == 0;
+                    let mut artifact_refs = vec![fixture_path.display().to_string()];
+                    let audit_ledger_path = differential_audit_ledger_path_for_fixture(
+                        &fixture_path,
+                        &report.packet_id,
+                    );
+                    if audit_ledger_path.exists() {
+                        artifact_refs.push(audit_ledger_path.display().to_string());
+                    }
                     StepExecutionOutcome {
                         passed,
                         message: format!(
                             "differential fixture run: pass_count={} fail_count={} oracle_status={:?}",
                             report.pass_count, report.fail_count, report.oracle_status
                         ),
-                        artifact_refs: vec![fixture_path.display().to_string()],
+                        artifact_refs,
                     }
                 }
                 Err(error) => StepExecutionOutcome {
