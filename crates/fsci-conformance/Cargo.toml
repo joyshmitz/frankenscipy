@@ -33,6 +33,7 @@ fsci-spatial = { workspace = true }
 fsci-fft = { workspace = true }
 fsci-integrate = { workspace = true }
 fsci-interpolate = { workspace = true }
+fsci-io = { workspace = true }
 fsci-linalg = { workspace = true }
 fsci-ndimage = { workspace = true }
 fsci-opt = { workspace = true }
