@@ -581,6 +581,8 @@ dependencies = [
  "fsci-constants",
  "fsci-fft",
  "fsci-integrate",
+ "fsci-interpolate",
+ "fsci-io",
  "fsci-linalg",
  "fsci-ndimage",
  "fsci-opt",

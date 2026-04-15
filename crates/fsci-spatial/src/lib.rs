@@ -1799,9 +1799,7 @@ pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<f64, Spati
             actual: xb[0].len(),
         });
     }
-    if xa.iter().flatten().any(|v| !v.is_finite())
-        || xb.iter().flatten().any(|v| !v.is_finite())
-    {
+    if xa.iter().flatten().any(|v| !v.is_finite()) || xb.iter().flatten().any(|v| !v.is_finite()) {
         return Err(SpatialError::InvalidArgument(
             "hausdorff distance requires finite points".to_string(),
         ));

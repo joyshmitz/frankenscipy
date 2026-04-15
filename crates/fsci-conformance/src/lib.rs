@@ -23,8 +23,8 @@ use fsci_arrayapi::{
     transpose as arrayapi_transpose, zeros as arrayapi_zeros,
 };
 use fsci_integrate::{
-    ToleranceValue, validate_tol, trapezoid, simpson, cumulative_trapezoid,
-    cumulative_simpson, romb, newton_cotes, fixed_quad, gauss_legendre,
+    ToleranceValue, cumulative_simpson, cumulative_trapezoid, fixed_quad, gauss_legendre,
+    newton_cotes, romb, simpson, trapezoid, validate_tol,
 };
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
@@ -2585,7 +2585,10 @@ fn execute_adjusted_rand_score(case: &ClusterCase) -> ClusterObserved {
         Ok(l) => l,
         Err(e) => return ClusterObserved::Error(format!("parse labels_pred: {e}")),
     };
-    ClusterObserved::Scalar(fsci_cluster::adjusted_rand_score(&labels_true, &labels_pred))
+    ClusterObserved::Scalar(fsci_cluster::adjusted_rand_score(
+        &labels_true,
+        &labels_pred,
+    ))
 }
 
 fn execute_is_valid_linkage(case: &ClusterCase) -> ClusterObserved {
@@ -2631,37 +2634,60 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
 
     match (&case.expected.kind.as_str(), observed) {
         (&"scalar", ClusterObserved::Scalar(got)) => {
-            let exp = case.expected.value.as_ref().and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let exp = case
+                .expected
+                .value
+                .as_ref()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
             let diff = (exp - got).abs();
             let tol = atol + rtol * exp.abs();
             if diff <= tol {
                 (true, format!("scalar matched: {got}"))
             } else {
-                (false, format!("scalar mismatch: expected {exp}, got {got}, diff {diff}"))
+                (
+                    false,
+                    format!("scalar mismatch: expected {exp}, got {got}, diff {diff}"),
+                )
             }
         }
         (&"array", ClusterObserved::Array1D(got)) => {
-            let exp: Vec<f64> = case.expected.value.as_ref()
+            let exp: Vec<f64> = case
+                .expected
+                .value
+                .as_ref()
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             if exp.len() != got.len() {
-                return (false, format!("array length mismatch: {} vs {}", exp.len(), got.len()));
+                return (
+                    false,
+                    format!("array length mismatch: {} vs {}", exp.len(), got.len()),
+                );
             }
             for (i, (&e, &g)) in exp.iter().zip(got.iter()).enumerate() {
                 let diff = (e - g).abs();
                 let tol = atol + rtol * e.abs();
                 if diff > tol {
-                    return (false, format!("array mismatch at [{i}]: expected {e}, got {g}"));
+                    return (
+                        false,
+                        format!("array mismatch at [{i}]: expected {e}, got {g}"),
+                    );
                 }
             }
             (true, "array matched".to_string())
         }
         (&"array" | &"matrix", ClusterObserved::Array2D(got)) => {
-            let exp: Vec<Vec<f64>> = case.expected.value.as_ref()
+            let exp: Vec<Vec<f64>> = case
+                .expected
+                .value
+                .as_ref()
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             if exp.len() != got.len() {
-                return (false, format!("matrix rows mismatch: {} vs {}", exp.len(), got.len()));
+                return (
+                    false,
+                    format!("matrix rows mismatch: {} vs {}", exp.len(), got.len()),
+                );
             }
             for (i, (er, gr)) in exp.iter().zip(got.iter()).enumerate() {
                 if er.len() != gr.len() {
@@ -2671,35 +2697,56 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                     let diff = (e - g).abs();
                     let tol = atol + rtol * e.abs();
                     if diff > tol {
-                        return (false, format!("matrix mismatch at [{i},{j}]: expected {e}, got {g}"));
+                        return (
+                            false,
+                            format!("matrix mismatch at [{i},{j}]: expected {e}, got {g}"),
+                        );
                     }
                 }
             }
             (true, "matrix matched".to_string())
         }
         (&"labels", ClusterObserved::Labels(got)) => {
-            let exp: Vec<usize> = case.expected.value.as_ref()
+            let exp: Vec<usize> = case
+                .expected
+                .value
+                .as_ref()
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             if exp == *got {
                 (true, format!("labels matched: {got:?}"))
             } else {
-                (false, format!("labels mismatch: expected {exp:?}, got {got:?}"))
+                (
+                    false,
+                    format!("labels mismatch: expected {exp:?}, got {got:?}"),
+                )
             }
         }
         (&"linkage", ClusterObserved::Linkage(got)) => {
-            let exp: Vec<[f64; 4]> = case.expected.value.as_ref()
+            let exp: Vec<[f64; 4]> = case
+                .expected
+                .value
+                .as_ref()
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             if exp.len() != got.len() {
-                return (false, format!("linkage rows mismatch: {} vs {}", exp.len(), got.len()));
+                return (
+                    false,
+                    format!("linkage rows mismatch: {} vs {}", exp.len(), got.len()),
+                );
             }
             for (i, (er, gr)) in exp.iter().zip(got.iter()).enumerate() {
                 for j in 0..4 {
                     let diff = (er[j] - gr[j]).abs();
                     let tol = atol + rtol * er[j].abs();
                     if diff > tol {
-                        return (false, format!("linkage mismatch at [{i},{j}]: expected {}, got {}", er[j], gr[j]));
+                        return (
+                            false,
+                            format!(
+                                "linkage mismatch at [{i},{j}]: expected {}, got {}",
+                                er[j], gr[j]
+                            ),
+                        );
                     }
                 }
             }
@@ -2709,7 +2756,10 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
             let exp_codes = case.expected.codes.clone().unwrap_or_default();
             let exp_dists = case.expected.dists.clone().unwrap_or_default();
             if exp_codes != *codes {
-                return (false, format!("vq codes mismatch: expected {exp_codes:?}, got {codes:?}"));
+                return (
+                    false,
+                    format!("vq codes mismatch: expected {exp_codes:?}, got {codes:?}"),
+                );
             }
             if exp_dists.len() != dists.len() {
                 return (false, format!("vq dists length mismatch"));
@@ -2718,23 +2768,35 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                 let diff = (e - g).abs();
                 let tol = atol + rtol * e.abs();
                 if diff > tol {
-                    return (false, format!("vq dists mismatch at [{i}]: expected {e}, got {g}"));
+                    return (
+                        false,
+                        format!("vq dists mismatch at [{i}]: expected {e}, got {g}"),
+                    );
                 }
             }
             (true, "vq_result matched".to_string())
         }
         (&"boolean", ClusterObserved::Boolean(got)) => {
-            let exp = case.expected.value.as_ref()
+            let exp = case
+                .expected
+                .value
+                .as_ref()
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             if exp == *got {
                 (true, format!("boolean matched: {got}"))
             } else {
-                (false, format!("boolean mismatch: expected {exp}, got {got}"))
+                (
+                    false,
+                    format!("boolean mismatch: expected {exp}, got {got}"),
+                )
             }
         }
         (_, ClusterObserved::Error(e)) => (false, format!("execution error: {e}")),
-        _ => (false, format!("unexpected observed type for kind '{}'", case.expected.kind)),
+        _ => (
+            false,
+            format!("unexpected observed type for kind '{}'", case.expected.kind),
+        ),
     }
 }
 
@@ -3018,21 +3080,39 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
 
     match (case.expected.kind.as_str(), observed) {
         ("scalar", SpatialObserved::Scalar(got)) => {
-            let expected = case.expected.value.as_ref().and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let expected = case
+                .expected
+                .value
+                .as_ref()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
             let diff = (got - expected).abs();
             let tol = atol + rtol * expected.abs();
             if diff <= tol {
                 (true, format!("scalar match: {got}"))
             } else {
-                (false, format!("scalar mismatch: got {got}, expected {expected}, diff {diff}"))
+                (
+                    false,
+                    format!("scalar mismatch: got {got}, expected {expected}, diff {diff}"),
+                )
             }
         }
         ("array", SpatialObserved::Array1D(got)) => {
-            let expected: Vec<f64> = case.expected.value.as_ref()
+            let expected: Vec<f64> = case
+                .expected
+                .value
+                .as_ref()
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             if got.len() != expected.len() {
-                return (false, format!("length mismatch: got {}, expected {}", got.len(), expected.len()));
+                return (
+                    false,
+                    format!(
+                        "length mismatch: got {}, expected {}",
+                        got.len(),
+                        expected.len()
+                    ),
+                );
             }
             for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
                 let diff = (g - e).abs();
@@ -3044,11 +3124,21 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
             (true, format!("array match ({} elements)", got.len()))
         }
         ("matrix", SpatialObserved::Array2D(got)) => {
-            let expected: Vec<Vec<f64>> = case.expected.value.as_ref()
+            let expected: Vec<Vec<f64>> = case
+                .expected
+                .value
+                .as_ref()
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             if got.len() != expected.len() {
-                return (false, format!("row count mismatch: got {}, expected {}", got.len(), expected.len()));
+                return (
+                    false,
+                    format!(
+                        "row count mismatch: got {}, expected {}",
+                        got.len(),
+                        expected.len()
+                    ),
+                );
             }
             for (i, (grow, erow)) in got.iter().zip(expected.iter()).enumerate() {
                 if grow.len() != erow.len() {
@@ -3058,49 +3148,83 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                     let diff = (g - e).abs();
                     let tol = atol + rtol * e.abs();
                     if diff > tol {
-                        return (false, format!("matrix[{i}][{j}] mismatch: got {g}, expected {e}"));
+                        return (
+                            false,
+                            format!("matrix[{i}][{j}] mismatch: got {g}, expected {e}"),
+                        );
                     }
                 }
             }
-            (true, format!("matrix match ({}x{})", got.len(), got.first().map_or(0, |r| r.len())))
+            (
+                true,
+                format!(
+                    "matrix match ({}x{})",
+                    got.len(),
+                    got.first().map_or(0, |r| r.len())
+                ),
+            )
         }
         ("kdtree_query_result", SpatialObserved::KdTreeQuery { index, distance }) => {
             let exp_idx = case.expected.index.unwrap_or(usize::MAX);
             let exp_dist = case.expected.distance.unwrap_or(0.0);
             if *index != exp_idx {
-                return (false, format!("index mismatch: got {index}, expected {exp_idx}"));
+                return (
+                    false,
+                    format!("index mismatch: got {index}, expected {exp_idx}"),
+                );
             }
             let diff = (distance - exp_dist).abs();
             let tol = atol + rtol * exp_dist.abs();
             if diff > tol {
-                return (false, format!("distance mismatch: got {distance}, expected {exp_dist}"));
+                return (
+                    false,
+                    format!("distance mismatch: got {distance}, expected {exp_dist}"),
+                );
             }
-            (true, format!("kdtree query match: idx={index}, dist={distance}"))
+            (
+                true,
+                format!("kdtree query match: idx={index}, dist={distance}"),
+            )
         }
         ("convex_hull", SpatialObserved::ConvexHull { vertices, area }) => {
             let exp_vertices = case.expected.vertices.as_ref().cloned().unwrap_or_default();
             let exp_area = case.expected.area.unwrap_or(0.0);
             if *vertices != exp_vertices {
-                return (false, format!("vertices mismatch: got {vertices:?}, expected {exp_vertices:?}"));
+                return (
+                    false,
+                    format!("vertices mismatch: got {vertices:?}, expected {exp_vertices:?}"),
+                );
             }
             let diff = (area - exp_area).abs();
             let tol = atol + rtol * exp_area.abs();
             if diff > tol {
-                return (false, format!("area mismatch: got {area}, expected {exp_area}"));
+                return (
+                    false,
+                    format!("area mismatch: got {area}, expected {exp_area}"),
+                );
             }
-            (true, format!("convex hull match: vertices={vertices:?}, area={area}"))
+            (
+                true,
+                format!("convex hull match: vertices={vertices:?}, area={area}"),
+            )
         }
         ("procrustes_result", SpatialObserved::Procrustes { disparity }) => {
             let exp_disparity = case.expected.disparity.unwrap_or(0.0);
             let diff = (disparity - exp_disparity).abs();
             let tol = atol + rtol * exp_disparity.abs();
             if diff > tol {
-                return (false, format!("disparity mismatch: got {disparity}, expected {exp_disparity}"));
+                return (
+                    false,
+                    format!("disparity mismatch: got {disparity}, expected {exp_disparity}"),
+                );
             }
             (true, format!("procrustes match: disparity={disparity}"))
         }
         (_, SpatialObserved::Error(e)) => (false, format!("execution error: {e}")),
-        (kind, obs) => (false, format!("type mismatch: expected {kind}, got {obs:?}")),
+        (kind, obs) => (
+            false,
+            format!("type mismatch: expected {kind}, got {obs:?}"),
+        ),
     }
 }
 
@@ -3186,9 +3310,19 @@ pub struct SignalExpected {
 enum SignalObserved {
     Array(Vec<f64>),
     Indices(Vec<usize>),
-    IirCoeffs { b: Vec<f64>, a: Vec<f64> },
-    Freqz { w: Vec<f64>, h_mag: Vec<f64>, h_phase: Vec<f64> },
-    ComplexArray { real: Vec<f64>, imag: Vec<f64> },
+    IirCoeffs {
+        b: Vec<f64>,
+        a: Vec<f64>,
+    },
+    Freqz {
+        w: Vec<f64>,
+        h_mag: Vec<f64>,
+        h_phase: Vec<f64>,
+    },
+    ComplexArray {
+        real: Vec<f64>,
+        imag: Vec<f64>,
+    },
     Error(String),
 }
 
@@ -3340,7 +3474,10 @@ fn execute_butter(case: &SignalCase) -> SignalObserved {
         _ => return SignalObserved::Error(format!("unknown filter type: {btype}")),
     };
     match fsci_signal::butter(order, &[wn], filter_type) {
-        Ok(coeffs) => SignalObserved::IirCoeffs { b: coeffs.b, a: coeffs.a },
+        Ok(coeffs) => SignalObserved::IirCoeffs {
+            b: coeffs.b,
+            a: coeffs.a,
+        },
         Err(e) => SignalObserved::Error(format!("{e:?}")),
     }
 }
@@ -3410,7 +3547,14 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
         ("array", SignalObserved::Array(got)) => {
             let expected = case.expected.value.as_ref().cloned().unwrap_or_default();
             if got.len() != expected.len() {
-                return (false, format!("length mismatch: got {}, expected {}", got.len(), expected.len()));
+                return (
+                    false,
+                    format!(
+                        "length mismatch: got {}, expected {}",
+                        got.len(),
+                        expected.len()
+                    ),
+                );
             }
             for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
                 let diff = (g - e).abs();
@@ -3422,20 +3566,35 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
             (true, format!("array match ({} elements)", got.len()))
         }
         ("indices", SignalObserved::Indices(got)) => {
-            let expected: Vec<usize> = case.expected.value.as_ref()
+            let expected: Vec<usize> = case
+                .expected
+                .value
+                .as_ref()
                 .map(|v| v.iter().map(|&x| x as usize).collect())
                 .unwrap_or_default();
             if *got == expected {
                 (true, format!("indices match: {got:?}"))
             } else {
-                (false, format!("indices mismatch: got {got:?}, expected {expected:?}"))
+                (
+                    false,
+                    format!("indices mismatch: got {got:?}, expected {expected:?}"),
+                )
             }
         }
         ("iir_coeffs", SignalObserved::IirCoeffs { b, a }) => {
             let exp_b = case.expected.b.as_ref().cloned().unwrap_or_default();
             let exp_a = case.expected.a.as_ref().cloned().unwrap_or_default();
             if b.len() != exp_b.len() || a.len() != exp_a.len() {
-                return (false, format!("length mismatch: b({}/{}), a({}/{})", b.len(), exp_b.len(), a.len(), exp_a.len()));
+                return (
+                    false,
+                    format!(
+                        "length mismatch: b({}/{}), a({}/{})",
+                        b.len(),
+                        exp_b.len(),
+                        a.len(),
+                        exp_a.len()
+                    ),
+                );
             }
             for (i, (&g, &e)) in b.iter().zip(exp_b.iter()).enumerate() {
                 let diff = (g - e).abs();
@@ -3458,7 +3617,10 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
             let exp_h_mag = case.expected.h_mag.as_ref().cloned().unwrap_or_default();
             let exp_h_phase = case.expected.h_phase.as_ref().cloned().unwrap_or_default();
             if w.len() != exp_w.len() {
-                return (false, format!("w length mismatch: {}/{}", w.len(), exp_w.len()));
+                return (
+                    false,
+                    format!("w length mismatch: {}/{}", w.len(), exp_w.len()),
+                );
             }
             for (i, (&g, &e)) in w.iter().zip(exp_w.iter()).enumerate() {
                 let diff = (g - e).abs();
@@ -3478,7 +3640,10 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
                 let diff = (g - e).abs();
                 let tol = atol + rtol * e.abs();
                 if diff > tol {
-                    return (false, format!("h_phase[{i}] mismatch: got {g}, expected {e}"));
+                    return (
+                        false,
+                        format!("h_phase[{i}] mismatch: got {g}, expected {e}"),
+                    );
                 }
             }
             (true, format!("freqz match ({} points)", w.len()))
@@ -3487,7 +3652,10 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
             let exp_real = case.expected.real.as_ref().cloned().unwrap_or_default();
             let exp_imag = case.expected.imag.as_ref().cloned().unwrap_or_default();
             if real.len() != exp_real.len() {
-                return (false, format!("real length mismatch: {}/{}", real.len(), exp_real.len()));
+                return (
+                    false,
+                    format!("real length mismatch: {}/{}", real.len(), exp_real.len()),
+                );
             }
             for (i, (&g, &e)) in real.iter().zip(exp_real.iter()).enumerate() {
                 let diff = (g - e).abs();
@@ -3503,10 +3671,16 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
                     return (false, format!("imag[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
-            (true, format!("complex array match ({} elements)", real.len()))
+            (
+                true,
+                format!("complex array match ({} elements)", real.len()),
+            )
         }
         (_, SignalObserved::Error(e)) => (false, format!("execution error: {e}")),
-        (kind, obs) => (false, format!("type mismatch: expected {kind}, got {obs:?}")),
+        (kind, obs) => (
+            false,
+            format!("type mismatch: expected {kind}, got {obs:?}"),
+        ),
     }
 }
 
@@ -3611,7 +3785,10 @@ enum StatsObserved {
         skewness: f64,
         kurtosis: f64,
     },
-    Correlation { statistic: f64, pvalue: f64 },
+    Correlation {
+        statistic: f64,
+        pvalue: f64,
+    },
     Linregress {
         slope: f64,
         intercept: f64,
@@ -3619,8 +3796,14 @@ enum StatsObserved {
         pvalue: f64,
         stderr: f64,
     },
-    Ttest { statistic: f64, pvalue: f64 },
-    Goodness { statistic: f64, pvalue: f64 },
+    Ttest {
+        statistic: f64,
+        pvalue: f64,
+    },
+    Goodness {
+        statistic: f64,
+        pvalue: f64,
+    },
     Error(String),
 }
 
@@ -3839,14 +4022,24 @@ fn compare_stats_outcome(case: &StatsCase, observed: &StatsObserved) -> (bool, S
             if close(*got, expected, atol, rtol) {
                 (true, format!("scalar match: {got}"))
             } else {
-                (false, format!("scalar mismatch: got {got}, expected {expected}"))
+                (
+                    false,
+                    format!("scalar mismatch: got {got}, expected {expected}"),
+                )
             }
         }
         ("array", StatsObserved::Array(got)) => {
             // Try array_value first, fall back to trying value as Option<Vec<f64>>
             let expected: Vec<f64> = case.expected.array_value.clone().unwrap_or_default();
             if got.len() != expected.len() {
-                return (false, format!("length mismatch: got {}, expected {}", got.len(), expected.len()));
+                return (
+                    false,
+                    format!(
+                        "length mismatch: got {}, expected {}",
+                        got.len(),
+                        expected.len()
+                    ),
+                );
             }
             for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
                 if !close(g, e, atol, rtol) {
@@ -3855,7 +4048,17 @@ fn compare_stats_outcome(case: &StatsCase, observed: &StatsObserved) -> (bool, S
             }
             (true, format!("array match ({} elements)", got.len()))
         }
-        ("describe_result", StatsObserved::Describe { nobs, minmax, mean, variance, skewness, kurtosis }) => {
+        (
+            "describe_result",
+            StatsObserved::Describe {
+                nobs,
+                minmax,
+                mean,
+                variance,
+                skewness,
+                kurtosis,
+            },
+        ) => {
             let exp_nobs = case.expected.nobs.unwrap_or(0);
             let exp_minmax = case.expected.minmax.unwrap_or([0.0, 0.0]);
             let exp_mean = case.expected.mean.unwrap_or(0.0);
@@ -3864,22 +4067,45 @@ fn compare_stats_outcome(case: &StatsCase, observed: &StatsObserved) -> (bool, S
             let exp_kurtosis = case.expected.kurtosis.unwrap_or(0.0);
 
             if *nobs != exp_nobs {
-                return (false, format!("nobs mismatch: got {nobs}, expected {exp_nobs}"));
+                return (
+                    false,
+                    format!("nobs mismatch: got {nobs}, expected {exp_nobs}"),
+                );
             }
-            if !close(minmax[0], exp_minmax[0], atol, rtol) || !close(minmax[1], exp_minmax[1], atol, rtol) {
-                return (false, format!("minmax mismatch: got {:?}, expected {:?}", minmax, exp_minmax));
+            if !close(minmax[0], exp_minmax[0], atol, rtol)
+                || !close(minmax[1], exp_minmax[1], atol, rtol)
+            {
+                return (
+                    false,
+                    format!(
+                        "minmax mismatch: got {:?}, expected {:?}",
+                        minmax, exp_minmax
+                    ),
+                );
             }
             if !close(*mean, exp_mean, atol, rtol) {
-                return (false, format!("mean mismatch: got {mean}, expected {exp_mean}"));
+                return (
+                    false,
+                    format!("mean mismatch: got {mean}, expected {exp_mean}"),
+                );
             }
             if !close(*variance, exp_variance, atol, rtol) {
-                return (false, format!("variance mismatch: got {variance}, expected {exp_variance}"));
+                return (
+                    false,
+                    format!("variance mismatch: got {variance}, expected {exp_variance}"),
+                );
             }
             if !close(*skewness, exp_skewness, atol, rtol) {
-                return (false, format!("skewness mismatch: got {skewness}, expected {exp_skewness}"));
+                return (
+                    false,
+                    format!("skewness mismatch: got {skewness}, expected {exp_skewness}"),
+                );
             }
             if !close(*kurtosis, exp_kurtosis, atol, rtol) {
-                return (false, format!("kurtosis mismatch: got {kurtosis}, expected {exp_kurtosis}"));
+                return (
+                    false,
+                    format!("kurtosis mismatch: got {kurtosis}, expected {exp_kurtosis}"),
+                );
             }
             (true, "describe_result match".to_string())
         }
@@ -3887,33 +4113,63 @@ fn compare_stats_outcome(case: &StatsCase, observed: &StatsObserved) -> (bool, S
             let exp_statistic = case.expected.statistic.unwrap_or(0.0);
             let exp_pvalue = case.expected.pvalue.unwrap_or(0.0);
             if !close(*statistic, exp_statistic, atol, rtol) {
-                return (false, format!("statistic mismatch: got {statistic}, expected {exp_statistic}"));
+                return (
+                    false,
+                    format!("statistic mismatch: got {statistic}, expected {exp_statistic}"),
+                );
             }
             if !close(*pvalue, exp_pvalue, atol, rtol) {
-                return (false, format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"));
+                return (
+                    false,
+                    format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"),
+                );
             }
             (true, "correlation_result match".to_string())
         }
-        ("linregress_result", StatsObserved::Linregress { slope, intercept, rvalue, pvalue, stderr }) => {
+        (
+            "linregress_result",
+            StatsObserved::Linregress {
+                slope,
+                intercept,
+                rvalue,
+                pvalue,
+                stderr,
+            },
+        ) => {
             let exp_slope = case.expected.slope.unwrap_or(0.0);
             let exp_intercept = case.expected.intercept.unwrap_or(0.0);
             let exp_rvalue = case.expected.rvalue.unwrap_or(0.0);
             let exp_pvalue = case.expected.pvalue.unwrap_or(0.0);
             let exp_stderr = case.expected.stderr.unwrap_or(0.0);
             if !close(*slope, exp_slope, atol, rtol) {
-                return (false, format!("slope mismatch: got {slope}, expected {exp_slope}"));
+                return (
+                    false,
+                    format!("slope mismatch: got {slope}, expected {exp_slope}"),
+                );
             }
             if !close(*intercept, exp_intercept, atol, rtol) {
-                return (false, format!("intercept mismatch: got {intercept}, expected {exp_intercept}"));
+                return (
+                    false,
+                    format!("intercept mismatch: got {intercept}, expected {exp_intercept}"),
+                );
             }
             if !close(*rvalue, exp_rvalue, atol, rtol) {
-                return (false, format!("rvalue mismatch: got {rvalue}, expected {exp_rvalue}"));
+                return (
+                    false,
+                    format!("rvalue mismatch: got {rvalue}, expected {exp_rvalue}"),
+                );
             }
             if !close(*pvalue, exp_pvalue, atol, rtol) {
-                return (false, format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"));
+                return (
+                    false,
+                    format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"),
+                );
             }
             if !close(*stderr, exp_stderr, atol, rtol) {
-                return (false, format!("stderr mismatch: got {stderr}, expected {exp_stderr}"));
+                return (
+                    false,
+                    format!("stderr mismatch: got {stderr}, expected {exp_stderr}"),
+                );
             }
             (true, "linregress_result match".to_string())
         }
@@ -3921,10 +4177,16 @@ fn compare_stats_outcome(case: &StatsCase, observed: &StatsObserved) -> (bool, S
             let exp_statistic = case.expected.statistic.unwrap_or(0.0);
             let exp_pvalue = case.expected.pvalue.unwrap_or(0.0);
             if !close(*statistic, exp_statistic, atol, rtol) {
-                return (false, format!("statistic mismatch: got {statistic}, expected {exp_statistic}"));
+                return (
+                    false,
+                    format!("statistic mismatch: got {statistic}, expected {exp_statistic}"),
+                );
             }
             if !close(*pvalue, exp_pvalue, atol, rtol) {
-                return (false, format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"));
+                return (
+                    false,
+                    format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"),
+                );
             }
             (true, "ttest_result match".to_string())
         }
@@ -3932,19 +4194,24 @@ fn compare_stats_outcome(case: &StatsCase, observed: &StatsObserved) -> (bool, S
             let exp_statistic = case.expected.statistic.unwrap_or(0.0);
             let exp_pvalue = case.expected.pvalue.unwrap_or(0.0);
             if !close(*statistic, exp_statistic, atol, rtol) {
-                return (false, format!("statistic mismatch: got {statistic}, expected {exp_statistic}"));
+                return (
+                    false,
+                    format!("statistic mismatch: got {statistic}, expected {exp_statistic}"),
+                );
             }
             if !close(*pvalue, exp_pvalue, atol, rtol) {
-                return (false, format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"));
+                return (
+                    false,
+                    format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"),
+                );
             }
             (true, "goodness_result match".to_string())
         }
-        (kind, StatsObserved::Error(msg)) => {
-            (false, format!("error executing {kind}: {msg}"))
-        }
-        (kind, observed) => {
-            (false, format!("kind/observed mismatch: expected {kind}, got {observed:?}"))
-        }
+        (kind, StatsObserved::Error(msg)) => (false, format!("error executing {kind}: {msg}")),
+        (kind, observed) => (
+            false,
+            format!("kind/observed mismatch: expected {kind}, got {observed:?}"),
+        ),
     }
 }
 
@@ -4214,34 +4481,44 @@ fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved)
             if close(*got, expected, atol, rtol) {
                 (true, format!("scalar match: {got}"))
             } else {
-                (false, format!("scalar mismatch: got {got}, expected {expected}"))
+                (
+                    false,
+                    format!("scalar mismatch: got {got}, expected {expected}"),
+                )
             }
         }
         ("array", IntegrateObserved::Array(got)) => {
             let expected: Vec<f64> = match &case.expected.value {
                 Some(serde_json::Value::Array(arr)) => {
-                    arr.iter()
-                        .filter_map(|v| v.as_f64())
-                        .collect()
+                    arr.iter().filter_map(|v| v.as_f64()).collect()
                 }
                 _ => return (false, "expected array value missing".to_string()),
             };
             if got.len() != expected.len() {
-                return (false, format!("array length mismatch: got {}, expected {}", got.len(), expected.len()));
+                return (
+                    false,
+                    format!(
+                        "array length mismatch: got {}, expected {}",
+                        got.len(),
+                        expected.len()
+                    ),
+                );
             }
             for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
                 if !close(g, e, atol, rtol) {
-                    return (false, format!("array mismatch at index {i}: got {g}, expected {e}"));
+                    return (
+                        false,
+                        format!("array mismatch at index {i}: got {g}, expected {e}"),
+                    );
                 }
             }
             (true, format!("array match ({} elements)", got.len()))
         }
-        (_, IntegrateObserved::Error(msg)) => {
-            (false, format!("error: {msg}"))
-        }
-        (kind, observed) => {
-            (false, format!("kind/observed mismatch: expected {kind}, got {observed:?}"))
-        }
+        (_, IntegrateObserved::Error(msg)) => (false, format!("error: {msg}")),
+        (kind, observed) => (
+            false,
+            format!("kind/observed mismatch: expected {kind}, got {observed:?}"),
+        ),
     }
 }
 
@@ -7485,10 +7762,10 @@ mod tests {
         OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
         SpecialPacketFixture, aggregate_packet_reports, discover_fixtures, ensure_artifact_layout,
         load_oracle_capture, run_array_api_packet, run_casp_packet, run_cluster_packet,
-        run_differential_test, run_fft_packet, run_linalg_packet,
-        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_signal_packet,
-        run_integrate_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
-        run_stats_packet, run_validate_tol_packet, write_parity_artifacts,
+        run_differential_test, run_fft_packet, run_integrate_packet, run_linalg_packet,
+        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_signal_packet, run_smoke,
+        run_sparse_packet, run_spatial_packet, run_special_packet, run_stats_packet,
+        run_validate_tol_packet, write_parity_artifacts,
     };
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
@@ -8141,8 +8418,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             "expected at least one signal test case"
         );
 
-        let artifacts = write_parity_artifacts(&cfg, &report)
-            .expect("signal parity artifacts must be written");
+        let artifacts =
+            write_parity_artifacts(&cfg, &report).expect("signal parity artifacts must be written");
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());
@@ -8164,8 +8441,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             "expected at least one stats test case"
         );
 
-        let artifacts = write_parity_artifacts(&cfg, &report)
-            .expect("stats parity artifacts must be written");
+        let artifacts =
+            write_parity_artifacts(&cfg, &report).expect("stats parity artifacts must be written");
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());

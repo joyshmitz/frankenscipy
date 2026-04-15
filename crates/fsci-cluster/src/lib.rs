@@ -850,10 +850,7 @@ pub fn dbscan(
 // Helpers
 // ══════════════════════════════════════════════════════════════════════
 
-fn validate_feature_dimensions(
-    data: &[Vec<f64>],
-    context: &str,
-) -> Result<usize, ClusterError> {
+fn validate_feature_dimensions(data: &[Vec<f64>], context: &str) -> Result<usize, ClusterError> {
     let first = data.first().ok_or(ClusterError::EmptyData)?;
     let d = first.len();
     if d == 0 {
@@ -2228,7 +2225,10 @@ mod tests {
         let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
         let labels = vec![0, 0, 0]; // all in cluster 0
         let score = silhouette_score(&data, &labels);
-        assert!(score.is_finite(), "silhouette with single cluster should be finite, got {score}");
+        assert!(
+            score.is_finite(),
+            "silhouette with single cluster should be finite, got {score}"
+        );
         assert_eq!(score, 0.0);
     }
 

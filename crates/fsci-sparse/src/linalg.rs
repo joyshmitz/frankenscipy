@@ -4752,7 +4752,10 @@ mod tests {
         let a = diagonally_dominant_csr_3x3();
         let b = vec![7.0, 7.0, 7.0];
         let result = bicg(&a, &b, None, IterativeSolveOptions::default()).expect("bicg works");
-        assert!(result.converged, "BiCG should converge for diagonally dominant system");
+        assert!(
+            result.converged,
+            "BiCG should converge for diagonally dominant system"
+        );
         let ax = csr_matvec(&a, &result.solution);
         assert_close_slice(&ax, &b, 1e-5);
     }
@@ -4764,10 +4767,7 @@ mod tests {
         let result = bicg(&a, &b, None, IterativeSolveOptions::default()).expect("bicg works");
         assert!(result.converged);
         assert_close_slice(&result.solution, &b, 1e-10);
-        assert!(
-            result.iterations <= 2,
-            "identity should converge quickly"
-        );
+        assert!(result.iterations <= 2, "identity should converge quickly");
     }
 
     #[test]
@@ -4804,7 +4804,10 @@ mod tests {
         let a = diagonally_dominant_csr_3x3();
         let b = vec![7.0, 7.0, 7.0];
         let result = cgs(&a, &b, None, IterativeSolveOptions::default()).expect("cgs works");
-        assert!(result.converged, "CGS should converge for diagonally dominant system");
+        assert!(
+            result.converged,
+            "CGS should converge for diagonally dominant system"
+        );
         let ax = csr_matvec(&a, &result.solution);
         assert_close_slice(&ax, &b, 1e-5);
     }
@@ -4816,10 +4819,7 @@ mod tests {
         let result = cgs(&a, &b, None, IterativeSolveOptions::default()).expect("cgs works");
         assert!(result.converged);
         assert_close_slice(&result.solution, &b, 1e-10);
-        assert!(
-            result.iterations <= 2,
-            "identity should converge quickly"
-        );
+        assert!(result.iterations <= 2, "identity should converge quickly");
     }
 
     #[test]
@@ -4856,7 +4856,10 @@ mod tests {
         let a = diagonally_dominant_csr_3x3();
         let b = vec![7.0, 7.0, 7.0];
         let result = lgmres(&a, &b, None, LgmresOptions::default()).expect("lgmres works");
-        assert!(result.converged, "LGMRES should converge for diagonally dominant system");
+        assert!(
+            result.converged,
+            "LGMRES should converge for diagonally dominant system"
+        );
         let ax = csr_matvec(&a, &result.solution);
         assert_close_slice(&ax, &b, 1e-5);
     }
@@ -4892,8 +4895,7 @@ mod tests {
         .expect("coo")
         .to_csr()
         .expect("csr");
-        let err =
-            lgmres(&a, &[1.0, 2.0], None, LgmresOptions::default()).expect_err("non-square");
+        let err = lgmres(&a, &[1.0, 2.0], None, LgmresOptions::default()).expect_err("non-square");
         assert!(matches!(err, SparseError::InvalidShape { .. }));
     }
 
@@ -4935,7 +4937,10 @@ mod tests {
             ..Default::default()
         };
         let result = qmr(&a, &b, None, opts).expect("qmr works");
-        assert!(result.converged, "QMR on identity should converge in 1 step");
+        assert!(
+            result.converged,
+            "QMR on identity should converge in 1 step"
+        );
         assert_close_slice(&result.solution, &b, 1e-10);
     }
 
@@ -5074,7 +5079,6 @@ mod tests {
         }
         0.0
     }
-
 }
 
 // ══════════════════════════════════════════════════════════════════════
