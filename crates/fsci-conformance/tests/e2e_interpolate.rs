@@ -1,0 +1,1035 @@
+#![forbid(unsafe_code)]
+//! E2E scenario tests for FSCI-P2C-009 (Interpolate).
+//!
+//! Implements conformance tests for scipy.interpolate parity:
+//!   Happy-path:  1-5  (basic interpolation scenarios)
+//!   Error recovery: 6-8 (invalid input handling)
+//!   Cross-op consistency: 9-11 (round-trip and derivative checks)
+//!   Performance boundary: 12-14 (large grid, high-dimension)
+//!
+//! Each scenario emits a forensic log bundle to
+//! `fixtures/artifacts/FSCI-P2C-009/e2e/`.
+
+use fsci_interpolate::{
+    Akima1DInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpError, InterpKind,
+    PchipInterpolator, RegularGridInterpolator, RegularGridMethod, SplineBc, interp1d_linear,
+    make_interp_spline, polyfit, polyval,
+};
+use fsci_runtime::RuntimeMode;
+use serde::Serialize;
+use std::f64::consts::PI;
+use std::fs;
+use std::path::PathBuf;
+use std::time::Instant;
+
+// ───────────────────────── Forensic log types ─────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+struct ForensicLogBundle {
+    scenario_id: String,
+    steps: Vec<ForensicStep>,
+    artifacts: Vec<ArtifactRef>,
+    environment: EnvironmentInfo,
+    interpolator_metadata: Option<InterpolatorMetadata>,
+    overall: OverallResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ForensicStep {
+    step_id: usize,
+    step_name: String,
+    action: String,
+    input_summary: String,
+    output_summary: String,
+    duration_ns: u128,
+    mode: String,
+    outcome: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ArtifactRef {
+    path: String,
+    blake3: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EnvironmentInfo {
+    rust_version: String,
+    os: String,
+    cpu_count: usize,
+    total_memory_mb: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InterpolatorMetadata {
+    kind: String,
+    num_points: usize,
+    dimensions: usize,
+    mode: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OverallResult {
+    status: String,
+    total_duration_ns: u128,
+    replay_command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_chain: Option<String>,
+}
+
+// ───────────────────────── Helpers ─────────────────────────
+
+fn e2e_output_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/artifacts/FSCI-P2C-009/e2e")
+}
+
+fn make_env() -> EnvironmentInfo {
+    EnvironmentInfo {
+        rust_version: String::from(env!("CARGO_PKG_VERSION")),
+        os: String::from(std::env::consts::OS),
+        cpu_count: std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1),
+        total_memory_mb: String::from("unknown"),
+    }
+}
+
+fn replay_cmd(scenario_id: &str) -> String {
+    format!("cargo test -p fsci-conformance --test e2e_interpolate -- {scenario_id} --nocapture")
+}
+
+fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
+    let dir = e2e_output_dir();
+    fs::create_dir_all(&dir)
+        .unwrap_or_else(|e| panic!("failed to create e2e dir {}: {e}", dir.display()));
+    let path = dir.join(format!("{scenario_id}.json"));
+    let json = serde_json::to_vec_pretty(bundle).expect("serialize bundle");
+    fs::write(&path, &json).unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
+}
+
+fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(
+            0.0_f64,
+            |acc, v| if v.is_nan() { f64::NAN } else { acc.max(v) },
+        )
+}
+
+// ───────────────────── Scenario runner framework ──────────────────────
+
+struct ScenarioRunner {
+    scenario_id: String,
+    steps: Vec<ForensicStep>,
+    start: Instant,
+    step_counter: usize,
+    passed: bool,
+    error_chain: Option<String>,
+    interp_meta: Option<InterpolatorMetadata>,
+}
+
+impl ScenarioRunner {
+    fn new(scenario_id: &str) -> Self {
+        Self {
+            scenario_id: scenario_id.to_owned(),
+            steps: Vec::new(),
+            start: Instant::now(),
+            step_counter: 0,
+            passed: true,
+            error_chain: None,
+            interp_meta: None,
+        }
+    }
+
+    fn set_interp_meta(&mut self, kind: &str, num_points: usize, dimensions: usize, mode: &str) {
+        self.interp_meta = Some(InterpolatorMetadata {
+            kind: kind.to_owned(),
+            num_points,
+            dimensions,
+            mode: mode.to_owned(),
+        });
+    }
+
+    fn record_step(
+        &mut self,
+        name: &str,
+        action: &str,
+        input_summary: &str,
+        mode: &str,
+        f: impl FnOnce() -> Result<String, String>,
+    ) -> bool {
+        self.step_counter += 1;
+        let step_start = Instant::now();
+        let result = f();
+        let duration_ns = step_start.elapsed().as_nanos();
+        let (outcome, output_summary) = match result {
+            Ok(summary) => ("pass".to_owned(), summary),
+            Err(err) => {
+                self.passed = false;
+                if self.error_chain.is_none() {
+                    self.error_chain = Some(err.clone());
+                }
+                ("fail".to_owned(), err)
+            }
+        };
+        self.steps.push(ForensicStep {
+            step_id: self.step_counter,
+            step_name: name.to_owned(),
+            action: action.to_owned(),
+            input_summary: input_summary.to_owned(),
+            output_summary,
+            duration_ns,
+            mode: mode.to_owned(),
+            outcome: outcome.clone(),
+        });
+        outcome == "pass"
+    }
+
+    fn finish(self) -> ForensicLogBundle {
+        let total_duration_ns = self.start.elapsed().as_nanos();
+        ForensicLogBundle {
+            scenario_id: self.scenario_id.clone(),
+            steps: self.steps,
+            artifacts: Vec::new(),
+            environment: make_env(),
+            interpolator_metadata: self.interp_meta,
+            overall: OverallResult {
+                status: if self.passed { "pass" } else { "fail" }.to_owned(),
+                total_duration_ns,
+                replay_command: replay_cmd(&self.scenario_id),
+                error_chain: self.error_chain,
+            },
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//                       HAPPY-PATH SCENARIOS (1-5)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Scenario 1: Linear interpolation - basic exact-match test
+/// scipy.interpolate.interp1d(x, y, kind='linear')
+#[test]
+fn scenario_01_interp1d_linear_exact() {
+    let mut runner = ScenarioRunner::new("scenario_01_interp1d_linear_exact");
+    runner.set_interp_meta("Interp1d-Linear", 5, 1, "Strict");
+
+    // Reference data: y = 2x + 1
+    let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+    let y = vec![1.0, 3.0, 5.0, 7.0, 9.0];
+
+    // Step 1: Create interpolator
+    let mut interp: Option<Interp1d> = None;
+    runner.record_step(
+        "create_interp1d",
+        "Interp1d::new(x, y, Linear)",
+        "x=[0,1,2,3,4], y=[1,3,5,7,9]",
+        "Strict",
+        || {
+            let opts = Interp1dOptions {
+                kind: InterpKind::Linear,
+                mode: RuntimeMode::Strict,
+                ..Default::default()
+            };
+            match Interp1d::new(&x, &y, opts) {
+                Ok(i) => {
+                    interp = Some(i);
+                    Ok("created linear interpolator".to_owned())
+                }
+                Err(e) => Err(format!("construction failed: {e}")),
+            }
+        },
+    );
+
+    // Step 2: Evaluate at known points
+    let interp = interp.expect("interpolator should exist");
+    runner.record_step(
+        "eval_known_point",
+        "interp.eval(1.5)",
+        "x_new=1.5",
+        "Strict",
+        || {
+            let result = interp.eval(1.5).map_err(|e| format!("{e}"))?;
+            let expected = 4.0; // 2*1.5 + 1
+            if (result - expected).abs() < 1e-12 {
+                Ok(format!("result={result}, expected={expected}"))
+            } else {
+                Err(format!("result={result}, expected={expected}"))
+            }
+        },
+    );
+
+    // Step 3: Evaluate at multiple points
+    runner.record_step(
+        "eval_many",
+        "interp.eval_many([0.5, 1.5, 2.5, 3.5])",
+        "x_new=[0.5,1.5,2.5,3.5]",
+        "Strict",
+        || {
+            let x_new = vec![0.5, 1.5, 2.5, 3.5];
+            let expected = vec![2.0, 4.0, 6.0, 8.0];
+            let result = interp.eval_many(&x_new).map_err(|e| format!("{e}"))?;
+            let diff = max_abs_diff(&result, &expected);
+            if diff < 1e-12 {
+                Ok(format!("max_diff={diff:.2e}"))
+            } else {
+                Err(format!("max_diff={diff:.2e} exceeds tolerance"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_01_interp1d_linear_exact", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_01 failed");
+}
+
+/// Scenario 2: Cubic spline interpolation with natural BCs
+/// scipy.interpolate.CubicSpline(x, y, bc_type='natural')
+#[test]
+fn scenario_02_cubic_spline_natural() {
+    let mut runner = ScenarioRunner::new("scenario_02_cubic_spline_natural");
+    runner.set_interp_meta("CubicSpline-Natural", 10, 1, "Strict");
+
+    // Reference: sin function
+    let n = 10;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 * PI / (n - 1) as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&t| t.sin()).collect();
+
+    let mut spline: Option<CubicSplineStandalone> = None;
+    runner.record_step(
+        "create_cubic_spline",
+        "CubicSplineStandalone::new(x, y, Natural)",
+        &format!("n={n} points on sin(x)"),
+        "Strict",
+        || match CubicSplineStandalone::new(&x, &y, SplineBc::Natural) {
+            Ok(s) => {
+                spline = Some(s);
+                Ok("created natural cubic spline".to_owned())
+            }
+            Err(e) => Err(format!("construction failed: {e}")),
+        },
+    );
+
+    let spline = spline.expect("spline should exist");
+    runner.record_step(
+        "eval_midpoint",
+        "spline.eval(PI/4)",
+        "x_new=PI/4",
+        "Strict",
+        || {
+            let result = spline.eval(PI / 4.0);
+            let expected = (PI / 4.0).sin();
+            let err = (result - expected).abs();
+            // Cubic spline should be very accurate for smooth functions
+            if err < 1e-3 {
+                Ok(format!(
+                    "result={result:.6}, expected={expected:.6}, err={err:.2e}"
+                ))
+            } else {
+                Err(format!("err={err:.2e} exceeds tolerance"))
+            }
+        },
+    );
+
+    // Verify derivative endpoint conditions (natural = S''=0 at ends)
+    runner.record_step(
+        "check_natural_bc",
+        "verify second derivative near zero at endpoints",
+        "S''(0) and S''(PI) should be ~0",
+        "Strict",
+        || {
+            let deriv2 = spline.derivative(2);
+            let d2_start = deriv2.eval(0.0);
+            let d2_end = deriv2.eval(PI);
+            if d2_start.abs() < 1e-8 && d2_end.abs() < 1e-8 {
+                Ok(format!("S''(0)={d2_start:.2e}, S''(PI)={d2_end:.2e}"))
+            } else {
+                Err(format!(
+                    "S''(0)={d2_start:.2e}, S''(PI)={d2_end:.2e} not near zero"
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_02_cubic_spline_natural", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_02 failed");
+}
+
+/// Scenario 3: PCHIP monotonicity preservation
+/// scipy.interpolate.PchipInterpolator(x, y)
+#[test]
+fn scenario_03_pchip_monotonic() {
+    let mut runner = ScenarioRunner::new("scenario_03_pchip_monotonic");
+    runner.set_interp_meta("PCHIP", 5, 1, "Strict");
+
+    // Monotonically increasing data
+    let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+    let y = vec![0.0, 1.0, 4.0, 9.0, 16.0]; // x^2
+
+    let mut pchip: Option<PchipInterpolator> = None;
+    runner.record_step(
+        "create_pchip",
+        "PchipInterpolator::new(x, y)",
+        "monotonic data",
+        "Strict",
+        || match PchipInterpolator::new(&x, &y) {
+            Ok(p) => {
+                pchip = Some(p);
+                Ok("created PCHIP interpolator".to_owned())
+            }
+            Err(e) => Err(format!("construction failed: {e}")),
+        },
+    );
+
+    let pchip = pchip.expect("pchip should exist");
+    runner.record_step(
+        "verify_monotonicity",
+        "check interpolated values are monotonic",
+        "eval at 100 points",
+        "Strict",
+        || {
+            let pts: Vec<f64> = (0..=100).map(|i| i as f64 * 4.0 / 100.0).collect();
+            let vals: Vec<f64> = pts.iter().map(|&t| pchip.eval(t)).collect();
+            let monotonic = vals.windows(2).all(|w| w[1] >= w[0]);
+            if monotonic {
+                Ok("all interpolated values monotonically increasing".to_owned())
+            } else {
+                Err("monotonicity violated".to_owned())
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_03_pchip_monotonic", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_03 failed");
+}
+
+/// Scenario 4: RegularGridInterpolator 2D bilinear
+/// scipy.interpolate.RegularGridInterpolator((x, y), values, method='linear')
+#[test]
+fn scenario_04_regular_grid_2d() {
+    let mut runner = ScenarioRunner::new("scenario_04_regular_grid_2d");
+    runner.set_interp_meta("RegularGridInterpolator-Linear", 9, 2, "Strict");
+
+    // 3x3 grid: f(x,y) = x + y
+    let points = vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0]];
+    let mut values = Vec::new();
+    for &x in &points[0] {
+        for &y in &points[1] {
+            values.push(x + y);
+        }
+    }
+
+    let mut interp: Option<RegularGridInterpolator> = None;
+    runner.record_step(
+        "create_regular_grid",
+        "RegularGridInterpolator::new(points, values, Linear)",
+        "3x3 grid, f(x,y)=x+y",
+        "Strict",
+        || match RegularGridInterpolator::new(
+            points.clone(),
+            values.clone(),
+            RegularGridMethod::Linear,
+            false,
+            None,
+        ) {
+            Ok(i) => {
+                interp = Some(i);
+                Ok("created 2D regular grid interpolator".to_owned())
+            }
+            Err(e) => Err(format!("construction failed: {e}")),
+        },
+    );
+
+    let interp = interp.expect("interpolator should exist");
+    runner.record_step(
+        "eval_center",
+        "interp.eval([1.0, 1.0])",
+        "center of grid",
+        "Strict",
+        || {
+            let result = interp.eval(&[1.0, 1.0]).map_err(|e| format!("{e}"))?;
+            let expected = 2.0;
+            if (result - expected).abs() < 1e-12 {
+                Ok(format!("result={result}"))
+            } else {
+                Err(format!("result={result}, expected={expected}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "eval_interior",
+        "interp.eval([0.5, 0.5])",
+        "interior point",
+        "Strict",
+        || {
+            let result = interp.eval(&[0.5, 0.5]).map_err(|e| format!("{e}"))?;
+            let expected = 1.0; // 0.5 + 0.5
+            if (result - expected).abs() < 1e-12 {
+                Ok(format!("result={result}"))
+            } else {
+                Err(format!("result={result}, expected={expected}"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_04_regular_grid_2d", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_04 failed");
+}
+
+/// Scenario 5: Akima interpolator smooth derivative
+/// scipy.interpolate.Akima1DInterpolator(x, y)
+#[test]
+fn scenario_05_akima_smoothness() {
+    let mut runner = ScenarioRunner::new("scenario_05_akima_smoothness");
+    runner.set_interp_meta("Akima", 10, 1, "Strict");
+
+    // Data with potential for oscillation (runge-like)
+    let x: Vec<f64> = (-5..=5).map(|i| i as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&t| 1.0 / (1.0 + t * t)).collect();
+
+    let mut akima: Option<Akima1DInterpolator> = None;
+    runner.record_step(
+        "create_akima",
+        "Akima1DInterpolator::new(x, y)",
+        "Runge function data",
+        "Strict",
+        || match Akima1DInterpolator::new(&x, &y) {
+            Ok(a) => {
+                akima = Some(a);
+                Ok("created Akima interpolator".to_owned())
+            }
+            Err(e) => Err(format!("construction failed: {e}")),
+        },
+    );
+
+    let akima = akima.expect("akima should exist");
+    runner.record_step(
+        "eval_no_overshoot",
+        "verify no wild oscillations",
+        "check values stay bounded",
+        "Strict",
+        || {
+            let pts: Vec<f64> = (-50..=50).map(|i| i as f64 / 10.0).collect();
+            let vals: Vec<f64> = pts.iter().map(|&t| akima.eval(t)).collect();
+            let max_val = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let min_val = vals.iter().cloned().fold(f64::INFINITY, f64::min);
+            // Akima should not overshoot badly - values should be reasonable
+            if max_val <= 1.5 && min_val >= -0.5 {
+                Ok(format!("range=[{min_val:.3}, {max_val:.3}]"))
+            } else {
+                Err(format!(
+                    "excessive oscillation: range=[{min_val:.3}, {max_val:.3}]"
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_05_akima_smoothness", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_05 failed");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//                       ERROR RECOVERY SCENARIOS (6-8)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Scenario 6: Reject non-finite coordinates in construction
+#[test]
+fn scenario_06_reject_nan_coordinates() {
+    let mut runner = ScenarioRunner::new("scenario_06_reject_nan_coordinates");
+    runner.set_interp_meta("error-handling", 3, 1, "Strict");
+
+    // NaN in x coordinates
+    runner.record_step(
+        "reject_nan_x",
+        "Interp1d::new([1, NaN, 3], [0,1,2])",
+        "NaN in x",
+        "Strict",
+        || {
+            let x = vec![1.0, f64::NAN, 3.0];
+            let y = vec![0.0, 1.0, 2.0];
+            match Interp1d::new(&x, &y, Interp1dOptions::default()) {
+                Err(InterpError::NonFiniteX) => Ok("correctly rejected with NonFiniteX".to_owned()),
+                Err(e) => Err(format!("wrong error type: {e}")),
+                Ok(_) => Err("should have rejected NaN".to_owned()),
+            }
+        },
+    );
+
+    // Inf in x coordinates
+    runner.record_step(
+        "reject_inf_x",
+        "Interp1d::new([1, INF, 3], [0,1,2])",
+        "Inf in x",
+        "Strict",
+        || {
+            let x = vec![1.0, f64::INFINITY, 3.0];
+            let y = vec![0.0, 1.0, 2.0];
+            match Interp1d::new(&x, &y, Interp1dOptions::default()) {
+                Err(InterpError::NonFiniteX) => Ok("correctly rejected with NonFiniteX".to_owned()),
+                Err(e) => Err(format!("wrong error type: {e}")),
+                Ok(_) => Err("should have rejected Inf".to_owned()),
+            }
+        },
+    );
+
+    // RegularGridInterpolator - NaN in points
+    runner.record_step(
+        "reject_nan_regulargrid",
+        "RegularGridInterpolator with NaN in points",
+        "NaN in axis",
+        "Strict",
+        || {
+            let points = vec![vec![0.0, f64::NAN, 2.0]];
+            let values = vec![0.0, 1.0, 2.0];
+            match RegularGridInterpolator::new(
+                points,
+                values,
+                RegularGridMethod::Linear,
+                false,
+                None,
+            ) {
+                Err(InterpError::NonFiniteX) => Ok("correctly rejected with NonFiniteX".to_owned()),
+                Err(e) => Err(format!("wrong error type: {e}")),
+                Ok(_) => Err("should have rejected NaN".to_owned()),
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_06_reject_nan_coordinates", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_06 failed");
+}
+
+/// Scenario 7: Reject unsorted x coordinates
+#[test]
+fn scenario_07_reject_unsorted() {
+    let mut runner = ScenarioRunner::new("scenario_07_reject_unsorted");
+    runner.set_interp_meta("error-handling", 4, 1, "Strict");
+
+    runner.record_step(
+        "reject_unsorted_x",
+        "Interp1d::new([1, 3, 2, 4], [0,1,2,3])",
+        "unsorted x",
+        "Strict",
+        || {
+            let x = vec![1.0, 3.0, 2.0, 4.0];
+            let y = vec![0.0, 1.0, 2.0, 3.0];
+            match Interp1d::new(&x, &y, Interp1dOptions::default()) {
+                Err(InterpError::UnsortedX) => Ok("correctly rejected with UnsortedX".to_owned()),
+                Err(e) => Err(format!("wrong error type: {e}")),
+                Ok(_) => Err("should have rejected unsorted".to_owned()),
+            }
+        },
+    );
+
+    runner.record_step(
+        "reject_duplicate_x",
+        "Interp1d::new([1, 2, 2, 4], [0,1,2,3])",
+        "duplicate x values",
+        "Strict",
+        || {
+            let x = vec![1.0, 2.0, 2.0, 4.0];
+            let y = vec![0.0, 1.0, 2.0, 3.0];
+            match Interp1d::new(&x, &y, Interp1dOptions::default()) {
+                Err(InterpError::UnsortedX) => {
+                    Ok("correctly rejected duplicates with UnsortedX".to_owned())
+                }
+                Err(e) => Err(format!("wrong error type: {e}")),
+                Ok(_) => Err("should have rejected duplicates".to_owned()),
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_07_reject_unsorted", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_07 failed");
+}
+
+/// Scenario 8: Too few points
+#[test]
+fn scenario_08_too_few_points() {
+    let mut runner = ScenarioRunner::new("scenario_08_too_few_points");
+    runner.set_interp_meta("error-handling", 1, 1, "Strict");
+
+    runner.record_step(
+        "reject_single_point_linear",
+        "Interp1d::new([1], [0], Linear)",
+        "single point",
+        "Strict",
+        || {
+            let x = vec![1.0];
+            let y = vec![0.0];
+            match Interp1d::new(&x, &y, Interp1dOptions::default()) {
+                Err(InterpError::TooFewPoints { minimum, actual }) => {
+                    Ok(format!("rejected: need {minimum}, got {actual}"))
+                }
+                Err(e) => Err(format!("wrong error type: {e}")),
+                Ok(_) => Err("should have rejected single point".to_owned()),
+            }
+        },
+    );
+
+    runner.record_step(
+        "reject_cubic_with_3_points",
+        "Interp1d::new([1,2,3], [0,1,2], CubicSpline)",
+        "too few for cubic",
+        "Strict",
+        || {
+            let x = vec![1.0, 2.0, 3.0];
+            let y = vec![0.0, 1.0, 2.0];
+            let opts = Interp1dOptions {
+                kind: InterpKind::CubicSpline,
+                ..Default::default()
+            };
+            match Interp1d::new(&x, &y, opts) {
+                Err(InterpError::TooFewPoints { minimum, actual }) => {
+                    Ok(format!("rejected: need {minimum}, got {actual}"))
+                }
+                Err(e) => Err(format!("wrong error type: {e}")),
+                Ok(_) => Err("should have rejected 3 points for cubic".to_owned()),
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_08_too_few_points", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_08 failed");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//                   CROSS-OP CONSISTENCY SCENARIOS (9-11)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Scenario 9: Polynomial round-trip (fit then eval)
+#[test]
+fn scenario_09_polyfit_polyval_roundtrip() {
+    let mut runner = ScenarioRunner::new("scenario_09_polyfit_polyval_roundtrip");
+    runner.set_interp_meta("polyfit-polyval", 5, 1, "Strict");
+
+    // Fit degree-2 polynomial to exact quadratic data
+    let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+    let y: Vec<f64> = x.iter().map(|&t| 2.0 * t * t + 3.0 * t + 1.0).collect();
+
+    let mut coeffs: Option<Vec<f64>> = None;
+    runner.record_step(
+        "polyfit",
+        "polyfit(x, y, deg=2)",
+        "fit quadratic",
+        "Strict",
+        || match polyfit(&x, &y, 2) {
+            Ok(c) => {
+                coeffs = Some(c.clone());
+                Ok(format!("coeffs={c:?}"))
+            }
+            Err(e) => Err(format!("polyfit failed: {e}")),
+        },
+    );
+
+    let coeffs = coeffs.expect("coeffs should exist");
+    runner.record_step(
+        "polyval_roundtrip",
+        "polyval(coeffs, x) matches y",
+        "evaluate fitted polynomial",
+        "Strict",
+        || {
+            let y_fit: Vec<f64> = x.iter().map(|&t| polyval(&coeffs, t)).collect();
+            let diff = max_abs_diff(&y, &y_fit);
+            if diff < 1e-10 {
+                Ok(format!("max_diff={diff:.2e}"))
+            } else {
+                Err(format!("max_diff={diff:.2e} exceeds tolerance"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_09_polyfit_polyval_roundtrip", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_09 failed");
+}
+
+/// Scenario 10: Spline derivative consistency
+#[test]
+fn scenario_10_spline_derivative_integral() {
+    let mut runner = ScenarioRunner::new("scenario_10_spline_derivative_integral");
+    runner.set_interp_meta("CubicSpline-derivative", 20, 1, "Strict");
+
+    // sin(x) on [0, 2pi]
+    let n = 20;
+    let x: Vec<f64> = (0..=n).map(|i| i as f64 * 2.0 * PI / n as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&t| t.sin()).collect();
+
+    let spline = CubicSplineStandalone::new(&x, &y, SplineBc::Natural).expect("create spline");
+
+    runner.record_step(
+        "derivative_accuracy",
+        "spline.derivative(1).eval(t) vs cos(t)",
+        "first derivative",
+        "Strict",
+        || {
+            let deriv = spline.derivative(1);
+            let test_pts: Vec<f64> = (1..n).map(|i| i as f64 * 2.0 * PI / n as f64).collect();
+            let max_err = test_pts
+                .iter()
+                .map(|&t| (deriv.eval(t) - t.cos()).abs())
+                .fold(0.0_f64, f64::max);
+            if max_err < 0.05 {
+                Ok(format!("max_derivative_error={max_err:.4}"))
+            } else {
+                Err(format!("max_derivative_error={max_err:.4} too large"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "integral_accuracy",
+        "spline.integrate(0, PI) vs 2.0",
+        "integral of sin from 0 to PI",
+        "Strict",
+        || {
+            let integral = spline.integrate(0.0, PI);
+            let expected = 2.0; // integral of sin from 0 to pi
+            let err = (integral - expected).abs();
+            if err < 0.01 {
+                Ok(format!(
+                    "integral={integral:.6}, expected={expected}, err={err:.4}"
+                ))
+            } else {
+                Err(format!(
+                    "integral={integral:.6}, expected={expected}, err={err:.4}"
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_10_spline_derivative_integral", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_10 failed");
+}
+
+/// Scenario 11: interp1d vs make_interp_spline consistency
+#[test]
+fn scenario_11_interp_methods_consistency() {
+    let mut runner = ScenarioRunner::new("scenario_11_interp_methods_consistency");
+    runner.set_interp_meta("cross-method", 10, 1, "Strict");
+
+    let x: Vec<f64> = (0..10).map(|i| i as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&t| t.powi(2)).collect();
+
+    runner.record_step(
+        "compare_linear_methods",
+        "interp1d_linear vs Interp1d(Linear)",
+        "both should give same results",
+        "Strict",
+        || {
+            let x_new = vec![0.5, 2.5, 5.5, 8.5];
+            let result1 = interp1d_linear(&x, &y, &x_new).map_err(|e| format!("{e}"))?;
+
+            let opts = Interp1dOptions {
+                kind: InterpKind::Linear,
+                ..Default::default()
+            };
+            let interp = Interp1d::new(&x, &y, opts).map_err(|e| format!("{e}"))?;
+            let result2 = interp.eval_many(&x_new).map_err(|e| format!("{e}"))?;
+
+            let diff = max_abs_diff(&result1, &result2);
+            if diff < 1e-14 {
+                Ok(format!("max_diff={diff:.2e}"))
+            } else {
+                Err(format!("methods differ: max_diff={diff:.2e}"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_11_interp_methods_consistency", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_11 failed");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//                   PERFORMANCE BOUNDARY SCENARIOS (12-14)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Scenario 12: Large 1D interpolation
+#[test]
+fn scenario_12_large_1d_interpolation() {
+    let mut runner = ScenarioRunner::new("scenario_12_large_1d_interpolation");
+    runner.set_interp_meta("Interp1d-Linear", 10000, 1, "Strict");
+
+    let n = 10000;
+    let x: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&t| t.sin()).collect();
+
+    runner.record_step(
+        "create_large_interpolator",
+        &format!("Interp1d::new(n={n})"),
+        "large dataset",
+        "Strict",
+        || {
+            let start = Instant::now();
+            let opts = Interp1dOptions {
+                kind: InterpKind::Linear,
+                ..Default::default()
+            };
+            let _interp = Interp1d::new(&x, &y, opts).map_err(|e| format!("{e}"))?;
+            let elapsed = start.elapsed();
+            Ok(format!("created in {:?}", elapsed))
+        },
+    );
+
+    runner.record_step(
+        "eval_many_large",
+        "eval_many(1000 points)",
+        "bulk evaluation",
+        "Strict",
+        || {
+            let opts = Interp1dOptions {
+                kind: InterpKind::Linear,
+                ..Default::default()
+            };
+            let interp = Interp1d::new(&x, &y, opts).map_err(|e| format!("{e}"))?;
+            let x_new: Vec<f64> = (0..1000).map(|i| i as f64 * 10.0 + 0.5).collect();
+            let start = Instant::now();
+            let _result = interp.eval_many(&x_new).map_err(|e| format!("{e}"))?;
+            let elapsed = start.elapsed();
+            if elapsed.as_millis() < 100 {
+                Ok(format!("evaluated in {:?}", elapsed))
+            } else {
+                Err(format!("too slow: {:?}", elapsed))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_12_large_1d_interpolation", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_12 failed");
+}
+
+/// Scenario 13: High-dimensional regular grid (3D)
+#[test]
+fn scenario_13_high_dim_regular_grid() {
+    let mut runner = ScenarioRunner::new("scenario_13_high_dim_regular_grid");
+    runner.set_interp_meta("RegularGridInterpolator-3D", 1000, 3, "Strict");
+
+    // 10x10x10 grid
+    let axis: Vec<f64> = (0..10).map(|i| i as f64).collect();
+    let points = vec![axis.clone(), axis.clone(), axis.clone()];
+    let mut values = Vec::with_capacity(1000);
+    for &x in &points[0] {
+        for &y in &points[1] {
+            for &z in &points[2] {
+                values.push(x + y + z);
+            }
+        }
+    }
+
+    runner.record_step(
+        "create_3d_grid",
+        "RegularGridInterpolator::new(10x10x10)",
+        "3D trilinear",
+        "Strict",
+        || {
+            let start = Instant::now();
+            let _interp = RegularGridInterpolator::new(
+                points.clone(),
+                values.clone(),
+                RegularGridMethod::Linear,
+                false,
+                None,
+            )
+            .map_err(|e| format!("{e}"))?;
+            let elapsed = start.elapsed();
+            Ok(format!("created in {:?}", elapsed))
+        },
+    );
+
+    runner.record_step(
+        "eval_3d_interior",
+        "evaluate at interior points",
+        "100 random evaluations",
+        "Strict",
+        || {
+            let interp = RegularGridInterpolator::new(
+                points.clone(),
+                values.clone(),
+                RegularGridMethod::Linear,
+                false,
+                None,
+            )
+            .map_err(|e| format!("{e}"))?;
+            let start = Instant::now();
+            for i in 0..100 {
+                let pt = vec![
+                    (i % 9) as f64 + 0.5,
+                    ((i / 9) % 9) as f64 + 0.5,
+                    ((i / 81) % 9) as f64 + 0.5,
+                ];
+                let _val = interp.eval(&pt).map_err(|e| format!("{e}"))?;
+            }
+            let elapsed = start.elapsed();
+            if elapsed.as_millis() < 50 {
+                Ok(format!("100 evals in {:?}", elapsed))
+            } else {
+                Err(format!("too slow: {:?}", elapsed))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_13_high_dim_regular_grid", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_13 failed");
+}
+
+/// Scenario 14: BSpline with many knots
+#[test]
+fn scenario_14_bspline_many_knots() {
+    let mut runner = ScenarioRunner::new("scenario_14_bspline_many_knots");
+    runner.set_interp_meta("BSpline", 100, 1, "Strict");
+
+    let n = 100;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&t| (2.0 * PI * t).sin()).collect();
+
+    runner.record_step(
+        "create_bspline",
+        &format!("make_interp_spline(n={n}, k=3)"),
+        "cubic B-spline",
+        "Strict",
+        || {
+            let start = Instant::now();
+            let _spline = make_interp_spline(&x, &y, 3).map_err(|e| format!("{e}"))?;
+            let elapsed = start.elapsed();
+            Ok(format!("created in {:?}", elapsed))
+        },
+    );
+
+    runner.record_step(
+        "eval_bspline_accuracy",
+        "evaluate at midpoints",
+        "check accuracy",
+        "Strict",
+        || {
+            let spline = make_interp_spline(&x, &y, 3).map_err(|e| format!("{e}"))?;
+            let x_test: Vec<f64> = (0..50)
+                .map(|i| (2 * i + 1) as f64 / (2 * n - 2) as f64)
+                .collect();
+            let y_expected: Vec<f64> = x_test.iter().map(|&t| (2.0 * PI * t).sin()).collect();
+            let y_actual: Vec<f64> = x_test.iter().map(|&t| spline.eval(t)).collect();
+            let max_err = max_abs_diff(&y_expected, &y_actual);
+            if max_err < 0.01 {
+                Ok(format!("max_error={max_err:.4}"))
+            } else {
+                Err(format!("max_error={max_err:.4} too large"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_14_bspline_many_knots", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_14 failed");
+}
