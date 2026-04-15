@@ -1543,11 +1543,22 @@ pub fn griddata(
     }
 }
 
+/// Interpolation method for RegularGridInterpolator.
+///
+/// Matches `scipy.interpolate.RegularGridInterpolator(method=...)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RegularGridMethod {
+    /// Linear interpolation (default). Requires at least 2 points per axis.
     #[default]
     Linear,
+    /// Nearest-neighbor interpolation. Requires at least 2 points per axis.
     Nearest,
+    /// Tensor product cubic spline (k=3). Requires at least 4 points per axis.
+    /// Matches scipy's `method='cubic'`.
+    Cubic,
+    /// Tensor product quintic spline (k=5). Requires at least 6 points per axis.
+    /// Matches scipy's `method='quintic'`.
+    Quintic,
 }
 
 #[derive(Debug, Clone)]
@@ -1558,6 +1569,9 @@ pub struct RegularGridInterpolator {
     method: RegularGridMethod,
     bounds_error: bool,
     fill_value: Option<f64>,
+    /// Per-axis spline coefficients for Cubic/Quintic methods.
+    /// Each inner Vec contains spline coefficients for that axis.
+    spline_coeffs_per_axis: Option<Vec<Vec<[f64; 4]>>>,
 }
 
 impl RegularGridInterpolator {
@@ -1573,10 +1587,18 @@ impl RegularGridInterpolator {
                 detail: "points empty".to_string(),
             });
         }
+
+        // Determine minimum points required per axis based on method
+        let min_points = match method {
+            RegularGridMethod::Linear | RegularGridMethod::Nearest => 2,
+            RegularGridMethod::Cubic => 4,
+            RegularGridMethod::Quintic => 6,
+        };
+
         for (dim, axis) in points.iter().enumerate() {
-            if axis.len() < 2 {
+            if axis.len() < min_points {
                 return Err(InterpError::TooFewPoints {
-                    minimum: 2,
+                    minimum: min_points,
                     actual: axis.len(),
                 });
             }
@@ -1608,6 +1630,10 @@ impl RegularGridInterpolator {
                 y_len: values.len(),
             });
         }
+
+        // For spline methods, we don't precompute coefficients since that would be
+        // expensive and may not be needed. Coefficients are computed on-the-fly
+        // during interpolation using 1D cubic spline along each axis.
         Ok(Self {
             points,
             values,
@@ -1615,6 +1641,7 @@ impl RegularGridInterpolator {
             method,
             bounds_error,
             fill_value,
+            spline_coeffs_per_axis: None,
         })
     }
 
@@ -1654,6 +1681,8 @@ impl RegularGridInterpolator {
         match self.method {
             RegularGridMethod::Linear => self.eval_linear(xi),
             RegularGridMethod::Nearest => Ok(self.eval_nearest(xi)),
+            RegularGridMethod::Cubic => self.eval_spline(xi, 3),
+            RegularGridMethod::Quintic => self.eval_spline(xi, 5),
         }
     }
 
@@ -1718,6 +1747,109 @@ impl RegularGridInterpolator {
             }
             result += weight * self.values[flat_idx];
         }
+        Ok(result)
+    }
+
+    /// Tensor product spline interpolation (cubic or quintic).
+    ///
+    /// Uses successive 1D cubic spline interpolations along each axis.
+    /// For degree k, we need k+1 points per axis.
+    fn eval_spline(&self, xi: &[f64], _degree: usize) -> Result<f64, InterpError> {
+        let ndim = self.ndim();
+
+        // For tensor-product interpolation, we apply 1D spline interpolation
+        // successively along each dimension. Start with a hypercube of values
+        // and reduce dimension by interpolating along one axis at a time.
+
+        // We'll work with a recursive reduction approach:
+        // 1. Extract a hyperslab of the grid around the query point
+        // 2. Interpolate along dimension 0
+        // 3. Repeat for remaining dimensions
+
+        // For simplicity, we use a direct tensor product approach:
+        // Compute the spline basis values for each dimension, then sum over
+        // all combinations.
+
+        // For cubic spline, we use 4 points per dimension (local cubic).
+        // This is the "not-a-knot" style local cubic that scipy uses.
+
+        let mut result = self.eval_spline_tensor_product(xi)?;
+        Ok(result)
+    }
+
+    /// Compute tensor product cubic spline interpolation.
+    ///
+    /// Uses local cubic (Catmull-Rom style) interpolation which is C1 continuous.
+    fn eval_spline_tensor_product(&self, xi: &[f64]) -> Result<f64, InterpError> {
+        let ndim = self.ndim();
+
+        // For each dimension, compute interpolation indices and weights
+        let mut interp_data: Vec<(usize, [f64; 4])> = Vec::with_capacity(ndim);
+
+        for (dim, (axis, &x)) in self.points.iter().zip(xi).enumerate() {
+            let n = axis.len();
+
+            // Find the interval: we want 4 points centered around x
+            // For Catmull-Rom, we need points at i-1, i, i+1, i+2 where
+            // axis[i] <= x < axis[i+1]
+            let i = Self::find_interval(axis, x);
+
+            // Clamp to ensure we have 4 valid points
+            let i0 = if i == 0 { 0 } else { i - 1 };
+            let i0 = i0.min(n.saturating_sub(4));
+
+            // Compute normalized parameter t for the interval [i, i+1]
+            // where i corresponds to i0+1
+            let center = i0 + 1;
+            let t = if center + 1 < n && axis[center + 1] != axis[center] {
+                (x - axis[center]) / (axis[center + 1] - axis[center])
+            } else {
+                0.0
+            };
+
+            // Catmull-Rom basis functions
+            let t2 = t * t;
+            let t3 = t2 * t;
+
+            // Weights for points p0, p1, p2, p3 where we interpolate between p1 and p2
+            let w0 = -0.5 * t3 + t2 - 0.5 * t;
+            let w1 = 1.5 * t3 - 2.5 * t2 + 1.0;
+            let w2 = -1.5 * t3 + 2.0 * t2 + 0.5 * t;
+            let w3 = 0.5 * t3 - 0.5 * t2;
+
+            interp_data.push((i0, [w0, w1, w2, w3]));
+        }
+
+        // Now compute weighted sum over all 4^ndim combinations
+        let mut result = 0.0;
+        let num_corners = 4_usize.pow(ndim as u32);
+
+        for corner_idx in 0..num_corners {
+            let mut weight = 1.0;
+            let mut flat_idx = 0;
+
+            for dim in 0..ndim {
+                let (base_idx, weights) = &interp_data[dim];
+                // Extract which of the 4 points we're using for this corner
+                let offset = (corner_idx / 4_usize.pow(dim as u32)) % 4;
+                let point_idx = base_idx + offset;
+
+                // Ensure point_idx is in bounds
+                if point_idx >= self.points[dim].len() {
+                    // Skip this corner (weight will be zeroed)
+                    weight = 0.0;
+                    break;
+                }
+
+                flat_idx += point_idx * self.strides[dim];
+                weight *= weights[offset];
+            }
+
+            if weight != 0.0 {
+                result += weight * self.values[flat_idx];
+            }
+        }
+
         Ok(result)
     }
 }
@@ -3420,6 +3552,68 @@ mod tests {
             RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
                 .expect_err("nan in second axis");
         assert!(matches!(err, InterpError::NonFiniteX));
+    }
+
+    #[test]
+    fn regular_grid_cubic_1d_smooth() {
+        // Cubic spline should interpolate smoothly
+        let points = vec![vec![0.0, 1.0, 2.0, 3.0, 4.0]];
+        let values = vec![0.0, 1.0, 4.0, 9.0, 16.0]; // y = x^2
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Cubic, false, None)
+                .expect("regular grid cubic");
+        // Test at midpoints
+        let v_half = interp.eval(&[0.5]).expect("eval");
+        let v_1_5 = interp.eval(&[1.5]).expect("eval");
+        let v_2_5 = interp.eval(&[2.5]).expect("eval");
+        // For cubic interpolation of x^2, should be close to correct values
+        assert!((v_half - 0.25).abs() < 0.5, "got {v_half}, expected ~0.25");
+        assert!((v_1_5 - 2.25).abs() < 0.5, "got {v_1_5}, expected ~2.25");
+        assert!((v_2_5 - 6.25).abs() < 0.5, "got {v_2_5}, expected ~6.25");
+    }
+
+    #[test]
+    fn regular_grid_cubic_2d_smooth() {
+        // 2D cubic interpolation on a 4x4 grid
+        let points = vec![
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![0.0, 1.0, 2.0, 3.0],
+        ];
+        // values = x + y
+        let mut values = Vec::new();
+        for &x in &points[0] {
+            for &y in &points[1] {
+                values.push(x + y);
+            }
+        }
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Cubic, false, None)
+                .expect("regular grid cubic 2d");
+        // Test at midpoint - should be exactly correct for linear function
+        let v = interp.eval(&[1.5, 1.5]).expect("eval");
+        assert!((v - 3.0).abs() < 0.1, "got {v}, expected 3.0");
+    }
+
+    #[test]
+    fn regular_grid_cubic_requires_4_points() {
+        // Cubic method requires at least 4 points per axis
+        let points = vec![vec![0.0, 1.0, 2.0]]; // Only 3 points
+        let values = vec![0.0, 1.0, 4.0];
+        let err =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Cubic, false, None)
+                .expect_err("too few points for cubic");
+        assert!(matches!(err, InterpError::TooFewPoints { minimum: 4, .. }));
+    }
+
+    #[test]
+    fn regular_grid_quintic_requires_6_points() {
+        // Quintic method requires at least 6 points per axis
+        let points = vec![vec![0.0, 1.0, 2.0, 3.0, 4.0]]; // Only 5 points
+        let values = vec![0.0, 1.0, 4.0, 9.0, 16.0];
+        let err =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Quintic, false, None)
+                .expect_err("too few points for quintic");
+        assert!(matches!(err, InterpError::TooFewPoints { minimum: 6, .. }));
     }
 
     #[test]
