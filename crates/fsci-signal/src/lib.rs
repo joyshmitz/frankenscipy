@@ -6532,6 +6532,74 @@ impl Lti {
         let (re, im) = poly_roots(&self.num)?;
         Ok(re.into_iter().zip(im).collect())
     }
+
+    /// Simulate the response of the LTI system to arbitrary input.
+    ///
+    /// Matches `scipy.signal.lsim`. Uses state-space representation with RK4.
+    ///
+    /// # Arguments
+    /// * `u` - Input signal values at each time point
+    /// * `t` - Time points (must be uniformly spaced)
+    /// * `x0` - Initial state (None for zero initial conditions)
+    ///
+    /// # Returns
+    /// Output signal values at each time point
+    pub fn lsim(
+        &self,
+        u: &[f64],
+        t: &[f64],
+        x0: Option<&[f64]>,
+    ) -> Result<Vec<f64>, SignalError> {
+        if t.is_empty() {
+            return Ok(Vec::new());
+        }
+        if u.len() != t.len() {
+            return Err(SignalError::InvalidArgument(format!(
+                "input u length {} must match t length {}",
+                u.len(),
+                t.len()
+            )));
+        }
+
+        let (a, b, c, d) = tf2ss(&self.num, &self.den)?;
+        let n = b.len();
+
+        // Initialize state
+        let mut x = if let Some(x0_init) = x0 {
+            if x0_init.len() != n {
+                return Err(SignalError::InvalidArgument(format!(
+                    "initial state length {} must match system order {}",
+                    x0_init.len(),
+                    n
+                )));
+            }
+            x0_init.to_vec()
+        } else {
+            vec![0.0; n]
+        };
+
+        if n == 0 {
+            // Static system: y = d*u
+            return Ok(u.iter().map(|&ui| d * ui).collect());
+        }
+
+        let mut y = Vec::with_capacity(t.len());
+
+        for i in 0..t.len() {
+            // Output: y = c'x + d*u
+            let output: f64 =
+                c.iter().zip(x.iter()).map(|(&ci, &xi)| ci * xi).sum::<f64>() + d * u[i];
+            y.push(output);
+
+            if i + 1 < t.len() {
+                let dt = t[i + 1] - t[i];
+                // RK4 step with current input
+                x = rk4_step(&a, &b, &x, u[i], dt);
+            }
+        }
+
+        Ok(y)
+    }
 }
 
 /// Discrete-time Linear Time-Invariant system representation.
@@ -6655,6 +6723,50 @@ impl Dlti {
         let poles = self.poles()?;
         Ok(poles.iter().all(|&(re, im)| re * re + im * im < 1.0))
     }
+
+    /// Simulate the response of the discrete LTI system to arbitrary input.
+    ///
+    /// Matches `scipy.signal.dlsim`. Uses lfilter with optional initial state.
+    ///
+    /// # Arguments
+    /// * `u` - Input signal values
+    /// * `zi` - Initial filter state (None for zero initial conditions)
+    ///
+    /// # Returns
+    /// Output signal values
+    pub fn dlsim(&self, u: &[f64], zi: Option<&[f64]>) -> Result<Vec<f64>, SignalError> {
+        lfilter(&self.num, &self.den, u, zi)
+    }
+}
+
+/// Simulate the response of a continuous-time LTI system.
+///
+/// Standalone function matching `scipy.signal.lsim`.
+///
+/// # Arguments
+/// * `system` - The LTI system
+/// * `u` - Input signal values
+/// * `t` - Time points
+/// * `x0` - Initial state (None for zero)
+pub fn lsim(
+    system: &Lti,
+    u: &[f64],
+    t: &[f64],
+    x0: Option<&[f64]>,
+) -> Result<Vec<f64>, SignalError> {
+    system.lsim(u, t, x0)
+}
+
+/// Simulate the response of a discrete-time LTI system.
+///
+/// Standalone function matching `scipy.signal.dlsim`.
+///
+/// # Arguments
+/// * `system` - The DLTI system
+/// * `u` - Input signal values
+/// * `zi` - Initial filter state (None for zero)
+pub fn dlsim(system: &Dlti, u: &[f64], zi: Option<&[f64]>) -> Result<Vec<f64>, SignalError> {
+    system.dlsim(u, zi)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -10064,6 +10176,80 @@ mod tests {
         let y1 = sys.lfilter(&x).expect("dlti lfilter");
         let y2 = lfilter(&sys.num, &sys.den, &x, None).expect("direct lfilter");
         for (i, (a, b)) in y1.iter().zip(y2.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-12, "y[{i}]: {} vs {}", a, b);
+        }
+    }
+
+    #[test]
+    fn lti_lsim_step_input() {
+        // lsim with step input should match step response
+        let sys = Lti::new(vec![1.0], vec![1.0, 1.0]).expect("valid");
+        let t: Vec<f64> = (0..50).map(|i| i as f64 * 0.1).collect();
+        let u: Vec<f64> = vec![1.0; t.len()]; // step input
+        let y_lsim = sys.lsim(&u, &t, None).expect("lsim");
+        let y_step = sys.step(&t).expect("step");
+        for (i, (a, b)) in y_lsim.iter().zip(y_step.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-6,
+                "lsim[{i}] = {} vs step[{i}] = {}",
+                a,
+                b
+            );
+        }
+    }
+
+    #[test]
+    fn lti_lsim_zero_input() {
+        // lsim with zero input should give zero output (zero IC)
+        let sys = Lti::new(vec![1.0], vec![1.0, 1.0]).expect("valid");
+        let t: Vec<f64> = (0..20).map(|i| i as f64 * 0.1).collect();
+        let u: Vec<f64> = vec![0.0; t.len()];
+        let y = sys.lsim(&u, &t, None).expect("lsim");
+        for (i, &yi) in y.iter().enumerate() {
+            assert!(yi.abs() < 1e-12, "y[{i}] = {yi}, expected 0");
+        }
+    }
+
+    #[test]
+    fn lti_lsim_mismatched_lengths_rejected() {
+        let sys = Lti::new(vec![1.0], vec![1.0, 1.0]).expect("valid");
+        let t: Vec<f64> = (0..10).map(|i| i as f64 * 0.1).collect();
+        let u: Vec<f64> = vec![1.0; 5]; // shorter than t
+        let err = sys.lsim(&u, &t, None).expect_err("mismatched");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn dlti_dlsim_matches_lfilter() {
+        // dlsim should match lfilter with no initial state
+        let sys = Dlti::new(vec![1.0, 0.5], vec![1.0, -0.3], 0.01).expect("valid");
+        let u: Vec<f64> = (0..20).map(|i| (i as f64 * 0.5).sin()).collect();
+        let y_dlsim = sys.dlsim(&u, None).expect("dlsim");
+        let y_lfilter = sys.lfilter(&u).expect("lfilter");
+        for (i, (a, b)) in y_dlsim.iter().zip(y_lfilter.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-12, "y[{i}]: {} vs {}", a, b);
+        }
+    }
+
+    #[test]
+    fn lsim_standalone_matches_method() {
+        let sys = Lti::new(vec![2.0], vec![1.0, 0.5]).expect("valid");
+        let t: Vec<f64> = (0..30).map(|i| i as f64 * 0.1).collect();
+        let u: Vec<f64> = t.iter().map(|&ti| ti.sin()).collect();
+        let y_method = sys.lsim(&u, &t, None).expect("method");
+        let y_standalone = lsim(&sys, &u, &t, None).expect("standalone");
+        for (i, (a, b)) in y_method.iter().zip(y_standalone.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-12, "y[{i}]: {} vs {}", a, b);
+        }
+    }
+
+    #[test]
+    fn dlsim_standalone_matches_method() {
+        let sys = Dlti::new(vec![1.0], vec![1.0, -0.5], 0.01).expect("valid");
+        let u: Vec<f64> = (0..15).map(|i| i as f64 * 0.1).collect();
+        let y_method = sys.dlsim(&u, None).expect("method");
+        let y_standalone = dlsim(&sys, &u, None).expect("standalone");
+        for (i, (a, b)) in y_method.iter().zip(y_standalone.iter()).enumerate() {
             assert!((a - b).abs() < 1e-12, "y[{i}]: {} vs {}", a, b);
         }
     }
