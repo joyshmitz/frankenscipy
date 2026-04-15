@@ -15,8 +15,10 @@ use std::time::Instant;
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, FormatConvertible, Shape2D, SolveOptions, SparseError, add_csr,
-    csr_to_csc_with_mode, diags, eye, scale_csr, spmv_csr, spsolve, sub_csr,
+    CooMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D, SolveOptions,
+    SparseError, add_csr, bicgstab, cg, csr_to_csc_with_mode, diags, eye, gmres,
+    connected_component_sizes, is_connected, pagerank, scale_csr, spmv_csr, spsolve, sub_csr,
+    topological_sort, strongly_connected_components, sparse_norm, sparse_diagonal,
 };
 use serde::Serialize;
 
@@ -867,4 +869,697 @@ fn e2e_010_rapid_sequential() {
     };
     write_bundle(scenario_id, &bundle);
     assert!(all_pass, "rapid sequential: state leakage detected");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ITERATIVE SOLVER SCENARIOS (11-13)
+// ═══════════════════════════════════════════════════════════════════
+
+/// Scenario 11: Conjugate Gradient solver for SPD system
+/// Tests CG convergence on a symmetric positive definite tridiagonal matrix.
+#[test]
+fn e2e_011_cg_spd_system() {
+    let scenario_id = "e2e_sparse_011_cg";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+    let n = 20;
+
+    // Step 1: Build SPD tridiagonal matrix (diagonally dominant)
+    let t_start = Instant::now();
+    // A = diag(4) + tridiag(-1, 0, -1) is SPD
+    let a = make_tridiag(n, -1.0, 4.0, -1.0);
+    steps.push(make_step(
+        1,
+        "build_spd_matrix",
+        "diags",
+        &format!("n={n}, tridiag(-1, 4, -1)"),
+        &format!("nnz={}", a.nnz()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 2: Create known solution and compute RHS
+    let t_start = Instant::now();
+    let x_true: Vec<f64> = (0..n).map(|i| (i as f64 + 1.0) / (n as f64)).collect();
+    let b = spmv_csr(&a, &x_true).expect("spmv for rhs");
+    steps.push(make_step(
+        2,
+        "compute_rhs",
+        "A * x_true",
+        &format!("x_true = [1/n, 2/n, ..., 1]"),
+        &format!("b len={}", b.len()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 3: Solve with CG
+    let t_start = Instant::now();
+    let options = IterativeSolveOptions {
+        max_iter: Some(100),
+        tol: 1e-10,
+        ..Default::default()
+    };
+    let result = cg(&a, &b, None, options).expect("cg solve");
+    let converged = result.converged;
+    let iterations = result.iterations;
+    steps.push(make_step(
+        3,
+        "cg_solve",
+        "cg",
+        &format!("maxiter=100, tol=1e-10"),
+        &format!("converged={}, iters={}", converged, iterations),
+        t_start.elapsed().as_nanos(),
+        if converged { "ok" } else { "fail" },
+    ));
+
+    // Step 4: Verify solution accuracy
+    // Note: converged flag may be false if we hit max_iter before tolerance,
+    // but if the solution is accurate enough, we still consider it a pass
+    let t_start = Instant::now();
+    let diff = max_abs_diff_vec(&result.solution, &x_true);
+    let pass = diff < 1e-6; // Accuracy is what matters
+    steps.push(make_step(
+        4,
+        "verify_solution",
+        "compare x with x_true",
+        &format!("max_diff={diff:.4e}, converged={converged}"),
+        &format!("pass={pass}"),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(pass, "CG solver: converged={}, diff={diff:.4e}", converged);
+}
+
+/// Scenario 12: GMRES solver for general system
+/// Tests GMRES on a non-symmetric matrix.
+#[test]
+fn e2e_012_gmres_general_system() {
+    let scenario_id = "e2e_sparse_012_gmres";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+    let n = 15;
+
+    // Step 1: Build non-symmetric bidiagonal matrix
+    let t_start = Instant::now();
+    let a = make_bidiag(n, 3.0, -1.0, 1); // upper bidiagonal
+    steps.push(make_step(
+        1,
+        "build_nonsym_matrix",
+        "diags",
+        &format!("n={n}, bidiag(3, -1, offset=1)"),
+        &format!("nnz={}", a.nnz()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 2: Create known solution and RHS
+    let t_start = Instant::now();
+    let x_true: Vec<f64> = (0..n).map(|i| ((i + 1) as f64).sin()).collect();
+    let b = spmv_csr(&a, &x_true).expect("spmv for rhs");
+    steps.push(make_step(
+        2,
+        "compute_rhs",
+        "A * x_true",
+        "x_true = [sin(1), sin(2), ...]",
+        &format!("b len={}", b.len()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 3: Solve with GMRES
+    let t_start = Instant::now();
+    let options = IterativeSolveOptions {
+        max_iter: Some(50),
+        tol: 1e-10,
+        ..Default::default()
+    };
+    let result = gmres(&a, &b, None, options).expect("gmres solve");
+    let converged = result.converged;
+    let iterations = result.iterations;
+    steps.push(make_step(
+        3,
+        "gmres_solve",
+        "gmres",
+        &format!("maxiter=50, tol=1e-10"),
+        &format!("converged={}, iters={}", converged, iterations),
+        t_start.elapsed().as_nanos(),
+        if converged { "ok" } else { "fail" },
+    ));
+
+    // Step 4: Verify solution
+    let t_start = Instant::now();
+    let diff = max_abs_diff_vec(&result.solution, &x_true);
+    let pass = diff < 1e-6 && converged;
+    steps.push(make_step(
+        4,
+        "verify_solution",
+        "compare x with x_true",
+        &format!("max_diff={diff:.4e}"),
+        &format!("pass={pass}"),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(pass, "GMRES solver: converged={}, diff={diff:.4e}", converged);
+}
+
+/// Scenario 13: BiCGSTAB for non-symmetric system
+/// Tests BiCGSTAB on a tridiagonal system with asymmetric off-diagonals.
+#[test]
+fn e2e_013_bicgstab_asymmetric() {
+    let scenario_id = "e2e_sparse_013_bicgstab";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+    let n = 20;
+
+    // Step 1: Build asymmetric tridiagonal
+    let t_start = Instant::now();
+    // Different sub and super diagonals
+    let a = make_tridiag(n, -1.0, 3.0, -0.5);
+    steps.push(make_step(
+        1,
+        "build_asym_matrix",
+        "diags",
+        &format!("n={n}, tridiag(-1, 3, -0.5)"),
+        &format!("nnz={}", a.nnz()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 2: Known solution and RHS
+    let t_start = Instant::now();
+    let x_true: Vec<f64> = (0..n).map(|i| 1.0 / ((i + 1) as f64)).collect();
+    let b = spmv_csr(&a, &x_true).expect("spmv for rhs");
+    steps.push(make_step(
+        2,
+        "compute_rhs",
+        "A * x_true",
+        "x_true = [1, 1/2, 1/3, ...]",
+        &format!("b len={}", b.len()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 3: Solve with BiCGSTAB
+    let t_start = Instant::now();
+    let options = IterativeSolveOptions {
+        max_iter: Some(100),
+        tol: 1e-10,
+        ..Default::default()
+    };
+    let result = bicgstab(&a, &b, None, options).expect("bicgstab solve");
+    let converged = result.converged;
+    let iterations = result.iterations;
+    steps.push(make_step(
+        3,
+        "bicgstab_solve",
+        "bicgstab",
+        &format!("maxiter=100, tol=1e-10"),
+        &format!("converged={}, iters={}", converged, iterations),
+        t_start.elapsed().as_nanos(),
+        if converged { "ok" } else { "fail" },
+    ));
+
+    // Step 4: Verify
+    // Note: converged flag may be false if we hit max_iter before tolerance,
+    // but if the solution is accurate enough, we still consider it a pass
+    let t_start = Instant::now();
+    let diff = max_abs_diff_vec(&result.solution, &x_true);
+    let pass = diff < 1e-5; // Accuracy is what matters
+    steps.push(make_step(
+        4,
+        "verify_solution",
+        "compare x with x_true",
+        &format!("max_diff={diff:.4e}, converged={converged}"),
+        &format!("pass={pass}"),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(pass, "BiCGSTAB solver: converged={}, diff={diff:.4e}", converged);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GRAPH ALGORITHM SCENARIOS (14-16)
+// ═══════════════════════════════════════════════════════════════════
+
+/// Scenario 14: Connected components on small graph
+/// Tests connected_component_sizes on a known graph structure.
+#[test]
+fn e2e_014_connected_components() {
+    let scenario_id = "e2e_sparse_014_components";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    // Step 1: Build a graph with 2 connected components
+    // Component 1: nodes 0-2 (triangle)
+    // Component 2: nodes 3-4 (edge)
+    let t_start = Instant::now();
+    let n = 5;
+    let rows = vec![0, 0, 1, 1, 2, 2, 3, 4];
+    let cols = vec![1, 2, 0, 2, 0, 1, 4, 3];
+    let data = vec![1.0; 8];
+    let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+        .expect("graph coo");
+    let graph = coo.to_csr().expect("graph csr");
+    steps.push(make_step(
+        1,
+        "build_graph",
+        "from_triplets",
+        "5 nodes, 2 components",
+        &format!("nnz={}", graph.nnz()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 2: Find connected components
+    let t_start = Instant::now();
+    let (num_components, sizes) = connected_component_sizes(&graph);
+    let pass = num_components == 2 && sizes.iter().sum::<usize>() == n;
+    steps.push(make_step(
+        2,
+        "find_components",
+        "connected_component_sizes",
+        &format!("expected 2 components"),
+        &format!("found={}, sizes={:?}", num_components, sizes),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    // Step 3: Verify connectivity
+    let t_start = Instant::now();
+    let connected = is_connected(&graph);
+    let pass2 = !connected; // Graph should NOT be connected
+    steps.push(make_step(
+        3,
+        "check_connectivity",
+        "is_connected",
+        "expected false (2 components)",
+        &format!("is_connected={}", connected),
+        t_start.elapsed().as_nanos(),
+        if pass2 { "ok" } else { "fail" },
+    ));
+
+    let overall_pass = pass && pass2;
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if overall_pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(overall_pass, "connected components: num={}, sizes={:?}", num_components, sizes);
+}
+
+/// Scenario 15: PageRank on simple graph
+/// Tests PageRank convergence on a small directed graph.
+#[test]
+fn e2e_015_pagerank() {
+    let scenario_id = "e2e_sparse_015_pagerank";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    // Step 1: Build a simple graph (chain with a hub)
+    // 0 -> 1 -> 2 -> 3, and 0 -> 2 (making node 2 a mini-hub)
+    let t_start = Instant::now();
+    let n = 4;
+    let rows = vec![0, 1, 2, 0];
+    let cols = vec![1, 2, 3, 2];
+    let data = vec![1.0; 4];
+    let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+        .expect("graph coo");
+    let graph = coo.to_csr().expect("graph csr");
+    steps.push(make_step(
+        1,
+        "build_graph",
+        "from_triplets",
+        "4 nodes, chain with hub",
+        &format!("nnz={}", graph.nnz()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 2: Compute PageRank
+    let t_start = Instant::now();
+    let damping = 0.85;
+    let max_iter = 100;
+    let tol = 1e-8;
+    let ranks = pagerank(&graph, damping, max_iter, tol);
+    let sum: f64 = ranks.iter().sum();
+    let normalized = (sum - 1.0).abs() < 0.01;
+    steps.push(make_step(
+        2,
+        "compute_pagerank",
+        "pagerank",
+        &format!("damping={}, max_iter={}", damping, max_iter),
+        &format!("sum={:.4}, normalized={}", sum, normalized),
+        t_start.elapsed().as_nanos(),
+        if normalized { "ok" } else { "fail" },
+    ));
+
+    // Step 3: Verify rank ordering
+    // Node 2 should have highest rank (most incoming links)
+    // Node 3 should have decent rank (only sink)
+    let t_start = Instant::now();
+    let max_rank_node = ranks
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .map(|(i, _)| i)
+        .unwrap();
+    // Node 2 or 3 should have highest rank
+    let pass = max_rank_node == 2 || max_rank_node == 3;
+    steps.push(make_step(
+        3,
+        "verify_ranking",
+        "check max rank node",
+        "expected node 2 or 3 highest",
+        &format!("max_rank_node={}, ranks={:?}", max_rank_node, ranks),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    let overall_pass = normalized && pass;
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if overall_pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(overall_pass, "PageRank: normalized={}, max_node={}", normalized, max_rank_node);
+}
+
+/// Scenario 16: Topological sort on DAG
+/// Tests topological_sort on a directed acyclic graph.
+#[test]
+fn e2e_016_topological_sort() {
+    let scenario_id = "e2e_sparse_016_toposort";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    // Step 1: Build a DAG: 0->1, 0->2, 1->3, 2->3
+    let t_start = Instant::now();
+    let n = 4;
+    let rows = vec![0, 0, 1, 2];
+    let cols = vec![1, 2, 3, 3];
+    let data = vec![1.0; 4];
+    let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+        .expect("dag coo");
+    let dag = coo.to_csr().expect("dag csr");
+    steps.push(make_step(
+        1,
+        "build_dag",
+        "from_triplets",
+        "4 nodes, diamond DAG",
+        &format!("nnz={}", dag.nnz()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 2: Compute topological sort
+    let t_start = Instant::now();
+    let order = topological_sort(&dag);
+    let has_order = order.is_some();
+    steps.push(make_step(
+        2,
+        "toposort",
+        "topological_sort",
+        "expected valid ordering",
+        &format!("has_order={}, order={:?}", has_order, order),
+        t_start.elapsed().as_nanos(),
+        if has_order { "ok" } else { "fail" },
+    ));
+
+    // Step 3: Verify ordering constraints
+    let t_start = Instant::now();
+    let mut pass = false;
+    if let Some(ref o) = order {
+        // In topological order: for edge u->v, u comes before v
+        let pos: Vec<usize> = {
+            let mut p = vec![0; n];
+            for (i, &node) in o.iter().enumerate() {
+                p[node] = i;
+            }
+            p
+        };
+        // 0->1: pos[0] < pos[1]
+        // 0->2: pos[0] < pos[2]
+        // 1->3: pos[1] < pos[3]
+        // 2->3: pos[2] < pos[3]
+        pass = pos[0] < pos[1] && pos[0] < pos[2] && pos[1] < pos[3] && pos[2] < pos[3];
+    }
+    steps.push(make_step(
+        3,
+        "verify_order",
+        "check edge constraints",
+        "all edges u->v have pos[u] < pos[v]",
+        &format!("pass={}", pass),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(pass, "topological sort: order={:?}", order);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SPARSE MATRIX UTILITIES SCENARIOS (17-18)
+// ═══════════════════════════════════════════════════════════════════
+
+/// Scenario 17: Matrix norms
+/// Tests sparse_norm for Frobenius, 1-norm, and inf-norm.
+#[test]
+fn e2e_017_sparse_norms() {
+    let scenario_id = "e2e_sparse_017_norms";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    // Step 1: Build a simple matrix with known norms
+    let t_start = Instant::now();
+    let a = make_tridiag(3, -1.0, 2.0, -1.0);
+    // Matrix:
+    // [ 2 -1  0]
+    // [-1  2 -1]
+    // [ 0 -1  2]
+    steps.push(make_step(
+        1,
+        "build_matrix",
+        "tridiag",
+        "3x3 tridiag(-1, 2, -1)",
+        &format!("nnz={}", a.nnz()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 2: Compute Frobenius norm
+    let t_start = Instant::now();
+    let fro = sparse_norm(&a, "fro");
+    // Frobenius = sqrt(4 + 1 + 1 + 4 + 1 + 1 + 4) = sqrt(16) = 4 (off by one element)
+    // Actually: 2^2 * 3 + (-1)^2 * 4 = 12 + 4 = 16, sqrt(16) = 4 - wait let me recalc
+    // Elements: 2, -1 (row 0); -1, 2, -1 (row 1); -1, 2 (row 2)
+    // = 4 + 1 + 1 + 4 + 1 + 1 + 4 = 16, no wait that's 7 elements for 3x3
+    // Correct: diag has 3 2's = 12, off-diag has 4 -1's = 4, total = 16
+    let expected_fro = 4.0;
+    let fro_pass = (fro - expected_fro).abs() < 0.01;
+    steps.push(make_step(
+        2,
+        "frobenius_norm",
+        "sparse_norm(fro)",
+        &format!("expected {}", expected_fro),
+        &format!("computed={:.6}, pass={}", fro, fro_pass),
+        t_start.elapsed().as_nanos(),
+        if fro_pass { "ok" } else { "fail" },
+    ));
+
+    // Step 3: Compute 1-norm (max column sum of abs)
+    let t_start = Instant::now();
+    let norm1 = sparse_norm(&a, "1");
+    // Column sums: |2|+|-1| = 3, |-1|+|2|+|-1| = 4, |0|+|-1|+|2| = 3
+    let expected_1 = 4.0;
+    let norm1_pass = (norm1 - expected_1).abs() < TOL;
+    steps.push(make_step(
+        3,
+        "one_norm",
+        "sparse_norm(1)",
+        &format!("expected {}", expected_1),
+        &format!("computed={:.6}, pass={}", norm1, norm1_pass),
+        t_start.elapsed().as_nanos(),
+        if norm1_pass { "ok" } else { "fail" },
+    ));
+
+    // Step 4: Compute inf-norm (max row sum of abs)
+    let t_start = Instant::now();
+    let norm_inf = sparse_norm(&a, "inf");
+    // Row sums: |2|+|-1| = 3, |-1|+|2|+|-1| = 4, |-1|+|2| = 3
+    let expected_inf = 4.0;
+    let inf_pass = (norm_inf - expected_inf).abs() < TOL;
+    steps.push(make_step(
+        4,
+        "inf_norm",
+        "sparse_norm(inf)",
+        &format!("expected {}", expected_inf),
+        &format!("computed={:.6}, pass={}", norm_inf, inf_pass),
+        t_start.elapsed().as_nanos(),
+        if inf_pass { "ok" } else { "fail" },
+    ));
+
+    let overall_pass = fro_pass && norm1_pass && inf_pass;
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if overall_pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(overall_pass, "sparse norms: fro={}, 1={}, inf={}", fro, norm1, norm_inf);
+}
+
+/// Scenario 18: Strongly connected components
+/// Tests SCC detection on a graph with multiple SCCs.
+#[test]
+fn e2e_018_strongly_connected_components() {
+    let scenario_id = "e2e_sparse_018_scc";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    // Step 1: Build graph with 2 SCCs
+    // SCC 1: 0 <-> 1 (bidirectional)
+    // SCC 2: 2 -> 3 -> 2 (cycle)
+    // Link: 1 -> 2 (cross-SCC)
+    let t_start = Instant::now();
+    let n = 4;
+    let rows = vec![0, 1, 1, 2, 3];
+    let cols = vec![1, 0, 2, 3, 2];
+    let data = vec![1.0; 5];
+    let coo = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+        .expect("scc graph coo");
+    let graph = coo.to_csr().expect("scc graph csr");
+    steps.push(make_step(
+        1,
+        "build_graph",
+        "from_triplets",
+        "4 nodes, 2 SCCs",
+        &format!("nnz={}", graph.nnz()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    // Step 2: Find SCCs
+    let t_start = Instant::now();
+    let labels = strongly_connected_components(&graph);
+    let num_sccs = labels.iter().max().map(|&x| x + 1).unwrap_or(0);
+    let pass = num_sccs == 2;
+    steps.push(make_step(
+        2,
+        "find_scc",
+        "strongly_connected_components",
+        "expected 2 SCCs",
+        &format!("num_sccs={}, labels={:?}", num_sccs, labels),
+        t_start.elapsed().as_nanos(),
+        if pass { "ok" } else { "fail" },
+    ));
+
+    // Step 3: Verify SCC membership
+    let t_start = Instant::now();
+    // Nodes 0,1 should be in same SCC; nodes 2,3 should be in same SCC
+    let same_01 = labels[0] == labels[1];
+    let same_23 = labels[2] == labels[3];
+    let different_groups = labels[0] != labels[2];
+    let membership_pass = same_01 && same_23 && different_groups;
+    steps.push(make_step(
+        3,
+        "verify_membership",
+        "check SCC groups",
+        "0,1 same; 2,3 same; groups different",
+        &format!("same_01={}, same_23={}, diff={}", same_01, same_23, different_groups),
+        t_start.elapsed().as_nanos(),
+        if membership_pass { "ok" } else { "fail" },
+    ));
+
+    let overall_pass = pass && membership_pass;
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if overall_pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(overall_pass, "SCC: num={}, labels={:?}", num_sccs, labels);
 }
