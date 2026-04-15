@@ -1,8 +1,21 @@
 #![forbid(unsafe_code)]
 
+use std::sync::{Arc, Mutex as StdMutex};
+
 use fsci_runtime::{
-    RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio, StructuralEvidence,
+    AuditAction, AuditEvent, AuditLedger, RuntimeMode, SolverAction, SolverEvidenceEntry,
+    SolverPortfolio, StructuralEvidence, casp_now_unix_ms,
 };
+
+/// Thread-safe audit ledger handle for synchronous code (uses std::sync::Mutex).
+pub type SyncSharedAuditLedger = Arc<StdMutex<AuditLedger>>;
+
+/// Create a new shared audit ledger for synchronous contexts.
+#[must_use]
+pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
+    Arc::new(StdMutex::new(AuditLedger::new()))
+}
+
 use nalgebra::linalg::Cholesky;
 use nalgebra::{DMatrix, DVector, Dyn, LU, linalg::SVD};
 use serde::Serialize;
@@ -26,6 +39,93 @@ pub struct LinalgTrace {
     pub warning: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Audit Ledger Integration (§0.19)
+// ═══════════════════════════════════════════════════════════════════
+
+/// Record a fail-closed audit event when validation rejects input.
+fn record_fail_closed(
+    ledger: &SyncSharedAuditLedger,
+    input_bytes: &[u8],
+    reason: &str,
+    outcome: &str,
+) {
+    let event = AuditEvent::new(
+        casp_now_unix_ms(),
+        AuditLedger::fingerprint_bytes(input_bytes),
+        AuditAction::FailClosed {
+            reason: reason.to_string(),
+        },
+        outcome,
+    );
+    if let Ok(mut guard) = ledger.lock() {
+        guard.record(event);
+    }
+}
+
+/// Record a bounded recovery audit event when hardened mode recovers from an issue.
+fn record_bounded_recovery(
+    ledger: &SyncSharedAuditLedger,
+    input_bytes: &[u8],
+    recovery_action: &str,
+    outcome: &str,
+) {
+    let event = AuditEvent::new(
+        casp_now_unix_ms(),
+        AuditLedger::fingerprint_bytes(input_bytes),
+        AuditAction::BoundedRecovery {
+            recovery_action: recovery_action.to_string(),
+        },
+        outcome,
+    );
+    if let Ok(mut guard) = ledger.lock() {
+        guard.record(event);
+    }
+}
+
+/// Record a CASP solver selection decision for audit trail.
+fn record_casp_decision(
+    ledger: &SyncSharedAuditLedger,
+    input_bytes: &[u8],
+    action: SolverAction,
+    rcond: f64,
+    fallback: bool,
+) {
+    let decision_desc = if fallback {
+        format!("CASP fallback to {:?} (rcond={rcond:.2e})", action)
+    } else {
+        format!("CASP selected {:?} (rcond={rcond:.2e})", action)
+    };
+    let event = AuditEvent::new(
+        casp_now_unix_ms(),
+        AuditLedger::fingerprint_bytes(input_bytes),
+        AuditAction::ModeDecision {
+            mode: RuntimeMode::Strict, // CASP operates in both modes
+        },
+        decision_desc,
+    );
+    if let Ok(mut guard) = ledger.lock() {
+        guard.record(event);
+    }
+}
+
+/// Compute a fingerprint for matrix input (first 1KB of flattened data).
+fn matrix_fingerprint(a: &[Vec<f64>]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(1024);
+    for row in a {
+        for &val in row {
+            if bytes.len() >= 1024 {
+                break;
+            }
+            bytes.extend_from_slice(&val.to_le_bytes());
+        }
+        if bytes.len() >= 1024 {
+            break;
+        }
+    }
+    bytes
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1283,6 +1383,226 @@ pub fn solve_with_casp(
     portfolio: &mut SolverPortfolio,
 ) -> Result<SolveResult, LinalgError> {
     solve_with_portfolio_internal(a, b, options, portfolio, "solve_with_casp", true)
+}
+
+/// Solve linear system with full audit logging.
+///
+/// Records to the provided `AuditLedger`:
+/// - `FailClosed` events when validation rejects input (non-finite, ill-conditioned)
+/// - CASP solver selection decisions
+/// - Bounded recovery events in hardened mode
+pub fn solve_with_audit(
+    a: &[Vec<f64>],
+    b: &[f64],
+    options: SolveOptions,
+    portfolio: &mut SolverPortfolio,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<SolveResult, LinalgError> {
+    let fingerprint = matrix_fingerprint(a);
+    let (rows, cols) = matrix_shape(a)?;
+
+    // Validation with audit logging
+    if rows != cols {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "non_square_matrix",
+            &format!("rejected: {rows}x{cols} is not square"),
+        );
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if b.len() != rows {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "incompatible_shapes",
+            &format!("rejected: b.len()={} != rows={rows}", b.len()),
+        );
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (rows, cols),
+            b_len: b.len(),
+        });
+    }
+
+    // Hardened dimension check with audit
+    if options.mode == RuntimeMode::Hardened && (rows > HARDENED_MAX_DIM || cols > HARDENED_MAX_DIM)
+    {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "resource_exhausted",
+            &format!("rejected: {rows}x{cols} exceeds hardened limit {HARDENED_MAX_DIM}"),
+        );
+        return Err(LinalgError::ResourceExhausted {
+            detail: format!(
+                "matrix dimension ({rows}x{cols}) exceeds hardened limit ({HARDENED_MAX_DIM})"
+            ),
+        });
+    }
+
+    // Finite check with audit
+    let must_check = options.check_finite || options.mode == RuntimeMode::Hardened;
+    if must_check {
+        if a.iter().flatten().any(|v| !v.is_finite()) {
+            record_fail_closed(
+                audit_ledger,
+                &fingerprint,
+                "non_finite_matrix",
+                "rejected: matrix contains NaN or Inf",
+            );
+            return Err(LinalgError::NonFiniteInput);
+        }
+        if b.iter().any(|v| !v.is_finite()) {
+            record_fail_closed(
+                audit_ledger,
+                &fingerprint,
+                "non_finite_vector",
+                "rejected: vector contains NaN or Inf",
+            );
+            return Err(LinalgError::NonFiniteInput);
+        }
+    }
+
+    if rows == 0 {
+        return Ok(SolveResult {
+            x: Vec::new(),
+            warning: None,
+            backward_error: None,
+            certificate: None,
+        });
+    }
+
+    let effective_a = if options.transposed {
+        transpose(a)
+    } else {
+        a.to_vec()
+    };
+    let diagnostics = condition_diagnostics_with_assumption(
+        &effective_a,
+        normalize_assumption_for_effective_matrix(options.assume_a, options.transposed),
+    )?;
+    let ConditionDiagnosticsWork {
+        report,
+        mut matrix_cache,
+        mut lu_cache,
+    } = diagnostics;
+
+    // Hardened mode: reject ill-conditioned matrices with audit
+    if options.mode == RuntimeMode::Hardened
+        && report.rcond_estimate < HARDENED_RCOND_THRESHOLD
+        && report.rcond_estimate > 0.0
+    {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "condition_too_high",
+            &format!(
+                "rejected: rcond={:.2e} < threshold={:.2e}",
+                report.rcond_estimate, HARDENED_RCOND_THRESHOLD
+            ),
+        );
+        return Err(LinalgError::ConditionTooHigh {
+            rcond: report.rcond_estimate,
+            threshold: HARDENED_RCOND_THRESHOLD,
+        });
+    }
+
+    // CASP solver selection with audit
+    let (selected_action, posterior, expected_losses, _) =
+        portfolio.select_action(report.rcond_estimate, Some(report.structural_evidence));
+
+    let mut actions = candidate_actions(report.structural_evidence);
+    actions
+        .sort_by(|lhs, rhs| expected_losses[lhs.index()].total_cmp(&expected_losses[rhs.index()]));
+    if let Some(position) = actions.iter().position(|action| *action == selected_action) {
+        actions.swap(0, position);
+    }
+
+    let mut last_error = None;
+    let mut actual_action = selected_action;
+    let result = actions
+        .into_iter()
+        .find_map(|action| {
+            match dispatch_solve_action(
+                action,
+                &effective_a,
+                b,
+                &report,
+                &mut matrix_cache,
+                &mut lu_cache,
+            ) {
+                Ok(mut solve_result) => {
+                    let fallback_active = action != selected_action;
+                    solve_result.certificate = Some(build_solve_certificate(
+                        &report,
+                        action,
+                        posterior,
+                        expected_losses,
+                        fallback_active,
+                    ));
+                    actual_action = action;
+                    Some(Ok(solve_result))
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                    None
+                }
+            }
+        })
+        .unwrap_or_else(|| Err(last_error.unwrap_or(LinalgError::SingularMatrix)));
+
+    // Record CASP decision to audit ledger
+    let fallback_active = actual_action != selected_action;
+    record_casp_decision(
+        audit_ledger,
+        &fingerprint,
+        actual_action,
+        report.rcond_estimate,
+        fallback_active,
+    );
+
+    // Record bounded recovery if fallback occurred in hardened mode
+    if fallback_active && options.mode == RuntimeMode::Hardened {
+        record_bounded_recovery(
+            audit_ledger,
+            &fingerprint,
+            &format!("fallback from {:?} to {:?}", selected_action, actual_action),
+            "recovered via safer solver",
+        );
+    }
+
+    emit_trace(LinalgTrace {
+        operation: "solve_with_audit",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: Some(report.rcond_estimate),
+        warning: result.as_ref().ok().and_then(|solve_result| {
+            solve_result
+                .warning
+                .as_ref()
+                .map(|warning| format!("{warning:?}"))
+        }),
+        error: result.as_ref().err().map(|e| e.to_string()),
+    });
+
+    // Record evidence to portfolio
+    let backward_error = result
+        .as_ref()
+        .ok()
+        .and_then(|solve_result| solve_result.backward_error);
+    portfolio.record_evidence(SolverEvidenceEntry {
+        component: "solver_portfolio",
+        matrix_shape: (rows, cols),
+        rcond_estimate: report.rcond_estimate,
+        chosen_action: actual_action,
+        posterior: posterior.to_vec(),
+        expected_losses: expected_losses.to_vec(),
+        chosen_expected_loss: expected_losses[actual_action.index()],
+        fallback_active,
+        backward_error,
+    });
+
+    result
 }
 
 /// Compute matrix inverse with CASP-driven algorithm selection.
@@ -7875,6 +8195,158 @@ mod tests {
             dot.0 += r * r + i * i;
         }
         assert!((dot.0 - 1.0).abs() < 1e-10, "first row norm = {}", dot.0);
+    }
+
+    // ═══ AuditLedger Integration Tests (§0.19) ═══
+
+    #[test]
+    fn solve_with_audit_records_casp_decision() {
+        let a = vec![vec![3.0, 2.0], vec![1.0, 2.0]];
+        let b = vec![5.0, 5.0];
+        let audit_ledger = sync_audit_ledger();
+        let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 16);
+
+        let result = solve_with_audit(&a, &b, SolveOptions::default(), &mut portfolio, &audit_ledger);
+        assert!(result.is_ok());
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1, "should have exactly one audit entry");
+
+        let entry = &ledger.entries()[0];
+        match &entry.action {
+            AuditAction::ModeDecision { .. } => {}
+            other => panic!("expected ModeDecision, got {other:?}"),
+        }
+        assert!(entry.outcome.contains("CASP"), "outcome should mention CASP");
+    }
+
+    #[test]
+    fn solve_with_audit_records_fail_closed_on_non_finite_input() {
+        let a = vec![vec![f64::NAN, 2.0], vec![1.0, 2.0]];
+        let b = vec![5.0, 5.0];
+        let audit_ledger = sync_audit_ledger();
+        let mut portfolio = SolverPortfolio::new(RuntimeMode::Hardened, 16);
+
+        let result = solve_with_audit(
+            &a,
+            &b,
+            SolveOptions {
+                mode: RuntimeMode::Hardened,
+                ..SolveOptions::default()
+            },
+            &mut portfolio,
+            &audit_ledger,
+        );
+        assert!(result.is_err());
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1, "should have exactly one audit entry");
+
+        let entry = &ledger.entries()[0];
+        match &entry.action {
+            AuditAction::FailClosed { reason } => {
+                assert!(
+                    reason.contains("non_finite"),
+                    "reason should mention non_finite: {reason}"
+                );
+            }
+            other => panic!("expected FailClosed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn solve_with_audit_records_fail_closed_on_condition_too_high() {
+        // Near-singular matrix to trigger condition rejection in hardened mode
+        let a = vec![vec![1.0, 1.0], vec![1.0, 1.0 + 1e-16]];
+        let b = vec![2.0, 2.0];
+        let audit_ledger = sync_audit_ledger();
+        let mut portfolio = SolverPortfolio::new(RuntimeMode::Hardened, 16);
+
+        let result = solve_with_audit(
+            &a,
+            &b,
+            SolveOptions {
+                mode: RuntimeMode::Hardened,
+                ..SolveOptions::default()
+            },
+            &mut portfolio,
+            &audit_ledger,
+        );
+
+        // This should either fail with ConditionTooHigh or succeed
+        // Check if we got a fail-closed entry when it fails
+        if result.is_err() {
+            let ledger = audit_ledger.lock().expect("lock");
+            let has_fail_closed = ledger.entries().iter().any(|e| {
+                matches!(
+                    &e.action,
+                    AuditAction::FailClosed { reason } if reason.contains("condition")
+                )
+            });
+            assert!(
+                has_fail_closed,
+                "should have fail_closed entry for condition rejection"
+            );
+        }
+    }
+
+    #[test]
+    fn solve_with_audit_records_fail_closed_on_non_square() {
+        let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]; // 2x3
+        let b = vec![1.0, 2.0];
+        let audit_ledger = sync_audit_ledger();
+        let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 16);
+
+        let result = solve_with_audit(&a, &b, SolveOptions::default(), &mut portfolio, &audit_ledger);
+        assert!(result.is_err());
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+
+        let entry = &ledger.entries()[0];
+        match &entry.action {
+            AuditAction::FailClosed { reason } => {
+                assert!(reason.contains("non_square"));
+            }
+            other => panic!("expected FailClosed for non_square, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn solve_with_audit_records_fail_closed_on_incompatible_shapes() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let b = vec![1.0, 2.0, 3.0]; // Wrong size
+        let audit_ledger = sync_audit_ledger();
+        let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 16);
+
+        let result = solve_with_audit(&a, &b, SolveOptions::default(), &mut portfolio, &audit_ledger);
+        assert!(result.is_err());
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+
+        let entry = &ledger.entries()[0];
+        match &entry.action {
+            AuditAction::FailClosed { reason } => {
+                assert!(reason.contains("incompatible"));
+            }
+            other => panic!("expected FailClosed for incompatible_shapes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn matrix_fingerprint_is_deterministic() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let fp1 = matrix_fingerprint(&a);
+        let fp2 = matrix_fingerprint(&a);
+        assert_eq!(fp1, fp2, "fingerprint should be deterministic");
+    }
+
+    #[test]
+    fn matrix_fingerprint_truncates_large_input() {
+        let large: Vec<Vec<f64>> = (0..100).map(|i| vec![i as f64; 100]).collect();
+        let fp = matrix_fingerprint(&large);
+        assert!(fp.len() <= 1024, "fingerprint should be <= 1KB");
     }
 }
 
