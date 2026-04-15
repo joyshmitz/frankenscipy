@@ -62,11 +62,11 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ### fsci-fft (80% coverage)
 
-**Implemented:** fft, ifft, rfft, irfft, fft2, ifft2, fftn, ifftn, rfft2, irfft2, rfftn, irfftn, dct (I-IV), idct, dst (I-IV), dctn, idctn, dstn, idstn, hilbert, hfft, ihfft, fftfreq, rfftfreq, fftshift, ifftshift, next_fast_len
+**Implemented:** fft, ifft, rfft, irfft, fft2, ifft2, fftn, ifftn, rfft2, irfft2, rfftn, irfftn, dct (I-IV), idct, dst (I-IV), dctn, idctn, dstn, idstn, hilbert, hfft, ihfft, fht, ifht, fhtoffset, fftfreq, rfftfreq, fftshift, ifftshift, next_fast_len
 
 **Missing (LOW priority):**
 - ~~`dctn`, `idctn`, `dstn`, `idstn` (N-D DCT/DST)~~ ✓ DONE
-- `fht`, `ifht` (fast Hankel transform)
+- ~~`fht`, `ifht` (fast Hankel transform)~~ ✓ DONE
 
 ### fsci-special (55% coverage)
 
