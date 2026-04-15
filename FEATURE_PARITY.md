@@ -46,11 +46,11 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ### fsci-opt (55% coverage)
 
-**Implemented:** minimize (BFGS, CG, Powell, NM, L-BFGS-B, Newton-CG, TNC, COBYLA, SLSQP, trust-ncg, trust-krylov, trust-constr, dogleg), minimize_scalar, brentq, brenth, bisect, ridder, toms748, halley, newton_scalar, secant, root_scalar, root, fsolve, broyden1, broyden2, anderson, curve_fit, least_squares, line_search, Bounds, LinearConstraint, NonlinearConstraint, differential_evolution, basinhopping, dual_annealing, shgo, pso, linprog, milp, linear_sum_assignment, approx_fprime, check_grad, cobyla, rosen, rosen_der, rosen_hess, rosen_hess_prod
+**Implemented:** minimize (BFGS, CG, Powell, NM, L-BFGS-B, Newton-CG, TNC, COBYLA, SLSQP, trust-ncg, trust-krylov, trust-constr, dogleg), minimize_scalar, brentq, brenth, bisect, ridder, toms748, halley, newton_scalar, secant, root_scalar, root, fsolve, broyden1, broyden2, anderson, lm_root, curve_fit, least_squares, line_search, Bounds, LinearConstraint, NonlinearConstraint, differential_evolution, basinhopping, dual_annealing, shgo, pso, linprog, milp, linear_sum_assignment, approx_fprime, check_grad, cobyla, rosen, rosen_der, rosen_hess, rosen_hess_prod
 
 **Missing (LOW priority):**
 - `minimize` methods: `trust-exact`, `Newton-CG` hessian product
-- Root: ~~`broyden2`~~ ✓ DONE, ~~`anderson`~~ ✓ DONE, `hybr`, `lm`
+- Root: ~~`broyden2`~~ ✓ DONE, ~~`anderson`~~ ✓ DONE, `hybr`, ~~`lm`~~ ✓ DONE
 - ~~Utilities: `rosen` family test functions~~ ✓ DONE
 
 ### fsci-integrate (80% coverage)

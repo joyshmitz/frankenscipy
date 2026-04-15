@@ -1090,6 +1090,12 @@ pub enum MultivariateRootMethod {
     Hybr,
     /// Broyden's first method (quasi-Newton with approximate Jacobian updates).
     Broyden1,
+    /// Broyden's second ("bad") method with approximate inverse Jacobian.
+    Broyden2,
+    /// Anderson acceleration (DIIS mixing).
+    Anderson,
+    /// Levenberg-Marquardt algorithm (damped least squares).
+    Lm,
 }
 
 /// Options for multivariate root finding.
@@ -1114,8 +1120,12 @@ impl Default for MultivariateRootOptions {
 ///
 /// Matches `scipy.optimize.root(fun, x0, method)`.
 ///
-/// Supports method="hybr" (Newton with finite-difference Jacobian) and
-/// method="broyden1" (Broyden quasi-Newton with approximate Jacobian updates).
+/// Supports:
+/// - method="hybr" (Powell's hybrid: Newton with finite-difference Jacobian)
+/// - method="broyden1" (Broyden's first quasi-Newton method)
+/// - method="broyden2" (Broyden's second "bad" method)
+/// - method="anderson" (Anderson acceleration/DIIS mixing)
+/// - method="lm" (Levenberg-Marquardt damped least squares)
 pub fn root<F>(
     func: F,
     x0: &[f64],
@@ -1127,6 +1137,9 @@ where
     match options.method {
         MultivariateRootMethod::Hybr => fsolve(func, x0),
         MultivariateRootMethod::Broyden1 => broyden1(func, x0, options.tol, options.max_iter),
+        MultivariateRootMethod::Broyden2 => broyden2(func, x0, options.tol, options.max_iter),
+        MultivariateRootMethod::Anderson => anderson(func, x0, options.tol, options.max_iter, 5, 1.0),
+        MultivariateRootMethod::Lm => lm_root(func, x0, options.tol, options.max_iter),
     }
 }
 
@@ -1512,6 +1525,197 @@ where
     })
 }
 
+/// Levenberg-Marquardt algorithm for root finding.
+///
+/// Matches `scipy.optimize.root(method='lm')`.
+///
+/// The Levenberg-Marquardt algorithm is a damped least-squares method that
+/// combines Gauss-Newton and gradient descent. It solves:
+///
+/// (J^T J + λI) dx = -J^T F(x)
+///
+/// where λ is an adaptive damping parameter. When λ is small, this approaches
+/// the Gauss-Newton method; when λ is large, it approaches gradient descent.
+///
+/// # Arguments
+/// * `func` - Function F(x) whose root is sought
+/// * `x0` - Initial guess
+/// * `tol` - Convergence tolerance on ||F(x)||
+/// * `maxiter` - Maximum iterations
+pub fn lm_root<F>(
+    func: F,
+    x0: &[f64],
+    tol: f64,
+    maxiter: usize,
+) -> Result<MultivariateRootResult, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = x0.len();
+    if n == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "x0 must not be empty".to_string(),
+        });
+    }
+
+    let eps = 1e-8; // Finite difference step
+    let mut lambda = 1e-3; // Initial damping parameter
+    let lambda_up = 10.0; // Factor to increase lambda on bad step
+    let lambda_down = 0.1; // Factor to decrease lambda on good step
+
+    let mut x = x0.to_vec();
+    let mut fx = func(&x);
+    let mut nfev = 1usize;
+
+    for iteration in 0..maxiter {
+        let norm_fx: f64 = fx.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if norm_fx < tol {
+            return Ok(MultivariateRootResult {
+                x,
+                fun: fx,
+                converged: true,
+                message: "lm converged".to_string(),
+                iterations: iteration,
+                function_calls: nfev,
+            });
+        }
+
+        // Compute Jacobian via finite differences
+        let mut jac = vec![vec![0.0; n]; n];
+        for j in 0..n {
+            let h = eps * (1.0 + x[j].abs());
+            let original = x[j];
+            x[j] += h;
+            let fx_plus = func(&x);
+            x[j] = original;
+            nfev += 1;
+            for i in 0..n {
+                jac[i][j] = (fx_plus[i] - fx[i]) / h;
+            }
+        }
+
+        // Compute J^T J and J^T F
+        let mut jtj = vec![vec![0.0; n]; n];
+        let mut jtf = vec![0.0; n];
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    jtj[i][j] += jac[k][i] * jac[k][j];
+                }
+            }
+            for k in 0..n {
+                jtf[i] += jac[k][i] * fx[k];
+            }
+        }
+
+        // Try steps with adaptive damping
+        let mut step_accepted = false;
+        for _ in 0..10 {
+            // Build (J^T J + λI)
+            let mut lhs = jtj.clone();
+            for i in 0..n {
+                lhs[i][i] += lambda;
+            }
+
+            // Solve (J^T J + λI) dx = -J^T F
+            let neg_jtf: Vec<f64> = jtf.iter().map(|v| -v).collect();
+            let dx = match solve_lm_system(&lhs, &neg_jtf) {
+                Some(d) => d,
+                None => {
+                    lambda *= lambda_up;
+                    continue;
+                }
+            };
+
+            // Trial step
+            let x_trial: Vec<f64> = x.iter().zip(&dx).map(|(&xi, &di)| xi + di).collect();
+            let fx_trial = func(&x_trial);
+            nfev += 1;
+
+            let trial_norm: f64 = fx_trial.iter().map(|v| v * v).sum::<f64>().sqrt();
+
+            if trial_norm < norm_fx {
+                // Good step: accept and decrease damping
+                x = x_trial;
+                fx = fx_trial;
+                lambda *= lambda_down;
+                lambda = lambda.max(1e-10); // Prevent underflow
+                step_accepted = true;
+                break;
+            } else {
+                // Bad step: increase damping and retry
+                lambda *= lambda_up;
+                lambda = lambda.min(1e10); // Prevent overflow
+            }
+        }
+
+        if !step_accepted {
+            // Failed to find an improving step; continue with current x
+            // but give it one more iteration chance
+        }
+    }
+
+    Ok(MultivariateRootResult {
+        x,
+        fun: fx,
+        converged: false,
+        message: format!("lm failed to converge within {maxiter} iterations"),
+        iterations: maxiter,
+        function_calls: nfev,
+    })
+}
+
+/// Solve a linear system for LM using Cholesky-like decomposition.
+fn solve_lm_system(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+    let n = b.len();
+    if n == 0 {
+        return Some(vec![]);
+    }
+
+    // Use Gaussian elimination with partial pivoting (same as solve_dense)
+    let mut aug: Vec<Vec<f64>> = a
+        .iter()
+        .zip(b.iter())
+        .map(|(row, &bi)| {
+            let mut r = row.clone();
+            r.push(bi);
+            r
+        })
+        .collect();
+
+    for col in 0..n {
+        // Partial pivoting
+        let max_row = (col..n)
+            .max_by(|&i, &j| aug[i][col].abs().total_cmp(&aug[j][col].abs()))
+            .unwrap_or(col);
+        aug.swap(col, max_row);
+
+        if aug[col][col].abs() < 1e-15 {
+            return None;
+        }
+
+        let pivot = aug[col][col];
+        for row in (col + 1)..n {
+            let factor = aug[row][col] / pivot;
+            for j in col..=n {
+                aug[row][j] -= factor * aug[col][j];
+            }
+        }
+    }
+
+    // Back substitution
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut sum = aug[i][n];
+        for j in (i + 1)..n {
+            sum -= aug[i][j] * x[j];
+        }
+        x[i] = sum / aug[i][i];
+    }
+
+    Some(x)
+}
+
 /// Solve a small linear system Ax = b using Gaussian elimination with partial pivoting.
 fn solve_small_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     let n = b.len();
@@ -1580,7 +1784,8 @@ mod tests {
     use serde::Serialize;
 
     use super::{
-        MultivariateRootMethod, MultivariateRootOptions, anderson, broyden1, broyden2, fsolve, root,
+        MultivariateRootMethod, MultivariateRootOptions, anderson, broyden1, broyden2, fsolve,
+        lm_root, root,
     };
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, halley, newton_scalar,
@@ -2485,5 +2690,68 @@ mod tests {
             "root = {}",
             result.root
         );
+    }
+
+    // --- Levenberg-Marquardt tests ---
+
+    #[test]
+    fn lm_root_linear_system() {
+        // x + y = 3, x - y = 1 → x=2, y=1
+        let f = |x: &[f64]| vec![x[0] + x[1] - 3.0, x[0] - x[1] - 1.0];
+        let result = lm_root(f, &[0.0, 0.0], 1e-8, 200).expect("lm_root linear");
+        assert!(result.converged, "lm_root failed: {}", result.message);
+        assert!(
+            (result.x[0] - 2.0).abs() < 1e-6,
+            "x = {}, expected 2.0",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 1.0).abs() < 1e-6,
+            "y = {}, expected 1.0",
+            result.x[1]
+        );
+    }
+
+    #[test]
+    fn lm_root_rosenbrock_2d() {
+        // Rosenbrock residuals: f1 = 1-x, f2 = 10(y-x²) → root at (1,1)
+        let f = |x: &[f64]| vec![1.0 - x[0], 10.0 * (x[1] - x[0] * x[0])];
+        let result = lm_root(f, &[0.0, 0.0], 1e-8, 500).expect("lm_root rosenbrock");
+        assert!(result.converged, "lm_root failed: {}", result.message);
+        assert!(
+            (result.x[0] - 1.0).abs() < 1e-5,
+            "x = {}, expected 1.0",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 1.0).abs() < 1e-5,
+            "y = {}, expected 1.0",
+            result.x[1]
+        );
+    }
+
+    #[test]
+    fn lm_root_via_root_interface() {
+        // Test that lm is accessible via the root() dispatcher
+        let f = |x: &[f64]| vec![x[0] * x[0] - 2.0];
+        let opts = MultivariateRootOptions {
+            method: MultivariateRootMethod::Lm,
+            tol: 1e-10,
+            max_iter: 100,
+        };
+        let result = root(f, &[1.0], opts).expect("root with lm");
+        assert!(result.converged, "root lm failed: {}", result.message);
+        assert!(
+            (result.x[0].abs() - std::f64::consts::SQRT_2).abs() < 1e-6,
+            "x = {}, expected ±sqrt(2)",
+            result.x[0]
+        );
+    }
+
+    #[test]
+    fn lm_root_empty_x0_rejected() {
+        let f = |_x: &[f64]| vec![];
+        let err = lm_root(f, &[], 1e-10, 200).expect_err("empty");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
     }
 }
