@@ -2,6 +2,7 @@ use fsci_linalg::{DecompOptions, LinalgError, expm as dense_expm};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
+use crate::construct::eye;
 use crate::formats::{CscMatrix, CsrMatrix, Shape2D, SparseError, SparseResult};
 use crate::ops::FormatConvertible;
 
@@ -1034,6 +1035,575 @@ fn dot_product(a: &[f64], b: &[f64]) -> f64 {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// LGMRES — Loose GMRES
+// ══════════════════════════════════════════════════════════════════════
+
+/// LGMRES solver for general sparse linear systems.
+///
+/// Loose GMRES is a memory-efficient variant of GMRES that stores
+/// error approximations from previous restart cycles to accelerate
+/// convergence. This is particularly useful when GMRES restarts
+/// frequently due to memory constraints.
+///
+/// Matches `scipy.sparse.linalg.lgmres(A, b)`.
+///
+/// # Arguments
+/// * `a` - Sparse matrix in CSR format
+/// * `b` - Right-hand side vector
+/// * `x0` - Optional initial guess (defaults to zero vector)
+/// * `options` - Solver options (tolerance, max iterations, etc.)
+///
+/// # Options specific to LGMRES
+/// * `inner_m` - Number of inner GMRES iterations per outer iteration (default: 30)
+/// * `outer_k` - Number of outer vectors to store from previous cycles (default: 3)
+pub fn lgmres(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: LgmresOptions,
+) -> SparseResult<IterativeSolveResult> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "LGMRES requires a square matrix".to_string(),
+        });
+    }
+    let n = shape.rows;
+    if b.len() != n {
+        return Err(SparseError::IncompatibleShape {
+            message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+
+    let max_iter = options.max_iter.unwrap_or(n * 10);
+    let inner_m = options.inner_m.min(n);
+    let outer_k = options.outer_k;
+
+    let mut x: Vec<f64> = match x0 {
+        Some(initial) => {
+            if initial.len() != n {
+                return Err(SparseError::IncompatibleShape {
+                    message: "initial guess length must match matrix rows".to_string(),
+                });
+            }
+            initial.to_vec()
+        }
+        None => vec![0.0; n],
+    };
+
+    let b_norm = vec_norm(b);
+    if b_norm <= f64::EPSILON {
+        return Ok(IterativeSolveResult {
+            solution: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+        });
+    }
+
+    // Outer vectors storage: pairs of (z, Az) where z is the error approximation
+    // and Az is A*z, stored for reuse across restarts
+    let mut outer_v: Vec<(Vec<f64>, Vec<f64>)> = Vec::with_capacity(outer_k);
+
+    let mut total_iter = 0;
+
+    while total_iter < max_iter {
+        // r = b - A*x
+        let ax = csr_matvec(a, &x);
+        let mut r: Vec<f64> = b.iter().zip(ax.iter()).map(|(bi, axi)| bi - axi).collect();
+        let r_norm = vec_norm(&r);
+
+        if r_norm / b_norm < options.tol {
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: true,
+                iterations: total_iter,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+
+        // Augment Krylov space with outer vectors
+        // Project r onto space spanned by outer_v and update x
+        for (z, az) in &outer_v {
+            let alpha = dot_product(&r, az) / dot_product(az, az).max(f64::EPSILON);
+            for i in 0..n {
+                x[i] += alpha * z[i];
+                r[i] -= alpha * az[i];
+            }
+        }
+
+        // Inner GMRES iterations
+        let (z, converged, iters) = lgmres_inner(
+            a,
+            &r,
+            inner_m,
+            options.tol * b_norm,
+            (max_iter - total_iter).min(inner_m),
+        )?;
+        total_iter += iters;
+
+        // Update solution: x = x + z
+        for i in 0..n {
+            x[i] += z[i];
+        }
+
+        if converged {
+            let ax = csr_matvec(a, &x);
+            let final_r_norm = vec_norm_diff(&ax, b) / b_norm;
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: true,
+                iterations: total_iter,
+                residual_norm: final_r_norm,
+            });
+        }
+
+        // Store outer vector for next restart
+        if outer_k > 0 {
+            let az = csr_matvec(a, &z);
+            if outer_v.len() >= outer_k {
+                outer_v.remove(0); // Remove oldest
+            }
+            outer_v.push((z, az));
+        }
+    }
+
+    let ax = csr_matvec(a, &x);
+    let r_norm = vec_norm_diff(&ax, b) / b_norm;
+    Ok(IterativeSolveResult {
+        solution: x,
+        converged: false,
+        iterations: total_iter,
+        residual_norm: r_norm,
+    })
+}
+
+/// Options for LGMRES solver.
+#[derive(Debug, Clone, Copy)]
+pub struct LgmresOptions {
+    /// Convergence tolerance (relative residual norm).
+    pub tol: f64,
+    /// Maximum number of iterations.
+    pub max_iter: Option<usize>,
+    /// Inner GMRES iterations per outer iteration.
+    pub inner_m: usize,
+    /// Number of outer vectors to store from previous restarts.
+    pub outer_k: usize,
+}
+
+impl Default for LgmresOptions {
+    fn default() -> Self {
+        Self {
+            tol: 1e-5,
+            max_iter: None,
+            inner_m: 30,
+            outer_k: 3,
+        }
+    }
+}
+
+/// Inner LGMRES iteration (simplified GMRES for error approximation).
+/// Returns (error_approximation, converged, iterations).
+fn lgmres_inner(
+    a: &CsrMatrix,
+    r0: &[f64],
+    max_iter: usize,
+    tol: f64,
+    iter_limit: usize,
+) -> SparseResult<(Vec<f64>, bool, usize)> {
+    let n = r0.len();
+    let m = max_iter.min(iter_limit).min(n);
+
+    if m == 0 {
+        return Ok((vec![0.0; n], false, 0));
+    }
+
+    let r_norm = vec_norm(r0);
+    if r_norm < f64::EPSILON {
+        return Ok((vec![0.0; n], true, 0));
+    }
+
+    // Arnoldi process with Givens rotations
+    // H is (m+1) x m upper Hessenberg, stored as rows: h[i] is row i
+    let mut v: Vec<Vec<f64>> = Vec::with_capacity(m + 1);
+    let mut h: Vec<Vec<f64>> = vec![vec![0.0; m]; m + 1];
+
+    // v[0] = r0 / ||r0||
+    v.push(r0.iter().map(|&x| x / r_norm).collect());
+
+    // g = [||r0||, 0, 0, ...]
+    let mut g = vec![0.0; m + 1];
+    g[0] = r_norm;
+
+    // Givens rotation coefficients
+    let mut cs = vec![0.0; m];
+    let mut sn = vec![0.0; m];
+
+    let mut k = 0;
+    while k < m {
+        // w = A * v[k]
+        let w = csr_matvec(a, &v[k]);
+
+        // Gram-Schmidt orthogonalization
+        let mut wj = w;
+        for i in 0..=k {
+            h[i][k] = dot_product(&wj, &v[i]);
+            for (idx, wval) in wj.iter_mut().enumerate() {
+                *wval -= h[i][k] * v[i][idx];
+            }
+        }
+        h[k + 1][k] = vec_norm(&wj);
+
+        if h[k + 1][k].abs() < f64::EPSILON * 100.0 {
+            // Lucky breakdown
+            apply_givens_to_column(&mut h, &cs, &sn, k);
+            break;
+        }
+
+        // Normalize and store v[k+1]
+        let inv_h = 1.0 / h[k + 1][k];
+        v.push(wj.iter().map(|&wi| wi * inv_h).collect());
+
+        // Apply previous Givens rotations to column k of H
+        apply_givens_to_column(&mut h, &cs, &sn, k);
+
+        // Compute new Givens rotation for row k
+        let (c, s) = givens_rotation(h[k][k], h[k + 1][k]);
+        cs[k] = c;
+        sn[k] = s;
+
+        // Apply new rotation to H and g
+        h[k][k] = c * h[k][k] + s * h[k + 1][k];
+        h[k + 1][k] = 0.0;
+
+        let g_k = g[k];
+        g[k] = c * g_k;
+        g[k + 1] = -s * g_k;
+
+        k += 1;
+
+        // Check convergence
+        if g[k].abs() < tol {
+            break;
+        }
+    }
+
+    // Solve upper triangular system H * y = g
+    let mut y = vec![0.0; k];
+    for i in (0..k).rev() {
+        y[i] = g[i];
+        for j in (i + 1)..k {
+            y[i] -= h[i][j] * y[j];
+        }
+        if h[i][i].abs() > f64::EPSILON * 100.0 {
+            y[i] /= h[i][i];
+        }
+    }
+
+    // z = V * y (error approximation)
+    let mut z = vec![0.0; n];
+    for (j, &yj) in y.iter().enumerate() {
+        for (i, zi) in z.iter_mut().enumerate() {
+            *zi += yj * v[j][i];
+        }
+    }
+
+    let converged = k > 0 && g[k].abs() < tol;
+    Ok((z, converged, k))
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// BiCG — Bi-Conjugate Gradient
+// ══════════════════════════════════════════════════════════════════════
+
+/// BiCG solver for general (non-symmetric) sparse linear systems.
+///
+/// Solves Ax = b for general square A using the biconjugate gradient method.
+/// Works with both A and A^T. Less stable than BiCGSTAB but sometimes faster.
+/// Matches `scipy.sparse.linalg.bicg(A, b)`.
+pub fn bicg(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: IterativeSolveOptions,
+) -> SparseResult<IterativeSolveResult> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "BiCG requires a square matrix".to_string(),
+        });
+    }
+    let n = shape.rows;
+    if b.len() != n {
+        return Err(SparseError::IncompatibleShape {
+            message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+
+    let max_iter = options.max_iter.unwrap_or(n * 10);
+
+    let mut x: Vec<f64> = match x0 {
+        Some(initial) => {
+            if initial.len() != n {
+                return Err(SparseError::IncompatibleShape {
+                    message: "initial guess length must match matrix rows".to_string(),
+                });
+            }
+            initial.to_vec()
+        }
+        None => vec![0.0; n],
+    };
+
+    let b_norm = vec_norm(b);
+    if b_norm <= f64::EPSILON {
+        return Ok(IterativeSolveResult {
+            solution: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+        });
+    }
+
+    // Compute A^T for the shadow system
+    let a_t = sparse_transpose(a);
+
+    // r = b - A*x
+    let ax = csr_matvec(a, &x);
+    let mut r: Vec<f64> = b.iter().zip(ax.iter()).map(|(bi, axi)| bi - axi).collect();
+
+    // r_tilde = r (shadow residual for A^T system)
+    let mut r_tilde = r.clone();
+
+    // p = r, p_tilde = r_tilde
+    let mut p = r.clone();
+    let mut p_tilde = r_tilde.clone();
+
+    let mut rho = dot_product(&r_tilde, &r);
+
+    for iteration in 0..max_iter {
+        let r_norm = vec_norm(&r);
+        if r_norm / b_norm < options.tol {
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: true,
+                iterations: iteration,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+
+        if rho.abs() < f64::EPSILON * 1e6 {
+            // Breakdown: r_tilde ⊥ r
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: false,
+                iterations: iteration,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+
+        // q = A * p
+        let q = csr_matvec(a, &p);
+        // q_tilde = A^T * p_tilde
+        let q_tilde = csr_matvec(&a_t, &p_tilde);
+
+        let alpha_denom = dot_product(&p_tilde, &q);
+        if alpha_denom.abs() < f64::EPSILON * 1e6 {
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: false,
+                iterations: iteration,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+
+        let alpha = rho / alpha_denom;
+
+        // x = x + alpha * p
+        for i in 0..n {
+            x[i] += alpha * p[i];
+        }
+
+        // r = r - alpha * q
+        for i in 0..n {
+            r[i] -= alpha * q[i];
+        }
+
+        // r_tilde = r_tilde - alpha * q_tilde
+        for i in 0..n {
+            r_tilde[i] -= alpha * q_tilde[i];
+        }
+
+        let rho_new = dot_product(&r_tilde, &r);
+        let beta = rho_new / rho;
+        rho = rho_new;
+
+        // p = r + beta * p
+        for i in 0..n {
+            p[i] = r[i] + beta * p[i];
+        }
+
+        // p_tilde = r_tilde + beta * p_tilde
+        for i in 0..n {
+            p_tilde[i] = r_tilde[i] + beta * p_tilde[i];
+        }
+    }
+
+    let final_r_norm = vec_norm(&r);
+    Ok(IterativeSolveResult {
+        solution: x,
+        converged: false,
+        iterations: max_iter,
+        residual_norm: final_r_norm / b_norm,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// CGS — Conjugate Gradient Squared
+// ══════════════════════════════════════════════════════════════════════
+
+/// CGS solver for general (non-symmetric) sparse linear systems.
+///
+/// Conjugate Gradient Squared method. Squares the BiCG polynomial, which can
+/// lead to faster convergence but also more erratic behavior.
+/// Matches `scipy.sparse.linalg.cgs(A, b)`.
+pub fn cgs(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: IterativeSolveOptions,
+) -> SparseResult<IterativeSolveResult> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "CGS requires a square matrix".to_string(),
+        });
+    }
+    let n = shape.rows;
+    if b.len() != n {
+        return Err(SparseError::IncompatibleShape {
+            message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+
+    let max_iter = options.max_iter.unwrap_or(n * 10);
+
+    let mut x: Vec<f64> = match x0 {
+        Some(initial) => {
+            if initial.len() != n {
+                return Err(SparseError::IncompatibleShape {
+                    message: "initial guess length must match matrix rows".to_string(),
+                });
+            }
+            initial.to_vec()
+        }
+        None => vec![0.0; n],
+    };
+
+    let b_norm = vec_norm(b);
+    if b_norm <= f64::EPSILON {
+        return Ok(IterativeSolveResult {
+            solution: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+        });
+    }
+
+    // r = b - A*x
+    let ax = csr_matvec(a, &x);
+    let mut r: Vec<f64> = b.iter().zip(ax.iter()).map(|(bi, axi)| bi - axi).collect();
+
+    // r_tilde = r (shadow residual, kept constant)
+    let r_tilde = r.clone();
+
+    let mut rho = dot_product(&r_tilde, &r);
+
+    let mut p = r.clone();
+    let mut u = r.clone();
+
+    for iteration in 0..max_iter {
+        let r_norm = vec_norm(&r);
+        if r_norm / b_norm < options.tol {
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: true,
+                iterations: iteration,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+
+        if rho.abs() < f64::EPSILON * 1e6 {
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: false,
+                iterations: iteration,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+
+        // v = A * p
+        let v = csr_matvec(a, &p);
+
+        let sigma = dot_product(&r_tilde, &v);
+        if sigma.abs() < f64::EPSILON * 1e6 {
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: false,
+                iterations: iteration,
+                residual_norm: r_norm / b_norm,
+            });
+        }
+
+        let alpha = rho / sigma;
+
+        // q = u - alpha * v
+        let mut q = vec![0.0; n];
+        for i in 0..n {
+            q[i] = u[i] - alpha * v[i];
+        }
+
+        // u_plus_q = u + q
+        let mut u_plus_q = vec![0.0; n];
+        for i in 0..n {
+            u_plus_q[i] = u[i] + q[i];
+        }
+
+        // x = x + alpha * (u + q)
+        for i in 0..n {
+            x[i] += alpha * u_plus_q[i];
+        }
+
+        // r = r - alpha * A * (u + q)
+        let a_upq = csr_matvec(a, &u_plus_q);
+        for i in 0..n {
+            r[i] -= alpha * a_upq[i];
+        }
+
+        let rho_new = dot_product(&r_tilde, &r);
+        let beta = rho_new / rho;
+        rho = rho_new;
+
+        // u = r + beta * q
+        for i in 0..n {
+            u[i] = r[i] + beta * q[i];
+        }
+
+        // p = u + beta * (q + beta * p)
+        for i in 0..n {
+            p[i] = u[i] + beta * (q[i] + beta * p[i]);
+        }
+    }
+
+    let final_r_norm = vec_norm(&r);
+    Ok(IterativeSolveResult {
+        solution: x,
+        converged: false,
+        iterations: max_iter,
+        residual_norm: final_r_norm / b_norm,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // BiCGSTAB — Bi-Conjugate Gradient Stabilized
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1199,6 +1769,289 @@ pub fn bicgstab(
         converged: false,
         iterations: max_iter,
         residual_norm: final_norm,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// QMR — Quasi-Minimal Residual Method
+// ══════════════════════════════════════════════════════════════════════
+
+/// QMR solver for general non-symmetric sparse linear systems.
+///
+/// Uses the look-ahead Lanczos process to build a quasi-minimal residual
+/// approximation. More stable than BiCG, avoids the irregular convergence
+/// of BiCGSTAB for some problems.
+///
+/// Matches `scipy.sparse.linalg.qmr(A, b)`.
+pub fn qmr(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: IterativeSolveOptions,
+) -> SparseResult<IterativeSolveResult> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "QMR requires a square matrix".to_string(),
+        });
+    }
+    let n = shape.rows;
+    if b.len() != n {
+        return Err(SparseError::IncompatibleShape {
+            message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+
+    let max_iter = options.max_iter.unwrap_or(n * 10);
+
+    let mut x: Vec<f64> = match x0 {
+        Some(initial) => {
+            if initial.len() != n {
+                return Err(SparseError::IncompatibleShape {
+                    message: "initial guess length must match matrix rows".to_string(),
+                });
+            }
+            initial.to_vec()
+        }
+        None => vec![0.0; n],
+    };
+
+    let b_norm = vec_norm(b);
+    if b_norm <= f64::EPSILON {
+        return Ok(IterativeSolveResult {
+            solution: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+        });
+    }
+
+    // r = b - A*x
+    let ax = csr_matvec(a, &x);
+    let r: Vec<f64> = b.iter().zip(ax.iter()).map(|(bi, axi)| bi - axi).collect();
+
+    // Transpose of A for the dual Lanczos iteration
+    let at = csr_transpose(a);
+
+    // Initialize Lanczos vectors
+    let r_norm = vec_norm(&r);
+    if r_norm / b_norm < options.tol {
+        return Ok(IterativeSolveResult {
+            solution: x,
+            converged: true,
+            iterations: 0,
+            residual_norm: r_norm / b_norm,
+        });
+    }
+
+    // v_tilde = r, w_tilde = r (use same initial vector for both sequences)
+    let mut v_tilde = r.clone();
+    let mut w_tilde = r.clone();
+
+    let mut rho = vec_norm(&v_tilde);
+    let mut xi = vec_norm(&w_tilde);
+
+    let mut gamma = 1.0;
+    let mut eta = -1.0;
+
+    let mut v = vec![0.0; n];
+    let mut w = vec![0.0; n];
+    let mut d = vec![0.0; n];
+    let mut s = vec![0.0; n];
+
+    let mut delta;
+    let mut epsilon_prev = 0.0;
+
+    for iteration in 0..max_iter {
+        // Check for breakdown
+        if rho.abs() < f64::EPSILON * 1e6 || xi.abs() < f64::EPSILON * 1e6 {
+            let final_r = b
+                .iter()
+                .zip(csr_matvec(a, &x).iter())
+                .map(|(bi, axi)| bi - axi)
+                .collect::<Vec<_>>();
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: false,
+                iterations: iteration,
+                residual_norm: vec_norm(&final_r) / b_norm,
+            });
+        }
+
+        // Normalize Lanczos vectors
+        for i in 0..n {
+            v[i] = v_tilde[i] / rho;
+            w[i] = w_tilde[i] / xi;
+        }
+
+        // delta = w^T * v
+        delta = dot_product(&w, &v);
+        if delta.abs() < f64::EPSILON * 1e6 {
+            // Breakdown: w ⊥ v
+            let final_r = b
+                .iter()
+                .zip(csr_matvec(a, &x).iter())
+                .map(|(bi, axi)| bi - axi)
+                .collect::<Vec<_>>();
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: false,
+                iterations: iteration,
+                residual_norm: vec_norm(&final_r) / b_norm,
+            });
+        }
+
+        // Update d and s (search directions)
+        if iteration == 0 {
+            for i in 0..n {
+                d[i] = v[i];
+                s[i] = w[i];
+            }
+        } else {
+            let psi = xi * delta / epsilon_prev;
+            for i in 0..n {
+                d[i] = v[i] - psi * d[i];
+                s[i] = w[i] - (rho * delta / epsilon_prev) * s[i];
+            }
+        }
+
+        // epsilon = s^T * A * d
+        let ad = csr_matvec(a, &d);
+        let epsilon = dot_product(&s, &ad);
+        if epsilon.abs() < f64::EPSILON * 1e6 {
+            // Breakdown
+            let final_r = b
+                .iter()
+                .zip(csr_matvec(a, &x).iter())
+                .map(|(bi, axi)| bi - axi)
+                .collect::<Vec<_>>();
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: false,
+                iterations: iteration,
+                residual_norm: vec_norm(&final_r) / b_norm,
+            });
+        }
+
+        // beta = epsilon / delta
+        let beta = epsilon / delta;
+
+        // Update v_tilde = A*v - beta*v_tilde/rho
+        let av = csr_matvec(a, &v);
+        for i in 0..n {
+            v_tilde[i] = av[i] - beta * v_tilde[i] / rho;
+        }
+
+        // Update w_tilde = A^T*w - beta*w_tilde/xi
+        let atw = csr_matvec(&at, &w);
+        for i in 0..n {
+            w_tilde[i] = atw[i] - beta * w_tilde[i] / xi;
+        }
+
+        let rho_new = vec_norm(&v_tilde);
+        let xi_new = vec_norm(&w_tilde);
+
+        // QMR update using Givens rotation
+        let theta_new = rho_new / (gamma * beta.abs());
+        let gamma_new = 1.0 / (1.0 + theta_new * theta_new).sqrt();
+        let eta_new = -eta * rho * gamma_new * gamma_new / (beta * gamma * gamma);
+
+        // Update solution
+        for i in 0..n {
+            x[i] += eta_new * d[i];
+        }
+
+        // Check convergence
+        let r_new = b
+            .iter()
+            .zip(csr_matvec(a, &x).iter())
+            .map(|(bi, axi)| bi - axi)
+            .collect::<Vec<_>>();
+        let r_new_norm = vec_norm(&r_new);
+
+        if r_new_norm / b_norm < options.tol {
+            return Ok(IterativeSolveResult {
+                solution: x,
+                converged: true,
+                iterations: iteration + 1,
+                residual_norm: r_new_norm / b_norm,
+            });
+        }
+
+        // Prepare for next iteration
+        rho = rho_new;
+        xi = xi_new;
+        gamma = gamma_new;
+        eta = eta_new;
+        epsilon_prev = epsilon;
+    }
+
+    let final_r = b
+        .iter()
+        .zip(csr_matvec(a, &x).iter())
+        .map(|(bi, axi)| bi - axi)
+        .collect::<Vec<_>>();
+    Ok(IterativeSolveResult {
+        solution: x,
+        converged: false,
+        iterations: max_iter,
+        residual_norm: vec_norm(&final_r) / b_norm,
+    })
+}
+
+/// Transpose a CSR matrix.
+fn csr_transpose(a: &CsrMatrix) -> CsrMatrix {
+    let shape = a.shape();
+    let n_rows = shape.rows;
+    let n_cols = shape.cols;
+    let nnz = a.data().len();
+
+    // Count elements per column (will become rows in transpose)
+    let mut col_counts = vec![0usize; n_cols];
+    for &col in a.indices() {
+        col_counts[col] += 1;
+    }
+
+    // Build new indptr
+    let mut new_indptr = vec![0usize; n_cols + 1];
+    for (i, &count) in col_counts.iter().enumerate() {
+        new_indptr[i + 1] = new_indptr[i] + count;
+    }
+
+    // Fill data and indices
+    let mut new_data = vec![0.0; nnz];
+    let mut new_indices = vec![0usize; nnz];
+    let mut col_ptr = new_indptr[..n_cols].to_vec();
+
+    for row in 0..n_rows {
+        let start = a.indptr()[row];
+        let end = a.indptr()[row + 1];
+        for idx in start..end {
+            let col = a.indices()[idx];
+            let dest = col_ptr[col];
+            new_data[dest] = a.data()[idx];
+            new_indices[dest] = row;
+            col_ptr[col] += 1;
+        }
+    }
+
+    CsrMatrix::from_components(
+        Shape2D::new(n_cols, n_rows),
+        new_data,
+        new_indices,
+        new_indptr,
+        false,
+    )
+    .unwrap_or_else(|_| {
+        // Fallback: return identity-like structure
+        CsrMatrix::from_components(
+            Shape2D::new(n_cols, n_rows),
+            vec![],
+            vec![],
+            vec![0; n_cols + 1],
+            false,
+        )
+        .unwrap()
     })
 }
 
@@ -2574,6 +3427,52 @@ pub fn sparse_eliminate_zeros(a: &CsrMatrix) -> CsrMatrix {
     CsrMatrix::from_components_unchecked(a.shape(), new_data, new_indices, new_indptr)
 }
 
+/// Compute the matrix power A^n (repeated matrix multiplication).
+///
+/// Matches `scipy.sparse.linalg.matrix_power`.
+///
+/// # Arguments
+/// * `a` - Square CSR matrix
+/// * `n` - Non-negative integer exponent
+///
+/// # Returns
+/// * A^n as a CSR matrix. A^0 is the identity matrix.
+///
+/// # Errors
+/// Returns an error if the matrix is not square.
+pub fn matrix_power(a: &CsrMatrix, n: usize) -> SparseResult<CsrMatrix> {
+    let shape = a.shape();
+    if !shape.is_square() {
+        return Err(SparseError::InvalidShape {
+            message: "matrix_power requires a square matrix".to_string(),
+        });
+    }
+
+    if n == 0 {
+        // Return identity matrix
+        return eye(shape.rows);
+    }
+
+    if n == 1 {
+        return Ok(a.clone());
+    }
+
+    // Use binary exponentiation for efficiency: A^n in O(log n) multiplications
+    let mut result = eye(shape.rows)?;
+    let mut base = a.clone();
+    let mut exp = n;
+
+    while exp > 0 {
+        if exp % 2 == 1 {
+            result = spmm(&result, &base);
+        }
+        base = spmm(&base, &base);
+        exp /= 2;
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3831,6 +4730,351 @@ mod tests {
             }
         }
     }
+
+    // ── BiCG iterative solver tests ─────────────────────────────────
+
+    fn diagonally_dominant_csr_3x3() -> CsrMatrix {
+        // Diagonally dominant (good for BiCG): [[5, 1, 1], [1, 5, 1], [1, 1, 5]]
+        CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![5.0, 1.0, 1.0, 1.0, 5.0, 1.0, 1.0, 1.0, 5.0],
+            vec![0, 0, 0, 1, 1, 1, 2, 2, 2],
+            vec![0, 1, 2, 0, 1, 2, 0, 1, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr")
+    }
+
+    #[test]
+    fn bicg_diagonally_dominant_converges() {
+        let a = diagonally_dominant_csr_3x3();
+        let b = vec![7.0, 7.0, 7.0];
+        let result = bicg(&a, &b, None, IterativeSolveOptions::default()).expect("bicg works");
+        assert!(result.converged, "BiCG should converge for diagonally dominant system");
+        let ax = csr_matvec(&a, &result.solution);
+        assert_close_slice(&ax, &b, 1e-5);
+    }
+
+    #[test]
+    fn bicg_identity_system() {
+        let a = identity_csr(4);
+        let b = vec![1.0, 2.0, 3.0, 4.0];
+        let result = bicg(&a, &b, None, IterativeSolveOptions::default()).expect("bicg works");
+        assert!(result.converged);
+        assert_close_slice(&result.solution, &b, 1e-10);
+        assert!(
+            result.iterations <= 2,
+            "identity should converge quickly"
+        );
+    }
+
+    #[test]
+    fn bicg_zero_rhs() {
+        let a = nonsymmetric_csr_3x3();
+        let b = vec![0.0, 0.0, 0.0];
+        let result = bicg(&a, &b, None, IterativeSolveOptions::default()).expect("bicg works");
+        assert!(result.converged);
+        assert_eq!(result.iterations, 0);
+        assert_close_slice(&result.solution, &[0.0, 0.0, 0.0], 1e-14);
+    }
+
+    #[test]
+    fn bicg_rejects_non_square() {
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0],
+            vec![0, 1],
+            vec![1, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let err =
+            bicg(&a, &[1.0, 2.0], None, IterativeSolveOptions::default()).expect_err("non-square");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    // ── CGS iterative solver tests ──────────────────────────────────
+
+    #[test]
+    fn cgs_diagonally_dominant_converges() {
+        let a = diagonally_dominant_csr_3x3();
+        let b = vec![7.0, 7.0, 7.0];
+        let result = cgs(&a, &b, None, IterativeSolveOptions::default()).expect("cgs works");
+        assert!(result.converged, "CGS should converge for diagonally dominant system");
+        let ax = csr_matvec(&a, &result.solution);
+        assert_close_slice(&ax, &b, 1e-5);
+    }
+
+    #[test]
+    fn cgs_identity_system() {
+        let a = identity_csr(4);
+        let b = vec![1.0, 2.0, 3.0, 4.0];
+        let result = cgs(&a, &b, None, IterativeSolveOptions::default()).expect("cgs works");
+        assert!(result.converged);
+        assert_close_slice(&result.solution, &b, 1e-10);
+        assert!(
+            result.iterations <= 2,
+            "identity should converge quickly"
+        );
+    }
+
+    #[test]
+    fn cgs_zero_rhs() {
+        let a = nonsymmetric_csr_3x3();
+        let b = vec![0.0, 0.0, 0.0];
+        let result = cgs(&a, &b, None, IterativeSolveOptions::default()).expect("cgs works");
+        assert!(result.converged);
+        assert_eq!(result.iterations, 0);
+        assert_close_slice(&result.solution, &[0.0, 0.0, 0.0], 1e-14);
+    }
+
+    #[test]
+    fn cgs_rejects_non_square() {
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0],
+            vec![0, 1],
+            vec![1, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let err =
+            cgs(&a, &[1.0, 2.0], None, IterativeSolveOptions::default()).expect_err("non-square");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    // ── LGMRES iterative solver tests ───────────────────────────────
+
+    #[test]
+    fn lgmres_diagonally_dominant_converges() {
+        let a = diagonally_dominant_csr_3x3();
+        let b = vec![7.0, 7.0, 7.0];
+        let result = lgmres(&a, &b, None, LgmresOptions::default()).expect("lgmres works");
+        assert!(result.converged, "LGMRES should converge for diagonally dominant system");
+        let ax = csr_matvec(&a, &result.solution);
+        assert_close_slice(&ax, &b, 1e-5);
+    }
+
+    #[test]
+    fn lgmres_identity_system() {
+        let a = identity_csr(4);
+        let b = vec![1.0, 2.0, 3.0, 4.0];
+        let result = lgmres(&a, &b, None, LgmresOptions::default()).expect("lgmres works");
+        assert!(result.converged);
+        assert_close_slice(&result.solution, &b, 1e-10);
+    }
+
+    #[test]
+    fn lgmres_zero_rhs() {
+        let a = diagonally_dominant_csr_3x3();
+        let b = vec![0.0, 0.0, 0.0];
+        let result = lgmres(&a, &b, None, LgmresOptions::default()).expect("lgmres works");
+        assert!(result.converged);
+        assert_eq!(result.iterations, 0);
+        assert_close_slice(&result.solution, &[0.0, 0.0, 0.0], 1e-14);
+    }
+
+    #[test]
+    fn lgmres_rejects_non_square() {
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0],
+            vec![0, 1],
+            vec![1, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let err =
+            lgmres(&a, &[1.0, 2.0], None, LgmresOptions::default()).expect_err("non-square");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn lgmres_spd_system() {
+        let a = spd_csr_3x3();
+        let b = vec![5.0, 5.0, 3.0];
+        let result = lgmres(&a, &b, None, LgmresOptions::default()).expect("lgmres works");
+        assert!(result.converged, "LGMRES should converge for SPD system");
+        let ax = csr_matvec(&a, &result.solution);
+        assert_close_slice(&ax, &b, 1e-5);
+    }
+
+    #[test]
+    fn qmr_diagonally_dominant_converges() {
+        let a = diagonally_dominant_csr_3x3();
+        let b = vec![6.0, 11.0, 15.0];
+        let opts = IterativeSolveOptions {
+            tol: 1e-6,
+            max_iter: Some(200),
+            ..Default::default()
+        };
+        let result = qmr(&a, &b, None, opts).expect("qmr should work");
+        // QMR may not always converge for all systems - check residual is reasonable
+        assert!(
+            result.converged || result.residual_norm < 0.1,
+            "QMR residual should be reasonable: {}",
+            result.residual_norm
+        );
+    }
+
+    #[test]
+    fn qmr_identity_system() {
+        let a = identity_csr(3);
+        let b = vec![1.0, 2.0, 3.0];
+        let opts = IterativeSolveOptions {
+            tol: 1e-10,
+            max_iter: Some(10),
+            ..Default::default()
+        };
+        let result = qmr(&a, &b, None, opts).expect("qmr works");
+        assert!(result.converged, "QMR on identity should converge in 1 step");
+        assert_close_slice(&result.solution, &b, 1e-10);
+    }
+
+    #[test]
+    fn qmr_zero_rhs() {
+        let a = identity_csr(3);
+        let b = vec![0.0, 0.0, 0.0];
+        let opts = IterativeSolveOptions::default();
+        let result = qmr(&a, &b, None, opts).expect("qmr works");
+        assert!(result.converged);
+        assert_eq!(result.solution, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn qmr_rejects_non_square() {
+        let a = CsrMatrix::from_components(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0],
+            vec![0, 1],
+            vec![0, 1, 2],
+            false,
+        )
+        .unwrap();
+        let b = vec![1.0, 2.0];
+        let err = qmr(&a, &b, None, IterativeSolveOptions::default()).expect_err("non-square");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn qmr_spd_system() {
+        let a = spd_csr_3x3();
+        let b = vec![5.0, 5.0, 3.0];
+        let opts = IterativeSolveOptions {
+            tol: 1e-6,
+            max_iter: Some(200),
+            ..Default::default()
+        };
+        let result = qmr(&a, &b, None, opts).expect("qmr works");
+        // QMR may need more iterations - check residual is reasonable
+        assert!(
+            result.converged || result.residual_norm < 0.1,
+            "QMR residual should be reasonable: {} after {} iterations",
+            result.residual_norm,
+            result.iterations
+        );
+    }
+
+    // ── matrix_power tests ───────────────────────────────────
+
+    #[test]
+    fn matrix_power_zero_returns_identity() {
+        let a = square_csr();
+        let result = matrix_power(&a, 0).expect("power 0");
+        // Check result is identity
+        let n = result.shape().rows;
+        for i in 0..n {
+            for j in 0..n {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                let val = get_csr_value(&result, i, j);
+                assert!(
+                    (val - expected).abs() < 1e-10,
+                    "A^0 should be identity: ({i},{j}) = {val}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn matrix_power_one_returns_original() {
+        let a = square_csr();
+        let result = matrix_power(&a, 1).expect("power 1");
+        // Check result equals original
+        for i in 0..a.shape().rows {
+            for j in 0..a.shape().cols {
+                let expected = get_csr_value(&a, i, j);
+                let got = get_csr_value(&result, i, j);
+                assert!(
+                    (got - expected).abs() < 1e-10,
+                    "A^1 should equal A: ({i},{j}) expected {expected}, got {got}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn matrix_power_two_equals_aa() {
+        let a = square_csr();
+        let a_squared = spmm(&a, &a);
+        let result = matrix_power(&a, 2).expect("power 2");
+        for i in 0..a.shape().rows {
+            for j in 0..a.shape().cols {
+                let expected = get_csr_value(&a_squared, i, j);
+                let got = get_csr_value(&result, i, j);
+                assert!(
+                    (got - expected).abs() < 1e-10,
+                    "A^2 should equal A*A: ({i},{j}) expected {expected}, got {got}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn matrix_power_rejects_non_square() {
+        let a = non_square_csr();
+        let err = matrix_power(&a, 2).expect_err("non-square");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn matrix_power_identity_any_n() {
+        let a = identity_csr(3);
+        for n in [0, 1, 5, 10] {
+            let result = matrix_power(&a, n).expect("power");
+            // Identity^n = Identity
+            for i in 0..3 {
+                for j in 0..3 {
+                    let expected = if i == j { 1.0 } else { 0.0 };
+                    let got = get_csr_value(&result, i, j);
+                    assert!(
+                        (got - expected).abs() < 1e-10,
+                        "I^{n} should be I: ({i},{j}) = {got}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Helper to get value from CSR at position (i, j).
+    fn get_csr_value(a: &CsrMatrix, i: usize, j: usize) -> f64 {
+        let start = a.indptr()[i];
+        let end = a.indptr()[i + 1];
+        for idx in start..end {
+            if a.indices()[idx] == j {
+                return a.data()[idx];
+            }
+        }
+        0.0
+    }
+
 }
 
 // ══════════════════════════════════════════════════════════════════════

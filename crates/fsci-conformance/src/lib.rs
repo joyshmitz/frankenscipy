@@ -22,7 +22,10 @@ use fsci_arrayapi::{
     ones as arrayapi_ones, reshape as arrayapi_reshape, result_type as arrayapi_result_type,
     transpose as arrayapi_transpose, zeros as arrayapi_zeros,
 };
-use fsci_integrate::{ToleranceValue, validate_tol};
+use fsci_integrate::{
+    ToleranceValue, validate_tol, trapezoid, simpson, cumulative_trapezoid,
+    cumulative_simpson, romb, newton_cotes, fixed_quad, gauss_legendre,
+};
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
     SolveOptions, TriangularSolveOptions, TriangularTranspose, det, inv, lstsq, pinv, solve,
@@ -2445,6 +2448,7 @@ pub struct ClusterExpected {
 #[derive(Debug)]
 enum ClusterObserved {
     Scalar(f64),
+    Boolean(bool),
     Array1D(Vec<f64>),
     Array2D(Vec<Vec<f64>>),
     Labels(Vec<usize>),
@@ -2463,6 +2467,10 @@ fn execute_cluster_case(case: &ClusterCase) -> ClusterObserved {
         "inconsistent" => execute_inconsistent(case),
         "silhouette_score" => execute_silhouette_score(case),
         "adjusted_rand_score" => execute_adjusted_rand_score(case),
+        "is_valid_linkage" => execute_is_valid_linkage(case),
+        "is_monotonic" => execute_is_monotonic(case),
+        "leaves_list" => execute_leaves_list(case),
+        "num_obs_linkage" => execute_num_obs_linkage(case),
         _ => ClusterObserved::Error(format!("unknown function: {}", case.function)),
     }
 }
@@ -2580,6 +2588,43 @@ fn execute_adjusted_rand_score(case: &ClusterCase) -> ClusterObserved {
     ClusterObserved::Scalar(fsci_cluster::adjusted_rand_score(&labels_true, &labels_pred))
 }
 
+fn execute_is_valid_linkage(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let z: Vec<[f64; 4]> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse Z: {e}")),
+    };
+    ClusterObserved::Boolean(fsci_cluster::is_valid_linkage(&z))
+}
+
+fn execute_is_monotonic(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let z: Vec<[f64; 4]> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse Z: {e}")),
+    };
+    ClusterObserved::Boolean(fsci_cluster::is_monotonic(&z))
+}
+
+fn execute_leaves_list(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let z: Vec<[f64; 4]> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse Z: {e}")),
+    };
+    let leaves = fsci_cluster::leaves_list(&z);
+    ClusterObserved::Labels(leaves)
+}
+
+fn execute_num_obs_linkage(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let z: Vec<[f64; 4]> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse Z: {e}")),
+    };
+    ClusterObserved::Scalar(fsci_cluster::num_obs_linkage(&z) as f64)
+}
+
 fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (bool, String) {
     let atol = case.expected.atol.unwrap_or(1e-10);
     let rtol = case.expected.rtol.unwrap_or(1e-10);
@@ -2677,6 +2722,16 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                 }
             }
             (true, "vq_result matched".to_string())
+        }
+        (&"boolean", ClusterObserved::Boolean(got)) => {
+            let exp = case.expected.value.as_ref()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if exp == *got {
+                (true, format!("boolean matched: {got}"))
+            } else {
+                (false, format!("boolean mismatch: expected {exp}, got {got}"))
+            }
         }
         (_, ClusterObserved::Error(e)) => (false, format!("execution error: {e}")),
         _ => (false, format!("unexpected observed type for kind '{}'", case.expected.kind)),
@@ -3475,6 +3530,740 @@ pub fn run_signal_packet(
     for case in &fixture.cases {
         let observed = execute_signal_case(case);
         let (passed, message) = compare_signal_outcome(case, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Stats Conformance Harness
+// ══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct StatsPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<StatsCase>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StatsCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: String,
+    pub function: String,
+    pub args: Vec<serde_json::Value>,
+    pub expected: StatsExpected,
+}
+
+impl StatsCase {
+    pub fn case_id(&self) -> &str {
+        &self.case_id
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StatsExpected {
+    pub kind: String,
+    pub value: Option<f64>,
+    // describe_result fields
+    pub nobs: Option<usize>,
+    pub minmax: Option<[f64; 2]>,
+    pub mean: Option<f64>,
+    pub variance: Option<f64>,
+    pub skewness: Option<f64>,
+    pub kurtosis: Option<f64>,
+    // correlation_result fields
+    pub statistic: Option<f64>,
+    pub pvalue: Option<f64>,
+    // linregress_result fields
+    pub slope: Option<f64>,
+    pub intercept: Option<f64>,
+    pub rvalue: Option<f64>,
+    pub stderr: Option<f64>,
+    // array output
+    #[serde(default)]
+    pub array_value: Option<Vec<f64>>,
+    pub atol: Option<f64>,
+    pub rtol: Option<f64>,
+    #[serde(default)]
+    pub contract_ref: String,
+}
+
+#[derive(Debug)]
+enum StatsObserved {
+    Scalar(f64),
+    Array(Vec<f64>),
+    Describe {
+        nobs: usize,
+        minmax: [f64; 2],
+        mean: f64,
+        variance: f64,
+        skewness: f64,
+        kurtosis: f64,
+    },
+    Correlation { statistic: f64, pvalue: f64 },
+    Linregress {
+        slope: f64,
+        intercept: f64,
+        rvalue: f64,
+        pvalue: f64,
+        stderr: f64,
+    },
+    Ttest { statistic: f64, pvalue: f64 },
+    Goodness { statistic: f64, pvalue: f64 },
+    Error(String),
+}
+
+fn execute_stats_case(case: &StatsCase) -> StatsObserved {
+    match case.function.as_str() {
+        "describe" => execute_stats_describe(case),
+        "skew" => execute_stats_skew(case),
+        "kurtosis" => execute_stats_kurtosis(case),
+        "pearsonr" => execute_stats_pearsonr(case),
+        "spearmanr" => execute_stats_spearmanr(case),
+        "linregress" => execute_stats_linregress(case),
+        "ttest_1samp" => execute_stats_ttest_1samp(case),
+        "ks_2samp" => execute_stats_ks_2samp(case),
+        "zscore" => execute_stats_zscore(case),
+        "sem" => execute_stats_sem(case),
+        "iqr" => execute_stats_iqr(case),
+        "moment" => execute_stats_moment(case),
+        "variation" => execute_stats_variation(case),
+        "entropy" => execute_stats_entropy(case),
+        "shapiro" => execute_stats_shapiro(case),
+        _ => StatsObserved::Error(format!("unknown function: {}", case.function)),
+    }
+}
+
+fn execute_stats_describe(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    let result = fsci_stats::describe(&data);
+    StatsObserved::Describe {
+        nobs: result.nobs,
+        minmax: [result.minmax.0, result.minmax.1],
+        mean: result.mean,
+        variance: result.variance,
+        skewness: result.skewness,
+        kurtosis: result.kurtosis,
+    }
+}
+
+fn execute_stats_skew(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    StatsObserved::Scalar(fsci_stats::skew(&data))
+}
+
+fn execute_stats_kurtosis(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    StatsObserved::Scalar(fsci_stats::kurtosis(&data))
+}
+
+fn execute_stats_pearsonr(case: &StatsCase) -> StatsObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse x: {e}")),
+    };
+    let y: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse y: {e}")),
+    };
+    let result = fsci_stats::pearsonr(&x, &y);
+    StatsObserved::Correlation {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+    }
+}
+
+fn execute_stats_spearmanr(case: &StatsCase) -> StatsObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse x: {e}")),
+    };
+    let y: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse y: {e}")),
+    };
+    let result = fsci_stats::spearmanr(&x, &y);
+    StatsObserved::Correlation {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+    }
+}
+
+fn execute_stats_linregress(case: &StatsCase) -> StatsObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse x: {e}")),
+    };
+    let y: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse y: {e}")),
+    };
+    let result = fsci_stats::linregress(&x, &y);
+    StatsObserved::Linregress {
+        slope: result.slope,
+        intercept: result.intercept,
+        rvalue: result.rvalue,
+        pvalue: result.pvalue,
+        stderr: result.stderr,
+    }
+}
+
+fn execute_stats_ttest_1samp(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    let popmean: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse popmean: {e}")),
+    };
+    let result = fsci_stats::ttest_1samp(&data, popmean);
+    StatsObserved::Ttest {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+    }
+}
+
+fn execute_stats_ks_2samp(case: &StatsCase) -> StatsObserved {
+    let data1: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data1: {e}")),
+    };
+    let data2: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data2: {e}")),
+    };
+    let result = fsci_stats::ks_2samp(&data1, &data2);
+    StatsObserved::Goodness {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+    }
+}
+
+fn execute_stats_zscore(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    StatsObserved::Array(fsci_stats::zscore(&data))
+}
+
+fn execute_stats_sem(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    StatsObserved::Scalar(fsci_stats::sem(&data))
+}
+
+fn execute_stats_iqr(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    StatsObserved::Scalar(fsci_stats::iqr(&data))
+}
+
+fn execute_stats_moment(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    let k: u32 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse k: {e}")),
+    };
+    StatsObserved::Scalar(fsci_stats::moment(&data, k))
+}
+
+fn execute_stats_variation(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    StatsObserved::Scalar(fsci_stats::variation(&data))
+}
+
+fn execute_stats_entropy(case: &StatsCase) -> StatsObserved {
+    let pk: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse pk: {e}")),
+    };
+    StatsObserved::Scalar(fsci_stats::entropy(&pk, None))
+}
+
+fn execute_stats_shapiro(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    let result = fsci_stats::shapiro(&data);
+    StatsObserved::Goodness {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+    }
+}
+
+fn compare_stats_outcome(case: &StatsCase, observed: &StatsObserved) -> (bool, String) {
+    let atol = case.expected.atol.unwrap_or(1e-10);
+    let rtol = case.expected.rtol.unwrap_or(1e-10);
+
+    fn close(a: f64, b: f64, atol: f64, rtol: f64) -> bool {
+        let diff = (a - b).abs();
+        diff <= atol + rtol * b.abs()
+    }
+
+    match (case.expected.kind.as_str(), observed) {
+        ("scalar", StatsObserved::Scalar(got)) => {
+            let expected = case.expected.value.unwrap_or(0.0);
+            if close(*got, expected, atol, rtol) {
+                (true, format!("scalar match: {got}"))
+            } else {
+                (false, format!("scalar mismatch: got {got}, expected {expected}"))
+            }
+        }
+        ("array", StatsObserved::Array(got)) => {
+            // Try array_value first, fall back to trying value as Option<Vec<f64>>
+            let expected: Vec<f64> = case.expected.array_value.clone().unwrap_or_default();
+            if got.len() != expected.len() {
+                return (false, format!("length mismatch: got {}, expected {}", got.len(), expected.len()));
+            }
+            for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
+                if !close(g, e, atol, rtol) {
+                    return (false, format!("array[{i}] mismatch: got {g}, expected {e}"));
+                }
+            }
+            (true, format!("array match ({} elements)", got.len()))
+        }
+        ("describe_result", StatsObserved::Describe { nobs, minmax, mean, variance, skewness, kurtosis }) => {
+            let exp_nobs = case.expected.nobs.unwrap_or(0);
+            let exp_minmax = case.expected.minmax.unwrap_or([0.0, 0.0]);
+            let exp_mean = case.expected.mean.unwrap_or(0.0);
+            let exp_variance = case.expected.variance.unwrap_or(0.0);
+            let exp_skewness = case.expected.skewness.unwrap_or(0.0);
+            let exp_kurtosis = case.expected.kurtosis.unwrap_or(0.0);
+
+            if *nobs != exp_nobs {
+                return (false, format!("nobs mismatch: got {nobs}, expected {exp_nobs}"));
+            }
+            if !close(minmax[0], exp_minmax[0], atol, rtol) || !close(minmax[1], exp_minmax[1], atol, rtol) {
+                return (false, format!("minmax mismatch: got {:?}, expected {:?}", minmax, exp_minmax));
+            }
+            if !close(*mean, exp_mean, atol, rtol) {
+                return (false, format!("mean mismatch: got {mean}, expected {exp_mean}"));
+            }
+            if !close(*variance, exp_variance, atol, rtol) {
+                return (false, format!("variance mismatch: got {variance}, expected {exp_variance}"));
+            }
+            if !close(*skewness, exp_skewness, atol, rtol) {
+                return (false, format!("skewness mismatch: got {skewness}, expected {exp_skewness}"));
+            }
+            if !close(*kurtosis, exp_kurtosis, atol, rtol) {
+                return (false, format!("kurtosis mismatch: got {kurtosis}, expected {exp_kurtosis}"));
+            }
+            (true, "describe_result match".to_string())
+        }
+        ("correlation_result", StatsObserved::Correlation { statistic, pvalue }) => {
+            let exp_statistic = case.expected.statistic.unwrap_or(0.0);
+            let exp_pvalue = case.expected.pvalue.unwrap_or(0.0);
+            if !close(*statistic, exp_statistic, atol, rtol) {
+                return (false, format!("statistic mismatch: got {statistic}, expected {exp_statistic}"));
+            }
+            if !close(*pvalue, exp_pvalue, atol, rtol) {
+                return (false, format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"));
+            }
+            (true, "correlation_result match".to_string())
+        }
+        ("linregress_result", StatsObserved::Linregress { slope, intercept, rvalue, pvalue, stderr }) => {
+            let exp_slope = case.expected.slope.unwrap_or(0.0);
+            let exp_intercept = case.expected.intercept.unwrap_or(0.0);
+            let exp_rvalue = case.expected.rvalue.unwrap_or(0.0);
+            let exp_pvalue = case.expected.pvalue.unwrap_or(0.0);
+            let exp_stderr = case.expected.stderr.unwrap_or(0.0);
+            if !close(*slope, exp_slope, atol, rtol) {
+                return (false, format!("slope mismatch: got {slope}, expected {exp_slope}"));
+            }
+            if !close(*intercept, exp_intercept, atol, rtol) {
+                return (false, format!("intercept mismatch: got {intercept}, expected {exp_intercept}"));
+            }
+            if !close(*rvalue, exp_rvalue, atol, rtol) {
+                return (false, format!("rvalue mismatch: got {rvalue}, expected {exp_rvalue}"));
+            }
+            if !close(*pvalue, exp_pvalue, atol, rtol) {
+                return (false, format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"));
+            }
+            if !close(*stderr, exp_stderr, atol, rtol) {
+                return (false, format!("stderr mismatch: got {stderr}, expected {exp_stderr}"));
+            }
+            (true, "linregress_result match".to_string())
+        }
+        ("ttest_result", StatsObserved::Ttest { statistic, pvalue }) => {
+            let exp_statistic = case.expected.statistic.unwrap_or(0.0);
+            let exp_pvalue = case.expected.pvalue.unwrap_or(0.0);
+            if !close(*statistic, exp_statistic, atol, rtol) {
+                return (false, format!("statistic mismatch: got {statistic}, expected {exp_statistic}"));
+            }
+            if !close(*pvalue, exp_pvalue, atol, rtol) {
+                return (false, format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"));
+            }
+            (true, "ttest_result match".to_string())
+        }
+        ("goodness_result", StatsObserved::Goodness { statistic, pvalue }) => {
+            let exp_statistic = case.expected.statistic.unwrap_or(0.0);
+            let exp_pvalue = case.expected.pvalue.unwrap_or(0.0);
+            if !close(*statistic, exp_statistic, atol, rtol) {
+                return (false, format!("statistic mismatch: got {statistic}, expected {exp_statistic}"));
+            }
+            if !close(*pvalue, exp_pvalue, atol, rtol) {
+                return (false, format!("pvalue mismatch: got {pvalue}, expected {exp_pvalue}"));
+            }
+            (true, "goodness_result match".to_string())
+        }
+        (kind, StatsObserved::Error(msg)) => {
+            (false, format!("error executing {kind}: {msg}"))
+        }
+        (kind, observed) => {
+            (false, format!("kind/observed mismatch: expected {kind}, got {observed:?}"))
+        }
+    }
+}
+
+pub fn run_stats_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: StatsPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_stats_case(case);
+        let (passed, message) = compare_stats_outcome(case, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IntegrateCore harness (FSCI-P2C-013)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct IntegratePacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<IntegrateCase>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IntegrateCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: String,
+    pub function: String,
+    pub args: IntegrateArgs,
+    pub expected: IntegrateExpected,
+}
+
+impl IntegrateCase {
+    pub fn case_id(&self) -> &str {
+        &self.case_id
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IntegrateArgs {
+    pub y: Option<Vec<f64>>,
+    pub x: Option<Vec<f64>>,
+    pub dx: Option<f64>,
+    pub n: Option<usize>,
+    pub func: Option<String>,
+    pub a: Option<f64>,
+    pub b: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IntegrateExpected {
+    pub kind: String,
+    pub value: Option<serde_json::Value>,
+    pub atol: Option<f64>,
+    pub rtol: Option<f64>,
+    #[serde(default)]
+    pub contract_ref: String,
+}
+
+#[derive(Debug)]
+enum IntegrateObserved {
+    Scalar(f64),
+    Array(Vec<f64>),
+    Error(String),
+}
+
+fn execute_integrate_case(case: &IntegrateCase) -> IntegrateObserved {
+    match case.function.as_str() {
+        "trapezoid" => execute_integrate_trapezoid(case),
+        "simpson" => execute_integrate_simpson(case),
+        "cumulative_trapezoid" => execute_integrate_cumulative_trapezoid(case),
+        "cumulative_simpson" => execute_integrate_cumulative_simpson(case),
+        "romb" => execute_integrate_romb(case),
+        "newton_cotes" => execute_integrate_newton_cotes(case),
+        "fixed_quad" => execute_integrate_fixed_quad(case),
+        "gauss_legendre" => execute_integrate_gauss_legendre(case),
+        _ => IntegrateObserved::Error(format!("unknown function: {}", case.function)),
+    }
+}
+
+fn execute_integrate_trapezoid(case: &IntegrateCase) -> IntegrateObserved {
+    let y = match &case.args.y {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing y".to_string()),
+    };
+    let x = match &case.args.x {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing x".to_string()),
+    };
+    match trapezoid(&y, &x) {
+        Ok(result) => IntegrateObserved::Scalar(result.integral),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn execute_integrate_simpson(case: &IntegrateCase) -> IntegrateObserved {
+    let y = match &case.args.y {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing y".to_string()),
+    };
+    let x = match &case.args.x {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing x".to_string()),
+    };
+    match simpson(&y, &x) {
+        Ok(result) => IntegrateObserved::Scalar(result.integral),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn execute_integrate_cumulative_trapezoid(case: &IntegrateCase) -> IntegrateObserved {
+    let y = match &case.args.y {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing y".to_string()),
+    };
+    let x = match &case.args.x {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing x".to_string()),
+    };
+    match cumulative_trapezoid(&y, &x) {
+        Ok(result) => IntegrateObserved::Array(result),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn execute_integrate_cumulative_simpson(case: &IntegrateCase) -> IntegrateObserved {
+    let y = match &case.args.y {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing y".to_string()),
+    };
+    let x = match &case.args.x {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing x".to_string()),
+    };
+    match cumulative_simpson(&y, &x) {
+        Ok(result) => IntegrateObserved::Array(result),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn execute_integrate_romb(case: &IntegrateCase) -> IntegrateObserved {
+    let y = match &case.args.y {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing y".to_string()),
+    };
+    let dx = case.args.dx.unwrap_or(1.0);
+    match romb(&y, dx) {
+        Ok(result) => IntegrateObserved::Scalar(result),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn execute_integrate_newton_cotes(case: &IntegrateCase) -> IntegrateObserved {
+    let n = match case.args.n {
+        Some(v) => v,
+        None => return IntegrateObserved::Error("missing n".to_string()),
+    };
+    match newton_cotes(n) {
+        Ok(weights) => IntegrateObserved::Array(weights),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn make_integrate_func(func_str: &str) -> Option<Box<dyn Fn(f64) -> f64>> {
+    match func_str {
+        "x" => Some(Box::new(|x| x)),
+        "x^2" => Some(Box::new(|x| x * x)),
+        "x^3" => Some(Box::new(|x| x * x * x)),
+        "sin(x)" => Some(Box::new(|x| x.sin())),
+        "cos(x)" => Some(Box::new(|x| x.cos())),
+        "exp(x)" => Some(Box::new(|x| x.exp())),
+        _ => None,
+    }
+}
+
+fn execute_integrate_fixed_quad(case: &IntegrateCase) -> IntegrateObserved {
+    let func_str = match &case.args.func {
+        Some(s) => s.as_str(),
+        None => return IntegrateObserved::Error("missing func".to_string()),
+    };
+    let a = match case.args.a {
+        Some(v) => v,
+        None => return IntegrateObserved::Error("missing a".to_string()),
+    };
+    let b = match case.args.b {
+        Some(v) => v,
+        None => return IntegrateObserved::Error("missing b".to_string()),
+    };
+    let n = match case.args.n {
+        Some(v) => v,
+        None => return IntegrateObserved::Error("missing n".to_string()),
+    };
+    let f = match make_integrate_func(func_str) {
+        Some(f) => f,
+        None => return IntegrateObserved::Error(format!("unknown func: {func_str}")),
+    };
+    match fixed_quad(&*f, a, b, n) {
+        Ok((integral, _)) => IntegrateObserved::Scalar(integral),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn execute_integrate_gauss_legendre(case: &IntegrateCase) -> IntegrateObserved {
+    let func_str = match &case.args.func {
+        Some(s) => s.as_str(),
+        None => return IntegrateObserved::Error("missing func".to_string()),
+    };
+    let a = match case.args.a {
+        Some(v) => v,
+        None => return IntegrateObserved::Error("missing a".to_string()),
+    };
+    let b = match case.args.b {
+        Some(v) => v,
+        None => return IntegrateObserved::Error("missing b".to_string()),
+    };
+    let n = match case.args.n {
+        Some(v) => v,
+        None => return IntegrateObserved::Error("missing n".to_string()),
+    };
+    let f = match make_integrate_func(func_str) {
+        Some(f) => f,
+        None => return IntegrateObserved::Error(format!("unknown func: {func_str}")),
+    };
+    let result = gauss_legendre(&*f, a, b, n);
+    IntegrateObserved::Scalar(result)
+}
+
+fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved) -> (bool, String) {
+    let atol = case.expected.atol.unwrap_or(1e-12);
+    let rtol = case.expected.rtol.unwrap_or(1e-12);
+
+    fn close(a: f64, b: f64, atol: f64, rtol: f64) -> bool {
+        (a - b).abs() <= atol + rtol * b.abs()
+    }
+
+    match (case.expected.kind.as_str(), observed) {
+        ("scalar", IntegrateObserved::Scalar(got)) => {
+            let expected = match &case.expected.value {
+                Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+                _ => return (false, "expected scalar value missing".to_string()),
+            };
+            if close(*got, expected, atol, rtol) {
+                (true, format!("scalar match: {got}"))
+            } else {
+                (false, format!("scalar mismatch: got {got}, expected {expected}"))
+            }
+        }
+        ("array", IntegrateObserved::Array(got)) => {
+            let expected: Vec<f64> = match &case.expected.value {
+                Some(serde_json::Value::Array(arr)) => {
+                    arr.iter()
+                        .filter_map(|v| v.as_f64())
+                        .collect()
+                }
+                _ => return (false, "expected array value missing".to_string()),
+            };
+            if got.len() != expected.len() {
+                return (false, format!("array length mismatch: got {}, expected {}", got.len(), expected.len()));
+            }
+            for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
+                if !close(g, e, atol, rtol) {
+                    return (false, format!("array mismatch at index {i}: got {g}, expected {e}"));
+                }
+            }
+            (true, format!("array match ({} elements)", got.len()))
+        }
+        (_, IntegrateObserved::Error(msg)) => {
+            (false, format!("error: {msg}"))
+        }
+        (kind, observed) => {
+            (false, format!("kind/observed mismatch: expected {kind}, got {observed:?}"))
+        }
+    }
+}
+
+pub fn run_integrate_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: IntegratePacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = execute_integrate_case(case);
+        let (passed, message) = compare_integrate_outcome(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
             passed,
@@ -6443,11 +7232,15 @@ pub enum PacketFamily {
     Spatial,
     /// P2C-011: Signal processing (filters, windows, transforms)
     Signal,
+    /// P2C-012: Statistics (descriptive, hypothesis tests, correlations)
+    Stats,
+    /// P2C-013: Integration (quadrature, ODE solvers)
+    IntegrateCore,
 }
 
 impl PacketFamily {
     /// All known packet families for enumeration.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::ValidateTol,
         Self::LinalgCore,
         Self::Optimize,
@@ -6459,6 +7252,8 @@ impl PacketFamily {
         Self::Cluster,
         Self::Spatial,
         Self::Signal,
+        Self::Stats,
+        Self::IntegrateCore,
     ];
 
     /// Canonical packet ID for this family (e.g., "FSCI-P2C-001").
@@ -6476,6 +7271,8 @@ impl PacketFamily {
             Self::Cluster => "FSCI-P2C-009",
             Self::Spatial => "FSCI-P2C-010",
             Self::Signal => "FSCI-P2C-011",
+            Self::Stats => "FSCI-P2C-012",
+            Self::IntegrateCore => "FSCI-P2C-013",
         }
     }
 
@@ -6494,6 +7291,8 @@ impl PacketFamily {
             Self::Cluster => "cluster_core",
             Self::Spatial => "spatial_core",
             Self::Signal => "signal_core",
+            Self::Stats => "stats_core",
+            Self::IntegrateCore => "integrate_core",
         }
     }
 
@@ -6522,6 +7321,10 @@ impl PacketFamily {
             Some(Self::Spatial)
         } else if s.contains("signal") {
             Some(Self::Signal)
+        } else if s.contains("stats") {
+            Some(Self::Stats)
+        } else if s.contains("integrate") {
+            Some(Self::IntegrateCore)
         } else {
             None
         }
@@ -6543,6 +7346,8 @@ impl PacketFamily {
                 | Self::Cluster
                 | Self::Spatial
                 | Self::Signal
+                | Self::Stats
+                | Self::IntegrateCore
         )
     }
 
@@ -6661,6 +7466,8 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
             PacketFamily::Cluster => run_cluster_packet(config, fixture_name)?,
             PacketFamily::Spatial => run_spatial_packet(config, fixture_name)?,
             PacketFamily::Signal => run_signal_packet(config, fixture_name)?,
+            PacketFamily::Stats => run_stats_packet(config, fixture_name)?,
+            PacketFamily::IntegrateCore => run_integrate_packet(config, fixture_name)?,
         };
         reports.push(report);
     }
@@ -6680,8 +7487,8 @@ mod tests {
         load_oracle_capture, run_array_api_packet, run_casp_packet, run_cluster_packet,
         run_differential_test, run_fft_packet, run_linalg_packet,
         run_linalg_packet_with_oracle_capture, run_optimize_packet, run_signal_packet,
-        run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
-        run_validate_tol_packet, write_parity_artifacts,
+        run_integrate_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
+        run_stats_packet, run_validate_tol_packet, write_parity_artifacts,
     };
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
@@ -7342,6 +8149,52 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn stats_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_stats_packet(&cfg, "FSCI-P2C-012_stats_core.json")
+            .expect("stats packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one stats test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("stats parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn integrate_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_integrate_packet(&cfg, "FSCI-P2C-013_integrate_core.json")
+            .expect("integrate packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one integrate test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("integrate parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
     fn differential_test_optimize_fixture() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root
@@ -7706,8 +8559,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn packet_family_all_has_11_entries() {
-        assert_eq!(PacketFamily::ALL.len(), 11);
+    fn packet_family_all_has_13_entries() {
+        assert_eq!(PacketFamily::ALL.len(), 13);
     }
 
     #[test]

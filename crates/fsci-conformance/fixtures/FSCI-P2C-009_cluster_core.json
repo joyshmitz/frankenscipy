@@ -243,6 +243,107 @@
         "rtol": 1e-10,
         "contract_ref": "fsci_cluster::adjusted_rand_score"
       }
+    },
+    {
+      "case_id": "is_valid_linkage_valid_5pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "is_valid_linkage",
+      "args": [
+        [[0.0, 1.0, 1.0, 2.0], [2.0, 3.0, 1.0, 2.0], [5.0, 6.0, 3.0, 4.0], [4.0, 7.0, 4.0, 5.0]]
+      ],
+      "expected": {
+        "kind": "boolean",
+        "value": true,
+        "contract_ref": "fsci_cluster::is_valid_linkage"
+      }
+    },
+    {
+      "case_id": "is_valid_linkage_bad_index",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "is_valid_linkage",
+      "args": [
+        [[10.0, 0.0, 1.0, 2.0]]
+      ],
+      "expected": {
+        "kind": "boolean",
+        "value": false,
+        "contract_ref": "fsci_cluster::is_valid_linkage"
+      }
+    },
+    {
+      "case_id": "is_valid_linkage_negative_dist",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "is_valid_linkage",
+      "args": [
+        [[0.0, 1.0, -1.0, 2.0]]
+      ],
+      "expected": {
+        "kind": "boolean",
+        "value": false,
+        "contract_ref": "fsci_cluster::is_valid_linkage"
+      }
+    },
+    {
+      "case_id": "is_monotonic_monotonic_5pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "is_monotonic",
+      "args": [
+        [[0.0, 1.0, 1.0, 2.0], [2.0, 3.0, 1.0, 2.0], [5.0, 6.0, 3.0, 4.0], [4.0, 7.0, 4.0, 5.0]]
+      ],
+      "expected": {
+        "kind": "boolean",
+        "value": true,
+        "contract_ref": "fsci_cluster::is_monotonic"
+      }
+    },
+    {
+      "case_id": "is_monotonic_not_monotonic",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "is_monotonic",
+      "args": [
+        [[0.0, 1.0, 5.0, 2.0], [2.0, 3.0, 1.0, 3.0]]
+      ],
+      "expected": {
+        "kind": "boolean",
+        "value": false,
+        "contract_ref": "fsci_cluster::is_monotonic"
+      }
+    },
+    {
+      "case_id": "leaves_list_5pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "leaves_list",
+      "args": [
+        [[0.0, 1.0, 1.0, 2.0], [2.0, 3.0, 1.0, 2.0], [5.0, 6.0, 3.0, 4.0], [4.0, 7.0, 4.0, 5.0]]
+      ],
+      "expected": {
+        "kind": "labels",
+        "value": [4, 0, 1, 2, 3],
+        "note": "Depth-first traversal order from root: cluster8=(4, cluster7), cluster7=(cluster5, cluster6)",
+        "contract_ref": "fsci_cluster::leaves_list"
+      }
+    },
+    {
+      "case_id": "num_obs_linkage_5pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "num_obs_linkage",
+      "args": [
+        [[0.0, 1.0, 1.0, 2.0], [2.0, 3.0, 1.0, 2.0], [5.0, 6.0, 3.0, 4.0], [4.0, 7.0, 4.0, 5.0]]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 5.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_cluster::num_obs_linkage"
+      }
     }
   ]
 }

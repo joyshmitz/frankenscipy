@@ -1,0 +1,547 @@
+{
+  "packet_id": "FSCI-P2C-012",
+  "family": "stats_core",
+  "cases": [
+    {
+      "case_id": "describe_8pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "describe",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+      ],
+      "expected": {
+        "kind": "describe_result",
+        "nobs": 8,
+        "minmax": [1.0, 8.0],
+        "mean": 4.5,
+        "variance": 6.0,
+        "skewness": 0.0,
+        "kurtosis": -1.2380952380952381,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::describe"
+      }
+    },
+    {
+      "case_id": "skew_asymmetric",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "skew",
+      "args": [
+        [1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.6,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::skew (bias=True)"
+      }
+    },
+    {
+      "case_id": "kurtosis_uniform",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kurtosis",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -1.2242424242424244,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::kurtosis (Fisher=True, bias=True)"
+      }
+    },
+    {
+      "case_id": "pearsonr_linear",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "pearsonr",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [2.0, 4.0, 6.0, 8.0, 10.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": 1.0,
+        "pvalue": 0.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::pearsonr"
+      }
+    },
+    {
+      "case_id": "pearsonr_negative",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "pearsonr",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [10.0, 8.0, 6.0, 4.0, 2.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": -1.0,
+        "pvalue": 0.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::pearsonr"
+      }
+    },
+    {
+      "case_id": "spearmanr_monotonic",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spearmanr",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [1.0, 4.0, 9.0, 16.0, 25.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": 0.9999999999999999,
+        "pvalue": 1.4042654220543672e-24,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::spearmanr"
+      }
+    },
+    {
+      "case_id": "linregress_perfect",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "linregress",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [3.0, 5.0, 7.0, 9.0, 11.0]
+      ],
+      "expected": {
+        "kind": "linregress_result",
+        "slope": 2.0,
+        "intercept": 1.0,
+        "rvalue": 1.0,
+        "pvalue": 0.0,
+        "stderr": 0.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::linregress"
+      }
+    },
+    {
+      "case_id": "linregress_noisy",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "linregress",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [2.1, 3.9, 6.2, 7.8, 10.1]
+      ],
+      "expected": {
+        "kind": "linregress_result",
+        "slope": 1.99,
+        "intercept": 0.05,
+        "rvalue": 0.9986517555689657,
+        "pvalue": 0.00005941539111755041,
+        "stderr": 0.05972157622389534,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::linregress"
+      }
+    },
+    {
+      "case_id": "ttest_1samp_zero",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ttest_1samp",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        3.0
+      ],
+      "expected": {
+        "kind": "ttest_result",
+        "statistic": 0.0,
+        "pvalue": 1.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::ttest_1samp"
+      }
+    },
+    {
+      "case_id": "ttest_1samp_shifted",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ttest_1samp",
+      "args": [
+        [2.0, 3.0, 4.0, 5.0, 6.0],
+        3.0
+      ],
+      "expected": {
+        "kind": "ttest_result",
+        "statistic": 1.4142135623730951,
+        "pvalue": 0.23019964108049706,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::ttest_1samp"
+      }
+    },
+    {
+      "case_id": "ks_2samp_same",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ks_2samp",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [1.0, 2.0, 3.0, 4.0, 5.0]
+      ],
+      "expected": {
+        "kind": "goodness_result",
+        "statistic": 0.0,
+        "pvalue": 1.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::ks_2samp"
+      }
+    },
+    {
+      "case_id": "ks_2samp_different",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ks_2samp",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [6.0, 7.0, 8.0, 9.0, 10.0]
+      ],
+      "expected": {
+        "kind": "goodness_result",
+        "statistic": 1.0,
+        "pvalue": 0.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::ks_2samp"
+      }
+    },
+    {
+      "case_id": "zscore_5pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "zscore",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0]
+      ],
+      "expected": {
+        "kind": "array",
+        "array_value": [
+          -1.4142135623730951,
+          -0.7071067811865476,
+          0.0,
+          0.7071067811865476,
+          1.4142135623730951
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::zscore (ddof=0)"
+      }
+    },
+    {
+      "case_id": "sem_5pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "sem",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.7071067811865476,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::sem (ddof=1)"
+      }
+    },
+    {
+      "case_id": "iqr_8pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "iqr",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.5,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::iqr"
+      }
+    },
+    {
+      "case_id": "moment_k2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "moment",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::moment (central moment)"
+      }
+    },
+    {
+      "case_id": "moment_k3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "moment",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        3
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::moment (central moment)"
+      }
+    },
+    {
+      "case_id": "variation_5pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "variation",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.47140452079103173,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::variation (ddof=0)"
+      }
+    },
+    {
+      "case_id": "entropy_uniform",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "entropy",
+      "args": [
+        [0.25, 0.25, 0.25, 0.25]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.3862943611198906,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::entropy (base=e)"
+      }
+    },
+    {
+      "case_id": "shapiro_normal",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "shapiro",
+      "args": [
+        [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5]
+      ],
+      "expected": {
+        "kind": "goodness_result",
+        "statistic": 0.991567124662354,
+        "pvalue": 0.9999918434496657,
+        "atol": 1e-6,
+        "rtol": 1e-6,
+        "contract_ref": "fsci_stats::shapiro"
+      }
+    },
+    {
+      "case_id": "skew_symmetric",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "skew",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "note": "Symmetric distribution around mean has zero skew",
+        "contract_ref": "fsci_stats::skew (bias=True)"
+      }
+    },
+    {
+      "case_id": "kurtosis_peaked",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kurtosis",
+      "args": [
+        [0.0, 0.0, 0.0, 1.0, 10.0, 1.0, 0.0, 0.0, 0.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.888318009734993,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "note": "Leptokurtic distribution with high peak",
+        "contract_ref": "fsci_stats::kurtosis (Fisher=True, bias=True)"
+      }
+    },
+    {
+      "case_id": "pearsonr_uncorrelated",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "pearsonr",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [3.0, 1.0, 4.0, 1.0, 5.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": 0.3535533905932738,
+        "pvalue": 0.5594043441634879,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "note": "Low correlation with high p-value",
+        "contract_ref": "fsci_stats::pearsonr"
+      }
+    },
+    {
+      "case_id": "linregress_negative_slope",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "linregress",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [10.0, 8.0, 6.0, 4.0, 2.0]
+      ],
+      "expected": {
+        "kind": "linregress_result",
+        "slope": -2.0,
+        "intercept": 12.0,
+        "rvalue": -1.0,
+        "pvalue": 0.0,
+        "stderr": 0.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "note": "Perfect negative linear relationship",
+        "contract_ref": "fsci_stats::linregress"
+      }
+    },
+    {
+      "case_id": "iqr_small_4pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "iqr",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.5,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "note": "Small dataset IQR",
+        "contract_ref": "fsci_stats::iqr"
+      }
+    },
+    {
+      "case_id": "moment_k4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "moment",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        4
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 6.8,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "note": "Fourth central moment",
+        "contract_ref": "fsci_stats::moment (central moment)"
+      }
+    },
+    {
+      "case_id": "entropy_concentrated",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "entropy",
+      "args": [
+        [0.001, 0.001, 0.001, 0.997]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.02371876133018424,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "note": "Nearly deterministic distribution has low entropy",
+        "contract_ref": "fsci_stats::entropy (base=e)"
+      }
+    },
+    {
+      "case_id": "variation_high_mean",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "variation",
+      "args": [
+        [10.0, 11.0, 12.0, 13.0, 14.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.11785113019775793,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "note": "Lower CV for same spread but higher mean",
+        "contract_ref": "fsci_stats::variation (ddof=0)"
+      }
+    },
+    {
+      "case_id": "sem_10pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "sem",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.9574271077563381,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "note": "Standard error of mean with larger sample",
+        "contract_ref": "fsci_stats::sem (ddof=1)"
+      }
+    },
+    {
+      "case_id": "describe_3pt",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "describe",
+      "args": [
+        [1.0, 2.0, 3.0]
+      ],
+      "expected": {
+        "kind": "describe_result",
+        "nobs": 3,
+        "minmax": [1.0, 3.0],
+        "mean": 2.0,
+        "variance": 1.0,
+        "skewness": 0.0,
+        "kurtosis": -1.5,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "note": "Minimal viable sample for describe",
+        "contract_ref": "fsci_stats::describe"
+      }
+    }
+  ]
+}

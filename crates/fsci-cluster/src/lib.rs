@@ -542,6 +542,119 @@ pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
         .collect()
 }
 
+/// Validate a linkage matrix.
+///
+/// Checks that the linkage matrix has valid structure:
+/// - 4 columns (idx1, idx2, distance, count)
+/// - Valid cluster indices (0..n for original, n..2n-1 for merged)
+/// - Distances are non-negative
+/// - Counts are positive
+///
+/// Matches `scipy.cluster.hierarchy.is_valid_linkage`.
+pub fn is_valid_linkage(z: &[[f64; 4]]) -> bool {
+    if z.is_empty() {
+        return true; // Empty linkage is valid (0 or 1 observations)
+    }
+
+    let n = z.len() + 1; // number of original observations
+
+    for (step, row) in z.iter().enumerate() {
+        let ci = row[0] as usize;
+        let cj = row[1] as usize;
+        let dist = row[2];
+        let count = row[3] as usize;
+
+        // Check cluster indices are valid
+        let max_valid_idx = n + step; // can reference clusters 0..n+step
+        if ci >= max_valid_idx || cj >= max_valid_idx {
+            return false;
+        }
+        if ci == cj {
+            return false; // can't merge cluster with itself
+        }
+
+        // Distance must be non-negative and finite
+        if !dist.is_finite() || dist < 0.0 {
+            return false;
+        }
+
+        // Count must be positive
+        if count == 0 {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Check if linkage distances are monotonically non-decreasing.
+///
+/// Matches `scipy.cluster.hierarchy.is_monotonic`.
+pub fn is_monotonic(z: &[[f64; 4]]) -> bool {
+    if z.len() < 2 {
+        return true;
+    }
+    for i in 1..z.len() {
+        if z[i][2] < z[i - 1][2] {
+            return false;
+        }
+    }
+    true
+}
+
+/// Get the number of original observations from a linkage matrix.
+///
+/// Matches `scipy.cluster.hierarchy.num_obs_linkage`.
+pub fn num_obs_linkage(z: &[[f64; 4]]) -> usize {
+    z.len() + 1
+}
+
+/// Return the leaf ordering from a linkage matrix.
+///
+/// Performs a depth-first traversal of the dendrogram tree
+/// and returns indices of the original observations in order.
+///
+/// Matches `scipy.cluster.hierarchy.leaves_list`.
+pub fn leaves_list(z: &[[f64; 4]]) -> Vec<usize> {
+    let n = z.len() + 1;
+    if n <= 1 {
+        return (0..n).collect();
+    }
+
+    let mut result = Vec::with_capacity(n);
+    let root = 2 * n - 2; // last cluster formed
+
+    fn traverse(z: &[[f64; 4]], node: usize, n: usize, result: &mut Vec<usize>) {
+        if node < n {
+            result.push(node);
+        } else {
+            let step = node - n;
+            if step < z.len() {
+                traverse(z, z[step][0] as usize, n, result);
+                traverse(z, z[step][1] as usize, n, result);
+            }
+        }
+    }
+
+    traverse(z, root, n, &mut result);
+    result
+}
+
+/// Cluster data directly from observations.
+///
+/// Combines distance computation, linkage, and fcluster into one step.
+/// Equivalent to calling `linkage` then `fcluster`.
+///
+/// Matches `scipy.cluster.hierarchy.fclusterdata`.
+pub fn fclusterdata(
+    data: &[Vec<f64>],
+    max_clusters: usize,
+    method: LinkageMethod,
+) -> Result<Vec<usize>, ClusterError> {
+    let z = linkage(data, method)?;
+    Ok(fcluster(&z, max_clusters))
+}
+
 /// Compute cophenetic distances from a linkage matrix.
 ///
 /// Returns the cophenetic distance matrix (condensed form).
@@ -777,6 +890,10 @@ pub fn silhouette_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
     }
 
     let k = labels.iter().cloned().max().unwrap_or(0) + 1;
+    // Silhouette is undefined for single cluster; return 0
+    if k < 2 {
+        return 0.0;
+    }
     let mut total = 0.0;
 
     for i in 0..n {
@@ -1487,6 +1604,10 @@ pub fn silhouette_samples(data: &[Vec<f64>], labels: &[usize]) -> Vec<f64> {
         return vec![0.0; n];
     }
     let k = labels.iter().cloned().max().unwrap_or(0) + 1;
+    // Silhouette is undefined for single cluster; return all zeros
+    if k < 2 {
+        return vec![0.0; n];
+    }
 
     (0..n)
         .map(|i| {
@@ -1636,8 +1757,11 @@ pub fn kmedoids(
     }
 
     let mut labels = vec![0usize; n];
+    let mut actual_iter = 0;
 
-    for _ in 0..max_iter {
+    for iter in 0..max_iter {
+        actual_iter = iter + 1;
+
         // Assign to nearest medoid
         for i in 0..n {
             let mut min_dist = f64::INFINITY;
@@ -1697,7 +1821,7 @@ pub fn kmedoids(
         centroids,
         labels,
         inertia,
-        n_iter: max_iter,
+        n_iter: actual_iter,
     })
 }
 
@@ -2095,5 +2219,172 @@ mod tests {
         let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
         let err = mean_shift(&data, f64::NAN, 10).expect_err("should reject NaN bandwidth");
         assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn silhouette_score_single_cluster_returns_zero() {
+        // When all points are in one cluster, silhouette is undefined.
+        // We return 0.0 instead of NaN to match sklearn behavior for trivial cases.
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let labels = vec![0, 0, 0]; // all in cluster 0
+        let score = silhouette_score(&data, &labels);
+        assert!(score.is_finite(), "silhouette with single cluster should be finite, got {score}");
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn silhouette_samples_single_cluster_returns_zeros() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let labels = vec![0, 0, 0];
+        let samples = silhouette_samples(&data, &labels);
+        assert!(samples.iter().all(|&s| s.is_finite() && s == 0.0));
+    }
+
+    #[test]
+    fn kmedoids_returns_correct_n_iter() {
+        // Well-separated clusters should converge quickly
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+        ];
+        let result = kmedoids(&data, 2, 100, 42).unwrap();
+        // Should converge in far fewer than 100 iterations
+        assert!(
+            result.n_iter < 100,
+            "kmedoids should converge early but reported n_iter={}",
+            result.n_iter
+        );
+    }
+
+    #[test]
+    fn kmedoids_basic_clustering() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.1],
+            vec![10.0, 10.0],
+            vec![10.1, 10.1],
+        ];
+        let result = kmedoids(&data, 2, 100, 42).unwrap();
+        assert_eq!(result.labels.len(), 4);
+        // First two in one cluster, last two in another
+        assert_eq!(result.labels[0], result.labels[1]);
+        assert_eq!(result.labels[2], result.labels[3]);
+        assert_ne!(result.labels[0], result.labels[2]);
+    }
+
+    #[test]
+    fn is_valid_linkage_accepts_good_linkage() {
+        let data = vec![vec![0.0], vec![1.0], vec![5.0]];
+        let z = linkage(&data, LinkageMethod::Single).unwrap();
+        assert!(is_valid_linkage(&z));
+    }
+
+    #[test]
+    fn is_valid_linkage_rejects_bad_indices() {
+        // Invalid linkage: index 10 doesn't exist
+        let bad = [[10.0, 0.0, 1.0, 2.0]];
+        assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
+    fn is_valid_linkage_rejects_negative_distance() {
+        let bad = [[0.0, 1.0, -1.0, 2.0]];
+        assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
+    fn is_valid_linkage_rejects_self_merge() {
+        let bad = [[0.0, 0.0, 1.0, 2.0]];
+        assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
+    fn is_monotonic_detects_non_monotonic() {
+        // distances: 5.0, 1.0 - not monotonic
+        let z = [[0.0, 1.0, 5.0, 2.0], [2.0, 3.0, 1.0, 3.0]];
+        assert!(!is_monotonic(&z));
+    }
+
+    #[test]
+    fn is_monotonic_accepts_monotonic() {
+        let data = vec![vec![0.0], vec![1.0], vec![5.0]];
+        let z = linkage(&data, LinkageMethod::Single).unwrap();
+        assert!(is_monotonic(&z));
+    }
+
+    #[test]
+    fn leaves_list_returns_correct_order() {
+        let data = vec![vec![0.0], vec![1.0], vec![5.0]];
+        let z = linkage(&data, LinkageMethod::Single).unwrap();
+        let leaves = leaves_list(&z);
+        assert_eq!(leaves.len(), 3);
+        // Check all indices present
+        let mut sorted = leaves.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn num_obs_linkage_computes_correctly() {
+        let data = vec![vec![0.0], vec![1.0], vec![5.0], vec![10.0]];
+        let z = linkage(&data, LinkageMethod::Single).unwrap();
+        assert_eq!(num_obs_linkage(&z), 4);
+    }
+
+    #[test]
+    fn fclusterdata_combines_workflow() {
+        let data = vec![vec![0.0], vec![1.0], vec![10.0], vec![11.0]];
+        let labels = fclusterdata(&data, 2, LinkageMethod::Complete).unwrap();
+        assert_eq!(labels.len(), 4);
+        // First two in one cluster, last two in another
+        assert_eq!(labels[0], labels[1]);
+        assert_eq!(labels[2], labels[3]);
+        assert_ne!(labels[0], labels[2]);
+    }
+
+    #[test]
+    fn leaves_list_empty_linkage() {
+        let z: Vec<[f64; 4]> = vec![];
+        let leaves = leaves_list(&z);
+        // Empty linkage means 1 observation
+        assert_eq!(leaves, vec![0]);
+    }
+
+    #[test]
+    fn is_valid_linkage_empty_is_valid() {
+        let z: Vec<[f64; 4]> = vec![];
+        assert!(is_valid_linkage(&z));
+    }
+
+    #[test]
+    fn is_monotonic_empty_is_monotonic() {
+        let z: Vec<[f64; 4]> = vec![];
+        assert!(is_monotonic(&z));
+    }
+
+    #[test]
+    fn is_monotonic_single_is_monotonic() {
+        let z = [[0.0, 1.0, 5.0, 2.0]];
+        assert!(is_monotonic(&z));
+    }
+
+    #[test]
+    fn is_valid_linkage_rejects_nan_distance() {
+        let bad = [[0.0, 1.0, f64::NAN, 2.0]];
+        assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
+    fn is_valid_linkage_rejects_inf_distance() {
+        let bad = [[0.0, 1.0, f64::INFINITY, 2.0]];
+        assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
+    fn is_valid_linkage_rejects_zero_count() {
+        let bad = [[0.0, 1.0, 1.0, 0.0]];
+        assert!(!is_valid_linkage(&bad));
     }
 }

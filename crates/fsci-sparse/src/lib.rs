@@ -12,12 +12,27 @@ pub use formats::{
 };
 pub use linalg::{
     ConnectedComponentsResult, EigsOptions, EigsResult, ExpmOptions, IluOptions,
-    IterativeSolveOptions, IterativeSolveResult, LuOptions, MstResult, PermutationOrdering,
-    ShortestPathResult, SolveOptions, SolveResult, SparseBackend, SparseIluFactorization,
-    SparseLuFactorization, SvdsResult, bellman_ford, bicgstab, breadth_first_order, cg,
-    connected_components, depth_first_order, dijkstra, eigs, eigsh, expm, gmres, laplacian, lsmr,
-    lsqr, minimum_spanning_tree, minres, pcg, spilu, splu, splu_solve, spsolve, spsolve_triangular,
-    svds,
+    IterativeSolveOptions, IterativeSolveResult, LgmresOptions, LuOptions, MstResult,
+    PermutationOrdering, ShortestPathResult, SolveOptions, SolveResult, SparseBackend,
+    SparseIluFactorization, SparseLuFactorization, SvdsResult,
+    // Direct solvers
+    spsolve, splu, splu_solve, spilu, spsolve_triangular, expm,
+    // Iterative solvers
+    cg, pcg, gmres, lgmres, bicg, cgs, bicgstab, qmr, minres, lsqr, lsmr,
+    // Eigensolvers
+    eigs, eigsh, svds,
+    // Graph algorithms
+    connected_components, dijkstra, bellman_ford, breadth_first_order, depth_first_order,
+    laplacian, minimum_spanning_tree, floyd_warshall, shortest_path, reverse_cuthill_mckee,
+    strongly_connected_components, topological_sort, is_connected, connected_component_sizes,
+    pagerank, graph_diameter, eccentricity, clustering_coefficient, average_clustering,
+    betweenness_centrality, closeness_centrality, degree_sequence,
+    // Sparse matrix operations
+    sparse_norm, sparse_diagonal, sparse_trace, sparse_transpose, sparse_nnz, sparse_density,
+    spmv, spmm, onenormest, sparse_scale, sparse_add, sparse_is_symmetric, structural_rank,
+    sparse_abs, sparse_power, sparse_sum, sparse_row_sums, sparse_col_sums,
+    sparse_row_max, sparse_row_min, sparse_has_explicit_zeros, sparse_eliminate_zeros,
+    sparse_submatrix, sparse_frobenius_inner, sparse_map, matrix_power,
 };
 pub use ops::{
     ConversionLogEntry, FormatConvertible, add_coo, add_csc, add_csr, coo_to_csr_with_mode,
