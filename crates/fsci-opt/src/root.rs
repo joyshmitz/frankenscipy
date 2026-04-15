@@ -1336,8 +1336,7 @@ where
             // H_k Δf
             let h_df: Vec<f64> = (0..n)
                 .map(|i| {
-                    h[i]
-                        .iter()
+                    h[i].iter()
                         .zip(df.iter())
                         .map(|(hi, dfi)| hi * dfi)
                         .sum::<f64>()
@@ -1475,11 +1474,7 @@ where
                         .map(|(a, b)| a * b)
                         .sum();
                 }
-                atb[i] = delta_f[i]
-                    .iter()
-                    .zip(fx.iter())
-                    .map(|(a, b)| a * b)
-                    .sum();
+                atb[i] = delta_f[i].iter().zip(fx.iter()).map(|(a, b)| a * b).sum();
             }
 
             // Solve the small linear system using simple Gaussian elimination

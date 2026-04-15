@@ -1545,7 +1545,11 @@ fn fht_kernel(n: usize, dln: f64, mu: f64, offset: f64, bias: f64) -> Vec<Comple
 
     for m in 0..n {
         // Frequency index (centered)
-        let m_shift = if m <= n / 2 { m as f64 } else { m as f64 - n as f64 };
+        let m_shift = if m <= n / 2 {
+            m as f64
+        } else {
+            m as f64 - n as f64
+        };
 
         // Argument for U_μ: q + 2πi·m / (n·dln)
         let x_re = bias;
