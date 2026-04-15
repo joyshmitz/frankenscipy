@@ -4964,6 +4964,80 @@ fn compare_cluster_case_differential(
     }
 }
 
+fn compare_casp_case_differential(
+    case: &CaspCase,
+    observed: &CaspObserved,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    let (passed, message) = compare_casp_outcome(&case.expected, observed);
+
+    match (&case.expected, observed) {
+        (CaspExpectedOutcome::PolicyAction { action }, CaspObserved::PolicyAction(actual)) => {
+            let diff = if action == actual { 0.0 } else { f64::INFINITY };
+            (
+                passed,
+                message,
+                Some(diff),
+                Some(ToleranceUsed {
+                    atol: 0.0,
+                    rtol: 0.0,
+                    comparison_mode: "exact".to_owned(),
+                }),
+            )
+        }
+        (CaspExpectedOutcome::SolverAction { action }, CaspObserved::SolverAction(actual)) => {
+            let diff = if action == actual { 0.0 } else { f64::INFINITY };
+            (
+                passed,
+                message,
+                Some(diff),
+                Some(ToleranceUsed {
+                    atol: 0.0,
+                    rtol: 0.0,
+                    comparison_mode: "exact".to_owned(),
+                }),
+            )
+        }
+        (
+            CaspExpectedOutcome::CalibratorFallback { should_fallback },
+            CaspObserved::CalibratorFallback(actual),
+        ) => {
+            let diff = if *should_fallback == *actual {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+            (
+                passed,
+                message,
+                Some(diff),
+                Some(ToleranceUsed {
+                    atol: 0.0,
+                    rtol: 0.0,
+                    comparison_mode: "exact".to_owned(),
+                }),
+            )
+        }
+        (CaspExpectedOutcome::Error { error }, CaspObserved::Error(actual)) => {
+            let diff = if actual.contains(error) {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+            (
+                passed,
+                message,
+                Some(diff),
+                Some(ToleranceUsed {
+                    atol: 0.0,
+                    rtol: 0.0,
+                    comparison_mode: "substring".to_owned(),
+                }),
+            )
+        }
+        _ => (passed, message, None, None),
+    }
+}
+
 pub fn run_integrate_packet(
     config: &HarnessConfig,
     fixture_name: &str,
@@ -6365,6 +6439,8 @@ pub fn run_differential_test(
         run_differential_special(fixture_path, &raw, oracle_config)
     } else if family.contains("optim") {
         run_differential_optimize(fixture_path, &raw, oracle_config)
+    } else if family.contains("casp") {
+        run_differential_casp(fixture_path, &raw, oracle_config)
     } else if family.contains("cluster") {
         run_differential_cluster(fixture_path, &raw, oracle_config)
     } else if family.contains("spatial") {
@@ -6844,6 +6920,53 @@ fn run_differential_cluster(
         let observed = execute_cluster_case(case);
         let (passed, message, max_diff, tolerance_used) =
             compare_cluster_case_differential(case, &observed);
+
+        per_case_results.push(DifferentialCaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+            max_diff,
+            tolerance_used,
+            oracle_status: oracle_status.clone(),
+        });
+    }
+
+    let pass_count = per_case_results
+        .iter()
+        .filter(|result| result.passed)
+        .count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+fn run_differential_casp(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: CaspPacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+
+    for case in &fixture.cases {
+        let observed = execute_casp_case(case);
+        let (passed, message, max_diff, tolerance_used) =
+            compare_casp_case_differential(case, &observed);
 
         per_case_results.push(DifferentialCaseResult {
             case_id: case.case_id().to_owned(),
@@ -8435,10 +8558,10 @@ mod tests {
     #[cfg(feature = "dashboard")]
     use super::style_for_case_result;
     use super::{
-        AggregateParityReport, ArrayApiPacketFixture, ClusterPacketFixture, ConformanceReport,
-        DifferentialOracleConfig, HarnessConfig, IntegratePacketFixture, LinalgCase,
-        LinalgExpectedOutcome, LinalgPacketFixture, OptimizePacketFixture, OracleStatus,
-        PacketFamily, PythonOracleConfig, SignalPacketFixture, SpatialPacketFixture,
+        AggregateParityReport, ArrayApiPacketFixture, CaspPacketFixture, ClusterPacketFixture,
+        ConformanceReport, DifferentialOracleConfig, HarnessConfig, IntegratePacketFixture,
+        LinalgCase, LinalgExpectedOutcome, LinalgPacketFixture, OptimizePacketFixture,
+        OracleStatus, PacketFamily, PythonOracleConfig, SignalPacketFixture, SpatialPacketFixture,
         SpecialPacketFixture, StatsPacketFixture, aggregate_packet_reports, discover_fixtures,
         ensure_artifact_layout, load_oracle_capture, run_array_api_packet, run_casp_packet,
         run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
@@ -8901,6 +9024,23 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     fn cluster_case_expected_summary(expected: &super::ClusterExpected) -> String {
+        format!("{expected:?}")
+    }
+
+    fn casp_case_input_summary(case: &super::CaspCase) -> String {
+        format!(
+            "kind={:?} mode={:?} condition_signal={:?} metadata_signal={:?} anomaly_signal={:?} condition_state={:?} observations={:?}",
+            case.test_kind,
+            case.mode,
+            case.condition_signal,
+            case.metadata_signal,
+            case.anomaly_signal,
+            case.condition_state,
+            case.observations
+        )
+    }
+
+    fn casp_case_expected_summary(expected: &super::CaspExpectedOutcome) -> String {
         format!("{expected:?}")
     }
 
@@ -9956,6 +10096,88 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let output_path = output_dir.join("structured_case_logs.json");
         let payload = serde_json::to_vec_pretty(&logs).expect("serialize cluster logs");
         fs::write(&output_path, payload).expect("write cluster structured logs");
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn differential_test_casp_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-008_runtime_casp.json");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle).expect("differential casp runs");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-008");
+        assert_eq!(report.family, "runtime_casp");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 15);
+    }
+
+    #[test]
+    fn differential_casp_quota_and_structured_logs() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-008_runtime_casp.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read casp fixture");
+        let fixture: CaspPacketFixture = serde_json::from_str(&raw).expect("parse casp fixture");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle).expect("casp differential");
+
+        let mut by_case = std::collections::BTreeMap::new();
+        for case in &fixture.cases {
+            by_case.insert(case.case_id().to_owned(), case);
+        }
+
+        let mut case_count = 0usize;
+        let mut logs = Vec::with_capacity(report.per_case_results.len());
+
+        for case_result in &report.per_case_results {
+            let case = by_case
+                .get(&case_result.case_id)
+                .expect("every report case should exist in fixture");
+            case_count += 1;
+
+            let log = StructuredCaseLog {
+                test_id: case_result.case_id.clone(),
+                category: case.category.clone(),
+                input_summary: casp_case_input_summary(case),
+                expected: casp_case_expected_summary(&case.expected),
+                actual: case_result.message.clone(),
+                diff: case_result.max_diff,
+                tolerance: case_result.tolerance_used.clone(),
+                pass: case_result.passed,
+            };
+
+            let payload =
+                serde_json::to_string(&log).expect("structured conformance log should serialize");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&payload).expect("structured log should parse");
+            assert!(parsed.get("test_id").is_some());
+            assert!(parsed.get("category").is_some());
+            assert!(parsed.get("input_summary").is_some());
+            assert!(parsed.get("expected").is_some());
+            assert!(parsed.get("actual").is_some());
+            assert!(parsed.get("diff").is_some());
+            assert!(parsed.get("tolerance").is_some());
+            assert!(parsed.get("pass").is_some());
+            logs.push(log);
+        }
+
+        assert_eq!(case_count, 15, "expected 15 cases, got {case_count}");
+        assert_eq!(report.fail_count, 0);
+
+        let output_dir = HarnessConfig::default_paths()
+            .artifact_dir_for("P2C-008")
+            .join("differential");
+        fs::create_dir_all(&output_dir).expect("create casp differential artifact directory");
+        let output_path = output_dir.join("structured_case_logs.json");
+        let payload = serde_json::to_vec_pretty(&logs).expect("serialize casp logs");
+        fs::write(&output_path, payload).expect("write casp structured logs");
         assert!(output_path.exists());
     }
 
