@@ -70,11 +70,11 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ### fsci-special (55% coverage)
 
-**Implemented:** gamma, gammaln, digamma, polygamma, gammainc, gammaincc, rgamma, factorial, factorial2, comb, perm, zeta, zetac, beta, betaln, betainc, betaincinv, erf, erfc, erfinv, erfcinv, j0, j1, jn, jv, jve, y0, y1, yn, yv, yve, iv, ive, kv, kve, k0, k1, k0e, k1e, i0, i1, i0e, i1e, hankel1, hankel2, airy, airye, ai_zeros, bi_zeros, hyp1f1, hyp2f1, ellipk, ellipkm1, ellipe, ellipkinc, ellipeinc, ellipj, elliprc, elliprd, elliprf, elliprg, elliprj, lambertw, wrightomega, exp1, expi, eval_legendre, eval_chebyt, eval_chebyu, eval_chebyc, eval_chebys, eval_laguerre, eval_genlaguerre, eval_hermite, eval_hermitenorm, roots_legendre, fresnel, entr, rel_entr, kl_div, sinc, xlogy, xlog1py, logsumexp, expit, logit, log_expit, log_ndtr, ndtr, ndtri, huber, pseudo_huber, softmax, log_softmax, exprel, spherical_jn, spherical_yn, spherical_in, spherical_kn, dawsn, struve
+**Implemented:** gamma, gammaln, digamma, polygamma, gammainc, gammaincc, rgamma, factorial, factorial2, comb, perm, zeta, zetac, beta, betaln, betainc, betaincinv, erf, erfc, erfinv, erfcinv, j0, j1, jn, jv, jve, y0, y1, yn, yv, yve, iv, ive, kv, kve, k0, k1, k0e, k1e, i0, i1, i0e, i1e, hankel1, hankel2, airy, airye, ai_zeros, bi_zeros, hyp1f1, hyp2f1, ellipk, ellipkm1, ellipe, ellipkinc, ellipeinc, ellipj, elliprc, elliprd, elliprf, elliprg, elliprj, lambertw, wrightomega, exp1, expi, eval_legendre, eval_chebyt, eval_chebyu, eval_chebyc, eval_chebys, eval_laguerre, eval_genlaguerre, eval_hermite, eval_hermitenorm, roots_legendre, fresnel, entr, rel_entr, kl_div, sinc, xlogy, xlog1py, logsumexp, expit, logit, log_expit, log_ndtr, ndtr, ndtri, huber, pseudo_huber, softmax, log_softmax, exprel, spherical_jn, spherical_yn, spherical_in, spherical_kn, dawsn, struve, modstruve, sph_harm, sph_harm_y, lpmv
 
 **Missing (LOW priority):**
-- `sph_harm_y`, `lpmv` (spherical harmonics)
-- `modstruve` (modified Struve)
+- ~~`sph_harm_y`, `lpmv` (spherical harmonics)~~ ✓ Already implemented
+- ~~`modstruve` (modified Struve)~~ ✓ Already implemented
 - Some elliptic functions
 - Remaining Bessel variants
 
