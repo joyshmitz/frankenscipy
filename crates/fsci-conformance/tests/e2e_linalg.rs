@@ -11,7 +11,9 @@
 //! `fixtures/artifacts/FSCI-P2C-002/e2e/`.
 
 use fsci_linalg::{
-    InvOptions, LinalgError, LstsqOptions, PinvOptions, SolveOptions, det, inv, lstsq, pinv, solve,
+    DecompOptions, InvOptions, LinalgError, LstsqOptions, NormKind, PinvOptions, SolveOptions,
+    cholesky, cond, det, eig, eigh, expm, inv, lstsq, lu, norm, pinv, qr, solve, solve_sylvester,
+    svd,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -980,4 +982,722 @@ fn e2e_p2c002_11_large_solve_500x500() {
 
     let bundle = r.finish();
     assert_eq!(bundle.overall.status, "pass");
+}
+
+// ══════════════════ DECOMPOSITION CONFORMANCE ══════════════════
+
+/// Scenario 12: LU decomposition - verify P @ A = L @ U
+#[test]
+fn e2e_p2c002_12_lu_decomposition() {
+    let mut r = ScenarioRunner::new("p2c002_12_lu_decomposition");
+    let a = vec![
+        vec![2.0, 1.0, 1.0],
+        vec![4.0, 3.0, 3.0],
+        vec![8.0, 7.0, 9.0],
+    ];
+    r.set_matrix_meta((3, 3), "strict");
+
+    let mut lu_result = None;
+
+    r.record_step(
+        "compute_lu",
+        "lu(A)",
+        "3x3 general matrix",
+        "strict",
+        || {
+            let res = lu(&a, DecompOptions::default()).map_err(|e| format!("lu failed: {e}"))?;
+            lu_result = Some(res);
+            Ok("LU decomposition computed".to_string())
+        },
+    );
+
+    r.record_step(
+        "verify_pa_equals_lu",
+        "P @ A == L @ U",
+        "fundamental LU identity",
+        "strict",
+        || {
+            let res = lu_result.as_ref().unwrap();
+            // Compute P @ A
+            let pa = mat_mul(&res.p, &a);
+            // Compute L @ U
+            let lu_prod = mat_mul(&res.l, &res.u);
+            let max_diff = max_abs_diff_matrix(&pa, &lu_prod);
+            if max_diff < 1e-12 {
+                Ok(format!("PA == LU verified: max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!("PA != LU: max_diff={max_diff:.2e}"))
+            }
+        },
+    );
+
+    r.record_step(
+        "verify_l_unit_lower",
+        "L is unit lower triangular",
+        "structural check",
+        "strict",
+        || {
+            let l = &lu_result.as_ref().unwrap().l;
+            let n = l.len();
+            for i in 0..n {
+                // Diagonal should be 1
+                if (l[i][i] - 1.0).abs() > 1e-12 {
+                    return Err(format!("L[{i},{i}] = {} != 1", l[i][i]));
+                }
+                // Upper part should be 0
+                for j in (i + 1)..n {
+                    if l[i][j].abs() > 1e-12 {
+                        return Err(format!("L[{i},{j}] = {} != 0", l[i][j]));
+                    }
+                }
+            }
+            Ok("L is unit lower triangular".to_string())
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+/// Scenario 13: QR decomposition - verify A = Q @ R and Q orthogonal
+#[test]
+fn e2e_p2c002_13_qr_decomposition() {
+    let mut r = ScenarioRunner::new("p2c002_13_qr_decomposition");
+    let a = vec![
+        vec![12.0, -51.0, 4.0],
+        vec![6.0, 167.0, -68.0],
+        vec![-4.0, 24.0, -41.0],
+    ];
+    r.set_matrix_meta((3, 3), "strict");
+
+    let mut qr_result = None;
+
+    r.record_step("compute_qr", "qr(A)", "3x3 matrix", "strict", || {
+        let res = qr(&a, DecompOptions::default()).map_err(|e| format!("qr failed: {e}"))?;
+        qr_result = Some(res);
+        Ok("QR decomposition computed".to_string())
+    });
+
+    r.record_step(
+        "verify_a_equals_qr",
+        "A == Q @ R",
+        "fundamental QR identity",
+        "strict",
+        || {
+            let res = qr_result.as_ref().unwrap();
+            let qr_prod = mat_mul(&res.q, &res.r);
+            let max_diff = max_abs_diff_matrix(&a, &qr_prod);
+            if max_diff < 1e-10 {
+                Ok(format!("A == QR verified: max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!("A != QR: max_diff={max_diff:.2e}"))
+            }
+        },
+    );
+
+    r.record_step(
+        "verify_q_orthogonal",
+        "Q' @ Q == I",
+        "orthogonality check",
+        "strict",
+        || {
+            let q = &qr_result.as_ref().unwrap().q;
+            let n = q.len();
+            // Compute Q' @ Q
+            let qt = transpose(q);
+            let qtq = mat_mul(&qt, q);
+            let eye = identity_matrix(n);
+            let max_diff = max_abs_diff_matrix(&qtq, &eye);
+            if max_diff < 1e-10 {
+                Ok(format!("Q orthogonal: max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!("Q not orthogonal: max_diff={max_diff:.2e}"))
+            }
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+/// Scenario 14: SVD decomposition - verify A = U @ S @ V' and singular values
+#[test]
+fn e2e_p2c002_14_svd_decomposition() {
+    let mut r = ScenarioRunner::new("p2c002_14_svd_decomposition");
+    let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+    r.set_matrix_meta((2, 3), "strict");
+
+    let mut svd_result = None;
+
+    r.record_step("compute_svd", "svd(A)", "2x3 matrix", "strict", || {
+        let res = svd(&a, DecompOptions::default()).map_err(|e| format!("svd failed: {e}"))?;
+        svd_result = Some(res);
+        Ok("SVD decomposition computed".to_string())
+    });
+
+    r.record_step(
+        "verify_reconstruction",
+        "A == U @ diag(S) @ V'",
+        "SVD reconstruction",
+        "strict",
+        || {
+            let res = svd_result.as_ref().unwrap();
+            let (m, _n) = (a.len(), a[0].len());
+            let k = res.s.len();
+
+            // Build U @ diag(S) @ Vt
+            // U is m×k, S is k, Vt is k×n
+            let mut us = vec![vec![0.0; k]; m];
+            for i in 0..m {
+                for j in 0..k {
+                    us[i][j] = res.u[i][j] * res.s[j];
+                }
+            }
+            let reconstructed = mat_mul(&us, &res.vt);
+
+            let max_diff = max_abs_diff_matrix(&a, &reconstructed);
+            if max_diff < 1e-10 {
+                Ok(format!(
+                    "A == USV' verified: max_diff={max_diff:.2e}, singular_values={:?}",
+                    res.s
+                ))
+            } else {
+                Err(format!("SVD reconstruction failed: max_diff={max_diff:.2e}"))
+            }
+        },
+    );
+
+    r.record_step(
+        "verify_singular_values_ordered",
+        "σ₁ ≥ σ₂ ≥ ... ≥ 0",
+        "descending order check",
+        "strict",
+        || {
+            let s = &svd_result.as_ref().unwrap().s;
+            for i in 0..s.len() {
+                if s[i] < 0.0 {
+                    return Err(format!("negative singular value: σ[{i}]={}", s[i]));
+                }
+                if i > 0 && s[i] > s[i - 1] + 1e-12 {
+                    return Err(format!(
+                        "singular values not descending: σ[{}]={} > σ[{}]={}",
+                        i,
+                        s[i],
+                        i - 1,
+                        s[i - 1]
+                    ));
+                }
+            }
+            Ok("singular values in descending order".to_string())
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+/// Scenario 15: Cholesky decomposition - verify A = L @ L' for SPD matrix
+#[test]
+fn e2e_p2c002_15_cholesky_decomposition() {
+    let mut r = ScenarioRunner::new("p2c002_15_cholesky_decomposition");
+    // Symmetric positive definite matrix
+    let a = vec![
+        vec![4.0, 12.0, -16.0],
+        vec![12.0, 37.0, -43.0],
+        vec![-16.0, -43.0, 98.0],
+    ];
+    r.set_matrix_meta((3, 3), "strict");
+
+    let mut chol_l: Option<Vec<Vec<f64>>> = None;
+
+    r.record_step(
+        "compute_cholesky",
+        "cholesky(A)",
+        "3x3 SPD matrix",
+        "strict",
+        || {
+            let res = cholesky(&a, true, DecompOptions::default())
+                .map_err(|e| format!("chol failed: {e}"))?;
+            chol_l = Some(res.factor);
+            Ok("Cholesky decomposition computed".to_string())
+        },
+    );
+
+    r.record_step(
+        "verify_a_equals_llt",
+        "A == L @ L'",
+        "Cholesky identity",
+        "strict",
+        || {
+            let l = chol_l.as_ref().unwrap();
+            let lt = transpose(l);
+            let llt = mat_mul(l, &lt);
+            let max_diff = max_abs_diff_matrix(&a, &llt);
+            if max_diff < 1e-10 {
+                Ok(format!("A == LL' verified: max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!("A != LL': max_diff={max_diff:.2e}"))
+            }
+        },
+    );
+
+    r.record_step(
+        "verify_l_lower_triangular",
+        "L is lower triangular",
+        "structural check",
+        "strict",
+        || {
+            let l = chol_l.as_ref().unwrap();
+            let n = l.len();
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    if l[i][j].abs() > 1e-12 {
+                        return Err(format!("L[{i},{j}] = {} != 0", l[i][j]));
+                    }
+                }
+            }
+            Ok("L is lower triangular".to_string())
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+/// Scenario 16: Eigenvalue decomposition - verify A @ v = λ @ v
+#[test]
+fn e2e_p2c002_16_eigenvalue_decomposition() {
+    let mut r = ScenarioRunner::new("p2c002_16_eigenvalue_decomposition");
+    // Matrix with known eigenvalues: 1, 2, 3
+    let a = vec![
+        vec![2.0, 0.0, 0.0],
+        vec![0.0, 3.0, 4.0],
+        vec![0.0, 4.0, 9.0],
+    ];
+    r.set_matrix_meta((3, 3), "strict");
+
+    let mut eig_result = None;
+
+    r.record_step("compute_eig", "eig(A)", "3x3 matrix", "strict", || {
+        let res = eig(&a, DecompOptions::default()).map_err(|e| format!("eig failed: {e}"))?;
+        eig_result = Some(res);
+        Ok("eigenvalue decomposition computed".to_string())
+    });
+
+    r.record_step(
+        "verify_eigenvalue_equation",
+        "A @ v == λ @ v for each pair",
+        "eigenpair check",
+        "strict",
+        || {
+            let res = eig_result.as_ref().unwrap();
+            let n = a.len();
+            let mut max_residual = 0.0f64;
+
+            for k in 0..n {
+                // Skip complex eigenvalues for simplicity
+                if res.eigenvalues_im[k].abs() > 1e-10 {
+                    continue;
+                }
+                let lambda = res.eigenvalues_re[k];
+
+                // Extract k-th eigenvector (column k of eigenvectors matrix)
+                let v: Vec<f64> = res.eigenvectors.iter().map(|row| row[k]).collect();
+
+                // Compute A @ v
+                let av = mat_vec_mul(&a, &v);
+
+                // Compute λ @ v
+                let lambda_v: Vec<f64> = v.iter().map(|&x| lambda * x).collect();
+
+                let residual = max_abs_diff_vec(&av, &lambda_v);
+                max_residual = max_residual.max(residual);
+            }
+
+            if max_residual < 1e-10 {
+                Ok(format!(
+                    "eigenpairs verified: max_residual={max_residual:.2e}, λ={:?}",
+                    res.eigenvalues_re
+                ))
+            } else {
+                Err(format!(
+                    "eigenpair equation violated: max_residual={max_residual:.2e}"
+                ))
+            }
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+/// Scenario 17: Symmetric eigenvalue (eigh) - verify real eigenvalues and orthogonal eigenvectors
+#[test]
+fn e2e_p2c002_17_symmetric_eigenvalue() {
+    let mut r = ScenarioRunner::new("p2c002_17_symmetric_eigenvalue");
+    // Symmetric matrix
+    let a = vec![
+        vec![4.0, 1.0, 1.0],
+        vec![1.0, 4.0, 1.0],
+        vec![1.0, 1.0, 4.0],
+    ];
+    r.set_matrix_meta((3, 3), "strict");
+
+    let mut eigh_result = None;
+
+    r.record_step("compute_eigh", "eigh(A)", "3x3 symmetric", "strict", || {
+        let res = eigh(&a, DecompOptions::default()).map_err(|e| format!("eigh failed: {e}"))?;
+        eigh_result = Some(res);
+        Ok("symmetric eigenvalue decomposition computed".to_string())
+    });
+
+    r.record_step(
+        "verify_eigenvalues_real",
+        "all eigenvalues are real",
+        "symmetric property",
+        "strict",
+        || {
+            let eigenvalues = &eigh_result.as_ref().unwrap().eigenvalues;
+            // eigenvalues from eigh are guaranteed real, just verify they're finite
+            for (i, &ev) in eigenvalues.iter().enumerate() {
+                if !ev.is_finite() {
+                    return Err(format!("eigenvalue[{i}] = {ev} is not finite"));
+                }
+            }
+            Ok(format!("eigenvalues are real: {:?}", eigenvalues))
+        },
+    );
+
+    r.record_step(
+        "verify_eigenvectors_orthogonal",
+        "V' @ V == I",
+        "orthogonality check",
+        "strict",
+        || {
+            let v = &eigh_result.as_ref().unwrap().eigenvectors;
+            let n = v.len();
+            let vt = transpose(v);
+            let vtv = mat_mul(&vt, v);
+            let eye = identity_matrix(n);
+            let max_diff = max_abs_diff_matrix(&vtv, &eye);
+            if max_diff < 1e-10 {
+                Ok(format!("eigenvectors orthogonal: max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!(
+                    "eigenvectors not orthogonal: max_diff={max_diff:.2e}"
+                ))
+            }
+        },
+    );
+
+    r.record_step(
+        "verify_reconstruction",
+        "A == V @ diag(λ) @ V'",
+        "spectral decomposition",
+        "strict",
+        || {
+            let res = eigh_result.as_ref().unwrap();
+            let n = a.len();
+            let v = &res.eigenvectors;
+            let eigenvalues = &res.eigenvalues;
+
+            // Compute V @ diag(λ)
+            let mut vd = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..n {
+                    vd[i][j] = v[i][j] * eigenvalues[j];
+                }
+            }
+            // Compute (V @ diag(λ)) @ V'
+            let vt = transpose(v);
+            let reconstructed = mat_mul(&vd, &vt);
+
+            let max_diff = max_abs_diff_matrix(&a, &reconstructed);
+            if max_diff < 1e-10 {
+                Ok(format!("A == VΛV' verified: max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!(
+                    "spectral reconstruction failed: max_diff={max_diff:.2e}"
+                ))
+            }
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+/// Scenario 18: Matrix exponential - verify expm(0) = I and expm properties
+#[test]
+fn e2e_p2c002_18_matrix_exponential() {
+    let mut r = ScenarioRunner::new("p2c002_18_matrix_exponential");
+    r.set_matrix_meta((3, 3), "strict");
+
+    r.record_step(
+        "verify_expm_zero",
+        "expm(0) == I",
+        "zero matrix property",
+        "strict",
+        || {
+            let zero = vec![vec![0.0; 3]; 3];
+            let result = expm(&zero, DecompOptions::default())
+                .map_err(|e| format!("expm(0) failed: {e}"))?;
+            let eye = identity_matrix(3);
+            let max_diff = max_abs_diff_matrix(&result, &eye);
+            if max_diff < 1e-12 {
+                Ok(format!("expm(0) == I verified: max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!("expm(0) != I: max_diff={max_diff:.2e}"))
+            }
+        },
+    );
+
+    r.record_step(
+        "verify_expm_diagonal",
+        "expm(diag(a,b,c)) == diag(e^a, e^b, e^c)",
+        "diagonal matrix property",
+        "strict",
+        || {
+            let diag_a = vec![
+                vec![1.0, 0.0, 0.0],
+                vec![0.0, 2.0, 0.0],
+                vec![0.0, 0.0, 3.0],
+            ];
+            let result = expm(&diag_a, DecompOptions::default())
+                .map_err(|e| format!("expm(diag) failed: {e}"))?;
+            let expected = vec![
+                vec![1.0_f64.exp(), 0.0, 0.0],
+                vec![0.0, 2.0_f64.exp(), 0.0],
+                vec![0.0, 0.0, 3.0_f64.exp()],
+            ];
+            let max_diff = max_abs_diff_matrix(&result, &expected);
+            if max_diff < 1e-10 {
+                Ok(format!(
+                    "expm(diag) verified: max_diff={max_diff:.2e}, e^[1,2,3]=[{:.4},{:.4},{:.4}]",
+                    result[0][0], result[1][1], result[2][2]
+                ))
+            } else {
+                Err(format!("expm(diag) incorrect: max_diff={max_diff:.2e}"))
+            }
+        },
+    );
+
+    r.record_step(
+        "verify_expm_nilpotent",
+        "expm(N) for nilpotent N",
+        "nilpotent matrix (N^2=0)",
+        "strict",
+        || {
+            // Nilpotent matrix: [[0,1,0],[0,0,1],[0,0,0]]
+            // N^2 = [[0,0,1],[0,0,0],[0,0,0]], N^3 = 0
+            // expm(N) = I + N + N^2/2! = I + N + N^2/2
+            let n_mat = vec![
+                vec![0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 1.0],
+                vec![0.0, 0.0, 0.0],
+            ];
+            let result = expm(&n_mat, DecompOptions::default())
+                .map_err(|e| format!("expm(nilpotent) failed: {e}"))?;
+            // Expected: I + N + N^2/2
+            let expected = vec![
+                vec![1.0, 1.0, 0.5],
+                vec![0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0],
+            ];
+            let max_diff = max_abs_diff_matrix(&result, &expected);
+            if max_diff < 1e-10 {
+                Ok(format!(
+                    "expm(nilpotent) verified: max_diff={max_diff:.2e}"
+                ))
+            } else {
+                Err(format!(
+                    "expm(nilpotent) incorrect: max_diff={max_diff:.2e}"
+                ))
+            }
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+/// Scenario 19: Sylvester equation - verify A @ X + X @ B = C
+#[test]
+fn e2e_p2c002_19_sylvester_equation() {
+    let mut r = ScenarioRunner::new("p2c002_19_sylvester_equation");
+    // A (2x2), B (3x3), C (2x3)
+    let a_mat = vec![vec![1.0, 2.0], vec![0.0, 4.0]];
+    let b_mat = vec![
+        vec![5.0, 1.0, 0.0],
+        vec![0.0, 6.0, 2.0],
+        vec![0.0, 0.0, 7.0],
+    ];
+    let c_mat = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+    r.set_matrix_meta((2, 3), "strict");
+
+    let mut x_sol = None;
+
+    r.record_step(
+        "solve_sylvester",
+        "solve_sylvester(A, B, C)",
+        "2x2 A, 3x3 B, 2x3 C",
+        "strict",
+        || {
+            let res = solve_sylvester(&a_mat, &b_mat, &c_mat, DecompOptions::default())
+                .map_err(|e| format!("solve_sylvester failed: {e}"))?;
+            x_sol = Some(res);
+            Ok("Sylvester equation solved".to_string())
+        },
+    );
+
+    r.record_step(
+        "verify_axb_equals_c",
+        "A @ X + X @ B == C",
+        "Sylvester equation verification",
+        "strict",
+        || {
+            let x = x_sol.as_ref().unwrap();
+            // Compute A @ X
+            let ax = mat_mul(&a_mat, x);
+            // Compute X @ B
+            let xb = mat_mul(x, &b_mat);
+            // Compute A @ X + X @ B
+            let mut axb = vec![vec![0.0; c_mat[0].len()]; c_mat.len()];
+            for i in 0..axb.len() {
+                for j in 0..axb[0].len() {
+                    axb[i][j] = ax[i][j] + xb[i][j];
+                }
+            }
+            let max_diff = max_abs_diff_matrix(&axb, &c_mat);
+            if max_diff < 1e-10 {
+                Ok(format!("AX + XB == C verified: max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!("AX + XB != C: max_diff={max_diff:.2e}"))
+            }
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+/// Scenario 20: Matrix norm and condition number
+#[test]
+fn e2e_p2c002_20_norm_and_condition() {
+    let mut r = ScenarioRunner::new("p2c002_20_norm_and_condition");
+    // Well-conditioned matrix
+    let a_good = vec![
+        vec![1.0, 0.0, 0.0],
+        vec![0.0, 2.0, 0.0],
+        vec![0.0, 0.0, 3.0],
+    ];
+    // Ill-conditioned matrix (large condition number)
+    let a_bad = vec![
+        vec![1.0, 0.0, 0.0],
+        vec![0.0, 1e-10, 0.0],
+        vec![0.0, 0.0, 1.0],
+    ];
+    r.set_matrix_meta((3, 3), "strict");
+
+    r.record_step(
+        "compute_frobenius_norm",
+        "norm(A, 'fro')",
+        "Frobenius norm of diagonal",
+        "strict",
+        || {
+            let fro = norm(&a_good, NormKind::Fro, DecompOptions::default())
+                .map_err(|e| format!("{e}"))?;
+            // Expected: sqrt(1 + 4 + 9) = sqrt(14)
+            let expected = 14.0_f64.sqrt();
+            let diff = (fro - expected).abs();
+            if diff < 1e-10 {
+                Ok(format!("||A||_F = {fro:.6} (expected {expected:.6})"))
+            } else {
+                Err(format!(
+                    "Frobenius norm incorrect: got {fro}, expected {expected}"
+                ))
+            }
+        },
+    );
+
+    r.record_step(
+        "compute_spectral_norm",
+        "norm(A, 'spectral')",
+        "spectral norm (largest singular value)",
+        "strict",
+        || {
+            let spec = norm(&a_good, NormKind::Spectral, DecompOptions::default())
+                .map_err(|e| format!("{e}"))?;
+            // For diagonal matrix, spectral norm = max(abs(diagonal)) = 3
+            let expected = 3.0;
+            let diff = (spec - expected).abs();
+            if diff < 1e-10 {
+                Ok(format!("||A||_2 = {spec:.6} (expected {expected:.6})"))
+            } else {
+                Err(format!(
+                    "spectral norm incorrect: got {spec}, expected {expected}"
+                ))
+            }
+        },
+    );
+
+    r.record_step(
+        "verify_cond_well_conditioned",
+        "cond(A_good) is small",
+        "diagonal matrix condition number",
+        "strict",
+        || {
+            let c =
+                cond(&a_good, DecompOptions::default()).map_err(|e| format!("{e}"))?;
+            // cond = max(sv) / min(sv) = 3 / 1 = 3
+            let expected = 3.0;
+            let diff = (c - expected).abs();
+            if diff < 1e-10 {
+                Ok(format!(
+                    "cond(A_good) = {c:.6} (expected {expected:.6}, well-conditioned)"
+                ))
+            } else {
+                Err(format!(
+                    "condition number incorrect: got {c}, expected {expected}"
+                ))
+            }
+        },
+    );
+
+    r.record_step(
+        "verify_cond_ill_conditioned",
+        "cond(A_bad) is large",
+        "ill-conditioned matrix",
+        "strict",
+        || {
+            let c =
+                cond(&a_bad, DecompOptions::default()).map_err(|e| format!("{e}"))?;
+            // cond = max(sv) / min(sv) = 1 / 1e-10 = 1e10
+            if c > 1e9 {
+                Ok(format!("cond(A_bad) = {c:.2e} (large, ill-conditioned)"))
+            } else {
+                Err(format!("expected large condition number, got {c:.2e}"))
+            }
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+// ───────────────────────── Helper functions ─────────────────────────
+
+fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    if a.is_empty() {
+        return Vec::new();
+    }
+    let m = a.len();
+    let n = a[0].len();
+    let mut t = vec![vec![0.0; m]; n];
+    for i in 0..m {
+        for j in 0..n {
+            t[j][i] = a[i][j];
+        }
+    }
+    t
 }
