@@ -4522,6 +4522,112 @@ fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved)
     }
 }
 
+fn compare_integrate_case_differential(
+    case: &IntegrateCase,
+    observed: &IntegrateObserved,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    let tolerance = ToleranceUsed {
+        atol: case.expected.atol.unwrap_or(1e-12),
+        rtol: case.expected.rtol.unwrap_or(1e-12),
+        comparison_mode: "allclose".to_owned(),
+    };
+
+    match (case.expected.kind.as_str(), observed) {
+        ("scalar", IntegrateObserved::Scalar(actual)) => {
+            let expected = match &case.expected.value {
+                Some(serde_json::Value::Number(value)) => match value.as_f64() {
+                    Some(value) => value,
+                    None => {
+                        return (
+                            false,
+                            "expected scalar value must be finite".to_owned(),
+                            None,
+                            None,
+                        );
+                    }
+                },
+                _ => {
+                    return (
+                        false,
+                        "expected scalar value missing".to_owned(),
+                        None,
+                        None,
+                    );
+                }
+            };
+            let diff = (*actual - expected).abs();
+            let pass = allclose_scalar(*actual, expected, tolerance.atol, tolerance.rtol);
+            let msg = if pass {
+                format!("integrate scalar matched (diff={diff:.2e})")
+            } else {
+                format!(
+                    "integrate scalar mismatch: expected={expected:.16e}, got={actual:.16e}, diff={diff:.2e}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(diff), Some(tolerance))
+        }
+        ("array", IntegrateObserved::Array(actual)) => {
+            let expected = match &case.expected.value {
+                Some(serde_json::Value::Array(values)) => values
+                    .iter()
+                    .map(serde_json::Value::as_f64)
+                    .collect::<Option<Vec<_>>>(),
+                _ => None,
+            };
+            let expected = match expected {
+                Some(expected) => expected,
+                None => {
+                    return (false, "expected array value missing".to_owned(), None, None);
+                }
+            };
+
+            let diff = max_diff_vec(actual, &expected);
+            let pass = allclose_vec(actual, &expected, tolerance.atol, tolerance.rtol);
+            let msg = if pass {
+                format!(
+                    "integrate array matched len={} (max_diff={diff:.2e})",
+                    actual.len()
+                )
+            } else if actual.len() != expected.len() {
+                format!(
+                    "integrate array length mismatch: expected={}, got={}",
+                    expected.len(),
+                    actual.len()
+                )
+            } else {
+                format!(
+                    "integrate array mismatch: max_diff={diff:.2e}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(diff), Some(tolerance))
+        }
+        ("error", IntegrateObserved::Error(actual))
+        | ("error_kind", IntegrateObserved::Error(actual)) => {
+            let expected = match &case.expected.value {
+                Some(serde_json::Value::String(value)) => value,
+                _ => {
+                    return (false, "expected error value missing".to_owned(), None, None);
+                }
+            };
+            let pass = actual == expected;
+            let msg = if pass {
+                format!("integrate error matched ({actual})")
+            } else {
+                format!("integrate error mismatch: expected={expected}, got={actual}")
+            };
+            (pass, msg, None, None)
+        }
+        (expected_kind, actual) => (
+            false,
+            format!("shape mismatch: expected kind={expected_kind}, got {actual:?}"),
+            None,
+            None,
+        ),
+    }
+}
+
 pub fn run_integrate_packet(
     config: &HarnessConfig,
     fixture_name: &str,
@@ -5923,6 +6029,8 @@ pub fn run_differential_test(
         run_differential_special(fixture_path, &raw, oracle_config)
     } else if family.contains("optim") {
         run_differential_optimize(fixture_path, &raw, oracle_config)
+    } else if family.contains("integrate") {
+        run_differential_integrate(fixture_path, &raw, oracle_config)
     } else {
         Err(HarnessError::FixtureParse {
             path: fixture_path.to_path_buf(),
@@ -6169,6 +6277,50 @@ fn run_differential_special(
         let observed = execute_special_case(case);
         let (passed, message, max_diff, tolerance_used) =
             compare_special_case_differential(case, &observed);
+
+        per_case_results.push(DifferentialCaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+            max_diff,
+            tolerance_used,
+            oracle_status: oracle_status.clone(),
+        });
+    }
+
+    let pass_count = per_case_results.iter().filter(|r| r.passed).count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+fn run_differential_integrate(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: IntegratePacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+
+    for case in &fixture.cases {
+        let observed = execute_integrate_case(case);
+        let (passed, message, max_diff, tolerance_used) =
+            compare_integrate_case_differential(case, &observed);
 
         per_case_results.push(DifferentialCaseResult {
             case_id: case.case_id().to_owned(),
@@ -7758,8 +7910,8 @@ mod tests {
     use super::style_for_case_result;
     use super::{
         AggregateParityReport, ArrayApiPacketFixture, ConformanceReport, DifferentialOracleConfig,
-        HarnessConfig, LinalgCase, LinalgExpectedOutcome, LinalgPacketFixture,
-        OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
+        HarnessConfig, IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome,
+        LinalgPacketFixture, OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig,
         SpecialPacketFixture, aggregate_packet_reports, discover_fixtures, ensure_artifact_layout,
         load_oracle_capture, run_array_api_packet, run_casp_packet, run_cluster_packet,
         run_differential_test, run_fft_packet, run_integrate_packet, run_linalg_packet,
@@ -8165,6 +8317,20 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
     fn array_api_case_expected_summary(expected: &super::ArrayApiExpectedOutcome) -> String {
         format!("{expected:?}")
+    }
+
+    fn integrate_case_input_summary(case: &super::IntegrateCase) -> String {
+        format!(
+            "function={} mode={} args={:?}",
+            case.function, case.mode, case.args
+        )
+    }
+
+    fn integrate_case_expected_summary(expected: &super::IntegrateExpected) -> String {
+        format!(
+            "kind={} value={:?} atol={:?} rtol={:?} contract_ref={}",
+            expected.kind, expected.value, expected.atol, expected.rtol, expected.contract_ref
+        )
     }
 
     #[test]
@@ -8775,6 +8941,95 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let output_path = output_dir.join("structured_case_logs.json");
         let payload = serde_json::to_vec_pretty(&logs).expect("serialize array api logs");
         fs::write(&output_path, payload).expect("write array_api structured logs");
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn differential_test_integrate_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-013_integrate_core.json");
+        let oracle = default_test_oracle();
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("differential integrate runs");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-013");
+        assert_eq!(report.family, "integrate_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 23);
+    }
+
+    #[test]
+    fn differential_integrate_quota_and_structured_logs() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-013_integrate_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read integrate fixture");
+        let fixture: IntegratePacketFixture =
+            serde_json::from_str(&raw).expect("parse integrate fixture");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle).expect("integrate differential");
+
+        let mut by_case = std::collections::BTreeMap::new();
+        for case in &fixture.cases {
+            by_case.insert(case.case_id().to_owned(), case);
+        }
+
+        let mut differential_count = 0usize;
+        let mut logs = Vec::with_capacity(report.per_case_results.len());
+
+        for case_result in &report.per_case_results {
+            let case = by_case
+                .get(&case_result.case_id)
+                .expect("every report case should exist in fixture");
+            if case.category == "differential" {
+                differential_count += 1;
+            }
+
+            let log = StructuredCaseLog {
+                test_id: case_result.case_id.clone(),
+                category: case.category.clone(),
+                input_summary: integrate_case_input_summary(case),
+                expected: integrate_case_expected_summary(&case.expected),
+                actual: case_result.message.clone(),
+                diff: case_result.max_diff,
+                tolerance: case_result.tolerance_used.clone(),
+                pass: case_result.passed,
+            };
+
+            let payload =
+                serde_json::to_string(&log).expect("structured conformance log should serialize");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&payload).expect("structured log should parse");
+            assert!(parsed.get("test_id").is_some());
+            assert!(parsed.get("category").is_some());
+            assert!(parsed.get("input_summary").is_some());
+            assert!(parsed.get("expected").is_some());
+            assert!(parsed.get("actual").is_some());
+            assert!(parsed.get("diff").is_some());
+            assert!(parsed.get("tolerance").is_some());
+            assert!(parsed.get("pass").is_some());
+            logs.push(log);
+        }
+
+        assert_eq!(
+            differential_count, 23,
+            "expected 23 differential cases, got {differential_count}"
+        );
+        assert_eq!(report.fail_count, 0);
+
+        let output_dir = HarnessConfig::default_paths()
+            .artifact_dir_for("P2C-013")
+            .join("differential");
+        fs::create_dir_all(&output_dir).expect("create integrate differential artifact directory");
+        let output_path = output_dir.join("structured_case_logs.json");
+        let payload = serde_json::to_vec_pretty(&logs).expect("serialize integrate logs");
+        fs::write(&output_path, payload).expect("write integrate structured logs");
         assert!(output_path.exists());
     }
 

@@ -22,6 +22,10 @@ use fsci_stats::{
     Exponential, FrechetR, GammaDist, GenHalfLogistic, GenLogistic, Gompertz, Gumbel, InvWeibull,
     LogLaplace, Logistic, Lognormal, Maxwell, Mielke, Normal, Pareto, Rayleigh, StudentT,
     TukeyLambda, Uniform, Weibull,
+    // Hypothesis tests
+    chisquare, describe, f_oneway, jarque_bera, kendalltau, ks_1samp, ks_2samp, kruskal, kurtosis,
+    linregress, mannwhitneyu, normaltest, pearsonr, shapiro, skew, spearmanr, ttest_1samp,
+    ttest_ind, ttest_rel, wilcoxon, fisher_exact, chi2_contingency,
 };
 use serde::Serialize;
 
