@@ -6544,12 +6544,7 @@ impl Lti {
     ///
     /// # Returns
     /// Output signal values at each time point
-    pub fn lsim(
-        &self,
-        u: &[f64],
-        t: &[f64],
-        x0: Option<&[f64]>,
-    ) -> Result<Vec<f64>, SignalError> {
+    pub fn lsim(&self, u: &[f64], t: &[f64], x0: Option<&[f64]>) -> Result<Vec<f64>, SignalError> {
         if t.is_empty() {
             return Ok(Vec::new());
         }
@@ -6587,8 +6582,12 @@ impl Lti {
 
         for i in 0..t.len() {
             // Output: y = c'x + d*u
-            let output: f64 =
-                c.iter().zip(x.iter()).map(|(&ci, &xi)| ci * xi).sum::<f64>() + d * u[i];
+            let output: f64 = c
+                .iter()
+                .zip(x.iter())
+                .map(|(&ci, &xi)| ci * xi)
+                .sum::<f64>()
+                + d * u[i];
             y.push(output);
 
             if i + 1 < t.len() {
@@ -10109,7 +10108,11 @@ mod tests {
         let sys = Lti::new(vec![1.0], vec![1.0, 2.0]).expect("valid");
         let poles = sys.poles().expect("poles");
         assert_eq!(poles.len(), 1);
-        assert!((poles[0].0 + 2.0).abs() < 1e-10, "pole real = {}", poles[0].0);
+        assert!(
+            (poles[0].0 + 2.0).abs() < 1e-10,
+            "pole real = {}",
+            poles[0].0
+        );
         assert!(poles[0].1.abs() < 1e-10, "pole imag = {}", poles[0].1);
     }
 

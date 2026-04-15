@@ -110,6 +110,143 @@ where
     Ok(squared_error.sqrt())
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Rosenbrock test function family
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// The Rosenbrock function.
+///
+/// Matches `scipy.optimize.rosen`. The function is defined as:
+/// f(x) = sum_{i=0}^{n-2} [100*(x_{i+1} - x_i^2)^2 + (1 - x_i)^2]
+///
+/// The global minimum is at x = [1, 1, ..., 1] with f(x) = 0.
+///
+/// # Arguments
+/// * `x` - Input point (length >= 2)
+///
+/// # Returns
+/// Function value at x
+pub fn rosen(x: &[f64]) -> f64 {
+    if x.len() < 2 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for i in 0..x.len() - 1 {
+        let t1 = x[i + 1] - x[i] * x[i];
+        let t2 = 1.0 - x[i];
+        sum += 100.0 * t1 * t1 + t2 * t2;
+    }
+    sum
+}
+
+/// Gradient of the Rosenbrock function.
+///
+/// Matches `scipy.optimize.rosen_der`.
+///
+/// # Arguments
+/// * `x` - Input point (length >= 2)
+///
+/// # Returns
+/// Gradient vector at x
+pub fn rosen_der(x: &[f64]) -> Vec<f64> {
+    let n = x.len();
+    if n < 2 {
+        return vec![0.0; n];
+    }
+
+    let mut grad = vec![0.0; n];
+
+    // First element: df/dx_0 = -400*x_0*(x_1 - x_0^2) - 2*(1 - x_0)
+    grad[0] = -400.0 * x[0] * (x[1] - x[0] * x[0]) - 2.0 * (1.0 - x[0]);
+
+    // Middle elements: df/dx_i = 200*(x_i - x_{i-1}^2) - 400*x_i*(x_{i+1} - x_i^2) - 2*(1 - x_i)
+    for i in 1..n - 1 {
+        grad[i] = 200.0 * (x[i] - x[i - 1] * x[i - 1])
+            - 400.0 * x[i] * (x[i + 1] - x[i] * x[i])
+            - 2.0 * (1.0 - x[i]);
+    }
+
+    // Last element: df/dx_{n-1} = 200*(x_{n-1} - x_{n-2}^2)
+    grad[n - 1] = 200.0 * (x[n - 1] - x[n - 2] * x[n - 2]);
+
+    grad
+}
+
+/// Hessian matrix of the Rosenbrock function.
+///
+/// Matches `scipy.optimize.rosen_hess`.
+///
+/// # Arguments
+/// * `x` - Input point (length >= 2)
+///
+/// # Returns
+/// Hessian matrix (n x n) at x
+pub fn rosen_hess(x: &[f64]) -> Vec<Vec<f64>> {
+    let n = x.len();
+    if n < 2 {
+        return vec![vec![0.0; n]; n];
+    }
+
+    let mut h = vec![vec![0.0; n]; n];
+
+    // The Hessian has a tridiagonal structure
+    // d²f/dx_i² and d²f/dx_i dx_{i±1} are non-zero
+
+    // First diagonal element
+    h[0][0] = 1200.0 * x[0] * x[0] - 400.0 * x[1] + 2.0;
+
+    // First off-diagonal
+    h[0][1] = -400.0 * x[0];
+    h[1][0] = -400.0 * x[0];
+
+    // Middle elements
+    for i in 1..n - 1 {
+        h[i][i] = 202.0 + 1200.0 * x[i] * x[i] - 400.0 * x[i + 1];
+        h[i][i + 1] = -400.0 * x[i];
+        h[i + 1][i] = -400.0 * x[i];
+    }
+
+    // Last diagonal element
+    h[n - 1][n - 1] = 200.0;
+
+    h
+}
+
+/// Hessian-vector product for the Rosenbrock function.
+///
+/// Matches `scipy.optimize.rosen_hess_prod`. Computes H(x) @ p
+/// without explicitly forming the Hessian matrix.
+///
+/// # Arguments
+/// * `x` - Input point (length >= 2)
+/// * `p` - Vector to multiply (same length as x)
+///
+/// # Returns
+/// Result of Hessian-vector product
+pub fn rosen_hess_prod(x: &[f64], p: &[f64]) -> Vec<f64> {
+    let n = x.len();
+    if n < 2 || p.len() != n {
+        return vec![0.0; n];
+    }
+
+    let mut hp = vec![0.0; n];
+
+    // First element
+    hp[0] = (1200.0 * x[0] * x[0] - 400.0 * x[1] + 2.0) * p[0] - 400.0 * x[0] * p[1];
+
+    // Middle elements
+    for i in 1..n - 1 {
+        hp[i] = -400.0 * x[i - 1] * p[i - 1]
+            + (202.0 + 1200.0 * x[i] * x[i] - 400.0 * x[i + 1]) * p[i]
+            - 400.0 * x[i] * p[i + 1];
+    }
+
+    // Last element
+    hp[n - 1] = -400.0 * x[n - 2] * p[n - 2] + 200.0 * p[n - 1];
+
+    hp
+}
+
 /// Solve the linear sum assignment problem using a Hungarian-style algorithm.
 ///
 /// Returns `(row_ind, col_ind)` with monotonically increasing row indices.
@@ -2863,7 +3000,8 @@ mod tests {
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions, Integrality,
         LinearConstraint, MilpOptions, MilpProblem, MinimizeOptions, NonlinearConstraint,
         OptimizeMethod, RootOptions, approx_fprime, basinhopping, check_grad, cobyla,
-        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, pso, shgo,
+        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, pso,
+        rosen, rosen_der, rosen_hess, rosen_hess_prod, shgo,
     };
 
     #[test]
@@ -3648,5 +3786,101 @@ mod tests {
         let err = cobyla(|_: &[f64]| 0.0, &[], &[] as &[fn(&[f64]) -> f64], 100, 0.5)
             .expect_err("empty x0");
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    // ── Rosenbrock test function tests ──────────────────────────────
+
+    #[test]
+    fn rosen_minimum_is_zero() {
+        // f([1, 1, ..., 1]) = 0
+        let x = vec![1.0; 5];
+        let val = rosen(&x);
+        assert!(val.abs() < 1e-12, "rosen at minimum = {val}");
+    }
+
+    #[test]
+    fn rosen_away_from_minimum() {
+        // f([0, 0]) = 1
+        let val = rosen(&[0.0, 0.0]);
+        assert!((val - 1.0).abs() < 1e-12, "rosen([0,0]) = {val}");
+    }
+
+    #[test]
+    fn rosen_2d_value() {
+        // f([2, 3]) = 100*(3 - 4)^2 + (1 - 2)^2 = 100 + 1 = 101
+        let val = rosen(&[2.0, 3.0]);
+        assert!((val - 101.0).abs() < 1e-10, "rosen([2,3]) = {val}");
+    }
+
+    #[test]
+    fn rosen_der_at_minimum_is_zero() {
+        // Gradient at minimum should be zero
+        let x = vec![1.0; 4];
+        let grad = rosen_der(&x);
+        for (i, g) in grad.iter().enumerate() {
+            assert!(g.abs() < 1e-10, "grad[{i}] = {g}, expected 0");
+        }
+    }
+
+    #[test]
+    fn rosen_der_numerical_check() {
+        // Compare analytical gradient to numerical approximation
+        let x = vec![1.5, 2.0, 0.5];
+        let grad = rosen_der(&x);
+        let num_grad = approx_fprime(&x, rosen, 1e-7).expect("approx_fprime");
+        for (i, (a, n)) in grad.iter().zip(num_grad.iter()).enumerate() {
+            // Relative error check for large values
+            let tol = 1e-4 * a.abs().max(1.0);
+            assert!(
+                (a - n).abs() < tol,
+                "grad[{i}]: analytical={a}, numerical={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn rosen_hess_is_symmetric() {
+        let x = vec![1.2, 0.8, 1.5];
+        let h = rosen_hess(&x);
+        for i in 0..h.len() {
+            for j in i + 1..h.len() {
+                assert!(
+                    (h[i][j] - h[j][i]).abs() < 1e-12,
+                    "H[{i}][{j}] != H[{j}][{i}]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rosen_hess_at_minimum() {
+        // At [1,1], H should be [[802, -400], [-400, 200]]
+        let h = rosen_hess(&[1.0, 1.0]);
+        assert!((h[0][0] - 802.0).abs() < 1e-10, "H[0][0] = {}", h[0][0]);
+        assert!((h[0][1] + 400.0).abs() < 1e-10, "H[0][1] = {}", h[0][1]);
+        assert!((h[1][0] + 400.0).abs() < 1e-10, "H[1][0] = {}", h[1][0]);
+        assert!((h[1][1] - 200.0).abs() < 1e-10, "H[1][1] = {}", h[1][1]);
+    }
+
+    #[test]
+    fn rosen_hess_prod_matches_explicit() {
+        // H @ p should match explicit matrix-vector product
+        let x = vec![0.5, 1.5, 2.0];
+        let p = vec![1.0, 2.0, 3.0];
+        let h = rosen_hess(&x);
+        let hp_explicit: Vec<f64> = (0..3)
+            .map(|i| h[i].iter().zip(p.iter()).map(|(a, b)| a * b).sum::<f64>())
+            .collect();
+        let hp = rosen_hess_prod(&x, &p);
+        for (i, (e, c)) in hp_explicit.iter().zip(hp.iter()).enumerate() {
+            assert!((e - c).abs() < 1e-10, "hp[{i}]: explicit={e}, computed={c}");
+        }
+    }
+
+    #[test]
+    fn rosen_short_input() {
+        // Single element input should return 0
+        assert_eq!(rosen(&[1.0]), 0.0);
+        assert_eq!(rosen_der(&[1.0]), vec![0.0]);
     }
 }
