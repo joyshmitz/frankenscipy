@@ -1580,6 +1580,11 @@ impl RegularGridInterpolator {
                     actual: axis.len(),
                 });
             }
+            // Check for non-finite values (NaN/Inf) before sortedness check
+            // because NaN comparisons always return false, bypassing the sort check
+            if axis.iter().any(|&v| !v.is_finite()) {
+                return Err(InterpError::NonFiniteX);
+            }
             if axis.windows(2).any(|w| w[1] <= w[0]) {
                 return Err(InterpError::InvalidArgument {
                     detail: format!("axis {dim} not strictly increasing"),
@@ -3375,6 +3380,46 @@ mod tests {
             RegularGridInterpolator::new(points, values, RegularGridMethod::Nearest, false, None)
                 .expect("regular grid");
         assert!(interp.eval(&[f64::NAN]).unwrap().is_nan());
+    }
+
+    #[test]
+    fn regular_grid_rejects_nan_in_points() {
+        let points = vec![vec![0.0, f64::NAN, 2.0]];
+        let values = vec![0.0, 1.0, 2.0];
+        let err =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
+                .expect_err("nan in points");
+        assert!(matches!(err, InterpError::NonFiniteX));
+    }
+
+    #[test]
+    fn regular_grid_rejects_infinity_in_points() {
+        let points = vec![vec![0.0, f64::INFINITY, 2.0]];
+        let values = vec![0.0, 1.0, 2.0];
+        let err =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
+                .expect_err("inf in points");
+        assert!(matches!(err, InterpError::NonFiniteX));
+    }
+
+    #[test]
+    fn regular_grid_rejects_neg_infinity_in_points() {
+        let points = vec![vec![f64::NEG_INFINITY, 1.0, 2.0]];
+        let values = vec![0.0, 1.0, 2.0];
+        let err =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
+                .expect_err("neg_inf in points");
+        assert!(matches!(err, InterpError::NonFiniteX));
+    }
+
+    #[test]
+    fn regular_grid_rejects_nan_in_second_axis() {
+        let points = vec![vec![0.0, 1.0], vec![0.0, f64::NAN]];
+        let values = vec![0.0, 1.0, 2.0, 3.0];
+        let err =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
+                .expect_err("nan in second axis");
+        assert!(matches!(err, InterpError::NonFiniteX));
     }
 
     #[test]
