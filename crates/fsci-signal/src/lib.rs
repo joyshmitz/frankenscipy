@@ -1173,6 +1173,25 @@ pub fn blackmanharris(m: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Bartlett-Hann window.
+///
+/// Matches `scipy.signal.windows.barthann(M)`.
+pub fn barthann(m: usize) -> Vec<f64> {
+    if m == 0 {
+        return Vec::new();
+    }
+    if m == 1 {
+        return vec![1.0];
+    }
+    let denom = (m - 1) as f64;
+    (0..m)
+        .map(|i| {
+            let fac = (i as f64 / denom - 0.5).abs();
+            0.62 - 0.48 * fac + 0.38 * (2.0 * std::f64::consts::PI * fac).cos()
+        })
+        .collect()
+}
+
 /// Nuttall window (minimum 4-term Blackman-Harris).
 ///
 /// Matches `scipy.signal.windows.nuttall(M)`.
@@ -5724,9 +5743,9 @@ pub fn triang(n: usize) -> Vec<f64> {
 /// Matches `scipy.signal.get_window(window, Nx)`.
 ///
 /// # Supported windows
-/// `"hann"`, `"hamming"`, `"blackman"`, `"blackmanharris"`, `"bartlett"`,
-/// `"flattop"`, `"cosine"`, `"rectangular"` / `"boxcar"`, `"kaiser,<beta>"`
-/// (e.g. `"kaiser,8.6"`).
+/// `"hann"`, `"hamming"`, `"blackman"`, `"blackmanharris"`, `"barthann"`,
+/// `"bartlett"`, `"flattop"`, `"cosine"`, `"rectangular"` / `"boxcar"`,
+/// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`).
 pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
     let lower = window.trim().to_lowercase();
     if let Some(rest) = lower.strip_prefix("kaiser,") {
@@ -5741,6 +5760,7 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
         "hamming" => Ok(hamming(nx)),
         "blackman" => Ok(blackman(nx)),
         "blackmanharris" => Ok(blackmanharris(nx)),
+        "barthann" => Ok(barthann(nx)),
         "bartlett" | "triangle" => Ok(bartlett(nx)),
         "flattop" => Ok(flattop(nx)),
         "cosine" => Ok(cosine(nx)),
@@ -7168,6 +7188,24 @@ mod tests {
     }
 
     #[test]
+    fn barthann_window_matches_scipy_reference() {
+        let w = barthann(8);
+        let expected = [
+            0.0,
+            0.21164530386510985,
+            0.6017008120462566,
+            0.9280824555172049,
+            0.9280824555172051,
+            0.6017008120462566,
+            0.21164530386511002,
+            0.0,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn kaiser_window_beta_zero_is_rectangular() {
         let w = kaiser(8, 0.0);
         for &v in &w {
@@ -7184,6 +7222,7 @@ mod tests {
         assert!(hamming(0).is_empty());
         assert!(blackman(0).is_empty());
         assert!(blackmanharris(0).is_empty());
+        assert!(barthann(0).is_empty());
         assert!(kaiser(0, 5.0).is_empty());
     }
 
@@ -7193,6 +7232,7 @@ mod tests {
         assert_eq!(hamming(1), [1.0]);
         assert_eq!(blackman(1), [1.0]);
         assert_eq!(blackmanharris(1), [1.0]);
+        assert_eq!(barthann(1), [1.0]);
         assert_eq!(kaiser(1, 5.0), [1.0]);
     }
 
@@ -9020,6 +9060,13 @@ mod tests {
     fn get_window_dispatches_blackmanharris() {
         let w = get_window("blackmanharris", 10).unwrap();
         let expected = blackmanharris(10);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_barthann() {
+        let w = get_window("barthann", 10).unwrap();
+        let expected = barthann(10);
         assert_eq!(w, expected);
     }
 
