@@ -11,7 +11,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_ndimage::{BoundaryMode, NdArray, map_coordinates, shift, zoom};
+use fsci_ndimage::{
+    BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_opening,
+    center_of_mass, convolve, correlate, distance_transform_edt, find_objects, gaussian_filter,
+    label, laplace, map_coordinates, maximum_filter, mean_labels, median_filter, minimum_filter,
+    prewitt, rotate, shift, sobel, sum_labels, uniform_filter, zoom,
+};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -330,4 +335,744 @@ fn e2e_ndimage_interpolation() {
         .collect::<Vec<_>>()
         .join(" | ");
     assert!(all_pass, "scenario {scenario_id} had failures: {details}");
+}
+
+// ══════════════════ FILTER CONFORMANCE ══════════════════
+
+/// Test convolution and correlation filters
+#[test]
+fn e2e_ndimage_convolution() {
+    let scenario_id = "e2e_ndimage_convolution";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Test 1D convolution with simple kernel
+    let t = Instant::now();
+    let signal = NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![5]).unwrap();
+    let kernel = NdArray::new(vec![1.0, 0.0, -1.0], vec![3]).unwrap();
+    let conv_result = convolve(&signal, &kernel, BoundaryMode::Constant, 0.0);
+    let pass = match &conv_result {
+        Ok(result) => {
+            // Convolution with [-1, 0, 1] kernel computes differences
+            // At center: result[i] = signal[i+1] - signal[i-1]
+            result.data.len() == 5
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "convolve_1d_diff",
+        "ndimage::convolve(signal, kernel)",
+        "signal=[1,2,3,4,5], kernel=[1,0,-1]",
+        &format!("result={:?}", conv_result.as_ref().map(|r| &r.data)),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Test correlation (same as convolution with flipped kernel)
+    let t = Instant::now();
+    let corr_result = correlate(&signal, &kernel, BoundaryMode::Constant, 0.0);
+    let pass = corr_result.is_ok() && corr_result.as_ref().unwrap().data.len() == 5;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "correlate_1d",
+        "ndimage::correlate(signal, kernel)",
+        "signal=[1,2,3,4,5], kernel=[1,0,-1]",
+        &format!("result={:?}", corr_result.as_ref().map(|r| &r.data)),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Test uniform filter (box blur)
+    let t = Instant::now();
+    let image = NdArray::new(
+        vec![
+            0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0,
+        ],
+        vec![5, 5],
+    )
+    .unwrap();
+    let uniform_result = uniform_filter(&image, 3, BoundaryMode::Constant, 0.0);
+    let pass = match &uniform_result {
+        Ok(result) => {
+            // Center pixel should be average of 3x3 neighborhood = 9/9 = 1.0
+            let center_val = result.data[12]; // index 2*5+2 = 12
+            (center_val - 1.0).abs() < 1e-10
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "uniform_filter_3x3",
+        "ndimage::uniform_filter(size=3)",
+        "5x5 image with 3x3 center block",
+        &format!(
+            "center_val={}",
+            uniform_result.as_ref().map(|r| r.data[12]).unwrap_or(f64::NAN)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Test Gaussian filter
+    let t = Instant::now();
+    let gauss_result = gaussian_filter(&image, 1.0, BoundaryMode::Constant, 0.0);
+    let pass = match &gauss_result {
+        Ok(result) => {
+            // Gaussian should smooth the image, center should be close to but less than 1.0
+            let center_val = result.data[12];
+            center_val > 0.5 && center_val < 1.5
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "gaussian_filter_sigma1",
+        "ndimage::gaussian_filter(sigma=1.0)",
+        "5x5 image with 3x3 center block",
+        &format!(
+            "center_val={}",
+            gauss_result.as_ref().map(|r| r.data[12]).unwrap_or(f64::NAN)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Test median, minimum, and maximum filters
+#[test]
+fn e2e_ndimage_rank_filters() {
+    let scenario_id = "e2e_ndimage_rank_filters";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Image with an outlier
+    let image = NdArray::new(
+        vec![
+            1.0, 1.0, 1.0,
+            1.0, 100.0, 1.0,  // outlier in center
+            1.0, 1.0, 1.0,
+        ],
+        vec![3, 3],
+    )
+    .unwrap();
+
+    // Median filter should remove the outlier
+    let t = Instant::now();
+    let median_result = median_filter(&image, 3, BoundaryMode::Nearest, 0.0);
+    let pass = match &median_result {
+        Ok(result) => {
+            // Center pixel should be median of [1,1,1,1,100,1,1,1,1] = 1.0
+            let center_val = result.data[4];
+            (center_val - 1.0).abs() < 1e-10
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "median_filter_outlier",
+        "ndimage::median_filter(size=3)",
+        "3x3 image with outlier at center",
+        &format!(
+            "center_val={}",
+            median_result.as_ref().map(|r| r.data[4]).unwrap_or(f64::NAN)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Minimum filter
+    let t = Instant::now();
+    let min_result = minimum_filter(&image, 3, BoundaryMode::Nearest, 0.0);
+    let pass = match &min_result {
+        Ok(result) => {
+            // All pixels should be 1.0 (min of neighborhood)
+            result.data.iter().all(|&v| (v - 1.0).abs() < 1e-10)
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "minimum_filter",
+        "ndimage::minimum_filter(size=3)",
+        "3x3 image with outlier",
+        &format!("all_ones={}", pass),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Maximum filter
+    let t = Instant::now();
+    let max_result = maximum_filter(&image, 3, BoundaryMode::Nearest, 0.0);
+    let pass = match &max_result {
+        Ok(result) => {
+            // All pixels should be 100.0 (max of neighborhood includes center)
+            result.data.iter().all(|&v| (v - 100.0).abs() < 1e-10)
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "maximum_filter",
+        "ndimage::maximum_filter(size=3)",
+        "3x3 image with outlier",
+        &format!("all_100={}", pass),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Test edge detection: Sobel, Prewitt, Laplacian
+#[test]
+fn e2e_ndimage_edge_detection() {
+    let scenario_id = "e2e_ndimage_edge_detection";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Simple step edge image (left half black, right half white)
+    let image = NdArray::new(
+        vec![
+            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+        ],
+        vec![6, 6],
+    )
+    .unwrap();
+
+    // Sobel edge detection (horizontal derivative)
+    let t = Instant::now();
+    let sobel_result = sobel(&image, 1, BoundaryMode::Constant, 0.0);
+    let pass = match &sobel_result {
+        Ok(result) => {
+            // Edge should be detected in column 2-3 transition
+            // Values should be non-zero at the edge
+            let edge_col = 2; // column just before transition
+            let edge_val = result.data[1 * 6 + edge_col]; // row 1, col 2
+            edge_val.abs() > 0.1 || result.data[1 * 6 + 3].abs() > 0.1
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "sobel_horizontal",
+        "ndimage::sobel(axis=1)",
+        "6x6 step edge image",
+        &format!("edge_detected={}", pass),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Prewitt edge detection
+    let t = Instant::now();
+    let prewitt_result = prewitt(&image, 1, BoundaryMode::Constant, 0.0);
+    let pass = match &prewitt_result {
+        Ok(result) => {
+            // Similar to Sobel, should detect the vertical edge
+            let has_edge = result.data.iter().any(|&v| v.abs() > 0.1);
+            has_edge
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "prewitt_horizontal",
+        "ndimage::prewitt(axis=1)",
+        "6x6 step edge image",
+        &format!("edge_detected={}", pass),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Laplacian
+    let t = Instant::now();
+    let laplace_result = laplace(&image, BoundaryMode::Constant, 0.0);
+    let pass = match &laplace_result {
+        Ok(result) => {
+            // Laplacian should respond at edges
+            let has_response = result.data.iter().any(|&v| v.abs() > 0.1);
+            has_response
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "laplacian",
+        "ndimage::laplace()",
+        "6x6 step edge image",
+        &format!("has_response={}", pass),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Test binary morphological operations
+#[test]
+fn e2e_ndimage_binary_morphology() {
+    let scenario_id = "e2e_ndimage_binary_morphology";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Small binary image with a 3x3 square
+    let image = NdArray::new(
+        vec![
+            0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0,
+        ],
+        vec![5, 5],
+    )
+    .unwrap();
+
+    // Binary erosion should shrink the object
+    let t = Instant::now();
+    let eroded = binary_erosion(&image, 3, 1); // 3x3 structuring element
+    let pass = match &eroded {
+        Ok(result) => {
+            // After erosion, only center pixel should remain
+            let center_val = result.data[12]; // 2*5+2
+            let border_eroded = result.data[6] < 0.5; // 1*5+1 should be eroded
+            center_val > 0.5 && border_eroded
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "binary_erosion",
+        "ndimage::binary_erosion(size=3, iterations=1)",
+        "5x5 image with 3x3 square",
+        &format!(
+            "center={}, corner_eroded={}",
+            eroded.as_ref().map(|r| r.data[12]).unwrap_or(f64::NAN),
+            eroded.as_ref().map(|r| r.data[6] < 0.5).unwrap_or(false)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Binary dilation should expand the object
+    let t = Instant::now();
+    let dilated = binary_dilation(&image, 3, 1); // 3x3 structuring element
+    let pass = match &dilated {
+        Ok(result) => {
+            // After dilation, corners should be filled
+            let corner_filled = result.data[0] > 0.5; // top-left corner
+            let expanded = result.data.iter().filter(|&&v| v > 0.5).count() > 9;
+            corner_filled || expanded
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "binary_dilation",
+        "ndimage::binary_dilation(size=3, iterations=1)",
+        "5x5 image with 3x3 square",
+        &format!("expanded={}", pass),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Binary opening = erosion followed by dilation (removes small protrusions)
+    let t = Instant::now();
+    let opened = binary_opening(&image, 3, 1);
+    let pass = opened.is_ok();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "binary_opening",
+        "ndimage::binary_opening(size=3, iterations=1)",
+        "5x5 image with 3x3 square",
+        &format!("success={}", pass),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Binary closing = dilation followed by erosion (fills small holes)
+    let t = Instant::now();
+    let closed = binary_closing(&image, 3, 1);
+    let pass = closed.is_ok();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "binary_closing",
+        "ndimage::binary_closing(size=3, iterations=1)",
+        "5x5 image with 3x3 square",
+        &format!("success={}", pass),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Test connected component labeling
+#[test]
+fn e2e_ndimage_labeling() {
+    let scenario_id = "e2e_ndimage_labeling";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Image with two separate objects
+    let image = NdArray::new(
+        vec![
+            1.0, 1.0, 0.0, 0.0, 2.0, 2.0,
+            1.0, 1.0, 0.0, 0.0, 2.0, 2.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 3.0, 3.0, 0.0, 0.0,
+            0.0, 0.0, 3.0, 3.0, 0.0, 0.0,
+        ],
+        vec![5, 6],
+    )
+    .unwrap();
+
+    // Binarize for labeling
+    let binary = NdArray::new(
+        image.data.iter().map(|&v| if v > 0.0 { 1.0 } else { 0.0 }).collect(),
+        image.shape.clone(),
+    )
+    .unwrap();
+
+    // Label connected components
+    let t = Instant::now();
+    let label_result = label(&binary);
+    let pass = match &label_result {
+        Ok((_labels, num_labels)) => {
+            // Should find 3 separate objects
+            *num_labels == 3
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "label_components",
+        "ndimage::label()",
+        "5x6 binary image with 3 objects",
+        &format!(
+            "num_labels={}",
+            label_result.as_ref().map(|(_, n)| *n).unwrap_or(0)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Sum labels - sum pixel values for each label
+    let t = Instant::now();
+    if let Ok((labels, num_labels)) = &label_result {
+        let sums = sum_labels(&image, labels, *num_labels);
+        let pass = sums.len() == *num_labels && sums.iter().all(|&s| s > 0.0);
+        if !pass {
+            all_pass = false;
+        }
+        steps.push(make_step(
+            2,
+            "sum_labels",
+            "ndimage::sum_labels()",
+            "sum pixel values per label",
+            &format!("sums={:?}", sums),
+            t.elapsed().as_nanos(),
+            if pass { "pass" } else { "FAIL" },
+        ));
+
+        // Mean labels
+        let t = Instant::now();
+        let means = mean_labels(&image, labels, *num_labels);
+        let pass = means.len() == *num_labels;
+        if !pass {
+            all_pass = false;
+        }
+        steps.push(make_step(
+            3,
+            "mean_labels",
+            "ndimage::mean_labels()",
+            "mean pixel values per label",
+            &format!("means={:?}", means),
+            t.elapsed().as_nanos(),
+            if pass { "pass" } else { "FAIL" },
+        ));
+
+        // Find objects (bounding boxes)
+        let t = Instant::now();
+        let objects = find_objects(labels, *num_labels);
+        let pass = objects.len() == *num_labels && objects.iter().all(|o| o.is_some());
+        if !pass {
+            all_pass = false;
+        }
+        steps.push(make_step(
+            4,
+            "find_objects",
+            "ndimage::find_objects()",
+            "bounding boxes for each label",
+            &format!("num_objects={}", objects.iter().filter(|o| o.is_some()).count()),
+            t.elapsed().as_nanos(),
+            if pass { "pass" } else { "FAIL" },
+        ));
+
+        // Center of mass
+        let t = Instant::now();
+        let centers = center_of_mass(&image, labels, *num_labels);
+        let pass = centers.len() == *num_labels && centers.iter().all(|c| c.len() == 2);
+        if !pass {
+            all_pass = false;
+        }
+        steps.push(make_step(
+            5,
+            "center_of_mass",
+            "ndimage::center_of_mass()",
+            "centroid for each label",
+            &format!("centers={:?}", centers),
+            t.elapsed().as_nanos(),
+            if pass { "pass" } else { "FAIL" },
+        ));
+    }
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Test distance transform
+#[test]
+fn e2e_ndimage_distance_transform() {
+    let scenario_id = "e2e_ndimage_distance_transform";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Binary image with a hole in center
+    let image = NdArray::new(
+        vec![
+            1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 0.0, 1.0, 1.0,  // hole at center
+            1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0,
+        ],
+        vec![5, 5],
+    )
+    .unwrap();
+
+    let t = Instant::now();
+    let dist_result = distance_transform_edt(&image);
+    let pass = match &dist_result {
+        Ok(result) => {
+            // Distance at the hole (center) should be 0
+            let center_dist = result.data[12]; // 2*5+2
+            // Distance at corners should be sqrt(2) * 2 = ~2.83 (distance to center hole)
+            let corner_dist = result.data[0];
+            center_dist < 0.01 && corner_dist > 2.0
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "distance_transform_edt",
+        "ndimage::distance_transform_edt()",
+        "5x5 image with center hole",
+        &format!(
+            "center_dist={}, corner_dist={}",
+            dist_result.as_ref().map(|r| r.data[12]).unwrap_or(f64::NAN),
+            dist_result.as_ref().map(|r| r.data[0]).unwrap_or(f64::NAN)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Distance transform on inverted image
+    let t = Instant::now();
+    let inverted = NdArray::new(
+        image.data.iter().map(|&v| 1.0 - v).collect(),
+        image.shape.clone(),
+    )
+    .unwrap();
+    let dist_inv = distance_transform_edt(&inverted);
+    let pass = match &dist_inv {
+        Ok(result) => {
+            // Now center should have the highest distance
+            let center_dist = result.data[12];
+            center_dist > 0.9 // Should be ~1.0 (distance to nearest edge)
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "distance_transform_inverted",
+        "ndimage::distance_transform_edt(inverted)",
+        "5x5 with only center pixel",
+        &format!(
+            "center_dist={}",
+            dist_inv.as_ref().map(|r| r.data[12]).unwrap_or(f64::NAN)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Test geometric transformations (rotate)
+#[test]
+fn e2e_ndimage_geometric() {
+    let scenario_id = "e2e_ndimage_geometric";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Simple 4x4 image with pattern
+    let image = NdArray::new(
+        vec![
+            1.0, 2.0, 3.0, 4.0,
+            5.0, 6.0, 7.0, 8.0,
+            9.0, 10.0, 11.0, 12.0,
+            13.0, 14.0, 15.0, 16.0,
+        ],
+        vec![4, 4],
+    )
+    .unwrap();
+
+    // Rotate by 90 degrees
+    let t = Instant::now();
+    let rotated = rotate(&image, 90.0, false, 1, BoundaryMode::Constant, 0.0);
+    let pass = match &rotated {
+        Ok(result) => {
+            // After 90 degree rotation, shape should be preserved
+            // Top-left should now contain what was bottom-left
+            result.shape == vec![4, 4]
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "rotate_90",
+        "ndimage::rotate(angle=90)",
+        "4x4 sequential image",
+        &format!(
+            "shape={:?}",
+            rotated.as_ref().map(|r| &r.shape).unwrap_or(&vec![])
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Rotate by 180 degrees
+    let t = Instant::now();
+    let rotated_180 = rotate(&image, 180.0, false, 1, BoundaryMode::Constant, 0.0);
+    let pass = match &rotated_180 {
+        Ok(result) => {
+            // After 180 degree rotation, top-left (1.0) should be near bottom-right (16.0) location
+            // The image should be reversed
+            result.shape == vec![4, 4]
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "rotate_180",
+        "ndimage::rotate(angle=180)",
+        "4x4 sequential image",
+        &format!("success={}", pass),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Rotate by 45 degrees with reshape
+    let t = Instant::now();
+    let rotated_45 = rotate(&image, 45.0, true, 1, BoundaryMode::Constant, 0.0);
+    let pass = match &rotated_45 {
+        Ok(result) => {
+            // With reshape=true, output should be larger to contain rotated image
+            // For 45 degrees, diagonal length is sqrt(2) * original
+            result.shape[0] >= 4 && result.shape[1] >= 4
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "rotate_45_reshape",
+        "ndimage::rotate(angle=45, reshape=true)",
+        "4x4 sequential image",
+        &format!(
+            "shape={:?}",
+            rotated_45.as_ref().map(|r| &r.shape).unwrap_or(&vec![])
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
 }
