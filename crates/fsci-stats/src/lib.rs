@@ -6551,20 +6551,70 @@ pub fn variation(data: &[f64]) -> f64 {
     var.sqrt() / mean_val
 }
 
+fn mean_std_ddof(data: &[f64], ddof: usize) -> Option<(f64, f64)> {
+    let n = data.len();
+    if n == 0 || n <= ddof {
+        return None;
+    }
+    let mean = data.iter().sum::<f64>() / n as f64;
+    let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - ddof) as f64;
+    Some((mean, var.sqrt()))
+}
+
 /// Compute z-scores: (x - mean) / std.
 ///
 /// Matches `scipy.stats.zscore(a)`.
 pub fn zscore(data: &[f64]) -> Vec<f64> {
-    if data.len() < 2 {
+    let Some((mean_val, std_val)) = mean_std_ddof(data, 0) else {
         return vec![f64::NAN; data.len()];
-    }
-    let n = data.len() as f64;
-    let mean_val = data.iter().sum::<f64>() / n;
-    let std_val = (data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / n).sqrt();
+    };
     if std_val == 0.0 {
         return vec![f64::NAN; data.len()];
     }
     data.iter().map(|&x| (x - mean_val) / std_val).collect()
+}
+
+/// Compute relative z-scores using the mean and variance of `compare`.
+///
+/// Matches the core 1D behavior of `scipy.stats.zmap(scores, compare)`.
+pub fn zmap(scores: &[f64], compare: &[f64]) -> Vec<f64> {
+    zmap_ddof(scores, compare, 0)
+}
+
+/// Compute relative z-scores with an explicit degrees-of-freedom correction.
+///
+/// Matches the core 1D behavior of `scipy.stats.zmap(scores, compare, ddof=...)`.
+pub fn zmap_ddof(scores: &[f64], compare: &[f64], ddof: usize) -> Vec<f64> {
+    let Some((mean, std)) = mean_std_ddof(compare, ddof) else {
+        return vec![f64::NAN; scores.len()];
+    };
+
+    let mut out: Vec<f64> = scores.iter().map(|&score| (score - mean) / std).collect();
+
+    // SciPy's zscore special-cases the exact same array object by replacing
+    // constant slices with NaN rather than leaving mixed NaN/inf outputs.
+    let same_slice =
+        core::ptr::eq(scores.as_ptr(), compare.as_ptr()) && scores.len() == compare.len();
+    if same_slice && std <= (f64::EPSILON * mean).abs() {
+        out.fill(f64::NAN);
+    }
+
+    out
+}
+
+/// Compute the geometric z-score for strictly positive data.
+///
+/// Matches the core 1D behavior of `scipy.stats.gzscore(a)`.
+pub fn gzscore(data: &[f64]) -> Vec<f64> {
+    gzscore_ddof(data, 0)
+}
+
+/// Compute the geometric z-score with an explicit degrees-of-freedom correction.
+///
+/// Matches the core 1D behavior of `scipy.stats.gzscore(a, ddof=...)`.
+pub fn gzscore_ddof(data: &[f64], ddof: usize) -> Vec<f64> {
+    let logged: Vec<f64> = data.iter().map(|&value| value.ln()).collect();
+    zscore_ddof(&logged, ddof)
 }
 
 /// Compute the q-th percentile of data.
@@ -9501,15 +9551,11 @@ pub fn iqr_range(data: &[f64]) -> f64 {
 ///
 /// Matches `scipy.stats.zscore` for 1D.
 pub fn zscore_ddof(data: &[f64], ddof: usize) -> Vec<f64> {
-    let n = data.len();
-    if n <= ddof {
-        return vec![f64::NAN; n];
-    }
-    let mean: f64 = data.iter().sum::<f64>() / n as f64;
-    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - ddof) as f64;
-    let std = var.sqrt();
+    let Some((mean, std)) = mean_std_ddof(data, ddof) else {
+        return vec![f64::NAN; data.len()];
+    };
     if std == 0.0 {
-        return vec![f64::NAN; n];
+        return vec![f64::NAN; data.len()];
     }
     data.iter().map(|&x| (x - mean) / std).collect()
 }
@@ -12331,6 +12377,64 @@ mod tests {
     fn zscore_constant() {
         let z = zscore(&[5.0, 5.0, 5.0]);
         assert!(z.iter().all(|&v| v.is_nan()), "constant data => all NaNs");
+    }
+
+    #[test]
+    fn zmap_matches_scipy_reference_values() {
+        let same = zmap(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]);
+        assert_close(same[0], -1.224_744_871_391_589, 1e-12, "zmap same[0]");
+        assert_close(same[1], 0.0, 1e-12, "zmap same[1]");
+        assert_close(same[2], 1.224_744_871_391_589, 1e-12, "zmap same[2]");
+
+        let shifted = zmap(&[2.0, 4.0], &[1.0, 2.0, 3.0]);
+        assert_close(shifted[0], 0.0, 1e-12, "zmap shifted[0]");
+        assert_close(shifted[1], 2.449_489_742_783_178, 1e-12, "zmap shifted[1]");
+    }
+
+    #[test]
+    fn zmap_matches_scipy_constant_compare_shape() {
+        let constant_compare = zmap(&[1.0, 2.0], &[1.0, 1.0]);
+        assert!(
+            constant_compare[0].is_nan(),
+            "mean-aligned score should be NaN"
+        );
+        assert!(
+            constant_compare[1].is_infinite() && constant_compare[1].is_sign_positive(),
+            "offset score should be +inf"
+        );
+
+        let identical = [1.0, 1.0];
+        let same_object = zmap(&identical, &identical);
+        assert!(same_object.iter().all(|&value| value.is_nan()));
+    }
+
+    #[test]
+    fn zmap_ddof_matches_scipy_reference_values() {
+        let z = zmap_ddof(&[2.0, 4.0], &[1.0, 2.0, 3.0], 1);
+        assert_close(z[0], 0.0, 1e-12, "zmap ddof[0]");
+        assert_close(z[1], 2.0, 1e-12, "zmap ddof[1]");
+    }
+
+    #[test]
+    fn gzscore_matches_scipy_reference_values() {
+        let z = gzscore(&[1.0, 2.0, 4.0]);
+        assert_close(z[0], -1.224_744_871_391_589_2, 1e-12, "gzscore[0]");
+        assert_close(z[1], 0.0, 1e-12, "gzscore[1]");
+        assert_close(z[2], 1.224_744_871_391_589_2, 1e-12, "gzscore[2]");
+
+        let ddof = gzscore_ddof(&[1.0, 2.0, 4.0], 1);
+        assert_close(ddof[0], -1.0, 1e-12, "gzscore ddof[0]");
+        assert_close(ddof[1], 0.0, 1e-12, "gzscore ddof[1]");
+        assert_close(ddof[2], 1.0, 1e-12, "gzscore ddof[2]");
+    }
+
+    #[test]
+    fn gzscore_invalid_inputs_match_scipy_shape() {
+        let zero = gzscore(&[0.0, 1.0, 2.0]);
+        assert!(zero.iter().all(|&value| value.is_nan()));
+
+        let negative = gzscore(&[-1.0, 1.0, 2.0]);
+        assert!(negative.iter().all(|&value| value.is_nan()));
     }
 
     // ── Discrete distributions ────────────────────────────────────
