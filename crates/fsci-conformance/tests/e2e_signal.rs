@@ -11,9 +11,11 @@
 //! `fixtures/artifacts/FSCI-P2C-010/e2e/`.
 
 use fsci_signal::{
-    ConvolveMode, FindPeaksOptions, autocorrelation, blackman, convolve, correlate, find_peaks,
-    gausspulse, hamming, hann, hilbert_envelope, kaiser, peak_prominences, ricker, rms,
-    savgol_coeffs, savgol_filter, spectral_centroid, spectral_flatness,
+    BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection,
+    autocorrelation, blackman, butter, convolve, correlate, filtfilt, find_peaks, firwin,
+    freqz, gausspulse, hamming, hann, hilbert_envelope, kaiser, lfilter, peak_prominences,
+    resample, ricker, rms, savgol_coeffs, savgol_filter, sosfilt, spectral_centroid,
+    spectral_flatness, stft, tf2sos,
 };
 use serde::Serialize;
 use std::f64::consts::PI;
@@ -1001,4 +1003,548 @@ fn scenario_14_large_savgol() {
     let bundle = runner.finish();
     write_bundle("scenario_14_large_savgol", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_14 failed");
+}
+
+// ══════════════════ IIR FILTER DESIGN & FILTERING ══════════════════
+
+/// Scenario 15: Butterworth filter design and lfilter
+#[test]
+fn scenario_15_butter_lfilter() {
+    let mut runner = ScenarioRunner::new("scenario_15_butter_lfilter");
+    runner.set_signal_meta("butter+lfilter", 1000, "Strict");
+
+    // Generate test signal: 10Hz + 50Hz components
+    let fs = 1000.0; // 1kHz sample rate
+    let n = 1000;
+    let t: Vec<f64> = (0..n).map(|i| i as f64 / fs).collect();
+    let signal: Vec<f64> = t
+        .iter()
+        .map(|&ti| (2.0 * PI * 10.0 * ti).sin() + 0.5 * (2.0 * PI * 50.0 * ti).sin())
+        .collect();
+
+    let mut ba_coeffs: Option<BaCoeffs> = None;
+
+    runner.record_step(
+        "design_butter_lowpass",
+        "butter(4, [0.03], lowpass)",
+        "4th order Butterworth lowpass at 15Hz (wn=15/500=0.03)",
+        "Strict",
+        || {
+            let wn = vec![0.03]; // Normalized cutoff (15Hz at 500Hz Nyquist)
+            let ba = butter(4, &wn, FilterType::Lowpass).map_err(|e| format!("{e}"))?;
+            if ba.b.len() != 5 || ba.a.len() != 5 {
+                return Err(format!(
+                    "unexpected coefficient lengths: b={}, a={}",
+                    ba.b.len(),
+                    ba.a.len()
+                ));
+            }
+            ba_coeffs = Some(ba);
+            Ok("4th order Butterworth designed".to_string())
+        },
+    );
+
+    runner.record_step(
+        "apply_lfilter",
+        "lfilter(b, a, signal)",
+        "apply filter to mixed-frequency signal",
+        "Strict",
+        || {
+            let ba = ba_coeffs.as_ref().unwrap();
+            let filtered = lfilter(&ba.b, &ba.a, &signal, None).map_err(|e| format!("{e}"))?;
+            if filtered.len() != n {
+                return Err(format!("filtered length {} != {}", filtered.len(), n));
+            }
+            // After transient, the 50Hz component should be attenuated
+            // Check that variance of latter half is reduced compared to original
+            let orig_var: f64 = signal[500..].iter().map(|x| x * x).sum::<f64>() / 500.0;
+            let filt_var: f64 = filtered[500..].iter().map(|x| x * x).sum::<f64>() / 500.0;
+            if filt_var < orig_var {
+                Ok(format!(
+                    "filtering reduced variance: {:.4} -> {:.4}",
+                    orig_var, filt_var
+                ))
+            } else {
+                Err(format!(
+                    "filtering did not reduce variance: {:.4} -> {:.4}",
+                    orig_var, filt_var
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_15_butter_lfilter", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_15 failed");
+}
+
+/// Scenario 16: SOS filtering with sosfilt
+#[test]
+fn scenario_16_sosfilt() {
+    let mut runner = ScenarioRunner::new("scenario_16_sosfilt");
+    runner.set_signal_meta("sosfilt", 1000, "Strict");
+
+    // Generate impulse response test
+    let n = 100;
+    let mut impulse = vec![0.0; n];
+    impulse[0] = 1.0;
+
+    // Simple 2nd order section: lowpass biquad
+    // H(z) = (b0 + b1*z^-1 + b2*z^-2) / (1 + a1*z^-1 + a2*z^-2)
+    // SosSection = [b0, b1, b2, a0, a1, a2] where a0=1.0
+    let sos: Vec<SosSection> = vec![
+        [0.0675, 0.135, 0.0675, 1.0, -1.143, 0.4128], // ~0.2 normalized cutoff
+    ];
+
+    runner.record_step(
+        "sosfilt_impulse_response",
+        "sosfilt(sos, impulse)",
+        "compute impulse response of biquad",
+        "Strict",
+        || {
+            let h = sosfilt(&sos, &impulse).map_err(|e| format!("{e}"))?;
+            if h.len() != n {
+                return Err(format!("output length {} != {}", h.len(), n));
+            }
+            // First sample should equal b0
+            if (h[0] - sos[0][0]).abs() > 1e-10 {
+                return Err(format!("h[0]={} != b0={}", h[0], sos[0][0]));
+            }
+            // Impulse response should decay (stable filter)
+            let energy_first_half: f64 = h[..50].iter().map(|x| x * x).sum();
+            let energy_second_half: f64 = h[50..].iter().map(|x| x * x).sum();
+            if energy_second_half < energy_first_half {
+                Ok(format!(
+                    "h[0]={:.4}, decaying response verified",
+                    h[0]
+                ))
+            } else {
+                Err("impulse response not decaying".to_string())
+            }
+        },
+    );
+
+    runner.record_step(
+        "sosfilt_sine_attenuation",
+        "sosfilt(sos, high_freq_sine)",
+        "verify high frequencies are attenuated",
+        "Strict",
+        || {
+            // High frequency sine (0.4 normalized = above cutoff of 0.2)
+            let high_freq: Vec<f64> = (0..n)
+                .map(|i| (2.0 * PI * 0.4 * i as f64).sin())
+                .collect();
+            let filtered = sosfilt(&sos, &high_freq).map_err(|e| format!("{e}"))?;
+
+            // Steady-state should be attenuated (skip transient)
+            let input_power: f64 = high_freq[50..].iter().map(|x| x * x).sum::<f64>() / 50.0;
+            let output_power: f64 = filtered[50..].iter().map(|x| x * x).sum::<f64>() / 50.0;
+            let attenuation_db = 10.0 * (output_power / input_power).log10();
+
+            if attenuation_db < -3.0 {
+                Ok(format!("high freq attenuated by {:.1} dB", -attenuation_db))
+            } else {
+                Err(format!(
+                    "insufficient attenuation: {:.1} dB",
+                    -attenuation_db
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_16_sosfilt", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_16 failed");
+}
+
+/// Scenario 17: Zero-phase filtering with filtfilt
+#[test]
+fn scenario_17_filtfilt() {
+    let mut runner = ScenarioRunner::new("scenario_17_filtfilt");
+    runner.set_signal_meta("filtfilt", 500, "Strict");
+
+    // Generate signal with sharp edge
+    let n = 500;
+    let mut signal = vec![0.0; n];
+    for i in 100..400 {
+        signal[i] = 1.0;
+    }
+    // Add noise
+    for i in 0..n {
+        signal[i] += 0.1 * ((i * 37) as f64 % 1.0 - 0.5);
+    }
+
+    runner.record_step(
+        "filtfilt_preserves_phase",
+        "filtfilt(b, a, signal)",
+        "zero-phase filtering preserves edge location",
+        "Strict",
+        || {
+            // Simple moving average as IIR: b=[0.2,0.2,0.2,0.2,0.2], a=[1.0]
+            let b = vec![0.2, 0.2, 0.2, 0.2, 0.2];
+            let a = vec![1.0];
+
+            let filtered = filtfilt(&b, &a, &signal).map_err(|e| format!("{e}"))?;
+
+            if filtered.len() != n {
+                return Err(format!("output length {} != {}", filtered.len(), n));
+            }
+
+            // Find edge locations (where signal crosses 0.5)
+            let orig_edge = signal
+                .windows(2)
+                .position(|w| w[0] < 0.5 && w[1] >= 0.5)
+                .unwrap_or(0);
+            let filt_edge = filtered
+                .windows(2)
+                .position(|w| w[0] < 0.5 && w[1] >= 0.5)
+                .unwrap_or(0);
+
+            // Zero-phase filtering should preserve edge location
+            let edge_shift = (orig_edge as i64 - filt_edge as i64).abs();
+            if edge_shift <= 2 {
+                Ok(format!(
+                    "edge preserved: orig={}, filt={}, shift={}",
+                    orig_edge, filt_edge, edge_shift
+                ))
+            } else {
+                Err(format!(
+                    "edge shifted too much: orig={}, filt={}, shift={}",
+                    orig_edge, filt_edge, edge_shift
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_17_filtfilt", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_17 failed");
+}
+
+/// Scenario 18: FIR filter design with firwin
+#[test]
+fn scenario_18_firwin() {
+    let mut runner = ScenarioRunner::new("scenario_18_firwin");
+    runner.set_signal_meta("firwin", 101, "Strict");
+
+    runner.record_step(
+        "firwin_lowpass",
+        "firwin(101, [0.3], hamming, pass_zero=true)",
+        "design 101-tap lowpass FIR",
+        "Strict",
+        || {
+            let h = firwin(101, &[0.3], FirWindow::Hamming, true).map_err(|e| format!("{e}"))?;
+            if h.len() != 101 {
+                return Err(format!("filter length {} != 101", h.len()));
+            }
+            // FIR lowpass should be symmetric
+            let symmetric = (0..50).all(|i| (h[i] - h[100 - i]).abs() < 1e-12);
+            if !symmetric {
+                return Err("filter not symmetric".to_string());
+            }
+            // DC gain should be ~1.0 for lowpass
+            let dc_gain: f64 = h.iter().sum();
+            if (dc_gain - 1.0).abs() < 0.01 {
+                Ok(format!(
+                    "symmetric FIR, DC gain={:.4}, len={}",
+                    dc_gain,
+                    h.len()
+                ))
+            } else {
+                Err(format!("DC gain {} != 1.0", dc_gain))
+            }
+        },
+    );
+
+    runner.record_step(
+        "firwin_bandpass",
+        "firwin(101, [0.2, 0.4], hamming, pass_zero=false)",
+        "design 101-tap bandpass FIR",
+        "Strict",
+        || {
+            let h =
+                firwin(101, &[0.2, 0.4], FirWindow::Hamming, false).map_err(|e| format!("{e}"))?;
+            if h.len() != 101 {
+                return Err(format!("filter length {} != 101", h.len()));
+            }
+            // Bandpass should have ~0 DC gain
+            let dc_gain: f64 = h.iter().sum();
+            if dc_gain.abs() < 0.1 {
+                Ok(format!("bandpass FIR, DC gain={:.4} (near zero)", dc_gain))
+            } else {
+                Err(format!("bandpass DC gain {} not near zero", dc_gain))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_18_firwin", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_18 failed");
+}
+
+/// Scenario 19: STFT (Short-Time Fourier Transform)
+#[test]
+fn scenario_19_stft() {
+    let mut runner = ScenarioRunner::new("scenario_19_stft");
+    runner.set_signal_meta("stft", 2048, "Strict");
+
+    // Generate chirp signal (frequency increasing with time)
+    let fs = 1000.0;
+    let n = 2048;
+    let t: Vec<f64> = (0..n).map(|i| i as f64 / fs).collect();
+    let signal: Vec<f64> = t
+        .iter()
+        .map(|&ti| {
+            let freq = 10.0 + 200.0 * ti; // 10Hz to 210Hz over 2 seconds
+            (2.0 * PI * freq * ti).sin()
+        })
+        .collect();
+
+    runner.record_step(
+        "compute_stft",
+        "stft(signal, fs, hann, 256, 128)",
+        "compute STFT of chirp signal",
+        "Strict",
+        || {
+            let result =
+                stft(&signal, fs, Some("hann"), Some(256), Some(128)).map_err(|e| format!("{e}"))?;
+
+            // Check dimensions
+            let n_freqs = result.frequencies.len();
+            let n_times = result.times.len();
+
+            if n_freqs != 129 {
+                // nperseg/2 + 1 = 256/2 + 1 = 129
+                return Err(format!("expected 129 frequency bins, got {}", n_freqs));
+            }
+
+            // Verify frequency range
+            let f_max = result.frequencies.last().unwrap_or(&0.0);
+            if (*f_max - fs / 2.0).abs() > 1.0 {
+                return Err(format!("max freq {} != Nyquist {}", f_max, fs / 2.0));
+            }
+
+            Ok(format!(
+                "STFT: {} freq bins, {} time frames, f_max={:.1}Hz",
+                n_freqs, n_times, f_max
+            ))
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_19_stft", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_19 failed");
+}
+
+/// Scenario 20: Resample
+#[test]
+fn scenario_20_resample() {
+    let mut runner = ScenarioRunner::new("scenario_20_resample");
+    runner.set_signal_meta("resample", 1000, "Strict");
+
+    // Generate sinusoid at 50Hz sampled at 1kHz
+    let fs_orig = 1000.0;
+    let n_orig = 1000;
+    let freq = 50.0;
+    let signal: Vec<f64> = (0..n_orig)
+        .map(|i| (2.0 * PI * freq * i as f64 / fs_orig).sin())
+        .collect();
+
+    runner.record_step(
+        "resample_upsample",
+        "resample(signal, 2000)",
+        "upsample 1000 -> 2000 samples",
+        "Strict",
+        || {
+            let resampled = resample(&signal, 2000).map_err(|e| format!("{e}"))?;
+            if resampled.len() != 2000 {
+                return Err(format!("expected 2000 samples, got {}", resampled.len()));
+            }
+            // Verify the signal energy is roughly preserved
+            let orig_energy: f64 = signal.iter().map(|x| x * x).sum::<f64>() / n_orig as f64;
+            let resamp_energy: f64 = resampled.iter().map(|x| x * x).sum::<f64>() / 2000.0;
+            let energy_ratio = resamp_energy / orig_energy;
+            // Energy should be roughly preserved (within 20%)
+            if (energy_ratio - 1.0).abs() < 0.2 {
+                Ok(format!(
+                    "upsampled 1000->2000, energy ratio={:.3}",
+                    energy_ratio
+                ))
+            } else {
+                Err(format!("energy not preserved: ratio={:.3}", energy_ratio))
+            }
+        },
+    );
+
+    runner.record_step(
+        "resample_downsample",
+        "resample(signal, 500)",
+        "downsample 1000 -> 500 samples",
+        "Strict",
+        || {
+            let resampled = resample(&signal, 500).map_err(|e| format!("{e}"))?;
+            if resampled.len() != 500 {
+                return Err(format!("expected 500 samples, got {}", resampled.len()));
+            }
+            // Verify the signal energy is roughly preserved
+            let orig_energy: f64 = signal.iter().map(|x| x * x).sum::<f64>() / n_orig as f64;
+            let resamp_energy: f64 = resampled.iter().map(|x| x * x).sum::<f64>() / 500.0;
+            let energy_ratio = resamp_energy / orig_energy;
+            // Energy should be roughly preserved (within 20%)
+            if (energy_ratio - 1.0).abs() < 0.2 {
+                Ok(format!(
+                    "downsampled 1000->500, energy ratio={:.3}",
+                    energy_ratio
+                ))
+            } else {
+                Err(format!("energy not preserved: ratio={:.3}", energy_ratio))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_20_resample", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_20 failed");
+}
+
+/// Scenario 21: Frequency response with freqz
+#[test]
+fn scenario_21_freqz() {
+    let mut runner = ScenarioRunner::new("scenario_21_freqz");
+    runner.set_signal_meta("freqz", 512, "Strict");
+
+    runner.record_step(
+        "freqz_butter_lowpass",
+        "freqz(butter(4, 0.25))",
+        "frequency response of 4th order Butterworth",
+        "Strict",
+        || {
+            // Design 4th order Butterworth lowpass at normalized freq 0.25
+            let ba = butter(4, &[0.25], FilterType::Lowpass).map_err(|e| format!("{e}"))?;
+            let resp = freqz(&ba.b, &ba.a, Some(512)).map_err(|e| format!("{e}"))?;
+
+            if resp.w.len() != 512 || resp.h_mag.len() != 512 {
+                return Err(format!(
+                    "expected 512 points, got w={}, h={}",
+                    resp.w.len(),
+                    resp.h_mag.len()
+                ));
+            }
+
+            // At DC (w=0), magnitude should be ~1
+            let dc_mag = resp.h_mag[0];
+            // At Nyquist (w=pi), magnitude should be much smaller
+            let nyq_mag = resp.h_mag[511];
+
+            if (dc_mag - 1.0).abs() < 0.01 && nyq_mag < 0.1 {
+                Ok(format!(
+                    "DC mag={:.4}, Nyquist mag={:.4}",
+                    dc_mag, nyq_mag
+                ))
+            } else {
+                Err(format!(
+                    "unexpected response: DC={:.4}, Nyquist={:.4}",
+                    dc_mag, nyq_mag
+                ))
+            }
+        },
+    );
+
+    runner.record_step(
+        "freqz_3db_point",
+        "verify -3dB at cutoff",
+        "Butterworth -3dB at cutoff frequency",
+        "Strict",
+        || {
+            let ba = butter(4, &[0.25], FilterType::Lowpass).map_err(|e| format!("{e}"))?;
+            let resp = freqz(&ba.b, &ba.a, Some(512)).map_err(|e| format!("{e}"))?;
+
+            // freqz returns normalized frequencies from 0 to pi
+            // For cutoff at 0.25 (normalized to Nyquist), the actual angular freq is 0.25*pi
+            // With 512 points from 0 to pi, index for 0.25*pi is ~128
+            let cutoff_idx = (0.25 * 512.0) as usize; // ~128
+            let mag_at_cutoff = resp.h_mag[cutoff_idx];
+            let db_at_cutoff: f64 = 20.0 * mag_at_cutoff.log10();
+
+            // Should be around -3dB (allow some tolerance for discrete sampling)
+            if (db_at_cutoff + 3.0).abs() < 2.0 {
+                Ok(format!("magnitude at cutoff = {:.2} dB", db_at_cutoff))
+            } else {
+                Err(format!(
+                    "expected ~-3dB at cutoff, got {:.2} dB",
+                    db_at_cutoff
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_21_freqz", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_21 failed");
+}
+
+/// Scenario 22: tf2sos conversion
+#[test]
+fn scenario_22_tf2sos() {
+    let mut runner = ScenarioRunner::new("scenario_22_tf2sos");
+    runner.set_signal_meta("tf2sos", 0, "Strict");
+
+    runner.record_step(
+        "butter_to_sos",
+        "tf2sos(butter(4, 0.3))",
+        "convert Butterworth to SOS form",
+        "Strict",
+        || {
+            let ba = butter(4, &[0.3], FilterType::Lowpass).map_err(|e| format!("{e}"))?;
+            let sos = tf2sos(&ba.b, &ba.a).map_err(|e| format!("{e}"))?;
+
+            // 4th order = 2 second-order sections
+            if sos.len() != 2 {
+                return Err(format!("expected 2 SOS sections, got {}", sos.len()));
+            }
+
+            // Each section should have 6 coefficients
+            for (i, section) in sos.iter().enumerate() {
+                if section.len() != 6 {
+                    return Err(format!("section {} has {} coeffs, expected 6", i, section.len()));
+                }
+                // a0 should be 1.0
+                if (section[3] - 1.0).abs() > 1e-10 {
+                    return Err(format!("section {} a0={} != 1.0", i, section[3]));
+                }
+            }
+
+            Ok(format!("{} SOS sections, each properly normalized", sos.len()))
+        },
+    );
+
+    runner.record_step(
+        "sos_filter_equivalence",
+        "sosfilt(sos) == lfilter(b,a)",
+        "SOS and TF forms give same result",
+        "Strict",
+        || {
+            let ba = butter(4, &[0.3], FilterType::Lowpass).map_err(|e| format!("{e}"))?;
+            let sos = tf2sos(&ba.b, &ba.a).map_err(|e| format!("{e}"))?;
+
+            // Test signal
+            let signal: Vec<f64> = (0..100)
+                .map(|i| (2.0 * PI * 0.1 * i as f64).sin())
+                .collect();
+
+            let tf_result = lfilter(&ba.b, &ba.a, &signal, None).map_err(|e| format!("{e}"))?;
+            let sos_result = sosfilt(&sos, &signal).map_err(|e| format!("{e}"))?;
+
+            let max_diff = max_abs_diff(&tf_result, &sos_result);
+            if max_diff < 1e-10 {
+                Ok(format!("TF and SOS forms equivalent, max_diff={:.2e}", max_diff))
+            } else {
+                Err(format!("TF and SOS differ by {:.2e}", max_diff))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_22_tf2sos", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_22 failed");
 }
