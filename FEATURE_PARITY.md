@@ -106,11 +106,11 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ### fsci-spatial (85% coverage)
 
-**Implemented:** KDTree (query, query_k, query_ball_point, query_ball_tree, count_neighbors, sparse_distance_matrix), euclidean, sqeuclidean, cityblock, chebyshev, cosine, minkowski, correlation, hamming, jaccard, canberra, braycurtis, mahalanobis, seuclidean, wminkowski, pdist, squareform_to_matrix, squareform_to_condensed, cdist, cdist_metric, distance_matrix, directed_hausdorff, hausdorff_distance, ConvexHull, Delaunay, Voronoi, SphericalVoronoi, procrustes, geometric_slerp, boolean metrics (yule, dice, kulsinski, rogerstanimoto, russellrao, sokalmichener, sokalsneath, matching), coordinate transforms (spherical, cylindrical), rotation_matrix, nearest_neighbors, k_nearest_neighbors, centroid, medoid, diameter, spread
+**Implemented:** KDTree (query, query_k, query_ball_point, query_ball_tree, count_neighbors, sparse_distance_matrix), euclidean, sqeuclidean, cityblock, chebyshev, cosine, minkowski, correlation, hamming, jaccard, canberra, braycurtis, mahalanobis, seuclidean, wminkowski, pdist, squareform_to_matrix, squareform_to_condensed, cdist, cdist_metric, distance_matrix, directed_hausdorff, hausdorff_distance, ConvexHull, Delaunay, Voronoi, SphericalVoronoi, procrustes, geometric_slerp, boolean metrics (yule, dice, kulsinski, rogerstanimoto, russellrao, sokalmichener, sokalsneath, matching), coordinate transforms (spherical, cylindrical), rotation_matrix, nearest_neighbors, k_nearest_neighbors, centroid, medoid, diameter, spread, Rectangle
 
 **Missing (LOW priority):**
 - `cKDTree` (C-accelerated KDTree variant, already fast in Rust)
-- `Rectangle`, `HalfspaceIntersection`
+- ~~`Rectangle`~~ ✓ Already implemented, `HalfspaceIntersection`
 - `QhullError` exception hierarchy
 
 ## Packet Readiness Snapshot
