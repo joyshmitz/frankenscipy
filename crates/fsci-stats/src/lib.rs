@@ -1079,6 +1079,69 @@ impl ContinuousDistribution for Pareto {
     }
 }
 
+/// Lomax distribution.
+///
+/// Matches `scipy.stats.lomax(c)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Lomax {
+    pub c: f64,
+}
+
+impl Lomax {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "shape c must be positive, got {c}");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for Lomax {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.0
+        } else {
+            self.c / (1.0 + x).powf(self.c + 1.0)
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.0
+        } else {
+            -(-self.c * x.ln_1p()).exp_m1()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        (-(-q).ln_1p() / self.c).exp_m1()
+    }
+
+    fn mean(&self) -> f64 {
+        if self.c <= 1.0 {
+            f64::INFINITY
+        } else {
+            1.0 / (self.c - 1.0)
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.c <= 2.0 {
+            f64::INFINITY
+        } else {
+            self.c / ((self.c - 1.0).powi(2) * (self.c - 2.0))
+        }
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Rayleigh Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -12683,6 +12746,62 @@ mod tests {
         let p = Pareto::new(2.5, 1.5);
         let x = p.ppf(0.75);
         assert_close(p.cdf(x), 0.75, 1e-10, "pareto cdf(ppf(q))");
+    }
+
+    #[test]
+    fn lomax_pdf_cdf_match_scipy_reference_values() {
+        let dist = Lomax::new(2.5);
+        let cases = [
+            (0.0, 2.5, 0.0),
+            (0.5, 0.604_812_282_168_686, 0.637_112_630_698_788_4),
+            (1.0, 0.220_970_869_120_796_08, 0.823_223_304_703_363_1),
+            (3.0, 0.019_531_25, 0.968_75),
+            (10.0, 0.000_566_324_839_552_523_7, 0.997_508_170_705_968_9),
+        ];
+
+        assert_eq!(dist.pdf(-1.0), 0.0);
+        assert_eq!(dist.cdf(-1.0), 0.0);
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("Lomax pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("Lomax cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn lomax_ppf_roundtrip_matches_scipy_reference_values() {
+        let dist = Lomax::new(2.5);
+        let cases = [
+            (0.1, 0.043_044_881_510_632_57),
+            (0.25, 0.121_955_145_446_199_56),
+            (0.5, 0.319_507_910_772_894_2),
+            (0.75, 0.741_101_126_592_248_2),
+            (0.9, 1.511_886_431_509_580_6),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("Lomax ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("Lomax cdf(ppf({q}))"));
+        }
+
+        assert_eq!(dist.ppf(0.0), 0.0);
+        assert!(dist.ppf(1.0).is_infinite());
+    }
+
+    #[test]
+    fn lomax_mean_and_variance_match_closed_form() {
+        let dist = Lomax::new(2.5);
+        assert_close(dist.mean(), 2.0 / 3.0, 1e-12, "Lomax mean");
+        assert_close(dist.var(), 20.0 / 9.0, 1e-12, "Lomax variance");
+
+        let heavy_tailed = Lomax::new(0.75);
+        assert!(heavy_tailed.mean().is_infinite());
+        assert!(heavy_tailed.var().is_infinite());
+
+        let finite_mean_only = Lomax::new(1.5);
+        assert!(finite_mean_only.mean().is_finite());
+        assert!(finite_mean_only.var().is_infinite());
     }
 
     #[test]
