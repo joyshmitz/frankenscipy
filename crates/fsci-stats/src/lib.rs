@@ -1364,6 +1364,47 @@ impl ContinuousDistribution for Logistic {
     }
 }
 
+/// Hyperbolic secant distribution.
+///
+/// Matches `scipy.stats.hypsecant`.
+pub struct HypSecant;
+
+impl ContinuousDistribution for HypSecant {
+    fn pdf(&self, x: f64) -> f64 {
+        let exp_neg_abs_x = (-x.abs()).exp();
+        2.0 * exp_neg_abs_x / (PI * (1.0 + exp_neg_abs_x * exp_neg_abs_x))
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x >= 0.0 {
+            1.0 - 2.0 / PI * (-x).exp().atan()
+        } else {
+            2.0 / PI * x.exp().atan()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        (0.5 * PI * q).tan().ln()
+    }
+
+    fn mean(&self) -> f64 {
+        0.0
+    }
+
+    fn var(&self) -> f64 {
+        PI * PI / 4.0
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Maxwell Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -13214,6 +13255,58 @@ mod tests {
         let l = Logistic::new(-1.0, 3.0);
         let x = l.ppf(0.25);
         assert_close(l.cdf(x), 0.25, 1e-10, "logistic cdf(ppf(q))");
+    }
+
+    #[test]
+    fn hypsecant_pdf_cdf_match_scipy_reference_values() {
+        let dist = HypSecant;
+        let cases = [
+            (-2.0, 0.084_607_477_207_573_79, 0.085_636_815_594_619_84),
+            (-1.0, 0.206_282_082_090_870_5, 0.224_417_014_328_585_02),
+            (0.0, 0.318_309_886_183_790_7, 0.5),
+            (1.0, 0.206_282_082_090_870_5, 0.775_582_985_671_415),
+            (2.0, 0.084_607_477_207_573_79, 0.914_363_184_405_380_2),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("HypSecant pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("HypSecant cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn hypsecant_ppf_roundtrip_matches_scipy_reference_values() {
+        let dist = HypSecant;
+        let cases = [
+            (0.1, -1.842_730_034_701_113),
+            (0.25, -0.881_373_587_019_543),
+            (0.5, 0.0),
+            (0.75, 0.881_373_587_019_542_9),
+            (0.9, 1.842_730_034_701_112_6),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("HypSecant ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("HypSecant cdf(ppf({q}))"));
+        }
+
+        assert!(dist.ppf(0.0).is_infinite() && dist.ppf(0.0).is_sign_negative());
+        assert!(dist.ppf(1.0).is_infinite() && dist.ppf(1.0).is_sign_positive());
+    }
+
+    #[test]
+    fn hypsecant_mean_and_variance_match_closed_form() {
+        let dist = HypSecant;
+        assert_close(dist.mean(), 0.0, 1e-12, "HypSecant mean");
+        assert_close(dist.var(), PI * PI / 4.0, 1e-12, "HypSecant variance");
+        assert_close(dist.pdf(-1.0), dist.pdf(1.0), 1e-12, "HypSecant symmetry");
+        assert_close(
+            dist.cdf(-1.0),
+            1.0 - dist.cdf(1.0),
+            1e-12,
+            "HypSecant cdf symmetry",
+        );
     }
 
     #[test]
