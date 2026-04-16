@@ -298,6 +298,86 @@ pub fn bdtri(k: f64, n: f64, y: f64) -> f64 {
     1.0 - btdtri(n - k, k + 1.0, y)
 }
 
+/// Negative binomial distribution CDF.
+///
+/// Returns P(X <= k) where X is the number of failures before n successes
+/// in a sequence of Bernoulli trials with success probability p.
+///
+/// Matches `scipy.special.nbdtr(k, n, p)`.
+#[must_use]
+pub fn nbdtr(k: f64, n: f64, p: f64) -> f64 {
+    if k.is_nan() || n.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if n <= 0.0 || p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return 0.0;
+    }
+    if p == 1.0 {
+        return 1.0;
+    }
+    if k < 0.0 {
+        return 0.0;
+    }
+
+    // nbdtr(k, n, p) = I_p(n, k+1) = betainc(n, k+1, p)
+    btdtr(n, k + 1.0, p)
+}
+
+/// Negative binomial distribution survival function.
+///
+/// Returns P(X > k) where X is the number of failures before n successes.
+///
+/// Matches `scipy.special.nbdtrc(k, n, p)`.
+#[must_use]
+pub fn nbdtrc(k: f64, n: f64, p: f64) -> f64 {
+    if k.is_nan() || n.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if n <= 0.0 || p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return 1.0;
+    }
+    if p == 1.0 {
+        return 0.0;
+    }
+    if k < 0.0 {
+        return 1.0;
+    }
+
+    // nbdtrc(k, n, p) = 1 - betainc(n, k+1, p) = betainc(k+1, n, 1-p)
+    btdtr(k + 1.0, n, 1.0 - p)
+}
+
+/// Inverse negative binomial distribution CDF.
+///
+/// Returns p such that nbdtr(k, n, p) = y.
+///
+/// Matches `scipy.special.nbdtri(k, n, y)`.
+#[must_use]
+pub fn nbdtri(k: f64, n: f64, y: f64) -> f64 {
+    if k.is_nan() || n.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if n <= 0.0 || y < 0.0 || y > 1.0 || k < 0.0 {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return 0.0;
+    }
+    if y == 1.0 {
+        return 1.0;
+    }
+
+    // nbdtr(k, n, p) = betainc(n, k+1, p) = y
+    // So p = btdtri(n, k+1, y)
+    btdtri(n, k + 1.0, y)
+}
+
 fn map_real_binary<F>(
     function: &'static str,
     a: &SpecialTensor,
@@ -843,6 +923,67 @@ mod tests {
                         assert!(
                             (p_recovered - p).abs() < 0.01,
                             "bdtri failed: k={k}, n={n}, p={p}, y={y}, p_recovered={p_recovered}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nbdtr_basic() {
+        // nbdtr(0, 1, 0.5) = P(0 failures before 1 success) = p = 0.5
+        let result = nbdtr(0.0, 1.0, 0.5);
+        assert!(
+            (result - 0.5).abs() < 1e-10,
+            "nbdtr(0, 1, 0.5) = {result}, expected 0.5"
+        );
+
+        // nbdtr(0, 1, p) = p for all p (geometric: first trial is success)
+        for &p in &[0.1, 0.5, 0.9] {
+            let result = nbdtr(0.0, 1.0, p);
+            assert!(
+                (result - p).abs() < 1e-10,
+                "nbdtr(0, 1, {p}) = {result}, expected {p}"
+            );
+        }
+
+        // As k -> infinity, nbdtr(k, n, p) -> 1
+        let result = nbdtr(100.0, 1.0, 0.5);
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "nbdtr(100, 1, 0.5) = {result}, expected ~1.0"
+        );
+    }
+
+    #[test]
+    fn nbdtr_nbdtrc_complement() {
+        // nbdtr(k, n, p) + nbdtrc(k, n, p) = 1
+        for &n in &[1.0, 3.0, 5.0] {
+            for &p in &[0.2, 0.5, 0.8] {
+                for &k in &[0.0, 1.0, 5.0, 10.0] {
+                    let sum = nbdtr(k, n, p) + nbdtrc(k, n, p);
+                    assert!(
+                        (sum - 1.0).abs() < 1e-10,
+                        "nbdtr({k}, {n}, {p}) + nbdtrc = {sum}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nbdtri_inverse() {
+        // nbdtri should be inverse of nbdtr
+        for &n in &[1.0, 3.0, 5.0] {
+            for &k in &[0.0, 2.0, 5.0] {
+                for &p in &[0.2, 0.5, 0.8] {
+                    let y = nbdtr(k, n, p);
+                    if y > 0.01 && y < 0.99 {
+                        let p_recovered = nbdtri(k, n, y);
+                        assert!(
+                            (p_recovered - p).abs() < 0.01,
+                            "nbdtri failed: k={k}, n={n}, p={p}, y={y}, p_recovered={p_recovered}"
                         );
                     }
                 }
