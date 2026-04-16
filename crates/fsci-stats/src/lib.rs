@@ -4901,6 +4901,58 @@ impl ContinuousDistribution for HalfGenNorm {
     }
 }
 
+/// Log-gamma distribution.
+///
+/// Matches `scipy.stats.loggamma`.
+pub struct LogGamma {
+    pub c: f64,
+}
+
+impl LogGamma {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for LogGamma {
+    fn pdf(&self, x: f64) -> f64 {
+        (self.c * x - x.exp() - ln_gamma(self.c)).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        lower_regularized_gamma(self.c, x.exp())
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+
+        let g = fsci_special::gammaincinv(self.c, q);
+        if g.is_finite() && g > 0.0 {
+            g.ln()
+        } else {
+            (q.ln() + ln_gamma(self.c + 1.0)) / self.c
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        fsci_special::digamma_scalar(self.c)
+    }
+
+    fn var(&self) -> f64 {
+        fsci_special::trigamma(self.c)
+    }
+}
+
 /// Laplace-asymmetric distribution.
 ///
 /// Matches `scipy.stats.laplace_asymmetric`.
@@ -15471,6 +15523,52 @@ mod tests {
             0.303_607_540_093_080_44,
             1e-10,
             "HalfGenNorm variance",
+        );
+    }
+
+    #[test]
+    fn loggamma_pdf_cdf_match_scipy_reference_values() {
+        let dist = LogGamma::new(2.5);
+        let cases = [
+            (-1.0, 0.042_742_466_914_866_446, 0.019_051_344_462_367_25),
+            (0.0, 0.276_738_331_613_729_8, 0.150_854_963_915_390_38),
+            (0.5, 0.504_895_328_658_646_3, 0.345_766_749_224_207_14),
+            (1.0, 0.604_735_141_813_711_2, 0.635_047_943_374_931_8),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("LogGamma pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("LogGamma cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn loggamma_ppf_roundtrip_matches_quantiles() {
+        let dist = LogGamma::new(2.5);
+        let cases = [
+            (0.1, -0.216_721_723_608_478_3),
+            (0.25, 0.290_653_706_308_147_6),
+            (0.5, 0.777_364_284_327_939_5),
+            (0.75, 1.197_805_791_909_737_6),
+            (0.9, 1.530_000_352_431_393_7),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("LogGamma ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("LogGamma cdf(ppf({q}))"));
+        }
+    }
+
+    #[test]
+    fn loggamma_mean_var_match_closed_form() {
+        let dist = LogGamma::new(2.5);
+        assert_close(dist.mean(), 0.703_156_640_645_243_2, 1e-12, "LogGamma mean");
+        assert_close(
+            dist.var(),
+            0.490_357_756_100_234_9,
+            1e-12,
+            "LogGamma variance",
         );
     }
 
