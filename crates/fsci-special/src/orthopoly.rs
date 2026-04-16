@@ -350,6 +350,39 @@ pub fn roots_laguerre(n: usize) -> (Vec<f64>, Vec<f64>) {
     golub_welsch(n, 1.0, |k| 2.0 * k as f64 + 1.0, |k| k as f64, false)
 }
 
+/// Compute generalized Gauss-Laguerre quadrature nodes and weights on `[0, ∞)`.
+///
+/// The weight function is `x^alpha * exp(-x)` where alpha > -1.
+///
+/// Matches `scipy.special.roots_genlaguerre(n, alpha)`.
+///
+/// # Arguments
+/// * `n` - Number of quadrature points
+/// * `alpha` - Parameter of the weight function (must be > -1)
+///
+/// # Returns
+/// Tuple of (nodes, weights) for the quadrature rule
+#[must_use]
+pub fn roots_genlaguerre(n: usize, alpha: f64) -> (Vec<f64>, Vec<f64>) {
+    assert!(alpha > -1.0, "alpha must be greater than -1");
+
+    // mu0 = integral of x^alpha * exp(-x) from 0 to infinity = Gamma(alpha + 1)
+    let mu0 = gamma_half_integer_or_lanczos(alpha + 1.0);
+
+    golub_welsch(
+        n,
+        mu0,
+        // Diagonal elements: a_k = 2k + alpha + 1
+        |k| 2.0 * k as f64 + alpha + 1.0,
+        // Off-diagonal elements: b_k = sqrt(k * (k + alpha))
+        |k| {
+            let kf = k as f64;
+            (kf * (kf + alpha)).sqrt()
+        },
+        false,
+    )
+}
+
 /// Compute Gauss-Jacobi quadrature nodes and weights on `[-1, 1]`.
 ///
 /// The weight function is `(1 - x)^alpha (1 + x)^beta`.
@@ -1082,6 +1115,39 @@ mod tests {
         assert_close(x[0], -x[2], 1e-12, "jacobi symmetry");
         assert_close(w[0], w[2], 1e-12, "jacobi weight symmetry");
         assert_close(x[1], 0.0, 1e-12, "jacobi center root");
+    }
+
+    #[test]
+    fn roots_genlaguerre_alpha0_matches_laguerre() {
+        // When alpha=0, generalized Laguerre = ordinary Laguerre
+        let (x_gen, w_gen) = roots_genlaguerre(5, 0.0);
+        let (x_lag, w_lag) = roots_laguerre(5);
+        for (actual, expected) in x_gen.iter().zip(&x_lag) {
+            assert_close(*actual, *expected, 1e-10, "genlaguerre(alpha=0) nodes");
+        }
+        for (actual, expected) in w_gen.iter().zip(&w_lag) {
+            assert_close(*actual, *expected, 1e-10, "genlaguerre(alpha=0) weights");
+        }
+    }
+
+    #[test]
+    fn roots_genlaguerre_positive_nodes_and_weight_sum() {
+        // For alpha > -1, all nodes are positive
+        // Weight sum = Gamma(alpha + 1)
+        let alpha = 1.5;
+        let (x, w) = roots_genlaguerre(5, alpha);
+        assert!(
+            x.iter().all(|&xi| xi > 0.0),
+            "genlaguerre nodes should be positive"
+        );
+        // Gamma(2.5) = 1.5 * Gamma(1.5) = 1.5 * sqrt(pi)/2 ≈ 1.3293
+        let expected_sum = 1.5 * PI.sqrt() / 2.0;
+        assert_close(
+            w.iter().sum::<f64>(),
+            expected_sum,
+            1e-10,
+            "genlaguerre weight sum = Gamma(alpha+1)",
+        );
     }
 
     // ── Associated Legendre tests ────────────────────────────────────
