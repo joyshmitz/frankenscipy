@@ -3031,6 +3031,65 @@ impl ContinuousDistribution for HalfCauchy {
     }
 }
 
+/// Birnbaum-Saunders fatigue-life distribution.
+///
+/// Matches `scipy.stats.fatiguelife`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FatigueLife {
+    pub c: f64,
+}
+
+impl FatigueLife {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for FatigueLife {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let numerator = x + 1.0;
+        let denominator = 2.0 * self.c * (2.0 * PI * x.powi(3)).sqrt();
+        let exponent = -((x - 1.0) * (x - 1.0)) / (2.0 * x * self.c * self.c);
+        numerator * exponent.exp() / denominator
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let root_x = x.sqrt();
+        let z = (root_x - 1.0 / root_x) / self.c;
+        0.5 * (1.0 + fsci_special::erf_scalar(z * FRAC_1_SQRT_2))
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        let tmp = self.c * fsci_special::ndtri(q);
+        0.25 * (tmp + (tmp * tmp + 4.0).sqrt()).powi(2)
+    }
+
+    fn mean(&self) -> f64 {
+        1.0 + 0.5 * self.c * self.c
+    }
+
+    fn var(&self) -> f64 {
+        0.25 * self.c * self.c * (5.0 * self.c * self.c + 4.0)
+    }
+}
+
 /// Truncated normal distribution on [a, b].
 ///
 /// Matches `scipy.stats.truncnorm`.
@@ -15254,6 +15313,47 @@ mod tests {
         let hc = HalfCauchy;
         assert!(hc.mean().is_nan());
         assert!(hc.var().is_nan());
+    }
+
+    #[test]
+    fn fatiguelife_pdf_cdf_match_scipy_reference_values() {
+        let dist = FatigueLife::new(1.2);
+        let cases = [
+            (0.0, 0.0, 0.0),
+            (0.5, 0.592_838_949_590_313_1, 0.277_844_895_141_397_3),
+            (1.0, 0.332_451_900_334_527_3, 0.5),
+            (2.0, 0.148_209_737_397_578_34, 0.722_155_104_858_602_8),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("FatigueLife pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("FatigueLife cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn fatiguelife_ppf_roundtrip_matches_quantiles() {
+        let dist = FatigueLife::new(1.2);
+        let cases = [
+            (0.1, 0.242_574_512_462_447_16),
+            (0.25, 0.454_398_900_905_987_5),
+            (0.5, 1.0),
+            (0.75, 2.200_709_548_386_197_6),
+            (0.9, 4.122_444_645_353_288),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("FatigueLife ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("FatigueLife cdf(ppf({q}))"));
+        }
+    }
+
+    #[test]
+    fn fatiguelife_mean_var_match_closed_form() {
+        let dist = FatigueLife::new(1.2);
+        assert_close(dist.mean(), 1.72, 1e-12, "FatigueLife mean");
+        assert_close(dist.var(), 4.032, 1e-12, "FatigueLife variance");
     }
 
     #[test]
