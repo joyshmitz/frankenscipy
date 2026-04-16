@@ -2989,6 +2989,99 @@ impl ContinuousDistribution for JohnsonSU {
     }
 }
 
+/// Johnson SB distribution.
+///
+/// Matches `scipy.stats.johnsonsb`.
+pub struct JohnsonSB {
+    pub a: f64,
+    pub b: f64,
+}
+
+impl JohnsonSB {
+    #[must_use]
+    pub fn new(a: f64, b: f64) -> Self {
+        assert!(a.is_finite(), "a must be finite");
+        assert!(b.is_finite() && b > 0.0, "b must be positive and finite");
+        Self { a, b }
+    }
+
+    fn expit(x: f64) -> f64 {
+        if x >= 0.0 {
+            1.0 / (1.0 + (-x).exp())
+        } else {
+            let exp_x = x.exp();
+            exp_x / (1.0 + exp_x)
+        }
+    }
+}
+
+impl ContinuousDistribution for JohnsonSB {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 || x >= 1.0 {
+            return 0.0;
+        }
+        let z = self.a + self.b * (x / (1.0 - x)).ln();
+        self.b * standard_normal_pdf(z) / (x * (1.0 - x))
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if x >= 1.0 {
+            return 1.0;
+        }
+        let z = self.a + self.b * (x / (1.0 - x)).ln();
+        if z >= 0.0 {
+            -fsci_special::log_ndtr(-z).exp_m1()
+        } else {
+            fsci_special::log_ndtr(z).exp()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return 1.0;
+        }
+        Self::expit((fsci_special::ndtri(q) - self.a) / self.b)
+    }
+
+    fn mean(&self) -> f64 {
+        simpson_integrate_adaptive(
+            |z| Self::expit((z - self.a) / self.b) * standard_normal_pdf(z),
+            -12.0,
+            12.0,
+            4_096,
+            1e-11,
+            1e-11,
+            8,
+        )
+    }
+
+    fn var(&self) -> f64 {
+        let mean = self.mean();
+        let second_moment = simpson_integrate_adaptive(
+            |z| {
+                let x = Self::expit((z - self.a) / self.b);
+                x * x * standard_normal_pdf(z)
+            },
+            -12.0,
+            12.0,
+            4_096,
+            1e-11,
+            1e-11,
+            8,
+        );
+        (second_moment - mean * mean).max(0.0)
+    }
+}
+
 /// Generalized Extreme Value (GEV) distribution.
 ///
 /// Matches `scipy.stats.genextreme`.
@@ -12926,6 +13019,67 @@ mod tests {
             0.243_854_078_016_202_07,
             1e-12,
             "JohnsonSU variance",
+        );
+    }
+
+    #[test]
+    fn johnsonsb_pdf_cdf_match_scipy_reference_values() {
+        let dist = JohnsonSB::new(1.25, 2.5);
+        let cases = [
+            (0.01, 1.751_704_106_236_141e-21, 6.712_746_482_116_965e-25),
+            (0.1, 0.001_365_154_870_334_988_3, 1.102_455_172_391_221_6e-5),
+            (0.25, 1.735_900_904_225_877_7, 0.067_257_704_127_486_51),
+            (0.5, 1.826_490_853_890_219_1, 0.894_350_226_333_144_6),
+            (0.75, 0.001_809_327_097_099_710_3, 0.999_967_861_228_319_8),
+            (0.9, 1.483_085_670_607_699_7e-9, 0.999_999_999_992_245_9),
+        ];
+
+        assert_eq!(dist.pdf(0.0), 0.0);
+        assert_eq!(dist.pdf(1.0), 0.0);
+        assert_eq!(dist.cdf(0.0), 0.0);
+        assert_eq!(dist.cdf(1.0), 1.0);
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("JohnsonSB pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("JohnsonSB cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn johnsonsb_ppf_roundtrip_matches_scipy_reference_values() {
+        let dist = JohnsonSB::new(1.25, 2.5);
+        let cases = [
+            (0.1, 0.266_467_303_275_897_07),
+            (0.25, 0.316_523_258_829_016_4),
+            (0.5, 0.377_540_668_798_145_4),
+            (0.75, 0.442_701_789_909_708_54),
+            (0.9, 0.503_155_114_675_628_2),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("JohnsonSB ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("JohnsonSB cdf(ppf({q}))"));
+        }
+
+        assert_eq!(dist.ppf(0.0), 0.0);
+        assert_eq!(dist.ppf(1.0), 1.0);
+    }
+
+    #[test]
+    fn johnsonsb_mean_and_variance_match_scipy_reference_values() {
+        let dist = JohnsonSB::new(1.25, 2.5);
+        assert_close(
+            dist.mean(),
+            0.381_839_722_522_487_1,
+            1e-10,
+            "JohnsonSB mean",
+        );
+        assert_close(
+            dist.var(),
+            0.008_333_511_900_955_853,
+            1e-10,
+            "JohnsonSB variance",
         );
     }
 
