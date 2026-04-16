@@ -3,8 +3,8 @@ use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrayApiErrorKind {
-    NotYetImplemented,
     InvalidShape,
+    UnsupportedShape,
     InvalidIndex,
     InvalidStep,
     UnsupportedDtype,
@@ -70,5 +70,18 @@ mod tests {
         assert_eq!(pass().expect("success value should pass through"), 7);
         let err = fail().expect_err("error variant should pass through");
         assert_eq!(err.kind, ArrayApiErrorKind::Overflow);
+    }
+
+    #[test]
+    fn array_api_error_supports_unsupported_shape_kind() {
+        let err = ArrayApiError::new(
+            ArrayApiErrorKind::UnsupportedShape,
+            "operation is outside the currently supported rank scope",
+        );
+        assert_eq!(err.kind, ArrayApiErrorKind::UnsupportedShape);
+        assert_eq!(
+            err.to_string(),
+            "operation is outside the currently supported rank scope"
+        );
     }
 }

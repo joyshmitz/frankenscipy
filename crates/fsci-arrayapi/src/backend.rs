@@ -85,29 +85,11 @@ pub trait ArrayApiBackend {
         shape: &Shape,
         dtype: DType,
         order: MemoryOrder,
-    ) -> ArrayApiResult<Self::Array> {
-        let _ = (values, shape, dtype, order);
-        Err(ArrayApiError::new(
-            ArrayApiErrorKind::NotYetImplemented,
-            "from_slice not implemented for backend",
-        ))
-    }
+    ) -> ArrayApiResult<Self::Array>;
 
-    fn reshape(&self, array: &Self::Array, new_shape: &Shape) -> ArrayApiResult<Self::Array> {
-        let _ = (array, new_shape);
-        Err(ArrayApiError::new(
-            ArrayApiErrorKind::NotYetImplemented,
-            "reshape not implemented for backend",
-        ))
-    }
+    fn reshape(&self, array: &Self::Array, new_shape: &Shape) -> ArrayApiResult<Self::Array>;
 
-    fn transpose(&self, array: &Self::Array) -> ArrayApiResult<Self::Array> {
-        let _ = array;
-        Err(ArrayApiError::new(
-            ArrayApiErrorKind::NotYetImplemented,
-            "transpose not implemented for backend",
-        ))
-    }
+    fn transpose(&self, array: &Self::Array) -> ArrayApiResult<Self::Array>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -963,7 +945,7 @@ fn basic_getitem(
             })
         }
         _ => Err(ArrayApiError::new(
-            ArrayApiErrorKind::NotYetImplemented,
+            ArrayApiErrorKind::UnsupportedShape,
             "basic slicing is currently scoped to rank-1 and rank-2 arrays",
         )),
     }
@@ -976,7 +958,7 @@ fn advanced_getitem(
 ) -> ArrayApiResult<CoreArray> {
     if array.shape.rank() != 1 || indices.len() != 1 {
         return Err(ArrayApiError::new(
-            ArrayApiErrorKind::NotYetImplemented,
+            ArrayApiErrorKind::UnsupportedShape,
             "advanced indexing is currently scoped to 1D arrays",
         ));
     }
@@ -1123,6 +1105,66 @@ mod tests {
         let hardened_error =
             getitem(&hardened, &hardened_array, &request).expect_err("hardened should reject");
         assert_eq!(hardened_error.kind, ArrayApiErrorKind::InvalidIndex);
+    }
+
+    #[test]
+    fn basic_getitem_rejects_rank_three_arrays_with_unsupported_shape() {
+        let backend = strict_backend();
+        let request = CreationRequest {
+            shape: Shape::new(vec![1, 1, 1]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        };
+        let values = [ScalarValue::F64(42.0)];
+        let array = from_slice(&backend, &values, &request).expect("from_slice should succeed");
+
+        let index = IndexRequest {
+            mode: IndexingMode::Basic,
+            index: IndexExpr::Basic {
+                slices: vec![
+                    SliceSpec {
+                        start: None,
+                        stop: None,
+                        step: 1,
+                    },
+                    SliceSpec {
+                        start: None,
+                        stop: None,
+                        step: 1,
+                    },
+                    SliceSpec {
+                        start: None,
+                        stop: None,
+                        step: 1,
+                    },
+                ],
+            },
+        };
+
+        let err = getitem(&backend, &array, &index).expect_err("rank-3 slicing should fail");
+        assert_eq!(err.kind, ArrayApiErrorKind::UnsupportedShape);
+    }
+
+    #[test]
+    fn advanced_getitem_rejects_non_vector_arrays_with_unsupported_shape() {
+        let backend = strict_backend();
+        let request = CreationRequest {
+            shape: Shape::new(vec![1, 2]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        };
+        let values = [ScalarValue::F64(1.0), ScalarValue::F64(2.0)];
+        let array = from_slice(&backend, &values, &request).expect("from_slice should succeed");
+
+        let index = IndexRequest {
+            mode: IndexingMode::Advanced,
+            index: IndexExpr::Advanced {
+                indices: vec![vec![0]],
+            },
+        };
+
+        let err = getitem(&backend, &array, &index).expect_err("2D advanced indexing should fail");
+        assert_eq!(err.kind, ArrayApiErrorKind::UnsupportedShape);
     }
 
     #[test]

@@ -245,6 +245,75 @@ impl ArrayApiBackend for ProfileArrayBackend {
     fn result_type(&self, _dtypes: &[DType], _force_floating: bool) -> ArrayApiResult<DType> {
         profile_unimplemented("result_type")
     }
+
+    fn array_from_slice(
+        &self,
+        values: &[ScalarValue],
+        shape: &Shape,
+        dtype: DType,
+        _order: MemoryOrder,
+    ) -> ArrayApiResult<Self::Array> {
+        let resolved_dtype = profile_resolve_dtype(Some(dtype))?;
+        let expected = profile_checked_size(shape)?;
+        if expected != values.len() {
+            return Err(ArrayApiError::new(
+                ArrayApiErrorKind::InvalidShape,
+                "input slice length does not match target shape",
+            ));
+        }
+
+        let mut cast_values = Vec::with_capacity(values.len());
+        for value in values {
+            cast_values.push(profile_cast_scalar(*value, resolved_dtype)?);
+        }
+
+        Ok(ProfileArray {
+            shape: shape.clone(),
+            dtype: resolved_dtype,
+            values: cast_values,
+        })
+    }
+
+    fn reshape(&self, array: &Self::Array, new_shape: &Shape) -> ArrayApiResult<Self::Array> {
+        let expected = profile_checked_size(new_shape)?;
+        let actual = profile_checked_size(&array.shape)?;
+        if expected != actual {
+            return Err(ArrayApiError::new(
+                ArrayApiErrorKind::InvalidShape,
+                "cannot reshape array because element counts differ",
+            ));
+        }
+
+        Ok(ProfileArray {
+            shape: new_shape.clone(),
+            dtype: array.dtype,
+            values: array.values.clone(),
+        })
+    }
+
+    fn transpose(&self, array: &Self::Array) -> ArrayApiResult<Self::Array> {
+        if array.shape.rank() != 2 {
+            return Err(ArrayApiError::new(
+                ArrayApiErrorKind::InvalidShape,
+                "transpose requires a rank-2 array",
+            ));
+        }
+
+        let rows = array.shape.dims[0];
+        let cols = array.shape.dims[1];
+        let mut values = Vec::with_capacity(array.values.len());
+        for col in 0..cols {
+            for row in 0..rows {
+                values.push(array.values[row * cols + col]);
+            }
+        }
+
+        Ok(ProfileArray {
+            shape: Shape::new(vec![cols, rows]),
+            dtype: array.dtype,
+            values,
+        })
+    }
 }
 
 fn make_sequence_values(len: usize) -> Vec<ScalarValue> {
@@ -327,9 +396,15 @@ fn profile_filled_array(
     })
 }
 
+fn profile_checked_size(shape: &Shape) -> ArrayApiResult<usize> {
+    shape.element_count().ok_or_else(|| {
+        ArrayApiError::new(ArrayApiErrorKind::Overflow, "shape element count overflow")
+    })
+}
+
 fn profile_unimplemented<T>(operation: &'static str) -> ArrayApiResult<T> {
     Err(ArrayApiError::new(
-        ArrayApiErrorKind::NotYetImplemented,
+        ArrayApiErrorKind::UnsupportedShape,
         operation,
     ))
 }
