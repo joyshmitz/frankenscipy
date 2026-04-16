@@ -2565,6 +2565,67 @@ pub fn round(x: f64) -> f64 {
     x.round()
 }
 
+/// Floor function - largest integer not greater than x.
+///
+/// Matches numpy `floor(x)`.
+#[must_use]
+pub fn floor(x: f64) -> f64 {
+    x.floor()
+}
+
+/// Ceiling function - smallest integer not less than x.
+///
+/// Matches numpy `ceil(x)`.
+#[must_use]
+pub fn ceil(x: f64) -> f64 {
+    x.ceil()
+}
+
+/// Truncate towards zero.
+///
+/// Matches `scipy.special.fix(x)` and numpy `trunc(x)`.
+#[must_use]
+pub fn trunc(x: f64) -> f64 {
+    x.trunc()
+}
+
+/// Sign function.
+///
+/// Returns -1 for x < 0, 0 for x == 0, 1 for x > 0.
+/// Returns NaN for NaN input.
+///
+/// Matches numpy `sign(x)`.
+#[must_use]
+pub fn sign(x: f64) -> f64 {
+    if x.is_nan() {
+        f64::NAN
+    } else if x > 0.0 {
+        1.0
+    } else if x < 0.0 {
+        -1.0
+    } else {
+        0.0
+    }
+}
+
+/// Heaviside step function.
+///
+/// H(x) = 0 for x < 0, h0 for x == 0, 1 for x > 0.
+///
+/// Matches numpy `heaviside(x, h0)`.
+#[must_use]
+pub fn heaviside(x: f64, h0: f64) -> f64 {
+    if x.is_nan() {
+        f64::NAN
+    } else if x > 0.0 {
+        1.0
+    } else if x < 0.0 {
+        0.0
+    } else {
+        h0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2761,5 +2822,40 @@ mod tests {
         assert!((round(-1.4) - (-1.0)).abs() < 1e-14);
         assert!((round(-1.5) - (-2.0)).abs() < 1e-14);
         assert!((round(0.0) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn floor_ceil_trunc() {
+        // floor
+        assert!((floor(1.7) - 1.0).abs() < 1e-14);
+        assert!((floor(-1.7) - (-2.0)).abs() < 1e-14);
+        assert!((floor(2.0) - 2.0).abs() < 1e-14);
+
+        // ceil
+        assert!((ceil(1.3) - 2.0).abs() < 1e-14);
+        assert!((ceil(-1.3) - (-1.0)).abs() < 1e-14);
+        assert!((ceil(2.0) - 2.0).abs() < 1e-14);
+
+        // trunc (towards zero)
+        assert!((trunc(1.7) - 1.0).abs() < 1e-14);
+        assert!((trunc(-1.7) - (-1.0)).abs() < 1e-14);
+        assert!((trunc(2.0) - 2.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn sign_basic() {
+        assert!((sign(5.0) - 1.0).abs() < 1e-14);
+        assert!((sign(-5.0) - (-1.0)).abs() < 1e-14);
+        assert!((sign(0.0) - 0.0).abs() < 1e-14);
+        assert!(sign(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn heaviside_basic() {
+        assert!((heaviside(1.0, 0.5) - 1.0).abs() < 1e-14);
+        assert!((heaviside(-1.0, 0.5) - 0.0).abs() < 1e-14);
+        assert!((heaviside(0.0, 0.5) - 0.5).abs() < 1e-14);
+        assert!((heaviside(0.0, 0.0) - 0.0).abs() < 1e-14);
+        assert!((heaviside(0.0, 1.0) - 1.0).abs() < 1e-14);
     }
 }
