@@ -18,7 +18,7 @@ pub use bessel::{
 };
 pub use beta::{
     BETA_DISPATCH_PLAN, beta, betainc, betainc_scalar, betaln, betaln_scalar, btdtr, btdtri, fdtr,
-    fdtri,
+    fdtri, stdtr, stdtri,
 };
 pub use convenience::{
     CONVENIENCE_DISPATCH_PLAN,

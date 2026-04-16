@@ -145,6 +145,78 @@ pub fn fdtri(dfn: f64, dfd: f64, y: f64) -> f64 {
     dfd * z / (dfn * (1.0 - z))
 }
 
+/// Student's t distribution CDF.
+///
+/// Returns P(T <= t) where T follows a Student's t distribution
+/// with v degrees of freedom.
+///
+/// Matches `scipy.special.stdtr(v, t)`.
+#[must_use]
+pub fn stdtr(v: f64, t: f64) -> f64 {
+    if v.is_nan() || t.is_nan() {
+        return f64::NAN;
+    }
+    if v <= 0.0 {
+        return f64::NAN;
+    }
+
+    // Use the relation with incomplete beta:
+    // For t >= 0: stdtr(v, t) = 1 - 0.5 * I(v/(v+t²); v/2, 1/2)
+    // For t < 0:  stdtr(v, t) = 0.5 * I(v/(v+t²); v/2, 1/2)
+    let x = v / (v + t * t);
+    let half_beta = 0.5 * btdtr(0.5 * v, 0.5, x);
+
+    if t >= 0.0 {
+        1.0 - half_beta
+    } else {
+        half_beta
+    }
+}
+
+/// Inverse Student's t distribution CDF.
+///
+/// Returns t such that P(T <= t) = p where T follows a Student's t
+/// distribution with v degrees of freedom.
+///
+/// Matches `scipy.special.stdtri(v, p)`.
+#[must_use]
+pub fn stdtri(v: f64, p: f64) -> f64 {
+    if v.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if v <= 0.0 || p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p == 1.0 {
+        return f64::INFINITY;
+    }
+    if (p - 0.5).abs() < 1e-15 {
+        return 0.0;
+    }
+
+    // Use the inverse beta to find z = v/(v+t²)
+    // For p > 0.5: z = btdtri(v/2, 1/2, 2*(1-p))
+    // For p < 0.5: z = btdtri(v/2, 1/2, 2*p)
+    let (z, sign) = if p > 0.5 {
+        (btdtri(0.5 * v, 0.5, 2.0 * (1.0 - p)), 1.0)
+    } else {
+        (btdtri(0.5 * v, 0.5, 2.0 * p), -1.0)
+    };
+
+    // z = v/(v+t²) => t² = v*(1-z)/z => t = sign * sqrt(v*(1-z)/z)
+    if z <= 0.0 {
+        return sign * f64::INFINITY;
+    }
+    if z >= 1.0 {
+        return 0.0;
+    }
+
+    sign * (v * (1.0 - z) / z).sqrt()
+}
+
 fn map_real_binary<F>(
     function: &'static str,
     a: &SpecialTensor,
@@ -562,5 +634,75 @@ fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
             mode,
             detail: "unexpected non-scalar gammaln output",
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stdtr_basic() {
+        // stdtr(v, 0) = 0.5 for any v > 0 (symmetric around 0)
+        assert!((stdtr(1.0, 0.0) - 0.5).abs() < 1e-10);
+        assert!((stdtr(10.0, 0.0) - 0.5).abs() < 1e-10);
+        assert!((stdtr(100.0, 0.0) - 0.5).abs() < 1e-10);
+
+        // For large v, approaches normal distribution
+        // stdtr(1000, 1.96) ≈ 0.975
+        let result = stdtr(1000.0, 1.96);
+        assert!(
+            (result - 0.975).abs() < 0.01,
+            "stdtr(1000, 1.96) = {result}, expected ~0.975"
+        );
+
+        // stdtr(1, t) = 0.5 + arctan(t)/π (Cauchy distribution)
+        let t = 1.0_f64;
+        let expected = 0.5 + t.atan() / std::f64::consts::PI;
+        let result = stdtr(1.0, t);
+        assert!(
+            (result - expected).abs() < 0.001,
+            "stdtr(1, 1) = {result}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn stdtr_symmetry() {
+        // stdtr(v, -t) = 1 - stdtr(v, t)
+        for &v in &[1.0, 2.0, 5.0, 10.0, 30.0] {
+            for &t in &[0.5, 1.0, 2.0, 3.0] {
+                let left = stdtr(v, -t);
+                let right = 1.0 - stdtr(v, t);
+                assert!(
+                    (left - right).abs() < 1e-10,
+                    "stdtr({v}, -{t}) = {left}, expected {right}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stdtri_inverse() {
+        // stdtri should be inverse of stdtr
+        for &v in &[1.0, 2.0, 5.0, 10.0, 30.0] {
+            for &p in &[0.1, 0.25, 0.5, 0.75, 0.9, 0.95] {
+                let t = stdtri(v, p);
+                let p_recovered = stdtr(v, t);
+                assert!(
+                    (p_recovered - p).abs() < 1e-8,
+                    "stdtri/stdtr failed: v={v}, p={p}, t={t}, p_recovered={p_recovered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stdtri_endpoints() {
+        // stdtri(v, 0) = -inf
+        assert!(stdtri(5.0, 0.0).is_infinite() && stdtri(5.0, 0.0).is_sign_negative());
+        // stdtri(v, 1) = +inf
+        assert!(stdtri(5.0, 1.0).is_infinite() && stdtri(5.0, 1.0).is_sign_positive());
+        // stdtri(v, 0.5) = 0
+        assert!((stdtri(5.0, 0.5) - 0.0).abs() < 1e-10);
     }
 }
