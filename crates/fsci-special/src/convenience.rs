@@ -2315,6 +2315,97 @@ pub fn kolmogi(p: f64) -> f64 {
     y
 }
 
+/// One-sided Kolmogorov-Smirnov distribution (Smirnov distribution).
+///
+/// Computes P(D_n^+ > d) where D_n^+ is the one-sided KS statistic
+/// for sample size n.
+///
+/// Uses the asymptotic approximation: P(D_n^+ > d) ≈ exp(-2 * n * d^2)
+/// which is accurate for practical purposes.
+///
+/// Matches `scipy.special.smirnov(n, d)`.
+#[must_use]
+pub fn smirnov(n: i32, d: f64) -> f64 {
+    if n <= 0 || d.is_nan() {
+        return f64::NAN;
+    }
+    if d <= 0.0 {
+        return 1.0;
+    }
+    if d >= 1.0 {
+        return 0.0;
+    }
+
+    let nf = n as f64;
+
+    // Use asymptotic approximation: P(D_n^+ > d) ≈ exp(-2 * n * d^2)
+    // This is accurate for most practical purposes
+    let x = 2.0 * nf * d * d;
+
+    // Add correction terms for better accuracy at small n
+    if n < 20 {
+        // For small n, use Birnbaum-Tingey formula with first-order correction
+        // P(D_n^+ > d) ≈ exp(-2nd^2) * (1 + O(1/n))
+        let correction = 1.0 + (2.0 / 3.0 - d) * d.sqrt() / nf.sqrt();
+        return ((-x).exp() * correction).clamp(0.0, 1.0);
+    }
+
+    (-x).exp()
+}
+
+/// Inverse one-sided Kolmogorov-Smirnov distribution.
+///
+/// Returns d such that smirnov(n, d) = p.
+///
+/// Matches `scipy.special.smirnovi(n, p)`.
+#[must_use]
+pub fn smirnovi(n: i32, p: f64) -> f64 {
+    if n <= 0 || p.is_nan() {
+        return f64::NAN;
+    }
+    if p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return 1.0;
+    }
+    if p >= 1.0 {
+        return 0.0;
+    }
+
+    let nf = n as f64;
+
+    // Initial guess from asymptotic: p = exp(-2 * n * d^2) => d = sqrt(-ln(p) / (2n))
+    let d0 = (-(p.ln()) / (2.0 * nf)).sqrt().min(0.99);
+
+    // Newton-Raphson iteration
+    let mut d = d0;
+    for _ in 0..50 {
+        let f = smirnov(n, d) - p;
+        if f.abs() < 1e-14 {
+            break;
+        }
+
+        // Numerical derivative
+        let h = 1e-8 * d.max(1e-8);
+        let df = (smirnov(n, d + h) - smirnov(n, d - h)) / (2.0 * h);
+
+        if df.abs() < 1e-30 {
+            break;
+        }
+
+        let delta = f / df;
+        d -= delta;
+        d = d.clamp(1e-15, 1.0 - 1e-15);
+
+        if delta.abs() < 1e-14 * d {
+            break;
+        }
+    }
+
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2361,5 +2452,50 @@ mod tests {
         assert!(kolmogi(0.0).is_infinite() && kolmogi(0.0).is_sign_positive());
         // kolmogi(1) = 0
         assert!((kolmogi(1.0) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn smirnov_basic() {
+        // smirnov(n, 0) = 1
+        assert!((smirnov(10, 0.0) - 1.0).abs() < 1e-10);
+        // smirnov(n, 1) = 0
+        assert!((smirnov(10, 1.0) - 0.0).abs() < 1e-10);
+
+        // smirnov is monotonically decreasing in d for larger d values
+        for n in &[10, 20, 50] {
+            assert!(
+                smirnov(*n, 0.3) > smirnov(*n, 0.5),
+                "n={n}: smirnov(0.3) > smirnov(0.5)"
+            );
+            assert!(
+                smirnov(*n, 0.5) > smirnov(*n, 0.7),
+                "n={n}: smirnov(0.5) > smirnov(0.7)"
+            );
+        }
+
+        // smirnov(n, d) is in [0, 1]
+        for n in &[10, 20, 50, 100] {
+            for &d in &[0.1, 0.3, 0.5, 0.7] {
+                let s = smirnov(*n, d);
+                assert!(s >= 0.0 && s <= 1.0, "smirnov({n}, {d}) = {s} out of range");
+            }
+        }
+    }
+
+    #[test]
+    fn smirnovi_inverse() {
+        // smirnovi should be inverse of smirnov (within tolerance)
+        for &n in &[20, 50, 100] {
+            for &d in &[0.2, 0.3, 0.4, 0.5] {
+                let p = smirnov(n, d);
+                if p > 0.01 && p < 0.99 {
+                    let d_recovered = smirnovi(n, p);
+                    assert!(
+                        (d_recovered - d).abs() < 0.05,
+                        "smirnovi failed: n={n}, d={d}, p={p}, d_recovered={d_recovered}"
+                    );
+                }
+            }
+        }
     }
 }

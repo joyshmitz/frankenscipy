@@ -84,6 +84,8 @@ pub use convenience::{
     sici,
     sinc,
     sinc_squared,
+    smirnov,
+    smirnovi,
     softmax,
     spence,
     struve,
