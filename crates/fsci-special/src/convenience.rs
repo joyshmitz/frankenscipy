@@ -3547,6 +3547,59 @@ pub fn log_expit_scalar(x: f64) -> f64 {
     -softplus(-x)
 }
 
+/// Complementary log-log function.
+///
+/// cloglog(p) = log(-log(1 - p))
+///
+/// The cloglog link function, used in survival analysis and
+/// generalized linear models. Maps (0, 1) to (-∞, +∞).
+///
+/// Returns -∞ for p ≤ 0, +∞ for p ≥ 1.
+#[must_use]
+pub fn cloglog(p: f64) -> f64 {
+    if p.is_nan() {
+        return f64::NAN;
+    }
+    if p <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
+    // Use log1p for numerical stability when p is near 0
+    if p < 0.5 {
+        // log(-log(1-p)) where 1-p is close to 1
+        // ln_1p(-p) = ln(1-p), then negate and take ln
+        (-((-p).ln_1p())).ln()
+    } else {
+        (-((1.0 - p).ln())).ln()
+    }
+}
+
+/// Inverse complementary log-log function.
+///
+/// cloglog_inv(x) = 1 - exp(-exp(x))
+///
+/// The inverse of cloglog. Maps (-∞, +∞) to (0, 1).
+/// Also known as the Gumbel CDF.
+#[must_use]
+pub fn cloglog_inv(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // 1 - exp(-exp(x))
+    // Use expm1 for numerical stability
+    if x < -37.0 {
+        // exp(x) is essentially 0, so 1 - exp(-0) = 0
+        0.0
+    } else if x > 709.0 {
+        // exp(x) overflows, result is 1
+        1.0
+    } else {
+        -(-x.exp()).exp_m1()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4487,5 +4540,55 @@ mod tests {
         // Symmetric property: log_expit(x) + log_expit(-x) = -log(2) - |x|... actually just test consistency
         assert!((log_expit_scalar(5.0) - expit_scalar(5.0).ln()).abs() < 1e-14);
         assert!((log_expit_scalar(-5.0) - expit_scalar(-5.0).ln()).abs() < 1e-14);
+    }
+
+    #[test]
+    fn cloglog_basic() {
+        // cloglog(0.5) = log(-log(0.5)) = log(ln(2)) ≈ -0.3665
+        let expected = std::f64::consts::LN_2.ln();
+        assert!((cloglog(0.5) - expected).abs() < 1e-14);
+
+        // Monotonically increasing
+        assert!(cloglog(0.3) < cloglog(0.5));
+        assert!(cloglog(0.5) < cloglog(0.7));
+
+        // Boundary behavior
+        assert!(cloglog(0.0).is_infinite() && cloglog(0.0) < 0.0);
+        assert!(cloglog(1.0).is_infinite() && cloglog(1.0) > 0.0);
+
+        // Near boundaries should still work
+        assert!(cloglog(1e-10).is_finite());
+        assert!(cloglog(1.0 - 1e-10).is_finite());
+    }
+
+    #[test]
+    fn cloglog_inv_basic() {
+        // cloglog_inv is the Gumbel CDF: 1 - exp(-exp(x))
+        // cloglog_inv(0) = 1 - exp(-1) ≈ 0.6321
+        let expected = 1.0 - (-1.0_f64).exp();
+        assert!((cloglog_inv(0.0) - expected).abs() < 1e-14);
+
+        // Monotonically increasing
+        assert!(cloglog_inv(-2.0) < cloglog_inv(0.0));
+        assert!(cloglog_inv(0.0) < cloglog_inv(2.0));
+
+        // Bounded by (0, 1)
+        assert!(cloglog_inv(-100.0) >= 0.0);
+        assert!(cloglog_inv(100.0) <= 1.0);
+    }
+
+    #[test]
+    fn cloglog_inverse_relationship() {
+        // cloglog and cloglog_inv are inverses
+        let p = 0.3;
+        assert!((cloglog_inv(cloglog(p)) - p).abs() < 1e-14);
+
+        let x = 1.5;
+        assert!((cloglog(cloglog_inv(x)) - x).abs() < 1e-14);
+
+        // Test more values
+        for &p in &[0.1, 0.25, 0.5, 0.75, 0.9] {
+            assert!((cloglog_inv(cloglog(p)) - p).abs() < 1e-13);
+        }
     }
 }

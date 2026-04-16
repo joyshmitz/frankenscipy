@@ -40,6 +40,8 @@ pub use convenience::{
     ceil,
     clausen,
     clip,
+    cloglog,
+    cloglog_inv,
     copysign,
     cosdg,
     cotdg,
