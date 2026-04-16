@@ -3680,6 +3680,90 @@ pub fn cauchit_inv(x: f64) -> f64 {
     0.5 + x.atan() / std::f64::consts::PI
 }
 
+/// Hard shrinkage function.
+///
+/// hardshrink(x, λ) = x if |x| > λ, else 0
+///
+/// A thresholding function that sets values with magnitude below λ to zero.
+/// Used in sparse signal processing and neural networks.
+#[must_use]
+pub fn hardshrink(x: f64, lambda: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x.abs() > lambda {
+        x
+    } else {
+        0.0
+    }
+}
+
+/// Soft shrinkage function (soft thresholding).
+///
+/// softshrink(x, λ) = sign(x) * max(|x| - λ, 0)
+///                  = x - λ  if x > λ
+///                  = x + λ  if x < -λ
+///                  = 0      otherwise
+///
+/// Shrinks values toward zero by λ. Used in LASSO regression,
+/// wavelet denoising, and neural networks.
+#[must_use]
+pub fn softshrink(x: f64, lambda: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x > lambda {
+        x - lambda
+    } else if x < -lambda {
+        x + lambda
+    } else {
+        0.0
+    }
+}
+
+/// Tanh shrinkage function.
+///
+/// tanhshrink(x) = x - tanh(x)
+///
+/// A smooth shrinkage function that subtracts the bounded tanh.
+/// Approaches 0 for small x, approaches x for large |x|.
+#[must_use]
+pub fn tanhshrink(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    x - x.tanh()
+}
+
+/// CELU activation function (Continuously Differentiable ELU).
+///
+/// celu(x, α) = max(0, x) + min(0, α * (exp(x/α) - 1))
+///
+/// A continuously differentiable variant of ELU. Unlike ELU,
+/// CELU is C¹ continuous (has continuous first derivative).
+#[must_use]
+pub fn celu(x: f64, alpha: f64) -> f64 {
+    if x.is_nan() || alpha.is_nan() {
+        return f64::NAN;
+    }
+    if x >= 0.0 {
+        x
+    } else {
+        alpha * ((x / alpha).exp() - 1.0)
+    }
+}
+
+/// LogSigmoid activation function.
+///
+/// logsigmoid(x) = log(sigmoid(x)) = log(1 / (1 + exp(-x))) = -softplus(-x)
+///
+/// Numerically stable log of the sigmoid function.
+/// Equivalent to log_expit_scalar but with a more common ML name.
+#[must_use]
+pub fn logsigmoid(x: f64) -> f64 {
+    log_expit_scalar(x)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4766,5 +4850,63 @@ mod tests {
         for &p in &[0.1, 0.25, 0.5, 0.75, 0.9] {
             assert!((cauchit_inv(cauchit(p)) - p).abs() < 1e-13);
         }
+    }
+
+    #[test]
+    fn hardshrink_basic() {
+        // hardshrink(x, λ) = x if |x| > λ, else 0
+        assert!((hardshrink(2.0, 0.5) - 2.0).abs() < 1e-14);
+        assert!((hardshrink(-2.0, 0.5) - (-2.0)).abs() < 1e-14);
+        assert!((hardshrink(0.3, 0.5) - 0.0).abs() < 1e-14);
+        assert!((hardshrink(-0.3, 0.5) - 0.0).abs() < 1e-14);
+        // At threshold
+        assert!((hardshrink(0.5, 0.5) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn softshrink_basic() {
+        // softshrink shrinks toward zero by λ
+        assert!((softshrink(2.0, 0.5) - 1.5).abs() < 1e-14);
+        assert!((softshrink(-2.0, 0.5) - (-1.5)).abs() < 1e-14);
+        assert!((softshrink(0.3, 0.5) - 0.0).abs() < 1e-14);
+        assert!((softshrink(-0.3, 0.5) - 0.0).abs() < 1e-14);
+        // At threshold
+        assert!((softshrink(0.5, 0.5) - 0.0).abs() < 1e-14);
+        assert!((softshrink(-0.5, 0.5) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn tanhshrink_basic() {
+        // tanhshrink(x) = x - tanh(x)
+        assert!((tanhshrink(0.0) - 0.0).abs() < 1e-14);
+        // For small x, tanhshrink ≈ x^3/3
+        assert!((tanhshrink(0.1) - (0.1 - 0.1_f64.tanh())).abs() < 1e-14);
+        // For large |x|, tanhshrink ≈ x - sign(x)
+        assert!((tanhshrink(10.0) - 9.0).abs() < 1e-5);
+        assert!((tanhshrink(-10.0) - (-9.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn celu_basic() {
+        // celu(x, α) is like elu but C¹ continuous
+        // For x >= 0, celu(x) = x
+        assert!((celu(2.0, 1.0) - 2.0).abs() < 1e-14);
+        assert!((celu(0.0, 1.0) - 0.0).abs() < 1e-14);
+        // For x < 0, celu(x, α) = α * (exp(x/α) - 1)
+        let expected = 1.0 * ((-1.0_f64 / 1.0).exp() - 1.0);
+        assert!((celu(-1.0, 1.0) - expected).abs() < 1e-14);
+        // Different alpha
+        let expected2 = 2.0 * ((-1.0_f64 / 2.0).exp() - 1.0);
+        assert!((celu(-1.0, 2.0) - expected2).abs() < 1e-14);
+    }
+
+    #[test]
+    fn logsigmoid_basic() {
+        // logsigmoid is same as log_expit_scalar
+        assert!((logsigmoid(0.0) - log_expit_scalar(0.0)).abs() < 1e-14);
+        assert!((logsigmoid(2.0) - log_expit_scalar(2.0)).abs() < 1e-14);
+        assert!((logsigmoid(-2.0) - log_expit_scalar(-2.0)).abs() < 1e-14);
+        // logsigmoid(0) = log(0.5) = -ln(2)
+        assert!((logsigmoid(0.0) - (-std::f64::consts::LN_2)).abs() < 1e-14);
     }
 }
