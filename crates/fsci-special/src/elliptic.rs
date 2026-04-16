@@ -77,6 +77,16 @@ pub fn ellipk(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("ellipk", m_tensor, mode, |m| ellipk_scalar(m, mode))
 }
 
+/// Complete elliptic integral of the first kind with complementary argument.
+///
+/// K(1-p) where p = 1 - m is the complementary parameter.
+///
+/// This is numerically stable when p is small (m close to 1).
+/// Matches `scipy.special.ellipkm1(p)`.
+pub fn ellipkm1(p_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("ellipkm1", p_tensor, mode, |p| ellipkm1_scalar(p, mode))
+}
+
 /// Complete elliptic integral of the second kind E(m).
 ///
 /// E(m) = ∫₀^{π/2} sqrt(1 - m sin²θ) dθ
@@ -215,6 +225,44 @@ fn ellipk_scalar(m: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     // AGM iteration: K(m) = π / (2 * agm(1, sqrt(1-m)))
     let mut a = 1.0;
     let mut b = (1.0 - m).sqrt();
+    for _ in 0..50 {
+        let a_new = 0.5 * (a + b);
+        let b_new = (a * b).sqrt();
+        if (a_new - b_new).abs() < 1.0e-15 * a_new {
+            return Ok(PI / (2.0 * a_new));
+        }
+        a = a_new;
+        b = b_new;
+    }
+    Ok(PI / (2.0 * a))
+}
+
+fn ellipkm1_scalar(p: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if p.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if p < 0.0 || p > 1.0 {
+        return domain_error("ellipkm1", mode, "p must be in [0, 1]");
+    }
+    if p == 0.0 {
+        return Ok(f64::INFINITY);
+    }
+    if p == 1.0 {
+        return Ok(PI / 2.0);
+    }
+
+    // For small p, use series expansion for numerical stability
+    // K(1-p) ≈ ln(4/sqrt(p)) + (ln(4/sqrt(p)) - 1) * p/4 + O(p^2)
+    if p < 1e-10 {
+        let ln4_sqrt_p = (4.0 / p.sqrt()).ln();
+        // Leading term only for very small p
+        return Ok(ln4_sqrt_p);
+    }
+
+    // For larger p, use AGM directly with m = 1 - p
+    // sqrt(1 - m) = sqrt(p)
+    let mut a = 1.0;
+    let mut b = p.sqrt();
     for _ in 0..50 {
         let a_new = 0.5 * (a + b);
         let b_new = (a * b).sqrt();
@@ -1155,6 +1203,36 @@ mod tests {
             let en1 = expn_scalar(n + 1, x);
             let computed = ((-x).exp() - x * en) / n as f64;
             assert_close(en1, computed, 1e-6, &format!("E_{} recurrence", n + 1));
+        }
+    }
+
+    #[test]
+    fn ellipkm1_basic() {
+        use super::*;
+
+        // ellipkm1(p) = ellipk(1-p)
+        // ellipkm1(1) = ellipk(0) = π/2
+        let result = ellipkm1_scalar(1.0, RuntimeMode::Strict).unwrap();
+        assert_close(result, std::f64::consts::PI / 2.0, 1e-10, "ellipkm1(1)");
+
+        // ellipkm1(0.5) = ellipk(0.5) ≈ 1.854
+        let result = ellipkm1_scalar(0.5, RuntimeMode::Strict).unwrap();
+        assert_close(result, 1.854, 0.001, "ellipkm1(0.5)");
+
+        // ellipkm1(0) = ellipk(1) = infinity
+        let result = ellipkm1_scalar(0.0, RuntimeMode::Strict).unwrap();
+        assert!(result.is_infinite() && result.is_sign_positive());
+    }
+
+    #[test]
+    fn ellipkm1_consistency_with_ellipk() {
+        use super::*;
+
+        // For moderate values, ellipkm1(p) should equal ellipk(1-p)
+        for &p in &[0.1, 0.3, 0.5, 0.7, 0.9] {
+            let k1 = ellipkm1_scalar(p, RuntimeMode::Strict).unwrap();
+            let k2 = ellipk_scalar(1.0 - p, RuntimeMode::Strict).unwrap();
+            assert_close(k1, k2, 1e-10, &format!("ellipkm1({p}) vs ellipk(1-{p})"));
         }
     }
 }
