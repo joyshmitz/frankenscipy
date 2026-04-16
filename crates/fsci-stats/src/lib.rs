@@ -4837,6 +4837,70 @@ impl ContinuousDistribution for GenNorm {
     }
 }
 
+/// Half generalized normal distribution (upper half of `gennorm`).
+///
+/// Matches `scipy.stats.halfgennorm`.
+pub struct HalfGenNorm {
+    pub beta: f64,
+}
+
+impl HalfGenNorm {
+    #[must_use]
+    pub fn new(beta: f64) -> Self {
+        assert!(beta > 0.0, "beta must be positive");
+        Self { beta }
+    }
+}
+
+impl ContinuousDistribution for HalfGenNorm {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        let b = self.beta;
+        b / ln_gamma(1.0 / b).exp() * (-x.powf(b)).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let b = self.beta;
+        lower_regularized_gamma(1.0 / b, x.powf(b))
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+
+        let b = self.beta;
+        let g = fsci_special::gammaincinv(1.0 / b, q);
+        if g.is_finite() && g >= 0.0 {
+            g.powf(1.0 / b)
+        } else {
+            ppf_bisection(|x| self.cdf(x), q, self.mean(), self.std())
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        let b = self.beta;
+        ln_gamma(2.0 / b).exp() / ln_gamma(1.0 / b).exp()
+    }
+
+    fn var(&self) -> f64 {
+        let b = self.beta;
+        let mean = self.mean();
+        ln_gamma(3.0 / b).exp() / ln_gamma(1.0 / b).exp() - mean * mean
+    }
+}
+
 /// Laplace-asymmetric distribution.
 ///
 /// Matches `scipy.stats.laplace_asymmetric`.
@@ -15354,6 +15418,60 @@ mod tests {
         let dist = FatigueLife::new(1.2);
         assert_close(dist.mean(), 1.72, 1e-12, "FatigueLife mean");
         assert_close(dist.var(), 4.032, 1e-12, "FatigueLife variance");
+    }
+
+    #[test]
+    fn halfgennorm_pdf_cdf_match_scipy_reference_values() {
+        let dist = HalfGenNorm::new(1.5);
+        let cases = [
+            (0.0, 1.107_732_167_432_472_5, 0.0),
+            (0.5, 0.777_836_790_520_629_4, 0.483_498_658_477_359_23),
+            (1.0, 0.407_511_890_722_688_56, 0.775_182_471_983_855_6),
+            (2.0, 0.065_473_336_746_790_16, 0.971_760_775_641_508),
+        ];
+
+        assert_eq!(dist.pdf(-1.0), 0.0);
+        assert_eq!(dist.cdf(-1.0), 0.0);
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("HalfGenNorm pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("HalfGenNorm cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn halfgennorm_ppf_roundtrip_matches_quantiles() {
+        let dist = HalfGenNorm::new(1.5);
+        let cases = [
+            (0.1, 0.091_272_638_420_941_47),
+            (0.25, 0.236_147_948_684_195_06),
+            (0.5, 0.521_458_465_537_009),
+            (0.75, 0.940_877_375_848_903_2),
+            (0.9, 1.420_286_821_096_215_4),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("HalfGenNorm ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("HalfGenNorm cdf(ppf({q}))"));
+        }
+    }
+
+    #[test]
+    fn halfgennorm_mean_var_match_closed_form() {
+        let dist = HalfGenNorm::new(1.5);
+        assert_close(
+            dist.mean(),
+            0.659_454_753_208_446_7,
+            1e-10,
+            "HalfGenNorm mean",
+        );
+        assert_close(
+            dist.var(),
+            0.303_607_540_093_080_44,
+            1e-10,
+            "HalfGenNorm variance",
+        );
     }
 
     #[test]
