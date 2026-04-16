@@ -2626,6 +2626,83 @@ pub fn heaviside(x: f64, h0: f64) -> f64 {
     }
 }
 
+/// Euclidean distance / hypotenuse: sqrt(x² + y²).
+///
+/// Computed without overflow for large inputs.
+/// Matches numpy `hypot(x, y)`.
+#[must_use]
+pub fn hypot(x: f64, y: f64) -> f64 {
+    x.hypot(y)
+}
+
+/// Copy sign of y to magnitude of x.
+///
+/// Returns a value with magnitude of x and sign of y.
+/// Matches numpy `copysign(x, y)`.
+#[must_use]
+pub fn copysign(x: f64, y: f64) -> f64 {
+    x.copysign(y)
+}
+
+/// Multiply x by 2 raised to the power exp.
+///
+/// ldexp(x, exp) = x * 2^exp
+/// Matches numpy `ldexp(x, exp)`.
+#[must_use]
+pub fn ldexp(x: f64, exp: i32) -> f64 {
+    // Use the formula: x * 2^exp
+    // For safety, use libm's implementation via powi
+    x * 2.0_f64.powi(exp)
+}
+
+/// Extract mantissa and exponent from x.
+///
+/// Returns (mantissa, exponent) such that x = mantissa * 2^exponent
+/// where 0.5 <= |mantissa| < 1.0 (or mantissa == 0 if x == 0).
+///
+/// Matches numpy `frexp(x)`.
+#[must_use]
+pub fn frexp(x: f64) -> (f64, i32) {
+    if x == 0.0 || x.is_nan() || x.is_infinite() {
+        return (x, 0);
+    }
+
+    let bits = x.to_bits();
+    let sign = bits >> 63;
+    let exp = ((bits >> 52) & 0x7ff) as i32;
+    let mantissa_bits = bits & 0x000f_ffff_ffff_ffff;
+
+    if exp == 0 {
+        // Subnormal number - normalize it
+        let normalized = x * 2.0_f64.powi(64);
+        let (m, e) = frexp(normalized);
+        return (m, e - 64);
+    }
+
+    // Normal number: reconstruct mantissa in [0.5, 1.0)
+    let new_exp: u64 = 0x3fe; // Exponent for [0.5, 1.0)
+    let new_bits = (sign << 63) | (new_exp << 52) | mantissa_bits;
+    let mantissa = f64::from_bits(new_bits);
+
+    (mantissa, exp - 0x3fe)
+}
+
+/// Absolute value.
+///
+/// Matches numpy `fabs(x)`.
+#[must_use]
+pub fn fabs(x: f64) -> f64 {
+    x.abs()
+}
+
+/// Clip/clamp value to range [min, max].
+///
+/// Matches numpy `clip(x, min, max)`.
+#[must_use]
+pub fn clip(x: f64, min: f64, max: f64) -> f64 {
+    x.clamp(min, max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2857,5 +2934,83 @@ mod tests {
         assert!((heaviside(0.0, 0.5) - 0.5).abs() < 1e-14);
         assert!((heaviside(0.0, 0.0) - 0.0).abs() < 1e-14);
         assert!((heaviside(0.0, 1.0) - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn hypot_basic() {
+        // Classic 3-4-5 triangle
+        assert!((hypot(3.0, 4.0) - 5.0).abs() < 1e-14);
+        // 5-12-13 triangle
+        assert!((hypot(5.0, 12.0) - 13.0).abs() < 1e-14);
+        // Handles zeros
+        assert!((hypot(3.0, 0.0) - 3.0).abs() < 1e-14);
+        assert!((hypot(0.0, 4.0) - 4.0).abs() < 1e-14);
+        // Negative values
+        assert!((hypot(-3.0, 4.0) - 5.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn copysign_basic() {
+        assert!((copysign(3.0, 1.0) - 3.0).abs() < 1e-14);
+        assert!((copysign(3.0, -1.0) - (-3.0)).abs() < 1e-14);
+        assert!((copysign(-3.0, 1.0) - 3.0).abs() < 1e-14);
+        assert!((copysign(-3.0, -1.0) - (-3.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn ldexp_basic() {
+        // ldexp(x, n) = x * 2^n
+        assert!((ldexp(1.0, 0) - 1.0).abs() < 1e-14);
+        assert!((ldexp(1.0, 1) - 2.0).abs() < 1e-14);
+        assert!((ldexp(1.0, 2) - 4.0).abs() < 1e-14);
+        assert!((ldexp(1.0, -1) - 0.5).abs() < 1e-14);
+        assert!((ldexp(3.0, 2) - 12.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn frexp_basic() {
+        // frexp returns (mantissa, exp) where x = mantissa * 2^exp
+        // and 0.5 <= |mantissa| < 1.0
+        let (m, e) = frexp(1.0);
+        assert!((m - 0.5).abs() < 1e-14);
+        assert_eq!(e, 1);
+
+        let (m, e) = frexp(2.0);
+        assert!((m - 0.5).abs() < 1e-14);
+        assert_eq!(e, 2);
+
+        let (m, e) = frexp(8.0);
+        assert!((m - 0.5).abs() < 1e-14);
+        assert_eq!(e, 4);
+
+        let (m, e) = frexp(0.0);
+        assert!((m - 0.0).abs() < 1e-14);
+        assert_eq!(e, 0);
+
+        // Verify roundtrip: ldexp(frexp(x)) == x
+        for &x in &[0.5, 1.0, 2.0, 3.14, 100.0, 0.001] {
+            let (m, e) = frexp(x);
+            assert!((ldexp(m, e) - x).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn fabs_basic() {
+        assert!((fabs(3.0) - 3.0).abs() < 1e-14);
+        assert!((fabs(-3.0) - 3.0).abs() < 1e-14);
+        assert!((fabs(0.0) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn clip_basic() {
+        // Value within range
+        assert!((clip(5.0, 0.0, 10.0) - 5.0).abs() < 1e-14);
+        // Value below min
+        assert!((clip(-5.0, 0.0, 10.0) - 0.0).abs() < 1e-14);
+        // Value above max
+        assert!((clip(15.0, 0.0, 10.0) - 10.0).abs() < 1e-14);
+        // At boundaries
+        assert!((clip(0.0, 0.0, 10.0) - 0.0).abs() < 1e-14);
+        assert!((clip(10.0, 0.0, 10.0) - 10.0).abs() < 1e-14);
     }
 }
