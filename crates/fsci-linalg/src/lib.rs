@@ -2836,6 +2836,196 @@ pub fn eigvalsh(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Lina
     Ok(result.eigenvalues)
 }
 
+/// Eigenvalues and eigenvectors of a symmetric tridiagonal matrix.
+///
+/// Given the diagonal elements `d` and off-diagonal elements `e` of a
+/// symmetric tridiagonal matrix T, computes the eigenvalues and optionally
+/// the eigenvectors.
+///
+/// The matrix has structure:
+/// ```text
+/// T = | d[0]  e[0]   0    ...    0   |
+///     | e[0]  d[1]  e[1]  ...    0   |
+///     |  0    e[1]  d[2]  ...    0   |
+///     | ...   ...   ...   ...   ... |
+///     |  0     0     0   e[n-2] d[n-1]|
+/// ```
+///
+/// Matches `scipy.linalg.eigh_tridiagonal(d, e)`.
+///
+/// # Arguments
+/// * `d` - Main diagonal elements (length n)
+/// * `e` - Off-diagonal elements (length n-1)
+/// * `eigvals_only` - If true, only compute eigenvalues
+/// * `options` - Decomposition options
+///
+/// # Returns
+/// (eigenvalues, eigenvectors) where eigenvectors is None if eigvals_only=true.
+pub fn eigh_tridiagonal(
+    d: &[f64],
+    e: &[f64],
+    eigvals_only: bool,
+    options: DecompOptions,
+) -> Result<(Vec<f64>, Option<Vec<Vec<f64>>>), LinalgError> {
+    let n = d.len();
+    if n == 0 {
+        return Ok((vec![], if eigvals_only { None } else { Some(vec![]) }));
+    }
+    if e.len() != n - 1 && n > 0 {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!(
+                "e must have length n-1={}, got {}",
+                n.saturating_sub(1),
+                e.len()
+            ),
+        });
+    }
+    hardened_dimension_check(options.mode, n, n)?;
+
+    if options.check_finite {
+        for &val in d.iter().chain(e.iter()) {
+            if !val.is_finite() {
+                return Err(LinalgError::NonFiniteInput);
+            }
+        }
+    }
+
+    // Use QL algorithm with implicit shifts for symmetric tridiagonal eigenvalues
+    let mut diagonal = d.to_vec();
+    let mut off_diag = e.to_vec();
+    off_diag.push(0.0); // Pad for convenience
+
+    // Initialize eigenvectors to identity if needed
+    let mut eigenvectors = if eigvals_only {
+        None
+    } else {
+        let mut z = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            z[i][i] = 1.0;
+        }
+        Some(z)
+    };
+
+    // Implicit QR algorithm with Wilkinson shift
+    let max_iter = 30 * n;
+    let eps = 1e-14;
+
+    // Work on a deflating submatrix [l, m]
+    let mut m = n as i32 - 1;
+
+    for _ in 0..max_iter {
+        // Check for convergence of off-diagonal elements from bottom
+        while m > 0 {
+            let mi = m as usize;
+            let tst = diagonal[mi - 1].abs() + diagonal[mi].abs();
+            if off_diag[mi - 1].abs() <= eps * tst {
+                off_diag[mi - 1] = 0.0;
+                m -= 1;
+            } else {
+                break;
+            }
+        }
+
+        if m <= 0 {
+            break;
+        }
+
+        // Find start of unreduced block
+        let mut l = m - 1;
+        while l > 0 {
+            let li = l as usize;
+            let tst = diagonal[li - 1].abs() + diagonal[li].abs();
+            if off_diag[li - 1].abs() <= eps * tst {
+                break;
+            }
+            l -= 1;
+        }
+
+        let li = l as usize;
+        let mi = m as usize;
+
+        // Compute Wilkinson shift
+        let d_diff = (diagonal[mi - 1] - diagonal[mi]) / 2.0;
+        let e_sq = off_diag[mi - 1] * off_diag[mi - 1];
+        let shift = if d_diff == 0.0 {
+            diagonal[mi] - e_sq.sqrt()
+        } else {
+            diagonal[mi] - e_sq / (d_diff + d_diff.signum() * (d_diff * d_diff + e_sq).sqrt())
+        };
+
+        // QR step with Givens rotations
+        let mut x = diagonal[li] - shift;
+        let mut z = off_diag[li];
+
+        for k in li..mi {
+            // Compute Givens rotation
+            let (c, s, r) = if z.abs() > x.abs() {
+                let t = -x / z;
+                let s = 1.0 / (1.0 + t * t).sqrt();
+                let c = s * t;
+                (c, s, z / s)
+            } else if x.abs() > 0.0 {
+                let t = -z / x;
+                let c = 1.0 / (1.0 + t * t).sqrt();
+                let s = c * t;
+                (c, s, x / c)
+            } else {
+                (1.0, 0.0, 0.0)
+            };
+
+            // Apply rotation to tridiagonal matrix
+            if k > li {
+                off_diag[k - 1] = r;
+            }
+
+            let d_k = diagonal[k];
+            let d_k1 = diagonal[k + 1];
+            let e_k = off_diag[k];
+
+            diagonal[k] = c * c * d_k + s * s * d_k1 - 2.0 * c * s * e_k;
+            diagonal[k + 1] = s * s * d_k + c * c * d_k1 + 2.0 * c * s * e_k;
+            off_diag[k] = c * s * (d_k - d_k1) + (c * c - s * s) * e_k;
+
+            if k + 1 < mi {
+                x = off_diag[k];
+                z = -s * off_diag[k + 1];
+                off_diag[k + 1] *= c;
+            }
+
+            // Update eigenvectors
+            if let Some(ref mut evec) = eigenvectors {
+                for j in 0..n {
+                    let t = evec[j][k];
+                    evec[j][k] = c * t - s * evec[j][k + 1];
+                    evec[j][k + 1] = s * t + c * evec[j][k + 1];
+                }
+            }
+        }
+    }
+
+    // Sort eigenvalues (and eigenvectors) in ascending order
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| diagonal[a].partial_cmp(&diagonal[b]).unwrap_or(std::cmp::Ordering::Equal));
+
+    let sorted_eigenvalues: Vec<f64> = indices.iter().map(|&i| diagonal[i]).collect();
+    let sorted_eigenvectors = eigenvectors.map(|z| {
+        (0..n)
+            .map(|row| indices.iter().map(|&col| z[row][col]).collect())
+            .collect()
+    });
+
+    emit_trace(LinalgTrace {
+        operation: "eigh_tridiagonal",
+        matrix_size: (n, n),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok((sorted_eigenvalues, sorted_eigenvectors))
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Schur and Hessenberg Decompositions — Public API
 // ══════════════════════════════════════════════════════════════════════
@@ -9273,5 +9463,59 @@ mod proptest_tests {
             matrix_rank(&a, Some(1e-10), DecompOptions::default()).expect("tolerant rank");
         assert_eq!(default_rank, 2);
         assert_eq!(tolerant_rank, 1);
+    }
+
+    // ── eigh_tridiagonal tests ─────────────────────────────────────────
+
+    #[test]
+    fn eigh_tridiagonal_2x2() {
+        // T = [[2, 1], [1, 2]] has eigenvalues 1 and 3
+        let d = vec![2.0, 2.0];
+        let e = vec![1.0];
+        let (eigenvalues, eigenvectors) =
+            eigh_tridiagonal(&d, &e, false, DecompOptions::default()).expect("eigh_tridiagonal");
+        assert_eq!(eigenvalues.len(), 2);
+        assert!((eigenvalues[0] - 1.0).abs() < 1e-10, "λ1 = {}", eigenvalues[0]);
+        assert!((eigenvalues[1] - 3.0).abs() < 1e-10, "λ2 = {}", eigenvalues[1]);
+        assert!(eigenvectors.is_some());
+    }
+
+    #[test]
+    fn eigh_tridiagonal_eigenvalues_only() {
+        let d = vec![1.0, 2.0, 3.0];
+        let e = vec![0.5, 0.5];
+        let (eigenvalues, eigenvectors) =
+            eigh_tridiagonal(&d, &e, true, DecompOptions::default()).expect("eigvals only");
+        assert_eq!(eigenvalues.len(), 3);
+        assert!(eigenvectors.is_none());
+    }
+
+    #[test]
+    fn eigh_tridiagonal_diagonal_matrix() {
+        // Off-diagonals are zero: eigenvalues are just the diagonal
+        let d = vec![3.0, 1.0, 2.0];
+        let e = vec![0.0, 0.0];
+        let (eigenvalues, _) =
+            eigh_tridiagonal(&d, &e, false, DecompOptions::default()).expect("diagonal");
+        // Sorted eigenvalues
+        assert!((eigenvalues[0] - 1.0).abs() < 1e-10);
+        assert!((eigenvalues[1] - 2.0).abs() < 1e-10);
+        assert!((eigenvalues[2] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn eigh_tridiagonal_empty() {
+        let (eigenvalues, eigenvectors) =
+            eigh_tridiagonal(&[], &[], false, DecompOptions::default()).expect("empty");
+        assert!(eigenvalues.is_empty());
+        assert!(eigenvectors.unwrap().is_empty());
+    }
+
+    #[test]
+    fn eigh_tridiagonal_invalid_e_length() {
+        let d = vec![1.0, 2.0, 3.0];
+        let e = vec![0.5]; // Should be length 2
+        let err = eigh_tridiagonal(&d, &e, false, DecompOptions::default()).expect_err("invalid");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
     }
 }

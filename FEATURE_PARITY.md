@@ -32,10 +32,10 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 **Implemented:** solve, solve_triangular, solve_banded, inv, det, lstsq, pinv, lu, lu_factor, lu_solve, qr, svd, svdvals, cholesky, cho_factor, cho_solve, ldl, eig, eigvals, eigh, eigvalsh, schur, hessenberg, expm, norm, matrix_rank, solve_with_casp, logm, sqrtm, matrix_power, solve_sylvester, solve_continuous_lyapunov, solve_discrete_lyapunov, solve_circulant, solve_toeplitz, khatri_rao, hadamard, block_diag, companion, issymmetric, ishermitian, is_positive_definite, is_diagonal, is_upper_triangular, is_lower_triangular, is_orthogonal, mat_norm_1, mat_norm_inf, bandwidth, orth, null_space, subspace_angles, polar, and 60+ more
 
 **Missing (LOW priority):**
-- Matrix functions: `fractional_matrix_power`, `funm`, `signm`
-- Generalized decompositions: `qz`, `ordqz`
+- Matrix functions: ~~`fractional_matrix_power`~~ ✓ DONE, ~~`funm`~~ ✓ DONE, ~~`signm`~~ ✓ DONE
+- Generalized decompositions: ~~`qz`~~ ✓ DONE, ~~`ordqz`~~ ✓ DONE
 - ~~Subspace: `orth`, `null_space`, `subspace_angles`, `polar`~~ ✓ Already implemented
-- Banded: `eig_banded`, `eigh_tridiagonal`, `cho_solve_banded`, `solveh_banded`
+- Banded: `eig_banded`, ~~`eigh_tridiagonal`~~ ✓ DONE, `cho_solve_banded`, `solveh_banded`
 
 ### fsci-sparse (44% coverage)
 
