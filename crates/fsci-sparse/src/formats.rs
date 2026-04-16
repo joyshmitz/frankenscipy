@@ -37,6 +37,7 @@ pub enum SparseFormat {
     Csr,
     Csc,
     Coo,
+    Bsr,
     Dia,
     Dok,
     Lil,
@@ -408,6 +409,189 @@ impl CooMatrix {
             mode,
             validation_result: validation_result.into(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BsrMatrix {
+    pub(crate) shape: Shape2D,
+    pub(crate) block_shape: Shape2D,
+    pub(crate) data: Vec<Vec<f64>>,
+    pub(crate) indices: Vec<usize>,
+    pub(crate) indptr: Vec<usize>,
+    pub(crate) canonical: CanonicalMeta,
+}
+
+impl BsrMatrix {
+    pub fn from_components(
+        shape: Shape2D,
+        block_shape: Shape2D,
+        data: Vec<Vec<f64>>,
+        indices: Vec<usize>,
+        indptr: Vec<usize>,
+        canonicalize: bool,
+    ) -> SparseResult<Self> {
+        let canonical =
+            validate_bsr_components(shape, block_shape, &data, &indices, &indptr, canonicalize)?;
+        Ok(Self {
+            shape,
+            block_shape,
+            data,
+            indices,
+            indptr,
+            canonical,
+        })
+    }
+
+    pub fn from_triplets(
+        shape: Shape2D,
+        block_shape: Shape2D,
+        data: Vec<f64>,
+        row_indices: Vec<usize>,
+        col_indices: Vec<usize>,
+    ) -> SparseResult<Self> {
+        if data.len() != row_indices.len() || data.len() != col_indices.len() {
+            return Err(SparseError::IncompatibleShape {
+                message: "BSR data/row/col lengths must match".to_string(),
+            });
+        }
+
+        let (block_rows, _, block_area) = validate_bsr_block_shape(shape, block_shape)?;
+        let mut block_row_maps = vec![BTreeMap::new(); block_rows];
+
+        for ((row, col), value) in row_indices.into_iter().zip(col_indices).zip(data) {
+            validate_coordinate(shape, row, col)?;
+            let block_row = row / block_shape.rows;
+            let block_col = col / block_shape.cols;
+            let offset = (row % block_shape.rows) * block_shape.cols + (col % block_shape.cols);
+            let block = block_row_maps[block_row]
+                .entry(block_col)
+                .or_insert_with(|| vec![0.0; block_area]);
+            block[offset] += value;
+        }
+
+        let mut data_blocks = Vec::new();
+        let mut block_indices = Vec::new();
+        let mut indptr = Vec::with_capacity(block_rows + 1);
+        indptr.push(0);
+
+        for row_map in block_row_maps {
+            for (block_col, block) in row_map {
+                block_indices.push(block_col);
+                data_blocks.push(block);
+            }
+            indptr.push(block_indices.len());
+        }
+
+        Self::from_components(shape, block_shape, data_blocks, block_indices, indptr, true)
+    }
+
+    #[must_use]
+    pub const fn shape(&self) -> Shape2D {
+        self.shape
+    }
+
+    #[must_use]
+    pub const fn block_shape(&self) -> Shape2D {
+        self.block_shape
+    }
+
+    #[must_use]
+    pub fn nnz_blocks(&self) -> usize {
+        self.data.len()
+    }
+
+    #[must_use]
+    pub fn nnz(&self) -> usize {
+        self.nnz_blocks()
+            .saturating_mul(self.block_shape.rows.saturating_mul(self.block_shape.cols))
+    }
+
+    #[must_use]
+    pub fn canonical_meta(&self) -> CanonicalMeta {
+        self.canonical
+    }
+
+    #[must_use]
+    pub fn data(&self) -> &[Vec<f64>] {
+        &self.data
+    }
+
+    #[must_use]
+    pub fn indices(&self) -> &[usize] {
+        &self.indices
+    }
+
+    #[must_use]
+    pub fn indptr(&self) -> &[usize] {
+        &self.indptr
+    }
+
+    pub fn get(&self, row: usize, col: usize) -> SparseResult<f64> {
+        validate_coordinate(self.shape, row, col)?;
+        let block_row = row / self.block_shape.rows;
+        let block_col = col / self.block_shape.cols;
+        let offset =
+            (row % self.block_shape.rows) * self.block_shape.cols + (col % self.block_shape.cols);
+
+        let mut value = 0.0;
+        for idx in self.indptr[block_row]..self.indptr[block_row + 1] {
+            if self.indices[idx] == block_col {
+                value += self.data[idx][offset];
+            }
+        }
+        Ok(value)
+    }
+
+    #[must_use]
+    pub fn construction_log(
+        &self,
+        mode: RuntimeMode,
+        operation_id: impl Into<String>,
+        validation_result: impl Into<String>,
+    ) -> ConstructionLogEntry {
+        ConstructionLogEntry {
+            timestamp: now_timestamp(),
+            operation_id: operation_id.into(),
+            format: SparseFormat::Bsr,
+            shape: self.shape,
+            nnz: self.nnz(),
+            mode,
+            validation_result: validation_result.into(),
+        }
+    }
+
+    pub fn to_coo(&self) -> SparseResult<CooMatrix> {
+        let mut rows = Vec::with_capacity(self.nnz());
+        let mut cols = Vec::with_capacity(self.nnz());
+        let mut data = Vec::with_capacity(self.nnz());
+
+        for block_row in 0..self.indptr.len().saturating_sub(1) {
+            for idx in self.indptr[block_row]..self.indptr[block_row + 1] {
+                let block_col = self.indices[idx];
+                let block = &self.data[idx];
+
+                for local_row in 0..self.block_shape.rows {
+                    for local_col in 0..self.block_shape.cols {
+                        rows.push(block_row * self.block_shape.rows + local_row);
+                        cols.push(block_col * self.block_shape.cols + local_col);
+                        data.push(block[local_row * self.block_shape.cols + local_col]);
+                    }
+                }
+            }
+        }
+
+        CooMatrix::from_triplets(self.shape, data, rows, cols, false)
+    }
+
+    pub fn to_csr(&self) -> SparseResult<CsrMatrix> {
+        use crate::ops::FormatConvertible;
+        self.to_coo()?.to_csr()
+    }
+
+    pub fn to_csc(&self) -> SparseResult<CscMatrix> {
+        use crate::ops::FormatConvertible;
+        self.to_coo()?.to_csc()
     }
 }
 
@@ -998,6 +1182,39 @@ impl NalgebraBridge for DokMatrix {
     }
 }
 
+impl NalgebraBridge for BsrMatrix {
+    fn to_nalgebra_cs(&self) -> NalgebraCsMatrix<f64> {
+        let mut rows = Vec::with_capacity(self.nnz());
+        let mut cols = Vec::with_capacity(self.nnz());
+        let mut vals = Vec::with_capacity(self.nnz());
+
+        for block_row in 0..self.indptr.len().saturating_sub(1) {
+            for idx in self.indptr[block_row]..self.indptr[block_row + 1] {
+                let block_col = self.indices[idx];
+                let block = &self.data[idx];
+                for local_row in 0..self.block_shape.rows {
+                    for local_col in 0..self.block_shape.cols {
+                        rows.push(block_row * self.block_shape.rows + local_row);
+                        cols.push(block_col * self.block_shape.cols + local_col);
+                        vals.push(block[local_row * self.block_shape.cols + local_col]);
+                    }
+                }
+            }
+        }
+
+        NalgebraCsMatrix::from_triplet(self.shape.rows, self.shape.cols, &rows, &cols, &vals)
+    }
+
+    fn from_nalgebra_cs(matrix: &NalgebraCsMatrix<f64>) -> SparseResult<Self> {
+        let (rows, cols) = matrix.shape();
+        Err(SparseError::Unsupported {
+            feature: format!(
+                "BSR conversion from nalgebra requires an explicit block size for {rows}x{cols} matrices"
+            ),
+        })
+    }
+}
+
 impl NalgebraBridge for LilMatrix {
     fn to_nalgebra_cs(&self) -> NalgebraCsMatrix<f64> {
         let mut rows = Vec::with_capacity(self.nnz());
@@ -1218,6 +1435,89 @@ fn validate_coordinate(shape: Shape2D, row: usize, col: usize) -> SparseResult<(
     Ok(())
 }
 
+fn validate_bsr_block_shape(
+    shape: Shape2D,
+    block_shape: Shape2D,
+) -> SparseResult<(usize, usize, usize)> {
+    if block_shape.rows == 0 || block_shape.cols == 0 {
+        return Err(SparseError::InvalidShape {
+            message: "BSR block dimensions must be non-zero".to_string(),
+        });
+    }
+    if !shape.rows.is_multiple_of(block_shape.rows) || !shape.cols.is_multiple_of(block_shape.cols)
+    {
+        return Err(SparseError::InvalidShape {
+            message: "BSR block dimensions must divide the matrix shape".to_string(),
+        });
+    }
+
+    let block_area = block_shape
+        .rows
+        .checked_mul(block_shape.cols)
+        .ok_or_else(|| SparseError::IndexOverflow {
+            message: "BSR block area overflows usize".to_string(),
+        })?;
+    Ok((
+        shape.rows / block_shape.rows,
+        shape.cols / block_shape.cols,
+        block_area,
+    ))
+}
+
+fn validate_bsr_components(
+    shape: Shape2D,
+    block_shape: Shape2D,
+    data: &[Vec<f64>],
+    indices: &[usize],
+    indptr: &[usize],
+    canonicalize: bool,
+) -> SparseResult<CanonicalMeta> {
+    let (block_rows, block_cols, block_area) = validate_bsr_block_shape(shape, block_shape)?;
+    if data.len() != indices.len() {
+        return Err(SparseError::IncompatibleShape {
+            message: "BSR data and indices lengths differ".to_string(),
+        });
+    }
+    for block in data {
+        if block.len() != block_area {
+            return Err(SparseError::IncompatibleShape {
+                message: format!("BSR blocks must each store exactly {block_area} scalar values"),
+            });
+        }
+    }
+    if indptr.len() != block_rows + 1 {
+        return Err(SparseError::InvalidShape {
+            message: "BSR indptr length must be block_rows + 1".to_string(),
+        });
+    }
+    if !indptr.windows(2).all(|w| w[0] <= w[1]) {
+        return Err(SparseError::InvalidSparseStructure {
+            message: "BSR indptr must be monotone non-decreasing".to_string(),
+        });
+    }
+    if indptr.first().copied().unwrap_or_default() != 0 || indptr[block_rows] != data.len() {
+        return Err(SparseError::InvalidSparseStructure {
+            message: "BSR pointer endpoints must satisfy indptr[0]=0 and indptr[last]=nnz_blocks"
+                .to_string(),
+        });
+    }
+    for &idx in indices {
+        if idx >= block_cols {
+            return Err(SparseError::IndexOutOfBounds {
+                axis: "minor",
+                index: idx,
+                bound: block_cols,
+            });
+        }
+    }
+
+    let (sorted, deduplicated) = detect_canonical(indptr, indices);
+    Ok(CanonicalMeta {
+        sorted_indices: canonicalize || sorted,
+        deduplicated: canonicalize || deduplicated,
+    })
+}
+
 fn canonicalize_lil_row(
     row_indices: Vec<usize>,
     row_data: Vec<f64>,
@@ -1307,6 +1607,7 @@ fn format_label(format: SparseFormat) -> &'static str {
         SparseFormat::Csr => "csr",
         SparseFormat::Csc => "csc",
         SparseFormat::Coo => "coo",
+        SparseFormat::Bsr => "bsr",
         SparseFormat::Dia => "dia",
         SparseFormat::Dok => "dok",
         SparseFormat::Lil => "lil",

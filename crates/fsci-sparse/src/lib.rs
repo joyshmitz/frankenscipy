@@ -7,8 +7,8 @@ pub mod ops;
 
 pub use construct::{block_diag, bmat, diags, eye, kron, random};
 pub use formats::{
-    CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, DokMatrix,
-    LilMatrix, NalgebraBridge, Shape2D, SparseError, SparseFormat, SparseResult,
+    BsrMatrix, CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix,
+    DokMatrix, LilMatrix, NalgebraBridge, Shape2D, SparseError, SparseFormat, SparseResult,
 };
 pub use linalg::{
     ConnectedComponentsResult,
@@ -398,6 +398,100 @@ mod tests {
         assert_eq!(coo.row_indices(), &[0, 0]);
         assert_eq!(coo.col_indices(), &[1, 1]);
         assert_vec_close(coo.data(), &[1.0, 2.0]);
+    }
+
+    #[test]
+    fn bsr_rejects_non_divisible_block_shape() {
+        let err = BsrMatrix::from_components(
+            Shape2D::new(3, 4),
+            Shape2D::new(2, 2),
+            vec![],
+            vec![],
+            vec![0],
+            false,
+        )
+        .expect_err("non-divisible block shape");
+        assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn bsr_rejects_invalid_block_component_shape() {
+        let err = BsrMatrix::from_components(
+            Shape2D::new(4, 4),
+            Shape2D::new(2, 2),
+            vec![vec![1.0, 2.0, 3.0]],
+            vec![0],
+            vec![0, 1, 1],
+            false,
+        )
+        .expect_err("invalid block width");
+        assert!(matches!(err, SparseError::IncompatibleShape { .. }));
+    }
+
+    #[test]
+    fn bsr_from_triplets_canonicalizes_blocks_and_preserves_explicit_zeros() {
+        let bsr = BsrMatrix::from_triplets(
+            Shape2D::new(4, 4),
+            Shape2D::new(2, 2),
+            vec![1.5, 2.5, -4.0, 3.0, 0.0],
+            vec![0, 0, 0, 1, 3],
+            vec![0, 0, 0, 1, 3],
+        )
+        .expect("bsr");
+        assert_eq!(bsr.nnz_blocks(), 2);
+        assert_eq!(bsr.nnz(), 8);
+        assert_eq!(bsr.block_shape(), Shape2D::new(2, 2));
+        assert!(bsr.canonical_meta().sorted_indices);
+        assert!(bsr.canonical_meta().deduplicated);
+        assert!((bsr.get(0, 0).expect("get") - 0.0).abs() <= EPS);
+        assert!((bsr.get(1, 1).expect("get") - 3.0).abs() <= EPS);
+        assert!((bsr.get(3, 3).expect("get") - 0.0).abs() <= EPS);
+    }
+
+    #[test]
+    fn bsr_to_coo_preserves_dense_semantics() {
+        let bsr = BsrMatrix::from_components(
+            Shape2D::new(4, 4),
+            Shape2D::new(2, 2),
+            vec![vec![1.0, 0.0, 0.0, 2.0], vec![0.0, 0.0, 5.0, 0.0]],
+            vec![0, 1],
+            vec![0, 1, 2],
+            true,
+        )
+        .expect("bsr");
+        let dense = dense_from_coo(&bsr.to_coo().expect("bsr->coo"));
+        assert_matrix_close(
+            &dense,
+            &[
+                vec![1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 2.0, 0.0, 0.0],
+                vec![0.0, 0.0, 0.0, 0.0],
+                vec![0.0, 0.0, 5.0, 0.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn bsr_converts_through_csr_and_csc() {
+        let bsr = BsrMatrix::from_components(
+            Shape2D::new(4, 6),
+            Shape2D::new(2, 3),
+            vec![
+                vec![1.0, 0.0, 2.0, 0.0, 3.0, 0.0],
+                vec![0.0, 0.0, 4.0, 5.0, 0.0, 0.0],
+            ],
+            vec![0, 1],
+            vec![0, 1, 2],
+            true,
+        )
+        .expect("bsr");
+        let dense_from_bsr = dense_from_coo(&bsr.to_coo().expect("bsr->coo"));
+        let dense_from_csr =
+            dense_from_coo(&bsr.to_csr().expect("bsr->csr").to_coo().expect("csr->coo"));
+        let dense_from_csc =
+            dense_from_coo(&bsr.to_csc().expect("bsr->csc").to_coo().expect("csc->coo"));
+        assert_matrix_close(&dense_from_bsr, &dense_from_csr);
+        assert_matrix_close(&dense_from_bsr, &dense_from_csc);
     }
 
     #[test]
