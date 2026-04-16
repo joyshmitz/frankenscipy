@@ -301,6 +301,39 @@ pub fn roots_chebyt(n: usize) -> (Vec<f64>, Vec<f64>) {
     (nodes, weights)
 }
 
+/// Compute Gauss-Chebyshev (second kind) quadrature nodes and weights on [-1, 1].
+///
+/// The weight function is `sqrt(1 - x^2)`.
+/// The nodes are the roots of U_n(x), the Chebyshev polynomial of the second kind.
+///
+/// Matches `scipy.special.roots_chebyu(n)`.
+#[must_use]
+pub fn roots_chebyu(n: usize) -> (Vec<f64>, Vec<f64>) {
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let n1 = n as f64 + 1.0;
+    let mut nodes = Vec::with_capacity(n);
+    let mut weights = Vec::with_capacity(n);
+
+    for k in 1..=n {
+        let theta = PI * k as f64 / n1;
+        nodes.push(theta.cos());
+        // Weight for Chebyshev U: w_k = π/(n+1) * sin²(kπ/(n+1))
+        let sin_theta = theta.sin();
+        weights.push(PI / n1 * sin_theta * sin_theta);
+    }
+
+    // Sort nodes in ascending order (they come out descending from cos)
+    // Also reorder weights accordingly
+    let mut pairs: Vec<(f64, f64)> = nodes.into_iter().zip(weights).collect();
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (sorted_nodes, sorted_weights): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
+
+    (sorted_nodes, sorted_weights)
+}
+
 /// Compute Gauss-Hermite quadrature nodes and weights on `(-∞, ∞)`.
 ///
 /// The weight function is `exp(-x^2)`.
@@ -946,6 +979,25 @@ mod tests {
         for weight in w {
             assert_close(weight, PI / n as f64, 1e-12, "chebyt weight");
         }
+    }
+
+    #[test]
+    fn roots_chebyu_match_closed_form() {
+        let n = 4;
+        let (x, w) = roots_chebyu(n);
+        // U_4(x) roots are cos(kπ/5) for k=1,2,3,4
+        let expected_nodes = [
+            -0.809_016_994_374_947_4, // cos(4π/5)
+            -0.309_016_994_374_947_4, // cos(3π/5)
+            0.309_016_994_374_947_4,  // cos(2π/5)
+            0.809_016_994_374_947_4,  // cos(π/5)
+        ];
+        for (actual, expected) in x.iter().zip(expected_nodes) {
+            assert_close(*actual, expected, 1e-12, "chebyu node");
+        }
+        // Weights should be π/(n+1) * sin²(kπ/(n+1))
+        let weight_sum: f64 = w.iter().sum();
+        assert_close(weight_sum, PI / 2.0, 1e-10, "chebyu weight sum = π/2");
     }
 
     #[test]
