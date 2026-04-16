@@ -259,6 +259,23 @@ pub fn hamming(n: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Generate a generalized Hamming window of length `n`.
+///
+/// Matches `scipy.signal.windows.general_hamming(n, alpha)`.
+pub fn general_hamming(n: usize, alpha: f64) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+    let m = (n - 1) as f64;
+    let beta = 1.0 - alpha;
+    (0..n)
+        .map(|i| alpha - beta * (2.0 * std::f64::consts::PI * i as f64 / m).cos())
+        .collect()
+}
+
 /// Generate a Blackman window of length `n`.
 ///
 /// Matches `scipy.signal.windows.blackman(n)`.
@@ -5949,7 +5966,8 @@ pub fn triang(n: usize) -> Vec<f64> {
 /// # Supported windows
 /// `"hann"`, `"hamming"`, `"blackman"`, `"blackmanharris"`, `"barthann"`,
 /// `"bartlett"`, `"flattop"`, `"cosine"`, `"rectangular"` / `"boxcar"`,
-/// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`), `"chebwin,<at>"` (e.g. `"chebwin,100"`).
+/// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`), `"chebwin,<at>"` (e.g. `"chebwin,100"`),
+/// `"general_hamming,<alpha>"` (e.g. `"general_hamming,0.75"`).
 pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
     let lower = window.trim().to_lowercase();
     if let Some(rest) = lower.strip_prefix("kaiser,") {
@@ -5964,6 +5982,12 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
             SignalError::InvalidArgument(format!("invalid chebwin attenuation: {rest}"))
         })?;
         return Ok(chebwin(nx, attenuation));
+    }
+    if let Some(rest) = lower.strip_prefix("general_hamming,") {
+        let alpha: f64 = rest.trim().parse().map_err(|_| {
+            SignalError::InvalidArgument(format!("invalid general_hamming alpha: {rest}"))
+        })?;
+        return Ok(general_hamming(nx, alpha));
     }
     match lower.as_str() {
         "hann" | "hanning" => Ok(hann(nx)),
@@ -7417,6 +7441,24 @@ mod tests {
     }
 
     #[test]
+    fn general_hamming_window_matches_scipy_reference() {
+        let w = general_hamming(8, 0.75);
+        let expected = [
+            0.5,
+            0.5941275495353167,
+            0.8056302334890786,
+            0.9752422169756048,
+            0.9752422169756048,
+            0.8056302334890786,
+            0.5941275495353167,
+            0.5,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn chebwin_window_matches_scipy_reference() {
         let w = chebwin(5, 100.0);
         let expected = [
@@ -7497,6 +7539,7 @@ mod tests {
     fn window_empty_returns_empty() {
         assert!(hann(0).is_empty());
         assert!(hamming(0).is_empty());
+        assert!(general_hamming(0, 0.75).is_empty());
         assert!(blackman(0).is_empty());
         assert!(blackmanharris(0).is_empty());
         assert!(barthann(0).is_empty());
@@ -7510,6 +7553,7 @@ mod tests {
     fn window_single_returns_one() {
         assert_eq!(hann(1), [1.0]);
         assert_eq!(hamming(1), [1.0]);
+        assert_eq!(general_hamming(1, 0.75), [1.0]);
         assert_eq!(blackman(1), [1.0]);
         assert_eq!(blackmanharris(1), [1.0]);
         assert_eq!(barthann(1), [1.0]);
@@ -9380,6 +9424,13 @@ mod tests {
     fn get_window_dispatches_chebwin() {
         let w = get_window("chebwin,100", 5).unwrap();
         let expected = chebwin(5, 100.0);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_general_hamming() {
+        let w = get_window("general_hamming,0.75", 8).unwrap();
+        let expected = general_hamming(8, 0.75);
         assert_eq!(w, expected);
     }
 
