@@ -1903,10 +1903,8 @@ pub fn qmr(
 
         // Update d and s (search directions)
         if iteration == 0 {
-            for i in 0..n {
-                d[i] = v[i];
-                s[i] = w[i];
-            }
+            d[..n].copy_from_slice(&v[..n]);
+            s[..n].copy_from_slice(&w[..n]);
         } else {
             let psi = xi * delta / epsilon_prev;
             for i in 0..n {

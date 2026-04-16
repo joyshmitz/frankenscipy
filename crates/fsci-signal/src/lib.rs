@@ -237,7 +237,7 @@ fn factorial_small(n: usize) -> f64 {
 /// # Arguments
 /// * `n` - Number of points in the window
 /// * `sym` - If true (default), generates a symmetric window for filter design.
-///           If false, generates a periodic window for spectral analysis.
+///   If false, generates a periodic window for spectral analysis.
 pub fn boxcar(n: usize, sym: bool) -> Vec<f64> {
     if n == 0 {
         return Vec::new();
@@ -5900,7 +5900,7 @@ pub fn chebwin(n: usize, at: f64) -> Vec<f64> {
         window.extend(fft_values[1..split].iter().rev().copied());
         window.extend_from_slice(&fft_values[1..split]);
     } else {
-        let split = (n + 1) / 2;
+        let split = n.div_ceil(2);
         window.extend(fft_values[1..split].iter().rev().copied());
         window.extend_from_slice(&fft_values[..split]);
     }
@@ -5950,7 +5950,7 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
 
     // Calculate F_m coefficients for m = 1, ..., nbar-1
     let mut fm = vec![0.0; nbar];
-    for m in 1..nbar {
+    for (m, fm_m) in fm.iter_mut().enumerate().take(nbar).skip(1) {
         let mf = m as f64;
         let m_sq = mf * mf;
 
@@ -5973,7 +5973,7 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
 
         // Sign alternates: (-1)^(m+1)
         let sign = if m % 2 == 1 { 1.0 } else { -1.0 };
-        fm[m] = if den.abs() > 1e-15 {
+        *fm_m = if den.abs() > 1e-15 {
             sign * num / den
         } else {
             0.0
@@ -5986,8 +5986,8 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
         .map(|i| {
             let x = (i as f64) / (nf - 1.0) - 0.5; // x in [-0.5, 0.5]
             let mut val = 1.0;
-            for m in 1..nbar {
-                val += 2.0 * fm[m] * (2.0 * std::f64::consts::PI * m as f64 * x).cos();
+            for (m, &fm_m) in fm.iter().enumerate().take(nbar).skip(1) {
+                val += 2.0 * fm_m * (2.0 * std::f64::consts::PI * m as f64 * x).cos();
             }
             val
         })
@@ -7226,10 +7226,9 @@ fn poly_eval_complex(coeffs: &[f64], z_re: f64, z_im: f64) -> (f64, f64) {
 }
 
 /// Convert transfer function to state-space (controllable canonical form).
-fn tf2ss(
-    num: &[f64],
-    den: &[f64],
-) -> Result<(Vec<Vec<f64>>, Vec<f64>, Vec<f64>, f64), SignalError> {
+type StateSpace = (Vec<Vec<f64>>, Vec<f64>, Vec<f64>, f64);
+
+fn tf2ss(num: &[f64], den: &[f64]) -> Result<StateSpace, SignalError> {
     if den.is_empty() || den[0] == 0.0 {
         return Err(SignalError::InvalidArgument(
             "denominator leading coefficient cannot be zero".to_string(),
