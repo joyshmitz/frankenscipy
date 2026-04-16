@@ -7,7 +7,7 @@ pub mod ops;
 
 pub use construct::{block_diag, bmat, diags, eye, kron, random};
 pub use formats::{
-    CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix,
+    CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, DokMatrix,
     NalgebraBridge, Shape2D, SparseError, SparseFormat, SparseResult,
 };
 pub use linalg::{
@@ -398,6 +398,99 @@ mod tests {
         assert_eq!(coo.row_indices(), &[0, 0]);
         assert_eq!(coo.col_indices(), &[1, 1]);
         assert_vec_close(coo.data(), &[1.0, 2.0]);
+    }
+
+    #[test]
+    fn dok_from_triplets_merges_duplicates_and_elides_zero_sums() {
+        let dok = DokMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![1.5, 2.5, -4.0, 3.0],
+            vec![0, 0, 0, 2],
+            vec![1, 1, 1, 2],
+        )
+        .expect("dok with duplicate triplets");
+        assert_eq!(dok.nnz(), 1);
+        assert_eq!(dok.entries().len(), 1);
+        assert!((dok.get(0, 1).expect("get") - 0.0).abs() <= EPS);
+        assert!((dok.get(2, 2).expect("get") - 3.0).abs() <= EPS);
+    }
+
+    #[test]
+    fn dok_insert_and_remove_elide_zero_entries() {
+        let mut dok = DokMatrix::new(Shape2D::new(2, 3));
+        assert_eq!(dok.insert(1, 2, 4.0).expect("insert"), None);
+        assert_eq!(dok.nnz(), 1);
+        assert!(dok.contains(1, 2).expect("contains"));
+
+        let previous = dok.insert(1, 2, 0.0).expect("zero insert");
+        assert!(matches!(previous, Some(value) if (value - 4.0).abs() <= EPS));
+        assert_eq!(dok.nnz(), 0);
+        assert!(!dok.contains(1, 2).expect("contains"));
+
+        assert_eq!(dok.remove(0, 0).expect("remove"), None);
+    }
+
+    #[test]
+    fn dok_rejects_out_of_bounds_coordinates() {
+        let err = DokMatrix::from_triplets(Shape2D::new(2, 2), vec![1.0], vec![0], vec![2])
+            .expect_err("col index out of bounds");
+        assert!(matches!(
+            err,
+            SparseError::IndexOutOfBounds {
+                axis: "col",
+                index: 2,
+                bound: 2
+            }
+        ));
+
+        let mut dok = DokMatrix::new(Shape2D::new(2, 2));
+        let err = dok.insert(2, 1, 5.0).expect_err("row index out of bounds");
+        assert!(matches!(
+            err,
+            SparseError::IndexOutOfBounds {
+                axis: "row",
+                index: 2,
+                bound: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn dok_to_coo_preserves_dense_semantics() {
+        let dok = DokMatrix::from_triplets(
+            Shape2D::new(3, 4),
+            vec![2.0, -1.0, 5.0],
+            vec![0, 1, 2],
+            vec![1, 0, 3],
+        )
+        .expect("dok");
+        let dense = dense_from_coo(&dok.to_coo().expect("dok->coo"));
+        assert_matrix_close(
+            &dense,
+            &[
+                vec![0.0, 2.0, 0.0, 0.0],
+                vec![-1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 0.0, 0.0, 5.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn dok_converts_through_csr_and_csc() {
+        let dok = DokMatrix::from_triplets(
+            Shape2D::new(4, 4),
+            vec![3.0, -2.0, 7.0, 1.5],
+            vec![0, 1, 2, 3],
+            vec![0, 2, 1, 3],
+        )
+        .expect("dok");
+        let dense_from_dok = dense_from_coo(&dok.to_coo().expect("dok->coo"));
+        let dense_from_csr =
+            dense_from_coo(&dok.to_csr().expect("dok->csr").to_coo().expect("csr->coo"));
+        let dense_from_csc =
+            dense_from_coo(&dok.to_csc().expect("dok->csc").to_coo().expect("csc->coo"));
+        assert_matrix_close(&dense_from_dok, &dense_from_csr);
+        assert_matrix_close(&dense_from_dok, &dense_from_csc);
     }
 
     #[test]

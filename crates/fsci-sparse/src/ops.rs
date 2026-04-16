@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fsci_runtime::RuntimeMode;
 
 use crate::formats::{
-    CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, Shape2D, SparseError, SparseFormat, SparseResult,
+    CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, DokMatrix, Shape2D, SparseError, SparseFormat,
+    SparseResult,
 };
 
 pub trait FormatConvertible {
@@ -131,6 +132,20 @@ impl FormatConvertible for DiaMatrix {
         }
 
         CooMatrix::from_triplets(self.shape(), data, rows, cols, false)
+    }
+}
+
+impl FormatConvertible for DokMatrix {
+    fn to_csr(&self) -> SparseResult<CsrMatrix> {
+        DokMatrix::to_coo(self)?.to_csr()
+    }
+
+    fn to_csc(&self) -> SparseResult<CscMatrix> {
+        DokMatrix::to_coo(self)?.to_csc()
+    }
+
+    fn to_coo(&self) -> SparseResult<CooMatrix> {
+        DokMatrix::to_coo(self)
     }
 }
 
@@ -449,5 +464,6 @@ fn format_label(format: SparseFormat) -> &'static str {
         SparseFormat::Csc => "csc",
         SparseFormat::Coo => "coo",
         SparseFormat::Dia => "dia",
+        SparseFormat::Dok => "dok",
     }
 }

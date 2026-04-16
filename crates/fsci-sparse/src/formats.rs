@@ -1,5 +1,6 @@
 use fsci_runtime::RuntimeMode;
 use nalgebra::sparse::CsMatrix as NalgebraCsMatrix;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -37,6 +38,7 @@ pub enum SparseFormat {
     Csc,
     Coo,
     Dia,
+    Dok,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -409,6 +411,133 @@ impl CooMatrix {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct DokMatrix {
+    pub(crate) shape: Shape2D,
+    pub(crate) entries: BTreeMap<(usize, usize), f64>,
+}
+
+impl DokMatrix {
+    #[must_use]
+    pub fn new(shape: Shape2D) -> Self {
+        Self {
+            shape,
+            entries: BTreeMap::new(),
+        }
+    }
+
+    pub fn from_triplets(
+        shape: Shape2D,
+        data: Vec<f64>,
+        row_indices: Vec<usize>,
+        col_indices: Vec<usize>,
+    ) -> SparseResult<Self> {
+        if data.len() != row_indices.len() || data.len() != col_indices.len() {
+            return Err(SparseError::IncompatibleShape {
+                message: "DOK data/row/col lengths must match".to_string(),
+            });
+        }
+
+        let mut entries = BTreeMap::new();
+        for ((row, col), value) in row_indices.into_iter().zip(col_indices).zip(data) {
+            validate_coordinate(shape, row, col)?;
+            let key = (row, col);
+            let updated = entries.get(&key).copied().unwrap_or(0.0) + value;
+            if updated == 0.0 {
+                entries.remove(&key);
+            } else {
+                entries.insert(key, updated);
+            }
+        }
+
+        Ok(Self { shape, entries })
+    }
+
+    #[must_use]
+    pub const fn shape(&self) -> Shape2D {
+        self.shape
+    }
+
+    #[must_use]
+    pub fn nnz(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[must_use]
+    pub fn entries(&self) -> &BTreeMap<(usize, usize), f64> {
+        &self.entries
+    }
+
+    pub fn get(&self, row: usize, col: usize) -> SparseResult<f64> {
+        validate_coordinate(self.shape, row, col)?;
+        Ok(self.entries.get(&(row, col)).copied().unwrap_or(0.0))
+    }
+
+    pub fn contains(&self, row: usize, col: usize) -> SparseResult<bool> {
+        validate_coordinate(self.shape, row, col)?;
+        Ok(self.entries.contains_key(&(row, col)))
+    }
+
+    pub fn insert(&mut self, row: usize, col: usize, value: f64) -> SparseResult<Option<f64>> {
+        validate_coordinate(self.shape, row, col)?;
+        let key = (row, col);
+        let previous = self.entries.get(&key).copied();
+        if value == 0.0 {
+            self.entries.remove(&key);
+        } else {
+            self.entries.insert(key, value);
+        }
+        Ok(previous)
+    }
+
+    pub fn remove(&mut self, row: usize, col: usize) -> SparseResult<Option<f64>> {
+        validate_coordinate(self.shape, row, col)?;
+        Ok(self.entries.remove(&(row, col)))
+    }
+
+    #[must_use]
+    pub fn construction_log(
+        &self,
+        mode: RuntimeMode,
+        operation_id: impl Into<String>,
+        validation_result: impl Into<String>,
+    ) -> ConstructionLogEntry {
+        ConstructionLogEntry {
+            timestamp: now_timestamp(),
+            operation_id: operation_id.into(),
+            format: SparseFormat::Dok,
+            shape: self.shape,
+            nnz: self.nnz(),
+            mode,
+            validation_result: validation_result.into(),
+        }
+    }
+
+    pub fn to_coo(&self) -> SparseResult<CooMatrix> {
+        let mut rows = Vec::with_capacity(self.nnz());
+        let mut cols = Vec::with_capacity(self.nnz());
+        let mut data = Vec::with_capacity(self.nnz());
+
+        for (&(row, col), &value) in &self.entries {
+            rows.push(row);
+            cols.push(col);
+            data.push(value);
+        }
+
+        CooMatrix::from_triplets(self.shape, data, rows, cols, false)
+    }
+
+    pub fn to_csr(&self) -> SparseResult<CsrMatrix> {
+        use crate::ops::FormatConvertible;
+        self.to_coo()?.to_csr()
+    }
+
+    pub fn to_csc(&self) -> SparseResult<CscMatrix> {
+        use crate::ops::FormatConvertible;
+        self.to_coo()?.to_csc()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiaMatrix {
     pub(crate) shape: Shape2D,
     pub(crate) offsets: Vec<isize>,
@@ -427,7 +556,7 @@ impl DiaMatrix {
             });
         }
 
-        let mut seen = std::collections::BTreeSet::new();
+        let mut seen = BTreeSet::new();
         for (&offset, _diagonal) in offsets.iter().zip(data.iter()) {
             if !seen.insert(offset) {
                 return Err(SparseError::InvalidArgument {
@@ -654,6 +783,27 @@ impl NalgebraBridge for CooMatrix {
     }
 }
 
+impl NalgebraBridge for DokMatrix {
+    fn to_nalgebra_cs(&self) -> NalgebraCsMatrix<f64> {
+        let mut rows = Vec::with_capacity(self.nnz());
+        let mut cols = Vec::with_capacity(self.nnz());
+        let mut vals = Vec::with_capacity(self.nnz());
+
+        for (&(row, col), &value) in &self.entries {
+            rows.push(row);
+            cols.push(col);
+            vals.push(value);
+        }
+
+        NalgebraCsMatrix::from_triplet(self.shape.rows, self.shape.cols, &rows, &cols, &vals)
+    }
+
+    fn from_nalgebra_cs(matrix: &NalgebraCsMatrix<f64>) -> SparseResult<Self> {
+        let coo = CooMatrix::from_nalgebra_cs(matrix)?;
+        Self::from_triplets(coo.shape, coo.data, coo.row_indices, coo.col_indices)
+    }
+}
+
 impl NalgebraBridge for CsrMatrix {
     fn to_nalgebra_cs(&self) -> NalgebraCsMatrix<f64> {
         let mut rows = Vec::with_capacity(self.nnz());
@@ -828,6 +978,24 @@ fn validate_compressed(
     })
 }
 
+fn validate_coordinate(shape: Shape2D, row: usize, col: usize) -> SparseResult<()> {
+    if row >= shape.rows {
+        return Err(SparseError::IndexOutOfBounds {
+            axis: "row",
+            index: row,
+            bound: shape.rows,
+        });
+    }
+    if col >= shape.cols {
+        return Err(SparseError::IndexOutOfBounds {
+            axis: "col",
+            index: col,
+            bound: shape.cols,
+        });
+    }
+    Ok(())
+}
+
 fn diagonal_len(shape: Shape2D, offset: isize) -> usize {
     let start_row = if offset < 0 { (-offset) as usize } else { 0 };
     let start_col = if offset > 0 { offset as usize } else { 0 };
@@ -874,6 +1042,7 @@ fn format_label(format: SparseFormat) -> &'static str {
         SparseFormat::Csc => "csc",
         SparseFormat::Coo => "coo",
         SparseFormat::Dia => "dia",
+        SparseFormat::Dok => "dok",
     }
 }
 
