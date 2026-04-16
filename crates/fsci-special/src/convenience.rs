@@ -2209,3 +2209,157 @@ where
 
     hess
 }
+
+/// Kolmogorov distribution CDF.
+///
+/// Computes the complementary CDF of the Kolmogorov distribution,
+/// P(D_n > x) where D_n is the Kolmogorov-Smirnov statistic.
+///
+/// Uses the series: K(x) = 1 - 2 * sum_{k=1}^{inf} (-1)^{k-1} * exp(-2*k^2*x^2)
+///
+/// Matches `scipy.special.kolmogorov(y)`.
+#[must_use]
+pub fn kolmogorov(y: f64) -> f64 {
+    if y.is_nan() {
+        return f64::NAN;
+    }
+    if y <= 0.0 {
+        return 1.0;
+    }
+    if y >= 3.0 {
+        // Asymptotic: K(y) ~ 2*exp(-2*y^2) for large y
+        return 2.0 * (-2.0 * y * y).exp();
+    }
+
+    // Series expansion: K(y) = 1 - 2 * sum_{k=1}^{inf} (-1)^{k-1} * exp(-2*k^2*y^2)
+    let y2 = y * y;
+    let mut sum = 0.0;
+    let mut sign = 1.0;
+
+    for k in 1..100 {
+        let kf = k as f64;
+        let term = sign * (-2.0 * kf * kf * y2).exp();
+        sum += term;
+        if term.abs() < 1e-16 * sum.abs().max(1e-30) {
+            break;
+        }
+        sign = -sign;
+    }
+
+    2.0 * sum
+}
+
+/// Inverse Kolmogorov distribution CDF.
+///
+/// Returns y such that kolmogorov(y) = p.
+///
+/// Matches `scipy.special.kolmogi(p)`.
+#[must_use]
+pub fn kolmogi(p: f64) -> f64 {
+    if p.is_nan() {
+        return f64::NAN;
+    }
+    if p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return f64::INFINITY;
+    }
+    if p >= 1.0 {
+        return 0.0;
+    }
+
+    // Initial guess from asymptotic: p ~ 2*exp(-2*y^2) => y ~ sqrt(-ln(p/2)/2)
+    let y0 = if p < 0.5 {
+        (-(p / 2.0).ln() / 2.0).sqrt()
+    } else {
+        0.5 // Start from center for larger p
+    };
+
+    // Newton-Raphson iteration
+    let mut y = y0;
+    for _ in 0..50 {
+        let f = kolmogorov(y) - p;
+        if f.abs() < 1e-14 {
+            break;
+        }
+
+        // Derivative: dK/dy = -8*y * sum_{k=1}^{inf} (-1)^{k-1} * k^2 * exp(-2*k^2*y^2)
+        let y2 = y * y;
+        let mut dsum = 0.0;
+        let mut sign = 1.0;
+        for k in 1..100 {
+            let kf = k as f64;
+            let term = sign * kf * kf * (-2.0 * kf * kf * y2).exp();
+            dsum += term;
+            if term.abs() < 1e-16 {
+                break;
+            }
+            sign = -sign;
+        }
+        let df = -8.0 * y * dsum;
+
+        if df.abs() < 1e-30 {
+            break;
+        }
+
+        let delta = f / df;
+        y -= delta;
+        y = y.max(1e-15);
+
+        if delta.abs() < 1e-14 * y {
+            break;
+        }
+    }
+
+    y
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kolmogorov_basic() {
+        // kolmogorov(0) = 1 (survival function at 0)
+        assert!((kolmogorov(0.0) - 1.0).abs() < 1e-10);
+
+        // kolmogorov is monotonically decreasing
+        assert!(kolmogorov(0.5) > kolmogorov(1.0));
+        assert!(kolmogorov(1.0) > kolmogorov(1.5));
+        assert!(kolmogorov(1.5) > kolmogorov(2.0));
+
+        // Known value: kolmogorov(1.0) ≈ 0.27
+        let k1 = kolmogorov(1.0);
+        assert!(
+            (k1 - 0.27).abs() < 0.02,
+            "kolmogorov(1.0) = {k1}, expected ~0.27"
+        );
+
+        // For large y, kolmogorov(y) -> 0
+        assert!(kolmogorov(3.0) < 0.001);
+    }
+
+    #[test]
+    fn kolmogi_inverse() {
+        // kolmogi should be inverse of kolmogorov
+        for &y in &[0.5, 1.0, 1.5, 2.0, 2.5] {
+            let p = kolmogorov(y);
+            if p > 0.001 && p < 0.999 {
+                let y_recovered = kolmogi(p);
+                assert!(
+                    (y_recovered - y).abs() < 0.001,
+                    "kolmogi failed: y={y}, p={p}, y_recovered={y_recovered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kolmogi_endpoints() {
+        // kolmogi(0) = +inf
+        assert!(kolmogi(0.0).is_infinite() && kolmogi(0.0).is_sign_positive());
+        // kolmogi(1) = 0
+        assert!((kolmogi(1.0) - 0.0).abs() < 1e-10);
+    }
+}

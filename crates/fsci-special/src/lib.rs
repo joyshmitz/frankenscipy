@@ -65,6 +65,8 @@ pub use convenience::{
     kei,
     ker,
     kl_div,
+    kolmogi,
+    kolmogorov,
     lambertw_scalar,
     log_comb,
     log_ndtr,
