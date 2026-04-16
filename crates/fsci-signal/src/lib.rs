@@ -5682,21 +5682,26 @@ pub fn general_cosine(n: usize, coeffs: &[f64], sym: bool) -> Vec<f64> {
 
 /// Gaussian window.
 ///
-/// Matches `scipy.signal.windows.gaussian(n, std)`.
-pub fn gaussian_window(n: usize, std: f64) -> Vec<f64> {
+/// Matches `scipy.signal.windows.gaussian(n, std, sym)`.
+pub fn gaussian(n: usize, std: f64, sym: bool) -> Vec<f64> {
     if n == 0 {
         return Vec::new();
     }
     if n == 1 {
         return vec![1.0];
     }
-    let center = (n as f64 - 1.0) / 2.0;
-    (0..n)
+    let m = if sym { n } else { n + 1 };
+    let center = (m as f64 - 1.0) / 2.0;
+    let mut window: Vec<f64> = (0..m)
         .map(|i| {
             let x = (i as f64 - center) / std;
             (-0.5 * x * x).exp()
         })
-        .collect()
+        .collect();
+    if !sym {
+        window.truncate(n);
+    }
+    window
 }
 
 /// General Gaussian window: exp(-0.5 * |x/σ|^p).
@@ -5997,7 +6002,8 @@ pub fn triang(n: usize) -> Vec<f64> {
 /// `"bartlett"`, `"flattop"`, `"cosine"`, `"rectangular"` / `"boxcar"`,
 /// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`), `"chebwin,<at>"` (e.g. `"chebwin,100"`),
 /// `"general_hamming,<alpha>"` (e.g. `"general_hamming,0.75"`),
-/// `"general_cosine,<a0>,<a1>,..."` (e.g. `"general_cosine,0.5,0.5"`).
+/// `"general_cosine,<a0>,<a1>,..."` (e.g. `"general_cosine,0.5,0.5"`),
+/// `"gaussian,<std>"` (e.g. `"gaussian,2.0"`).
 pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
     let lower = window.trim().to_lowercase();
     if let Some(rest) = lower.strip_prefix("kaiser,") {
@@ -6033,6 +6039,13 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
             })
             .collect::<Result<_, _>>()?;
         return Ok(general_cosine(nx, &coeffs, true));
+    }
+    if let Some(rest) = lower.strip_prefix("gaussian,") {
+        let std: f64 = rest
+            .trim()
+            .parse()
+            .map_err(|_| SignalError::InvalidArgument(format!("invalid gaussian std: {rest}")))?;
+        return Ok(gaussian(nx, std, true));
     }
     match lower.as_str() {
         "hann" | "hanning" => Ok(hann(nx)),
@@ -7540,6 +7553,39 @@ mod tests {
     }
 
     #[test]
+    fn gaussian_window_matches_scipy_reference() {
+        let w = gaussian(5, 1.0, true);
+        let expected = [
+            0.1353352832366127,
+            0.6065306597126334,
+            1.0,
+            0.6065306597126334,
+            0.1353352832366127,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn gaussian_periodic_window_matches_scipy_reference() {
+        let w = gaussian(8, 2.0, false);
+        let expected = [
+            0.1353352832366127,
+            0.32465246735834974,
+            0.6065306597126334,
+            0.8824969025845955,
+            1.0,
+            0.8824969025845955,
+            0.6065306597126334,
+            0.32465246735834974,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn chebwin_window_matches_scipy_reference() {
         let w = chebwin(5, 100.0);
         let expected = [
@@ -7622,6 +7668,7 @@ mod tests {
         assert!(hamming(0).is_empty());
         assert!(general_hamming(0, 0.75).is_empty());
         assert!(general_cosine(0, &[0.5, 0.5], true).is_empty());
+        assert!(gaussian(0, 2.0, true).is_empty());
         assert!(blackman(0).is_empty());
         assert!(blackmanharris(0).is_empty());
         assert!(barthann(0).is_empty());
@@ -7637,6 +7684,7 @@ mod tests {
         assert_eq!(hamming(1), [1.0]);
         assert_eq!(general_hamming(1, 0.75), [1.0]);
         assert_eq!(general_cosine(1, &[0.5, 0.5], true), [1.0]);
+        assert_eq!(gaussian(1, 2.0, true), [1.0]);
         assert_eq!(blackman(1), [1.0]);
         assert_eq!(blackmanharris(1), [1.0]);
         assert_eq!(barthann(1), [1.0]);
@@ -9521,6 +9569,13 @@ mod tests {
     fn get_window_dispatches_general_cosine() {
         let w = get_window("general_cosine,0.5,0.3,0.2", 8).unwrap();
         let expected = general_cosine(8, &[0.5, 0.3, 0.2], true);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_gaussian() {
+        let w = get_window("gaussian,2.0", 8).unwrap();
+        let expected = gaussian(8, 2.0, true);
         assert_eq!(w, expected);
     }
 
