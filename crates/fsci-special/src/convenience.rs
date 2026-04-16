@@ -3316,6 +3316,122 @@ pub fn pseudo_huber(delta: f64, x: f64) -> f64 {
     delta * delta * ((1.0 + ratio * ratio).sqrt() - 1.0)
 }
 
+/// Exponential Linear Unit (ELU).
+///
+/// elu(x, alpha) =
+///   x                    if x > 0
+///   alpha * (exp(x) - 1) if x <= 0
+///
+/// A smooth activation function that allows negative outputs.
+#[must_use]
+pub fn elu(x: f64, alpha: f64) -> f64 {
+    if x.is_nan() || alpha.is_nan() {
+        return f64::NAN;
+    }
+    if x > 0.0 {
+        x
+    } else {
+        alpha * (x.exp() - 1.0)
+    }
+}
+
+/// Leaky Rectified Linear Unit.
+///
+/// leaky_relu(x, alpha) =
+///   x         if x > 0
+///   alpha * x if x <= 0
+///
+/// Unlike ReLU, allows small negative values to pass through.
+#[must_use]
+pub fn leaky_relu(x: f64, alpha: f64) -> f64 {
+    if x.is_nan() || alpha.is_nan() {
+        return f64::NAN;
+    }
+    if x > 0.0 {
+        x
+    } else {
+        alpha * x
+    }
+}
+
+/// Gaussian Error Linear Unit (GELU).
+///
+/// gelu(x) = x * Φ(x) = x * 0.5 * (1 + erf(x / sqrt(2)))
+///
+/// A smooth activation function used in transformers and modern NNs.
+/// This is the exact formula; for the approximate version, use gelu_approx.
+#[must_use]
+pub fn gelu(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // Φ(x) = 0.5 * (1 + erf(x / sqrt(2)))
+    let sqrt_2 = std::f64::consts::SQRT_2;
+    x * 0.5 * (1.0 + crate::erf_scalar(x / sqrt_2))
+}
+
+/// Scaled Exponential Linear Unit (SELU).
+///
+/// selu(x) = scale * elu(x, alpha)
+/// where scale ≈ 1.0507 and alpha ≈ 1.6733
+///
+/// Self-normalizing activation function.
+#[must_use]
+pub fn selu(x: f64) -> f64 {
+    const ALPHA: f64 = 1.6732632423543772;
+    const SCALE: f64 = 1.0507009873554805;
+
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x > 0.0 {
+        SCALE * x
+    } else {
+        SCALE * ALPHA * (x.exp() - 1.0)
+    }
+}
+
+/// Swish activation function.
+///
+/// swish(x, beta) = x * sigmoid(beta * x) = x / (1 + exp(-beta * x))
+///
+/// Also known as SiLU (Sigmoid Linear Unit) when beta = 1.
+#[must_use]
+pub fn swish(x: f64, beta: f64) -> f64 {
+    if x.is_nan() || beta.is_nan() {
+        return f64::NAN;
+    }
+    let bx = beta * x;
+    if bx >= 0.0 {
+        let ex = (-bx).exp();
+        x / (1.0 + ex)
+    } else {
+        let ex = bx.exp();
+        x * ex / (1.0 + ex)
+    }
+}
+
+/// Mish activation function.
+///
+/// mish(x) = x * tanh(softplus(x)) = x * tanh(ln(1 + exp(x)))
+///
+/// A self-regularized non-monotonic activation function.
+#[must_use]
+pub fn mish(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // softplus(x) = ln(1 + exp(x)), computed stably
+    let sp = if x > 20.0 {
+        x
+    } else if x < -20.0 {
+        x.exp()
+    } else {
+        (1.0 + x.exp()).ln()
+    };
+    x * sp.tanh()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4080,5 +4196,92 @@ mod tests {
         // Invalid delta
         assert!(pseudo_huber(0.0, 1.0).is_nan());
         assert!(pseudo_huber(-1.0, 1.0).is_nan());
+    }
+
+    #[test]
+    fn elu_basic() {
+        // Positive values pass through
+        assert!((elu(2.0, 1.0) - 2.0).abs() < 1e-14);
+
+        // Negative values: alpha * (exp(x) - 1)
+        // elu(-1, 1) = 1 * (exp(-1) - 1) ≈ -0.632
+        assert!((elu(-1.0, 1.0) - ((-1.0_f64).exp() - 1.0)).abs() < 1e-14);
+
+        // Zero
+        assert!((elu(0.0, 1.0) - 0.0).abs() < 1e-14);
+
+        // Different alpha
+        assert!((elu(-1.0, 2.0) - 2.0 * ((-1.0_f64).exp() - 1.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn leaky_relu_basic() {
+        // Positive values pass through
+        assert!((leaky_relu(2.0, 0.1) - 2.0).abs() < 1e-14);
+
+        // Negative values scaled by alpha
+        assert!((leaky_relu(-2.0, 0.1) - (-0.2)).abs() < 1e-14);
+
+        // Zero
+        assert!((leaky_relu(0.0, 0.1) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn gelu_basic() {
+        // gelu(0) = 0 (since Φ(0) = 0.5)
+        assert!((gelu(0.0) - 0.0).abs() < 1e-14);
+
+        // For large positive x, gelu(x) ≈ x
+        assert!((gelu(10.0) - 10.0).abs() < 1e-6);
+
+        // For large negative x, gelu(x) ≈ 0
+        assert!(gelu(-10.0).abs() < 1e-6);
+
+        // gelu is smooth and monotonic for x > 0
+        assert!(gelu(1.0) > gelu(0.5));
+        assert!(gelu(2.0) > gelu(1.0));
+    }
+
+    #[test]
+    fn selu_basic() {
+        // Positive values scaled by ~1.0507
+        let scale = 1.0507009873554805;
+        assert!((selu(1.0) - scale * 1.0).abs() < 1e-10);
+
+        // Negative values
+        assert!(selu(-1.0) < 0.0);
+
+        // Zero
+        assert!((selu(0.0) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn swish_basic() {
+        // swish(0, beta) = 0
+        assert!((swish(0.0, 1.0) - 0.0).abs() < 1e-14);
+
+        // For large positive x, swish(x, 1) ≈ x
+        assert!((swish(10.0, 1.0) - 10.0).abs() < 1e-3);
+
+        // For large negative x, swish(x, 1) ≈ 0
+        assert!(swish(-10.0, 1.0).abs() < 1e-3);
+
+        // swish is smooth
+        assert!(swish(1.0, 1.0) > swish(0.0, 1.0));
+    }
+
+    #[test]
+    fn mish_basic() {
+        // mish(0) = 0
+        assert!((mish(0.0) - 0.0).abs() < 1e-14);
+
+        // For large positive x, mish(x) ≈ x
+        assert!((mish(10.0) - 10.0).abs() < 1e-3);
+
+        // For large negative x, mish(x) ≈ 0
+        assert!(mish(-10.0).abs() < 1e-3);
+
+        // mish is smooth and has slight negative region
+        assert!(mish(-0.5) < 0.0);
     }
 }
