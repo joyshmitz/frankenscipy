@@ -4523,6 +4523,71 @@ impl ContinuousDistribution for Levy {
     }
 }
 
+/// Left-skewed Levy distribution.
+///
+/// Matches `scipy.stats.levy_l`.
+pub struct LevyLeft {
+    pub loc: f64,
+    pub scale: f64,
+}
+
+impl LevyLeft {
+    #[must_use]
+    pub fn new(loc: f64, scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive");
+        Self { loc, scale }
+    }
+}
+
+impl Default for LevyLeft {
+    fn default() -> Self {
+        Self {
+            loc: 0.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl ContinuousDistribution for LevyLeft {
+    fn pdf(&self, x: f64) -> f64 {
+        let z = self.loc - x;
+        if z <= 0.0 {
+            return 0.0;
+        }
+        (self.scale / (2.0 * PI)).sqrt() * (-self.scale / (2.0 * z)).exp() / z.powf(1.5)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let z = self.loc - x;
+        if z <= 0.0 {
+            return 1.0;
+        }
+        fsci_special::erf_scalar((self.scale / (2.0 * z)).sqrt())
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return self.loc;
+        }
+        let z = fsci_special::ndtri((q + 1.0) / 2.0);
+        self.loc - self.scale / (z * z)
+    }
+
+    fn mean(&self) -> f64 {
+        f64::NEG_INFINITY
+    }
+
+    fn var(&self) -> f64 {
+        f64::INFINITY
+    }
+}
+
 /// Burr (Type XII) distribution.
 ///
 /// Matches `scipy.stats.burr12`.
@@ -13324,6 +13389,54 @@ mod tests {
         assert!(m.cdf(2.0) > 0.0 && m.cdf(2.0) < 1.0);
         assert_close(m.mean(), 4.0 * (2.0 / PI).sqrt(), 1e-12, "maxwell mean");
         assert_close(m.var(), 4.0 * (3.0 - 8.0 / PI), 1e-12, "maxwell variance");
+    }
+
+    #[test]
+    fn levy_left_pdf_cdf_match_scipy_reference_values() {
+        let dist = LevyLeft::default();
+        let cases = [
+            (-0.1, 0.085_003_666_025_203_4, 0.998_434_597_741_997_5),
+            (-0.5, 0.415_107_497_420_594_8, 0.842_700_792_949_714_9),
+            (-1.0, 0.241_970_724_519_143_37, 0.682_689_492_137_086),
+            (-2.0, 0.109_847_822_366_930_61, 0.520_499_877_813_046_5),
+            (-5.0, 0.032_286_845_174_307_24, 0.345_279_153_981_422_95),
+        ];
+
+        assert_eq!(dist.pdf(0.0), 0.0);
+        assert_eq!(dist.cdf(0.0), 1.0);
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("LevyLeft pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("LevyLeft cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn levy_left_ppf_roundtrip_matches_reference_values() {
+        let dist = LevyLeft::default();
+        let cases = [
+            (0.1, -63.328_117_677_016_64),
+            (0.25, -9.849_204_321_824_375),
+            (0.5, -2.198_109_338_317_732_6),
+            (0.75, -0.755_684_430_050_973_1),
+            (0.9, -0.369_611_509_468_195_43),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-11, &format!("LevyLeft ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("LevyLeft cdf(ppf({q}))"));
+        }
+
+        assert!(dist.ppf(0.0).is_infinite() && dist.ppf(0.0).is_sign_negative());
+        assert_eq!(dist.ppf(1.0), 0.0);
+    }
+
+    #[test]
+    fn levy_left_moments_are_divergent() {
+        let dist = LevyLeft::default();
+        assert!(dist.mean().is_infinite() && dist.mean().is_sign_negative());
+        assert!(dist.var().is_infinite() && dist.var().is_sign_positive());
     }
 
     // ── Cauchy distribution ───────────────────────────────────────
