@@ -5741,6 +5741,99 @@ pub fn lanczos(n: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Taylor window.
+///
+/// The Taylor window is designed for radar and antenna applications. It provides
+/// nearly constant sidelobe levels with a specified peak sidelobe attenuation.
+///
+/// Matches `scipy.signal.windows.taylor(M, nbar, sll, norm, sym)`.
+///
+/// # Arguments
+/// * `n` - Window length
+/// * `nbar` - Number of nearly constant-level sidelobes adjacent to the mainlobe
+/// * `sll` - Desired peak sidelobe level in dB (negative, e.g., -30.0)
+/// * `norm` - If true, normalize the window to have unit peak
+/// * `sym` - If true, generate symmetric window (default for filter design)
+pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+
+    let nbar = nbar.max(1);
+    let n_use = if sym { n } else { n + 1 };
+
+    // Calculate B from sidelobe level: B = 10^(-sll/20)
+    // A = arccosh(B) / pi
+    let b = 10.0_f64.powf(sll.abs() / 20.0);
+    let a = (b + (b * b - 1.0).max(0.0).sqrt()).ln() / std::f64::consts::PI;
+    let a_sq = a * a;
+
+    // sigma^2 = nbar^2 / (A^2 + (nbar - 0.5)^2)
+    let nbar_f = nbar as f64;
+    let sigma_sq = nbar_f * nbar_f / (a_sq + (nbar_f - 0.5) * (nbar_f - 0.5));
+
+    // Calculate F_m coefficients for m = 1, ..., nbar-1
+    let mut fm = vec![0.0; nbar];
+    for m in 1..nbar {
+        let mf = m as f64;
+        let m_sq = mf * mf;
+
+        // Numerator: product over n=1..nbar-1 of (1 - m^2 / (sigma^2 * (A^2 + (n-0.5)^2)))
+        let mut num = 1.0;
+        for nn in 1..nbar {
+            let nf = nn as f64;
+            let term = a_sq + (nf - 0.5) * (nf - 0.5);
+            num *= 1.0 - m_sq / (sigma_sq * term);
+        }
+
+        // Denominator: product over n=1..nbar-1, n!=m of (1 - m^2/n^2)
+        let mut den = 1.0;
+        for nn in 1..nbar {
+            if nn != m {
+                let nf = nn as f64;
+                den *= 1.0 - m_sq / (nf * nf);
+            }
+        }
+
+        // Sign alternates: (-1)^(m+1)
+        let sign = if m % 2 == 1 { 1.0 } else { -1.0 };
+        fm[m] = if den.abs() > 1e-15 { sign * num / den } else { 0.0 };
+    }
+
+    // Generate window samples
+    let nf = n_use as f64;
+    let mut w: Vec<f64> = (0..n_use)
+        .map(|i| {
+            let x = (i as f64) / (nf - 1.0) - 0.5; // x in [-0.5, 0.5]
+            let mut val = 1.0;
+            for m in 1..nbar {
+                val += 2.0 * fm[m] * (2.0 * std::f64::consts::PI * m as f64 * x).cos();
+            }
+            val
+        })
+        .collect();
+
+    // If asymmetric, truncate to n samples
+    if !sym {
+        w.truncate(n);
+    }
+
+    // Normalize if requested
+    if norm {
+        let max_val = w.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        if max_val > 1e-15 {
+            for v in &mut w {
+                *v /= max_val;
+            }
+        }
+    }
+
+    w
+}
+
 /// Triangular window.
 ///
 /// Matches `scipy.signal.windows.triang(n)`.
@@ -7246,6 +7339,39 @@ mod tests {
     }
 
     #[test]
+    fn taylor_window_symmetric() {
+        // Taylor window should be symmetric
+        let w = taylor(11, 4, -30.0, true, true);
+        assert_eq!(w.len(), 11);
+        for i in 0..5 {
+            assert!(
+                (w[i] - w[10 - i]).abs() < 1e-12,
+                "Taylor asymmetric at {i}: {} vs {}",
+                w[i],
+                w[10 - i]
+            );
+        }
+    }
+
+    #[test]
+    fn taylor_window_normalized_peak() {
+        // With norm=true, peak should be 1.0
+        let w = taylor(21, 4, -30.0, true, true);
+        let max_val = w.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (max_val - 1.0).abs() < 1e-10,
+            "Taylor norm peak = {}, expected 1.0",
+            max_val
+        );
+    }
+
+    #[test]
+    fn taylor_window_empty_and_single() {
+        assert!(taylor(0, 4, -30.0, true, true).is_empty());
+        assert_eq!(taylor(1, 4, -30.0, true, true), [1.0]);
+    }
+
+    #[test]
     fn window_empty_returns_empty() {
         assert!(hann(0).is_empty());
         assert!(hamming(0).is_empty());
@@ -7254,6 +7380,7 @@ mod tests {
         assert!(barthann(0).is_empty());
         assert!(kaiser(0, 5.0).is_empty());
         assert!(lanczos(0).is_empty());
+        assert!(taylor(0, 4, -30.0, true, true).is_empty());
     }
 
     #[test]
