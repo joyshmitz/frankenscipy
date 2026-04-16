@@ -101,9 +101,9 @@ pub use error::{
     ERROR_DISPATCH_PLAN, erf, erf_scalar, erfc, erfc_scalar, erfcinv, erfinv, erfinv_scalar,
 };
 pub use gamma::{
-    GAMMA_DISPATCH_PLAN, comb, digamma, factorial, factorial2, gamma, gammainc, gammainc_scalar,
-    gammaincc, gammaincc_scalar, gammaln, gammaln_scalar, gdtr, gdtri, pdtr, pdtrc, pdtri, perm,
-    polygamma, rgamma, zeta, zetac,
+    GAMMA_DISPATCH_PLAN, chdtr, chdtrc, chdtri, comb, digamma, factorial, factorial2, gamma,
+    gammainc, gammainc_scalar, gammaincc, gammaincc_scalar, gammaln, gammaln_scalar, gdtr, gdtri,
+    pdtr, pdtrc, pdtri, perm, polygamma, rgamma, zeta, zetac,
 };
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp0f1, hyp0f1_scalar, hyp1f1, hyp2f1};
 pub use orthopoly::{

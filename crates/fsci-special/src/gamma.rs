@@ -1089,6 +1089,73 @@ pub fn pdtri(k: f64, p: f64) -> f64 {
     gammaincinv(k + 1.0, 1.0 - p)
 }
 
+/// Chi-squared distribution CDF.
+///
+/// Returns the probability P(X <= x) where X follows a chi-squared
+/// distribution with v degrees of freedom.
+///
+/// Matches `scipy.special.chdtr(v, x)`.
+#[must_use]
+pub fn chdtr(v: f64, x: f64) -> f64 {
+    if v.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if v <= 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 {
+        return 0.0;
+    }
+    // chdtr(v, x) = gammainc(v/2, x/2) = P(v/2, x/2)
+    gammainc_scalar(v / 2.0, x / 2.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Chi-squared distribution survival function.
+///
+/// Returns the probability P(X > x) where X follows a chi-squared
+/// distribution with v degrees of freedom.
+///
+/// Matches `scipy.special.chdtrc(v, x)`.
+#[must_use]
+pub fn chdtrc(v: f64, x: f64) -> f64 {
+    if v.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if v <= 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 {
+        return 1.0;
+    }
+    // chdtrc(v, x) = gammaincc(v/2, x/2) = Q(v/2, x/2)
+    gammaincc_scalar(v / 2.0, x / 2.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Inverse chi-squared distribution CDF.
+///
+/// Returns x such that P(X <= x) = p where X follows a chi-squared
+/// distribution with v degrees of freedom.
+///
+/// Matches `scipy.special.chdtri(v, p)`.
+#[must_use]
+pub fn chdtri(v: f64, p: f64) -> f64 {
+    if v.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if v <= 0.0 || p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return 0.0;
+    }
+    if p == 1.0 {
+        return f64::INFINITY;
+    }
+    // chdtri(v, p) finds x such that gammainc(v/2, x/2) = p
+    // So x/2 = gammaincinv(v/2, p), thus x = 2 * gammaincinv(v/2, p)
+    2.0 * gammaincinv(v / 2.0, p)
+}
+
 /// Inverse of the regularized lower incomplete gamma function.
 /// Finds x such that gammainc(a, x) = p.
 fn gammaincinv(a: f64, p: f64) -> f64 {
@@ -1536,6 +1603,62 @@ mod tests {
                     assert!(
                         (m_recovered - m).abs() / m < 0.01,
                         "pdtri failed: k={k}, m={m}, p={p}, m_recovered={m_recovered}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chdtr_basic() {
+        // Chi-squared CDF values compared with scipy.special.chdtr
+        // chdtr(1, 1) ≈ 0.6827 (P(X <= 1) for chi2 with df=1)
+        let result = chdtr(1.0, 1.0);
+        assert!(
+            (result - 0.6827).abs() < 0.01,
+            "chdtr(1, 1) = {result}, expected ~0.6827"
+        );
+
+        // chdtr(2, 2) ≈ 0.6321 (P(X <= 2) for chi2 with df=2)
+        let result = chdtr(2.0, 2.0);
+        assert!(
+            (result - 0.6321).abs() < 0.01,
+            "chdtr(2, 2) = {result}, expected ~0.6321"
+        );
+
+        // chdtr(10, 10) ≈ 0.5595
+        let result = chdtr(10.0, 10.0);
+        assert!(
+            (result - 0.5595).abs() < 0.01,
+            "chdtr(10, 10) = {result}, expected ~0.5595"
+        );
+    }
+
+    #[test]
+    fn chdtr_chdtrc_complement() {
+        // chdtr + chdtrc should equal 1
+        for &v in &[1.0, 2.0, 5.0, 10.0] {
+            for &x in &[0.5, 1.0, 2.0, 5.0] {
+                let sum = chdtr(v, x) + chdtrc(v, x);
+                assert!(
+                    (sum - 1.0).abs() < 1e-10,
+                    "chdtr({v}, {x}) + chdtrc({v}, {x}) = {sum}, expected 1.0"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chdtri_inverse() {
+        // chdtri should be inverse of chdtr
+        for &v in &[1.0, 2.0, 5.0, 10.0] {
+            for &x in &[0.5, 1.0, 2.0, 5.0, 10.0] {
+                let p = chdtr(v, x);
+                if p > 0.01 && p < 0.99 {
+                    let x_recovered = chdtri(v, p);
+                    assert!(
+                        (x_recovered - x).abs() / x < 0.01,
+                        "chdtri failed: v={v}, x={x}, p={p}, x_recovered={x_recovered}"
                     );
                 }
             }
