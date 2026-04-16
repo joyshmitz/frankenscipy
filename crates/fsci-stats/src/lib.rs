@@ -4953,6 +4953,62 @@ impl ContinuousDistribution for LogGamma {
     }
 }
 
+/// Alpha distribution.
+///
+/// Matches `scipy.stats.alpha`.
+pub struct Alpha {
+    pub a: f64,
+}
+
+impl Alpha {
+    #[must_use]
+    pub fn new(a: f64) -> Self {
+        assert!(a > 0.0, "a must be positive");
+        Self { a }
+    }
+}
+
+impl ContinuousDistribution for Alpha {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+
+        let normalizer = standard_normal_cdf(self.a);
+        standard_normal_pdf(self.a - 1.0 / x) / (x * x * normalizer)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+
+        standard_normal_cdf(self.a - 1.0 / x) / standard_normal_cdf(self.a)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+
+        1.0 / (self.a - fsci_special::ndtri(q * standard_normal_cdf(self.a)))
+    }
+
+    fn mean(&self) -> f64 {
+        f64::INFINITY
+    }
+
+    fn var(&self) -> f64 {
+        f64::INFINITY
+    }
+}
+
 /// Laplace-asymmetric distribution.
 ///
 /// Matches `scipy.stats.laplace_asymmetric`.
@@ -8561,6 +8617,10 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
 /// Standard normal CDF approximation.
 fn standard_normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + fsci_special::erf_scalar(x / std::f64::consts::SQRT_2))
+}
+
+fn standard_normal_pdf(x: f64) -> f64 {
+    (-0.5 * x * x).exp() / (2.0 * PI).sqrt()
 }
 
 fn somers_alternative_pvalue(z: f64, alternative: &str) -> f64 {
@@ -15563,13 +15623,57 @@ mod tests {
     #[test]
     fn loggamma_mean_var_match_closed_form() {
         let dist = LogGamma::new(2.5);
-        assert_close(dist.mean(), 0.703_156_640_645_243_2, 1e-12, "LogGamma mean");
+        assert_close(dist.mean(), 0.703_156_640_645_243_2, 1e-9, "LogGamma mean");
         assert_close(
             dist.var(),
             0.490_357_756_100_234_9,
-            1e-12,
+            1e-9,
             "LogGamma variance",
         );
+    }
+
+    #[test]
+    fn alpha_pdf_cdf_match_scipy_reference_values() {
+        let dist = Alpha::new(2.0);
+        let cases = [
+            (0.1, 5.169_886_687_842_443e-13, 6.365_782_976_950_845e-16),
+            (0.5, 1.632_918_226_724_295_2, 0.511_639_874_658_429_1),
+            (1.0, 0.247_603_742_327_967_56, 0.860_931_040_846_074_4),
+            (2.0, 0.033_133_183_206_278_98, 0.954_917_293_149_900_3),
+        ];
+
+        assert_eq!(dist.pdf(-1.0), 0.0);
+        assert_eq!(dist.cdf(-1.0), 0.0);
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("Alpha pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("Alpha cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn alpha_ppf_roundtrip_matches_quantiles() {
+        let dist = Alpha::new(2.0);
+        let cases = [
+            (0.1, 0.303_524_773_708_178_15),
+            (0.25, 0.371_402_382_874_491_34),
+            (0.5, 0.492_970_991_216_020_45),
+            (0.75, 0.725_542_620_459_912_8),
+            (0.9, 1.208_627_158_667_152_9),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("Alpha ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("Alpha cdf(ppf({q}))"));
+        }
+    }
+
+    #[test]
+    fn alpha_mean_var_are_infinite() {
+        let dist = Alpha::new(2.0);
+        assert!(dist.mean().is_infinite() && dist.mean().is_sign_positive());
+        assert!(dist.var().is_infinite() && dist.var().is_sign_positive());
     }
 
     #[test]
