@@ -2056,6 +2056,68 @@ impl DiscreteDistribution for LogSeries {
     }
 }
 
+/// Discrete uniform distribution over integers in `[low, high)`.
+///
+/// Matches `scipy.stats.randint(low, high)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RandInt {
+    pub low: i64,
+    pub high: i64,
+}
+
+impl RandInt {
+    #[must_use]
+    pub fn new(low: i64, high: i64) -> Self {
+        assert!(high > low, "high must be greater than low");
+        Self { low, high }
+    }
+
+    fn width(&self) -> i64 {
+        self.high - self.low
+    }
+
+    pub fn pmf(&self, k: i64) -> f64 {
+        if (self.low..self.high).contains(&k) {
+            1.0 / self.width() as f64
+        } else {
+            0.0
+        }
+    }
+
+    pub fn cdf(&self, k: i64) -> f64 {
+        if k < self.low {
+            0.0
+        } else if k >= self.high - 1 {
+            1.0
+        } else {
+            (k - self.low + 1) as f64 / self.width() as f64
+        }
+    }
+
+    pub fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return (self.low - 1) as f64;
+        }
+        if q == 1.0 {
+            return (self.high - 1) as f64;
+        }
+
+        (self.low + (q * self.width() as f64).ceil() as i64 - 1) as f64
+    }
+
+    pub fn mean(&self) -> f64 {
+        self.low as f64 + (self.width() as f64 - 1.0) / 2.0
+    }
+
+    pub fn var(&self) -> f64 {
+        let n = self.width() as f64;
+        (n * n - 1.0) / 12.0
+    }
+}
+
 /// Log of the Beta function: ln(B(a,b)) = ln(Γ(a)) + ln(Γ(b)) - ln(Γ(a+b))
 fn ln_beta(a: f64, b: f64) -> f64 {
     ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b)
@@ -14377,6 +14439,79 @@ mod tests {
             let mass: f64 = (1..=500).map(|k| dist.pmf(k)).sum();
             assert_close(mass, 1.0, 1e-10, &format!("LogSeries mass({p})"));
         }
+    }
+
+    #[test]
+    fn randint_pmf_cdf_match_scipy_reference_values() {
+        let dist = RandInt::new(2, 7);
+        let cases = [
+            (1, 0.0, 0.0),
+            (2, 0.2, 0.2),
+            (3, 0.2, 0.4),
+            (6, 0.2, 1.0),
+            (7, 0.0, 1.0),
+        ];
+
+        for &(k, pmf, cdf) in &cases {
+            assert_close(dist.pmf(k), pmf, 1e-15, &format!("RandInt pmf({k})"));
+            assert_close(dist.cdf(k), cdf, 1e-15, &format!("RandInt cdf({k})"));
+        }
+    }
+
+    #[test]
+    fn randint_ppf_matches_scipy_reference_values() {
+        let dist = RandInt::new(2, 7);
+        let cases = [
+            (0.0, 1.0),
+            (0.1, 2.0),
+            (0.25, 3.0),
+            (0.5, 4.0),
+            (0.8, 5.0),
+            (0.99, 6.0),
+            (1.0, 6.0),
+        ];
+
+        for &(q, want) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, want, 1e-15, &format!("RandInt ppf({q})"));
+            if (0.0..1.0).contains(&q) {
+                assert!(dist.cdf(x as i64) >= q, "cdf(ppf({q}))");
+            }
+        }
+    }
+
+    #[test]
+    fn randint_mean_var_and_negative_support_match_scipy_reference_values() {
+        let dist = RandInt::new(2, 7);
+        assert_close(dist.mean(), 4.0, 1e-15, "RandInt mean");
+        assert_close(dist.var(), 2.0, 1e-15, "RandInt variance");
+
+        let zero_based = RandInt::new(0, 5);
+        let cases = [
+            (-1, 0.0, 0.0),
+            (0, 0.2, 0.2),
+            (1, 0.2, 0.4),
+            (4, 0.2, 1.0),
+            (5, 0.0, 1.0),
+        ];
+        for &(k, pmf, cdf) in &cases {
+            assert_close(
+                zero_based.pmf(k),
+                pmf,
+                1e-15,
+                &format!("RandInt(0,5) pmf({k})"),
+            );
+            assert_close(
+                zero_based.cdf(k),
+                cdf,
+                1e-15,
+                &format!("RandInt(0,5) cdf({k})"),
+            );
+        }
+        assert_close(zero_based.ppf(0.0), -1.0, 1e-15, "RandInt(0,5) ppf(0)");
+        assert_close(zero_based.ppf(1.0), 4.0, 1e-15, "RandInt(0,5) ppf(1)");
+        assert_close(zero_based.mean(), 2.0, 1e-15, "RandInt(0,5) mean");
+        assert_close(zero_based.var(), 2.0, 1e-15, "RandInt(0,5) var");
     }
 
     #[test]
