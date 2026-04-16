@@ -3600,6 +3600,86 @@ pub fn cloglog_inv(x: f64) -> f64 {
     }
 }
 
+/// Log-log link function.
+///
+/// loglog(p) = -log(-log(p))
+///
+/// The log-log link function, used in extreme value distributions.
+/// Maps (0, 1) to (-∞, +∞). The negative of the Gumbel quantile function.
+///
+/// Returns -∞ for p ≤ 0, +∞ for p ≥ 1.
+#[must_use]
+pub fn loglog(p: f64) -> f64 {
+    if p.is_nan() {
+        return f64::NAN;
+    }
+    if p <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
+    -(-p.ln()).ln()
+}
+
+/// Inverse log-log link function.
+///
+/// loglog_inv(x) = exp(-exp(-x))
+///
+/// The inverse of loglog. Maps (-∞, +∞) to (0, 1).
+/// This is the standard Gumbel (minimum) CDF.
+#[must_use]
+pub fn loglog_inv(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // exp(-exp(-x))
+    if x < -709.0 {
+        // exp(-x) overflows, exp(-inf) = 0
+        0.0
+    } else if x > 37.0 {
+        // exp(-x) is essentially 0, exp(-0) = 1
+        1.0
+    } else {
+        (-(-x).exp()).exp()
+    }
+}
+
+/// Cauchy link function (cauchit).
+///
+/// cauchit(p) = tan(π * (p - 0.5))
+///
+/// The inverse Cauchy CDF, used as a link function for heavy-tailed
+/// distributions. Maps (0, 1) to (-∞, +∞).
+///
+/// Returns -∞ for p ≤ 0, +∞ for p ≥ 1.
+#[must_use]
+pub fn cauchit(p: f64) -> f64 {
+    if p.is_nan() {
+        return f64::NAN;
+    }
+    if p <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
+    (std::f64::consts::PI * (p - 0.5)).tan()
+}
+
+/// Inverse Cauchy link function.
+///
+/// cauchit_inv(x) = 0.5 + arctan(x) / π
+///
+/// The Cauchy CDF. Maps (-∞, +∞) to (0, 1).
+#[must_use]
+pub fn cauchit_inv(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    0.5 + x.atan() / std::f64::consts::PI
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4589,6 +4669,102 @@ mod tests {
         // Test more values
         for &p in &[0.1, 0.25, 0.5, 0.75, 0.9] {
             assert!((cloglog_inv(cloglog(p)) - p).abs() < 1e-13);
+        }
+    }
+
+    #[test]
+    fn loglog_basic() {
+        // loglog(p) = -log(-log(p))
+        // loglog(exp(-1)) = -log(-log(exp(-1))) = -log(1) = 0
+        let p_at_zero = (-1.0_f64).exp();
+        assert!((loglog(p_at_zero) - 0.0).abs() < 1e-14);
+
+        // Monotonically increasing (like cloglog)
+        assert!(loglog(0.3) < loglog(0.5));
+        assert!(loglog(0.5) < loglog(0.7));
+
+        // Boundary behavior (opposite direction of cloglog)
+        assert!(loglog(0.0).is_infinite() && loglog(0.0) < 0.0);
+        assert!(loglog(1.0).is_infinite() && loglog(1.0) > 0.0);
+    }
+
+    #[test]
+    fn loglog_inv_basic() {
+        // loglog_inv(x) = exp(-exp(-x)) - the Gumbel (minimum) CDF
+        // loglog_inv(0) = exp(-exp(0)) = exp(-1) ≈ 0.3679
+        let expected = (-1.0_f64).exp();
+        assert!((loglog_inv(0.0) - expected).abs() < 1e-14);
+
+        // Monotonically increasing
+        assert!(loglog_inv(-2.0) < loglog_inv(0.0));
+        assert!(loglog_inv(0.0) < loglog_inv(2.0));
+
+        // Bounded by (0, 1)
+        assert!(loglog_inv(-100.0) >= 0.0);
+        assert!(loglog_inv(100.0) <= 1.0);
+    }
+
+    #[test]
+    fn loglog_inverse_relationship() {
+        // loglog and loglog_inv are inverses
+        let p = 0.3;
+        assert!((loglog_inv(loglog(p)) - p).abs() < 1e-14);
+
+        let x = -1.5;
+        assert!((loglog(loglog_inv(x)) - x).abs() < 1e-14);
+
+        for &p in &[0.1, 0.25, 0.5, 0.75, 0.9] {
+            assert!((loglog_inv(loglog(p)) - p).abs() < 1e-13);
+        }
+    }
+
+    #[test]
+    fn cauchit_basic() {
+        // cauchit(0.5) = tan(0) = 0
+        assert!((cauchit(0.5) - 0.0).abs() < 1e-14);
+
+        // cauchit(0.75) = tan(π/4) = 1
+        assert!((cauchit(0.75) - 1.0).abs() < 1e-14);
+
+        // cauchit(0.25) = tan(-π/4) = -1
+        assert!((cauchit(0.25) - (-1.0)).abs() < 1e-14);
+
+        // Monotonically increasing
+        assert!(cauchit(0.3) < cauchit(0.5));
+        assert!(cauchit(0.5) < cauchit(0.7));
+
+        // Boundary behavior
+        assert!(cauchit(0.0).is_infinite() && cauchit(0.0) < 0.0);
+        assert!(cauchit(1.0).is_infinite() && cauchit(1.0) > 0.0);
+    }
+
+    #[test]
+    fn cauchit_inv_basic() {
+        // cauchit_inv(0) = 0.5
+        assert!((cauchit_inv(0.0) - 0.5).abs() < 1e-14);
+
+        // cauchit_inv(1) = 0.75
+        assert!((cauchit_inv(1.0) - 0.75).abs() < 1e-14);
+
+        // cauchit_inv(-1) = 0.25
+        assert!((cauchit_inv(-1.0) - 0.25).abs() < 1e-14);
+
+        // Bounded by (0, 1) for finite x
+        assert!(cauchit_inv(-1000.0) > 0.0);
+        assert!(cauchit_inv(1000.0) < 1.0);
+    }
+
+    #[test]
+    fn cauchit_inverse_relationship() {
+        // cauchit and cauchit_inv are inverses
+        let p = 0.3;
+        assert!((cauchit_inv(cauchit(p)) - p).abs() < 1e-14);
+
+        let x = 2.5;
+        assert!((cauchit(cauchit_inv(x)) - x).abs() < 1e-14);
+
+        for &p in &[0.1, 0.25, 0.5, 0.75, 0.9] {
+            assert!((cauchit_inv(cauchit(p)) - p).abs() < 1e-13);
         }
     }
 }
