@@ -2588,6 +2588,128 @@ pub fn cho_solve(cho: &ChoFactorResult, b: &[f64]) -> Result<SolveResult, Linalg
     })
 }
 
+/// Solve a banded positive definite system using banded Cholesky factorization.
+///
+/// Given the lower triangular banded Cholesky factor `cb` of a symmetric
+/// positive definite banded matrix A (stored in lower band storage format),
+/// solves A @ x = b.
+///
+/// The matrix cb has shape (lower_bandwidth + 1, n) where:
+/// - cb[0, :] contains the main diagonal of L
+/// - cb[k, i] contains L[i+k, i] for k = 1, ..., lower_bandwidth
+///
+/// Matches `scipy.linalg.cho_solve_banded((cb, lower), b)`.
+///
+/// # Arguments
+/// * `cb` - Cholesky factor in banded storage format, shape (lower_bandwidth + 1, n)
+/// * `b` - Right-hand side vector
+/// * `lower` - If true, cb contains lower triangular factor; if false, upper triangular
+pub fn cho_solve_banded(
+    cb: &[Vec<f64>],
+    b: &[f64],
+    lower: bool,
+) -> Result<SolveResult, LinalgError> {
+    if cb.is_empty() {
+        return Err(LinalgError::InvalidArgument {
+            detail: "cb must not be empty".to_string(),
+        });
+    }
+
+    let bandwidth_plus_1 = cb.len();
+    let n = cb[0].len();
+
+    if b.len() != n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (n, n),
+            b_len: b.len(),
+        });
+    }
+
+    // Verify all rows have same length
+    for row in cb.iter() {
+        if row.len() != n {
+            return Err(LinalgError::InvalidArgument {
+                detail: "All rows in cb must have the same length".to_string(),
+            });
+        }
+    }
+
+    if n == 0 {
+        return Ok(SolveResult {
+            x: vec![],
+            warning: None,
+            backward_error: None,
+            certificate: None,
+        });
+    }
+
+    let mut x = b.to_vec();
+
+    if lower {
+        // Solve L @ y = b (forward substitution)
+        for i in 0..n {
+            for k in 1..bandwidth_plus_1 {
+                if i >= k {
+                    x[i] -= cb[k][i - k] * x[i - k];
+                }
+            }
+            if cb[0][i].abs() < 1e-15 {
+                return Err(LinalgError::SingularMatrix);
+            }
+            x[i] /= cb[0][i];
+        }
+
+        // Solve L^T @ x = y (backward substitution)
+        for i in (0..n).rev() {
+            for k in 1..bandwidth_plus_1 {
+                if i + k < n {
+                    x[i] -= cb[k][i] * x[i + k];
+                }
+            }
+            x[i] /= cb[0][i];
+        }
+    } else {
+        // Upper triangular: Solve U^T @ y = b then U @ x = y
+        // U is stored with U[0,:] = diagonal, U[k,i] = U[i-k,i]
+        for i in 0..n {
+            for k in 1..bandwidth_plus_1 {
+                if i >= k {
+                    x[i] -= cb[k][i] * x[i - k];
+                }
+            }
+            if cb[0][i].abs() < 1e-15 {
+                return Err(LinalgError::SingularMatrix);
+            }
+            x[i] /= cb[0][i];
+        }
+
+        for i in (0..n).rev() {
+            for k in 1..bandwidth_plus_1 {
+                if i + k < n {
+                    x[i] -= cb[k][i + k] * x[i + k];
+                }
+            }
+            x[i] /= cb[0][i];
+        }
+    }
+
+    emit_trace(LinalgTrace {
+        operation: "cho_solve_banded",
+        matrix_size: (n, n),
+        mode: RuntimeMode::Strict,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(SolveResult {
+        x,
+        warning: None,
+        backward_error: None,
+        certificate: None,
+    })
+}
+
 /// LDL decomposition for symmetric indefinite matrices.
 ///
 /// Factors A = L * D * Lᵀ where L is unit lower triangular and D is diagonal.
@@ -7319,6 +7441,48 @@ mod tests {
         ];
         let result = cholesky(&a, true, DecompOptions::default()).expect("cholesky of I");
         assert_close_matrix(&result.factor, &a, 1e-14, 1e-14);
+    }
+
+    #[test]
+    fn cho_solve_banded_tridiagonal() {
+        // A = [[4, 2, 0], [2, 5, 2], [0, 2, 6]]
+        // Cholesky: L = [[2, 0, 0], [1, 2, 0], [0, 1, sqrt(5)]]
+        // Banded storage: cb[k, i] = L[i+k, i]
+        // cb[0] = [2, 2, sqrt(5)] (diagonal)
+        // cb[1] = [1, 1, 0] (sub-diagonal: L[1,0]=1, L[2,1]=1)
+        let sqrt5 = 5.0_f64.sqrt();
+        let cb = vec![
+            vec![2.0, 2.0, sqrt5],  // diagonal of L
+            vec![1.0, 1.0, 0.0],    // sub-diagonal
+        ];
+        // Use b such that x is known: x = [1, 1, 1]
+        // A @ [1,1,1] = [4+2, 2+5+2, 2+6] = [6, 9, 8]
+        let b = vec![6.0, 9.0, 8.0];
+        let result = cho_solve_banded(&cb, &b, true).expect("cho_solve_banded");
+        assert!((result.x[0] - 1.0).abs() < 1e-10, "x[0] = {}", result.x[0]);
+        assert!((result.x[1] - 1.0).abs() < 1e-10, "x[1] = {}", result.x[1]);
+        assert!((result.x[2] - 1.0).abs() < 1e-10, "x[2] = {}", result.x[2]);
+    }
+
+    #[test]
+    fn cho_solve_banded_diagonal() {
+        // Diagonal positive definite matrix
+        let cb = vec![vec![2.0, 3.0, 4.0]]; // Only diagonal, no off-diagonal bands
+        let b = vec![2.0, 6.0, 8.0];
+        // A = diag(4, 9, 16), b = [2, 6, 8], x = [0.5, 2/3, 0.5]
+        // Wait, L@L^T where L = diag(2,3,4) gives A = diag(4, 9, 16)
+        let result = cho_solve_banded(&cb, &b, true).expect("cho_solve_banded diagonal");
+        assert!((result.x[0] - 0.5).abs() < 1e-10, "x[0] = {}", result.x[0]);
+        assert!((result.x[1] - 2.0 / 3.0).abs() < 1e-10, "x[1] = {}", result.x[1]);
+        assert!((result.x[2] - 0.5).abs() < 1e-10, "x[2] = {}", result.x[2]);
+    }
+
+    #[test]
+    fn cho_solve_banded_empty() {
+        let cb = vec![vec![]];
+        let b = vec![];
+        let result = cho_solve_banded(&cb, &b, true).expect("empty");
+        assert!(result.x.is_empty());
     }
 
     // ── Eigenvalue decomposition tests ──────────────────────────────

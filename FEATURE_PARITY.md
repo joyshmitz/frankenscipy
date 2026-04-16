@@ -35,7 +35,7 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 - Matrix functions: ~~`fractional_matrix_power`~~ ✓ DONE, ~~`funm`~~ ✓ DONE, ~~`signm`~~ ✓ DONE
 - Generalized decompositions: ~~`qz`~~ ✓ DONE, ~~`ordqz`~~ ✓ DONE
 - ~~Subspace: `orth`, `null_space`, `subspace_angles`, `polar`~~ ✓ Already implemented
-- Banded: `eig_banded`, ~~`eigh_tridiagonal`~~ ✓ DONE, `cho_solve_banded`, `solveh_banded`
+- Banded: `eig_banded`, ~~`eigh_tridiagonal`~~ ✓ DONE, ~~`cho_solve_banded`~~ ✓ DONE, `solveh_banded`
 
 ### fsci-sparse (44% coverage)
 
