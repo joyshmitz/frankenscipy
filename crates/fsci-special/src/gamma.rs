@@ -1012,6 +1012,134 @@ pub fn factorial2(n: i64) -> f64 {
     }
 }
 
+/// Poisson distribution CDF: P(X <= k) for Poisson with mean m.
+///
+/// Matches `scipy.special.pdtr(k, m)`.
+///
+/// Uses the relation: pdtr(k, m) = gammaincc(k + 1, m)
+///
+/// # Arguments
+/// * `k` - Number of events (non-negative integer, but accepts float)
+/// * `m` - Expected number of events (mean, must be >= 0)
+pub fn pdtr(k: f64, m: f64) -> f64 {
+    if k.is_nan() || m.is_nan() {
+        return f64::NAN;
+    }
+    if m < 0.0 || k < 0.0 {
+        return f64::NAN;
+    }
+    if m == 0.0 {
+        return 1.0; // P(X <= k) = 1 when m = 0
+    }
+
+    // pdtr(k, m) = gammaincc(k + 1, m) = Q(k + 1, m)
+    gammaincc_scalar(k + 1.0, m, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Poisson distribution survival function: P(X > k) for Poisson with mean m.
+///
+/// Matches `scipy.special.pdtrc(k, m)`.
+///
+/// Uses the relation: pdtrc(k, m) = gammainc(k + 1, m)
+///
+/// # Arguments
+/// * `k` - Number of events (non-negative integer, but accepts float)
+/// * `m` - Expected number of events (mean, must be >= 0)
+pub fn pdtrc(k: f64, m: f64) -> f64 {
+    if k.is_nan() || m.is_nan() {
+        return f64::NAN;
+    }
+    if m < 0.0 || k < 0.0 {
+        return f64::NAN;
+    }
+    if m == 0.0 {
+        return 0.0; // P(X > k) = 0 when m = 0
+    }
+
+    // pdtrc(k, m) = gammainc(k + 1, m) = P(k + 1, m)
+    gammainc_scalar(k + 1.0, m, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Inverse of Poisson CDF: find m such that pdtr(k, m) = p.
+///
+/// Matches `scipy.special.pdtri(k, p)`.
+///
+/// Uses Newton's method to find the root.
+///
+/// # Arguments
+/// * `k` - Number of events (non-negative integer, but accepts float)
+/// * `p` - Probability (must be in [0, 1])
+pub fn pdtri(k: f64, p: f64) -> f64 {
+    if k.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if k < 0.0 || p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return f64::INFINITY;
+    }
+    if p == 1.0 {
+        return 0.0;
+    }
+
+    // Use gammaincinv: we need m such that gammaincc(k+1, m) = p
+    // This is the same as gammainc(k+1, m) = 1 - p
+    // So m = gammaincinv(k+1, 1-p)
+    gammaincinv(k + 1.0, 1.0 - p)
+}
+
+/// Inverse of the regularized lower incomplete gamma function.
+/// Finds x such that gammainc(a, x) = p.
+fn gammaincinv(a: f64, p: f64) -> f64 {
+    if a <= 0.0 || p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return 0.0;
+    }
+    if p == 1.0 {
+        return f64::INFINITY;
+    }
+
+    // Initial guess using approximations
+    let mut x = if p < 0.5 {
+        // For small p, use approximation from incomplete gamma
+        let ln_p = p.ln();
+        let a_inv = 1.0 / a;
+        (a * (1.0 + a_inv * ln_p + a_inv * a_inv * ln_p.powi(2) / 2.0)).max(0.01)
+    } else {
+        // For p near 1, start from a reasonable value
+        a + (p - 0.5).sqrt() * a.sqrt()
+    };
+
+    // Newton-Raphson iteration
+    for _ in 0..50 {
+        let f = gammainc_scalar(a, x, RuntimeMode::Strict).unwrap_or(f64::NAN) - p;
+        if f.abs() < 1e-14 {
+            break;
+        }
+
+        // Derivative: d/dx P(a,x) = x^(a-1) * exp(-x) / Gamma(a)
+        let gammaln_a = gammaln_scalar(a, RuntimeMode::Strict).unwrap_or(f64::NAN);
+        let df = ((a - 1.0) * x.ln() - x - gammaln_a).exp();
+
+        if df.abs() < 1e-30 {
+            break;
+        }
+
+        let delta = f / df;
+        x -= delta;
+        x = x.max(1e-15);
+
+        if delta.abs() < 1e-14 * x {
+            break;
+        }
+    }
+
+    x
+}
+
 const FACTORIALS: [f64; 21] = [
     1.0,
     1.0,
@@ -1368,5 +1496,49 @@ mod tests {
     fn zetac_pole() {
         // At s=1, zetac should return infinity
         assert!(zetac(1.0).is_infinite());
+    }
+
+    // ── Poisson distribution functions ────────────────────────────────
+
+    #[test]
+    fn pdtr_basic() {
+        // pdtr(k, m) = P(X <= k) for Poisson with mean m
+        // pdtr(0, 1) = P(X = 0) = exp(-1) ≈ 0.3679
+        let result = pdtr(0.0, 1.0);
+        assert!((result - (-1.0_f64).exp()).abs() < 1e-10);
+
+        // pdtr(k, 0) = 1 for any k >= 0
+        assert!((pdtr(5.0, 0.0) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn pdtr_pdtrc_complement() {
+        // pdtr(k, m) + pdtrc(k, m) = 1
+        for &k in &[0.0, 1.0, 5.0, 10.0] {
+            for &m in &[0.5, 1.0, 5.0, 10.0] {
+                let sum = pdtr(k, m) + pdtrc(k, m);
+                assert!(
+                    (sum - 1.0).abs() < 1e-10,
+                    "pdtr + pdtrc != 1 for k={k}, m={m}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pdtri_inverse() {
+        // pdtri should be inverse of pdtr
+        for &k in &[1.0, 5.0, 10.0] {
+            for &m in &[1.0, 5.0, 10.0] {
+                let p = pdtr(k, m);
+                if p > 0.01 && p < 0.99 {
+                    let m_recovered = pdtri(k, p);
+                    assert!(
+                        (m_recovered - m).abs() / m < 0.01,
+                        "pdtri failed: k={k}, m={m}, p={p}, m_recovered={m_recovered}"
+                    );
+                }
+            }
+        }
     }
 }
