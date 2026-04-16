@@ -14,6 +14,7 @@ use fsci_conformance::{
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::path::Path;
 
 #[derive(Debug, Serialize)]
@@ -106,7 +107,7 @@ fn now_str() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time should be after epoch")
+        .unwrap_or_default()
         .as_secs();
     format!("unix:{secs}")
 }
@@ -122,18 +123,16 @@ fn fold_max(values: impl Iterator<Item = f64>) -> f64 {
 }
 
 #[test]
-fn evidence_p2c012_final_pack() {
+fn evidence_p2c012_final_pack() -> Result<(), Box<dyn Error>> {
     let config = HarnessConfig::default_paths();
     let fixture_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/FSCI-P2C-012_stats_core.json");
     let evidence_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/artifacts/P2C-012/evidence");
-    std::fs::create_dir_all(&evidence_dir).expect("evidence directory should be creatable");
+    std::fs::create_dir_all(&evidence_dir)?;
 
-    let fixture_raw =
-        std::fs::read_to_string(&fixture_path).expect("P2C-012 fixture file should be readable");
-    let fixture: StatsPacketFixture =
-        serde_json::from_str(&fixture_raw).expect("P2C-012 fixture file should parse");
+    let fixture_raw = std::fs::read_to_string(&fixture_path)?;
+    let fixture: StatsPacketFixture = serde_json::from_str(&fixture_raw)?;
 
     let fixture_manifest = FixtureManifest {
         packet_id: fixture.packet_id.clone(),
@@ -154,17 +153,14 @@ fn evidence_p2c012_final_pack() {
             .collect(),
     };
 
-    let packet_report = run_stats_packet(&config, "FSCI-P2C-012_stats_core.json")
-        .expect("stats packet runner should succeed");
-    let parity_artifacts = write_parity_artifacts(&config, &packet_report)
-        .expect("stats parity artifacts should be written");
+    let packet_report = run_stats_packet(&config, "FSCI-P2C-012_stats_core.json")?;
+    let parity_artifacts = write_parity_artifacts(&config, &packet_report)?;
     assert!(parity_artifacts.report_path.exists());
     assert!(parity_artifacts.sidecar_path.exists());
     assert!(parity_artifacts.decode_proof_path.exists());
 
     let oracle_config = DifferentialOracleConfig::default();
-    let differential_report = run_differential_test(&fixture_path, &oracle_config)
-        .expect("stats differential should succeed");
+    let differential_report = run_differential_test(&fixture_path, &oracle_config)?;
 
     let case_entries: BTreeMap<&str, &FixtureEntry> = fixture_manifest
         .fixtures
@@ -175,12 +171,18 @@ fn evidence_p2c012_final_pack() {
     let gates = differential_report
         .per_case_results
         .iter()
-        .map(|result| {
+        .map(|result| -> Result<ParityGate, Box<dyn Error>> {
             let entry = case_entries
                 .get(result.case_id.as_str())
-                .unwrap_or_else(|| panic!("missing fixture entry for {}", result.case_id));
+                .copied()
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("missing fixture entry for {}", result.case_id),
+                    )
+                })?;
             let tolerance = result.tolerance_used.as_ref();
-            ParityGate {
+            Ok(ParityGate {
                 fixture_id: entry.fixture_id.clone(),
                 category: entry.category.clone(),
                 function: entry.function.clone(),
@@ -193,9 +195,9 @@ fn evidence_p2c012_final_pack() {
                     |value| value.comparison_mode.clone(),
                 ),
                 note: result.message.clone(),
-            }
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
 
     assert_eq!(
         gates.len(),
@@ -301,55 +303,43 @@ fn evidence_p2c012_final_pack() {
         sidecar: None,
     };
 
-    let bundle_json = serde_json::to_string_pretty(&evidence).expect("bundle should serialize");
-    std::fs::write(evidence_dir.join("evidence_bundle.json"), &bundle_json)
-        .expect("bundle should be written");
+    let bundle_json = serde_json::to_string_pretty(&evidence)?;
+    std::fs::write(evidence_dir.join("evidence_bundle.json"), &bundle_json)?;
 
-    let sidecar = generate_raptorq_sidecar(bundle_json.as_bytes()).expect("sidecar should build");
+    let sidecar = generate_raptorq_sidecar(bundle_json.as_bytes())?;
     std::fs::write(
         evidence_dir.join("evidence_bundle.raptorq.json"),
-        serde_json::to_string_pretty(&sidecar).expect("sidecar should serialize"),
-    )
-    .expect("sidecar should be written");
+        serde_json::to_string_pretty(&sidecar)?,
+    )?;
 
     std::fs::write(
         evidence_dir.join("fixture_manifest.json"),
-        serde_json::to_string_pretty(&evidence.fixture_manifest)
-            .expect("manifest should serialize"),
-    )
-    .expect("manifest should be written");
+        serde_json::to_string_pretty(&evidence.fixture_manifest)?,
+    )?;
     std::fs::write(
         evidence_dir.join("runner_report.json"),
-        serde_json::to_string_pretty(&evidence.packet_report)
-            .expect("runner report should serialize"),
-    )
-    .expect("runner report should be written");
+        serde_json::to_string_pretty(&evidence.packet_report)?,
+    )?;
     std::fs::write(
         evidence_dir.join("differential_report.json"),
-        serde_json::to_string_pretty(&evidence.differential_report)
-            .expect("differential report should serialize"),
-    )
-    .expect("differential report should be written");
+        serde_json::to_string_pretty(&evidence.differential_report)?,
+    )?;
     std::fs::write(
         evidence_dir.join("parity_gates.json"),
-        serde_json::to_string_pretty(&evidence.parity_gates).expect("gates should serialize"),
-    )
-    .expect("gates should be written");
+        serde_json::to_string_pretty(&evidence.parity_gates)?,
+    )?;
     std::fs::write(
         evidence_dir.join("parity_report.json"),
-        serde_json::to_string_pretty(&evidence.parity_report).expect("report should serialize"),
-    )
-    .expect("report should be written");
+        serde_json::to_string_pretty(&evidence.parity_report)?,
+    )?;
     std::fs::write(
         evidence_dir.join("risk_notes.json"),
-        serde_json::to_string_pretty(&evidence.risk_notes).expect("notes should serialize"),
-    )
-    .expect("risk notes should be written");
+        serde_json::to_string_pretty(&evidence.risk_notes)?,
+    )?;
     std::fs::write(
         evidence_dir.join("evidence_bundle.blake3"),
         hash(bundle_json.as_bytes()).to_hex().to_string(),
-    )
-    .expect("bundle hash should be written");
+    )?;
 
     for gate in &evidence.parity_gates.gates {
         let status = if gate.pass { "PASS" } else { "FAIL" };
@@ -362,4 +352,5 @@ fn evidence_p2c012_final_pack() {
         evidence.parity_gates.all_gates_pass,
         "all P2C-012 parity gates must pass"
     );
+    Ok(())
 }
