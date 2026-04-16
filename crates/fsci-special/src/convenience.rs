@@ -3123,6 +3123,93 @@ pub fn divmod(x: f64, y: f64) -> (f64, f64) {
     (q, r)
 }
 
+/// Element-wise maximum, propagating NaNs.
+///
+/// If either input is NaN, returns NaN.
+///
+/// Matches `numpy.maximum(x, y)`.
+#[must_use]
+pub fn maximum(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        f64::NAN
+    } else if x >= y {
+        x
+    } else {
+        y
+    }
+}
+
+/// Element-wise minimum, propagating NaNs.
+///
+/// If either input is NaN, returns NaN.
+///
+/// Matches `numpy.minimum(x, y)`.
+#[must_use]
+pub fn minimum(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        f64::NAN
+    } else if x <= y {
+        x
+    } else {
+        y
+    }
+}
+
+/// Element-wise maximum, ignoring NaNs.
+///
+/// If one input is NaN, returns the other. If both are NaN, returns NaN.
+///
+/// Matches `numpy.fmax(x, y)`.
+#[must_use]
+pub fn fmax(x: f64, y: f64) -> f64 {
+    if x.is_nan() {
+        y
+    } else if y.is_nan() {
+        x
+    } else if x >= y {
+        x
+    } else {
+        y
+    }
+}
+
+/// Element-wise minimum, ignoring NaNs.
+///
+/// If one input is NaN, returns the other. If both are NaN, returns NaN.
+///
+/// Matches `numpy.fmin(x, y)`.
+#[must_use]
+pub fn fmin(x: f64, y: f64) -> f64 {
+    if x.is_nan() {
+        y
+    } else if y.is_nan() {
+        x
+    } else if x <= y {
+        x
+    } else {
+        y
+    }
+}
+
+/// Compute x raised to the power y.
+///
+/// Handles special cases like 0^0 = 1 and negative bases with
+/// non-integer exponents (returns NaN).
+///
+/// Matches `numpy.power(x, y)`.
+#[must_use]
+pub fn power(x: f64, y: f64) -> f64 {
+    x.powf(y)
+}
+
+/// Compute the absolute difference |x - y|.
+///
+/// Useful for computing distances and tolerances.
+#[must_use]
+pub fn fdiff(x: f64, y: f64) -> f64 {
+    (x - y).abs()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3733,5 +3820,66 @@ mod tests {
         let (q, r) = divmod(1.0, 0.0);
         assert!(q.is_nan());
         assert!(r.is_nan());
+    }
+
+    #[test]
+    fn maximum_minimum_basic() {
+        // maximum - basic
+        assert!((maximum(3.0, 5.0) - 5.0).abs() < 1e-14);
+        assert!((maximum(5.0, 3.0) - 5.0).abs() < 1e-14);
+        assert!((maximum(-1.0, 1.0) - 1.0).abs() < 1e-14);
+
+        // maximum - propagates NaN
+        assert!(maximum(f64::NAN, 1.0).is_nan());
+        assert!(maximum(1.0, f64::NAN).is_nan());
+        assert!(maximum(f64::NAN, f64::NAN).is_nan());
+
+        // minimum - basic
+        assert!((minimum(3.0, 5.0) - 3.0).abs() < 1e-14);
+        assert!((minimum(5.0, 3.0) - 3.0).abs() < 1e-14);
+        assert!((minimum(-1.0, 1.0) - (-1.0)).abs() < 1e-14);
+
+        // minimum - propagates NaN
+        assert!(minimum(f64::NAN, 1.0).is_nan());
+        assert!(minimum(1.0, f64::NAN).is_nan());
+        assert!(minimum(f64::NAN, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn fmax_fmin_basic() {
+        // fmax - basic
+        assert!((fmax(3.0, 5.0) - 5.0).abs() < 1e-14);
+        assert!((fmax(5.0, 3.0) - 5.0).abs() < 1e-14);
+
+        // fmax - ignores NaN
+        assert!((fmax(f64::NAN, 1.0) - 1.0).abs() < 1e-14);
+        assert!((fmax(1.0, f64::NAN) - 1.0).abs() < 1e-14);
+        assert!(fmax(f64::NAN, f64::NAN).is_nan());
+
+        // fmin - basic
+        assert!((fmin(3.0, 5.0) - 3.0).abs() < 1e-14);
+        assert!((fmin(5.0, 3.0) - 3.0).abs() < 1e-14);
+
+        // fmin - ignores NaN
+        assert!((fmin(f64::NAN, 1.0) - 1.0).abs() < 1e-14);
+        assert!((fmin(1.0, f64::NAN) - 1.0).abs() < 1e-14);
+        assert!(fmin(f64::NAN, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn power_basic() {
+        assert!((power(2.0, 3.0) - 8.0).abs() < 1e-14);
+        assert!((power(3.0, 2.0) - 9.0).abs() < 1e-14);
+        assert!((power(4.0, 0.5) - 2.0).abs() < 1e-14);
+        assert!((power(2.0, -1.0) - 0.5).abs() < 1e-14);
+        assert!((power(0.0, 0.0) - 1.0).abs() < 1e-14); // 0^0 = 1 by convention
+    }
+
+    #[test]
+    fn fdiff_basic() {
+        assert!((fdiff(5.0, 3.0) - 2.0).abs() < 1e-14);
+        assert!((fdiff(3.0, 5.0) - 2.0).abs() < 1e-14);
+        assert!((fdiff(-1.0, 1.0) - 2.0).abs() < 1e-14);
+        assert!((fdiff(0.0, 0.0) - 0.0).abs() < 1e-14);
     }
 }
