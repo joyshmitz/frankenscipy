@@ -2714,6 +2714,102 @@ impl ContinuousDistribution for InverseGaussian {
     }
 }
 
+/// Pearson type III distribution.
+///
+/// Matches `scipy.stats.pearson3`.
+pub struct Pearson3 {
+    pub skew: f64,
+}
+
+impl Pearson3 {
+    #[must_use]
+    pub fn new(skew: f64) -> Self {
+        assert!(skew.is_finite(), "skew must be finite");
+        Self { skew }
+    }
+}
+
+impl ContinuousDistribution for Pearson3 {
+    fn pdf(&self, x: f64) -> f64 {
+        const NORMAL_TRANSITION: f64 = 1.6e-5;
+        let skew = self.skew;
+        if skew.abs() < NORMAL_TRANSITION {
+            return standard_normal_pdf(x);
+        }
+
+        let beta = 2.0 / skew;
+        let alpha = beta * beta;
+        let zeta = -beta;
+        let transx = beta * (x - zeta);
+        if transx < 0.0 {
+            return 0.0;
+        }
+
+        beta.abs() * transx.powf(alpha - 1.0) * (-transx).exp() / ln_gamma(alpha).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        const NORMAL_TRANSITION: f64 = 1.6e-5;
+        let skew = self.skew;
+        if skew.abs() < NORMAL_TRANSITION {
+            return standard_normal_cdf(x);
+        }
+
+        let beta = 2.0 / skew;
+        let alpha = beta * beta;
+        let zeta = -beta;
+        let transx = beta * (x - zeta);
+
+        if skew > 0.0 {
+            if transx <= 0.0 {
+                0.0
+            } else {
+                lower_regularized_gamma(alpha, transx)
+            }
+        } else if transx <= 0.0 {
+            1.0
+        } else {
+            upper_regularized_gamma(alpha, transx)
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        const NORMAL_TRANSITION: f64 = 1.6e-5;
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+
+        let skew = self.skew;
+        if skew.abs() < NORMAL_TRANSITION {
+            return fsci_special::ndtri(q);
+        }
+
+        let beta = 2.0 / skew;
+        let alpha = beta * beta;
+        let zeta = -beta;
+        let gamma_q = if beta < 0.0 { 1.0 - q } else { q };
+        let g = fsci_special::gammaincinv(alpha, gamma_q);
+        if !g.is_finite() {
+            return ppf_bisection(|x| self.cdf(x), q, self.mean(), self.std());
+        }
+        g / beta + zeta
+    }
+
+    fn mean(&self) -> f64 {
+        0.0
+    }
+
+    fn var(&self) -> f64 {
+        1.0
+    }
+}
+
 /// Generalized Extreme Value (GEV) distribution.
 ///
 /// Matches `scipy.stats.genextreme`.
@@ -12402,6 +12498,103 @@ mod tests {
             1e-12,
             "GumbelLeft variance",
         );
+    }
+
+    #[test]
+    fn pearson3_positive_skew_pdf_cdf_match_scipy_reference_values() {
+        let dist = Pearson3::new(1.5);
+        let cases = [
+            (-2.0, 0.0, 0.0),
+            (-1.0, 0.491_520_420_923_186_1, 0.108_815_120_615_328_25),
+            (0.0, 0.380_847_526_111_116_33, 0.599_647_799_258_328_2),
+            (1.0, 0.155_139_155_520_572_03, 0.856_126_172_584_151_5),
+            (2.0, 0.053_968_632_797_029_154, 0.952_726_553_443_132_6),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("Pearson3(1.5) pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("Pearson3(1.5) cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn pearson3_negative_skew_pdf_cdf_match_scipy_reference_values() {
+        let dist = Pearson3::new(-1.5);
+        let cases = [
+            (-2.0, 0.053_968_632_797_029_154, 0.047_273_446_556_867_44),
+            (-1.0, 0.155_139_155_520_572_03, 0.143_873_827_415_848_5),
+            (0.0, 0.380_847_526_111_116_33, 0.400_352_200_741_672_94),
+            (1.0, 0.491_520_420_923_186_1, 0.891_184_879_384_671_7),
+            (2.0, 0.0, 1.0),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("Pearson3(-1.5) pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("Pearson3(-1.5) cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn pearson3_ppf_roundtrip_matches_scipy_reference_values() {
+        let positive = Pearson3::new(1.5);
+        let positive_cases = [
+            (0.1, -1.018_104_310_659_964_5),
+            (0.25, -0.733_120_813_876_001_7),
+            (0.5, -0.239_964_153_964_511_43),
+            (0.75, 0.475_368_176_123_716_5),
+            (0.9, 1.333_300_518_218_442_5),
+        ];
+
+        for &(q, expected_x) in &positive_cases {
+            let x = positive.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("Pearson3(1.5) ppf({q})"));
+            assert_close(
+                positive.cdf(x),
+                q,
+                1e-10,
+                &format!("Pearson3(1.5) cdf(ppf({q}))"),
+            );
+        }
+
+        let negative = Pearson3::new(-1.5);
+        let negative_cases = [
+            (0.1, -1.333_300_518_218_442_5),
+            (0.25, -0.475_368_176_123_716_5),
+            (0.5, 0.239_964_153_964_511_43),
+            (0.75, 0.733_120_813_876_001_7),
+            (0.9, 1.018_104_310_659_964_5),
+        ];
+
+        for &(q, expected_x) in &negative_cases {
+            let x = negative.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("Pearson3(-1.5) ppf({q})"));
+            assert_close(
+                negative.cdf(x),
+                q,
+                1e-10,
+                &format!("Pearson3(-1.5) cdf(ppf({q}))"),
+            );
+        }
+    }
+
+    #[test]
+    fn pearson3_zero_skew_matches_standard_normal() {
+        let dist = Pearson3::new(0.0);
+        let cases = [
+            (-2.0, 0.053_990_966_513_188_056, 0.022_750_131_948_179_195),
+            (-1.0, 0.241_970_724_519_143_37, 0.158_655_253_931_457_07),
+            (0.0, 0.398_942_280_401_432_7, 0.5),
+            (1.0, 0.241_970_724_519_143_37, 0.841_344_746_068_542_9),
+            (2.0, 0.053_990_966_513_188_056, 0.977_249_868_051_820_8),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("Pearson3(0) pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("Pearson3(0) cdf({x})"));
+        }
+
+        assert_close(dist.mean(), 0.0, 1e-12, "Pearson3 mean");
+        assert_close(dist.var(), 1.0, 1e-12, "Pearson3 variance");
     }
 
     #[test]
