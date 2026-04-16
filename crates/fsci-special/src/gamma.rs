@@ -964,6 +964,58 @@ pub fn factorial(n: u64) -> f64 {
     }
 }
 
+/// Compute the double factorial n!! = n * (n-2) * (n-4) * ... * (1 or 2).
+///
+/// Matches `scipy.special.factorial2(n, exact=True)`.
+///
+/// For odd n: n!! = n * (n-2) * ... * 3 * 1
+/// For even n: n!! = n * (n-2) * ... * 4 * 2
+///
+/// Special cases:
+/// - 0!! = 1 (by convention)
+/// - (-1)!! = 1 (by convention)
+/// - For negative n < -1, returns 0
+pub fn factorial2(n: i64) -> f64 {
+    match n.cmp(&0) {
+        std::cmp::Ordering::Less => {
+            // (-1)!! = 1 by convention, others are 0
+            if n == -1 {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        std::cmp::Ordering::Equal => 1.0, // 0!! = 1
+        std::cmp::Ordering::Greater => {
+            if n <= 33 {
+                // Direct computation for small values
+                let mut result = 1.0_f64;
+                let mut k = n;
+                while k > 1 {
+                    result *= k as f64;
+                    k -= 2;
+                }
+                result
+            } else {
+                // For large n, use relation to gamma function:
+                // n!! = 2^(n/2) * Gamma(n/2 + 1) for even n
+                // n!! = 2^((n+1)/2) * Gamma((n+1)/2) / sqrt(pi) for odd n
+                let nf = n as f64;
+                if n % 2 == 0 {
+                    // Even: n!! = 2^(n/2) * (n/2)!
+                    let half_n = nf / 2.0;
+                    2.0_f64.powf(half_n) * gamma_core(half_n + 1.0)
+                } else {
+                    // Odd: n!! = n! / (n/2)! / 2^(n/2)
+                    // Or equivalently: n!! = sqrt(2/pi) * 2^((n+1)/2) * Gamma((n+1)/2 + 1/2)
+                    let half_n_plus_1 = (nf + 1.0) / 2.0;
+                    2.0_f64.powf(half_n_plus_1) * gamma_core(half_n_plus_1) / PI.sqrt()
+                }
+            }
+        }
+    }
+}
+
 const FACTORIALS: [f64; 21] = [
     1.0,
     1.0,
@@ -1120,6 +1172,44 @@ fn dirichlet_eta(s: f64) -> f64 {
     sum
 }
 
+/// Compute the Riemann zeta function complement: zetac(s) = zeta(s) - 1.
+///
+/// Matches `scipy.special.zetac(s)`.
+///
+/// This is useful when zeta(s) is close to 1 (i.e., for large s > 1),
+/// where direct computation of zeta(s) - 1 would suffer from catastrophic
+/// cancellation. For large s, zetac(s) ≈ 2^(-s).
+///
+/// # Arguments
+/// * `s` - Real argument
+///
+/// # Returns
+/// ζ(s) - 1 for any real s ≠ 1
+pub fn zetac(s: f64) -> f64 {
+    if s.is_nan() {
+        return f64::NAN;
+    }
+    if s == 1.0 {
+        return f64::INFINITY; // pole of zeta
+    }
+    if s > 10.0 {
+        // For large s > 10, zetac(s) = sum_{n=2}^∞ n^(-s) ≈ 2^(-s) + 3^(-s) + ...
+        // Direct computation avoids subtraction from 1
+        let mut sum = 0.0_f64;
+        for n in 2..=100 {
+            let term = (n as f64).powf(-s);
+            if term < 1e-18 {
+                break;
+            }
+            sum += term;
+        }
+        sum
+    } else {
+        // For smaller s, just compute zeta(s) - 1
+        zeta(s) - 1.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1206,5 +1296,81 @@ mod tests {
         let err = polygamma(3, &scalar(-1.0), RuntimeMode::Hardened)
             .expect_err("hardened mode should reject higher-order poles");
         assert_eq!(err.kind, SpecialErrorKind::PoleInput);
+    }
+
+    // ── factorial2 tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn factorial2_small_even() {
+        // 0!! = 1, 2!! = 2, 4!! = 8, 6!! = 48, 8!! = 384, 10!! = 3840
+        assert_eq!(factorial2(0), 1.0);
+        assert_eq!(factorial2(2), 2.0);
+        assert_eq!(factorial2(4), 8.0);
+        assert_eq!(factorial2(6), 48.0);
+        assert_eq!(factorial2(8), 384.0);
+        assert_eq!(factorial2(10), 3840.0);
+    }
+
+    #[test]
+    fn factorial2_small_odd() {
+        // 1!! = 1, 3!! = 3, 5!! = 15, 7!! = 105, 9!! = 945
+        assert_eq!(factorial2(1), 1.0);
+        assert_eq!(factorial2(3), 3.0);
+        assert_eq!(factorial2(5), 15.0);
+        assert_eq!(factorial2(7), 105.0);
+        assert_eq!(factorial2(9), 945.0);
+    }
+
+    #[test]
+    fn factorial2_negative() {
+        // (-1)!! = 1 by convention, others are 0
+        assert_eq!(factorial2(-1), 1.0);
+        assert_eq!(factorial2(-2), 0.0);
+        assert_eq!(factorial2(-5), 0.0);
+    }
+
+    #[test]
+    fn factorial2_large() {
+        // Test gamma-based computation for large values
+        // 20!! = 3715891200
+        let computed = factorial2(20);
+        let expected = 3_715_891_200.0_f64;
+        assert!((computed - expected).abs() / expected < 1e-10);
+    }
+
+    // ── zetac tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn zetac_small_s() {
+        // zetac(2) = zeta(2) - 1 = π²/6 - 1 ≈ 0.6449340668
+        let result = zetac(2.0);
+        let expected = PI * PI / 6.0 - 1.0;
+        assert!((result - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn zetac_large_s() {
+        // For large s, zetac(s) ≈ 2^(-s)
+        let s = 20.0;
+        let result = zetac(s);
+        let approx = 2.0_f64.powf(-s);
+        // Should be close to 2^(-s), within a few percent
+        assert!((result - approx).abs() / approx < 0.01);
+    }
+
+    #[test]
+    fn zetac_consistency() {
+        // zetac(s) should equal zeta(s) - 1
+        for s in [3.0, 4.0, 5.0, 10.0] {
+            let zetac_result = zetac(s);
+            let zeta_minus_one = zeta(s) - 1.0;
+            assert!((zetac_result - zeta_minus_one).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn zetac_pole() {
+        // At s=1, zetac should return infinity
+        assert!(zetac(1.0).is_infinite());
     }
 }

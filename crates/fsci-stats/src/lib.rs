@@ -5615,7 +5615,6 @@ pub fn bartlett(groups: &[&[f64]]) -> VarianceTestResult {
     VarianceTestResult { statistic, pvalue }
 }
 
-/// Mann-Whitney U test (rank-sum test for two independent samples).
 /// Friedman test for repeated measures (non-parametric).
 ///
 /// Tests H0: all treatments have the same effect. Non-parametric alternative
@@ -15491,5 +15490,62 @@ mod tests {
         // Mean = 0.5, Var = 1/8 = 0.125
         assert_eq!(a.mean(), 0.5);
         assert_eq!(a.var(), 0.125);
+    }
+
+    // ── Fligner test ────────────────────────────────────────────────
+
+    #[test]
+    fn fligner_equal_variances() {
+        // Two groups with similar spreads should have high p-value
+        let g1 = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let g2 = [2.0, 3.0, 4.0, 5.0, 6.0];
+        let result = fligner(&[&g1, &g2]);
+        assert!(result.statistic.is_finite(), "stat = {}", result.statistic);
+        assert!(result.pvalue.is_finite(), "pvalue = {}", result.pvalue);
+        assert!(
+            result.pvalue > 0.05,
+            "pvalue = {} should be > 0.05",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn fligner_unequal_variances() {
+        // One group with much larger spread
+        let g1 = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let g2 = [0.0, 5.0, 10.0, 15.0, 20.0]; // Much higher variance
+        let result = fligner(&[&g1, &g2]);
+        assert!(result.statistic.is_finite());
+        assert!(result.pvalue.is_finite());
+        // With such different variances, p-value should be low
+        assert!(
+            result.pvalue < 0.1,
+            "pvalue = {} should be < 0.1",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn fligner_three_groups() {
+        let g1 = [1.0, 2.0, 3.0, 4.0];
+        let g2 = [2.0, 3.0, 4.0, 5.0];
+        let g3 = [3.0, 4.0, 5.0, 6.0];
+        let result = fligner(&[&g1, &g2, &g3]);
+        assert!(result.statistic.is_finite());
+        assert!(result.pvalue.is_finite());
+    }
+
+    #[test]
+    fn fligner_insufficient_data() {
+        // Less than 2 groups
+        let g1 = [1.0, 2.0, 3.0];
+        let result = fligner(&[&g1]);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+
+        // Group with less than 2 elements
+        let g2 = [1.0];
+        let result2 = fligner(&[&g1, &g2]);
+        assert!(result2.statistic.is_nan());
     }
 }
