@@ -3210,6 +3210,112 @@ pub fn fdiff(x: f64, y: f64) -> f64 {
     (x - y).abs()
 }
 
+/// Replace NaN with zero and infinity with large finite numbers.
+///
+/// nan_to_num(x, nan, posinf, neginf) replaces:
+/// - NaN with `nan` (default 0.0)
+/// - +inf with `posinf` (default f64::MAX)
+/// - -inf with `neginf` (default f64::MIN)
+///
+/// Matches `numpy.nan_to_num(x)`.
+#[must_use]
+pub fn nan_to_num(x: f64, nan: f64, posinf: f64, neginf: f64) -> f64 {
+    if x.is_nan() {
+        nan
+    } else if x == f64::INFINITY {
+        posinf
+    } else if x == f64::NEG_INFINITY {
+        neginf
+    } else {
+        x
+    }
+}
+
+/// Rectified Linear Unit (ReLU): max(0, x).
+///
+/// The ReLU activation function, commonly used in neural networks.
+///
+/// Matches `scipy.special.relu(x)` (proposed).
+#[must_use]
+pub fn relu(x: f64) -> f64 {
+    if x.is_nan() {
+        f64::NAN
+    } else if x > 0.0 {
+        x
+    } else {
+        0.0
+    }
+}
+
+/// Softplus: log(1 + exp(x)).
+///
+/// A smooth approximation to ReLU. Computed in a numerically stable way.
+///
+/// Matches `scipy.special.softplus(x)` (proposed).
+#[must_use]
+pub fn softplus(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // For large positive x, softplus(x) ≈ x
+    // For large negative x, softplus(x) ≈ exp(x) ≈ 0
+    if x > 20.0 {
+        x
+    } else if x < -20.0 {
+        x.exp()
+    } else {
+        (1.0 + x.exp()).ln()
+    }
+}
+
+/// Huber loss function.
+///
+/// huber(delta, x) =
+///   0.5 * x^2                  if |x| <= delta
+///   delta * (|x| - 0.5*delta)  if |x| > delta
+///
+/// A robust loss function that is quadratic for small errors and
+/// linear for large errors.
+///
+/// Matches `scipy.special.huber(delta, x)`.
+#[must_use]
+pub fn huber(delta: f64, x: f64) -> f64 {
+    if delta.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if delta <= 0.0 {
+        return f64::NAN;
+    }
+
+    let ax = x.abs();
+    if ax <= delta {
+        0.5 * x * x
+    } else {
+        delta * (ax - 0.5 * delta)
+    }
+}
+
+/// Pseudo-Huber loss function.
+///
+/// pseudo_huber(delta, x) = delta^2 * (sqrt(1 + (x/delta)^2) - 1)
+///
+/// A smooth approximation to the Huber loss. Unlike Huber, it has
+/// continuous derivatives of all orders.
+///
+/// Matches `scipy.special.pseudo_huber(delta, x)`.
+#[must_use]
+pub fn pseudo_huber(delta: f64, x: f64) -> f64 {
+    if delta.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if delta <= 0.0 {
+        return f64::NAN;
+    }
+
+    let ratio = x / delta;
+    delta * delta * ((1.0 + ratio * ratio).sqrt() - 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3881,5 +3987,98 @@ mod tests {
         assert!((fdiff(3.0, 5.0) - 2.0).abs() < 1e-14);
         assert!((fdiff(-1.0, 1.0) - 2.0).abs() < 1e-14);
         assert!((fdiff(0.0, 0.0) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn nan_to_num_basic() {
+        // NaN replacement
+        assert!((nan_to_num(f64::NAN, 0.0, f64::MAX, f64::MIN) - 0.0).abs() < 1e-14);
+        assert!((nan_to_num(f64::NAN, 99.0, f64::MAX, f64::MIN) - 99.0).abs() < 1e-14);
+
+        // Infinity replacement
+        assert!((nan_to_num(f64::INFINITY, 0.0, 1e10, -1e10) - 1e10).abs() < 1e-14);
+        assert!((nan_to_num(f64::NEG_INFINITY, 0.0, 1e10, -1e10) - (-1e10)).abs() < 1e-14);
+
+        // Finite values unchanged
+        assert!((nan_to_num(5.0, 0.0, f64::MAX, f64::MIN) - 5.0).abs() < 1e-14);
+        assert!((nan_to_num(-3.0, 0.0, f64::MAX, f64::MIN) - (-3.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn relu_basic() {
+        // Positive values pass through
+        assert!((relu(5.0) - 5.0).abs() < 1e-14);
+        assert!((relu(0.1) - 0.1).abs() < 1e-14);
+
+        // Negative values become zero
+        assert!((relu(-5.0) - 0.0).abs() < 1e-14);
+        assert!((relu(-0.1) - 0.0).abs() < 1e-14);
+
+        // Zero stays zero
+        assert!((relu(0.0) - 0.0).abs() < 1e-14);
+
+        // NaN propagates
+        assert!(relu(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn softplus_basic() {
+        // softplus(0) = ln(2)
+        assert!((softplus(0.0) - std::f64::consts::LN_2).abs() < 1e-14);
+
+        // For large positive x, softplus(x) ≈ x
+        assert!((softplus(100.0) - 100.0).abs() < 1e-10);
+
+        // For large negative x, softplus(x) ≈ 0
+        assert!(softplus(-100.0) < 1e-40);
+
+        // softplus is always positive
+        assert!(softplus(-10.0) > 0.0);
+        assert!(softplus(0.0) > 0.0);
+        assert!(softplus(10.0) > 0.0);
+
+        // NaN propagates
+        assert!(softplus(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn huber_basic() {
+        let delta = 1.0;
+
+        // For |x| <= delta, huber = 0.5 * x^2
+        assert!((huber(delta, 0.5) - 0.125).abs() < 1e-14);
+        assert!((huber(delta, -0.5) - 0.125).abs() < 1e-14);
+        assert!((huber(delta, 0.0) - 0.0).abs() < 1e-14);
+
+        // For |x| > delta, huber = delta * (|x| - 0.5*delta)
+        assert!((huber(delta, 2.0) - 1.5).abs() < 1e-14);
+        assert!((huber(delta, -2.0) - 1.5).abs() < 1e-14);
+
+        // At boundary
+        assert!((huber(delta, 1.0) - 0.5).abs() < 1e-14);
+
+        // Invalid delta
+        assert!(huber(0.0, 1.0).is_nan());
+        assert!(huber(-1.0, 1.0).is_nan());
+    }
+
+    #[test]
+    fn pseudo_huber_basic() {
+        let delta = 1.0;
+
+        // pseudo_huber(delta, 0) = 0
+        assert!((pseudo_huber(delta, 0.0) - 0.0).abs() < 1e-14);
+
+        // For small x, pseudo_huber ≈ 0.5 * x^2
+        let small = 0.01;
+        let expected = 0.5 * small * small;
+        assert!((pseudo_huber(delta, small) - expected).abs() < 1e-6);
+
+        // Symmetric
+        assert!((pseudo_huber(delta, 2.0) - pseudo_huber(delta, -2.0)).abs() < 1e-14);
+
+        // Invalid delta
+        assert!(pseudo_huber(0.0, 1.0).is_nan());
+        assert!(pseudo_huber(-1.0, 1.0).is_nan());
     }
 }
