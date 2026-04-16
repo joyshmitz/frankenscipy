@@ -2423,6 +2423,113 @@ impl ContinuousDistribution for Triangular {
     }
 }
 
+/// Trapezoidal distribution on `[loc, loc + scale]` with flat top spanning
+/// `[loc + c * scale, loc + d * scale]`.
+///
+/// Matches `scipy.stats.trapezoid(c, d, loc, scale)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Trapezoid {
+    pub c: f64,
+    pub d: f64,
+    pub loc: f64,
+    pub scale: f64,
+}
+
+impl Trapezoid {
+    #[must_use]
+    pub fn new(c: f64, d: f64, loc: f64, scale: f64) -> Self {
+        assert!((0.0..=1.0).contains(&c), "c must be in [0, 1]");
+        assert!((0.0..=1.0).contains(&d), "d must be in [0, 1]");
+        assert!(d >= c, "d must be >= c");
+        assert!(scale > 0.0, "scale must be positive");
+        Self { c, d, loc, scale }
+    }
+
+    fn standard_moment(&self, n: usize) -> f64 {
+        let c = self.c;
+        let d = self.d;
+        let den = 1.0 + d - c;
+        let ab_term = c.powf((n + 1) as f64);
+        let dc_term = if d == 0.0 {
+            1.0
+        } else if d < 1.0 {
+            (d.powf((n + 2) as f64) - 1.0) / (d - 1.0)
+        } else {
+            (n + 2) as f64
+        };
+        2.0 * (dc_term - ab_term) / (den * (n as f64 + 1.0) * (n as f64 + 2.0))
+    }
+}
+
+impl ContinuousDistribution for Trapezoid {
+    fn pdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        if !(0.0..=1.0).contains(&z) {
+            return 0.0;
+        }
+        let height = 2.0 / (1.0 + self.d - self.c);
+        let standard_pdf = if z < self.c {
+            height * z / self.c
+        } else if z <= self.d {
+            height
+        } else {
+            height * (1.0 - z) / (1.0 - self.d)
+        };
+        standard_pdf / self.scale
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        if z <= 0.0 {
+            return 0.0;
+        }
+        if z >= 1.0 {
+            return 1.0;
+        }
+        let den = 1.0 + self.d - self.c;
+        if z < self.c {
+            z * z / (self.c * den)
+        } else if z <= self.d {
+            (self.c + 2.0 * (z - self.c)) / den
+        } else {
+            1.0 - (1.0 - z).powi(2) / ((1.0 - self.d) * den)
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return self.loc;
+        }
+        if q == 1.0 {
+            return self.loc + self.scale;
+        }
+        let den = 1.0 + self.d - self.c;
+        let qc = self.c / den;
+        let qd = (2.0 * self.d - self.c) / den;
+        let z = if q < qc {
+            (q * self.c * den).sqrt()
+        } else if q <= qd {
+            0.5 * (q * den + self.c)
+        } else {
+            1.0 - ((1.0 - q) * (1.0 - self.d) * den).sqrt()
+        };
+        self.loc + self.scale * z
+    }
+
+    fn mean(&self) -> f64 {
+        self.loc + self.scale * self.standard_moment(1)
+    }
+
+    fn var(&self) -> f64 {
+        let ex = self.standard_moment(1);
+        let ex2 = self.standard_moment(2);
+        self.scale * self.scale * (ex2 - ex * ex)
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Additional Distributions
 // ══════════════════════════════════════════════════════════════════════
