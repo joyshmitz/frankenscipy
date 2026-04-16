@@ -5712,6 +5712,35 @@ pub fn exponential_window(n: usize, tau: f64) -> Vec<f64> {
         .collect()
 }
 
+/// Lanczos window (sinc window).
+///
+/// The Lanczos window is the central lobe of a sinc function. It has the form:
+/// w(n) = sinc(2n/(N-1) - 1) for n = 0, ..., N-1
+///
+/// where sinc(x) = sin(πx)/(πx).
+///
+/// Matches `scipy.signal.windows.lanczos(n)`.
+pub fn lanczos(n: usize) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+    let nf = n as f64;
+    (0..n)
+        .map(|i| {
+            let x = 2.0 * (i as f64) / (nf - 1.0) - 1.0;
+            if x.abs() < 1e-10 {
+                1.0
+            } else {
+                let pi_x = std::f64::consts::PI * x;
+                pi_x.sin() / pi_x
+            }
+        })
+        .collect()
+}
+
 /// Triangular window.
 ///
 /// Matches `scipy.signal.windows.triang(n)`.
@@ -7224,6 +7253,7 @@ mod tests {
         assert!(blackmanharris(0).is_empty());
         assert!(barthann(0).is_empty());
         assert!(kaiser(0, 5.0).is_empty());
+        assert!(lanczos(0).is_empty());
     }
 
     #[test]
@@ -7234,6 +7264,27 @@ mod tests {
         assert_eq!(blackmanharris(1), [1.0]);
         assert_eq!(barthann(1), [1.0]);
         assert_eq!(kaiser(1, 5.0), [1.0]);
+        assert_eq!(lanczos(1), [1.0]);
+    }
+
+    #[test]
+    fn lanczos_window_symmetric() {
+        // Lanczos window should be symmetric
+        let w = lanczos(7);
+        assert_eq!(w.len(), 7);
+        for i in 0..3 {
+            assert!((w[i] - w[6 - i]).abs() < 1e-12, "asymmetry at {i}");
+        }
+        // Center should be 1.0 (sinc(0) = 1)
+        assert!((w[3] - 1.0).abs() < 1e-12, "center = {}, expected 1.0", w[3]);
+    }
+
+    #[test]
+    fn lanczos_window_endpoints() {
+        // At endpoints, x = ±1, so sinc(±1) = sin(±π)/(±π) = 0
+        let w = lanczos(11);
+        assert!((w[0]).abs() < 1e-12, "w[0] = {}, expected 0", w[0]);
+        assert!((w[10]).abs() < 1e-12, "w[10] = {}, expected 0", w[10]);
     }
 
     // ── Convolution tests ───────────────────────────────────────────
