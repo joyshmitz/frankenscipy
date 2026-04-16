@@ -211,11 +211,7 @@ pub fn stdtr(v: f64, t: f64) -> f64 {
     let x = v / (v + t * t);
     let half_beta = 0.5 * btdtr(0.5 * v, 0.5, x);
 
-    if t >= 0.0 {
-        1.0 - half_beta
-    } else {
-        half_beta
-    }
+    if t >= 0.0 { 1.0 - half_beta } else { half_beta }
 }
 
 /// Student's t distribution survival function.
@@ -237,11 +233,7 @@ pub fn stdtrc(v: f64, t: f64) -> f64 {
     let x = v / (v + t * t);
     let half_beta = 0.5 * btdtr(0.5 * v, 0.5, x);
 
-    if t >= 0.0 {
-        half_beta
-    } else {
-        1.0 - half_beta
-    }
+    if t >= 0.0 { half_beta } else { 1.0 - half_beta }
 }
 
 /// Inverse Student's t distribution CDF.
@@ -255,7 +247,7 @@ pub fn stdtri(v: f64, p: f64) -> f64 {
     if v.is_nan() || p.is_nan() {
         return f64::NAN;
     }
-    if v <= 0.0 || p < 0.0 || p > 1.0 {
+    if v <= 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if p == 0.0 {
@@ -299,7 +291,7 @@ pub fn bdtr(k: f64, n: f64, p: f64) -> f64 {
     if k.is_nan() || n.is_nan() || p.is_nan() {
         return f64::NAN;
     }
-    if n < 0.0 || p < 0.0 || p > 1.0 {
+    if n < 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if k < 0.0 {
@@ -325,7 +317,7 @@ pub fn bdtrc(k: f64, n: f64, p: f64) -> f64 {
     if k.is_nan() || n.is_nan() || p.is_nan() {
         return f64::NAN;
     }
-    if n < 0.0 || p < 0.0 || p > 1.0 {
+    if n < 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if k < 0.0 {
@@ -350,7 +342,7 @@ pub fn bdtri(k: f64, n: f64, y: f64) -> f64 {
     if k.is_nan() || n.is_nan() || y.is_nan() {
         return f64::NAN;
     }
-    if n < 0.0 || y < 0.0 || y > 1.0 || k < 0.0 || k > n {
+    if n < 0.0 || !(0.0..=1.0).contains(&y) || k < 0.0 || k > n {
         return f64::NAN;
     }
     if y == 0.0 {
@@ -380,7 +372,7 @@ pub fn nbdtr(k: f64, n: f64, p: f64) -> f64 {
     if k.is_nan() || n.is_nan() || p.is_nan() {
         return f64::NAN;
     }
-    if n <= 0.0 || p < 0.0 || p > 1.0 {
+    if n <= 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if p == 0.0 {
@@ -407,7 +399,7 @@ pub fn nbdtrc(k: f64, n: f64, p: f64) -> f64 {
     if k.is_nan() || n.is_nan() || p.is_nan() {
         return f64::NAN;
     }
-    if n <= 0.0 || p < 0.0 || p > 1.0 {
+    if n <= 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if p == 0.0 {
@@ -434,7 +426,7 @@ pub fn nbdtri(k: f64, n: f64, y: f64) -> f64 {
     if k.is_nan() || n.is_nan() || y.is_nan() {
         return f64::NAN;
     }
-    if n <= 0.0 || y < 0.0 || y > 1.0 || k < 0.0 {
+    if n <= 0.0 || !(0.0..=1.0).contains(&y) || k < 0.0 {
         return f64::NAN;
     }
     if y == 0.0 {

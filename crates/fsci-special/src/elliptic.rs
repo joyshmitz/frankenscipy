@@ -241,7 +241,7 @@ fn ellipkm1_scalar(p: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if p.is_nan() {
         return Ok(f64::NAN);
     }
-    if p < 0.0 || p > 1.0 {
+    if !(0.0..=1.0).contains(&p) {
         return domain_error("ellipkm1", mode, "p must be in [0, 1]");
     }
     if p == 0.0 {
@@ -1191,7 +1191,10 @@ mod tests {
         let asymp = (-x).exp() / x;
         // E_1(10) should be close to but slightly larger than asymptotic
         let e1 = expn_scalar(1, x);
-        assert!(e1 > 0.9 * asymp && e1 < 1.5 * asymp, "E_1(10) near asymptotic");
+        assert!(
+            e1 > 0.9 * asymp && e1 < 1.5 * asymp,
+            "E_1(10) near asymptotic"
+        );
     }
 
     #[test]

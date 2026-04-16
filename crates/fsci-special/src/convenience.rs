@@ -2259,7 +2259,7 @@ pub fn kolmogi(p: f64) -> f64 {
     if p.is_nan() {
         return f64::NAN;
     }
-    if p < 0.0 || p > 1.0 {
+    if !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if p == 0.0 {
@@ -2363,7 +2363,7 @@ pub fn smirnovi(n: i32, p: f64) -> f64 {
     if n <= 0 || p.is_nan() {
         return f64::NAN;
     }
-    if p < 0.0 || p > 1.0 {
+    if !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if p == 0.0 {
@@ -3164,9 +3164,7 @@ pub fn minimum(x: f64, y: f64) -> f64 {
 pub fn fmax(x: f64, y: f64) -> f64 {
     if x.is_nan() {
         y
-    } else if y.is_nan() {
-        x
-    } else if x >= y {
+    } else if y.is_nan() || x >= y {
         x
     } else {
         y
@@ -3182,9 +3180,7 @@ pub fn fmax(x: f64, y: f64) -> f64 {
 pub fn fmin(x: f64, y: f64) -> f64 {
     if x.is_nan() {
         y
-    } else if y.is_nan() {
-        x
-    } else if x <= y {
+    } else if y.is_nan() || x <= y {
         x
     } else {
         y
@@ -3328,11 +3324,7 @@ pub fn elu(x: f64, alpha: f64) -> f64 {
     if x.is_nan() || alpha.is_nan() {
         return f64::NAN;
     }
-    if x > 0.0 {
-        x
-    } else {
-        alpha * (x.exp() - 1.0)
-    }
+    if x > 0.0 { x } else { alpha * (x.exp() - 1.0) }
 }
 
 /// Leaky Rectified Linear Unit.
@@ -3347,11 +3339,7 @@ pub fn leaky_relu(x: f64, alpha: f64) -> f64 {
     if x.is_nan() || alpha.is_nan() {
         return f64::NAN;
     }
-    if x > 0.0 {
-        x
-    } else {
-        alpha * x
-    }
+    if x > 0.0 { x } else { alpha * x }
 }
 
 /// Gaussian Error Linear Unit (GELU).
@@ -3691,11 +3679,7 @@ pub fn hardshrink(x: f64, lambda: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
-    if x.abs() > lambda {
-        x
-    } else {
-        0.0
-    }
+    if x.abs() > lambda { x } else { 0.0 }
 }
 
 /// Soft shrinkage function (soft thresholding).
@@ -3929,7 +3913,10 @@ mod tests {
         for n in &[10, 20, 50, 100] {
             for &d in &[0.1, 0.3, 0.5, 0.7] {
                 let s = smirnov(*n, d);
-                assert!(s >= 0.0 && s <= 1.0, "smirnov({n}, {d}) = {s} out of range");
+                assert!(
+                    (0.0..=1.0).contains(&s),
+                    "smirnov({n}, {d}) = {s} out of range"
+                );
             }
         }
     }
@@ -4143,7 +4130,7 @@ mod tests {
         assert_eq!(e, 0);
 
         // Verify roundtrip: ldexp(frexp(x)) == x
-        for &x in &[0.5, 1.0, 2.0, 3.14, 100.0, 0.001] {
+        for &x in &[0.5, 1.0, 2.0, std::f64::consts::PI, 100.0, 0.001] {
             let (m, e) = frexp(x);
             assert!((ldexp(m, e) - x).abs() < 1e-14);
         }

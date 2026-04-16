@@ -1826,11 +1826,10 @@ impl RegularGridInterpolator {
             let mut weight = 1.0;
             let mut flat_idx = 0;
 
-            for dim in 0..ndim {
-                let (base_idx, weights) = &interp_data[dim];
+            for (dim, (base_idx, weights)) in interp_data.iter().enumerate().take(ndim) {
                 // Extract which of the 4 points we're using for this corner
                 let offset = (corner_idx / 4_usize.pow(dim as u32)) % 4;
-                let point_idx = base_idx + offset;
+                let point_idx = *base_idx + offset;
 
                 // Ensure point_idx is in bounds
                 if point_idx >= self.points[dim].len() {
@@ -3238,7 +3237,7 @@ impl RectBivariateSpline {
         }
 
         // Validate degree
-        if kx < 1 || kx > 5 || ky < 1 || ky > 5 {
+        if !(1..=5).contains(&kx) || !(1..=5).contains(&ky) {
             return Err(InterpError::InvalidArgument {
                 detail: format!("spline degree must be 1-5, got kx={}, ky={}", kx, ky),
             });

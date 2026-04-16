@@ -3842,10 +3842,10 @@ mod tests {
     fn rosen_hess_is_symmetric() {
         let x = vec![1.2, 0.8, 1.5];
         let h = rosen_hess(&x);
-        for i in 0..h.len() {
-            for j in i + 1..h.len() {
+        for (i, row) in h.iter().enumerate() {
+            for (j, &entry) in row.iter().enumerate().skip(i + 1) {
                 assert!(
-                    (h[i][j] - h[j][i]).abs() < 1e-12,
+                    (entry - h[j][i]).abs() < 1e-12,
                     "H[{i}][{j}] != H[{j}][{i}]"
                 );
             }

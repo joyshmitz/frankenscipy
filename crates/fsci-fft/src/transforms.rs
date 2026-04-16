@@ -1234,20 +1234,20 @@ fn apply_dct_along_axis(
             if d == axis {
                 continue;
             }
-            let dim_size = if d == axis { 1 } else { shape[d] };
+            let dim_size = shape[d];
             multi_idx[d] = remaining % dim_size;
             remaining /= dim_size;
         }
 
         // Extract the fiber
-        for i in 0..axis_len {
+        for (i, value) in temp.iter_mut().enumerate().take(axis_len) {
             multi_idx[axis] = i;
             let flat_idx: usize = multi_idx
                 .iter()
                 .zip(strides.iter())
                 .map(|(m, s)| m * s)
                 .sum();
-            temp[i] = data[flat_idx];
+            *value = data[flat_idx];
         }
 
         // Apply DCT or IDCT
@@ -1259,14 +1259,14 @@ fn apply_dct_along_axis(
         temp_out.copy_from_slice(&transformed);
 
         // Store back
-        for i in 0..axis_len {
+        for (i, &value) in temp_out.iter().enumerate().take(axis_len) {
             multi_idx[axis] = i;
             let flat_idx: usize = multi_idx
                 .iter()
                 .zip(strides.iter())
                 .map(|(m, s)| m * s)
                 .sum();
-            result[flat_idx] = temp_out[i];
+            result[flat_idx] = value;
         }
     }
 
@@ -1310,20 +1310,20 @@ fn apply_dst_along_axis(
             if d == axis {
                 continue;
             }
-            let dim_size = if d == axis { 1 } else { shape[d] };
+            let dim_size = shape[d];
             multi_idx[d] = remaining % dim_size;
             remaining /= dim_size;
         }
 
         // Extract the fiber
-        for i in 0..axis_len {
+        for (i, value) in temp.iter_mut().enumerate().take(axis_len) {
             multi_idx[axis] = i;
             let flat_idx: usize = multi_idx
                 .iter()
                 .zip(strides.iter())
                 .map(|(m, s)| m * s)
                 .sum();
-            temp[i] = data[flat_idx];
+            *value = data[flat_idx];
         }
 
         // Apply DST or IDST (DST-II forward, DST-III inverse)
@@ -1335,14 +1335,14 @@ fn apply_dst_along_axis(
         temp_out.copy_from_slice(&transformed);
 
         // Store back
-        for i in 0..axis_len {
+        for (i, &value) in temp_out.iter().enumerate().take(axis_len) {
             multi_idx[axis] = i;
             let flat_idx: usize = multi_idx
                 .iter()
                 .zip(strides.iter())
                 .map(|(m, s)| m * s)
                 .sum();
-            result[flat_idx] = temp_out[i];
+            result[flat_idx] = value;
         }
     }
 
@@ -1630,9 +1630,9 @@ fn ln_gamma(x: f64) -> f64 {
     // Lanczos approximation coefficients
     const G: f64 = 7.0;
     const C: [f64; 9] = [
-        0.999_999_999_999_809_93,
+        0.999_999_999_999_809_9,
         676.520_368_121_885_1,
-        -1259.139_216_722_402_9,
+        -1_259.139_216_722_402_8,
         771.323_428_777_653_1,
         -176.615_029_162_140_6,
         12.507_343_278_686_905,

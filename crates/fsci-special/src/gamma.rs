@@ -1092,7 +1092,7 @@ pub fn pdtri(k: f64, p: f64) -> f64 {
     if k.is_nan() || p.is_nan() {
         return f64::NAN;
     }
-    if k < 0.0 || p < 0.0 || p > 1.0 {
+    if k < 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if p == 0.0 {
@@ -1161,7 +1161,7 @@ pub fn chdtri(v: f64, p: f64) -> f64 {
     if v.is_nan() || p.is_nan() {
         return f64::NAN;
     }
-    if v <= 0.0 || p < 0.0 || p > 1.0 {
+    if v <= 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if p == 0.0 {
@@ -1178,7 +1178,7 @@ pub fn chdtri(v: f64, p: f64) -> f64 {
 /// Inverse of the regularized lower incomplete gamma function.
 /// Finds x such that gammainc(a, x) = p.
 fn gammaincinv(a: f64, p: f64) -> f64 {
-    if a <= 0.0 || p < 0.0 || p > 1.0 {
+    if a <= 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
     if p == 0.0 {

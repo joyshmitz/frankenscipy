@@ -8,9 +8,9 @@
 
 use blake3::hash;
 use fsci_conformance::{
-    generate_raptorq_sidecar, run_differential_test, run_stats_packet, write_parity_artifacts,
     ConformanceReport, DifferentialOracleConfig, HarnessConfig, OracleStatus, PacketReport,
-    RaptorQSidecar, StatsPacketFixture,
+    RaptorQSidecar, StatsPacketFixture, generate_raptorq_sidecar, run_differential_test,
+    run_stats_packet, write_parity_artifacts,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;

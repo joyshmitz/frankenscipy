@@ -10,6 +10,8 @@ use fsci_runtime::{
 /// Thread-safe audit ledger handle for synchronous code (uses std::sync::Mutex).
 pub type SyncSharedAuditLedger = Arc<StdMutex<AuditLedger>>;
 
+type EigenDecomposition = (Vec<f64>, Option<Vec<Vec<f64>>>);
+
 /// Create a new shared audit ledger for synchronous contexts.
 #[must_use]
 pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
@@ -2800,9 +2802,9 @@ pub fn solveh_banded(ab: &[Vec<f64>], b: &[f64], lower: bool) -> Result<SolveRes
         // Cholesky factorization for upper band storage
         for j in 0..n {
             let mut diag = cb[0][j];
-            for k in 1..bandwidth_plus_1 {
+            for (k, band_row) in cb.iter().enumerate().take(bandwidth_plus_1).skip(1) {
                 if j >= k {
-                    let ukj = cb[k][j];
+                    let ukj = band_row[j];
                     diag -= ukj * ukj;
                 }
             }
@@ -3101,7 +3103,7 @@ pub fn eig_banded(
     lower: bool,
     eigvals_only: bool,
     options: DecompOptions,
-) -> Result<(Vec<f64>, Option<Vec<Vec<f64>>>), LinalgError> {
+) -> Result<EigenDecomposition, LinalgError> {
     if ab.is_empty() {
         return Err(LinalgError::InvalidArgument {
             detail: "ab must not be empty".to_string(),
@@ -3194,8 +3196,8 @@ pub fn eig_banded(
 
     // Reduce to tridiagonal form using Householder
     let mut q_accum = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        q_accum[i][i] = 1.0;
+    for (i, row) in q_accum.iter_mut().enumerate().take(n) {
+        row[i] = 1.0;
     }
 
     for k in 0..n.saturating_sub(2) {
@@ -3333,7 +3335,7 @@ pub fn eigh_tridiagonal(
     e: &[f64],
     eigvals_only: bool,
     options: DecompOptions,
-) -> Result<(Vec<f64>, Option<Vec<Vec<f64>>>), LinalgError> {
+) -> Result<EigenDecomposition, LinalgError> {
     let n = d.len();
     if n == 0 {
         return Ok((vec![], if eigvals_only { None } else { Some(vec![]) }));
@@ -3367,8 +3369,8 @@ pub fn eigh_tridiagonal(
         None
     } else {
         let mut z = vec![vec![0.0; n]; n];
-        for i in 0..n {
-            z[i][i] = 1.0;
+        for (i, row) in z.iter_mut().enumerate().take(n) {
+            row[i] = 1.0;
         }
         Some(z)
     };
@@ -3461,10 +3463,10 @@ pub fn eigh_tridiagonal(
 
             // Update eigenvectors
             if let Some(ref mut evec) = eigenvectors {
-                for j in 0..n {
-                    let t = evec[j][k];
-                    evec[j][k] = c * t - s * evec[j][k + 1];
-                    evec[j][k + 1] = s * t + c * evec[j][k + 1];
+                for row in evec.iter_mut().take(n) {
+                    let t = row[k];
+                    row[k] = c * t - s * row[k + 1];
+                    row[k + 1] = s * t + c * row[k + 1];
                 }
             }
         }

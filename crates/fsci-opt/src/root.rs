@@ -1601,12 +1601,12 @@ where
         let mut jtf = vec![0.0; n];
         for i in 0..n {
             for j in 0..n {
-                for k in 0..n {
-                    jtj[i][j] += jac[k][i] * jac[k][j];
+                for row in jac.iter().take(n) {
+                    jtj[i][j] += row[i] * row[j];
                 }
             }
-            for k in 0..n {
-                jtf[i] += jac[k][i] * fx[k];
+            for (row, fx_value) in jac.iter().zip(fx.iter()).take(n) {
+                jtf[i] += row[i] * *fx_value;
             }
         }
 
@@ -1615,8 +1615,8 @@ where
         for _ in 0..10 {
             // Build (J^T J + λI)
             let mut lhs = jtj.clone();
-            for i in 0..n {
-                lhs[i][i] += lambda;
+            for (i, row) in lhs.iter_mut().enumerate().take(n) {
+                row[i] += lambda;
             }
 
             // Solve (J^T J + λI) dx = -J^T F
@@ -1697,10 +1697,11 @@ fn solve_lm_system(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
         }
 
         let pivot = aug[col][col];
-        for row in (col + 1)..n {
-            let factor = aug[row][col] / pivot;
-            for j in col..=n {
-                aug[row][j] -= factor * aug[col][j];
+        let pivot_row = aug[col].clone();
+        for row in aug.iter_mut().take(n).skip(col + 1) {
+            let factor = row[col] / pivot;
+            for (entry, pivot_entry) in row[col..=n].iter_mut().zip(pivot_row[col..=n].iter()) {
+                *entry -= factor * *pivot_entry;
             }
         }
     }
@@ -1709,8 +1710,8 @@ fn solve_lm_system(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     let mut x = vec![0.0; n];
     for i in (0..n).rev() {
         let mut sum = aug[i][n];
-        for j in (i + 1)..n {
-            sum -= aug[i][j] * x[j];
+        for (entry, x_value) in aug[i][(i + 1)..n].iter().zip(x[(i + 1)..n].iter()) {
+            sum -= *entry * *x_value;
         }
         x[i] = sum / aug[i][i];
     }
@@ -1726,7 +1727,7 @@ fn solve_small_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     }
 
     // Create augmented matrix
-    let mut aug: Vec<Vec<f64>> = a.iter().map(|row| row.clone()).collect();
+    let mut aug: Vec<Vec<f64>> = a.to_vec();
     let mut rhs = b.to_vec();
 
     // Forward elimination with partial pivoting
@@ -1734,9 +1735,9 @@ fn solve_small_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
         // Find pivot
         let mut max_row = col;
         let mut max_val = aug[col][col].abs();
-        for row in (col + 1)..n {
-            if aug[row][col].abs() > max_val {
-                max_val = aug[row][col].abs();
+        for (row, row_values) in aug.iter().enumerate().take(n).skip(col + 1) {
+            if row_values[col].abs() > max_val {
+                max_val = row_values[col].abs();
                 max_row = row;
             }
         }
@@ -1754,12 +1755,16 @@ fn solve_small_system(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
         }
 
         // Eliminate
-        for row in (col + 1)..n {
-            let factor = aug[row][col] / aug[col][col];
-            for j in col..n {
-                aug[row][j] -= factor * aug[col][j];
+        let pivot = aug[col][col];
+        let pivot_row = aug[col].clone();
+        let rhs_col = rhs[col];
+        for (row, row_values) in aug.iter_mut().enumerate().take(n).skip(col + 1) {
+            let factor = row_values[col] / pivot;
+            for (entry, pivot_entry) in row_values[col..n].iter_mut().zip(pivot_row[col..n].iter())
+            {
+                *entry -= factor * *pivot_entry;
             }
-            rhs[row] -= factor * rhs[col];
+            rhs[row] -= factor * rhs_col;
         }
     }
 
