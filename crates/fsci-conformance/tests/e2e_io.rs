@@ -224,7 +224,7 @@ fn scenario_01_matrix_market() {
             // MM input is column-major [1,2,3,4,5,6], but stored as row-major:
             // Row 0: [1, 4], Row 1: [2, 5], Row 2: [3, 6]
             // So data = [1, 4, 2, 5, 3, 6]
-            let expected = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+            let expected = [1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
             for (i, (&a, &e)) in result.data.iter().zip(expected.iter()).enumerate() {
                 if !approx_eq(a, e, 1e-10) {
                     return Err(format!("data[{i}]: expected {e}, got {a}"));
@@ -542,7 +542,7 @@ fn scenario_04_csv_files() {
                 return Err(format!(
                     "expected 3x3, got {}x{}",
                     data.len(),
-                    data.get(0).map(|r| r.len()).unwrap_or(0)
+                    data.first().map(|r| r.len()).unwrap_or(0)
                 ));
             }
             // Check values row by row
@@ -762,14 +762,9 @@ fn scenario_06_empty_data() {
         "loadtxt('')",
         "empty content",
         "Strict",
-        || {
-            let result = loadtxt("");
-            if result.is_err() {
-                Ok("correctly rejected empty content".to_string())
-            } else {
-                let (rows, cols, _) = result.unwrap();
-                Ok(format!("accepted empty as {}x{}", rows, cols))
-            }
+        || match loadtxt("") {
+            Err(_) => Ok("correctly rejected empty content".to_string()),
+            Ok((rows, cols, _)) => Ok(format!("accepted empty as {}x{}", rows, cols)),
         },
     );
 
@@ -1205,7 +1200,7 @@ fn scenario_11_wav_bit_depth() {
 
             // Check clipping: values should be clamped to [-1, 1]
             for &sample in &wav.data {
-                if sample < -1.0 || sample > 1.0 {
+                if !(-1.0..=1.0).contains(&sample) {
                     return Err(format!("sample out of range: {sample}"));
                 }
             }

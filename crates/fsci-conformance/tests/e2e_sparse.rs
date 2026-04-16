@@ -91,11 +91,10 @@ fn replay_cmd(scenario_id: &str) -> String {
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
     let dir = e2e_output_dir();
-    fs::create_dir_all(&dir)
-        .unwrap_or_else(|e| panic!("failed to create e2e dir {}: {e}", dir.display()));
+    fs::create_dir_all(&dir).expect("failed to create e2e dir");
     let path = dir.join(format!("{scenario_id}.json"));
     let json = serde_json::to_vec_pretty(bundle).expect("serialize bundle");
-    fs::write(&path, &json).unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
+    fs::write(&path, &json).expect("failed to write bundle");
 }
 
 const TOL: f64 = 1e-10;
@@ -906,7 +905,7 @@ fn e2e_011_cg_spd_system() {
         2,
         "compute_rhs",
         "A * x_true",
-        &format!("x_true = [1/n, 2/n, ..., 1]"),
+        "x_true = [1/n, 2/n, ..., 1]",
         &format!("b len={}", b.len()),
         t_start.elapsed().as_nanos(),
         "ok",
@@ -926,7 +925,7 @@ fn e2e_011_cg_spd_system() {
         3,
         "cg_solve",
         "cg",
-        &format!("maxiter=100, tol=1e-10"),
+        "maxiter=100, tol=1e-10",
         &format!("converged={}, iters={}", converged, iterations),
         t_start.elapsed().as_nanos(),
         if converged { "ok" } else { "fail" },
@@ -1014,7 +1013,7 @@ fn e2e_012_gmres_general_system() {
         3,
         "gmres_solve",
         "gmres",
-        &format!("maxiter=50, tol=1e-10"),
+        "maxiter=50, tol=1e-10",
         &format!("converged={}, iters={}", converged, iterations),
         t_start.elapsed().as_nanos(),
         if converged { "ok" } else { "fail" },
@@ -1105,7 +1104,7 @@ fn e2e_013_bicgstab_asymmetric() {
         3,
         "bicgstab_solve",
         "bicgstab",
-        &format!("maxiter=100, tol=1e-10"),
+        "maxiter=100, tol=1e-10",
         &format!("converged={}, iters={}", converged, iterations),
         t_start.elapsed().as_nanos(),
         if converged { "ok" } else { "fail" },
@@ -1188,7 +1187,7 @@ fn e2e_014_connected_components() {
         2,
         "find_components",
         "connected_component_sizes",
-        &format!("expected 2 components"),
+        "expected 2 components",
         &format!("found={}, sizes={:?}", num_components, sizes),
         t_start.elapsed().as_nanos(),
         if pass { "ok" } else { "fail" },

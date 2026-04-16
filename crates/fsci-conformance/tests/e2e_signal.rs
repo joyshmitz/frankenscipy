@@ -105,11 +105,10 @@ fn replay_cmd(scenario_id: &str) -> String {
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
     let dir = e2e_output_dir();
-    fs::create_dir_all(&dir)
-        .unwrap_or_else(|e| panic!("failed to create e2e dir {}: {e}", dir.display()));
+    fs::create_dir_all(&dir).expect("failed to create e2e dir");
     let path = dir.join(format!("{scenario_id}.json"));
     let json = serde_json::to_vec_pretty(bundle).expect("serialize bundle");
-    fs::write(&path, &json).unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
+    fs::write(&path, &json).expect("failed to write bundle");
 }
 
 fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
@@ -777,7 +776,7 @@ fn scenario_08_spectral_features() {
             let flatness = spectral_flatness(&magnitudes);
             // Peaked spectrum should have low flatness (< 1)
             // Flatness = geom_mean / arith_mean, always <= 1
-            if flatness >= 0.0 && flatness <= 1.0 {
+            if (0.0..=1.0).contains(&flatness) {
                 Ok(format!("flatness={flatness:.4}"))
             } else {
                 Err(format!("flatness={flatness:.4} out of range"))
@@ -1166,12 +1165,12 @@ fn scenario_17_filtfilt() {
     // Generate signal with sharp edge
     let n = 500;
     let mut signal = vec![0.0; n];
-    for i in 100..400 {
-        signal[i] = 1.0;
+    for sample in signal.iter_mut().take(400).skip(100) {
+        *sample = 1.0;
     }
     // Add noise
-    for i in 0..n {
-        signal[i] += 0.1 * ((i * 37) as f64 % 1.0 - 0.5);
+    for (i, sample) in signal.iter_mut().enumerate().take(n) {
+        *sample += 0.1 * ((i * 37) as f64 % 1.0 - 0.5);
     }
 
     runner.record_step(

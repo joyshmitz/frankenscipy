@@ -215,12 +215,10 @@ fn environment_info() -> EnvironmentInfo {
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
     let dir = e2e_output_dir();
-    fs::create_dir_all(&dir)
-        .unwrap_or_else(|error| panic!("failed to create {}: {error}", dir.display()));
+    fs::create_dir_all(&dir).expect("failed to create output dir");
     let path = dir.join(format!("{scenario_id}.json"));
     let bytes = serde_json::to_vec_pretty(bundle).expect("serialize forensic bundle");
-    fs::write(&path, bytes)
-        .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+    fs::write(&path, bytes).expect("failed to write forensic bundle");
 }
 
 fn rosenbrock(x: &[f64]) -> f64 {
@@ -897,7 +895,7 @@ fn e2e_p2c003_09_curve_fit_exponential() {
             return Err(format!(
                 "unexpected pcov shape: {}x{}",
                 result.pcov.len(),
-                result.pcov.get(0).map(|r| r.len()).unwrap_or(0)
+                result.pcov.first().map(|r| r.len()).unwrap_or(0)
             ));
         }
 

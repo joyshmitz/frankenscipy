@@ -584,8 +584,8 @@ fn e2e_ndimage_edge_detection() {
             // Edge should be detected in column 2-3 transition
             // Values should be non-zero at the edge
             let edge_col = 2; // column just before transition
-            let edge_val = result.data[1 * 6 + edge_col]; // row 1, col 2
-            edge_val.abs() > 0.1 || result.data[1 * 6 + 3].abs() > 0.1
+            let edge_val = result.data[6 + edge_col]; // row 1, col 2
+            edge_val.abs() > 0.1 || result.data[6 + 3].abs() > 0.1
         }
         Err(_) => false,
     };
@@ -608,8 +608,7 @@ fn e2e_ndimage_edge_detection() {
     let pass = match &prewitt_result {
         Ok(result) => {
             // Similar to Sobel, should detect the vertical edge
-            let has_edge = result.data.iter().any(|&v| v.abs() > 0.1);
-            has_edge
+            result.data.iter().any(|&v| v.abs() > 0.1)
         }
         Err(_) => false,
     };
@@ -632,8 +631,7 @@ fn e2e_ndimage_edge_detection() {
     let pass = match &laplace_result {
         Ok(result) => {
             // Laplacian should respond at edges
-            let has_response = result.data.iter().any(|&v| v.abs() > 0.1);
-            has_response
+            result.data.iter().any(|&v| v.abs() > 0.1)
         }
         Err(_) => false,
     };

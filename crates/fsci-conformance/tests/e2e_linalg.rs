@@ -99,11 +99,10 @@ fn replay_cmd(scenario_id: &str) -> String {
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
     let dir = e2e_output_dir();
-    fs::create_dir_all(&dir)
-        .unwrap_or_else(|e| panic!("failed to create e2e dir {}: {e}", dir.display()));
+    fs::create_dir_all(&dir).expect("failed to create e2e dir");
     let path = dir.join(format!("{scenario_id}.json"));
     let json = serde_json::to_vec_pretty(bundle).expect("serialize bundle");
-    fs::write(&path, &json).unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
+    fs::write(&path, &json).expect("failed to write bundle");
 }
 
 fn mat_mul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
@@ -1039,15 +1038,15 @@ fn e2e_p2c002_12_lu_decomposition() {
         || {
             let l = &lu_result.as_ref().unwrap().l;
             let n = l.len();
-            for i in 0..n {
+            for (i, row) in l.iter().enumerate().take(n) {
                 // Diagonal should be 1
-                if (l[i][i] - 1.0).abs() > 1e-12 {
-                    return Err(format!("L[{i},{i}] = {} != 1", l[i][i]));
+                if (row[i] - 1.0).abs() > 1e-12 {
+                    return Err(format!("L[{i},{i}] = {} != 1", row[i]));
                 }
                 // Upper part should be 0
-                for j in (i + 1)..n {
-                    if l[i][j].abs() > 1e-12 {
-                        return Err(format!("L[{i},{j}] = {} != 0", l[i][j]));
+                for (j, &value) in row.iter().enumerate().take(n).skip(i + 1) {
+                    if value.abs() > 1e-12 {
+                        return Err(format!("L[{i},{j}] = {} != 0", value));
                     }
                 }
             }
@@ -1148,9 +1147,9 @@ fn e2e_p2c002_14_svd_decomposition() {
             // Build U @ diag(S) @ Vt
             // U is m×k, S is k, Vt is k×n
             let mut us = vec![vec![0.0; k]; m];
-            for i in 0..m {
-                for j in 0..k {
-                    us[i][j] = res.u[i][j] * res.s[j];
+            for (i, row) in us.iter_mut().enumerate().take(m) {
+                for (j, value) in row.iter_mut().enumerate().take(k) {
+                    *value = res.u[i][j] * res.s[j];
                 }
             }
             let reconstructed = mat_mul(&us, &res.vt);
@@ -1251,10 +1250,10 @@ fn e2e_p2c002_15_cholesky_decomposition() {
         || {
             let l = chol_l.as_ref().unwrap();
             let n = l.len();
-            for i in 0..n {
-                for j in (i + 1)..n {
-                    if l[i][j].abs() > 1e-12 {
-                        return Err(format!("L[{i},{j}] = {} != 0", l[i][j]));
+            for (i, row) in l.iter().enumerate().take(n) {
+                for (j, &value) in row.iter().enumerate().take(n).skip(i + 1) {
+                    if value.abs() > 1e-12 {
+                        return Err(format!("L[{i},{j}] = {} != 0", value));
                     }
                 }
             }

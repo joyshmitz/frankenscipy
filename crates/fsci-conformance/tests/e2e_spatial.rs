@@ -380,7 +380,7 @@ fn scenario_02_pdist() {
                     return Err(format!("index {i}: expected {e}, got {c}"));
                 }
             }
-            Ok(format!("cityblock distances verified"))
+            Ok("cityblock distances verified".to_string())
         },
     );
 
@@ -425,9 +425,9 @@ fn scenario_03_squareform() {
             }
 
             // Check symmetry
-            for i in 0..4 {
-                for j in 0..4 {
-                    if !approx_eq(matrix[i][j], matrix[j][i], 1e-10) {
+            for (i, row) in matrix.iter().enumerate().take(4) {
+                for (j, &value) in row.iter().enumerate().take(4) {
+                    if !approx_eq(value, matrix[j][i], 1e-10) {
                         return Err(format!("not symmetric at [{i}][{j}]"));
                     }
                 }
@@ -508,7 +508,7 @@ fn scenario_04_cdist() {
                 }
             }
 
-            Ok(format!("2x3 distance matrix verified"))
+            Ok("2x3 distance matrix verified".to_string())
         },
     );
 
@@ -1109,9 +1109,8 @@ fn scenario_11_pdist_cdist_consistency() {
             // Convert condensed to matrix and compare
             let n = points.len();
             let mut idx = 0;
-            for i in 0..n {
-                for j in (i + 1)..n {
-                    let cdist_val = matrix[i][j];
+            for (i, row) in matrix.iter().enumerate().take(n) {
+                for (j, &cdist_val) in row.iter().enumerate().take(n).skip(i + 1) {
                     let pdist_val = condensed[idx];
                     if !approx_eq(cdist_val, pdist_val, 1e-10) {
                         return Err(format!(

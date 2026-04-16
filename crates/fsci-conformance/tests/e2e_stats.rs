@@ -1978,13 +1978,8 @@ fn e2e_021_normality_tests() {
 
     // D'Agostino-Pearson normaltest: bimodal should fail
     let t = Instant::now();
-    let mut bimodal: Vec<f64> = vec![];
-    for _ in 0..25 {
-        bimodal.push(0.0);
-    }
-    for _ in 0..25 {
-        bimodal.push(10.0);
-    }
+    let mut bimodal: Vec<f64> = vec![0.0; 25];
+    bimodal.extend([10.0; 25]);
     let result = normaltest(&bimodal);
     // Bimodal should reject normality
     let pass = result.pvalue < 0.05;

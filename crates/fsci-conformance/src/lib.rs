@@ -2947,7 +2947,7 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                 );
             }
             if exp_dists.len() != dists.len() {
-                return (false, format!("vq dists length mismatch"));
+                return (false, "vq dists length mismatch".to_string());
             }
             for (i, (&e, &g)) in exp_dists.iter().zip(dists.iter()).enumerate() {
                 let diff = (e - g).abs();
@@ -3795,7 +3795,7 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
                     return (false, format!("a[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
-            (true, format!("iir coeffs match"))
+            (true, "iir coeffs match".to_string())
         }
         ("freqz_result", SignalObserved::Freqz { w, h_mag, h_phase }) => {
             let exp_w = case.expected.w.as_ref().cloned().unwrap_or_default();

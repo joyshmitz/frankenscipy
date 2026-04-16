@@ -104,11 +104,10 @@ fn replay_cmd(scenario_id: &str) -> String {
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
     let dir = e2e_output_dir();
-    fs::create_dir_all(&dir)
-        .unwrap_or_else(|e| panic!("failed to create e2e dir {}: {e}", dir.display()));
+    fs::create_dir_all(&dir).expect("failed to create e2e dir");
     let path = dir.join(format!("{scenario_id}.json"));
     let json = serde_json::to_vec_pretty(bundle).expect("serialize bundle");
-    fs::write(&path, &json).unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
+    fs::write(&path, &json).expect("failed to write bundle");
 }
 
 /// Generate well-separated clusters for testing
@@ -396,7 +395,7 @@ fn scenario_03_dbscan() {
             let n_clusters = result.n_clusters;
             let n_noise = result.labels.iter().filter(|&&l| l == -1).count();
             // With well-separated data and reasonable eps, should find ~3 clusters
-            if n_clusters >= 2 && n_clusters <= 5 {
+            if (2..=5).contains(&n_clusters) {
                 Ok(format!("n_clusters={}, n_noise={}", n_clusters, n_noise))
             } else {
                 Err(format!("unexpected n_clusters={}", n_clusters))
@@ -428,7 +427,7 @@ fn scenario_04_clustering_metrics() {
         || {
             let score = silhouette_score(&data, &labels);
             // Well-separated clusters should have high silhouette (> 0.5)
-            if score >= -1.0 && score <= 1.0 {
+            if (-1.0..=1.0).contains(&score) {
                 if score > 0.3 {
                     Ok(format!("silhouette={score:.4} (good separation)"))
                 } else {
@@ -501,7 +500,7 @@ fn scenario_05_external_validation() {
         || {
             let score = adjusted_rand_score(&labels_true, &labels_pred);
             // ARI ranges from -1 to 1, with 1 being perfect agreement
-            if score >= -1.0 && score <= 1.0 {
+            if (-1.0..=1.0).contains(&score) {
                 Ok(format!("adjusted_rand={score:.4}"))
             } else {
                 Err(format!("ARI out of range: {score}"))
@@ -517,7 +516,7 @@ fn scenario_05_external_validation() {
         || {
             let score = normalized_mutual_info(&labels_true, &labels_pred);
             // NMI ranges from 0 to 1
-            if score >= 0.0 && score <= 1.0 + 1e-10 {
+            if (0.0..=1.0 + 1e-10).contains(&score) {
                 Ok(format!("nmi={score:.4}"))
             } else {
                 Err(format!("NMI out of range: {score}"))
@@ -535,7 +534,7 @@ fn scenario_05_external_validation() {
             let c = completeness_score(&labels_true, &labels_pred);
             let v = v_measure_score(&labels_true, &labels_pred);
             // All should be in [0, 1]
-            if h >= 0.0 && h <= 1.0 && c >= 0.0 && c <= 1.0 && v >= 0.0 && v <= 1.0 {
+            if (0.0..=1.0).contains(&h) && (0.0..=1.0).contains(&c) && (0.0..=1.0).contains(&v) {
                 // V-measure should be harmonic mean of h and c
                 let expected_v = if h + c > 0.0 {
                     2.0 * h * c / (h + c)
