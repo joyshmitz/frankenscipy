@@ -17,8 +17,8 @@ pub use bessel::{
     spherical_kn, spherical_yn, y0, y1, yn, yv,
 };
 pub use beta::{
-    BETA_DISPATCH_PLAN, beta, betainc, betainc_scalar, betaln, betaln_scalar, btdtr, btdtri, fdtr,
-    fdtri, stdtr, stdtri,
+    BETA_DISPATCH_PLAN, bdtr, bdtrc, bdtri, beta, betainc, betainc_scalar, betaln, betaln_scalar,
+    btdtr, btdtri, fdtr, fdtri, stdtr, stdtri,
 };
 pub use convenience::{
     CONVENIENCE_DISPATCH_PLAN,

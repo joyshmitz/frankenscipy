@@ -217,6 +217,87 @@ pub fn stdtri(v: f64, p: f64) -> f64 {
     sign * (v * (1.0 - z) / z).sqrt()
 }
 
+/// Binomial distribution CDF.
+///
+/// Returns P(X <= k) where X follows a binomial distribution
+/// with n trials and success probability p.
+///
+/// Matches `scipy.special.bdtr(k, n, p)`.
+#[must_use]
+pub fn bdtr(k: f64, n: f64, p: f64) -> f64 {
+    if k.is_nan() || n.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if n < 0.0 || p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if k < 0.0 {
+        return 0.0;
+    }
+    if k >= n {
+        return 1.0;
+    }
+
+    // bdtr(k, n, p) = I(1-p; n-k, k+1) = betainc(n-k, k+1, 1-p)
+    // Or equivalently: 1 - betainc(k+1, n-k, p)
+    btdtr(n - k, k + 1.0, 1.0 - p)
+}
+
+/// Binomial distribution survival function.
+///
+/// Returns P(X > k) where X follows a binomial distribution
+/// with n trials and success probability p.
+///
+/// Matches `scipy.special.bdtrc(k, n, p)`.
+#[must_use]
+pub fn bdtrc(k: f64, n: f64, p: f64) -> f64 {
+    if k.is_nan() || n.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if n < 0.0 || p < 0.0 || p > 1.0 {
+        return f64::NAN;
+    }
+    if k < 0.0 {
+        return 1.0;
+    }
+    if k >= n {
+        return 0.0;
+    }
+
+    // bdtrc(k, n, p) = betainc(k+1, n-k, p)
+    btdtr(k + 1.0, n - k, p)
+}
+
+/// Inverse binomial distribution CDF.
+///
+/// Returns p such that P(X <= k) = y where X follows a binomial distribution
+/// with n trials.
+///
+/// Matches `scipy.special.bdtri(k, n, y)`.
+#[must_use]
+pub fn bdtri(k: f64, n: f64, y: f64) -> f64 {
+    if k.is_nan() || n.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if n < 0.0 || y < 0.0 || y > 1.0 || k < 0.0 || k > n {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return 1.0;
+    }
+    if y == 1.0 {
+        return 0.0;
+    }
+    if k >= n {
+        return 0.0;
+    }
+
+    // bdtr(k, n, p) = betainc(n-k, k+1, 1-p) = y
+    // So 1-p = btdtri(n-k, k+1, y)
+    // Thus p = 1 - btdtri(n-k, k+1, y)
+    1.0 - btdtri(n - k, k + 1.0, y)
+}
+
 fn map_real_binary<F>(
     function: &'static str,
     a: &SpecialTensor,
