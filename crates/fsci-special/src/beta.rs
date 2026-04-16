@@ -84,6 +84,29 @@ pub fn btdtr(a: f64, b: f64, x: f64) -> f64 {
     betainc_scalar(a, b, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
+/// Beta distribution survival function.
+///
+/// Returns P(X > x) = 1 - btdtr(a, b, x).
+///
+/// Matches `scipy.special.btdtrc(a, b, x)`.
+#[must_use]
+pub fn btdtrc(a: f64, b: f64, x: f64) -> f64 {
+    if a.is_nan() || b.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if a <= 0.0 || b <= 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 {
+        return 1.0;
+    }
+    if x >= 1.0 {
+        return 0.0;
+    }
+    // btdtrc(a, b, x) = 1 - betainc(a, b, x) = betainc(b, a, 1-x)
+    betainc_scalar(b, a, 1.0 - x, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
 /// Inverse beta distribution CDF.
 ///
 /// Matches `scipy.special.btdtri(a, b, y)`.
@@ -823,6 +846,22 @@ fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn btdtrc_complement() {
+        // btdtr + btdtrc should equal 1
+        for &a in &[0.5, 1.0, 2.0, 5.0] {
+            for &b in &[0.5, 1.0, 2.0, 5.0] {
+                for &x in &[0.1, 0.3, 0.5, 0.7, 0.9] {
+                    let sum = btdtr(a, b, x) + btdtrc(a, b, x);
+                    assert!(
+                        (sum - 1.0).abs() < 1e-10,
+                        "btdtr({a}, {b}, {x}) + btdtrc = {sum}, expected 1.0"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn fdtrc_complement() {
