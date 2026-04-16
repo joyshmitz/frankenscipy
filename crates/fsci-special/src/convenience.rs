@@ -560,11 +560,7 @@ pub fn sici(x: f64) -> (f64, f64) {
     };
 
     // Si(-x) = -Si(x), Ci(-x) = Ci(x) + i*π (we ignore imaginary part for real x > 0)
-    if x < 0.0 {
-        (-si, ci)
-    } else {
-        (si, ci)
-    }
+    if x < 0.0 { (-si, ci) } else { (si, ci) }
 }
 
 /// Power series for Si and Ci.
@@ -682,11 +678,7 @@ pub fn shichi(x: f64) -> (f64, f64) {
     let (shi, chi) = shichi_series(ax);
 
     // Shi(-x) = -Shi(x), Chi(-x) = Chi(x)
-    if x < 0.0 {
-        (-shi, chi)
-    } else {
-        (shi, chi)
-    }
+    if x < 0.0 { (-shi, chi) } else { (shi, chi) }
 }
 
 /// Power series for Shi and Chi.

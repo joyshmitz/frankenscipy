@@ -104,7 +104,7 @@ pub use gamma::{
     gammaincc, gammaincc_scalar, gammaln, gammaln_scalar, gdtr, gdtri, perm, polygamma, rgamma,
     zeta, zetac,
 };
-pub use hyper::{HYPER_DISPATCH_PLAN, hyp1f1, hyp2f1};
+pub use hyper::{HYPER_DISPATCH_PLAN, hyp0f1, hyp0f1_scalar, hyp1f1, hyp2f1};
 pub use orthopoly::{
     eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite, eval_hermitenorm,
     eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt, eval_sh_chebyu, eval_sh_legendre,
@@ -2329,5 +2329,44 @@ mod tests {
         let (shi_neg, chi_neg) = shichi(-2.0);
         assert!((shi_neg + shi_pos).abs() < 1e-10);
         assert!((chi_neg - chi_pos).abs() < 1e-10);
+    }
+
+    // ── hyp0f1 tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn hyp0f1_at_zero() {
+        // 0F1(; b; 0) = 1 for any b
+        let result = hyp0f1_scalar(2.0, 0.0, RuntimeMode::Strict).unwrap();
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn hyp0f1_small_positive() {
+        // 0F1(; 1; z) = I_0(2*sqrt(z)) for z > 0
+        // At z = 1: 0F1(; 1; 1) = I_0(2) ≈ 2.2795853
+        let result = hyp0f1_scalar(1.0, 1.0, RuntimeMode::Strict).unwrap();
+        assert!((result - 2.2795853).abs() < 0.01, "0F1(;1;1) = {result}");
+    }
+
+    #[test]
+    fn hyp0f1_negative_z() {
+        // 0F1(; 1; -z²/4) = J_0(z) for integer order
+        // 0F1(; 1; -1) = J_0(2) ≈ 0.2238907
+        let result = hyp0f1_scalar(1.0, -1.0, RuntimeMode::Strict).unwrap();
+        assert!((result - 0.2238907).abs() < 0.01, "0F1(;1;-1) = {result}");
+    }
+
+    #[test]
+    fn hyp0f1_pole() {
+        // 0F1(; 0; z) is undefined (pole at b=0)
+        let result = hyp0f1_scalar(0.0, 1.0, RuntimeMode::Strict).unwrap();
+        assert!(result.is_nan());
+    }
+
+    #[test]
+    fn hyp0f1_hardened_pole() {
+        // In hardened mode, pole should return error
+        let result = hyp0f1_scalar(-1.0, 1.0, RuntimeMode::Hardened);
+        assert!(result.is_err());
     }
 }

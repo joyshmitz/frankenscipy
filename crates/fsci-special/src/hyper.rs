@@ -109,6 +109,159 @@ pub fn hyp1f1(
     }
 }
 
+/// Confluent hypergeometric limit function 0F1(; b; z).
+///
+/// Also known as the regularized confluent hypergeometric limit function.
+/// Defined as: 0F1(; b; z) = Σ_{n=0}^∞ z^n / ((b)_n * n!)
+///
+/// Related to Bessel functions: J_n(x) = (x/2)^n / Γ(n+1) * 0F1(; n+1; -x²/4)
+///
+/// Matches `scipy.special.hyp0f1(b, z)`.
+///
+/// # Arguments
+/// * `b` - Parameter (must not be a non-positive integer)
+/// * `z` - Argument
+///
+/// # Returns
+/// Value of 0F1(; b; z)
+pub fn hyp0f1(b: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    match (b, z) {
+        (SpecialTensor::RealScalar(b_val), SpecialTensor::RealScalar(z_val)) => {
+            let result = hyp0f1_scalar(*b_val, *z_val, mode)?;
+            Ok(SpecialTensor::RealScalar(result))
+        }
+        (SpecialTensor::RealScalar(b_val), SpecialTensor::RealVec(z_vec)) => {
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp0f1_scalar(*b_val, zi, mode)?);
+            }
+            Ok(SpecialTensor::RealVec(results))
+        }
+        _ => Err(SpecialError {
+            function: "hyp0f1",
+            kind: SpecialErrorKind::NotYetImplemented,
+            mode,
+            detail: "complex parameter support for hyp0f1 is not yet implemented",
+        }),
+    }
+}
+
+/// Scalar implementation of 0F1(; b; z).
+pub fn hyp0f1_scalar(b: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    // Check for pole at non-positive integer b
+    if b <= 0.0 && b == b.floor() {
+        if mode == RuntimeMode::Hardened {
+            return Err(SpecialError {
+                function: "hyp0f1",
+                kind: SpecialErrorKind::PoleInput,
+                mode,
+                detail: "hyp0f1: b must not be a non-positive integer",
+            });
+        }
+        return Ok(f64::NAN);
+    }
+
+    // Handle special cases
+    if z == 0.0 {
+        return Ok(1.0);
+    }
+
+    // For small |z|, use direct series
+    if z.abs() < 50.0 {
+        return Ok(hyp0f1_series(b, z));
+    }
+
+    // For large |z|, use asymptotic expansion
+    Ok(hyp0f1_asymptotic(b, z))
+}
+
+/// Power series for 0F1(; b; z).
+/// 0F1(; b; z) = Σ_{n=0}^∞ z^n / ((b)_n * n!)
+fn hyp0f1_series(b: f64, z: f64) -> f64 {
+    let mut sum = 1.0;
+    let mut term = 1.0;
+
+    for n in 1..300 {
+        let nf = n as f64;
+        // term_n = term_{n-1} * z / (n * (b + n - 1))
+        term *= z / (nf * (b + nf - 1.0));
+        sum += term;
+
+        if term.abs() < 1e-16 * sum.abs() {
+            break;
+        }
+        if !sum.is_finite() {
+            break;
+        }
+    }
+
+    sum
+}
+
+/// Asymptotic expansion for 0F1(; b; z) for large |z|.
+/// Uses relation to Bessel functions.
+fn hyp0f1_asymptotic(b: f64, z: f64) -> f64 {
+    // 0F1(; b; z) is related to Bessel functions:
+    // 0F1(; b; -x²/4) = Γ(b) * (x/2)^(1-b) * J_{b-1}(x)  for x > 0
+    // 0F1(; b; x²/4) = Γ(b) * (x/2)^(1-b) * I_{b-1}(x)   for x > 0
+    //
+    // For large positive z: use modified Bessel I
+    // For large negative z: use Bessel J
+
+    // Compute gamma(b) via exp(gammaln(b))
+    // Use gammaln_scalar with Strict mode (won't fail for b > 0)
+    let ln_gamma_b = crate::gamma::gammaln_scalar(b, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let gamma_b = ln_gamma_b.exp();
+
+    if z > 0.0 {
+        // z = x²/4, so x = 2*sqrt(z)
+        let x = 2.0 * z.sqrt();
+        let nu = b - 1.0;
+
+        // 0F1(; b; z) = Γ(b) * z^((1-b)/2) * I_{b-1}(x)
+        let i_val = bessel_i_asymptotic(nu, x);
+        gamma_b * z.powf((1.0 - b) / 2.0) * i_val
+    } else {
+        // z = -x²/4, so x = 2*sqrt(-z)
+        let x = 2.0 * (-z).sqrt();
+        let nu = b - 1.0;
+
+        // 0F1(; b; z) = Γ(b) * (-z)^((1-b)/2) * J_{b-1}(x)
+        let j_val = bessel_j_asymptotic(nu, x);
+        gamma_b * (-z).powf((1.0 - b) / 2.0) * j_val
+    }
+}
+
+/// Asymptotic approximation for I_nu(x) for large x.
+fn bessel_i_asymptotic(nu: f64, x: f64) -> f64 {
+    // I_nu(x) ~ exp(x) / sqrt(2*pi*x) * (1 - (4*nu²-1)/(8x) + ...)
+    let coeff = (2.0 * std::f64::consts::PI * x).sqrt().recip();
+    let mu = 4.0 * nu * nu;
+
+    let mut sum = 1.0;
+    let mut term = 1.0;
+    let x_inv = 1.0 / x;
+
+    for k in 1..10 {
+        let kf = k as f64;
+        term *= -(mu - (2.0 * kf - 1.0).powi(2)) / (8.0 * kf) * x_inv;
+        sum += term;
+        if term.abs() < 1e-15 {
+            break;
+        }
+    }
+
+    x.exp() * coeff * sum
+}
+
+/// Asymptotic approximation for J_nu(x) for large x.
+fn bessel_j_asymptotic(nu: f64, x: f64) -> f64 {
+    // J_nu(x) ~ sqrt(2/(pi*x)) * cos(x - nu*pi/2 - pi/4)
+    let phase = x - nu * std::f64::consts::FRAC_PI_2 - std::f64::consts::FRAC_PI_4;
+    let amplitude = (2.0 / (std::f64::consts::PI * x)).sqrt();
+    amplitude * phase.cos()
+}
+
 /// Gauss hypergeometric function 2F1(a, b; c; z).
 ///
 /// Supports real parameters with real or complex scalar/vector `z` inputs.

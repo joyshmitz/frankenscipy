@@ -979,11 +979,7 @@ pub fn factorial2(n: i64) -> f64 {
     match n.cmp(&0) {
         std::cmp::Ordering::Less => {
             // (-1)!! = 1 by convention, others are 0
-            if n == -1 {
-                1.0
-            } else {
-                0.0
-            }
+            if n == -1 { 1.0 } else { 0.0 }
         }
         std::cmp::Ordering::Equal => 1.0, // 0!! = 1
         std::cmp::Ordering::Greater => {
