@@ -2810,6 +2810,56 @@ impl ContinuousDistribution for Pearson3 {
     }
 }
 
+/// Exponentially modified normal distribution.
+///
+/// Matches `scipy.stats.exponnorm`.
+pub struct ExponNorm {
+    pub k: f64,
+}
+
+impl ExponNorm {
+    #[must_use]
+    pub fn new(k: f64) -> Self {
+        assert!(k.is_finite() && k > 0.0, "k must be positive and finite");
+        Self { k }
+    }
+}
+
+impl ContinuousDistribution for ExponNorm {
+    fn pdf(&self, x: f64) -> f64 {
+        let inv_k = 1.0 / self.k;
+        let exp_arg = inv_k * (0.5 * inv_k - x);
+        (exp_arg + fsci_special::log_ndtr(x - inv_k)).exp() / self.k
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let inv_k = 1.0 / self.k;
+        let exp_arg = inv_k * (0.5 * inv_k - x);
+        standard_normal_cdf(x) - (exp_arg + fsci_special::log_ndtr(x - inv_k)).exp()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        ppf_bisection(|x| self.cdf(x), q, self.mean(), self.std())
+    }
+
+    fn mean(&self) -> f64 {
+        self.k
+    }
+
+    fn var(&self) -> f64 {
+        1.0 + self.k * self.k
+    }
+}
+
 /// Generalized Extreme Value (GEV) distribution.
 ///
 /// Matches `scipy.stats.genextreme`.
@@ -12595,6 +12645,49 @@ mod tests {
 
         assert_close(dist.mean(), 0.0, 1e-12, "Pearson3 mean");
         assert_close(dist.var(), 1.0, 1e-12, "Pearson3 variance");
+    }
+
+    #[test]
+    fn exponnorm_pdf_cdf_match_scipy_reference_values() {
+        let dist = ExponNorm::new(1.5);
+        let cases = [
+            (-2.0, 0.012_098_174_949_533_125, 0.004_602_869_523_879_505),
+            (-1.0, 0.077_497_646_225_164_67, 0.042_408_784_593_710_086),
+            (0.0, 0.210_216_679_964_559_62, 0.184_674_980_053_160_58),
+            (1.0, 0.269_534_564_286_752_27, 0.437_042_899_638_414_53),
+            (2.0, 0.199_444_595_909_829_16, 0.678_082_974_187_077_1),
+            (4.0, 0.057_824_732_034_141_49, 0.913_231_230_706_954_7),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("ExponNorm pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("ExponNorm cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn exponnorm_ppf_roundtrip_matches_scipy_reference_values() {
+        let dist = ExponNorm::new(1.5);
+        let cases = [
+            (0.1, -0.475_357_491_648_256),
+            (0.25, 0.287_818_458_047_716_5),
+            (0.5, 1.236_654_259_449_335_7),
+            (0.75, 2.399_177_439_596_912),
+            (0.9, 3.786_999_526_289_809),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-11, &format!("ExponNorm ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("ExponNorm cdf(ppf({q}))"));
+        }
+    }
+
+    #[test]
+    fn exponnorm_mean_and_variance_match_closed_form() {
+        let dist = ExponNorm::new(1.5);
+        assert_close(dist.mean(), 1.5, 1e-12, "ExponNorm mean");
+        assert_close(dist.var(), 3.25, 1e-12, "ExponNorm variance");
     }
 
     #[test]
