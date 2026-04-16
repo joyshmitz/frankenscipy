@@ -2974,6 +2974,91 @@ pub fn signbit(x: f64) -> bool {
     x.is_sign_negative()
 }
 
+/// Test if x is NaN.
+///
+/// Matches `numpy.isnan(x)`.
+#[must_use]
+pub fn isnan(x: f64) -> bool {
+    x.is_nan()
+}
+
+/// Test if x is positive or negative infinity.
+///
+/// Matches `numpy.isinf(x)`.
+#[must_use]
+pub fn isinf(x: f64) -> bool {
+    x.is_infinite()
+}
+
+/// Test if x is finite (not infinity or NaN).
+///
+/// Matches `numpy.isfinite(x)`.
+#[must_use]
+pub fn isfinite(x: f64) -> bool {
+    x.is_finite()
+}
+
+/// Test if x is positive infinity.
+///
+/// Matches `numpy.isposinf(x)`.
+#[must_use]
+pub fn isposinf(x: f64) -> bool {
+    x == f64::INFINITY
+}
+
+/// Test if x is negative infinity.
+///
+/// Matches `numpy.isneginf(x)`.
+#[must_use]
+pub fn isneginf(x: f64) -> bool {
+    x == f64::NEG_INFINITY
+}
+
+/// Return 1/x (reciprocal).
+///
+/// Matches `numpy.reciprocal(x)`.
+#[must_use]
+pub fn reciprocal(x: f64) -> f64 {
+    1.0 / x
+}
+
+/// Return x² (square).
+///
+/// Matches `numpy.square(x)`.
+#[must_use]
+pub fn square(x: f64) -> f64 {
+    x * x
+}
+
+/// Return the positive part of x (max(x, 0)).
+///
+/// Matches `numpy.positive(x)` conceptually, though numpy.positive
+/// just returns x. This matches the mathematical positive part [x]⁺.
+#[must_use]
+pub fn positive(x: f64) -> f64 {
+    if x.is_nan() {
+        f64::NAN
+    } else if x > 0.0 {
+        x
+    } else {
+        0.0
+    }
+}
+
+/// Return the negative part of x (max(-x, 0)).
+///
+/// This matches the mathematical negative part [x]⁻ = max(-x, 0).
+#[must_use]
+pub fn negative(x: f64) -> f64 {
+    if x.is_nan() {
+        f64::NAN
+    } else if x < 0.0 {
+        -x
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3443,5 +3528,70 @@ mod tests {
         assert!(!signbit(0.0));
         // Negative zero
         assert!(signbit(-0.0));
+    }
+
+    #[test]
+    fn float_classification() {
+        // isnan
+        assert!(isnan(f64::NAN));
+        assert!(!isnan(1.0));
+        assert!(!isnan(f64::INFINITY));
+
+        // isinf
+        assert!(isinf(f64::INFINITY));
+        assert!(isinf(f64::NEG_INFINITY));
+        assert!(!isinf(1.0));
+        assert!(!isinf(f64::NAN));
+
+        // isfinite
+        assert!(isfinite(1.0));
+        assert!(isfinite(0.0));
+        assert!(!isfinite(f64::INFINITY));
+        assert!(!isfinite(f64::NEG_INFINITY));
+        assert!(!isfinite(f64::NAN));
+
+        // isposinf
+        assert!(isposinf(f64::INFINITY));
+        assert!(!isposinf(f64::NEG_INFINITY));
+        assert!(!isposinf(1.0));
+
+        // isneginf
+        assert!(isneginf(f64::NEG_INFINITY));
+        assert!(!isneginf(f64::INFINITY));
+        assert!(!isneginf(-1.0));
+    }
+
+    #[test]
+    fn reciprocal_basic() {
+        assert!((reciprocal(2.0) - 0.5).abs() < 1e-14);
+        assert!((reciprocal(4.0) - 0.25).abs() < 1e-14);
+        assert!((reciprocal(-2.0) - (-0.5)).abs() < 1e-14);
+        assert!(reciprocal(0.0).is_infinite());
+    }
+
+    #[test]
+    fn square_basic() {
+        assert!((square(2.0) - 4.0).abs() < 1e-14);
+        assert!((square(3.0) - 9.0).abs() < 1e-14);
+        assert!((square(-2.0) - 4.0).abs() < 1e-14);
+        assert!((square(0.0) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn positive_negative_parts() {
+        // Positive part
+        assert!((positive(3.0) - 3.0).abs() < 1e-14);
+        assert!((positive(-3.0) - 0.0).abs() < 1e-14);
+        assert!((positive(0.0) - 0.0).abs() < 1e-14);
+
+        // Negative part
+        assert!((negative(3.0) - 0.0).abs() < 1e-14);
+        assert!((negative(-3.0) - 3.0).abs() < 1e-14);
+        assert!((negative(0.0) - 0.0).abs() < 1e-14);
+
+        // positive(x) + negative(x) == |x|
+        for &x in &[-3.0, -1.0, 0.0, 1.0, 3.0] {
+            assert!((positive(x) + negative(x) - x.abs()).abs() < 1e-14);
+        }
     }
 }
