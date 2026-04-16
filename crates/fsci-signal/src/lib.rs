@@ -5741,6 +5741,84 @@ pub fn lanczos(n: usize) -> Vec<f64> {
         .collect()
 }
 
+fn fft_real_parts(input: &[fsci_fft::Complex64]) -> Vec<f64> {
+    let opts = fsci_fft::FftOptions::default();
+    match fsci_fft::fft(input, &opts) {
+        Ok(values) => values.into_iter().map(|(re, _)| re).collect(),
+        Err(_) => {
+            let n = input.len() as f64;
+            (0..input.len())
+                .map(|k| {
+                    input.iter().enumerate().fold(0.0, |acc, (m, &(re, im))| {
+                        let angle = 2.0 * std::f64::consts::PI * k as f64 * m as f64 / n;
+                        acc + re * angle.cos() + im * angle.sin()
+                    })
+                })
+                .collect()
+        }
+    }
+}
+
+/// Dolph-Chebyshev window.
+///
+/// Matches `scipy.signal.windows.chebwin(n, at)`.
+pub fn chebwin(n: usize, at: f64) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+
+    let order = n as f64 - 1.0;
+    let beta = (10.0_f64.powf(at.abs() / 20.0).acosh() / order).cosh();
+    let negative_sign = if n.is_multiple_of(2) { -1.0 } else { 1.0 };
+    let p: Vec<f64> = (0..n)
+        .map(|k| {
+            let x = beta * (std::f64::consts::PI * k as f64 / n as f64).cos();
+            if x > 1.0 {
+                (order * x.acosh()).cosh()
+            } else if x < -1.0 {
+                negative_sign * (order * (-x).acosh()).cosh()
+            } else {
+                (order * x.acos()).cos()
+            }
+        })
+        .collect();
+
+    let fft_input: Vec<fsci_fft::Complex64> = if n.is_multiple_of(2) {
+        p.iter()
+            .enumerate()
+            .map(|(k, &value)| {
+                let angle = std::f64::consts::PI * k as f64 / n as f64;
+                (value * angle.cos(), value * angle.sin())
+            })
+            .collect()
+    } else {
+        p.into_iter().map(|value| (value, 0.0)).collect()
+    };
+
+    let fft_values = fft_real_parts(&fft_input);
+    let mut window = Vec::with_capacity(n);
+    if n.is_multiple_of(2) {
+        let split = n / 2 + 1;
+        window.extend(fft_values[1..split].iter().rev().copied());
+        window.extend_from_slice(&fft_values[1..split]);
+    } else {
+        let split = (n + 1) / 2;
+        window.extend(fft_values[1..split].iter().rev().copied());
+        window.extend_from_slice(&fft_values[..split]);
+    }
+
+    let max_value = window.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if max_value.is_finite() && max_value > 0.0 {
+        for value in &mut window {
+            *value /= max_value;
+        }
+    }
+    window
+}
+
 /// Taylor window.
 ///
 /// The Taylor window is designed for radar and antenna applications. It provides
@@ -5800,7 +5878,11 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
 
         // Sign alternates: (-1)^(m+1)
         let sign = if m % 2 == 1 { 1.0 } else { -1.0 };
-        fm[m] = if den.abs() > 1e-15 { sign * num / den } else { 0.0 };
+        fm[m] = if den.abs() > 1e-15 {
+            sign * num / den
+        } else {
+            0.0
+        };
     }
 
     // Generate window samples
@@ -5867,7 +5949,7 @@ pub fn triang(n: usize) -> Vec<f64> {
 /// # Supported windows
 /// `"hann"`, `"hamming"`, `"blackman"`, `"blackmanharris"`, `"barthann"`,
 /// `"bartlett"`, `"flattop"`, `"cosine"`, `"rectangular"` / `"boxcar"`,
-/// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`).
+/// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`), `"chebwin,<at>"` (e.g. `"chebwin,100"`).
 pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
     let lower = window.trim().to_lowercase();
     if let Some(rest) = lower.strip_prefix("kaiser,") {
@@ -5876,6 +5958,12 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
             .parse()
             .map_err(|_| SignalError::InvalidArgument(format!("invalid kaiser beta: {rest}")))?;
         return Ok(kaiser(nx, beta));
+    }
+    if let Some(rest) = lower.strip_prefix("chebwin,") {
+        let attenuation: f64 = rest.trim().parse().map_err(|_| {
+            SignalError::InvalidArgument(format!("invalid chebwin attenuation: {rest}"))
+        })?;
+        return Ok(chebwin(nx, attenuation));
     }
     match lower.as_str() {
         "hann" | "hanning" => Ok(hann(nx)),
@@ -5887,6 +5975,7 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
         "flattop" => Ok(flattop(nx)),
         "cosine" => Ok(cosine(nx)),
         "rectangular" | "boxcar" | "rect" => Ok(vec![1.0; nx]),
+        "chebwin" => Ok(chebwin(nx, 100.0)),
         "parzen" => Ok(parzen(nx)),
         "triang" => Ok(triang(nx)),
         "tukey" => Ok(tukey_window(nx, 0.5)),
@@ -7328,6 +7417,39 @@ mod tests {
     }
 
     #[test]
+    fn chebwin_window_matches_scipy_reference() {
+        let w = chebwin(5, 100.0);
+        let expected = [
+            0.16866468734562678,
+            0.6686513141856113,
+            1.0,
+            0.6686513141856113,
+            0.16866468734562678,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn chebwin_even_window_matches_scipy_reference() {
+        let w = chebwin(8, 60.0);
+        let expected = [
+            0.06847555416399577,
+            0.303219161655201,
+            0.686846620773932,
+            1.0,
+            1.0,
+            0.686846620773932,
+            0.303219161655201,
+            0.06847555416399577,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn kaiser_window_beta_zero_is_rectangular() {
         let w = kaiser(8, 0.0);
         for &v in &w {
@@ -7378,6 +7500,7 @@ mod tests {
         assert!(blackman(0).is_empty());
         assert!(blackmanharris(0).is_empty());
         assert!(barthann(0).is_empty());
+        assert!(chebwin(0, 100.0).is_empty());
         assert!(kaiser(0, 5.0).is_empty());
         assert!(lanczos(0).is_empty());
         assert!(taylor(0, 4, -30.0, true, true).is_empty());
@@ -7390,6 +7513,7 @@ mod tests {
         assert_eq!(blackman(1), [1.0]);
         assert_eq!(blackmanharris(1), [1.0]);
         assert_eq!(barthann(1), [1.0]);
+        assert_eq!(chebwin(1, 100.0), [1.0]);
         assert_eq!(kaiser(1, 5.0), [1.0]);
         assert_eq!(lanczos(1), [1.0]);
     }
@@ -7403,7 +7527,11 @@ mod tests {
             assert!((w[i] - w[6 - i]).abs() < 1e-12, "asymmetry at {i}");
         }
         // Center should be 1.0 (sinc(0) = 1)
-        assert!((w[3] - 1.0).abs() < 1e-12, "center = {}, expected 1.0", w[3]);
+        assert!(
+            (w[3] - 1.0).abs() < 1e-12,
+            "center = {}, expected 1.0",
+            w[3]
+        );
     }
 
     #[test]
@@ -9245,6 +9373,13 @@ mod tests {
     fn get_window_dispatches_barthann() {
         let w = get_window("barthann", 10).unwrap();
         let expected = barthann(10);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_chebwin() {
+        let w = get_window("chebwin,100", 5).unwrap();
+        let expected = chebwin(5, 100.0);
         assert_eq!(w, expected);
     }
 

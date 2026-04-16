@@ -1138,7 +1138,9 @@ where
         MultivariateRootMethod::Hybr => fsolve(func, x0),
         MultivariateRootMethod::Broyden1 => broyden1(func, x0, options.tol, options.max_iter),
         MultivariateRootMethod::Broyden2 => broyden2(func, x0, options.tol, options.max_iter),
-        MultivariateRootMethod::Anderson => anderson(func, x0, options.tol, options.max_iter, 5, 1.0),
+        MultivariateRootMethod::Anderson => {
+            anderson(func, x0, options.tol, options.max_iter, 5, 1.0)
+        }
         MultivariateRootMethod::Lm => lm_root(func, x0, options.tol, options.max_iter),
     }
 }

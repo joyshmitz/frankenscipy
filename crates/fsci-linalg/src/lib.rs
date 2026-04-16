@@ -2710,6 +2710,127 @@ pub fn cho_solve_banded(
     })
 }
 
+/// Solve a symmetric positive-definite banded system Ax = b.
+///
+/// Given a symmetric positive-definite banded matrix A in banded storage format,
+/// solves the system Ax = b using banded Cholesky factorization.
+///
+/// The matrix `ab` stores the lower or upper band of A:
+/// - If lower=true: ab[k, i] = A[i+k, i] for k = 0, ..., lower_bandwidth
+/// - If lower=false: ab[k, i] = A[i-k, i] for k = 0, ..., upper_bandwidth
+///
+/// The diagonal is always ab[0, :].
+///
+/// Matches `scipy.linalg.solveh_banded(ab, b, lower)`.
+///
+/// # Arguments
+/// * `ab` - Banded matrix in lower or upper band storage, shape (bandwidth+1, n)
+/// * `b` - Right-hand side vector
+/// * `lower` - If true, ab contains lower band; if false, upper band
+pub fn solveh_banded(ab: &[Vec<f64>], b: &[f64], lower: bool) -> Result<SolveResult, LinalgError> {
+    if ab.is_empty() {
+        return Err(LinalgError::InvalidArgument {
+            detail: "ab must not be empty".to_string(),
+        });
+    }
+
+    let bandwidth_plus_1 = ab.len();
+    let n = ab[0].len();
+
+    if b.len() != n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (n, n),
+            b_len: b.len(),
+        });
+    }
+
+    for row in ab.iter() {
+        if row.len() != n {
+            return Err(LinalgError::InvalidArgument {
+                detail: "All rows in ab must have the same length".to_string(),
+            });
+        }
+    }
+
+    if n == 0 {
+        return Ok(SolveResult {
+            x: vec![],
+            warning: None,
+            backward_error: None,
+            certificate: None,
+        });
+    }
+
+    // Perform banded Cholesky factorization
+    // L stored in same format as input
+    let mut cb = ab.to_vec();
+
+    if lower {
+        // Cholesky factorization for lower band storage
+        for j in 0..n {
+            // Compute diagonal element
+            let mut diag = cb[0][j];
+            for k in 1..bandwidth_plus_1 {
+                if j >= k {
+                    let lkj = cb[k][j - k];
+                    diag -= lkj * lkj;
+                }
+            }
+            if diag <= 0.0 {
+                return Err(LinalgError::InvalidArgument {
+                    detail: "Matrix is not positive definite".to_string(),
+                });
+            }
+            cb[0][j] = diag.sqrt();
+
+            // Compute sub-diagonal elements
+            for i in 1..bandwidth_plus_1 {
+                if j + i < n {
+                    let mut sum = cb[i][j];
+                    for k in 1..bandwidth_plus_1 {
+                        if j >= k && i + k < bandwidth_plus_1 {
+                            sum -= cb[k][j - k] * cb[i + k][j - k];
+                        }
+                    }
+                    cb[i][j] = sum / cb[0][j];
+                }
+            }
+        }
+    } else {
+        // Cholesky factorization for upper band storage
+        for j in 0..n {
+            let mut diag = cb[0][j];
+            for k in 1..bandwidth_plus_1 {
+                if j >= k {
+                    let ukj = cb[k][j];
+                    diag -= ukj * ukj;
+                }
+            }
+            if diag <= 0.0 {
+                return Err(LinalgError::InvalidArgument {
+                    detail: "Matrix is not positive definite".to_string(),
+                });
+            }
+            cb[0][j] = diag.sqrt();
+
+            for i in 1..bandwidth_plus_1 {
+                if j + i < n {
+                    let mut sum = cb[i][j + i];
+                    for k in 1..bandwidth_plus_1.min(j + 1) {
+                        if i + k < bandwidth_plus_1 {
+                            sum -= cb[k][j] * cb[i + k][j + i];
+                        }
+                    }
+                    cb[i][j + i] = sum / cb[0][j];
+                }
+            }
+        }
+    }
+
+    // Now solve using the computed Cholesky factor
+    cho_solve_banded(&cb, b, lower)
+}
+
 /// LDL decomposition for symmetric indefinite matrices.
 ///
 /// Factors A = L * D * Lᵀ where L is unit lower triangular and D is diagonal.
@@ -3127,7 +3248,11 @@ pub fn eigh_tridiagonal(
 
     // Sort eigenvalues (and eigenvectors) in ascending order
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| diagonal[a].partial_cmp(&diagonal[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        diagonal[a]
+            .partial_cmp(&diagonal[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let sorted_eigenvalues: Vec<f64> = indices.iter().map(|&i| diagonal[i]).collect();
     let sorted_eigenvectors = eigenvectors.map(|z| {
@@ -7452,8 +7577,8 @@ mod tests {
         // cb[1] = [1, 1, 0] (sub-diagonal: L[1,0]=1, L[2,1]=1)
         let sqrt5 = 5.0_f64.sqrt();
         let cb = vec![
-            vec![2.0, 2.0, sqrt5],  // diagonal of L
-            vec![1.0, 1.0, 0.0],    // sub-diagonal
+            vec![2.0, 2.0, sqrt5], // diagonal of L
+            vec![1.0, 1.0, 0.0],   // sub-diagonal
         ];
         // Use b such that x is known: x = [1, 1, 1]
         // A @ [1,1,1] = [4+2, 2+5+2, 2+6] = [6, 9, 8]
@@ -7473,7 +7598,11 @@ mod tests {
         // Wait, L@L^T where L = diag(2,3,4) gives A = diag(4, 9, 16)
         let result = cho_solve_banded(&cb, &b, true).expect("cho_solve_banded diagonal");
         assert!((result.x[0] - 0.5).abs() < 1e-10, "x[0] = {}", result.x[0]);
-        assert!((result.x[1] - 2.0 / 3.0).abs() < 1e-10, "x[1] = {}", result.x[1]);
+        assert!(
+            (result.x[1] - 2.0 / 3.0).abs() < 1e-10,
+            "x[1] = {}",
+            result.x[1]
+        );
         assert!((result.x[2] - 0.5).abs() < 1e-10, "x[2] = {}", result.x[2]);
     }
 
@@ -7482,6 +7611,41 @@ mod tests {
         let cb = vec![vec![]];
         let b = vec![];
         let result = cho_solve_banded(&cb, &b, true).expect("empty");
+        assert!(result.x.is_empty());
+    }
+
+    #[test]
+    fn solveh_banded_tridiagonal() {
+        // A = [[4, 2, 0], [2, 5, 2], [0, 2, 6]] (symmetric positive definite)
+        // Lower band storage: ab[k, i] = A[i+k, i]
+        // ab[0] = [4, 5, 6] (diagonal)
+        // ab[1] = [2, 2, 0] (sub-diagonal: A[1,0]=2, A[2,1]=2)
+        let ab = vec![vec![4.0, 5.0, 6.0], vec![2.0, 2.0, 0.0]];
+        // b = A @ [1, 1, 1] = [6, 9, 8]
+        let b = vec![6.0, 9.0, 8.0];
+        let result = solveh_banded(&ab, &b, true).expect("solveh_banded");
+        assert!((result.x[0] - 1.0).abs() < 1e-8, "x[0] = {}", result.x[0]);
+        assert!((result.x[1] - 1.0).abs() < 1e-8, "x[1] = {}", result.x[1]);
+        assert!((result.x[2] - 1.0).abs() < 1e-8, "x[2] = {}", result.x[2]);
+    }
+
+    #[test]
+    fn solveh_banded_diagonal() {
+        // Diagonal matrix A = diag(4, 9, 16)
+        let ab = vec![vec![4.0, 9.0, 16.0]];
+        let b = vec![8.0, 27.0, 32.0];
+        // x = [2, 3, 2]
+        let result = solveh_banded(&ab, &b, true).expect("solveh_banded diagonal");
+        assert!((result.x[0] - 2.0).abs() < 1e-10, "x[0] = {}", result.x[0]);
+        assert!((result.x[1] - 3.0).abs() < 1e-10, "x[1] = {}", result.x[1]);
+        assert!((result.x[2] - 2.0).abs() < 1e-10, "x[2] = {}", result.x[2]);
+    }
+
+    #[test]
+    fn solveh_banded_empty() {
+        let ab = vec![vec![]];
+        let b = vec![];
+        let result = solveh_banded(&ab, &b, true).expect("empty");
         assert!(result.x.is_empty());
     }
 
@@ -9639,8 +9803,16 @@ mod proptest_tests {
         let (eigenvalues, eigenvectors) =
             eigh_tridiagonal(&d, &e, false, DecompOptions::default()).expect("eigh_tridiagonal");
         assert_eq!(eigenvalues.len(), 2);
-        assert!((eigenvalues[0] - 1.0).abs() < 1e-10, "λ1 = {}", eigenvalues[0]);
-        assert!((eigenvalues[1] - 3.0).abs() < 1e-10, "λ2 = {}", eigenvalues[1]);
+        assert!(
+            (eigenvalues[0] - 1.0).abs() < 1e-10,
+            "λ1 = {}",
+            eigenvalues[0]
+        );
+        assert!(
+            (eigenvalues[1] - 3.0).abs() < 1e-10,
+            "λ2 = {}",
+            eigenvalues[1]
+        );
         assert!(eigenvectors.is_some());
     }
 
