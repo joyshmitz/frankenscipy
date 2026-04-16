@@ -141,6 +141,59 @@ pub fn expi(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("expi", x_tensor, mode, |x| expi_scalar(x, mode))
 }
 
+/// Generalized exponential integral E_n(x) = ∫₁^∞ exp(-xt)/t^n dt.
+///
+/// Matches `scipy.special.expn(n, x)`.
+///
+/// # Arguments
+/// * `n` - Order (non-negative integer)
+/// * `x` - Argument (must be > 0 for n=0,1; can be 0 for n >= 2)
+pub fn expn_scalar(n: u32, x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x < 0.0 {
+        return f64::NAN;
+    }
+
+    // Special cases
+    if n == 0 {
+        if x == 0.0 {
+            return f64::INFINITY;
+        }
+        return (-x).exp() / x;
+    }
+
+    if x == 0.0 {
+        if n == 1 {
+            return f64::INFINITY;
+        }
+        // E_n(0) = 1/(n-1) for n >= 2
+        return 1.0 / (n - 1) as f64;
+    }
+
+    if x == f64::INFINITY {
+        return 0.0;
+    }
+
+    // Use E_1 and recurrence relation: n * E_{n+1}(x) = e^{-x} - x * E_n(x)
+    // Rearranged: E_n(x) computed from E_1(x) using upward recurrence
+    let e1 = exp1_scalar(x, fsci_runtime::RuntimeMode::Strict).unwrap_or(f64::NAN);
+    if n == 1 {
+        return e1;
+    }
+
+    // Upward recurrence from E_1 to E_n
+    let exp_neg_x = (-x).exp();
+    let mut e_prev = e1;
+    for k in 1..n {
+        // E_{k+1}(x) = (e^{-x} - x * E_k(x)) / k
+        let e_next = (exp_neg_x - x * e_prev) / k as f64;
+        e_prev = e_next;
+    }
+    e_prev
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Scalar Kernels
 // ══════════════════════════════════════════════════════════════════════
@@ -1051,5 +1104,57 @@ mod tests {
         assert!(cn.is_nan());
         assert!(dn.is_nan());
         assert!(ph.is_nan());
+    }
+
+    // ── Generalized exponential integral E_n ──────────────────────────
+
+    #[test]
+    fn expn_special_cases() {
+        // E_0(x) = exp(-x)/x
+        assert_close(expn_scalar(0, 1.0), (-1.0_f64).exp(), 1e-12, "E_0(1)");
+        assert_close(expn_scalar(0, 2.0), (-2.0_f64).exp() / 2.0, 1e-12, "E_0(2)");
+
+        // E_1(1) ≈ 0.219_383_934_4 (matches exp1)
+        assert_close(expn_scalar(1, 1.0), 0.219_383_934_4, 1e-8, "E_1(1)");
+
+        // E_n(0) = 1/(n-1) for n >= 2
+        assert_close(expn_scalar(2, 0.0), 1.0, 1e-12, "E_2(0) = 1");
+        assert_close(expn_scalar(3, 0.0), 0.5, 1e-12, "E_3(0) = 0.5");
+        assert_close(expn_scalar(4, 0.0), 1.0 / 3.0, 1e-12, "E_4(0) = 1/3");
+    }
+
+    #[test]
+    fn expn_known_values() {
+        // Values verified against SciPy/Wolfram Alpha
+        // E_2(1) ≈ 0.148_495_506_8
+        assert_close(expn_scalar(2, 1.0), 0.148_495_506_8, 1e-6, "E_2(1)");
+
+        // E_3(1) ≈ 0.109_691_632_2
+        assert_close(expn_scalar(3, 1.0), 0.109_691_632_2, 1e-6, "E_3(1)");
+
+        // E_2(0.5) ≈ 0.326_643_070_9
+        assert_close(expn_scalar(2, 0.5), 0.326_643_070_9, 1e-6, "E_2(0.5)");
+    }
+
+    #[test]
+    fn expn_large_x() {
+        // For large x, E_n(x) ≈ exp(-x)/x
+        let x = 10.0_f64;
+        let asymp = (-x).exp() / x;
+        // E_1(10) should be close to but slightly larger than asymptotic
+        let e1 = expn_scalar(1, x);
+        assert!(e1 > 0.9 * asymp && e1 < 1.5 * asymp, "E_1(10) near asymptotic");
+    }
+
+    #[test]
+    fn expn_recurrence() {
+        // Recurrence: E_{n+1}(x) = (exp(-x) - x*E_n(x)) / n for n >= 1
+        let x = 2.0;
+        for n in 1..5 {
+            let en = expn_scalar(n, x);
+            let en1 = expn_scalar(n + 1, x);
+            let computed = ((-x).exp() - x * en) / n as f64;
+            assert_close(en1, computed, 1e-6, &format!("E_{} recurrence", n + 1));
+        }
     }
 }
