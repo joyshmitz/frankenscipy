@@ -252,7 +252,7 @@ struct IndexedRunSummaryProbe {
 /// Build a replay command for a specific test.
 pub fn build_replay_cmd(packet_id: &str, test_name: &str) -> String {
     format!(
-        "cargo test -p fsci-conformance --test {test_file} -- {test_name} --nocapture --exact",
+        "rch exec -- cargo test -p fsci-conformance --test {test_file} -- {test_name} --nocapture",
         test_file = test_file_for_packet(packet_id),
     )
 }
@@ -268,7 +268,10 @@ fn test_file_for_packet(packet_id: &str) -> &str {
         "P2C-006" | "FSCI-P2C-006" => "e2e_special",
         "P2C-007" | "FSCI-P2C-007" => "e2e_orchestrator",
         "P2C-008" | "FSCI-P2C-008" => "e2e_casp",
-        "P2C-009" | "FSCI-P2C-009" => "e2e_stats",
+        "P2C-009" | "FSCI-P2C-009" => "e2e_cluster",
+        "P2C-010" | "FSCI-P2C-010" => "e2e_spatial",
+        "P2C-011" | "FSCI-P2C-011" => "e2e_signal",
+        "P2C-012" | "FSCI-P2C-012" => "e2e_stats",
         "P2C-013" | "FSCI-P2C-013" => "e2e_ndimage",
         _ => "golden_journeys",
     }
@@ -717,12 +720,25 @@ mod tests {
         assert!(cmd.contains("e2e_linalg"));
         assert!(cmd.contains("test_solve"));
         assert!(cmd.contains("--nocapture"));
+        assert!(cmd.starts_with("rch exec -- cargo test"));
 
         let cmd2 = build_replay_cmd("P2C-005", "test_fft");
         assert!(cmd2.contains("e2e_fft"));
 
-        let cmd3 = build_replay_cmd("FSCI-P2C-013", "e2e_ndimage_interpolation");
-        assert!(cmd3.contains("e2e_ndimage"));
+        let cmd3 = build_replay_cmd("FSCI-P2C-009", "scenario_01_kmeans");
+        assert!(cmd3.contains("e2e_cluster"));
+
+        let cmd4 = build_replay_cmd("FSCI-P2C-010", "scenario_01_distance_functions");
+        assert!(cmd4.contains("e2e_spatial"));
+
+        let cmd5 = build_replay_cmd("FSCI-P2C-011", "scenario_01_window_functions");
+        assert!(cmd5.contains("e2e_signal"));
+
+        let cmd6 = build_replay_cmd("FSCI-P2C-012", "e2e_stats_001_normal");
+        assert!(cmd6.contains("e2e_stats"));
+
+        let cmd7 = build_replay_cmd("FSCI-P2C-013", "e2e_ndimage_interpolation");
+        assert!(cmd7.contains("e2e_ndimage"));
     }
 
     #[test]
@@ -786,17 +802,17 @@ mod tests {
     #[test]
     fn artifact_index_builder_keeps_non_ndimage_signal_summary() {
         let tmp = temp_dir("signal-summary");
-        let summary_dir = tmp.join("FSCI-P2C-010/e2e/runs/run-1/e2e_signal_smoke");
+        let summary_dir = tmp.join("FSCI-P2C-011/e2e/runs/run-1/e2e_signal_smoke");
         fs::create_dir_all(&summary_dir).expect("create signal summary dir");
         fs::write(
             summary_dir.join("summary.json"),
             r#"{
-  "packet_id": "FSCI-P2C-010",
+  "packet_id": "FSCI-P2C-011",
   "scenario_id": "e2e_signal_smoke",
   "run_id": "run-1",
   "passed": true,
   "failed_step": null,
-  "replay_command": "cargo test -p fsci-conformance --test e2e_signal -- e2e_signal_smoke --nocapture",
+  "replay_command": "rch exec -- cargo test -p fsci-conformance --test e2e_signal -- e2e_signal_smoke --nocapture",
   "generated_unix_ms": 1775501229596
 }"#,
         )
@@ -805,7 +821,7 @@ mod tests {
         let index = build_artifact_index(&tmp, "test-run").expect("build artifact index");
         assert_eq!(index.summary.total_tests, 1);
         assert_eq!(index.summary.total_artifacts, 1);
-        assert!(index.entries.contains_key("FSCI-P2C-010/summary"));
+        assert!(index.entries.contains_key("FSCI-P2C-011/summary"));
 
         let _ = fs::remove_dir_all(&tmp);
     }

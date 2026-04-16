@@ -7,9 +7,10 @@
 //!   Adversarial:    7-10 (extreme parameters, tail probabilities, identity checks)
 //!
 //! Each scenario emits topology-compliant artifacts to
-//! `fixtures/artifacts/FSCI-P2C-009/e2e/runs/{run_id}/{scenario_id}/`
+//! `fixtures/artifacts/FSCI-P2C-012/e2e/runs/{run_id}/{scenario_id}/`
 //! containing `events.jsonl` and `summary.json`.
 
+use fsci_conformance::PacketFamily;
 use std::f64::consts::PI;
 use std::fs;
 use std::io::{BufWriter, Write};
@@ -120,7 +121,9 @@ type ScalarFn = Box<dyn Fn(f64) -> f64>;
 type RoundtripDistribution = (&'static str, ScalarFn, ScalarFn);
 type CdfDistribution = (&'static str, ScalarFn);
 
-const PACKET_ID: &str = "FSCI-P2C-009";
+fn packet_id() -> &'static str {
+    PacketFamily::Stats.packet_id()
+}
 
 // ---- Helpers ----
 
@@ -138,7 +141,7 @@ fn run_id() -> String {
 fn e2e_runs_dir(run_id: &str, scenario_id: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures/artifacts")
-        .join(PACKET_ID)
+        .join(packet_id())
         .join("e2e/runs")
         .join(run_id)
         .join(scenario_id)
@@ -215,7 +218,7 @@ fn write_topology_artifacts(
         .find(|s| s.outcome == "FAIL")
         .map(|s| s.step_name.clone());
     let summary = RunSummary {
-        packet_id: PACKET_ID.to_string(),
+        packet_id: packet_id().to_string(),
         scenario_id: scenario_id.to_string(),
         run_id: rid,
         passed: all_pass,

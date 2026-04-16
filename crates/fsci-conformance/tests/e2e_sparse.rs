@@ -17,7 +17,7 @@ use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
     CooMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D, SolveOptions,
     SparseError, add_csr, bicgstab, cg, connected_component_sizes, csr_to_csc_with_mode, diags,
-    eye, gmres, is_connected, pagerank, scale_csr, sparse_diagonal, sparse_norm, spmv_csr, spsolve,
+    eye, gmres, is_connected, pagerank, scale_csr, sparse_norm, spmv_csr, spsolve,
     strongly_connected_components, sub_csr, topological_sort,
 };
 use serde::Serialize;

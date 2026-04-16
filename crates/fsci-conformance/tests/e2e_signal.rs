@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! E2E scenario tests for FSCI-P2C-010 (Signal Processing).
+//! E2E scenario tests for FSCI-P2C-011 (Signal Processing).
 //!
 //! Implements conformance tests for scipy.signal parity:
 //!   Happy-path (1-5): window functions, convolution, filtering
@@ -8,8 +8,9 @@
 //!   Performance boundary (12-14): large signals, CZT, CWT
 //!
 //! Each scenario emits a forensic log bundle to
-//! `fixtures/artifacts/FSCI-P2C-010/e2e/`.
+//! `fixtures/artifacts/FSCI-P2C-011/e2e/`.
 
+use fsci_conformance::PacketFamily;
 use fsci_signal::{
     BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, autocorrelation,
     blackman, butter, convolve, correlate, filtfilt, find_peaks, firwin, freqz, gausspulse,
@@ -79,7 +80,10 @@ struct OverallResult {
 // ───────────────────────── Helpers ─────────────────────────
 
 fn e2e_output_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/artifacts/FSCI-P2C-010/e2e")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/artifacts")
+        .join(PacketFamily::Signal.packet_id())
+        .join("e2e")
 }
 
 fn make_env() -> EnvironmentInfo {
@@ -94,7 +98,9 @@ fn make_env() -> EnvironmentInfo {
 }
 
 fn replay_cmd(scenario_id: &str) -> String {
-    format!("cargo test -p fsci-conformance --test e2e_signal -- {scenario_id} --nocapture")
+    format!(
+        "rch exec -- cargo test -p fsci-conformance --test e2e_signal -- {scenario_id} --nocapture"
+    )
 }
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {

@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! E2E scenario tests for FSCI-P2C-011 (Clustering).
+//! E2E scenario tests for FSCI-P2C-009 (Clustering).
 //!
 //! Implements conformance tests for scipy.cluster parity:
 //!   Happy-path (1-5): kmeans, hierarchical, dbscan, metrics
@@ -8,13 +8,14 @@
 //!   Performance boundary (12-14): large datasets
 //!
 //! Each scenario emits a forensic log bundle to
-//! `fixtures/artifacts/FSCI-P2C-011/e2e/`.
+//! `fixtures/artifacts/FSCI-P2C-009/e2e/`.
 
 use fsci_cluster::{
     LinkageMethod, adjusted_rand_score, calinski_harabasz_score, completeness_score,
     davies_bouldin_score, dbscan, fcluster, homogeneity_score, is_monotonic, is_valid_linkage,
     kmeans, linkage, normalized_mutual_info, silhouette_score, v_measure_score, whiten,
 };
+use fsci_conformance::PacketFamily;
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
@@ -78,7 +79,10 @@ struct OverallResult {
 // ───────────────────────── Helpers ─────────────────────────
 
 fn e2e_output_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/artifacts/FSCI-P2C-011/e2e")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/artifacts")
+        .join(PacketFamily::Cluster.packet_id())
+        .join("e2e")
 }
 
 fn make_env() -> EnvironmentInfo {
@@ -93,7 +97,9 @@ fn make_env() -> EnvironmentInfo {
 }
 
 fn replay_cmd(scenario_id: &str) -> String {
-    format!("cargo test -p fsci-conformance --test e2e_cluster -- {scenario_id} --nocapture")
+    format!(
+        "rch exec -- cargo test -p fsci-conformance --test e2e_cluster -- {scenario_id} --nocapture"
+    )
 }
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
