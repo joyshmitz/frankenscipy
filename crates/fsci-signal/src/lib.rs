@@ -5651,6 +5651,35 @@ pub fn cosine(n: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Generic weighted sum of cosine terms window.
+///
+/// Matches `scipy.signal.windows.general_cosine(M, a, sym)`.
+pub fn general_cosine(n: usize, coeffs: &[f64], sym: bool) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1.0];
+    }
+
+    let m = if sym { n } else { n + 1 };
+    let denom = (m - 1) as f64;
+    let mut window: Vec<f64> = (0..m)
+        .map(|i| {
+            let angle = -std::f64::consts::PI + 2.0 * std::f64::consts::PI * i as f64 / denom;
+            coeffs
+                .iter()
+                .enumerate()
+                .map(|(k, &coefficient)| coefficient * (k as f64 * angle).cos())
+                .sum()
+        })
+        .collect();
+    if !sym {
+        window.truncate(n);
+    }
+    window
+}
+
 /// Gaussian window.
 ///
 /// Matches `scipy.signal.windows.gaussian(n, std)`.
@@ -5967,7 +5996,8 @@ pub fn triang(n: usize) -> Vec<f64> {
 /// `"hann"`, `"hamming"`, `"blackman"`, `"blackmanharris"`, `"barthann"`,
 /// `"bartlett"`, `"flattop"`, `"cosine"`, `"rectangular"` / `"boxcar"`,
 /// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`), `"chebwin,<at>"` (e.g. `"chebwin,100"`),
-/// `"general_hamming,<alpha>"` (e.g. `"general_hamming,0.75"`).
+/// `"general_hamming,<alpha>"` (e.g. `"general_hamming,0.75"`),
+/// `"general_cosine,<a0>,<a1>,..."` (e.g. `"general_cosine,0.5,0.5"`).
 pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
     let lower = window.trim().to_lowercase();
     if let Some(rest) = lower.strip_prefix("kaiser,") {
@@ -5988,6 +6018,21 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
             SignalError::InvalidArgument(format!("invalid general_hamming alpha: {rest}"))
         })?;
         return Ok(general_hamming(nx, alpha));
+    }
+    if let Some(rest) = lower.strip_prefix("general_cosine,") {
+        let coeffs: Vec<f64> = rest
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                value.parse::<f64>().map_err(|_| {
+                    SignalError::InvalidArgument(format!(
+                        "invalid general_cosine coefficient: {value}"
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        return Ok(general_cosine(nx, &coeffs, true));
     }
     match lower.as_str() {
         "hann" | "hanning" => Ok(hann(nx)),
@@ -7459,6 +7504,42 @@ mod tests {
     }
 
     #[test]
+    fn general_cosine_window_matches_scipy_reference() {
+        let w = general_cosine(8, &[0.5, 0.3, 0.2], true);
+        let expected = [
+            0.4,
+            0.26844887265111705,
+            0.38656250660641056,
+            0.8949886207424725,
+            0.8949886207424725,
+            0.38656250660641056,
+            0.26844887265111705,
+            0.4,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn general_cosine_periodic_window_matches_scipy_reference() {
+        let w = general_cosine(8, &[0.5, 0.5], false);
+        let expected = [
+            0.0,
+            0.14644660940672627,
+            0.5,
+            0.8535533905932737,
+            1.0,
+            0.8535533905932737,
+            0.5,
+            0.14644660940672627,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn chebwin_window_matches_scipy_reference() {
         let w = chebwin(5, 100.0);
         let expected = [
@@ -7540,6 +7621,7 @@ mod tests {
         assert!(hann(0).is_empty());
         assert!(hamming(0).is_empty());
         assert!(general_hamming(0, 0.75).is_empty());
+        assert!(general_cosine(0, &[0.5, 0.5], true).is_empty());
         assert!(blackman(0).is_empty());
         assert!(blackmanharris(0).is_empty());
         assert!(barthann(0).is_empty());
@@ -7554,6 +7636,7 @@ mod tests {
         assert_eq!(hann(1), [1.0]);
         assert_eq!(hamming(1), [1.0]);
         assert_eq!(general_hamming(1, 0.75), [1.0]);
+        assert_eq!(general_cosine(1, &[0.5, 0.5], true), [1.0]);
         assert_eq!(blackman(1), [1.0]);
         assert_eq!(blackmanharris(1), [1.0]);
         assert_eq!(barthann(1), [1.0]);
@@ -9431,6 +9514,13 @@ mod tests {
     fn get_window_dispatches_general_hamming() {
         let w = get_window("general_hamming,0.75", 8).unwrap();
         let expected = general_hamming(8, 0.75);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_general_cosine() {
+        let w = get_window("general_cosine,0.5,0.3,0.2", 8).unwrap();
+        let expected = general_cosine(8, &[0.5, 0.3, 0.2], true);
         assert_eq!(w, expected);
     }
 

@@ -3079,6 +3079,230 @@ pub fn eigvalsh(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Lina
     Ok(result.eigenvalues)
 }
 
+/// Eigenvalues and eigenvectors of a symmetric banded matrix.
+///
+/// Given a symmetric banded matrix in banded storage format, computes eigenvalues
+/// and optionally eigenvectors. The matrix is first reduced to tridiagonal form
+/// using Householder transformations, then solved via the QR algorithm.
+///
+/// Banded storage format (lower=true):
+/// - ab[0, :] = main diagonal
+/// - ab[k, i] = A[i+k, i] for k = 1, ..., lower_bandwidth
+///
+/// Matches `scipy.linalg.eig_banded(a_band, lower, eigvals_only, ...)`.
+///
+/// # Arguments
+/// * `ab` - Banded matrix in lower band storage, shape (bandwidth+1, n)
+/// * `lower` - If true, ab contains lower band (only lower=true supported currently)
+/// * `eigvals_only` - If true, only compute eigenvalues
+/// * `options` - Decomposition options
+pub fn eig_banded(
+    ab: &[Vec<f64>],
+    lower: bool,
+    eigvals_only: bool,
+    options: DecompOptions,
+) -> Result<(Vec<f64>, Option<Vec<Vec<f64>>>), LinalgError> {
+    if ab.is_empty() {
+        return Err(LinalgError::InvalidArgument {
+            detail: "ab must not be empty".to_string(),
+        });
+    }
+
+    let bandwidth_plus_1 = ab.len();
+    let n = ab[0].len();
+
+    for row in ab.iter() {
+        if row.len() != n {
+            return Err(LinalgError::InvalidArgument {
+                detail: "All rows in ab must have the same length".to_string(),
+            });
+        }
+    }
+
+    if n == 0 {
+        return Ok((vec![], if eigvals_only { None } else { Some(vec![]) }));
+    }
+
+    hardened_dimension_check(options.mode, n, n)?;
+
+    if options.check_finite {
+        for row in ab.iter() {
+            for &val in row.iter() {
+                if !val.is_finite() {
+                    return Err(LinalgError::NonFiniteInput);
+                }
+            }
+        }
+    }
+
+    if !lower {
+        // Convert upper to lower band storage
+        // For now, only support lower=true
+        return Err(LinalgError::NotSupported {
+            detail: "eig_banded currently only supports lower=true".to_string(),
+        });
+    }
+
+    // Special case: tridiagonal (bandwidth = 1)
+    if bandwidth_plus_1 == 2 {
+        let d: Vec<f64> = ab[0].clone();
+        let e: Vec<f64> = (0..n - 1).map(|i| ab[1][i]).collect();
+        return eigh_tridiagonal(&d, &e, eigvals_only, options);
+    }
+
+    // Special case: diagonal (bandwidth = 0)
+    if bandwidth_plus_1 == 1 {
+        let mut eigenvalues = ab[0].clone();
+        eigenvalues.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let eigenvectors = if eigvals_only {
+            None
+        } else {
+            // For diagonal matrix, eigenvectors are standard basis (reordered)
+            let mut indices: Vec<usize> = (0..n).collect();
+            indices.sort_by(|&i, &j| {
+                ab[0][i]
+                    .partial_cmp(&ab[0][j])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let evecs: Vec<Vec<f64>> = (0..n)
+                .map(|row| {
+                    indices
+                        .iter()
+                        .map(|&col| if row == col { 1.0 } else { 0.0 })
+                        .collect()
+                })
+                .collect();
+            Some(evecs)
+        };
+        return Ok((eigenvalues, eigenvectors));
+    }
+
+    // General case: reduce banded matrix to tridiagonal form
+    // Using Householder transformations
+
+    // Expand banded matrix to full symmetric form for reduction
+    let mut a_full = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        a_full[i][i] = ab[0][i];
+        for k in 1..bandwidth_plus_1 {
+            if i + k < n {
+                a_full[i + k][i] = ab[k][i];
+                a_full[i][i + k] = ab[k][i]; // Symmetric
+            }
+        }
+    }
+
+    // Reduce to tridiagonal form using Householder
+    let mut q_accum = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        q_accum[i][i] = 1.0;
+    }
+
+    for k in 0..n.saturating_sub(2) {
+        // Extract column below diagonal
+        let col_len = n - k - 1;
+        if col_len <= 1 {
+            continue;
+        }
+
+        let mut v: Vec<f64> = (0..col_len).map(|i| a_full[k + 1 + i][k]).collect();
+
+        // Compute Householder vector
+        let norm_v: f64 = v.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if norm_v < 1e-15 {
+            continue;
+        }
+
+        let sign = if v[0] >= 0.0 { 1.0 } else { -1.0 };
+        v[0] += sign * norm_v;
+        let norm_v_new: f64 = v.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if norm_v_new < 1e-15 {
+            continue;
+        }
+        for vi in &mut v {
+            *vi /= norm_v_new;
+        }
+
+        // Apply Householder: A = (I - 2vv^T) A (I - 2vv^T)
+        // First: A = A - 2 * v * (v^T * A)
+        let mut va = vec![0.0; n];
+        for j in 0..n {
+            for i in 0..col_len {
+                va[j] += v[i] * a_full[k + 1 + i][j];
+            }
+        }
+        for i in 0..col_len {
+            for j in 0..n {
+                a_full[k + 1 + i][j] -= 2.0 * v[i] * va[j];
+            }
+        }
+
+        // Second: A = A - 2 * (A * v) * v^T
+        let mut av = vec![0.0; n];
+        for i in 0..n {
+            for j in 0..col_len {
+                av[i] += a_full[i][k + 1 + j] * v[j];
+            }
+        }
+        for i in 0..n {
+            for j in 0..col_len {
+                a_full[i][k + 1 + j] -= 2.0 * av[i] * v[j];
+            }
+        }
+
+        // Accumulate Q if eigenvectors needed
+        if !eigvals_only {
+            // Q = Q * (I - 2vv^T)
+            let mut qv = vec![0.0; n];
+            for i in 0..n {
+                for j in 0..col_len {
+                    qv[i] += q_accum[i][k + 1 + j] * v[j];
+                }
+            }
+            for i in 0..n {
+                for j in 0..col_len {
+                    q_accum[i][k + 1 + j] -= 2.0 * qv[i] * v[j];
+                }
+            }
+        }
+    }
+
+    // Extract tridiagonal elements
+    let d: Vec<f64> = (0..n).map(|i| a_full[i][i]).collect();
+    let e: Vec<f64> = (0..n - 1).map(|i| a_full[i + 1][i]).collect();
+
+    // Solve tridiagonal eigenvalue problem
+    let (eigenvalues, tri_evecs) = eigh_tridiagonal(&d, &e, eigvals_only, options)?;
+
+    // Transform eigenvectors back if needed
+    let eigenvectors = if eigvals_only {
+        None
+    } else {
+        let tri_evecs = tri_evecs.unwrap();
+        // Multiply Q * tri_evecs
+        let mut result_evecs = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    result_evecs[i][j] += q_accum[i][k] * tri_evecs[k][j];
+                }
+            }
+        }
+        Some(result_evecs)
+    };
+
+    emit_trace(LinalgTrace {
+        operation: "eig_banded",
+        matrix_size: (n, n),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok((eigenvalues, eigenvectors))
+}
+
 /// Eigenvalues and eigenvectors of a symmetric tridiagonal matrix.
 ///
 /// Given the diagonal elements `d` and off-diagonal elements `e` of a
@@ -9853,5 +10077,67 @@ mod proptest_tests {
         let e = vec![0.5]; // Should be length 2
         let err = eigh_tridiagonal(&d, &e, false, DecompOptions::default()).expect_err("invalid");
         assert!(matches!(err, LinalgError::InvalidArgument { .. }));
+    }
+
+    // ── eig_banded tests ────────────────────────────────────────────────
+
+    #[test]
+    fn eig_banded_tridiagonal() {
+        // A = [[2, 1, 0], [1, 2, 1], [0, 1, 2]] - tridiagonal
+        // Banded storage: ab[0] = diagonal, ab[1] = sub-diagonal
+        let ab = vec![vec![2.0, 2.0, 2.0], vec![1.0, 1.0, 0.0]];
+        let (eigenvalues, eigenvectors) =
+            eig_banded(&ab, true, false, DecompOptions::default()).expect("eig_banded");
+        assert_eq!(eigenvalues.len(), 3);
+        // Known eigenvalues: 2 - sqrt(2), 2, 2 + sqrt(2)
+        let sqrt2 = std::f64::consts::SQRT_2;
+        assert!(
+            (eigenvalues[0] - (2.0 - sqrt2)).abs() < 1e-8,
+            "λ1 = {}, expected {}",
+            eigenvalues[0],
+            2.0 - sqrt2
+        );
+        assert!(
+            (eigenvalues[1] - 2.0).abs() < 1e-8,
+            "λ2 = {}",
+            eigenvalues[1]
+        );
+        assert!(
+            (eigenvalues[2] - (2.0 + sqrt2)).abs() < 1e-8,
+            "λ3 = {}, expected {}",
+            eigenvalues[2],
+            2.0 + sqrt2
+        );
+        assert!(eigenvectors.is_some());
+    }
+
+    #[test]
+    fn eig_banded_diagonal() {
+        // Diagonal matrix A = diag(3, 1, 2)
+        let ab = vec![vec![3.0, 1.0, 2.0]];
+        let (eigenvalues, _) =
+            eig_banded(&ab, true, true, DecompOptions::default()).expect("eig_banded diagonal");
+        // Eigenvalues sorted: 1, 2, 3
+        assert!((eigenvalues[0] - 1.0).abs() < 1e-10);
+        assert!((eigenvalues[1] - 2.0).abs() < 1e-10);
+        assert!((eigenvalues[2] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn eig_banded_eigvals_only() {
+        let ab = vec![vec![2.0, 2.0, 2.0], vec![1.0, 1.0, 0.0]];
+        let (eigenvalues, eigenvectors) =
+            eig_banded(&ab, true, true, DecompOptions::default()).expect("eigvals only");
+        assert_eq!(eigenvalues.len(), 3);
+        assert!(eigenvectors.is_none());
+    }
+
+    #[test]
+    fn eig_banded_empty() {
+        let ab = vec![vec![]];
+        let (eigenvalues, eigenvectors) =
+            eig_banded(&ab, true, false, DecompOptions::default()).expect("empty");
+        assert!(eigenvalues.is_empty());
+        assert!(eigenvectors.unwrap().is_empty());
     }
 }
