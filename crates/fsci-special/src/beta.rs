@@ -123,6 +123,28 @@ pub fn fdtr(dfn: f64, dfd: f64, x: f64) -> f64 {
     btdtr(0.5 * dfn, 0.5 * dfd, z)
 }
 
+/// F-distribution survival function.
+///
+/// Returns P(X > x) = 1 - fdtr(dfn, dfd, x).
+///
+/// Matches `scipy.special.fdtrc(dfn, dfd, x)`.
+#[must_use]
+pub fn fdtrc(dfn: f64, dfd: f64, x: f64) -> f64 {
+    if dfn.is_nan() || dfd.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if dfn <= 0.0 || dfd <= 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 {
+        return 1.0;
+    }
+    // fdtrc(dfn, dfd, x) = 1 - fdtr(dfn, dfd, x)
+    // = 1 - btdtr(dfn/2, dfd/2, z) = btdtr(dfd/2, dfn/2, 1-z)
+    let z = dfn * x / (dfn * x + dfd);
+    btdtr(0.5 * dfd, 0.5 * dfn, 1.0 - z)
+}
+
 /// Inverse F-distribution CDF.
 ///
 /// Matches `scipy.special.fdtri(dfn, dfd, y)`.
@@ -801,6 +823,22 @@ fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fdtrc_complement() {
+        // fdtr + fdtrc should equal 1
+        for &dfn in &[1.0, 5.0, 10.0] {
+            for &dfd in &[1.0, 5.0, 10.0] {
+                for &x in &[0.5, 1.0, 2.0, 5.0] {
+                    let sum = fdtr(dfn, dfd, x) + fdtrc(dfn, dfd, x);
+                    assert!(
+                        (sum - 1.0).abs() < 1e-10,
+                        "fdtr({dfn}, {dfd}, {x}) + fdtrc = {sum}, expected 1.0"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn stdtr_basic() {
