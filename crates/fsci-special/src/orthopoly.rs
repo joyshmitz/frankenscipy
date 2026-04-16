@@ -342,6 +342,26 @@ pub fn roots_hermite(n: usize) -> (Vec<f64>, Vec<f64>) {
     golub_welsch(n, PI.sqrt(), |_k| 0.0, |k| ((k as f64) / 2.0).sqrt(), true)
 }
 
+/// Compute Gauss-Hermite quadrature nodes and weights for probabilist's Hermite polynomials.
+///
+/// The weight function is `exp(-x²/2)` on `(-∞, ∞)`.
+///
+/// Matches `scipy.special.roots_hermitenorm(n)`.
+///
+/// # Arguments
+/// * `n` - Number of quadrature points
+///
+/// # Returns
+/// Tuple of (nodes, weights) for the quadrature rule
+#[must_use]
+pub fn roots_hermitenorm(n: usize) -> (Vec<f64>, Vec<f64>) {
+    // mu0 = integral of exp(-x²/2) from -∞ to ∞ = sqrt(2π)
+    let mu0 = (2.0 * PI).sqrt();
+    // Probabilist's recurrence: He_{n+1}(x) = x * He_n(x) - n * He_{n-1}(x)
+    // So b_k = sqrt(k)
+    golub_welsch(n, mu0, |_k| 0.0, |k| (k as f64).sqrt(), true)
+}
+
 /// Compute Gauss-Laguerre quadrature nodes and weights on `[0, ∞)`.
 ///
 /// The weight function is `exp(-x)`.
