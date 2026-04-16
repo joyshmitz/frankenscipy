@@ -227,6 +227,30 @@ fn factorial_small(n: usize) -> f64 {
 // Window Functions
 // ══════════════════════════════════════════════════════════════════════
 
+/// Generate a rectangular (boxcar) window of length `n`.
+///
+/// A boxcar window is simply a vector of ones. It provides no tapering
+/// and is equivalent to not applying any window function.
+///
+/// Matches `scipy.signal.windows.boxcar(n, sym)`.
+///
+/// # Arguments
+/// * `n` - Number of points in the window
+/// * `sym` - If true (default), generates a symmetric window for filter design.
+///           If false, generates a periodic window for spectral analysis.
+pub fn boxcar(n: usize, sym: bool) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if sym {
+        vec![1.0; n]
+    } else {
+        // For periodic window, we would generate n+1 points and truncate
+        // but since all values are 1.0, the result is the same
+        vec![1.0; n]
+    }
+}
+
 /// Generate a Hann (Hanning) window of length `n`.
 ///
 /// Matches `scipy.signal.windows.hann(n)`.
@@ -6087,7 +6111,7 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
         "bartlett" | "triangle" => Ok(bartlett(nx)),
         "flattop" => Ok(flattop(nx)),
         "cosine" => Ok(cosine(nx)),
-        "rectangular" | "boxcar" | "rect" => Ok(vec![1.0; nx]),
+        "rectangular" | "boxcar" | "rect" => Ok(boxcar(nx, true)),
         "chebwin" => Ok(chebwin(nx, 100.0)),
         "parzen" => Ok(parzen(nx)),
         "triang" => Ok(triang(nx)),
@@ -7581,6 +7605,17 @@ mod tests {
         for (actual, want) in w.iter().zip(expected.iter()) {
             assert!((*actual - *want).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn boxcar_window_all_ones() {
+        let w = boxcar(5, true);
+        assert_eq!(w, vec![1.0; 5]);
+
+        let w_periodic = boxcar(5, false);
+        assert_eq!(w_periodic, vec![1.0; 5]);
+
+        assert!(boxcar(0, true).is_empty());
     }
 
     #[test]
