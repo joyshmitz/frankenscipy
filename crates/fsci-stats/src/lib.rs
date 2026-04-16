@@ -2860,6 +2860,82 @@ impl ContinuousDistribution for ExponNorm {
     }
 }
 
+/// Power normal distribution.
+///
+/// Matches `scipy.stats.powernorm`.
+pub struct PowerNorm {
+    pub c: f64,
+}
+
+impl PowerNorm {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c.is_finite() && c > 0.0, "c must be positive and finite");
+        Self { c }
+    }
+
+    fn log_sf(&self, x: f64) -> f64 {
+        self.c * fsci_special::log_ndtr(-x)
+    }
+
+    fn raw_moment(&self, order: i32) -> f64 {
+        if (self.c - 1.0).abs() < 1e-12 {
+            return match order {
+                1 => 0.0,
+                2 => 1.0,
+                _ => f64::NAN,
+            };
+        }
+
+        let eps = 1e-12;
+        let lo = self.ppf(eps);
+        let hi = self.ppf(1.0 - eps);
+        simpson_integrate_adaptive(
+            |x| x.powi(order) * self.pdf(x),
+            lo,
+            hi,
+            4_096,
+            1e-10,
+            1e-10,
+            8,
+        )
+    }
+}
+
+impl ContinuousDistribution for PowerNorm {
+    fn pdf(&self, x: f64) -> f64 {
+        (self.c.ln() - 0.5 * x * x - 0.5 * (2.0 * PI).ln()
+            + (self.c - 1.0) * fsci_special::log_ndtr(-x))
+        .exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        -self.log_sf(x).exp_m1()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        -fsci_special::ndtri(((1.0 - q).ln() / self.c).exp())
+    }
+
+    fn mean(&self) -> f64 {
+        self.raw_moment(1)
+    }
+
+    fn var(&self) -> f64 {
+        let mean = self.mean();
+        (self.raw_moment(2) - mean * mean).max(0.0)
+    }
+}
+
 /// Generalized Extreme Value (GEV) distribution.
 ///
 /// Matches `scipy.stats.genextreme`.
@@ -12688,6 +12764,63 @@ mod tests {
         let dist = ExponNorm::new(1.5);
         assert_close(dist.mean(), 1.5, 1e-12, "ExponNorm mean");
         assert_close(dist.var(), 3.25, 1e-12, "ExponNorm variance");
+    }
+
+    #[test]
+    fn powernorm_pdf_cdf_match_scipy_reference_values() {
+        let dist = PowerNorm::new(2.5);
+        let cases = [
+            (-2.0, 0.130_397_582_949_598_2, 0.055_908_579_072_061_4),
+            (-1.0, 0.466_835_435_527_963_1, 0.350_715_601_252_005_1),
+            (0.0, 0.352_618_489_717_347_7, 0.823_223_304_703_363_1),
+            (0.5, 0.150_843_041_398_128_49, 0.947_122_608_006_122_9),
+            (1.0, 0.038_228_259_138_313_68, 0.989_973_805_016_289_3),
+            (2.0, 0.000_463_166_340_410_448_95, 0.999_921_934_382_443_6),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("PowerNorm pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("PowerNorm cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn powernorm_ppf_roundtrip_matches_scipy_reference_values() {
+        let dist = PowerNorm::new(2.5);
+        let cases = [
+            (0.1, -1.736_151_960_039_111),
+            (0.25, -1.233_477_832_951_635),
+            (0.5, -0.699_429_858_259_551),
+            (0.75, -0.187_457_880_164_406_6),
+            (0.9, 0.258_249_521_507_514),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("PowerNorm ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("PowerNorm cdf(ppf({q}))"));
+        }
+    }
+
+    #[test]
+    fn powernorm_mean_and_variance_match_scipy_reference_values() {
+        let dist = PowerNorm::new(2.5);
+        assert_close(
+            dist.mean(),
+            -0.723_184_261_165_366_8,
+            1e-9,
+            "PowerNorm mean",
+        );
+        assert_close(
+            dist.var(),
+            0.610_027_542_500_311_1,
+            1e-9,
+            "PowerNorm variance",
+        );
+
+        let standard = PowerNorm::new(1.0);
+        assert_close(standard.mean(), 0.0, 1e-12, "PowerNorm(c=1) mean");
+        assert_close(standard.var(), 1.0, 1e-12, "PowerNorm(c=1) variance");
     }
 
     #[test]
