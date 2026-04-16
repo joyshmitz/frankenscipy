@@ -2406,6 +2406,113 @@ pub fn smirnovi(n: i32, p: f64) -> f64 {
     d
 }
 
+/// Cosine of angle given in degrees.
+///
+/// Matches `scipy.special.cosdg(x)`.
+#[must_use]
+pub fn cosdg(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // Convert degrees to radians and compute cosine
+    // Handle exact values for common angles
+    let x_mod = x.rem_euclid(360.0);
+    if x_mod == 0.0 || x_mod == 360.0 {
+        return 1.0;
+    }
+    if x_mod == 90.0 || x_mod == 270.0 {
+        return 0.0;
+    }
+    if x_mod == 180.0 {
+        return -1.0;
+    }
+    (x * std::f64::consts::PI / 180.0).cos()
+}
+
+/// Sine of angle given in degrees.
+///
+/// Matches `scipy.special.sindg(x)`.
+#[must_use]
+pub fn sindg(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // Handle exact values for common angles
+    let x_mod = x.rem_euclid(360.0);
+    if x_mod == 0.0 || x_mod == 180.0 || x_mod == 360.0 {
+        return 0.0;
+    }
+    if x_mod == 90.0 {
+        return 1.0;
+    }
+    if x_mod == 270.0 {
+        return -1.0;
+    }
+    (x * std::f64::consts::PI / 180.0).sin()
+}
+
+/// Tangent of angle given in degrees.
+///
+/// Matches `scipy.special.tandg(x)`.
+#[must_use]
+pub fn tandg(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // Handle exact values for common angles
+    let x_mod = x.rem_euclid(180.0);
+    if x_mod == 0.0 {
+        return 0.0;
+    }
+    if x_mod == 90.0 {
+        return f64::INFINITY;
+    }
+    if x_mod == 45.0 {
+        return 1.0;
+    }
+    if x_mod == 135.0 {
+        return -1.0;
+    }
+    (x * std::f64::consts::PI / 180.0).tan()
+}
+
+/// Cotangent of angle given in degrees.
+///
+/// Matches `scipy.special.cotdg(x)`.
+#[must_use]
+pub fn cotdg(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // Handle exact values for common angles
+    let x_mod = x.rem_euclid(180.0);
+    if x_mod == 0.0 {
+        return f64::INFINITY;
+    }
+    if x_mod == 90.0 {
+        return 0.0;
+    }
+    if x_mod == 45.0 {
+        return 1.0;
+    }
+    if x_mod == 135.0 {
+        return -1.0;
+    }
+    1.0 / (x * std::f64::consts::PI / 180.0).tan()
+}
+
+/// Convert angle from degrees to radians.
+///
+/// Matches `scipy.special.radian(d, m, s)` where d=degrees, m=minutes, s=seconds.
+#[must_use]
+pub fn radian(degrees: f64, minutes: f64, seconds: f64) -> f64 {
+    if degrees.is_nan() || minutes.is_nan() || seconds.is_nan() {
+        return f64::NAN;
+    }
+    let total_degrees = degrees + minutes / 60.0 + seconds / 3600.0;
+    total_degrees * std::f64::consts::PI / 180.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2497,5 +2604,61 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn degree_trig_exact_values() {
+        // Test exact values at common angles
+        assert!((cosdg(0.0) - 1.0).abs() < 1e-15);
+        assert!((cosdg(90.0) - 0.0).abs() < 1e-15);
+        assert!((cosdg(180.0) - (-1.0)).abs() < 1e-15);
+        assert!((cosdg(270.0) - 0.0).abs() < 1e-15);
+        assert!((cosdg(360.0) - 1.0).abs() < 1e-15);
+
+        assert!((sindg(0.0) - 0.0).abs() < 1e-15);
+        assert!((sindg(90.0) - 1.0).abs() < 1e-15);
+        assert!((sindg(180.0) - 0.0).abs() < 1e-15);
+        assert!((sindg(270.0) - (-1.0)).abs() < 1e-15);
+
+        assert!((tandg(0.0) - 0.0).abs() < 1e-15);
+        assert!((tandg(45.0) - 1.0).abs() < 1e-15);
+        assert!(tandg(90.0).is_infinite());
+
+        assert!(cotdg(0.0).is_infinite());
+        assert!((cotdg(45.0) - 1.0).abs() < 1e-15);
+        assert!((cotdg(90.0) - 0.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn degree_trig_general() {
+        // Test general values match radians conversion
+        for &deg in &[30.0, 45.0, 60.0, 120.0, 150.0, 210.0, 300.0] {
+            let rad = deg * std::f64::consts::PI / 180.0;
+            assert!(
+                (cosdg(deg) - rad.cos()).abs() < 1e-14,
+                "cosdg({deg}) failed"
+            );
+            assert!(
+                (sindg(deg) - rad.sin()).abs() < 1e-14,
+                "sindg({deg}) failed"
+            );
+        }
+    }
+
+    #[test]
+    fn radian_basic() {
+        // 180 degrees = π radians
+        assert!((radian(180.0, 0.0, 0.0) - std::f64::consts::PI).abs() < 1e-14);
+
+        // 90 degrees = π/2 radians
+        assert!((radian(90.0, 0.0, 0.0) - std::f64::consts::FRAC_PI_2).abs() < 1e-14);
+
+        // 45 degrees 30 minutes = 45.5 degrees
+        let expected = 45.5 * std::f64::consts::PI / 180.0;
+        assert!((radian(45.0, 30.0, 0.0) - expected).abs() < 1e-14);
+
+        // 1 degree 1 minute 1 second
+        let expected = (1.0 + 1.0 / 60.0 + 1.0 / 3600.0) * std::f64::consts::PI / 180.0;
+        assert!((radian(1.0, 1.0, 1.0) - expected).abs() < 1e-14);
     }
 }
