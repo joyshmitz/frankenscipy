@@ -181,6 +181,25 @@ pub fn gdtr(a: f64, b: f64, x: f64) -> f64 {
     gammainc_scalar(a, x / b, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
+/// Gamma distribution survival function with shape `a` and scale `b`.
+///
+/// Returns P(X > x) = 1 - gdtr(a, b, x).
+///
+/// Matches `scipy.special.gdtrc(a, b, x)`.
+#[must_use]
+pub fn gdtrc(a: f64, b: f64, x: f64) -> f64 {
+    if a.is_nan() || b.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if a <= 0.0 || b <= 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 {
+        return 1.0;
+    }
+    gammaincc_scalar(a, x / b, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
 /// Inverse gamma distribution CDF with shape `a` and scale `b`.
 ///
 /// Matches `scipy.special.gdtri(a, b, y)`.
@@ -1603,6 +1622,22 @@ mod tests {
                     assert!(
                         (m_recovered - m).abs() / m < 0.01,
                         "pdtri failed: k={k}, m={m}, p={p}, m_recovered={m_recovered}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gdtrc_complement() {
+        // gdtr + gdtrc should equal 1
+        for &a in &[1.0, 2.0, 5.0] {
+            for &b in &[1.0, 2.0] {
+                for &x in &[0.5, 1.0, 2.0, 5.0] {
+                    let sum = gdtr(a, b, x) + gdtrc(a, b, x);
+                    assert!(
+                        (sum - 1.0).abs() < 1e-10,
+                        "gdtr({a}, {b}, {x}) + gdtrc = {sum}, expected 1.0"
                     );
                 }
             }
