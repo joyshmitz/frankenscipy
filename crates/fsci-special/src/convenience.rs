@@ -3059,6 +3059,70 @@ pub fn negative(x: f64) -> f64 {
     }
 }
 
+/// Convert degrees to radians.
+///
+/// deg2rad(x) = x * π / 180
+///
+/// Matches `numpy.deg2rad(x)` and `numpy.radians(x)`.
+#[must_use]
+pub fn deg2rad(x: f64) -> f64 {
+    x * std::f64::consts::PI / 180.0
+}
+
+/// Convert radians to degrees.
+///
+/// rad2deg(x) = x * 180 / π
+///
+/// Matches `numpy.rad2deg(x)` and `numpy.degrees(x)`.
+#[must_use]
+pub fn rad2deg(x: f64) -> f64 {
+    x * 180.0 / std::f64::consts::PI
+}
+
+/// Round to nearest integer (as float).
+///
+/// Uses round-half-to-even (banker's rounding) like numpy.rint.
+/// This differs from `round` which uses round-half-away-from-zero.
+///
+/// Matches `numpy.rint(x)`.
+#[must_use]
+pub fn rint(x: f64) -> f64 {
+    // Rust's round_ties_even provides banker's rounding
+    x.round_ties_even()
+}
+
+/// Round towards zero (truncate to integer, return as float).
+///
+/// This is equivalent to trunc but emphasizes the "fix" semantic
+/// from numpy where values are "fixed" towards zero.
+///
+/// Matches `numpy.fix(x)`.
+#[must_use]
+pub fn fix(x: f64) -> f64 {
+    x.trunc()
+}
+
+/// Return quotient and remainder of division.
+///
+/// divmod(x, y) returns (floor(x/y), x % y) where the remainder
+/// has the same sign as the divisor y (Python/numpy convention).
+///
+/// Matches `numpy.divmod(x, y)`.
+#[must_use]
+pub fn divmod(x: f64, y: f64) -> (f64, f64) {
+    if y == 0.0 {
+        return (f64::NAN, f64::NAN);
+    }
+    if x.is_nan() || y.is_nan() {
+        return (f64::NAN, f64::NAN);
+    }
+
+    // Floor division and modulo (Python-style)
+    let q = (x / y).floor();
+    let r = x - q * y;
+    (q, r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3593,5 +3657,81 @@ mod tests {
         for &x in &[-3.0, -1.0, 0.0, 1.0, 3.0] {
             assert!((positive(x) + negative(x) - x.abs()).abs() < 1e-14);
         }
+    }
+
+    #[test]
+    fn deg2rad_rad2deg() {
+        use std::f64::consts::PI;
+
+        // deg2rad
+        assert!((deg2rad(0.0) - 0.0).abs() < 1e-14);
+        assert!((deg2rad(180.0) - PI).abs() < 1e-14);
+        assert!((deg2rad(90.0) - PI / 2.0).abs() < 1e-14);
+        assert!((deg2rad(360.0) - 2.0 * PI).abs() < 1e-14);
+        assert!((deg2rad(-90.0) - (-PI / 2.0)).abs() < 1e-14);
+
+        // rad2deg
+        assert!((rad2deg(0.0) - 0.0).abs() < 1e-14);
+        assert!((rad2deg(PI) - 180.0).abs() < 1e-12);
+        assert!((rad2deg(PI / 2.0) - 90.0).abs() < 1e-12);
+        assert!((rad2deg(2.0 * PI) - 360.0).abs() < 1e-12);
+
+        // Roundtrip
+        for &deg in &[0.0, 45.0, 90.0, 180.0, 270.0, 360.0] {
+            assert!((rad2deg(deg2rad(deg)) - deg).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn rint_basic() {
+        // Round to nearest, ties to even (banker's rounding)
+        assert!((rint(1.4) - 1.0).abs() < 1e-14);
+        assert!((rint(1.6) - 2.0).abs() < 1e-14);
+        assert!((rint(-1.4) - (-1.0)).abs() < 1e-14);
+        assert!((rint(-1.6) - (-2.0)).abs() < 1e-14);
+
+        // Ties go to even
+        assert!((rint(0.5) - 0.0).abs() < 1e-14); // 0 is even
+        assert!((rint(1.5) - 2.0).abs() < 1e-14); // 2 is even
+        assert!((rint(2.5) - 2.0).abs() < 1e-14); // 2 is even
+        assert!((rint(3.5) - 4.0).abs() < 1e-14); // 4 is even
+    }
+
+    #[test]
+    fn fix_basic() {
+        // Round towards zero
+        assert!((fix(1.7) - 1.0).abs() < 1e-14);
+        assert!((fix(-1.7) - (-1.0)).abs() < 1e-14);
+        assert!((fix(2.9) - 2.0).abs() < 1e-14);
+        assert!((fix(-2.9) - (-2.0)).abs() < 1e-14);
+        assert!((fix(0.0) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn divmod_basic() {
+        // Basic division
+        let (q, r) = divmod(7.0, 3.0);
+        assert!((q - 2.0).abs() < 1e-14);
+        assert!((r - 1.0).abs() < 1e-14);
+
+        // Negative dividend
+        let (q, r) = divmod(-7.0, 3.0);
+        assert!((q - (-3.0)).abs() < 1e-14);
+        assert!((r - 2.0).abs() < 1e-14);
+
+        // Negative divisor
+        let (q, r) = divmod(7.0, -3.0);
+        assert!((q - (-3.0)).abs() < 1e-14);
+        assert!((r - (-2.0)).abs() < 1e-14);
+
+        // Both negative
+        let (q, r) = divmod(-7.0, -3.0);
+        assert!((q - 2.0).abs() < 1e-14);
+        assert!((r - (-1.0)).abs() < 1e-14);
+
+        // Division by zero
+        let (q, r) = divmod(1.0, 0.0);
+        assert!(q.is_nan());
+        assert!(r.is_nan());
     }
 }
