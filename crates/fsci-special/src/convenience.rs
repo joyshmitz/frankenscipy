@@ -3764,6 +3764,100 @@ pub fn logsigmoid(x: f64) -> f64 {
     log_expit_scalar(x)
 }
 
+/// Log of 1 minus exp(x), computed in a numerically stable way.
+///
+/// log1mexp(x) = log(1 - exp(x))
+///
+/// For x < 0, this computes log(1 - exp(x)) stably.
+/// Uses log1p for x close to 0 and direct computation otherwise.
+///
+/// Returns NaN for x > 0 (since 1 - exp(x) < 0).
+#[must_use]
+pub fn log1mexp(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x > 0.0 {
+        return f64::NAN; // log of negative number
+    }
+    if x == 0.0 {
+        return f64::NEG_INFINITY; // log(0)
+    }
+    // For x < 0:
+    // If x is close to 0 (say x > -0.693 = -ln(2)), use log1p(-exp(x))
+    // Otherwise use log(1 - exp(x)) directly
+    if x > -std::f64::consts::LN_2 {
+        // x close to 0: exp(x) close to 1, use log1p for accuracy
+        (-x.exp()).ln_1p()
+    } else {
+        // x far from 0: exp(x) small, direct computation is fine
+        (1.0 - x.exp()).ln()
+    }
+}
+
+/// Log of 1 plus exp(x), computed in a numerically stable way.
+///
+/// log1pexp(x) = log(1 + exp(x))
+///
+/// This is the same as softplus(x). Provided as an alias for
+/// compatibility with other libraries.
+#[must_use]
+pub fn log1pexp(x: f64) -> f64 {
+    softplus(x)
+}
+
+/// x * log(x) with proper handling of x = 0.
+///
+/// xlogx(x) = x * log(x) for x > 0
+///          = 0         for x = 0
+///          = NaN       for x < 0
+///
+/// Used in entropy calculations where 0 * log(0) = 0 by convention.
+#[must_use]
+pub fn xlogx(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x < 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 0.0; // By L'Hôpital's rule, lim x*log(x) as x->0+ = 0
+    }
+    x * x.ln()
+}
+
+/// Negative entropy function: x * log(x).
+///
+/// negentropy(x) = x * log(x)
+///
+/// The negation of entropy contribution. Same as xlogx.
+/// Returns 0 for x = 0, NaN for x < 0.
+#[must_use]
+pub fn negentropy(x: f64) -> f64 {
+    xlogx(x)
+}
+
+/// Binary cross-entropy loss (logistic loss).
+///
+/// binary_cross_entropy(p, q) = -p * log(q) - (1-p) * log(1-q)
+///
+/// Computes the cross-entropy between true label p and predicted
+/// probability q. Both p and q should be in [0, 1].
+#[must_use]
+pub fn binary_cross_entropy(p: f64, q: f64) -> f64 {
+    if p.is_nan() || q.is_nan() {
+        return f64::NAN;
+    }
+    if q <= 0.0 || q >= 1.0 {
+        if (p == 0.0 && q == 0.0) || (p == 1.0 && q == 1.0) {
+            return 0.0; // 0 * log(0) = 0 by convention
+        }
+        return f64::INFINITY; // log(0) or log(negative)
+    }
+    -p * q.ln() - (1.0 - p) * (1.0 - q).ln()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4908,5 +5002,73 @@ mod tests {
         assert!((logsigmoid(-2.0) - log_expit_scalar(-2.0)).abs() < 1e-14);
         // logsigmoid(0) = log(0.5) = -ln(2)
         assert!((logsigmoid(0.0) - (-std::f64::consts::LN_2)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn log1mexp_basic() {
+        // log1mexp(x) = log(1 - exp(x)) for x < 0
+        // log1mexp(-ln(2)) = log(1 - 0.5) = log(0.5) = -ln(2)
+        assert!((log1mexp(-std::f64::consts::LN_2) - (-std::f64::consts::LN_2)).abs() < 1e-14);
+
+        // For x -> -inf, exp(x) -> 0, so log1mexp(x) -> log(1) = 0
+        assert!((log1mexp(-100.0) - 0.0).abs() < 1e-40);
+
+        // log1mexp(0) = log(0) = -inf
+        assert!(log1mexp(0.0).is_infinite() && log1mexp(0.0) < 0.0);
+
+        // log1mexp(x) is NaN for x > 0
+        assert!(log1mexp(1.0).is_nan());
+    }
+
+    #[test]
+    fn log1pexp_basic() {
+        // log1pexp is same as softplus
+        assert!((log1pexp(0.0) - softplus(0.0)).abs() < 1e-14);
+        assert!((log1pexp(2.0) - softplus(2.0)).abs() < 1e-14);
+        assert!((log1pexp(-2.0) - softplus(-2.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn xlogx_basic() {
+        // xlogx(0) = 0 by convention
+        assert!((xlogx(0.0) - 0.0).abs() < 1e-14);
+
+        // xlogx(1) = 1 * log(1) = 0
+        assert!((xlogx(1.0) - 0.0).abs() < 1e-14);
+
+        // xlogx(e) = e * log(e) = e
+        assert!((xlogx(std::f64::consts::E) - std::f64::consts::E).abs() < 1e-14);
+
+        // xlogx(x) for x > 0
+        assert!((xlogx(2.0) - 2.0 * 2.0_f64.ln()).abs() < 1e-14);
+
+        // xlogx(x) is NaN for x < 0
+        assert!(xlogx(-1.0).is_nan());
+    }
+
+    #[test]
+    fn negentropy_basic() {
+        // negentropy is same as xlogx
+        assert!((negentropy(0.0) - xlogx(0.0)).abs() < 1e-14);
+        assert!((negentropy(0.5) - xlogx(0.5)).abs() < 1e-14);
+        assert!((negentropy(2.0) - xlogx(2.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn binary_cross_entropy_basic() {
+        // BCE(1, 1) = 0 (perfect prediction)
+        assert!((binary_cross_entropy(1.0, 1.0) - 0.0).abs() < 1e-14);
+
+        // BCE(0, 0) = 0 (perfect prediction)
+        assert!((binary_cross_entropy(0.0, 0.0) - 0.0).abs() < 1e-14);
+
+        // BCE(1, 0.5) = -log(0.5) = ln(2)
+        assert!((binary_cross_entropy(1.0, 0.5) - std::f64::consts::LN_2).abs() < 1e-14);
+
+        // BCE(0, 0.5) = -log(0.5) = ln(2)
+        assert!((binary_cross_entropy(0.0, 0.5) - std::f64::consts::LN_2).abs() < 1e-14);
+
+        // BCE(0.5, 0.5) = -0.5*log(0.5) - 0.5*log(0.5) = ln(2)
+        assert!((binary_cross_entropy(0.5, 0.5) - std::f64::consts::LN_2).abs() < 1e-14);
     }
 }

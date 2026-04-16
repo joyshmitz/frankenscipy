@@ -30,6 +30,7 @@ pub use convenience::{
     bei,
     ber,
     bernoulli,
+    binary_cross_entropy,
     // Convenience wrappers
     betaincinv,
     boxcox_transform,
@@ -107,7 +108,9 @@ pub use convenience::{
     lambertw_scalar,
     ldexp,
     leaky_relu,
+    log1mexp,
     log1p,
+    log1pexp,
     logaddexp,
     logaddexp2,
     log10,
@@ -133,6 +136,7 @@ pub use convenience::{
     nextafter,
     ndtri,
     negative,
+    negentropy,
     owens_t,
     poch,
     positive,
@@ -176,6 +180,7 @@ pub use convenience::{
     trunc,
     wrightomega,
     xlog1py,
+    xlogx,
     xlogy,
     zeta_scalar,
 };
