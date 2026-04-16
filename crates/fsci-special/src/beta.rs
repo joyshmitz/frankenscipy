@@ -786,4 +786,67 @@ mod tests {
         // stdtri(v, 0.5) = 0
         assert!((stdtri(5.0, 0.5) - 0.0).abs() < 1e-10);
     }
+
+    #[test]
+    fn bdtr_basic() {
+        // bdtr(0, 1, 0.5) = 0.5 (1 trial, k=0: P(X=0) = 1-p)
+        let result = bdtr(0.0, 1.0, 0.5);
+        assert!(
+            (result - 0.5).abs() < 1e-10,
+            "bdtr(0, 1, 0.5) = {result}, expected 0.5"
+        );
+
+        // bdtr(0, 10, 0.5) = P(X=0) = 0.5^10 = 0.0009765625
+        let result = bdtr(0.0, 10.0, 0.5);
+        assert!(
+            (result - 0.0009765625).abs() < 1e-8,
+            "bdtr(0, 10, 0.5) = {result}, expected 0.0009765625"
+        );
+
+        // bdtr(5, 10, 0.5) = 0.623046875 (median of symmetric binomial)
+        let result = bdtr(5.0, 10.0, 0.5);
+        assert!(
+            (result - 0.623046875).abs() < 1e-6,
+            "bdtr(5, 10, 0.5) = {result}, expected 0.623046875"
+        );
+    }
+
+    #[test]
+    fn bdtr_bdtrc_complement() {
+        // bdtr(k, n, p) + bdtrc(k, n, p) = 1
+        for &n in &[5.0, 10.0, 20.0] {
+            for &p in &[0.2, 0.5, 0.8] {
+                for k in 0..=(n as i32) {
+                    let kf = k as f64;
+                    let sum = bdtr(kf, n, p) + bdtrc(kf, n, p);
+                    assert!(
+                        (sum - 1.0).abs() < 1e-10,
+                        "bdtr({kf}, {n}, {p}) + bdtrc = {sum}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bdtri_inverse() {
+        // bdtri should be inverse of bdtr
+        for &n in &[5.0, 10.0, 20.0] {
+            for &k in &[1.0, 3.0, 5.0] {
+                if k >= n {
+                    continue;
+                }
+                for &p in &[0.2, 0.5, 0.8] {
+                    let y = bdtr(k, n, p);
+                    if y > 0.01 && y < 0.99 {
+                        let p_recovered = bdtri(k, n, y);
+                        assert!(
+                            (p_recovered - p).abs() < 0.01,
+                            "bdtri failed: k={k}, n={n}, p={p}, y={y}, p_recovered={p_recovered}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
