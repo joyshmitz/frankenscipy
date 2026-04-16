@@ -403,6 +403,25 @@ pub fn roots_genlaguerre(n: usize, alpha: f64) -> (Vec<f64>, Vec<f64>) {
     )
 }
 
+/// Compute Gauss-Gegenbauer (ultraspherical) quadrature nodes and weights on `[-1, 1]`.
+///
+/// The weight function is `(1 - x²)^(alpha - 1/2)` where alpha > -1/2.
+///
+/// Matches `scipy.special.roots_gegenbauer(n, alpha)`.
+///
+/// # Arguments
+/// * `n` - Number of quadrature points
+/// * `alpha` - Parameter of the weight function (must be > -1/2)
+///
+/// # Returns
+/// Tuple of (nodes, weights) for the quadrature rule
+#[must_use]
+pub fn roots_gegenbauer(n: usize, alpha: f64) -> (Vec<f64>, Vec<f64>) {
+    assert!(alpha > -0.5, "alpha must be greater than -1/2");
+    // Gegenbauer with parameter alpha corresponds to Jacobi with alpha = beta = alpha - 1/2
+    roots_jacobi(n, alpha - 0.5, alpha - 0.5)
+}
+
 /// Compute Gauss-Jacobi quadrature nodes and weights on `[-1, 1]`.
 ///
 /// The weight function is `(1 - x)^alpha (1 + x)^beta`.
@@ -1168,6 +1187,31 @@ mod tests {
             1e-10,
             "genlaguerre weight sum = Gamma(alpha+1)",
         );
+    }
+
+    #[test]
+    fn roots_gegenbauer_alpha_half_matches_legendre() {
+        // Gegenbauer with alpha=0.5 corresponds to Legendre
+        // (weight function (1-x²)^0 = 1)
+        let (x_g, w_g) = roots_gegenbauer(5, 0.5);
+        let (x_l, w_l) = roots_legendre(5);
+        for (actual, expected) in x_g.iter().zip(&x_l) {
+            assert_close(*actual, *expected, 1e-12, "gegenbauer(0.5) vs legendre nodes");
+        }
+        for (actual, expected) in w_g.iter().zip(&w_l) {
+            assert_close(*actual, *expected, 1e-12, "gegenbauer(0.5) vs legendre weights");
+        }
+    }
+
+    #[test]
+    fn roots_gegenbauer_symmetric_and_weight_sum() {
+        // Gegenbauer with alpha=1 has weight function (1-x²)^0.5
+        // mu0 = integral of (1-x²)^0.5 from -1 to 1 = π/2
+        let (x, w) = roots_gegenbauer(4, 1.0);
+        assert_close(x[0], -x[3], 1e-12, "gegenbauer symmetry");
+        assert_close(x[1], -x[2], 1e-12, "gegenbauer symmetry");
+        assert_close(w[0], w[3], 1e-12, "gegenbauer weight symmetry");
+        assert_close(w.iter().sum::<f64>(), PI / 2.0, 1e-10, "gegenbauer weight sum");
     }
 
     // ── Associated Legendre tests ────────────────────────────────────
