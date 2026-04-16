@@ -4121,6 +4121,72 @@ impl ContinuousDistribution for DoubleWeibull {
     }
 }
 
+/// Double gamma distribution.
+///
+/// Matches `scipy.stats.dgamma`.
+pub struct DoubleGamma {
+    pub a: f64,
+}
+
+impl DoubleGamma {
+    #[must_use]
+    pub fn new(a: f64) -> Self {
+        assert!(a > 0.0, "a must be positive");
+        Self { a }
+    }
+}
+
+impl ContinuousDistribution for DoubleGamma {
+    fn pdf(&self, x: f64) -> f64 {
+        0.5 * x.abs().powf(self.a - 1.0) * (-x.abs()).exp() / ln_gamma(self.a).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            0.5 * upper_regularized_gamma(self.a, -x)
+        } else if x > 0.0 {
+            0.5 + 0.5 * lower_regularized_gamma(self.a, x)
+        } else {
+            0.5
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        if q == 0.5 {
+            return 0.0;
+        }
+
+        let target = if q < 0.5 {
+            1.0 - 2.0 * q
+        } else {
+            2.0 * q - 1.0
+        };
+        let g = fsci_special::gammaincinv(self.a, target);
+        if g.is_finite() && g >= 0.0 {
+            if q < 0.5 { -g } else { g }
+        } else {
+            ppf_bisection(|x| self.cdf(x), q, self.mean(), self.std())
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        0.0
+    }
+
+    fn var(&self) -> f64 {
+        self.a * (self.a + 1.0)
+    }
+}
+
 /// Semicircular distribution on [-1, 1].
 ///
 /// Matches `scipy.stats.semicircular`.
@@ -16080,6 +16146,67 @@ mod tests {
         for (&q, &want) in qs.iter().zip(expected.iter()) {
             assert_close(dist.ppf(q), want, 1e-12, &format!("DoubleWeibull ppf({q})"));
         }
+    }
+
+    #[test]
+    fn doublegamma_pdf_cdf_match_scipy_reference_values() {
+        let dist = DoubleGamma::new(2.5);
+        let cases = [
+            (-3.0, 0.097_304_346_659_282_93, 0.153_109_459_206_639_38),
+            (-1.5, 0.154_180_329_803_769_28, 0.349_992_917_939_313_8),
+            (-0.5, 0.080_656_908_173_047_8, 0.481_282_886_623_648_2),
+            (0.5, 0.080_656_908_173_047_8, 0.518_717_113_376_351_8),
+            (1.5, 0.154_180_329_803_769_28, 0.650_007_082_060_686_2),
+            (3.0, 0.097_304_346_659_282_93, 0.846_890_540_793_360_7),
+        ];
+
+        assert_eq!(dist.cdf(0.0), 0.5);
+        assert_eq!(dist.pdf(0.0), 0.0);
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("DoubleGamma pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("DoubleGamma cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn doublegamma_ppf_roundtrip_matches_scipy_reference_values() {
+        let dist = DoubleGamma::new(2.5);
+        let cases = [
+            (0.1, -3.644_638_063_324_482_6),
+            (0.25, -2.175_730_095_547_763),
+            (0.5, 0.0),
+            (0.75, 2.175_730_095_547_763),
+            (0.9, 3.644_638_063_324_480_4),
+        ];
+
+        assert!(dist.ppf(0.0).is_infinite() && dist.ppf(0.0).is_sign_negative());
+        assert!(dist.ppf(1.0).is_infinite() && dist.ppf(1.0).is_sign_positive());
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-11, &format!("DoubleGamma ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("DoubleGamma cdf(ppf({q}))"));
+        }
+    }
+
+    #[test]
+    fn doublegamma_boundary_behavior_and_moments_match_contract() {
+        let finite_at_zero = DoubleGamma::new(1.0);
+        assert_close(
+            finite_at_zero.pdf(0.0),
+            0.5,
+            1e-15,
+            "DoubleGamma(a=1) pdf(0)",
+        );
+
+        let singular_at_zero = DoubleGamma::new(0.5);
+        assert!(singular_at_zero.pdf(0.0).is_infinite());
+        assert_eq!(singular_at_zero.cdf(0.0), 0.5);
+
+        let dist = DoubleGamma::new(2.5);
+        assert_eq!(dist.mean(), 0.0);
+        assert_close(dist.var(), 8.75, 1e-12, "DoubleGamma variance");
     }
 
     #[test]
