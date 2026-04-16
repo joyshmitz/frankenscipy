@@ -2805,6 +2805,87 @@ pub fn cospi(x: f64) -> f64 {
     }
 }
 
+/// Compute log(1 + x) with better accuracy for small x.
+///
+/// For small x, the direct computation log(1+x) loses precision.
+/// This function uses a numerically stable algorithm.
+///
+/// Matches `numpy.log1p(x)`.
+#[must_use]
+pub fn log1p(x: f64) -> f64 {
+    x.ln_1p()
+}
+
+/// Compute exp(x) - 1 with better accuracy for small x.
+///
+/// For small x, exp(x) is close to 1, so exp(x)-1 loses precision.
+/// This function uses a numerically stable algorithm.
+///
+/// Matches `numpy.expm1(x)`.
+#[must_use]
+pub fn expm1(x: f64) -> f64 {
+    x.exp_m1()
+}
+
+/// Compute log(exp(x) + exp(y)) without overflow.
+///
+/// This is useful for adding probabilities in log-space.
+/// logaddexp(x, y) = log(exp(x) + exp(y))
+///                 = max(x, y) + log1p(exp(-|x - y|))
+///
+/// Matches `numpy.logaddexp(x, y)`.
+#[must_use]
+pub fn logaddexp(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if x == f64::NEG_INFINITY {
+        return y;
+    }
+    if y == f64::NEG_INFINITY {
+        return x;
+    }
+    if x == f64::INFINITY || y == f64::INFINITY {
+        return f64::INFINITY;
+    }
+
+    // Use the stable formula: max(x,y) + log1p(exp(-|x-y|))
+    let (larger, smaller) = if x >= y { (x, y) } else { (y, x) };
+    larger + (smaller - larger).exp().ln_1p()
+}
+
+/// Compute log2(2^x + 2^y) without overflow.
+///
+/// This is useful for adding values in log2-space.
+/// logaddexp2(x, y) = log2(2^x + 2^y)
+///                  = max(x, y) + log2(1 + 2^{-|x - y|})
+///
+/// Matches `numpy.logaddexp2(x, y)`.
+#[must_use]
+pub fn logaddexp2(x: f64, y: f64) -> f64 {
+    use std::f64::consts::LN_2;
+
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if x == f64::NEG_INFINITY {
+        return y;
+    }
+    if y == f64::NEG_INFINITY {
+        return x;
+    }
+    if x == f64::INFINITY || y == f64::INFINITY {
+        return f64::INFINITY;
+    }
+
+    // Use the stable formula: max(x,y) + log2(1 + 2^(-|x-y|))
+    let (larger, smaller) = if x >= y { (x, y) } else { (y, x) };
+    let diff = smaller - larger;
+    // 2^diff = exp(diff * ln(2))
+    let two_pow_diff = (diff * LN_2).exp();
+    larger + two_pow_diff.ln_1p() / LN_2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3152,5 +3233,55 @@ mod tests {
         assert!((cospi(0.25) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-14);
         // Negative
         assert!((cospi(-0.25) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-14);
+    }
+
+    #[test]
+    fn log1p_basic() {
+        // log1p(0) = 0
+        assert!((log1p(0.0) - 0.0).abs() < 1e-14);
+        // log1p(e-1) = 1
+        assert!((log1p(std::f64::consts::E - 1.0) - 1.0).abs() < 1e-14);
+        // Small values - this is where log1p shines
+        let small = 1e-15;
+        assert!((log1p(small) - small).abs() < 1e-28);
+    }
+
+    #[test]
+    fn expm1_basic() {
+        // expm1(0) = 0
+        assert!((expm1(0.0) - 0.0).abs() < 1e-14);
+        // expm1(1) = e-1
+        assert!((expm1(1.0) - (std::f64::consts::E - 1.0)).abs() < 1e-14);
+        // Small values - this is where expm1 shines
+        let small = 1e-15;
+        assert!((expm1(small) - small).abs() < 1e-28);
+    }
+
+    #[test]
+    fn logaddexp_basic() {
+        // logaddexp(0, 0) = log(2)
+        assert!((logaddexp(0.0, 0.0) - std::f64::consts::LN_2).abs() < 1e-14);
+        // logaddexp(x, -inf) = x
+        assert!((logaddexp(1.0, f64::NEG_INFINITY) - 1.0).abs() < 1e-14);
+        // logaddexp(-inf, x) = x
+        assert!((logaddexp(f64::NEG_INFINITY, 2.0) - 2.0).abs() < 1e-14);
+        // For large difference, result ≈ max
+        assert!((logaddexp(100.0, 0.0) - 100.0).abs() < 1e-10);
+        // Symmetric
+        assert!((logaddexp(1.0, 2.0) - logaddexp(2.0, 1.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn logaddexp2_basic() {
+        // logaddexp2(0, 0) = 1  (log2(2^0 + 2^0) = log2(2) = 1)
+        assert!((logaddexp2(0.0, 0.0) - 1.0).abs() < 1e-14);
+        // logaddexp2(x, -inf) = x
+        assert!((logaddexp2(1.0, f64::NEG_INFINITY) - 1.0).abs() < 1e-14);
+        // logaddexp2(-inf, x) = x
+        assert!((logaddexp2(f64::NEG_INFINITY, 2.0) - 2.0).abs() < 1e-14);
+        // For large difference, result ≈ max
+        assert!((logaddexp2(100.0, 0.0) - 100.0).abs() < 1e-10);
+        // Symmetric
+        assert!((logaddexp2(1.0, 2.0) - logaddexp2(2.0, 1.0)).abs() < 1e-14);
     }
 }
