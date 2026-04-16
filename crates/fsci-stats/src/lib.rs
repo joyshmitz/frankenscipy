@@ -1982,6 +1982,80 @@ impl DiscreteDistribution for Hypergeometric {
     }
 }
 
+/// Logarithmic (log-series) distribution.
+///
+/// Matches `scipy.stats.logser`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LogSeries {
+    pub p: f64,
+}
+
+impl LogSeries {
+    #[must_use]
+    pub fn new(p: f64) -> Self {
+        assert!(p > 0.0 && p < 1.0, "p must be in (0, 1), got {p}");
+        Self { p }
+    }
+
+    fn norm(&self) -> f64 {
+        -(-self.p).ln_1p()
+    }
+
+    /// Percent point function (inverse CDF).
+    pub fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+
+        let norm = self.norm();
+        let mut sum = 0.0;
+        let mut k: u64 = 1;
+        loop {
+            sum += self.p.powf(k as f64) / (k as f64 * norm);
+            if sum >= q || k >= 1_000_000 {
+                return k as f64;
+            }
+            k += 1;
+        }
+    }
+}
+
+impl DiscreteDistribution for LogSeries {
+    fn pmf(&self, k: u64) -> f64 {
+        if k == 0 {
+            return 0.0;
+        }
+        self.p.powf(k as f64) / (k as f64 * self.norm())
+    }
+
+    fn cdf(&self, k: u64) -> f64 {
+        if k == 0 {
+            return 0.0;
+        }
+        let norm = self.norm();
+        let mut sum = 0.0;
+        for i in 1..=k {
+            sum += self.p.powf(i as f64) / (i as f64 * norm);
+        }
+        sum.min(1.0)
+    }
+
+    fn mean(&self) -> f64 {
+        self.p / ((1.0 - self.p) * self.norm())
+    }
+
+    fn var(&self) -> f64 {
+        let norm = self.norm();
+        self.p * (norm - self.p) / ((1.0 - self.p).powi(2) * norm * norm)
+    }
+}
+
 /// Log of the Beta function: ln(B(a,b)) = ln(Γ(a)) + ln(Γ(b)) - ln(Γ(a+b))
 fn ln_beta(a: f64, b: f64) -> f64 {
     ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b)
@@ -14241,6 +14315,68 @@ mod tests {
         assert_close(d.var(), 3.0, 1e-12, "Poisson var via trait");
         let sum: f64 = (0..=30).map(|k| d.pmf(k)).sum();
         assert!((sum - 1.0).abs() < 1e-6, "Poisson PMF sum via trait");
+    }
+
+    #[test]
+    fn logseries_pmf_cdf_match_scipy_reference_values() {
+        let dist = LogSeries::new(0.65);
+        let cases = [
+            (1, 0.619_152_506_726_217_9, 0.619_152_506_726_217_9),
+            (2, 0.201_224_564_686_020_85, 0.820_377_071_412_238_7),
+            (3, 0.087_197_311_363_942_36, 0.907_574_382_776_181_1),
+            (5, 0.022_104_518_430_759_39, 0.972_187_590_496_862_4),
+            (10, 0.001_282_383_275_267_492, 0.998_100_223_993_989_7),
+        ];
+
+        assert_eq!(dist.pmf(0), 0.0);
+        assert_eq!(dist.cdf(0), 0.0);
+
+        for &(k, pmf, cdf) in &cases {
+            assert_close(dist.pmf(k), pmf, 1e-12, &format!("LogSeries pmf({k})"));
+            assert_close(dist.cdf(k), cdf, 1e-12, &format!("LogSeries cdf({k})"));
+        }
+    }
+
+    #[test]
+    fn logseries_ppf_matches_scipy_reference_values() {
+        let dist = LogSeries::new(0.65);
+        let cases = [
+            (0.1, 1.0),
+            (0.25, 1.0),
+            (0.5, 1.0),
+            (0.75, 2.0),
+            (0.9, 3.0),
+            (0.99, 7.0),
+        ];
+
+        assert_eq!(dist.ppf(0.0), 0.0);
+        assert!(dist.ppf(1.0).is_infinite());
+
+        for &(q, want) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, want, 1e-12, &format!("LogSeries ppf({q})"));
+            assert!(dist.cdf(x as u64) >= q, "cdf(ppf({q}))");
+            if x > 1.0 {
+                assert!(dist.cdf(x as u64 - 1) < q, "ppf minimality at {q}");
+            }
+        }
+    }
+
+    #[test]
+    fn logseries_mean_var_and_mass_match_closed_form() {
+        let cases = [
+            (0.2, 1.120_355_029_431_137_3, 0.145_248_394_817_277_14),
+            (0.5, 1.442_695_040_888_963_4, 0.804_021_100_772_319),
+            (0.8, 2.485_339_738_238_447_4, 6.249_785_076_725_087),
+        ];
+
+        for &(p, mean, var) in &cases {
+            let dist = LogSeries::new(p);
+            assert_close(dist.mean(), mean, 1e-12, &format!("LogSeries mean({p})"));
+            assert_close(dist.var(), var, 1e-11, &format!("LogSeries var({p})"));
+            let mass: f64 = (1..=500).map(|k| dist.pmf(k)).sum();
+            assert_close(mass, 1.0, 1e-10, &format!("LogSeries mass({p})"));
+        }
     }
 
     #[test]
