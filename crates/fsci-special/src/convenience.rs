@@ -3533,6 +3533,20 @@ pub fn silu(x: f64) -> f64 {
     swish(x, 1.0)
 }
 
+/// Log-expit function (log of logistic sigmoid).
+///
+/// log_expit(x) = log(1 / (1 + exp(-x))) = -log(1 + exp(-x))
+///
+/// Numerically stable computation of log(expit(x)).
+#[must_use]
+pub fn log_expit_scalar(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // log(expit(x)) = -log(1 + exp(-x)) = -softplus(-x)
+    -softplus(-x)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4460,5 +4474,18 @@ mod tests {
         assert!((silu(0.0) - swish(0.0, 1.0)).abs() < 1e-14);
         assert!((silu(2.0) - swish(2.0, 1.0)).abs() < 1e-14);
         assert!((silu(-2.0) - swish(-2.0, 1.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn log_expit_scalar_basic() {
+        // log_expit(0) = log(0.5) = -ln(2)
+        assert!((log_expit_scalar(0.0) - (-std::f64::consts::LN_2)).abs() < 1e-14);
+        // log_expit should equal log(expit_scalar(x))
+        assert!((log_expit_scalar(2.0) - expit_scalar(2.0).ln()).abs() < 1e-14);
+        // For large negative x, log_expit(x) ≈ x
+        assert!((log_expit_scalar(-50.0) - (-50.0)).abs() < 1e-10);
+        // Symmetric property: log_expit(x) + log_expit(-x) = -log(2) - |x|... actually just test consistency
+        assert!((log_expit_scalar(5.0) - expit_scalar(5.0).ln()).abs() < 1e-14);
+        assert!((log_expit_scalar(-5.0) - expit_scalar(-5.0).ln()).abs() < 1e-14);
     }
 }

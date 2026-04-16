@@ -111,6 +111,7 @@ pub use convenience::{
     log_ndtr,
     log_softmax,
     logit,
+    log_expit_scalar,
     logsumexp,
     maximum,
     minimum,
