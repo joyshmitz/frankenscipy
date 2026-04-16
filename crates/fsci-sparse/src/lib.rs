@@ -8,7 +8,7 @@ pub mod ops;
 pub use construct::{block_diag, bmat, diags, eye, kron, random};
 pub use formats::{
     CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, DokMatrix,
-    NalgebraBridge, Shape2D, SparseError, SparseFormat, SparseResult,
+    LilMatrix, NalgebraBridge, Shape2D, SparseError, SparseFormat, SparseResult,
 };
 pub use linalg::{
     ConnectedComponentsResult,
@@ -398,6 +398,119 @@ mod tests {
         assert_eq!(coo.row_indices(), &[0, 0]);
         assert_eq!(coo.col_indices(), &[1, 1]);
         assert_vec_close(coo.data(), &[1.0, 2.0]);
+    }
+
+    #[test]
+    fn lil_from_triplets_merges_duplicates_and_preserves_explicit_zero() {
+        let lil = LilMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![1.5, 2.5, -4.0, 0.0, 3.0],
+            vec![0, 0, 0, 1, 2],
+            vec![1, 1, 1, 0, 2],
+        )
+        .expect("lil with duplicate triplets");
+        assert_eq!(lil.nnz(), 3);
+        assert_eq!(lil.row_indices()[0], vec![1]);
+        assert_eq!(lil.row_data()[0], vec![0.0]);
+        assert_eq!(lil.row_indices()[1], vec![0]);
+        assert_eq!(lil.row_data()[1], vec![0.0]);
+        assert_eq!(lil.row_indices()[2], vec![2]);
+        assert_eq!(lil.row_data()[2], vec![3.0]);
+        assert!((lil.get(0, 1).expect("get") - 0.0).abs() <= EPS);
+    }
+
+    #[test]
+    fn lil_insert_maintains_sorted_rows_and_tracks_explicit_zero() {
+        let mut lil = LilMatrix::new(Shape2D::new(2, 4));
+        assert_eq!(lil.insert(1, 3, 4.0).expect("insert"), None);
+        assert_eq!(lil.insert(1, 1, -2.0).expect("insert"), None);
+        assert_eq!(lil.insert(1, 2, 0.0).expect("insert"), None);
+        assert_eq!(lil.row_indices()[1], vec![1, 2, 3]);
+        assert_eq!(lil.row_data()[1], vec![-2.0, 0.0, 4.0]);
+        assert!(lil.contains(1, 2).expect("contains"));
+
+        let previous = lil.insert(1, 2, 5.0).expect("update");
+        assert!(matches!(previous, Some(value) if (value - 0.0).abs() <= EPS));
+        assert_eq!(lil.row_data()[1], vec![-2.0, 5.0, 4.0]);
+    }
+
+    #[test]
+    fn lil_remove_deletes_entry() {
+        let mut lil =
+            LilMatrix::from_triplets(Shape2D::new(2, 3), vec![7.0, 1.5], vec![0, 1], vec![2, 0])
+                .expect("lil");
+        let removed = lil.remove(0, 2).expect("remove");
+        assert!(matches!(removed, Some(value) if (value - 7.0).abs() <= EPS));
+        assert_eq!(lil.nnz(), 1);
+        assert!(!lil.contains(0, 2).expect("contains"));
+        assert_eq!(lil.remove(0, 2).expect("missing remove"), None);
+    }
+
+    #[test]
+    fn lil_rejects_out_of_bounds_coordinates() {
+        let err = LilMatrix::from_triplets(Shape2D::new(2, 2), vec![1.0], vec![0], vec![2])
+            .expect_err("col index out of bounds");
+        assert!(matches!(
+            err,
+            SparseError::IndexOutOfBounds {
+                axis: "col",
+                index: 2,
+                bound: 2
+            }
+        ));
+
+        let err = LilMatrix::from_rows(
+            Shape2D::new(2, 2),
+            vec![vec![0], vec![2]],
+            vec![vec![1.0], vec![5.0]],
+        )
+        .expect_err("row with out of bounds col");
+        assert!(matches!(
+            err,
+            SparseError::IndexOutOfBounds {
+                axis: "col",
+                index: 2,
+                bound: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn lil_to_coo_preserves_dense_semantics() {
+        let lil = LilMatrix::from_rows(
+            Shape2D::new(3, 4),
+            vec![vec![1], vec![0, 3], vec![2]],
+            vec![vec![2.0], vec![-1.0, 0.0], vec![5.0]],
+        )
+        .expect("lil");
+        let dense = dense_from_coo(&lil.to_coo().expect("lil->coo"));
+        assert_matrix_close(
+            &dense,
+            &[
+                vec![0.0, 2.0, 0.0, 0.0],
+                vec![-1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 0.0, 5.0, 0.0],
+            ],
+        );
+        assert_eq!(lil.nnz(), 4);
+    }
+
+    #[test]
+    fn lil_converts_through_csr_and_csc() {
+        let lil = LilMatrix::from_triplets(
+            Shape2D::new(4, 4),
+            vec![3.0, -2.0, 7.0, 1.5, 0.0],
+            vec![0, 1, 2, 3, 1],
+            vec![0, 2, 1, 3, 0],
+        )
+        .expect("lil");
+        let dense_from_lil = dense_from_coo(&lil.to_coo().expect("lil->coo"));
+        let dense_from_csr =
+            dense_from_coo(&lil.to_csr().expect("lil->csr").to_coo().expect("csr->coo"));
+        let dense_from_csc =
+            dense_from_coo(&lil.to_csc().expect("lil->csc").to_coo().expect("csc->coo"));
+        assert_matrix_close(&dense_from_lil, &dense_from_csr);
+        assert_matrix_close(&dense_from_lil, &dense_from_csc);
     }
 
     #[test]

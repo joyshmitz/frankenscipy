@@ -39,6 +39,7 @@ pub enum SparseFormat {
     Coo,
     Dia,
     Dok,
+    Lil,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -407,6 +408,199 @@ impl CooMatrix {
             mode,
             validation_result: validation_result.into(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LilMatrix {
+    pub(crate) shape: Shape2D,
+    pub(crate) row_indices: Vec<Vec<usize>>,
+    pub(crate) row_data: Vec<Vec<f64>>,
+}
+
+impl LilMatrix {
+    #[must_use]
+    pub fn new(shape: Shape2D) -> Self {
+        Self {
+            shape,
+            row_indices: vec![Vec::new(); shape.rows],
+            row_data: vec![Vec::new(); shape.rows],
+        }
+    }
+
+    pub fn from_rows(
+        shape: Shape2D,
+        row_indices: Vec<Vec<usize>>,
+        row_data: Vec<Vec<f64>>,
+    ) -> SparseResult<Self> {
+        if row_indices.len() != shape.rows || row_data.len() != shape.rows {
+            return Err(SparseError::InvalidShape {
+                message: "LIL outer row containers must match shape.rows".to_string(),
+            });
+        }
+
+        let mut canonical_indices = Vec::with_capacity(shape.rows);
+        let mut canonical_data = Vec::with_capacity(shape.rows);
+
+        for (row_cols, row_values) in row_indices.into_iter().zip(row_data) {
+            let (cols, values) = canonicalize_lil_row(row_cols, row_values, shape.cols)?;
+            canonical_indices.push(cols);
+            canonical_data.push(values);
+        }
+
+        Ok(Self {
+            shape,
+            row_indices: canonical_indices,
+            row_data: canonical_data,
+        })
+    }
+
+    pub fn from_triplets(
+        shape: Shape2D,
+        data: Vec<f64>,
+        row_indices: Vec<usize>,
+        col_indices: Vec<usize>,
+    ) -> SparseResult<Self> {
+        if data.len() != row_indices.len() || data.len() != col_indices.len() {
+            return Err(SparseError::IncompatibleShape {
+                message: "LIL data/row/col lengths must match".to_string(),
+            });
+        }
+
+        let mut row_maps = vec![BTreeMap::new(); shape.rows];
+        for ((row, col), value) in row_indices.into_iter().zip(col_indices).zip(data) {
+            validate_coordinate(shape, row, col)?;
+            *row_maps[row].entry(col).or_insert(0.0) += value;
+        }
+
+        let mut canonical_indices = Vec::with_capacity(shape.rows);
+        let mut canonical_data = Vec::with_capacity(shape.rows);
+        for row_map in row_maps {
+            let mut cols = Vec::with_capacity(row_map.len());
+            let mut values = Vec::with_capacity(row_map.len());
+            for (col, value) in row_map {
+                cols.push(col);
+                values.push(value);
+            }
+            canonical_indices.push(cols);
+            canonical_data.push(values);
+        }
+
+        Ok(Self {
+            shape,
+            row_indices: canonical_indices,
+            row_data: canonical_data,
+        })
+    }
+
+    #[must_use]
+    pub const fn shape(&self) -> Shape2D {
+        self.shape
+    }
+
+    #[must_use]
+    pub fn nnz(&self) -> usize {
+        self.row_data.iter().map(Vec::len).sum()
+    }
+
+    #[must_use]
+    pub fn row_indices(&self) -> &[Vec<usize>] {
+        &self.row_indices
+    }
+
+    #[must_use]
+    pub fn row_data(&self) -> &[Vec<f64>] {
+        &self.row_data
+    }
+
+    pub fn get(&self, row: usize, col: usize) -> SparseResult<f64> {
+        validate_coordinate(self.shape, row, col)?;
+        let row_cols = &self.row_indices[row];
+        Ok(match row_cols.binary_search(&col) {
+            Ok(idx) => self.row_data[row][idx],
+            Err(_) => 0.0,
+        })
+    }
+
+    pub fn contains(&self, row: usize, col: usize) -> SparseResult<bool> {
+        validate_coordinate(self.shape, row, col)?;
+        Ok(self.row_indices[row].binary_search(&col).is_ok())
+    }
+
+    pub fn insert(&mut self, row: usize, col: usize, value: f64) -> SparseResult<Option<f64>> {
+        validate_coordinate(self.shape, row, col)?;
+        match self.row_indices[row].binary_search(&col) {
+            Ok(idx) => {
+                let previous = self.row_data[row][idx];
+                self.row_data[row][idx] = value;
+                Ok(Some(previous))
+            }
+            Err(idx) => {
+                self.row_indices[row].insert(idx, col);
+                self.row_data[row].insert(idx, value);
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn remove(&mut self, row: usize, col: usize) -> SparseResult<Option<f64>> {
+        validate_coordinate(self.shape, row, col)?;
+        Ok(match self.row_indices[row].binary_search(&col) {
+            Ok(idx) => {
+                self.row_indices[row].remove(idx);
+                Some(self.row_data[row].remove(idx))
+            }
+            Err(_) => None,
+        })
+    }
+
+    #[must_use]
+    pub fn construction_log(
+        &self,
+        mode: RuntimeMode,
+        operation_id: impl Into<String>,
+        validation_result: impl Into<String>,
+    ) -> ConstructionLogEntry {
+        ConstructionLogEntry {
+            timestamp: now_timestamp(),
+            operation_id: operation_id.into(),
+            format: SparseFormat::Lil,
+            shape: self.shape,
+            nnz: self.nnz(),
+            mode,
+            validation_result: validation_result.into(),
+        }
+    }
+
+    pub fn to_coo(&self) -> SparseResult<CooMatrix> {
+        let mut rows = Vec::with_capacity(self.nnz());
+        let mut cols = Vec::with_capacity(self.nnz());
+        let mut data = Vec::with_capacity(self.nnz());
+
+        for (row, (row_cols, row_values)) in self
+            .row_indices
+            .iter()
+            .zip(self.row_data.iter())
+            .enumerate()
+        {
+            for (&col, &value) in row_cols.iter().zip(row_values.iter()) {
+                rows.push(row);
+                cols.push(col);
+                data.push(value);
+            }
+        }
+
+        CooMatrix::from_triplets(self.shape, data, rows, cols, false)
+    }
+
+    pub fn to_csr(&self) -> SparseResult<CsrMatrix> {
+        use crate::ops::FormatConvertible;
+        self.to_coo()?.to_csr()
+    }
+
+    pub fn to_csc(&self) -> SparseResult<CscMatrix> {
+        use crate::ops::FormatConvertible;
+        self.to_coo()?.to_csc()
     }
 }
 
@@ -804,6 +998,34 @@ impl NalgebraBridge for DokMatrix {
     }
 }
 
+impl NalgebraBridge for LilMatrix {
+    fn to_nalgebra_cs(&self) -> NalgebraCsMatrix<f64> {
+        let mut rows = Vec::with_capacity(self.nnz());
+        let mut cols = Vec::with_capacity(self.nnz());
+        let mut vals = Vec::with_capacity(self.nnz());
+
+        for (row, (row_cols, row_values)) in self
+            .row_indices
+            .iter()
+            .zip(self.row_data.iter())
+            .enumerate()
+        {
+            for (&col, &value) in row_cols.iter().zip(row_values.iter()) {
+                rows.push(row);
+                cols.push(col);
+                vals.push(value);
+            }
+        }
+
+        NalgebraCsMatrix::from_triplet(self.shape.rows, self.shape.cols, &rows, &cols, &vals)
+    }
+
+    fn from_nalgebra_cs(matrix: &NalgebraCsMatrix<f64>) -> SparseResult<Self> {
+        let coo = CooMatrix::from_nalgebra_cs(matrix)?;
+        Self::from_triplets(coo.shape, coo.data, coo.row_indices, coo.col_indices)
+    }
+}
+
 impl NalgebraBridge for CsrMatrix {
     fn to_nalgebra_cs(&self) -> NalgebraCsMatrix<f64> {
         let mut rows = Vec::with_capacity(self.nnz());
@@ -996,6 +1218,50 @@ fn validate_coordinate(shape: Shape2D, row: usize, col: usize) -> SparseResult<(
     Ok(())
 }
 
+fn canonicalize_lil_row(
+    row_indices: Vec<usize>,
+    row_data: Vec<f64>,
+    col_bound: usize,
+) -> SparseResult<(Vec<usize>, Vec<f64>)> {
+    if row_indices.len() != row_data.len() {
+        return Err(SparseError::IncompatibleShape {
+            message: "LIL row indices/data lengths must match".to_string(),
+        });
+    }
+
+    let mut pairs = Vec::with_capacity(row_indices.len());
+    for (col, value) in row_indices.into_iter().zip(row_data) {
+        if col >= col_bound {
+            return Err(SparseError::IndexOutOfBounds {
+                axis: "col",
+                index: col,
+                bound: col_bound,
+            });
+        }
+        pairs.push((col, value));
+    }
+
+    pairs.sort_unstable_by_key(|(col, _)| *col);
+
+    let mut canonical_indices = Vec::with_capacity(pairs.len());
+    let mut canonical_data = Vec::with_capacity(pairs.len());
+    for (col, value) in pairs {
+        match canonical_indices.last().copied() {
+            Some(last_col) if last_col == col => {
+                if let Some(last_value) = canonical_data.last_mut() {
+                    *last_value += value;
+                }
+            }
+            _ => {
+                canonical_indices.push(col);
+                canonical_data.push(value);
+            }
+        }
+    }
+
+    Ok((canonical_indices, canonical_data))
+}
+
 fn diagonal_len(shape: Shape2D, offset: isize) -> usize {
     let start_row = if offset < 0 { (-offset) as usize } else { 0 };
     let start_col = if offset > 0 { offset as usize } else { 0 };
@@ -1043,6 +1309,7 @@ fn format_label(format: SparseFormat) -> &'static str {
         SparseFormat::Coo => "coo",
         SparseFormat::Dia => "dia",
         SparseFormat::Dok => "dok",
+        SparseFormat::Lil => "lil",
     }
 }
 
