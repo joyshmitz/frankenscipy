@@ -218,6 +218,32 @@ pub fn stdtr(v: f64, t: f64) -> f64 {
     }
 }
 
+/// Student's t distribution survival function.
+///
+/// Returns P(T > t) = 1 - stdtr(v, t) where T follows a Student's t
+/// distribution with v degrees of freedom.
+///
+/// Matches `scipy.special.stdtrc(v, t)`.
+#[must_use]
+pub fn stdtrc(v: f64, t: f64) -> f64 {
+    if v.is_nan() || t.is_nan() {
+        return f64::NAN;
+    }
+    if v <= 0.0 {
+        return f64::NAN;
+    }
+
+    // Use symmetry: stdtrc(v, t) = 1 - stdtr(v, t) = stdtr(v, -t)
+    let x = v / (v + t * t);
+    let half_beta = 0.5 * btdtr(0.5 * v, 0.5, x);
+
+    if t >= 0.0 {
+        half_beta
+    } else {
+        1.0 - half_beta
+    }
+}
+
 /// Inverse Student's t distribution CDF.
 ///
 /// Returns t such that P(T <= t) = p where T follows a Student's t
@@ -914,6 +940,20 @@ mod tests {
                 assert!(
                     (left - right).abs() < 1e-10,
                     "stdtr({v}, -{t}) = {left}, expected {right}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stdtrc_complement() {
+        // stdtr + stdtrc should equal 1
+        for &v in &[1.0, 2.0, 5.0, 10.0, 30.0] {
+            for &t in &[-2.0, -1.0, 0.0, 1.0, 2.0] {
+                let sum = stdtr(v, t) + stdtrc(v, t);
+                assert!(
+                    (sum - 1.0).abs() < 1e-10,
+                    "stdtr({v}, {t}) + stdtrc = {sum}, expected 1.0"
                 );
             }
         }
