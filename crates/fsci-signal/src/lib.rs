@@ -5778,18 +5778,33 @@ pub fn parzen(n: usize) -> Vec<f64> {
 
 /// Exponential (Poisson) window.
 ///
-/// Matches `scipy.signal.windows.exponential(n, tau=tau)`.
-pub fn exponential_window(n: usize, tau: f64) -> Vec<f64> {
+/// Matches `scipy.signal.windows.exponential(M, center=None, tau=1.0, sym=True)`.
+pub fn exponential(
+    n: usize,
+    center: Option<f64>,
+    tau: f64,
+    sym: bool,
+) -> Result<Vec<f64>, SignalError> {
+    if sym && center.is_some() {
+        return Err(SignalError::InvalidArgument(
+            "If sym==True, center must be None.".into(),
+        ));
+    }
     if n == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     if n == 1 {
-        return vec![1.0];
+        return Ok(vec![1.0]);
     }
-    let center = (n as f64 - 1.0) / 2.0;
-    (0..n)
+    let m = if sym { n } else { n + 1 };
+    let center = center.unwrap_or((m as f64 - 1.0) / 2.0);
+    let mut window: Vec<f64> = (0..m)
         .map(|i| (-(i as f64 - center).abs() / tau).exp())
-        .collect()
+        .collect();
+    if !sym {
+        window.truncate(n);
+    }
+    Ok(window)
 }
 
 /// Lanczos window (sinc window).
@@ -6033,7 +6048,8 @@ pub fn triang(n: usize) -> Vec<f64> {
 /// `"general_hamming,<alpha>"` (e.g. `"general_hamming,0.75"`),
 /// `"general_cosine,<a0>,<a1>,..."` (e.g. `"general_cosine,0.5,0.5"`),
 /// `"gaussian,<std>"` (e.g. `"gaussian,2.0"`),
-/// `"general_gaussian,<p>,<sig>"` (e.g. `"general_gaussian,1.5,2.0"`).
+/// `"general_gaussian,<p>,<sig>"` (e.g. `"general_gaussian,1.5,2.0"`),
+/// `"exponential,<tau>"` (e.g. `"exponential,2.0"`).
 pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
     let lower = window.trim().to_lowercase();
     if let Some(rest) = lower.strip_prefix("kaiser,") {
@@ -6102,6 +6118,12 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
         })?;
         return Ok(general_gaussian(nx, p, sig, true));
     }
+    if let Some(rest) = lower.strip_prefix("exponential,") {
+        let tau: f64 = rest.trim().parse().map_err(|_| {
+            SignalError::InvalidArgument(format!("invalid exponential tau: {rest}"))
+        })?;
+        return exponential(nx, None, tau, true);
+    }
     match lower.as_str() {
         "hann" | "hanning" => Ok(hann(nx)),
         "hamming" => Ok(hamming(nx)),
@@ -6118,6 +6140,7 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
         "tukey" => Ok(tukey_window(nx, 0.5)),
         "nuttall" => Ok(nuttall_window(nx)),
         "bohman" => Ok(bohman_window(nx)),
+        "exponential" => exponential(nx, None, 1.0, true),
         _ => Err(SignalError::InvalidArgument(format!(
             "unknown window type: {window}"
         ))),
@@ -7688,6 +7711,67 @@ mod tests {
     }
 
     #[test]
+    fn exponential_window_matches_scipy_reference() {
+        let w = exponential(8, None, 2.0, true).unwrap();
+        let expected = [
+            0.17377394345044514,
+            0.2865047968601901,
+            0.4723665527410147,
+            0.7788007830714049,
+            0.7788007830714049,
+            0.4723665527410147,
+            0.2865047968601901,
+            0.17377394345044514,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn exponential_periodic_window_matches_scipy_reference() {
+        let w = exponential(8, None, 2.0, false).unwrap();
+        let expected = [
+            0.1353352832366127,
+            0.22313016014842982,
+            0.36787944117144233,
+            0.6065306597126334,
+            1.0,
+            0.6065306597126334,
+            0.36787944117144233,
+            0.22313016014842982,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn exponential_window_supports_non_symmetric_center() {
+        let w = exponential(5, Some(1.0), 2.0, false).unwrap();
+        let expected = [
+            0.6065306597126334,
+            1.0,
+            0.6065306597126334,
+            0.36787944117144233,
+            0.22313016014842982,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn exponential_window_rejects_center_for_symmetric_mode() {
+        let err = exponential(5, Some(1.0), 2.0, true).unwrap_err();
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert_eq!(
+            err.to_string(),
+            "invalid argument: If sym==True, center must be None."
+        );
+    }
+
+    #[test]
     fn chebwin_window_matches_scipy_reference() {
         let w = chebwin(5, 100.0);
         let expected = [
@@ -7772,6 +7856,7 @@ mod tests {
         assert!(general_cosine(0, &[0.5, 0.5], true).is_empty());
         assert!(gaussian(0, 2.0, true).is_empty());
         assert!(general_gaussian(0, 1.5, 2.0, true).is_empty());
+        assert!(exponential(0, None, 2.0, true).unwrap().is_empty());
         assert!(blackman(0).is_empty());
         assert!(blackmanharris(0).is_empty());
         assert!(barthann(0).is_empty());
@@ -7789,6 +7874,7 @@ mod tests {
         assert_eq!(general_cosine(1, &[0.5, 0.5], true), [1.0]);
         assert_eq!(gaussian(1, 2.0, true), [1.0]);
         assert_eq!(general_gaussian(1, 1.5, 2.0, true), [1.0]);
+        assert_eq!(exponential(1, None, 2.0, true).unwrap(), [1.0]);
         assert_eq!(blackman(1), [1.0]);
         assert_eq!(blackmanharris(1), [1.0]);
         assert_eq!(barthann(1), [1.0]);
@@ -9687,6 +9773,13 @@ mod tests {
     fn get_window_dispatches_general_gaussian() {
         let w = get_window("general_gaussian,1.5,2.0", 8).unwrap();
         let expected = general_gaussian(8, 1.5, 2.0, true);
+        assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_exponential() {
+        let w = get_window("exponential,2.0", 8).unwrap();
+        let expected = exponential(8, None, 2.0, true).unwrap();
         assert_eq!(w, expected);
     }
 
