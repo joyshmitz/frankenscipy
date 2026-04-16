@@ -3432,6 +3432,107 @@ pub fn mish(x: f64) -> f64 {
     x * sp.tanh()
 }
 
+/// Hard sigmoid activation function.
+///
+/// hard_sigmoid(x) = clip((x + 3) / 6, 0, 1)
+///
+/// A piecewise linear approximation to sigmoid, faster to compute.
+#[must_use]
+pub fn hard_sigmoid(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    ((x + 3.0) / 6.0).clamp(0.0, 1.0)
+}
+
+/// Hard swish activation function.
+///
+/// hard_swish(x) = x * hard_sigmoid(x) = x * clip((x + 3) / 6, 0, 1)
+///
+/// A piecewise linear approximation to swish, used in MobileNetV3.
+#[must_use]
+pub fn hard_swish(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    x * hard_sigmoid(x)
+}
+
+/// Hard tanh activation function.
+///
+/// hard_tanh(x, min, max) = clip(x, min, max)
+///
+/// A clipped version of the identity function, approximating tanh.
+#[must_use]
+pub fn hard_tanh(x: f64, min_val: f64, max_val: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    x.clamp(min_val, max_val)
+}
+
+/// Log-cosh loss function.
+///
+/// log_cosh(x) = log(cosh(x))
+///
+/// A smooth approximation to absolute value loss. For large |x|,
+/// log_cosh(x) ≈ |x| - ln(2).
+#[must_use]
+pub fn log_cosh(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    // For numerical stability:
+    // log(cosh(x)) = log((exp(x) + exp(-x))/2)
+    //              = log(exp(x) + exp(-x)) - log(2)
+    // For large |x|: log(cosh(x)) ≈ |x| - log(2)
+    let ax = x.abs();
+    if ax > 20.0 {
+        ax - std::f64::consts::LN_2
+    } else {
+        x.cosh().ln()
+    }
+}
+
+/// Softsign activation function.
+///
+/// softsign(x) = x / (1 + |x|)
+///
+/// A smooth, bounded activation function similar to tanh but with
+/// slower saturation.
+#[must_use]
+pub fn softsign(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    x / (1.0 + x.abs())
+}
+
+/// Threshold function.
+///
+/// threshold(x, threshold, value) =
+///   x     if x > threshold
+///   value otherwise
+///
+/// A simple step function with configurable threshold and fill value.
+#[must_use]
+pub fn threshold(x: f64, thresh: f64, value: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x > thresh { x } else { value }
+}
+
+/// Sigmoid Linear Unit (SiLU), same as swish with beta=1.
+///
+/// silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
+///
+/// Also known as swish-1.
+#[must_use]
+pub fn silu(x: f64) -> f64 {
+    swish(x, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4283,5 +4384,81 @@ mod tests {
 
         // mish is smooth and has slight negative region
         assert!(mish(-0.5) < 0.0);
+    }
+
+    #[test]
+    fn hard_sigmoid_basic() {
+        // hard_sigmoid(-3) = 0
+        assert!((hard_sigmoid(-3.0) - 0.0).abs() < 1e-14);
+        // hard_sigmoid(3) = 1
+        assert!((hard_sigmoid(3.0) - 1.0).abs() < 1e-14);
+        // hard_sigmoid(0) = 0.5
+        assert!((hard_sigmoid(0.0) - 0.5).abs() < 1e-14);
+        // Linear region
+        assert!((hard_sigmoid(1.0) - (4.0 / 6.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn hard_swish_basic() {
+        // hard_swish(0) = 0 * 0.5 = 0
+        assert!((hard_swish(0.0) - 0.0).abs() < 1e-14);
+        // hard_swish(-3) = -3 * 0 = 0
+        assert!((hard_swish(-3.0) - 0.0).abs() < 1e-14);
+        // hard_swish(3) = 3 * 1 = 3
+        assert!((hard_swish(3.0) - 3.0).abs() < 1e-14);
+        // For large positive x, hard_swish(x) ≈ x
+        assert!((hard_swish(10.0) - 10.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn hard_tanh_basic() {
+        // Clipped to range
+        assert!((hard_tanh(0.5, -1.0, 1.0) - 0.5).abs() < 1e-14);
+        assert!((hard_tanh(2.0, -1.0, 1.0) - 1.0).abs() < 1e-14);
+        assert!((hard_tanh(-2.0, -1.0, 1.0) - (-1.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn log_cosh_basic() {
+        // log_cosh(0) = 0
+        assert!((log_cosh(0.0) - 0.0).abs() < 1e-14);
+        // Symmetric
+        assert!((log_cosh(2.0) - log_cosh(-2.0)).abs() < 1e-14);
+        // For large |x|, log_cosh(x) ≈ |x| - ln(2)
+        let large = 30.0;
+        assert!((log_cosh(large) - (large - std::f64::consts::LN_2)).abs() < 1e-10);
+        // Always non-negative
+        assert!(log_cosh(-5.0) >= 0.0);
+    }
+
+    #[test]
+    fn softsign_basic() {
+        // softsign(0) = 0
+        assert!((softsign(0.0) - 0.0).abs() < 1e-14);
+        // Bounded by [-1, 1]
+        assert!(softsign(100.0) < 1.0);
+        assert!(softsign(-100.0) > -1.0);
+        // Antisymmetric
+        assert!((softsign(2.0) + softsign(-2.0)).abs() < 1e-14);
+        // softsign(1) = 0.5
+        assert!((softsign(1.0) - 0.5).abs() < 1e-14);
+    }
+
+    #[test]
+    fn threshold_basic() {
+        // Above threshold: pass through
+        assert!((threshold(5.0, 0.0, -1.0) - 5.0).abs() < 1e-14);
+        // Below threshold: use value
+        assert!((threshold(-5.0, 0.0, -1.0) - (-1.0)).abs() < 1e-14);
+        // At threshold: use value (not strictly greater)
+        assert!((threshold(0.0, 0.0, -1.0) - (-1.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn silu_basic() {
+        // silu is just swish with beta=1
+        assert!((silu(0.0) - swish(0.0, 1.0)).abs() < 1e-14);
+        assert!((silu(2.0) - swish(2.0, 1.0)).abs() < 1e-14);
+        assert!((silu(-2.0) - swish(-2.0, 1.0)).abs() < 1e-14);
     }
 }
