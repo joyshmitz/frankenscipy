@@ -2513,6 +2513,58 @@ pub fn radian(degrees: f64, minutes: f64, seconds: f64) -> f64 {
     total_degrees * std::f64::consts::PI / 180.0
 }
 
+/// Cube root that handles negative numbers correctly.
+///
+/// Unlike `x.powf(1.0/3.0)`, this returns real values for negative x.
+/// cbrt(-8) = -2, not NaN.
+///
+/// Matches `scipy.special.cbrt(x)`.
+#[must_use]
+pub fn cbrt(x: f64) -> f64 {
+    x.cbrt()
+}
+
+/// Base-2 exponential: 2^x.
+///
+/// Matches `scipy.special.exp2(x)`.
+#[must_use]
+pub fn exp2(x: f64) -> f64 {
+    x.exp2()
+}
+
+/// Base-10 exponential: 10^x.
+///
+/// Matches `scipy.special.exp10(x)`.
+#[must_use]
+pub fn exp10(x: f64) -> f64 {
+    (x * std::f64::consts::LN_10).exp()
+}
+
+/// Base-2 logarithm.
+///
+/// Matches `scipy.special.log2(x)` (numpy ufunc).
+#[must_use]
+pub fn log2(x: f64) -> f64 {
+    x.log2()
+}
+
+/// Base-10 logarithm.
+///
+/// Matches `scipy.special.log10(x)` (numpy ufunc).
+#[must_use]
+pub fn log10(x: f64) -> f64 {
+    x.log10()
+}
+
+/// Round to nearest integer.
+///
+/// Rounds half-way cases away from zero.
+/// Matches `scipy.special.round(x)`.
+#[must_use]
+pub fn round(x: f64) -> f64 {
+    x.round()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2660,5 +2712,54 @@ mod tests {
         // 1 degree 1 minute 1 second
         let expected = (1.0 + 1.0 / 60.0 + 1.0 / 3600.0) * std::f64::consts::PI / 180.0;
         assert!((radian(1.0, 1.0, 1.0) - expected).abs() < 1e-14);
+    }
+
+    #[test]
+    fn cbrt_basic() {
+        // Positive values
+        assert!((cbrt(8.0) - 2.0).abs() < 1e-14);
+        assert!((cbrt(27.0) - 3.0).abs() < 1e-14);
+        assert!((cbrt(1.0) - 1.0).abs() < 1e-14);
+
+        // Negative values (key feature - handles negative inputs)
+        assert!((cbrt(-8.0) - (-2.0)).abs() < 1e-14);
+        assert!((cbrt(-27.0) - (-3.0)).abs() < 1e-14);
+
+        // Zero
+        assert!((cbrt(0.0) - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn exp_log_functions() {
+        // exp2: 2^x
+        assert!((exp2(0.0) - 1.0).abs() < 1e-14);
+        assert!((exp2(1.0) - 2.0).abs() < 1e-14);
+        assert!((exp2(3.0) - 8.0).abs() < 1e-14);
+        assert!((exp2(-1.0) - 0.5).abs() < 1e-14);
+
+        // exp10: 10^x
+        assert!((exp10(0.0) - 1.0).abs() < 1e-14);
+        assert!((exp10(1.0) - 10.0).abs() < 1e-13);
+        assert!((exp10(2.0) - 100.0).abs() < 1e-12);
+
+        // log2
+        assert!((log2(1.0) - 0.0).abs() < 1e-14);
+        assert!((log2(2.0) - 1.0).abs() < 1e-14);
+        assert!((log2(8.0) - 3.0).abs() < 1e-14);
+
+        // log10
+        assert!((log10(1.0) - 0.0).abs() < 1e-14);
+        assert!((log10(10.0) - 1.0).abs() < 1e-14);
+        assert!((log10(100.0) - 2.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn round_basic() {
+        assert!((round(1.4) - 1.0).abs() < 1e-14);
+        assert!((round(1.5) - 2.0).abs() < 1e-14);
+        assert!((round(1.6) - 2.0).abs() < 1e-14);
+        assert!((round(-1.4) - (-1.0)).abs() < 1e-14);
+        assert!((round(-1.5) - (-2.0)).abs() < 1e-14);
+        assert!((round(0.0) - 0.0).abs() < 1e-14);
     }
 }
