@@ -1196,10 +1196,20 @@ mod tests {
         let (x_g, w_g) = roots_gegenbauer(5, 0.5);
         let (x_l, w_l) = roots_legendre(5);
         for (actual, expected) in x_g.iter().zip(&x_l) {
-            assert_close(*actual, *expected, 1e-12, "gegenbauer(0.5) vs legendre nodes");
+            assert_close(
+                *actual,
+                *expected,
+                1e-12,
+                "gegenbauer(0.5) vs legendre nodes",
+            );
         }
         for (actual, expected) in w_g.iter().zip(&w_l) {
-            assert_close(*actual, *expected, 1e-12, "gegenbauer(0.5) vs legendre weights");
+            assert_close(
+                *actual,
+                *expected,
+                1e-12,
+                "gegenbauer(0.5) vs legendre weights",
+            );
         }
     }
 
@@ -1211,7 +1221,12 @@ mod tests {
         assert_close(x[0], -x[3], 1e-12, "gegenbauer symmetry");
         assert_close(x[1], -x[2], 1e-12, "gegenbauer symmetry");
         assert_close(w[0], w[3], 1e-12, "gegenbauer weight symmetry");
-        assert_close(w.iter().sum::<f64>(), PI / 2.0, 1e-10, "gegenbauer weight sum");
+        assert_close(
+            w.iter().sum::<f64>(),
+            PI / 2.0,
+            1e-10,
+            "gegenbauer weight sum",
+        );
     }
 
     // ── Associated Legendre tests ────────────────────────────────────
