@@ -2886,6 +2886,94 @@ pub fn logaddexp2(x: f64, y: f64) -> f64 {
     larger + two_pow_diff.ln_1p() / LN_2
 }
 
+/// Return the next floating-point value after x towards y.
+///
+/// If x == y, returns y.
+///
+/// Matches `numpy.nextafter(x, y)`.
+#[must_use]
+pub fn nextafter(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if x == y {
+        return y;
+    }
+
+    // Use bit manipulation to find the next representable value
+    if x == 0.0 {
+        // From zero, step toward y
+        let tiny = f64::from_bits(1);
+        return if y > 0.0 { tiny } else { -tiny };
+    }
+
+    let bits = x.to_bits();
+    let next_bits = if (y > x) == (x > 0.0) {
+        bits + 1
+    } else {
+        bits - 1
+    };
+    f64::from_bits(next_bits)
+}
+
+/// Return the spacing between x and the nearest adjacent number.
+///
+/// This is the positive distance to the next representable floating
+/// point value larger in magnitude than x.
+///
+/// Matches `numpy.spacing(x)`.
+#[must_use]
+pub fn spacing(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x.is_infinite() {
+        return f64::NAN;
+    }
+
+    let ax = x.abs();
+    if ax == 0.0 {
+        // Smallest positive subnormal
+        return f64::from_bits(1);
+    }
+
+    // Spacing is the difference to the next representable number
+    let bits = ax.to_bits();
+    let next = f64::from_bits(bits + 1);
+    next - ax
+}
+
+/// Extract the fractional and integer parts of x.
+///
+/// Returns (fractional, integer) where x = fractional + integer
+/// and fractional has the same sign as x with |fractional| < 1.
+///
+/// Matches `numpy.modf(x)` (which returns (frac, int)).
+#[must_use]
+pub fn modf(x: f64) -> (f64, f64) {
+    if x.is_nan() {
+        return (f64::NAN, f64::NAN);
+    }
+    if x.is_infinite() {
+        return (0.0_f64.copysign(x), x);
+    }
+
+    let int_part = x.trunc();
+    let frac_part = x - int_part;
+    (frac_part, int_part)
+}
+
+/// Test if x is negative (sign bit is set).
+///
+/// Returns true if sign bit is set, false otherwise.
+/// Note: signbit(-0.0) is true, signbit(NaN) depends on the NaN's sign bit.
+///
+/// Matches `numpy.signbit(x)`.
+#[must_use]
+pub fn signbit(x: f64) -> bool {
+    x.is_sign_negative()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3283,5 +3371,77 @@ mod tests {
         assert!((logaddexp2(100.0, 0.0) - 100.0).abs() < 1e-10);
         // Symmetric
         assert!((logaddexp2(1.0, 2.0) - logaddexp2(2.0, 1.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn nextafter_basic() {
+        // Moving toward larger value increases
+        let next = nextafter(1.0, 2.0);
+        assert!(next > 1.0);
+        assert!(next < 1.0 + 1e-14);
+
+        // Moving toward smaller value decreases
+        let prev = nextafter(1.0, 0.0);
+        assert!(prev < 1.0);
+        assert!(prev > 1.0 - 1e-14);
+
+        // From zero
+        let tiny = nextafter(0.0, 1.0);
+        assert!(tiny > 0.0);
+        let neg_tiny = nextafter(0.0, -1.0);
+        assert!(neg_tiny < 0.0);
+
+        // Same value returns itself
+        assert_eq!(nextafter(1.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn spacing_basic() {
+        // Spacing at 1.0 is machine epsilon
+        let eps = spacing(1.0);
+        assert!((eps - f64::EPSILON).abs() < 1e-30);
+
+        // Spacing is always positive
+        assert!(spacing(1.0) > 0.0);
+        assert!(spacing(-1.0) > 0.0);
+        assert!(spacing(0.0) > 0.0);
+
+        // Spacing gets larger for larger numbers
+        assert!(spacing(1e10) > spacing(1.0));
+    }
+
+    #[test]
+    fn modf_basic() {
+        // Positive values
+        let (frac, int) = modf(3.5);
+        assert!((frac - 0.5).abs() < 1e-14);
+        assert!((int - 3.0).abs() < 1e-14);
+
+        // Negative values
+        let (frac, int) = modf(-3.5);
+        assert!((frac - (-0.5)).abs() < 1e-14);
+        assert!((int - (-3.0)).abs() < 1e-14);
+
+        // Integer values
+        let (frac, int) = modf(4.0);
+        assert!((frac - 0.0).abs() < 1e-14);
+        assert!((int - 4.0).abs() < 1e-14);
+
+        // Zero
+        let (frac, int) = modf(0.0);
+        assert!((frac - 0.0).abs() < 1e-14);
+        assert!((int - 0.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn signbit_basic() {
+        // Positive
+        assert!(!signbit(1.0));
+        // Negative
+        assert!(signbit(-1.0));
+        // Zero
+        assert!(!signbit(0.0));
+        // Negative zero
+        assert!(signbit(-0.0));
     }
 }
