@@ -524,6 +524,211 @@ fn dawsn_asymptotic(x: f64) -> f64 {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Sine and Cosine Integrals
+// ══════════════════════════════════════════════════════════════════════
+
+/// Sine integral Si(x) and cosine integral Ci(x).
+///
+/// Si(x) = ∫₀ˣ sin(t)/t dt
+/// Ci(x) = γ + ln|x| + ∫₀ˣ (cos(t)-1)/t dt
+///
+/// where γ ≈ 0.5772... is the Euler-Mascheroni constant.
+///
+/// Matches `scipy.special.sici(x)` which returns (Si(x), Ci(x)).
+///
+/// # Arguments
+/// * `x` - Real argument
+///
+/// # Returns
+/// Tuple (Si(x), Ci(x))
+pub fn sici(x: f64) -> (f64, f64) {
+    if x.is_nan() {
+        return (f64::NAN, f64::NAN);
+    }
+    if x == 0.0 {
+        return (0.0, f64::NEG_INFINITY);
+    }
+
+    let ax = x.abs();
+
+    // Series converges for all x, but asymptotic is faster for large x
+    // Use series for x < 20 where it converges quickly with good accuracy
+    let (si, ci) = if ax < 20.0 {
+        sici_series(ax)
+    } else {
+        sici_asymptotic(ax)
+    };
+
+    // Si(-x) = -Si(x), Ci(-x) = Ci(x) + i*π (we ignore imaginary part for real x > 0)
+    if x < 0.0 {
+        (-si, ci)
+    } else {
+        (si, ci)
+    }
+}
+
+/// Power series for Si and Ci.
+fn sici_series(x: f64) -> (f64, f64) {
+    const EULER_GAMMA: f64 = 0.5772156649015329;
+
+    let x2 = x * x;
+
+    // Si(x) = x - x³/(3·3!) + x⁵/(5·5!) - x⁷/(7·7!) + ...
+    //       = Σ (-1)^n x^{2n+1} / ((2n+1)·(2n+1)!)
+    let mut si = x;
+    let mut si_term = x;
+
+    for n in 1..150 {
+        let nf = n as f64;
+        si_term *= -x2 / ((2.0 * nf) * (2.0 * nf + 1.0));
+        let contribution = si_term / (2.0 * nf + 1.0);
+        si += contribution;
+        if contribution.abs() < 1e-16 * si.abs() {
+            break;
+        }
+    }
+
+    // Ci(x) = γ + ln(x) + Σ (-1)^n x^{2n} / ((2n)·(2n)!) for n ≥ 1
+    //       = γ + ln(x) - x²/(2·2!) + x⁴/(4·4!) - ...
+    let mut ci = EULER_GAMMA + x.ln();
+    let mut ci_term = 1.0;
+
+    for n in 1..150 {
+        let nf = n as f64;
+        ci_term *= -x2 / ((2.0 * nf - 1.0) * (2.0 * nf));
+        let contribution = ci_term / (2.0 * nf);
+        ci += contribution;
+        if contribution.abs() < 1e-16 * ci.abs().max(1.0) {
+            break;
+        }
+    }
+
+    (si, ci)
+}
+
+/// Asymptotic expansion for Si and Ci (large arguments).
+fn sici_asymptotic(x: f64) -> (f64, f64) {
+    // For large x:
+    // Si(x) ≈ π/2 - f(x)cos(x) - g(x)sin(x)
+    // Ci(x) ≈ f(x)sin(x) - g(x)cos(x)
+    // where f(x) = (1/x)[1 - 2!/x² + 4!/x⁴ - ...] (alternating factorials)
+    //       g(x) = (1/x²)[1 - 3!/x² + 5!/x⁴ - ...]
+
+    let x_inv = 1.0 / x;
+    let x2_inv = x_inv * x_inv;
+
+    let (sin_x, cos_x) = x.sin_cos();
+    let half_pi = std::f64::consts::FRAC_PI_2;
+
+    // Compute the auxiliary functions f and g via their series
+    let mut f_aux = 0.0;
+    let mut g_aux = 0.0;
+    let mut term_f = 1.0;
+    let mut term_g = 1.0;
+
+    for n in 0..10 {
+        f_aux += term_f;
+        g_aux += term_g;
+
+        // term_f(n+1) = -term_f(n) * (2n+2)(2n+1) / x²
+        // term_g(n+1) = -term_g(n) * (2n+3)(2n+2) / x²
+        let nf = n as f64;
+        term_f *= -(2.0 * nf + 2.0) * (2.0 * nf + 1.0) * x2_inv;
+        term_g *= -(2.0 * nf + 3.0) * (2.0 * nf + 2.0) * x2_inv;
+
+        if term_f.abs() < 1e-15 && term_g.abs() < 1e-15 {
+            break;
+        }
+        if term_f.abs() > 1e8 || term_g.abs() > 1e8 {
+            break; // Asymptotic series diverging
+        }
+    }
+
+    let f_val = f_aux * x_inv;
+    let g_val = g_aux * x2_inv;
+
+    let si = half_pi - f_val * cos_x - g_val * sin_x;
+    let ci = f_val * sin_x - g_val * cos_x;
+
+    (si, ci)
+}
+
+/// Hyperbolic sine integral Shi(x) and hyperbolic cosine integral Chi(x).
+///
+/// Shi(x) = ∫₀ˣ sinh(t)/t dt
+/// Chi(x) = γ + ln|x| + ∫₀ˣ (cosh(t)-1)/t dt
+///
+/// where γ ≈ 0.5772... is the Euler-Mascheroni constant.
+///
+/// Matches `scipy.special.shichi(x)` which returns (Shi(x), Chi(x)).
+///
+/// # Arguments
+/// * `x` - Real argument
+///
+/// # Returns
+/// Tuple (Shi(x), Chi(x))
+pub fn shichi(x: f64) -> (f64, f64) {
+    if x.is_nan() {
+        return (f64::NAN, f64::NAN);
+    }
+    if x == 0.0 {
+        return (0.0, f64::NEG_INFINITY);
+    }
+
+    let ax = x.abs();
+
+    // Shi and Chi are computed using series for all x
+    // (they don't have the oscillatory behavior of Si/Ci)
+    let (shi, chi) = shichi_series(ax);
+
+    // Shi(-x) = -Shi(x), Chi(-x) = Chi(x)
+    if x < 0.0 {
+        (-shi, chi)
+    } else {
+        (shi, chi)
+    }
+}
+
+/// Power series for Shi and Chi.
+fn shichi_series(x: f64) -> (f64, f64) {
+    const EULER_GAMMA: f64 = 0.5772156649015329;
+
+    let x2 = x * x;
+
+    // Shi(x) = x + x³/(3·3!) + x⁵/(5·5!) + x⁷/(7·7!) + ...
+    //        = Σ x^{2n+1} / ((2n+1)·(2n+1)!)
+    let mut shi = x;
+    let mut shi_term = x;
+
+    for n in 1..80 {
+        let nf = n as f64;
+        shi_term *= x2 / ((2.0 * nf) * (2.0 * nf + 1.0));
+        let contribution = shi_term / (2.0 * nf + 1.0);
+        shi += contribution;
+        if contribution.abs() < 1e-16 * shi.abs() {
+            break;
+        }
+    }
+
+    // Chi(x) = γ + ln(x) + Σ x^{2n} / ((2n)·(2n)!) for n ≥ 1
+    //        = γ + ln(x) + x²/(2·2!) + x⁴/(4·4!) + ...
+    let mut chi = EULER_GAMMA + x.ln();
+    let mut chi_term = 1.0;
+
+    for n in 1..80 {
+        let nf = n as f64;
+        chi_term *= x2 / ((2.0 * nf - 1.0) * (2.0 * nf));
+        let contribution = chi_term / (2.0 * nf);
+        chi += contribution;
+        if contribution.abs() < 1e-16 * chi.abs().max(1.0) {
+            break;
+        }
+    }
+
+    (shi, chi)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Struve functions
 // ══════════════════════════════════════════════════════════════════════
 

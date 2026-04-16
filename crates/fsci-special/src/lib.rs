@@ -78,6 +78,8 @@ pub use convenience::{
     owens_t,
     poch,
     rel_entr,
+    shichi,
+    sici,
     sinc,
     sinc_squared,
     softmax,
@@ -2267,5 +2269,65 @@ mod tests {
     #[test]
     fn hurwitz_zeta_pole() {
         assert!(hurwitz_zeta(1.0, 1.0).is_infinite());
+    }
+
+    // ── sici tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn sici_zero() {
+        let (si, ci) = sici(0.0);
+        assert_eq!(si, 0.0);
+        assert!(ci.is_infinite() && ci < 0.0); // Ci(0) = -∞
+    }
+
+    #[test]
+    fn sici_small_positive() {
+        // Si(1) ≈ 0.9460831, Ci(1) ≈ 0.3374039
+        let (si, ci) = sici(1.0);
+        assert!((si - 0.9460831).abs() < 1e-5, "Si(1) = {si}");
+        assert!((ci - 0.3374039).abs() < 1e-5, "Ci(1) = {ci}");
+    }
+
+    #[test]
+    fn sici_large() {
+        // Si(10) ≈ 1.6583475, Ci(10) ≈ -0.04545643
+        let (si, ci) = sici(10.0);
+        assert!((si - 1.6583475).abs() < 1e-5, "Si(10) = {si}");
+        assert!((ci - (-0.04545643)).abs() < 1e-5, "Ci(10) = {ci}");
+    }
+
+    #[test]
+    fn sici_negative() {
+        // Si(-x) = -Si(x)
+        let (si_pos, ci_pos) = sici(2.0);
+        let (si_neg, ci_neg) = sici(-2.0);
+        assert!((si_neg + si_pos).abs() < 1e-10);
+        assert!((ci_neg - ci_pos).abs() < 1e-10);
+    }
+
+    // ── shichi tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn shichi_zero() {
+        let (shi, chi) = shichi(0.0);
+        assert_eq!(shi, 0.0);
+        assert!(chi.is_infinite() && chi < 0.0); // Chi(0) = -∞
+    }
+
+    #[test]
+    fn shichi_small_positive() {
+        // Shi(1) ≈ 1.0572509, Chi(1) ≈ 0.8378669
+        let (shi, chi) = shichi(1.0);
+        assert!((shi - 1.0572509).abs() < 1e-5, "Shi(1) = {shi}");
+        assert!((chi - 0.8378669).abs() < 1e-5, "Chi(1) = {chi}");
+    }
+
+    #[test]
+    fn shichi_negative() {
+        // Shi(-x) = -Shi(x), Chi(-x) = Chi(x)
+        let (shi_pos, chi_pos) = shichi(2.0);
+        let (shi_neg, chi_neg) = shichi(-2.0);
+        assert!((shi_neg + shi_pos).abs() < 1e-10);
+        assert!((chi_neg - chi_pos).abs() < 1e-10);
     }
 }
