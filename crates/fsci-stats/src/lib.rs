@@ -2936,6 +2936,59 @@ impl ContinuousDistribution for PowerNorm {
     }
 }
 
+/// Johnson SU distribution.
+///
+/// Matches `scipy.stats.johnsonsu`.
+pub struct JohnsonSU {
+    pub a: f64,
+    pub b: f64,
+}
+
+impl JohnsonSU {
+    #[must_use]
+    pub fn new(a: f64, b: f64) -> Self {
+        assert!(a.is_finite(), "a must be finite");
+        assert!(b.is_finite() && b > 0.0, "b must be positive and finite");
+        Self { a, b }
+    }
+}
+
+impl ContinuousDistribution for JohnsonSU {
+    fn pdf(&self, x: f64) -> f64 {
+        let z = self.a + self.b * x.asinh();
+        self.b * standard_normal_pdf(z) / x.hypot(1.0)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        standard_normal_cdf(self.a + self.b * x.asinh())
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        ((fsci_special::ndtri(q) - self.a) / self.b).sinh()
+    }
+
+    fn mean(&self) -> f64 {
+        let inv_b = self.b.recip();
+        let exp_inv_b_sq = (inv_b * inv_b).exp();
+        -exp_inv_b_sq.sqrt() * (self.a * inv_b).sinh()
+    }
+
+    fn var(&self) -> f64 {
+        let inv_b = self.b.recip();
+        let exp_inv_b_sq = (inv_b * inv_b).exp();
+        0.5 * exp_inv_b_sq.mul_add((2.0 * self.a * inv_b).cosh(), 1.0) * (inv_b * inv_b).exp_m1()
+    }
+}
+
 /// Generalized Extreme Value (GEV) distribution.
 ///
 /// Matches `scipy.stats.genextreme`.
@@ -12821,6 +12874,59 @@ mod tests {
         let standard = PowerNorm::new(1.0);
         assert_close(standard.mean(), 0.0, 1e-12, "PowerNorm(c=1) mean");
         assert_close(standard.var(), 1.0, 1e-12, "PowerNorm(c=1) variance");
+    }
+
+    #[test]
+    fn johnsonsu_pdf_cdf_match_scipy_reference_values() {
+        let dist = JohnsonSU::new(1.25, 2.5);
+        let cases = [
+            (-2.0, 0.027_597_875_707_316_224, 0.009_159_938_455_470_54),
+            (-1.0, 0.447_651_810_771_863_3, 0.170_185_118_968_971_37),
+            (0.0, 0.456_622_713_472_554_8, 0.894_350_226_333_144_6),
+            (0.5, 0.044_029_448_070_319_485, 0.992_917_065_193_594_1),
+            (1.0, 0.001_813_812_172_870_174_5, 0.999_723_251_103_546_7),
+            (2.0, 3.329_334_258_887_854e-6, 0.999_999_410_363_487_5),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("JohnsonSU pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("JohnsonSU cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn johnsonsu_ppf_roundtrip_matches_scipy_reference_values() {
+        let dist = JohnsonSU::new(1.25, 2.5);
+        let cases = [
+            (0.1, -1.194_769_948_937_944_2),
+            (0.25, -0.848_108_955_878_338_8),
+            (0.5, -0.521_095_305_493_747_4),
+            (0.75, -0.232_242_730_752_036_8),
+            (0.9, 0.012_620_961_256_499_301),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("JohnsonSU ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("JohnsonSU cdf(ppf({q}))"));
+        }
+    }
+
+    #[test]
+    fn johnsonsu_mean_and_variance_match_scipy_reference_values() {
+        let dist = JohnsonSU::new(1.25, 2.5);
+        assert_close(
+            dist.mean(),
+            -0.564_495_805_467_508_3,
+            1e-12,
+            "JohnsonSU mean",
+        );
+        assert_close(
+            dist.var(),
+            0.243_854_078_016_202_07,
+            1e-12,
+            "JohnsonSU variance",
+        );
     }
 
     #[test]
