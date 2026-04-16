@@ -2703,6 +2703,108 @@ pub fn clip(x: f64, min: f64, max: f64) -> f64 {
     x.clamp(min, max)
 }
 
+/// Sine of π*x with higher accuracy for integer/half-integer arguments.
+///
+/// sinpi(x) = sin(π*x)
+///
+/// This function computes sin(π*x) more accurately than sin(PI*x),
+/// especially for integer and half-integer values where the result
+/// should be exactly 0 or ±1.
+///
+/// Matches `numpy.sinpi(x)`.
+#[must_use]
+pub fn sinpi(x: f64) -> f64 {
+    use std::f64::consts::PI;
+
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x.is_infinite() {
+        return f64::NAN;
+    }
+
+    // Reduce to [-1, 1) range for better accuracy
+    let mut y = x % 2.0;
+    if y > 1.0 {
+        y -= 2.0;
+    } else if y < -1.0 {
+        y += 2.0;
+    }
+
+    // For exact integers, return 0
+    if y == 0.0 || y == 1.0 || y == -1.0 {
+        return 0.0;
+    }
+
+    // For half-integers, return ±1
+    if y == 0.5 {
+        return 1.0;
+    }
+    if y == -0.5 {
+        return -1.0;
+    }
+
+    // Use sin(π*y) = sin(π*(1-y)) for y > 0.5
+    if y > 0.5 {
+        (PI * (1.0 - y)).sin()
+    } else if y < -0.5 {
+        -(PI * (1.0 + y)).sin()
+    } else {
+        (PI * y).sin()
+    }
+}
+
+/// Cosine of π*x with higher accuracy for integer/half-integer arguments.
+///
+/// cospi(x) = cos(π*x)
+///
+/// This function computes cos(π*x) more accurately than cos(PI*x),
+/// especially for integer and half-integer values where the result
+/// should be exactly ±1 or 0.
+///
+/// Matches `numpy.cospi(x)`.
+#[must_use]
+pub fn cospi(x: f64) -> f64 {
+    use std::f64::consts::PI;
+
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x.is_infinite() {
+        return f64::NAN;
+    }
+
+    // Reduce to [-1, 1) range
+    let mut y = x % 2.0;
+    if y > 1.0 {
+        y -= 2.0;
+    } else if y < -1.0 {
+        y += 2.0;
+    }
+
+    // For exact integers, return ±1
+    if y == 0.0 {
+        return 1.0;
+    }
+    if y == 1.0 || y == -1.0 {
+        return -1.0;
+    }
+
+    // For half-integers, return 0
+    if y == 0.5 || y == -0.5 {
+        return 0.0;
+    }
+
+    // Use cos(π*y) = -cos(π*(1-y)) for y > 0.5
+    if y > 0.5 {
+        -(PI * (1.0 - y)).cos()
+    } else if y < -0.5 {
+        -(PI * (1.0 + y)).cos()
+    } else {
+        (PI * y).cos()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3012,5 +3114,43 @@ mod tests {
         // At boundaries
         assert!((clip(0.0, 0.0, 10.0) - 0.0).abs() < 1e-14);
         assert!((clip(10.0, 0.0, 10.0) - 10.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn sinpi_basic() {
+        // sinpi(0) = 0
+        assert!((sinpi(0.0) - 0.0).abs() < 1e-14);
+        // sinpi(0.5) = 1
+        assert!((sinpi(0.5) - 1.0).abs() < 1e-14);
+        // sinpi(1) = 0
+        assert!((sinpi(1.0) - 0.0).abs() < 1e-14);
+        // sinpi(-0.5) = -1
+        assert!((sinpi(-0.5) - (-1.0)).abs() < 1e-14);
+        // sinpi(1.5) = -1
+        assert!((sinpi(1.5) - (-1.0)).abs() < 1e-14);
+        // sinpi(2) = 0
+        assert!((sinpi(2.0) - 0.0).abs() < 1e-14);
+        // Non-special values
+        assert!((sinpi(0.25) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-14);
+        // Negative
+        assert!((sinpi(-0.25) - (-std::f64::consts::FRAC_1_SQRT_2)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn cospi_basic() {
+        // cospi(0) = 1
+        assert!((cospi(0.0) - 1.0).abs() < 1e-14);
+        // cospi(0.5) = 0
+        assert!((cospi(0.5) - 0.0).abs() < 1e-14);
+        // cospi(1) = -1
+        assert!((cospi(1.0) - (-1.0)).abs() < 1e-14);
+        // cospi(-0.5) = 0
+        assert!((cospi(-0.5) - 0.0).abs() < 1e-14);
+        // cospi(2) = 1
+        assert!((cospi(2.0) - 1.0).abs() < 1e-14);
+        // Non-special values
+        assert!((cospi(0.25) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-14);
+        // Negative
+        assert!((cospi(-0.25) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-14);
     }
 }

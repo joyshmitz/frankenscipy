@@ -104,6 +104,8 @@ pub use convenience::{
     sinc_squared,
     sign,
     sindg,
+    sinpi,
+    cospi,
     smirnov,
     smirnovi,
     softmax,
