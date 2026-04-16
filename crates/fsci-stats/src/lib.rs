@@ -1195,6 +1195,57 @@ impl ContinuousDistribution for Gumbel {
     }
 }
 
+/// Left-skewed Gumbel (extreme value type I) distribution.
+///
+/// Matches `scipy.stats.gumbel_l(loc=loc, scale=scale)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GumbelLeft {
+    pub loc: f64,
+    pub scale: f64,
+}
+
+impl GumbelLeft {
+    #[must_use]
+    pub fn new(loc: f64, scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive, got {scale}");
+        Self { loc, scale }
+    }
+}
+
+impl ContinuousDistribution for GumbelLeft {
+    fn pdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        (z - z.exp()).exp() / self.scale
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        -(-z.exp()).exp_m1()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        self.loc + self.scale * (-(-q).ln_1p()).ln()
+    }
+
+    fn mean(&self) -> f64 {
+        const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+        self.loc - EULER_GAMMA * self.scale
+    }
+
+    fn var(&self) -> f64 {
+        PI * PI * self.scale * self.scale / 6.0
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Logistic Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -12299,6 +12350,58 @@ mod tests {
             "gumbel mean",
         );
         assert_close(g.var(), PI * PI * 1.5 * 1.5 / 6.0, 1e-12, "gumbel variance");
+    }
+
+    #[test]
+    fn gumbel_left_pdf_cdf_match_scipy_reference_values() {
+        let dist = GumbelLeft::new(0.5, 1.25);
+        let cases = [
+            (-1.0, 0.178_291_083_598_038_75, 0.260_065_945_216_393_8),
+            (0.0, 0.274_319_005_174_185_4, 0.488_455_166_310_958_4),
+            (0.5, 0.294_303_552_937_153_9, 0.632_120_558_828_557_7),
+            (1.0, 0.268_482_847_714_755_95, 0.775_038_206_450_081_6),
+            (2.0, 0.096_014_075_924_335_02, 0.963_851_395_086_864_5),
+        ];
+
+        for &(x, pdf, cdf) in &cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, &format!("GumbelLeft pdf({x})"));
+            assert_close(dist.cdf(x), cdf, 1e-12, &format!("GumbelLeft cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn gumbel_left_ppf_roundtrip_matches_quantiles() {
+        let dist = GumbelLeft::new(0.5, 1.25);
+        let cases = [
+            (0.1, -2.312_959_159_140_557),
+            (0.25, -1.057_374_154_634_047_8),
+            (0.5, 0.041_858_849_272_919_55),
+            (0.75, 0.908_292_824_972_851_2),
+            (0.9, 1.542_540_556_559_945),
+        ];
+
+        for &(q, expected_x) in &cases {
+            let x = dist.ppf(q);
+            assert_close(x, expected_x, 1e-12, &format!("GumbelLeft ppf({q})"));
+            assert_close(dist.cdf(x), q, 1e-10, &format!("GumbelLeft cdf(ppf({q}))"));
+        }
+    }
+
+    #[test]
+    fn gumbel_left_mean_and_variance() {
+        let dist = GumbelLeft::new(0.5, 1.25);
+        assert_close(
+            dist.mean(),
+            -0.221_519_581_126_916_05,
+            1e-12,
+            "GumbelLeft mean",
+        );
+        assert_close(
+            dist.var(),
+            2.570_209_479_450_354,
+            1e-12,
+            "GumbelLeft variance",
+        );
     }
 
     #[test]
