@@ -20,8 +20,8 @@ use fsci_sparse::{
     CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D,
     SolveOptions, SparseError, add_csr, bicgstab, cg, connected_component_sizes,
     csr_to_csc_with_mode, diags, eye, find, gmres, hstack, is_connected, pagerank, scale_csr,
-    sparse_norm, spmv_csr, spsolve, strongly_connected_components, sub_csr, topological_sort,
-    tril, triu, vstack,
+    sparse_norm, spmv_csr, spsolve, strongly_connected_components, sub_csr, topological_sort, tril,
+    triu, vstack,
 };
 use serde::{Deserialize, Serialize};
 
@@ -219,7 +219,7 @@ struct SparseOracleCaseOutput {
     error: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SparseOracleTriplets {
     shape: [usize; 2],
     row: Vec<usize>,
@@ -227,7 +227,7 @@ struct SparseOracleTriplets {
     data: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SparseOracleFindResult {
     row: Vec<usize>,
     col: Vec<usize>,
@@ -1950,10 +1950,9 @@ fn e2e_019_sparse_helper_oracle_match() {
     assert!(output.success(), "SciPy sparse oracle should succeed");
 
     let t_start = Instant::now();
-    let capture: SparseOracleCapture = serde_json::from_slice(
-        &fs::read(&output_path).expect("read oracle output"),
-    )
-    .expect("parse oracle output");
+    let capture: SparseOracleCapture =
+        serde_json::from_slice(&fs::read(&output_path).expect("read oracle output"))
+            .expect("parse oracle output");
     steps.push(make_step(
         3,
         "load_oracle_output",
@@ -1972,8 +1971,22 @@ fn e2e_019_sparse_helper_oracle_match() {
             .iter()
             .find(|output| output.case_id == case.case_id)
             .unwrap_or_else(|| panic!("missing oracle output for {}", case.case_id));
+        assert_eq!(
+            actual.status, "ok",
+            "{} rust execution failed",
+            case.case_id
+        );
+        assert!(
+            actual.error.is_none(),
+            "{} rust error present",
+            case.case_id
+        );
         assert_eq!(expected.status, "ok", "{} oracle failed", case.case_id);
-        assert!(expected.error.is_none(), "{} oracle error present", case.case_id);
+        assert!(
+            expected.error.is_none(),
+            "{} oracle error present",
+            case.case_id
+        );
         assert_eq!(
             actual.result_kind, expected.result_kind,
             "{} result kind mismatch",
@@ -2002,7 +2015,7 @@ fn e2e_019_sparse_helper_oracle_match() {
         "compare_results",
         "rust vs scipy helper outputs",
         &format!("cases={}", fixture.cases.len()),
-        "all helper cases matched".to_string().as_str(),
+        "all helper cases matched",
         t_start.elapsed().as_nanos(),
         "ok",
     ));
