@@ -15,7 +15,7 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 | Module | SciPy Symbols | FSCI Functions | Coverage | Status |
 |---|---|---|---|---|
 | linalg | 108 | 113 | 105% | parity_green |
-| sparse | 112 (incl. linalg) | 48+ | 43% | parity_gap |
+| sparse | 112 (incl. linalg) | 50+ | 45% | parity_gap |
 | optimize | 82 | 45+ | 55% | parity_gap |
 | integrate | 38 | 30+ | 80% | parity_green |
 | fft | 40 | 22 | 55% | parity_gap |
@@ -39,7 +39,7 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ### fsci-sparse (44% coverage)
 
-**Implemented:** COO/CSR/CSC/BSR/DIA/DOK/LIL formats, spsolve, splu, spilu, cg, pcg, gmres, lgmres, bicg, bicgstab, cgs, qmr, minres, lsqr, lsmr, eigsh, eigs, svds, expm, norm, spsolve_triangular, eye, diags, random, block_diag, bmat, kron, find, tril, triu, dijkstra, bellman_ford, breadth_first_order, depth_first_order, minimum_spanning_tree, connected_components, laplacian, floyd_warshall, shortest_path, reverse_cuthill_mckee, strongly_connected_components, topological_sort, pagerank, betweenness_centrality, closeness_centrality, sparse_norm, sparse_diagonal, sparse_trace, sparse_transpose, matrix_power
+**Implemented:** COO/CSR/CSC/BSR/DIA/DOK/LIL formats, spsolve, splu, spilu, cg, pcg, gmres, lgmres, bicg, bicgstab, cgs, qmr, minres, lsqr, lsmr, eigsh, eigs, svds, expm, norm, spsolve_triangular, eye, diags, random, block_diag, bmat, vstack, hstack, kron, find, tril, triu, dijkstra, bellman_ford, breadth_first_order, depth_first_order, minimum_spanning_tree, connected_components, laplacian, floyd_warshall, shortest_path, reverse_cuthill_mckee, strongly_connected_components, topological_sort, pagerank, betweenness_centrality, closeness_centrality, sparse_norm, sparse_diagonal, sparse_trace, sparse_transpose, matrix_power
 
 **Missing (MEDIUM priority):**
 - No remaining core sparse storage formats; remaining parity work is broader API surface and specialized ops

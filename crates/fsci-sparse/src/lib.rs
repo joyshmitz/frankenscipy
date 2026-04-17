@@ -5,7 +5,7 @@ pub mod formats;
 pub mod linalg;
 pub mod ops;
 
-pub use construct::{block_diag, bmat, diags, eye, kron, random};
+pub use construct::{block_diag, bmat, diags, eye, hstack, kron, random, vstack};
 pub use formats::{
     BsrMatrix, CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix,
     DokMatrix, LilMatrix, NalgebraBridge, Shape2D, SparseError, SparseFormat, SparseResult,

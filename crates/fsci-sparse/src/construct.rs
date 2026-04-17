@@ -241,6 +241,22 @@ pub fn bmat(blocks: &[Vec<Option<&CsrMatrix>>]) -> SparseResult<CsrMatrix> {
     coo.to_csr()
 }
 
+/// Stack sparse matrices vertically (row wise).
+///
+/// Mirrors `scipy.sparse.vstack` for sparse inputs. The Rust API returns CSR
+/// directly; call `.to_coo()` when coordinate output is desired.
+pub fn vstack(blocks: &[&dyn FormatConvertible]) -> SparseResult<CsrMatrix> {
+    stack_sparse_blocks(blocks, StackAxis::Rows)
+}
+
+/// Stack sparse matrices horizontally (column wise).
+///
+/// Mirrors `scipy.sparse.hstack` for sparse inputs. The Rust API returns CSR
+/// directly; call `.to_coo()` when coordinate output is desired.
+pub fn hstack(blocks: &[&dyn FormatConvertible]) -> SparseResult<CsrMatrix> {
+    stack_sparse_blocks(blocks, StackAxis::Cols)
+}
+
 /// Kronecker product of two sparse matrices.
 ///
 /// For A (m×n) and B (p×q), produces an (m*p × n*q) matrix.
@@ -300,6 +316,103 @@ fn xorshift64(mut x: u64) -> u64 {
     x ^= x >> 7;
     x ^= x << 17;
     x
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StackAxis {
+    Rows,
+    Cols,
+}
+
+fn stack_sparse_blocks(
+    blocks: &[&dyn FormatConvertible],
+    axis: StackAxis,
+) -> SparseResult<CsrMatrix> {
+    if blocks.is_empty() {
+        return Err(SparseError::InvalidArgument {
+            message: format!(
+                "{} requires at least one block",
+                match axis {
+                    StackAxis::Rows => "vstack",
+                    StackAxis::Cols => "hstack",
+                }
+            ),
+        });
+    }
+
+    let first = blocks[0].to_coo()?;
+    let mut total_rows = first.shape().rows;
+    let mut total_cols = first.shape().cols;
+    let mut row_offset = 0usize;
+    let mut col_offset = 0usize;
+    let shared_extent = match axis {
+        StackAxis::Rows => first.shape().cols,
+        StackAxis::Cols => first.shape().rows,
+    };
+
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut data = Vec::new();
+    append_coo_entries(
+        &first, row_offset, col_offset, &mut rows, &mut cols, &mut data,
+    );
+
+    match axis {
+        StackAxis::Rows => row_offset += first.shape().rows,
+        StackAxis::Cols => col_offset += first.shape().cols,
+    }
+
+    for block in blocks.iter().skip(1) {
+        let coo = block.to_coo()?;
+        match axis {
+            StackAxis::Rows => {
+                if coo.shape().cols != shared_extent {
+                    return Err(SparseError::IncompatibleShape {
+                        message: "vstack requires all blocks to have matching column counts"
+                            .to_string(),
+                    });
+                }
+                total_rows += coo.shape().rows;
+            }
+            StackAxis::Cols => {
+                if coo.shape().rows != shared_extent {
+                    return Err(SparseError::IncompatibleShape {
+                        message: "hstack requires all blocks to have matching row counts"
+                            .to_string(),
+                    });
+                }
+                total_cols += coo.shape().cols;
+            }
+        }
+
+        append_coo_entries(
+            &coo, row_offset, col_offset, &mut rows, &mut cols, &mut data,
+        );
+
+        match axis {
+            StackAxis::Rows => row_offset += coo.shape().rows,
+            StackAxis::Cols => col_offset += coo.shape().cols,
+        }
+    }
+
+    let shape = Shape2D::new(total_rows, total_cols);
+    let coo = CooMatrix::from_triplets(shape, data, rows, cols, false)?;
+    coo.to_csr()
+}
+
+fn append_coo_entries(
+    coo: &CooMatrix,
+    row_offset: usize,
+    col_offset: usize,
+    rows: &mut Vec<usize>,
+    cols: &mut Vec<usize>,
+    data: &mut Vec<f64>,
+) {
+    for idx in 0..coo.nnz() {
+        rows.push(row_offset + coo.row_indices()[idx]);
+        cols.push(col_offset + coo.col_indices()[idx]);
+        data.push(coo.data()[idx]);
+    }
 }
 
 #[cfg(test)]
@@ -519,6 +632,86 @@ mod tests {
         let a = eye(2).expect("eye(2)");
         let err = bmat(&[vec![Some(&a), Some(&a)], vec![Some(&a)]]).expect_err("ragged");
         assert!(matches!(err, SparseError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn vstack_accepts_mixed_sparse_formats() {
+        let top = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo");
+        let bottom = CooMatrix::from_triplets(
+            Shape2D::new(1, 2),
+            vec![5.0, 6.0],
+            vec![0, 0],
+            vec![0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+
+        let result = vstack(&[&top, &bottom]).expect("vstack");
+        assert_eq!(result.shape(), Shape2D::new(3, 2));
+        assert_eq!(
+            dense_from_csr(&result),
+            vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]]
+        );
+    }
+
+    #[test]
+    fn hstack_accepts_mixed_sparse_formats() {
+        let left = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo");
+        let right = CooMatrix::from_triplets(
+            Shape2D::new(2, 1),
+            vec![5.0, 6.0],
+            vec![0, 1],
+            vec![0, 0],
+            false,
+        )
+        .expect("coo")
+        .to_csc()
+        .expect("csc");
+
+        let result = hstack(&[&left, &right]).expect("hstack");
+        assert_eq!(result.shape(), Shape2D::new(2, 3));
+        assert_eq!(
+            dense_from_csr(&result),
+            vec![vec![1.0, 2.0, 5.0], vec![3.0, 4.0, 6.0]]
+        );
+    }
+
+    #[test]
+    fn vstack_rejects_empty_input() {
+        let err = vstack(&[]).expect_err("empty vstack");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn vstack_rejects_mismatched_column_counts() {
+        let left = eye(2).expect("eye");
+        let right = eye(3).expect("eye");
+        let err = vstack(&[&left, &right]).expect_err("mismatched cols");
+        assert!(matches!(err, SparseError::IncompatibleShape { .. }));
+    }
+
+    #[test]
+    fn hstack_rejects_mismatched_row_counts() {
+        let left = eye(2).expect("eye");
+        let right = eye(3).expect("eye");
+        let err = hstack(&[&left, &right]).expect_err("mismatched rows");
+        assert!(matches!(err, SparseError::IncompatibleShape { .. }));
     }
 
     // ── kron tests ──────────────────────────────────────────────────
