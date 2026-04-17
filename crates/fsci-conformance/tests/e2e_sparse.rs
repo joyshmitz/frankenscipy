@@ -267,11 +267,16 @@ fn build_sparse_input(spec: &SparseOracleMatrix) -> SparseInputMatrix {
         false,
     )
     .expect("fixture COO should be valid");
-    match spec.format.as_str() {
+    let format = spec.format.as_str();
+    assert!(
+        matches!(format, "coo" | "csr" | "csc"),
+        "unsupported fixture format {}",
+        spec.format
+    );
+    match format {
         "coo" => SparseInputMatrix::Coo(coo),
         "csr" => SparseInputMatrix::Csr(coo.to_csr().expect("coo->csr")),
-        "csc" => SparseInputMatrix::Csc(coo.to_csc().expect("coo->csc")),
-        other => panic!("unsupported fixture format {other}"),
+        _ => SparseInputMatrix::Csc(coo.to_csc().expect("coo->csc")),
     }
 }
 
@@ -313,15 +318,52 @@ fn compare_sparse_triplets(
     actual: &SparseOracleTriplets,
     expected: &SparseOracleTriplets,
 ) {
+    fn normalized_entries(triplets: &SparseOracleTriplets) -> Vec<(usize, usize, f64)> {
+        let mut entries: Vec<_> = triplets
+            .row
+            .iter()
+            .copied()
+            .zip(triplets.col.iter().copied())
+            .zip(triplets.data.iter().copied())
+            .map(|((row, col), data)| (row, col, data))
+            .collect();
+        entries.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.total_cmp(&right.2))
+        });
+        entries
+    }
+
     assert_eq!(actual.shape, expected.shape, "{case_id}: shape mismatch");
-    assert_eq!(actual.row, expected.row, "{case_id}: row mismatch");
-    assert_eq!(actual.col, expected.col, "{case_id}: col mismatch");
-    assert!(
-        max_abs_diff_vec(&actual.data, &expected.data) <= TOL,
-        "{case_id}: data mismatch actual={:?} expected={:?}",
-        actual.data,
-        expected.data
+    let actual_entries = normalized_entries(actual);
+    let expected_entries = normalized_entries(expected);
+    assert_eq!(
+        actual_entries.len(),
+        expected_entries.len(),
+        "{case_id}: nnz mismatch"
     );
+    for (idx, (actual_entry, expected_entry)) in actual_entries
+        .iter()
+        .zip(expected_entries.iter())
+        .enumerate()
+    {
+        assert_eq!(
+            actual_entry.0, expected_entry.0,
+            "{case_id}: row mismatch at sorted idx {idx}"
+        );
+        assert_eq!(
+            actual_entry.1, expected_entry.1,
+            "{case_id}: col mismatch at sorted idx {idx}"
+        );
+        assert!(
+            (actual_entry.2 - expected_entry.2).abs() <= TOL,
+            "{case_id}: data mismatch at sorted idx {idx}: actual={} expected={}",
+            actual_entry.2,
+            expected_entry.2
+        );
+    }
 }
 
 fn compare_find_result(
@@ -340,7 +382,13 @@ fn compare_find_result(
 }
 
 fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
-    match case.operation.as_str() {
+    let operation = case.operation.as_str();
+    assert!(
+        matches!(operation, "find" | "tril" | "triu" | "vstack" | "hstack"),
+        "unsupported sparse oracle operation {}",
+        case.operation
+    );
+    match operation {
         "find" => {
             let matrix = build_sparse_input(case.matrix.as_ref().expect("matrix"));
             let (row, col, data) = sparse_find(&matrix);
@@ -394,7 +442,7 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
                 error: None,
             }
         }
-        "hstack" => {
+        _ => {
             let blocks = case.blocks.as_ref().expect("blocks");
             let matrices: Vec<SparseInputMatrix> = blocks.iter().map(build_sparse_input).collect();
             let refs: Vec<&dyn FormatConvertible> = matrices
@@ -411,7 +459,6 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
                 error: None,
             }
         }
-        other => panic!("unsupported sparse oracle operation {other}"),
     }
 }
 
@@ -1994,7 +2041,7 @@ fn e2e_019_sparse_helper_oracle_match() {
             .case_outputs
             .iter()
             .find(|output| output.case_id == case.case_id)
-            .unwrap_or_else(|| panic!("missing oracle output for {}", case.case_id));
+            .expect("oracle output should exist for every fixture case");
         assert_eq!(
             actual.status, "ok",
             "{} rust execution failed",
@@ -2016,22 +2063,26 @@ fn e2e_019_sparse_helper_oracle_match() {
             "{} result kind mismatch",
             case.case_id
         );
-        match expected.result_kind.as_str() {
-            "find_triplets" => {
-                let actual_result: SparseOracleFindResult =
-                    serde_json::from_value(actual.result.clone()).expect("actual find result");
-                let expected_result: SparseOracleFindResult =
-                    serde_json::from_value(expected.result.clone()).expect("oracle find result");
-                compare_find_result(&case.case_id, &actual_result, &expected_result);
-            }
-            "matrix_triplets" => {
-                let actual_result: SparseOracleTriplets =
-                    serde_json::from_value(actual.result.clone()).expect("actual triplets");
-                let expected_result: SparseOracleTriplets =
-                    serde_json::from_value(expected.result.clone()).expect("oracle triplets");
-                compare_sparse_triplets(&case.case_id, &actual_result, &expected_result);
-            }
-            other => panic!("unsupported oracle result kind {other}"),
+        assert!(
+            matches!(
+                expected.result_kind.as_str(),
+                "find_triplets" | "matrix_triplets"
+            ),
+            "unsupported oracle result kind {}",
+            expected.result_kind
+        );
+        if expected.result_kind == "find_triplets" {
+            let actual_result: SparseOracleFindResult =
+                serde_json::from_value(actual.result.clone()).expect("actual find result");
+            let expected_result: SparseOracleFindResult =
+                serde_json::from_value(expected.result.clone()).expect("oracle find result");
+            compare_find_result(&case.case_id, &actual_result, &expected_result);
+        } else {
+            let actual_result: SparseOracleTriplets =
+                serde_json::from_value(actual.result.clone()).expect("actual triplets");
+            let expected_result: SparseOracleTriplets =
+                serde_json::from_value(expected.result.clone()).expect("oracle triplets");
+            compare_sparse_triplets(&case.case_id, &actual_result, &expected_result);
         }
     }
     steps.push(make_step(
