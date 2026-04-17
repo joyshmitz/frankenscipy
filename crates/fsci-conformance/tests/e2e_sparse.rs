@@ -275,6 +275,30 @@ fn build_sparse_input(spec: &SparseOracleMatrix) -> SparseInputMatrix {
     }
 }
 
+fn sparse_find(matrix: &SparseInputMatrix) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+    match matrix {
+        SparseInputMatrix::Coo(matrix) => find(matrix).expect("find"),
+        SparseInputMatrix::Csr(matrix) => find(matrix).expect("find"),
+        SparseInputMatrix::Csc(matrix) => find(matrix).expect("find"),
+    }
+}
+
+fn sparse_tril(matrix: &SparseInputMatrix, k: isize) -> CooMatrix {
+    match matrix {
+        SparseInputMatrix::Coo(matrix) => tril(matrix, k).expect("tril"),
+        SparseInputMatrix::Csr(matrix) => tril(matrix, k).expect("tril"),
+        SparseInputMatrix::Csc(matrix) => tril(matrix, k).expect("tril"),
+    }
+}
+
+fn sparse_triu(matrix: &SparseInputMatrix, k: isize) -> CooMatrix {
+    match matrix {
+        SparseInputMatrix::Coo(matrix) => triu(matrix, k).expect("triu"),
+        SparseInputMatrix::Csr(matrix) => triu(matrix, k).expect("triu"),
+        SparseInputMatrix::Csc(matrix) => triu(matrix, k).expect("triu"),
+    }
+}
+
 fn triplets_from_coo(coo: &CooMatrix) -> SparseOracleTriplets {
     SparseOracleTriplets {
         shape: [coo.shape().rows, coo.shape().cols],
@@ -319,7 +343,7 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
     match case.operation.as_str() {
         "find" => {
             let matrix = build_sparse_input(case.matrix.as_ref().expect("matrix"));
-            let (row, col, data) = find(matrix.as_format_convertible()).expect("find");
+            let (row, col, data) = sparse_find(&matrix);
             SparseOracleCaseOutput {
                 case_id: case.case_id.clone(),
                 status: "ok".to_string(),
@@ -331,7 +355,7 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
         }
         "tril" => {
             let matrix = build_sparse_input(case.matrix.as_ref().expect("matrix"));
-            let coo = tril(matrix.as_format_convertible(), case.k.unwrap_or(0)).expect("tril");
+            let coo = sparse_tril(&matrix, case.k.unwrap_or(0));
             SparseOracleCaseOutput {
                 case_id: case.case_id.clone(),
                 status: "ok".to_string(),
@@ -343,7 +367,7 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
         }
         "triu" => {
             let matrix = build_sparse_input(case.matrix.as_ref().expect("matrix"));
-            let coo = triu(matrix.as_format_convertible(), case.k.unwrap_or(0)).expect("triu");
+            let coo = sparse_triu(&matrix, case.k.unwrap_or(0));
             SparseOracleCaseOutput {
                 case_id: case.case_id.clone(),
                 status: "ok".to_string(),
