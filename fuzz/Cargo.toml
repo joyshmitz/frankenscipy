@@ -13,6 +13,7 @@ fsci-integrate = { path = "../crates/fsci-integrate" }
 fsci-linalg = { path = "../crates/fsci-linalg" }
 fsci-opt = { path = "../crates/fsci-opt" }
 fsci-runtime = { path = "../crates/fsci-runtime" }
+fsci-sparse = { path = "../crates/fsci-sparse" }
 libfuzzer-sys = "0.4.10"
 
 [[bin]]
@@ -53,6 +54,13 @@ bench = false
 [[bin]]
 name = "p2c003_add_properties"
 path = "fuzz_targets/p2c003_add_properties.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c004_sparse_helpers"
+path = "fuzz_targets/p2c004_sparse_helpers.rs"
 test = false
 doc = false
 bench = false
