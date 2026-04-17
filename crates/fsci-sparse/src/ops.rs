@@ -249,6 +249,51 @@ pub fn csc_to_csr_with_mode(
     Ok((csr, log))
 }
 
+/// Return the row indices, column indices, and values of nonzero entries.
+///
+/// Matches `scipy.sparse.find` by canonicalizing duplicate coordinates and
+/// dropping explicit zeros from the returned triplets.
+pub fn find<T: FormatConvertible>(matrix: &T) -> SparseResult<(Vec<usize>, Vec<usize>, Vec<f64>)> {
+    let coo = matrix.to_coo()?;
+    let canonical = CooMatrix::from_triplets(
+        coo.shape(),
+        coo.data().to_vec(),
+        coo.row_indices().to_vec(),
+        coo.col_indices().to_vec(),
+        true,
+    )?;
+
+    let mut rows = Vec::with_capacity(canonical.nnz());
+    let mut cols = Vec::with_capacity(canonical.nnz());
+    let mut data = Vec::with_capacity(canonical.nnz());
+    for idx in 0..canonical.nnz() {
+        let value = canonical.data()[idx];
+        if value != 0.0 {
+            rows.push(canonical.row_indices()[idx]);
+            cols.push(canonical.col_indices()[idx]);
+            data.push(value);
+        }
+    }
+
+    Ok((rows, cols, data))
+}
+
+/// Return the lower-triangular portion of a sparse matrix in COO form.
+///
+/// Matches the default `scipy.sparse.tril` behavior. Call `.to_csr()` or
+/// `.to_csc()` on the result when a different output format is desired.
+pub fn tril<T: FormatConvertible>(matrix: &T, k: isize) -> SparseResult<CooMatrix> {
+    triangular_filter(matrix, k, TriangleHalf::Lower)
+}
+
+/// Return the upper-triangular portion of a sparse matrix in COO form.
+///
+/// Matches the default `scipy.sparse.triu` behavior. Call `.to_csr()` or
+/// `.to_csc()` on the result when a different output format is desired.
+pub fn triu<T: FormatConvertible>(matrix: &T, k: isize) -> SparseResult<CooMatrix> {
+    triangular_filter(matrix, k, TriangleHalf::Upper)
+}
+
 pub fn spmv_csr(matrix: &CsrMatrix, vector: &[f64]) -> SparseResult<Vec<f64>> {
     if vector.len() != matrix.shape().cols {
         return Err(SparseError::IncompatibleShape {
@@ -359,6 +404,64 @@ pub fn scale_coo(matrix: &CooMatrix, alpha: f64) -> SparseResult<CooMatrix> {
         matrix.col_indices().to_vec(),
         false,
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TriangleHalf {
+    Lower,
+    Upper,
+}
+
+fn triangular_filter<T: FormatConvertible>(
+    matrix: &T,
+    k: isize,
+    half: TriangleHalf,
+) -> SparseResult<CooMatrix> {
+    let coo = matrix.to_coo()?;
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut data = Vec::new();
+
+    for idx in 0..coo.nnz() {
+        let row = coo.row_indices()[idx];
+        let col = coo.col_indices()[idx];
+        let keep = match half {
+            TriangleHalf::Lower => is_lower_triangle(row, col, k),
+            TriangleHalf::Upper => is_upper_triangle(row, col, k),
+        };
+        if keep {
+            rows.push(row);
+            cols.push(col);
+            data.push(coo.data()[idx]);
+        }
+    }
+
+    CooMatrix::from_triplets(coo.shape(), data, rows, cols, false)
+}
+
+fn is_lower_triangle(row: usize, col: usize, k: isize) -> bool {
+    if k >= 0 {
+        row.saturating_add(k as usize) >= col
+    } else {
+        match col.checked_add(k.unsigned_abs()) {
+            Some(limit) => row >= limit,
+            None => false,
+        }
+    }
+}
+
+fn is_upper_triangle(row: usize, col: usize, k: isize) -> bool {
+    if k >= 0 {
+        match row.checked_add(k as usize) {
+            Some(diagonal_col) => diagonal_col <= col,
+            None => false,
+        }
+    } else {
+        match col.checked_add(k.unsigned_abs()) {
+            Some(limit) => row <= limit,
+            None => true,
+        }
+    }
 }
 
 fn combine_coo(lhs: CooMatrix, rhs: CooMatrix, rhs_scale: f64) -> SparseResult<CooMatrix> {

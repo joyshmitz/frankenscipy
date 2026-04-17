@@ -105,8 +105,8 @@ pub use linalg::{
 };
 pub use ops::{
     ConversionLogEntry, FormatConvertible, add_coo, add_csc, add_csr, coo_to_csr_with_mode,
-    csc_to_csr_with_mode, csr_to_csc_with_mode, scale_coo, scale_csc, scale_csr, spmv_coo,
-    spmv_csc, spmv_csr, sub_coo, sub_csc, sub_csr,
+    csc_to_csr_with_mode, csr_to_csc_with_mode, find, scale_coo, scale_csc, scale_csr, spmv_coo,
+    spmv_csc, spmv_csr, sub_coo, sub_csc, sub_csr, tril, triu,
 };
 
 #[cfg(test)]
@@ -398,6 +398,72 @@ mod tests {
         assert_eq!(coo.row_indices(), &[0, 0]);
         assert_eq!(coo.col_indices(), &[1, 1]);
         assert_vec_close(coo.data(), &[1.0, 2.0]);
+    }
+
+    #[test]
+    fn sparse_find_sums_duplicates_and_drops_explicit_zeros() {
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![0.0, 1.0, 2.0, 3.0, 4.0],
+            vec![0, 0, 0, 1, 1],
+            vec![0, 1, 1, 0, 1],
+            false,
+        )
+        .expect("coo");
+        let (rows, cols, data) = find(&coo).expect("find");
+        assert_eq!(rows, vec![0, 1, 1]);
+        assert_eq!(cols, vec![1, 0, 1]);
+        assert_vec_close(&data, &[3.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn sparse_tril_preserves_explicit_zeros_in_lower_triangle() {
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![0, 0, 0, 1],
+            vec![0, 1, 1, 0],
+            false,
+        )
+        .expect("coo");
+        let lower = tril(&coo, 0).expect("tril");
+        assert_eq!(lower.row_indices(), &[0, 1]);
+        assert_eq!(lower.col_indices(), &[0, 0]);
+        assert_vec_close(lower.data(), &[0.0, 3.0]);
+    }
+
+    #[test]
+    fn sparse_triu_preserves_duplicates_and_respects_offsets() {
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(2, 3),
+            vec![5.0, 1.0, 2.0, 3.0],
+            vec![0, 0, 0, 1],
+            vec![0, 1, 1, 2],
+            false,
+        )
+        .expect("coo");
+        let upper = triu(&coo, 1).expect("triu");
+        assert_eq!(upper.row_indices(), &[0, 0, 1]);
+        assert_eq!(upper.col_indices(), &[1, 1, 2]);
+        assert_vec_close(upper.data(), &[1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn sparse_tril_accepts_csr_input() {
+        let csr = CooMatrix::from_triplets(
+            Shape2D::new(3, 4),
+            vec![10.0, 20.0, 30.0, 40.0],
+            vec![0, 0, 1, 2],
+            vec![2, 0, 1, 3],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let lower = tril(&csr, 0).expect("tril");
+        assert_eq!(lower.row_indices(), &[0, 1]);
+        assert_eq!(lower.col_indices(), &[0, 1]);
+        assert_vec_close(lower.data(), &[20.0, 30.0]);
     }
 
     #[test]
