@@ -11,16 +11,19 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D, SolveOptions,
-    SparseError, add_csr, bicgstab, cg, connected_component_sizes, csr_to_csc_with_mode, diags,
-    eye, gmres, is_connected, pagerank, scale_csr, sparse_norm, spmv_csr, spsolve,
-    strongly_connected_components, sub_csr, topological_sort,
+    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D,
+    SolveOptions, SparseError, add_csr, bicgstab, cg, connected_component_sizes,
+    csr_to_csc_with_mode, diags, eye, find, gmres, hstack, is_connected, pagerank, scale_csr,
+    sparse_norm, spmv_csr, spsolve, strongly_connected_components, sub_csr, topological_sort,
+    tril, triu, vstack,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // ───────────────────────── Forensic log types ─────────────────────────
 
@@ -172,6 +175,220 @@ fn max_abs_diff_vec(a: &[f64], b: &[f64]) -> f64 {
                 a.max(b)
             }
         })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SparseOracleFixture {
+    packet_id: String,
+    family: String,
+    cases: Vec<SparseOracleCase>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SparseOracleCase {
+    case_id: String,
+    operation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matrix: Option<SparseOracleMatrix>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blocks: Option<Vec<SparseOracleMatrix>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    k: Option<isize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SparseOracleMatrix {
+    format: String,
+    shape: [usize; 2],
+    row: Vec<usize>,
+    col: Vec<usize>,
+    data: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SparseOracleCapture {
+    case_outputs: Vec<SparseOracleCaseOutput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SparseOracleCaseOutput {
+    case_id: String,
+    status: String,
+    result_kind: String,
+    result: serde_json::Value,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SparseOracleTriplets {
+    shape: [usize; 2],
+    row: Vec<usize>,
+    col: Vec<usize>,
+    data: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SparseOracleFindResult {
+    row: Vec<usize>,
+    col: Vec<usize>,
+    data: Vec<f64>,
+}
+
+enum SparseInputMatrix {
+    Coo(CooMatrix),
+    Csr(CsrMatrix),
+    Csc(CscMatrix),
+}
+
+impl SparseInputMatrix {
+    fn as_format_convertible(&self) -> &dyn FormatConvertible {
+        match self {
+            Self::Coo(matrix) => matrix,
+            Self::Csr(matrix) => matrix,
+            Self::Csc(matrix) => matrix,
+        }
+    }
+}
+
+fn sparse_oracle_temp_path(prefix: &str) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!("{prefix}_{stamp}.json"))
+}
+
+fn build_sparse_input(spec: &SparseOracleMatrix) -> SparseInputMatrix {
+    let coo = CooMatrix::from_triplets(
+        Shape2D::new(spec.shape[0], spec.shape[1]),
+        spec.data.clone(),
+        spec.row.clone(),
+        spec.col.clone(),
+        false,
+    )
+    .expect("fixture COO should be valid");
+    match spec.format.as_str() {
+        "coo" => SparseInputMatrix::Coo(coo),
+        "csr" => SparseInputMatrix::Csr(coo.to_csr().expect("coo->csr")),
+        "csc" => SparseInputMatrix::Csc(coo.to_csc().expect("coo->csc")),
+        other => panic!("unsupported fixture format {other}"),
+    }
+}
+
+fn triplets_from_coo(coo: &CooMatrix) -> SparseOracleTriplets {
+    SparseOracleTriplets {
+        shape: [coo.shape().rows, coo.shape().cols],
+        row: coo.row_indices().to_vec(),
+        col: coo.col_indices().to_vec(),
+        data: coo.data().to_vec(),
+    }
+}
+
+fn compare_sparse_triplets(
+    case_id: &str,
+    actual: &SparseOracleTriplets,
+    expected: &SparseOracleTriplets,
+) {
+    assert_eq!(actual.shape, expected.shape, "{case_id}: shape mismatch");
+    assert_eq!(actual.row, expected.row, "{case_id}: row mismatch");
+    assert_eq!(actual.col, expected.col, "{case_id}: col mismatch");
+    assert!(
+        max_abs_diff_vec(&actual.data, &expected.data) <= TOL,
+        "{case_id}: data mismatch actual={:?} expected={:?}",
+        actual.data,
+        expected.data
+    );
+}
+
+fn compare_find_result(
+    case_id: &str,
+    actual: &SparseOracleFindResult,
+    expected: &SparseOracleFindResult,
+) {
+    assert_eq!(actual.row, expected.row, "{case_id}: row mismatch");
+    assert_eq!(actual.col, expected.col, "{case_id}: col mismatch");
+    assert!(
+        max_abs_diff_vec(&actual.data, &expected.data) <= TOL,
+        "{case_id}: data mismatch actual={:?} expected={:?}",
+        actual.data,
+        expected.data
+    );
+}
+
+fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
+    match case.operation.as_str() {
+        "find" => {
+            let matrix = build_sparse_input(case.matrix.as_ref().expect("matrix"));
+            let (row, col, data) = find(matrix.as_format_convertible()).expect("find");
+            SparseOracleCaseOutput {
+                case_id: case.case_id.clone(),
+                status: "ok".to_string(),
+                result_kind: "find_triplets".to_string(),
+                result: serde_json::to_value(SparseOracleFindResult { row, col, data })
+                    .expect("serialize find result"),
+                error: None,
+            }
+        }
+        "tril" => {
+            let matrix = build_sparse_input(case.matrix.as_ref().expect("matrix"));
+            let coo = tril(matrix.as_format_convertible(), case.k.unwrap_or(0)).expect("tril");
+            SparseOracleCaseOutput {
+                case_id: case.case_id.clone(),
+                status: "ok".to_string(),
+                result_kind: "matrix_triplets".to_string(),
+                result: serde_json::to_value(triplets_from_coo(&coo))
+                    .expect("serialize tril result"),
+                error: None,
+            }
+        }
+        "triu" => {
+            let matrix = build_sparse_input(case.matrix.as_ref().expect("matrix"));
+            let coo = triu(matrix.as_format_convertible(), case.k.unwrap_or(0)).expect("triu");
+            SparseOracleCaseOutput {
+                case_id: case.case_id.clone(),
+                status: "ok".to_string(),
+                result_kind: "matrix_triplets".to_string(),
+                result: serde_json::to_value(triplets_from_coo(&coo))
+                    .expect("serialize triu result"),
+                error: None,
+            }
+        }
+        "vstack" => {
+            let blocks = case.blocks.as_ref().expect("blocks");
+            let matrices: Vec<SparseInputMatrix> = blocks.iter().map(build_sparse_input).collect();
+            let refs: Vec<&dyn FormatConvertible> = matrices
+                .iter()
+                .map(SparseInputMatrix::as_format_convertible)
+                .collect();
+            let coo = vstack(&refs).expect("vstack").to_coo().expect("csr->coo");
+            SparseOracleCaseOutput {
+                case_id: case.case_id.clone(),
+                status: "ok".to_string(),
+                result_kind: "matrix_triplets".to_string(),
+                result: serde_json::to_value(triplets_from_coo(&coo))
+                    .expect("serialize vstack result"),
+                error: None,
+            }
+        }
+        "hstack" => {
+            let blocks = case.blocks.as_ref().expect("blocks");
+            let matrices: Vec<SparseInputMatrix> = blocks.iter().map(build_sparse_input).collect();
+            let refs: Vec<&dyn FormatConvertible> = matrices
+                .iter()
+                .map(SparseInputMatrix::as_format_convertible)
+                .collect();
+            let coo = hstack(&refs).expect("hstack").to_coo().expect("csr->coo");
+            SparseOracleCaseOutput {
+                case_id: case.case_id.clone(),
+                status: "ok".to_string(),
+                result_kind: "matrix_triplets".to_string(),
+                result: serde_json::to_value(triplets_from_coo(&coo))
+                    .expect("serialize hstack result"),
+                error: None,
+            }
+        }
+        other => panic!("unsupported sparse oracle operation {other}"),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1584,4 +1801,223 @@ fn e2e_018_strongly_connected_components() {
     };
     write_bundle(scenario_id, &bundle);
     assert!(overall_pass, "SCC: num={}, labels={:?}", num_sccs, labels);
+}
+
+/// Scenario 19: Sparse helper parity against live SciPy.
+#[test]
+fn e2e_019_sparse_helper_oracle_match() {
+    let scipy_check = Command::new("python3")
+        .arg("-c")
+        .arg("import scipy; import numpy")
+        .status();
+    if !matches!(scipy_check, Ok(status) if status.success()) {
+        eprintln!("SciPy/NumPy not available; skipping sparse helper oracle match");
+        return;
+    }
+
+    let scenario_id = "e2e_sparse_019_helper_oracle";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    let fixture = SparseOracleFixture {
+        packet_id: "FSCI-P2C-004".to_string(),
+        family: "sparse".to_string(),
+        cases: vec![
+            SparseOracleCase {
+                case_id: "find_duplicate_zero".to_string(),
+                operation: "find".to_string(),
+                matrix: Some(SparseOracleMatrix {
+                    format: "coo".to_string(),
+                    shape: [2, 2],
+                    row: vec![0, 0, 0, 1, 1],
+                    col: vec![0, 1, 1, 0, 1],
+                    data: vec![0.0, 1.0, 2.0, 3.0, 4.0],
+                }),
+                blocks: None,
+                k: None,
+            },
+            SparseOracleCase {
+                case_id: "tril_explicit_zero".to_string(),
+                operation: "tril".to_string(),
+                matrix: Some(SparseOracleMatrix {
+                    format: "coo".to_string(),
+                    shape: [2, 2],
+                    row: vec![0, 0, 0, 1],
+                    col: vec![0, 1, 1, 0],
+                    data: vec![0.0, 1.0, 2.0, 3.0],
+                }),
+                blocks: None,
+                k: Some(0),
+            },
+            SparseOracleCase {
+                case_id: "triu_duplicate_offset".to_string(),
+                operation: "triu".to_string(),
+                matrix: Some(SparseOracleMatrix {
+                    format: "coo".to_string(),
+                    shape: [2, 3],
+                    row: vec![0, 0, 0, 1],
+                    col: vec![0, 1, 1, 2],
+                    data: vec![5.0, 1.0, 2.0, 3.0],
+                }),
+                blocks: None,
+                k: Some(1),
+            },
+            SparseOracleCase {
+                case_id: "vstack_mixed_formats".to_string(),
+                operation: "vstack".to_string(),
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "coo".to_string(),
+                        shape: [2, 2],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 1, 0, 1],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csr".to_string(),
+                        shape: [1, 2],
+                        row: vec![0, 0],
+                        col: vec![0, 1],
+                        data: vec![5.0, 6.0],
+                    },
+                ]),
+                k: None,
+            },
+            SparseOracleCase {
+                case_id: "hstack_mixed_formats".to_string(),
+                operation: "hstack".to_string(),
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "coo".to_string(),
+                        shape: [2, 2],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 1, 0, 1],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csc".to_string(),
+                        shape: [2, 1],
+                        row: vec![0, 1],
+                        col: vec![0, 0],
+                        data: vec![5.0, 6.0],
+                    },
+                ]),
+                k: None,
+            },
+        ],
+    };
+
+    let fixture_path = sparse_oracle_temp_path("fsci_sparse_helper_fixture");
+    let output_path = sparse_oracle_temp_path("fsci_sparse_helper_output");
+    let t_start = Instant::now();
+    fs::write(
+        &fixture_path,
+        serde_json::to_vec_pretty(&fixture).expect("serialize fixture"),
+    )
+    .expect("write fixture");
+    steps.push(make_step(
+        1,
+        "write_fixture",
+        "serialize fixture JSON",
+        &format!("cases={}", fixture.cases.len()),
+        &fixture_path.display().to_string(),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    let oracle_script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python_oracle/scipy_sparse_oracle.py");
+    let t_start = Instant::now();
+    let output = Command::new("python3")
+        .arg(&oracle_script)
+        .arg("--fixture")
+        .arg(&fixture_path)
+        .arg("--output")
+        .arg(&output_path)
+        .status()
+        .expect("run sparse oracle");
+    steps.push(make_step(
+        2,
+        "run_scipy_oracle",
+        "python3 scipy_sparse_oracle.py",
+        &oracle_script.display().to_string(),
+        &format!("success={}", output.success()),
+        t_start.elapsed().as_nanos(),
+        if output.success() { "ok" } else { "fail" },
+    ));
+    assert!(output.success(), "SciPy sparse oracle should succeed");
+
+    let t_start = Instant::now();
+    let capture: SparseOracleCapture = serde_json::from_slice(
+        &fs::read(&output_path).expect("read oracle output"),
+    )
+    .expect("parse oracle output");
+    steps.push(make_step(
+        3,
+        "load_oracle_output",
+        "parse output JSON",
+        &output_path.display().to_string(),
+        &format!("case_outputs={}", capture.case_outputs.len()),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    let t_start = Instant::now();
+    for case in &fixture.cases {
+        let actual = run_sparse_oracle_case(case);
+        let expected = capture
+            .case_outputs
+            .iter()
+            .find(|output| output.case_id == case.case_id)
+            .unwrap_or_else(|| panic!("missing oracle output for {}", case.case_id));
+        assert_eq!(expected.status, "ok", "{} oracle failed", case.case_id);
+        assert!(expected.error.is_none(), "{} oracle error present", case.case_id);
+        assert_eq!(
+            actual.result_kind, expected.result_kind,
+            "{} result kind mismatch",
+            case.case_id
+        );
+        match expected.result_kind.as_str() {
+            "find_triplets" => {
+                let actual_result: SparseOracleFindResult =
+                    serde_json::from_value(actual.result.clone()).expect("actual find result");
+                let expected_result: SparseOracleFindResult =
+                    serde_json::from_value(expected.result.clone()).expect("oracle find result");
+                compare_find_result(&case.case_id, &actual_result, &expected_result);
+            }
+            "matrix_triplets" => {
+                let actual_result: SparseOracleTriplets =
+                    serde_json::from_value(actual.result.clone()).expect("actual triplets");
+                let expected_result: SparseOracleTriplets =
+                    serde_json::from_value(expected.result.clone()).expect("oracle triplets");
+                compare_sparse_triplets(&case.case_id, &actual_result, &expected_result);
+            }
+            other => panic!("unsupported oracle result kind {other}"),
+        }
+    }
+    steps.push(make_step(
+        4,
+        "compare_results",
+        "rust vs scipy helper outputs",
+        &format!("cases={}", fixture.cases.len()),
+        "all helper cases matched".to_string().as_str(),
+        t_start.elapsed().as_nanos(),
+        "ok",
+    ));
+
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: "pass".to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
 }
