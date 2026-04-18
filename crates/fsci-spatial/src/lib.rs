@@ -1245,16 +1245,15 @@ pub struct HalfspaceIntersection {
 
 impl HalfspaceIntersection {
     /// Compute the intersection of 2D halfspaces.
-    pub fn new(
-        halfspaces: &[Halfspace2],
-        interior_point: Point2,
-    ) -> Result<Self, SpatialError> {
+    pub fn new(halfspaces: &[Halfspace2], interior_point: Point2) -> Result<Self, SpatialError> {
         validate_halfspace_intersection_inputs(halfspaces, interior_point)?;
 
         let dual_points = halfspace_dual_points(halfspaces, interior_point);
         let dual_hull = ConvexHull::new(&dual_points).map_err(|err| match err {
             SpatialError::Qhull(qhull) => SpatialError::Qhull(qhull),
-            other => qhull_error(format!("Qhull failed to construct halfspace dual hull: {other}")),
+            other => qhull_error(format!(
+                "Qhull failed to construct halfspace dual hull: {other}"
+            )),
         })?;
 
         let dual_facets = dual_hull
@@ -3403,11 +3402,7 @@ mod tests {
 
     #[test]
     fn halfspace_intersection_unbounded_region_is_marked() {
-        let halfspaces = [
-            [-1.0, 0.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [1.0, 0.0, -1.0],
-        ];
+        let halfspaces = [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [1.0, 0.0, -1.0]];
         let hs = HalfspaceIntersection::new(&halfspaces, (0.5, 0.5)).expect("halfspaces");
 
         assert!(!hs.is_bounded);
@@ -3437,11 +3432,7 @@ mod tests {
     #[test]
     fn halfspace_intersection_add_halfspaces_recomputes_region() {
         let mut hs = HalfspaceIntersection::new(
-            &[
-                [-1.0, 0.0, 0.0],
-                [0.0, -1.0, 0.0],
-                [1.0, 0.0, -1.0],
-            ],
+            &[[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [1.0, 0.0, -1.0]],
             (0.5, 0.5),
         )
         .expect("initial halfspaces");
