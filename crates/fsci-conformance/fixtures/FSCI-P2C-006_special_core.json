@@ -560,6 +560,96 @@
       }
     },
     {
+      "case_id": "diff_jvp_v0_x1p25_n1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "jvp",
+      "args": [
+        0.0,
+        1.25,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.5106232603198806,
+        "atol": 0.0005,
+        "rtol": 0.0005,
+        "contract_ref": "fsci_special::jvp"
+      }
+    },
+    {
+      "case_id": "diff_jvp_v0_x1p25_n2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "jvp",
+      "args": [
+        0.0,
+        1.25,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.23740747701538087,
+        "atol": 0.0005,
+        "rtol": 0.0005,
+        "contract_ref": "fsci_special::jvp"
+      }
+    },
+    {
+      "case_id": "diff_yvp_v0_x1p75_n1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "yvp",
+      "args": [
+        0.0,
+        1.75,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.2539729859462456,
+        "atol": 0.0005,
+        "rtol": 0.0005,
+        "contract_ref": "fsci_special::yvp"
+      }
+    },
+    {
+      "case_id": "diff_ivp_v0_x1p1_n1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ivp",
+      "args": [
+        0.0,
+        1.1,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.637488876453882,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ivp"
+      }
+    },
+    {
+      "case_id": "diff_kvp_v0_x1p1_n1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kvp",
+      "args": [
+        0.0,
+        1.1,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.5097600271670271,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "contract_ref": "fsci_special::kvp"
+      }
+    },
+    {
       "case_id": "diff_spherical_jn_n0_x1",
       "category": "differential",
       "mode": "Strict",

@@ -45,10 +45,11 @@ use fsci_special::{
     betaln as special_betaln, erf as special_erf, erfc as special_erfc, erfcinv as special_erfcinv,
     erfinv as special_erfinv, expit as special_expit, exprel as special_exprel,
     gamma as special_gamma, gammainc as special_gammainc, gammaincc as special_gammaincc,
-    gammaln as special_gammaln, iv as special_iv, j0 as special_j0, j1 as special_j1,
-    jn as special_jn, kv as special_kv, logit as special_logit, sinc as special_sinc,
-    spherical_jn as special_spherical_jn, spherical_yn as special_spherical_yn,
-    xlogy as special_xlogy, y0 as special_y0, y1 as special_y1, yn as special_yn,
+    gammaln as special_gammaln, iv as special_iv, ivp as special_ivp, j0 as special_j0,
+    j1 as special_j1, jn as special_jn, jvp as special_jvp, kv as special_kv, kvp as special_kvp,
+    logit as special_logit, sinc as special_sinc, spherical_jn as special_spherical_jn,
+    spherical_yn as special_spherical_yn, xlogy as special_xlogy, y0 as special_y0,
+    y1 as special_y1, yn as special_yn, yvp as special_yvp,
 };
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};
@@ -535,6 +536,10 @@ pub enum SpecialCaseFunction {
     Yn,
     Iv,
     Kv,
+    Jvp,
+    Yvp,
+    Ivp,
+    Kvp,
     SphericalJn,
     SphericalYn,
     Sinc,
@@ -8183,6 +8188,70 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 mode,
             )
         }
+        SpecialCaseFunction::Jvp => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("jvp", mode));
+            }
+            let derivative_order = special_derivative_order_from_fixture("jvp", mode, args[2])?;
+            special_scalar_from_tensor(
+                special_jvp(
+                    &special_scalar(args[0]),
+                    &special_scalar(args[1]),
+                    derivative_order,
+                    mode,
+                )?,
+                "jvp",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Yvp => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("yvp", mode));
+            }
+            let derivative_order = special_derivative_order_from_fixture("yvp", mode, args[2])?;
+            special_scalar_from_tensor(
+                special_yvp(
+                    &special_scalar(args[0]),
+                    &special_scalar(args[1]),
+                    derivative_order,
+                    mode,
+                )?,
+                "yvp",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Ivp => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("ivp", mode));
+            }
+            let derivative_order = special_derivative_order_from_fixture("ivp", mode, args[2])?;
+            special_scalar_from_tensor(
+                special_ivp(
+                    &special_scalar(args[0]),
+                    &special_scalar(args[1]),
+                    derivative_order,
+                    mode,
+                )?,
+                "ivp",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Kvp => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("kvp", mode));
+            }
+            let derivative_order = special_derivative_order_from_fixture("kvp", mode, args[2])?;
+            special_scalar_from_tensor(
+                special_kvp(
+                    &special_scalar(args[0]),
+                    &special_scalar(args[1]),
+                    derivative_order,
+                    mode,
+                )?,
+                "kvp",
+                mode,
+            )
+        }
         SpecialCaseFunction::SphericalJn => {
             if args.len() != 2 {
                 return Err(special_invalid_fixture_error("spherical_jn", mode));
@@ -8356,6 +8425,22 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
 
 fn special_scalar(value: f64) -> FsciSpecialTensor {
     FsciSpecialTensor::RealScalar(value)
+}
+
+fn special_derivative_order_from_fixture(
+    function: &'static str,
+    mode: RuntimeMode,
+    value: f64,
+) -> Result<usize, FsciSpecialError> {
+    if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= usize::MAX as f64 {
+        return Ok(value as usize);
+    }
+    Err(FsciSpecialError {
+        function,
+        kind: FsciSpecialErrorKind::DomainError,
+        mode,
+        detail: "derivative order fixture must be a non-negative integer",
+    })
 }
 
 fn special_scalar_from_tensor(
