@@ -783,6 +783,595 @@
       }
     },
     {
+      "case_id": "diff_xlog1py_zero_x",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "xlog1py",
+      "args": [
+        0.0,
+        5.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::xlog1py"
+      }
+    },
+    {
+      "case_id": "diff_xlog1py_normal",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "xlog1py",
+      "args": [
+        2.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8109302162163288,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::xlog1py"
+      }
+    },
+    {
+      "case_id": "diff_xlogx_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "xlogx",
+      "args": [
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.3862943611198906,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::xlogx"
+      }
+    },
+    {
+      "case_id": "diff_log1p_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "log1p",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.6931471805599453,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::log1p"
+      }
+    },
+    {
+      "case_id": "diff_expm1_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "expm1",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.718281828459045,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::expm1"
+      }
+    },
+    {
+      "case_id": "diff_logaddexp_1_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "logaddexp",
+      "args": [
+        1.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.313261687518223,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::logaddexp"
+      }
+    },
+    {
+      "case_id": "diff_logaddexp2_1_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "logaddexp2",
+      "args": [
+        1.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.584962500721156,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::logaddexp2"
+      }
+    },
+    {
+      "case_id": "diff_softplus_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "softplus",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.3132616875182228,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::softplus"
+      }
+    },
+    {
+      "case_id": "diff_huber_1_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "huber",
+      "args": [
+        1.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.5,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::huber"
+      }
+    },
+    {
+      "case_id": "diff_pseudo_huber_1_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "pseudo_huber",
+      "args": [
+        1.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.2360679774997896,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::pseudo_huber"
+      }
+    },
+    {
+      "case_id": "diff_entr_half",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "entr",
+      "args": [
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.34657359027997264,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::entr"
+      }
+    },
+    {
+      "case_id": "diff_entr_zero",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "entr",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::entr"
+      }
+    },
+    {
+      "case_id": "diff_rel_entr_2_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "rel_entr",
+      "args": [
+        2.0,
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.8109302162163288,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::rel_entr"
+      }
+    },
+    {
+      "case_id": "diff_kl_div_2_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kl_div",
+      "args": [
+        2.0,
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.18906978378367123,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::kl_div"
+      }
+    },
+    {
+      "case_id": "diff_ndtr_zero",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ndtr",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::ndtr"
+      }
+    },
+    {
+      "case_id": "diff_ndtr_1p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ndtr",
+      "args": [
+        1.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8943502263331446,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ndtr"
+      }
+    },
+    {
+      "case_id": "diff_ndtri_0p975",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ndtri",
+      "args": [
+        0.975
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.959963984540054,
+        "atol": 5e-5,
+        "rtol": 5e-5,
+        "contract_ref": "fsci_special::ndtri"
+      }
+    },
+    {
+      "case_id": "diff_log_ndtr_neg8",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "log_ndtr",
+      "args": [
+        -8.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -35.01343715991456,
+        "atol": 1e-6,
+        "rtol": 1e-6,
+        "contract_ref": "fsci_special::log_ndtr"
+      }
+    },
+    {
+      "case_id": "diff_logsumexp_1_2_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "logsumexp",
+      "args": [
+        1.0,
+        2.0,
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.40760596444438,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::logsumexp"
+      }
+    },
+    {
+      "case_id": "diff_fresnel_s_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "fresnel_s",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.4382591473903547,
+        "atol": 5e-8,
+        "rtol": 5e-8,
+        "contract_ref": "fsci_special::fresnel"
+      }
+    },
+    {
+      "case_id": "diff_fresnel_c_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "fresnel_c",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.779893400376823,
+        "atol": 5e-8,
+        "rtol": 5e-8,
+        "contract_ref": "fsci_special::fresnel"
+      }
+    },
+    {
+      "case_id": "diff_dawsn_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "dawsn",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5380795069127684,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "contract_ref": "fsci_special::dawsn"
+      }
+    },
+    {
+      "case_id": "diff_sici_si_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "sici_si",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.9460830703671831,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::sici"
+      }
+    },
+    {
+      "case_id": "diff_sici_ci_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "sici_ci",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.33740392290096816,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::sici"
+      }
+    },
+    {
+      "case_id": "diff_shichi_shi_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "shichi_shi",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0572508753757286,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::shichi"
+      }
+    },
+    {
+      "case_id": "diff_shichi_chi_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "shichi_chi",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8378669409802082,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::shichi"
+      }
+    },
+    {
+      "case_id": "diff_struve_0_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "struve",
+      "args": [
+        0.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5686566270482881,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::struve"
+      }
+    },
+    {
+      "case_id": "diff_modstruve_0_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "modstruve",
+      "args": [
+        0.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.710243185937891,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::modstruve"
+      }
+    },
+    {
+      "case_id": "diff_ber_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ber",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.984381781213087,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::ber"
+      }
+    },
+    {
+      "case_id": "diff_bei_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "bei",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.24956604003665972,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::bei"
+      }
+    },
+    {
+      "case_id": "diff_ker_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ker",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.28670620872831604,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ker"
+      }
+    },
+    {
+      "case_id": "diff_kei_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kei",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.49499463651872,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::kei"
+      }
+    },
+    {
+      "case_id": "diff_spence_half",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spence",
+      "args": [
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5822405264650135,
+        "atol": 1e-7,
+        "rtol": 1e-7,
+        "contract_ref": "fsci_special::spence"
+      }
+    },
+    {
+      "case_id": "diff_zeta_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "zeta",
+      "args": [
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.6449340668482264,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "contract_ref": "fsci_special::zeta"
+      }
+    },
+    {
+      "case_id": "diff_zetac_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "zetac",
+      "args": [
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.6449340668482264,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "contract_ref": "fsci_special::zetac"
+      }
+    },
+    {
+      "case_id": "diff_hurwitz_zeta_2_half",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "hurwitz_zeta",
+      "args": [
+        2.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 4.93480220054468,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "contract_ref": "fsci_special::hurwitz_zeta"
+      }
+    },
+    {
       "case_id": "diff_expit_zero",
       "category": "differential",
       "mode": "Strict",
@@ -876,6 +1465,413 @@
         "atol": 1e-10,
         "rtol": 1e-10,
         "contract_ref": "fsci_special::exprel"
+      }
+    },
+    {
+      "case_id": "diff_ellipk_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ellipk",
+      "args": [
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.8540746773013719,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ellipk"
+      }
+    },
+    {
+      "case_id": "diff_ellipkm1_0p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ellipkm1",
+      "args": [
+        0.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.156515647499643,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ellipkm1"
+      }
+    },
+    {
+      "case_id": "diff_ellipe_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ellipe",
+      "args": [
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.3506438810476755,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ellipe"
+      }
+    },
+    {
+      "case_id": "diff_ellipkinc_0p7_0p2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ellipkinc",
+      "args": [
+        0.7,
+        0.2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.7107841364378853,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ellipkinc"
+      }
+    },
+    {
+      "case_id": "diff_ellipeinc_0p7_0p2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ellipeinc",
+      "args": [
+        0.7,
+        0.2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.6894990277704386,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ellipeinc"
+      }
+    },
+    {
+      "case_id": "diff_ellipj_sn_0p7_0p2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ellipj_sn",
+      "args": [
+        0.7,
+        0.2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.6362806256364313,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ellipj"
+      }
+    },
+    {
+      "case_id": "diff_ellipj_cn_0p7_0p2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ellipj_cn",
+      "args": [
+        0.7,
+        0.2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.771457688690515,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ellipj"
+      }
+    },
+    {
+      "case_id": "diff_ellipj_dn_0p7_0p2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ellipj_dn",
+      "args": [
+        0.7,
+        0.2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.9586602073143238,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ellipj"
+      }
+    },
+    {
+      "case_id": "diff_ellipj_ph_0p7_0p2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ellipj_ph",
+      "args": [
+        0.7,
+        0.2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.6896673935732983,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::ellipj"
+      }
+    },
+    {
+      "case_id": "diff_lpmv_1_3_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "lpmv",
+      "args": [
+        1.0,
+        3.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.3247595264191645,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::lpmv"
+      }
+    },
+    {
+      "case_id": "diff_lpmv_neg1_3_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "lpmv",
+      "args": [
+        -1.0,
+        3.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.02706329386826371,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::lpmv"
+      }
+    },
+    {
+      "case_id": "diff_roots_legendre_3_node_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_legendre_node",
+      "args": [
+        3.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.7745966692414834,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_legendre"
+      }
+    },
+    {
+      "case_id": "diff_roots_legendre_3_node_mid",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_legendre_node",
+      "args": [
+        3.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_legendre"
+      }
+    },
+    {
+      "case_id": "diff_roots_legendre_3_node_right",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_legendre_node",
+      "args": [
+        3.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.7745966692414834,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_legendre"
+      }
+    },
+    {
+      "case_id": "diff_roots_legendre_3_weight_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_legendre_weight",
+      "args": [
+        3.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5555555555555558,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_legendre"
+      }
+    },
+    {
+      "case_id": "diff_roots_legendre_3_weight_mid",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_legendre_weight",
+      "args": [
+        3.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8888888888888883,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_legendre"
+      }
+    },
+    {
+      "case_id": "diff_roots_legendre_3_weight_right",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_legendre_weight",
+      "args": [
+        3.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5555555555555558,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_legendre"
+      }
+    },
+    {
+      "case_id": "diff_lambertw_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "lambertw",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5671432904097838,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::lambertw"
+      }
+    },
+    {
+      "case_id": "diff_exp1_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "exp1",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.2193839343955205,
+        "atol": 1e-9,
+        "rtol": 1e-9,
+        "contract_ref": "fsci_special::exp1"
+      }
+    },
+    {
+      "case_id": "diff_expi_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "expi",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.895117816355937,
+        "atol": 1e-9,
+        "rtol": 1e-9,
+        "contract_ref": "fsci_special::expi"
+      }
+    },
+    {
+      "case_id": "diff_expn_2_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "expn",
+      "args": [
+        2.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.14849550677592194,
+        "atol": 1e-9,
+        "rtol": 1e-9,
+        "contract_ref": "fsci_special::expn"
+      }
+    },
+    {
+      "case_id": "diff_hyp0f1_1p5_0p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "hyp0f1",
+      "args": [
+        1.5,
+        0.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.1752011936438014,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "contract_ref": "fsci_special::hyp0f1"
+      }
+    },
+    {
+      "case_id": "diff_hyp1f1_1_2_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "hyp1f1",
+      "args": [
+        1.0,
+        2.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.2974425414002564,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "contract_ref": "fsci_special::hyp1f1"
+      }
+    },
+    {
+      "case_id": "diff_hyp2f1_1_1_2_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "hyp2f1",
+      "args": [
+        1.0,
+        1.0,
+        2.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.3862943611198901,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "contract_ref": "fsci_special::hyp2f1"
       }
     }
   ]

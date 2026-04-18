@@ -402,6 +402,108 @@
         "note": "Integral of sin(x) from 0 to pi = 2",
         "contract_ref": "fsci_integrate::fixed_quad"
       }
+    },
+    {
+      "case_id": "cubature_scalar_unit_square_product",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cubature",
+      "args": {
+        "func": "x0*x1",
+        "lower": [0.0, 0.0],
+        "upper": [1.0, 1.0],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      },
+      "expected": {
+        "kind": "scalar",
+        "value": 0.25,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "note": "Integral of x*y over [0,1]^2 = 1/4",
+        "contract_ref": "fsci_integrate::cubature_scalar"
+      }
+    },
+    {
+      "case_id": "cubature_vector_1d_powers",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cubature",
+      "args": {
+        "func": "powers_1d",
+        "lower": [0.0],
+        "upper": [1.0],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      },
+      "expected": {
+        "kind": "array",
+        "value": [0.5, 0.3333333333333333],
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "note": "Vector-valued integral of [x, x^2] over [0,1]",
+        "contract_ref": "fsci_integrate::cubature"
+      }
+    },
+    {
+      "case_id": "cubature_reversed_bounds_preserve_orientation",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cubature",
+      "args": {
+        "func": "constant_1",
+        "lower": [1.0],
+        "upper": [0.0],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      },
+      "expected": {
+        "kind": "scalar",
+        "value": -1.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "note": "Reversed one-dimensional bounds preserve signed orientation",
+        "contract_ref": "fsci_integrate::cubature_scalar"
+      }
+    },
+    {
+      "case_id": "cubature_zero_dim_vector",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cubature",
+      "args": {
+        "func": "zero_dim_pair",
+        "lower": [],
+        "upper": [],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      },
+      "expected": {
+        "kind": "array",
+        "value": [42.0, -7.0],
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "note": "Zero-dimensional cubature evaluates the vector integrand once",
+        "contract_ref": "fsci_integrate::cubature"
+      }
+    },
+    {
+      "case_id": "cubature_rejects_mismatched_bounds",
+      "category": "differential",
+      "mode": "Hardened",
+      "function": "cubature",
+      "args": {
+        "func": "constant_1",
+        "lower": [0.0],
+        "upper": [1.0, 2.0],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      },
+      "expected": {
+        "kind": "error",
+        "value": "cubature bounds must have the same dimensionality",
+        "contract_ref": "fsci_integrate::cubature"
+      }
     }
   ]
 }

@@ -577,6 +577,107 @@
         "note": "4 points = 6 condensed distances",
         "contract_ref": "fsci_spatial::squareform_to_matrix"
       }
+    },
+    {
+      "case_id": "halfspace_intersection_unit_square",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "halfspace_intersection",
+      "args": [
+        [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [1.0, 0.0, -1.0], [0.0, 1.0, -1.0]],
+        [0.5, 0.5]
+      ],
+      "expected": {
+        "kind": "halfspace_intersection",
+        "value": {
+          "intersections": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+          "dual_points": [[-2.0, 0.0], [0.0, -2.0], [2.0, 0.0], [0.0, 2.0]],
+          "dual_vertices": [0, 1, 2, 3],
+          "dual_area": 11.313708498984761,
+          "dual_volume": 8.0,
+          "is_bounded": true
+        },
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::HalfspaceIntersection"
+      }
+    },
+    {
+      "case_id": "halfspace_intersection_redundant_halfspace",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "halfspace_intersection",
+      "args": [
+        [
+          [-1.0, 0.0, 0.0],
+          [0.0, -1.0, 0.0],
+          [1.0, 0.0, -1.0],
+          [0.0, 1.0, -1.0],
+          [1.0, 0.0, -2.0]
+        ],
+        [0.5, 0.5]
+      ],
+      "expected": {
+        "kind": "halfspace_intersection",
+        "value": {
+          "intersections": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+          "is_bounded": true
+        },
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::HalfspaceIntersection"
+      }
+    },
+    {
+      "case_id": "halfspace_intersection_unbounded_strip",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "halfspace_intersection",
+      "args": [
+        [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [1.0, 0.0, -1.0]],
+        [0.5, 0.5]
+      ],
+      "expected": {
+        "kind": "halfspace_intersection",
+        "value": {
+          "finite_intersections": [[0.0, 0.0], [1.0, 0.0]],
+          "has_nonfinite_intersection": true,
+          "is_bounded": false
+        },
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_spatial::HalfspaceIntersection"
+      }
+    },
+    {
+      "case_id": "halfspace_intersection_boundary_feasible_point_error",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "halfspace_intersection",
+      "args": [
+        [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [1.0, 0.0, -1.0], [0.0, 1.0, -1.0]],
+        [0.0, 0.5]
+      ],
+      "expected": {
+        "kind": "error_contains",
+        "value": "QH6023",
+        "contract_ref": "fsci_spatial::QhullError"
+      }
+    },
+    {
+      "case_id": "halfspace_intersection_unsupported_dimension_error",
+      "category": "differential",
+      "mode": "Hardened",
+      "function": "halfspace_intersection",
+      "args": [
+        [[-1.0, 0.0, 0.0, 0.0], [0.0, -1.0, 0.0, 0.0], [0.0, 0.0, -1.0, 0.0], [1.0, 1.0, 1.0, -1.0]],
+        [0.2, 0.2, 0.2]
+      ],
+      "expected": {
+        "kind": "error_contains",
+        "value": "currently supports only 2D",
+        "contract_ref": "fsci_spatial::HalfspaceIntersection::from_nd"
+      }
     }
   ]
 }

@@ -24,9 +24,10 @@ use fsci_arrayapi::{
 };
 use fsci_fft::sync_audit_ledger as fft_sync_audit_ledger;
 use fsci_integrate::{
-    ToleranceValue, cumulative_simpson, cumulative_trapezoid, fixed_quad, gauss_legendre,
-    newton_cotes, romb, simpson, sync_audit_ledger as integrate_sync_audit_ledger, trapezoid,
-    validate_tol, validate_tol_with_audit,
+    CubatureOptions, ToleranceValue, cubature, cubature_scalar, cumulative_simpson,
+    cumulative_trapezoid, fixed_quad, gauss_legendre, newton_cotes, romb, simpson,
+    sync_audit_ledger as integrate_sync_audit_ledger, trapezoid, validate_tol,
+    validate_tol_with_audit,
 };
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
@@ -41,15 +42,30 @@ use fsci_opt::{
 use fsci_runtime::{AuditLedger, RuntimeMode, SolverPortfolio};
 use fsci_special::{
     SpecialError as FsciSpecialError, SpecialErrorKind as FsciSpecialErrorKind,
-    SpecialTensor as FsciSpecialTensor, beta as special_beta, betainc as special_betainc,
-    betaln as special_betaln, erf as special_erf, erfc as special_erfc, erfcinv as special_erfcinv,
-    erfinv as special_erfinv, expit as special_expit, exprel as special_exprel,
+    SpecialTensor as FsciSpecialTensor, bei as special_bei, ber as special_ber,
+    beta as special_beta, betainc as special_betainc, betaln as special_betaln,
+    dawsn as special_dawsn, ellipe as special_ellipe, ellipeinc as special_ellipeinc,
+    ellipj as special_ellipj, ellipk as special_ellipk, ellipkinc as special_ellipkinc,
+    ellipkm1 as special_ellipkm1, entr as special_entr, erf as special_erf, erfc as special_erfc,
+    erfcinv as special_erfcinv, erfinv as special_erfinv, exp1 as special_exp1,
+    expi as special_expi, expit as special_expit, expm1 as special_expm1,
+    expn_scalar as special_expn, exprel as special_exprel, fresnel as special_fresnel,
     gamma as special_gamma, gammainc as special_gammainc, gammaincc as special_gammaincc,
-    gammaln as special_gammaln, iv as special_iv, ivp as special_ivp, j0 as special_j0,
-    j1 as special_j1, jn as special_jn, jvp as special_jvp, kv as special_kv, kvp as special_kvp,
-    logit as special_logit, sinc as special_sinc, spherical_jn as special_spherical_jn,
-    spherical_yn as special_spherical_yn, xlogy as special_xlogy, y0 as special_y0,
-    y1 as special_y1, yn as special_yn, yvp as special_yvp,
+    gammaln as special_gammaln, huber as special_huber, hurwitz_zeta as special_hurwitz_zeta,
+    hyp0f1 as special_hyp0f1, hyp1f1 as special_hyp1f1, hyp2f1 as special_hyp2f1, iv as special_iv,
+    ivp as special_ivp, j0 as special_j0, j1 as special_j1, jn as special_jn, jvp as special_jvp,
+    kei as special_kei, ker as special_ker, kl_div as special_kl_div, kv as special_kv,
+    kvp as special_kvp, lambertw as special_lambertw, log_ndtr as special_log_ndtr,
+    log1p as special_log1p, logaddexp as special_logaddexp, logaddexp2 as special_logaddexp2,
+    logit as special_logit, logsumexp as special_logsumexp, lpmv as special_lpmv,
+    modstruve as special_modstruve, ndtr as special_ndtr, ndtri as special_ndtri,
+    pseudo_huber as special_pseudo_huber, rel_entr as special_rel_entr,
+    roots_legendre as special_roots_legendre, shichi as special_shichi, sici as special_sici,
+    sinc as special_sinc, softplus as special_softplus, spence as special_spence,
+    spherical_jn as special_spherical_jn, spherical_yn as special_spherical_yn,
+    struve as special_struve, xlog1py as special_xlog1py, xlogx as special_xlogx,
+    xlogy as special_xlogy, y0 as special_y0, y1 as special_y1, yn as special_yn,
+    yvp as special_yvp, zeta as special_zeta, zetac as special_zetac,
 };
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};
@@ -528,6 +544,22 @@ pub enum SpecialCaseFunction {
     Beta,
     Betaln,
     Betainc,
+    Ellipk,
+    Ellipkm1,
+    Ellipe,
+    Ellipkinc,
+    Ellipeinc,
+    EllipjSn,
+    EllipjCn,
+    EllipjDn,
+    EllipjPh,
+    Lambertw,
+    Exp1,
+    Expi,
+    Expn,
+    Hyp0f1,
+    Hyp1f1,
+    Hyp2f1,
     J0,
     J1,
     Jn,
@@ -544,6 +576,42 @@ pub enum SpecialCaseFunction {
     SphericalYn,
     Sinc,
     Xlogy,
+    Xlog1py,
+    Xlogx,
+    Entr,
+    RelEntr,
+    KlDiv,
+    Ndtr,
+    Ndtri,
+    LogNdtr,
+    Logsumexp,
+    Log1p,
+    Expm1,
+    Logaddexp,
+    Logaddexp2,
+    Softplus,
+    Huber,
+    PseudoHuber,
+    FresnelS,
+    FresnelC,
+    Dawsn,
+    SiciSi,
+    SiciCi,
+    ShichiShi,
+    ShichiChi,
+    Struve,
+    Modstruve,
+    Ber,
+    Bei,
+    Ker,
+    Kei,
+    Spence,
+    Zeta,
+    Zetac,
+    HurwitzZeta,
+    Lpmv,
+    RootsLegendreNode,
+    RootsLegendreWeight,
     Expit,
     Logit,
     Exprel,
@@ -3071,8 +3139,14 @@ enum SpatialObserved {
     Scalar(f64),
     Array1D(Vec<f64>),
     Array2D(Vec<Vec<f64>>),
-    KdTreeQuery { index: usize, distance: f64 },
-    ConvexHull { vertices: Vec<usize>, area: f64 },
+    KdTreeQuery {
+        index: usize,
+        distance: f64,
+    },
+    ConvexHull {
+        vertices: Vec<usize>,
+        area: f64,
+    },
     HalfspaceIntersection {
         intersections: Vec<Vec<f64>>,
         dual_points: Vec<Vec<f64>>,
@@ -3081,7 +3155,9 @@ enum SpatialObserved {
         dual_volume: f64,
         is_bounded: bool,
     },
-    Procrustes { disparity: f64 },
+    Procrustes {
+        disparity: f64,
+    },
     Error(String),
 }
 
@@ -3438,27 +3514,9 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                 format!("convex hull match: vertices={vertices:?}, area={area}"),
             )
         }
-        (
-            "halfspace_intersection",
-            SpatialObserved::HalfspaceIntersection {
-                intersections,
-                dual_points,
-                dual_vertices,
-                dual_area,
-                dual_volume,
-                is_bounded,
-            },
-        ) => compare_halfspace_intersection_outcome(
-            case,
-            intersections,
-            dual_points,
-            dual_vertices,
-            *dual_area,
-            *dual_volume,
-            *is_bounded,
-            atol,
-            rtol,
-        ),
+        ("halfspace_intersection", obs @ SpatialObserved::HalfspaceIntersection { .. }) => {
+            compare_halfspace_intersection_outcome(case, obs, atol, rtol)
+        }
         ("procrustes_result", SpatialObserved::Procrustes { disparity }) => {
             let exp_disparity = case.expected.disparity.unwrap_or(0.0);
             let diff = (disparity - exp_disparity).abs();
@@ -3497,16 +3555,28 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
 
 fn compare_halfspace_intersection_outcome(
     case: &SpatialCase,
-    intersections: &[Vec<f64>],
-    dual_points: &[Vec<f64>],
-    dual_vertices: &[usize],
-    dual_area: f64,
-    dual_volume: f64,
-    is_bounded: bool,
+    observed: &SpatialObserved,
     atol: f64,
     rtol: f64,
 ) -> (bool, String) {
-    let Some(expected) = case.expected.value.as_ref().and_then(|value| value.as_object()) else {
+    let SpatialObserved::HalfspaceIntersection {
+        intersections,
+        dual_points,
+        dual_vertices,
+        dual_area,
+        dual_volume,
+        is_bounded,
+    } = observed
+    else {
+        return (false, format!("type mismatch: got {observed:?}"));
+    };
+
+    let Some(expected) = case
+        .expected
+        .value
+        .as_ref()
+        .and_then(|value| value.as_object())
+    else {
         return (
             false,
             "halfspace_intersection expected value must be an object".to_string(),
@@ -3514,15 +3584,18 @@ fn compare_halfspace_intersection_outcome(
     };
 
     if let Some(expected_bounded) = expected.get("is_bounded").and_then(|value| value.as_bool())
-        && is_bounded != expected_bounded
+        && *is_bounded != expected_bounded
     {
         return (
             false,
-            format!("is_bounded mismatch: got {is_bounded}, expected {expected_bounded}"),
+            format!(
+                "is_bounded mismatch: got {}, expected {expected_bounded}",
+                *is_bounded
+            ),
         );
     }
 
-    for (field, got) in [("dual_area", dual_area), ("dual_volume", dual_volume)] {
+    for (field, got) in [("dual_area", *dual_area), ("dual_volume", *dual_volume)] {
         if let Some(expected_value) = expected.get(field).and_then(|value| value.as_f64()) {
             let diff = (got - expected_value).abs();
             let tol = atol + rtol * expected_value.abs();
@@ -3551,8 +3624,13 @@ fn compare_halfspace_intersection_outcome(
     if let Some(expected_dual_points) = expected
         .get("dual_points")
         .and_then(|value| serde_json::from_value::<Vec<Vec<f64>>>(value.clone()).ok())
-        && let Err(message) =
-            compare_ordered_matrix(dual_points, &expected_dual_points, atol, rtol, "dual_points")
+        && let Err(message) = compare_ordered_matrix(
+            dual_points,
+            &expected_dual_points,
+            atol,
+            rtol,
+            "dual_points",
+        )
     {
         return (false, message);
     }
@@ -4745,6 +4823,12 @@ pub struct IntegrateArgs {
     pub func: Option<String>,
     pub a: Option<f64>,
     pub b: Option<f64>,
+    pub lower: Option<Vec<f64>>,
+    pub upper: Option<Vec<f64>>,
+    pub atol: Option<f64>,
+    pub rtol: Option<f64>,
+    pub max_subdivisions: Option<usize>,
+    pub points: Option<Vec<Vec<f64>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4774,6 +4858,7 @@ fn execute_integrate_case(case: &IntegrateCase) -> IntegrateObserved {
         "newton_cotes" => execute_integrate_newton_cotes(case),
         "fixed_quad" => execute_integrate_fixed_quad(case),
         "gauss_legendre" => execute_integrate_gauss_legendre(case),
+        "cubature" => execute_integrate_cubature(case),
         _ => IntegrateObserved::Error(format!("unknown function: {}", case.function)),
     }
 }
@@ -4925,6 +5010,99 @@ fn execute_integrate_gauss_legendre(case: &IntegrateCase) -> IntegrateObserved {
     IntegrateObserved::Scalar(result)
 }
 
+type CubatureScalarFn = Box<dyn Fn(&[f64]) -> f64>;
+type CubatureVectorFn = Box<dyn Fn(&[f64]) -> Vec<f64>>;
+
+fn make_cubature_scalar_func(func_str: &str) -> Option<CubatureScalarFn> {
+    match func_str {
+        "constant_1" => Some(Box::new(|_| 1.0)),
+        "x0*x1" => Some(Box::new(|x| x[0] * x[1])),
+        "x0+x1" => Some(Box::new(|x| x[0] + x[1])),
+        _ => None,
+    }
+}
+
+fn make_cubature_vector_func(func_str: &str) -> Option<CubatureVectorFn> {
+    match func_str {
+        "powers_1d" => Some(Box::new(|x| vec![x[0], x[0] * x[0]])),
+        "zero_dim_pair" => Some(Box::new(|_| vec![42.0, -7.0])),
+        _ => None,
+    }
+}
+
+fn cubature_options_from_case(case: &IntegrateCase) -> CubatureOptions {
+    let mut options = CubatureOptions::default();
+    if let Some(atol) = case.args.atol {
+        options.atol = atol;
+    }
+    if let Some(rtol) = case.args.rtol {
+        options.rtol = rtol;
+    }
+    if let Some(max_subdivisions) = case.args.max_subdivisions {
+        options.max_subdivisions = max_subdivisions;
+    }
+    if let Some(points) = &case.args.points {
+        options.points = points.clone();
+    }
+    options
+}
+
+fn execute_integrate_cubature(case: &IntegrateCase) -> IntegrateObserved {
+    let func_str = match &case.args.func {
+        Some(s) => s.as_str(),
+        None => return IntegrateObserved::Error("missing func".to_string()),
+    };
+    let lower = match &case.args.lower {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing lower".to_string()),
+    };
+    let upper = match &case.args.upper {
+        Some(v) => v.clone(),
+        None => return IntegrateObserved::Error("missing upper".to_string()),
+    };
+    let options = cubature_options_from_case(case);
+
+    match case.expected.kind.as_str() {
+        "scalar" => {
+            let Some(f) = make_cubature_scalar_func(func_str) else {
+                return IntegrateObserved::Error(format!("unknown cubature func: {func_str}"));
+            };
+            match cubature_scalar(&*f, &lower, &upper, options) {
+                Ok(result) => IntegrateObserved::Scalar(result.estimate),
+                Err(e) => IntegrateObserved::Error(format!("{e}")),
+            }
+        }
+        "array" => {
+            let Some(f) = make_cubature_vector_func(func_str) else {
+                return IntegrateObserved::Error(format!("unknown cubature func: {func_str}"));
+            };
+            match cubature(&*f, &lower, &upper, options) {
+                Ok(result) => IntegrateObserved::Array(result.estimate),
+                Err(e) => IntegrateObserved::Error(format!("{e}")),
+            }
+        }
+        "error" => {
+            if let Some(f) = make_cubature_scalar_func(func_str) {
+                match cubature_scalar(&*f, &lower, &upper, options) {
+                    Ok(result) => IntegrateObserved::Scalar(result.estimate),
+                    Err(e) => IntegrateObserved::Error(format!("{e}")),
+                }
+            } else if let Some(f) = make_cubature_vector_func(func_str) {
+                match cubature(&*f, &lower, &upper, options) {
+                    Ok(result) => IntegrateObserved::Array(result.estimate),
+                    Err(e) => IntegrateObserved::Error(format!("{e}")),
+                }
+            } else {
+                IntegrateObserved::Error(format!("unknown cubature func: {func_str}"))
+            }
+        }
+        _ => IntegrateObserved::Error(format!(
+            "unknown expected integrate kind: {}",
+            case.expected.kind
+        )),
+    }
+}
+
 fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved) -> (bool, String) {
     let atol = case.expected.atol.unwrap_or(1e-12);
     let rtol = case.expected.rtol.unwrap_or(1e-12);
@@ -4974,6 +5152,21 @@ fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved)
                 }
             }
             (true, format!("array match ({} elements)", got.len()))
+        }
+        ("error", IntegrateObserved::Error(msg))
+        | ("error_kind", IntegrateObserved::Error(msg)) => {
+            let expected = match &case.expected.value {
+                Some(serde_json::Value::String(value)) => value,
+                _ => return (false, "expected error value missing".to_string()),
+            };
+            if msg == expected {
+                (true, format!("error match: {msg}"))
+            } else {
+                (
+                    false,
+                    format!("error mismatch: got {msg}, expected {expected}"),
+                )
+            }
         }
         (_, IntegrateObserved::Error(msg)) => (false, format!("error: {msg}")),
         (kind, observed) => (
@@ -8395,6 +8588,154 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 mode,
             )
         }
+        SpecialCaseFunction::Ellipk => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ellipk", mode));
+            }
+            special_scalar_from_tensor(
+                special_ellipk(&special_scalar(args[0]), mode)?,
+                "ellipk",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Ellipkm1 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ellipkm1", mode));
+            }
+            special_scalar_from_tensor(
+                special_ellipkm1(&special_scalar(args[0]), mode)?,
+                "ellipkm1",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Ellipe => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ellipe", mode));
+            }
+            special_scalar_from_tensor(
+                special_ellipe(&special_scalar(args[0]), mode)?,
+                "ellipe",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Ellipkinc => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("ellipkinc", mode));
+            }
+            special_scalar_from_tensor(
+                special_ellipkinc(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "ellipkinc",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Ellipeinc => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("ellipeinc", mode));
+            }
+            special_scalar_from_tensor(
+                special_ellipeinc(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "ellipeinc",
+                mode,
+            )
+        }
+        SpecialCaseFunction::EllipjSn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("ellipj_sn", mode));
+            }
+            let (sn, _, _, _) = special_ellipj(args[0], args[1]);
+            Ok(sn)
+        }
+        SpecialCaseFunction::EllipjCn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("ellipj_cn", mode));
+            }
+            let (_, cn, _, _) = special_ellipj(args[0], args[1]);
+            Ok(cn)
+        }
+        SpecialCaseFunction::EllipjDn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("ellipj_dn", mode));
+            }
+            let (_, _, dn, _) = special_ellipj(args[0], args[1]);
+            Ok(dn)
+        }
+        SpecialCaseFunction::EllipjPh => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("ellipj_ph", mode));
+            }
+            let (_, _, _, ph) = special_ellipj(args[0], args[1]);
+            Ok(ph)
+        }
+        SpecialCaseFunction::Lambertw => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("lambertw", mode));
+            }
+            special_scalar_from_tensor(
+                special_lambertw(&special_scalar(args[0]), mode)?,
+                "lambertw",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Exp1 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("exp1", mode));
+            }
+            special_scalar_from_tensor(special_exp1(&special_scalar(args[0]), mode)?, "exp1", mode)
+        }
+        SpecialCaseFunction::Expi => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("expi", mode));
+            }
+            special_scalar_from_tensor(special_expi(&special_scalar(args[0]), mode)?, "expi", mode)
+        }
+        SpecialCaseFunction::Expn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("expn", mode));
+            }
+            let order = special_u32_from_fixture("expn", mode, args[0])?;
+            Ok(special_expn(order, args[1]))
+        }
+        SpecialCaseFunction::Hyp0f1 => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("hyp0f1", mode));
+            }
+            special_scalar_from_tensor(
+                special_hyp0f1(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "hyp0f1",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Hyp1f1 => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("hyp1f1", mode));
+            }
+            special_scalar_from_tensor(
+                special_hyp1f1(
+                    &special_scalar(args[0]),
+                    &special_scalar(args[1]),
+                    &special_scalar(args[2]),
+                    mode,
+                )?,
+                "hyp1f1",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Hyp2f1 => {
+            if args.len() != 4 {
+                return Err(special_invalid_fixture_error("hyp2f1", mode));
+            }
+            special_scalar_from_tensor(
+                special_hyp2f1(
+                    &special_scalar(args[0]),
+                    &special_scalar(args[1]),
+                    &special_scalar(args[2]),
+                    &special_scalar(args[3]),
+                    mode,
+                )?,
+                "hyp2f1",
+                mode,
+            )
+        }
         SpecialCaseFunction::J0 => {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("j0", mode));
@@ -8559,6 +8900,244 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 mode,
             )
         }
+        SpecialCaseFunction::Xlog1py => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("xlog1py", mode));
+            }
+            special_scalar_from_tensor(
+                special_xlog1py(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "xlog1py",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Xlogx => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("xlogx", mode));
+            }
+            Ok(special_xlogx(args[0]))
+        }
+        SpecialCaseFunction::Entr => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("entr", mode));
+            }
+            special_scalar_from_tensor(special_entr(&special_scalar(args[0]), mode)?, "entr", mode)
+        }
+        SpecialCaseFunction::RelEntr => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("rel_entr", mode));
+            }
+            special_scalar_from_tensor(
+                special_rel_entr(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "rel_entr",
+                mode,
+            )
+        }
+        SpecialCaseFunction::KlDiv => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("kl_div", mode));
+            }
+            Ok(special_kl_div(args[0], args[1]))
+        }
+        SpecialCaseFunction::Ndtr => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ndtr", mode));
+            }
+            Ok(special_ndtr(args[0]))
+        }
+        SpecialCaseFunction::Ndtri => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ndtri", mode));
+            }
+            Ok(special_ndtri(args[0]))
+        }
+        SpecialCaseFunction::LogNdtr => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("log_ndtr", mode));
+            }
+            Ok(special_log_ndtr(args[0]))
+        }
+        SpecialCaseFunction::Logsumexp => {
+            if args.is_empty() {
+                return Err(special_invalid_fixture_error("logsumexp", mode));
+            }
+            Ok(special_logsumexp(args))
+        }
+        SpecialCaseFunction::Log1p => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("log1p", mode));
+            }
+            Ok(special_log1p(args[0]))
+        }
+        SpecialCaseFunction::Expm1 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("expm1", mode));
+            }
+            Ok(special_expm1(args[0]))
+        }
+        SpecialCaseFunction::Logaddexp => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("logaddexp", mode));
+            }
+            Ok(special_logaddexp(args[0], args[1]))
+        }
+        SpecialCaseFunction::Logaddexp2 => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("logaddexp2", mode));
+            }
+            Ok(special_logaddexp2(args[0], args[1]))
+        }
+        SpecialCaseFunction::Softplus => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("softplus", mode));
+            }
+            Ok(special_softplus(args[0]))
+        }
+        SpecialCaseFunction::Huber => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("huber", mode));
+            }
+            Ok(special_huber(args[0], args[1]))
+        }
+        SpecialCaseFunction::PseudoHuber => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("pseudo_huber", mode));
+            }
+            Ok(special_pseudo_huber(args[0], args[1]))
+        }
+        SpecialCaseFunction::FresnelS => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("fresnel_s", mode));
+            }
+            let (s, _) = special_fresnel(args[0]);
+            Ok(s)
+        }
+        SpecialCaseFunction::FresnelC => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("fresnel_c", mode));
+            }
+            let (_, c) = special_fresnel(args[0]);
+            Ok(c)
+        }
+        SpecialCaseFunction::Dawsn => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("dawsn", mode));
+            }
+            Ok(special_dawsn(args[0]))
+        }
+        SpecialCaseFunction::SiciSi => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("sici_si", mode));
+            }
+            let (si, _) = special_sici(args[0]);
+            Ok(si)
+        }
+        SpecialCaseFunction::SiciCi => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("sici_ci", mode));
+            }
+            let (_, ci) = special_sici(args[0]);
+            Ok(ci)
+        }
+        SpecialCaseFunction::ShichiShi => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("shichi_shi", mode));
+            }
+            let (shi, _) = special_shichi(args[0]);
+            Ok(shi)
+        }
+        SpecialCaseFunction::ShichiChi => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("shichi_chi", mode));
+            }
+            let (_, chi) = special_shichi(args[0]);
+            Ok(chi)
+        }
+        SpecialCaseFunction::Struve => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("struve", mode));
+            }
+            Ok(special_struve(args[0], args[1]))
+        }
+        SpecialCaseFunction::Modstruve => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("modstruve", mode));
+            }
+            Ok(special_modstruve(args[0], args[1]))
+        }
+        SpecialCaseFunction::Ber => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ber", mode));
+            }
+            Ok(special_ber(args[0]))
+        }
+        SpecialCaseFunction::Bei => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("bei", mode));
+            }
+            Ok(special_bei(args[0]))
+        }
+        SpecialCaseFunction::Ker => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ker", mode));
+            }
+            Ok(special_ker(args[0]))
+        }
+        SpecialCaseFunction::Kei => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("kei", mode));
+            }
+            Ok(special_kei(args[0]))
+        }
+        SpecialCaseFunction::Spence => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("spence", mode));
+            }
+            Ok(special_spence(args[0]))
+        }
+        SpecialCaseFunction::Zeta => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("zeta", mode));
+            }
+            Ok(special_zeta(args[0]))
+        }
+        SpecialCaseFunction::Zetac => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("zetac", mode));
+            }
+            Ok(special_zetac(args[0]))
+        }
+        SpecialCaseFunction::HurwitzZeta => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("hurwitz_zeta", mode));
+            }
+            Ok(special_hurwitz_zeta(args[0], args[1]))
+        }
+        SpecialCaseFunction::Lpmv => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("lpmv", mode));
+            }
+            let order = special_i32_from_fixture("lpmv", mode, args[0])?;
+            let degree = special_u32_from_fixture("lpmv", mode, args[1])?;
+            Ok(special_lpmv(order, degree, args[2]))
+        }
+        SpecialCaseFunction::RootsLegendreNode => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_legendre_node", mode));
+            }
+            let degree = special_usize_from_fixture("roots_legendre_node", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_legendre_node", mode, args[1])?;
+            let (nodes, _) = special_roots_legendre(degree);
+            roots_legendre_component(nodes.get(index), "roots_legendre_node", mode)
+        }
+        SpecialCaseFunction::RootsLegendreWeight => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_legendre_weight", mode));
+            }
+            let degree = special_usize_from_fixture("roots_legendre_weight", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_legendre_weight", mode, args[1])?;
+            let (_, weights) = special_roots_legendre(degree);
+            roots_legendre_component(weights.get(index), "roots_legendre_weight", mode)
+        }
         SpecialCaseFunction::Expit => {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("expit", mode));
@@ -8711,6 +9290,71 @@ fn special_derivative_order_from_fixture(
         kind: FsciSpecialErrorKind::DomainError,
         mode,
         detail: "derivative order fixture must be a non-negative integer",
+    })
+}
+
+fn special_i32_from_fixture(
+    function: &'static str,
+    mode: RuntimeMode,
+    value: f64,
+) -> Result<i32, FsciSpecialError> {
+    if value.is_finite()
+        && value.fract() == 0.0
+        && value >= f64::from(i32::MIN)
+        && value <= f64::from(i32::MAX)
+    {
+        return Ok(value as i32);
+    }
+    Err(FsciSpecialError {
+        function,
+        kind: FsciSpecialErrorKind::DomainError,
+        mode,
+        detail: "fixture argument must be a finite i32 integer",
+    })
+}
+
+fn special_u32_from_fixture(
+    function: &'static str,
+    mode: RuntimeMode,
+    value: f64,
+) -> Result<u32, FsciSpecialError> {
+    if value.is_finite() && value.fract() == 0.0 && value >= 0.0 && value <= f64::from(u32::MAX) {
+        return Ok(value as u32);
+    }
+    Err(FsciSpecialError {
+        function,
+        kind: FsciSpecialErrorKind::DomainError,
+        mode,
+        detail: "fixture argument must be a finite u32 integer",
+    })
+}
+
+fn special_usize_from_fixture(
+    function: &'static str,
+    mode: RuntimeMode,
+    value: f64,
+) -> Result<usize, FsciSpecialError> {
+    if value.is_finite() && value.fract() == 0.0 && value >= 0.0 && value <= usize::MAX as f64 {
+        return Ok(value as usize);
+    }
+    Err(FsciSpecialError {
+        function,
+        kind: FsciSpecialErrorKind::DomainError,
+        mode,
+        detail: "fixture argument must be a finite usize integer",
+    })
+}
+
+fn roots_legendre_component(
+    component: Option<&f64>,
+    function: &'static str,
+    mode: RuntimeMode,
+) -> Result<f64, FsciSpecialError> {
+    component.copied().ok_or(FsciSpecialError {
+        function,
+        kind: FsciSpecialErrorKind::DomainError,
+        mode,
+        detail: "roots_legendre fixture index is out of range",
     })
 }
 
