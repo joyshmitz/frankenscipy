@@ -11,6 +11,7 @@
 //! - `RegularGridInterpolator` — N-D interpolation on regular grids
 //! - `NearestNDInterpolator` — Nearest-neighbor for scattered N-D data
 //! - `LinearNDInterpolator` — Linear interpolation for scattered 2D data
+//! - `CloughTocher2DInterpolator` — Smooth scattered 2D interpolation
 
 use fsci_runtime::RuntimeMode;
 
@@ -2051,6 +2052,319 @@ impl LinearNDInterpolator {
     }
 }
 
+/// Options for [`CloughTocher2DInterpolator`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CloughTocher2DOptions {
+    /// Value returned outside the convex hull of the input points.
+    pub fill_value: f64,
+    /// Gradient-estimation tolerance, retained for SciPy API parity.
+    pub tol: f64,
+    /// Maximum gradient-estimation iterations, retained for SciPy API parity.
+    pub maxiter: usize,
+    /// Rescale input coordinates to the unit square before triangulation.
+    pub rescale: bool,
+}
+
+impl Default for CloughTocher2DOptions {
+    fn default() -> Self {
+        Self {
+            fill_value: f64::NAN,
+            tol: 1e-6,
+            maxiter: 400,
+            rescale: false,
+        }
+    }
+}
+
+/// Smooth scattered-data interpolator for 2D point sets.
+///
+/// Mirrors the core public surface of
+/// `scipy.interpolate.CloughTocher2DInterpolator(points, values, ...)`: input
+/// points are triangulated, values are interpolated exactly at data sites, and
+/// query points outside the convex hull return `fill_value`. The Rust kernel
+/// estimates per-vertex gradients from neighboring triangles and evaluates a
+/// cubic, gradient-corrected triangular patch that preserves affine functions.
+#[derive(Debug, Clone)]
+pub struct CloughTocher2DInterpolator {
+    delaunay: Delaunay2D,
+    values: Vec<f64>,
+    gradients: Vec<(f64, f64)>,
+    fill_value: f64,
+    offset: (f64, f64),
+    scale: (f64, f64),
+    rescale: bool,
+}
+
+impl CloughTocher2DInterpolator {
+    pub fn new(points: &[Vec<f64>], values: &[f64]) -> Result<Self, InterpError> {
+        Self::with_options(points, values, CloughTocher2DOptions::default())
+    }
+
+    pub fn with_options(
+        points: &[Vec<f64>],
+        values: &[f64],
+        options: CloughTocher2DOptions,
+    ) -> Result<Self, InterpError> {
+        validate_clough_tocher_inputs(points, values, options)?;
+        let (scaled_points, offset, scale) = prepare_clough_tocher_points(points, options.rescale)?;
+        let delaunay = Delaunay2D::new(&scaled_points)?;
+        if delaunay.simplices.is_empty() {
+            return Err(InterpError::InvalidArgument {
+                detail: "CloughTocher2DInterpolator requires non-collinear points".to_string(),
+            });
+        }
+        let gradients = estimate_clough_tocher_gradients(&delaunay, values);
+        Ok(Self {
+            delaunay,
+            values: values.to_vec(),
+            gradients,
+            fill_value: options.fill_value,
+            offset,
+            scale,
+            rescale: options.rescale,
+        })
+    }
+
+    pub fn eval(&self, query: &[f64]) -> Result<f64, InterpError> {
+        if query.len() != 2 {
+            return Err(InterpError::InvalidArgument {
+                detail: "query must be 2D".to_string(),
+            });
+        }
+        if !query[0].is_finite() || !query[1].is_finite() {
+            return Ok(f64::NAN);
+        }
+        let point = self.transform_query((query[0], query[1]));
+        let Some((idx, l1, l2, l3)) = self.delaunay.find_simplex(point) else {
+            return Ok(self.fill_value);
+        };
+        let (a, b, c) = self.delaunay.simplices[idx];
+        Ok(clough_tocher_triangle_eval(
+            point,
+            [
+                self.delaunay.points[a],
+                self.delaunay.points[b],
+                self.delaunay.points[c],
+            ],
+            [self.values[a], self.values[b], self.values[c]],
+            [self.gradients[a], self.gradients[b], self.gradients[c]],
+            [l1, l2, l3],
+        ))
+    }
+
+    pub fn eval_many(&self, queries: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+        queries.iter().map(|query| self.eval(query)).collect()
+    }
+
+    fn transform_query(&self, point: (f64, f64)) -> (f64, f64) {
+        if self.rescale {
+            (
+                (point.0 - self.offset.0) / self.scale.0,
+                (point.1 - self.offset.1) / self.scale.1,
+            )
+        } else {
+            point
+        }
+    }
+}
+
+fn validate_clough_tocher_inputs(
+    points: &[Vec<f64>],
+    values: &[f64],
+    options: CloughTocher2DOptions,
+) -> Result<(), InterpError> {
+    if points.len() < 3 {
+        return Err(InterpError::TooFewPoints {
+            minimum: 3,
+            actual: points.len(),
+        });
+    }
+    if points.len() != values.len() {
+        return Err(InterpError::LengthMismatch {
+            x_len: points.len(),
+            y_len: values.len(),
+        });
+    }
+    if !options.fill_value.is_finite() && !options.fill_value.is_nan() {
+        return Err(InterpError::InvalidArgument {
+            detail: "fill_value must be finite or NaN".to_string(),
+        });
+    }
+    if !options.tol.is_finite() || options.tol <= 0.0 {
+        return Err(InterpError::InvalidArgument {
+            detail: "tol must be positive and finite".to_string(),
+        });
+    }
+    if options.maxiter == 0 {
+        return Err(InterpError::InvalidArgument {
+            detail: "maxiter must be positive".to_string(),
+        });
+    }
+    for (index, point) in points.iter().enumerate() {
+        if point.len() != 2 {
+            return Err(InterpError::InvalidArgument {
+                detail: format!(
+                    "CloughTocher2DInterpolator only supports 2D points; point {index} has dimension {}",
+                    point.len()
+                ),
+            });
+        }
+        if !point[0].is_finite() || !point[1].is_finite() {
+            return Err(InterpError::InvalidArgument {
+                detail: "CloughTocher2DInterpolator requires finite points".to_string(),
+            });
+        }
+    }
+    for i in 0..points.len() {
+        for j in i + 1..points.len() {
+            if points[i][0] == points[j][0] && points[i][1] == points[j][1] {
+                return Err(InterpError::InvalidArgument {
+                    detail: "CloughTocher2DInterpolator requires unique points".to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn prepare_clough_tocher_points(
+    points: &[Vec<f64>],
+    rescale: bool,
+) -> Result<(Vec<(f64, f64)>, (f64, f64), (f64, f64)), InterpError> {
+    let raw = points
+        .iter()
+        .map(|point| (point[0], point[1]))
+        .collect::<Vec<_>>();
+    if !rescale {
+        return Ok((raw, (0.0, 0.0), (1.0, 1.0)));
+    }
+
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for &(x, y) in &raw {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+
+    let scale_x = (max_x - min_x).max(1.0);
+    let scale_y = (max_y - min_y).max(1.0);
+    let scaled = raw
+        .iter()
+        .map(|&(x, y)| ((x - min_x) / scale_x, (y - min_y) / scale_y))
+        .collect::<Vec<_>>();
+    Ok((scaled, (min_x, min_y), (scale_x, scale_y)))
+}
+
+fn estimate_clough_tocher_gradients(delaunay: &Delaunay2D, values: &[f64]) -> Vec<(f64, f64)> {
+    let mut neighbors = vec![Vec::<usize>::new(); values.len()];
+    for &(a, b, c) in &delaunay.simplices {
+        push_unique_neighbor(&mut neighbors[a], b);
+        push_unique_neighbor(&mut neighbors[a], c);
+        push_unique_neighbor(&mut neighbors[b], a);
+        push_unique_neighbor(&mut neighbors[b], c);
+        push_unique_neighbor(&mut neighbors[c], a);
+        push_unique_neighbor(&mut neighbors[c], b);
+    }
+
+    (0..values.len())
+        .map(|index| {
+            estimate_vertex_gradient(index, delaunay, values, &neighbors[index])
+                .or_else(|| fallback_triangle_gradient(index, delaunay, values))
+                .unwrap_or((0.0, 0.0))
+        })
+        .collect()
+}
+
+fn push_unique_neighbor(neighbors: &mut Vec<usize>, candidate: usize) {
+    if !neighbors.contains(&candidate) {
+        neighbors.push(candidate);
+    }
+}
+
+fn estimate_vertex_gradient(
+    index: usize,
+    delaunay: &Delaunay2D,
+    values: &[f64],
+    neighbors: &[usize],
+) -> Option<(f64, f64)> {
+    let origin = delaunay.points[index];
+    let base = values[index];
+    let mut xx = 0.0;
+    let mut xy = 0.0;
+    let mut yy = 0.0;
+    let mut xz = 0.0;
+    let mut yz = 0.0;
+    for &neighbor in neighbors {
+        let point = delaunay.points[neighbor];
+        let dx = point.0 - origin.0;
+        let dy = point.1 - origin.1;
+        let dz = values[neighbor] - base;
+        xx += dx * dx;
+        xy += dx * dy;
+        yy += dy * dy;
+        xz += dx * dz;
+        yz += dy * dz;
+    }
+    let det = xx * yy - xy * xy;
+    if det.abs() <= 1e-24 {
+        return None;
+    }
+    Some(((xz * yy - yz * xy) / det, (xx * yz - xy * xz) / det))
+}
+
+fn fallback_triangle_gradient(
+    index: usize,
+    delaunay: &Delaunay2D,
+    values: &[f64],
+) -> Option<(f64, f64)> {
+    for &(a, b, c) in &delaunay.simplices {
+        if a == index || b == index || c == index {
+            return triangle_plane_gradient(
+                [delaunay.points[a], delaunay.points[b], delaunay.points[c]],
+                [values[a], values[b], values[c]],
+            );
+        }
+    }
+    None
+}
+
+fn triangle_plane_gradient(points: [(f64, f64); 3], values: [f64; 3]) -> Option<(f64, f64)> {
+    let dx1 = points[1].0 - points[0].0;
+    let dy1 = points[1].1 - points[0].1;
+    let dz1 = values[1] - values[0];
+    let dx2 = points[2].0 - points[0].0;
+    let dy2 = points[2].1 - points[0].1;
+    let dz2 = values[2] - values[0];
+    let det = dx1 * dy2 - dx2 * dy1;
+    if det.abs() <= 1e-24 {
+        return None;
+    }
+    Some(((dz1 * dy2 - dz2 * dy1) / det, (dx1 * dz2 - dx2 * dz1) / det))
+}
+
+fn clough_tocher_triangle_eval(
+    query: (f64, f64),
+    points: [(f64, f64); 3],
+    values: [f64; 3],
+    gradients: [(f64, f64); 3],
+    bary: [f64; 3],
+) -> f64 {
+    let linear = bary[0] * values[0] + bary[1] * values[1] + bary[2] * values[2];
+    let mut correction = 0.0;
+    for i in 0..3 {
+        let dx = query.0 - points[i].0;
+        let dy = query.1 - points[i].1;
+        let tangent = values[i] + gradients[i].0 * dx + gradients[i].1 * dy;
+        let weight = bary[i] * bary[i] * (1.0 - bary[i]);
+        correction += weight * (tangent - linear);
+    }
+    linear + correction
+}
+
 // ── RBF Interpolator ─────────────────────────────────────────────────
 
 /// Radial basis function kernel types.
@@ -3695,6 +4009,114 @@ mod tests {
         let values = vec![0.0, 1.0, 2.0];
         let err = LinearNDInterpolator::new(&points, &values).expect_err("malformed point");
         assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn clough_tocher_exact_at_data_points() {
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+            vec![0.5, 0.5],
+        ];
+        let values = points
+            .iter()
+            .map(|point| point[0] * point[0] + point[1] * point[1])
+            .collect::<Vec<_>>();
+        let interp = CloughTocher2DInterpolator::new(&points, &values).expect("clough-tocher");
+        for (point, &expected) in points.iter().zip(values.iter()) {
+            let got = interp.eval(point).expect("eval at point");
+            assert!(
+                (got - expected).abs() < 1e-10,
+                "at {point:?}: {got} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn clough_tocher_preserves_affine_surfaces() {
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![2.0, 0.0],
+            vec![0.0, 2.0],
+            vec![2.0, 2.0],
+            vec![1.0, 0.75],
+        ];
+        let values = points
+            .iter()
+            .map(|point| 2.0 * point[0] - 3.0 * point[1] + 1.0)
+            .collect::<Vec<_>>();
+        let interp = CloughTocher2DInterpolator::new(&points, &values).expect("clough-tocher");
+        for query in [vec![0.25, 0.25], vec![1.25, 0.5], vec![1.5, 1.5]] {
+            let got = interp.eval(&query).expect("affine eval");
+            let expected = 2.0 * query[0] - 3.0 * query[1] + 1.0;
+            assert!(
+                (got - expected).abs() < 1e-10,
+                "{query:?}: {got} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn clough_tocher_fill_value_outside_hull() {
+        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let values = vec![0.0, 1.0, 1.0];
+        let interp = CloughTocher2DInterpolator::with_options(
+            &points,
+            &values,
+            CloughTocher2DOptions {
+                fill_value: -99.0,
+                ..CloughTocher2DOptions::default()
+            },
+        )
+        .expect("clough-tocher");
+        assert_eq!(interp.eval(&[2.0, 2.0]).expect("outside"), -99.0);
+    }
+
+    #[test]
+    fn clough_tocher_rescale_handles_different_coordinate_scales() {
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1000.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1000.0, 1.0],
+            vec![500.0, 0.5],
+        ];
+        let values = points
+            .iter()
+            .map(|point| point[0] / 1000.0 + 2.0 * point[1])
+            .collect::<Vec<_>>();
+        let interp = CloughTocher2DInterpolator::with_options(
+            &points,
+            &values,
+            CloughTocher2DOptions {
+                rescale: true,
+                ..CloughTocher2DOptions::default()
+            },
+        )
+        .expect("clough-tocher rescale");
+        let got = interp.eval(&[250.0, 0.25]).expect("rescaled eval");
+        assert!((got - 0.75).abs() < 1e-10, "rescaled affine got {got}");
+    }
+
+    #[test]
+    fn clough_tocher_rejects_invalid_inputs() {
+        let points = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![1.0, 0.0]];
+        let values = vec![0.0, 1.0, 2.0];
+        let duplicate_err =
+            CloughTocher2DInterpolator::new(&points, &values).expect_err("duplicate point");
+        assert!(matches!(duplicate_err, InterpError::InvalidArgument { .. }));
+
+        let nonfinite_points = vec![vec![0.0, 0.0], vec![f64::NAN, 0.0], vec![0.0, 1.0]];
+        let nonfinite_err = CloughTocher2DInterpolator::new(&nonfinite_points, &values)
+            .expect_err("nonfinite point");
+        assert!(matches!(nonfinite_err, InterpError::InvalidArgument { .. }));
+
+        let collinear = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let collinear_err =
+            CloughTocher2DInterpolator::new(&collinear, &values).expect_err("collinear points");
+        assert!(matches!(collinear_err, InterpError::InvalidArgument { .. }));
     }
 
     #[test]
