@@ -2065,6 +2065,9 @@ pub struct CloughTocher2DOptions {
     pub rescale: bool,
 }
 
+type Point2 = (f64, f64);
+type PreparedCloughTocherPoints = (Vec<Point2>, Point2, Point2);
+
 impl Default for CloughTocher2DOptions {
     fn default() -> Self {
         Self {
@@ -2230,7 +2233,7 @@ fn validate_clough_tocher_inputs(
 fn prepare_clough_tocher_points(
     points: &[Vec<f64>],
     rescale: bool,
-) -> Result<(Vec<(f64, f64)>, (f64, f64), (f64, f64)), InterpError> {
+) -> Result<PreparedCloughTocherPoints, InterpError> {
     let raw = points
         .iter()
         .map(|point| (point[0], point[1]))
