@@ -8,6 +8,10 @@
 
 # Python virtual environments
 .venv*/
+/bin/
+/lib/
+/lib64
+/pyvenv.cfg
 
 # Legacy SciPy oracle clone (large upstream repo, not project source)
 legacy_scipy_code/
@@ -102,6 +106,7 @@ storage.sqlite3-wal.corrupt-*
 /reproduce_*.rs
 /reproduce_*.py
 /fix_*.py
+/fix_*.sh
 /patch_*.py
 /ndimage_patch.diff
 /fails.txt
