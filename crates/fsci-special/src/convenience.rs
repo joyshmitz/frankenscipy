@@ -11,6 +11,7 @@
 //! - `entr` — Elementwise entropy: -x * log(x)
 //! - `rel_entr` — Relative entropy (KL divergence element): x * log(x/y)
 //! - `ndtr` / `ndtri` — Standard normal CDF and inverse CDF
+//! - `nrdtrimn` — Recover the normal mean from a CDF value, scale, and quantile
 //! - `kl_div` — KL divergence element with the `-x + y` correction
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI, SQRT_2};
@@ -176,6 +177,27 @@ pub fn ndtri(y: f64) -> f64 {
         return f64::INFINITY;
     }
     SQRT_2 * crate::error::erfinv_scalar(2.0 * y - 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Recover the mean of a normal distribution from a CDF value, standard deviation, and quantile.
+///
+/// Matches `scipy.special.nrdtrimn(p, std, x)`.
+#[must_use]
+pub fn nrdtrimn(p: f64, std: f64, x: f64) -> f64 {
+    if p.is_nan() || std.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if std <= 0.0 || !(0.0 < p && p < 1.0) {
+        return f64::NAN;
+    }
+    if std == f64::INFINITY && x.is_finite() {
+        return if p < 0.5 {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        };
+    }
+    x - std * ndtri(p)
 }
 
 /// KL divergence element `x * log(x / y) - x + y`.
@@ -3836,6 +3858,41 @@ pub fn binary_cross_entropy(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nrdtrimn_recovers_mean() {
+        let mean = 3.0;
+        let std = 2.0;
+        let x = 6.0;
+        let p = ndtr((x - mean) / std);
+        let recovered = nrdtrimn(p, std, x);
+        assert!(
+            (recovered - mean).abs() <= 1.0e-12,
+            "nrdtrimn mean recovery mismatch: expected={mean}, got={recovered}"
+        );
+    }
+
+    #[test]
+    fn nrdtrimn_matches_scipy_contract_points() {
+        assert!((nrdtrimn(0.8, 2.0, 1.0) - (-0.683_242_467_145_828_8)).abs() <= 1.0e-12);
+        assert!((nrdtrimn(0.2, 2.0, 1.0) - 2.683_242_467_145_828_6).abs() <= 1.0e-12);
+        assert!((nrdtrimn(0.5, 1.0, 1.0) - 1.0).abs() <= 1.0e-12);
+        assert!(nrdtrimn(0.2, f64::INFINITY, 1.0).is_infinite());
+        assert!(nrdtrimn(0.2, f64::INFINITY, 1.0).is_sign_positive());
+        assert!(nrdtrimn(0.5, f64::INFINITY, 1.0).is_infinite());
+        assert!(nrdtrimn(0.5, f64::INFINITY, 1.0).is_sign_negative());
+    }
+
+    #[test]
+    fn nrdtrimn_rejects_invalid_inputs_like_scipy() {
+        assert!(nrdtrimn(0.0, 2.0, 1.0).is_nan());
+        assert!(nrdtrimn(1.0, 2.0, 1.0).is_nan());
+        assert!(nrdtrimn(0.8, 0.0, 1.0).is_nan());
+        assert!(nrdtrimn(0.8, -1.0, 1.0).is_nan());
+        assert!(nrdtrimn(f64::NAN, 2.0, 1.0).is_nan());
+        assert!(nrdtrimn(0.8, f64::NAN, 1.0).is_nan());
+        assert!(nrdtrimn(0.8, 2.0, f64::NAN).is_nan());
+    }
 
     #[test]
     fn kelvin_functions_match_scipy_reference_points() {

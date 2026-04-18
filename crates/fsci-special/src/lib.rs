@@ -18,7 +18,8 @@ pub use bessel::{
 };
 pub use beta::{
     BETA_DISPATCH_PLAN, bdtr, bdtrc, bdtri, beta, betainc, betainc_scalar, betaln, betaln_scalar,
-    btdtr, btdtrc, btdtri, fdtr, fdtrc, fdtri, nbdtr, nbdtrc, nbdtri, stdtr, stdtrc, stdtri,
+    btdtr, btdtrc, btdtri, btdtria, btdtrib, fdtr, fdtrc, fdtri, fdtridfd, nbdtr, nbdtrc, nbdtri,
+    stdtr, stdtrc, stdtridf, stdtrit,
 };
 pub use convenience::{
     CONVENIENCE_DISPATCH_PLAN,
@@ -138,6 +139,7 @@ pub use convenience::{
     negative,
     negentropy,
     nextafter,
+    nrdtrimn,
     owens_t,
     poch,
     positive,
@@ -192,9 +194,10 @@ pub use error::{
     ERROR_DISPATCH_PLAN, erf, erf_scalar, erfc, erfc_scalar, erfcinv, erfinv, erfinv_scalar,
 };
 pub use gamma::{
-    GAMMA_DISPATCH_PLAN, chdtr, chdtrc, chdtri, comb, digamma, factorial, factorial2, gamma,
-    gammainc, gammainc_scalar, gammaincc, gammaincc_scalar, gammaln, gammaln_scalar, gdtr, gdtrc,
-    gdtri, pdtr, pdtrc, pdtri, perm, polygamma, rgamma, zeta, zetac,
+    GAMMA_DISPATCH_PLAN, chdtr, chdtrc, chdtri, chdtriv, comb, digamma, factorial, factorial2,
+    gamma, gammainc, gammainc_scalar, gammaincc, gammaincc_scalar, gammaln, gammaln_scalar, gdtr,
+    gdtrc, gdtria, gdtrib, gdtrix, pdtr, pdtrc, pdtri, pdtrik, perm, polygamma, rgamma, zeta,
+    zetac,
 };
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp0f1, hyp0f1_scalar, hyp1f1, hyp2f1};
 pub use orthopoly::{
@@ -1475,10 +1478,28 @@ mod tests {
     fn gamma_distribution_cdf_and_inverse_roundtrip() {
         let x = 3.2;
         let y = gdtr(2.5, 1.25, x);
-        let back = gdtri(2.5, 1.25, y);
+        let back = gdtrix(2.5, 1.25, y);
         assert!(
             (back - x).abs() <= 1.0e-8,
             "gamma inverse roundtrip failed: {back}"
+        );
+    }
+
+    #[test]
+    fn gamma_inverse_parameters_roundtrip() {
+        let a = 1.2;
+        let b = 3.4;
+        let x = 5.6;
+        let p = gdtr(a, b, x);
+        let back_a = gdtria(p, b, x);
+        let back_b = gdtrib(a, p, x);
+        assert!(
+            (back_a - a).abs() <= 1.0e-8,
+            "gamma rate inverse failed: {back_a}"
+        );
+        assert!(
+            (back_b - b).abs() <= 1.0e-8,
+            "gamma shape inverse failed: {back_b}"
         );
     }
 
@@ -1487,15 +1508,22 @@ mod tests {
         let x = 1.5_f64;
         let scale = 2.0_f64;
         let expected = 1.0 - (-(x / scale)).exp();
-        assert!((gdtr(1.0, scale, x) - expected).abs() <= 1.0e-10);
+        assert!((gdtr(1.0 / scale, 1.0, x) - expected).abs() <= 1.0e-10);
     }
 
     #[test]
     fn gamma_inverse_endpoints_and_invalid_inputs() {
-        assert_eq!(gdtri(2.0, 3.0, 0.0), 0.0);
-        assert_eq!(gdtri(2.0, 3.0, 1.0), f64::INFINITY);
+        assert_eq!(gdtrix(2.0, 3.0, 0.0), 0.0);
+        assert_eq!(gdtrix(2.0, 3.0, 1.0), f64::INFINITY);
+        assert_eq!(gdtria(0.0, 3.0, 2.0), 0.0);
+        assert_eq!(gdtria(1.0, 3.0, 2.0), f64::INFINITY);
+        assert_eq!(gdtrib(2.0, 0.0, 3.0), f64::INFINITY);
+        assert_eq!(gdtrib(2.0, 1.0, 3.0), 0.0);
+        assert_eq!(gdtrib(2.0, 0.5, 0.0), 0.0);
         assert!(gdtr(-1.0, 3.0, 1.0).is_nan());
-        assert!(gdtri(2.0, -3.0, 0.5).is_nan());
+        assert!(gdtrix(2.0, -3.0, 0.5).is_nan());
+        assert!(gdtria(0.5, 3.0, 0.0).is_nan());
+        assert!(gdtrib(2.0, 0.0, 0.0).is_nan());
     }
 
     #[test]
@@ -2020,8 +2048,8 @@ mod tests {
     }
 
     #[test]
-    fn spherical_kn_k0_is_exp_neg_x_over_x() {
-        // k_0(x) = exp(-x)/x
+    fn spherical_kn_k0_uses_scipy_normalization() {
+        // SciPy's k_0(x) = pi * exp(-x) / (2x)
         let mode = RuntimeMode::Strict;
         for x in [0.5, 1.0, 2.0, 5.0] {
             let result = spherical_kn(
@@ -2030,7 +2058,7 @@ mod tests {
                 mode,
             )
             .expect("spherical_kn(0, x)");
-            let expected = (-x).exp() / x;
+            let expected = std::f64::consts::FRAC_PI_2 * (-x).exp() / x;
             assert_real_scalar_close(result, expected, 1e-12);
         }
     }
@@ -2080,7 +2108,7 @@ mod tests {
 
     #[test]
     fn spherical_kn_k1_formula() {
-        // k_1(x) = exp(-x)/x * (1 + 1/x)
+        // SciPy's k_1(x) = pi * exp(-x) / (2x) * (1 + 1/x)
         let mode = RuntimeMode::Strict;
         for x in [0.5, 1.0, 3.0] {
             let result = spherical_kn(
@@ -2089,7 +2117,7 @@ mod tests {
                 mode,
             )
             .expect("k_1(x)");
-            let expected = (-x).exp() / x * (1.0 + 1.0 / x);
+            let expected = std::f64::consts::FRAC_PI_2 * (-x).exp() / x * (1.0 + 1.0 / x);
             assert_real_scalar_close(result, expected, 1e-12);
         }
     }

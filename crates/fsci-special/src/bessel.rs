@@ -847,10 +847,10 @@ pub fn spherical_in(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> 
 
 /// Modified spherical Bessel function of the second kind k_n(z).
 ///
-/// k_n(z) = √(2/(πz)) K_{n+1/2}(z)
+/// k_n(z) = √(π/(2z)) K_{n+1/2}(z)
 ///
 /// Computed via recurrence from:
-///   k_0(z) = exp(-z)/z,  k_1(z) = exp(-z)/z * (1 + 1/z)
+///   k_0(z) = π exp(-z)/(2z),  k_1(z) = π exp(-z)/(2z) * (1 + 1/z)
 pub fn spherical_kn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real_binary("spherical_kn", n, z, mode, |order, x| {
         spherical_kn_scalar(order, x, mode)
@@ -1046,18 +1046,19 @@ fn spherical_in_nonneg(n: u32, x: f64) -> f64 {
     }
 }
 
-/// k_0(z) = exp(-z)/z, k_1(z) = exp(-z)/z * (1 + 1/z)
+/// k_0(z) = π exp(-z)/(2z), k_1(z) = π exp(-z)/(2z) * (1 + 1/z)
 /// Recurrence: k_{k+1}(z) = k_{k-1}(z) + (2k+1)/z * k_k(z)
 fn spherical_kn_nonneg(n: u32, x: f64) -> f64 {
     if x.is_infinite() {
         return 0.0;
     }
     let emx = (-x).exp();
-    let mut k_prev = emx / x; // k_0
+    let scale = PI / 2.0;
+    let mut k_prev = scale * emx / x; // k_0
     if n == 0 {
         return k_prev;
     }
-    let mut k_curr = emx / x * (1.0 + 1.0 / x); // k_1
+    let mut k_curr = scale * emx / x * (1.0 + 1.0 / x); // k_1
     if n == 1 {
         return k_curr;
     }

@@ -128,6 +128,58 @@ pub fn btdtri(a: f64, b: f64, y: f64) -> f64 {
     invert_monotone_unit_interval(|x| btdtr(a, b, x), y)
 }
 
+/// Inverse beta distribution CDF with respect to shape parameter `a`.
+///
+/// Returns `a` such that `betainc(a, b, x) = p`.
+///
+/// Matches `scipy.special.btdtria(p, b, x)`.
+#[must_use]
+pub fn btdtria(p: f64, b: f64, x: f64) -> f64 {
+    if p.is_nan() || b.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if b <= 0.0 || !(0.0..=1.0).contains(&p) || x <= 0.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return f64::INFINITY;
+    }
+    if p == 1.0 {
+        return f64::MIN_POSITIVE;
+    }
+    if x >= 1.0 || !x.is_finite() {
+        return f64::NAN;
+    }
+
+    invert_monotone_positive(|a| btdtr(a, b, x), p, false)
+}
+
+/// Inverse beta distribution CDF with respect to shape parameter `b`.
+///
+/// Returns `b` such that `betainc(a, b, x) = p`.
+///
+/// Matches `scipy.special.btdtrib(a, p, x)`.
+#[must_use]
+pub fn btdtrib(a: f64, p: f64, x: f64) -> f64 {
+    if a.is_nan() || p.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if a <= 0.0 || !(0.0..=1.0).contains(&p) || x <= 0.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return f64::MIN_POSITIVE;
+    }
+    if p == 1.0 {
+        return f64::INFINITY;
+    }
+    if x >= 1.0 || !x.is_finite() {
+        return f64::NAN;
+    }
+
+    invert_monotone_positive(|b| btdtr(a, b, x), p, true)
+}
+
 /// F-distribution CDF.
 ///
 /// Matches `scipy.special.fdtr(dfn, dfd, x)`.
@@ -190,6 +242,74 @@ pub fn fdtri(dfn: f64, dfd: f64, y: f64) -> f64 {
     dfd * z / (dfn * (1.0 - z))
 }
 
+/// Inverse F-distribution CDF with respect to denominator degrees of freedom.
+///
+/// Returns dfd such that P(F <= x) = p for an F distribution with dfn and dfd
+/// degrees of freedom.
+///
+/// Matches `scipy.special.fdtridfd(dfn, p, x)`, including CDFlib sentinel
+/// values for no-solution boundary cases.
+#[must_use]
+pub fn fdtridfd(dfn: f64, p: f64, x: f64) -> f64 {
+    const LOWER_SENTINEL: f64 = 1.0e-100;
+    const UPPER_SENTINEL: f64 = 1.0e100;
+
+    if dfn.is_nan() || p.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if dfn <= 0.0 || !(0.0..=1.0).contains(&p) || x < 0.0 {
+        return f64::NAN;
+    }
+    if p == 1.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return if p == 0.0 {
+            5.0
+        } else if p <= 0.5 {
+            LOWER_SENTINEL
+        } else {
+            UPPER_SENTINEL
+        };
+    }
+    if x.is_infinite() {
+        return UPPER_SENTINEL;
+    }
+    if p == 0.0 {
+        return LOWER_SENTINEL;
+    }
+
+    let upper_limit = gamma::chdtr(dfn, dfn * x);
+    if !upper_limit.is_finite() {
+        return f64::NAN;
+    }
+    if p >= upper_limit {
+        return UPPER_SENTINEL;
+    }
+
+    let mut hi = 1.0;
+    while fdtr(dfn, hi, x) < p {
+        hi *= 2.0;
+        if hi >= UPPER_SENTINEL {
+            return UPPER_SENTINEL;
+        }
+    }
+
+    let mut lo = 0.0;
+    for _ in 0..240 {
+        let mid = lo + (hi - lo) * 0.5;
+        let value = fdtr(dfn, mid, x);
+        if !value.is_finite() || value < p {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    let dfd = lo + (hi - lo) * 0.5;
+    if dfd == 0.0 { LOWER_SENTINEL } else { dfd }
+}
+
 /// Student's t distribution CDF.
 ///
 /// Returns P(T <= t) where T follows a Student's t distribution
@@ -241,9 +361,9 @@ pub fn stdtrc(v: f64, t: f64) -> f64 {
 /// Returns t such that P(T <= t) = p where T follows a Student's t
 /// distribution with v degrees of freedom.
 ///
-/// Matches `scipy.special.stdtri(v, p)`.
+/// Matches `scipy.special.stdtrit(v, p)`.
 #[must_use]
-pub fn stdtri(v: f64, p: f64) -> f64 {
+pub fn stdtrit(v: f64, p: f64) -> f64 {
     if v.is_nan() || p.is_nan() {
         return f64::NAN;
     }
@@ -251,7 +371,7 @@ pub fn stdtri(v: f64, p: f64) -> f64 {
         return f64::NAN;
     }
     if p == 0.0 {
-        return f64::NEG_INFINITY;
+        return f64::INFINITY;
     }
     if p == 1.0 {
         return f64::INFINITY;
@@ -278,6 +398,80 @@ pub fn stdtri(v: f64, p: f64) -> f64 {
     }
 
     sign * (v * (1.0 - z) / z).sqrt()
+}
+
+/// Inverse Student's t distribution CDF with respect to degrees of freedom.
+///
+/// Returns v such that P(T <= t) = p where T follows a Student's t
+/// distribution with v degrees of freedom.
+///
+/// Matches `scipy.special.stdtridf(p, t)`, including CDFlib sentinel
+/// values for no-solution boundary cases.
+#[must_use]
+pub fn stdtridf(p: f64, t: f64) -> f64 {
+    const LOWER_SENTINEL: f64 = -1.0e100;
+    const UPPER_SENTINEL: f64 = 1.0e10;
+    const MIN_DF_SENTINEL: f64 = 5.0e-51;
+
+    if p.is_nan() || t.is_nan() {
+        return f64::NAN;
+    }
+    if !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if t == 0.0 {
+        return if p == 0.5 { 5.0 } else { UPPER_SENTINEL };
+    }
+    if t.is_infinite() {
+        return if t.is_sign_positive() {
+            if p == 1.0 {
+                5.0
+            } else if p > 0.5 {
+                LOWER_SENTINEL
+            } else {
+                UPPER_SENTINEL
+            }
+        } else if p == 0.0 {
+            5.0
+        } else if p < 0.5 {
+            LOWER_SENTINEL
+        } else {
+            UPPER_SENTINEL
+        };
+    }
+    if p == 0.5 {
+        return MIN_DF_SENTINEL;
+    }
+    if t < 0.0 {
+        return stdtridf(1.0 - p, -t);
+    }
+    if p < 0.5 {
+        return LOWER_SENTINEL;
+    }
+
+    let upper_value = stdtr(UPPER_SENTINEL, t);
+    if !upper_value.is_finite() {
+        return f64::NAN;
+    }
+    if p >= upper_value {
+        return UPPER_SENTINEL;
+    }
+
+    let mut lo = 0.0;
+    let mut hi = UPPER_SENTINEL;
+
+    for _ in 0..240 {
+        let mid = lo + (hi - lo) * 0.5;
+        let value = stdtr(mid, t);
+        if !value.is_finite() || value < p {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    let df = lo + (hi - lo) * 0.5;
+    if df == 0.0 { MIN_DF_SENTINEL } else { df }
 }
 
 /// Binomial distribution CDF.
@@ -847,6 +1041,66 @@ fn invert_monotone_unit_interval(cdf: impl Fn(f64) -> f64, target: f64) -> f64 {
     lo + (hi - lo) * 0.5
 }
 
+fn invert_monotone_positive(cdf: impl Fn(f64) -> f64, target: f64, increasing: bool) -> f64 {
+    let mut lo = f64::MIN_POSITIVE;
+    let mut hi = 1.0;
+    let mut hi_value = cdf(hi);
+
+    if !hi_value.is_finite() {
+        return f64::NAN;
+    }
+
+    if increasing {
+        while hi_value < target {
+            lo = hi;
+            hi *= 2.0;
+            if !hi.is_finite() {
+                return f64::INFINITY;
+            }
+            hi_value = cdf(hi);
+            if !hi_value.is_finite() {
+                return f64::NAN;
+            }
+        }
+    } else {
+        while hi_value > target {
+            lo = hi;
+            hi *= 2.0;
+            if !hi.is_finite() {
+                return f64::INFINITY;
+            }
+            hi_value = cdf(hi);
+            if !hi_value.is_finite() {
+                return f64::NAN;
+            }
+        }
+    }
+
+    for _ in 0..180 {
+        let mid = 0.5 * (lo + hi);
+        let value = cdf(mid);
+        if !value.is_finite() {
+            return f64::NAN;
+        }
+        if increasing {
+            if value < target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        } else if value > target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if (hi - lo).abs() <= 1.0e-12 * hi.abs().max(1.0) {
+            break;
+        }
+    }
+
+    0.5 * (lo + hi)
+}
+
 fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     let tensor = SpecialTensor::RealScalar(value);
     let result = gamma::gammaln(&tensor, mode)?;
@@ -882,6 +1136,112 @@ mod tests {
     }
 
     #[test]
+    fn btdtria_inverse() {
+        for &a in &[0.25, 0.5, 1.0, 2.0, 5.0] {
+            for &b in &[0.5, 2.0, 5.0] {
+                for &x in &[0.2, 0.3, 0.7] {
+                    let p = btdtr(a, b, x);
+                    let recovered = btdtria(p, b, x);
+                    assert!(
+                        (recovered - a).abs() <= 1e-8 * a.abs().max(1.0),
+                        "btdtria/btdtr failed: a={a}, b={b}, x={x}, p={p}, recovered={recovered}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn btdtria_reference_values() {
+        let cases: &[(f64, f64, f64, f64, f64)] = &[
+            (0.5, 2.0, 0.3, 1.0249306894715173, 2e-12),
+            (0.8, 2.0, 0.3, 0.38229690978762904, 2e-12),
+            (0.2, 2.0, 0.3, 2.084034825279176, 2e-12),
+            (0.5, 5.0, 0.7, 11.231150488078322, 2e-11),
+        ];
+        for &(p, b, x, expected, tolerance) in cases {
+            let actual = btdtria(p, b, x);
+            assert!(
+                (actual - expected).abs() < tolerance,
+                "btdtria({p}, {b}, {x}) = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn btdtria_edges_match_scipy() {
+        assert!(btdtria(0.0, 2.0, 0.3).is_infinite());
+        assert_eq!(btdtria(1.0, 2.0, 0.3), f64::MIN_POSITIVE);
+        assert_eq!(btdtria(1.0, 2.0, 1.1), f64::MIN_POSITIVE);
+        assert!(btdtria(0.0, 2.0, 1.1).is_infinite());
+
+        assert!(btdtria(0.5, 2.0, 0.0).is_nan());
+        assert!(btdtria(0.5, 2.0, 1.0).is_nan());
+        assert!(btdtria(0.0, 2.0, 0.0).is_nan());
+        assert!(btdtria(1.0, 2.0, 0.0).is_nan());
+        assert!(btdtria(0.5, 0.0, 0.3).is_nan());
+        assert!(btdtria(0.5, -1.0, 0.3).is_nan());
+        assert!(btdtria(-0.1, 2.0, 0.3).is_nan());
+        assert!(btdtria(1.1, 2.0, 0.3).is_nan());
+        assert!(btdtria(f64::NAN, 2.0, 0.3).is_nan());
+        assert!(btdtria(0.5, f64::NAN, 0.3).is_nan());
+        assert!(btdtria(0.5, 2.0, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn btdtrib_inverse() {
+        for &a in &[0.25, 0.5, 1.0, 2.0, 5.0] {
+            for &b in &[0.5, 2.0, 5.0] {
+                for &x in &[0.2, 0.3, 0.7] {
+                    let p = btdtr(a, b, x);
+                    let recovered = btdtrib(a, p, x);
+                    assert!(
+                        (recovered - b).abs() <= 1e-8 * b.abs().max(1.0),
+                        "btdtrib/btdtr failed: a={a}, b={b}, x={x}, p={p}, recovered={recovered}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn btdtrib_reference_values() {
+        let cases: &[(f64, f64, f64, f64, f64)] = &[
+            (2.0, 0.5, 0.3, 4.246702175718102, 2e-12),
+            (2.0, 0.8, 0.3, 7.924719144223477, 2e-11),
+            (2.0, 0.2, 0.3, 1.8790372491805813, 2e-12),
+            (0.5, 0.7, 0.2, 2.6396222094025554, 2e-12),
+        ];
+        for &(a, p, x, expected, tolerance) in cases {
+            let actual = btdtrib(a, p, x);
+            assert!(
+                (actual - expected).abs() < tolerance,
+                "btdtrib({a}, {p}, {x}) = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn btdtrib_edges_match_scipy() {
+        assert_eq!(btdtrib(2.0, 0.0, 0.3), f64::MIN_POSITIVE);
+        assert!(btdtrib(2.0, 1.0, 0.3).is_infinite());
+        assert_eq!(btdtrib(2.0, 0.0, 1.1), f64::MIN_POSITIVE);
+        assert!(btdtrib(2.0, 1.0, 1.1).is_infinite());
+
+        assert!(btdtrib(2.0, 0.5, 0.0).is_nan());
+        assert!(btdtrib(2.0, 0.5, 1.0).is_nan());
+        assert!(btdtrib(2.0, 0.0, 0.0).is_nan());
+        assert!(btdtrib(2.0, 1.0, 0.0).is_nan());
+        assert!(btdtrib(0.0, 0.5, 0.3).is_nan());
+        assert!(btdtrib(-1.0, 0.5, 0.3).is_nan());
+        assert!(btdtrib(2.0, -0.1, 0.3).is_nan());
+        assert!(btdtrib(2.0, 1.1, 0.3).is_nan());
+        assert!(btdtrib(f64::NAN, 0.5, 0.3).is_nan());
+        assert!(btdtrib(2.0, f64::NAN, 0.3).is_nan());
+        assert!(btdtrib(2.0, 0.5, f64::NAN).is_nan());
+    }
+
+    #[test]
     fn fdtrc_complement() {
         // fdtr + fdtrc should equal 1
         for &dfn in &[1.0, 5.0, 10.0] {
@@ -895,6 +1255,60 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fdtridfd_inverse() {
+        for &dfn in &[1.0, 2.0, 5.0, 10.0] {
+            for &dfd in &[0.1, 0.5, 1.0, 2.0, 5.0, 10.0] {
+                for &x in &[1.5, 2.0, 5.0] {
+                    let p = fdtr(dfn, dfd, x);
+                    let dfd_recovered = fdtridfd(dfn, p, x);
+                    assert!(
+                        (dfd_recovered - dfd).abs() < 1e-8,
+                        "fdtridfd/fdtr failed: dfn={dfn}, dfd={dfd}, x={x}, p={p}, dfd_recovered={dfd_recovered}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fdtridfd_reference_values() {
+        let cases: &[(f64, f64, f64, f64, f64)] = &[
+            (5.0, 0.7, 1.5, 7.1205455518861855, 2e-10),
+            (5.0, 0.5537887707581542, 1.5, 2.0, 2e-12),
+            (5.0, 0.5, 1.5, 1.3789296276108034, 2e-12),
+            (10.0, 0.8, 2.0, 6.2203600193018, 2e-10),
+            (2.0, 0.9, 5.0, 3.3085663860076275, 2e-10),
+        ];
+        for &(dfn, p, x, expected, tolerance) in cases {
+            let result = fdtridfd(dfn, p, x);
+            assert!(
+                (result - expected).abs() < tolerance,
+                "fdtridfd({dfn}, {p}, {x}) = {result}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn fdtridfd_scipy_sentinels() {
+        assert_eq!(fdtridfd(5.0, 0.0, 1.5), 1.0e-100);
+        assert_eq!(fdtridfd(5.0, 0.0, 0.0), 5.0);
+        assert_eq!(fdtridfd(5.0, 0.1, 0.0), 1.0e-100);
+        assert_eq!(fdtridfd(5.0, 0.5, 0.0), 1.0e-100);
+        assert_eq!(fdtridfd(5.0, 0.5000000001, 0.0), 1.0e100);
+        assert_eq!(fdtridfd(5.0, 0.7, 0.0), 1.0e100);
+        assert_eq!(fdtridfd(5.0, 0.9, 1.5), 1.0e100);
+        assert_eq!(fdtridfd(5.0, 0.7, f64::INFINITY), 1.0e100);
+        assert!(fdtridfd(5.0, 1.0, 1.5).is_nan());
+        assert!(fdtridfd(f64::NAN, 0.7, 1.0).is_nan());
+        assert!(fdtridfd(5.0, f64::NAN, 1.0).is_nan());
+        assert!(fdtridfd(5.0, 0.7, f64::NAN).is_nan());
+        assert!(fdtridfd(-1.0, 0.7, 1.0).is_nan());
+        assert!(fdtridfd(5.0, -0.1, 1.0).is_nan());
+        assert!(fdtridfd(5.0, 1.1, 1.0).is_nan());
+        assert!(fdtridfd(5.0, 0.7, -1.0).is_nan());
     }
 
     #[test]
@@ -952,28 +1366,72 @@ mod tests {
     }
 
     #[test]
-    fn stdtri_inverse() {
-        // stdtri should be inverse of stdtr
+    fn stdtrit_inverse() {
+        // stdtrit should be inverse of stdtr
         for &v in &[1.0, 2.0, 5.0, 10.0, 30.0] {
             for &p in &[0.1, 0.25, 0.5, 0.75, 0.9, 0.95] {
-                let t = stdtri(v, p);
+                let t = stdtrit(v, p);
                 let p_recovered = stdtr(v, t);
                 assert!(
                     (p_recovered - p).abs() < 1e-8,
-                    "stdtri/stdtr failed: v={v}, p={p}, t={t}, p_recovered={p_recovered}"
+                    "stdtrit/stdtr failed: v={v}, p={p}, t={t}, p_recovered={p_recovered}"
                 );
             }
         }
     }
 
     #[test]
-    fn stdtri_endpoints() {
-        // stdtri(v, 0) = -inf
-        assert!(stdtri(5.0, 0.0).is_infinite() && stdtri(5.0, 0.0).is_sign_negative());
-        // stdtri(v, 1) = +inf
-        assert!(stdtri(5.0, 1.0).is_infinite() && stdtri(5.0, 1.0).is_sign_positive());
-        // stdtri(v, 0.5) = 0
-        assert!((stdtri(5.0, 0.5) - 0.0).abs() < 1e-10);
+    fn stdtrit_endpoints() {
+        // SciPy returns +inf at both exact endpoints.
+        assert!(stdtrit(5.0, 0.0).is_infinite() && stdtrit(5.0, 0.0).is_sign_positive());
+        assert!(stdtrit(5.0, 1.0).is_infinite() && stdtrit(5.0, 1.0).is_sign_positive());
+        assert!((stdtrit(5.0, 0.5) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn stdtridf_inverse() {
+        for &v in &[0.25, 0.5, 1.0, 2.0, 5.0, 10.0] {
+            for &t in &[0.75, 1.0, 1.5, 2.0, 4.0] {
+                let p = stdtr(v, t);
+                let v_recovered = stdtridf(p, t);
+                assert!(
+                    (v_recovered - v).abs() < 1e-8,
+                    "stdtridf/stdtr failed: v={v}, t={t}, p={p}, v_recovered={v_recovered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stdtridf_reference_values() {
+        let cases: &[(f64, f64, f64, f64)] = &[
+            (0.8, 1.25, 1.2176499408295116, 2e-12),
+            (0.6, 1.0, 0.1321140237878431, 2e-12),
+            (0.4, -1.0, 0.1321140237878431, 2e-12),
+            (0.75, 1.0, 1.0000000000000093, 2e-12),
+            (0.95, 2.0, 5.176135682782311, 2e-10),
+        ];
+        for &(p, t, expected, tolerance) in cases {
+            let result = stdtridf(p, t);
+            assert!(
+                (result - expected).abs() < tolerance,
+                "stdtridf({p}, {t}) = {result}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn stdtridf_scipy_sentinels() {
+        assert_eq!(stdtridf(0.4, 1.0), -1.0e100);
+        assert_eq!(stdtridf(0.8, -1.0), -1.0e100);
+        assert_eq!(stdtridf(0.8, 0.0), 1.0e10);
+        assert_eq!(stdtridf(0.5, 0.0), 5.0);
+        assert_eq!(stdtridf(0.5, 1.0), 5.0e-51);
+        assert_eq!(stdtridf(1.0, 1.0), 1.0e10);
+        assert!(stdtridf(f64::NAN, 1.0).is_nan());
+        assert!(stdtridf(0.8, f64::NAN).is_nan());
+        assert!(stdtridf(-0.1, 1.0).is_nan());
+        assert!(stdtridf(1.1, 1.0).is_nan());
     }
 
     #[test]

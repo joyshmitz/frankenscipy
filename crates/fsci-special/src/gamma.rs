@@ -164,7 +164,7 @@ pub fn rgamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real_input("rgamma", z, mode, |x| rgamma_scalar(x, mode))
 }
 
-/// Gamma distribution CDF with shape `a` and scale `b`.
+/// Gamma distribution CDF with rate `a` and shape `b`.
 ///
 /// Matches `scipy.special.gdtr(a, b, x)`.
 #[must_use]
@@ -178,10 +178,10 @@ pub fn gdtr(a: f64, b: f64, x: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
-    gammainc_scalar(a, x / b, RuntimeMode::Strict).unwrap_or(f64::NAN)
+    gammainc_scalar(b, a * x, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
-/// Gamma distribution survival function with shape `a` and scale `b`.
+/// Gamma distribution survival function with rate `a` and shape `b`.
 ///
 /// Returns P(X > x) = 1 - gdtr(a, b, x).
 ///
@@ -197,50 +197,66 @@ pub fn gdtrc(a: f64, b: f64, x: f64) -> f64 {
     if x <= 0.0 {
         return 1.0;
     }
-    gammaincc_scalar(a, x / b, RuntimeMode::Strict).unwrap_or(f64::NAN)
+    gammaincc_scalar(b, a * x, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
-/// Inverse gamma distribution CDF with shape `a` and scale `b`.
+/// Inverse gamma distribution CDF with rate `a` and shape `b`, solving for `x`.
 ///
-/// Matches `scipy.special.gdtri(a, b, y)`.
+/// Matches `scipy.special.gdtrix(a, b, p)`.
 #[must_use]
-pub fn gdtri(a: f64, b: f64, y: f64) -> f64 {
-    if a.is_nan() || b.is_nan() || y.is_nan() {
+pub fn gdtrix(a: f64, b: f64, p: f64) -> f64 {
+    if a.is_nan() || b.is_nan() || p.is_nan() {
         return f64::NAN;
     }
-    if a <= 0.0 || b <= 0.0 || !(0.0..=1.0).contains(&y) {
+    if b <= 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
     }
-    if y == 0.0 {
-        return 0.0;
+
+    gammaincinv(b, p) / a
+}
+
+/// Inverse gamma distribution CDF with respect to rate `a`.
+///
+/// Matches `scipy.special.gdtria(p, b, x)`.
+#[must_use]
+pub fn gdtria(p: f64, b: f64, x: f64) -> f64 {
+    if p.is_nan() || b.is_nan() || x.is_nan() {
+        return f64::NAN;
     }
-    if y == 1.0 {
+    if b <= 0.0 || !(0.0..=1.0).contains(&p) || x == 0.0 {
+        return f64::NAN;
+    }
+
+    gammaincinv(b, p) / x
+}
+
+/// Inverse gamma distribution CDF with respect to shape `b`.
+///
+/// Matches `scipy.special.gdtrib(a, p, x)`.
+#[must_use]
+pub fn gdtrib(a: f64, p: f64, x: f64) -> f64 {
+    if a.is_nan() || p.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if a <= 0.0 || x < 0.0 || !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+
+    let scaled_x = a * x;
+    if !scaled_x.is_finite() {
+        return f64::NAN;
+    }
+    if scaled_x == 0.0 {
+        return if p == 0.0 { f64::NAN } else { 0.0 };
+    }
+    if p == 0.0 {
         return f64::INFINITY;
     }
-
-    let mut lo = 0.0;
-    let mut hi = (a + 1.0).max(1.0);
-    while gdtr(a, 1.0, hi) < y {
-        hi *= 2.0;
-        if !hi.is_finite() {
-            return f64::INFINITY;
-        }
+    if p == 1.0 {
+        return 0.0;
     }
 
-    for _ in 0..160 {
-        let mid = 0.5 * (lo + hi);
-        let value = gdtr(a, 1.0, mid);
-        if value < y {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-        if (hi - lo).abs() <= 1.0e-12 * mid.abs().max(1.0) {
-            break;
-        }
-    }
-
-    0.5 * (lo + hi) * b
+    gammainc_shape_inv(scaled_x, p)
 }
 
 fn map_real_binary<F>(
@@ -594,6 +610,9 @@ fn polygamma_higher_scalar(order: usize, x: f64, mode: RuntimeMode) -> Result<f6
 }
 
 fn rgamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if is_negative_integer_pole(x) {
+        return Ok(0.0);
+    }
     let gamma_value = gamma_scalar(x, mode)?;
     let value = 1.0 / gamma_value;
     if !value.is_finite() {
@@ -990,16 +1009,12 @@ pub fn factorial(n: u64) -> f64 {
 /// For odd n: n!! = n * (n-2) * ... * 3 * 1
 /// For even n: n!! = n * (n-2) * ... * 4 * 2
 ///
-/// Special cases:
+/// SciPy compatibility cases:
 /// - 0!! = 1 (by convention)
-/// - (-1)!! = 1 (by convention)
-/// - For negative n < -1, returns 0
+/// - For negative n, returns 0
 pub fn factorial2(n: i64) -> f64 {
     match n.cmp(&0) {
-        std::cmp::Ordering::Less => {
-            // (-1)!! = 1 by convention, others are 0
-            if n == -1 { 1.0 } else { 0.0 }
-        }
+        std::cmp::Ordering::Less => 0.0,
         std::cmp::Ordering::Equal => 1.0, // 0!! = 1
         std::cmp::Ordering::Greater => {
             if n <= 33 {
@@ -1108,6 +1123,38 @@ pub fn pdtri(k: f64, p: f64) -> f64 {
     gammaincinv(k + 1.0, 1.0 - p)
 }
 
+/// Inverse of Poisson CDF with respect to event count k.
+///
+/// Matches `scipy.special.pdtrik(p, m)`.
+///
+/// Uses the relation pdtr(k, m) = gammaincc(k + 1, m), so k + 1 is the
+/// inverse of gammainc(a, m) at 1 - p.
+#[must_use]
+pub fn pdtrik(p: f64, m: f64) -> f64 {
+    if p.is_nan() || m.is_nan() {
+        return f64::NAN;
+    }
+    if !(0.0..=1.0).contains(&p) || m < 0.0 {
+        return f64::NAN;
+    }
+    if p == 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 || m == 0.0 {
+        return 0.0;
+    }
+    if !m.is_finite() {
+        return f64::NAN;
+    }
+
+    let shape = gammainc_shape_inv(m, 1.0 - p);
+    if !shape.is_finite() {
+        return shape;
+    }
+
+    (shape - 1.0).max(0.0)
+}
+
 /// Chi-squared distribution CDF.
 ///
 /// Returns the probability P(X <= x) where X follows a chi-squared
@@ -1150,9 +1197,9 @@ pub fn chdtrc(v: f64, x: f64) -> f64 {
     gammaincc_scalar(v / 2.0, x / 2.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
-/// Inverse chi-squared distribution CDF.
+/// Inverse complemented chi-squared distribution.
 ///
-/// Returns x such that P(X <= x) = p where X follows a chi-squared
+/// Returns x such that P(X > x) = p where X follows a chi-squared
 /// distribution with v degrees of freedom.
 ///
 /// Matches `scipy.special.chdtri(v, p)`.
@@ -1165,14 +1212,43 @@ pub fn chdtri(v: f64, p: f64) -> f64 {
         return f64::NAN;
     }
     if p == 0.0 {
-        return 0.0;
-    }
-    if p == 1.0 {
         return f64::INFINITY;
     }
-    // chdtri(v, p) finds x such that gammainc(v/2, x/2) = p
-    // So x/2 = gammaincinv(v/2, p), thus x = 2 * gammaincinv(v/2, p)
-    2.0 * gammaincinv(v / 2.0, p)
+    if p == 1.0 {
+        return 0.0;
+    }
+    // chdtri(v, p) finds x such that gammaincc(v/2, x/2) = p.
+    // So x/2 = gammaincinv(v/2, 1-p), thus x = 2 * gammaincinv(v/2, 1-p).
+    2.0 * gammaincinv(v / 2.0, 1.0 - p)
+}
+
+/// Inverse chi-squared distribution CDF with respect to degrees of freedom.
+///
+/// Returns `v` such that `P(X <= x) = p` where `X` follows a chi-squared
+/// distribution with `v` degrees of freedom.
+///
+/// Matches `scipy.special.chdtriv(p, x)`.
+#[must_use]
+pub fn chdtriv(p: f64, x: f64) -> f64 {
+    if p.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if !(0.0..=1.0).contains(&p) || x <= 0.0 || !x.is_finite() {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return f64::INFINITY;
+    }
+    if p == 1.0 {
+        return 0.0;
+    }
+
+    let shape = gammainc_shape_inv(x / 2.0, p);
+    if !shape.is_finite() {
+        return shape;
+    }
+
+    2.0 * shape
 }
 
 /// Inverse of the regularized lower incomplete gamma function.
@@ -1224,6 +1300,36 @@ fn gammaincinv(a: f64, p: f64) -> f64 {
     }
 
     x
+}
+
+fn gammainc_shape_inv(x: f64, p: f64) -> f64 {
+    let mut lo = 0.0;
+    let mut hi = x.max(1.0);
+    while gammainc_scalar(hi, x, RuntimeMode::Strict).unwrap_or(f64::NAN) > p {
+        lo = hi;
+        hi *= 2.0;
+        if !hi.is_finite() {
+            return f64::INFINITY;
+        }
+    }
+
+    for _ in 0..180 {
+        let mid = 0.5 * (lo + hi);
+        let value = gammainc_scalar(mid, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
+        if !value.is_finite() {
+            return f64::NAN;
+        }
+        if value > p {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if (hi - lo).abs() <= 1.0e-12 * hi.abs().max(1.0) {
+            break;
+        }
+    }
+
+    0.5 * (lo + hi)
 }
 
 const FACTORIALS: [f64; 21] = [
@@ -1428,25 +1534,35 @@ mod tests {
         SpecialTensor::RealScalar(value)
     }
 
-    fn get_scalar(result: SpecialResult) -> f64 {
-        match result.expect("polygamma should succeed") {
-            SpecialTensor::RealScalar(value) => value,
-            _ => panic!("expected real scalar"),
+    fn get_scalar(result: SpecialResult) -> Result<f64, String> {
+        match result.map_err(|err| err.to_string())? {
+            SpecialTensor::RealScalar(value) => Ok(value),
+            other => Err(format!("expected real scalar, got {other:?}")),
         }
     }
 
     #[test]
-    fn polygamma_order_two_matches_tetragamma_scalar() {
-        let x = 1.5;
-        let actual = get_scalar(polygamma(2, &scalar(x), RuntimeMode::Strict));
-        let expected = crate::convenience::tetragamma(x);
-        assert!((actual - expected).abs() <= 1.0e-12);
+    fn rgamma_returns_zero_at_negative_integer_poles() -> Result<(), String> {
+        for x in [-1.0, -2.0, -8.0] {
+            let actual = get_scalar(rgamma(&scalar(x), RuntimeMode::Strict))?;
+            assert_eq!(actual, 0.0);
+        }
+        Ok(())
     }
 
     #[test]
-    fn polygamma_order_two_supports_real_vectors() {
+    fn polygamma_order_two_matches_tetragamma_scalar() -> Result<(), String> {
+        let x = 1.5;
+        let actual = get_scalar(polygamma(2, &scalar(x), RuntimeMode::Strict))?;
+        let expected = crate::convenience::tetragamma(x);
+        assert!((actual - expected).abs() <= 1.0e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn polygamma_order_two_supports_real_vectors() -> Result<(), String> {
         let input = SpecialTensor::RealVec(vec![0.5, 1.0, 2.5]);
-        let result = polygamma(2, &input, RuntimeMode::Strict).expect("vector order-2 polygamma");
+        let result = polygamma(2, &input, RuntimeMode::Strict).map_err(|err| err.to_string())?;
         match result {
             SpecialTensor::RealVec(values) => {
                 let expected = [
@@ -1459,8 +1575,9 @@ mod tests {
                     assert!((*actual - *expected_value).abs() <= 1.0e-12);
                 }
             }
-            _ => panic!("expected real vector"),
+            other => return Err(format!("expected real vector, got {other:?}")),
         }
+        Ok(())
     }
 
     #[test]
@@ -1471,16 +1588,17 @@ mod tests {
     }
 
     #[test]
-    fn polygamma_order_three_matches_known_value_at_one() {
-        let actual = get_scalar(polygamma(3, &scalar(1.0), RuntimeMode::Strict));
+    fn polygamma_order_three_matches_known_value_at_one() -> Result<(), String> {
+        let actual = get_scalar(polygamma(3, &scalar(1.0), RuntimeMode::Strict))?;
         let expected = PI.powi(4) / 15.0;
         assert!((actual - expected).abs() <= 1.0e-11);
+        Ok(())
     }
 
     #[test]
-    fn polygamma_higher_orders_support_real_vectors() {
+    fn polygamma_higher_orders_support_real_vectors() -> Result<(), String> {
         let input = SpecialTensor::RealVec(vec![1.0, 2.0, 0.5]);
-        let result = polygamma(3, &input, RuntimeMode::Strict).expect("vector order-3 polygamma");
+        let result = polygamma(3, &input, RuntimeMode::Strict).map_err(|err| err.to_string())?;
         match result {
             SpecialTensor::RealVec(values) => {
                 let expected = [PI.powi(4) / 15.0, PI.powi(4) / 15.0 - 6.0, PI.powi(4)];
@@ -1489,16 +1607,18 @@ mod tests {
                     assert!((*actual - *expected_value).abs() <= 1.0e-10);
                 }
             }
-            _ => panic!("expected real vector"),
+            other => return Err(format!("expected real vector, got {other:?}")),
         }
+        Ok(())
     }
 
     #[test]
-    fn polygamma_order_four_satisfies_recurrence_off_negative_axis() {
+    fn polygamma_order_four_satisfies_recurrence_off_negative_axis() -> Result<(), String> {
         let x = -0.25;
-        let lhs = get_scalar(polygamma(4, &scalar(x + 1.0), RuntimeMode::Strict));
-        let rhs = get_scalar(polygamma(4, &scalar(x), RuntimeMode::Strict)) + 24.0 / x.powi(5);
+        let lhs = get_scalar(polygamma(4, &scalar(x + 1.0), RuntimeMode::Strict))?;
+        let rhs = get_scalar(polygamma(4, &scalar(x), RuntimeMode::Strict))? + 24.0 / x.powi(5);
         assert!((lhs - rhs).abs() <= 1.0e-10);
+        Ok(())
     }
 
     #[test]
@@ -1533,8 +1653,8 @@ mod tests {
 
     #[test]
     fn factorial2_negative() {
-        // (-1)!! = 1 by convention, others are 0
-        assert_eq!(factorial2(-1), 1.0);
+        // SciPy returns 0 for all negative integer inputs.
+        assert_eq!(factorial2(-1), 0.0);
         assert_eq!(factorial2(-2), 0.0);
         assert_eq!(factorial2(-5), 0.0);
     }
@@ -1629,6 +1749,54 @@ mod tests {
     }
 
     #[test]
+    fn pdtrik_reference_values() {
+        let cases = [
+            (0.7, 2.5, 2.692_718_092_203_629),
+            (0.5, 2.5, 1.825_430_403_950_633_3),
+            (0.757_576_133_133_066_2, 2.5, 3.000_000_000_000_001_8),
+            (0.99, 2.5, 6.299_974_200_719_591),
+        ];
+
+        for (p, m, expected) in cases {
+            let actual = pdtrik(p, m);
+            assert!(
+                (actual - expected).abs() < 5e-10,
+                "pdtrik({p}, {m}) = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn pdtrik_inverse() {
+        for &m in &[0.5, 1.0, 2.5, 5.0, 10.0] {
+            for &k in &[0.25, 1.0, 2.5, 5.0] {
+                let p = pdtr(k, m);
+                let recovered = pdtrik(p, m);
+                assert!(
+                    (recovered - k).abs() < 5e-10,
+                    "pdtrik failed: m={m}, k={k}, p={p}, recovered={recovered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pdtrik_edges_match_scipy() {
+        assert_eq!(pdtrik(0.0, 2.5), 0.0);
+        assert_eq!(pdtrik(0.001, 2.5), 0.0);
+        assert_eq!(pdtrik(0.7, 0.0), 0.0);
+        assert_eq!(pdtrik(0.0, f64::INFINITY), 0.0);
+
+        assert!(pdtrik(1.0, 2.5).is_nan());
+        assert!(pdtrik(0.7, f64::INFINITY).is_nan());
+        assert!(pdtrik(-0.1, 2.5).is_nan());
+        assert!(pdtrik(1.1, 2.5).is_nan());
+        assert!(pdtrik(0.7, -1.0).is_nan());
+        assert!(pdtrik(f64::NAN, 2.5).is_nan());
+        assert!(pdtrik(0.7, f64::NAN).is_nan());
+    }
+
+    #[test]
     fn gdtrc_complement() {
         // gdtr + gdtrc should equal 1
         for &a in &[1.0, 2.0, 5.0] {
@@ -1642,6 +1810,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn gdtrix_reference_values() {
+        let cases: &[(f64, f64, f64, f64, f64)] = &[
+            (2.5, 1.25, 0.4, 0.28778803752030013, 2e-12),
+            (2.0, 3.0, 0.7, 1.8077838329329956, 2e-12),
+            (-2.5, 1.25, 0.4, -0.28778803752030013, 2e-12),
+        ];
+        for &(a, b, p, expected, tolerance) in cases {
+            let actual = gdtrix(a, b, p);
+            assert!(
+                (actual - expected).abs() < tolerance,
+                "gdtrix({a}, {b}, {p}) = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn gdtrix_matches_scipy_nonpositive_rates() {
+        assert!(gdtrix(0.0, 1.25, 0.4).is_infinite() && gdtrix(0.0, 1.25, 0.4).is_sign_positive());
+        assert!(
+            gdtrix(-0.0, 1.25, 0.4).is_infinite() && gdtrix(-0.0, 1.25, 0.4).is_sign_negative()
+        );
+        assert_eq!(gdtrix(-2.5, 1.25, 0.0), -0.0);
+        assert!(
+            gdtrix(-2.5, 1.25, 1.0).is_infinite() && gdtrix(-2.5, 1.25, 1.0).is_sign_negative()
+        );
+        assert!(gdtrix(0.0, 1.25, 0.0).is_nan());
+
+        assert!(gdtrix(2.5, 0.0, 0.4).is_nan());
+        assert!(gdtrix(2.5, -1.0, 0.4).is_nan());
+        assert!(gdtrix(2.5, 1.25, -0.1).is_nan());
+        assert!(gdtrix(2.5, 1.25, 1.1).is_nan());
+        assert!(gdtrix(f64::NAN, 1.25, 0.4).is_nan());
+        assert!(gdtrix(2.5, f64::NAN, 0.4).is_nan());
+        assert!(gdtrix(2.5, 1.25, f64::NAN).is_nan());
     }
 
     #[test]
@@ -1698,5 +1903,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn chdtriv_reference_values() {
+        let cases = [
+            (0.5, 2.0, 2.628_500_020_690_701_4),
+            (0.8, 3.0, 1.853_054_579_870_468_3),
+            (0.95, 10.0, 4.318_557_759_041_437),
+        ];
+
+        for (p, x, expected) in cases {
+            let actual = chdtriv(p, x);
+            assert!(
+                (actual - expected).abs() < 5e-10,
+                "chdtriv({p}, {x}) = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn chdtriv_inverse() {
+        for &v in &[0.5, 1.0, 2.5, 5.0, 10.0] {
+            for &x in &[1.0, 2.0, 5.0, 10.0] {
+                let p = chdtr(v, x);
+                if p > 0.01 && p < 0.99 {
+                    let recovered = chdtriv(p, x);
+                    let tolerance = 5e-10 * v.abs().max(1.0);
+                    assert!(
+                        (recovered - v).abs() <= tolerance,
+                        "chdtriv failed: v={v}, x={x}, p={p}, recovered={recovered}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chdtriv_edges_match_scipy() {
+        assert!(chdtriv(0.0, 2.0).is_infinite());
+        assert_eq!(chdtriv(1.0, 2.0), 0.0);
+
+        assert!(chdtriv(0.5, 0.0).is_nan());
+        assert!(chdtriv(0.0, 0.0).is_nan());
+        assert!(chdtriv(1.0, 0.0).is_nan());
+        assert!(chdtriv(0.5, f64::INFINITY).is_nan());
+        assert!(chdtriv(-0.1, 3.0).is_nan());
+        assert!(chdtriv(1.1, 3.0).is_nan());
+        assert!(chdtriv(0.5, -1.0).is_nan());
+        assert!(chdtriv(f64::NAN, 3.0).is_nan());
+        assert!(chdtriv(0.5, f64::NAN).is_nan());
     }
 }
