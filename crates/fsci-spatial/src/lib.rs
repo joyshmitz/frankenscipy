@@ -5,7 +5,34 @@
 //! Matches `scipy.spatial` core types:
 //! - `KDTree` — k-d tree for fast nearest-neighbor queries
 //! - `Rectangle` — hyperrectangle utility used by SciPy spatial search
+//! - `HalfspaceIntersection` — 2D halfspace intersection via Qhull-style duality
 //! - `distance` — pairwise distance computations
+
+/// Error raised by Qhull-backed spatial operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QhullError {
+    message: String,
+}
+
+impl QhullError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for QhullError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for QhullError {}
 
 /// Error type for spatial operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,6 +40,7 @@ pub enum SpatialError {
     EmptyData,
     DimensionMismatch { expected: usize, actual: usize },
     InvalidArgument(String),
+    Qhull(QhullError),
 }
 
 impl std::fmt::Display for SpatialError {
@@ -23,11 +51,18 @@ impl std::fmt::Display for SpatialError {
                 write!(f, "dimension mismatch: expected {expected}, got {actual}")
             }
             Self::InvalidArgument(msg) => write!(f, "{msg}"),
+            Self::Qhull(err) => err.fmt(f),
         }
     }
 }
 
 impl std::error::Error for SpatialError {}
+
+impl From<QhullError> for SpatialError {
+    fn from(value: QhullError) -> Self {
+        Self::Qhull(value)
+    }
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // Distance Functions
@@ -1071,8 +1106,8 @@ impl ConvexHull {
     /// * `points` — Slice of (x, y) coordinate pairs.
     pub fn new(points: &[(f64, f64)]) -> Result<Self, SpatialError> {
         if points.len() < 3 {
-            return Err(SpatialError::InvalidArgument(
-                "convex hull requires at least 3 points".to_string(),
+            return Err(qhull_error(
+                "QH6214 qhull input error: not enough points to construct initial simplex",
             ));
         }
 
@@ -1126,8 +1161,8 @@ impl ConvexHull {
 
         // Handle degenerate cases (all collinear)
         if vertices.len() < 3 {
-            return Err(SpatialError::InvalidArgument(
-                "convex hull requires at least 3 non-collinear points".to_string(),
+            return Err(qhull_error(
+                "QH6154 Qhull precision error: initial simplex is flat",
             ));
         }
 
@@ -1165,6 +1200,143 @@ impl ConvexHull {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Halfspace Intersection (2D)
+// ══════════════════════════════════════════════════════════════════════
+
+type Point2 = (f64, f64);
+type Halfspace2 = [f64; 3];
+type Equation2 = [f64; 3];
+
+/// Halfspace intersection result for 2D halfspaces.
+///
+/// Mirrors the core public attributes of
+/// `scipy.spatial.HalfspaceIntersection(halfspaces, interior_point)` for the
+/// 2D scope currently implemented by FrankenSciPy. Halfspaces use SciPy's
+/// `A x + b <= 0` row format `[a_x, a_y, b]`. Higher-dimensional inputs must
+/// use [`HalfspaceIntersection::from_nd`], which fails closed until the crate
+/// grows a full N-D Qhull-compatible backend.
+#[derive(Debug, Clone)]
+pub struct HalfspaceIntersection {
+    /// Input halfspaces in SciPy row format `[a_x, a_y, b]`.
+    pub halfspaces: Vec<Halfspace2>,
+    /// Feasible point that must be strictly inside every halfspace.
+    pub interior_point: Point2,
+    /// Halfspace intersections derived from the dual hull equations.
+    pub intersections: Vec<Point2>,
+    /// Qhull-style dual points `-A / (A * interior_point + b)`.
+    pub dual_points: Vec<Point2>,
+    /// Indices of dual points forming each dual convex-hull facet.
+    pub dual_facets: Vec<Vec<usize>>,
+    /// Indices of halfspaces that form the dual convex-hull vertices.
+    pub dual_vertices: Vec<usize>,
+    /// Dual hull line equations `[normal_x, normal_y, offset]`.
+    pub dual_equations: Vec<Equation2>,
+    /// Perimeter of the 2D dual convex hull, matching SciPy's `dual_area`.
+    pub dual_area: f64,
+    /// Area of the 2D dual convex hull, matching SciPy's `dual_volume`.
+    pub dual_volume: f64,
+    /// Spatial dimension, fixed at 2 for this implementation.
+    pub ndim: usize,
+    /// Number of input inequalities.
+    pub nineq: usize,
+    /// Whether the primal feasible region is bounded.
+    pub is_bounded: bool,
+}
+
+impl HalfspaceIntersection {
+    /// Compute the intersection of 2D halfspaces.
+    pub fn new(
+        halfspaces: &[Halfspace2],
+        interior_point: Point2,
+    ) -> Result<Self, SpatialError> {
+        validate_halfspace_intersection_inputs(halfspaces, interior_point)?;
+
+        let dual_points = halfspace_dual_points(halfspaces, interior_point);
+        let dual_hull = ConvexHull::new(&dual_points).map_err(|err| match err {
+            SpatialError::Qhull(qhull) => SpatialError::Qhull(qhull),
+            other => qhull_error(format!("Qhull failed to construct halfspace dual hull: {other}")),
+        })?;
+
+        let dual_facets = dual_hull
+            .simplices
+            .iter()
+            .map(|&(a, b)| vec![a, b])
+            .collect::<Vec<_>>();
+        let dual_equations = dual_hull
+            .simplices
+            .iter()
+            .map(|&(a, b)| dual_edge_equation(dual_points[a], dual_points[b]))
+            .collect::<Vec<_>>();
+        let intersections = dual_equations
+            .iter()
+            .map(|equation| intersection_from_dual_equation(*equation, interior_point))
+            .collect::<Vec<_>>();
+
+        Ok(Self {
+            halfspaces: halfspaces.to_vec(),
+            interior_point,
+            intersections,
+            dual_points,
+            dual_facets,
+            dual_vertices: dual_hull.vertices,
+            dual_equations,
+            dual_area: dual_hull.perimeter,
+            dual_volume: dual_hull.area,
+            ndim: 2,
+            nineq: halfspaces.len(),
+            is_bounded: halfspace_region_is_bounded(halfspaces),
+        })
+    }
+
+    /// Construct from SciPy-shaped rows, failing closed for unsupported dimensions.
+    pub fn from_nd(halfspaces: &[Vec<f64>], interior_point: &[f64]) -> Result<Self, SpatialError> {
+        if interior_point.len() != 2 {
+            return Err(SpatialError::InvalidArgument(
+                "HalfspaceIntersection currently supports only 2D interior points".to_string(),
+            ));
+        }
+        let rows = halfspaces
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| {
+                if row.len() != 3 {
+                    return Err(SpatialError::DimensionMismatch {
+                        expected: 3,
+                        actual: row.len(),
+                    });
+                }
+                if row.iter().any(|value| !value.is_finite()) {
+                    return Err(SpatialError::InvalidArgument(format!(
+                        "halfspace row {idx} contains a non-finite coefficient"
+                    )));
+                }
+                Ok([row[0], row[1], row[2]])
+            })
+            .collect::<Result<Vec<_>, SpatialError>>()?;
+        Self::new(&rows, (interior_point[0], interior_point[1]))
+    }
+
+    /// Recompute the intersection after appending halfspaces.
+    ///
+    /// The current pure-Rust implementation does not retain a live Qhull handle;
+    /// `restart` is accepted for SciPy surface parity and recomputation is always
+    /// deterministic from the complete halfspace set.
+    pub fn add_halfspaces(
+        &mut self,
+        halfspaces: &[Halfspace2],
+        _restart: bool,
+    ) -> Result<(), SpatialError> {
+        let mut combined = self.halfspaces.clone();
+        combined.extend_from_slice(halfspaces);
+        *self = Self::new(&combined, self.interior_point)?;
+        Ok(())
+    }
+
+    /// No-op parity method for SciPy's incremental object lifecycle.
+    pub fn close(&mut self) {}
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Delaunay Triangulation (2D)
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1185,8 +1357,8 @@ impl Delaunay {
     pub fn new(points: &[(f64, f64)]) -> Result<Self, SpatialError> {
         let n = points.len();
         if n < 3 {
-            return Err(SpatialError::InvalidArgument(
-                "delaunay triangulation requires at least 3 points".to_string(),
+            return Err(qhull_error(
+                "QH6214 qhull input error: not enough points to construct initial simplex",
             ));
         }
         if points
@@ -1260,8 +1432,8 @@ impl Delaunay {
             .filter(|&(a, b, c)| a < n && b < n && c < n)
             .collect();
         if simplices.is_empty() {
-            return Err(SpatialError::InvalidArgument(
-                "delaunay triangulation requires at least 3 non-collinear points".to_string(),
+            return Err(qhull_error(
+                "QH6154 Qhull precision error: initial simplex is flat",
             ));
         }
 
@@ -1328,6 +1500,117 @@ fn barycentric_2d(a: (f64, f64), b: (f64, f64), c: (f64, f64), p: (f64, f64)) ->
     (1.0 - l2 - l3, l2, l3)
 }
 
+fn qhull_error(message: impl Into<String>) -> SpatialError {
+    SpatialError::Qhull(QhullError::new(message))
+}
+
+fn validate_halfspace_intersection_inputs(
+    halfspaces: &[Halfspace2],
+    interior_point: Point2,
+) -> Result<(), SpatialError> {
+    if halfspaces.len() < 3 {
+        return Err(qhull_error(format!(
+            "QH6214 qhull input error: not enough halfspaces({}) to construct initial simplex (need 3)",
+            halfspaces.len()
+        )));
+    }
+    if !interior_point.0.is_finite() || !interior_point.1.is_finite() {
+        return Err(SpatialError::InvalidArgument(
+            "interior_point must contain finite coordinates".to_string(),
+        ));
+    }
+
+    for (idx, &[a, b, offset]) in halfspaces.iter().enumerate() {
+        if !a.is_finite() || !b.is_finite() || !offset.is_finite() {
+            return Err(SpatialError::InvalidArgument(format!(
+                "halfspace row {idx} contains a non-finite coefficient"
+            )));
+        }
+        let normal_norm = a.hypot(b);
+        if normal_norm <= f64::EPSILON {
+            return Err(qhull_error(format!(
+                "QH6154 Qhull precision error: halfspace row {idx} has zero normal"
+            )));
+        }
+        let signed_distance = a * interior_point.0 + b * interior_point.1 + offset;
+        let clear_inside_tol = 1e-12 * normal_norm.max(1.0);
+        if signed_distance >= -clear_inside_tol {
+            return Err(qhull_error(
+                "QH6023 qhull input error: feasible point is not clearly inside halfspace",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn halfspace_dual_points(halfspaces: &[Halfspace2], interior_point: Point2) -> Vec<Point2> {
+    halfspaces
+        .iter()
+        .map(|&[a, b, offset]| {
+            let distance = a * interior_point.0 + b * interior_point.1 + offset;
+            (-a / distance, -b / distance)
+        })
+        .collect()
+}
+
+fn dual_edge_equation(lhs: Point2, rhs: Point2) -> Equation2 {
+    let dx = rhs.0 - lhs.0;
+    let dy = rhs.1 - lhs.1;
+    let length = dx.hypot(dy);
+    if length <= f64::EPSILON {
+        return [f64::NAN, f64::NAN, f64::NAN];
+    }
+
+    let mut normal_x = -dy / length;
+    let mut normal_y = dx / length;
+    let mut offset = -(normal_x * lhs.0 + normal_y * lhs.1);
+    if offset > 0.0 {
+        normal_x = -normal_x;
+        normal_y = -normal_y;
+        offset = -offset;
+    }
+    [normal_x, normal_y, offset]
+}
+
+fn intersection_from_dual_equation(equation: Equation2, interior_point: Point2) -> Point2 {
+    let denominator = -equation[2];
+    (
+        interior_point.0 + equation[0] / denominator,
+        interior_point.1 + equation[1] / denominator,
+    )
+}
+
+fn halfspace_region_is_bounded(halfspaces: &[Halfspace2]) -> bool {
+    let mut angles = halfspaces
+        .iter()
+        .map(|&[a, b, _]| {
+            let mut angle = b.atan2(a);
+            if angle < 0.0 {
+                angle += std::f64::consts::TAU;
+            }
+            angle
+        })
+        .collect::<Vec<_>>();
+    angles.sort_by(f64::total_cmp);
+    angles.dedup_by(|lhs, rhs| (*lhs - *rhs).abs() < 1e-12);
+    if angles.len() < 3 {
+        return false;
+    }
+
+    for idx in 0..angles.len() {
+        let next = if idx + 1 == angles.len() {
+            angles[0] + std::f64::consts::TAU
+        } else {
+            angles[idx + 1]
+        };
+        if next - angles[idx] >= std::f64::consts::PI - 1e-12 {
+            return false;
+        }
+    }
+    true
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Voronoi Diagram (2D)
 // ══════════════════════════════════════════════════════════════════════
@@ -1392,8 +1675,8 @@ impl Voronoi {
                     ridge_vertices.push((*left as isize, *right as isize));
                 }
                 _ => {
-                    return Err(SpatialError::InvalidArgument(
-                        "voronoi construction encountered a non-manifold Delaunay edge".to_string(),
+                    return Err(qhull_error(
+                        "Qhull topology error: Voronoi construction encountered a non-manifold Delaunay edge",
                     ));
                 }
             }
@@ -1443,8 +1726,8 @@ fn circumcenter_2d(
 ) -> Result<(f64, f64), SpatialError> {
     let d = 2.0 * (a.0 * (b.1 - c.1) + b.0 * (c.1 - a.1) + c.0 * (a.1 - b.1));
     if d.abs() < 1e-30 {
-        return Err(SpatialError::InvalidArgument(
-            "voronoi diagram requires at least 3 non-collinear points".to_string(),
+        return Err(qhull_error(
+            "QH6154 Qhull precision error: initial simplex is flat",
         ));
     }
 
@@ -2402,6 +2685,12 @@ pub fn spread(points: &[Vec<f64>]) -> f64 {
 mod tests {
     use super::*;
 
+    fn point_set_contains(points: &[Point2], expected: Point2) -> bool {
+        points
+            .iter()
+            .any(|&(x, y)| (x - expected.0).abs() < 1e-10 && (y - expected.1).abs() < 1e-10)
+    }
+
     #[test]
     fn euclidean_distance() {
         assert!((euclidean(&[0.0, 0.0], &[3.0, 4.0]) - 5.0).abs() < 1e-12);
@@ -3024,14 +3313,14 @@ mod tests {
     fn convex_hull_too_few_points() {
         let points = [(0.0, 0.0), (1.0, 1.0)];
         let err = ConvexHull::new(&points).expect_err("too few");
-        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+        assert!(matches!(err, SpatialError::Qhull(_)));
     }
 
     #[test]
     fn convex_hull_collinear_points_rejected() {
         let points = [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
         let err = ConvexHull::new(&points).expect_err("collinear");
-        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+        assert!(matches!(err, SpatialError::Qhull(_)));
     }
 
     #[test]
@@ -3054,6 +3343,115 @@ mod tests {
             "area ≈ π: {}",
             hull.area
         );
+    }
+
+    // ── HalfspaceIntersection tests ──────────────────────────────────
+
+    #[test]
+    fn qhull_error_variant_preserves_message() {
+        let err = QhullError::new("QH6154 Qhull precision error");
+        assert!(err.message().contains("QH6154"));
+        let spatial: SpatialError = err.clone().into();
+        assert_eq!(spatial.to_string(), err.to_string());
+        assert!(matches!(spatial, SpatialError::Qhull(_)));
+    }
+
+    #[test]
+    fn halfspace_intersection_square_matches_dual_surface() {
+        let halfspaces = [
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, -1.0],
+            [0.0, 1.0, -1.0],
+        ];
+        let hs = HalfspaceIntersection::new(&halfspaces, (0.5, 0.5)).expect("halfspaces");
+
+        assert_eq!(hs.ndim, 2);
+        assert_eq!(hs.nineq, 4);
+        assert!(hs.is_bounded);
+        assert_eq!(hs.dual_vertices.len(), 4);
+        assert_eq!(hs.dual_facets.len(), 4);
+        assert!((hs.dual_points[0].0 + 2.0).abs() < 1e-10);
+        assert!((hs.dual_points[1].1 + 2.0).abs() < 1e-10);
+        assert!((hs.dual_volume - 8.0).abs() < 1e-10);
+        assert!((hs.dual_area - 8.0 * 2.0_f64.sqrt()).abs() < 1e-10);
+
+        for expected in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+            assert!(
+                point_set_contains(&hs.intersections, expected),
+                "missing intersection {expected:?}: {:?}",
+                hs.intersections
+            );
+        }
+    }
+
+    #[test]
+    fn halfspace_intersection_rejects_boundary_feasible_point_as_qhull_error() {
+        let halfspaces = [
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, -1.0],
+            [0.0, 1.0, -1.0],
+        ];
+        let err = HalfspaceIntersection::new(&halfspaces, (0.0, 0.5))
+            .expect_err("boundary feasible point");
+        match err {
+            SpatialError::Qhull(qhull) => assert!(qhull.message().contains("QH6023")),
+            other => panic!("expected QhullError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn halfspace_intersection_unbounded_region_is_marked() {
+        let halfspaces = [
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, -1.0],
+        ];
+        let hs = HalfspaceIntersection::new(&halfspaces, (0.5, 0.5)).expect("halfspaces");
+
+        assert!(!hs.is_bounded);
+        assert!(point_set_contains(&hs.intersections, (0.0, 0.0)));
+        assert!(point_set_contains(&hs.intersections, (1.0, 0.0)));
+        assert!(
+            hs.intersections
+                .iter()
+                .any(|&(x, y)| !x.is_finite() || !y.is_finite()),
+            "unbounded dual edge should surface a non-finite intersection"
+        );
+    }
+
+    #[test]
+    fn halfspace_intersection_from_nd_fails_closed_for_unsupported_dimension() {
+        let halfspaces = vec![vec![-1.0, 0.0, 0.0, 0.0]; 4];
+        let err = HalfspaceIntersection::from_nd(&halfspaces, &[0.25, 0.25, 0.25])
+            .expect_err("3D unsupported");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+
+        let bad_rows = vec![vec![-1.0, 0.0], vec![0.0, -1.0, 0.0]];
+        let err = HalfspaceIntersection::from_nd(&bad_rows, &[0.25, 0.25])
+            .expect_err("row shape mismatch");
+        assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn halfspace_intersection_add_halfspaces_recomputes_region() {
+        let mut hs = HalfspaceIntersection::new(
+            &[
+                [-1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [1.0, 0.0, -1.0],
+            ],
+            (0.5, 0.5),
+        )
+        .expect("initial halfspaces");
+        assert!(!hs.is_bounded);
+
+        hs.add_halfspaces(&[[0.0, 1.0, -1.0]], false)
+            .expect("append y <= 1");
+        assert!(hs.is_bounded);
+        assert_eq!(hs.nineq, 4);
+        assert!(point_set_contains(&hs.intersections, (1.0, 1.0)));
     }
 
     // ── Delaunay tests ──────────────────────────────────────────────
@@ -3094,14 +3492,14 @@ mod tests {
     fn delaunay_collinear_points_rejected() {
         let points = [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
         let err = Delaunay::new(&points).expect_err("collinear");
-        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+        assert!(matches!(err, SpatialError::Qhull(_)));
     }
 
     #[test]
     fn delaunay_too_few_points_rejected() {
         let points = [(0.0, 0.0), (1.0, 0.0)];
         let err = Delaunay::new(&points).expect_err("too few");
-        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+        assert!(matches!(err, SpatialError::Qhull(_)));
     }
 
     #[test]
