@@ -49,9 +49,13 @@ use fsci_stats::{
     chi2_contingency,
     // Hypothesis tests
     chisquare,
+    combine_pvalues,
     describe,
+    expected_freq_uniform,
     f_oneway,
+    false_discovery_control,
     fisher_exact,
+    gzscore,
     jarque_bera,
     kendalltau,
     kruskal,
@@ -60,8 +64,22 @@ use fsci_stats::{
     kurtosis,
     linregress,
     mannwhitneyu,
+    mean_absolute_error,
+    mean_absolute_percentage_error,
+    mean_squared_error,
+    median_abs_deviation,
+    median_test,
+    mode,
+    multipletests_bonferroni,
+    multipletests_fdr_bh,
+    multipletests_holm,
     normaltest,
     pearsonr,
+    poisson_means_test,
+    power_divergence,
+    probplot_quantiles,
+    r2_score,
+    root_mean_squared_error,
     shapiro,
     skew,
     spearmanr,
@@ -69,6 +87,8 @@ use fsci_stats::{
     ttest_ind,
     ttest_rel,
     wilcoxon,
+    winsorize,
+    zmap,
 };
 use serde::Serialize;
 
@@ -2218,6 +2238,928 @@ fn e2e_023_contingency_tests() {
         "chi2_contingency(proportional)",
         "perfectly proportional rows",
         &format!("chi2={:.6}, p={:.4}", result.statistic, result.pvalue),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 24: Filliben order-statistic medians for probplot.
+/// Verifies SciPy-compatible endpoint medians, interior Filliben spacing,
+/// and normal symmetry for odd sample sizes.
+#[test]
+fn e2e_024_probplot_filliben_quantiles() {
+    let scenario_id = "e2e_stats_024_probplot_filliben";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+    let normal = Normal::standard();
+
+    let t = Instant::now();
+    let singleton = probplot_quantiles(1);
+    let pass = singleton.len() == 1 && singleton[0].abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "probplot_singleton",
+        "probplot_quantiles(1)",
+        "sample size n=1",
+        &format!("quantiles={singleton:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let quantiles = probplot_quantiles(4);
+    let probabilities: Vec<f64> = quantiles.iter().map(|&value| normal.cdf(value)).collect();
+    let expected = [0.159_103_58, 0.385_452_46, 0.614_547_54, 0.840_896_42];
+    let max_err = probabilities
+        .iter()
+        .zip(&expected)
+        .map(|(&got, &want)| (got - want).abs())
+        .fold(0.0_f64, f64::max);
+    let pass = max_err < 2e-8;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "probplot_filliben_probabilities",
+        "Normal::cdf(probplot_quantiles(4))",
+        "n=4 Filliben reference probabilities",
+        &format!("probabilities={probabilities:?}, max_err={max_err:.2e}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let quantiles = probplot_quantiles(5);
+    let endpoint_err = (quantiles[0] + quantiles[4]).abs();
+    let interior_err = (quantiles[1] + quantiles[3]).abs();
+    let center_err = quantiles[2].abs();
+    let pass = endpoint_err < 1e-12 && interior_err < 1e-12 && center_err < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "probplot_normal_symmetry",
+        "probplot_quantiles(5)",
+        "odd n should preserve normal symmetry",
+        &format!(
+            "quantiles={quantiles:?}, endpoint_err={endpoint_err:.2e}, interior_err={interior_err:.2e}, center_err={center_err:.2e}"
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 25: Robust helper edge semantics.
+/// Verifies SciPy-compatible saturation and sentinel behavior for `winsorize`,
+/// `zmap`, and `gzscore`.
+#[test]
+fn e2e_025_robust_helper_edge_semantics() {
+    let scenario_id = "e2e_stats_025_robust_helper_edges";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let saturated = winsorize(&[1.0, 2.0, 3.0], (0.8, 0.8));
+    let pass = saturated == vec![3.0, 3.0, 3.0];
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "winsorize_overlapping_limits",
+        "winsorize([1,2,3], (0.8, 0.8))",
+        "overlapping clip windows",
+        &format!("result={saturated:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let fail_closed = winsorize(&[1.0, 2.0, 3.0], (0.0, 1.1));
+    let pass = fail_closed == vec![1.0, 1.0, 1.0];
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "winsorize_out_of_range_limits",
+        "winsorize([1,2,3], (0.0, 1.1))",
+        "invalid upper limit should fail closed",
+        &format!("result={fail_closed:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let constant_compare = zmap(&[1.0, 2.0], &[1.0, 1.0]);
+    let same_object = zmap(&[1.0, 1.0], &[1.0, 1.0]);
+    let pass = constant_compare[0].is_nan()
+        && constant_compare[1].is_infinite()
+        && constant_compare[1].is_sign_positive()
+        && same_object.iter().all(|&value| value.is_nan());
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "zmap_constant_reference_shape",
+        "zmap(scores, compare)",
+        "constant compare vector and identical constant vectors",
+        &format!("constant_compare={constant_compare:?}, same_object={same_object:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let zero = gzscore(&[0.0, 1.0, 2.0]);
+    let negative = gzscore(&[-1.0, 1.0, 2.0]);
+    let pass =
+        zero.iter().all(|&value| value.is_nan()) && negative.iter().all(|&value| value.is_nan());
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "gzscore_invalid_inputs",
+        "gzscore(a)",
+        "zero and negative values should propagate NaN shape",
+        &format!("zero={zero:?}, negative={negative:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 26: Descriptive helper contracts.
+/// Verifies SciPy-shaped semantics for scaled MAD, mode tie-breaking, and
+/// uniform expected frequencies.
+#[test]
+fn e2e_026_descriptive_helper_contracts() {
+    let scenario_id = "e2e_stats_026_descriptive_helper_contracts";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let data = [1.0, 1.0, 2.0, 2.0, 4.0, 6.0, 9.0];
+    let mad = median_abs_deviation(&data, 1.4826);
+    let pass = (mad - 1.4826).abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "median_abs_deviation_scaled_sample",
+        "median_abs_deviation([1,1,2,2,4,6,9], 1.4826)",
+        "sample with unit unscaled MAD and normal-consistency scale",
+        &format!("mad={mad:.12}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let constant = median_abs_deviation(&[5.0, 5.0, 5.0, 5.0], 1.0);
+    let pass = constant.abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "median_abs_deviation_constant_sample",
+        "median_abs_deviation([5,5,5,5], 1.0)",
+        "constant sample should have zero dispersion",
+        &format!("mad={constant:.12}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let tie_mode = mode(&[3.0, 1.0, 2.0, 3.0, 2.0]);
+    let pass = (tie_mode - 2.0).abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "mode_prefers_smallest_tied_value",
+        "mode([3,1,2,3,2])",
+        "equal-frequency tie should resolve to the smallest value",
+        &format!("mode={tie_mode:.12}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let expected = expected_freq_uniform(&[2.0, 4.0, 6.0, 8.0]);
+    let pass = expected == vec![5.0, 5.0, 5.0, 5.0];
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "expected_freq_uniform_preserves_total",
+        "expected_freq_uniform([2,4,6,8])",
+        "uniform expected bins should evenly divide the observed total",
+        &format!("expected={expected:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 27: Regression metric helper contracts.
+/// Verifies deterministic 1D metric outputs against the documented sklearn-like
+/// helper formulas in `fsci_stats`.
+#[test]
+fn e2e_027_regression_metric_helper_contracts() {
+    let scenario_id = "e2e_stats_027_regression_metric_helpers";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let perfect_true = [1.0, 2.0, 3.0];
+    let perfect_pred = [1.0, 2.0, 3.0];
+    let r2 = r2_score(&perfect_true, &perfect_pred);
+    let mae = mean_absolute_error(&perfect_true, &perfect_pred);
+    let mse = mean_squared_error(&perfect_true, &perfect_pred);
+    let rmse = root_mean_squared_error(&perfect_true, &perfect_pred);
+    let pass =
+        (r2 - 1.0).abs() < 1e-12 && mae.abs() < 1e-12 && mse.abs() < 1e-12 && rmse.abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "regression_metrics_perfect_fit",
+        "metrics([1,2,3], [1,2,3])",
+        "perfect predictions should yield ideal scores",
+        &format!("r2={r2:.12}, mae={mae:.12}, mse={mse:.12}, rmse={rmse:.12}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let sample_true = [3.0, -0.5, 2.0, 7.0];
+    let sample_pred = [2.5, 0.0, 2.0, 8.0];
+    let r2 = r2_score(&sample_true, &sample_pred);
+    let mae = mean_absolute_error(&sample_true, &sample_pred);
+    let mse = mean_squared_error(&sample_true, &sample_pred);
+    let rmse = root_mean_squared_error(&sample_true, &sample_pred);
+    let pass = (r2 - 0.948_608_137_044_967_9).abs() < TOL
+        && (mae - 0.5).abs() < 1e-12
+        && (mse - 0.375).abs() < 1e-12
+        && (rmse - 0.612_372_435_695_794_5).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "regression_metrics_reference_example",
+        "metrics([3,-0.5,2,7], [2.5,0,2,8])",
+        "reference 1D regression example with non-zero residuals",
+        &format!("r2={r2:.12}, mae={mae:.12}, mse={mse:.12}, rmse={rmse:.12}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let constant_true = [1.0, 1.0, 1.0];
+    let constant_pred = [1.0, 2.0, 1.0];
+    let r2 = r2_score(&constant_true, &constant_pred);
+    let pass = r2.abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "r2_constant_target_sentinel",
+        "r2_score([1,1,1], [1,2,1])",
+        "non-perfect constant targets should return the 0.0 sentinel",
+        &format!("r2={r2:.12}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let mape = mean_absolute_percentage_error(&[0.0, 10.0], &[5.0, 8.0]);
+    let pass = (mape - 0.1).abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "mape_zero_target_fail_closed",
+        "mean_absolute_percentage_error([0,10], [5,8])",
+        "zero targets should contribute 0.0 instead of dividing by zero",
+        &format!("mape={mape:.12}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 28: Multiple-testing helper contracts.
+/// Verifies SciPy-shaped false-discovery-control outputs and wrapper alignment
+/// for the Bonferroni, Holm, and Benjamini-Hochberg helpers.
+#[test]
+fn e2e_028_multiple_testing_helper_contracts() {
+    let scenario_id = "e2e_stats_028_multiple_testing_helpers";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let pvalues = [0.01, 0.04, 0.03, 0.005];
+
+    let t = Instant::now();
+    let bh = false_discovery_control(&pvalues, None).expect("default bh");
+    let expected_bh = [0.02, 0.04, 0.04, 0.02];
+    let pass = bh
+        .iter()
+        .zip(expected_bh.iter())
+        .all(|(&actual, &expected)| (actual - expected).abs() < TOL);
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "false_discovery_control_bh_reference_vector",
+        "false_discovery_control([0.01,0.04,0.03,0.005], None)",
+        "default method should match SciPy's Benjamini-Hochberg adjusted p-values",
+        &format!("corrected={bh:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let by = false_discovery_control(&pvalues, Some("by")).expect("by");
+    let expected_by = [
+        0.041_666_666_666_666_664,
+        0.083_333_333_333_333_33,
+        0.083_333_333_333_333_31,
+        0.041_666_666_666_666_664,
+    ];
+    let pass = by.iter().zip(expected_by.iter()).zip(bh.iter()).all(
+        |((&actual, &expected), &bh_value)| {
+            (actual - expected).abs() < TOL && actual + TOL >= bh_value
+        },
+    );
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "false_discovery_control_by_reference_vector",
+        "false_discovery_control([0.01,0.04,0.03,0.005], Some(\"by\"))",
+        "BY should match SciPy's adjusted vector and remain at least as conservative as BH",
+        &format!("corrected={by:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let bonferroni = multipletests_bonferroni(&pvalues, 0.05);
+    let expected_corrected = [0.04, 0.16, 0.12, 0.02];
+    let expected_reject = [true, false, false, true];
+    let pass = bonferroni
+        .pvalues_corrected
+        .iter()
+        .zip(expected_corrected.iter())
+        .all(|(&actual, &expected)| (actual - expected).abs() < TOL)
+        && bonferroni.reject.as_slice() == expected_reject.as_slice();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "multipletests_bonferroni_reference_vector",
+        "multipletests_bonferroni([0.01,0.04,0.03,0.005], 0.05)",
+        "Bonferroni should scale each p-value by the test count and derive the matching reject mask",
+        &format!(
+            "corrected={:?}, reject={:?}",
+            bonferroni.pvalues_corrected, bonferroni.reject
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let holm = multipletests_holm(&pvalues, 0.05);
+    let expected_corrected = [0.03, 0.06, 0.06, 0.02];
+    let expected_reject = [true, false, false, true];
+    let pass = holm
+        .pvalues_corrected
+        .iter()
+        .zip(expected_corrected.iter())
+        .all(|(&actual, &expected)| (actual - expected).abs() < TOL)
+        && holm.reject.as_slice() == expected_reject.as_slice();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "multipletests_holm_reference_vector",
+        "multipletests_holm([0.01,0.04,0.03,0.005], 0.05)",
+        "Holm should enforce monotone step-down corrected p-values with the matching reject mask",
+        &format!(
+            "corrected={:?}, reject={:?}",
+            holm.pvalues_corrected, holm.reject
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let fdr_bh = multipletests_fdr_bh(&pvalues, 0.05);
+    let invalid = false_discovery_control(&[0.01, 0.02], Some("unknown"));
+    let expected_corrected = [0.02, 0.04, 0.04, 0.02];
+    let expected_reject = [true, true, true, true];
+    let pass = fdr_bh
+        .pvalues_corrected
+        .iter()
+        .zip(expected_corrected.iter())
+        .all(|(&actual, &expected)| (actual - expected).abs() < TOL)
+        && fdr_bh.reject.as_slice() == expected_reject.as_slice()
+        && invalid.is_err();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        5,
+        "multipletests_fdr_bh_alignment_and_fail_closed_invalid_method",
+        "multipletests_fdr_bh([0.01,0.04,0.03,0.005], 0.05)",
+        "FDR-BH helper should align with the BH-adjusted vector and invalid methods should fail closed",
+        &format!(
+            "corrected={:?}, reject={:?}, invalid_method_error={}",
+            fdr_bh.pvalues_corrected,
+            fdr_bh.reject,
+            invalid.is_err()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 29: Combined p-value helper contracts.
+/// Verifies SciPy-shaped `combine_pvalues` outputs for Fisher, Pearson,
+/// Tippett, and weighted Stouffer methods, plus fail-closed invalid-method
+/// handling.
+#[test]
+fn e2e_029_combine_pvalues_helper_contracts() {
+    let scenario_id = "e2e_stats_029_combine_pvalues_helpers";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let fisher = combine_pvalues(&[0.01, 0.03, 0.2], None, None).expect("default fisher");
+    let pass = (fisher.statistic - 19.442_331_991_484_345).abs() < TOL
+        && (fisher.pvalue - 0.003_478_302_009_247_749_2).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "combine_pvalues_default_fisher_reference",
+        "combine_pvalues([0.01,0.03,0.2], None, None)",
+        "default method should match SciPy's Fisher statistic and p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            fisher.statistic, fisher.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let pearson = combine_pvalues(&[0.01, 0.03, 0.2], Some("pearson"), None).expect("pearson");
+    let pass = (pearson.statistic + 0.527_306_189_304_839_5).abs() < TOL
+        && (pearson.pvalue - 0.002_509_830_550_904_323_7).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "combine_pvalues_pearson_reference",
+        "combine_pvalues([0.01,0.03,0.2], Some(\"pearson\"), None)",
+        "Pearson mode should match SciPy's statistic sign and lower-tail p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            pearson.statistic, pearson.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let tippett = combine_pvalues(&[0.4, 0.03, 0.8, 0.2], Some("tippett"), None).expect("tippett");
+    let pass =
+        (tippett.statistic - 0.03).abs() < 1e-12 && (tippett.pvalue - 0.114_707_19).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "combine_pvalues_tippett_reference",
+        "combine_pvalues([0.4,0.03,0.8,0.2], Some(\"tippett\"), None)",
+        "Tippett mode should use the smallest p-value and SciPy's combined tail probability",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            tippett.statistic, tippett.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let stouffer = combine_pvalues(&[0.01, 0.05, 0.2], Some("stouffer"), Some(&[2.0, 1.0, 0.5]))
+        .expect("stouffer");
+    let pass = (stouffer.statistic - 2.932_132_686_521_549_6).abs() < TOL
+        && (stouffer.pvalue - 0.001_683_214_419_543_920_8).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "combine_pvalues_weighted_stouffer_reference",
+        "combine_pvalues([0.01,0.05,0.2], Some(\"stouffer\"), Some([2.0,1.0,0.5]))",
+        "weighted Stouffer mode should match SciPy's z-score aggregation and p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            stouffer.statistic, stouffer.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let invalid = combine_pvalues(&[0.01, 0.02], Some("unknown"), None);
+    let pass = invalid.is_err();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        5,
+        "combine_pvalues_invalid_method_fail_closed",
+        "combine_pvalues([0.01,0.02], Some(\"unknown\"), None)",
+        "unsupported methods should fail closed rather than silently selecting a fallback",
+        &format!("invalid_method_error={}", invalid.is_err()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 30: Poisson means test helper contracts.
+/// Verifies SciPy-shaped `poisson_means_test` outputs for two-sided,
+/// one-sided, and nonzero-diff calls, plus the degenerate unit-pvalue path
+/// and fail-closed invalid-alternative handling.
+#[test]
+fn e2e_030_poisson_means_test_helper_contracts() {
+    let scenario_id = "e2e_stats_030_poisson_means_test_helpers";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let two_sided =
+        poisson_means_test(0, 100.0, 3, 100.0, 0.0, None).expect("two-sided poisson means");
+    let pass = (two_sided.statistic + 1.732_050_807_568_877_2).abs() < TOL
+        && (two_sided.pvalue - 0.088_379_009_454_835_18).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "poisson_means_test_two_sided_reference",
+        "poisson_means_test(0, 100.0, 3, 100.0, 0.0, None)",
+        "two-sided poisson means test should match SciPy's reference statistic and p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            two_sided.statistic, two_sided.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let less =
+        poisson_means_test(0, 100.0, 3, 100.0, 0.0, Some("less")).expect("less poisson means");
+    let pass = (less.statistic + 1.732_050_807_568_877_2).abs() < TOL
+        && (less.pvalue - 0.044_189_504_727_417_59).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "poisson_means_test_less_reference",
+        "poisson_means_test(0, 100.0, 3, 100.0, 0.0, Some(\"less\"))",
+        "the less alternative should preserve SciPy's test statistic and halve the two-sided tail",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            less.statistic, less.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let greater = poisson_means_test(0, 100.0, 3, 100.0, 0.0, Some("greater"))
+        .expect("greater poisson means");
+    let pass = (greater.statistic + 1.732_050_807_568_877_2).abs() < TOL
+        && (greater.pvalue - 0.934_031_619_723_871_6).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "poisson_means_test_greater_reference",
+        "poisson_means_test(0, 100.0, 3, 100.0, 0.0, Some(\"greater\"))",
+        "the greater alternative should match SciPy's upper-tail p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            greater.statistic, greater.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let nonzero_diff =
+        poisson_means_test(10, 100.0, 5, 80.0, 0.02, None).expect("nonzero-diff poisson means");
+    let pass = (nonzero_diff.statistic - 0.414_644_214_431_364_8).abs() < TOL
+        && (nonzero_diff.pvalue - 0.683_267_124_060_036_6).abs() < 5e-7;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "poisson_means_test_nonzero_diff_reference",
+        "poisson_means_test(10, 100.0, 5, 80.0, 0.02, None)",
+        "nonzero null differences should match SciPy's E-test statistic and p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            nonzero_diff.statistic, nonzero_diff.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let degenerate =
+        poisson_means_test(1, 1.0, 0, 1.0, 10.0, None).expect("degenerate poisson means");
+    let pass = degenerate.statistic == 0.0 && degenerate.pvalue == 1.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        5,
+        "poisson_means_test_lambda_hat2_nonpositive_unit_pvalue",
+        "poisson_means_test(1, 1.0, 0, 1.0, 10.0, None)",
+        "when SciPy's intermediate lambda_hat2 is nonpositive the helper should return the unit p-value sentinel",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            degenerate.statistic, degenerate.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let invalid = poisson_means_test(1, 1.0, 0, 1.0, 0.0, Some("sideways"));
+    let pass = invalid.is_err();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        6,
+        "poisson_means_test_invalid_alternative_fail_closed",
+        "poisson_means_test(1, 1.0, 0, 1.0, 0.0, Some(\"sideways\"))",
+        "unsupported alternatives should fail closed rather than silently changing the hypothesis test",
+        &format!("invalid_alternative_error={}", invalid.is_err()),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 31: Power divergence helper contracts.
+/// Verifies SciPy-shaped `power_divergence` outputs for Pearson chi-squared,
+/// the G-test, custom expected frequencies, and fail-closed unequal-total
+/// handling.
+#[test]
+fn e2e_031_power_divergence_helper_contracts() {
+    let scenario_id = "e2e_stats_031_power_divergence_helpers";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let (uniform_stat, uniform_pvalue) = power_divergence(&[25.0, 25.0, 25.0, 25.0], None, 1.0);
+    let pass = uniform_stat == 0.0 && uniform_pvalue == 1.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "power_divergence_pearson_uniform_reference",
+        "power_divergence([25.0,25.0,25.0,25.0], None, 1.0)",
+        "uniform observed frequencies should match SciPy's zero Pearson statistic and unit p-value",
+        &format!("statistic={uniform_stat:.12}, pvalue={uniform_pvalue:.12}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let (pearson_stat, pearson_pvalue) = power_divergence(&[50.0, 10.0, 10.0, 10.0], None, 1.0);
+    let pass = (pearson_stat - 60.0).abs() < TOL
+        && (pearson_pvalue - 5.878_230_727_906_921e-13).abs() < 1e-18;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "power_divergence_pearson_skewed_reference",
+        "power_divergence([50.0,10.0,10.0,10.0], None, 1.0)",
+        "Pearson mode should match SciPy's chi-squared statistic and tail probability for a skewed multinomial sample",
+        &format!("statistic={pearson_stat:.12}, pvalue={pearson_pvalue:.18e}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let (gtest_stat, gtest_pvalue) = power_divergence(&[50.0, 10.0, 10.0, 10.0], None, 0.0);
+    let pass = (gtest_stat - 50.040_242_353_818_8).abs() < TOL
+        && (gtest_pvalue - 7.833_065_358_568_862e-11).abs() < 1e-16;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "power_divergence_gtest_reference",
+        "power_divergence([50.0,10.0,10.0,10.0], None, 0.0)",
+        "lambda=0 should reproduce SciPy's log-likelihood-ratio statistic and p-value",
+        &format!("statistic={gtest_stat:.12}, pvalue={gtest_pvalue:.18e}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let (custom_stat, custom_pvalue) =
+        power_divergence(&[10.0, 20.0, 30.0], Some(&[20.0, 20.0, 20.0]), 1.0);
+    let pass =
+        (custom_stat - 10.0).abs() < TOL && (custom_pvalue - 0.006_737_946_999_085_468).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "power_divergence_custom_expected_reference",
+        "power_divergence([10.0,20.0,30.0], Some([20.0,20.0,20.0]), 1.0)",
+        "custom expected frequencies should match SciPy's Pearson statistic and p-value",
+        &format!("statistic={custom_stat:.12}, pvalue={custom_pvalue:.12}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let (nan_stat, nan_pvalue) = power_divergence(&[10.0, 20.0], Some(&[20.0, 20.0]), 1.0);
+    let pass = nan_stat.is_nan() && nan_pvalue.is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        5,
+        "power_divergence_unequal_totals_fail_closed",
+        "power_divergence([10.0,20.0], Some([20.0,20.0]), 1.0)",
+        "mismatched observed and expected totals should fail closed with NaN sentinels instead of producing a misleading statistic",
+        &format!(
+            "statistic_is_nan={}, pvalue_is_nan={}",
+            nan_stat.is_nan(),
+            nan_pvalue.is_nan()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 32: Median test helper contracts.
+/// Verifies SciPy-shaped `median_test` outputs for same-median, shifted-median,
+/// and three-group inputs, plus fail-closed invalid-input handling.
+#[test]
+fn e2e_032_median_test_helper_contracts() {
+    let scenario_id = "e2e_stats_032_median_test_helpers";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let same_left = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let same_right = [1.5, 2.5, 3.5, 4.5, 5.5];
+    let same = median_test(&[&same_left, &same_right]);
+    let pass = same.statistic == 0.0 && same.pvalue == 1.0 && same.df == 1.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "median_test_same_median_reference",
+        "median_test([[1,2,3,4,5], [1.5,2.5,3.5,4.5,5.5]])",
+        "groups with the same median should match SciPy's zero statistic, unit p-value, and one degree of freedom",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}, df={:.1}",
+            same.statistic, same.pvalue, same.df
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let shifted_left: Vec<f64> = (0..20).map(|i| i as f64).collect();
+    let shifted_right: Vec<f64> = (100..120).map(|i| i as f64).collect();
+    let shifted = median_test(&[&shifted_left, &shifted_right]);
+    let pass = (shifted.statistic - 36.1).abs() < 1e-12
+        && (shifted.pvalue - 1.874_468_450_406_542_3e-9).abs() < 1e-18
+        && shifted.df == 1.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "median_test_shifted_medians_reference",
+        "median_test([0..19], [100..119])",
+        "widely separated medians should match SciPy's chi-squared statistic and tiny p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.18e}, df={:.1}",
+            shifted.statistic, shifted.pvalue, shifted.df
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let tri_a = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let tri_b = [6.0, 7.0, 8.0, 9.0, 10.0];
+    let tri_c = [11.0, 12.0, 13.0, 14.0, 15.0];
+    let tri = median_test(&[&tri_a, &tri_b, &tri_c]);
+    let pass = (tri.statistic - 10.178_571_428_571_43).abs() < 1e-12
+        && (tri.pvalue - 0.006_162_420_044_100_12).abs() < 1e-15
+        && tri.df == 2.0;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "median_test_three_group_reference",
+        "median_test([[1,2,3,4,5], [6,7,8,9,10], [11,12,13,14,15]])",
+        "three-group inputs should match SciPy's contingency-based statistic, p-value, and degrees of freedom",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}, df={:.1}",
+            tri.statistic, tri.pvalue, tri.df
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let invalid_single = median_test(&[&[1.0, 2.0, 3.0]]);
+    let pass = invalid_single.statistic.is_nan()
+        && invalid_single.pvalue.is_nan()
+        && invalid_single.df.is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "median_test_single_group_fail_closed",
+        "median_test([[1,2,3]])",
+        "invalid single-group input should fail closed with NaN sentinels instead of a misleading test result",
+        &format!(
+            "statistic_is_nan={}, pvalue_is_nan={}, df_is_nan={}",
+            invalid_single.statistic.is_nan(),
+            invalid_single.pvalue.is_nan(),
+            invalid_single.df.is_nan()
+        ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));

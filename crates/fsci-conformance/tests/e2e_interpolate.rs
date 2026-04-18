@@ -738,6 +738,97 @@ fn scenario_16_smooth_bivariate_spline_scattered_surface() {
     assert!(bundle.overall.status == "pass", "scenario_16 failed");
 }
 
+/// Scenario 17: SmoothBivariateSpline constructs a piecewise linear surface
+/// from scattered samples instead of collapsing to a single global polynomial.
+#[test]
+fn scenario_17_smooth_bivariate_spline_piecewise_surface() {
+    let mut runner = ScenarioRunner::new("scenario_17_smooth_bivariate_spline_piecewise_surface");
+    runner.set_interp_meta("SmoothBivariateSpline", 17, 2, "Strict");
+
+    let x = vec![0.0, 0.5, 1.0, 0.0, 0.5, 1.0, 0.0, 0.5, 1.0];
+    let y = vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0];
+    let z: Vec<f64> = x
+        .iter()
+        .zip(&y)
+        .map(|(&xv, &yv)| (xv - 0.5_f64).abs() + (yv - 0.5_f64).abs())
+        .collect();
+    let options = SmoothBivariateSplineOptions {
+        kx: 1,
+        ky: 1,
+        smoothing: Some(0.0),
+        ..SmoothBivariateSplineOptions::default()
+    };
+
+    let mut spline: Option<SmoothBivariateSpline> = None;
+    runner.record_step(
+        "create_piecewise_smooth_bivariate_spline",
+        "SmoothBivariateSpline::new(x, y, z, kx=1, ky=1, s=0)",
+        "nine scattered samples from |x-0.5| + |y-0.5|",
+        "Strict",
+        || match SmoothBivariateSpline::new(&x, &y, &z, options) {
+            Ok(s) => {
+                spline = Some(s);
+                Ok("created piecewise SmoothBivariateSpline".to_owned())
+            }
+            Err(e) => Err(format!("construction failed: {e}")),
+        },
+    );
+
+    let spline = spline.expect("spline should exist");
+    runner.record_step(
+        "eval_piecewise_surface",
+        "spline.eval(0.25, 0.75), spline.integral(0, 1, 0, 1)",
+        "piecewise tent surface value and integral",
+        "Strict",
+        || {
+            let value = spline.eval(0.25, 0.75);
+            let integral = spline.integral(0.0, 1.0, 0.0, 1.0);
+            let value_err = (value - 0.5).abs();
+            let integral_err = (integral - 0.5).abs();
+            if value_err < 1e-10 && integral_err < 3e-2 {
+                Ok(format!(
+                    "value={value}, integral={integral}, value_err={value_err:.2e}, integral_err={integral_err:.2e}"
+                ))
+            } else {
+                Err(format!(
+                    "value={value}, integral={integral}, value_err={value_err:.2e}, integral_err={integral_err:.2e}"
+                ))
+            }
+        },
+    );
+
+    runner.record_step(
+        "piecewise_metadata",
+        "spline.knots(), spline.coefficients()",
+        "piecewise spline should expose interior knots and more than four coefficients",
+        "Strict",
+        || {
+            let (tx, ty) = spline.knots();
+            let coeff_count = spline.coefficients().len();
+            if tx.len() > 4 && ty.len() > 4 && coeff_count > 4 {
+                Ok(format!(
+                    "tx_len={}, ty_len={}, coeff_count={coeff_count}",
+                    tx.len(),
+                    ty.len()
+                ))
+            } else {
+                Err(format!(
+                    "tx_len={}, ty_len={}, coeff_count={coeff_count}",
+                    tx.len(),
+                    ty.len()
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle(
+        "scenario_17_smooth_bivariate_spline_piecewise_surface",
+        &bundle,
+    );
+    assert!(bundle.overall.status == "pass", "scenario_17 failed");
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 //                       ERROR RECOVERY SCENARIOS (6-8)
 // ═══════════════════════════════════════════════════════════════════════

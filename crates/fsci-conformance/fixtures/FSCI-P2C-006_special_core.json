@@ -51,6 +51,121 @@
       }
     },
     {
+      "case_id": "diff_digamma_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "digamma",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.5772156649015329,
+        "atol": 1e-08,
+        "rtol": 1e-08,
+        "contract_ref": "fsci_special::digamma"
+      }
+    },
+    {
+      "case_id": "diff_digamma_3p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "digamma",
+      "args": [
+        3.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.103156640645243,
+        "atol": 1e-08,
+        "rtol": 1e-08,
+        "contract_ref": "fsci_special::digamma"
+      }
+    },
+    {
+      "case_id": "diff_polygamma_order1_2p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "polygamma",
+      "args": [
+        1.0,
+        2.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.4903577561002349,
+        "atol": 1e-08,
+        "rtol": 1e-08,
+        "contract_ref": "fsci_special::polygamma"
+      }
+    },
+    {
+      "case_id": "diff_polygamma_order2_1p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "polygamma",
+      "args": [
+        2.0,
+        1.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.8287966442343201,
+        "atol": 1e-08,
+        "rtol": 1e-08,
+        "contract_ref": "fsci_special::polygamma"
+      }
+    },
+    {
+      "case_id": "diff_polygamma_order3_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "polygamma",
+      "args": [
+        3.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 6.493939402266829,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::polygamma"
+      }
+    },
+    {
+      "case_id": "diff_rgamma_3p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "rgamma",
+      "args": [
+        3.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.30090111122547003,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::rgamma"
+      }
+    },
+    {
+      "case_id": "diff_rgamma_neg2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "rgamma",
+      "args": [
+        -2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::rgamma"
+      }
+    },
+    {
       "case_id": "diff_gammainc_a2_x1",
       "category": "differential",
       "mode": "Strict",
@@ -82,6 +197,156 @@
         "atol": 1e-10,
         "rtol": 1e-10,
         "contract_ref": "fsci_special::gamma"
+      }
+    },
+    {
+      "case_id": "diff_factorial_6",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "factorial",
+      "args": [
+        6.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 720.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::factorial"
+      }
+    },
+    {
+      "case_id": "diff_factorial2_9",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "factorial2",
+      "args": [
+        9.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 945.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::factorial2"
+      }
+    },
+    {
+      "case_id": "diff_factorial2_neg1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "factorial2",
+      "args": [
+        -1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::factorial2"
+      }
+    },
+    {
+      "case_id": "diff_comb_10_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "comb",
+      "args": [
+        10.0,
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 120.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::comb"
+      }
+    },
+    {
+      "case_id": "diff_comb_5_7",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "comb",
+      "args": [
+        5.0,
+        7.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::comb"
+      }
+    },
+    {
+      "case_id": "diff_perm_10_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "perm",
+      "args": [
+        10.0,
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 720.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::perm"
+      }
+    },
+    {
+      "case_id": "diff_perm_5_7",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "perm",
+      "args": [
+        5.0,
+        7.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::perm"
+      }
+    },
+    {
+      "case_id": "diff_poch_2p5_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "poch",
+      "args": [
+        2.5,
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 39.375,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::poch"
+      }
+    },
+    {
+      "case_id": "diff_poch_neg2_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "poch",
+      "args": [
+        -2.0,
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::poch"
       }
     },
     {
@@ -148,6 +413,55 @@
       }
     },
     {
+      "case_id": "diff_erfcx_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "erfcx",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.427583576155807,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::erfcx"
+      }
+    },
+    {
+      "case_id": "diff_erfi_one",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "erfi",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.6504257587975428,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::erfi"
+      }
+    },
+    {
+      "case_id": "diff_owens_t_0p5_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "owens_t",
+      "args": [
+        0.5,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.10667106296144852,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::owens_t"
+      }
+    },
+    {
       "case_id": "diff_beta_2_3",
       "category": "differential",
       "mode": "Strict",
@@ -197,6 +511,675 @@
         "atol": 2e-11,
         "rtol": 2e-11,
         "contract_ref": "fsci_special::beta"
+      }
+    },
+    {
+      "case_id": "diff_btdtr_2_5_0p3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "btdtr",
+      "args": [
+        2.0,
+        5.0,
+        0.3
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5798250000000003,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::btdtr"
+      }
+    },
+    {
+      "case_id": "diff_btdtrc_2_5_0p3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "btdtrc",
+      "args": [
+        2.0,
+        5.0,
+        0.3
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.4201749999999999,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::btdtrc"
+      }
+    },
+    {
+      "case_id": "diff_btdtri_2_5_0p4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "btdtri",
+      "args": [
+        2.0,
+        5.0,
+        0.4
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.2225835336154239,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::btdtri"
+      }
+    },
+    {
+      "case_id": "diff_btdtria_0p5_2_0p3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "btdtria",
+      "args": [
+        0.5,
+        2.0,
+        0.3
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0249306894715173,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::btdtria"
+      }
+    },
+    {
+      "case_id": "diff_btdtrib_2_0p5_0p3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "btdtrib",
+      "args": [
+        2.0,
+        0.5,
+        0.3
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 4.246702175718102,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::btdtrib"
+      }
+    },
+    {
+      "case_id": "diff_fdtr_5_2_1p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "fdtr",
+      "args": [
+        5.0,
+        2.0,
+        1.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.49953413669564345,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::fdtr"
+      }
+    },
+    {
+      "case_id": "diff_fdtrc_5_2_1p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "fdtrc",
+      "args": [
+        5.0,
+        2.0,
+        1.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5004658633043565,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::fdtrc"
+      }
+    },
+    {
+      "case_id": "diff_fdtri_5_2_0p7",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "fdtri",
+      "args": [
+        5.0,
+        2.0,
+        0.7
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.6084273054201277,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::fdtri"
+      }
+    },
+    {
+      "case_id": "diff_fdtridfd_5_0p7_1p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "fdtridfd",
+      "args": [
+        5.0,
+        0.7,
+        1.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 7.1205455518861855,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::fdtridfd"
+      }
+    },
+    {
+      "case_id": "diff_fdtridfd_5_0p5_0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "fdtridfd",
+      "args": [
+        5.0,
+        0.5,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1e-100,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::fdtridfd"
+      }
+    },
+    {
+      "case_id": "diff_stdtr_10_1p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "stdtr",
+      "args": [
+        10.0,
+        1.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8801196948723322,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::stdtr"
+      }
+    },
+    {
+      "case_id": "diff_stdtrc_10_1p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "stdtrc",
+      "args": [
+        10.0,
+        1.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.1198803051276678,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::stdtrc"
+      }
+    },
+    {
+      "case_id": "diff_stdtridf_0p8_1p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "stdtridf",
+      "args": [
+        0.8,
+        1.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.2176499408295116,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::stdtridf"
+      }
+    },
+    {
+      "case_id": "diff_stdtrit_10_0p8",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "stdtrit",
+      "args": [
+        10.0,
+        0.8
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8790578285505889,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::stdtrit"
+      }
+    },
+    {
+      "case_id": "diff_bdtr_3_10_0p4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "bdtr",
+      "args": [
+        3.0,
+        10.0,
+        0.4
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.38228060160000021,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::bdtr"
+      }
+    },
+    {
+      "case_id": "diff_bdtrc_3_10_0p4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "bdtrc",
+      "args": [
+        3.0,
+        10.0,
+        0.4
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.61771939839999979,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::bdtrc"
+      }
+    },
+    {
+      "case_id": "diff_bdtri_3_10_0p6",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "bdtri",
+      "args": [
+        3.0,
+        10.0,
+        0.6
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.31839617147666432,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::bdtri"
+      }
+    },
+    {
+      "case_id": "diff_nbdtr_4_3_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nbdtr",
+      "args": [
+        4.0,
+        3.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.77343750000000022,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::nbdtr"
+      }
+    },
+    {
+      "case_id": "diff_nbdtrc_4_3_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nbdtrc",
+      "args": [
+        4.0,
+        3.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.22656249999999981,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::nbdtrc"
+      }
+    },
+    {
+      "case_id": "diff_nbdtri_4_3_0p65",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nbdtri",
+      "args": [
+        4.0,
+        3.0,
+        0.65
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.4331406303324592,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::nbdtri"
+      }
+    },
+    {
+      "case_id": "diff_pdtr_3_2p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "pdtr",
+      "args": [
+        3.0,
+        2.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.75757613313306615,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::pdtr"
+      }
+    },
+    {
+      "case_id": "diff_pdtrc_3_2p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "pdtrc",
+      "args": [
+        3.0,
+        2.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.2424238668669339,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::pdtrc"
+      }
+    },
+    {
+      "case_id": "diff_pdtri_3_0p6",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "pdtri",
+      "args": [
+        3.0,
+        0.6
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.211322780120959,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::pdtri"
+      }
+    },
+    {
+      "case_id": "diff_pdtrik_0p7_2p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "pdtrik",
+      "args": [
+        0.7,
+        2.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.692718092203629,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::pdtrik"
+      }
+    },
+    {
+      "case_id": "diff_chdtr_4_3p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "chdtr",
+      "args": [
+        4.0,
+        3.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.52212165551127598,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::chdtr"
+      }
+    },
+    {
+      "case_id": "diff_chdtrc_4_3p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "chdtrc",
+      "args": [
+        4.0,
+        3.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.47787834448872402,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::chdtrc"
+      }
+    },
+    {
+      "case_id": "diff_chdtri_4_0p6",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "chdtri",
+      "args": [
+        4.0,
+        0.6
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.7528426841257754,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::chdtri"
+      }
+    },
+    {
+      "case_id": "diff_chdtriv_0p5_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "chdtriv",
+      "args": [
+        0.5,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.6285000206907014,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::chdtriv"
+      }
+    },
+    {
+      "case_id": "diff_gdtr_2_3_4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtr",
+      "args": [
+        2.0,
+        3.0,
+        4.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.98624603225599705,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gdtr"
+      }
+    },
+    {
+      "case_id": "diff_gdtrc_2_3_4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtrc",
+      "args": [
+        2.0,
+        3.0,
+        4.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.013753967744002971,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gdtrc"
+      }
+    },
+    {
+      "case_id": "diff_gdtria_0p4_1p25_3p2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtria",
+      "args": [
+        0.4,
+        1.25,
+        3.2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.22483440431273446,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gdtria"
+      }
+    },
+    {
+      "case_id": "diff_gdtria_0p7_3_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtria",
+      "args": [
+        0.7,
+        3.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.8077838329329956,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gdtria"
+      }
+    },
+    {
+      "case_id": "diff_gdtrib_2p5_0p4_3p2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtrib",
+      "args": [
+        2.5,
+        0.4,
+        3.2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 9.05581244967315,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gdtrib"
+      }
+    },
+    {
+      "case_id": "diff_gdtrib_2_0p7_1p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtrib",
+      "args": [
+        2.0,
+        0.7,
+        1.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.472602993054606,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gdtrib"
+      }
+    },
+    {
+      "case_id": "diff_gdtrix_2p5_1p25_0p4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtrix",
+      "args": [
+        2.5,
+        1.25,
+        0.4
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.28778803752030013,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gdtrix"
+      }
+    },
+    {
+      "case_id": "diff_gdtrix_2_3_0p7",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtrix",
+      "args": [
+        2.0,
+        3.0,
+        0.7
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.8077838329329956,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gdtrix"
+      }
+    },
+    {
+      "case_id": "diff_gdtrix_0_1p25_0p4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtrix",
+      "args": [
+        0.0,
+        1.25,
+        0.4
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "diff_gdtrix_neg2p5_1p25_0p4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gdtrix",
+      "args": [
+        -2.5,
+        1.25,
+        0.4
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.28778803752030013,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::gdtrix"
       }
     },
     {
@@ -749,6 +1732,74 @@
       }
     },
     {
+      "case_id": "diff_spherical_in_n0_x1p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_in",
+      "args": [
+        0.0,
+        1.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.2815352642406603,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::spherical_in"
+      }
+    },
+    {
+      "case_id": "diff_spherical_in_n3_x2p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_in",
+      "args": [
+        3.0,
+        2.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.20843886982513898,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::spherical_in"
+      }
+    },
+    {
+      "case_id": "diff_spherical_kn_n0_x1p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_kn",
+      "args": [
+        0.0,
+        1.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.36003254601368373,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::spherical_kn"
+      }
+    },
+    {
+      "case_id": "diff_spherical_kn_n3_x2p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_kn",
+      "args": [
+        3.0,
+        2.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.3486505539304314,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::spherical_kn"
+      }
+    },
+    {
       "case_id": "diff_xlogy_zero_x",
       "category": "differential",
       "mode": "Strict",
@@ -830,6 +1881,70 @@
         "atol": 1e-12,
         "rtol": 1e-12,
         "contract_ref": "fsci_special::xlogx"
+      }
+    },
+    {
+      "case_id": "diff_kolmogorov_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kolmogorov",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.26999967167735456,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::kolmogorov"
+      }
+    },
+    {
+      "case_id": "diff_kolmogorov_1p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kolmogorov",
+      "args": [
+        1.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.022217962616525127,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::kolmogorov"
+      }
+    },
+    {
+      "case_id": "diff_kolmogi_0p27",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kolmogi",
+      "args": [
+        0.27
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.999999693714313,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::kolmogi"
+      }
+    },
+    {
+      "case_id": "diff_kolmogi_0p1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kolmogi",
+      "args": [
+        0.1
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.2238478702170823,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::kolmogi"
       }
     },
     {
@@ -949,6 +2064,204 @@
       }
     },
     {
+      "case_id": "diff_cosdg_90",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cosdg",
+      "args": [
+        90.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::cosdg"
+      }
+    },
+    {
+      "case_id": "diff_sindg_30",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "sindg",
+      "args": [
+        30.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.49999999999999994,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::sindg"
+      }
+    },
+    {
+      "case_id": "diff_tandg_45",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "tandg",
+      "args": [
+        45.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::tandg"
+      }
+    },
+    {
+      "case_id": "diff_cotdg_45",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cotdg",
+      "args": [
+        45.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::cotdg"
+      }
+    },
+    {
+      "case_id": "diff_radian_180",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "radian",
+      "args": [
+        180.0,
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.141592653589793,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::radian"
+      }
+    },
+    {
+      "case_id": "diff_cbrt_neg8",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cbrt",
+      "args": [
+        -8.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -2.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::cbrt"
+      }
+    },
+    {
+      "case_id": "diff_exp2_3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "exp2",
+      "args": [
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 8.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::exp2"
+      }
+    },
+    {
+      "case_id": "diff_exp10_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "exp10",
+      "args": [
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 100.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::exp10"
+      }
+    },
+    {
+      "case_id": "diff_boxcox_2_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "boxcox",
+      "args": [
+        2.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8284271247461901,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::boxcox_transform"
+      }
+    },
+    {
+      "case_id": "diff_inv_boxcox_0p828_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "inv_boxcox",
+      "args": [
+        0.8284271247461901,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::inv_boxcox"
+      }
+    },
+    {
+      "case_id": "diff_boxcox1p_1_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "boxcox1p",
+      "args": [
+        1.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8284271247461901,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::boxcox1p"
+      }
+    },
+    {
+      "case_id": "diff_inv_boxcox1p_0p828_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "inv_boxcox1p",
+      "args": [
+        0.8284271247461901,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::inv_boxcox1p"
+      }
+    },
+    {
       "case_id": "diff_entr_half",
       "category": "differential",
       "mode": "Strict",
@@ -1060,6 +2373,39 @@
         "atol": 5e-5,
         "rtol": 5e-5,
         "contract_ref": "fsci_special::ndtri"
+      }
+    },
+    {
+      "case_id": "diff_nrdtrimn_0p8_2_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nrdtrimn",
+      "args": [
+        0.8,
+        2.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.6832424671458288,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::nrdtrimn"
+      }
+    },
+    {
+      "case_id": "diff_nrdtrimn_p0_invalid",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nrdtrimn",
+      "args": [
+        0.0,
+        2.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
       }
     },
     {
@@ -1651,6 +2997,650 @@
         "atol": 1e-10,
         "rtol": 1e-10,
         "contract_ref": "fsci_special::lpmv"
+      }
+    },
+    {
+      "case_id": "diff_eval_legendre_4_0p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_legendre",
+      "args": [
+        4.0,
+        0.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.15771484375,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_legendre"
+      }
+    },
+    {
+      "case_id": "diff_eval_chebyt_5_0p3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_chebyt",
+      "args": [
+        5.0,
+        0.3
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.99888,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_chebyt"
+      }
+    },
+    {
+      "case_id": "diff_eval_chebyu_4_0p3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_chebyu",
+      "args": [
+        4.0,
+        0.3
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.04960000000000009,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_chebyu"
+      }
+    },
+    {
+      "case_id": "diff_eval_hermite_4_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_hermite",
+      "args": [
+        4.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_hermite"
+      }
+    },
+    {
+      "case_id": "diff_eval_hermitenorm_4_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_hermitenorm",
+      "args": [
+        4.0,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.5625,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_hermitenorm"
+      }
+    },
+    {
+      "case_id": "diff_eval_laguerre_3_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_laguerre",
+      "args": [
+        3.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.33333333333333337,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_laguerre"
+      }
+    },
+    {
+      "case_id": "diff_eval_genlaguerre_3_1p5_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_genlaguerre",
+      "args": [
+        3.0,
+        1.5,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -1.520833333333333,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_genlaguerre"
+      }
+    },
+    {
+      "case_id": "diff_eval_jacobi_3_0p5_1_0p25",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_jacobi",
+      "args": [
+        3.0,
+        0.5,
+        1.0,
+        0.25
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.39465332031250006,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_jacobi"
+      }
+    },
+    {
+      "case_id": "diff_eval_jacobi_4_1p5_0p5_neg0p2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_jacobi",
+      "args": [
+        4.0,
+        1.5,
+        0.5,
+        -0.2
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5499375000000001,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_jacobi"
+      }
+    },
+    {
+      "case_id": "diff_eval_gegenbauer_4_1p25_0p3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_gegenbauer",
+      "args": [
+        4.0,
+        1.25,
+        0.3
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.029285156250000055,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_gegenbauer"
+      }
+    },
+    {
+      "case_id": "diff_eval_gegenbauer_5_0p75_neg0p4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_gegenbauer",
+      "args": [
+        5.0,
+        0.75,
+        -0.4
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.46431,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_gegenbauer"
+      }
+    },
+    {
+      "case_id": "diff_eval_sh_legendre_4_0p75",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_sh_legendre",
+      "args": [
+        4.0,
+        0.75
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.28906249999999994,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_sh_legendre"
+      }
+    },
+    {
+      "case_id": "diff_eval_sh_chebyt_5_0p8",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_sh_chebyt",
+      "args": [
+        5.0,
+        0.8
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.07584000000000046,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_sh_chebyt"
+      }
+    },
+    {
+      "case_id": "diff_eval_sh_chebyu_4_0p8",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "eval_sh_chebyu",
+      "args": [
+        4.0,
+        0.8
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -1.2464,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::eval_sh_chebyu"
+      }
+    },
+    {
+      "case_id": "diff_roots_chebyt_4_node_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_chebyt_node",
+      "args": [
+        4.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.9238795325112867,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_chebyt"
+      }
+    },
+    {
+      "case_id": "diff_roots_chebyt_4_node_right",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_chebyt_node",
+      "args": [
+        4.0,
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.9238795325112867,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_chebyt"
+      }
+    },
+    {
+      "case_id": "diff_roots_chebyt_4_weight_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_chebyt_weight",
+      "args": [
+        4.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.7853981633974483,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_chebyt"
+      }
+    },
+    {
+      "case_id": "diff_roots_chebyu_4_node_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_chebyu_node",
+      "args": [
+        4.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.8090169943749473,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_chebyu"
+      }
+    },
+    {
+      "case_id": "diff_roots_chebyu_4_node_right",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_chebyu_node",
+      "args": [
+        4.0,
+        3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.8090169943749475,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_chebyu"
+      }
+    },
+    {
+      "case_id": "diff_roots_chebyu_4_weight_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_chebyu_weight",
+      "args": [
+        4.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.21707871342270607,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_chebyu"
+      }
+    },
+    {
+      "case_id": "diff_roots_chebyu_4_weight_inner",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_chebyu_weight",
+      "args": [
+        4.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5683194499747424,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_chebyu"
+      }
+    },
+    {
+      "case_id": "diff_roots_hermite_3_node_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_hermite_node",
+      "args": [
+        3.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -1.224744871391589,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_hermite"
+      }
+    },
+    {
+      "case_id": "diff_roots_hermite_3_node_mid",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_hermite_node",
+      "args": [
+        3.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_hermite"
+      }
+    },
+    {
+      "case_id": "diff_roots_hermite_3_weight_mid",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_hermite_weight",
+      "args": [
+        3.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.1816359006036774,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_hermite"
+      }
+    },
+    {
+      "case_id": "diff_roots_hermitenorm_3_node_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_hermitenorm_node",
+      "args": [
+        3.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -1.7320508075688774,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_hermitenorm"
+      }
+    },
+    {
+      "case_id": "diff_roots_hermitenorm_3_node_mid",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_hermitenorm_node",
+      "args": [
+        3.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_hermitenorm"
+      }
+    },
+    {
+      "case_id": "diff_roots_hermitenorm_3_weight_mid",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_hermitenorm_weight",
+      "args": [
+        3.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.6710855164206668,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_hermitenorm"
+      }
+    },
+    {
+      "case_id": "diff_roots_laguerre_3_node_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_laguerre_node",
+      "args": [
+        3.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.41577455678347913,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_laguerre"
+      }
+    },
+    {
+      "case_id": "diff_roots_laguerre_3_node_right",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_laguerre_node",
+      "args": [
+        3.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 6.289945082937478,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_laguerre"
+      }
+    },
+    {
+      "case_id": "diff_roots_laguerre_3_weight_left",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_laguerre_weight",
+      "args": [
+        3.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.7110930099291731,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_laguerre"
+      }
+    },
+    {
+      "case_id": "diff_roots_laguerre_3_weight_right",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_laguerre_weight",
+      "args": [
+        3.0,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.010389256501586133,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::roots_laguerre"
+      }
+    },
+    {
+      "case_id": "diff_roots_genlaguerre_4_1p5_node_inner",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_genlaguerre_node",
+      "args": [
+        4.0,
+        1.5,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 6.319300497896596,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::roots_genlaguerre"
+      }
+    },
+    {
+      "case_id": "diff_roots_genlaguerre_4_1p5_weight_inner",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_genlaguerre_weight",
+      "args": [
+        4.0,
+        1.5,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.11894878057553862,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::roots_genlaguerre"
+      }
+    },
+    {
+      "case_id": "diff_roots_jacobi_4_0p5_1_node_inner",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_jacobi_node",
+      "args": [
+        4.0,
+        0.5,
+        1.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.23082864090118665,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::roots_jacobi"
+      }
+    },
+    {
+      "case_id": "diff_roots_jacobi_4_0p5_1_weight_inner",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_jacobi_weight",
+      "args": [
+        4.0,
+        0.5,
+        1.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5011891464890381,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::roots_jacobi"
+      }
+    },
+    {
+      "case_id": "diff_roots_gegenbauer_4_1p25_node_inner",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_gegenbauer_node",
+      "args": [
+        4.0,
+        1.25,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.29640932576492884,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::roots_gegenbauer"
+      }
+    },
+    {
+      "case_id": "diff_roots_gegenbauer_4_1p25_weight_inner",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "roots_gegenbauer_weight",
+      "args": [
+        4.0,
+        1.25,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5366920142035819,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::roots_gegenbauer"
       }
     },
     {

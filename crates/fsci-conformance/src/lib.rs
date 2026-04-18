@@ -42,28 +42,58 @@ use fsci_opt::{
 use fsci_runtime::{AuditLedger, RuntimeMode, SolverPortfolio};
 use fsci_special::{
     SpecialError as FsciSpecialError, SpecialErrorKind as FsciSpecialErrorKind,
-    SpecialTensor as FsciSpecialTensor, bei as special_bei, ber as special_ber,
-    beta as special_beta, betainc as special_betainc, betaln as special_betaln,
-    dawsn as special_dawsn, ellipe as special_ellipe, ellipeinc as special_ellipeinc,
-    ellipj as special_ellipj, ellipk as special_ellipk, ellipkinc as special_ellipkinc,
-    ellipkm1 as special_ellipkm1, entr as special_entr, erf as special_erf, erfc as special_erfc,
-    erfcinv as special_erfcinv, erfinv as special_erfinv, exp1 as special_exp1,
-    expi as special_expi, expit as special_expit, expm1 as special_expm1,
-    expn_scalar as special_expn, exprel as special_exprel, fresnel as special_fresnel,
-    gamma as special_gamma, gammainc as special_gammainc, gammaincc as special_gammaincc,
-    gammaln as special_gammaln, huber as special_huber, hurwitz_zeta as special_hurwitz_zeta,
-    hyp0f1 as special_hyp0f1, hyp1f1 as special_hyp1f1, hyp2f1 as special_hyp2f1, iv as special_iv,
-    ivp as special_ivp, j0 as special_j0, j1 as special_j1, jn as special_jn, jvp as special_jvp,
-    kei as special_kei, ker as special_ker, kl_div as special_kl_div, kv as special_kv,
-    kvp as special_kvp, lambertw as special_lambertw, log_ndtr as special_log_ndtr,
-    log1p as special_log1p, logaddexp as special_logaddexp, logaddexp2 as special_logaddexp2,
-    logit as special_logit, logsumexp as special_logsumexp, lpmv as special_lpmv,
-    modstruve as special_modstruve, ndtr as special_ndtr, ndtri as special_ndtri,
-    pseudo_huber as special_pseudo_huber, rel_entr as special_rel_entr,
-    roots_legendre as special_roots_legendre, shichi as special_shichi, sici as special_sici,
-    sinc as special_sinc, softplus as special_softplus, spence as special_spence,
-    spherical_jn as special_spherical_jn, spherical_yn as special_spherical_yn,
-    struve as special_struve, xlog1py as special_xlog1py, xlogx as special_xlogx,
+    SpecialTensor as FsciSpecialTensor, bdtr as special_bdtr, bdtrc as special_bdtrc,
+    bdtri as special_bdtri, bei as special_bei, ber as special_ber, beta as special_beta,
+    betainc as special_betainc, betaln as special_betaln,
+    boxcox_transform as special_boxcox_transform, boxcox1p as special_boxcox1p,
+    btdtr as special_btdtr, btdtrc as special_btdtrc, btdtri as special_btdtri,
+    btdtria as special_btdtria, btdtrib as special_btdtrib, cbrt as special_cbrt,
+    chdtr as special_chdtr, chdtrc as special_chdtrc, chdtri as special_chdtri,
+    chdtriv as special_chdtriv, comb as special_comb, cosdg as special_cosdg,
+    cotdg as special_cotdg, dawsn as special_dawsn, digamma as special_digamma,
+    ellipe as special_ellipe, ellipeinc as special_ellipeinc, ellipj as special_ellipj,
+    ellipk as special_ellipk, ellipkinc as special_ellipkinc, ellipkm1 as special_ellipkm1,
+    entr as special_entr, erf as special_erf, erfc as special_erfc, erfcinv as special_erfcinv,
+    erfcx as special_erfcx, erfi as special_erfi, erfinv as special_erfinv,
+    eval_chebyt as special_eval_chebyt, eval_chebyu as special_eval_chebyu,
+    eval_gegenbauer as special_eval_gegenbauer, eval_genlaguerre as special_eval_genlaguerre,
+    eval_hermite as special_eval_hermite, eval_hermitenorm as special_eval_hermitenorm,
+    eval_jacobi as special_eval_jacobi, eval_laguerre as special_eval_laguerre,
+    eval_legendre as special_eval_legendre, eval_sh_chebyt as special_eval_sh_chebyt,
+    eval_sh_chebyu as special_eval_sh_chebyu, eval_sh_legendre as special_eval_sh_legendre,
+    exp1 as special_exp1, exp2 as special_exp2, exp10 as special_exp10, expi as special_expi,
+    expit as special_expit, expm1 as special_expm1, expn_scalar as special_expn,
+    exprel as special_exprel, factorial as special_factorial, factorial2 as special_factorial2,
+    fdtr as special_fdtr, fdtrc as special_fdtrc, fdtri as special_fdtri,
+    fdtridfd as special_fdtridfd, fresnel as special_fresnel, gamma as special_gamma,
+    gammainc as special_gammainc, gammaincc as special_gammaincc, gammaln as special_gammaln,
+    gdtr as special_gdtr, gdtrc as special_gdtrc, gdtria as special_gdtria,
+    gdtrib as special_gdtrib, gdtrix as special_gdtrix, huber as special_huber,
+    hurwitz_zeta as special_hurwitz_zeta, hyp0f1 as special_hyp0f1, hyp1f1 as special_hyp1f1,
+    hyp2f1 as special_hyp2f1, inv_boxcox as special_inv_boxcox,
+    inv_boxcox1p as special_inv_boxcox1p, iv as special_iv, ivp as special_ivp, j0 as special_j0,
+    j1 as special_j1, jn as special_jn, jvp as special_jvp, kei as special_kei, ker as special_ker,
+    kl_div as special_kl_div, kolmogi as special_kolmogi, kolmogorov as special_kolmogorov,
+    kv as special_kv, kvp as special_kvp, lambertw as special_lambertw,
+    log_ndtr as special_log_ndtr, log1p as special_log1p, logaddexp as special_logaddexp,
+    logaddexp2 as special_logaddexp2, logit as special_logit, logsumexp as special_logsumexp,
+    lpmv as special_lpmv, modstruve as special_modstruve, nbdtr as special_nbdtr,
+    nbdtrc as special_nbdtrc, nbdtri as special_nbdtri, ndtr as special_ndtr,
+    ndtri as special_ndtri, nrdtrimn as special_nrdtrimn, owens_t as special_owens_t,
+    pdtr as special_pdtr, pdtrc as special_pdtrc, pdtri as special_pdtri, pdtrik as special_pdtrik,
+    perm as special_perm, poch as special_poch, polygamma as special_polygamma,
+    pseudo_huber as special_pseudo_huber, radian as special_radian, rel_entr as special_rel_entr,
+    rgamma as special_rgamma, roots_chebyt as special_roots_chebyt,
+    roots_chebyu as special_roots_chebyu, roots_gegenbauer as special_roots_gegenbauer,
+    roots_genlaguerre as special_roots_genlaguerre, roots_hermite as special_roots_hermite,
+    roots_hermitenorm as special_roots_hermitenorm, roots_jacobi as special_roots_jacobi,
+    roots_laguerre as special_roots_laguerre, roots_legendre as special_roots_legendre,
+    shichi as special_shichi, sici as special_sici, sinc as special_sinc, sindg as special_sindg,
+    softplus as special_softplus, spence as special_spence, spherical_in as special_spherical_in,
+    spherical_jn as special_spherical_jn, spherical_kn as special_spherical_kn,
+    spherical_yn as special_spherical_yn, stdtr as special_stdtr, stdtrc as special_stdtrc,
+    stdtridf as special_stdtridf, stdtrit as special_stdtrit, struve as special_struve,
+    tandg as special_tandg, xlog1py as special_xlog1py, xlogx as special_xlogx,
     xlogy as special_xlogy, y0 as special_y0, y1 as special_y1, yn as special_yn,
     yvp as special_yvp, zeta as special_zeta, zetac as special_zetac,
 };
@@ -535,15 +565,58 @@ pub struct OptimizePacketFixture {
 pub enum SpecialCaseFunction {
     Gamma,
     Gammaln,
+    Digamma,
+    Polygamma,
+    Rgamma,
     Gammainc,
     Gammaincc,
+    Factorial,
+    Factorial2,
+    Comb,
+    Perm,
+    Poch,
     Erf,
     Erfc,
     Erfinv,
     Erfcinv,
+    Erfcx,
+    Erfi,
+    OwensT,
     Beta,
     Betaln,
     Betainc,
+    Btdtr,
+    Btdtrc,
+    Btdtri,
+    Btdtria,
+    Btdtrib,
+    Fdtr,
+    Fdtrc,
+    Fdtri,
+    Fdtridfd,
+    Stdtr,
+    Stdtrc,
+    Stdtridf,
+    Stdtrit,
+    Bdtr,
+    Bdtrc,
+    Bdtri,
+    Nbdtr,
+    Nbdtrc,
+    Nbdtri,
+    Pdtr,
+    Pdtrc,
+    Pdtri,
+    Pdtrik,
+    Chdtr,
+    Chdtrc,
+    Chdtri,
+    Chdtriv,
+    Gdtr,
+    Gdtrc,
+    Gdtria,
+    Gdtrib,
+    Gdtrix,
     Ellipk,
     Ellipkm1,
     Ellipe,
@@ -574,15 +647,20 @@ pub enum SpecialCaseFunction {
     Kvp,
     SphericalJn,
     SphericalYn,
+    SphericalIn,
+    SphericalKn,
     Sinc,
     Xlogy,
     Xlog1py,
     Xlogx,
+    Kolmogorov,
+    Kolmogi,
     Entr,
     RelEntr,
     KlDiv,
     Ndtr,
     Ndtri,
+    Nrdtrimn,
     LogNdtr,
     Logsumexp,
     Log1p,
@@ -592,6 +670,18 @@ pub enum SpecialCaseFunction {
     Softplus,
     Huber,
     PseudoHuber,
+    Cosdg,
+    Sindg,
+    Tandg,
+    Cotdg,
+    Radian,
+    Cbrt,
+    Exp2,
+    Exp10,
+    Boxcox,
+    InvBoxcox,
+    Boxcox1p,
+    InvBoxcox1p,
     FresnelS,
     FresnelC,
     Dawsn,
@@ -610,6 +700,34 @@ pub enum SpecialCaseFunction {
     Zetac,
     HurwitzZeta,
     Lpmv,
+    EvalLegendre,
+    EvalChebyt,
+    EvalChebyu,
+    EvalHermite,
+    EvalHermitenorm,
+    EvalLaguerre,
+    EvalGenlaguerre,
+    EvalJacobi,
+    EvalGegenbauer,
+    EvalShLegendre,
+    EvalShChebyt,
+    EvalShChebyu,
+    RootsChebytNode,
+    RootsChebytWeight,
+    RootsChebyuNode,
+    RootsChebyuWeight,
+    RootsHermiteNode,
+    RootsHermiteWeight,
+    RootsHermitenormNode,
+    RootsHermitenormWeight,
+    RootsLaguerreNode,
+    RootsLaguerreWeight,
+    RootsGenlaguerreNode,
+    RootsGenlaguerreWeight,
+    RootsJacobiNode,
+    RootsJacobiWeight,
+    RootsGegenbauerNode,
+    RootsGegenbauerWeight,
     RootsLegendreNode,
     RootsLegendreWeight,
     Expit,
@@ -8501,6 +8619,37 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 mode,
             )
         }
+        SpecialCaseFunction::Digamma => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("digamma", mode));
+            }
+            special_scalar_from_tensor(
+                special_digamma(&special_scalar(args[0]), mode)?,
+                "digamma",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Polygamma => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("polygamma", mode));
+            }
+            let order = special_usize_from_fixture("polygamma", mode, args[0])?;
+            special_scalar_from_tensor(
+                special_polygamma(order, &special_scalar(args[1]), mode)?,
+                "polygamma",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Rgamma => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("rgamma", mode));
+            }
+            special_scalar_from_tensor(
+                special_rgamma(&special_scalar(args[0]), mode)?,
+                "rgamma",
+                mode,
+            )
+        }
         SpecialCaseFunction::Gammainc => {
             if args.len() != 2 {
                 return Err(special_invalid_fixture_error("gammainc", mode));
@@ -8520,6 +8669,50 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 "gammaincc",
                 mode,
             )
+        }
+        SpecialCaseFunction::Factorial => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("factorial", mode));
+            }
+            Ok(special_factorial(special_u64_from_fixture(
+                "factorial",
+                mode,
+                args[0],
+            )?))
+        }
+        SpecialCaseFunction::Factorial2 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("factorial2", mode));
+            }
+            Ok(special_factorial2(special_i64_from_fixture(
+                "factorial2",
+                mode,
+                args[0],
+            )?))
+        }
+        SpecialCaseFunction::Comb => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("comb", mode));
+            }
+            Ok(special_comb(
+                special_u64_from_fixture("comb", mode, args[0])?,
+                special_u64_from_fixture("comb", mode, args[1])?,
+            ))
+        }
+        SpecialCaseFunction::Perm => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("perm", mode));
+            }
+            Ok(special_perm(
+                special_u64_from_fixture("perm", mode, args[0])?,
+                special_u64_from_fixture("perm", mode, args[1])?,
+            ))
+        }
+        SpecialCaseFunction::Poch => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("poch", mode));
+            }
+            Ok(special_poch(args[0], args[1]))
         }
         SpecialCaseFunction::Erf => {
             if args.len() != 1 {
@@ -8552,6 +8745,24 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 "erfcinv",
                 mode,
             )
+        }
+        SpecialCaseFunction::Erfcx => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("erfcx", mode));
+            }
+            Ok(special_erfcx(args[0]))
+        }
+        SpecialCaseFunction::Erfi => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("erfi", mode));
+            }
+            Ok(special_erfi(args[0]))
+        }
+        SpecialCaseFunction::OwensT => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("owens_t", mode));
+            }
+            Ok(special_owens_t(args[0], args[1]))
         }
         SpecialCaseFunction::Beta => {
             if args.len() != 2 {
@@ -8587,6 +8798,198 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 "betainc",
                 mode,
             )
+        }
+        SpecialCaseFunction::Btdtr => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("btdtr", mode));
+            }
+            Ok(special_btdtr(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Btdtrc => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("btdtrc", mode));
+            }
+            Ok(special_btdtrc(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Btdtri => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("btdtri", mode));
+            }
+            Ok(special_btdtri(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Btdtria => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("btdtria", mode));
+            }
+            Ok(special_btdtria(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Btdtrib => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("btdtrib", mode));
+            }
+            Ok(special_btdtrib(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Fdtr => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("fdtr", mode));
+            }
+            Ok(special_fdtr(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Fdtrc => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("fdtrc", mode));
+            }
+            Ok(special_fdtrc(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Fdtri => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("fdtri", mode));
+            }
+            Ok(special_fdtri(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Fdtridfd => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("fdtridfd", mode));
+            }
+            Ok(special_fdtridfd(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Stdtr => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("stdtr", mode));
+            }
+            Ok(special_stdtr(args[0], args[1]))
+        }
+        SpecialCaseFunction::Stdtrc => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("stdtrc", mode));
+            }
+            Ok(special_stdtrc(args[0], args[1]))
+        }
+        SpecialCaseFunction::Stdtridf => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("stdtridf", mode));
+            }
+            Ok(special_stdtridf(args[0], args[1]))
+        }
+        SpecialCaseFunction::Stdtrit => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("stdtrit", mode));
+            }
+            Ok(special_stdtrit(args[0], args[1]))
+        }
+        SpecialCaseFunction::Bdtr => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("bdtr", mode));
+            }
+            Ok(special_bdtr(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Bdtrc => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("bdtrc", mode));
+            }
+            Ok(special_bdtrc(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Bdtri => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("bdtri", mode));
+            }
+            Ok(special_bdtri(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Nbdtr => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("nbdtr", mode));
+            }
+            Ok(special_nbdtr(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Nbdtrc => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("nbdtrc", mode));
+            }
+            Ok(special_nbdtrc(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Nbdtri => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("nbdtri", mode));
+            }
+            Ok(special_nbdtri(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Pdtr => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("pdtr", mode));
+            }
+            Ok(special_pdtr(args[0], args[1]))
+        }
+        SpecialCaseFunction::Pdtrc => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("pdtrc", mode));
+            }
+            Ok(special_pdtrc(args[0], args[1]))
+        }
+        SpecialCaseFunction::Pdtri => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("pdtri", mode));
+            }
+            Ok(special_pdtri(args[0], args[1]))
+        }
+        SpecialCaseFunction::Pdtrik => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("pdtrik", mode));
+            }
+            Ok(special_pdtrik(args[0], args[1]))
+        }
+        SpecialCaseFunction::Chdtr => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("chdtr", mode));
+            }
+            Ok(special_chdtr(args[0], args[1]))
+        }
+        SpecialCaseFunction::Chdtrc => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("chdtrc", mode));
+            }
+            Ok(special_chdtrc(args[0], args[1]))
+        }
+        SpecialCaseFunction::Chdtri => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("chdtri", mode));
+            }
+            Ok(special_chdtri(args[0], args[1]))
+        }
+        SpecialCaseFunction::Chdtriv => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("chdtriv", mode));
+            }
+            Ok(special_chdtriv(args[0], args[1]))
+        }
+        SpecialCaseFunction::Gdtr => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("gdtr", mode));
+            }
+            Ok(special_gdtr(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Gdtrc => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("gdtrc", mode));
+            }
+            Ok(special_gdtrc(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Gdtria => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("gdtria", mode));
+            }
+            Ok(special_gdtria(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Gdtrib => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("gdtrib", mode));
+            }
+            Ok(special_gdtrib(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Gdtrix => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("gdtrix", mode));
+            }
+            Ok(special_gdtrix(args[0], args[1], args[2]))
         }
         SpecialCaseFunction::Ellipk => {
             if args.len() != 1 {
@@ -8884,6 +9287,26 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 mode,
             )
         }
+        SpecialCaseFunction::SphericalIn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("spherical_in", mode));
+            }
+            special_scalar_from_tensor(
+                special_spherical_in(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "spherical_in",
+                mode,
+            )
+        }
+        SpecialCaseFunction::SphericalKn => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("spherical_kn", mode));
+            }
+            special_scalar_from_tensor(
+                special_spherical_kn(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "spherical_kn",
+                mode,
+            )
+        }
         SpecialCaseFunction::Sinc => {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("sinc", mode));
@@ -8915,6 +9338,18 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 return Err(special_invalid_fixture_error("xlogx", mode));
             }
             Ok(special_xlogx(args[0]))
+        }
+        SpecialCaseFunction::Kolmogorov => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("kolmogorov", mode));
+            }
+            Ok(special_kolmogorov(args[0]))
+        }
+        SpecialCaseFunction::Kolmogi => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("kolmogi", mode));
+            }
+            Ok(special_kolmogi(args[0]))
         }
         SpecialCaseFunction::Entr => {
             if args.len() != 1 {
@@ -8949,6 +9384,12 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 return Err(special_invalid_fixture_error("ndtri", mode));
             }
             Ok(special_ndtri(args[0]))
+        }
+        SpecialCaseFunction::Nrdtrimn => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("nrdtrimn", mode));
+            }
+            Ok(special_nrdtrimn(args[0], args[1], args[2]))
         }
         SpecialCaseFunction::LogNdtr => {
             if args.len() != 1 {
@@ -9003,6 +9444,78 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 return Err(special_invalid_fixture_error("pseudo_huber", mode));
             }
             Ok(special_pseudo_huber(args[0], args[1]))
+        }
+        SpecialCaseFunction::Cosdg => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("cosdg", mode));
+            }
+            Ok(special_cosdg(args[0]))
+        }
+        SpecialCaseFunction::Sindg => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("sindg", mode));
+            }
+            Ok(special_sindg(args[0]))
+        }
+        SpecialCaseFunction::Tandg => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("tandg", mode));
+            }
+            Ok(special_tandg(args[0]))
+        }
+        SpecialCaseFunction::Cotdg => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("cotdg", mode));
+            }
+            Ok(special_cotdg(args[0]))
+        }
+        SpecialCaseFunction::Radian => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("radian", mode));
+            }
+            Ok(special_radian(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Cbrt => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("cbrt", mode));
+            }
+            Ok(special_cbrt(args[0]))
+        }
+        SpecialCaseFunction::Exp2 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("exp2", mode));
+            }
+            Ok(special_exp2(args[0]))
+        }
+        SpecialCaseFunction::Exp10 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("exp10", mode));
+            }
+            Ok(special_exp10(args[0]))
+        }
+        SpecialCaseFunction::Boxcox => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("boxcox", mode));
+            }
+            Ok(special_boxcox_transform(args[0], args[1]))
+        }
+        SpecialCaseFunction::InvBoxcox => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("inv_boxcox", mode));
+            }
+            Ok(special_inv_boxcox(args[0], args[1]))
+        }
+        SpecialCaseFunction::Boxcox1p => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("boxcox1p", mode));
+            }
+            Ok(special_boxcox1p(args[0], args[1]))
+        }
+        SpecialCaseFunction::InvBoxcox1p => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("inv_boxcox1p", mode));
+            }
+            Ok(special_inv_boxcox1p(args[0], args[1]))
         }
         SpecialCaseFunction::FresnelS => {
             if args.len() != 1 {
@@ -9120,6 +9633,249 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             let degree = special_u32_from_fixture("lpmv", mode, args[1])?;
             Ok(special_lpmv(order, degree, args[2]))
         }
+        SpecialCaseFunction::EvalLegendre => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("eval_legendre", mode));
+            }
+            let degree = special_u32_from_fixture("eval_legendre", mode, args[0])?;
+            Ok(special_eval_legendre(degree, args[1]))
+        }
+        SpecialCaseFunction::EvalChebyt => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("eval_chebyt", mode));
+            }
+            let degree = special_u32_from_fixture("eval_chebyt", mode, args[0])?;
+            Ok(special_eval_chebyt(degree, args[1]))
+        }
+        SpecialCaseFunction::EvalChebyu => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("eval_chebyu", mode));
+            }
+            let degree = special_u32_from_fixture("eval_chebyu", mode, args[0])?;
+            Ok(special_eval_chebyu(degree, args[1]))
+        }
+        SpecialCaseFunction::EvalHermite => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("eval_hermite", mode));
+            }
+            let degree = special_u32_from_fixture("eval_hermite", mode, args[0])?;
+            Ok(special_eval_hermite(degree, args[1]))
+        }
+        SpecialCaseFunction::EvalHermitenorm => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("eval_hermitenorm", mode));
+            }
+            let degree = special_u32_from_fixture("eval_hermitenorm", mode, args[0])?;
+            Ok(special_eval_hermitenorm(degree, args[1]))
+        }
+        SpecialCaseFunction::EvalLaguerre => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("eval_laguerre", mode));
+            }
+            let degree = special_u32_from_fixture("eval_laguerre", mode, args[0])?;
+            Ok(special_eval_laguerre(degree, args[1]))
+        }
+        SpecialCaseFunction::EvalGenlaguerre => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("eval_genlaguerre", mode));
+            }
+            let degree = special_u32_from_fixture("eval_genlaguerre", mode, args[0])?;
+            Ok(special_eval_genlaguerre(degree, args[1], args[2]))
+        }
+        SpecialCaseFunction::EvalJacobi => {
+            if args.len() != 4 {
+                return Err(special_invalid_fixture_error("eval_jacobi", mode));
+            }
+            let degree = special_u32_from_fixture("eval_jacobi", mode, args[0])?;
+            Ok(special_eval_jacobi(degree, args[1], args[2], args[3]))
+        }
+        SpecialCaseFunction::EvalGegenbauer => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("eval_gegenbauer", mode));
+            }
+            let degree = special_u32_from_fixture("eval_gegenbauer", mode, args[0])?;
+            Ok(special_eval_gegenbauer(degree, args[1], args[2]))
+        }
+        SpecialCaseFunction::EvalShLegendre => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("eval_sh_legendre", mode));
+            }
+            let degree = special_u32_from_fixture("eval_sh_legendre", mode, args[0])?;
+            Ok(special_eval_sh_legendre(degree, args[1]))
+        }
+        SpecialCaseFunction::EvalShChebyt => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("eval_sh_chebyt", mode));
+            }
+            let degree = special_u32_from_fixture("eval_sh_chebyt", mode, args[0])?;
+            Ok(special_eval_sh_chebyt(degree, args[1]))
+        }
+        SpecialCaseFunction::EvalShChebyu => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("eval_sh_chebyu", mode));
+            }
+            let degree = special_u32_from_fixture("eval_sh_chebyu", mode, args[0])?;
+            Ok(special_eval_sh_chebyu(degree, args[1]))
+        }
+        SpecialCaseFunction::RootsChebytNode => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_chebyt_node", mode));
+            }
+            let degree = special_usize_from_fixture("roots_chebyt_node", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_chebyt_node", mode, args[1])?;
+            let (nodes, _) = special_roots_chebyt(degree);
+            roots_component(nodes.get(index), "roots_chebyt_node", mode)
+        }
+        SpecialCaseFunction::RootsChebytWeight => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_chebyt_weight", mode));
+            }
+            let degree = special_usize_from_fixture("roots_chebyt_weight", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_chebyt_weight", mode, args[1])?;
+            let (_, weights) = special_roots_chebyt(degree);
+            roots_component(weights.get(index), "roots_chebyt_weight", mode)
+        }
+        SpecialCaseFunction::RootsChebyuNode => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_chebyu_node", mode));
+            }
+            let degree = special_usize_from_fixture("roots_chebyu_node", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_chebyu_node", mode, args[1])?;
+            let (nodes, _) = special_roots_chebyu(degree);
+            roots_component(nodes.get(index), "roots_chebyu_node", mode)
+        }
+        SpecialCaseFunction::RootsChebyuWeight => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_chebyu_weight", mode));
+            }
+            let degree = special_usize_from_fixture("roots_chebyu_weight", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_chebyu_weight", mode, args[1])?;
+            let (_, weights) = special_roots_chebyu(degree);
+            roots_component(weights.get(index), "roots_chebyu_weight", mode)
+        }
+        SpecialCaseFunction::RootsHermiteNode => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_hermite_node", mode));
+            }
+            let degree = special_usize_from_fixture("roots_hermite_node", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_hermite_node", mode, args[1])?;
+            let (nodes, _) = special_roots_hermite(degree);
+            roots_component(nodes.get(index), "roots_hermite_node", mode)
+        }
+        SpecialCaseFunction::RootsHermiteWeight => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_hermite_weight", mode));
+            }
+            let degree = special_usize_from_fixture("roots_hermite_weight", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_hermite_weight", mode, args[1])?;
+            let (_, weights) = special_roots_hermite(degree);
+            roots_component(weights.get(index), "roots_hermite_weight", mode)
+        }
+        SpecialCaseFunction::RootsHermitenormNode => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error(
+                    "roots_hermitenorm_node",
+                    mode,
+                ));
+            }
+            let degree = special_usize_from_fixture("roots_hermitenorm_node", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_hermitenorm_node", mode, args[1])?;
+            let (nodes, _) = special_roots_hermitenorm(degree);
+            roots_component(nodes.get(index), "roots_hermitenorm_node", mode)
+        }
+        SpecialCaseFunction::RootsHermitenormWeight => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error(
+                    "roots_hermitenorm_weight",
+                    mode,
+                ));
+            }
+            let degree = special_usize_from_fixture("roots_hermitenorm_weight", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_hermitenorm_weight", mode, args[1])?;
+            let (_, weights) = special_roots_hermitenorm(degree);
+            roots_component(weights.get(index), "roots_hermitenorm_weight", mode)
+        }
+        SpecialCaseFunction::RootsLaguerreNode => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_laguerre_node", mode));
+            }
+            let degree = special_usize_from_fixture("roots_laguerre_node", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_laguerre_node", mode, args[1])?;
+            let (nodes, _) = special_roots_laguerre(degree);
+            roots_component(nodes.get(index), "roots_laguerre_node", mode)
+        }
+        SpecialCaseFunction::RootsLaguerreWeight => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("roots_laguerre_weight", mode));
+            }
+            let degree = special_usize_from_fixture("roots_laguerre_weight", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_laguerre_weight", mode, args[1])?;
+            let (_, weights) = special_roots_laguerre(degree);
+            roots_component(weights.get(index), "roots_laguerre_weight", mode)
+        }
+        SpecialCaseFunction::RootsGenlaguerreNode => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error(
+                    "roots_genlaguerre_node",
+                    mode,
+                ));
+            }
+            let degree = special_usize_from_fixture("roots_genlaguerre_node", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_genlaguerre_node", mode, args[2])?;
+            let (nodes, _) = special_roots_genlaguerre(degree, args[1]);
+            roots_component(nodes.get(index), "roots_genlaguerre_node", mode)
+        }
+        SpecialCaseFunction::RootsGenlaguerreWeight => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error(
+                    "roots_genlaguerre_weight",
+                    mode,
+                ));
+            }
+            let degree = special_usize_from_fixture("roots_genlaguerre_weight", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_genlaguerre_weight", mode, args[2])?;
+            let (_, weights) = special_roots_genlaguerre(degree, args[1]);
+            roots_component(weights.get(index), "roots_genlaguerre_weight", mode)
+        }
+        SpecialCaseFunction::RootsJacobiNode => {
+            if args.len() != 4 {
+                return Err(special_invalid_fixture_error("roots_jacobi_node", mode));
+            }
+            let degree = special_usize_from_fixture("roots_jacobi_node", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_jacobi_node", mode, args[3])?;
+            let (nodes, _) = special_roots_jacobi(degree, args[1], args[2]);
+            roots_component(nodes.get(index), "roots_jacobi_node", mode)
+        }
+        SpecialCaseFunction::RootsJacobiWeight => {
+            if args.len() != 4 {
+                return Err(special_invalid_fixture_error("roots_jacobi_weight", mode));
+            }
+            let degree = special_usize_from_fixture("roots_jacobi_weight", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_jacobi_weight", mode, args[3])?;
+            let (_, weights) = special_roots_jacobi(degree, args[1], args[2]);
+            roots_component(weights.get(index), "roots_jacobi_weight", mode)
+        }
+        SpecialCaseFunction::RootsGegenbauerNode => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("roots_gegenbauer_node", mode));
+            }
+            let degree = special_usize_from_fixture("roots_gegenbauer_node", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_gegenbauer_node", mode, args[2])?;
+            let (nodes, _) = special_roots_gegenbauer(degree, args[1]);
+            roots_component(nodes.get(index), "roots_gegenbauer_node", mode)
+        }
+        SpecialCaseFunction::RootsGegenbauerWeight => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error(
+                    "roots_gegenbauer_weight",
+                    mode,
+                ));
+            }
+            let degree = special_usize_from_fixture("roots_gegenbauer_weight", mode, args[0])?;
+            let index = special_usize_from_fixture("roots_gegenbauer_weight", mode, args[2])?;
+            let (_, weights) = special_roots_gegenbauer(degree, args[1]);
+            roots_component(weights.get(index), "roots_gegenbauer_weight", mode)
+        }
         SpecialCaseFunction::RootsLegendreNode => {
             if args.len() != 2 {
                 return Err(special_invalid_fixture_error("roots_legendre_node", mode));
@@ -9127,7 +9883,7 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             let degree = special_usize_from_fixture("roots_legendre_node", mode, args[0])?;
             let index = special_usize_from_fixture("roots_legendre_node", mode, args[1])?;
             let (nodes, _) = special_roots_legendre(degree);
-            roots_legendre_component(nodes.get(index), "roots_legendre_node", mode)
+            roots_component(nodes.get(index), "roots_legendre_node", mode)
         }
         SpecialCaseFunction::RootsLegendreWeight => {
             if args.len() != 2 {
@@ -9136,7 +9892,7 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             let degree = special_usize_from_fixture("roots_legendre_weight", mode, args[0])?;
             let index = special_usize_from_fixture("roots_legendre_weight", mode, args[1])?;
             let (_, weights) = special_roots_legendre(degree);
-            roots_legendre_component(weights.get(index), "roots_legendre_weight", mode)
+            roots_component(weights.get(index), "roots_legendre_weight", mode)
         }
         SpecialCaseFunction::Expit => {
             if args.len() != 1 {
@@ -9313,6 +10069,26 @@ fn special_i32_from_fixture(
     })
 }
 
+fn special_i64_from_fixture(
+    function: &'static str,
+    mode: RuntimeMode,
+    value: f64,
+) -> Result<i64, FsciSpecialError> {
+    if value.is_finite()
+        && value.fract() == 0.0
+        && value >= i64::MIN as f64
+        && value <= i64::MAX as f64
+    {
+        return Ok(value as i64);
+    }
+    Err(FsciSpecialError {
+        function,
+        kind: FsciSpecialErrorKind::DomainError,
+        mode,
+        detail: "fixture argument must be a finite i64 integer",
+    })
+}
+
 fn special_u32_from_fixture(
     function: &'static str,
     mode: RuntimeMode,
@@ -9326,6 +10102,22 @@ fn special_u32_from_fixture(
         kind: FsciSpecialErrorKind::DomainError,
         mode,
         detail: "fixture argument must be a finite u32 integer",
+    })
+}
+
+fn special_u64_from_fixture(
+    function: &'static str,
+    mode: RuntimeMode,
+    value: f64,
+) -> Result<u64, FsciSpecialError> {
+    if value.is_finite() && value.fract() == 0.0 && value >= 0.0 && value <= u64::MAX as f64 {
+        return Ok(value as u64);
+    }
+    Err(FsciSpecialError {
+        function,
+        kind: FsciSpecialErrorKind::DomainError,
+        mode,
+        detail: "fixture argument must be a finite u64 integer",
     })
 }
 
@@ -9345,7 +10137,7 @@ fn special_usize_from_fixture(
     })
 }
 
-fn roots_legendre_component(
+fn roots_component(
     component: Option<&f64>,
     function: &'static str,
     mode: RuntimeMode,
@@ -9354,7 +10146,7 @@ fn roots_legendre_component(
         function,
         kind: FsciSpecialErrorKind::DomainError,
         mode,
-        detail: "roots_legendre fixture index is out of range",
+        detail: "roots fixture index is out of range",
     })
 }
 
