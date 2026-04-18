@@ -15,6 +15,7 @@
 //! - `SmoothBivariateSpline` — Smooth bivariate approximation for scattered 2D data
 
 use fsci_runtime::RuntimeMode;
+use std::collections::HashMap;
 
 /// Interpolation method for `interp1d`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1868,6 +1869,7 @@ pub fn interpn(
 pub struct Delaunay2D {
     pub points: Vec<(f64, f64)>,
     pub simplices: Vec<(usize, usize, usize)>,
+    pub neighbors: Vec<[Option<usize>; 3]>,
 }
 
 impl Delaunay2D {
@@ -1932,12 +1934,16 @@ impl Delaunay2D {
                 triangles.push((p_idx, e0, e1));
             }
         }
+        let simplices = triangles
+            .into_iter()
+            .filter(|&(a, b, c)| a < n && b < n && c < n)
+            .map(|triangle| orient_triangle_ccw(points, triangle))
+            .collect::<Vec<_>>();
+        let neighbors = compute_simplex_neighbors(&simplices);
         Ok(Self {
             points: points.to_vec(),
-            simplices: triangles
-                .into_iter()
-                .filter(|&(a, b, c)| a < n && b < n && c < n)
-                .collect(),
+            simplices,
+            neighbors,
         })
     }
     pub fn find_simplex(&self, query: (f64, f64)) -> Option<(usize, f64, f64, f64)> {
@@ -1949,6 +1955,42 @@ impl Delaunay2D {
         }
         None
     }
+}
+
+fn orient_triangle_ccw(
+    points: &[(f64, f64)],
+    (a, b, c): (usize, usize, usize),
+) -> (usize, usize, usize) {
+    if signed_triangle_area2(points[a], points[b], points[c]) >= 0.0 {
+        (a, b, c)
+    } else {
+        (a, c, b)
+    }
+}
+
+fn signed_triangle_area2(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> f64 {
+    (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+}
+
+fn sorted_edge(a: usize, b: usize) -> (usize, usize) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+
+fn compute_simplex_neighbors(simplices: &[(usize, usize, usize)]) -> Vec<[Option<usize>; 3]> {
+    let mut neighbors = vec![[None; 3]; simplices.len()];
+    let mut edge_owners = HashMap::<(usize, usize), (usize, usize)>::new();
+    for (simplex_index, &(a, b, c)) in simplices.iter().enumerate() {
+        for (local_edge_index, (u, v)) in [(0, (b, c)), (1, (c, a)), (2, (a, b))] {
+            let edge = sorted_edge(u, v);
+            if let Some((other_simplex, other_edge)) =
+                edge_owners.insert(edge, (simplex_index, local_edge_index))
+            {
+                neighbors[simplex_index][local_edge_index] = Some(other_simplex);
+                neighbors[other_simplex][other_edge] = Some(simplex_index);
+            }
+        }
+    }
+    neighbors
 }
 
 fn in_circumcircle(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
@@ -2142,16 +2184,11 @@ impl CloughTocher2DInterpolator {
         let Some((idx, l1, l2, l3)) = self.delaunay.find_simplex(point) else {
             return Ok(self.fill_value);
         };
-        let (a, b, c) = self.delaunay.simplices[idx];
         Ok(clough_tocher_triangle_eval(
-            point,
-            [
-                self.delaunay.points[a],
-                self.delaunay.points[b],
-                self.delaunay.points[c],
-            ],
-            [self.values[a], self.values[b], self.values[c]],
-            [self.gradients[a], self.gradients[b], self.gradients[c]],
+            &self.delaunay,
+            idx,
+            &self.values,
+            &self.gradients,
             [l1, l2, l3],
         ))
     }
@@ -2351,22 +2388,119 @@ fn triangle_plane_gradient(points: [(f64, f64); 3], values: [f64; 3]) -> Option<
 }
 
 fn clough_tocher_triangle_eval(
-    query: (f64, f64),
-    points: [(f64, f64); 3],
-    values: [f64; 3],
-    gradients: [(f64, f64); 3],
+    delaunay: &Delaunay2D,
+    simplex_index: usize,
+    values: &[f64],
+    gradients: &[(f64, f64)],
     bary: [f64; 3],
 ) -> f64 {
-    let linear = bary[0] * values[0] + bary[1] * values[1] + bary[2] * values[2];
-    let mut correction = 0.0;
-    for i in 0..3 {
-        let dx = query.0 - points[i].0;
-        let dy = query.1 - points[i].1;
-        let tangent = values[i] + gradients[i].0 * dx + gradients[i].1 * dy;
-        let weight = bary[i] * bary[i] * (1.0 - bary[i]);
-        correction += weight * (tangent - linear);
+    let (a, b, c) = delaunay.simplices[simplex_index];
+    let points = [delaunay.points[a], delaunay.points[b], delaunay.points[c]];
+    let values = [values[a], values[b], values[c]];
+    let gradients = [gradients[a], gradients[b], gradients[c]];
+
+    let e12 = (points[1].0 - points[0].0, points[1].1 - points[0].1);
+    let e23 = (points[2].0 - points[1].0, points[2].1 - points[1].1);
+    let e31 = (points[0].0 - points[2].0, points[0].1 - points[2].1);
+
+    let f1 = values[0];
+    let f2 = values[1];
+    let f3 = values[2];
+    let df12 = gradients[0].0 * e12.0 + gradients[0].1 * e12.1;
+    let df21 = -(gradients[1].0 * e12.0 + gradients[1].1 * e12.1);
+    let df23 = gradients[1].0 * e23.0 + gradients[1].1 * e23.1;
+    let df32 = -(gradients[2].0 * e23.0 + gradients[2].1 * e23.1);
+    let df31 = gradients[2].0 * e31.0 + gradients[2].1 * e31.1;
+    let df13 = -(gradients[0].0 * e31.0 + gradients[0].1 * e31.1);
+
+    let c3000 = f1;
+    let c2100 = (df12 + 3.0 * c3000) / 3.0;
+    let c2010 = (df13 + 3.0 * c3000) / 3.0;
+    let c0300 = f2;
+    let c1200 = (df21 + 3.0 * c0300) / 3.0;
+    let c0210 = (df23 + 3.0 * c0300) / 3.0;
+    let c0030 = f3;
+    let c1020 = (df31 + 3.0 * c0030) / 3.0;
+    let c0120 = (df32 + 3.0 * c0030) / 3.0;
+
+    let c2001 = (c2100 + c2010 + c3000) / 3.0;
+    let c0201 = (c1200 + c0300 + c0210) / 3.0;
+    let c0021 = (c1020 + c0120 + c0030) / 3.0;
+
+    let mut g = [-0.5; 3];
+    for (k, maybe_neighbor) in delaunay.neighbors[simplex_index].iter().enumerate() {
+        let Some(neighbor_index) = maybe_neighbor else {
+            continue;
+        };
+        let neighbor = delaunay.simplices[*neighbor_index];
+        let neighbor_centroid = triangle_centroid([
+            delaunay.points[neighbor.0],
+            delaunay.points[neighbor.1],
+            delaunay.points[neighbor.2],
+        ]);
+        let c = barycentric(points[0], points[1], points[2], neighbor_centroid);
+        let denom = match k {
+            0 => 2.0 - 3.0 * c.2 - 3.0 * c.1,
+            1 => 2.0 - 3.0 * c.0 - 3.0 * c.2,
+            _ => 2.0 - 3.0 * c.1 - 3.0 * c.0,
+        };
+        if denom.abs() <= 1e-14 {
+            continue;
+        }
+        g[k] = match k {
+            0 => (2.0 * c.2 + c.1 - 1.0) / denom,
+            1 => (2.0 * c.0 + c.2 - 1.0) / denom,
+            _ => (2.0 * c.1 + c.0 - 1.0) / denom,
+        };
     }
-    linear + correction
+
+    let c0111 = (g[0] * (-c0300 + 3.0 * c0210 - 3.0 * c0120 + c0030)
+        + (-c0300 + 2.0 * c0210 - c0120 + c0021 + c0201))
+        / 2.0;
+    let c1011 = (g[1] * (-c0030 + 3.0 * c1020 - 3.0 * c2010 + c3000)
+        + (-c0030 + 2.0 * c1020 - c2010 + c2001 + c0021))
+        / 2.0;
+    let c1101 = (g[2] * (-c3000 + 3.0 * c2100 - 3.0 * c1200 + c0300)
+        + (-c3000 + 2.0 * c2100 - c1200 + c2001 + c0201))
+        / 2.0;
+
+    let c1002 = (c1101 + c1011 + c2001) / 3.0;
+    let c0102 = (c1101 + c0111 + c0201) / 3.0;
+    let c0012 = (c1011 + c0111 + c0021) / 3.0;
+    let c0003 = (c1002 + c0102 + c0012) / 3.0;
+
+    let min_bary = bary[0].min(bary[1]).min(bary[2]);
+    let b1 = bary[0] - min_bary;
+    let b2 = bary[1] - min_bary;
+    let b3 = bary[2] - min_bary;
+    let b4 = 3.0 * min_bary;
+
+    b1.powi(3) * c3000
+        + 3.0 * b1.powi(2) * b2 * c2100
+        + 3.0 * b1.powi(2) * b3 * c2010
+        + 3.0 * b1.powi(2) * b4 * c2001
+        + 3.0 * b1 * b2.powi(2) * c1200
+        + 6.0 * b1 * b2 * b4 * c1101
+        + 3.0 * b1 * b3.powi(2) * c1020
+        + 6.0 * b1 * b3 * b4 * c1011
+        + 3.0 * b1 * b4.powi(2) * c1002
+        + b2.powi(3) * c0300
+        + 3.0 * b2.powi(2) * b3 * c0210
+        + 3.0 * b2.powi(2) * b4 * c0201
+        + 3.0 * b2 * b3.powi(2) * c0120
+        + 6.0 * b2 * b3 * b4 * c0111
+        + 3.0 * b2 * b4.powi(2) * c0102
+        + b3.powi(3) * c0030
+        + 3.0 * b3.powi(2) * b4 * c0021
+        + 3.0 * b3 * b4.powi(2) * c0012
+        + b4.powi(3) * c0003
+}
+
+fn triangle_centroid(points: [(f64, f64); 3]) -> (f64, f64) {
+    (
+        (points[0].0 + points[1].0 + points[2].0) / 3.0,
+        (points[0].1 + points[1].1 + points[2].1) / 3.0,
+    )
 }
 
 // ── RBF Interpolator ─────────────────────────────────────────────────
@@ -3851,8 +3985,11 @@ pub struct SmoothBivariateSpline {
     kx: usize,
     ky: usize,
     bbox: [f64; 4],
+    tx: Vec<f64>,
+    ty: Vec<f64>,
     coeffs: Vec<f64>,
-    powers: Vec<(usize, usize)>,
+    nx_coeffs: usize,
+    ny_coeffs: usize,
     residual: f64,
     smoothing_factor: f64,
 }
@@ -3911,14 +4048,14 @@ impl SmoothBivariateSpline {
             });
         }
 
-        let powers = smooth_bivariate_powers(options.kx, options.ky);
-        let coeffs = smooth_bivariate_fit(SmoothBivariateFit {
+        let fit = smooth_bivariate_fit(SmoothBivariateFit {
             x,
             y,
             z,
             weights: &weights,
             bbox,
-            powers: &powers,
+            kx: options.kx,
+            ky: options.ky,
             smoothing_factor,
             eps: options.eps,
         })?;
@@ -3926,8 +4063,11 @@ impl SmoothBivariateSpline {
             kx: options.kx,
             ky: options.ky,
             bbox,
-            coeffs,
-            powers,
+            tx: fit.tx,
+            ty: fit.ty,
+            coeffs: fit.coeffs,
+            nx_coeffs: fit.nx_coeffs,
+            ny_coeffs: fit.ny_coeffs,
             residual: 0.0,
             smoothing_factor,
         };
@@ -3962,49 +4102,42 @@ impl SmoothBivariateSpline {
     }
 
     pub fn eval_derivative(&self, x: f64, y: f64, dx: usize, dy: usize) -> f64 {
-        let span_x = self.bbox[1] - self.bbox[0];
-        let span_y = self.bbox[3] - self.bbox[2];
-        let ux = (x - self.bbox[0]) / span_x;
-        let uy = (y - self.bbox[2]) / span_y;
-
-        self.coeffs
-            .iter()
-            .zip(self.powers.iter())
-            .filter_map(|(&coeff, &(px, py))| {
-                let x_factor = derivative_power_factor(px, dx)?;
-                let y_factor = derivative_power_factor(py, dy)?;
-                Some(
-                    coeff
-                        * x_factor
-                        * y_factor
-                        * ux.powi((px - dx) as i32)
-                        * uy.powi((py - dy) as i32)
-                        / span_x.powi(dx as i32)
-                        / span_y.powi(dy as i32),
-                )
-            })
-            .sum()
+        self.eval_impl(x, y, dx, dy)
     }
 
     pub fn integral(&self, xa: f64, xb: f64, ya: f64, yb: f64) -> f64 {
-        let span_x = self.bbox[1] - self.bbox[0];
-        let span_y = self.bbox[3] - self.bbox[2];
-        let ua = (xa - self.bbox[0]) / span_x;
-        let ub = (xb - self.bbox[0]) / span_x;
-        let va = (ya - self.bbox[2]) / span_y;
-        let vb = (yb - self.bbox[2]) / span_y;
+        let gauss_points = [
+            -0.906_179_845_938_664,
+            -0.538_469_310_105_683,
+            0.0,
+            0.538_469_310_105_683,
+            0.906_179_845_938_664,
+        ];
+        let gauss_weights = [
+            0.236_926_885_056_189,
+            0.478_628_670_499_366,
+            0.568_888_888_888_889,
+            0.478_628_670_499_366,
+            0.236_926_885_056_189,
+        ];
 
-        self.coeffs
-            .iter()
-            .zip(self.powers.iter())
-            .map(|(&coeff, &(px, py))| {
-                let x_order = (px + 1) as i32;
-                let y_order = (py + 1) as i32;
-                let x_int = span_x * (ub.powi(x_order) - ua.powi(x_order)) / f64::from(x_order);
-                let y_int = span_y * (vb.powi(y_order) - va.powi(y_order)) / f64::from(y_order);
-                coeff * x_int * y_int
-            })
-            .sum()
+        let xmid = (xa + xb) / 2.0;
+        let xscale = (xb - xa) / 2.0;
+        let ymid = (ya + yb) / 2.0;
+        let yscale = (yb - ya) / 2.0;
+
+        let mut result = 0.0;
+        for (i, &gx) in gauss_points.iter().enumerate() {
+            let xi = xmid + xscale * gx;
+            let wx = gauss_weights[i];
+            for (j, &gy) in gauss_points.iter().enumerate() {
+                let yi = ymid + yscale * gy;
+                let wy = gauss_weights[j];
+                result += wx * wy * self.eval(xi, yi);
+            }
+        }
+
+        result * xscale * yscale
     }
 
     pub fn residual(&self) -> f64 {
@@ -4023,8 +4156,38 @@ impl SmoothBivariateSpline {
         self.bbox
     }
 
+    pub fn knots(&self) -> (&[f64], &[f64]) {
+        (&self.tx, &self.ty)
+    }
+
     pub fn coefficients(&self) -> &[f64] {
         &self.coeffs
+    }
+
+    fn eval_impl(&self, x: f64, y: f64, dx: usize, dy: usize) -> f64 {
+        if dx > self.kx || dy > self.ky {
+            return 0.0;
+        }
+
+        let xi = x.clamp(self.bbox[0], self.bbox[1]);
+        let yi = y.clamp(self.bbox[2], self.bbox[3]);
+
+        let mut intermediate = Vec::with_capacity(self.ny_coeffs);
+        for row in self.coeffs.chunks(self.nx_coeffs) {
+            let mut x_spline = BSpline::new(self.tx.clone(), row.to_vec(), self.kx)
+                .expect("x spline construction");
+            for _ in 0..dx {
+                x_spline = x_spline.derivative(1).expect("x derivative");
+            }
+            intermediate.push(x_spline.eval(xi));
+        }
+
+        let mut y_spline =
+            BSpline::new(self.ty.clone(), intermediate, self.ky).expect("y spline construction");
+        for _ in 0..dy {
+            y_spline = y_spline.derivative(1).expect("y derivative");
+        }
+        y_spline.eval(yi)
     }
 
     fn compute_residual(&self, x: &[f64], y: &[f64], z: &[f64], weights: &[f64]) -> f64 {
@@ -4092,44 +4255,202 @@ fn smooth_bivariate_bbox(
     Ok(bbox)
 }
 
-fn smooth_bivariate_powers(kx: usize, ky: usize) -> Vec<(usize, usize)> {
-    let mut powers = Vec::with_capacity((kx + 1) * (ky + 1));
-    for px in 0..=kx {
-        for py in 0..=ky {
-            powers.push((px, py));
-        }
-    }
-    powers
-}
-
 struct SmoothBivariateFit<'a> {
     x: &'a [f64],
     y: &'a [f64],
     z: &'a [f64],
     weights: &'a [f64],
     bbox: [f64; 4],
-    powers: &'a [(usize, usize)],
+    kx: usize,
+    ky: usize,
     smoothing_factor: f64,
     eps: f64,
 }
 
-fn smooth_bivariate_fit(input: SmoothBivariateFit<'_>) -> Result<Vec<f64>, InterpError> {
+struct SmoothBivariateLinearSystem<'a> {
+    x: &'a [f64],
+    y: &'a [f64],
+    z: &'a [f64],
+    weights: &'a [f64],
+    tx: &'a [f64],
+    ty: &'a [f64],
+    kx: usize,
+    ky: usize,
+    smoothing_factor: f64,
+    eps: f64,
+}
+
+struct SmoothBivariateSolution {
+    tx: Vec<f64>,
+    ty: Vec<f64>,
+    coeffs: Vec<f64>,
+    nx_coeffs: usize,
+    ny_coeffs: usize,
+}
+
+fn smooth_bivariate_fit(
+    input: SmoothBivariateFit<'_>,
+) -> Result<SmoothBivariateSolution, InterpError> {
     let SmoothBivariateFit {
         x,
         y,
         z,
         weights,
         bbox,
-        powers,
+        kx,
+        ky,
         smoothing_factor,
         eps,
     } = input;
-    let n_terms = powers.len();
+    let x_support = smooth_bivariate_support(x, bbox[0], bbox[1]);
+    let y_support = smooth_bivariate_support(y, bbox[2], bbox[3]);
+    if x_support.len() < kx + 1 || y_support.len() < ky + 1 {
+        return Err(InterpError::InvalidArgument {
+            detail: format!(
+                "need at least {} distinct x values and {} distinct y values for kx={}, ky={}",
+                kx + 1,
+                ky + 1,
+                kx,
+                ky
+            ),
+        });
+    }
+
+    let (mut nx_coeffs, mut ny_coeffs) =
+        smooth_bivariate_basis_shape(x_support.len(), y_support.len(), x.len(), kx, ky);
+
+    loop {
+        let tx = smooth_bivariate_knots(&x_support, kx, nx_coeffs);
+        let ty = smooth_bivariate_knots(&y_support, ky, ny_coeffs);
+        match smooth_bivariate_solve_coefficients(SmoothBivariateLinearSystem {
+            x,
+            y,
+            z,
+            weights,
+            tx: &tx,
+            ty: &ty,
+            kx,
+            ky,
+            smoothing_factor,
+            eps,
+        }) {
+            Ok(coeffs) => {
+                return Ok(SmoothBivariateSolution {
+                    tx,
+                    ty,
+                    coeffs,
+                    nx_coeffs,
+                    ny_coeffs,
+                });
+            }
+            Err(err) => {
+                let can_reduce_x = nx_coeffs > kx + 1;
+                let can_reduce_y = ny_coeffs > ky + 1;
+                if !can_reduce_x && !can_reduce_y {
+                    return Err(err);
+                }
+                if can_reduce_x && (!can_reduce_y || nx_coeffs >= ny_coeffs) {
+                    nx_coeffs -= 1;
+                } else {
+                    ny_coeffs -= 1;
+                }
+            }
+        }
+    }
+}
+
+fn smooth_bivariate_support(values: &[f64], lower: f64, upper: f64) -> Vec<f64> {
+    let mut support = values.to_vec();
+    support.push(lower);
+    support.push(upper);
+    support.sort_by(f64::total_cmp);
+    support.dedup_by(|a, b| a.total_cmp(b).is_eq());
+    support
+}
+
+fn smooth_bivariate_basis_shape(
+    x_support: usize,
+    y_support: usize,
+    samples: usize,
+    kx: usize,
+    ky: usize,
+) -> (usize, usize) {
+    let min_x = kx + 1;
+    let min_y = ky + 1;
+    let max_x = x_support.min(samples / min_y).max(min_x);
+    let max_y = y_support.min(samples / min_x).max(min_y);
+    let aspect = (x_support as f64 / y_support as f64).ln();
+    let mut best = (min_x, min_y, 0usize, f64::INFINITY);
+
+    for nx in min_x..=max_x {
+        for ny in min_y..=max_y {
+            let coeff_count = nx * ny;
+            if coeff_count > samples {
+                continue;
+            }
+            let aspect_error = ((nx as f64 / ny as f64).ln() - aspect).abs();
+            if coeff_count > best.2 || (coeff_count == best.2 && aspect_error < best.3) {
+                best = (nx, ny, coeff_count, aspect_error);
+            }
+        }
+    }
+
+    (best.0, best.1)
+}
+
+fn smooth_bivariate_knots(support: &[f64], degree: usize, n_coeffs: usize) -> Vec<f64> {
+    let mut knots = Vec::with_capacity(n_coeffs + degree + 1);
+    for _ in 0..=degree {
+        knots.push(support[0]);
+    }
+
+    let num_interior = n_coeffs.saturating_sub(degree + 1);
+    if num_interior > 0 {
+        let last_interior = support.len().saturating_sub(2);
+        for i in 0..num_interior {
+            let idx =
+                (((i + 1) * (support.len() - 1)) / (num_interior + 1)).clamp(1, last_interior);
+            knots.push(support[idx]);
+        }
+    }
+
+    for _ in 0..=degree {
+        knots.push(*support.last().expect("non-empty support"));
+    }
+    knots
+}
+
+fn smooth_bivariate_solve_coefficients(
+    system: SmoothBivariateLinearSystem<'_>,
+) -> Result<Vec<f64>, InterpError> {
+    let SmoothBivariateLinearSystem {
+        x,
+        y,
+        z,
+        weights,
+        tx,
+        ty,
+        kx,
+        ky,
+        smoothing_factor,
+        eps,
+    } = system;
+    let nx_coeffs = tx.len() - kx - 1;
+    let ny_coeffs = ty.len() - ky - 1;
+    let n_terms = nx_coeffs * ny_coeffs;
     let mut ata = vec![vec![0.0; n_terms]; n_terms];
     let mut atz = vec![0.0; n_terms];
 
     for ((&xv, &yv), (&zv, &weight)) in x.iter().zip(y).zip(z.iter().zip(weights)) {
-        let basis = smooth_bivariate_basis(xv, yv, bbox, powers);
+        let bx = eval_basis_all(tx, xv, kx, nx_coeffs);
+        let by = eval_basis_all(ty, yv, ky, ny_coeffs);
+        let mut basis = vec![0.0; n_terms];
+        for (iy, &by_val) in by.iter().enumerate() {
+            for (ix, &bx_val) in bx.iter().enumerate() {
+                basis[iy * nx_coeffs + ix] = bx_val * by_val;
+            }
+        }
+
         let weight_sq = weight * weight;
         for row in 0..n_terms {
             atz[row] += weight_sq * basis[row] * zv;
@@ -4152,32 +4473,33 @@ fn smooth_bivariate_fit(input: SmoothBivariateFit<'_>) -> Result<Vec<f64>, Inter
     } else {
         0.0
     };
-    for (index, &(px, py)) in powers.iter().enumerate() {
-        let order = px + py;
-        ata[index][index] += eps;
-        if order > 0 {
-            ata[index][index] += lambda * (order * order) as f64;
+
+    for (idx, row) in ata.iter_mut().enumerate() {
+        row[idx] += eps;
+    }
+    if lambda > 0.0 {
+        for iy in 0..ny_coeffs {
+            for ix in 0..nx_coeffs {
+                let idx = iy * nx_coeffs + ix;
+                if ix + 1 < nx_coeffs {
+                    let right = idx + 1;
+                    ata[idx][idx] += lambda;
+                    ata[right][right] += lambda;
+                    ata[idx][right] -= lambda;
+                    ata[right][idx] -= lambda;
+                }
+                if iy + 1 < ny_coeffs {
+                    let down = idx + nx_coeffs;
+                    ata[idx][idx] += lambda;
+                    ata[down][down] += lambda;
+                    ata[idx][down] -= lambda;
+                    ata[down][idx] -= lambda;
+                }
+            }
         }
     }
 
     solve_dense_system(&mut ata, &mut atz)
-}
-
-fn smooth_bivariate_basis(x: f64, y: f64, bbox: [f64; 4], powers: &[(usize, usize)]) -> Vec<f64> {
-    let ux = (x - bbox[0]) / (bbox[1] - bbox[0]);
-    let uy = (y - bbox[2]) / (bbox[3] - bbox[2]);
-    powers
-        .iter()
-        .map(|&(px, py)| ux.powi(px as i32) * uy.powi(py as i32))
-        .collect()
-}
-
-fn derivative_power_factor(power: usize, derivative: usize) -> Option<f64> {
-    if derivative > power {
-        return None;
-    }
-    let factor = (0..derivative).fold(1.0, |acc, step| acc * (power - step) as f64);
-    Some(factor)
 }
 
 #[cfg(test)]
@@ -4444,6 +4766,40 @@ mod tests {
                 "{query:?}: {got} vs {expected}"
             );
         }
+    }
+
+    #[test]
+    fn clough_tocher_matches_vertex_gradients_at_interior_sites() {
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![-1.0, 0.0],
+            vec![0.0, -1.0],
+            vec![1.0, 1.0],
+            vec![-1.0, -1.0],
+        ];
+        let values = points
+            .iter()
+            .map(|point| point[0] * point[0] + point[0] * point[1] + point[1] * point[1])
+            .collect::<Vec<_>>();
+        let interp = CloughTocher2DInterpolator::new(&points, &values).expect("clough-tocher");
+
+        let eps = 1e-6;
+        let d_dx = (interp.eval(&[eps, 0.0]).expect("+x") - interp.eval(&[-eps, 0.0]).expect("-x"))
+            / (2.0 * eps);
+        let d_dy = (interp.eval(&[0.0, eps]).expect("+y") - interp.eval(&[0.0, -eps]).expect("-y"))
+            / (2.0 * eps);
+        let (gx, gy) = interp.gradients[0];
+
+        assert!(
+            (d_dx - gx).abs() < 1e-4,
+            "x-derivative mismatch: finite-difference {d_dx}, stored gradient {gx}"
+        );
+        assert!(
+            (d_dy - gy).abs() < 1e-4,
+            "y-derivative mismatch: finite-difference {d_dy}, stored gradient {gy}"
+        );
     }
 
     #[test]
@@ -5019,6 +5375,39 @@ mod tests {
         assert!(spline.residual() < 1e-18, "residual={}", spline.residual());
         assert_eq!(spline.degrees(), (1, 1));
         assert_eq!(spline.bbox(), [0.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn smooth_bivariate_spline_builds_piecewise_surface() {
+        let x = vec![0.0, 0.5, 1.0, 0.0, 0.5, 1.0, 0.0, 0.5, 1.0];
+        let y = vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0];
+        let z: Vec<f64> = x
+            .iter()
+            .zip(&y)
+            .map(|(&xv, &yv)| (xv - 0.5_f64).abs() + (yv - 0.5_f64).abs())
+            .collect();
+        let options = SmoothBivariateSplineOptions {
+            kx: 1,
+            ky: 1,
+            smoothing: Some(0.0),
+            ..SmoothBivariateSplineOptions::default()
+        };
+        let spline = SmoothBivariateSpline::new(&x, &y, &z, options).expect("piecewise surface");
+
+        let value = spline.eval(0.25, 0.75);
+        assert!((value - 0.5).abs() < 1e-10, "value={value}");
+
+        let integral = spline.integral(0.0, 1.0, 0.0, 1.0);
+        assert!((integral - 0.5).abs() < 3e-2, "integral={integral}");
+
+        let (tx, ty) = spline.knots();
+        assert!(tx.len() > 2 * (spline.kx + 1), "tx={tx:?}");
+        assert!(ty.len() > 2 * (spline.ky + 1), "ty={ty:?}");
+        assert!(
+            spline.coefficients().len() > (spline.kx + 1) * (spline.ky + 1),
+            "coeff_count={}",
+            spline.coefficients().len()
+        );
     }
 
     #[test]
