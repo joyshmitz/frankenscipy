@@ -3394,10 +3394,10 @@ mod tests {
         ];
         let err = HalfspaceIntersection::new(&halfspaces, (0.0, 0.5))
             .expect_err("boundary feasible point");
-        match err {
-            SpatialError::Qhull(qhull) => assert!(qhull.message().contains("QH6023")),
-            other => panic!("expected QhullError, got {other:?}"),
-        }
+        assert!(matches!(
+            err,
+            SpatialError::Qhull(ref qhull) if qhull.message().contains("QH6023")
+        ));
     }
 
     #[test]

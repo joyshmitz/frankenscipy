@@ -98,20 +98,18 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ### fsci-interpolate (75% coverage)
 
-**Implemented:** Interp1d (linear, nearest, cubic spline), CubicSpline (with boundary conditions), PchipInterpolator, Akima1DInterpolator, BSpline, make_interp_spline, make_lsq_spline, RegularGridInterpolator, NearestNDInterpolator, LinearNDInterpolator, BarycentricInterpolator, UnivariateSpline, InterpolatedUnivariateSpline, interpn, griddata, RBFInterpolator, KroghInterpolator, Delaunay2D, PPoly, splrep, splev, splder, splantider, splint, sproot, interp2d, lagrange, polyfit, polyval, pade, ratval, polymul, polyadd, polysub, polyder, polyint, polyroots, chebyshev_nodes, barycentric_eval, neville, hermite_interp
+**Implemented:** Interp1d (linear, nearest, cubic spline), CubicSpline (with boundary conditions), PchipInterpolator, Akima1DInterpolator, BSpline, make_interp_spline, make_lsq_spline, RegularGridInterpolator, NearestNDInterpolator, LinearNDInterpolator, CloughTocher2DInterpolator, BarycentricInterpolator, UnivariateSpline, InterpolatedUnivariateSpline, interpn, griddata, RBFInterpolator, KroghInterpolator, Delaunay2D, PPoly, splrep, splev, splder, splantider, splint, sproot, interp2d, lagrange, polyfit, polyval, pade, ratval, polymul, polyadd, polysub, polyder, polyint, polyroots, chebyshev_nodes, barycentric_eval, neville, hermite_interp
 
 **Missing (LOW priority):**
 - 2D: `RectBivariateSpline`, `SmoothBivariateSpline`
-- `CloughTocher2DInterpolator`
 
-### fsci-spatial (85% coverage)
+### fsci-spatial (90% coverage)
 
-**Implemented:** KDTree (query, query_k, query_ball_point, query_ball_tree, count_neighbors, sparse_distance_matrix), euclidean, sqeuclidean, cityblock, chebyshev, cosine, minkowski, correlation, hamming, jaccard, canberra, braycurtis, mahalanobis, seuclidean, wminkowski, pdist, squareform_to_matrix, squareform_to_condensed, cdist, cdist_metric, distance_matrix, directed_hausdorff, hausdorff_distance, ConvexHull, Delaunay, Voronoi, SphericalVoronoi, procrustes, geometric_slerp, boolean metrics (yule, dice, kulsinski, rogerstanimoto, russellrao, sokalmichener, sokalsneath, matching), coordinate transforms (spherical, cylindrical), rotation_matrix, nearest_neighbors, k_nearest_neighbors, centroid, medoid, diameter, spread, Rectangle
+**Implemented:** KDTree (query, query_k, query_ball_point, query_ball_tree, count_neighbors, sparse_distance_matrix), euclidean, sqeuclidean, cityblock, chebyshev, cosine, minkowski, correlation, hamming, jaccard, canberra, braycurtis, mahalanobis, seuclidean, wminkowski, pdist, squareform_to_matrix, squareform_to_condensed, cdist, cdist_metric, distance_matrix, directed_hausdorff, hausdorff_distance, ConvexHull, Delaunay, Voronoi, SphericalVoronoi, HalfspaceIntersection (2D), QhullError, procrustes, geometric_slerp, boolean metrics (yule, dice, kulsinski, rogerstanimoto, russellrao, sokalmichener, sokalsneath, matching), coordinate transforms (spherical, cylindrical), rotation_matrix, nearest_neighbors, k_nearest_neighbors, centroid, medoid, diameter, spread, Rectangle
 
 **Missing (LOW priority):**
 - `cKDTree` (C-accelerated KDTree variant, already fast in Rust)
-- ~~`Rectangle`~~ ✓ Already implemented, `HalfspaceIntersection`
-- `QhullError` exception hierarchy
+- ~~`Rectangle`~~ ✓ Already implemented
 
 ## Packet Readiness Snapshot
 
