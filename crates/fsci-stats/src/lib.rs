@@ -10289,11 +10289,11 @@ pub fn combine_pvalues(
         }
         "pearson" => {
             let statistic = if pvalues.contains(&1.0) {
-                f64::INFINITY
+                f64::NEG_INFINITY
             } else {
-                -2.0 * pvalues.iter().map(|&p| (1.0 - p).ln()).sum::<f64>()
+                2.0 * pvalues.iter().map(|&p| (1.0 - p).ln()).sum::<f64>()
             };
-            let pvalue = ChiSquared::new(2.0 * k).cdf(statistic).clamp(0.0, 1.0);
+            let pvalue = ChiSquared::new(2.0 * k).cdf(-statistic).clamp(0.0, 1.0);
             GoodnessOfFitResult { statistic, pvalue }
         }
         "tippett" => {
@@ -10834,14 +10834,25 @@ pub fn zscore_ddof(data: &[f64], ddof: usize) -> Vec<f64> {
 /// Compute the expected value of the order statistic for the normal distribution.
 ///
 /// Used in probability plots (Q-Q plots).
-/// Matches `scipy.stats.probplot` (partially).
+/// Matches the Filliben order-statistic medians used by `scipy.stats.probplot`.
 pub fn probplot_quantiles(n: usize) -> Vec<f64> {
+    if n == 0 {
+        return vec![];
+    }
+
     let normal = Normal::standard();
-    (0..n)
-        .map(|i| {
-            let p = (i as f64 + 0.5) / n as f64;
-            normal.ppf(p)
-        })
+    let mut probabilities = vec![0.0; n];
+    let tail = 0.5_f64.powf(1.0 / n as f64);
+    probabilities[0] = 1.0 - tail;
+    probabilities[n - 1] = tail;
+    for (idx, probability) in probabilities.iter_mut().enumerate().take(n - 1).skip(1) {
+        let order = idx as f64 + 1.0;
+        *probability = (order - 0.3175) / (n as f64 + 0.365);
+    }
+
+    probabilities
+        .into_iter()
+        .map(|probability| normal.ppf(probability))
         .collect()
 }
 
@@ -14227,6 +14238,36 @@ mod tests {
         assert!(negative.iter().all(|&value| value.is_nan()));
     }
 
+    #[test]
+    fn probplot_quantiles_match_filliben_reference_probabilities() {
+        let normal = Normal::standard();
+        let quantiles = probplot_quantiles(4);
+        let probabilities: Vec<f64> = quantiles.iter().map(|&value| normal.cdf(value)).collect();
+        let expected = [0.159_103_58, 0.385_452_46, 0.614_547_54, 0.840_896_42];
+
+        for (idx, (&got, &want)) in probabilities.iter().zip(&expected).enumerate() {
+            assert_close(got, want, 2e-8, &format!("probplot probability[{idx}]"));
+        }
+    }
+
+    #[test]
+    fn probplot_quantiles_preserve_normal_symmetry_for_odd_sample_size() {
+        let quantiles = probplot_quantiles(5);
+        assert_close(quantiles[2], 0.0, 1e-12, "probplot median order statistic");
+        assert_close(
+            quantiles[0] + quantiles[4],
+            0.0,
+            1e-12,
+            "probplot endpoint symmetry",
+        );
+        assert_close(
+            quantiles[1] + quantiles[3],
+            0.0,
+            1e-12,
+            "probplot interior symmetry",
+        );
+    }
+
     // ── Discrete distributions ────────────────────────────────────
 
     #[test]
@@ -17289,6 +17330,24 @@ mod tests {
             expected_pvalue,
             1e-12,
             "combine_pvalues fisher pvalue",
+        );
+    }
+
+    #[test]
+    fn combine_pvalues_pearson_matches_scipy_reference() {
+        let pvalues = [0.01, 0.03, 0.2];
+        let result = combine_pvalues(&pvalues, Some("pearson"), None).expect("pearson");
+        assert_close(
+            result.statistic,
+            -0.527_306_189_304_839_5,
+            1e-12,
+            "combine_pvalues pearson statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.002_509_830_550_904_323_7,
+            1e-12,
+            "combine_pvalues pearson pvalue",
         );
     }
 
