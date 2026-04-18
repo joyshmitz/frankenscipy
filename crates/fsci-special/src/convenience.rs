@@ -1140,21 +1140,12 @@ pub fn bei(x: f64) -> f64 {
     // And: imag parts at n=1: -1, n=3: 1, n=5: -1, n=7: 1, ...
     //
     // ber(x) = 1 - (x/2)^4/(2!)^2 + (x/2)^8/(4!)^2 - ... = Σ_{k=0} (-1)^k (x/2)^{4k} / ((2k)!)^2
-    // bei(x) = -(x/2)^2/(1!)^2 + (x/2)^6/(3!)^2 - ... = Σ_{k=0} (-1)^{k+1} (x/2)^{4k+2} / ((2k+1)!)^2
-    //
-    // Wait that gives bei with a leading negative. Let me reconsider.
-    // Actually: (-1)^1 * e^{jπ/2} = (-1)(j) = -j. The imaginary part is -1.
-    // (-1)^3 * e^{j3π/2} = (-1)(-j) = j. The imaginary part is +1.
-    //
-    // bei(x) = Σ_{n odd} (-1)^n (x/2)^{2n} / (n!)^2 * sin(nπ/2)
-    // n=1: (-1)^1 * (x/2)^2 / 1 * sin(π/2) = -(x/2)^2
-    // n=3: (-1)^3 * (x/2)^6 / 36 * sin(3π/2) = -(x/2)^6/36 * (-1) = (x/2)^6/36
-    //
-    // So bei(x) = -(x/2)^2 + (x/2)^6/36 - (x/2)^{10}/(5!)^2 + ...
-    //           = Σ_{k=0} (-1)^{k+1} (x/2)^{4k+2} / ((2k+1)!)^2
+    // scipy.special.bei uses the positive-leading Kelvin convention:
+    // bei(x) = (x/2)^2 - (x/2)^6/(3!)^2 + (x/2)^10/(5!)^2 - ...
+    //        = Σ (-1)^k (x/2)^{4k+2} / ((2k+1)!)^2
 
     let x2 = x * x / 4.0; // (x/2)^2
-    let mut term = -x2; // first term: -(x/2)^2
+    let mut term = x2;
     let mut sum = term;
     for k in 1..50 {
         // Ratio: next/current = -(x/2)^4 / ((2k+1) * (2k))^2 ... let me compute:
@@ -1244,7 +1235,7 @@ pub fn kei(x: f64) -> f64 {
         correction += term * harmonic;
     }
 
-    -(ln_x2 + gamma_em) * bei_x - (std::f64::consts::PI / 4.0) * ber_x + correction
+    -(ln_x2 + gamma_em) * bei_x - (std::f64::consts::PI / 4.0) * ber_x - correction
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3845,6 +3836,14 @@ pub fn binary_cross_entropy(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kelvin_functions_match_scipy_reference_points() {
+        assert!((ber(1.0) - 0.984_381_781_213_087).abs() < 1e-12);
+        assert!((bei(1.0) - 0.249_566_040_036_659_72).abs() < 1e-12);
+        assert!((ker(1.0) - 0.286_706_208_728_316_04).abs() < 1e-10);
+        assert!((kei(1.0) - (-0.494_994_636_518_72)).abs() < 1e-10);
+    }
 
     #[test]
     fn kolmogorov_basic() {
