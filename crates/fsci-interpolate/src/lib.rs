@@ -12,6 +12,7 @@
 //! - `NearestNDInterpolator` — Nearest-neighbor for scattered N-D data
 //! - `LinearNDInterpolator` — Linear interpolation for scattered 2D data
 //! - `CloughTocher2DInterpolator` — Smooth scattered 2D interpolation
+//! - `SmoothBivariateSpline` — Smooth bivariate approximation for scattered 2D data
 
 use fsci_runtime::RuntimeMode;
 
@@ -3475,7 +3476,7 @@ pub fn polyval_with_error(coeffs: &[f64], x: f64) -> (f64, f64) {
 ///
 /// Matches `scipy.interpolate.RectBivariateSpline`.
 ///
-/// Given 1-D arrays `x` and `y` and a 2-D array `z` of shape `(len(y), len(x))`,
+/// Given 1-D arrays `x` and `y` and a 2-D array `z` of shape `(len(x), len(y))`,
 /// constructs a spline that can be evaluated at arbitrary points.
 ///
 /// # Example
@@ -3484,9 +3485,10 @@ pub fn polyval_with_error(coeffs: &[f64], x: f64) -> (f64, f64) {
 /// let x = vec![0.0, 1.0, 2.0, 3.0];
 /// let y = vec![0.0, 1.0, 2.0];
 /// let z = vec![
-///     vec![0.0, 1.0, 2.0, 3.0],
-///     vec![1.0, 2.0, 3.0, 4.0],
-///     vec![2.0, 3.0, 4.0, 5.0],
+///     vec![0.0, 1.0, 2.0],
+///     vec![1.0, 2.0, 3.0],
+///     vec![2.0, 3.0, 4.0],
+///     vec![3.0, 4.0, 5.0],
 /// ];
 /// let spline = RectBivariateSpline::new(&x, &y, &z, 3, 3).unwrap();
 /// let val = spline.eval(1.5, 0.5);
@@ -3515,7 +3517,7 @@ impl RectBivariateSpline {
     /// # Arguments
     /// * `x` - 1-D array of x coordinates (must be strictly increasing)
     /// * `y` - 1-D array of y coordinates (must be strictly increasing)
-    /// * `z` - 2-D array of values, shape `(len(y), len(x))`
+    /// * `z` - 2-D array of values, shape `(len(x), len(y))`
     /// * `kx` - Spline degree in x direction (1 <= kx <= 5, typically 3)
     /// * `ky` - Spline degree in y direction (1 <= ky <= 5, typically 3)
     pub fn new(
@@ -3535,19 +3537,19 @@ impl RectBivariateSpline {
                 actual: nx.min(ny),
             });
         }
-        if z.len() != ny {
+        if z.len() != nx {
             return Err(InterpError::InvalidArgument {
-                detail: format!("z has {} rows but y has {} points", z.len(), ny),
+                detail: format!("z has {} rows but x has {} points", z.len(), nx),
             });
         }
         for (i, row) in z.iter().enumerate() {
-            if row.len() != nx {
+            if row.len() != ny {
                 return Err(InterpError::InvalidArgument {
                     detail: format!(
-                        "z row {} has {} columns but x has {} points",
+                        "z row {} has {} columns but y has {} points",
                         i,
                         row.len(),
-                        nx
+                        ny
                     ),
                 });
             }
@@ -3594,8 +3596,14 @@ impl RectBivariateSpline {
         let tx = interpolation_knots(x, kx);
         let ty = interpolation_knots(y, ky);
 
+        // SciPy accepts z as shape (len(x), len(y)). The coefficient code works
+        // row-by-row along x for each y, so transpose to that internal layout.
+        let z_by_y: Vec<Vec<f64>> = (0..ny)
+            .map(|j| (0..nx).map(|i| z[i][j]).collect())
+            .collect();
+
         // Compute spline coefficients using tensor product approach
-        let coeffs = Self::compute_coefficients(x, y, z, kx, ky)?;
+        let coeffs = Self::compute_coefficients(x, y, &z_by_y, kx, ky)?;
 
         Ok(Self {
             kx,
@@ -3671,10 +3679,10 @@ impl RectBivariateSpline {
 
     /// Evaluate the spline on a grid and return a 2D array.
     ///
-    /// Returns values at all combinations of xi and yi, shape `(len(yi), len(xi))`.
+    /// Returns values at all combinations of xi and yi, shape `(len(xi), len(yi))`.
     pub fn eval_grid(&self, xi: &[f64], yi: &[f64]) -> Vec<Vec<f64>> {
-        yi.iter()
-            .map(|&yv| xi.iter().map(|&xv| self.eval(xv, yv)).collect())
+        xi.iter()
+            .map(|&xv| yi.iter().map(|&yv| self.eval(xv, yv)).collect())
             .collect()
     }
 
@@ -3793,6 +3801,383 @@ pub fn rect_bilinear_spline(
     z: &[Vec<f64>],
 ) -> Result<RectBivariateSpline, InterpError> {
     RectBivariateSpline::new(x, y, z, 1, 1)
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SmoothBivariateSpline — smooth approximation over scattered 2D samples
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Options for [`SmoothBivariateSpline`].
+///
+/// The fields mirror the SciPy constructor surface:
+/// `w`, `bbox`, `kx`, `ky`, `s`, and `eps`.
+#[derive(Debug, Clone)]
+pub struct SmoothBivariateSplineOptions {
+    /// Positive sample weights. Defaults to unit weights.
+    pub weights: Option<Vec<f64>>,
+    /// Approximation domain `[xmin, xmax, ymin, ymax]`.
+    pub bbox: Option<[f64; 4]>,
+    /// Degree in the x direction.
+    pub kx: usize,
+    /// Degree in the y direction.
+    pub ky: usize,
+    /// Non-negative smoothing factor. Defaults to the number of samples.
+    pub smoothing: Option<f64>,
+    /// Rank threshold/regularization floor. Must lie in `(0, 1)`.
+    pub eps: f64,
+}
+
+impl Default for SmoothBivariateSplineOptions {
+    fn default() -> Self {
+        Self {
+            weights: None,
+            bbox: None,
+            kx: 3,
+            ky: 3,
+            smoothing: None,
+            eps: 1e-16,
+        }
+    }
+}
+
+/// Smooth bivariate approximation over scattered `(x, y, z)` samples.
+///
+/// This implements the scoped `scipy.interpolate.SmoothBivariateSpline`
+/// contract used by FrankenSciPy: scattered samples, optional positive
+/// weights, automatic bounding box, configurable degrees, callable evaluation,
+/// grid evaluation, derivatives, integral, and residual reporting.
+#[derive(Debug, Clone)]
+pub struct SmoothBivariateSpline {
+    kx: usize,
+    ky: usize,
+    bbox: [f64; 4],
+    coeffs: Vec<f64>,
+    powers: Vec<(usize, usize)>,
+    residual: f64,
+    smoothing_factor: f64,
+}
+
+impl SmoothBivariateSpline {
+    pub fn new(
+        x: &[f64],
+        y: &[f64],
+        z: &[f64],
+        options: SmoothBivariateSplineOptions,
+    ) -> Result<Self, InterpError> {
+        let n = x.len();
+        if y.len() != n {
+            return Err(InterpError::LengthMismatch {
+                x_len: n,
+                y_len: y.len(),
+            });
+        }
+        if z.len() != n {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("z must have same length as x and y, got {}", z.len()),
+            });
+        }
+        if !(1..=5).contains(&options.kx) || !(1..=5).contains(&options.ky) {
+            return Err(InterpError::InvalidArgument {
+                detail: format!(
+                    "spline degree must be 1-5, got kx={}, ky={}",
+                    options.kx, options.ky
+                ),
+            });
+        }
+        let min_points = (options.kx + 1) * (options.ky + 1);
+        if n < min_points {
+            return Err(InterpError::TooFewPoints {
+                minimum: min_points,
+                actual: n,
+            });
+        }
+        if !(0.0..1.0).contains(&options.eps) {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("eps must lie in (0, 1), got {}", options.eps),
+            });
+        }
+        if !x.iter().chain(y).chain(z).all(|value| value.is_finite()) {
+            return Err(InterpError::InvalidArgument {
+                detail: "x, y, and z values must be finite".to_string(),
+            });
+        }
+
+        let weights = smooth_bivariate_weights(n, options.weights.as_deref())?;
+        let bbox = smooth_bivariate_bbox(x, y, options.bbox)?;
+        let smoothing_factor = options.smoothing.unwrap_or(n as f64);
+        if !smoothing_factor.is_finite() || smoothing_factor < 0.0 {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("smoothing factor must be non-negative, got {smoothing_factor}"),
+            });
+        }
+
+        let powers = smooth_bivariate_powers(options.kx, options.ky);
+        let coeffs = smooth_bivariate_fit(SmoothBivariateFit {
+            x,
+            y,
+            z,
+            weights: &weights,
+            bbox,
+            powers: &powers,
+            smoothing_factor,
+            eps: options.eps,
+        })?;
+        let mut spline = Self {
+            kx: options.kx,
+            ky: options.ky,
+            bbox,
+            coeffs,
+            powers,
+            residual: 0.0,
+            smoothing_factor,
+        };
+        spline.residual = spline.compute_residual(x, y, z, &weights);
+        Ok(spline)
+    }
+
+    pub fn eval(&self, x: f64, y: f64) -> f64 {
+        self.eval_derivative(x, y, 0, 0)
+    }
+
+    pub fn eval_many(&self, x: &[f64], y: &[f64]) -> Result<Vec<f64>, InterpError> {
+        if x.len() != y.len() {
+            return Err(InterpError::InvalidArgument {
+                detail: format!(
+                    "x and y must have same length, got {} and {}",
+                    x.len(),
+                    y.len()
+                ),
+            });
+        }
+        Ok(x.iter()
+            .zip(y)
+            .map(|(&xv, &yv)| self.eval(xv, yv))
+            .collect())
+    }
+
+    pub fn eval_grid(&self, x: &[f64], y: &[f64]) -> Vec<Vec<f64>> {
+        x.iter()
+            .map(|&xv| y.iter().map(|&yv| self.eval(xv, yv)).collect())
+            .collect()
+    }
+
+    pub fn eval_derivative(&self, x: f64, y: f64, dx: usize, dy: usize) -> f64 {
+        let span_x = self.bbox[1] - self.bbox[0];
+        let span_y = self.bbox[3] - self.bbox[2];
+        let ux = (x - self.bbox[0]) / span_x;
+        let uy = (y - self.bbox[2]) / span_y;
+
+        self.coeffs
+            .iter()
+            .zip(self.powers.iter())
+            .filter_map(|(&coeff, &(px, py))| {
+                let x_factor = derivative_power_factor(px, dx)?;
+                let y_factor = derivative_power_factor(py, dy)?;
+                Some(
+                    coeff
+                        * x_factor
+                        * y_factor
+                        * ux.powi((px - dx) as i32)
+                        * uy.powi((py - dy) as i32)
+                        / span_x.powi(dx as i32)
+                        / span_y.powi(dy as i32),
+                )
+            })
+            .sum()
+    }
+
+    pub fn integral(&self, xa: f64, xb: f64, ya: f64, yb: f64) -> f64 {
+        let span_x = self.bbox[1] - self.bbox[0];
+        let span_y = self.bbox[3] - self.bbox[2];
+        let ua = (xa - self.bbox[0]) / span_x;
+        let ub = (xb - self.bbox[0]) / span_x;
+        let va = (ya - self.bbox[2]) / span_y;
+        let vb = (yb - self.bbox[2]) / span_y;
+
+        self.coeffs
+            .iter()
+            .zip(self.powers.iter())
+            .map(|(&coeff, &(px, py))| {
+                let x_order = (px + 1) as i32;
+                let y_order = (py + 1) as i32;
+                let x_int = span_x * (ub.powi(x_order) - ua.powi(x_order)) / f64::from(x_order);
+                let y_int = span_y * (vb.powi(y_order) - va.powi(y_order)) / f64::from(y_order);
+                coeff * x_int * y_int
+            })
+            .sum()
+    }
+
+    pub fn residual(&self) -> f64 {
+        self.residual
+    }
+
+    pub fn smoothing_factor(&self) -> f64 {
+        self.smoothing_factor
+    }
+
+    pub fn degrees(&self) -> (usize, usize) {
+        (self.kx, self.ky)
+    }
+
+    pub fn bbox(&self) -> [f64; 4] {
+        self.bbox
+    }
+
+    pub fn coefficients(&self) -> &[f64] {
+        &self.coeffs
+    }
+
+    fn compute_residual(&self, x: &[f64], y: &[f64], z: &[f64], weights: &[f64]) -> f64 {
+        x.iter()
+            .zip(y)
+            .zip(z)
+            .zip(weights)
+            .map(|(((&xv, &yv), &zv), &weight)| {
+                let diff = weight * (zv - self.eval(xv, yv));
+                diff * diff
+            })
+            .sum()
+    }
+}
+
+pub fn smooth_bivariate_spline(
+    x: &[f64],
+    y: &[f64],
+    z: &[f64],
+) -> Result<SmoothBivariateSpline, InterpError> {
+    SmoothBivariateSpline::new(x, y, z, SmoothBivariateSplineOptions::default())
+}
+
+fn smooth_bivariate_weights(n: usize, weights: Option<&[f64]>) -> Result<Vec<f64>, InterpError> {
+    match weights {
+        Some(values) => {
+            if values.len() != n {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!("weights must have length {n}, got {}", values.len()),
+                });
+            }
+            if values
+                .iter()
+                .any(|&value| !value.is_finite() || value <= 0.0)
+            {
+                return Err(InterpError::InvalidArgument {
+                    detail: "weights must be positive and finite".to_string(),
+                });
+            }
+            Ok(values.to_vec())
+        }
+        None => Ok(vec![1.0; n]),
+    }
+}
+
+fn smooth_bivariate_bbox(
+    x: &[f64],
+    y: &[f64],
+    bbox: Option<[f64; 4]>,
+) -> Result<[f64; 4], InterpError> {
+    let bbox = match bbox {
+        Some(value) => value,
+        None => [
+            x.iter().copied().fold(f64::INFINITY, f64::min),
+            x.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            y.iter().copied().fold(f64::INFINITY, f64::min),
+            y.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        ],
+    };
+    if !bbox.iter().all(|value| value.is_finite()) || bbox[0] >= bbox[1] || bbox[2] >= bbox[3] {
+        return Err(InterpError::InvalidArgument {
+            detail: "bbox must be finite [xmin, xmax, ymin, ymax] with min < max".to_string(),
+        });
+    }
+    Ok(bbox)
+}
+
+fn smooth_bivariate_powers(kx: usize, ky: usize) -> Vec<(usize, usize)> {
+    let mut powers = Vec::with_capacity((kx + 1) * (ky + 1));
+    for px in 0..=kx {
+        for py in 0..=ky {
+            powers.push((px, py));
+        }
+    }
+    powers
+}
+
+struct SmoothBivariateFit<'a> {
+    x: &'a [f64],
+    y: &'a [f64],
+    z: &'a [f64],
+    weights: &'a [f64],
+    bbox: [f64; 4],
+    powers: &'a [(usize, usize)],
+    smoothing_factor: f64,
+    eps: f64,
+}
+
+fn smooth_bivariate_fit(input: SmoothBivariateFit<'_>) -> Result<Vec<f64>, InterpError> {
+    let SmoothBivariateFit {
+        x,
+        y,
+        z,
+        weights,
+        bbox,
+        powers,
+        smoothing_factor,
+        eps,
+    } = input;
+    let n_terms = powers.len();
+    let mut ata = vec![vec![0.0; n_terms]; n_terms];
+    let mut atz = vec![0.0; n_terms];
+
+    for ((&xv, &yv), (&zv, &weight)) in x.iter().zip(y).zip(z.iter().zip(weights)) {
+        let basis = smooth_bivariate_basis(xv, yv, bbox, powers);
+        let weight_sq = weight * weight;
+        for row in 0..n_terms {
+            atz[row] += weight_sq * basis[row] * zv;
+            for col in row..n_terms {
+                ata[row][col] += weight_sq * basis[row] * basis[col];
+                if row != col {
+                    ata[col][row] = ata[row][col];
+                }
+            }
+        }
+    }
+
+    let z_scale = z
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let lambda = if smoothing_factor > 0.0 {
+        smoothing_factor / ((x.len() as f64) * z_scale * z_scale)
+    } else {
+        0.0
+    };
+    for (index, &(px, py)) in powers.iter().enumerate() {
+        let order = px + py;
+        ata[index][index] += eps;
+        if order > 0 {
+            ata[index][index] += lambda * (order * order) as f64;
+        }
+    }
+
+    solve_dense_system(&mut ata, &mut atz)
+}
+
+fn smooth_bivariate_basis(x: f64, y: f64, bbox: [f64; 4], powers: &[(usize, usize)]) -> Vec<f64> {
+    let ux = (x - bbox[0]) / (bbox[1] - bbox[0]);
+    let uy = (y - bbox[2]) / (bbox[3] - bbox[2]);
+    powers
+        .iter()
+        .map(|&(px, py)| ux.powi(px as i32) * uy.powi(py as i32))
+        .collect()
+}
+
+fn derivative_power_factor(power: usize, derivative: usize) -> Option<f64> {
+    if derivative > power {
+        return None;
+    }
+    let factor = (0..derivative).fold(1.0, |acc, step| acc * (power - step) as f64);
+    Some(factor)
 }
 
 #[cfg(test)]
@@ -4488,6 +4873,31 @@ mod tests {
     }
 
     #[test]
+    fn rect_bivariate_spline_uses_scipy_x_major_z_shape() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 2.0];
+        let z: Vec<Vec<f64>> = x
+            .iter()
+            .map(|&xv| y.iter().map(|&yv| 10.0 * xv + yv).collect())
+            .collect();
+        let spline = RectBivariateSpline::new(&x, &y, &z, 1, 1).expect("bilinear");
+
+        let val = spline.eval(1.5, 0.5);
+        assert!(
+            (val - 15.5).abs() < 1e-10,
+            "at (1.5, 0.5): got {val}, expected 15.5"
+        );
+
+        let grid = spline.eval_grid(&[0.5, 1.5], &[0.5, 1.5]);
+        let expected = [vec![5.5, 6.5], vec![15.5, 16.5]];
+        for (got_row, expected_row) in grid.iter().zip(expected.iter()) {
+            for (&got, &want) in got_row.iter().zip(expected_row.iter()) {
+                assert!((got - want).abs() < 1e-10, "got {got}, expected {want}");
+            }
+        }
+    }
+
+    #[test]
     fn rect_bivariate_spline_quadratic_surface() {
         // z = x^2 + y^2
         let x: Vec<f64> = (0..5).map(|i| i as f64).collect();
@@ -4570,6 +4980,65 @@ mod tests {
     }
 
     #[test]
+    fn smooth_bivariate_spline_scattered_bilinear_surface() {
+        let x = vec![0.0, 1.0, 0.0, 1.0, 0.5, 0.25];
+        let y = vec![0.0, 0.0, 1.0, 1.0, 0.5, 0.75];
+        let z: Vec<f64> = x
+            .iter()
+            .zip(&y)
+            .map(|(&xv, &yv)| 2.0 + 3.0 * xv - 4.0 * yv + 5.0 * xv * yv)
+            .collect();
+        let options = SmoothBivariateSplineOptions {
+            kx: 1,
+            ky: 1,
+            smoothing: Some(0.0),
+            ..SmoothBivariateSplineOptions::default()
+        };
+        let spline = SmoothBivariateSpline::new(&x, &y, &z, options).expect("smooth bivariate");
+
+        let value = spline.eval(0.25, 0.5);
+        assert!((value - 1.375).abs() < 1e-10, "value={value}");
+
+        let dx = spline.eval_derivative(0.25, 0.5, 1, 0);
+        assert!((dx - 5.5).abs() < 1e-10, "dx={dx}");
+
+        let dy = spline.eval_derivative(0.25, 0.5, 0, 1);
+        assert!((dy + 2.75).abs() < 1e-10, "dy={dy}");
+
+        let integral = spline.integral(0.0, 1.0, 0.0, 1.0);
+        assert!((integral - 2.75).abs() < 1e-10, "integral={integral}");
+
+        let grid = spline.eval_grid(&[0.0, 1.0], &[0.0, 1.0]);
+        let expected = [vec![2.0, -2.0], vec![5.0, 6.0]];
+        for (got_row, expected_row) in grid.iter().zip(expected.iter()) {
+            for (&got, &want) in got_row.iter().zip(expected_row.iter()) {
+                assert!((got - want).abs() < 1e-10, "got {got}, expected {want}");
+            }
+        }
+
+        assert!(spline.residual() < 1e-18, "residual={}", spline.residual());
+        assert_eq!(spline.degrees(), (1, 1));
+        assert_eq!(spline.bbox(), [0.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn smooth_bivariate_spline_rejects_invalid_weights() {
+        let x = vec![0.0, 1.0, 0.0, 1.0];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
+        let z = vec![0.0, 1.0, 1.0, 2.0];
+        let options = SmoothBivariateSplineOptions {
+            weights: Some(vec![1.0, 1.0, 1.0]),
+            kx: 1,
+            ky: 1,
+            smoothing: Some(0.0),
+            ..SmoothBivariateSplineOptions::default()
+        };
+        let err =
+            SmoothBivariateSpline::new(&x, &y, &z, options).expect_err("weight length mismatch");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
     fn rect_bivariate_spline_rejects_mismatched_dimensions() {
         let x = vec![0.0, 1.0, 2.0];
         let y = vec![0.0, 1.0];
@@ -4593,12 +5062,7 @@ mod tests {
     fn rect_bivariate_spline_too_few_points() {
         let x = vec![0.0, 1.0]; // Only 2 points, need 4 for cubic
         let y = vec![0.0, 1.0, 2.0, 3.0];
-        let z = vec![
-            vec![0.0, 1.0],
-            vec![1.0, 2.0],
-            vec![2.0, 3.0],
-            vec![3.0, 4.0],
-        ];
+        let z = vec![vec![0.0, 1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0, 4.0]];
         let err = RectBivariateSpline::new(&x, &y, &z, 3, 3).expect_err("too few points");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
     }

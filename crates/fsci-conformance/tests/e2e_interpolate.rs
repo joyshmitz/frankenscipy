@@ -2,7 +2,7 @@
 //! E2E scenario tests for FSCI-P2C-009 (Interpolate).
 //!
 //! Implements conformance tests for scipy.interpolate parity:
-//!   Happy-path:  1-5  (basic interpolation scenarios)
+//!   Happy-path:  1-5, 15-16 (basic interpolation scenarios)
 //!   Error recovery: 6-8 (invalid input handling)
 //!   Cross-op consistency: 9-11 (round-trip and derivative checks)
 //!   Performance boundary: 12-14 (large grid, high-dimension)
@@ -12,7 +12,8 @@
 
 use fsci_interpolate::{
     Akima1DInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpError, InterpKind,
-    PchipInterpolator, RegularGridInterpolator, RegularGridMethod, SplineBc, interp1d_linear,
+    PchipInterpolator, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod,
+    SmoothBivariateSpline, SmoothBivariateSplineOptions, SplineBc, interp1d_linear,
     make_interp_spline, polyfit, polyval,
 };
 use fsci_runtime::RuntimeMode;
@@ -100,11 +101,10 @@ fn replay_cmd(scenario_id: &str) -> String {
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
     let dir = e2e_output_dir();
-    fs::create_dir_all(&dir)
-        .unwrap_or_else(|e| panic!("failed to create e2e dir {}: {e}", dir.display()));
+    fs::create_dir_all(&dir).expect("create interpolate e2e artifact directory");
     let path = dir.join(format!("{scenario_id}.json"));
     let json = serde_json::to_vec_pretty(bundle).expect("serialize bundle");
-    fs::write(&path, &json).unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
+    fs::write(&path, &json).expect("write interpolate e2e artifact bundle");
 }
 
 fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
@@ -532,6 +532,210 @@ fn scenario_05_akima_smoothness() {
     let bundle = runner.finish();
     write_bundle("scenario_05_akima_smoothness", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_05 failed");
+}
+
+/// Scenario 15: RectBivariateSpline uses SciPy's x-major z shape
+/// scipy.interpolate.RectBivariateSpline(x, y, z, kx=1, ky=1)
+#[test]
+fn scenario_15_rect_bivariate_spline_scipy_shape() {
+    let mut runner = ScenarioRunner::new("scenario_15_rect_bivariate_spline_scipy_shape");
+    runner.set_interp_meta("RectBivariateSpline", 12, 2, "Strict");
+
+    let x = vec![0.0, 1.0, 2.0, 3.0];
+    let y = vec![0.0, 1.0, 2.0];
+    let z: Vec<Vec<f64>> = x
+        .iter()
+        .map(|&xv| y.iter().map(|&yv| 10.0 * xv + yv).collect())
+        .collect();
+
+    let mut spline: Option<RectBivariateSpline> = None;
+    runner.record_step(
+        "create_rect_bivariate_spline",
+        "RectBivariateSpline::new(x, y, z, kx=1, ky=1)",
+        "x has 4 points, y has 3 points, z shape is (4, 3)",
+        "Strict",
+        || match RectBivariateSpline::new(&x, &y, &z, 1, 1) {
+            Ok(s) => {
+                spline = Some(s);
+                Ok("created bilinear RectBivariateSpline".to_owned())
+            }
+            Err(e) => Err(format!("construction failed: {e}")),
+        },
+    );
+
+    let spline = spline.expect("spline should exist");
+    runner.record_step(
+        "eval_scalar_orientation",
+        "spline.eval(1.5, 0.5)",
+        "asymmetric plane f(x,y)=10x+y",
+        "Strict",
+        || {
+            let result = spline.eval(1.5, 0.5);
+            let expected = 15.5;
+            let err = (result - expected).abs();
+            if err < 1e-10 {
+                Ok(format!("result={result}, expected={expected}"))
+            } else {
+                Err(format!("result={result}, expected={expected}, err={err}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "eval_grid_orientation",
+        "spline.eval_grid([0.5, 1.5], [0.5, 1.5])",
+        "grid=True equivalent should be x-major",
+        "Strict",
+        || {
+            let result = spline.eval_grid(&[0.5, 1.5], &[0.5, 1.5]);
+            let expected = [vec![5.5, 6.5], vec![15.5, 16.5]];
+            let max_err = result
+                .iter()
+                .zip(expected.iter())
+                .flat_map(|(got_row, expected_row)| {
+                    got_row
+                        .iter()
+                        .zip(expected_row.iter())
+                        .map(|(&got, &want)| (got - want).abs())
+                })
+                .fold(0.0_f64, f64::max);
+            if max_err < 1e-10 {
+                Ok(format!("max_grid_error={max_err:.2e}"))
+            } else {
+                Err(format!("max_grid_error={max_err:.2e}, result={result:?}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "integral_orientation",
+        "spline.integral(0, 1, 0, 1)",
+        "integral of 10x+y over unit square",
+        "Strict",
+        || {
+            let result = spline.integral(0.0, 1.0, 0.0, 1.0);
+            let expected = 5.5;
+            let err = (result - expected).abs();
+            if err < 1e-10 {
+                Ok(format!("integral={result}, expected={expected}"))
+            } else {
+                Err(format!("integral={result}, expected={expected}, err={err}"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_15_rect_bivariate_spline_scipy_shape", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_15 failed");
+}
+
+/// Scenario 16: SmoothBivariateSpline fits scattered bilinear data
+/// scipy.interpolate.SmoothBivariateSpline(x, y, z, kx=1, ky=1, s=0)
+#[test]
+fn scenario_16_smooth_bivariate_spline_scattered_surface() {
+    let mut runner = ScenarioRunner::new("scenario_16_smooth_bivariate_spline_scattered_surface");
+    runner.set_interp_meta("SmoothBivariateSpline", 16, 2, "Strict");
+
+    let x = vec![0.0, 1.0, 0.0, 1.0, 0.5, 0.25];
+    let y = vec![0.0, 0.0, 1.0, 1.0, 0.5, 0.75];
+    let z: Vec<f64> = x
+        .iter()
+        .zip(&y)
+        .map(|(&xv, &yv)| 2.0 + 3.0 * xv - 4.0 * yv + 5.0 * xv * yv)
+        .collect();
+    let options = SmoothBivariateSplineOptions {
+        kx: 1,
+        ky: 1,
+        smoothing: Some(0.0),
+        ..SmoothBivariateSplineOptions::default()
+    };
+
+    let mut spline: Option<SmoothBivariateSpline> = None;
+    runner.record_step(
+        "create_smooth_bivariate_spline",
+        "SmoothBivariateSpline::new(x, y, z, kx=1, ky=1, s=0)",
+        "six scattered samples from f(x,y)=2+3x-4y+5xy",
+        "Strict",
+        || match SmoothBivariateSpline::new(&x, &y, &z, options) {
+            Ok(s) => {
+                spline = Some(s);
+                Ok("created SmoothBivariateSpline".to_owned())
+            }
+            Err(e) => Err(format!("construction failed: {e}")),
+        },
+    );
+
+    let spline = spline.expect("spline should exist");
+    runner.record_step(
+        "eval_scalar_scattered_surface",
+        "spline.eval(0.25, 0.5)",
+        "bilinear surface exact value",
+        "Strict",
+        || {
+            let result = spline.eval(0.25, 0.5);
+            let expected = 1.375;
+            let err = (result - expected).abs();
+            if err < 1e-10 {
+                Ok(format!("result={result}, expected={expected}"))
+            } else {
+                Err(format!("result={result}, expected={expected}, err={err}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "derivative_and_integral",
+        "spline.eval_derivative(...), spline.integral(0, 1, 0, 1)",
+        "bilinear derivatives and unit-square integral",
+        "Strict",
+        || {
+            let dx = spline.eval_derivative(0.25, 0.5, 1, 0);
+            let dy = spline.eval_derivative(0.25, 0.5, 0, 1);
+            let integral = spline.integral(0.0, 1.0, 0.0, 1.0);
+            let max_err = (dx - 5.5)
+                .abs()
+                .max((dy + 2.75).abs())
+                .max((integral - 2.75).abs());
+            if max_err < 1e-10 {
+                Ok(format!(
+                    "dx={dx}, dy={dy}, integral={integral}, max_err={max_err:.2e}"
+                ))
+            } else {
+                Err(format!(
+                    "dx={dx}, dy={dy}, integral={integral}, max_err={max_err:.2e}"
+                ))
+            }
+        },
+    );
+
+    runner.record_step(
+        "residual_and_metadata",
+        "spline.residual(), spline.degrees(), spline.bbox()",
+        "exact scattered bilinear fit should have near-zero residual",
+        "Strict",
+        || {
+            let residual = spline.residual();
+            if residual < 1e-18
+                && spline.degrees() == (1, 1)
+                && spline.bbox() == [0.0, 1.0, 0.0, 1.0]
+            {
+                Ok(format!("residual={residual:.2e}"))
+            } else {
+                Err(format!(
+                    "residual={residual:.2e}, degrees={:?}, bbox={:?}",
+                    spline.degrees(),
+                    spline.bbox()
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle(
+        "scenario_16_smooth_bivariate_spline_scattered_surface",
+        &bundle,
+    );
+    assert!(bundle.overall.status == "pass", "scenario_16 failed");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
