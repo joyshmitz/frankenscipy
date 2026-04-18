@@ -22,7 +22,7 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 | special | 319 | 151 | 47% | parity_gap |
 | stats | 182 | 136 fn + 24 dist | 88% | parity_green |
 | signal | 159 | 137 | 86% | parity_green |
-| interpolate | 63 | 45+ | 75% | parity_green |
+| interpolate | 63 | 47+ | 78% | parity_green |
 | spatial | 23 + distance | 55+ | 85% | parity_green |
 
 ## Detailed Gap Analysis
@@ -58,7 +58,7 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 **Implemented:** solve_ivp (RK23, RK45, DOP853, BDF, Radau, LSODA), odeint, solve_bvp, quad, quad_vec, quad_explain, quad_inf, quad_neg_inf, quad_full_inf, quad_cauchy_pv, dblquad, dblquad_rect, tplquad, tplquad_rect, nquad, trapezoid, trapezoid_uniform, trapezoid_irregular, trapezoid_richardson, simpson, simpson_uniform, simpson_irregular, cumulative_trapezoid, cumulative_trapezoid_uniform, cumulative_trapezoid_initial, cumulative_simpson, romb, romb_func, romberg, fixed_quad, gauss_kronrod_quad, gauss_legendre, newton_cotes, newton_cotes_quad, monte_carlo_integrate, line_integral
 
 **Missing (LOW priority):**
-- `cubature` (adaptive N-dimensional cubature)
+- ~~`cubature` (adaptive N-dimensional cubature)~~ ✓ DONE
 
 ### fsci-fft (80% coverage)
 
@@ -96,12 +96,12 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 - ~~`freqs` (analog frequency response)~~ ✓ Already implemented
 - Some exotic windows
 
-### fsci-interpolate (75% coverage)
+### fsci-interpolate (78% coverage)
 
-**Implemented:** Interp1d (linear, nearest, cubic spline), CubicSpline (with boundary conditions), PchipInterpolator, Akima1DInterpolator, BSpline, make_interp_spline, make_lsq_spline, RegularGridInterpolator, NearestNDInterpolator, LinearNDInterpolator, CloughTocher2DInterpolator, BarycentricInterpolator, UnivariateSpline, InterpolatedUnivariateSpline, interpn, griddata, RBFInterpolator, KroghInterpolator, Delaunay2D, PPoly, splrep, splev, splder, splantider, splint, sproot, interp2d, lagrange, polyfit, polyval, pade, ratval, polymul, polyadd, polysub, polyder, polyint, polyroots, chebyshev_nodes, barycentric_eval, neville, hermite_interp
+**Implemented:** Interp1d (linear, nearest, cubic spline), CubicSpline (with boundary conditions), PchipInterpolator, Akima1DInterpolator, BSpline, make_interp_spline, make_lsq_spline, RegularGridInterpolator, NearestNDInterpolator, LinearNDInterpolator, CloughTocher2DInterpolator, RectBivariateSpline, SmoothBivariateSpline, BarycentricInterpolator, UnivariateSpline, InterpolatedUnivariateSpline, interpn, griddata, RBFInterpolator, KroghInterpolator, Delaunay2D, PPoly, splrep, splev, splder, splantider, splint, sproot, interp2d, lagrange, polyfit, polyval, pade, ratval, polymul, polyadd, polysub, polyder, polyint, polyroots, chebyshev_nodes, barycentric_eval, neville, hermite_interp
 
 **Missing (LOW priority):**
-- 2D: `RectBivariateSpline`, `SmoothBivariateSpline`
+- 2D: complete for scoped V1 surface
 
 ### fsci-spatial (90% coverage)
 
