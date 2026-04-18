@@ -3073,6 +3073,14 @@ enum SpatialObserved {
     Array2D(Vec<Vec<f64>>),
     KdTreeQuery { index: usize, distance: f64 },
     ConvexHull { vertices: Vec<usize>, area: f64 },
+    HalfspaceIntersection {
+        intersections: Vec<Vec<f64>>,
+        dual_points: Vec<Vec<f64>>,
+        dual_vertices: Vec<usize>,
+        dual_area: f64,
+        dual_volume: f64,
+        is_bounded: bool,
+    },
     Procrustes { disparity: f64 },
     Error(String),
 }
@@ -3088,6 +3096,7 @@ fn execute_spatial_case(case: &SpatialCase) -> SpatialObserved {
         "kdtree_query" => execute_kdtree_query(case),
         "directed_hausdorff" => execute_directed_hausdorff(case),
         "convex_hull" => execute_convex_hull(case),
+        "halfspace_intersection" => execute_halfspace_intersection(case),
         "procrustes" => execute_procrustes(case),
         "geometric_slerp" => execute_geometric_slerp(case),
         _ => SpatialObserved::Error(format!("unknown function: {}", case.function)),
@@ -3224,6 +3233,37 @@ fn execute_convex_hull(case: &SpatialCase) -> SpatialObserved {
                 area: hull.area,
             }
         }
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_halfspace_intersection(case: &SpatialCase) -> SpatialObserved {
+    let halfspaces: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse halfspaces: {e}")),
+    };
+    let interior_point: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse interior_point: {e}")),
+    };
+
+    match fsci_spatial::HalfspaceIntersection::from_nd(&halfspaces, &interior_point) {
+        Ok(result) => SpatialObserved::HalfspaceIntersection {
+            intersections: result
+                .intersections
+                .iter()
+                .map(|&(x, y)| vec![x, y])
+                .collect(),
+            dual_points: result
+                .dual_points
+                .iter()
+                .map(|&(x, y)| vec![x, y])
+                .collect(),
+            dual_vertices: result.dual_vertices,
+            dual_area: result.dual_area,
+            dual_volume: result.dual_volume,
+            is_bounded: result.is_bounded,
+        },
         Err(e) => SpatialObserved::Error(format!("{e:?}")),
     }
 }
@@ -3398,6 +3438,27 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                 format!("convex hull match: vertices={vertices:?}, area={area}"),
             )
         }
+        (
+            "halfspace_intersection",
+            SpatialObserved::HalfspaceIntersection {
+                intersections,
+                dual_points,
+                dual_vertices,
+                dual_area,
+                dual_volume,
+                is_bounded,
+            },
+        ) => compare_halfspace_intersection_outcome(
+            case,
+            intersections,
+            dual_points,
+            dual_vertices,
+            *dual_area,
+            *dual_volume,
+            *is_bounded,
+            atol,
+            rtol,
+        ),
         ("procrustes_result", SpatialObserved::Procrustes { disparity }) => {
             let exp_disparity = case.expected.disparity.unwrap_or(0.0);
             let diff = (disparity - exp_disparity).abs();
@@ -3410,12 +3471,222 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
             }
             (true, format!("procrustes match: disparity={disparity}"))
         }
+        ("error_contains", SpatialObserved::Error(e)) => {
+            let expected = case
+                .expected
+                .value
+                .as_ref()
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            if e.contains(expected) {
+                (true, format!("expected error observed: {expected}"))
+            } else {
+                (
+                    false,
+                    format!("error mismatch: got {e:?}, expected substring {expected:?}"),
+                )
+            }
+        }
         (_, SpatialObserved::Error(e)) => (false, format!("execution error: {e}")),
         (kind, obs) => (
             false,
             format!("type mismatch: expected {kind}, got {obs:?}"),
         ),
     }
+}
+
+fn compare_halfspace_intersection_outcome(
+    case: &SpatialCase,
+    intersections: &[Vec<f64>],
+    dual_points: &[Vec<f64>],
+    dual_vertices: &[usize],
+    dual_area: f64,
+    dual_volume: f64,
+    is_bounded: bool,
+    atol: f64,
+    rtol: f64,
+) -> (bool, String) {
+    let Some(expected) = case.expected.value.as_ref().and_then(|value| value.as_object()) else {
+        return (
+            false,
+            "halfspace_intersection expected value must be an object".to_string(),
+        );
+    };
+
+    if let Some(expected_bounded) = expected.get("is_bounded").and_then(|value| value.as_bool())
+        && is_bounded != expected_bounded
+    {
+        return (
+            false,
+            format!("is_bounded mismatch: got {is_bounded}, expected {expected_bounded}"),
+        );
+    }
+
+    for (field, got) in [("dual_area", dual_area), ("dual_volume", dual_volume)] {
+        if let Some(expected_value) = expected.get(field).and_then(|value| value.as_f64()) {
+            let diff = (got - expected_value).abs();
+            let tol = atol + rtol * expected_value.abs();
+            if diff > tol {
+                return (
+                    false,
+                    format!("{field} mismatch: got {got}, expected {expected_value}, diff {diff}"),
+                );
+            }
+        }
+    }
+
+    if let Some(expected_vertices) = expected
+        .get("dual_vertices")
+        .and_then(|value| serde_json::from_value::<Vec<usize>>(value.clone()).ok())
+        && dual_vertices != expected_vertices.as_slice()
+    {
+        return (
+            false,
+            format!(
+                "dual_vertices mismatch: got {dual_vertices:?}, expected {expected_vertices:?}"
+            ),
+        );
+    }
+
+    if let Some(expected_dual_points) = expected
+        .get("dual_points")
+        .and_then(|value| serde_json::from_value::<Vec<Vec<f64>>>(value.clone()).ok())
+        && let Err(message) =
+            compare_ordered_matrix(dual_points, &expected_dual_points, atol, rtol, "dual_points")
+    {
+        return (false, message);
+    }
+
+    if let Some(expected_intersections) = expected
+        .get("intersections")
+        .and_then(|value| serde_json::from_value::<Vec<Vec<f64>>>(value.clone()).ok())
+        && let Err(message) = compare_unordered_points(
+            intersections,
+            &expected_intersections,
+            atol,
+            rtol,
+            "intersections",
+        )
+    {
+        return (false, message);
+    }
+
+    if let Some(expected_finite_intersections) = expected
+        .get("finite_intersections")
+        .and_then(|value| serde_json::from_value::<Vec<Vec<f64>>>(value.clone()).ok())
+    {
+        let finite = intersections
+            .iter()
+            .filter(|row| row.iter().all(|value| value.is_finite()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Err(message) = compare_unordered_points(
+            &finite,
+            &expected_finite_intersections,
+            atol,
+            rtol,
+            "finite_intersections",
+        ) {
+            return (false, message);
+        }
+    }
+
+    if let Some(expected_nonfinite) = expected
+        .get("has_nonfinite_intersection")
+        .and_then(|value| value.as_bool())
+    {
+        let has_nonfinite = intersections
+            .iter()
+            .any(|row| row.iter().any(|value| !value.is_finite()));
+        if has_nonfinite != expected_nonfinite {
+            return (
+                false,
+                format!(
+                    "has_nonfinite_intersection mismatch: got {has_nonfinite}, expected {expected_nonfinite}"
+                ),
+            );
+        }
+    }
+
+    (
+        true,
+        format!(
+            "halfspace intersection match: {} intersections, {} dual points",
+            intersections.len(),
+            dual_points.len()
+        ),
+    )
+}
+
+fn compare_ordered_matrix(
+    got: &[Vec<f64>],
+    expected: &[Vec<f64>],
+    atol: f64,
+    rtol: f64,
+    label: &str,
+) -> Result<(), String> {
+    if got.len() != expected.len() {
+        return Err(format!(
+            "{label} row count mismatch: got {}, expected {}",
+            got.len(),
+            expected.len()
+        ));
+    }
+    for (row_idx, (got_row, expected_row)) in got.iter().zip(expected.iter()).enumerate() {
+        if got_row.len() != expected_row.len() {
+            return Err(format!("{label}[{row_idx}] length mismatch"));
+        }
+        for (col_idx, (&g, &e)) in got_row.iter().zip(expected_row.iter()).enumerate() {
+            let diff = (g - e).abs();
+            let tol = atol + rtol * e.abs();
+            if diff > tol {
+                return Err(format!(
+                    "{label}[{row_idx}][{col_idx}] mismatch: got {g}, expected {e}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn compare_unordered_points(
+    got: &[Vec<f64>],
+    expected: &[Vec<f64>],
+    atol: f64,
+    rtol: f64,
+    label: &str,
+) -> Result<(), String> {
+    if got.len() != expected.len() {
+        return Err(format!(
+            "{label} length mismatch: got {}, expected {}",
+            got.len(),
+            expected.len()
+        ));
+    }
+
+    let mut matched = vec![false; got.len()];
+    for expected_point in expected {
+        let Some(match_idx) = got.iter().enumerate().position(|(idx, candidate)| {
+            !matched[idx] && points_close(candidate, expected_point, atol, rtol)
+        }) else {
+            return Err(format!(
+                "{label} missing expected point {expected_point:?}; got {got:?}"
+            ));
+        };
+        matched[match_idx] = true;
+    }
+    Ok(())
+}
+
+fn points_close(got: &[f64], expected: &[f64], atol: f64, rtol: f64) -> bool {
+    got.len() == expected.len()
+        && got.iter().zip(expected.iter()).all(|(&g, &e)| {
+            if g.is_finite() && e.is_finite() {
+                (g - e).abs() <= atol + rtol * e.abs()
+            } else {
+                g.is_nan() == e.is_nan() && g.is_sign_positive() == e.is_sign_positive()
+            }
+        })
 }
 
 /// Run the spatial conformance packet.
