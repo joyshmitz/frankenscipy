@@ -49,11 +49,162 @@ pub struct QuadVecResult {
     pub converged: bool,
 }
 
+/// Rule selector for [`cubature`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CubatureRule {
+    /// Tensor-product Gauss-Kronrod style rule. The current Rust kernel uses an
+    /// embedded Gauss-Legendre rule with adaptive subdivision.
+    GaussKronrod,
+    /// Compatibility alias for SciPy's `gk21` spelling.
+    #[default]
+    Gk21,
+    /// Compatibility alias for SciPy's `gk15` spelling.
+    Gk15,
+    /// Genz-Malik compatibility spelling. The current implementation uses the
+    /// same embedded adaptive rule and keeps this selector for API parity.
+    GenzMalik,
+}
+
+/// Options for adaptive multidimensional cubature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CubatureOptions {
+    /// Relative error tolerance.
+    pub rtol: f64,
+    /// Absolute error tolerance.
+    pub atol: f64,
+    /// Maximum number of region subdivisions.
+    pub max_subdivisions: usize,
+    /// Rule selector retained for SciPy-observable API parity.
+    pub rule: CubatureRule,
+    /// Points that should be avoided by rules that do not evaluate boundaries.
+    ///
+    /// The current embedded rule never evaluates region boundaries; points are
+    /// validated for dimensionality and otherwise retained as caller intent.
+    pub points: Vec<Vec<f64>>,
+}
+
+impl Default for CubatureOptions {
+    fn default() -> Self {
+        Self {
+            rtol: 1e-8,
+            atol: 0.0,
+            max_subdivisions: 10_000,
+            rule: CubatureRule::default(),
+            points: Vec::new(),
+        }
+    }
+}
+
+/// Status of an adaptive cubature estimate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CubatureStatus {
+    Converged,
+    NotConverged,
+}
+
+/// Estimate for a single adaptive cubature region.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CubatureRegion {
+    /// Region lower corner in transformed coordinates.
+    pub a: Vec<f64>,
+    /// Region upper corner in transformed coordinates.
+    pub b: Vec<f64>,
+    /// Integral estimate over this region.
+    pub estimate: Vec<f64>,
+    /// Componentwise embedded-rule error estimate over this region.
+    pub error: Vec<f64>,
+}
+
+/// Result of adaptive multidimensional cubature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CubatureResult {
+    /// Integral estimate. Scalar-valued integrands have length 1.
+    pub estimate: Vec<f64>,
+    /// Componentwise absolute error estimate.
+    pub error: Vec<f64>,
+    /// Whether all components satisfy `atol + rtol * abs(estimate)`.
+    pub status: CubatureStatus,
+    /// Number of adaptive subdivision steps performed.
+    pub subdivisions: usize,
+    /// Requested absolute tolerance.
+    pub atol: f64,
+    /// Requested relative tolerance.
+    pub rtol: f64,
+    /// Terminal adaptive regions.
+    pub regions: Vec<CubatureRegion>,
+    /// Number of function evaluations.
+    pub neval: usize,
+}
+
+/// Scalar convenience result for [`cubature_scalar`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CubatureScalarResult {
+    pub estimate: f64,
+    pub error: f64,
+    pub status: CubatureStatus,
+    pub subdivisions: usize,
+    pub atol: f64,
+    pub rtol: f64,
+    pub neval: usize,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct QuadVecSpec {
     epsabs: f64,
     epsrel: f64,
     dim: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BoundTransform {
+    Finite,
+    LowerInfinite { upper: f64 },
+    UpperInfinite { lower: f64 },
+    BothInfinite,
+}
+
+impl BoundTransform {
+    fn interval(self, lower: f64, upper: f64) -> (f64, f64) {
+        match self {
+            Self::Finite => (lower, upper),
+            Self::LowerInfinite { .. } | Self::UpperInfinite { .. } => (0.0, 1.0),
+            Self::BothInfinite => (-1.0, 1.0),
+        }
+    }
+
+    fn map(self, t: f64) -> (f64, f64) {
+        match self {
+            Self::Finite => (t, 1.0),
+            Self::LowerInfinite { upper } => (upper - (1.0 - t) / t, 1.0 / t.powi(2)),
+            Self::UpperInfinite { lower } => {
+                let gap = 1.0 - t;
+                (lower + t / gap, 1.0 / gap.powi(2))
+            }
+            Self::BothInfinite => {
+                let angle = std::f64::consts::FRAC_PI_2 * t;
+                let x = angle.tan();
+                (x, std::f64::consts::FRAC_PI_2 * (1.0 + x * x))
+            }
+        }
+    }
+
+    fn inverse(self, x: f64) -> Option<f64> {
+        if !x.is_finite() {
+            return None;
+        }
+        match self {
+            Self::Finite => Some(x),
+            Self::LowerInfinite { upper } => {
+                let distance = upper - x;
+                (distance >= 0.0).then_some(1.0 / (1.0 + distance))
+            }
+            Self::UpperInfinite { lower } => {
+                let distance = x - lower;
+                (distance >= 0.0).then_some(distance / (1.0 + distance))
+            }
+            Self::BothInfinite => Some(std::f64::consts::FRAC_2_PI * x.atan()),
+        }
+    }
 }
 
 /// Numerically integrate a scalar function over a finite interval [a, b].
@@ -1162,6 +1313,492 @@ where
         *total_neval.borrow_mut() += result.neval;
         Ok(result.integral)
     }
+}
+
+/// Adaptive cubature of a multidimensional vector-valued function.
+///
+/// This mirrors the public shape of `scipy.integrate.cubature`: `a` and `b`
+/// define the lower and upper corners of a hyper-rectangle, the integrand takes
+/// one point at a time as `&[f64]`, and the result contains componentwise
+/// integral and error estimates. Infinite limits are handled with smooth
+/// transformations to finite coordinates.
+pub fn cubature<F>(
+    f: F,
+    a: &[f64],
+    b: &[f64],
+    options: CubatureOptions,
+) -> Result<CubatureResult, IntegrateValidationError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    validate_cubature_inputs(a, b, &options)?;
+
+    let transforms = cubature_transforms(a, b)?;
+    let transformed_ranges: Vec<(f64, f64)> = transforms
+        .iter()
+        .zip(a.iter().zip(b.iter()))
+        .map(|(transform, (&lower, &upper))| transform.interval(lower, upper))
+        .collect();
+
+    if a.is_empty() {
+        let estimate = f(&[]);
+        validate_cubature_output(&estimate, estimate.len())?;
+        return Ok(CubatureResult {
+            error: vec![0.0; estimate.len()],
+            estimate,
+            status: CubatureStatus::Converged,
+            subdivisions: 0,
+            atol: options.atol,
+            rtol: options.rtol,
+            regions: Vec::new(),
+            neval: 1,
+        });
+    }
+
+    let initial_regions = initial_cubature_regions(&transformed_ranges, &transforms, &options);
+    let sample_point = initial_regions
+        .first()
+        .map(|(lower, upper)| {
+            lower
+                .iter()
+                .zip(upper.iter())
+                .map(|(&left, &right)| 0.5 * (left + right))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| {
+            transformed_ranges
+                .iter()
+                .map(|(lower, upper)| 0.5 * (lower + upper))
+                .collect::<Vec<_>>()
+        });
+    let mut sample_x = vec![0.0; a.len()];
+    let mut sample_jacobian = 1.0;
+    map_cubature_point(
+        &sample_point,
+        &transforms,
+        &mut sample_x,
+        &mut sample_jacobian,
+    );
+    let sample = f(&sample_x);
+    validate_cubature_output(&sample, sample.len())?;
+    let output_dim = sample.len();
+
+    let mut neval = 1;
+    let mut regions = Vec::with_capacity(initial_regions.len());
+    for (initial_a, initial_b) in initial_regions {
+        let initial =
+            estimate_cubature_region(&f, &transforms, &initial_a, &initial_b, output_dim)?;
+        neval += initial.neval;
+        regions.push(initial.region);
+    }
+    let mut subdivisions = 0usize;
+
+    while !cubature_converged(&regions, options.atol, options.rtol)
+        && subdivisions < options.max_subdivisions
+    {
+        let Some(split_index) = largest_error_region(&regions) else {
+            break;
+        };
+        let region = regions.swap_remove(split_index);
+        let split_dim = widest_region_dimension(&region);
+        let midpoint = 0.5 * (region.a[split_dim] + region.b[split_dim]);
+
+        let left_a = region.a.clone();
+        let mut left_b = region.b.clone();
+        left_b[split_dim] = midpoint;
+        let mut right_a = region.a;
+        let right_b = region.b;
+        right_a[split_dim] = midpoint;
+
+        let left = estimate_cubature_region(&f, &transforms, &left_a, &left_b, output_dim)?;
+        let right = estimate_cubature_region(&f, &transforms, &right_a, &right_b, output_dim)?;
+        neval += left.neval + right.neval;
+        regions.push(left.region);
+        regions.push(right.region);
+        subdivisions += 1;
+    }
+
+    let (estimate, error) = sum_cubature_regions(&regions, output_dim);
+    let status = if componentwise_cubature_converged(&estimate, &error, options.atol, options.rtol)
+    {
+        CubatureStatus::Converged
+    } else {
+        CubatureStatus::NotConverged
+    };
+
+    Ok(CubatureResult {
+        estimate,
+        error,
+        status,
+        subdivisions,
+        atol: options.atol,
+        rtol: options.rtol,
+        regions,
+        neval,
+    })
+}
+
+/// Scalar-valued convenience wrapper around [`cubature`].
+pub fn cubature_scalar<F>(
+    f: F,
+    a: &[f64],
+    b: &[f64],
+    options: CubatureOptions,
+) -> Result<CubatureScalarResult, IntegrateValidationError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let result = cubature(|x| vec![f(x)], a, b, options)?;
+    Ok(CubatureScalarResult {
+        estimate: result.estimate[0],
+        error: result.error[0],
+        status: result.status,
+        subdivisions: result.subdivisions,
+        atol: result.atol,
+        rtol: result.rtol,
+        neval: result.neval,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct CubatureEstimate {
+    region: CubatureRegion,
+    neval: usize,
+}
+
+fn validate_cubature_inputs(
+    a: &[f64],
+    b: &[f64],
+    options: &CubatureOptions,
+) -> Result<(), IntegrateValidationError> {
+    if a.len() != b.len() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "cubature bounds must have the same dimensionality".to_string(),
+        });
+    }
+    if options.atol < 0.0 || options.rtol < 0.0 {
+        return Err(IntegrateValidationError::QuadInvalidTolerance {
+            detail: "cubature tolerances must be non-negative".to_string(),
+        });
+    }
+    for point in &options.points {
+        if point.len() != a.len() {
+            return Err(IntegrateValidationError::QuadInvalidBounds {
+                detail: "cubature points must match bound dimensionality".to_string(),
+            });
+        }
+        if point.iter().any(|value| !value.is_finite()) {
+            return Err(IntegrateValidationError::QuadInvalidBounds {
+                detail: "cubature points must be finite".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn cubature_transforms(
+    a: &[f64],
+    b: &[f64],
+) -> Result<Vec<BoundTransform>, IntegrateValidationError> {
+    a.iter()
+        .zip(b.iter())
+        .map(
+            |(&lower, &upper)| match (lower.is_finite(), upper.is_finite()) {
+                (true, true) => Ok(BoundTransform::Finite),
+                (false, true) if lower.is_sign_negative() => {
+                    Ok(BoundTransform::LowerInfinite { upper })
+                }
+                (true, false) if upper.is_sign_positive() => {
+                    Ok(BoundTransform::UpperInfinite { lower })
+                }
+                (false, false) if lower.is_sign_negative() && upper.is_sign_positive() => {
+                    Ok(BoundTransform::BothInfinite)
+                }
+                _ => Err(IntegrateValidationError::QuadInvalidBounds {
+                    detail: "cubature bounds must be finite or ordered infinities".to_string(),
+                }),
+            },
+        )
+        .collect()
+}
+
+fn validate_cubature_output(
+    values: &[f64],
+    expected_dim: usize,
+) -> Result<(), IntegrateValidationError> {
+    if values.len() != expected_dim {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "cubature integrand output shape changed between evaluations".to_string(),
+        });
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "cubature integrand returned a non-finite value".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn initial_cubature_regions(
+    ranges: &[(f64, f64)],
+    transforms: &[BoundTransform],
+    options: &CubatureOptions,
+) -> Vec<(Vec<f64>, Vec<f64>)> {
+    let mut breakpoints = ranges
+        .iter()
+        .map(|&(lower, upper)| vec![lower, upper])
+        .collect::<Vec<_>>();
+
+    for point in &options.points {
+        for ((axis_breakpoints, &coordinate), &transform) in breakpoints
+            .iter_mut()
+            .zip(point.iter())
+            .zip(transforms.iter())
+        {
+            let Some(mapped) = transform.inverse(coordinate) else {
+                continue;
+            };
+            let start = axis_breakpoints[0];
+            let Some(&end) = axis_breakpoints.last() else {
+                continue;
+            };
+            if is_strictly_between(mapped, start, end) {
+                axis_breakpoints.push(mapped);
+            }
+        }
+    }
+
+    for axis_breakpoints in &mut breakpoints {
+        let Some(&end) = axis_breakpoints.last() else {
+            continue;
+        };
+        let ascending = axis_breakpoints[0] <= end;
+        axis_breakpoints.sort_by(|left, right| {
+            if ascending {
+                left.total_cmp(right)
+            } else {
+                right.total_cmp(left)
+            }
+        });
+        axis_breakpoints.dedup_by(|left, right| cubature_breakpoints_equal(*left, *right));
+    }
+
+    let mut regions = Vec::new();
+    let mut lower = vec![0.0; ranges.len()];
+    let mut upper = vec![0.0; ranges.len()];
+    collect_initial_cubature_regions(&breakpoints, 0, &mut lower, &mut upper, &mut regions);
+    regions
+}
+
+fn collect_initial_cubature_regions(
+    breakpoints: &[Vec<f64>],
+    dim: usize,
+    lower: &mut [f64],
+    upper: &mut [f64],
+    regions: &mut Vec<(Vec<f64>, Vec<f64>)>,
+) {
+    if dim == breakpoints.len() {
+        regions.push((lower.to_vec(), upper.to_vec()));
+        return;
+    }
+
+    for window in breakpoints[dim].windows(2) {
+        lower[dim] = window[0];
+        upper[dim] = window[1];
+        collect_initial_cubature_regions(breakpoints, dim + 1, lower, upper, regions);
+    }
+}
+
+fn is_strictly_between(value: f64, start: f64, end: f64) -> bool {
+    let low = start.min(end);
+    let high = start.max(end);
+    value > low && value < high
+}
+
+fn cubature_breakpoints_equal(left: f64, right: f64) -> bool {
+    (left - right).abs() <= f64::EPSILON * (1.0 + left.abs().max(right.abs()))
+}
+
+fn estimate_cubature_region<F>(
+    f: &F,
+    transforms: &[BoundTransform],
+    a: &[f64],
+    b: &[f64],
+    output_dim: usize,
+) -> Result<CubatureEstimate, IntegrateValidationError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    const NODES: [f64; 3] = [-0.774_596_669_241_483_4, 0.0, 0.774_596_669_241_483_4];
+    const WEIGHTS: [f64; 3] = [
+        0.555_555_555_555_555_6,
+        0.888_888_888_888_888_8,
+        0.555_555_555_555_555_6,
+    ];
+
+    let ndim = a.len();
+    let mut high = vec![0.0; output_dim];
+    let mut t = vec![0.0; ndim];
+    let mut x = vec![0.0; ndim];
+    let mut neval = 0usize;
+
+    struct TensorState<'a, F>
+    where
+        F: Fn(&[f64]) -> Vec<f64>,
+    {
+        f: &'a F,
+        transforms: &'a [BoundTransform],
+        a: &'a [f64],
+        b: &'a [f64],
+        t: &'a mut [f64],
+        x: &'a mut [f64],
+        high: &'a mut [f64],
+        neval: &'a mut usize,
+        output_dim: usize,
+    }
+
+    fn visit_tensor<F>(
+        state: &mut TensorState<'_, F>,
+        dim: usize,
+        weight: f64,
+    ) -> Result<(), IntegrateValidationError>
+    where
+        F: Fn(&[f64]) -> Vec<f64>,
+    {
+        if dim == state.a.len() {
+            let mut jacobian = 1.0;
+            map_cubature_point(state.t, state.transforms, state.x, &mut jacobian);
+            let values = (state.f)(state.x);
+            validate_cubature_output(&values, state.output_dim)?;
+            for (total, value) in state.high.iter_mut().zip(values.iter()) {
+                *total += weight * jacobian * value;
+            }
+            *state.neval += 1;
+            return Ok(());
+        }
+
+        let center = 0.5 * (state.a[dim] + state.b[dim]);
+        let half_width = 0.5 * (state.b[dim] - state.a[dim]);
+        for (&node, &node_weight) in NODES.iter().zip(WEIGHTS.iter()) {
+            state.t[dim] = center + half_width * node;
+            visit_tensor(state, dim + 1, weight * half_width * node_weight)?;
+        }
+        Ok(())
+    }
+
+    let mut state = TensorState {
+        f,
+        transforms,
+        a,
+        b,
+        t: &mut t,
+        x: &mut x,
+        high: &mut high,
+        neval: &mut neval,
+        output_dim,
+    };
+    visit_tensor(&mut state, 0, 1.0)?;
+
+    let mut midpoint = vec![0.0; ndim];
+    let mut midpoint_weight = 1.0;
+    for ((mid, &lower), &upper) in midpoint.iter_mut().zip(a.iter()).zip(b.iter()) {
+        *mid = 0.5 * (lower + upper);
+        midpoint_weight *= upper - lower;
+    }
+    let mut midpoint_x = vec![0.0; ndim];
+    let mut midpoint_jacobian = 1.0;
+    map_cubature_point(
+        &midpoint,
+        transforms,
+        &mut midpoint_x,
+        &mut midpoint_jacobian,
+    );
+    let low_values = f(&midpoint_x);
+    validate_cubature_output(&low_values, output_dim)?;
+    neval += 1;
+
+    let low = low_values
+        .iter()
+        .map(|value| midpoint_weight * midpoint_jacobian * value)
+        .collect::<Vec<_>>();
+    let error = high
+        .iter()
+        .zip(low.iter())
+        .map(|(high_value, low_value)| (high_value - low_value).abs())
+        .collect::<Vec<_>>();
+
+    Ok(CubatureEstimate {
+        region: CubatureRegion {
+            a: a.to_vec(),
+            b: b.to_vec(),
+            estimate: high,
+            error,
+        },
+        neval,
+    })
+}
+
+fn map_cubature_point(t: &[f64], transforms: &[BoundTransform], x: &mut [f64], jacobian: &mut f64) {
+    *jacobian = 1.0;
+    for ((out, &coord), &transform) in x.iter_mut().zip(t.iter()).zip(transforms.iter()) {
+        let (mapped, derivative) = transform.map(coord);
+        *out = mapped;
+        *jacobian *= derivative;
+    }
+}
+
+fn cubature_converged(regions: &[CubatureRegion], atol: f64, rtol: f64) -> bool {
+    let Some(output_dim) = regions.first().map(|region| region.estimate.len()) else {
+        return true;
+    };
+    let (estimate, error) = sum_cubature_regions(regions, output_dim);
+    componentwise_cubature_converged(&estimate, &error, atol, rtol)
+}
+
+fn componentwise_cubature_converged(estimate: &[f64], error: &[f64], atol: f64, rtol: f64) -> bool {
+    estimate
+        .iter()
+        .zip(error.iter())
+        .all(|(estimate_value, error_value)| *error_value <= atol + rtol * estimate_value.abs())
+}
+
+fn sum_cubature_regions(regions: &[CubatureRegion], output_dim: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut estimate = vec![0.0; output_dim];
+    let mut error = vec![0.0; output_dim];
+    for region in regions {
+        for ((estimate_total, error_total), (region_estimate, region_error)) in estimate
+            .iter_mut()
+            .zip(error.iter_mut())
+            .zip(region.estimate.iter().zip(region.error.iter()))
+        {
+            *estimate_total += region_estimate;
+            *error_total += region_error;
+        }
+    }
+    (estimate, error)
+}
+
+fn largest_error_region(regions: &[CubatureRegion]) -> Option<usize> {
+    regions
+        .iter()
+        .enumerate()
+        .max_by(|(_, left), (_, right)| {
+            max_abs_component(&left.error).total_cmp(&max_abs_component(&right.error))
+        })
+        .map(|(index, _)| index)
+}
+
+fn widest_region_dimension(region: &CubatureRegion) -> usize {
+    let mut widest_index = 0;
+    let mut widest_width = 0.0;
+    for (index, (&lower, &upper)) in region.a.iter().zip(region.b.iter()).enumerate() {
+        let width = (upper - lower).abs();
+        if width > widest_width {
+            widest_width = width;
+            widest_index = index;
+        }
+    }
+    widest_index
 }
 
 /// Compute n-point Gauss-Legendre nodes and weights on [-1, 1].
@@ -2331,6 +2968,149 @@ mod tests {
             QuadOptions::default(),
         )
         .expect_err("inconsistent output length");
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
+    }
+
+    #[test]
+    fn cubature_scalar_2d_product() {
+        let result = cubature_scalar(
+            |x| x[0] * x[1],
+            &[0.0, 0.0],
+            &[1.0, 1.0],
+            CubatureOptions::default(),
+        )
+        .expect("cubature 2d product");
+        assert_eq!(result.status, CubatureStatus::Converged);
+        assert!(
+            (result.estimate - 0.25).abs() < 1e-10,
+            "integral should be 0.25, got {}",
+            result.estimate
+        );
+        assert!(result.neval > 0);
+    }
+
+    #[test]
+    fn cubature_vector_1d_powers() {
+        let result = cubature(
+            |x| vec![1.0, x[0], x[0] * x[0]],
+            &[0.0],
+            &[1.0],
+            CubatureOptions::default(),
+        )
+        .expect("cubature vector powers");
+        assert_eq!(result.status, CubatureStatus::Converged);
+        let expected = [1.0, 0.5, 1.0 / 3.0];
+        for (got, want) in result.estimate.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-10, "got {got}, expected {want}");
+        }
+    }
+
+    #[test]
+    fn cubature_reversed_bounds_preserve_orientation() {
+        let result = cubature_scalar(|_| 1.0, &[1.0], &[0.0], CubatureOptions::default())
+            .expect("cubature reversed bounds");
+        assert_eq!(result.status, CubatureStatus::Converged);
+        assert!(
+            (result.estimate + 1.0).abs() < 1e-12,
+            "reversed integral should be -1, got {}",
+            result.estimate
+        );
+    }
+
+    #[test]
+    fn cubature_zero_dim_returns_function_value() {
+        let result = cubature(|_| vec![42.0, -7.0], &[], &[], CubatureOptions::default())
+            .expect("cubature zero dim");
+        assert_eq!(result.status, CubatureStatus::Converged);
+        assert_eq!(result.estimate, vec![42.0, -7.0]);
+        assert_eq!(result.error, vec![0.0, 0.0]);
+        assert_eq!(result.neval, 1);
+    }
+
+    #[test]
+    fn cubature_points_avoid_singularity() {
+        let result = cubature_scalar(
+            |x| {
+                if x[0] == 0.0 {
+                    f64::NAN
+                } else {
+                    x[0].sin() / x[0]
+                }
+            },
+            &[-1.0],
+            &[1.0],
+            CubatureOptions {
+                points: vec![vec![0.0]],
+                ..CubatureOptions::default()
+            },
+        )
+        .expect("cubature avoids singular point");
+        assert_eq!(result.status, CubatureStatus::Converged);
+        assert!(
+            (result.estimate - 1.892_166_140_734_366).abs() < 1e-6,
+            "sinc integral got {}",
+            result.estimate
+        );
+    }
+
+    #[test]
+    fn cubature_rejects_invalid_inputs() {
+        let bounds_err = cubature_scalar(|x| x[0], &[0.0], &[1.0, 2.0], CubatureOptions::default())
+            .expect_err("mismatched bounds");
+        assert!(matches!(
+            bounds_err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
+
+        let tolerance_err = cubature_scalar(
+            |x| x[0],
+            &[0.0],
+            &[1.0],
+            CubatureOptions {
+                rtol: -1.0,
+                ..CubatureOptions::default()
+            },
+        )
+        .expect_err("negative tolerance");
+        assert!(matches!(
+            tolerance_err,
+            IntegrateValidationError::QuadInvalidTolerance { .. }
+        ));
+
+        let point_err = cubature_scalar(
+            |x| x[0],
+            &[0.0, 0.0],
+            &[1.0, 1.0],
+            CubatureOptions {
+                points: vec![vec![0.5]],
+                ..CubatureOptions::default()
+            },
+        )
+        .expect_err("point dimensionality mismatch");
+        assert!(matches!(
+            point_err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
+    }
+
+    #[test]
+    fn cubature_rejects_inconsistent_output_shape() {
+        let err = cubature(
+            |x| {
+                if x[0] < 0.5 {
+                    vec![x[0]]
+                } else {
+                    vec![x[0], x[0] * x[0]]
+                }
+            },
+            &[0.0],
+            &[1.0],
+            CubatureOptions::default(),
+        )
+        .expect_err("inconsistent cubature output length");
         assert!(matches!(
             err,
             IntegrateValidationError::QuadInvalidBounds { .. }
