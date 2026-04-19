@@ -586,6 +586,24 @@
       }
     },
     {
+      "case_id": "diff_btdtria_high_tail_complement_branch",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "btdtria",
+      "args": [
+        0.99999999999999989,
+        13.584377534422599,
+        0.96542532024339633
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 5.915066688085389,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::btdtria"
+      }
+    },
+    {
       "case_id": "diff_btdtrib_2_0p5_0p3",
       "category": "differential",
       "mode": "Strict",
@@ -598,6 +616,24 @@
       "expected": {
         "kind": "scalar",
         "value": 4.246702175718102,
+        "atol": 2e-10,
+        "rtol": 2e-10,
+        "contract_ref": "fsci_special::btdtrib"
+      }
+    },
+    {
+      "case_id": "diff_btdtrib_high_tail_complement_branch",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "btdtrib",
+      "args": [
+        0.04395757565162919,
+        0.99999999999999989,
+        0.7611845908830768
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 21.60864146301538,
         "atol": 2e-10,
         "rtol": 2e-10,
         "contract_ref": "fsci_special::btdtrib"

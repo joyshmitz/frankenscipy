@@ -150,6 +150,10 @@ pub fn btdtria(p: f64, b: f64, x: f64) -> f64 {
     if x >= 1.0 || !x.is_finite() {
         return f64::NAN;
     }
+    // I_x(a, b) = 1 - I_{1-x}(b, a); use the smaller tail when p is near 1.
+    if p > 0.5 {
+        return btdtrib(b, 1.0 - p, 1.0 - x);
+    }
 
     invert_monotone_positive(|a| btdtr(a, b, x), p, false)
 }
@@ -175,6 +179,10 @@ pub fn btdtrib(a: f64, p: f64, x: f64) -> f64 {
     }
     if x >= 1.0 || !x.is_finite() {
         return f64::NAN;
+    }
+    // I_x(a, b) = 1 - I_{1-x}(b, a); use the smaller tail when p is near 1.
+    if p > 0.5 {
+        return btdtria(1.0 - p, a, 1.0 - x);
     }
 
     invert_monotone_positive(|b| btdtr(a, b, x), p, true)
@@ -1158,6 +1166,13 @@ mod tests {
             (0.8, 2.0, 0.3, 0.38229690978762904, 2e-12),
             (0.2, 2.0, 0.3, 2.084034825279176, 2e-12),
             (0.5, 5.0, 0.7, 11.231150488078322, 2e-11),
+            (
+                0.9999999999999999,
+                13.584377534422599,
+                0.9654253202433963,
+                5.915066688085389,
+                2e-12,
+            ),
         ];
         for &(p, b, x, expected, tolerance) in cases {
             let actual = btdtria(p, b, x);
@@ -1211,6 +1226,13 @@ mod tests {
             (2.0, 0.8, 0.3, 7.924719144223477, 2e-11),
             (2.0, 0.2, 0.3, 1.8790372491805813, 2e-12),
             (0.5, 0.7, 0.2, 2.6396222094025554, 2e-12),
+            (
+                0.04395757565162919,
+                0.9999999999999999,
+                0.7611845908830768,
+                21.60864146301538,
+                2e-11,
+            ),
         ];
         for &(a, p, x, expected, tolerance) in cases {
             let actual = btdtrib(a, p, x);
