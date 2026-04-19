@@ -3477,6 +3477,72 @@ pub fn lfilter_zi(b: &[f64], a: &[f64]) -> Result<Vec<f64>, SignalError> {
     Ok(result.x)
 }
 
+/// Construct initial conditions for `lfilter` from prior input/output history.
+///
+/// Matches `scipy.signal.lfiltic(b, a, y, x=None)`.
+pub fn lfiltic(
+    b: &[f64],
+    a: &[f64],
+    y: &[f64],
+    x: Option<&[f64]>,
+) -> Result<Vec<f64>, SignalError> {
+    if a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "There must be at least one `a` coefficient.".to_string(),
+        ));
+    }
+    if a[0] == 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "First `a` filter coefficient must be non-zero.".to_string(),
+        ));
+    }
+
+    let n = a.len() - 1;
+    let m = b.len().saturating_sub(1);
+    let k = m.max(n);
+    if k == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut x_hist = x.map_or_else(|| vec![0.0; m], ToOwned::to_owned);
+    if x_hist.len() < m {
+        x_hist.resize(m, 0.0);
+    }
+
+    let mut y_hist = y.to_vec();
+    if y_hist.len() < n {
+        y_hist.resize(n, 0.0);
+    }
+
+    let mut zi = vec![0.0; k];
+    for state in 0..m {
+        let span = m - state;
+        zi[state] = b[state + 1..]
+            .iter()
+            .take(span)
+            .zip(x_hist.iter())
+            .map(|(&coeff, &sample)| coeff * sample)
+            .sum();
+    }
+    for state in 0..n {
+        let span = n - state;
+        zi[state] -= a[state + 1..]
+            .iter()
+            .take(span)
+            .zip(y_hist.iter())
+            .map(|(&coeff, &sample)| coeff * sample)
+            .sum::<f64>();
+    }
+
+    if a[0] != 1.0 {
+        for value in &mut zi {
+            *value /= a[0];
+        }
+    }
+
+    Ok(zi)
+}
+
 /// Apply a digital IIR filter using the Direct Form II transposed structure.
 ///
 /// Matches `scipy.signal.lfilter(b, a, x, zi=zi)`.
@@ -8582,6 +8648,72 @@ mod tests {
         let y = lfilter(&coeffs.b, &coeffs.a, &x, None).expect("lfilter");
         assert_eq!(y.len(), x.len());
         assert!(y.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn lfiltic_matches_scipy_reference_vector() {
+        let zi = lfiltic(&[1.0, 2.0, 3.0], &[1.0, 0.5], &[0.5], None).expect("lfiltic");
+        let expected = [-0.25, 0.0];
+        assert_eq!(zi.len(), expected.len());
+        for (got, want) in zi.iter().zip(expected.iter()) {
+            assert!((got - want).abs() <= 1.0e-12, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn lfiltic_matches_non_unit_a0_reference() {
+        let zi = lfiltic(
+            &[0.5, 1.0, 0.2],
+            &[2.0, 1.0, 3.0],
+            &[1.2, -0.7, 0.4],
+            Some(&[0.25, -1.5]),
+        )
+        .expect("lfiltic");
+        let expected = [0.425, -1.775];
+        assert_eq!(zi.len(), expected.len());
+        for (got, want) in zi.iter().zip(expected.iter()) {
+            assert!((got - want).abs() <= 1.0e-12, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn lfiltic_restores_lfilter_continuation() {
+        let b = [0.5, 1.0, 0.2];
+        let a = [2.0, 1.0, 3.0];
+        let zi = lfiltic(
+            &b,
+            &a,
+            &[-2.72515625, 0.7971875, 1.499375, -0.70125, -0.3625, 0.725],
+            Some(&[0.25, -0.5, 1.1, 0.7, -0.2, 1.3]),
+        )
+        .expect("lfiltic");
+        let future = [0.9, -0.1, 0.3, -0.8];
+        let y_future = lfilter(&b, &a, &future, Some(&zi)).expect("lfilter");
+        let expected = [0.466796875, 4.3043359375, -2.73736328125, -5.147822265625];
+        for (got, want) in y_future.iter().zip(expected.iter()) {
+            assert!((got - want).abs() <= 1.0e-12, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn lfiltic_rejects_empty_a_coefficients() {
+        let err = lfiltic(&[1.0], &[], &[0.0], Some(&[0.0])).expect_err("empty a must fail");
+        assert!(
+            err.to_string()
+                .contains("There must be at least one `a` coefficient."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn lfiltic_rejects_zero_a0() {
+        let err = lfiltic(&[1.0, 2.0], &[0.0, 2.0], &[0.0, 0.0], Some(&[0.0, 1.0]))
+            .expect_err("zero a0 must fail");
+        assert!(
+            err.to_string()
+                .contains("First `a` filter coefficient must be non-zero."),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

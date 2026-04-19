@@ -1228,7 +1228,7 @@ _(See full symbol list above -- all are functions/ufuncs from `_ufuncs` or `_bas
 | `kaiserord` | function | `_fir_filter_design` | no |
 | `lfilter` | function | `_signaltools` | no |
 | `lfilter_zi` | function | `_signaltools` | no |
-| `lfiltic` | function | `_signaltools` | no |
+| `lfiltic` | function | `_signaltools` | yes |
 | `lombscargle` | function | `_spectral_py` | no |
 | `lp2bp` | function | `_filter_design` | no |
 | `lp2bp_zpk` | function | `_filter_design` | no |

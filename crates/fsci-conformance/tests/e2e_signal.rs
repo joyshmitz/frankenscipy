@@ -14,8 +14,8 @@ use fsci_conformance::PacketFamily;
 use fsci_signal::{
     BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, autocorrelation,
     blackman, butter, convolve, correlate, filtfilt, find_peaks, firwin, freqz, gausspulse,
-    hamming, hann, hilbert_envelope, kaiser, lfilter, peak_prominences, resample, ricker, rms,
-    savgol_coeffs, savgol_filter, sosfilt, spectral_centroid, spectral_flatness, stft, tf2sos,
+    hamming, hann, hilbert_envelope, kaiser, lfilter, lfiltic, peak_prominences, resample, ricker,
+    rms, savgol_coeffs, savgol_filter, sosfilt, spectral_centroid, spectral_flatness, stft, tf2sos,
 };
 use serde::Serialize;
 use std::f64::consts::PI;
@@ -1553,4 +1553,112 @@ fn scenario_22_tf2sos() {
     let bundle = runner.finish();
     write_bundle("scenario_22_tf2sos", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_22 failed");
+}
+
+/// Scenario 23: lfiltic reconstructs lfilter state from history.
+#[test]
+fn scenario_23_lfiltic() {
+    let mut runner = ScenarioRunner::new("scenario_23_lfiltic");
+    runner.set_signal_meta("lfiltic", 10, "Strict");
+
+    let b = vec![0.5, 1.0, 0.2];
+    let a = vec![2.0, 1.0, 3.0];
+    let reference_y = vec![1.2, -0.7, 0.4];
+    let reference_x = vec![0.25, -1.5];
+    let y_history = vec![-2.72515625, 0.7971875, 1.499375, -0.70125, -0.3625, 0.725];
+    let x_history = vec![0.25, -0.5, 1.1, 0.7, -0.2, 1.3];
+    let x_future = vec![0.9, -0.1, 0.3, -0.8];
+    let mut zi: Option<Vec<f64>> = None;
+
+    runner.record_step(
+        "lfiltic_reference_vector",
+        "lfiltic(b, a, y_hist, x_hist)",
+        "SciPy reference vector with a[0] != 1",
+        "Strict",
+        || {
+            let got =
+                lfiltic(&b, &a, &reference_y, Some(&reference_x)).map_err(|e| format!("{e}"))?;
+            let expected = [0.425, -1.775];
+            if got.len() != expected.len() {
+                return Err(format!("zi length {} != {}", got.len(), expected.len()));
+            }
+            for (index, (actual, want)) in got.iter().zip(expected.iter()).enumerate() {
+                if (actual - want).abs() > 1.0e-12 {
+                    return Err(format!("zi[{index}] mismatch: {actual} vs {want}"));
+                }
+            }
+            Ok(format!("zi={got:?}"))
+        },
+    );
+
+    runner.record_step(
+        "lfiltic_restore_state",
+        "lfiltic(history) -> zi",
+        "recover final Direct Form II transposed state from prior I/O",
+        "Strict",
+        || {
+            let got = lfiltic(&b, &a, &y_history, Some(&x_history)).map_err(|e| format!("{e}"))?;
+            let expected = [0.241796875, 4.112734375];
+            if got.len() != expected.len() {
+                return Err(format!("zi length {} != {}", got.len(), expected.len()));
+            }
+            for (index, (actual, want)) in got.iter().zip(expected.iter()).enumerate() {
+                if (actual - want).abs() > 1.0e-12 {
+                    return Err(format!("restored zi[{index}] mismatch: {actual} vs {want}"));
+                }
+            }
+            zi = Some(got);
+            Ok(format!("restored zi={expected:?}"))
+        },
+    );
+
+    runner.record_step(
+        "lfiltic_continuation_matches_reference",
+        "lfilter(b, a, x_future, zi=lfiltic(...))",
+        "continued filtering should match SciPy tail output",
+        "Strict",
+        || {
+            let restored = zi
+                .as_ref()
+                .ok_or_else(|| "missing restored zi".to_string())?;
+            let y_future =
+                lfilter(&b, &a, &x_future, Some(restored)).map_err(|e| format!("{e}"))?;
+            let expected = [0.466796875, 4.3043359375, -2.73736328125, -5.147822265625];
+            if y_future.len() != expected.len() {
+                return Err(format!(
+                    "continued output length {} != {}",
+                    y_future.len(),
+                    expected.len()
+                ));
+            }
+            for (index, (actual, want)) in y_future.iter().zip(expected.iter()).enumerate() {
+                if (actual - want).abs() > 1.0e-12 {
+                    return Err(format!("continued y[{index}] mismatch: {actual} vs {want}"));
+                }
+            }
+            Ok(format!("continued output={y_future:?}"))
+        },
+    );
+
+    runner.record_step(
+        "lfiltic_invalid_a0",
+        "lfiltic(b, a=[0,...], y, x)",
+        "zero leading denominator coefficient should fail closed",
+        "Strict",
+        || match lfiltic(&[1.0, 2.0], &[0.0, 2.0], &[0.0, 0.0], Some(&[0.0, 1.0])) {
+            Ok(value) => Err(format!("expected error, got {value:?}")),
+            Err(err)
+                if err
+                    .to_string()
+                    .contains("First `a` filter coefficient must be non-zero.") =>
+            {
+                Ok(err.to_string())
+            }
+            Err(err) => Err(format!("unexpected error: {err}")),
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_23_lfiltic", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_23 failed");
 }
