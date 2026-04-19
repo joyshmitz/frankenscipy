@@ -190,12 +190,18 @@ pub fn nrdtrimn(p: f64, std: f64, x: f64) -> f64 {
     if std <= 0.0 || !(0.0 < p && p < 1.0) {
         return f64::NAN;
     }
-    if std == f64::INFINITY && x.is_finite() {
-        return if p < 0.5 {
-            f64::INFINITY
-        } else {
-            f64::NEG_INFINITY
-        };
+    if std == f64::INFINITY {
+        if x.is_finite() {
+            return if p < 0.5 {
+                f64::INFINITY
+            } else {
+                f64::NEG_INFINITY
+            };
+        }
+        if x.is_sign_positive() {
+            return if p < 0.5 { f64::INFINITY } else { f64::NAN };
+        }
+        return if p < 0.5 { f64::NAN } else { f64::NEG_INFINITY };
     }
     x - std * ndtri(p)
 }
@@ -3881,6 +3887,13 @@ mod tests {
         assert!(nrdtrimn(0.2, f64::INFINITY, 1.0).is_sign_positive());
         assert!(nrdtrimn(0.5, f64::INFINITY, 1.0).is_infinite());
         assert!(nrdtrimn(0.5, f64::INFINITY, 1.0).is_sign_negative());
+        assert!(nrdtrimn(0.5, f64::INFINITY, f64::INFINITY).is_nan());
+        assert!(nrdtrimn(0.8, f64::INFINITY, f64::INFINITY).is_nan());
+        assert!(nrdtrimn(0.2, f64::INFINITY, f64::NEG_INFINITY).is_nan());
+        assert!(nrdtrimn(0.5, f64::INFINITY, f64::NEG_INFINITY).is_infinite());
+        assert!(nrdtrimn(0.5, f64::INFINITY, f64::NEG_INFINITY).is_sign_negative());
+        assert!(nrdtrimn(0.8, f64::INFINITY, f64::NEG_INFINITY).is_infinite());
+        assert!(nrdtrimn(0.8, f64::INFINITY, f64::NEG_INFINITY).is_sign_negative());
     }
 
     #[test]

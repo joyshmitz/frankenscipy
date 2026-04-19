@@ -2430,12 +2430,45 @@
       }
     },
     {
+      "case_id": "diff_nrdtrimn_0p5_1_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nrdtrimn",
+      "args": [
+        0.5,
+        1.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::nrdtrimn"
+      }
+    },
+    {
       "case_id": "diff_nrdtrimn_p0_invalid",
       "category": "differential",
       "mode": "Strict",
       "function": "nrdtrimn",
       "args": [
         0.0,
+        2.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "diff_nrdtrimn_p1_invalid",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nrdtrimn",
+      "args": [
+        1.0,
         2.0,
         1.0
       ],
