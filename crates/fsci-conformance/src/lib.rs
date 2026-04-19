@@ -77,19 +77,20 @@ use fsci_special::{
     kv as special_kv, kvp as special_kvp, lambertw as special_lambertw,
     log_ndtr as special_log_ndtr, log1p as special_log1p, logaddexp as special_logaddexp,
     logaddexp2 as special_logaddexp2, logit as special_logit, logsumexp as special_logsumexp,
-    lpmv as special_lpmv, modstruve as special_modstruve, nbdtr as special_nbdtr,
-    nbdtrc as special_nbdtrc, nbdtri as special_nbdtri, ndtr as special_ndtr,
-    ndtri as special_ndtri, nrdtrimn as special_nrdtrimn, nrdtrisd as special_nrdtrisd,
-    owens_t as special_owens_t, pdtr as special_pdtr, pdtrc as special_pdtrc,
-    pdtri as special_pdtri, pdtrik as special_pdtrik, perm as special_perm, poch as special_poch,
-    polygamma as special_polygamma, pseudo_huber as special_pseudo_huber, radian as special_radian,
-    rel_entr as special_rel_entr, rgamma as special_rgamma, roots_chebyt as special_roots_chebyt,
-    roots_chebyu as special_roots_chebyu, roots_gegenbauer as special_roots_gegenbauer,
-    roots_genlaguerre as special_roots_genlaguerre, roots_hermite as special_roots_hermite,
-    roots_hermitenorm as special_roots_hermitenorm, roots_jacobi as special_roots_jacobi,
-    roots_laguerre as special_roots_laguerre, roots_legendre as special_roots_legendre,
-    shichi as special_shichi, sici as special_sici, sinc as special_sinc, sindg as special_sindg,
-    softplus as special_softplus, spence as special_spence, spherical_in as special_spherical_in,
+    lpmv as special_lpmv, modstruve as special_modstruve, multigammaln as special_multigammaln,
+    nbdtr as special_nbdtr, nbdtrc as special_nbdtrc, nbdtri as special_nbdtri,
+    ndtr as special_ndtr, ndtri as special_ndtri, nrdtrimn as special_nrdtrimn,
+    nrdtrisd as special_nrdtrisd, owens_t as special_owens_t, pdtr as special_pdtr,
+    pdtrc as special_pdtrc, pdtri as special_pdtri, pdtrik as special_pdtrik, perm as special_perm,
+    poch as special_poch, polygamma as special_polygamma, pseudo_huber as special_pseudo_huber,
+    radian as special_radian, rel_entr as special_rel_entr, rgamma as special_rgamma,
+    roots_chebyt as special_roots_chebyt, roots_chebyu as special_roots_chebyu,
+    roots_gegenbauer as special_roots_gegenbauer, roots_genlaguerre as special_roots_genlaguerre,
+    roots_hermite as special_roots_hermite, roots_hermitenorm as special_roots_hermitenorm,
+    roots_jacobi as special_roots_jacobi, roots_laguerre as special_roots_laguerre,
+    roots_legendre as special_roots_legendre, shichi as special_shichi, sici as special_sici,
+    sinc as special_sinc, sindg as special_sindg, softplus as special_softplus,
+    spence as special_spence, spherical_in as special_spherical_in,
     spherical_jn as special_spherical_jn, spherical_kn as special_spherical_kn,
     spherical_yn as special_spherical_yn, stdtr as special_stdtr, stdtrc as special_stdtrc,
     stdtridf as special_stdtridf, stdtrit as special_stdtrit, struve as special_struve,
@@ -565,6 +566,7 @@ pub struct OptimizePacketFixture {
 pub enum SpecialCaseFunction {
     Gamma,
     Gammaln,
+    Multigammaln,
     Digamma,
     Polygamma,
     Rgamma,
@@ -8617,6 +8619,16 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             special_scalar_from_tensor(
                 special_gammaln(&special_scalar(args[0]), mode)?,
                 "gammaln",
+                mode,
+            )
+        }
+        SpecialCaseFunction::Multigammaln => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("multigammaln", mode));
+            }
+            special_scalar_from_tensor(
+                special_multigammaln(&special_scalar(args[0]), args[1], mode)?,
+                "multigammaln",
                 mode,
             )
         }

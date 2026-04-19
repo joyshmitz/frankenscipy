@@ -737,7 +737,7 @@
 | `digamma` | function (ufunc) | `_ufuncs` | no |
 | `rgamma` | function (ufunc) | `_ufuncs` | no |
 | `polygamma` | function | `_basic` | no |
-| `multigammaln` | function | `_basic` | no |
+| `multigammaln` | function | `_basic` | yes |
 | `poch` | function (ufunc) | `_ufuncs` | no |
 
 **Error function and Fresnel (16)**

@@ -164,6 +164,28 @@ pub fn rgamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real_input("rgamma", z, mode, |x| rgamma_scalar(x, mode))
 }
 
+pub fn multigammaln(a: &SpecialTensor, d: f64, mode: RuntimeMode) -> SpecialResult {
+    if d.is_nan() || d.floor() != d {
+        record_special_trace(
+            "multigammaln",
+            mode,
+            "domain_error",
+            format!("a={a:?},d={d}"),
+            "fail_closed",
+            "d should be a positive integer (dimension)",
+            false,
+        );
+        return Err(SpecialError {
+            function: "multigammaln",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "d should be a positive integer (dimension)",
+        });
+    }
+
+    map_real_input("multigammaln", a, mode, |x| multigammaln_scalar(x, d, mode))
+}
+
 /// Gamma distribution CDF with rate `a` and shape `b`.
 ///
 /// Matches `scipy.special.gdtr(a, b, x)`.
@@ -464,6 +486,53 @@ pub fn gammaln_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         );
     }
     Ok(output)
+}
+
+fn multigammaln_scalar(a: f64, d: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    let threshold = 0.5 * (d - 1.0);
+    if !a.is_nan() && a <= threshold {
+        record_special_trace(
+            "multigammaln",
+            mode,
+            "domain_error",
+            format!("a={a},d={d}"),
+            "fail_closed",
+            format!("condition a ({a}) > 0.5 * (d - 1) ({threshold}) not met"),
+            false,
+        );
+        return Err(SpecialError {
+            function: "multigammaln",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "condition a must exceed 0.5 * (d - 1)",
+        });
+    }
+    if a.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if !d.is_finite() {
+        record_special_trace(
+            "multigammaln",
+            mode,
+            "domain_error",
+            format!("a={a},d={d}"),
+            "fail_closed",
+            "d should be a positive integer (dimension)",
+            false,
+        );
+        return Err(SpecialError {
+            function: "multigammaln",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "d should be a positive integer (dimension)",
+        });
+    }
+
+    let mut result = 0.25 * d * (d - 1.0) * PI.ln();
+    for j in 1..=(d as i64) {
+        result += gammaln_scalar(a - 0.5 * ((j - 1) as f64), mode)?;
+    }
+    Ok(result)
 }
 
 fn lngamma_lanczos(x: f64) -> f64 {
@@ -1548,6 +1617,88 @@ mod tests {
             assert_eq!(actual, 0.0);
         }
         Ok(())
+    }
+
+    #[test]
+    fn multigammaln_matches_scipy_reference_values() -> Result<(), String> {
+        let cases = [
+            (3.5, 2.0, 2.4664857258317197),
+            (4.0, 3.0, 5.402975080909175),
+            (1.0, 2.0, 1.1447298858494),
+        ];
+        for (a, d, expected) in cases {
+            let actual = get_scalar(multigammaln(&scalar(a), d, RuntimeMode::Strict))?;
+            assert!((actual - expected).abs() <= 1.0e-12);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn multigammaln_reduces_to_gammaln_for_dimension_one() -> Result<(), String> {
+        for a in [0.5, 1.25, 3.5, 10.0] {
+            let actual = get_scalar(multigammaln(&scalar(a), 1.0, RuntimeMode::Strict))?;
+            let expected = gammaln_scalar(a, RuntimeMode::Strict).map_err(|err| err.to_string())?;
+            assert!((actual - expected).abs() <= 1.0e-12);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn multigammaln_supports_real_vectors() -> Result<(), String> {
+        let input = SpecialTensor::RealVec(vec![2.5, 10.0]);
+        let result =
+            multigammaln(&input, 2.0, RuntimeMode::Strict).map_err(|err| err.to_string())?;
+        match result {
+            SpecialTensor::RealVec(values) => {
+                let expected = [
+                    0.5 * PI.ln()
+                        + gammaln_scalar(2.5, RuntimeMode::Strict)
+                            .map_err(|err| err.to_string())?
+                        + gammaln_scalar(2.0, RuntimeMode::Strict)
+                            .map_err(|err| err.to_string())?,
+                    0.5 * PI.ln()
+                        + gammaln_scalar(10.0, RuntimeMode::Strict)
+                            .map_err(|err| err.to_string())?
+                        + gammaln_scalar(9.5, RuntimeMode::Strict)
+                            .map_err(|err| err.to_string())?,
+                ];
+                assert_eq!(values.len(), expected.len());
+                for (actual, expected_value) in values.iter().zip(expected.iter()) {
+                    assert!((*actual - *expected_value).abs() <= 1.0e-12);
+                }
+            }
+            other => return Err(format!("expected real vector, got {other:?}")),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn multigammaln_preserves_scipy_edge_cases() -> Result<(), String> {
+        let zero_dim = get_scalar(multigammaln(&scalar(3.5), 0.0, RuntimeMode::Strict))?;
+        assert_eq!(zero_dim, 0.0);
+
+        let negative_dim = get_scalar(multigammaln(&scalar(3.5), -1.0, RuntimeMode::Strict))?;
+        assert!((negative_dim - 0.5723649429247001).abs() <= 1.0e-12);
+
+        let nan_a = get_scalar(multigammaln(&scalar(f64::NAN), 2.0, RuntimeMode::Strict))?;
+        assert!(nan_a.is_nan());
+        Ok(())
+    }
+
+    #[test]
+    fn multigammaln_rejects_non_integer_dimension() {
+        let err = multigammaln(&scalar(3.5), 1.2, RuntimeMode::Strict)
+            .expect_err("non-integer dimensions should fail closed");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+        assert_eq!(err.detail, "d should be a positive integer (dimension)");
+    }
+
+    #[test]
+    fn multigammaln_rejects_inputs_below_threshold() {
+        let err = multigammaln(&scalar(0.4), 2.0, RuntimeMode::Strict)
+            .expect_err("a <= 0.5 * (d - 1) should fail closed");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+        assert_eq!(err.detail, "condition a must exceed 0.5 * (d - 1)");
     }
 
     #[test]
