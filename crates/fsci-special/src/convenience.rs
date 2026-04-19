@@ -206,6 +206,26 @@ pub fn nrdtrimn(p: f64, std: f64, x: f64) -> f64 {
     x - std * ndtri(p)
 }
 
+/// Recover the standard deviation of a normal distribution from a mean, CDF value, and quantile.
+///
+/// Matches `scipy.special.nrdtrisd(mn, p, x)`.
+#[must_use]
+pub fn nrdtrisd(mn: f64, p: f64, x: f64) -> f64 {
+    const NRDTRISD_P50_DENOM: f64 = 6.637_989_419_862_078e-17;
+
+    if mn.is_nan() || p.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if !(0.0 < p && p < 1.0) {
+        return f64::NAN;
+    }
+    let delta = x - mn;
+    if p == 0.5 {
+        return delta / NRDTRISD_P50_DENOM;
+    }
+    delta / ndtri(p)
+}
+
 /// KL divergence element `x * log(x / y) - x + y`.
 ///
 /// Matches `scipy.special.kl_div(x, y)`.
@@ -3905,6 +3925,46 @@ mod tests {
         assert!(nrdtrimn(f64::NAN, 2.0, 1.0).is_nan());
         assert!(nrdtrimn(0.8, f64::NAN, 1.0).is_nan());
         assert!(nrdtrimn(0.8, 2.0, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn nrdtrisd_recovers_std() {
+        let mean = 3.0;
+        let std = 2.0;
+        let x = 6.0;
+        let p = ndtr((x - mean) / std);
+        let recovered = nrdtrisd(mean, p, x);
+        assert!(
+            (recovered - std).abs() <= 1.0e-12,
+            "nrdtrisd std recovery mismatch: expected={std}, got={recovered}"
+        );
+    }
+
+    #[test]
+    fn nrdtrisd_matches_scipy_contract_points() {
+        assert!(nrdtrisd(0.5, 0.5, 0.5) == 0.0);
+        assert!((nrdtrisd(3.0, 0.933_192_798_731_141_9, 6.0) - 2.0).abs() <= 1.0e-12);
+        assert!(
+            (nrdtrisd(1.0, 0.5, 0.5) - (-7.532_401_279_578_852e15)).abs()
+                <= 1.0e-12 * 7.532_401_279_578_852e15
+        );
+        assert!(nrdtrisd(1.0, 0.2, f64::INFINITY).is_infinite());
+        assert!(nrdtrisd(1.0, 0.2, f64::INFINITY).is_sign_negative());
+        assert!(nrdtrisd(1.0, 0.5, f64::INFINITY).is_infinite());
+        assert!(nrdtrisd(1.0, 0.5, f64::INFINITY).is_sign_positive());
+        assert!(nrdtrisd(f64::INFINITY, 0.2, 1.0).is_infinite());
+        assert!(nrdtrisd(f64::INFINITY, 0.2, 1.0).is_sign_positive());
+        assert!(nrdtrisd(f64::NEG_INFINITY, 0.8, 1.0).is_infinite());
+        assert!(nrdtrisd(f64::NEG_INFINITY, 0.8, 1.0).is_sign_positive());
+    }
+
+    #[test]
+    fn nrdtrisd_rejects_invalid_inputs_like_scipy() {
+        assert!(nrdtrisd(0.0, 0.0, 1.0).is_nan());
+        assert!(nrdtrisd(0.0, 1.0, 1.0).is_nan());
+        assert!(nrdtrisd(f64::NAN, 0.8, 1.0).is_nan());
+        assert!(nrdtrisd(0.0, f64::NAN, 1.0).is_nan());
+        assert!(nrdtrisd(0.0, 0.8, f64::NAN).is_nan());
     }
 
     #[test]

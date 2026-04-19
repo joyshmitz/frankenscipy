@@ -79,11 +79,11 @@ use fsci_special::{
     logaddexp2 as special_logaddexp2, logit as special_logit, logsumexp as special_logsumexp,
     lpmv as special_lpmv, modstruve as special_modstruve, nbdtr as special_nbdtr,
     nbdtrc as special_nbdtrc, nbdtri as special_nbdtri, ndtr as special_ndtr,
-    ndtri as special_ndtri, nrdtrimn as special_nrdtrimn, owens_t as special_owens_t,
-    pdtr as special_pdtr, pdtrc as special_pdtrc, pdtri as special_pdtri, pdtrik as special_pdtrik,
-    perm as special_perm, poch as special_poch, polygamma as special_polygamma,
-    pseudo_huber as special_pseudo_huber, radian as special_radian, rel_entr as special_rel_entr,
-    rgamma as special_rgamma, roots_chebyt as special_roots_chebyt,
+    ndtri as special_ndtri, nrdtrimn as special_nrdtrimn, nrdtrisd as special_nrdtrisd,
+    owens_t as special_owens_t, pdtr as special_pdtr, pdtrc as special_pdtrc,
+    pdtri as special_pdtri, pdtrik as special_pdtrik, perm as special_perm, poch as special_poch,
+    polygamma as special_polygamma, pseudo_huber as special_pseudo_huber, radian as special_radian,
+    rel_entr as special_rel_entr, rgamma as special_rgamma, roots_chebyt as special_roots_chebyt,
     roots_chebyu as special_roots_chebyu, roots_gegenbauer as special_roots_gegenbauer,
     roots_genlaguerre as special_roots_genlaguerre, roots_hermite as special_roots_hermite,
     roots_hermitenorm as special_roots_hermitenorm, roots_jacobi as special_roots_jacobi,
@@ -661,6 +661,7 @@ pub enum SpecialCaseFunction {
     Ndtr,
     Ndtri,
     Nrdtrimn,
+    Nrdtrisd,
     LogNdtr,
     Logsumexp,
     Log1p,
@@ -9390,6 +9391,12 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
                 return Err(special_invalid_fixture_error("nrdtrimn", mode));
             }
             Ok(special_nrdtrimn(args[0], args[1], args[2]))
+        }
+        SpecialCaseFunction::Nrdtrisd => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("nrdtrisd", mode));
+            }
+            Ok(special_nrdtrisd(args[0], args[1], args[2]))
         }
         SpecialCaseFunction::LogNdtr => {
             if args.len() != 1 {

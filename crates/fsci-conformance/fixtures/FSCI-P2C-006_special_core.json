@@ -2478,6 +2478,75 @@
       }
     },
     {
+      "case_id": "diff_nrdtrisd_3_0p9331927987311419_6",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nrdtrisd",
+      "args": [
+        3.0,
+        0.9331927987311419,
+        6.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.0000000000000004,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::nrdtrisd"
+      }
+    },
+    {
+      "case_id": "diff_nrdtrisd_0p5_0p5_0p5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nrdtrisd",
+      "args": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::nrdtrisd"
+      }
+    },
+    {
+      "case_id": "diff_nrdtrisd_midpoint_sentinel",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nrdtrisd",
+      "args": [
+        1.0,
+        0.5,
+        0.5
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -7532401279578852.0,
+        "atol": 8192.0,
+        "rtol": 1e-15,
+        "contract_ref": "fsci_special::nrdtrisd"
+      }
+    },
+    {
+      "case_id": "diff_nrdtrisd_p0_invalid",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nrdtrisd",
+      "args": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
       "case_id": "diff_log_ndtr_neg8",
       "category": "differential",
       "mode": "Strict",

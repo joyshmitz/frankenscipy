@@ -671,7 +671,7 @@
 | `nctdtrinc` | function (ufunc) | `_ufuncs` | no |
 | `nctdtrit` | function (ufunc) | `_ufuncs` | no |
 | `nrdtrimn` | function (ufunc) | `_ufuncs` | yes |
-| `nrdtrisd` | function (ufunc) | `_ufuncs` | no |
+| `nrdtrisd` | function (ufunc) | `_ufuncs` | yes |
 | `ndtr` | function (ufunc) | `_ufuncs` | no |
 | `log_ndtr` | function (ufunc) | `_ufuncs` | no |
 | `ndtri` | function (ufunc) | `_ufuncs` | no |

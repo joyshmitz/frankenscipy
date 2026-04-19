@@ -140,6 +140,7 @@ pub use convenience::{
     negentropy,
     nextafter,
     nrdtrimn,
+    nrdtrisd,
     owens_t,
     poch,
     positive,
