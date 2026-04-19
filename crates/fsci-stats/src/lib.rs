@@ -6324,6 +6324,20 @@ pub fn ttest_ind(a: &[f64], b: &[f64]) -> TtestResult {
     // Pooled variance
     let sp2 = ((n1 - 1.0) * var1 + (n2 - 1.0) * var2) / df;
     let se = (sp2 * (1.0 / n1 + 1.0 / n2)).sqrt();
+
+    if se == 0.0 {
+        let statistic = if (mean1 - mean2).abs() == 0.0 {
+            f64::NAN
+        } else {
+            (mean1 - mean2).signum() * f64::INFINITY
+        };
+        return TtestResult {
+            statistic,
+            pvalue: if statistic.is_nan() { f64::NAN } else { 0.0 },
+            df,
+        };
+    }
+
     let t = (mean1 - mean2) / se;
 
     let tdist = StudentT::new(df);
@@ -6355,12 +6369,29 @@ pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
     let var2: f64 = b.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0);
 
     let se = (var1 / n1 + var2 / n2).sqrt();
-    let t = (mean1 - mean2) / se;
 
     // Welch-Satterthwaite degrees of freedom
     let vn1 = var1 / n1;
     let vn2 = var2 / n2;
-    let df = (vn1 + vn2).powi(2) / (vn1.powi(2) / (n1 - 1.0) + vn2.powi(2) / (n2 - 1.0));
+    let mut df = (vn1 + vn2).powi(2) / (vn1.powi(2) / (n1 - 1.0) + vn2.powi(2) / (n2 - 1.0));
+    if df.is_nan() {
+        df = 1.0;
+    }
+
+    if se == 0.0 {
+        let statistic = if (mean1 - mean2).abs() == 0.0 {
+            f64::NAN
+        } else {
+            (mean1 - mean2).signum() * f64::INFINITY
+        };
+        return TtestResult {
+            statistic,
+            pvalue: if statistic.is_nan() { f64::NAN } else { 0.0 },
+            df,
+        };
+    }
+
+    let t = (mean1 - mean2) / se;
 
     let tdist = StudentT::new(df);
     let pvalue = 2.0 * tdist.sf(t.abs());
@@ -6894,7 +6925,11 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
 ///
 /// Matches `scipy.stats.mood(x, y)`.
 pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
-    if x.len() < 3 || y.len() < 3 {
+    let m = x.len();
+    let n = y.len();
+    let total = m + n;
+    if m == 0 || n == 0 || total < 3 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan())
+    {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -6902,10 +6937,15 @@ pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
         };
     }
 
-    let n = x.len() + y.len();
+    let mf = m as f64;
     let nf = n as f64;
+    let totalf = total as f64;
+    let center = (totalf + 1.0) / 2.0;
+    let sum_i = |u: f64| u * (u + 1.0) / 2.0;
+    let sum_i2 = |u: f64| u * (u + 1.0) * (2.0 * u + 1.0) / 6.0;
 
-    // Pool and rank all observations
+    // Pool observations and aggregate equal-valued groups so the statistic and
+    // variance follow SciPy's tie-aware Mielke correction.
     let mut pooled: Vec<(f64, bool)> = x
         .iter()
         .map(|&v| (v, true))
@@ -6913,22 +6953,43 @@ pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
         .collect();
     pooled.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-    // Mood statistic: M = Σ (rank_i - (n+1)/2)² for x observations
-    let center = (nf + 1.0) / 2.0;
-    let mut m_stat = 0.0;
-    for (rank, &(_, is_x)) in pooled.iter().enumerate() {
-        if is_x {
-            let r = rank as f64 + 1.0;
-            m_stat += (r - center).powi(2);
+    let mut cumulative = 0.0;
+    let mut statistic_sum = 0.0;
+    let mut tie_variance_sum = 0.0;
+    let mut i = 0;
+    while i < pooled.len() {
+        let value = pooled[i].0;
+        let start = cumulative;
+        let mut j = i;
+        let mut x_count = 0.0;
+        while j < pooled.len() && pooled[j].0 == value {
+            if pooled[j].1 {
+                x_count += 1.0;
+            }
+            j += 1;
         }
+
+        let count = (j - i) as f64;
+        cumulative += count;
+        let lo = start + 1.0;
+        let hi = cumulative;
+        let rank_sum = sum_i(hi) - sum_i(lo - 1.0);
+        let rank_sq_sum = sum_i2(hi) - sum_i2(lo - 1.0);
+        let phi = (rank_sq_sum - 2.0 * center * rank_sum + count * center * center) / count;
+        statistic_sum += x_count * phi;
+
+        tie_variance_sum += count
+            * (count * count - 1.0)
+            * (count * count - 4.0 + 15.0 * (totalf - cumulative - start).powi(2));
+
+        i = j;
     }
 
-    // Expected value and variance under H0
-    let nx = x.len() as f64;
-    let e_m = nx * (nf * nf - 1.0) / 12.0;
-    let var_m = nx * (nf - nx) * (nf + 1.0) * (nf + 2.0) * (nf - 2.0) / 180.0;
+    let e_m = mf * (totalf * totalf - 1.0) / 12.0;
+    let var_m = mf * nf * (totalf + 1.0) * (totalf * totalf - 4.0) / 180.0
+        - mf * nf * tie_variance_sum / (180.0 * totalf * (totalf - 1.0));
 
-    if var_m <= 0.0 {
+    if !var_m.is_finite() || var_m <= 0.0 {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -6936,9 +6997,9 @@ pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
         };
     }
 
-    let z = (m_stat - e_m) / var_m.sqrt();
+    let z = (statistic_sum - e_m) / var_m.sqrt();
     let norm = Normal::standard();
-    let pvalue = 2.0 * (1.0 - ContinuousDistribution::cdf(&norm, z.abs()));
+    let pvalue = (2.0 * ContinuousDistribution::sf(&norm, z.abs())).clamp(0.0, 1.0);
 
     TtestResult {
         statistic: z,
@@ -9222,9 +9283,12 @@ pub fn entropy(pk: &[f64], base: Option<f64>) -> f64 {
     if pk.is_empty() {
         return 0.0;
     }
+    if pk.iter().any(|&p| p < 0.0) {
+        return f64::NEG_INFINITY;
+    }
     let total: f64 = pk.iter().sum();
-    if total <= 0.0 {
-        return 0.0;
+    if total == 0.0 {
+        return f64::NAN;
     }
 
     let h: f64 = pk
@@ -16273,7 +16337,33 @@ mod tests {
         let a: Vec<f64> = (0..50).map(|i| i as f64 * 10.0).collect(); // wide
         let b: Vec<f64> = (0..50).map(|i| 250.0 + i as f64 * 0.1).collect(); // narrow
         let result = mood(&a, &b);
-        assert!(result.pvalue < 0.05, "different scale: p={}", result.pvalue);
+        assert_close(
+            result.statistic,
+            8.325_634_389_708_824,
+            1e-12,
+            "mood different-scale statistic",
+        );
+        assert_close(
+            result.pvalue,
+            8.387_831_487_417_383e-17,
+            1e-25,
+            "mood different-scale pvalue",
+        );
+    }
+
+    #[test]
+    fn mood_small_samples_match_scipy_oracle() {
+        let result = mood(&[1.0, 2.0], &[3.0, 4.0]);
+        assert_close(result.statistic, 0.0, 1e-12, "mood small-sample statistic");
+        assert_close(result.pvalue, 1.0, 1e-12, "mood small-sample pvalue");
+    }
+
+    #[test]
+    fn mood_nan_input_returns_nan() {
+        let result = mood(&[1.0, f64::NAN, 3.0], &[4.0, 5.0, 6.0]);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+        assert!(result.df.is_nan());
     }
 
     // ── Median test ──────────────────────────────────────────────────
