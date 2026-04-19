@@ -70,6 +70,7 @@ use fsci_stats::{
     median_abs_deviation,
     median_test,
     mode,
+    mood,
     multipletests_bonferroni,
     multipletests_fdr_bh,
     multipletests_holm,
@@ -3159,6 +3160,109 @@ fn e2e_032_median_test_helper_contracts() {
             invalid_single.statistic.is_nan(),
             invalid_single.pvalue.is_nan(),
             invalid_single.df.is_nan()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 33: Mood test helper contracts.
+/// Verifies SciPy-shaped `mood` outputs for equal-scale, unequal-scale, and
+/// small-sample inputs, plus fail-closed NaN-input handling.
+#[test]
+fn e2e_033_mood_helper_contracts() {
+    let scenario_id = "e2e_stats_033_mood_helpers";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let equal_left: Vec<f64> = (0..30).map(|i| i as f64).collect();
+    let equal_right: Vec<f64> = (0..30).map(|i| i as f64 + 100.0).collect();
+    let equal = mood(&equal_left, &equal_right);
+    let pass = equal.statistic == 0.0 && equal.pvalue == 1.0 && equal.df.is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "mood_equal_scale_reference",
+        "mood([0..29], [100..129])",
+        "samples with equal scale should match SciPy's zero z-score and unit p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}, df_is_nan={}",
+            equal.statistic,
+            equal.pvalue,
+            equal.df.is_nan()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let wide: Vec<f64> = (0..50).map(|i| i as f64 * 10.0).collect();
+    let narrow: Vec<f64> = (0..50).map(|i| 250.0 + i as f64 * 0.1).collect();
+    let unequal = mood(&wide, &narrow);
+    let pass = (unequal.statistic - 8.325_634_389_708_824).abs() < 1e-12
+        && (unequal.pvalue - 8.387_831_487_417_383e-17).abs() < 1e-25
+        && unequal.df.is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "mood_unequal_scale_reference",
+        "mood([0,10,20,...,490], [250.0,250.1,...,254.9])",
+        "samples with sharply different scales should match SciPy's z-score and two-sided p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.18e}, df_is_nan={}",
+            unequal.statistic,
+            unequal.pvalue,
+            unequal.df.is_nan()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let small = mood(&[1.0, 2.0], &[3.0, 4.0]);
+    let pass = small.statistic == 0.0 && small.pvalue == 1.0 && small.df.is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "mood_small_sample_reference",
+        "mood([1.0,2.0], [3.0,4.0])",
+        "the minimal non-degenerate 2x2 case should match SciPy's finite small-sample result instead of collapsing to NaN",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}, df_is_nan={}",
+            small.statistic,
+            small.pvalue,
+            small.df.is_nan()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let nan_input = mood(&[1.0, f64::NAN, 3.0], &[4.0, 5.0, 6.0]);
+    let pass = nan_input.statistic.is_nan() && nan_input.pvalue.is_nan() && nan_input.df.is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "mood_nan_input_fail_closed",
+        "mood([1.0, NaN, 3.0], [4.0, 5.0, 6.0])",
+        "NaN-contaminated input should fail closed with NaN sentinels rather than emitting a misleading scale statistic",
+        &format!(
+            "statistic_is_nan={}, pvalue_is_nan={}, df_is_nan={}",
+            nan_input.statistic.is_nan(),
+            nan_input.pvalue.is_nan(),
+            nan_input.df.is_nan()
         ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
