@@ -112,6 +112,15 @@ storage.sqlite3-wal.corrupt-*
 /fails.txt
 /ubs_*.txt
 /test.out
+/test
+/test.rs
+
+# Agent-generated root-level summary / audit / diff captures
+/audit_summary.md
+/final_summary*.md
+/summary*.md
+/gitlog.txt
+/*.patch
 
 # Scratch scan binaries inside crate src/bin (agent-dropped test harnesses)
 crates/fsci-fft/src/bin/test_*.rs
