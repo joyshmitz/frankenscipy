@@ -62,6 +62,20 @@ impl Shape2D {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SparseSliceSpec {
+    pub start: usize,
+    pub end: usize,
+    pub step: usize,
+}
+
+impl SparseSliceSpec {
+    #[must_use]
+    pub const fn new(start: usize, end: usize, step: usize) -> Self {
+        Self { start, end, step }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CanonicalMeta {
     pub sorted_indices: bool,
     pub deduplicated: bool,
@@ -848,6 +862,41 @@ impl LilMatrix {
         use crate::ops::FormatConvertible;
         self.to_coo()?.to_csc()
     }
+
+    pub fn slice(
+        &self,
+        row_slice: SparseSliceSpec,
+        col_slice: SparseSliceSpec,
+    ) -> SparseResult<Self> {
+        validate_slice_spec(row_slice, self.shape.rows, "row")?;
+        validate_slice_spec(col_slice, self.shape.cols, "col")?;
+
+        let mut sliced_row_indices = Vec::with_capacity(slice_len(row_slice));
+        let mut sliced_row_data = Vec::with_capacity(slice_len(row_slice));
+
+        for row in (row_slice.start..row_slice.end).step_by(row_slice.step) {
+            let mut cols = Vec::new();
+            let mut values = Vec::new();
+            for (&col, &value) in self.row_indices[row].iter().zip(self.row_data[row].iter()) {
+                if col < col_slice.start || col >= col_slice.end {
+                    continue;
+                }
+                let offset = col - col_slice.start;
+                if offset % col_slice.step == 0 {
+                    cols.push(offset / col_slice.step);
+                    values.push(value);
+                }
+            }
+            sliced_row_indices.push(cols);
+            sliced_row_data.push(values);
+        }
+
+        Ok(Self {
+            shape: Shape2D::new(slice_len(row_slice), slice_len(col_slice)),
+            row_indices: sliced_row_indices,
+            row_data: sliced_row_data,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1522,6 +1571,46 @@ fn validate_coordinate(shape: Shape2D, row: usize, col: usize) -> SparseResult<(
         });
     }
     Ok(())
+}
+
+fn validate_slice_spec(
+    spec: SparseSliceSpec,
+    bound: usize,
+    axis: &'static str,
+) -> SparseResult<()> {
+    if spec.step == 0 {
+        return Err(SparseError::InvalidArgument {
+            message: "slice step must be >= 1".to_string(),
+        });
+    }
+    if spec.start > bound {
+        return Err(SparseError::IndexOutOfBounds {
+            axis,
+            index: spec.start,
+            bound,
+        });
+    }
+    if spec.end > bound {
+        return Err(SparseError::IndexOutOfBounds {
+            axis,
+            index: spec.end,
+            bound,
+        });
+    }
+    if spec.start > spec.end {
+        return Err(SparseError::InvalidArgument {
+            message: "slice start must be <= end".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn slice_len(spec: SparseSliceSpec) -> usize {
+    if spec.start >= spec.end {
+        0
+    } else {
+        1 + (spec.end - spec.start - 1) / spec.step
+    }
 }
 
 fn validate_bsr_block_shape(

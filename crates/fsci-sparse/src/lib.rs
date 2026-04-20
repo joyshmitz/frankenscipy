@@ -11,6 +11,7 @@ pub use construct::{
 pub use formats::{
     BsrMatrix, CanonicalMeta, ConstructionLogEntry, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix,
     DokMatrix, LilMatrix, NalgebraBridge, Shape2D, SparseError, SparseFormat, SparseResult,
+    SparseSliceSpec,
 };
 pub use linalg::{
     ConnectedComponentsResult,
@@ -743,6 +744,80 @@ mod tests {
             dense_from_coo(&lil.to_csc().expect("lil->csc").to_coo().expect("csc->coo"));
         assert_matrix_close(&dense_from_lil, &dense_from_csr);
         assert_matrix_close(&dense_from_lil, &dense_from_csc);
+    }
+
+    #[test]
+    fn lil_slice_matches_scipy_dense_reference() {
+        let mut lil = LilMatrix::new(Shape2D::new(4, 5));
+        lil.insert(0, 1, 2.0).expect("insert");
+        lil.insert(1, 3, 5.0).expect("insert");
+        lil.insert(2, 0, 7.0).expect("insert");
+        lil.insert(3, 4, 11.0).expect("insert");
+
+        let row_slice = lil
+            .slice(SparseSliceSpec::new(1, 3, 1), SparseSliceSpec::new(0, 5, 1))
+            .expect("row slice");
+        assert_eq!(row_slice.row_indices()[0], vec![3]);
+        assert_eq!(row_slice.row_data()[0], vec![5.0]);
+        assert_eq!(row_slice.row_indices()[1], vec![0]);
+        assert_eq!(row_slice.row_data()[1], vec![7.0]);
+        assert_matrix_close(
+            &dense_from_coo(&row_slice.to_coo().expect("row slice coo")),
+            &[vec![0.0, 0.0, 0.0, 5.0, 0.0], vec![7.0, 0.0, 0.0, 0.0, 0.0]],
+        );
+
+        let col_slice = lil
+            .slice(SparseSliceSpec::new(0, 4, 1), SparseSliceSpec::new(1, 4, 1))
+            .expect("col slice");
+        assert_eq!(col_slice.row_indices()[0], vec![0]);
+        assert_eq!(col_slice.row_data()[0], vec![2.0]);
+        assert_eq!(col_slice.row_indices()[1], vec![2]);
+        assert_eq!(col_slice.row_data()[1], vec![5.0]);
+        assert_matrix_close(
+            &dense_from_coo(&col_slice.to_coo().expect("col slice coo")),
+            &[
+                vec![2.0, 0.0, 0.0],
+                vec![0.0, 0.0, 5.0],
+                vec![0.0, 0.0, 0.0],
+                vec![0.0, 0.0, 0.0],
+            ],
+        );
+
+        let stepped = lil
+            .slice(SparseSliceSpec::new(1, 4, 1), SparseSliceSpec::new(1, 5, 2))
+            .expect("stepped slice");
+        assert_eq!(stepped.row_indices()[0], vec![1]);
+        assert_eq!(stepped.row_data()[0], vec![5.0]);
+        assert_eq!(stepped.row_indices()[1], Vec::<usize>::new());
+        assert_eq!(stepped.row_indices()[2], Vec::<usize>::new());
+        assert_matrix_close(
+            &dense_from_coo(&stepped.to_coo().expect("stepped coo")),
+            &[vec![0.0, 5.0], vec![0.0, 0.0], vec![0.0, 0.0]],
+        );
+    }
+
+    #[test]
+    fn lil_slice_rejects_invalid_specs() {
+        let lil = LilMatrix::new(Shape2D::new(2, 3));
+        let err = lil
+            .slice(SparseSliceSpec::new(0, 2, 0), SparseSliceSpec::new(0, 3, 1))
+            .expect_err("zero step");
+        assert!(matches!(
+            err,
+            SparseError::InvalidArgument { message } if message == "slice step must be >= 1"
+        ));
+
+        let err = lil
+            .slice(SparseSliceSpec::new(0, 3, 1), SparseSliceSpec::new(0, 3, 1))
+            .expect_err("row bound");
+        assert!(matches!(
+            err,
+            SparseError::IndexOutOfBounds {
+                axis: "row",
+                index: 3,
+                bound: 2
+            }
+        ));
     }
 
     #[test]

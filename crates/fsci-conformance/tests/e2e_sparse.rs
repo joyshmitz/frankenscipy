@@ -17,8 +17,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D,
-    SolveOptions, SparseError, add_csr, bicgstab, cg, connected_component_sizes,
+    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, LilMatrix, Shape2D,
+    SolveOptions, SparseError, SparseSliceSpec, add_csr, bicgstab, cg, connected_component_sizes,
     csr_to_csc_with_mode, diags, dijkstra, eye, find, gmres, hstack, hstack_with_format,
     is_connected, pagerank, scale_csr, sparse_norm, spmm, spmv_csr, spsolve,
     strongly_connected_components, sub_csr, topological_sort, tril, triu, vstack,
@@ -2619,4 +2619,88 @@ fn e2e_021_dijkstra_negative_weight_handling() {
         overall_pass,
         "Dijkstra negative-edge handling should match SciPy"
     );
+}
+
+/// Scenario 22: LIL slicing parity.
+#[test]
+fn e2e_022_lil_matrix_slicing_parity() {
+    let scenario_id = "e2e_sparse_022_lil_matrix_slicing";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    let mut lil = LilMatrix::new(Shape2D::new(4, 5));
+    lil.insert(0, 1, 2.0).expect("insert");
+    lil.insert(1, 3, 5.0).expect("insert");
+    lil.insert(2, 0, 7.0).expect("insert");
+    lil.insert(3, 4, 11.0).expect("insert");
+
+    let t_start = Instant::now();
+    let row_slice = lil
+        .slice(SparseSliceSpec::new(1, 3, 1), SparseSliceSpec::new(0, 5, 1))
+        .expect("row slice");
+    let row_dense = dense_from_coo(&row_slice.to_coo().expect("row slice coo"));
+    let row_pass = row_dense == vec![vec![0.0, 0.0, 0.0, 5.0, 0.0], vec![7.0, 0.0, 0.0, 0.0, 0.0]];
+    steps.push(make_step(
+        1,
+        "row_slice_full_columns",
+        "lil.slice(rows=1:3, cols=:)",
+        "SciPy row slice should preserve row order and full-width columns",
+        &format!("dense={row_dense:?}"),
+        t_start.elapsed().as_nanos(),
+        if row_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let col_slice = lil
+        .slice(SparseSliceSpec::new(0, 4, 1), SparseSliceSpec::new(1, 4, 1))
+        .expect("col slice");
+    let col_dense = dense_from_coo(&col_slice.to_coo().expect("col slice coo"));
+    let col_pass = col_dense
+        == vec![
+            vec![2.0, 0.0, 0.0],
+            vec![0.0, 0.0, 5.0],
+            vec![0.0, 0.0, 0.0],
+            vec![0.0, 0.0, 0.0],
+        ];
+    steps.push(make_step(
+        2,
+        "column_slice_full_rows",
+        "lil.slice(rows=:, cols=1:4)",
+        "SciPy column slice should rebase column indices into the sliced matrix",
+        &format!("dense={col_dense:?}"),
+        t_start.elapsed().as_nanos(),
+        if col_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let stepped = lil
+        .slice(SparseSliceSpec::new(1, 4, 1), SparseSliceSpec::new(1, 5, 2))
+        .expect("stepped slice");
+    let stepped_dense = dense_from_coo(&stepped.to_coo().expect("stepped coo"));
+    let stepped_pass = stepped_dense == vec![vec![0.0, 5.0], vec![0.0, 0.0], vec![0.0, 0.0]];
+    steps.push(make_step(
+        3,
+        "stepped_column_slice",
+        "lil.slice(rows=1:4, cols=1:5:2)",
+        "positive-step SciPy slicing should keep only every second in-range column",
+        &format!("dense={stepped_dense:?}"),
+        t_start.elapsed().as_nanos(),
+        if stepped_pass { "ok" } else { "fail" },
+    ));
+
+    let overall_pass = row_pass && col_pass && stepped_pass;
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if overall_pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(overall_pass, "LIL slicing parity should match SciPy");
 }
