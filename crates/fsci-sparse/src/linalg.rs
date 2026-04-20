@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use fsci_linalg::{DecompOptions, LinalgError, expm as dense_expm};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
@@ -2659,13 +2661,17 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
     let m = a.shape().rows;
     let n = b.shape().cols;
 
-    let mut rows = Vec::new();
     let mut cols = Vec::new();
     let mut vals = Vec::new();
+    let mut indptr = Vec::with_capacity(m + 1);
+    let mut sorted_indices = true;
+    indptr.push(0);
 
     for i in 0..m {
-        // Accumulate row i of C
-        let mut row_acc = std::collections::BTreeMap::new();
+        // SciPy's CSR matmul kernel emits columns in reverse first-seen order
+        // within each row; do not sort the accumulator if we want parity.
+        let mut row_acc = HashMap::new();
+        let mut column_order = Vec::new();
         let a_start = a.indptr()[i];
         let a_end = a.indptr()[i + 1];
 
@@ -2679,30 +2685,35 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
                 for b_idx in b_start..b_end {
                     let j = b.indices()[b_idx];
                     let b_kj = b.data()[b_idx];
-                    *row_acc.entry(j).or_insert(0.0) += a_ik * b_kj;
+                    if let Some(value) = row_acc.get_mut(&j) {
+                        *value += a_ik * b_kj;
+                    } else {
+                        row_acc.insert(j, a_ik * b_kj);
+                        column_order.push(j);
+                    }
                 }
             }
         }
 
-        for (&j, &v) in &row_acc {
+        let mut prev_col = None;
+        for &j in column_order.iter().rev() {
+            let v = row_acc[&j];
             if v.abs() > 0.0 {
-                rows.push(i);
+                if let Some(prev) = prev_col {
+                    sorted_indices &= prev < j;
+                }
+                prev_col = Some(j);
                 cols.push(j);
                 vals.push(v);
             }
         }
+        indptr.push(cols.len());
     }
 
-    // Build CSR from COO-like data
-    let mut indptr = vec![0usize; m + 1];
-    for &r in &rows {
-        indptr[r + 1] += 1;
-    }
-    for i in 0..m {
-        indptr[i + 1] += indptr[i];
-    }
-
-    CsrMatrix::from_components_unchecked(Shape2D::new(m, n), vals, cols, indptr)
+    let mut result = CsrMatrix::from_components_unchecked(Shape2D::new(m, n), vals, cols, indptr);
+    result.canonical.sorted_indices = sorted_indices;
+    result.canonical.deduplicated = true;
+    result
 }
 
 /// Compute one-norm estimate for a sparse matrix.

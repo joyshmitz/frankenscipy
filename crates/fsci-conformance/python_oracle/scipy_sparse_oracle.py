@@ -47,6 +47,18 @@ def _find_result(matrix: Any, sparse: Any) -> Dict[str, Any]:
     }
 
 
+def _csr_components_result(matrix: Any) -> Dict[str, Any]:
+    csr = matrix if getattr(matrix, "format", None) == "csr" else matrix.tocsr()
+    return {
+        "shape": [int(csr.shape[0]), int(csr.shape[1])],
+        "data": [float(v) for v in csr.data.tolist()],
+        "indices": [int(v) for v in csr.indices.tolist()],
+        "indptr": [int(v) for v in csr.indptr.tolist()],
+        "has_sorted_indices": bool(csr.has_sorted_indices),
+        "has_canonical_format": bool(csr.has_canonical_format),
+    }
+
+
 def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
     case_id = case["case_id"]
     operation = case["operation"]
@@ -114,6 +126,18 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
                 "status": "ok",
                 "result_kind": "matrix_triplets",
                 "result": _matrix_result(result),
+                "error": None,
+            }
+
+        if operation == "csr_matmul":
+            lhs = _matrix_from_spec(case["blocks"][0], sparse, np)
+            rhs = _matrix_from_spec(case["blocks"][1], sparse, np)
+            result = lhs @ rhs
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "csr_components",
+                "result": _csr_components_result(result),
                 "error": None,
             }
 

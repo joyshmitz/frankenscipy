@@ -20,8 +20,8 @@ use fsci_sparse::{
     CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D,
     SolveOptions, SparseError, add_csr, bicgstab, cg, connected_component_sizes,
     csr_to_csc_with_mode, diags, eye, find, gmres, hstack, hstack_with_format, is_connected,
-    pagerank, scale_csr, sparse_norm, spmv_csr, spsolve, strongly_connected_components, sub_csr,
-    topological_sort, tril, triu, vstack,
+    pagerank, scale_csr, sparse_norm, spmm, spmv_csr, spsolve, strongly_connected_components,
+    sub_csr, topological_sort, tril, triu, vstack,
 };
 use serde::{Deserialize, Serialize};
 
@@ -238,6 +238,16 @@ struct SparseOracleFindResult {
     data: Vec<f64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SparseOracleCsrComponents {
+    shape: [usize; 2],
+    data: Vec<f64>,
+    indices: Vec<usize>,
+    indptr: Vec<usize>,
+    has_sorted_indices: bool,
+    has_canonical_format: bool,
+}
+
 enum SparseInputMatrix {
     Coo(CooMatrix),
     Csr(CsrMatrix),
@@ -386,12 +396,39 @@ fn compare_find_result(
     );
 }
 
+fn compare_csr_components(
+    case_id: &str,
+    actual: &SparseOracleCsrComponents,
+    expected: &SparseOracleCsrComponents,
+) {
+    assert_eq!(actual.shape, expected.shape, "{case_id}: shape mismatch");
+    assert_eq!(
+        actual.indices, expected.indices,
+        "{case_id}: indices mismatch"
+    );
+    assert_eq!(actual.indptr, expected.indptr, "{case_id}: indptr mismatch");
+    assert_eq!(
+        actual.has_sorted_indices, expected.has_sorted_indices,
+        "{case_id}: has_sorted_indices mismatch"
+    );
+    assert_eq!(
+        actual.has_canonical_format, expected.has_canonical_format,
+        "{case_id}: has_canonical_format mismatch"
+    );
+    assert!(
+        max_abs_diff_vec(&actual.data, &expected.data) <= TOL,
+        "{case_id}: data mismatch actual={:?} expected={:?}",
+        actual.data,
+        expected.data
+    );
+}
+
 fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
     let operation = case.operation.as_str();
     assert!(
         matches!(
             operation,
-            "find" | "tril" | "triu" | "tocsc" | "vstack" | "hstack"
+            "find" | "tril" | "triu" | "tocsc" | "vstack" | "hstack" | "csr_matmul"
         ),
         "unsupported sparse oracle operation {}",
         case.operation
@@ -460,6 +497,31 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
                 result_kind: "matrix_triplets".to_string(),
                 result: serde_json::to_value(triplets_from_coo(&coo, Some("csr")))
                     .expect("serialize vstack result"),
+                error: None,
+            }
+        }
+        "csr_matmul" => {
+            let blocks = case.blocks.as_ref().expect("blocks");
+            assert_eq!(blocks.len(), 2, "csr_matmul expects exactly two matrices");
+            let lhs = build_sparse_input(&blocks[0]);
+            let rhs = build_sparse_input(&blocks[1]);
+            let lhs_csr = lhs.as_format_convertible().to_csr().expect("lhs->csr");
+            let rhs_csr = rhs.as_format_convertible().to_csr().expect("rhs->csr");
+            let result = spmm(&lhs_csr, &rhs_csr);
+            SparseOracleCaseOutput {
+                case_id: case.case_id.clone(),
+                status: "ok".to_string(),
+                result_kind: "csr_components".to_string(),
+                result: serde_json::to_value(SparseOracleCsrComponents {
+                    shape: [result.shape().rows, result.shape().cols],
+                    data: result.data().to_vec(),
+                    indices: result.indices().to_vec(),
+                    indptr: result.indptr().to_vec(),
+                    has_sorted_indices: result.canonical_meta().sorted_indices,
+                    has_canonical_format: result.canonical_meta().sorted_indices
+                        && result.canonical_meta().deduplicated,
+                })
+                .expect("serialize csr_matmul result"),
                 error: None,
             }
         }
@@ -2186,6 +2248,29 @@ fn e2e_019_sparse_helper_oracle_match() {
                 ]),
                 k: None,
             },
+            SparseOracleCase {
+                case_id: "csr_matmul_identity_reverses_sorted_rows".to_string(),
+                operation: "csr_matmul".to_string(),
+                format: None,
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "csr".to_string(),
+                        shape: [2, 3],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 2, 1, 2],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csr".to_string(),
+                        shape: [3, 3],
+                        row: vec![0, 1, 2],
+                        col: vec![0, 1, 2],
+                        data: vec![1.0, 1.0, 1.0],
+                    },
+                ]),
+                k: None,
+            },
         ],
     };
 
@@ -2275,7 +2360,7 @@ fn e2e_019_sparse_helper_oracle_match() {
         assert!(
             matches!(
                 expected.result_kind.as_str(),
-                "find_triplets" | "matrix_triplets"
+                "find_triplets" | "matrix_triplets" | "csr_components"
             ),
             "unsupported oracle result kind {}",
             expected.result_kind
@@ -2286,7 +2371,7 @@ fn e2e_019_sparse_helper_oracle_match() {
             let expected_result: SparseOracleFindResult =
                 serde_json::from_value(expected.result.clone()).expect("oracle find result");
             compare_find_result(&case.case_id, &actual_result, &expected_result);
-        } else {
+        } else if expected.result_kind == "matrix_triplets" {
             let actual_result: SparseOracleTriplets =
                 serde_json::from_value(actual.result.clone()).expect("actual triplets");
             let expected_result: SparseOracleTriplets =
@@ -2299,6 +2384,12 @@ fn e2e_019_sparse_helper_oracle_match() {
                     case.case_id
                 );
             }
+        } else {
+            let actual_result: SparseOracleCsrComponents =
+                serde_json::from_value(actual.result.clone()).expect("actual csr components");
+            let expected_result: SparseOracleCsrComponents =
+                serde_json::from_value(expected.result.clone()).expect("oracle csr components");
+            compare_csr_components(&case.case_id, &actual_result, &expected_result);
         }
     }
     steps.push(make_step(

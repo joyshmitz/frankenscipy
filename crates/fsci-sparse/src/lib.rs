@@ -1037,6 +1037,49 @@ mod tests {
     }
 
     #[test]
+    fn spmm_identity_matches_scipy_csr_row_order_and_metadata() {
+        let lhs = CsrMatrix::from_components(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 2, 1, 2],
+            vec![0, 2, 4],
+            false,
+        )
+        .expect("sorted lhs csr");
+        let identity = eye(3).expect("identity matrix");
+
+        let product = spmm(&lhs, &identity);
+
+        assert_eq!(product.indptr(), &[0, 2, 4]);
+        assert_eq!(product.indices(), &[2, 0, 2, 1]);
+        assert_vec_close(product.data(), &[2.0, 1.0, 4.0, 3.0]);
+        assert!(!product.canonical_meta().sorted_indices);
+        assert!(product.canonical_meta().deduplicated);
+    }
+
+    #[test]
+    fn spmm_identity_second_pass_restores_sorted_metadata() {
+        let lhs = CsrMatrix::from_components(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 2, 1, 2],
+            vec![0, 2, 4],
+            false,
+        )
+        .expect("sorted lhs csr");
+        let identity = eye(3).expect("identity matrix");
+
+        let first = spmm(&lhs, &identity);
+        let second = spmm(&first, &identity);
+
+        assert_eq!(second.indptr(), &[0, 2, 4]);
+        assert_eq!(second.indices(), &[0, 2, 1, 2]);
+        assert_vec_close(second.data(), &[1.0, 2.0, 3.0, 4.0]);
+        assert!(second.canonical_meta().sorted_indices);
+        assert!(second.canonical_meta().deduplicated);
+    }
+
+    #[test]
     fn spmv_rejects_vector_length_mismatch_all_formats() {
         let coo = CooMatrix::from_triplets(
             Shape2D::new(2, 3),
