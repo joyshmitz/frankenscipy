@@ -882,7 +882,7 @@ impl LilMatrix {
                     continue;
                 }
                 let offset = col - col_slice.start;
-                if offset % col_slice.step == 0 {
+                if offset.is_multiple_of(col_slice.step) {
                     cols.push(offset / col_slice.step);
                     values.push(value);
                 }
