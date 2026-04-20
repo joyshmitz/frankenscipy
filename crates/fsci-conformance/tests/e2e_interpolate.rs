@@ -14,7 +14,7 @@ use fsci_interpolate::{
     Akima1DInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpError, InterpKind,
     PchipInterpolator, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod,
     SmoothBivariateSpline, SmoothBivariateSplineOptions, SplineBc, interp1d_linear,
-    make_interp_spline, polyfit, polyval,
+    make_interp_spline, polyfit, polyval, splev_with_derivative,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -1436,4 +1436,61 @@ fn scenario_18_regular_grid_pchip() {
     let bundle = runner.finish();
     write_bundle("scenario_18_regular_grid_pchip", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_18 failed");
+}
+
+/// Scenario 19: scipy.interpolate.splev(..., der=2) parity
+#[test]
+fn scenario_19_splev_second_derivative() {
+    let mut runner = ScenarioRunner::new("scenario_19_splev_second_derivative");
+    runner.set_interp_meta("splev-der2", 4, 1, "Strict");
+
+    let tck = (
+        vec![0.0, 0.0, 0.0, 0.0, 2.0, 4.0, 4.0, 4.0, 4.0],
+        vec![
+            4.131186545826286e-17,
+            -1.5593640784053972e-15,
+            2.0677589048408837e-15,
+            32.0,
+            64.0,
+        ],
+        3_usize,
+    );
+    let points = vec![0.5, 1.5, 2.5, 3.5];
+
+    runner.record_step(
+        "splev_der2_reference",
+        "splev_with_derivative(points, tck, 2)",
+        "SciPy cubic tck for x^3 sampled on [0,4]",
+        "Strict",
+        || {
+            let expected = vec![3.0, 9.0, 15.0, 21.0];
+            let actual = splev_with_derivative(&points, &tck, 2).map_err(|e| format!("{e}"))?;
+            let max_diff = max_abs_diff(&actual, &expected);
+            if max_diff < 1.0e-10 {
+                Ok(format!("max_abs_diff={max_diff:.3e}"))
+            } else {
+                Err(format!(
+                    "max_abs_diff={max_diff:.3e}, actual={actual:?}, expected={expected:?}"
+                ))
+            }
+        },
+    );
+
+    runner.record_step(
+        "splev_der_above_degree_rejected",
+        "splev_with_derivative([0.5], tck, 4)",
+        "SciPy rejects derivative order above spline degree",
+        "Strict",
+        || match splev_with_derivative(&[0.5], &tck, 4) {
+            Err(InterpError::InvalidArgument { detail }) if detail == "0<=der=4<=k=3 must hold" => {
+                Ok(detail)
+            }
+            Err(other) => Err(format!("unexpected error: {other}")),
+            Ok(values) => Err(format!("expected error, got values {values:?}")),
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_19_splev_second_derivative", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_19 failed");
 }

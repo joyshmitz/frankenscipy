@@ -1401,7 +1401,7 @@ _(See full symbol list above -- all are functions/ufuncs from `_ufuncs` or `_bas
 | `spalde` | function | `_fitpack_py` | no |
 | `splantider` | function | `_fitpack_py` | no |
 | `splder` | function | `_fitpack_py` | no |
-| `splev` | function | `_fitpack_py` | no |
+| `splev` | function | `_fitpack_py` | yes |
 | `splint` | function | `_fitpack_py` | no |
 | `splprep` | function | `_fitpack_py` | no |
 | `splrep` | function | `_fitpack_py` | no |

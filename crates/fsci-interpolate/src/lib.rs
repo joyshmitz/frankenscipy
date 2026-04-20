@@ -2909,9 +2909,31 @@ pub fn splrep(
 /// Takes (knots, coefficients, degree) from `splrep`.
 /// Matches `scipy.interpolate.splev`.
 pub fn splev(x_eval: &[f64], tck: &(Vec<f64>, Vec<f64>, usize)) -> Result<Vec<f64>, InterpError> {
+    splev_with_derivative(x_eval, tck, 0)
+}
+
+/// Evaluate a spline or one of its derivatives at given points.
+///
+/// Takes (knots, coefficients, degree) from `splrep`.
+/// Matches `scipy.interpolate.splev(..., der=der)`.
+pub fn splev_with_derivative(
+    x_eval: &[f64],
+    tck: &(Vec<f64>, Vec<f64>, usize),
+    der: usize,
+) -> Result<Vec<f64>, InterpError> {
     let (t, c, k) = tck;
+    if der > *k {
+        return Err(InterpError::InvalidArgument {
+            detail: format!("0<=der={der}<=k={} must hold", *k),
+        });
+    }
     let bspl = BSpline::new(t.clone(), c.clone(), *k)?;
-    Ok(x_eval.iter().map(|&x| bspl.eval(x)).collect())
+    let eval_spline = if der == 0 {
+        bspl
+    } else {
+        bspl.derivative(der)?
+    };
+    Ok(eval_spline.eval_many(x_eval))
 }
 
 /// Simple 2D interpolation on a regular grid.
@@ -4595,6 +4617,42 @@ mod tests {
         assert_eq!(anti.degree(), 2);
         assert_eq!(anti.eval(0.0), 0.0);
         assert_eq!(anti.eval(1.0), 1.0);
+    }
+
+    #[test]
+    fn splev_second_derivative_matches_scipy_reference_tck() {
+        let t = vec![0.0, 0.0, 0.0, 0.0, 2.0, 4.0, 4.0, 4.0, 4.0];
+        let c = vec![
+            4.131186545826286e-17,
+            -1.5593640784053972e-15,
+            2.0677589048408837e-15,
+            32.0,
+            64.0,
+        ];
+        let tck = (t, c, 3_usize);
+        let points = vec![0.5, 1.5, 2.5, 3.5];
+        let expected = [3.0, 9.0, 15.0, 21.0];
+        let actual = splev_with_derivative(&points, &tck, 2).expect("second derivative");
+        for (index, (&got, &want)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "second derivative mismatch at {index}: {got} vs {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn splev_rejects_derivative_order_above_degree() {
+        let tck = (
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![1.0, 2.0, 3.0],
+            2_usize,
+        );
+        let err = splev_with_derivative(&[0.5], &tck, 3).expect_err("derivative above degree");
+        assert!(matches!(
+            err,
+            InterpError::InvalidArgument { detail } if detail == "0<=der=3<=k=2 must hold"
+        ));
     }
 
     #[test]
