@@ -15,9 +15,9 @@ use fsci_signal::{
     BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, SpectralScaling,
     autocorrelation, blackman, butter, convolve, correlate, csd_with_scaling, filtfilt, find_peaks,
     firwin, freqz, gausspulse, get_window, get_window_with_fftbins, hamming, hann,
-    hilbert_envelope, kaiser, lfilter, lfiltic, peak_prominences, resample, ricker, rms,
-    savgol_coeffs, savgol_filter, sosfilt, spectral_centroid, spectral_flatness, stft, tf2sos,
-    welch,
+    hilbert_envelope, kaiser, lfilter, lfiltic, peak_prominences, resample,
+    resample_poly_with_padtype, ricker, rms, savgol_coeffs, savgol_filter, sosfilt,
+    spectral_centroid, spectral_flatness, stft, tf2sos, welch,
 };
 use serde::Serialize;
 use std::f64::consts::PI;
@@ -1947,4 +1947,91 @@ fn scenario_26_csd_scaling_modes() {
     let bundle = runner.finish();
     write_bundle("scenario_26_csd_scaling_modes", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_26 failed");
+}
+
+/// Scenario 27: resample_poly honors SciPy padtype and cval edge handling.
+#[test]
+fn scenario_27_resample_poly_padtype_modes() {
+    let mut runner = ScenarioRunner::new("scenario_27_resample_poly_padtype_modes");
+    let x = vec![1.0, 2.0, 4.0, 8.0];
+    runner.set_signal_meta("resample_poly", x.len(), "Strict");
+
+    runner.record_step(
+        "resample_poly_line_reference",
+        "resample_poly_with_padtype(x, 3, 2, Some(\"line\"), None)",
+        "global line extrapolation should match SciPy's line padtype output",
+        "Strict",
+        || {
+            let got = resample_poly_with_padtype(&x, 3, 2, Some("line"), None)
+                .map_err(|e| format!("{e}"))?;
+            let expected = [
+                1.000606173553777,
+                1.780628511492595,
+                2.331390913393649,
+                4.002424694215109,
+                6.739706761743146,
+                8.971945980209963,
+            ];
+            let diff = max_abs_diff(&got, &expected);
+            if diff < 1e-8 {
+                Ok(format!("max_abs_diff={diff:.2e}"))
+            } else {
+                Err(format!("line padtype mismatch diff={diff:.2e}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "resample_poly_mean_reference",
+        "resample_poly_with_padtype(x, 3, 2, Some(\"mean\"), None)",
+        "background-subtracted mean padding should match SciPy's mean padtype output",
+        "Strict",
+        || {
+            let got = resample_poly_with_padtype(&x, 3, 2, Some("mean"), None)
+                .map_err(|e| format!("{e}"))?;
+            let expected = [
+                0.998333022727113,
+                1.573448321613185,
+                2.293752166053205,
+                4.000151543388444,
+                7.390581540874371,
+                7.201952100936264,
+            ];
+            let diff = max_abs_diff(&got, &expected);
+            if diff < 1e-8 {
+                Ok(format!("max_abs_diff={diff:.2e}"))
+            } else {
+                Err(format!("mean padtype mismatch diff={diff:.2e}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "resample_poly_constant_cval_reference",
+        "resample_poly_with_padtype(x, 3, 2, Some(\"constant\"), Some(5.0))",
+        "constant padding with an explicit cval should match SciPy's nonzero boundary fill",
+        "Strict",
+        || {
+            let got = resample_poly_with_padtype(&x, 3, 2, Some("constant"), Some(5.0))
+                .map_err(|e| format!("{e}"))?;
+            let expected = [
+                1.000606173553777,
+                1.39589024581026,
+                2.44120445519666,
+                4.002424694215109,
+                7.179517790579072,
+                7.616661693078465,
+            ];
+            let diff = max_abs_diff(&got, &expected);
+            if diff < 1e-8 {
+                Ok(format!("max_abs_diff={diff:.2e}"))
+            } else {
+                Err(format!("constant cval mismatch diff={diff:.2e}"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_27_resample_poly_padtype_modes", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_27 failed");
 }

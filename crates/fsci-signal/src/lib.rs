@@ -6779,6 +6779,130 @@ pub fn resample(x: &[f64], num: usize) -> Result<Vec<f64>, SignalError> {
 /// * `up` — Upsampling factor.
 /// * `down` — Downsampling factor.
 pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, SignalError> {
+    resample_poly_with_padtype(x, up, down, None, None)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ResamplePolyPadMode {
+    Constant(f64),
+    Background(f64),
+    Edge,
+    Reflect,
+    Symmetric,
+    Wrap,
+    Line { start: f64, slope: f64 },
+}
+
+fn resample_poly_reflected_index(idx: i64, len: usize, symmetric: bool) -> usize {
+    if len <= 1 {
+        return 0;
+    }
+
+    let len = len as i64;
+    let period = if symmetric { 2 * len } else { 2 * len - 2 };
+    let idx = idx.rem_euclid(period);
+    if symmetric {
+        if idx < len {
+            idx as usize
+        } else {
+            (period - idx - 1) as usize
+        }
+    } else if idx < len {
+        idx as usize
+    } else {
+        (period - idx) as usize
+    }
+}
+
+fn resample_poly_median(x: &[f64]) -> f64 {
+    let mut values = x.to_vec();
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    if values.len() % 2 == 1 {
+        values[mid]
+    } else {
+        (values[mid - 1] + values[mid]) / 2.0
+    }
+}
+
+fn parse_resample_poly_pad_mode(
+    x: &[f64],
+    padtype: Option<&str>,
+    cval: Option<f64>,
+) -> Result<ResamplePolyPadMode, SignalError> {
+    let padtype = padtype.unwrap_or("constant");
+    if cval.is_some() && padtype != "constant" {
+        return Err(SignalError::InvalidArgument(format!(
+            "cval has no effect when padtype is {padtype}"
+        )));
+    }
+
+    let constant = |value: f64| Ok(ResamplePolyPadMode::Constant(value));
+    match padtype {
+        "constant" => constant(cval.unwrap_or(0.0)),
+        "mean" => Ok(ResamplePolyPadMode::Background(
+            x.iter().sum::<f64>() / x.len() as f64,
+        )),
+        "median" => Ok(ResamplePolyPadMode::Background(resample_poly_median(x))),
+        "maximum" => Ok(ResamplePolyPadMode::Background(
+            x.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        )),
+        "minimum" => Ok(ResamplePolyPadMode::Background(
+            x.iter().copied().fold(f64::INFINITY, f64::min),
+        )),
+        "edge" => Ok(ResamplePolyPadMode::Edge),
+        "reflect" => Ok(ResamplePolyPadMode::Reflect),
+        "symmetric" => Ok(ResamplePolyPadMode::Symmetric),
+        "wrap" => Ok(ResamplePolyPadMode::Wrap),
+        "line" => {
+            let slope = if x.len() > 1 {
+                (x[x.len() - 1] - x[0]) / (x.len() - 1) as f64
+            } else {
+                0.0
+            };
+            Ok(ResamplePolyPadMode::Line { start: x[0], slope })
+        }
+        _ => Err(SignalError::InvalidArgument(
+            "padtype must be one of {'constant', 'line', 'mean', 'median', \
+             'maximum', 'minimum', 'edge', 'reflect', 'symmetric', 'wrap'}"
+                .to_string(),
+        )),
+    }
+}
+
+fn resample_poly_sample(x: &[f64], idx: i64, mode: ResamplePolyPadMode) -> f64 {
+    if idx >= 0 && idx < x.len() as i64 {
+        return x[idx as usize];
+    }
+
+    match mode {
+        ResamplePolyPadMode::Constant(value) => value,
+        ResamplePolyPadMode::Background(_) => 0.0,
+        ResamplePolyPadMode::Edge => {
+            if idx < 0 {
+                x[0]
+            } else {
+                x[x.len() - 1]
+            }
+        }
+        ResamplePolyPadMode::Reflect => x[resample_poly_reflected_index(idx, x.len(), false)],
+        ResamplePolyPadMode::Symmetric => x[resample_poly_reflected_index(idx, x.len(), true)],
+        ResamplePolyPadMode::Wrap => x[idx.rem_euclid(x.len() as i64) as usize],
+        ResamplePolyPadMode::Line { start, slope } => start + slope * idx as f64,
+    }
+}
+
+/// Resample a signal using polyphase filtering with SciPy-style boundary modes.
+///
+/// Matches `scipy.signal.resample_poly(..., padtype=..., cval=...)` for the
+/// implemented 1-D modes.
+pub fn resample_poly_with_padtype(
+    x: &[f64],
+    up: usize,
+    down: usize,
+    padtype: Option<&str>,
+    cval: Option<f64>,
+) -> Result<Vec<f64>, SignalError> {
     if x.is_empty() {
         return Err(SignalError::InvalidArgument(
             "input must not be empty".to_string(),
@@ -6789,6 +6913,15 @@ pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, Sign
             "up and down must be > 0".to_string(),
         ));
     }
+    let parsed_mode = parse_resample_poly_pad_mode(x, padtype, cval)?;
+    let (background, pad_mode, input) = match parsed_mode {
+        ResamplePolyPadMode::Background(value) => (
+            value,
+            ResamplePolyPadMode::Constant(0.0),
+            x.iter().map(|sample| sample - value).collect::<Vec<_>>(),
+        ),
+        mode => (0.0, mode, x.to_vec()),
+    };
 
     // Simplify the ratio using GCD.
     let g = gcd(up, down);
@@ -6796,7 +6929,7 @@ pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, Sign
     let down = down / g;
 
     if up == 1 && down == 1 {
-        return Ok(x.to_vec());
+        return Ok(input.iter().map(|sample| sample + background).collect());
     }
 
     // Design anti-aliasing FIR filter.
@@ -6808,7 +6941,7 @@ pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, Sign
 
     // Polyphase implementation to avoid materializing the full upsampled signal.
     // Equivalent to: upsample -> convolve(mode=Same) -> downsample.
-    let upsampled_len = x.len() * up;
+    let upsampled_len = input.len() * up;
     let half_taps = (n_taps - 1) as i64 / 2;
     let mut output = Vec::with_capacity(upsampled_len.div_ceil(down));
 
@@ -6821,11 +6954,9 @@ pub fn resample_poly(x: &[f64], up: usize, down: usize) -> Result<Vec<f64>, Sign
         let k_start = (target % up as i64 + up as i64) % up as i64;
         for k in (k_start as usize..n_taps).step_by(up) {
             let x_idx = (target - k as i64) / up as i64;
-            if x_idx >= 0 && x_idx < x.len() as i64 {
-                val += h_scaled[k] * x[x_idx as usize];
-            }
+            val += h_scaled[k] * resample_poly_sample(&input, x_idx, pad_mode);
         }
-        output.push(val);
+        output.push(val + background);
         i += down;
     }
 
@@ -10594,6 +10725,80 @@ mod tests {
                 "identity resample_poly mismatch at {i}"
             );
         }
+    }
+
+    #[test]
+    fn resample_poly_padtype_line_matches_scipy_reference() {
+        let x = vec![1.0, 2.0, 4.0, 8.0];
+        let result = resample_poly_with_padtype(&x, 3, 2, Some("line"), None).unwrap();
+        let expected = [
+            1.000606173553777,
+            1.780628511492595,
+            2.331390913393649,
+            4.002424694215109,
+            6.739706761743146,
+            8.971945980209963,
+        ];
+        assert_eq!(result.len(), expected.len());
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-8,
+                "line padtype mismatch at {i}: got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn resample_poly_padtype_mean_matches_scipy_reference() {
+        let x = vec![1.0, 2.0, 4.0, 8.0];
+        let result = resample_poly_with_padtype(&x, 3, 2, Some("mean"), None).unwrap();
+        let expected = [
+            0.998333022727113,
+            1.573448321613185,
+            2.293752166053205,
+            4.000151543388444,
+            7.390581540874371,
+            7.201952100936264,
+        ];
+        assert_eq!(result.len(), expected.len());
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-8,
+                "mean padtype mismatch at {i}: got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn resample_poly_padtype_constant_cval_matches_scipy_reference() {
+        let x = vec![1.0, 2.0, 4.0, 8.0];
+        let result = resample_poly_with_padtype(&x, 3, 2, Some("constant"), Some(5.0)).unwrap();
+        let expected = [
+            1.000606173553777,
+            1.39589024581026,
+            2.44120445519666,
+            4.002424694215109,
+            7.179517790579072,
+            7.616661693078465,
+        ];
+        assert_eq!(result.len(), expected.len());
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-8,
+                "constant cval mismatch at {i}: got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn resample_poly_padtype_rejects_nonconstant_cval() {
+        let x = vec![1.0, 2.0, 4.0, 8.0];
+        let err =
+            resample_poly_with_padtype(&x, 3, 2, Some("mean"), Some(5.0)).expect_err("invalid");
+        assert_eq!(
+            err,
+            SignalError::InvalidArgument("cval has no effect when padtype is mean".to_string())
+        );
     }
 
     // ── Decimate tests ─────────────────────────────────────────────
