@@ -393,6 +393,34 @@ impl CooMatrix {
         &self.col_indices
     }
 
+    pub fn setdiag(&mut self, values: &[f64], k: isize) -> SparseResult<()> {
+        validate_setdiag_offset(self.shape, k)?;
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let count = diagonal_len_for_setdiag(self.shape, k).min(values.len());
+        if count == 0 {
+            return Ok(());
+        }
+
+        let coordinates = diagonal_coordinates_for_setdiag(self.shape, k, count);
+        self.replace_coordinates(&coordinates, values.iter().copied());
+        Ok(())
+    }
+
+    pub fn setdiag_scalar(&mut self, value: f64, k: isize) -> SparseResult<()> {
+        validate_setdiag_offset(self.shape, k)?;
+        let count = diagonal_len_for_setdiag(self.shape, k);
+        if count == 0 {
+            return Ok(());
+        }
+
+        let coordinates = diagonal_coordinates_for_setdiag(self.shape, k, count);
+        self.replace_coordinates(&coordinates, std::iter::repeat_n(value, count));
+        Ok(())
+    }
+
     #[must_use]
     pub fn construction_log(
         &self,
@@ -409,6 +437,40 @@ impl CooMatrix {
             mode,
             validation_result: validation_result.into(),
         }
+    }
+
+    fn replace_coordinates<I>(&mut self, coordinates: &[(usize, usize)], values: I)
+    where
+        I: IntoIterator<Item = f64>,
+    {
+        let targets: BTreeSet<(usize, usize)> = coordinates.iter().copied().collect();
+        let mut kept_rows = Vec::with_capacity(self.row_indices.len());
+        let mut kept_cols = Vec::with_capacity(self.col_indices.len());
+        let mut kept_data = Vec::with_capacity(self.data.len());
+
+        for ((&row, &col), &value) in self
+            .row_indices
+            .iter()
+            .zip(self.col_indices.iter())
+            .zip(self.data.iter())
+        {
+            if targets.contains(&(row, col)) {
+                continue;
+            }
+            kept_rows.push(row);
+            kept_cols.push(col);
+            kept_data.push(value);
+        }
+
+        for ((row, col), value) in coordinates.iter().copied().zip(values) {
+            kept_rows.push(row);
+            kept_cols.push(col);
+            kept_data.push(value);
+        }
+
+        self.row_indices = kept_rows;
+        self.col_indices = kept_cols;
+        self.data = kept_data;
     }
 }
 
@@ -1596,6 +1658,40 @@ fn diagonal_len(shape: Shape2D, offset: isize) -> usize {
         .rows
         .saturating_sub(start_row)
         .min(shape.cols.saturating_sub(start_col))
+}
+
+fn validate_setdiag_offset(shape: Shape2D, k: isize) -> SparseResult<()> {
+    if (k > 0 && k.unsigned_abs() >= shape.cols) || (k < 0 && k.unsigned_abs() >= shape.rows) {
+        return Err(SparseError::InvalidArgument {
+            message: "k exceeds array dimensions".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn diagonal_len_for_setdiag(shape: Shape2D, k: isize) -> usize {
+    if k >= 0 {
+        shape.rows.min(shape.cols.saturating_sub(k.unsigned_abs()))
+    } else {
+        shape.rows.saturating_sub(k.unsigned_abs()).min(shape.cols)
+    }
+}
+
+fn diagonal_coordinates_for_setdiag(shape: Shape2D, k: isize, count: usize) -> Vec<(usize, usize)> {
+    let max_count = diagonal_len_for_setdiag(shape, k).min(count);
+    let mut coordinates = Vec::with_capacity(max_count);
+    if k >= 0 {
+        let offset = k.unsigned_abs();
+        for index in 0..max_count {
+            coordinates.push((index, index + offset));
+        }
+    } else {
+        let offset = k.unsigned_abs();
+        for index in 0..max_count {
+            coordinates.push((index + offset, index));
+        }
+    }
+    coordinates
 }
 
 fn detect_canonical(indptr: &[usize], indices: &[usize]) -> (bool, bool) {

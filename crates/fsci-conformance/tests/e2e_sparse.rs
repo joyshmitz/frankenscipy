@@ -163,6 +163,15 @@ fn dense_from_csr(csr: &CsrMatrix) -> Vec<Vec<f64>> {
     dense
 }
 
+fn dense_from_coo(coo: &CooMatrix) -> Vec<Vec<f64>> {
+    let shape = coo.shape();
+    let mut dense = vec![vec![0.0; shape.cols]; shape.rows];
+    for idx in 0..coo.nnz() {
+        dense[coo.row_indices()[idx]][coo.col_indices()[idx]] += coo.data()[idx];
+    }
+    dense
+}
+
 fn max_abs_diff_vec(a: &[f64], b: &[f64]) -> f64 {
     assert_eq!(a.len(), b.len());
     a.iter()
@@ -2415,4 +2424,123 @@ fn e2e_019_sparse_helper_oracle_match() {
         },
     };
     write_bundle(scenario_id, &bundle);
+}
+
+/// Scenario 20: COO setdiag boundary parity.
+#[test]
+fn e2e_020_coo_setdiag_boundary_parity() {
+    let scenario_id = "e2e_sparse_020_coo_setdiag_boundary";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    let t_start = Instant::now();
+    let mut superdiag =
+        CooMatrix::from_triplets(Shape2D::new(3, 4), vec![8.0], vec![0], vec![3], false)
+            .expect("superdiag base");
+    superdiag
+        .setdiag(&[1.0, 2.0, 3.0, 4.0], 1)
+        .expect("superdiag setdiag");
+    let superdiag_dense = dense_from_coo(&superdiag);
+    let superdiag_pass = superdiag.row_indices() == [0, 0, 1, 2]
+        && superdiag.col_indices() == [3, 1, 2, 3]
+        && max_abs_diff_vec(superdiag.data(), &[8.0, 1.0, 2.0, 3.0]) <= TOL
+        && superdiag_dense
+            == vec![
+                vec![0.0, 1.0, 0.0, 8.0],
+                vec![0.0, 0.0, 2.0, 0.0],
+                vec![0.0, 0.0, 0.0, 3.0],
+            ];
+    steps.push(make_step(
+        1,
+        "set_superdiag",
+        "coo.setdiag(values, k=1)",
+        "shape=(3,4), values=[1,2,3,4]",
+        &format!(
+            "rows={:?} cols={:?} data={:?}",
+            superdiag.row_indices(),
+            superdiag.col_indices(),
+            superdiag.data()
+        ),
+        t_start.elapsed().as_nanos(),
+        if superdiag_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let mut partial = CooMatrix::from_triplets(
+        Shape2D::new(3, 3),
+        vec![10.0, 20.0, 30.0],
+        vec![0, 1, 2],
+        vec![0, 1, 2],
+        false,
+    )
+    .expect("partial base");
+    partial.setdiag(&[5.0], 0).expect("partial setdiag");
+    let partial_pass = partial.row_indices() == [1, 2, 0]
+        && partial.col_indices() == [1, 2, 0]
+        && max_abs_diff_vec(partial.data(), &[20.0, 30.0, 5.0]) <= TOL;
+    steps.push(make_step(
+        2,
+        "set_partial_main_diag",
+        "coo.setdiag(values, k=0)",
+        "shape=(3,3), values=[5]",
+        &format!(
+            "rows={:?} cols={:?} data={:?}",
+            partial.row_indices(),
+            partial.col_indices(),
+            partial.data()
+        ),
+        t_start.elapsed().as_nanos(),
+        if partial_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let mut scalar = CooMatrix::from_triplets(Shape2D::new(3, 4), vec![], vec![], vec![], false)
+        .expect("scalar base");
+    scalar.setdiag_scalar(9.0, 1).expect("scalar setdiag");
+    let scalar_pass = scalar.row_indices() == [0, 1, 2]
+        && scalar.col_indices() == [1, 2, 3]
+        && max_abs_diff_vec(scalar.data(), &[9.0, 9.0, 9.0]) <= TOL;
+    steps.push(make_step(
+        3,
+        "broadcast_scalar",
+        "coo.setdiag_scalar(value, k=1)",
+        "shape=(3,4), value=9",
+        &format!(
+            "rows={:?} cols={:?} data={:?}",
+            scalar.row_indices(),
+            scalar.col_indices(),
+            scalar.data()
+        ),
+        t_start.elapsed().as_nanos(),
+        if scalar_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let err = scalar.setdiag(&[1.0], 4).expect_err("out-of-bounds k");
+    let err_pass = matches!(err, SparseError::InvalidArgument { ref message } if message == "k exceeds array dimensions");
+    steps.push(make_step(
+        4,
+        "reject_out_of_bounds_k",
+        "coo.setdiag(values, k=4)",
+        "shape=(3,4), values=[1]",
+        &err.to_string(),
+        t_start.elapsed().as_nanos(),
+        if err_pass { "ok" } else { "fail" },
+    ));
+
+    let overall_pass = superdiag_pass && partial_pass && scalar_pass && err_pass;
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if overall_pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(overall_pass, "COO setdiag parity checks should match SciPy");
 }

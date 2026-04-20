@@ -427,6 +427,52 @@ mod tests {
     }
 
     #[test]
+    fn coo_setdiag_respects_boundaries_and_partial_updates() {
+        let mut partial = CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![10.0, 20.0, 30.0],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            false,
+        )
+        .expect("coo");
+        partial.setdiag(&[5.0], 0).expect("partial setdiag");
+        assert_eq!(partial.row_indices(), &[1, 2, 0]);
+        assert_eq!(partial.col_indices(), &[1, 2, 0]);
+        assert_vec_close(partial.data(), &[20.0, 30.0, 5.0]);
+
+        let mut offdiag =
+            CooMatrix::from_triplets(Shape2D::new(3, 4), vec![8.0], vec![0], vec![3], false)
+                .expect("coo");
+        offdiag
+            .setdiag(&[1.0, 2.0, 3.0, 4.0], 1)
+            .expect("superdiagonal setdiag");
+        assert_eq!(offdiag.row_indices(), &[0, 0, 1, 2]);
+        assert_eq!(offdiag.col_indices(), &[3, 1, 2, 3]);
+        assert_vec_close(offdiag.data(), &[8.0, 1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn coo_setdiag_scalar_broadcasts_and_rejects_out_of_bounds_k() {
+        let mut coo = CooMatrix::from_triplets(Shape2D::new(3, 4), vec![], vec![], vec![], false)
+            .expect("empty coo");
+        coo.setdiag_scalar(9.0, 1).expect("scalar setdiag");
+        assert_eq!(coo.row_indices(), &[0, 1, 2]);
+        assert_eq!(coo.col_indices(), &[1, 2, 3]);
+        assert_vec_close(coo.data(), &[9.0, 9.0, 9.0]);
+
+        let err = coo.setdiag(&[1.0], 4).expect_err("k beyond columns");
+        assert!(
+            matches!(err, SparseError::InvalidArgument { message } if message == "k exceeds array dimensions")
+        );
+
+        let err = coo.setdiag_scalar(1.0, -4).expect_err("k beyond rows");
+        assert!(
+            matches!(err, SparseError::InvalidArgument { message } if message == "k exceeds array dimensions")
+        );
+    }
+
+    #[test]
     fn sparse_find_sums_duplicates_and_drops_explicit_zeros() {
         let coo = CooMatrix::from_triplets(
             Shape2D::new(2, 2),
