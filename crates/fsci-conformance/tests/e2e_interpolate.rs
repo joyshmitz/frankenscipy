@@ -1328,3 +1328,112 @@ fn scenario_14_bspline_many_knots() {
     write_bundle("scenario_14_bspline_many_knots", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_14 failed");
 }
+
+/// Scenario 18: RegularGridInterpolator tensor-product PCHIP parity
+/// scipy.interpolate.RegularGridInterpolator((x, y), values, method='pchip')
+#[test]
+fn scenario_18_regular_grid_pchip() {
+    let mut runner = ScenarioRunner::new("scenario_18_regular_grid_pchip");
+    runner.set_interp_meta("RegularGridInterpolator-Pchip", 16, 2, "Strict");
+
+    let points: Vec<Vec<f64>> = vec![vec![1.0, 2.0, 3.0, 4.0], vec![1.0, 2.0, 3.0, 4.0]];
+    let mut values = Vec::new();
+    for &x in &points[0] {
+        for &y in &points[1] {
+            values.push(x.powi(4) * y.powi(4));
+        }
+    }
+
+    let mut interp: Option<RegularGridInterpolator> = None;
+    runner.record_step(
+        "create_regular_grid_pchip",
+        "RegularGridInterpolator::new(points, values, Pchip)",
+        "4x4 grid, f(x,y)=x^4*y^4",
+        "Strict",
+        || match RegularGridInterpolator::new(
+            points.clone(),
+            values.clone(),
+            RegularGridMethod::Pchip,
+            false,
+            None,
+        ) {
+            Ok(i) => {
+                interp = Some(i);
+                Ok("created 2D regular grid pchip interpolator".to_owned())
+            }
+            Err(e) => Err(format!("construction failed: {e}")),
+        },
+    );
+
+    let interp = interp.expect("pchip interpolator should exist");
+    runner.record_step(
+        "eval_reference_points",
+        "interp.eval_many([[1.5,2.0],[2.5,2.5],[3.5,3.0]])",
+        "SciPy reference points",
+        "Strict",
+        || {
+            let pts = vec![vec![1.5, 2.0], vec![2.5, 2.5], vec![3.5, 3.0]];
+            let expected = vec![87.25, 1575.924587673611, 12279.515625];
+            let actual = interp.eval_many(&pts).map_err(|e| format!("{e}"))?;
+            let max_diff = max_abs_diff(&actual, &expected);
+            if max_diff < 1e-9 {
+                Ok(format!("max_abs_diff={max_diff:.3e}"))
+            } else {
+                Err(format!(
+                    "max_abs_diff={max_diff:.3e}, actual={actual:?}, expected={expected:?}"
+                ))
+            }
+        },
+    );
+
+    runner.record_step(
+        "fill_value_out_of_bounds",
+        "RegularGridInterpolator::new(..., fill_value=-123.0).eval([-1,2])",
+        "out-of-bounds fill contract",
+        "Strict",
+        || {
+            let filled = RegularGridInterpolator::new(
+                points.clone(),
+                values.clone(),
+                RegularGridMethod::Pchip,
+                false,
+                Some(-123.0),
+            )
+            .map_err(|e| format!("{e}"))?;
+            let actual = filled.eval(&[-1.0, 2.0]).map_err(|e| format!("{e}"))?;
+            if actual == -123.0 {
+                Ok("returned configured fill_value".to_owned())
+            } else {
+                Err(format!("actual={actual}, expected=-123.0"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "extrapolation_when_fill_none",
+        "RegularGridInterpolator::new(..., fill_value=None).eval([-1,2])",
+        "SciPy extrapolation contract",
+        "Strict",
+        || {
+            let extrap = RegularGridInterpolator::new(
+                points.clone(),
+                values.clone(),
+                RegularGridMethod::Pchip,
+                false,
+                None,
+            )
+            .map_err(|e| format!("{e}"))?;
+            let actual = extrap.eval(&[-1.0, 2.0]).map_err(|e| format!("{e}"))?;
+            let expected = 2056.0;
+            if (actual - expected).abs() < 1e-9 {
+                Ok(format!("actual={actual}"))
+            } else {
+                Err(format!("actual={actual}, expected={expected}"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_18_regular_grid_pchip", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_18 failed");
+}

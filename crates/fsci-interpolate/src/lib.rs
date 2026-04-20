@@ -1556,6 +1556,9 @@ pub enum RegularGridMethod {
     Linear,
     /// Nearest-neighbor interpolation. Requires at least 2 points per axis.
     Nearest,
+    /// Tensor-product PCHIP interpolation. Requires at least 4 points per axis.
+    /// Matches scipy's `method='pchip'`.
+    Pchip,
     /// Tensor product cubic spline (k=3). Requires at least 4 points per axis.
     /// Matches scipy's `method='cubic'`.
     Cubic,
@@ -1595,7 +1598,7 @@ impl RegularGridInterpolator {
         // Determine minimum points required per axis based on method
         let min_points = match method {
             RegularGridMethod::Linear | RegularGridMethod::Nearest => 2,
-            RegularGridMethod::Cubic => 4,
+            RegularGridMethod::Pchip | RegularGridMethod::Cubic => 4,
             RegularGridMethod::Quintic => 6,
         };
 
@@ -1685,6 +1688,7 @@ impl RegularGridInterpolator {
         match self.method {
             RegularGridMethod::Linear => self.eval_linear(xi),
             RegularGridMethod::Nearest => Ok(self.eval_nearest(xi)),
+            RegularGridMethod::Pchip => self.eval_pchip(xi),
             RegularGridMethod::Cubic => self.eval_spline(xi, 3),
             RegularGridMethod::Quintic => self.eval_spline(xi, 5),
         }
@@ -1752,6 +1756,35 @@ impl RegularGridInterpolator {
             result += weight * self.values[flat_idx];
         }
         Ok(result)
+    }
+
+    /// Tensor-product PCHIP interpolation.
+    ///
+    /// This mirrors SciPy's recursive `_evaluate_spline(..., method="pchip")`
+    /// path: starting from the last interpolation dimension, collapse each
+    /// contiguous 1D slice with a 1D PCHIP fit, then repeat for the remaining
+    /// dimensions until only a scalar remains.
+    fn eval_pchip(&self, xi: &[f64]) -> Result<f64, InterpError> {
+        let ndim = self.ndim();
+        let mut reduced = self.values.clone();
+        let mut shape: Vec<usize> = self.points.iter().map(Vec::len).collect();
+
+        for dim in (0..ndim).rev() {
+            let axis = &self.points[dim];
+            let axis_len = shape[dim];
+            let outer = reduced.len() / axis_len;
+            let mut next = Vec::with_capacity(outer);
+
+            for slice in reduced.chunks_exact(axis_len) {
+                let interp = PchipInterpolator::new(axis, slice)?;
+                next.push(interp.eval(xi[dim]));
+            }
+
+            reduced = next;
+            shape.pop();
+        }
+
+        Ok(reduced[0])
     }
 
     /// Tensor product spline interpolation (cubic or quintic).
@@ -5102,6 +5135,71 @@ mod tests {
             RegularGridInterpolator::new(points, values, RegularGridMethod::Quintic, false, None)
                 .expect_err("too few points for quintic");
         assert!(matches!(err, InterpError::TooFewPoints { minimum: 6, .. }));
+    }
+
+    #[test]
+    fn regular_grid_pchip_requires_4_points() {
+        let points = vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0, 3.0]];
+        let values = vec![0.0; 12];
+        let err =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Pchip, false, None)
+                .expect_err("too few points for pchip");
+        assert!(matches!(err, InterpError::TooFewPoints { minimum: 4, .. }));
+    }
+
+    #[test]
+    fn regular_grid_pchip_matches_scipy_reference_values() {
+        let points: Vec<Vec<f64>> = vec![vec![1.0, 2.0, 3.0, 4.0], vec![1.0, 2.0, 3.0, 4.0]];
+        let mut values = Vec::new();
+        for &x in &points[0] {
+            for &y in &points[1] {
+                values.push(x.powi(4) * y.powi(4));
+            }
+        }
+        let interp =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Pchip, false, None)
+                .expect("regular grid pchip");
+
+        let cases = [
+            ([1.5, 2.0], 87.25),
+            ([2.5, 2.5], 1575.924587673611),
+            ([3.5, 3.0], 12279.515625),
+        ];
+        for (pt, expected) in cases {
+            let actual = interp.eval(&pt).expect("eval pchip");
+            assert!(
+                (actual - expected).abs() < 1e-9,
+                "point={pt:?} actual={actual} expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn regular_grid_pchip_fill_and_extrapolate_match_scipy() {
+        let points: Vec<Vec<f64>> = vec![vec![1.0, 2.0, 3.0, 4.0], vec![1.0, 2.0, 3.0, 4.0]];
+        let mut values = Vec::new();
+        for &x in &points[0] {
+            for &y in &points[1] {
+                values.push(x.powi(4) * y.powi(4));
+            }
+        }
+
+        let filled = RegularGridInterpolator::new(
+            points.clone(),
+            values.clone(),
+            RegularGridMethod::Pchip,
+            false,
+            Some(-123.0),
+        )
+        .expect("regular grid pchip fill");
+        let extrap =
+            RegularGridInterpolator::new(points, values, RegularGridMethod::Pchip, false, None)
+                .expect("regular grid pchip extrap");
+
+        let filled_val = filled.eval(&[-1.0, 2.0]).expect("filled eval");
+        let extrap_val = extrap.eval(&[-1.0, 2.0]).expect("extrap eval");
+        assert_eq!(filled_val, -123.0);
+        assert!((extrap_val - 2056.0).abs() < 1e-9);
     }
 
     #[test]
