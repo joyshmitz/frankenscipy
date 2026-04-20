@@ -8961,6 +8961,63 @@ pub fn shapiro(data: &[f64]) -> GoodnessOfFitResult {
     }
 }
 
+/// D'Agostino's skewness test for normality.
+///
+/// Tests H0: the population skewness matches the normal distribution's skewness.
+///
+/// Matches `scipy.stats.skewtest(data, nan_policy=..., alternative=...)`.
+pub fn skewtest(
+    data: &[f64],
+    nan_policy: Option<&str>,
+    alternative: Option<&str>,
+) -> Result<GoodnessOfFitResult, StatsError> {
+    let nan_policy = validate_nan_policy(nan_policy)?;
+    let alternative = validate_hypothesis_alternative(alternative)?;
+
+    let filtered;
+    let working = match nan_policy {
+        "propagate" => {
+            if data.iter().any(|value| value.is_nan()) {
+                return Ok(GoodnessOfFitResult {
+                    statistic: f64::NAN,
+                    pvalue: f64::NAN,
+                });
+            }
+            data
+        }
+        "raise" => {
+            if data.iter().any(|value| value.is_nan()) {
+                return Err(StatsError::InvalidArgument(
+                    "The input contains nan values".to_string(),
+                ));
+            }
+            data
+        }
+        "omit" => {
+            filtered = data
+                .iter()
+                .copied()
+                .filter(|value| !value.is_nan())
+                .collect::<Vec<_>>();
+            filtered.as_slice()
+        }
+        _ => unreachable!("validate_nan_policy only returns known values"),
+    };
+
+    if working.len() < 8 {
+        return Ok(GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        });
+    }
+
+    let z = dagostino_skewtest_z(skew(working), working.len() as f64);
+    Ok(GoodnessOfFitResult {
+        statistic: z,
+        pvalue: normal_alternative_pvalue(z, alternative),
+    })
+}
+
 /// D'Agostino-Pearson omnibus test for normality.
 ///
 /// Tests H0: data was drawn from a normal distribution by combining
@@ -9166,16 +9223,27 @@ fn kolmogorov_pvalue(d: f64, n: f64) -> f64 {
 
 /// D'Agostino's skewness test z-score.
 fn dagostino_skewtest_z(g1: f64, n: f64) -> f64 {
+    if !g1.is_finite() || n < 8.0 {
+        return f64::NAN;
+    }
+
     // D'Agostino (1990) transformation of sample skewness to z-score
     let y = g1 * ((n + 1.0) * (n + 3.0) / (6.0 * (n - 2.0))).sqrt();
-
     let beta2 = 3.0 * (n * n + 27.0 * n - 70.0) * (n + 1.0) * (n + 3.0)
         / ((n - 2.0) * (n + 5.0) * (n + 7.0) * (n + 9.0));
-    let w2 = (2.0 * (beta2 - 1.0)).sqrt() - 1.0;
-    let delta = 1.0 / w2.ln().sqrt();
-    let alpha = (2.0 / (w2 - 1.0)).sqrt();
+    let w2 = -1.0 + (2.0 * (beta2 - 1.0)).sqrt();
+    if !(w2.is_finite() && w2 > 1.0) {
+        return f64::NAN;
+    }
 
-    delta * (y / alpha + ((y / alpha).powi(2) + 1.0).sqrt()).ln()
+    let delta = 1.0 / (0.5 * w2.ln()).sqrt();
+    let alpha = (2.0 / (w2 - 1.0)).sqrt();
+    let y = if y == 0.0 { 1.0 } else { y };
+    let transformed = y / alpha + ((y / alpha).powi(2) + 1.0).sqrt();
+    if transformed <= 0.0 || !transformed.is_finite() {
+        return f64::NAN;
+    }
+    delta * transformed.ln()
 }
 
 /// Anscombe & Glynn kurtosis test z-score.
@@ -9477,7 +9545,10 @@ fn standard_normal_pdf(x: f64) -> f64 {
     (-0.5 * x * x).exp() / (2.0 * PI).sqrt()
 }
 
-fn somers_alternative_pvalue(z: f64, alternative: &str) -> f64 {
+fn normal_alternative_pvalue(z: f64, alternative: &str) -> f64 {
+    if !z.is_finite() {
+        return f64::NAN;
+    }
     let normal = Normal::standard();
     match alternative {
         "two-sided" => (2.0 * ContinuousDistribution::sf(&normal, z.abs())).clamp(0.0, 1.0),
@@ -9487,7 +9558,7 @@ fn somers_alternative_pvalue(z: f64, alternative: &str) -> f64 {
     }
 }
 
-fn somers_validate_alternative(alternative: Option<&str>) -> Result<&'static str, StatsError> {
+fn validate_hypothesis_alternative(alternative: Option<&str>) -> Result<&'static str, StatsError> {
     match alternative
         .unwrap_or("two-sided")
         .to_ascii_lowercase()
@@ -9498,6 +9569,21 @@ fn somers_validate_alternative(alternative: Option<&str>) -> Result<&'static str
         "greater" => Ok("greater"),
         _ => Err(StatsError::InvalidArgument(
             "alternative must be one of {'two-sided', 'less', 'greater'}".to_string(),
+        )),
+    }
+}
+
+fn validate_nan_policy(nan_policy: Option<&str>) -> Result<&'static str, StatsError> {
+    match nan_policy
+        .unwrap_or("propagate")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "propagate" => Ok("propagate"),
+        "omit" => Ok("omit"),
+        "raise" => Ok("raise"),
+        _ => Err(StatsError::InvalidArgument(
+            "nan_policy must be one of {'propagate', 'omit', 'raise'}".to_string(),
         )),
     }
 }
@@ -9609,7 +9695,7 @@ pub fn somersd(
     input: SomersDInput<'_>,
     alternative: Option<&str>,
 ) -> Result<SomersDResult, StatsError> {
-    let alternative = somers_validate_alternative(alternative)?;
+    let alternative = validate_hypothesis_alternative(alternative)?;
     let table = match input {
         SomersDInput::Rankings(x, y) => somers_from_rankings(x, y)?,
         SomersDInput::Table(table) => somers_validate_table(table)?,
@@ -9658,7 +9744,7 @@ pub fn somersd(
     } else {
         0.0
     };
-    let pvalue = somers_alternative_pvalue(z, alternative);
+    let pvalue = normal_alternative_pvalue(z, alternative);
 
     Ok(SomersDResult {
         statistic,
@@ -15133,6 +15219,91 @@ mod tests {
     fn normaltest_too_few() {
         let result = normaltest(&[1.0, 2.0, 3.0, 4.0, 5.0]);
         assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn skewtest_matches_scipy_reference_values() {
+        let symmetric = skewtest(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], None, None)
+            .expect("symmetric skewtest");
+        assert_close(
+            symmetric.statistic,
+            1.010_804_860_917_778_7,
+            1e-12,
+            "symmetric skewtest statistic",
+        );
+        assert_close(
+            symmetric.pvalue,
+            0.312_109_836_142_189_7,
+            1e-12,
+            "symmetric skewtest pvalue",
+        );
+
+        let skewed = skewtest(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8_000.0],
+            None,
+            Some("greater"),
+        )
+        .expect("skewed skewtest");
+        assert_close(
+            skewed.statistic,
+            3.571_773_510_360_407,
+            1e-12,
+            "skewed skewtest statistic",
+        );
+        assert_close(
+            skewed.pvalue,
+            1.772_859_952_911_566_6e-4,
+            1e-15,
+            "skewed skewtest greater-tail pvalue",
+        );
+    }
+
+    #[test]
+    fn skewtest_nan_policy_variants_match_scipy_shape() {
+        let data = [1.0, 2.0, 3.0, 4.0, f64::NAN, 5.0, 6.0, 7.0, 8_000.0];
+
+        let propagate = skewtest(&data, Some("propagate"), None).expect("propagate");
+        assert!(propagate.statistic.is_nan());
+        assert!(propagate.pvalue.is_nan());
+
+        let omit = skewtest(&data, Some("omit"), Some("greater")).expect("omit");
+        assert_close(
+            omit.statistic,
+            3.571_773_510_360_407,
+            1e-12,
+            "omit skewtest statistic",
+        );
+        assert_close(
+            omit.pvalue,
+            1.772_859_952_911_566_6e-4,
+            1e-15,
+            "omit skewtest pvalue",
+        );
+
+        let err = skewtest(&data, Some("raise"), None).expect_err("raise should reject NaNs");
+        assert_eq!(
+            err,
+            StatsError::InvalidArgument("The input contains nan values".to_string())
+        );
+    }
+
+    #[test]
+    fn skewtest_invalid_options_rejected() {
+        let err = skewtest(&[1.0; 8], Some("bad"), None).expect_err("invalid nan_policy");
+        assert_eq!(
+            err,
+            StatsError::InvalidArgument(
+                "nan_policy must be one of {'propagate', 'omit', 'raise'}".to_string()
+            )
+        );
+
+        let err = skewtest(&[1.0; 8], None, Some("sideways")).expect_err("invalid alternative");
+        assert_eq!(
+            err,
+            StatsError::InvalidArgument(
+                "alternative must be one of {'two-sided', 'less', 'greater'}".to_string()
+            )
+        );
     }
 
     #[test]

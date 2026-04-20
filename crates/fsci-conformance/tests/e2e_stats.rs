@@ -83,6 +83,7 @@ use fsci_stats::{
     root_mean_squared_error,
     shapiro,
     skew,
+    skewtest,
     spearmanr,
     ttest_1samp,
     ttest_ind,
@@ -3264,6 +3265,137 @@ fn e2e_033_mood_helper_contracts() {
             nan_input.pvalue.is_nan(),
             nan_input.df.is_nan()
         ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 34: Skewtest nan_policy and alternative parity.
+/// Verifies SciPy-shaped `skewtest` outputs for the default two-sided path,
+/// one-sided alternatives, and the `propagate` / `omit` / `raise` NaN policies.
+#[test]
+fn e2e_034_skewtest_nan_policy_parity() {
+    let scenario_id = "e2e_stats_034_skewtest_nan_policy";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let symmetric = skewtest(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], None, None)
+        .expect("symmetric skewtest");
+    let pass = (symmetric.statistic - 1.010_804_860_917_778_7).abs() < 1e-12
+        && (symmetric.pvalue - 0.312_109_836_142_189_7).abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "skewtest_two_sided_reference",
+        "skewtest([1,2,3,4,5,6,7,8], nan_policy='propagate', alternative='two-sided')",
+        "the default path should match SciPy's nonzero D'Agostino z-score for a length-8 symmetric sample",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            symmetric.statistic, symmetric.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let skewed = skewtest(
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8_000.0],
+        None,
+        Some("greater"),
+    )
+    .expect("greater-tail skewtest");
+    let pass = (skewed.statistic - 3.571_773_510_360_407).abs() < 1e-12
+        && (skewed.pvalue - 1.772_859_952_911_566_6e-4).abs() < 1e-15;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "skewtest_greater_reference",
+        "skewtest([1,2,3,4,5,6,7,8000], alternative='greater')",
+        "a heavily right-skewed sample should match SciPy's one-sided p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.18e}",
+            skewed.statistic, skewed.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let propagate = skewtest(
+        &[1.0, 2.0, 3.0, 4.0, f64::NAN, 5.0, 6.0, 7.0, 8_000.0],
+        Some("propagate"),
+        None,
+    )
+    .expect("propagate");
+    let pass = propagate.statistic.is_nan() && propagate.pvalue.is_nan();
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "skewtest_nan_policy_propagate",
+        "skewtest([... NaN ...], nan_policy='propagate')",
+        "the default NaN policy should fail closed with NaN statistic and p-value",
+        &format!(
+            "statistic_is_nan={}, pvalue_is_nan={}",
+            propagate.statistic.is_nan(),
+            propagate.pvalue.is_nan()
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let omit = skewtest(
+        &[1.0, 2.0, 3.0, 4.0, f64::NAN, 5.0, 6.0, 7.0, 8_000.0],
+        Some("omit"),
+        Some("greater"),
+    )
+    .expect("omit");
+    let pass = (omit.statistic - 3.571_773_510_360_407).abs() < 1e-12
+        && (omit.pvalue - 1.772_859_952_911_566_6e-4).abs() < 1e-15;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "skewtest_nan_policy_omit",
+        "skewtest([... NaN ...], nan_policy='omit', alternative='greater')",
+        "omitting NaNs should recover the SciPy reference statistic and one-sided p-value",
+        &format!(
+            "statistic={:.12}, pvalue={:.18e}",
+            omit.statistic, omit.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let raise_error = skewtest(
+        &[1.0, 2.0, 3.0, 4.0, f64::NAN, 5.0, 6.0, 7.0, 8_000.0],
+        Some("raise"),
+        None,
+    )
+    .expect_err("raise should reject NaNs");
+    let pass = raise_error
+        == fsci_stats::StatsError::InvalidArgument("The input contains nan values".to_string());
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        5,
+        "skewtest_nan_policy_raise",
+        "skewtest([... NaN ...], nan_policy='raise')",
+        "the strict NaN policy should reject the sample instead of silently coercing it",
+        &raise_error.to_string(),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));

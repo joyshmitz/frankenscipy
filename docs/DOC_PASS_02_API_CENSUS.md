@@ -948,7 +948,7 @@ _(See full symbol list above -- all are functions/ufuncs from `_ufuncs` or `_bas
 | `ttest_rel` | function | `_stats_py` | no |
 | `binomtest` | function | `_binomtest` | no |
 | `quantile_test` | function | `_hypotests` | no |
-| `skewtest` | function | `_stats_py` | no |
+| `skewtest` | function | `_stats_py` | yes |
 | `kurtosistest` | function | `_stats_py` | no |
 | `normaltest` | function | `_stats_py` | no |
 | `jarque_bera` | function | `_stats_py` | no |
