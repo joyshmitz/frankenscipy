@@ -2244,6 +2244,31 @@ fn scenario_31_filtfilt_padtype_modes() {
     runner.set_signal_meta("filtfilt_padtype", 20, "Strict");
 
     runner.record_step(
+        "filtfilt_odd_padtype_reference",
+        "filtfilt_with_padtype(b, a, x, Some(\"odd\"))",
+        "odd endpoint reflection should match SciPy's default forward-backward reference output",
+        "Strict",
+        || {
+            let x = [
+                0.0, 1.0, 2.0, 1.0, 0.0, -1.0, -2.0, -1.0, 0.0, 1.0, 2.0, 1.0, 0.0, -1.0, -2.0,
+                -1.0, 0.0, 1.0, 2.0, 1.0,
+            ];
+            let expected = [
+                0.0, 0.28, 0.4, 0.28, 0.0, -0.28, -0.4, -0.28, 0.0, 0.28, 0.4, 0.28, 0.0, -0.28,
+                -0.4, -0.28, 0.0, 0.36, 0.72, 1.0,
+            ];
+            let got = filtfilt_with_padtype(&[0.2; 5], &[1.0], &x, Some("odd"))
+                .map_err(|e| format!("{e}"))?;
+            let diff = max_abs_diff(&got, &expected);
+            if diff < 1e-12 {
+                Ok(format!("max_abs_diff={diff:.2e}"))
+            } else {
+                Err(format!("odd padtype mismatch diff={diff:.2e}"))
+            }
+        },
+    );
+
+    runner.record_step(
         "filtfilt_even_padtype_reference",
         "filtfilt_with_padtype(b, a, x, Some(\"even\"))",
         "even endpoint extension should match SciPy's forward-backward reference output",
