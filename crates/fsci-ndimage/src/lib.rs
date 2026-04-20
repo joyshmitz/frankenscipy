@@ -1674,7 +1674,10 @@ pub fn center_of_mass(input: &NdArray, labels: &NdArray, num_labels: usize) -> V
 ///
 /// Uses the brute-force approach for correctness (suitable for moderate sizes).
 /// Matches `scipy.ndimage.distance_transform_edt`.
-pub fn distance_transform_edt(input: &NdArray) -> Result<NdArray, NdimageError> {
+pub fn distance_transform_edt(
+    input: &NdArray,
+    sampling: Option<&[f64]>,
+) -> Result<NdArray, NdimageError> {
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
@@ -1683,6 +1686,8 @@ pub fn distance_transform_edt(input: &NdArray) -> Result<NdArray, NdimageError> 
             "distance_transform_edt currently supports 2D arrays only".to_string(),
         ));
     }
+
+    let sampling = normalize_sampling(input.ndim(), sampling)?;
 
     let rows = input.shape[0];
     let cols = input.shape[1];
@@ -1706,8 +1711,8 @@ pub fn distance_transform_edt(input: &NdArray) -> Result<NdArray, NdimageError> 
             } else {
                 let mut min_dist = f64::INFINITY;
                 for &(br, bc) in &bg_pixels {
-                    let dr = r as f64 - br as f64;
-                    let dc = c as f64 - bc as f64;
+                    let dr = (r as f64 - br as f64) * sampling[0];
+                    let dc = (c as f64 - bc as f64) * sampling[1];
                     let dist = (dr * dr + dc * dc).sqrt();
                     if dist < min_dist {
                         min_dist = dist;
@@ -1719,6 +1724,19 @@ pub fn distance_transform_edt(input: &NdArray) -> Result<NdArray, NdimageError> 
     }
 
     Ok(output)
+}
+
+fn normalize_sampling(ndim: usize, sampling: Option<&[f64]>) -> Result<Vec<f64>, NdimageError> {
+    match sampling {
+        None => Ok(vec![1.0; ndim]),
+        Some(values) if values.len() == 1 => Ok(vec![values[0]; ndim]),
+        Some(values) if values.len() == ndim => Ok(values.to_vec()),
+        Some(values) => Err(NdimageError::InvalidArgument(format!(
+            "sampling must have length 1 or match ndim={}, got {}",
+            ndim,
+            values.len()
+        ))),
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3210,7 +3228,7 @@ mod tests {
             1.0, 1.0, 1.0,
         ];
         let input = NdArray::new(data, vec![3, 3]).unwrap();
-        let result = distance_transform_edt(&input).unwrap();
+        let result = distance_transform_edt(&input, None).unwrap();
         assert_eq!(result.data[4], 0.0); // background pixel
         assert!((result.data[1] - 1.0).abs() < 1e-10); // adjacent foreground pixel
         assert!((result.data[0] - 2.0f64.sqrt()).abs() < 1e-10); // diagonal foreground pixel
@@ -3219,8 +3237,45 @@ mod tests {
     #[test]
     fn distance_transform_edt_zero_background_stays_zero() {
         let input = NdArray::new(vec![0.0; 9], vec![3, 3]).unwrap();
-        let result = distance_transform_edt(&input).unwrap();
+        let result = distance_transform_edt(&input, None).unwrap();
         assert!(result.data.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn distance_transform_edt_respects_sampling() {
+        #[rustfmt::skip]
+        let data = vec![
+            1.0, 1.0, 1.0,
+            1.0, 0.0, 1.0,
+            1.0, 1.0, 1.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+        let result = distance_transform_edt(&input, Some(&[2.0, 1.0])).unwrap();
+        assert!((result.data[1] - 2.0).abs() < 1e-10);
+        assert!((result.data[3] - 1.0).abs() < 1e-10);
+        assert!((result.data[0] - 5.0f64.sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn distance_transform_edt_scalar_sampling_applies_to_all_axes() {
+        #[rustfmt::skip]
+        let data = vec![
+            1.0, 1.0, 1.0,
+            1.0, 0.0, 1.0,
+            1.0, 1.0, 1.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+        let result = distance_transform_edt(&input, Some(&[2.0])).unwrap();
+        assert!((result.data[1] - 2.0).abs() < 1e-10);
+        assert!((result.data[3] - 2.0).abs() < 1e-10);
+        assert!((result.data[0] - (8.0f64).sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn distance_transform_edt_rejects_sampling_length_mismatch() {
+        let input = NdArray::new(vec![0.0; 9], vec![3, 3]).unwrap();
+        let err = distance_transform_edt(&input, Some(&[1.0, 2.0, 3.0])).unwrap_err();
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
     }
 
     #[test]

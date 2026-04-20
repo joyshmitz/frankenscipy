@@ -911,7 +911,7 @@ fn e2e_ndimage_distance_transform() {
     .unwrap();
 
     let t = Instant::now();
-    let dist_result = distance_transform_edt(&image);
+    let dist_result = distance_transform_edt(&image, None);
     let pass = match &dist_result {
         Ok(result) => {
             // Distance at the hole (center) should be 0
@@ -928,7 +928,7 @@ fn e2e_ndimage_distance_transform() {
     steps.push(make_step(
         1,
         "distance_transform_edt",
-        "ndimage::distance_transform_edt()",
+        "ndimage::distance_transform_edt(input, None)",
         "5x5 image with center hole",
         &format!(
             "center_dist={}, corner_dist={}",
@@ -946,7 +946,7 @@ fn e2e_ndimage_distance_transform() {
         image.shape.clone(),
     )
     .unwrap();
-    let dist_inv = distance_transform_edt(&inverted);
+    let dist_inv = distance_transform_edt(&inverted, None);
     let pass = match &dist_inv {
         Ok(result) => {
             // Now center should have the highest distance
@@ -961,11 +961,43 @@ fn e2e_ndimage_distance_transform() {
     steps.push(make_step(
         2,
         "distance_transform_inverted",
-        "ndimage::distance_transform_edt(inverted)",
+        "ndimage::distance_transform_edt(inverted, None)",
         "5x5 with only center pixel",
         &format!(
             "center_dist={}",
             dist_inv.as_ref().map(|r| r.data[12]).unwrap_or(f64::NAN)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Anisotropic sampling should scale row and column distances independently.
+    let t = Instant::now();
+    let sampled = distance_transform_edt(&image, Some(&[2.0, 1.0]));
+    let pass = match &sampled {
+        Ok(result) => {
+            let top_middle = result.data[2];
+            let middle_left = result.data[10];
+            let corner = result.data[0];
+            (top_middle - 4.0).abs() < 1e-10
+                && (middle_left - 2.0).abs() < 1e-10
+                && (corner - 20.0f64.sqrt()).abs() < 1e-10
+        }
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "distance_transform_sampling",
+        "ndimage::distance_transform_edt(input, Some([2,1]))",
+        "anisotropic pixel spacing",
+        &format!(
+            "top_middle={}, middle_left={}, corner={}",
+            sampled.as_ref().map(|r| r.data[2]).unwrap_or(f64::NAN),
+            sampled.as_ref().map(|r| r.data[10]).unwrap_or(f64::NAN),
+            sampled.as_ref().map(|r| r.data[0]).unwrap_or(f64::NAN)
         ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
