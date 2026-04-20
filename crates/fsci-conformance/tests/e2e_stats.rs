@@ -1460,7 +1460,7 @@ fn e2e_015_t_tests() {
     let t = Instant::now();
     let before: Vec<f64> = vec![10.0, 12.0, 11.0, 13.0, 9.0, 14.0, 12.0, 11.0];
     let after: Vec<f64> = vec![12.0, 14.0, 13.0, 15.0, 11.0, 15.0, 13.0, 12.0];
-    let result = ttest_rel(&before, &after);
+    let result = ttest_rel(&before, &after, None).expect("ttest_rel");
     // After values are higher, so difference (before - after) is negative, t < 0
     let pass = result.statistic < 0.0 && result.pvalue < 0.01 && result.df == 7.0;
     if !pass {
@@ -3632,6 +3632,79 @@ fn e2e_037_chi2_contingency_correction_false_parity() {
         ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 38: Paired t-test alternative parity.
+/// Verifies SciPy-style one-sided tails and invalid-alternative rejection.
+#[test]
+fn e2e_038_ttest_rel_alternative_parity() {
+    let scenario_id = "e2e_stats_038_ttest_rel_alternative";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let before = vec![10.0, 12.0, 11.0, 13.0, 9.0, 14.0, 12.0, 11.0];
+    let after = vec![12.0, 14.0, 13.0, 15.0, 11.0, 15.0, 13.0, 12.0];
+
+    let t = Instant::now();
+    let less = ttest_rel(&before, &after, Some("less")).expect("ttest_rel less");
+    let less_pass = (less.statistic - (-8.880_690_663_831_652)).abs() < 1.0e-12
+        && (less.pvalue - 2.326_064_069_551_914_4e-5).abs() < 1.0e-16
+        && less.df == 7.0;
+    if !less_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "ttest_rel_less",
+        "ttest_rel(before, after, alternative='less')",
+        "paired sample with negative mean difference",
+        &format!(
+            "t={:.12}, p={:.17}, df={}",
+            less.statistic, less.pvalue, less.df
+        ),
+        t.elapsed().as_nanos(),
+        if less_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let greater = ttest_rel(&before, &after, Some("greater")).expect("ttest_rel greater");
+    let greater_pass = (greater.statistic - (-8.880_690_663_831_652)).abs() < 1.0e-12
+        && (greater.pvalue - 0.999_976_739_359_304_5).abs() < 1.0e-15
+        && greater.df == 7.0;
+    if !greater_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "ttest_rel_greater",
+        "ttest_rel(before, after, alternative='greater')",
+        "paired sample with negative mean difference",
+        &format!(
+            "t={:.12}, p={:.15}, df={}",
+            greater.statistic, greater.pvalue, greater.df
+        ),
+        t.elapsed().as_nanos(),
+        if greater_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let invalid = ttest_rel(&before, &after, Some("sideways"));
+    let invalid_pass = invalid.is_err();
+    if !invalid_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "ttest_rel_invalid_alternative",
+        "ttest_rel(before, after, alternative='sideways')",
+        "paired sample with unsupported alternative",
+        &format!("invalid_alternative_error={}", invalid.is_err()),
+        t.elapsed().as_nanos(),
+        if invalid_pass { "pass" } else { "FAIL" },
     ));
 
     assert_artifacts_written(scenario_id, &steps, all_pass);

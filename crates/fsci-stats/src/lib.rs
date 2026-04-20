@@ -6407,38 +6407,47 @@ pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
 /// Tests H0: mean of differences a[i] - b[i] is zero.
 /// Requires equal-length paired observations.
 ///
-/// Matches `scipy.stats.ttest_rel(a, b)`.
-pub fn ttest_rel(a: &[f64], b: &[f64]) -> TtestResult {
+/// Matches `scipy.stats.ttest_rel(a, b, alternative=...)`.
+pub fn ttest_rel(
+    a: &[f64],
+    b: &[f64],
+    alternative: Option<&str>,
+) -> Result<TtestResult, StatsError> {
+    let alternative = validate_hypothesis_alternative(alternative)?;
     if a.len() != b.len() || a.len() < 2 {
-        return TtestResult {
+        return Ok(TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
             df: f64::NAN,
-        };
+        });
     }
     let n = a.len() as f64;
     let diffs: Vec<f64> = a.iter().zip(b.iter()).map(|(&ai, &bi)| ai - bi).collect();
     let d_mean = diffs.iter().sum::<f64>() / n;
     let d_var = diffs.iter().map(|&d| (d - d_mean).powi(2)).sum::<f64>() / (n - 1.0);
     let se = (d_var / n).sqrt();
+    let df = n - 1.0;
+    let tdist = StudentT::new(df);
 
     if se == 0.0 {
-        return TtestResult {
-            statistic: if d_mean == 0.0 { 0.0 } else { f64::INFINITY },
-            pvalue: if d_mean == 0.0 { 1.0 } else { 0.0 },
-            df: n - 1.0,
+        let statistic = if d_mean == 0.0 {
+            f64::NAN
+        } else {
+            d_mean.signum() * f64::INFINITY
         };
+        return Ok(TtestResult {
+            statistic,
+            pvalue: student_t_alternative_pvalue(statistic, &tdist, alternative),
+            df,
+        });
     }
 
     let t = d_mean / se;
-    let df = n - 1.0;
-    let tdist = StudentT::new(df);
-    let pvalue = 2.0 * tdist.sf(t.abs());
-    TtestResult {
+    Ok(TtestResult {
         statistic: t,
-        pvalue,
+        pvalue: student_t_alternative_pvalue(t, &tdist, alternative),
         df,
-    }
+    })
 }
 
 /// One-sample chi-squared goodness-of-fit test.
@@ -9590,6 +9599,18 @@ fn normal_alternative_pvalue(z: f64, alternative: &str) -> f64 {
         "two-sided" => (2.0 * ContinuousDistribution::sf(&normal, z.abs())).clamp(0.0, 1.0),
         "less" => ContinuousDistribution::cdf(&normal, z).clamp(0.0, 1.0),
         "greater" => ContinuousDistribution::sf(&normal, z).clamp(0.0, 1.0),
+        _ => f64::NAN,
+    }
+}
+
+fn student_t_alternative_pvalue(statistic: f64, t_dist: &StudentT, alternative: &str) -> f64 {
+    if statistic.is_nan() {
+        return f64::NAN;
+    }
+    match alternative {
+        "two-sided" => (2.0 * ContinuousDistribution::sf(t_dist, statistic.abs())).clamp(0.0, 1.0),
+        "less" => ContinuousDistribution::cdf(t_dist, statistic).clamp(0.0, 1.0),
+        "greater" => ContinuousDistribution::sf(t_dist, statistic).clamp(0.0, 1.0),
         _ => f64::NAN,
     }
 }
@@ -16495,11 +16516,14 @@ mod tests {
     fn ttest_rel_no_difference() {
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let b = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let result = ttest_rel(&a, &b);
+        let result = ttest_rel(&a, &b, None).expect("ttest_rel");
         assert!(
-            (result.statistic).abs() < 1e-10,
-            "identical pairs: t = {}",
-            result.statistic
+            result.statistic.is_nan(),
+            "identical pairs should return NaN statistic"
+        );
+        assert!(
+            result.pvalue.is_nan(),
+            "identical pairs should return NaN p-value"
         );
     }
 
@@ -16508,7 +16532,7 @@ mod tests {
         // b = a + 10, very significant difference
         let a: Vec<f64> = (0..20).map(|i| i as f64).collect();
         let b: Vec<f64> = a.iter().map(|&x| x + 10.0).collect();
-        let result = ttest_rel(&a, &b);
+        let result = ttest_rel(&a, &b, None).expect("ttest_rel");
         assert!(
             result.pvalue < 0.001,
             "shifted pairs should be significant: p = {}",
@@ -16518,8 +16542,32 @@ mod tests {
 
     #[test]
     fn ttest_rel_unequal_lengths() {
-        let result = ttest_rel(&[1.0, 2.0], &[1.0]);
+        let result = ttest_rel(&[1.0, 2.0], &[1.0], None).expect("ttest_rel");
         assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn ttest_rel_respects_one_sided_alternatives() {
+        let before = [10.0, 12.0, 11.0, 13.0, 9.0, 14.0, 12.0, 11.0];
+        let after = [12.0, 14.0, 13.0, 15.0, 11.0, 15.0, 13.0, 12.0];
+
+        let less = ttest_rel(&before, &after, Some("less")).expect("less");
+        let greater = ttest_rel(&before, &after, Some("greater")).expect("greater");
+
+        assert!((less.statistic - (-8.880_690_663_831_652)).abs() < 1.0e-12);
+        assert!((less.pvalue - 2.326_064_069_551_914_4e-5).abs() < 1.0e-16);
+        assert!((greater.pvalue - 0.999_976_739_359_304_5).abs() < 1.0e-15);
+    }
+
+    #[test]
+    fn ttest_rel_rejects_invalid_alternative() {
+        let err = ttest_rel(&[1.0, 2.0], &[1.0, 2.0], Some("sideways")).expect_err("invalid");
+        assert_eq!(
+            err,
+            StatsError::InvalidArgument(
+                "alternative must be one of {'two-sided', 'less', 'greater'}".to_string()
+            )
+        );
     }
 
     // ── chisquare tests ──────────────────────────────────────────────
