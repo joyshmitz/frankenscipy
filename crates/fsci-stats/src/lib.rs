@@ -16,6 +16,7 @@ use fsci_runtime::RuntimeMode;
 use rand::Rng;
 
 const EULER_MASCHERONI: f64 = 0.577_215_664_901_532_9;
+const KS_2SAMP_EXACT_MAX_CELLS: usize = 1_000_000;
 
 /// Error type for stats APIs that validate structured inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8993,14 +8994,62 @@ pub fn ks_2samp(data1: &[f64], data2: &[f64]) -> GoodnessOfFitResult {
         d_stat = d_stat.max(diff);
     }
 
-    // Effective sample size for p-value
-    let en = (n1f * n2f / (n1f + n2f)).sqrt();
-    let pvalue = kolmogorov_pvalue(d_stat, en * en);
+    let (statistic, pvalue) =
+        if let Some((exact_d, exact_pvalue)) = ks_2samp_exact_pvalue(d_stat, n1, n2) {
+            (exact_d, exact_pvalue)
+        } else {
+            let en = (n1f * n2f / (n1f + n2f)).sqrt();
+            (d_stat, kolmogorov_pvalue(d_stat, en * en))
+        };
 
-    GoodnessOfFitResult {
-        statistic: d_stat,
-        pvalue,
+    GoodnessOfFitResult { statistic, pvalue }
+}
+
+fn ks_2samp_exact_pvalue(d: f64, n1: usize, n2: usize) -> Option<(f64, f64)> {
+    if n1 == 0 || n2 == 0 || n1.saturating_mul(n2) > KS_2SAMP_EXACT_MAX_CELLS {
+        return None;
     }
+
+    let n1u = n1 as u64;
+    let n2u = n2 as u64;
+    let g = gcd_u64(n1u, n2u);
+    let lcm = (n1u / g).checked_mul(n2u)?;
+    let h = (d * lcm as f64).round() as u64;
+    let snapped_d = h as f64 / lcm as f64;
+
+    if h == 0 {
+        return Some((snapped_d, 1.0));
+    }
+
+    let a = (n2u / g) as i128;
+    let b = (n1u / g) as i128;
+    let mut inside_prob = vec![0.0_f64; n2 + 1];
+
+    for i in 0..=n1 {
+        let mut left_prob = 0.0_f64;
+        for (j, cell) in inside_prob.iter_mut().enumerate().take(n2 + 1) {
+            let top_prob = *cell;
+            let current = if i == 0 && j == 0 {
+                1.0
+            } else {
+                let delta = ((i as i128 * a) - (j as i128 * b)).unsigned_abs();
+                if delta >= h as u128 {
+                    0.0
+                } else if i == 0 {
+                    left_prob
+                } else if j == 0 {
+                    top_prob
+                } else {
+                    let denom = (i + j) as f64;
+                    top_prob * (i as f64 / denom) + left_prob * (j as f64 / denom)
+                }
+            };
+            *cell = current;
+            left_prob = current;
+        }
+    }
+
+    Some((snapped_d, (1.0 - inside_prob[n2]).clamp(0.0, 1.0)))
 }
 
 /// Shapiro-Wilk test for normality.
@@ -15255,6 +15304,35 @@ mod tests {
     fn ks_2samp_empty_returns_nan() {
         let result = ks_2samp(&[], &[1.0, 2.0]);
         assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn ks_2samp_exact_equal_size_matches_scipy_reference() {
+        let result = ks_2samp(&[1.0, 2.0, 3.0, 4.0], &[1.0, 2.0, 5.0, 6.0]);
+        assert_close(result.statistic, 0.5, 1e-12, "ks_2samp exact statistic");
+        assert_close(
+            result.pvalue,
+            0.771_428_571_428_571_6,
+            1e-15,
+            "ks_2samp exact equal-size pvalue",
+        );
+    }
+
+    #[test]
+    fn ks_2samp_exact_unequal_size_matches_scipy_reference() {
+        let result = ks_2samp(&[0.0, 1.0, 2.0], &[0.0, 2.0, 4.0, 6.0]);
+        assert_close(
+            result.statistic,
+            0.5,
+            1e-12,
+            "ks_2samp exact unequal statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.657_142_857_142_857_1,
+            1e-15,
+            "ks_2samp exact unequal-size pvalue",
+        );
     }
 
     #[test]

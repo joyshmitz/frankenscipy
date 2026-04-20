@@ -3799,3 +3799,73 @@ fn e2e_039_scoreatpercentile_array_percentiles() {
     assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
+
+/// Scenario 40: ks_2samp exact p-value parity for small samples.
+#[test]
+fn e2e_040_ks_2samp_exact_pvalue_parity() {
+    let scenario_id = "e2e_stats_040_ks_2samp_exact_pvalue_parity";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let equal = ks_2samp(&[1.0, 2.0, 3.0, 4.0], &[1.0, 2.0, 5.0, 6.0]);
+    let equal_pass = (equal.statistic - 0.5).abs() < 1.0e-12
+        && (equal.pvalue - 0.771_428_571_428_571_6).abs() < 1.0e-15;
+    if !equal_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "ks_2samp_exact_equal_size",
+        "ks_2samp([1,2,3,4], [1,2,5,6])",
+        "small equal-size samples should use the exact lattice-path tail",
+        &format!(
+            "statistic={:.16}, pvalue={:.16}",
+            equal.statistic, equal.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if equal_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let unequal = ks_2samp(&[0.0, 1.0, 2.0], &[0.0, 2.0, 4.0, 6.0]);
+    let unequal_pass = (unequal.statistic - 0.5).abs() < 1.0e-12
+        && (unequal.pvalue - 0.657_142_857_142_857_1).abs() < 1.0e-15;
+    if !unequal_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "ks_2samp_exact_unequal_size",
+        "ks_2samp([0,1,2], [0,2,4,6])",
+        "unequal sample sizes should still follow the exact SciPy path-counting tail",
+        &format!(
+            "statistic={:.16}, pvalue={:.16}",
+            unequal.statistic, unequal.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if unequal_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let identical = ks_2samp(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]);
+    let identical_pass = identical.statistic == 0.0 && identical.pvalue == 1.0;
+    if !identical_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "ks_2samp_exact_identity",
+        "ks_2samp([1,2,3], [1,2,3])",
+        "identical empirical CDFs should keep the exact p-value at one",
+        &format!(
+            "statistic={:.16}, pvalue={:.16}",
+            identical.statistic, identical.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if identical_pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
