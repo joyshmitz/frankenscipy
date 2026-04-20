@@ -389,7 +389,10 @@ fn compare_find_result(
 fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
     let operation = case.operation.as_str();
     assert!(
-        matches!(operation, "find" | "tril" | "triu" | "vstack" | "hstack"),
+        matches!(
+            operation,
+            "find" | "tril" | "triu" | "tocsc" | "vstack" | "hstack"
+        ),
         "unsupported sparse oracle operation {}",
         case.operation
     );
@@ -427,6 +430,19 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
                 result_kind: "matrix_triplets".to_string(),
                 result: serde_json::to_value(triplets_from_coo(&coo, Some("coo")))
                     .expect("serialize triu result"),
+                error: None,
+            }
+        }
+        "tocsc" => {
+            let matrix = build_sparse_input(case.matrix.as_ref().expect("matrix"));
+            let csc = matrix.as_format_convertible().to_csc().expect("tocsc");
+            let coo = csc.to_coo().expect("csc->coo");
+            SparseOracleCaseOutput {
+                case_id: case.case_id.clone(),
+                status: "ok".to_string(),
+                result_kind: "matrix_triplets".to_string(),
+                result: serde_json::to_value(triplets_from_coo(&coo, Some("csc")))
+                    .expect("serialize tocsc result"),
                 error: None,
             }
         }
@@ -1948,6 +1964,20 @@ fn e2e_019_sparse_helper_oracle_match() {
                 }),
                 blocks: None,
                 k: Some(1),
+            },
+            SparseOracleCase {
+                case_id: "tocsc_duplicate_cancellation_keeps_zero".to_string(),
+                operation: "tocsc".to_string(),
+                format: None,
+                matrix: Some(SparseOracleMatrix {
+                    format: "coo".to_string(),
+                    shape: [2, 2],
+                    row: vec![0, 0, 1],
+                    col: vec![0, 0, 1],
+                    data: vec![1.0, -1.0, 2.0],
+                }),
+                blocks: None,
+                k: None,
             },
             SparseOracleCase {
                 case_id: "vstack_mixed_formats".to_string(),

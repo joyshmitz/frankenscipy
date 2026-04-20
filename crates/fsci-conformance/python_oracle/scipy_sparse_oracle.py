@@ -84,6 +84,17 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
                 "error": None,
             }
 
+        if operation == "tocsc":
+            matrix = _matrix_from_spec(case["matrix"], sparse, np)
+            result = matrix.tocsc()
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "matrix_triplets",
+                "result": _matrix_result(result),
+                "error": None,
+            }
+
         if operation == "vstack":
             blocks = [_matrix_from_spec(block, sparse, np) for block in case["blocks"]]
             result = sparse.vstack(blocks, format=case.get("format"))

@@ -280,6 +280,30 @@ mod tests {
     }
 
     #[test]
+    fn csc_construction_preserves_explicit_zero_from_duplicate_cancellation() {
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![1.0, -1.0, 2.0],
+            vec![0, 0, 1],
+            vec![0, 0, 1],
+            false,
+        )
+        .expect("valid coo");
+        let csc = coo.to_csc().expect("coo->csc");
+        assert_eq!(csc.nnz(), 2);
+        assert!(csc.canonical_meta().sorted_indices);
+        assert!(csc.canonical_meta().deduplicated);
+        assert_eq!(csc.indptr(), &[0, 1, 2]);
+        assert_eq!(csc.indices(), &[0, 1]);
+        assert_vec_close(csc.data(), &[0.0, 2.0]);
+
+        let roundtrip = csc.to_coo().expect("csc->coo");
+        assert_eq!(roundtrip.row_indices(), &[0, 1]);
+        assert_eq!(roundtrip.col_indices(), &[0, 1]);
+        assert_vec_close(roundtrip.data(), &[0.0, 2.0]);
+    }
+
+    #[test]
     fn csc_column_indptr_layout_is_consistent() {
         let csc = CscMatrix::from_components(
             Shape2D::new(3, 3),
