@@ -194,6 +194,20 @@ pub const BESSEL_DISPATCH_PLAN: &[DispatchPlan] = &[
         ],
         notes: "Incoming-wave sign and phase conventions are contract-critical.",
     },
+    DispatchPlan {
+        function: "wright_bessel",
+        steps: &[
+            DispatchStep {
+                regime: KernelRegime::Series,
+                when: "nonnegative arguments summed in the log-domain series",
+            },
+            DispatchStep {
+                regime: KernelRegime::Asymptotic,
+                when: "large-a windows collapse to early terms through log-gamma damping",
+            },
+        ],
+        notes: "SciPy only exposes the nonnegative real domain; strict mode returns NaN outside it.",
+    },
 ];
 
 pub fn j0(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -264,6 +278,21 @@ pub fn hankel1(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> Speci
 pub fn hankel2(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     // H2_v = J_v - i*Y_v; return J_v as the real part
     map_real_binary("hankel2", v, z, mode, |order, x| Ok(jv_scalar(order, x)))
+}
+
+/// Wright's generalized Bessel function.
+///
+/// Matches `scipy.special.wright_bessel(a, b, x)` on SciPy's supported
+/// nonnegative real domain.
+pub fn wright_bessel(
+    a: &SpecialTensor,
+    b: &SpecialTensor,
+    x: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_ternary("wright_bessel", a, b, x, mode, |av, bv, xv| {
+        wright_bessel_scalar(av, bv, xv, mode)
+    })
 }
 
 /// Derivative of the Bessel function `J_v(z)`.
@@ -1071,6 +1100,126 @@ fn spherical_kn_nonneg(n: u32, x: f64) -> f64 {
     k_curr
 }
 
+fn wright_bessel_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    const LN_MAX: f64 = 709.782_712_893_384;
+    const LN_MIN: f64 = -745.133_219_101_941_1;
+
+    if a.is_nan() || b.is_nan() || x.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if !a.is_finite() || !b.is_finite() || !x.is_finite() || a < 0.0 || b < 0.0 || x < 0.0 {
+        return domain_error_by_mode(
+            "wright_bessel",
+            mode,
+            format!("a={a},b={b},x={x}"),
+            "wright_bessel requires finite a>=0, b>=0, x>=0",
+        );
+    }
+    if x == 0.0 {
+        return rgamma_nonnegative(b);
+    }
+    if a == 0.0 {
+        let log_value = x + rgamma_log_nonnegative(b)?;
+        return Ok(exp_from_log(log_value, LN_MIN, LN_MAX));
+    }
+
+    let log_value = log_wright_bessel_series(a, b, x)?;
+    Ok(exp_from_log(log_value, LN_MIN, LN_MAX))
+}
+
+fn log_wright_bessel_series(a: f64, b: f64, x: f64) -> Result<f64, SpecialError> {
+    const RELATIVE_LOG_EPS: f64 = -40.0;
+    const MIN_DECREASING_TERMS: usize = 8;
+
+    let ln_x = x.ln();
+    let mut max_log = f64::NEG_INFINITY;
+    let mut scaled_sum = 0.0;
+    let mut prev_log = f64::NEG_INFINITY;
+    let mut decreasing_terms = 0usize;
+    let max_terms = if a >= 10.0 {
+        256usize
+    } else if a >= 1.0 {
+        1024usize
+    } else if a >= 0.1 {
+        4096usize
+    } else {
+        16_384usize
+    };
+
+    for k in 0..max_terms {
+        let kf = k as f64;
+        let akb = a.mul_add(kf, b);
+        let log_rgamma = rgamma_log_nonnegative(akb)?;
+        let log_term =
+            kf * ln_x - crate::gamma::gammaln_scalar(kf + 1.0, RuntimeMode::Strict)? + log_rgamma;
+
+        if !log_term.is_finite() {
+            prev_log = log_term;
+            continue;
+        }
+
+        if log_term > max_log {
+            scaled_sum = if max_log.is_finite() {
+                scaled_sum * (max_log - log_term).exp() + 1.0
+            } else {
+                1.0
+            };
+            max_log = log_term;
+        } else {
+            scaled_sum += (log_term - max_log).exp();
+        }
+
+        if prev_log.is_finite() && log_term < prev_log {
+            decreasing_terms += 1;
+        } else {
+            decreasing_terms = 0;
+        }
+        prev_log = log_term;
+
+        let current_log_sum = max_log + scaled_sum.ln();
+        if decreasing_terms >= MIN_DECREASING_TERMS
+            && log_term - current_log_sum <= RELATIVE_LOG_EPS
+        {
+            return Ok(current_log_sum);
+        }
+    }
+
+    if max_log.is_finite() {
+        Ok(max_log + scaled_sum.ln())
+    } else {
+        Ok(f64::NEG_INFINITY)
+    }
+}
+
+fn rgamma_nonnegative(x: f64) -> Result<f64, SpecialError> {
+    Ok(exp_from_log(
+        rgamma_log_nonnegative(x)?,
+        f64::NEG_INFINITY,
+        709.782_712_893_384,
+    ))
+}
+
+fn rgamma_log_nonnegative(x: f64) -> Result<f64, SpecialError> {
+    if x == 0.0 {
+        return Ok(f64::NEG_INFINITY);
+    }
+    Ok(-crate::gamma::gammaln_scalar(x, RuntimeMode::Strict)?)
+}
+
+fn exp_from_log(log_value: f64, ln_min: f64, ln_max: f64) -> f64 {
+    if log_value.is_nan() {
+        f64::NAN
+    } else if log_value == f64::NEG_INFINITY {
+        0.0
+    } else if log_value > ln_max {
+        f64::INFINITY
+    } else if log_value < ln_min {
+        0.0
+    } else {
+        log_value.exp()
+    }
+}
+
 fn map_real_input<F>(
     function: &'static str,
     input: &SpecialTensor,
@@ -1106,6 +1255,81 @@ where
                 kind: SpecialErrorKind::DomainError,
                 mode,
                 detail: "empty tensor is not a valid special-function input",
+            })
+        }
+    }
+}
+
+fn map_real_ternary<F>(
+    function: &'static str,
+    a: &SpecialTensor,
+    b: &SpecialTensor,
+    c: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+) -> SpecialResult
+where
+    F: Fn(f64, f64, f64) -> Result<f64, SpecialError>,
+{
+    match (a, b, c) {
+        (
+            SpecialTensor::RealScalar(av),
+            SpecialTensor::RealScalar(bv),
+            SpecialTensor::RealScalar(cv),
+        ) => kernel(*av, *bv, *cv).map(SpecialTensor::RealScalar),
+        (
+            SpecialTensor::RealVec(av),
+            SpecialTensor::RealScalar(bv),
+            SpecialTensor::RealScalar(cv),
+        ) => av
+            .iter()
+            .copied()
+            .map(|lhs| kernel(lhs, *bv, *cv))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (
+            SpecialTensor::RealScalar(av),
+            SpecialTensor::RealVec(bv),
+            SpecialTensor::RealScalar(cv),
+        ) => bv
+            .iter()
+            .copied()
+            .map(|rhs| kernel(*av, rhs, *cv))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (
+            SpecialTensor::RealScalar(av),
+            SpecialTensor::RealScalar(bv),
+            SpecialTensor::RealVec(cv),
+        ) => cv
+            .iter()
+            .copied()
+            .map(|xv| kernel(*av, *bv, xv))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::ComplexScalar(_), _, _)
+        | (SpecialTensor::ComplexVec(_), _, _)
+        | (_, SpecialTensor::ComplexScalar(_), _)
+        | (_, SpecialTensor::ComplexVec(_), _)
+        | (_, _, SpecialTensor::ComplexScalar(_))
+        | (_, _, SpecialTensor::ComplexVec(_)) => {
+            not_yet_implemented(function, mode, "complex-valued path pending")
+        }
+        _ => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "unsupported_broadcast_pattern",
+                "fail_closed",
+                "unsupported broadcast pattern for ternary inputs",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "unsupported broadcast pattern for ternary inputs",
             })
         }
     }
@@ -1774,6 +1998,73 @@ mod tests {
     fn yvp_hardened_rejects_negative_real_argument() -> Result<(), String> {
         let Err(err) = yvp(&scalar(0.0), &scalar(-1.0), 1, RuntimeMode::Hardened) else {
             return Err("negative argument should fail closed".to_string());
+        };
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+        Ok(())
+    }
+
+    #[test]
+    fn wright_bessel_zero_matches_rgamma_boundary() -> Result<(), String> {
+        let result = real_value(tensor_result(wright_bessel(
+            &scalar(0.0),
+            &scalar(0.0),
+            &scalar(0.0),
+            RuntimeMode::Strict,
+        ))?)?;
+        assert_eq!(result, 0.0);
+
+        let exp_result = real_value(tensor_result(wright_bessel(
+            &scalar(0.0),
+            &scalar(1.0),
+            &scalar(2.0),
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!((exp_result - 2.0_f64.exp()).abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn wright_bessel_matches_large_a_scipy_reference_values() -> Result<(), String> {
+        let cases: [(f64, f64, f64, f64, f64); 4] = [
+            (20.0, 1.5, 2.0, std::f64::consts::FRAC_2_SQRT_PI, 1e-13),
+            (50.0, 0.25, 0.1, 0.275_815_662_830_209_3, 1e-13),
+            (100.0, 0.0, 1e20, 1.071_510_288_125_446_2e-136, 1e-12),
+            (100.0, 100.0, 1e20, 1.071_510_288_125_468_3e-156, 1e-12),
+        ];
+
+        for (a, b, x, expected, rel_tol) in cases {
+            let actual = real_value(tensor_result(wright_bessel(
+                &scalar(a),
+                &scalar(b),
+                &scalar(x),
+                RuntimeMode::Strict,
+            ))?)?;
+            let scale = expected.abs().max(1.0);
+            assert!(
+                (actual - expected).abs() <= rel_tol * scale,
+                "wright_bessel({a}, {b}, {x}) mismatch: actual={actual}, expected={expected}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wright_bessel_rejects_negative_domain_in_hardened_mode() -> Result<(), String> {
+        let strict = real_value(tensor_result(wright_bessel(
+            &scalar(-0.5),
+            &scalar(2.0),
+            &scalar(0.1),
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!(strict.is_nan());
+
+        let Err(err) = wright_bessel(
+            &scalar(-0.5),
+            &scalar(2.0),
+            &scalar(0.1),
+            RuntimeMode::Hardened,
+        ) else {
+            return Err("negative wright_bessel input should fail closed".to_string());
         };
         assert_eq!(err.kind, SpecialErrorKind::DomainError);
         Ok(())

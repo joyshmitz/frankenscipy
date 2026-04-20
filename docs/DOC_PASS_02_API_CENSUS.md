@@ -584,7 +584,7 @@
 | `hankel1e` | function (ufunc) | `_ufuncs` | no |
 | `hankel2` | function (ufunc) | `_ufuncs` | no |
 | `hankel2e` | function (ufunc) | `_ufuncs` | no |
-| `wright_bessel` | function (ufunc) | `_ufuncs` | no |
+| `wright_bessel` | function (ufunc) | `_ufuncs` | yes |
 | `log_wright_bessel` | function (ufunc) | `_ufuncs` | no |
 | `lmbda` | function | `_basic` | no |
 | `jnjnp_zeros` | function | `_basic` | no |

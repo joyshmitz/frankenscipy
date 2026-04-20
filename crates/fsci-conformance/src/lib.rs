@@ -94,9 +94,9 @@ use fsci_special::{
     spherical_jn as special_spherical_jn, spherical_kn as special_spherical_kn,
     spherical_yn as special_spherical_yn, stdtr as special_stdtr, stdtrc as special_stdtrc,
     stdtridf as special_stdtridf, stdtrit as special_stdtrit, struve as special_struve,
-    tandg as special_tandg, xlog1py as special_xlog1py, xlogx as special_xlogx,
-    xlogy as special_xlogy, y0 as special_y0, y1 as special_y1, yn as special_yn,
-    yvp as special_yvp, zeta as special_zeta, zetac as special_zetac,
+    tandg as special_tandg, wright_bessel as special_wright_bessel, xlog1py as special_xlog1py,
+    xlogx as special_xlogx, xlogy as special_xlogy, y0 as special_y0, y1 as special_y1,
+    yn as special_yn, yvp as special_yvp, zeta as special_zeta, zetac as special_zetac,
 };
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};
@@ -643,6 +643,7 @@ pub enum SpecialCaseFunction {
     Yn,
     Iv,
     Kv,
+    WrightBessel,
     Jvp,
     Yvp,
     Ivp,
@@ -9213,6 +9214,21 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             special_scalar_from_tensor(
                 special_kv(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
                 "kv",
+                mode,
+            )
+        }
+        SpecialCaseFunction::WrightBessel => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("wright_bessel", mode));
+            }
+            special_scalar_from_tensor(
+                special_wright_bessel(
+                    &special_scalar(args[0]),
+                    &special_scalar(args[1]),
+                    &special_scalar(args[2]),
+                    mode,
+                )?,
+                "wright_bessel",
                 mode,
             )
         }

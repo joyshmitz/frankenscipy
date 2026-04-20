@@ -14,7 +14,7 @@ pub mod types;
 pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
 pub use bessel::{
     BESSEL_DISPATCH_PLAN, h1vp, h2vp, hankel1, hankel2, iv, ivp, j0, j1, jn, jv, jvp, kv, kvp,
-    spherical_in, spherical_jn, spherical_kn, spherical_yn, y0, y1, yn, yv, yvp,
+    spherical_in, spherical_jn, spherical_kn, spherical_yn, wright_bessel, y0, y1, yn, yv, yvp,
 };
 pub use beta::{
     BETA_DISPATCH_PLAN, bdtr, bdtrc, bdtri, beta, betainc, betainc_scalar, betaln, betaln_scalar,

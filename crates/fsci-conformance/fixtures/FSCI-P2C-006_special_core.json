@@ -1627,6 +1627,126 @@
       }
     },
     {
+      "case_id": "diff_wright_bessel_zero_origin",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "wright_bessel",
+      "args": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::wright_bessel"
+      }
+    },
+    {
+      "case_id": "diff_wright_bessel_large_a_20_1p5_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "wright_bessel",
+      "args": [
+        20.0,
+        1.5,
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.1283791670955126,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::wright_bessel"
+      }
+    },
+    {
+      "case_id": "diff_wright_bessel_large_a_50_0p25_0p1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "wright_bessel",
+      "args": [
+        50.0,
+        0.25,
+        0.1
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.2758156628302093,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::wright_bessel"
+      }
+    },
+    {
+      "case_id": "diff_wright_bessel_large_a_100_0_1e20",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "wright_bessel",
+      "args": [
+        100.0,
+        0.0,
+        1e20
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0715102881254462e-136,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::wright_bessel"
+      }
+    },
+    {
+      "case_id": "diff_wright_bessel_large_a_100_100_1e20",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "wright_bessel",
+      "args": [
+        100.0,
+        100.0,
+        1e20
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0715102881254683e-156,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::wright_bessel"
+      }
+    },
+    {
+      "case_id": "diff_wright_bessel_negative_a_strict_nan",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "wright_bessel",
+      "args": [
+        -0.5,
+        2.0,
+        0.1
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "adv_wright_bessel_negative_a_hardened_error",
+      "category": "adversarial",
+      "mode": "Hardened",
+      "function": "wright_bessel",
+      "args": [
+        -0.5,
+        2.0,
+        0.1
+      ],
+      "expected": {
+        "kind": "error_kind",
+        "error": "DomainError"
+      }
+    },
+    {
       "case_id": "diff_jvp_v0_x1p25_n1",
       "category": "differential",
       "mode": "Strict",
