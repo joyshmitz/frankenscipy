@@ -14,10 +14,11 @@ use fsci_conformance::PacketFamily;
 use fsci_signal::{
     BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, SpectralScaling,
     autocorrelation, blackman, butter, butter_sos, convolve, correlate, csd_with_scaling, filtfilt,
-    find_peaks, firwin, freqz, freqz_with_whole, gausspulse, get_window, get_window_with_fftbins,
-    hamming, hann, hilbert_envelope, kaiser, lfilter, lfiltic, lombscargle, peak_prominences,
-    resample, resample_poly_with_padtype, ricker, rms, savgol_coeffs, savgol_filter, sosfilt,
-    spectral_centroid, spectral_flatness, stft, tf2sos, welch,
+    filtfilt_with_padtype, find_peaks, firwin, freqz, freqz_with_whole, gausspulse, get_window,
+    get_window_with_fftbins, hamming, hann, hilbert_envelope, kaiser, lfilter, lfiltic,
+    lombscargle, peak_prominences, resample, resample_poly_with_padtype, ricker, rms,
+    savgol_coeffs, savgol_filter, sosfilt, spectral_centroid, spectral_flatness, stft, tf2sos,
+    welch,
 };
 use serde::Serialize;
 use std::f64::consts::PI;
@@ -2234,4 +2235,65 @@ fn scenario_30_freqz_whole() {
     let bundle = runner.finish();
     write_bundle("scenario_30_freqz_whole", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_30 failed");
+}
+
+/// Scenario 31: filtfilt padtype matches SciPy's odd/even/constant padding modes.
+#[test]
+fn scenario_31_filtfilt_padtype_modes() {
+    let mut runner = ScenarioRunner::new("scenario_31_filtfilt_padtype_modes");
+    runner.set_signal_meta("filtfilt_padtype", 20, "Strict");
+
+    runner.record_step(
+        "filtfilt_even_padtype_reference",
+        "filtfilt_with_padtype(b, a, x, Some(\"even\"))",
+        "even endpoint extension should match SciPy's forward-backward reference output",
+        "Strict",
+        || {
+            let x = [
+                0.0, 1.0, 2.0, 1.0, 0.0, -1.0, -2.0, -1.0, 0.0, 1.0, 2.0, 1.0, 0.0, -1.0, -2.0,
+                -1.0, 0.0, 1.0, 2.0, 1.0,
+            ];
+            let expected = [
+                0.96, 0.92, 0.72, 0.36, 0.0, -0.28, -0.4, -0.28, 0.0, 0.28, 0.4, 0.28, 0.0, -0.28,
+                -0.4, -0.28, 0.08, 0.52, 0.88, 1.0,
+            ];
+            let got = filtfilt_with_padtype(&[0.2; 5], &[1.0], &x, Some("even"))
+                .map_err(|e| format!("{e}"))?;
+            let diff = max_abs_diff(&got, &expected);
+            if diff < 1e-12 {
+                Ok(format!("max_abs_diff={diff:.2e}"))
+            } else {
+                Err(format!("even padtype mismatch diff={diff:.2e}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "filtfilt_constant_padtype_reference",
+        "filtfilt_with_padtype(b, a, x, Some(\"constant\"))",
+        "constant endpoint extension should match SciPy's constant padtype output",
+        "Strict",
+        || {
+            let x = [
+                0.0, 1.0, 2.0, 1.0, 0.0, -1.0, -2.0, -1.0, 0.0, 1.0, 2.0, 1.0, 0.0, -1.0, -2.0,
+                -1.0, 0.0, 1.0, 2.0, 1.0,
+            ];
+            let expected = [
+                0.48, 0.6, 0.56, 0.32, 0.0, -0.28, -0.4, -0.28, 0.0, 0.28, 0.4, 0.28, 0.0, -0.28,
+                -0.4, -0.28, 0.04, 0.44, 0.8, 1.0,
+            ];
+            let got = filtfilt_with_padtype(&[0.2; 5], &[1.0], &x, Some("constant"))
+                .map_err(|e| format!("{e}"))?;
+            let diff = max_abs_diff(&got, &expected);
+            if diff < 1e-12 {
+                Ok(format!("max_abs_diff={diff:.2e}"))
+            } else {
+                Err(format!("constant padtype mismatch diff={diff:.2e}"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_31_filtfilt_padtype_modes", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_31 failed");
 }

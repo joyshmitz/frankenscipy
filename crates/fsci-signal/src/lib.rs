@@ -3674,6 +3674,19 @@ pub fn lfilter(
 ///
 /// This results in zero phase distortion (linear phase) and doubled filter order.
 pub fn filtfilt(b: &[f64], a: &[f64], x: &[f64]) -> Result<Vec<f64>, SignalError> {
+    filtfilt_with_padtype(b, a, x, None)
+}
+
+/// Apply a digital filter forward and backward with explicit SciPy padtype control.
+///
+/// Matches `scipy.signal.filtfilt(b, a, x, padtype=...)` for
+/// `padtype in {"odd", "even", "constant"}`.
+pub fn filtfilt_with_padtype(
+    b: &[f64],
+    a: &[f64],
+    x: &[f64],
+    padtype: Option<&str>,
+) -> Result<Vec<f64>, SignalError> {
     if b.is_empty() || a.is_empty() {
         return Err(SignalError::InvalidArgument(
             "b and a must be non-empty".to_string(),
@@ -3688,17 +3701,52 @@ pub fn filtfilt(b: &[f64], a: &[f64], x: &[f64]) -> Result<Vec<f64>, SignalError
 
     let nfilt = b.len().max(a.len());
     let padlen = (3 * (nfilt - 1)).min(n - 1);
+    let padtype = padtype.unwrap_or("odd");
 
     // 1. Pad signal with mirrored values
     let mut padded = Vec::with_capacity(n + 2 * padlen);
     let x0 = x[0];
-    for i in (1..=padlen).rev() {
-        padded.push(2.0 * x0 - x[i]);
+    match padtype {
+        "odd" => {
+            for i in (1..=padlen).rev() {
+                padded.push(2.0 * x0 - x[i]);
+            }
+        }
+        "even" => {
+            for i in (1..=padlen).rev() {
+                padded.push(x[i]);
+            }
+        }
+        "constant" => {
+            for _ in 0..padlen {
+                padded.push(x0);
+            }
+        }
+        _ => {
+            return Err(SignalError::InvalidArgument(
+                "padtype must be one of {'odd', 'even', 'constant'}".to_string(),
+            ));
+        }
     }
     padded.extend_from_slice(x);
     let xn = x[n - 1];
-    for i in 1..=padlen {
-        padded.push(2.0 * xn - x[n - 1 - i]);
+    match padtype {
+        "odd" => {
+            for i in 1..=padlen {
+                padded.push(2.0 * xn - x[n - 1 - i]);
+            }
+        }
+        "even" => {
+            for i in 1..=padlen {
+                padded.push(x[n - 1 - i]);
+            }
+        }
+        "constant" => {
+            for _ in 0..padlen {
+                padded.push(xn);
+            }
+        }
+        _ => unreachable!("padtype validated above"),
     }
 
     // Forward pass with initial conditions
@@ -9132,6 +9180,47 @@ mod tests {
     fn filtfilt_empty_coefficients_rejected() {
         assert!(filtfilt(&[], &[1.0], &[1.0, 2.0, 3.0]).is_err());
         assert!(filtfilt(&[1.0], &[], &[1.0, 2.0, 3.0]).is_err());
+    }
+
+    #[test]
+    fn filtfilt_padtypes_match_scipy_reference() {
+        let x = [
+            0.0, 1.0, 2.0, 1.0, 0.0, -1.0, -2.0, -1.0, 0.0, 1.0, 2.0, 1.0, 0.0, -1.0, -2.0, -1.0,
+            0.0, 1.0, 2.0, 1.0,
+        ];
+        let odd = filtfilt_with_padtype(&[0.2; 5], &[1.0], &x, Some("odd")).expect("odd");
+        let even = filtfilt_with_padtype(&[0.2; 5], &[1.0], &x, Some("even")).expect("even");
+        let constant =
+            filtfilt_with_padtype(&[0.2; 5], &[1.0], &x, Some("constant")).expect("constant");
+        let expected_odd = [
+            0.0, 0.28, 0.4, 0.28, 0.0, -0.28, -0.4, -0.28, 0.0, 0.28, 0.4, 0.28, 0.0, -0.28, -0.4,
+            -0.28, 0.0, 0.36, 0.72, 1.0,
+        ];
+        let expected_even = [
+            0.96, 0.92, 0.72, 0.36, 0.0, -0.28, -0.4, -0.28, 0.0, 0.28, 0.4, 0.28, 0.0, -0.28,
+            -0.4, -0.28, 0.08, 0.52, 0.88, 1.0,
+        ];
+        let expected_constant = [
+            0.48, 0.6, 0.56, 0.32, 0.0, -0.28, -0.4, -0.28, 0.0, 0.28, 0.4, 0.28, 0.0, -0.28, -0.4,
+            -0.28, 0.04, 0.44, 0.8, 1.0,
+        ];
+
+        for (actual, want) in odd.iter().zip(expected_odd.iter()) {
+            assert!((actual - want).abs() < 1e-12, "{actual} vs {want}");
+        }
+        for (actual, want) in even.iter().zip(expected_even.iter()) {
+            assert!((actual - want).abs() < 1e-12, "{actual} vs {want}");
+        }
+        for (actual, want) in constant.iter().zip(expected_constant.iter()) {
+            assert!((actual - want).abs() < 1e-12, "{actual} vs {want}");
+        }
+    }
+
+    #[test]
+    fn filtfilt_rejects_unknown_padtype() {
+        let err = filtfilt_with_padtype(&[0.2; 5], &[1.0], &[0.0, 1.0, 2.0, 1.0], Some("wrap"))
+            .expect_err("invalid padtype");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
     }
 
     // ── Periodogram tests ──────────────────────────────────────────
