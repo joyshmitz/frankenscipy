@@ -7074,7 +7074,7 @@ pub fn ansari(x: &[f64], y: &[f64]) -> TtestResult {
     let mut pooled = Vec::with_capacity(total);
     pooled.extend_from_slice(x);
     pooled.extend_from_slice(y);
-    let ranks = rankdata(&pooled);
+    let ranks = rankdata_average(&pooled);
     let total_f = total as f64;
     let symranks: Vec<f64> = ranks.iter().map(|&r| r.min(total_f - r + 1.0)).collect();
     let statistic: f64 = symranks[..n].iter().sum();
@@ -7157,7 +7157,7 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
     }
 
     let values: Vec<f64> = combined.iter().map(|&(v, _)| v).collect();
-    let ranks = rankdata(&values);
+    let ranks = rankdata_average(&values);
 
     // U statistic: sum of ranks of x - n1*(n1+1)/2
     let rank_sum_x: f64 = ranks
@@ -7231,7 +7231,7 @@ pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
 
     // Rank the absolute differences
     let abs_diffs: Vec<f64> = diffs.iter().map(|d| d.abs()).collect();
-    let ranks = rankdata(&abs_diffs);
+    let ranks = rankdata_average(&abs_diffs);
 
     // T+ = sum of ranks where difference is positive
     let t_plus: f64 = ranks
@@ -7307,7 +7307,7 @@ pub fn kruskal(groups: &[&[f64]]) -> TtestResult {
         all_values.extend_from_slice(g);
         group_sizes.push(g.len());
     }
-    let ranks = rankdata(&all_values);
+    let ranks = rankdata_average(&all_values);
 
     // Compute H statistic: H = (12/(N(N+1))) * Σ(R_i²/n_i) - 3(N+1)
     let mut offset = 0;
@@ -7353,7 +7353,7 @@ pub fn ranksums(x: &[f64], y: &[f64]) -> TtestResult {
     let mut combined: Vec<f64> = Vec::with_capacity(x.len() + y.len());
     combined.extend_from_slice(x);
     combined.extend_from_slice(y);
-    let ranks = rankdata(&combined);
+    let ranks = rankdata_average(&combined);
 
     // Sum of ranks for first sample
     let rank_sum_x: f64 = ranks[..x.len()].iter().sum();
@@ -7598,14 +7598,27 @@ pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
         };
     }
 
-    let rank_x = rankdata(x);
-    let rank_y = rankdata(y);
+    let rank_x = rankdata_average(x);
+    let rank_y = rankdata_average(y);
 
     pearsonr(&rank_x, &rank_y)
 }
 
+/// Compute ranks with a SciPy-style tie handling method.
+///
+/// Matches `scipy.stats.rankdata(a, method=...)` for the implemented methods.
+pub fn rankdata(data: &[f64], method: Option<&str>) -> Result<Vec<f64>, StatsError> {
+    match method.unwrap_or("average").to_ascii_lowercase().as_str() {
+        "average" => Ok(rankdata_average(data)),
+        "ordinal" => Ok(rankdata_ordinal(data)),
+        _ => Err(StatsError::InvalidArgument(
+            "method must be one of {'average', 'ordinal'}".to_string(),
+        )),
+    }
+}
+
 /// Compute ranks with average tie-breaking.
-fn rankdata(data: &[f64]) -> Vec<f64> {
+fn rankdata_average(data: &[f64]) -> Vec<f64> {
     let n = data.len();
     if data.iter().any(|v| v.is_nan()) {
         return vec![f64::NAN; n];
@@ -7633,6 +7646,29 @@ fn rankdata(data: &[f64]) -> Vec<f64> {
             ranks[item.1] = avg_rank;
         }
         i = j;
+    }
+    ranks
+}
+
+/// Compute ranks with ordinal tie-breaking.
+///
+/// Tied elements receive distinct ranks according to the stable input order.
+fn rankdata_ordinal(data: &[f64]) -> Vec<f64> {
+    let n = data.len();
+    if data.iter().any(|v| v.is_nan()) {
+        return vec![f64::NAN; n];
+    }
+    let mut indexed: Vec<(f64, usize)> = data
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(i, v)| (v, i))
+        .collect();
+    indexed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    let mut ranks = vec![0.0; n];
+    for (rank, item) in indexed.iter().enumerate() {
+        ranks[item.1] = (rank + 1) as f64;
     }
     ranks
 }
@@ -8790,7 +8826,7 @@ pub fn cramervonmises_2samp_with_method(
 
     let mut pooled = xa.clone();
     pooled.extend_from_slice(&ya);
-    let ranks = rankdata(&pooled);
+    let ranks = rankdata_average(&pooled);
     let rx = &ranks[..nx];
     let ry = &ranks[nx..];
 
@@ -14181,7 +14217,7 @@ mod tests {
 
     #[test]
     fn rankdata_no_ties() {
-        let ranks = rankdata(&[3.0, 1.0, 2.0]);
+        let ranks = rankdata(&[3.0, 1.0, 2.0], None).expect("rankdata average");
         assert_close(ranks[0], 3.0, 1e-12, "rank of 3.0");
         assert_close(ranks[1], 1.0, 1e-12, "rank of 1.0");
         assert_close(ranks[2], 2.0, 1e-12, "rank of 2.0");
@@ -14189,11 +14225,35 @@ mod tests {
 
     #[test]
     fn rankdata_with_ties() {
-        let ranks = rankdata(&[1.0, 2.0, 2.0, 4.0]);
+        let ranks = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("average")).expect("rankdata average");
         assert_close(ranks[0], 1.0, 1e-12, "rank of 1.0");
         assert_close(ranks[1], 2.5, 1e-12, "rank of 2.0 (tied)");
         assert_close(ranks[2], 2.5, 1e-12, "rank of 2.0 (tied)");
         assert_close(ranks[3], 4.0, 1e-12, "rank of 4.0");
+    }
+
+    #[test]
+    fn rankdata_ordinal_matches_scipy_reference() {
+        let ranks = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("ordinal")).expect("rankdata ordinal");
+        assert_close(ranks[0], 1.0, 1e-12, "rank of 1.0");
+        assert_close(ranks[1], 2.0, 1e-12, "first tied rank");
+        assert_close(ranks[2], 3.0, 1e-12, "second tied rank");
+        assert_close(ranks[3], 4.0, 1e-12, "rank of 4.0");
+    }
+
+    #[test]
+    fn rankdata_nan_and_invalid_method_match_scipy_shape() {
+        let ranks = rankdata(&[1.0, f64::NAN, 2.0], Some("ordinal")).expect("nan rankdata");
+        assert!(
+            ranks.iter().all(|rank| rank.is_nan()),
+            "NaN input should propagate"
+        );
+
+        let err = rankdata(&[1.0, 2.0], Some("dense")).expect_err("invalid method");
+        assert_eq!(
+            err,
+            StatsError::InvalidArgument("method must be one of {'average', 'ordinal'}".to_string())
+        );
     }
 
     // ── Summary statistics ────────────────────────────────────────

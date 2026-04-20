@@ -80,6 +80,7 @@ use fsci_stats::{
     power_divergence,
     probplot_quantiles,
     r2_score,
+    rankdata,
     root_mean_squared_error,
     shapiro,
     skew,
@@ -3396,6 +3397,86 @@ fn e2e_034_skewtest_nan_policy_parity() {
         "skewtest([... NaN ...], nan_policy='raise')",
         "the strict NaN policy should reject the sample instead of silently coercing it",
         &raise_error.to_string(),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 35: Rankdata average/ordinal parity.
+/// Verifies SciPy-shaped tie handling for the implemented public `rankdata`
+/// methods, plus NaN propagation and invalid-method rejection.
+#[test]
+fn e2e_035_rankdata_method_parity() {
+    let scenario_id = "e2e_stats_035_rankdata_methods";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let average = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("average")).expect("average rankdata");
+    let pass = average == vec![1.0, 2.5, 2.5, 4.0];
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "rankdata_average_reference",
+        "rankdata([1,2,2,4], method='average')",
+        "tied observations should receive the mean of their 1-based rank interval",
+        &format!("ranks={average:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let ordinal = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("ordinal")).expect("ordinal rankdata");
+    let pass = ordinal == vec![1.0, 2.0, 3.0, 4.0];
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "rankdata_ordinal_reference",
+        "rankdata([1,2,2,4], method='ordinal')",
+        "tied observations should receive distinct ranks according to stable input order",
+        &format!("ranks={ordinal:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let nan_ranks = rankdata(&[1.0, f64::NAN, 2.0], Some("ordinal")).expect("nan rankdata");
+    let pass = nan_ranks.iter().all(|rank| rank.is_nan());
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "rankdata_nan_propagates",
+        "rankdata([1, NaN, 2], method='ordinal')",
+        "the current SciPy-default NaN handling should fail closed with all-NaN ranks",
+        &format!("all_nan={}", nan_ranks.iter().all(|rank| rank.is_nan())),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let err = rankdata(&[1.0, 2.0], Some("dense")).expect_err("invalid method");
+    let pass = err
+        == fsci_stats::StatsError::InvalidArgument(
+            "method must be one of {'average', 'ordinal'}".to_string(),
+        );
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "rankdata_invalid_method_rejected",
+        "rankdata([1,2], method='dense')",
+        "unsupported tie methods should be rejected explicitly instead of silently coercing to average",
+        &err.to_string(),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));

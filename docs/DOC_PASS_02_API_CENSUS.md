@@ -1026,7 +1026,7 @@ _(See full symbol list above -- all are functions/ufuncs from `_ufuncs` or `_bas
 | `tstd` | function | `_stats_py` | no |
 | `tsem` | function | `_stats_py` | no |
 | `variation` | function | `_variation` | no |
-| `rankdata` | function | `_stats_py` | no |
+| `rankdata` | function | `_stats_py` | yes |
 | `tiecorrect` | function | `_stats_py` | no |
 | `trim_mean` | function | `_stats_py` | no |
 | `gstd` | function | `_stats_py` | no |
