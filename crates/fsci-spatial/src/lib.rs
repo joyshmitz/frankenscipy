@@ -239,6 +239,37 @@ pub fn braycurtis(a: &[f64], b: &[f64]) -> f64 {
     if den == 0.0 { 0.0 } else { num / den }
 }
 
+fn relative_entropy(x: f64, y: f64) -> f64 {
+    if x == 0.0 { 0.0 } else { x * (x / y).ln() }
+}
+
+/// Jensen-Shannon distance between two probability vectors.
+///
+/// Matches `scipy.spatial.distance.jensenshannon(p, q, base=None)` for
+/// one-dimensional inputs. The input vectors are normalized to sum to 1.
+pub fn jensenshannon(p: &[f64], q: &[f64], base: Option<f64>) -> f64 {
+    let sum_p: f64 = p.iter().sum();
+    let sum_q: f64 = q.iter().sum();
+
+    let normalized_p: Vec<f64> = p.iter().map(|value| value / sum_p).collect();
+    let normalized_q: Vec<f64> = q.iter().map(|value| value / sum_q).collect();
+
+    let js = normalized_p
+        .iter()
+        .zip(normalized_q.iter())
+        .map(|(&left, &right)| {
+            let mean = (left + right) / 2.0;
+            relative_entropy(left, mean) + relative_entropy(right, mean)
+        })
+        .sum::<f64>();
+
+    let scaled = match base {
+        Some(log_base) => js / log_base.ln(),
+        None => js,
+    };
+    (scaled / 2.0).sqrt()
+}
+
 /// Distance metric identifiers for use with `pdist` and `cdist_metric`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DistanceMetric {
@@ -3096,6 +3127,31 @@ mod tests {
     #[test]
     fn braycurtis_identical() {
         assert!(braycurtis(&[5.0, 10.0], &[5.0, 10.0]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn jensenshannon_matches_scipy_default_base() {
+        let distance = jensenshannon(&[1.0, 0.0], &[0.5, 0.5], None);
+        assert!((distance - 0.464501404022459).abs() < 1e-15);
+    }
+
+    #[test]
+    fn jensenshannon_respects_base_kwarg() {
+        let distance = jensenshannon(&[1.0, 0.0, 0.0], &[0.0, 1.0, 0.0], Some(2.0));
+        assert!((distance - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn jensenshannon_normalizes_input_masses() {
+        let normalized = jensenshannon(&[1.0, 0.0, 0.0], &[0.0, 1.0, 0.0], Some(2.0));
+        let unnormalized = jensenshannon(&[2.0, 0.0, 0.0], &[0.0, 4.0, 0.0], Some(2.0));
+        assert!((normalized - unnormalized).abs() < 1e-15);
+    }
+
+    #[test]
+    fn jensenshannon_zero_mass_vectors_match_scipy_nan() {
+        let distance = jensenshannon(&[0.0, 0.0], &[0.0, 0.0], None);
+        assert!(distance.is_nan());
     }
 
     #[test]

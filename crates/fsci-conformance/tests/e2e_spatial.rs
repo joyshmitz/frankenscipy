@@ -13,7 +13,8 @@
 use fsci_conformance::PacketFamily;
 use fsci_spatial::{
     DistanceMetric, KDTree, cdist, cdist_metric, chebyshev, cityblock, cosine, distance_matrix,
-    euclidean, minkowski, pdist, sqeuclidean, squareform_to_condensed, squareform_to_matrix,
+    euclidean, jensenshannon, minkowski, pdist, sqeuclidean, squareform_to_condensed,
+    squareform_to_matrix,
 };
 use serde::Serialize;
 use std::fs;
@@ -1367,4 +1368,79 @@ fn scenario_14_large_cdist() {
     let bundle = runner.finish();
     write_bundle("scenario_14_large_cdist", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_14 failed");
+}
+
+/// Scenario 15: Jensen-Shannon base kwarg parity
+#[test]
+fn scenario_15_jensenshannon_base_kwarg() {
+    let mut runner = ScenarioRunner::new("scenario_15_jensenshannon_base_kwarg");
+    runner.set_spatial_meta("distance", 2, 3, "jensenshannon");
+
+    runner.step(
+        "default_base",
+        "jensenshannon([1, 0], [0.5, 0.5], None)",
+        "SciPy natural-log default",
+        "Strict",
+        || {
+            let distance = jensenshannon(&[1.0, 0.0], &[0.5, 0.5], None);
+            let expected = 0.464501404022459;
+            if approx_eq(distance, expected, 1e-15) {
+                Ok(format!("distance={distance:.15}"))
+            } else {
+                Err(format!("expected {expected:.15}, got {distance:.15}"))
+            }
+        },
+    );
+
+    runner.step(
+        "base_two",
+        "jensenshannon([1, 0, 0], [0, 1, 0], Some(2.0))",
+        "SciPy base=2.0 example",
+        "Strict",
+        || {
+            let distance = jensenshannon(&[1.0, 0.0, 0.0], &[0.0, 1.0, 0.0], Some(2.0));
+            if approx_eq(distance, 1.0, 1e-15) {
+                Ok(String::from("distance=1.0"))
+            } else {
+                Err(format!("expected 1.0, got {distance:.15}"))
+            }
+        },
+    );
+
+    runner.step(
+        "normalization",
+        "jensenshannon([2, 0, 0], [0, 4, 0], Some(2.0))",
+        "SciPy normalizes probability masses before computing distance",
+        "Strict",
+        || {
+            let normalized = jensenshannon(&[1.0, 0.0, 0.0], &[0.0, 1.0, 0.0], Some(2.0));
+            let unnormalized = jensenshannon(&[2.0, 0.0, 0.0], &[0.0, 4.0, 0.0], Some(2.0));
+            if approx_eq(normalized, unnormalized, 1e-15) {
+                Ok(format!("normalized={normalized:.15}, unnormalized={unnormalized:.15}"))
+            } else {
+                Err(format!(
+                    "expected normalized and unnormalized inputs to match, got {normalized:.15} vs {unnormalized:.15}"
+                ))
+            }
+        },
+    );
+
+    runner.step(
+        "zero_mass_nan",
+        "jensenshannon([0, 0], [0, 0], None)",
+        "SciPy returns NaN when both vectors have zero mass",
+        "Strict",
+        || {
+            let distance = jensenshannon(&[0.0, 0.0], &[0.0, 0.0], None);
+            if distance.is_nan() {
+                Ok(String::from("distance=NaN"))
+            } else {
+                Err(format!("expected NaN, got {distance}"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_15_jensenshannon_base_kwarg", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_15 failed");
 }
