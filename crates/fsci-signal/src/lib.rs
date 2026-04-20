@@ -4639,6 +4639,15 @@ pub struct SpectralResult {
     pub psd: Vec<f64>,
 }
 
+/// Scaling mode for spectral-density style estimators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpectralScaling {
+    /// Power spectral density with units per Hz.
+    Density,
+    /// Power spectrum with squared-amplitude units.
+    Spectrum,
+}
+
 /// Estimate power spectral density using a periodogram.
 ///
 /// Matches `scipy.signal.periodogram(x, fs, window, scaling='density')`.
@@ -6504,6 +6513,29 @@ pub fn csd(
     nperseg: Option<usize>,
     noverlap: Option<usize>,
 ) -> Result<CsdResult, SignalError> {
+    csd_with_scaling(
+        x,
+        y,
+        fs,
+        window,
+        nperseg,
+        noverlap,
+        SpectralScaling::Density,
+    )
+}
+
+/// Cross-spectral density / spectrum estimation using Welch's method.
+///
+/// Matches `scipy.signal.csd(..., scaling='density'|'spectrum')`.
+pub fn csd_with_scaling(
+    x: &[f64],
+    y: &[f64],
+    fs: f64,
+    window: Option<&str>,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+    scaling: SpectralScaling,
+) -> Result<CsdResult, SignalError> {
     if x.len() != y.len() {
         return Err(SignalError::InvalidArgument(format!(
             "x and y must have same length ({} vs {})",
@@ -6582,7 +6614,13 @@ pub fn csd(
         ));
     }
 
-    let scale = 1.0 / (fs * nperseg as f64 * win_power * n_segments as f64);
+    let scale = match scaling {
+        SpectralScaling::Density => 1.0 / (fs * nperseg as f64 * win_power * n_segments as f64),
+        SpectralScaling::Spectrum => {
+            let win_sum = win_coeffs.iter().sum::<f64>();
+            1.0 / (win_sum * win_sum * n_segments as f64)
+        }
+    };
     for (re, im) in &mut avg_csd {
         *re *= scale;
         *im *= scale;
@@ -10274,6 +10312,108 @@ mod tests {
                     "auto-CSD/welch mismatch at bin {k}: csd={csd_re}, welch={welch_val}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn csd_scaling_matches_scipy_density_and_spectrum() {
+        let fs = 16.0;
+        let n = 32;
+        let t: Vec<f64> = (0..n).map(|i| i as f64 / fs).collect();
+        let x: Vec<f64> = t
+            .iter()
+            .map(|&ti| (2.0 * std::f64::consts::PI * 2.0 * ti).sin())
+            .collect();
+        let y: Vec<f64> = t
+            .iter()
+            .map(|&ti| (2.0 * std::f64::consts::PI * 2.0 * ti).cos())
+            .collect();
+        let expected_frequencies = [0.0, 2.0, 4.0, 6.0, 8.0];
+        let expected_density = [
+            (-3.962744417486146e-17, 0.0),
+            (1.3346567516981065e-17, 0.16666666666666666),
+            (-7.103421885274257e-19, 0.04166666666666669),
+            (-2.5133161553135813e-33, 2.363886302605754e-32),
+            (-2.1146214215064937e-33, 0.0),
+        ];
+        let expected_spectrum = [
+            (-1.127784089578213e-16, 0.0),
+            (2.9738116731031224e-17, 0.5),
+            (-9.686270956913913e-18, 0.12500000000000003),
+            (-2.9579909131093405e-34, 6.980810313780984e-32),
+            (-9.199850601359331e-33, 0.0),
+        ];
+
+        let density =
+            csd_with_scaling(&x, &y, fs, None, Some(8), Some(4), SpectralScaling::Density)
+                .expect("density");
+        let spectrum = csd_with_scaling(
+            &x,
+            &y,
+            fs,
+            None,
+            Some(8),
+            Some(4),
+            SpectralScaling::Spectrum,
+        )
+        .expect("spectrum");
+
+        for (index, ((actual, expected), spectrum_frequency)) in density
+            .frequencies
+            .iter()
+            .zip(expected_frequencies.iter())
+            .zip(spectrum.frequencies.iter())
+            .enumerate()
+        {
+            assert_close(
+                *actual,
+                *expected,
+                1e-12,
+                &format!("frequency[{index}] should match SciPy"),
+            );
+            assert_close(
+                *actual,
+                *spectrum_frequency,
+                1e-12,
+                &format!("frequency[{index}] should match across scaling modes"),
+            );
+        }
+
+        for (index, (((density_re, density_im), expected_density), expected_spectrum)) in density
+            .csd
+            .iter()
+            .zip(expected_density.iter())
+            .zip(expected_spectrum.iter())
+            .enumerate()
+        {
+            let (expected_density_re, expected_density_im) = *expected_density;
+            let (expected_spectrum_re, expected_spectrum_im) = *expected_spectrum;
+            let (spectrum_re, spectrum_im) = spectrum.csd[index];
+
+            assert_close(
+                *density_re,
+                expected_density_re,
+                1e-12,
+                &format!("density.re[{index}] should match SciPy"),
+            );
+            assert_close(
+                *density_im,
+                expected_density_im,
+                1e-12,
+                &format!("density.im[{index}] should match SciPy"),
+            );
+            assert_close(
+                spectrum_re,
+                expected_spectrum_re,
+                1e-12,
+                &format!("spectrum.re[{index}] should match SciPy"),
+            );
+            assert_close(
+                spectrum_im,
+                expected_spectrum_im,
+                1e-12,
+                &format!("spectrum.im[{index}] should match SciPy"),
+            );
         }
     }
 

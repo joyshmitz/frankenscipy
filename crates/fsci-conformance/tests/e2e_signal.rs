@@ -12,11 +12,12 @@
 
 use fsci_conformance::PacketFamily;
 use fsci_signal::{
-    BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, autocorrelation,
-    blackman, butter, convolve, correlate, filtfilt, find_peaks, firwin, freqz, gausspulse,
-    get_window, get_window_with_fftbins, hamming, hann, hilbert_envelope, kaiser, lfilter, lfiltic,
-    peak_prominences, resample, ricker, rms, savgol_coeffs, savgol_filter, sosfilt,
-    spectral_centroid, spectral_flatness, stft, tf2sos, welch,
+    BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, SpectralScaling,
+    autocorrelation, blackman, butter, convolve, correlate, csd_with_scaling, filtfilt, find_peaks,
+    firwin, freqz, gausspulse, get_window, get_window_with_fftbins, hamming, hann,
+    hilbert_envelope, kaiser, lfilter, lfiltic, peak_prominences, resample, ricker, rms,
+    savgol_coeffs, savgol_filter, sosfilt, spectral_centroid, spectral_flatness, stft, tf2sos,
+    welch,
 };
 use serde::Serialize;
 use std::f64::consts::PI;
@@ -1851,4 +1852,99 @@ fn scenario_25_welch_clamps_oversized_nperseg() {
     let bundle = runner.finish();
     write_bundle("scenario_25_welch_clamps_oversized_nperseg", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_25 failed");
+}
+
+/// Scenario 26: csd honors SciPy density/spectrum scaling with explicit noverlap.
+#[test]
+fn scenario_26_csd_scaling_modes() {
+    let mut runner = ScenarioRunner::new("scenario_26_csd_scaling_modes");
+    let fs = 16.0;
+    let t: Vec<f64> = (0..32).map(|i| i as f64 / fs).collect();
+    let x: Vec<f64> = t.iter().map(|&ti| (2.0 * PI * 2.0 * ti).sin()).collect();
+    let y: Vec<f64> = t.iter().map(|&ti| (2.0 * PI * 2.0 * ti).cos()).collect();
+    runner.set_signal_meta("csd", x.len(), "Strict");
+
+    runner.record_step(
+        "csd_density_vs_spectrum",
+        "csd_with_scaling(x, y, fs=16, nperseg=8, noverlap=4)",
+        "explicit noverlap should preserve SciPy density and spectrum scaling outputs",
+        "Strict",
+        || {
+            let density = csd_with_scaling(
+                &x,
+                &y,
+                fs,
+                None,
+                Some(8),
+                Some(4),
+                SpectralScaling::Density,
+            )
+            .map_err(|e| format!("{e}"))?;
+            let spectrum = csd_with_scaling(
+                &x,
+                &y,
+                fs,
+                None,
+                Some(8),
+                Some(4),
+                SpectralScaling::Spectrum,
+            )
+            .map_err(|e| format!("{e}"))?;
+
+            let expected_frequencies = [0.0, 2.0, 4.0, 6.0, 8.0];
+            let expected_density_re = [
+                -3.962744417486146e-17,
+                1.3346567516981065e-17,
+                -7.103421885274257e-19,
+                -2.5133161553135813e-33,
+                -2.1146214215064937e-33,
+            ];
+            let expected_density_im = [
+                0.0,
+                0.16666666666666666,
+                0.04166666666666669,
+                2.363886302605754e-32,
+                0.0,
+            ];
+            let expected_spectrum_re = [
+                -1.127784089578213e-16,
+                2.9738116731031224e-17,
+                -9.686270956913913e-18,
+                -2.9579909131093405e-34,
+                -9.199850601359331e-33,
+            ];
+            let expected_spectrum_im = [0.0, 0.5, 0.12500000000000003, 6.980810313780984e-32, 0.0];
+
+            let density_re: Vec<f64> = density.csd.iter().map(|(re, _)| *re).collect();
+            let density_im: Vec<f64> = density.csd.iter().map(|(_, im)| *im).collect();
+            let spectrum_re: Vec<f64> = spectrum.csd.iter().map(|(re, _)| *re).collect();
+            let spectrum_im: Vec<f64> = spectrum.csd.iter().map(|(_, im)| *im).collect();
+
+            let freq_diff = max_abs_diff(&density.frequencies, &expected_frequencies)
+                .max(max_abs_diff(&spectrum.frequencies, &expected_frequencies));
+            let density_re_diff = max_abs_diff(&density_re, &expected_density_re);
+            let density_im_diff = max_abs_diff(&density_im, &expected_density_im);
+            let spectrum_re_diff = max_abs_diff(&spectrum_re, &expected_spectrum_re);
+            let spectrum_im_diff = max_abs_diff(&spectrum_im, &expected_spectrum_im);
+
+            if freq_diff < 1e-12
+                && density_re_diff < 1e-12
+                && density_im_diff < 1e-12
+                && spectrum_re_diff < 1e-12
+                && spectrum_im_diff < 1e-12
+            {
+                Ok(format!(
+                    "freq_diff={freq_diff:.2e}, density_im_diff={density_im_diff:.2e}, spectrum_im_diff={spectrum_im_diff:.2e}"
+                ))
+            } else {
+                Err(format!(
+                    "csd scaling mismatch freq={freq_diff:.2e} density_re={density_re_diff:.2e} density_im={density_im_diff:.2e} spectrum_re={spectrum_re_diff:.2e} spectrum_im={spectrum_im_diff:.2e}"
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_26_csd_scaling_modes", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_26 failed");
 }
