@@ -3489,29 +3489,32 @@ pub fn lfilter_zi(b: &[f64], a: &[f64]) -> Result<Vec<f64>, SignalError> {
             "b and a must be non-empty".to_string(),
         ));
     }
-    let a0 = a[0];
-    if a0 == 0.0 {
+
+    let mut a_start = 0;
+    while a_start + 1 < a.len() && a[a_start] == 0.0 {
+        a_start += 1;
+    }
+    let a_trimmed = &a[a_start..];
+    let a0 = a_trimmed[0];
+
+    let nb = b.len();
+    let na = a_trimmed.len();
+    let n = nb.max(na);
+
+    if n <= 1 {
         return Err(SignalError::InvalidArgument(
-            "a[0] must not be zero".to_string(),
+            "The length of `a` along the last axis must be at least 2.".to_string(),
         ));
     }
 
-    let nb = b.len();
-    let na = a.len();
-    let n = nb.max(na);
-
-    // Pad and normalize
+    // Pad and normalize to the direct-form-II transposed state-space system.
     let mut b_norm = vec![0.0; n];
     let mut a_norm = vec![0.0; n];
     for (i, &val) in b.iter().enumerate() {
         b_norm[i] = val / a0;
     }
-    for (i, &val) in a.iter().enumerate() {
+    for (i, &val) in a_trimmed.iter().enumerate() {
         a_norm[i] = val / a0;
-    }
-
-    if n <= 1 {
-        return Ok(Vec::new());
     }
 
     let m = n - 1;
@@ -9006,6 +9009,66 @@ mod tests {
         let y = lfilter(&coeffs.b, &coeffs.a, &x, None).expect("lfilter");
         assert_eq!(y.len(), x.len());
         assert!(y.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn lfilter_zi_matches_scipy_reference_vectors() {
+        let zi = lfilter_zi(&[0.5, 0.5], &[1.0, -0.5]).expect("first-order reference");
+        assert_eq!(zi.len(), 1);
+        assert!((zi[0] - 1.5).abs() <= 1.0e-12, "got {}", zi[0]);
+
+        let zi = lfilter_zi(&[1.0, -0.25], &[2.0, -0.3]).expect("normalized reference");
+        assert_eq!(zi.len(), 1);
+        assert!(
+            (zi[0] - (-0.058_823_529_411_764_71)).abs() <= 1.0e-12,
+            "got {}",
+            zi[0]
+        );
+
+        let zi = lfilter_zi(&[0.2, 0.3, 0.5], &[1.0, -0.1, 0.2]).expect("second-order reference");
+        let expected = [0.709_090_909_090_909_1, 0.318_181_818_181_818_1];
+        assert_eq!(zi.len(), expected.len());
+        for (got, want) in zi.iter().zip(expected.iter()) {
+            assert!((got - want).abs() <= 1.0e-12, "got {got}, want {want}");
+        }
+
+        let zi = lfilter_zi(&[0.2; 5], &[1.0]).expect("fir reference");
+        let expected = [0.8, 0.6, 0.4, 0.2];
+        assert_eq!(zi.len(), expected.len());
+        for (got, want) in zi.iter().zip(expected.iter()) {
+            assert!((got - want).abs() <= 1.0e-12, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn lfilter_zi_trims_leading_zero_denominator() {
+        let zi = lfilter_zi(&[1.0, 2.0], &[0.0, 2.0, -0.6]).expect("trimmed denominator");
+        assert_eq!(zi.len(), 1);
+        assert!((zi[0] - 1.642_857_142_857_142_8).abs() <= 1.0e-12);
+    }
+
+    #[test]
+    fn lfilter_zi_sets_step_response_steady_state() {
+        let b = [0.2, 0.3, 0.5];
+        let a = [1.0, -0.1, 0.2];
+        let zi = lfilter_zi(&b, &a).expect("lfilter_zi");
+        let y = lfilter(&b, &a, &[1.0, 1.0, 1.0], Some(&zi)).expect("lfilter");
+        for value in y {
+            assert!(
+                (value - 0.909_090_909_090_909_2).abs() <= 1.0e-12,
+                "got {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn lfilter_zi_rejects_scalar_transfer_function() {
+        let err = lfilter_zi(&[0.1], &[1.0]).expect_err("scalar transfer function must fail");
+        assert!(
+            err.to_string()
+                .contains("The length of `a` along the last axis must be at least 2."),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

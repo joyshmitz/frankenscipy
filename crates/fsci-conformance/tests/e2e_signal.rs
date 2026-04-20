@@ -15,7 +15,7 @@ use fsci_signal::{
     BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, SpectralScaling,
     autocorrelation, blackman, butter, butter_sos, convolve, correlate, csd_with_scaling, filtfilt,
     filtfilt_with_padtype, find_peaks, firwin, freqz, freqz_with_whole, gausspulse, get_window,
-    get_window_with_fftbins, hamming, hann, hilbert_envelope, kaiser, lfilter, lfiltic,
+    get_window_with_fftbins, hamming, hann, hilbert_envelope, kaiser, lfilter, lfilter_zi, lfiltic,
     lombscargle, peak_prominences, resample, resample_poly_with_padtype, ricker, rms,
     savgol_coeffs, savgol_filter, sosfilt, spectral_centroid, spectral_flatness, stft, tf2sos,
     welch,
@@ -2321,4 +2321,94 @@ fn scenario_31_filtfilt_padtype_modes() {
     let bundle = runner.finish();
     write_bundle("scenario_31_filtfilt_padtype_modes", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_31 failed");
+}
+
+/// Scenario 32: lfilter_zi matches SciPy steady-state initialization semantics.
+#[test]
+fn scenario_32_lfilter_zi() {
+    let mut runner = ScenarioRunner::new("scenario_32_lfilter_zi");
+    runner.set_signal_meta("lfilter_zi", 12, "Strict");
+
+    runner.record_step(
+        "lfilter_zi_reference_vector",
+        "lfilter_zi(b, a)",
+        "SciPy steady-state vector for a normalized first-order IIR",
+        "Strict",
+        || {
+            let got = lfilter_zi(&[0.5, 0.5], &[1.0, -0.5]).map_err(|e| format!("{e}"))?;
+            let expected = [1.5];
+            if got.len() != expected.len() {
+                return Err(format!("zi length {} != {}", got.len(), expected.len()));
+            }
+            for (idx, (actual, want)) in got.iter().zip(expected.iter()).enumerate() {
+                if (actual - want).abs() > 1.0e-12 {
+                    return Err(format!("zi[{idx}] mismatch: {actual} vs {want}"));
+                }
+            }
+            Ok(format!("zi={got:?}"))
+        },
+    );
+
+    runner.record_step(
+        "lfilter_zi_step_response",
+        "lfilter(b, a, ones, zi=lfilter_zi(...))",
+        "steady-state zi should make the unit-step response constant from the first sample",
+        "Strict",
+        || {
+            let b = [0.2, 0.3, 0.5];
+            let a = [1.0, -0.1, 0.2];
+            let zi = lfilter_zi(&b, &a).map_err(|e| format!("{e}"))?;
+            let got = lfilter(&b, &a, &[1.0, 1.0, 1.0], Some(&zi)).map_err(|e| format!("{e}"))?;
+            let expected = [0.909_090_909_090_909_2; 3];
+            let diff = max_abs_diff(&got, &expected);
+            if diff < 1.0e-12 {
+                Ok(format!("step response={got:?}"))
+            } else {
+                Err(format!("step response mismatch diff={diff:.2e}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "lfilter_zi_trims_leading_zero_a",
+        "lfilter_zi(b, a=[0, ...])",
+        "SciPy trims leading zero denominator coefficients before solving the steady-state system",
+        "Strict",
+        || {
+            let got = lfilter_zi(&[1.0, 2.0], &[0.0, 2.0, -0.6]).map_err(|e| format!("{e}"))?;
+            let expected = [1.642_857_142_857_142_8];
+            if got.len() != expected.len() {
+                return Err(format!("zi length {} != {}", got.len(), expected.len()));
+            }
+            if (got[0] - expected[0]).abs() > 1.0e-12 {
+                return Err(format!(
+                    "trimmed zi mismatch: {} vs {}",
+                    got[0], expected[0]
+                ));
+            }
+            Ok(format!("trimmed zi={got:?}"))
+        },
+    );
+
+    runner.record_step(
+        "lfilter_zi_scalar_transfer_rejected",
+        "lfilter_zi([b0], [a0])",
+        "scalar transfer functions should fail with SciPy's degenerate-system error",
+        "Strict",
+        || match lfilter_zi(&[0.1], &[1.0]) {
+            Ok(value) => Err(format!("expected error, got {value:?}")),
+            Err(err)
+                if err
+                    .to_string()
+                    .contains("The length of `a` along the last axis must be at least 2.") =>
+            {
+                Ok(err.to_string())
+            }
+            Err(err) => Err(format!("unexpected error: {err}")),
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_32_lfilter_zi", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_32 failed");
 }
