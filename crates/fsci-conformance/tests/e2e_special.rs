@@ -4,7 +4,7 @@
 //! Implements bd-3jh.17.7 acceptance criteria:
 //!   Happy-path:     1-3  (function evaluation → chained computation → identity verification)
 //!   Error recovery: 4-6  (pole input → handle → continue, domain errors)
-//!   Adversarial:    7-10 (extreme arguments, edge values)
+//!   Adversarial:    7-11 (extreme arguments, edge values)
 //!
 //! Each scenario emits a forensic log bundle to
 //! `fixtures/artifacts/FSCI-P2C-006/e2e/`.
@@ -17,7 +17,8 @@ use std::time::Instant;
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialError, SpecialErrorKind, SpecialTensor, beta, erf, erfc, erfinv, gamma, gammainc,
-    gammaincc, gammaln, j0, j1, rgamma,
+    gammaincc, gammaln, j0, j1, logsumexp_axis_2d, logsumexp_axis_2d_with_b, logsumexp_with_b,
+    rgamma,
 };
 use serde::Serialize;
 
@@ -792,4 +793,90 @@ fn e2e_010_rapid_sequential() {
     };
     write_bundle(scenario_id, &bundle);
     assert!(all_pass, "rapid sequential: state leakage detected");
+}
+
+/// Scenario 11: logsumexp parity for weights, axis reduction, and broadcasted weights.
+#[test]
+fn e2e_011_logsumexp_axis_and_broadcast_parity() {
+    let scenario_id = "e2e_special_011_logsumexp";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t_start = Instant::now();
+    let weighted = logsumexp_with_b(&[1.0, 2.0, 3.0], &[1.0, 2.0, 0.5]).expect("weighted");
+    let weighted_expected = 3.315_609_082_086_973_5;
+    let weighted_pass = (weighted - weighted_expected).abs() < 1.0e-12;
+    if !weighted_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "weighted_logsumexp",
+        "logsumexp_with_b",
+        "a=[1,2,3], b=[1,2,0.5]",
+        &format!("result={weighted:.15}, expected={weighted_expected:.15}"),
+        t_start.elapsed().as_nanos(),
+        if weighted_pass { "ok" } else { "fail" },
+    ));
+
+    let data = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+
+    let t_start = Instant::now();
+    let axis_zero = logsumexp_axis_2d(&data, 0).expect("axis=0");
+    let axis_zero_expected = [3.126_928_011_042_972_7, 4.126_928_011_042_972];
+    let axis_zero_pass = axis_zero.len() == axis_zero_expected.len()
+        && axis_zero
+            .iter()
+            .zip(axis_zero_expected.iter())
+            .all(|(lhs, rhs)| (*lhs - *rhs).abs() < 1.0e-12);
+    if !axis_zero_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "axis_zero_logsumexp",
+        "logsumexp_axis_2d",
+        "a=[[1,2],[3,4]], axis=0",
+        &format!("result={axis_zero:?}, expected={axis_zero_expected:?}"),
+        t_start.elapsed().as_nanos(),
+        if axis_zero_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let weights = vec![vec![1.0, 2.0]];
+    let axis_one_weighted = logsumexp_axis_2d_with_b(&data, 1, &weights).expect("axis=1 weighted");
+    let axis_one_expected = [2.861_994_804_058_251_2, 4.861_994_804_058_251];
+    let axis_one_pass = axis_one_weighted.len() == axis_one_expected.len()
+        && axis_one_weighted
+            .iter()
+            .zip(axis_one_expected.iter())
+            .all(|(lhs, rhs)| (*lhs - *rhs).abs() < 1.0e-12);
+    if !axis_one_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "axis_one_broadcast_logsumexp",
+        "logsumexp_axis_2d_with_b",
+        "a=[[1,2],[3,4]], axis=1, b=[[1,2]]",
+        &format!("result={axis_one_weighted:?}, expected={axis_one_expected:?}"),
+        t_start.elapsed().as_nanos(),
+        if axis_one_pass { "ok" } else { "fail" },
+    ));
+
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if all_pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(all_pass, "logsumexp parity scenario failed");
 }

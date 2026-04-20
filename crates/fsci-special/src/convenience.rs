@@ -94,24 +94,205 @@ pub fn xlog1py(
 /// logsumexp(a) = log(sum(exp(a))) computed without overflow.
 /// Matches `scipy.special.logsumexp(a)`.
 pub fn logsumexp(data: &[f64]) -> f64 {
+    let weights = vec![1.0; data.len()];
+    logsumexp_weighted_unchecked(data, &weights)
+}
+
+/// Weighted log of the sum of exponentials (numerically stable).
+///
+/// Matches `scipy.special.logsumexp(a, b=b)`.
+pub fn logsumexp_with_b(data: &[f64], b: &[f64]) -> Result<f64, SpecialError> {
+    if data.len() != b.len() {
+        return Err(SpecialError {
+            function: "logsumexp_with_b",
+            kind: SpecialErrorKind::DomainError,
+            mode: RuntimeMode::Strict,
+            detail: "data and weights must have the same length",
+        });
+    }
+    Ok(logsumexp_weighted_unchecked(data, b))
+}
+
+/// Log of the sum of exponentials reduced along a 2D axis.
+///
+/// Matches `scipy.special.logsumexp(a, axis=axis)` for 2D inputs.
+pub fn logsumexp_axis_2d(data: &[Vec<f64>], axis: usize) -> Result<Vec<f64>, SpecialError> {
+    logsumexp_axis_2d_impl(data, axis, None)
+}
+
+/// Weighted log of the sum of exponentials reduced along a 2D axis.
+///
+/// Matches `scipy.special.logsumexp(a, axis=axis, b=b)` for 2D inputs, including
+/// NumPy-style broadcasting where each weight dimension is either 1 or matches
+/// the corresponding data dimension.
+pub fn logsumexp_axis_2d_with_b(
+    data: &[Vec<f64>],
+    axis: usize,
+    b: &[Vec<f64>],
+) -> Result<Vec<f64>, SpecialError> {
+    logsumexp_axis_2d_impl(data, axis, Some(b))
+}
+
+fn logsumexp_axis_2d_impl(
+    data: &[Vec<f64>],
+    axis: usize,
+    b: Option<&[Vec<f64>]>,
+) -> Result<Vec<f64>, SpecialError> {
+    let (rows, cols) = rectangular_shape(data, "logsumexp_axis_2d")?;
+    if axis > 1 {
+        return Err(SpecialError {
+            function: "logsumexp_axis_2d",
+            kind: SpecialErrorKind::DomainError,
+            mode: RuntimeMode::Strict,
+            detail: "axis must be 0 or 1",
+        });
+    }
+
+    let weight_shape = b
+        .map(|weights| {
+            let (weight_rows, weight_cols) =
+                rectangular_shape(weights, "logsumexp_axis_2d_with_b")?;
+            if !dimension_is_broadcastable(weight_rows, rows)
+                || !dimension_is_broadcastable(weight_cols, cols)
+            {
+                return Err(SpecialError {
+                    function: "logsumexp_axis_2d_with_b",
+                    kind: SpecialErrorKind::DomainError,
+                    mode: RuntimeMode::Strict,
+                    detail: "weights are not broadcast-compatible with data",
+                });
+            }
+            Ok((weight_rows, weight_cols))
+        })
+        .transpose()?;
+
+    match axis {
+        0 => {
+            let mut reduced = Vec::with_capacity(cols);
+            for col in 0..cols {
+                let column = data
+                    .iter()
+                    .map(|row_values| row_values[col])
+                    .collect::<Vec<_>>();
+                let value =
+                    if let (Some(weights), Some((weight_rows, weight_cols))) = (b, weight_shape) {
+                        let column_weights = data
+                            .iter()
+                            .enumerate()
+                            .map(|(row, _)| weight_at(weights, weight_rows, weight_cols, row, col))
+                            .collect::<Vec<_>>();
+                        logsumexp_with_b(&column, &column_weights)?
+                    } else {
+                        logsumexp(&column)
+                    };
+                reduced.push(value);
+            }
+            Ok(reduced)
+        }
+        1 => {
+            let mut reduced = Vec::with_capacity(rows);
+            for (row, row_values) in data.iter().enumerate() {
+                let value =
+                    if let (Some(weights), Some((weight_rows, weight_cols))) = (b, weight_shape) {
+                        let row_weights = (0..cols)
+                            .map(|col| weight_at(weights, weight_rows, weight_cols, row, col))
+                            .collect::<Vec<_>>();
+                        logsumexp_with_b(row_values, &row_weights)?
+                    } else {
+                        logsumexp(row_values)
+                    };
+                reduced.push(value);
+            }
+            Ok(reduced)
+        }
+        _ => unreachable!("axis validated above"),
+    }
+}
+
+fn logsumexp_weighted_unchecked(data: &[f64], b: &[f64]) -> f64 {
     if data.is_empty() {
         return f64::NEG_INFINITY;
     }
-    let max_val = data
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
-        });
-    if max_val.is_infinite() {
-        return max_val;
+
+    let mut max_val = f64::NEG_INFINITY;
+    let mut saw_active_term = false;
+    for (&value, &weight) in data.iter().zip(b.iter()) {
+        if value.is_nan() || weight.is_nan() {
+            return f64::NAN;
+        }
+        if weight == 0.0 {
+            continue;
+        }
+        saw_active_term = true;
+        max_val = max_val.max(value);
     }
-    let sum_exp: f64 = data.iter().map(|&x| (x - max_val).exp()).sum();
-    max_val + sum_exp.ln()
+
+    if !saw_active_term || max_val == f64::NEG_INFINITY {
+        return f64::NEG_INFINITY;
+    }
+
+    if max_val == f64::INFINITY {
+        let infinite_weight_sum = data
+            .iter()
+            .zip(b.iter())
+            .filter(|(value, weight)| **weight != 0.0 && **value == f64::INFINITY)
+            .map(|(_, weight)| *weight)
+            .sum::<f64>();
+        return if infinite_weight_sum > 0.0 {
+            f64::INFINITY
+        } else if infinite_weight_sum == 0.0 {
+            f64::NEG_INFINITY
+        } else {
+            f64::NAN
+        };
+    }
+
+    let sum_exp = data
+        .iter()
+        .zip(b.iter())
+        .filter(|(_, weight)| **weight != 0.0)
+        .map(|(value, weight)| *weight * (*value - max_val).exp())
+        .sum::<f64>();
+    if sum_exp > 0.0 {
+        max_val + sum_exp.ln()
+    } else if sum_exp == 0.0 {
+        f64::NEG_INFINITY
+    } else {
+        f64::NAN
+    }
+}
+
+fn rectangular_shape(
+    matrix: &[Vec<f64>],
+    function: &'static str,
+) -> Result<(usize, usize), SpecialError> {
+    let rows = matrix.len();
+    let cols = matrix.first().map_or(0, Vec::len);
+    if matrix.iter().any(|row| row.len() != cols) {
+        return Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode: RuntimeMode::Strict,
+            detail: "matrix rows must all have the same length",
+        });
+    }
+    Ok((rows, cols))
+}
+
+fn dimension_is_broadcastable(source: usize, target: usize) -> bool {
+    source == target || source == 1 || source == 0 || target == 0
+}
+
+fn weight_at(
+    weights: &[Vec<f64>],
+    weight_rows: usize,
+    weight_cols: usize,
+    row: usize,
+    col: usize,
+) -> f64 {
+    let source_row = if weight_rows <= 1 { 0 } else { row };
+    let source_col = if weight_cols <= 1 { 0 } else { col };
+    weights[source_row][source_col]
 }
 
 /// Logistic sigmoid function: 1 / (1 + exp(-x)).
@@ -3884,6 +4065,41 @@ pub fn binary_cross_entropy(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logsumexp_with_weights_matches_scipy_contract_point() {
+        let value =
+            logsumexp_with_b(&[1.0, 2.0, 3.0], &[1.0, 2.0, 0.5]).expect("weighted logsumexp");
+        assert!((value - 3.315_609_082_086_973_5).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn logsumexp_axis_2d_matches_scipy_axis_zero_contract_point() {
+        let data = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let reduced = logsumexp_axis_2d(&data, 0).expect("axis logsumexp");
+        assert_eq!(reduced.len(), 2);
+        assert!((reduced[0] - 3.126_928_011_042_972_7).abs() < 1.0e-12);
+        assert!((reduced[1] - 4.126_928_011_042_972).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn logsumexp_axis_2d_with_broadcast_weights_matches_scipy_contract_point() {
+        let data = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let weights = vec![vec![1.0, 2.0]];
+        let reduced =
+            logsumexp_axis_2d_with_b(&data, 1, &weights).expect("axis logsumexp with weights");
+        assert_eq!(reduced.len(), 2);
+        assert!((reduced[0] - 2.861_994_804_058_251_2).abs() < 1.0e-12);
+        assert!((reduced[1] - 4.861_994_804_058_251).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn logsumexp_axis_2d_rejects_non_broadcastable_weights() {
+        let data = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let weights = vec![vec![1.0, 2.0, 3.0]];
+        let err = logsumexp_axis_2d_with_b(&data, 1, &weights).expect_err("shape mismatch");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+    }
 
     #[test]
     fn nrdtrimn_recovers_mean() {
