@@ -7047,7 +7047,7 @@ pub fn median_test(groups: &[&[f64]]) -> TtestResult {
 
     // Chi-squared test on the 2×k contingency table
     let table = vec![above, below];
-    let result = chi2_contingency(&table);
+    let result = chi2_contingency(&table, true);
     TtestResult {
         statistic: result.statistic,
         pvalue: result.pvalue,
@@ -9886,14 +9886,16 @@ pub struct Chi2ContingencyResult {
 /// Chi-squared test of independence for a contingency table.
 ///
 /// Tests whether the row and column variables are independent.
-/// Matches `scipy.stats.chi2_contingency(observed)`.
+/// Matches `scipy.stats.chi2_contingency(observed, correction=...)`.
 ///
 /// # Arguments
 /// * `observed` — 2D contingency table of observed frequencies (rows x cols).
+/// * `correction` — Whether to apply Yates' continuity correction when the
+///   degrees of freedom equal 1 (SciPy's default behavior for 2x2 tables).
 ///
 /// # Returns
 /// (chi2 statistic, p-value, degrees of freedom, expected frequencies)
-pub fn chi2_contingency(observed: &[Vec<f64>]) -> Chi2ContingencyResult {
+pub fn chi2_contingency(observed: &[Vec<f64>], correction: bool) -> Chi2ContingencyResult {
     let nrows = observed.len();
     if nrows == 0 {
         return Chi2ContingencyResult {
@@ -9964,7 +9966,7 @@ pub fn chi2_contingency(observed: &[Vec<f64>]) -> Chi2ContingencyResult {
 
     // Chi-squared statistic: Σ (o_ij - e_ij)² / e_ij
     let dof = (nrows - 1) * (ncols - 1);
-    let use_yates_correction = dof == 1;
+    let use_yates_correction = correction && dof == 1;
     let chi2: f64 = observed
         .iter()
         .zip(expected.iter())
@@ -10752,7 +10754,7 @@ pub fn cohens_d(group1: &[f64], group2: &[f64]) -> f64 {
 ///
 /// V = sqrt(χ²/(n * min(r-1, c-1))), where χ² is the chi-squared statistic.
 pub fn cramers_v(observed: &[Vec<f64>]) -> f64 {
-    let result = chi2_contingency(observed);
+    let result = chi2_contingency(observed, true);
     let n: f64 = observed.iter().flat_map(|row| row.iter()).sum();
     let r = observed.len();
     if r == 0 {
@@ -16192,7 +16194,7 @@ mod tests {
         // Classic 2x2 contingency table
         // [[10, 10], [20, 20]] — independent rows → chi2 = 0, p ≈ 1
         let table = vec![vec![10.0, 10.0], vec![20.0, 20.0]];
-        let result = chi2_contingency(&table);
+        let result = chi2_contingency(&table, true);
         assert!(
             result.statistic < 0.01,
             "independent table chi2 should be ~0: {}",
@@ -16210,7 +16212,7 @@ mod tests {
     fn chi2_contingency_2x2_dependent() {
         // Highly dependent: [[50, 5], [5, 50]]
         let table = vec![vec![50.0, 5.0], vec![5.0, 50.0]];
-        let result = chi2_contingency(&table);
+        let result = chi2_contingency(&table, true);
         assert!(
             (result.statistic - 70.4).abs() < 1e-10,
             "dependent table should match Yates-corrected chi2: {}",
@@ -16224,9 +16226,40 @@ mod tests {
     }
 
     #[test]
+    fn chi2_contingency_2x2_uncorrected_matches_scipy_reference() {
+        let table = vec![vec![12.0, 5.0], vec![29.0, 2.0]];
+        let corrected = chi2_contingency(&table, true);
+        let uncorrected = chi2_contingency(&table, false);
+        assert!(
+            (corrected.statistic - 2.9860164364723074).abs() < 1e-12,
+            "corrected chi2 = {}",
+            corrected.statistic
+        );
+        assert!(
+            (corrected.pvalue - 0.08398654171499235).abs() < 1e-12,
+            "corrected pvalue = {}",
+            corrected.pvalue
+        );
+        assert!(
+            (uncorrected.statistic - 4.646430720203109).abs() < 1e-12,
+            "uncorrected chi2 = {}",
+            uncorrected.statistic
+        );
+        assert!(
+            (uncorrected.pvalue - 0.03111818732925684).abs() < 1e-12,
+            "uncorrected pvalue = {}",
+            uncorrected.pvalue
+        );
+        assert!(
+            uncorrected.statistic > corrected.statistic,
+            "disabling correction should increase chi2 for this 2x2 table"
+        );
+    }
+
+    #[test]
     fn chi2_contingency_expected_frequencies() {
         let table = vec![vec![10.0, 20.0], vec![30.0, 40.0]];
-        let result = chi2_contingency(&table);
+        let result = chi2_contingency(&table, true);
         // Grand total = 100
         // Row totals: [30, 70], Col totals: [40, 60]
         // Expected: [[30*40/100, 30*60/100], [70*40/100, 70*60/100]] = [[12, 18], [28, 42]]
@@ -16254,7 +16287,7 @@ mod tests {
             vec![20.0, 15.0, 25.0],
             vec![30.0, 25.0, 5.0],
         ];
-        let result = chi2_contingency(&table);
+        let result = chi2_contingency(&table, true);
         assert_eq!(result.dof, 4); // (3-1)*(3-1)
         assert!(result.statistic.is_finite());
         assert!(result.pvalue >= 0.0 && result.pvalue <= 1.0);
@@ -16262,7 +16295,7 @@ mod tests {
 
     #[test]
     fn chi2_contingency_empty_rejected() {
-        let result = chi2_contingency(&[]);
+        let result = chi2_contingency(&[], true);
         assert!(result.statistic.is_nan());
     }
 

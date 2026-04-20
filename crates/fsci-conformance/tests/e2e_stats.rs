@@ -2208,7 +2208,7 @@ fn e2e_023_contingency_tests() {
     // Chi-square test of independence: larger table
     let t = Instant::now();
     let observed = vec![vec![20.0, 30.0, 50.0], vec![30.0, 40.0, 30.0]];
-    let result = chi2_contingency(&observed);
+    let result = chi2_contingency(&observed, true);
     // Some deviation from independence expected
     let pass = result.statistic > 0.0 && result.dof == 2;
     if !pass {
@@ -2217,7 +2217,7 @@ fn e2e_023_contingency_tests() {
     steps.push(make_step(
         3,
         "chi2_contingency",
-        "chi2_contingency(2x3)",
+        "chi2_contingency(2x3, correction=True)",
         "2x3 contingency table",
         &format!(
             "chi2={:.4}, p={:.4}, dof={}",
@@ -2230,7 +2230,7 @@ fn e2e_023_contingency_tests() {
     // Chi-square: perfectly proportional (independence)
     let t = Instant::now();
     let observed = vec![vec![10.0, 20.0, 30.0], vec![10.0, 20.0, 30.0]];
-    let result = chi2_contingency(&observed);
+    let result = chi2_contingency(&observed, true);
     // Perfect independence, chi2 ≈ 0
     let pass = result.statistic < 0.01 && result.pvalue > 0.99;
     if !pass {
@@ -2239,7 +2239,7 @@ fn e2e_023_contingency_tests() {
     steps.push(make_step(
         4,
         "chi2_independent",
-        "chi2_contingency(proportional)",
+        "chi2_contingency(proportional, correction=True)",
         "perfectly proportional rows",
         &format!("chi2={:.6}, p={:.4}", result.statistic, result.pvalue),
         t.elapsed().as_nanos(),
@@ -3574,6 +3574,61 @@ fn e2e_036_ttest_ind_from_stats_equal_var_parity() {
             binary_equal.pvalue,
             binary_welch.statistic,
             binary_welch.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 37: chi2_contingency honors correction=False for 2x2 tables.
+#[test]
+fn e2e_037_chi2_contingency_correction_false_parity() {
+    let scenario_id = "e2e_stats_037_chi2_contingency_correction";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+    let observed = vec![vec![12.0, 5.0], vec![29.0, 2.0]];
+
+    let t = Instant::now();
+    let corrected = chi2_contingency(&observed, true);
+    let pass = (corrected.statistic - 2.9860164364723074).abs() < 1e-12
+        && (corrected.pvalue - 0.08398654171499235).abs() < 1e-12
+        && corrected.dof == 1;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "chi2_contingency_correction_true_reference",
+        "chi2_contingency([[12,5],[29,2]], correction=True)",
+        "the default Yates-corrected 2x2 result should match SciPy",
+        &format!(
+            "chi2={:.16}, p={:.16}, dof={}",
+            corrected.statistic, corrected.pvalue, corrected.dof
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let uncorrected = chi2_contingency(&observed, false);
+    let pass = (uncorrected.statistic - 4.646430720203109).abs() < 1e-12
+        && (uncorrected.pvalue - 0.03111818732925684).abs() < 1e-12
+        && uncorrected.dof == 1
+        && uncorrected.statistic > corrected.statistic;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "chi2_contingency_correction_false_reference",
+        "chi2_contingency([[12,5],[29,2]], correction=False)",
+        "disabling Yates correction should match SciPy's uncorrected 2x2 branch",
+        &format!(
+            "chi2={:.16}, p={:.16}, dof={}",
+            uncorrected.statistic, uncorrected.pvalue, uncorrected.dof
         ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
