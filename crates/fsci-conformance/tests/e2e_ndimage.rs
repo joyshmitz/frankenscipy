@@ -761,6 +761,99 @@ fn e2e_ndimage_binary_morphology() {
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
+#[test]
+fn e2e_ndimage_binary_opening_convergence() {
+    let scenario_id = "e2e_ndimage_binary_opening_convergence";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let image = NdArray::new(
+        vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
+            1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ],
+        vec![5, 5],
+    )
+    .unwrap();
+
+    let t = Instant::now();
+    let converged = binary_opening(&image, 3, 0);
+    let pass = match &converged {
+        Ok(result) => result.data.iter().all(|&v| v == 0.0),
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "binary_opening_iterations_zero",
+        "ndimage::binary_opening(size=3, iterations=0)",
+        "5x5 image with 3x3 square",
+        &format!(
+            "all_zero={}",
+            converged
+                .as_ref()
+                .map(|r| r.data.iter().all(|&v| v == 0.0))
+                .unwrap_or(false)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let once = binary_opening(&image, 3, 1);
+    let pass = match &once {
+        Ok(result) => result.data[6] == 1.0 && result.data[12] == 1.0 && result.data[18] == 1.0,
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "binary_opening_iterations_one",
+        "ndimage::binary_opening(size=3, iterations=1)",
+        "5x5 image with 3x3 square",
+        &format!(
+            "preserves_square={}",
+            once.as_ref()
+                .map(|r| r.data[6] == 1.0 && r.data[12] == 1.0 && r.data[18] == 1.0)
+                .unwrap_or(false)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let twice = binary_opening(&image, 3, 2);
+    let pass = match &twice {
+        Ok(result) => result.data.iter().all(|&v| v == 0.0),
+        Err(_) => false,
+    };
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "binary_opening_iterations_two",
+        "ndimage::binary_opening(size=3, iterations=2)",
+        "5x5 image with 3x3 square",
+        &format!(
+            "all_zero={}",
+            twice
+                .as_ref()
+                .map(|r| r.data.iter().all(|&v| v == 0.0))
+                .unwrap_or(false)
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
 /// Test connected component labeling
 #[test]
 fn e2e_ndimage_labeling() {

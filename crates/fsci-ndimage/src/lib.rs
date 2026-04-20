@@ -1168,6 +1168,119 @@ pub fn gaussian_laplace(
 /// element neighborhood are 1.
 ///
 /// Matches `scipy.ndimage.binary_erosion`.
+fn binary_erosion_once(current: &NdArray, size: usize) -> NdArray {
+    let ndim = current.ndim();
+    let mut output = NdArray::zeros(current.shape.clone());
+    let offsets: Vec<i64> = vec![size as i64 / 2; ndim];
+    let kernel_shape: Vec<usize> = vec![size; ndim];
+    let kernel_total: usize = kernel_shape.iter().product();
+    let kernel_strides = compute_strides(&kernel_shape);
+
+    for flat_out in 0..current.size() {
+        let out_idx = current.unravel(flat_out);
+        let mut all_set = true;
+
+        for flat_k in 0..kernel_total {
+            let mut k_idx = vec![0usize; ndim];
+            let mut rem = flat_k;
+            for d in 0..ndim {
+                k_idx[d] = rem / kernel_strides[d];
+                rem %= kernel_strides[d];
+            }
+
+            let mut in_idx = vec![0i64; ndim];
+            for d in 0..ndim {
+                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d];
+            }
+
+            let val = current.get_boundary(&in_idx, BoundaryMode::Constant, 0.0);
+            if val == 0.0 {
+                all_set = false;
+                break;
+            }
+        }
+
+        output.data[flat_out] = if all_set { 1.0 } else { 0.0 };
+    }
+
+    output
+}
+
+fn binary_dilation_once(current: &NdArray, size: usize) -> NdArray {
+    let ndim = current.ndim();
+    let mut output = NdArray::zeros(current.shape.clone());
+    let offsets: Vec<i64> = vec![size as i64 / 2; ndim];
+    let kernel_shape: Vec<usize> = vec![size; ndim];
+    let kernel_total: usize = kernel_shape.iter().product();
+    let kernel_strides = compute_strides(&kernel_shape);
+
+    let mut kernel_deltas = Vec::with_capacity(kernel_total);
+    for flat_k in 0..kernel_total {
+        let mut k_idx = vec![0usize; ndim];
+        let mut rem = flat_k;
+        for d in 0..ndim {
+            k_idx[d] = rem / kernel_strides[d];
+            rem %= kernel_strides[d];
+        }
+        let mut delta = vec![0i64; ndim];
+        for d in 0..ndim {
+            delta[d] = k_idx[d] as i64 - offsets[d];
+        }
+        kernel_deltas.push(delta);
+    }
+
+    for flat_out in 0..current.size() {
+        let out_idx = current.unravel(flat_out);
+        let mut any_set = false;
+
+        for delta in &kernel_deltas {
+            let mut in_idx = vec![0i64; ndim];
+            for d in 0..ndim {
+                in_idx[d] = out_idx[d] as i64 + delta[d];
+            }
+
+            let val = current.get_boundary(&in_idx, BoundaryMode::Constant, 0.0);
+            if val != 0.0 {
+                any_set = true;
+                break;
+            }
+        }
+
+        output.data[flat_out] = if any_set { 1.0 } else { 0.0 };
+    }
+
+    output
+}
+
+fn run_binary_iterations(
+    input: &NdArray,
+    size: usize,
+    iterations: usize,
+    op: fn(&NdArray, usize) -> NdArray,
+) -> NdArray {
+    let mut current = input.clone();
+
+    if iterations == 0 {
+        loop {
+            let output = op(&current, size);
+            if output.data == current.data {
+                return output;
+            }
+            current = output;
+        }
+    }
+
+    for _ in 0..iterations {
+        current = op(&current, size);
+    }
+
+    current
+}
+
+/// Binary erosion: output pixel is 1 only if all pixels in the structuring
+/// element neighborhood are 1.
+///
+/// Matches `scipy.ndimage.binary_erosion`.
 pub fn binary_erosion(
     input: &NdArray,
     structure_size: usize,
@@ -1181,47 +1294,12 @@ pub fn binary_erosion(
     } else {
         structure_size
     };
-    let mut current = input.clone();
-
-    for _ in 0..iterations.max(1) {
-        let ndim = current.ndim();
-        let mut output = NdArray::zeros(current.shape.clone());
-        let offsets: Vec<i64> = vec![size as i64 / 2; ndim];
-        let kernel_shape: Vec<usize> = vec![size; ndim];
-        let kernel_total: usize = kernel_shape.iter().product();
-        let kernel_strides = compute_strides(&kernel_shape);
-
-        for flat_out in 0..current.size() {
-            let out_idx = current.unravel(flat_out);
-            let mut all_set = true;
-
-            for flat_k in 0..kernel_total {
-                let mut k_idx = vec![0usize; ndim];
-                let mut rem = flat_k;
-                for d in 0..ndim {
-                    k_idx[d] = rem / kernel_strides[d];
-                    rem %= kernel_strides[d];
-                }
-
-                let mut in_idx = vec![0i64; ndim];
-                for d in 0..ndim {
-                    in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d];
-                }
-
-                let val = current.get_boundary(&in_idx, BoundaryMode::Constant, 0.0);
-                if val == 0.0 {
-                    all_set = false;
-                    break;
-                }
-            }
-
-            output.data[flat_out] = if all_set { 1.0 } else { 0.0 };
-        }
-
-        current = output;
-    }
-
-    Ok(current)
+    Ok(run_binary_iterations(
+        input,
+        size,
+        iterations,
+        binary_erosion_once,
+    ))
 }
 
 /// Binary dilation: output pixel is 1 if any pixel in the structuring
@@ -1241,55 +1319,12 @@ pub fn binary_dilation(
     } else {
         structure_size
     };
-    let mut current = input.clone();
-
-    for _ in 0..iterations.max(1) {
-        let ndim = current.ndim();
-        let mut output = NdArray::zeros(current.shape.clone());
-        let offsets: Vec<i64> = vec![size as i64 / 2; ndim];
-        let kernel_shape: Vec<usize> = vec![size; ndim];
-        let kernel_total: usize = kernel_shape.iter().product();
-        let kernel_strides = compute_strides(&kernel_shape);
-
-        let mut kernel_deltas = Vec::with_capacity(kernel_total);
-        for flat_k in 0..kernel_total {
-            let mut k_idx = vec![0usize; ndim];
-            let mut rem = flat_k;
-            for d in 0..ndim {
-                k_idx[d] = rem / kernel_strides[d];
-                rem %= kernel_strides[d];
-            }
-            let mut delta = vec![0i64; ndim];
-            for d in 0..ndim {
-                delta[d] = k_idx[d] as i64 - offsets[d];
-            }
-            kernel_deltas.push(delta);
-        }
-
-        for flat_out in 0..current.size() {
-            let out_idx = current.unravel(flat_out);
-            let mut any_set = false;
-
-            for delta in &kernel_deltas {
-                let mut in_idx = vec![0i64; ndim];
-                for d in 0..ndim {
-                    in_idx[d] = out_idx[d] as i64 + delta[d];
-                }
-
-                let val = current.get_boundary(&in_idx, BoundaryMode::Constant, 0.0);
-                if val != 0.0 {
-                    any_set = true;
-                    break;
-                }
-            }
-
-            output.data[flat_out] = if any_set { 1.0 } else { 0.0 };
-        }
-
-        current = output;
-    }
-
-    Ok(current)
+    Ok(run_binary_iterations(
+        input,
+        size,
+        iterations,
+        binary_dilation_once,
+    ))
 }
 
 /// Binary opening: erosion followed by dilation.
@@ -3165,6 +3200,30 @@ mod tests {
         assert_eq!(result.data[12], 1.0); // (2,2)
         assert_eq!(result.data[7], 1.0); // (1,2)
         assert_eq!(result.data[17], 1.0); // (3,2)
+    }
+
+    #[test]
+    fn binary_opening_zero_iterations_converges_to_fixed_point() {
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let input = NdArray::new(data, vec![5, 5]).unwrap();
+
+        let converged = binary_opening(&input, 3, 0).unwrap();
+        assert!(converged.data.iter().all(|&v| v == 0.0));
+
+        let once = binary_opening(&input, 3, 1).unwrap();
+        assert_eq!(once.data[6], 1.0);
+        assert_eq!(once.data[12], 1.0);
+        assert_eq!(once.data[18], 1.0);
+
+        let twice = binary_opening(&input, 3, 2).unwrap();
+        assert!(twice.data.iter().all(|&v| v == 0.0));
     }
 
     #[test]
