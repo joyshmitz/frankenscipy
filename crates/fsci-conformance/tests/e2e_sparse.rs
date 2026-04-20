@@ -19,9 +19,9 @@ use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
     CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D,
     SolveOptions, SparseError, add_csr, bicgstab, cg, connected_component_sizes,
-    csr_to_csc_with_mode, diags, eye, find, gmres, hstack, hstack_with_format, is_connected,
-    pagerank, scale_csr, sparse_norm, spmm, spmv_csr, spsolve, strongly_connected_components,
-    sub_csr, topological_sort, tril, triu, vstack,
+    csr_to_csc_with_mode, diags, dijkstra, eye, find, gmres, hstack, hstack_with_format,
+    is_connected, pagerank, scale_csr, sparse_norm, spmm, spmv_csr, spsolve,
+    strongly_connected_components, sub_csr, topological_sort, tril, triu, vstack,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2543,4 +2543,80 @@ fn e2e_020_coo_setdiag_boundary_parity() {
     };
     write_bundle(scenario_id, &bundle);
     assert!(overall_pass, "COO setdiag parity checks should match SciPy");
+}
+
+/// Scenario 21: Dijkstra negative-edge handling parity.
+#[test]
+fn e2e_021_dijkstra_negative_weight_handling() {
+    let scenario_id = "e2e_sparse_021_dijkstra_negative_weights";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    let t_start = Instant::now();
+    let reachable_negative = CooMatrix::from_triplets(
+        Shape2D::new(3, 3),
+        vec![1.0, -2.0],
+        vec![0, 1],
+        vec![1, 2],
+        false,
+    )
+    .expect("reachable negative coo")
+    .to_csr()
+    .expect("reachable negative csr");
+    let reachable = dijkstra(&reachable_negative, 0).expect("reachable negative dijkstra");
+    let reachable_pass = max_abs_diff_vec(&reachable.distances, &[0.0, 1.0, -1.0]) <= TOL;
+    steps.push(make_step(
+        1,
+        "reachable_negative_edge",
+        "dijkstra(graph, source=0)",
+        "edges: 0->1=1, 1->2=-2",
+        &format!("distances={:?}", reachable.distances),
+        t_start.elapsed().as_nanos(),
+        if reachable_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let split_graph = CooMatrix::from_triplets(
+        Shape2D::new(4, 4),
+        vec![1.0, -2.0],
+        vec![0, 2],
+        vec![1, 3],
+        false,
+    )
+    .expect("split graph coo")
+    .to_csr()
+    .expect("split graph csr");
+    let split = dijkstra(&split_graph, 0).expect("split graph dijkstra");
+    let split_pass = split.distances[0] == 0.0
+        && split.distances[1] == 1.0
+        && split.distances[2].is_infinite()
+        && split.distances[3].is_infinite();
+    steps.push(make_step(
+        2,
+        "unreachable_negative_component",
+        "dijkstra(graph, source=0)",
+        "negative edge isolated in unreachable component",
+        &format!("distances={:?}", split.distances),
+        t_start.elapsed().as_nanos(),
+        if split_pass { "ok" } else { "fail" },
+    ));
+
+    let overall_pass = reachable_pass && split_pass;
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if overall_pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(
+        overall_pass,
+        "Dijkstra negative-edge handling should match SciPy"
+    );
 }

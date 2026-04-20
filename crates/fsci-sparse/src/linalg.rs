@@ -4527,6 +4527,48 @@ mod tests {
     }
 
     #[test]
+    fn dijkstra_negative_edge_matches_scipy_reference_result() {
+        let g = CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![1.0, -2.0],
+            vec![0, 1],
+            vec![1, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let result = dijkstra(&g, 0).expect("dijkstra negative edge");
+        assert_eq!(result.distances[0], 0.0);
+        assert_eq!(result.distances[1], 1.0);
+        assert!((result.distances[2] - -1.0).abs() < 1e-10);
+
+        let unreachable = dijkstra(&g, 2).expect("dijkstra unreachable source");
+        assert!(unreachable.distances[0].is_infinite());
+        assert!(unreachable.distances[1].is_infinite());
+        assert_eq!(unreachable.distances[2], 0.0);
+    }
+
+    #[test]
+    fn dijkstra_unreachable_negative_component_is_ignored_like_scipy() {
+        let g = CooMatrix::from_triplets(
+            Shape2D::new(4, 4),
+            vec![1.0, -2.0],
+            vec![0, 2],
+            vec![1, 3],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let result = dijkstra(&g, 0).expect("dijkstra with unreachable negative edge");
+        assert_eq!(result.distances[0], 0.0);
+        assert_eq!(result.distances[1], 1.0);
+        assert!(result.distances[2].is_infinite());
+        assert!(result.distances[3].is_infinite());
+    }
+
+    #[test]
     fn minimum_spanning_tree_triangle() {
         let g = triangle_graph_csr();
         let result = minimum_spanning_tree(&g).expect("mst");
@@ -5728,7 +5770,9 @@ impl Ord for DijkstraState {
 ///
 /// Matches `scipy.sparse.csgraph.dijkstra(graph, indices=source)`.
 ///
-/// Requires non-negative edge weights. The CSR matrix values are edge weights.
+/// The CSR matrix values are edge weights. When negative edges are present,
+/// SciPy warns and still computes distances; we follow that observable result
+/// surface by delegating to Bellman-Ford instead of hard-failing.
 pub fn dijkstra(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathResult> {
     validate_csgraph(graph)?;
     let n = graph.shape().rows;
@@ -5741,6 +5785,10 @@ pub fn dijkstra(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathRe
     let indptr = graph.indptr();
     let indices = graph.indices();
     let data = graph.data();
+
+    if data.iter().any(|&weight| weight < 0.0) {
+        return bellman_ford(graph, source);
+    }
 
     let mut dist = vec![f64::INFINITY; n];
     let mut pred = vec![-1_i64; n];
@@ -5762,11 +5810,6 @@ pub fn dijkstra(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathRe
         for idx in indptr[position]..indptr[position + 1] {
             let v = indices[idx];
             let weight = data[idx];
-            if weight < 0.0 {
-                return Err(SparseError::InvalidArgument {
-                    message: "Dijkstra requires non-negative edge weights".to_string(),
-                });
-            }
             let alt = cost + weight;
             if alt < dist[v] {
                 dist[v] = alt;
@@ -5791,6 +5834,7 @@ pub fn dijkstra(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathRe
 ///
 /// Supports negative edge weights (unlike Dijkstra). Detects negative cycles.
 pub fn bellman_ford(graph: &CsrMatrix, source: usize) -> SparseResult<ShortestPathResult> {
+    validate_csgraph(graph)?;
     let n = graph.shape().rows;
     if source >= n {
         return Err(SparseError::InvalidArgument {
