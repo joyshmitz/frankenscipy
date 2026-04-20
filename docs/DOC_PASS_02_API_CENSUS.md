@@ -1064,7 +1064,7 @@ _(See full symbol list above -- all are functions/ufuncs from `_ufuncs` or `_bas
 | `cumfreq` | function | `_stats_py` | no |
 | `quantile` | function | `_quantile` | no |
 | `percentileofscore` | function | `_stats_py` | no |
-| `scoreatpercentile` | function | `_stats_py` | no |
+| `scoreatpercentile` | function | `_stats_py` | yes |
 | `relfreq` | function | `_stats_py` | no |
 | `binned_statistic` | function | `_binned_statistic` | no |
 | `binned_statistic_2d` | function | `_binned_statistic` | no |

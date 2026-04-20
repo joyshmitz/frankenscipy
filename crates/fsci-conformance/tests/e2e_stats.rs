@@ -82,6 +82,7 @@ use fsci_stats::{
     r2_score,
     rankdata,
     root_mean_squared_error,
+    scoreatpercentile,
     shapiro,
     skew,
     skewtest,
@@ -3705,6 +3706,94 @@ fn e2e_038_ttest_rel_alternative_parity() {
         &format!("invalid_alternative_error={}", invalid.is_err()),
         t.elapsed().as_nanos(),
         if invalid_pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 39: scoreatpercentile array-percentile parity.
+#[test]
+fn e2e_039_scoreatpercentile_array_percentiles() {
+    let scenario_id = "e2e_stats_039_scoreatpercentile_array_percentiles";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let quartiles = scoreatpercentile(&[1.0, 2.0, 3.0, 4.0], &[25.0, 50.0, 75.0], None, None)
+        .expect("scoreatpercentile quartiles");
+    let quartiles_pass = quartiles.len() == 3
+        && (quartiles[0] - 1.75).abs() < 1.0e-12
+        && (quartiles[1] - 2.5).abs() < 1.0e-12
+        && (quartiles[2] - 3.25).abs() < 1.0e-12;
+    if !quartiles_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "scoreatpercentile_array_quartiles",
+        "scoreatpercentile([1,2,3,4], per=[25,50,75])",
+        "SciPy-style array percentile interpolation",
+        &format!("quartiles={quartiles:?}"),
+        t.elapsed().as_nanos(),
+        if quartiles_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let limited = scoreatpercentile(
+        &[1.0, 2.0, 3.0, 4.0, 100.0],
+        &[50.0],
+        Some((0.0, 4.0)),
+        None,
+    )
+    .expect("scoreatpercentile limit");
+    let limited_pass = limited == vec![2.5];
+    if !limited_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "scoreatpercentile_limit",
+        "scoreatpercentile([1,2,3,4,100], per=[50], limit=(0,4))",
+        "limit should filter outlier before interpolation",
+        &format!("limited={limited:?}"),
+        t.elapsed().as_nanos(),
+        if limited_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let lower =
+        scoreatpercentile(&[1.0, 2.0, 3.0, 4.0], &[25.0], None, Some("lower")).expect("lower");
+    let higher =
+        scoreatpercentile(&[1.0, 2.0, 3.0, 4.0], &[25.0], None, Some("higher")).expect("higher");
+    let interp_pass = lower == vec![1.0] && higher == vec![2.0];
+    if !interp_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "scoreatpercentile_interpolation_methods",
+        "scoreatpercentile(..., interpolation_method in {'lower','higher'})",
+        "lower/higher should round the fractional index the SciPy way",
+        &format!("lower={lower:?}, higher={higher:?}"),
+        t.elapsed().as_nanos(),
+        if interp_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let empty = scoreatpercentile(&[], &[25.0, 50.0], None, None).expect("empty input");
+    let empty_pass = empty.len() == 2 && empty.iter().all(|value| value.is_nan());
+    if !empty_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "scoreatpercentile_empty_shape",
+        "scoreatpercentile([], per=[25,50])",
+        "empty input should return NaNs matching the percentile shape",
+        &format!("empty={empty:?}"),
+        t.elapsed().as_nanos(),
+        if empty_pass { "pass" } else { "FAIL" },
     ));
 
     assert_artifacts_written(scenario_id, &steps, all_pass);

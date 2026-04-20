@@ -8006,6 +8006,49 @@ pub fn percentile(data: &[f64], q: f64) -> f64 {
     quantile_sorted(&sorted, q_frac)
 }
 
+/// Compute scores at one or more percentiles of the input sequence.
+///
+/// Matches the implemented SciPy `scoreatpercentile(a, per, limit=..., interpolation_method=...)`
+/// behavior for 1-D inputs.
+pub fn scoreatpercentile(
+    data: &[f64],
+    per: &[f64],
+    limit: Option<(f64, f64)>,
+    interpolation_method: Option<&str>,
+) -> Result<Vec<f64>, StatsError> {
+    let method = interpolation_method
+        .unwrap_or("fraction")
+        .to_ascii_lowercase();
+    if !matches!(method.as_str(), "fraction" | "lower" | "higher") {
+        return Err(StatsError::InvalidArgument(
+            "interpolation_method must be one of {'fraction', 'lower', 'higher'}".to_string(),
+        ));
+    }
+
+    if data.is_empty() {
+        return Ok(vec![f64::NAN; per.len()]);
+    }
+
+    let mut filtered = if let Some((lower, upper)) = limit {
+        data.iter()
+            .copied()
+            .filter(|value| lower <= *value && *value <= upper)
+            .collect::<Vec<_>>()
+    } else {
+        data.to_vec()
+    };
+
+    if filtered.is_empty() || filtered.iter().any(|value| value.is_nan()) {
+        return Ok(vec![f64::NAN; per.len()]);
+    }
+
+    filtered.sort_by(|a, b| a.total_cmp(b));
+    per.iter()
+        .copied()
+        .map(|percentile| scoreatpercentile_single(&filtered, percentile, &method))
+        .collect()
+}
+
 /// Compute the mean after trimming a proportion from each tail.
 ///
 /// Matches `scipy.stats.trim_mean(a, proportiontocut)`.
@@ -8097,6 +8140,43 @@ fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
     } else {
         sorted[lo] * (1.0 - frac) + sorted[hi] * frac
     }
+}
+
+fn scoreatpercentile_single(
+    sorted: &[f64],
+    per: f64,
+    interpolation_method: &str,
+) -> Result<f64, StatsError> {
+    if !(0.0..=100.0).contains(&per) || per.is_nan() {
+        return Err(StatsError::InvalidArgument(
+            "percentile must be in the range [0, 100]".to_string(),
+        ));
+    }
+    if sorted.is_empty() {
+        return Ok(f64::NAN);
+    }
+    if sorted.len() == 1 {
+        return Ok(sorted[0]);
+    }
+
+    let idx = per / 100.0 * (sorted.len() - 1) as f64;
+    let lower = idx.floor() as usize;
+    let upper = idx.ceil() as usize;
+
+    if lower == upper {
+        return Ok(sorted[lower]);
+    }
+
+    let value = match interpolation_method {
+        "fraction" => {
+            let frac = idx - lower as f64;
+            sorted[lower] * (1.0 - frac) + sorted[upper] * frac
+        }
+        "lower" => sorted[lower],
+        "higher" => sorted[upper],
+        _ => unreachable!("validated interpolation method"),
+    };
+    Ok(value)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -16456,6 +16536,60 @@ mod tests {
     #[test]
     fn percentile_empty() {
         assert!(percentile(&[], 50.0).is_nan());
+    }
+
+    #[test]
+    fn scoreatpercentile_array_percentiles_match_scipy_reference() {
+        let result = scoreatpercentile(&[1.0, 2.0, 3.0, 4.0], &[25.0, 50.0, 75.0], None, None)
+            .expect("scoreatpercentile");
+        assert_eq!(result.len(), 3);
+        assert!((result[0] - 1.75).abs() < 1e-12);
+        assert!((result[1] - 2.5).abs() < 1e-12);
+        assert!((result[2] - 3.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn scoreatpercentile_limit_and_interpolation_match_scipy_reference() {
+        let limited = scoreatpercentile(
+            &[1.0, 2.0, 3.0, 4.0, 100.0],
+            &[50.0],
+            Some((0.0, 4.0)),
+            None,
+        )
+        .expect("limited scoreatpercentile");
+        assert_eq!(limited.len(), 1);
+        assert!((limited[0] - 2.5).abs() < 1e-12);
+
+        let lower = scoreatpercentile(&[1.0, 2.0, 3.0, 4.0], &[25.0], None, Some("lower"))
+            .expect("lower interpolation");
+        assert_eq!(lower, vec![1.0]);
+
+        let higher = scoreatpercentile(&[1.0, 2.0, 3.0, 4.0], &[25.0], None, Some("higher"))
+            .expect("higher interpolation");
+        assert_eq!(higher, vec![2.0]);
+    }
+
+    #[test]
+    fn scoreatpercentile_empty_and_invalid_inputs_match_shape() {
+        let empty = scoreatpercentile(&[], &[25.0, 50.0], None, None).expect("empty");
+        assert_eq!(empty.len(), 2);
+        assert!(empty.iter().all(|value| value.is_nan()));
+
+        let invalid_per =
+            scoreatpercentile(&[1.0, 2.0], &[150.0], None, None).expect_err("invalid percentile");
+        assert_eq!(
+            invalid_per,
+            StatsError::InvalidArgument("percentile must be in the range [0, 100]".to_string())
+        );
+
+        let invalid_method = scoreatpercentile(&[1.0, 2.0], &[50.0], None, Some("midpoint"))
+            .expect_err("invalid interpolation_method");
+        assert_eq!(
+            invalid_method,
+            StatsError::InvalidArgument(
+                "interpolation_method must be one of {'fraction', 'lower', 'higher'}".to_string()
+            )
+        );
     }
 
     // ── trim_mean tests ──────────────────────────────────────────────
