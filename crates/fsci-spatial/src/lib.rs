@@ -8,6 +8,10 @@
 //! - `HalfspaceIntersection` — 2D halfspace intersection via Qhull-style duality
 //! - `distance` — pairwise distance computations
 
+use std::collections::BTreeMap;
+
+use fsci_sparse::{CooMatrix, DokMatrix, Shape2D};
+
 /// Error raised by Qhull-backed spatial operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QhullError {
@@ -62,6 +66,10 @@ impl From<QhullError> for SpatialError {
     fn from(value: QhullError) -> Self {
         Self::Qhull(value)
     }
+}
+
+fn sparse_error_to_spatial(err: impl std::fmt::Display) -> SpatialError {
+    SpatialError::InvalidArgument(err.to_string())
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -671,6 +679,85 @@ impl Rectangle {
 // KDTree
 // ══════════════════════════════════════════════════════════════════════
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SparseDistanceMatrixRecord {
+    pub i: usize,
+    pub j: usize,
+    pub v: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SparseDistanceMatrixOutput {
+    DokMatrix(DokMatrix),
+    CooMatrix(CooMatrix),
+    Dict(BTreeMap<(usize, usize), f64>),
+    Ndarray(Vec<SparseDistanceMatrixRecord>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SparseDistanceMatrixOutputType {
+    DokMatrix,
+    CooMatrix,
+    Dict,
+    Ndarray,
+}
+
+impl SparseDistanceMatrixOutputType {
+    fn parse(output_type: &str) -> Result<Self, SpatialError> {
+        match output_type {
+            "dok_matrix" => Ok(Self::DokMatrix),
+            "coo_matrix" => Ok(Self::CooMatrix),
+            "dict" => Ok(Self::Dict),
+            "ndarray" => Ok(Self::Ndarray),
+            _ => Err(SpatialError::InvalidArgument(
+                "Invalid output type".to_string(),
+            )),
+        }
+    }
+}
+
+fn sparse_distance_matrix_output_from_triplets(
+    shape: Shape2D,
+    triplets: &[(usize, usize, f64)],
+    output_type: SparseDistanceMatrixOutputType,
+) -> Result<SparseDistanceMatrixOutput, SpatialError> {
+    let mut rows = Vec::with_capacity(triplets.len());
+    let mut cols = Vec::with_capacity(triplets.len());
+    let mut values = Vec::with_capacity(triplets.len());
+    for &(row, col, value) in triplets {
+        rows.push(row);
+        cols.push(col);
+        values.push(value);
+    }
+
+    match output_type {
+        SparseDistanceMatrixOutputType::DokMatrix => {
+            let matrix = DokMatrix::from_triplets(shape, values, rows, cols)
+                .map_err(sparse_error_to_spatial)?;
+            Ok(SparseDistanceMatrixOutput::DokMatrix(matrix))
+        }
+        SparseDistanceMatrixOutputType::CooMatrix => {
+            let matrix = CooMatrix::from_triplets(shape, values, rows, cols, false)
+                .map_err(sparse_error_to_spatial)?;
+            Ok(SparseDistanceMatrixOutput::CooMatrix(matrix))
+        }
+        SparseDistanceMatrixOutputType::Dict => {
+            let entries = triplets
+                .iter()
+                .map(|&(row, col, value)| ((row, col), value))
+                .collect();
+            Ok(SparseDistanceMatrixOutput::Dict(entries))
+        }
+        SparseDistanceMatrixOutputType::Ndarray => {
+            let entries = triplets
+                .iter()
+                .map(|&(i, j, v)| SparseDistanceMatrixRecord { i, j, v })
+                .collect();
+            Ok(SparseDistanceMatrixOutput::Ndarray(entries))
+        }
+    }
+}
+
 /// A k-d tree for efficient nearest-neighbor search.
 ///
 /// Matches `scipy.spatial.KDTree(data)`.
@@ -876,9 +963,41 @@ impl KDTree {
 
     /// Compute a sparse cross-distance matrix for pairs within `max_distance`.
     ///
-    /// Matches the core surface of `scipy.spatial.KDTree.sparse_distance_matrix`
-    /// by returning `(row, col, distance)` triplets for all retained pairs.
+    /// Matches the default `scipy.spatial.KDTree.sparse_distance_matrix`
+    /// container semantics by returning a DOK-style sparse matrix.
     pub fn sparse_distance_matrix(
+        &self,
+        other: &KDTree,
+        max_distance: f64,
+    ) -> Result<DokMatrix, SpatialError> {
+        let output =
+            self.sparse_distance_matrix_with_output_type(other, max_distance, "dok_matrix")?;
+        match output {
+            SparseDistanceMatrixOutput::DokMatrix(matrix) => Ok(matrix),
+            _ => unreachable!("dok_matrix output type must produce a DokMatrix"),
+        }
+    }
+
+    /// Compute a sparse cross-distance matrix using SciPy's `output_type` modes.
+    ///
+    /// Supported output types are `"dok_matrix"`, `"coo_matrix"`, `"dict"`,
+    /// and `"ndarray"`. Distances use the Euclidean metric.
+    pub fn sparse_distance_matrix_with_output_type(
+        &self,
+        other: &KDTree,
+        max_distance: f64,
+        output_type: &str,
+    ) -> Result<SparseDistanceMatrixOutput, SpatialError> {
+        let parsed_output_type = SparseDistanceMatrixOutputType::parse(output_type)?;
+        let triplets = self.sparse_distance_matrix_triplets(other, max_distance)?;
+        sparse_distance_matrix_output_from_triplets(
+            Shape2D::new(self.size(), other.size()),
+            &triplets,
+            parsed_output_type,
+        )
+    }
+
+    fn sparse_distance_matrix_triplets(
         &self,
         other: &KDTree,
         max_distance: f64,
@@ -3277,10 +3396,11 @@ mod tests {
 
         let entries = tree1.sparse_distance_matrix(&tree2, 0.75).unwrap();
         assert_eq!(
-            entries,
-            vec![(0, 0, 0.5), (1, 1, 0.5)],
-            "sparse triplets should preserve original point indices"
+            entries.entries(),
+            &BTreeMap::from([((0, 0), 0.5), ((1, 1), 0.5)]),
+            "default DOK output should preserve original point indices"
         );
+        assert_eq!(entries.shape(), Shape2D::new(2, 3));
     }
 
     #[test]
@@ -3288,7 +3408,8 @@ mod tests {
         let tree1 = KDTree::new(&[vec![0.0, 0.0]]).unwrap();
         let tree2 = KDTree::new(&[vec![10.0, 10.0]]).unwrap();
         let entries = tree1.sparse_distance_matrix(&tree2, 1.0).unwrap();
-        assert!(entries.is_empty());
+        assert!(entries.entries().is_empty());
+        assert_eq!(entries.shape(), Shape2D::new(1, 1));
     }
 
     #[test]
@@ -3299,6 +3420,57 @@ mod tests {
             .sparse_distance_matrix(&tree2, 1.0)
             .expect_err("dimension mismatch");
         assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
+    }
+
+    #[test]
+    fn kdtree_sparse_distance_matrix_output_type_variants() {
+        let tree1 = KDTree::new(&[vec![0.0, 0.0], vec![2.0, 0.0]]).unwrap();
+        let tree2 = KDTree::new(&[vec![0.5, 0.0], vec![2.5, 0.0], vec![9.0, 9.0]]).unwrap();
+
+        let dict_output = tree1
+            .sparse_distance_matrix_with_output_type(&tree2, 0.75, "dict")
+            .unwrap();
+        assert_eq!(
+            dict_output,
+            SparseDistanceMatrixOutput::Dict(BTreeMap::from([((0, 0), 0.5), ((1, 1), 0.5)]))
+        );
+
+        let ndarray_output = tree1
+            .sparse_distance_matrix_with_output_type(&tree2, 0.75, "ndarray")
+            .unwrap();
+        assert_eq!(
+            ndarray_output,
+            SparseDistanceMatrixOutput::Ndarray(vec![
+                SparseDistanceMatrixRecord { i: 0, j: 0, v: 0.5 },
+                SparseDistanceMatrixRecord { i: 1, j: 1, v: 0.5 },
+            ])
+        );
+
+        let coo_output = tree1
+            .sparse_distance_matrix_with_output_type(&tree2, 0.75, "coo_matrix")
+            .unwrap();
+        assert!(matches!(
+            coo_output,
+            SparseDistanceMatrixOutput::CooMatrix(_)
+        ));
+        if let SparseDistanceMatrixOutput::CooMatrix(matrix) = coo_output {
+            assert_eq!(matrix.shape(), Shape2D::new(2, 3));
+            assert_eq!(matrix.row_indices(), &[0, 1]);
+            assert_eq!(matrix.col_indices(), &[0, 1]);
+            assert_eq!(matrix.data(), &[0.5, 0.5]);
+        }
+    }
+
+    #[test]
+    fn kdtree_sparse_distance_matrix_rejects_invalid_output_type() {
+        let tree1 = KDTree::new(&[vec![0.0, 0.0]]).unwrap();
+        let tree2 = KDTree::new(&[vec![0.5, 0.0]]).unwrap();
+        let err = tree1
+            .sparse_distance_matrix_with_output_type(&tree2, 1.0, "bad")
+            .expect_err("invalid output type");
+        assert!(
+            matches!(err, SpatialError::InvalidArgument(message) if message == "Invalid output type")
+        );
     }
 
     // ── ConvexHull tests ─────────────────────────────────────────────

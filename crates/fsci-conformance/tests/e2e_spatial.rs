@@ -12,9 +12,9 @@
 
 use fsci_conformance::PacketFamily;
 use fsci_spatial::{
-    DistanceMetric, KDTree, cdist, cdist_metric, chebyshev, cityblock, cosine, distance_matrix,
-    euclidean, jensenshannon, minkowski, pdist, sqeuclidean, squareform_to_condensed,
-    squareform_to_matrix,
+    DistanceMetric, KDTree, SparseDistanceMatrixOutput, cdist, cdist_metric, chebyshev, cityblock,
+    cosine, distance_matrix, euclidean, jensenshannon, minkowski, pdist, sqeuclidean,
+    squareform_to_condensed, squareform_to_matrix,
 };
 use serde::Serialize;
 use std::fs;
@@ -208,6 +208,42 @@ fn generate_points(n: usize, dim: usize, seed: u64) -> Vec<Vec<f64>> {
 
 fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol || (a.is_nan() && b.is_nan())
+}
+
+fn dense_from_sparse_distance_output(
+    output: &SparseDistanceMatrixOutput,
+    rows: usize,
+    cols: usize,
+) -> Vec<Vec<f64>> {
+    let mut dense = vec![vec![0.0; cols]; rows];
+    match output {
+        SparseDistanceMatrixOutput::DokMatrix(matrix) => {
+            for (&(row, col), &value) in matrix.entries() {
+                dense[row][col] = value;
+            }
+        }
+        SparseDistanceMatrixOutput::CooMatrix(matrix) => {
+            for ((&row, &col), &value) in matrix
+                .row_indices()
+                .iter()
+                .zip(matrix.col_indices().iter())
+                .zip(matrix.data().iter())
+            {
+                dense[row][col] = value;
+            }
+        }
+        SparseDistanceMatrixOutput::Dict(entries) => {
+            for (&(row, col), &value) in entries {
+                dense[row][col] = value;
+            }
+        }
+        SparseDistanceMatrixOutput::Ndarray(entries) => {
+            for entry in entries {
+                dense[entry.i][entry.j] = entry.v;
+            }
+        }
+    }
+    dense
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1443,4 +1479,116 @@ fn scenario_15_jensenshannon_base_kwarg() {
     let bundle = runner.finish();
     write_bundle("scenario_15_jensenshannon_base_kwarg", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_15 failed");
+}
+
+/// Scenario 16: KDTree sparse_distance_matrix output_type parity
+#[test]
+fn scenario_16_kdtree_sparse_distance_matrix_output_type() {
+    let mut runner = ScenarioRunner::new("scenario_16_kdtree_sparse_distance_matrix_output_type");
+    runner.set_spatial_meta("KDTree", 2, 2, "euclidean");
+
+    let tree1 = KDTree::new(&[vec![0.0, 0.0], vec![2.0, 0.0]]).expect("tree1");
+    let tree2 = KDTree::new(&[vec![0.5, 0.0], vec![2.5, 0.0], vec![9.0, 9.0]]).expect("tree2");
+    let expected = vec![vec![0.5, 0.0, 0.0], vec![0.0, 0.5, 0.0]];
+
+    runner.step(
+        "default_dok",
+        "KDTree::sparse_distance_matrix(other, 0.75)",
+        "SciPy default output_type='dok_matrix'",
+        "Strict",
+        || {
+            let output = tree1
+                .sparse_distance_matrix(&tree2, 0.75)
+                .map_err(|e| format!("{e}"))?;
+            let dense = dense_from_sparse_distance_output(
+                &SparseDistanceMatrixOutput::DokMatrix(output),
+                2,
+                3,
+            );
+            if dense == expected {
+                Ok(String::from(
+                    "default DOK output matches expected dense matrix",
+                ))
+            } else {
+                Err(format!("expected {:?}, got {:?}", expected, dense))
+            }
+        },
+    );
+
+    runner.step(
+        "dict_output",
+        "KDTree::sparse_distance_matrix_with_output_type(other, 0.75, 'dict')",
+        "SciPy dict output_type",
+        "Strict",
+        || {
+            let output = tree1
+                .sparse_distance_matrix_with_output_type(&tree2, 0.75, "dict")
+                .map_err(|e| format!("{e}"))?;
+            let dense = dense_from_sparse_distance_output(&output, 2, 3);
+            if dense == expected {
+                Ok(String::from("dict output matches expected dense matrix"))
+            } else {
+                Err(format!("expected {:?}, got {:?}", expected, dense))
+            }
+        },
+    );
+
+    runner.step(
+        "ndarray_output",
+        "KDTree::sparse_distance_matrix_with_output_type(other, 0.75, 'ndarray')",
+        "SciPy ndarray record output_type",
+        "Strict",
+        || {
+            let output = tree1
+                .sparse_distance_matrix_with_output_type(&tree2, 0.75, "ndarray")
+                .map_err(|e| format!("{e}"))?;
+            let dense = dense_from_sparse_distance_output(&output, 2, 3);
+            if dense == expected {
+                Ok(String::from("ndarray output matches expected dense matrix"))
+            } else {
+                Err(format!("expected {:?}, got {:?}", expected, dense))
+            }
+        },
+    );
+
+    runner.step(
+        "coo_output",
+        "KDTree::sparse_distance_matrix_with_output_type(other, 0.75, 'coo_matrix')",
+        "SciPy COO output_type",
+        "Strict",
+        || {
+            let output = tree1
+                .sparse_distance_matrix_with_output_type(&tree2, 0.75, "coo_matrix")
+                .map_err(|e| format!("{e}"))?;
+            let dense = dense_from_sparse_distance_output(&output, 2, 3);
+            if dense == expected {
+                Ok(String::from("coo output matches expected dense matrix"))
+            } else {
+                Err(format!("expected {:?}, got {:?}", expected, dense))
+            }
+        },
+    );
+
+    runner.step(
+        "invalid_output_type",
+        "KDTree::sparse_distance_matrix_with_output_type(other, 0.75, 'bad')",
+        "SciPy rejects invalid output_type",
+        "Strict",
+        || match tree1.sparse_distance_matrix_with_output_type(&tree2, 0.75, "bad") {
+            Err(fsci_spatial::SpatialError::InvalidArgument(message))
+                if message == "Invalid output type" =>
+            {
+                Ok(String::from("invalid output type rejected"))
+            }
+            Err(err) => Err(format!("expected invalid output type error, got {err}")),
+            Ok(_) => Err(String::from("expected invalid output type rejection")),
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle(
+        "scenario_16_kdtree_sparse_distance_matrix_output_type",
+        &bundle,
+    );
+    assert!(bundle.overall.status == "pass", "scenario_16 failed");
 }
