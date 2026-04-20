@@ -30,6 +30,7 @@ def _matrix_from_spec(spec: Dict[str, Any], sparse: Any, np: Any) -> Any:
 def _matrix_result(matrix: Any) -> Dict[str, Any]:
     coo = matrix.tocoo()
     return {
+        "format": getattr(matrix, "format", None),
         "shape": [int(coo.shape[0]), int(coo.shape[1])],
         "row": [int(v) for v in coo.row.tolist()],
         "col": [int(v) for v in coo.col.tolist()],
@@ -85,7 +86,7 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
 
         if operation == "vstack":
             blocks = [_matrix_from_spec(block, sparse, np) for block in case["blocks"]]
-            result = sparse.vstack(blocks)
+            result = sparse.vstack(blocks, format=case.get("format"))
             return {
                 "case_id": case_id,
                 "status": "ok",
@@ -96,7 +97,7 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
 
         if operation == "hstack":
             blocks = [_matrix_from_spec(block, sparse, np) for block in case["blocks"]]
-            result = sparse.hstack(blocks)
+            result = sparse.hstack(blocks, format=case.get("format"))
             return {
                 "case_id": case_id,
                 "status": "ok",

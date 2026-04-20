@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use crate::formats::{CooMatrix, CsrMatrix, Shape2D, SparseError, SparseResult};
+use crate::formats::{
+    BsrMatrix, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, DokMatrix, LilMatrix, Shape2D,
+    SparseError, SparseFormat, SparseResult,
+};
 use crate::ops::FormatConvertible;
 
 pub fn eye(size: usize) -> SparseResult<CsrMatrix> {
@@ -257,6 +260,63 @@ pub fn hstack(blocks: &[&dyn FormatConvertible]) -> SparseResult<CsrMatrix> {
     stack_sparse_blocks(blocks, StackAxis::Cols)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum HstackOutput {
+    Csr(CsrMatrix),
+    Csc(CscMatrix),
+    Coo(CooMatrix),
+    Bsr(BsrMatrix),
+    Dia(DiaMatrix),
+    Dok(DokMatrix),
+    Lil(LilMatrix),
+}
+
+impl HstackOutput {
+    #[must_use]
+    pub const fn format(&self) -> SparseFormat {
+        match self {
+            Self::Csr(_) => SparseFormat::Csr,
+            Self::Csc(_) => SparseFormat::Csc,
+            Self::Coo(_) => SparseFormat::Coo,
+            Self::Bsr(_) => SparseFormat::Bsr,
+            Self::Dia(_) => SparseFormat::Dia,
+            Self::Dok(_) => SparseFormat::Dok,
+            Self::Lil(_) => SparseFormat::Lil,
+        }
+    }
+
+    #[must_use]
+    pub const fn format_name(&self) -> &'static str {
+        sparse_format_name(self.format())
+    }
+
+    pub fn to_coo(&self) -> SparseResult<CooMatrix> {
+        match self {
+            Self::Csr(matrix) => matrix.to_coo(),
+            Self::Csc(matrix) => matrix.to_coo(),
+            Self::Coo(matrix) => Ok(matrix.clone()),
+            Self::Bsr(matrix) => matrix.to_coo(),
+            Self::Dia(matrix) => matrix.to_coo(),
+            Self::Dok(matrix) => matrix.to_coo(),
+            Self::Lil(matrix) => matrix.to_coo(),
+        }
+    }
+}
+
+/// Stack sparse matrices horizontally and honor SciPy's `format=` kwarg.
+///
+/// When `format` is `None`, this matches SciPy's default container choice and
+/// returns a COO matrix. Supported format strings are `"csr"`, `"csc"`,
+/// `"coo"`, `"bsr"`, `"dia"`, `"dok"`, and `"lil"`.
+pub fn hstack_with_format(
+    blocks: &[&dyn FormatConvertible],
+    format: Option<&str>,
+) -> SparseResult<HstackOutput> {
+    let requested_format = parse_hstack_format(format)?;
+    let csr = stack_sparse_blocks(blocks, StackAxis::Cols)?;
+    hstack_output_from_csr(csr, requested_format)
+}
+
 /// Kronecker product of two sparse matrices.
 ///
 /// For A (m×n) and B (p×q), produces an (m*p × n*q) matrix.
@@ -398,6 +458,70 @@ fn stack_sparse_blocks(
     let shape = Shape2D::new(total_rows, total_cols);
     let coo = CooMatrix::from_triplets(shape, data, rows, cols, false)?;
     coo.to_csr()
+}
+
+fn parse_hstack_format(format: Option<&str>) -> SparseResult<SparseFormat> {
+    match format.unwrap_or("coo") {
+        "csr" => Ok(SparseFormat::Csr),
+        "csc" => Ok(SparseFormat::Csc),
+        "coo" => Ok(SparseFormat::Coo),
+        "bsr" => Ok(SparseFormat::Bsr),
+        "dia" => Ok(SparseFormat::Dia),
+        "dok" => Ok(SparseFormat::Dok),
+        "lil" => Ok(SparseFormat::Lil),
+        _ => Err(SparseError::InvalidArgument {
+            message: "format must be one of {'csr', 'csc', 'coo', 'bsr', 'dia', 'dok', 'lil'}"
+                .to_string(),
+        }),
+    }
+}
+
+fn hstack_output_from_csr(csr: CsrMatrix, format: SparseFormat) -> SparseResult<HstackOutput> {
+    let shape = csr.shape();
+    let coo = match format {
+        SparseFormat::Csr => return Ok(HstackOutput::Csr(csr)),
+        SparseFormat::Csc => return Ok(HstackOutput::Csc(csr.to_csc()?)),
+        SparseFormat::Coo => return Ok(HstackOutput::Coo(csr.to_coo()?)),
+        _ => csr.to_coo()?,
+    };
+
+    let data = coo.data().to_vec();
+    let rows = coo.row_indices().to_vec();
+    let cols = coo.col_indices().to_vec();
+
+    match format {
+        SparseFormat::Bsr => Ok(HstackOutput::Bsr(BsrMatrix::from_triplets(
+            shape,
+            Shape2D::new(1, 1),
+            data,
+            rows,
+            cols,
+        )?)),
+        SparseFormat::Dia => Ok(HstackOutput::Dia(DiaMatrix::from_triplets(
+            shape, data, rows, cols,
+        )?)),
+        SparseFormat::Dok => Ok(HstackOutput::Dok(DokMatrix::from_triplets(
+            shape, data, rows, cols,
+        )?)),
+        SparseFormat::Lil => Ok(HstackOutput::Lil(LilMatrix::from_triplets(
+            shape, data, rows, cols,
+        )?)),
+        SparseFormat::Csr | SparseFormat::Csc | SparseFormat::Coo => {
+            unreachable!("compressed and COO formats returned early")
+        }
+    }
+}
+
+const fn sparse_format_name(format: SparseFormat) -> &'static str {
+    match format {
+        SparseFormat::Csr => "csr",
+        SparseFormat::Csc => "csc",
+        SparseFormat::Coo => "coo",
+        SparseFormat::Bsr => "bsr",
+        SparseFormat::Dia => "dia",
+        SparseFormat::Dok => "dok",
+        SparseFormat::Lil => "lil",
+    }
 }
 
 fn append_coo_entries(
@@ -693,6 +817,88 @@ mod tests {
     }
 
     #[test]
+    fn hstack_with_format_defaults_to_coo_output() {
+        let left = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo");
+        let right = CooMatrix::from_triplets(
+            Shape2D::new(2, 1),
+            vec![5.0, 6.0],
+            vec![0, 1],
+            vec![0, 0],
+            false,
+        )
+        .expect("coo");
+
+        let result = hstack_with_format(&[&left, &right], None).expect("default hstack format");
+        assert!(matches!(result, HstackOutput::Coo(_)));
+        assert_eq!(result.format(), SparseFormat::Coo);
+        assert_eq!(
+            dense_from_coo(&result.to_coo().expect("output->coo")),
+            vec![vec![1.0, 2.0, 5.0], vec![3.0, 4.0, 6.0]]
+        );
+    }
+
+    #[test]
+    fn hstack_with_format_supports_all_sparse_output_kinds() {
+        let left = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo");
+        let right = CooMatrix::from_triplets(
+            Shape2D::new(2, 1),
+            vec![5.0, 6.0],
+            vec![0, 1],
+            vec![0, 0],
+            false,
+        )
+        .expect("coo")
+        .to_csc()
+        .expect("csc");
+
+        for (format, expected) in [
+            ("csr", SparseFormat::Csr),
+            ("csc", SparseFormat::Csc),
+            ("coo", SparseFormat::Coo),
+            ("bsr", SparseFormat::Bsr),
+            ("dia", SparseFormat::Dia),
+            ("dok", SparseFormat::Dok),
+            ("lil", SparseFormat::Lil),
+        ] {
+            let result = hstack_with_format(&[&left, &right], Some(format))
+                .unwrap_or_else(|err| panic!("hstack format {format} failed: {err}"));
+            assert_eq!(result.format(), expected, "format mismatch for {format}");
+            assert_eq!(
+                dense_from_coo(&result.to_coo().expect("output->coo")),
+                vec![vec![1.0, 2.0, 5.0], vec![3.0, 4.0, 6.0]],
+                "dense mismatch for {format}"
+            );
+            if let HstackOutput::Bsr(matrix) = &result {
+                assert_eq!(matrix.block_shape(), Shape2D::new(1, 1));
+            }
+        }
+    }
+
+    #[test]
+    fn hstack_with_format_rejects_invalid_format() {
+        let left = eye(2).expect("eye");
+        let right = eye(2).expect("eye");
+        let err = hstack_with_format(&[&left, &right], Some("bad")).expect_err("invalid format");
+        assert!(
+            matches!(err, SparseError::InvalidArgument { message } if message.contains("format must be one of"))
+        );
+    }
+
+    #[test]
     fn vstack_rejects_empty_input() {
         let err = vstack(&[]).expect_err("empty vstack");
         assert!(matches!(err, SparseError::InvalidArgument { .. }));
@@ -796,6 +1002,15 @@ mod tests {
             for idx in csr.indptr()[row]..csr.indptr()[row + 1] {
                 row_dense[csr.indices()[idx]] += csr.data()[idx];
             }
+        }
+        dense
+    }
+
+    fn dense_from_coo(coo: &CooMatrix) -> Vec<Vec<f64>> {
+        let shape = coo.shape();
+        let mut dense = vec![vec![0.0; shape.cols]; shape.rows];
+        for idx in 0..coo.nnz() {
+            dense[coo.row_indices()[idx]][coo.col_indices()[idx]] += coo.data()[idx];
         }
         dense
     }

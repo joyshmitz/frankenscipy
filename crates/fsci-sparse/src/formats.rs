@@ -923,6 +923,33 @@ pub struct DiaMatrix {
 }
 
 impl DiaMatrix {
+    pub fn from_triplets(
+        shape: Shape2D,
+        data: Vec<f64>,
+        row_indices: Vec<usize>,
+        col_indices: Vec<usize>,
+    ) -> SparseResult<Self> {
+        if data.len() != row_indices.len() || data.len() != col_indices.len() {
+            return Err(SparseError::IncompatibleShape {
+                message: "DIA data/row/col lengths must match".to_string(),
+            });
+        }
+
+        let mut diagonals = BTreeMap::<isize, Vec<f64>>::new();
+        for ((row, col), value) in row_indices.into_iter().zip(col_indices).zip(data) {
+            validate_coordinate(shape, row, col)?;
+            let offset = col as isize - row as isize;
+            let diagonal = diagonals
+                .entry(offset)
+                .or_insert_with(|| vec![0.0; diagonal_len(shape, offset)]);
+            let diagonal_index = if offset >= 0 { row } else { col };
+            diagonal[diagonal_index] += value;
+        }
+
+        let (offsets, data): (Vec<_>, Vec<_>) = diagonals.into_iter().unzip();
+        Self::from_diagonals(shape, offsets, data)
+    }
+
     pub fn from_diagonals(
         shape: Shape2D,
         offsets: Vec<isize>,

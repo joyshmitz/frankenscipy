@@ -19,9 +19,9 @@ use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
     CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IterativeSolveOptions, Shape2D,
     SolveOptions, SparseError, add_csr, bicgstab, cg, connected_component_sizes,
-    csr_to_csc_with_mode, diags, eye, find, gmres, hstack, is_connected, pagerank, scale_csr,
-    sparse_norm, spmv_csr, spsolve, strongly_connected_components, sub_csr, topological_sort, tril,
-    triu, vstack,
+    csr_to_csc_with_mode, diags, eye, find, gmres, hstack, hstack_with_format, is_connected,
+    pagerank, scale_csr, sparse_norm, spmv_csr, spsolve, strongly_connected_components, sub_csr,
+    topological_sort, tril, triu, vstack,
 };
 use serde::{Deserialize, Serialize};
 
@@ -189,6 +189,8 @@ struct SparseOracleCase {
     case_id: String,
     operation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     matrix: Option<SparseOracleMatrix>,
     #[serde(skip_serializing_if = "Option::is_none")]
     blocks: Option<Vec<SparseOracleMatrix>>,
@@ -221,6 +223,8 @@ struct SparseOracleCaseOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SparseOracleTriplets {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
     shape: [usize; 2],
     row: Vec<usize>,
     col: Vec<usize>,
@@ -304,8 +308,9 @@ fn sparse_triu(matrix: &SparseInputMatrix, k: isize) -> CooMatrix {
     }
 }
 
-fn triplets_from_coo(coo: &CooMatrix) -> SparseOracleTriplets {
+fn triplets_from_coo(coo: &CooMatrix, format: Option<&str>) -> SparseOracleTriplets {
     SparseOracleTriplets {
+        format: format.map(str::to_string),
         shape: [coo.shape().rows, coo.shape().cols],
         row: coo.row_indices().to_vec(),
         col: coo.col_indices().to_vec(),
@@ -408,7 +413,7 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
                 case_id: case.case_id.clone(),
                 status: "ok".to_string(),
                 result_kind: "matrix_triplets".to_string(),
-                result: serde_json::to_value(triplets_from_coo(&coo))
+                result: serde_json::to_value(triplets_from_coo(&coo, Some("coo")))
                     .expect("serialize tril result"),
                 error: None,
             }
@@ -420,7 +425,7 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
                 case_id: case.case_id.clone(),
                 status: "ok".to_string(),
                 result_kind: "matrix_triplets".to_string(),
-                result: serde_json::to_value(triplets_from_coo(&coo))
+                result: serde_json::to_value(triplets_from_coo(&coo, Some("coo")))
                     .expect("serialize triu result"),
                 error: None,
             }
@@ -437,7 +442,7 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
                 case_id: case.case_id.clone(),
                 status: "ok".to_string(),
                 result_kind: "matrix_triplets".to_string(),
-                result: serde_json::to_value(triplets_from_coo(&coo))
+                result: serde_json::to_value(triplets_from_coo(&coo, Some("csr")))
                     .expect("serialize vstack result"),
                 error: None,
             }
@@ -449,12 +454,20 @@ fn run_sparse_oracle_case(case: &SparseOracleCase) -> SparseOracleCaseOutput {
                 .iter()
                 .map(SparseInputMatrix::as_format_convertible)
                 .collect();
-            let coo = hstack(&refs).expect("hstack").to_coo().expect("csr->coo");
+            let (coo, actual_format) = if let Some(format) = case.format.as_deref() {
+                let output = hstack_with_format(&refs, Some(format)).expect("hstack format");
+                let actual_format = output.format_name().to_string();
+                let coo = output.to_coo().expect("output->coo");
+                (coo, Some(actual_format))
+            } else {
+                let coo = hstack(&refs).expect("hstack").to_coo().expect("csr->coo");
+                (coo, Some("csr".to_string()))
+            };
             SparseOracleCaseOutput {
                 case_id: case.case_id.clone(),
                 status: "ok".to_string(),
                 result_kind: "matrix_triplets".to_string(),
-                result: serde_json::to_value(triplets_from_coo(&coo))
+                result: serde_json::to_value(triplets_from_coo(&coo, actual_format.as_deref()))
                     .expect("serialize hstack result"),
                 error: None,
             }
@@ -1897,6 +1910,7 @@ fn e2e_019_sparse_helper_oracle_match() {
             SparseOracleCase {
                 case_id: "find_duplicate_zero".to_string(),
                 operation: "find".to_string(),
+                format: None,
                 matrix: Some(SparseOracleMatrix {
                     format: "coo".to_string(),
                     shape: [2, 2],
@@ -1910,6 +1924,7 @@ fn e2e_019_sparse_helper_oracle_match() {
             SparseOracleCase {
                 case_id: "tril_explicit_zero".to_string(),
                 operation: "tril".to_string(),
+                format: None,
                 matrix: Some(SparseOracleMatrix {
                     format: "coo".to_string(),
                     shape: [2, 2],
@@ -1923,6 +1938,7 @@ fn e2e_019_sparse_helper_oracle_match() {
             SparseOracleCase {
                 case_id: "triu_duplicate_offset".to_string(),
                 operation: "triu".to_string(),
+                format: None,
                 matrix: Some(SparseOracleMatrix {
                     format: "coo".to_string(),
                     shape: [2, 3],
@@ -1936,6 +1952,7 @@ fn e2e_019_sparse_helper_oracle_match() {
             SparseOracleCase {
                 case_id: "vstack_mixed_formats".to_string(),
                 operation: "vstack".to_string(),
+                format: None,
                 matrix: None,
                 blocks: Some(vec![
                     SparseOracleMatrix {
@@ -1958,6 +1975,168 @@ fn e2e_019_sparse_helper_oracle_match() {
             SparseOracleCase {
                 case_id: "hstack_mixed_formats".to_string(),
                 operation: "hstack".to_string(),
+                format: None,
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "coo".to_string(),
+                        shape: [2, 2],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 1, 0, 1],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csc".to_string(),
+                        shape: [2, 1],
+                        row: vec![0, 1],
+                        col: vec![0, 0],
+                        data: vec![5.0, 6.0],
+                    },
+                ]),
+                k: None,
+            },
+            SparseOracleCase {
+                case_id: "hstack_format_csr".to_string(),
+                operation: "hstack".to_string(),
+                format: Some("csr".to_string()),
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "coo".to_string(),
+                        shape: [2, 2],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 1, 0, 1],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csc".to_string(),
+                        shape: [2, 1],
+                        row: vec![0, 1],
+                        col: vec![0, 0],
+                        data: vec![5.0, 6.0],
+                    },
+                ]),
+                k: None,
+            },
+            SparseOracleCase {
+                case_id: "hstack_format_csc".to_string(),
+                operation: "hstack".to_string(),
+                format: Some("csc".to_string()),
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "coo".to_string(),
+                        shape: [2, 2],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 1, 0, 1],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csc".to_string(),
+                        shape: [2, 1],
+                        row: vec![0, 1],
+                        col: vec![0, 0],
+                        data: vec![5.0, 6.0],
+                    },
+                ]),
+                k: None,
+            },
+            SparseOracleCase {
+                case_id: "hstack_format_coo".to_string(),
+                operation: "hstack".to_string(),
+                format: Some("coo".to_string()),
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "coo".to_string(),
+                        shape: [2, 2],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 1, 0, 1],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csc".to_string(),
+                        shape: [2, 1],
+                        row: vec![0, 1],
+                        col: vec![0, 0],
+                        data: vec![5.0, 6.0],
+                    },
+                ]),
+                k: None,
+            },
+            SparseOracleCase {
+                case_id: "hstack_format_bsr".to_string(),
+                operation: "hstack".to_string(),
+                format: Some("bsr".to_string()),
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "coo".to_string(),
+                        shape: [2, 2],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 1, 0, 1],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csc".to_string(),
+                        shape: [2, 1],
+                        row: vec![0, 1],
+                        col: vec![0, 0],
+                        data: vec![5.0, 6.0],
+                    },
+                ]),
+                k: None,
+            },
+            SparseOracleCase {
+                case_id: "hstack_format_dia".to_string(),
+                operation: "hstack".to_string(),
+                format: Some("dia".to_string()),
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "coo".to_string(),
+                        shape: [2, 2],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 1, 0, 1],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csc".to_string(),
+                        shape: [2, 1],
+                        row: vec![0, 1],
+                        col: vec![0, 0],
+                        data: vec![5.0, 6.0],
+                    },
+                ]),
+                k: None,
+            },
+            SparseOracleCase {
+                case_id: "hstack_format_dok".to_string(),
+                operation: "hstack".to_string(),
+                format: Some("dok".to_string()),
+                matrix: None,
+                blocks: Some(vec![
+                    SparseOracleMatrix {
+                        format: "coo".to_string(),
+                        shape: [2, 2],
+                        row: vec![0, 0, 1, 1],
+                        col: vec![0, 1, 0, 1],
+                        data: vec![1.0, 2.0, 3.0, 4.0],
+                    },
+                    SparseOracleMatrix {
+                        format: "csc".to_string(),
+                        shape: [2, 1],
+                        row: vec![0, 1],
+                        col: vec![0, 0],
+                        data: vec![5.0, 6.0],
+                    },
+                ]),
+                k: None,
+            },
+            SparseOracleCase {
+                case_id: "hstack_format_lil".to_string(),
+                operation: "hstack".to_string(),
+                format: Some("lil".to_string()),
                 matrix: None,
                 blocks: Some(vec![
                     SparseOracleMatrix {
@@ -2083,6 +2262,13 @@ fn e2e_019_sparse_helper_oracle_match() {
             let expected_result: SparseOracleTriplets =
                 serde_json::from_value(expected.result.clone()).expect("oracle triplets");
             compare_sparse_triplets(&case.case_id, &actual_result, &expected_result);
+            if case.format.is_some() {
+                assert_eq!(
+                    actual_result.format, expected_result.format,
+                    "{} format mismatch",
+                    case.case_id
+                );
+            }
         }
     }
     steps.push(make_step(
