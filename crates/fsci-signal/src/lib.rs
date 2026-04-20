@@ -2722,6 +2722,15 @@ pub struct BaCoeffs {
     pub a: Vec<f64>,
 }
 
+/// Butterworth output form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButterOutput {
+    /// Transfer-function coefficients `(b, a)`.
+    Ba,
+    /// Second-order sections.
+    Sos,
+}
+
 /// Design a Butterworth IIR filter.
 ///
 /// Matches `scipy.signal.butter(N, Wn, btype='low', analog=False, output='ba')`.
@@ -2751,6 +2760,46 @@ pub fn butter(order: usize, wn: &[f64], btype: FilterType) -> Result<BaCoeffs, S
     };
 
     design_digital_iir(analog_zpk, wn, btype)
+}
+
+/// Design a Butterworth IIR filter with an explicit output form.
+///
+/// Matches the `output` kwarg of `scipy.signal.butter(..., output=...)`
+/// for the supported digital forms.
+pub fn butter_with_output(
+    order: usize,
+    wn: &[f64],
+    btype: FilterType,
+    output: ButterOutput,
+) -> Result<BaCoeffsOrSos, SignalError> {
+    let ba = butter(order, wn, btype)?;
+    match output {
+        ButterOutput::Ba => Ok(BaCoeffsOrSos::Ba(ba)),
+        ButterOutput::Sos => Ok(BaCoeffsOrSos::Sos(tf2sos(&ba.b, &ba.a)?)),
+    }
+}
+
+/// Butterworth design result for an explicit output form.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BaCoeffsOrSos {
+    /// Transfer-function coefficients `(b, a)`.
+    Ba(BaCoeffs),
+    /// Second-order sections.
+    Sos(Vec<SosSection>),
+}
+
+/// Design a Butterworth IIR filter directly in second-order-section form.
+///
+/// Matches `scipy.signal.butter(..., output='sos')`.
+pub fn butter_sos(
+    order: usize,
+    wn: &[f64],
+    btype: FilterType,
+) -> Result<Vec<SosSection>, SignalError> {
+    match butter_with_output(order, wn, btype, ButterOutput::Sos)? {
+        BaCoeffsOrSos::Sos(sos) => Ok(sos),
+        BaCoeffsOrSos::Ba(_) => unreachable!("ButterOutput::Sos must return SOS"),
+    }
 }
 
 /// Design a Chebyshev Type I IIR filter.
@@ -9338,6 +9387,56 @@ mod tests {
         let sos = tf2sos(&coeffs.b, &coeffs.a).expect("tf2sos");
         // Order 4 → 2 SOS sections
         assert_eq!(sos.len(), 2, "butter(4) should give 2 SOS sections");
+    }
+
+    #[test]
+    fn butter_with_output_ba_matches_legacy_butter() {
+        let direct = butter(4, &[0.25], FilterType::Lowpass).expect("butter");
+        let via_output = butter_with_output(4, &[0.25], FilterType::Lowpass, ButterOutput::Ba)
+            .expect("butter_with_output");
+        assert!(matches!(via_output, BaCoeffsOrSos::Ba(_)));
+        let via_output = match via_output {
+            BaCoeffsOrSos::Ba(ba) => ba,
+            BaCoeffsOrSos::Sos(_) => return,
+        };
+
+        assert_eq!(direct.b.len(), via_output.b.len());
+        assert_eq!(direct.a.len(), via_output.a.len());
+        for (i, (&got, &expected)) in via_output.b.iter().zip(direct.b.iter()).enumerate() {
+            assert_close(got, expected, 1e-12, &format!("b[{i}]"));
+        }
+        for (i, (&got, &expected)) in via_output.a.iter().zip(direct.a.iter()).enumerate() {
+            assert_close(got, expected, 1e-12, &format!("a[{i}]"));
+        }
+    }
+
+    #[test]
+    fn butter_sos_matches_scipy_reference_sections() {
+        let sos = butter_sos(4, &[0.25], FilterType::Lowpass).expect("butter_sos");
+        let expected = [
+            [
+                0.010209480791203138,
+                0.020418961582406275,
+                0.010209480791203138,
+                1.0,
+                -0.8553979327751704,
+                0.20971535775655478,
+            ],
+            [1.0, 2.0, 1.0, 1.0, -1.1130298541633479, 0.5740619150839545],
+        ];
+        assert_eq!(sos.len(), expected.len(), "section count");
+        for (section_idx, (got, expected_section)) in sos.iter().zip(expected.iter()).enumerate() {
+            for (coeff_idx, (&got_coeff, &expected_coeff)) in
+                got.iter().zip(expected_section.iter()).enumerate()
+            {
+                assert_close(
+                    got_coeff,
+                    expected_coeff,
+                    1e-7,
+                    &format!("section {section_idx} coeff {coeff_idx}"),
+                );
+            }
+        }
     }
 
     #[test]

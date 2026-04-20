@@ -13,8 +13,8 @@
 use fsci_conformance::PacketFamily;
 use fsci_signal::{
     BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, SpectralScaling,
-    autocorrelation, blackman, butter, convolve, correlate, csd_with_scaling, filtfilt, find_peaks,
-    firwin, freqz, gausspulse, get_window, get_window_with_fftbins, hamming, hann,
+    autocorrelation, blackman, butter, butter_sos, convolve, correlate, csd_with_scaling, filtfilt,
+    find_peaks, firwin, freqz, gausspulse, get_window, get_window_with_fftbins, hamming, hann,
     hilbert_envelope, kaiser, lfilter, lfiltic, peak_prominences, resample,
     resample_poly_with_padtype, ricker, rms, savgol_coeffs, savgol_filter, sosfilt,
     spectral_centroid, spectral_flatness, stft, tf2sos, welch,
@@ -2034,4 +2034,82 @@ fn scenario_27_resample_poly_padtype_modes() {
     let bundle = runner.finish();
     write_bundle("scenario_27_resample_poly_padtype_modes", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_27 failed");
+}
+
+/// Scenario 28: butter(..., output='sos') matches SciPy's SOS coefficients.
+#[test]
+fn scenario_28_butter_output_sos() {
+    let mut runner = ScenarioRunner::new("scenario_28_butter_output_sos");
+    runner.set_signal_meta("butter_sos", 0, "Strict");
+
+    runner.record_step(
+        "butter_sos_reference_sections",
+        "butter_sos(4, [0.25], lowpass)",
+        "4th-order Butterworth SOS sections should match SciPy's output='sos' coefficients",
+        "Strict",
+        || {
+            let got = butter_sos(4, &[0.25], FilterType::Lowpass).map_err(|e| format!("{e}"))?;
+            let expected = [
+                [
+                    0.010209480791203138,
+                    0.020418961582406275,
+                    0.010209480791203138,
+                    1.0,
+                    -0.8553979327751704,
+                    0.20971535775655478,
+                ],
+                [1.0, 2.0, 1.0, 1.0, -1.1130298541633479, 0.5740619150839545],
+            ];
+
+            if got.len() != expected.len() {
+                return Err(format!(
+                    "expected {} sections, got {}",
+                    expected.len(),
+                    got.len()
+                ));
+            }
+
+            let mut max_diff = 0.0_f64;
+            for (got_section, expected_section) in got.iter().zip(expected.iter()) {
+                max_diff = max_diff.max(max_abs_diff(got_section, expected_section));
+            }
+
+            if max_diff < 1e-7 {
+                Ok(format!("max_abs_diff={max_diff:.2e}"))
+            } else {
+                Err(format!("SciPy SOS mismatch diff={max_diff:.2e}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "butter_sos_filter_equivalence",
+        "sosfilt(butter_sos(...), x) == lfilter(butter(...), x)",
+        "returned SOS sections should reproduce the BA filter output on a representative signal",
+        "Strict",
+        || {
+            let ba = butter(4, &[0.25], FilterType::Lowpass).map_err(|e| format!("{e}"))?;
+            let sos = butter_sos(4, &[0.25], FilterType::Lowpass).map_err(|e| format!("{e}"))?;
+            let signal: Vec<f64> = (0..128)
+                .map(|i| {
+                    let t = i as f64;
+                    (2.0 * PI * 0.05 * t).sin() + 0.35 * (2.0 * PI * 0.3 * t).sin()
+                })
+                .collect();
+
+            let tf_result = lfilter(&ba.b, &ba.a, &signal, None).map_err(|e| format!("{e}"))?;
+            let sos_result = sosfilt(&sos, &signal).map_err(|e| format!("{e}"))?;
+            let diff = max_abs_diff(&tf_result, &sos_result);
+
+            if diff < 1e-10 {
+                Ok(format!("max_abs_diff={diff:.2e}"))
+            } else {
+                Err(format!("SOS filtering mismatch diff={diff:.2e}"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_28_butter_output_sos", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_28 failed");
 }
