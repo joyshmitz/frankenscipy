@@ -14,9 +14,9 @@ use fsci_conformance::PacketFamily;
 use fsci_signal::{
     BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, SpectralScaling,
     autocorrelation, blackman, butter, butter_sos, convolve, correlate, csd_with_scaling, filtfilt,
-    find_peaks, firwin, freqz, gausspulse, get_window, get_window_with_fftbins, hamming, hann,
-    hilbert_envelope, kaiser, lfilter, lfiltic, lombscargle, peak_prominences, resample,
-    resample_poly_with_padtype, ricker, rms, savgol_coeffs, savgol_filter, sosfilt,
+    find_peaks, firwin, freqz, freqz_with_whole, gausspulse, get_window, get_window_with_fftbins,
+    hamming, hann, hilbert_envelope, kaiser, lfilter, lfiltic, lombscargle, peak_prominences,
+    resample, resample_poly_with_padtype, ricker, rms, savgol_coeffs, savgol_filter, sosfilt,
     spectral_centroid, spectral_flatness, stft, tf2sos, welch,
 };
 use serde::Serialize;
@@ -2170,4 +2170,68 @@ fn scenario_29_lombscargle_normalize() {
     let bundle = runner.finish();
     write_bundle("scenario_29_lombscargle_normalize", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_29 failed");
+}
+
+/// Scenario 30: freqz(..., whole=True) matches SciPy's full-unit-circle sampling.
+#[test]
+fn scenario_30_freqz_whole() {
+    let mut runner = ScenarioRunner::new("scenario_30_freqz_whole");
+    runner.set_signal_meta("freqz_whole", 8, "Strict");
+
+    runner.record_step(
+        "freqz_whole_reference_response",
+        "freqz([1, 0.5, 0.25], [1, -0.3, 0.2], worN=8, whole=true)",
+        "whole-spectrum response should match SciPy's sampled magnitudes and phases",
+        "Strict",
+        || {
+            let tol = 1e-8;
+            let expected_mag = [
+                1.944_444_44,
+                1.880_828_33,
+                1.054_994_64,
+                0.511_363_23,
+                0.5,
+                0.511_363_23,
+                1.054_994_64,
+                1.880_828_33,
+            ];
+            let expected_phase = [
+                0.0,
+                -0.434_838_91,
+                -0.946_773_27,
+                -0.486_582_96,
+                0.0,
+                0.486_582_96,
+                0.946_773_27,
+                0.434_838_91,
+            ];
+
+            let resp = freqz_with_whole(&[1.0, 0.5, 0.25], &[1.0, -0.3, 0.2], Some(8), true)
+                .map_err(|e| format!("{e}"))?;
+            let mag_diff = max_abs_diff(&resp.h_mag, &expected_mag);
+            let phase_diff = max_abs_diff(&resp.h_phase, &expected_phase);
+
+            if resp.w.len() != 8 {
+                return Err(format!("expected 8 bins, got {}", resp.w.len()));
+            }
+
+            if (resp.w[4] - PI).abs() > 1e-12 {
+                return Err(format!("expected pi at bin 4, got {}", resp.w[4]));
+            }
+
+            if mag_diff < tol && phase_diff < tol {
+                Ok(format!(
+                    "mag_diff={mag_diff:.2e}, phase_diff={phase_diff:.2e}"
+                ))
+            } else {
+                Err(format!(
+                    "SciPy whole freqz mismatch: mag_diff={mag_diff:.2e}, phase_diff={phase_diff:.2e}"
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_30_freqz_whole", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_30 failed");
 }

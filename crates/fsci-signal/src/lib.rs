@@ -4380,6 +4380,21 @@ pub struct FreqzResult {
 /// * `a` — Denominator coefficients
 /// * `n_freqs` — Number of frequency points (default 512)
 pub fn freqz(b: &[f64], a: &[f64], n_freqs: Option<usize>) -> Result<FreqzResult, SignalError> {
+    freqz_with_whole(b, a, n_freqs, false)
+}
+
+/// Compute the frequency response of a digital filter over half or the whole unit circle.
+///
+/// Matches `scipy.signal.freqz(b, a, worN, whole=...)`.
+///
+/// When `whole` is false, evaluates on `[0, π)`. When `whole` is true,
+/// evaluates on `[0, 2π)` with SciPy's `endpoint=False` spacing.
+pub fn freqz_with_whole(
+    b: &[f64],
+    a: &[f64],
+    n_freqs: Option<usize>,
+    whole: bool,
+) -> Result<FreqzResult, SignalError> {
     if b.is_empty() || a.is_empty() {
         return Err(SignalError::InvalidArgument(
             "b and a must be non-empty".to_string(),
@@ -4398,9 +4413,14 @@ pub fn freqz(b: &[f64], a: &[f64], n_freqs: Option<usize>) -> Result<FreqzResult
     let mut h_phase = Vec::with_capacity(n);
 
     for i in 0..n {
-        // scipy uses endpoint=False: w = np.linspace(0, pi, n, endpoint=False)
-        // so w[i] = i * pi / n, not i * pi / (n-1)
-        let omega = std::f64::consts::PI * i as f64 / n as f64;
+        // scipy uses endpoint=False:
+        // half spectrum: w = np.linspace(0, pi, n, endpoint=False)
+        // whole spectrum: w = np.linspace(0, 2*pi, n, endpoint=False)
+        let omega = if whole {
+            std::f64::consts::TAU * i as f64 / n as f64
+        } else {
+            std::f64::consts::PI * i as f64 / n as f64
+        };
         w.push(omega);
 
         // Evaluate B(e^{jω}) and A(e^{jω}) using Horner's method
@@ -9543,6 +9563,51 @@ mod tests {
         assert_eq!(result.h_mag.len(), 64);
         for (i, &mag) in result.h_mag.iter().enumerate() {
             assert_close(mag, 1.0, 1e-12, &format!("unity mag at bin {i}"));
+        }
+    }
+
+    #[test]
+    fn freqz_whole_matches_scipy_reference() {
+        let tol = 1e-8;
+        let result = freqz_with_whole(&[1.0, 0.5, 0.25], &[1.0, -0.3, 0.2], Some(8), true)
+            .expect("freqz whole");
+        let expected_mag = [
+            1.944_444_44,
+            1.880_828_33,
+            1.054_994_64,
+            0.511_363_23,
+            0.5,
+            0.511_363_23,
+            1.054_994_64,
+            1.880_828_33,
+        ];
+        let expected_phase = [
+            0.0,
+            -0.434_838_91,
+            -0.946_773_27,
+            -0.486_582_96,
+            0.0,
+            0.486_582_96,
+            0.946_773_27,
+            0.434_838_91,
+        ];
+
+        assert_eq!(result.w.len(), 8);
+        assert_close(result.w[1], std::f64::consts::FRAC_PI_4, 1e-12, "pi/4 bin");
+        assert_close(result.w[4], std::f64::consts::PI, 1e-12, "pi bin");
+        assert_close(
+            result.w[7],
+            7.0 * std::f64::consts::PI / 4.0,
+            1e-12,
+            "7pi/4 bin",
+        );
+
+        for (i, (&actual, &want)) in result.h_mag.iter().zip(expected_mag.iter()).enumerate() {
+            assert_close(actual, want, tol, &format!("whole magnitude bin {i}"));
+        }
+
+        for (i, (&actual, &want)) in result.h_phase.iter().zip(expected_phase.iter()).enumerate() {
+            assert_close(actual, want, tol, &format!("whole phase bin {i}"));
         }
     }
 
