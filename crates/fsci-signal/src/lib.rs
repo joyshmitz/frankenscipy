@@ -708,13 +708,19 @@ pub fn hilbert_envelope(x: &[f64]) -> Result<Vec<f64>, SignalError> {
 ///
 /// Computes the Lomb-Scargle periodogram power at specified angular frequencies.
 ///
-/// Matches `scipy.signal.lombscargle(x, y, freqs)`.
+/// Matches `scipy.signal.lombscargle(x, y, freqs, normalize=...)`.
 ///
 /// # Arguments
 /// * `x` — Sample times (must be non-decreasing).
 /// * `y` — Measurements at each sample time.
 /// * `freqs` — Angular frequencies at which to evaluate the periodogram.
-pub fn lombscargle(x: &[f64], y: &[f64], freqs: &[f64]) -> Result<Vec<f64>, SignalError> {
+/// * `normalize` — Whether to divide by the signal energy as SciPy does.
+pub fn lombscargle(
+    x: &[f64],
+    y: &[f64],
+    freqs: &[f64],
+    normalize: bool,
+) -> Result<Vec<f64>, SignalError> {
     if x.len() != y.len() {
         return Err(SignalError::InvalidArgument(
             "x and y must have the same length".to_string(),
@@ -727,6 +733,7 @@ pub fn lombscargle(x: &[f64], y: &[f64], freqs: &[f64]) -> Result<Vec<f64>, Sign
     }
 
     let mut power = Vec::with_capacity(freqs.len());
+    let signal_energy = y.iter().map(|value| value * value).sum::<f64>();
 
     for &omega in freqs {
         // Compute tau: phase offset for orthogonality
@@ -759,7 +766,15 @@ pub fn lombscargle(x: &[f64], y: &[f64], freqs: &[f64]) -> Result<Vec<f64>, Sign
         } else {
             0.0
         };
-        power.push(p);
+        power.push(if normalize {
+            if signal_energy == 0.0 {
+                f64::NAN
+            } else {
+                p * (2.0 / signal_energy)
+            }
+        } else {
+            p
+        });
     }
 
     Ok(power)
@@ -11374,7 +11389,7 @@ mod tests {
         let x: Vec<f64> = (0..n).map(|i| i as f64 * 0.05).collect();
         let y: Vec<f64> = x.iter().map(|&t| (5.0 * t).sin()).collect();
         let freqs: Vec<f64> = (1..20).map(|f| f as f64).collect();
-        let power = lombscargle(&x, &y, &freqs).expect("lombscargle");
+        let power = lombscargle(&x, &y, &freqs, false).expect("lombscargle");
         // Peak should be near freq=5
         let peak_idx = power
             .iter()
@@ -11391,8 +11406,47 @@ mod tests {
 
     #[test]
     fn lombscargle_rejects_mismatched() {
-        let err = lombscargle(&[1.0, 2.0], &[1.0], &[1.0]).expect_err("mismatch");
+        let err = lombscargle(&[1.0, 2.0], &[1.0], &[1.0], false).expect_err("mismatch");
         assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn lombscargle_normalize_matches_scipy_reference() {
+        let tol = 5e-9;
+        let x = [0.0, 0.5, 1.1, 1.7, 2.4];
+        let y = [1.0, -0.5, 0.75, 0.25, -1.25];
+        let freqs = [0.5, 1.0, 1.5, 2.0];
+        let power = lombscargle(&x, &y, &freqs, false).expect("lombscargle power");
+        let normalized = lombscargle(&x, &y, &freqs, true).expect("lombscargle normalized");
+        let expected_power = [
+            0.707_498_041_923_665,
+            0.651_738_901_352_701,
+            0.587_708_048_398_399,
+            0.390_030_087_171_934,
+        ];
+        let expected_normalized = [
+            0.411_635_223_256_532,
+            0.379_193_542_532_48,
+            0.341_939_227_868_014,
+            0.226_926_597_192_203,
+        ];
+
+        for (actual, want) in power.iter().zip(expected_power.iter()) {
+            assert!((actual - want).abs() < tol, "{actual} vs {want}");
+        }
+
+        for (actual, want) in normalized.iter().zip(expected_normalized.iter()) {
+            assert!((actual - want).abs() < tol, "{actual} vs {want}");
+        }
+    }
+
+    #[test]
+    fn lombscargle_normalize_returns_nan_for_zero_energy_signal() {
+        let x = [0.1, 0.4, 1.1, 2.0];
+        let y = [0.0, 0.0, 0.0, 0.0];
+        let freqs = [1.0, 2.0];
+        let normalized = lombscargle(&x, &y, &freqs, true).expect("lombscargle normalized");
+        assert!(normalized.iter().all(|value| value.is_nan()));
     }
 
     // ── gausspulse tests ─────────────────────────────────────────────

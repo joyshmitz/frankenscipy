@@ -15,7 +15,7 @@ use fsci_signal::{
     BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, SpectralScaling,
     autocorrelation, blackman, butter, butter_sos, convolve, correlate, csd_with_scaling, filtfilt,
     find_peaks, firwin, freqz, gausspulse, get_window, get_window_with_fftbins, hamming, hann,
-    hilbert_envelope, kaiser, lfilter, lfiltic, peak_prominences, resample,
+    hilbert_envelope, kaiser, lfilter, lfiltic, lombscargle, peak_prominences, resample,
     resample_poly_with_padtype, ricker, rms, savgol_coeffs, savgol_filter, sosfilt,
     spectral_centroid, spectral_flatness, stft, tf2sos, welch,
 };
@@ -2112,4 +2112,62 @@ fn scenario_28_butter_output_sos() {
     let bundle = runner.finish();
     write_bundle("scenario_28_butter_output_sos", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_28 failed");
+}
+
+/// Scenario 29: lombscargle(..., normalize=True) matches SciPy reference values.
+#[test]
+fn scenario_29_lombscargle_normalize() {
+    let mut runner = ScenarioRunner::new("scenario_29_lombscargle_normalize");
+    runner.set_signal_meta("lombscargle", 5, "Strict");
+
+    runner.record_step(
+        "lombscargle_normalized_reference_vector",
+        "lombscargle(x, y, freqs, normalize=true)",
+        "normalized Lomb-Scargle power should match SciPy for representative uneven samples",
+        "Strict",
+        || {
+            let tol = 5e-9;
+            let x = [0.0, 0.5, 1.1, 1.7, 2.4];
+            let y = [1.0, -0.5, 0.75, 0.25, -1.25];
+            let freqs = [0.5, 1.0, 1.5, 2.0];
+            let expected = [
+                0.411_635_223_256_532,
+                0.379_193_542_532_48,
+                0.341_939_227_868_014,
+                0.226_926_597_192_203,
+            ];
+
+            let got = lombscargle(&x, &y, &freqs, true).map_err(|e| format!("{e}"))?;
+            let diff = max_abs_diff(&got, &expected);
+            if diff < tol {
+                Ok(format!("max_abs_diff={diff:.2e}"))
+            } else {
+                Err(format!(
+                    "SciPy normalized lombscargle mismatch diff={diff:.2e}"
+                ))
+            }
+        },
+    );
+
+    runner.record_step(
+        "lombscargle_zero_energy_nan_sentinel",
+        "lombscargle(x, zeros, freqs, normalize=true)",
+        "zero-energy signals should return NaN under normalized SciPy semantics",
+        "Strict",
+        || {
+            let x = [0.1, 0.4, 1.1, 2.0];
+            let y = [0.0, 0.0, 0.0, 0.0];
+            let freqs = [1.0, 2.0];
+            let got = lombscargle(&x, &y, &freqs, true).map_err(|e| format!("{e}"))?;
+            if got.iter().all(|value| value.is_nan()) {
+                Ok(format!("nan_count={}", got.len()))
+            } else {
+                Err(format!("expected all NaN values, got {got:?}"))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_29_lombscargle_normalize", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_29 failed");
 }
