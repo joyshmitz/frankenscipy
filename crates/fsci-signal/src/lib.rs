@@ -4738,12 +4738,7 @@ pub fn welch(
             "nperseg must be > 0".to_string(),
         ));
     }
-    if nperseg > x.len() {
-        return Err(SignalError::InvalidArgument(format!(
-            "nperseg ({nperseg}) must be <= signal length ({})",
-            x.len()
-        )));
-    }
+    let nperseg = nperseg.min(x.len());
 
     let noverlap = noverlap.unwrap_or(nperseg / 2);
     if noverlap >= nperseg {
@@ -8994,8 +8989,47 @@ mod tests {
     }
 
     #[test]
-    fn welch_nperseg_too_large() {
-        assert!(welch(&[1.0, 2.0, 3.0], 1.0, None, Some(10), None).is_err());
+    fn welch_nperseg_clamps_to_signal_length() {
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let oversized = welch(&x, 10.0, None, Some(16), None).expect("welch oversized");
+        let clamped = welch(&x, 10.0, None, Some(x.len()), None).expect("welch clamped");
+        let expected_frequencies = [0.0, 2.0, 4.0];
+
+        assert_eq!(oversized.frequencies.len(), expected_frequencies.len());
+        assert_eq!(oversized.frequencies.len(), clamped.frequencies.len());
+        assert_eq!(oversized.psd.len(), clamped.psd.len());
+
+        for (index, ((actual, expected), clamped_frequency)) in oversized
+            .frequencies
+            .iter()
+            .zip(expected_frequencies.iter())
+            .zip(clamped.frequencies.iter())
+            .enumerate()
+        {
+            assert_close(
+                *actual,
+                *expected,
+                1e-12,
+                &format!("frequency[{index}] should match SciPy clamp"),
+            );
+            assert_close(
+                *actual,
+                *clamped_frequency,
+                1e-12,
+                &format!("frequency[{index}] should match explicit clamp"),
+            );
+        }
+
+        for (index, (actual, clamped_psd)) in
+            oversized.psd.iter().zip(clamped.psd.iter()).enumerate()
+        {
+            assert_close(
+                *actual,
+                *clamped_psd,
+                1e-12,
+                &format!("psd[{index}] should match explicit clamp"),
+            );
+        }
     }
 
     fn variance_of_psd(psd: &[f64]) -> f64 {

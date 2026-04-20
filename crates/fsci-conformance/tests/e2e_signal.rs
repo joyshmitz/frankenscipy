@@ -16,7 +16,7 @@ use fsci_signal::{
     blackman, butter, convolve, correlate, filtfilt, find_peaks, firwin, freqz, gausspulse,
     get_window, get_window_with_fftbins, hamming, hann, hilbert_envelope, kaiser, lfilter, lfiltic,
     peak_prominences, resample, ricker, rms, savgol_coeffs, savgol_filter, sosfilt,
-    spectral_centroid, spectral_flatness, stft, tf2sos,
+    spectral_centroid, spectral_flatness, stft, tf2sos, welch,
 };
 use serde::Serialize;
 use std::f64::consts::PI;
@@ -1812,4 +1812,43 @@ fn scenario_24_get_window_fftbins() {
     let bundle = runner.finish();
     write_bundle("scenario_24_get_window_fftbins", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_24 failed");
+}
+
+/// Scenario 25: welch clamps oversized nperseg to signal length.
+#[test]
+fn scenario_25_welch_clamps_oversized_nperseg() {
+    let mut runner = ScenarioRunner::new("scenario_25_welch_clamps_oversized_nperseg");
+    let x = [0.0, 1.0, 2.0, 3.0, 4.0];
+    runner.set_signal_meta("welch", x.len(), "Strict");
+
+    runner.record_step(
+        "welch_oversized_nperseg_clamps",
+        "welch(x, fs=10.0, nperseg=16)",
+        "oversized nperseg should clamp to signal length and match SciPy reference output",
+        "Strict",
+        || {
+            let got = welch(&x, 10.0, None, Some(16), None).map_err(|e| format!("{e}"))?;
+            let clamped =
+                welch(&x, 10.0, None, Some(x.len()), None).map_err(|e| format!("{e}"))?;
+            let expected_frequencies = [0.0, 2.0, 4.0];
+
+            let freq_diff = max_abs_diff(&got.frequencies, &expected_frequencies);
+            let clamp_freq_diff = max_abs_diff(&got.frequencies, &clamped.frequencies);
+            let clamp_psd_diff = max_abs_diff(&got.psd, &clamped.psd);
+
+            if freq_diff < 1e-12 && clamp_freq_diff < 1e-12 && clamp_psd_diff < 1e-12 {
+                Ok(format!(
+                    "freq_diff={freq_diff:.2e}, clamp_psd_diff={clamp_psd_diff:.2e}"
+                ))
+            } else {
+                Err(format!(
+                    "welch clamp mismatch freq={freq_diff:.2e} clamp_freq={clamp_freq_diff:.2e} clamp_psd={clamp_psd_diff:.2e}"
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_25_welch_clamps_oversized_nperseg", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_25 failed");
 }
