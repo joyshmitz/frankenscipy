@@ -6103,9 +6103,46 @@ pub fn triang(n: usize) -> Vec<f64> {
         .collect()
 }
 
-/// Dispatch a window function by name string.
+fn periodic_from_symmetric<F>(nx: usize, build: F) -> Result<Vec<f64>, SignalError>
+where
+    F: FnOnce(usize) -> Vec<f64>,
+{
+    if nx <= 1 {
+        return Ok(build(nx));
+    }
+    let expanded = nx.checked_add(1).ok_or_else(|| {
+        SignalError::InvalidArgument(format!(
+            "window length overflow while building periodic form for nx={nx}"
+        ))
+    })?;
+    let mut window = build(expanded);
+    window.truncate(nx);
+    Ok(window)
+}
+
+fn symmetric_or_periodic_window<F>(nx: usize, sym: bool, build: F) -> Result<Vec<f64>, SignalError>
+where
+    F: FnOnce(usize) -> Vec<f64>,
+{
+    if sym {
+        Ok(build(nx))
+    } else {
+        periodic_from_symmetric(nx, build)
+    }
+}
+
+/// Dispatch a window function by name string using SciPy's default periodic policy.
 ///
-/// Matches `scipy.signal.get_window(window, Nx)`.
+/// Matches `scipy.signal.get_window(window, Nx)` with `fftbins=True`.
+pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
+    get_window_with_fftbins(window, nx, true)
+}
+
+/// Dispatch a window function by name string with explicit SciPy `fftbins` control.
+///
+/// `fftbins=true` returns the periodic form used for FFT analysis. `fftbins=false`
+/// returns the symmetric form used for filter design. A `_periodic` or
+/// `_symmetric` suffix on the window name overrides the flag.
 ///
 /// # Supported windows
 /// `"hann"`, `"hamming"`, `"blackman"`, `"blackmanharris"`, `"barthann"`,
@@ -6116,97 +6153,122 @@ pub fn triang(n: usize) -> Vec<f64> {
 /// `"gaussian,<std>"` (e.g. `"gaussian,2.0"`),
 /// `"general_gaussian,<p>,<sig>"` (e.g. `"general_gaussian,1.5,2.0"`),
 /// `"exponential,<tau>"` (e.g. `"exponential,2.0"`).
-pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
+pub fn get_window_with_fftbins(
+    window: &str,
+    nx: usize,
+    fftbins: bool,
+) -> Result<Vec<f64>, SignalError> {
     let lower = window.trim().to_lowercase();
-    if let Some(rest) = lower.strip_prefix("kaiser,") {
-        let beta: f64 = rest
-            .trim()
-            .parse()
-            .map_err(|_| SignalError::InvalidArgument(format!("invalid kaiser beta: {rest}")))?;
-        return Ok(kaiser(nx, beta));
-    }
-    if let Some(rest) = lower.strip_prefix("chebwin,") {
-        let attenuation: f64 = rest.trim().parse().map_err(|_| {
-            SignalError::InvalidArgument(format!("invalid chebwin attenuation: {rest}"))
-        })?;
-        return Ok(chebwin(nx, attenuation));
-    }
-    if let Some(rest) = lower.strip_prefix("general_hamming,") {
-        let alpha: f64 = rest.trim().parse().map_err(|_| {
-            SignalError::InvalidArgument(format!("invalid general_hamming alpha: {rest}"))
-        })?;
-        return Ok(general_hamming(nx, alpha));
-    }
-    if let Some(rest) = lower.strip_prefix("general_cosine,") {
-        let coeffs: Vec<f64> = rest
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| {
-                value.parse::<f64>().map_err(|_| {
+    let (raw_name, raw_params) = lower
+        .split_once(',')
+        .map_or((lower.as_str(), None), |(name, params)| {
+            (name.trim(), Some(params.trim()))
+        });
+
+    let mut sym = !fftbins;
+    let win_name = if let Some(name) = raw_name.strip_suffix("_symmetric") {
+        sym = true;
+        name
+    } else if let Some(name) = raw_name.strip_suffix("_periodic") {
+        sym = false;
+        name
+    } else {
+        raw_name
+    };
+
+    if let Some(rest) = raw_params.filter(|rest| !rest.is_empty()) {
+        match win_name {
+            "kaiser" => {
+                let beta: f64 = rest.trim().parse().map_err(|_| {
+                    SignalError::InvalidArgument(format!("invalid kaiser beta: {rest}"))
+                })?;
+                return symmetric_or_periodic_window(nx, sym, |n| kaiser(n, beta));
+            }
+            "chebwin" => {
+                let attenuation: f64 = rest.trim().parse().map_err(|_| {
+                    SignalError::InvalidArgument(format!("invalid chebwin attenuation: {rest}"))
+                })?;
+                return symmetric_or_periodic_window(nx, sym, |n| chebwin(n, attenuation));
+            }
+            "general_hamming" => {
+                let alpha: f64 = rest.trim().parse().map_err(|_| {
+                    SignalError::InvalidArgument(format!("invalid general_hamming alpha: {rest}"))
+                })?;
+                return symmetric_or_periodic_window(nx, sym, |n| general_hamming(n, alpha));
+            }
+            "general_cosine" => {
+                let coeffs: Vec<f64> = rest
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| {
+                        value.parse::<f64>().map_err(|_| {
+                            SignalError::InvalidArgument(format!(
+                                "invalid general_cosine coefficient: {value}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<_, _>>()?;
+                return Ok(general_cosine(nx, &coeffs, sym));
+            }
+            "gaussian" => {
+                let std: f64 = rest.trim().parse().map_err(|_| {
+                    SignalError::InvalidArgument(format!("invalid gaussian std: {rest}"))
+                })?;
+                return Ok(gaussian(nx, std, sym));
+            }
+            "general_gaussian" => {
+                let params: Vec<&str> = rest
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .collect();
+                if params.len() != 2 {
+                    return Err(SignalError::InvalidArgument(format!(
+                        "general_gaussian expects p,sig parameters: {rest}"
+                    )));
+                }
+                let p = params[0].parse::<f64>().map_err(|_| {
                     SignalError::InvalidArgument(format!(
-                        "invalid general_cosine coefficient: {value}"
+                        "invalid general_gaussian shape parameter: {}",
+                        params[0]
                     ))
-                })
-            })
-            .collect::<Result<_, _>>()?;
-        return Ok(general_cosine(nx, &coeffs, true));
-    }
-    if let Some(rest) = lower.strip_prefix("gaussian,") {
-        let std: f64 = rest
-            .trim()
-            .parse()
-            .map_err(|_| SignalError::InvalidArgument(format!("invalid gaussian std: {rest}")))?;
-        return Ok(gaussian(nx, std, true));
-    }
-    if let Some(rest) = lower.strip_prefix("general_gaussian,") {
-        let params: Vec<&str> = rest
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .collect();
-        if params.len() != 2 {
-            return Err(SignalError::InvalidArgument(format!(
-                "general_gaussian expects p,sig parameters: {rest}"
-            )));
+                })?;
+                let sig = params[1].parse::<f64>().map_err(|_| {
+                    SignalError::InvalidArgument(format!(
+                        "invalid general_gaussian sigma parameter: {}",
+                        params[1]
+                    ))
+                })?;
+                return Ok(general_gaussian(nx, p, sig, sym));
+            }
+            "exponential" => {
+                let tau: f64 = rest.trim().parse().map_err(|_| {
+                    SignalError::InvalidArgument(format!("invalid exponential tau: {rest}"))
+                })?;
+                return exponential(nx, None, tau, sym);
+            }
+            _ => {}
         }
-        let p = params[0].parse::<f64>().map_err(|_| {
-            SignalError::InvalidArgument(format!(
-                "invalid general_gaussian shape parameter: {}",
-                params[0]
-            ))
-        })?;
-        let sig = params[1].parse::<f64>().map_err(|_| {
-            SignalError::InvalidArgument(format!(
-                "invalid general_gaussian sigma parameter: {}",
-                params[1]
-            ))
-        })?;
-        return Ok(general_gaussian(nx, p, sig, true));
     }
-    if let Some(rest) = lower.strip_prefix("exponential,") {
-        let tau: f64 = rest.trim().parse().map_err(|_| {
-            SignalError::InvalidArgument(format!("invalid exponential tau: {rest}"))
-        })?;
-        return exponential(nx, None, tau, true);
-    }
-    match lower.as_str() {
-        "hann" | "hanning" => Ok(hann(nx)),
-        "hamming" => Ok(hamming(nx)),
-        "blackman" => Ok(blackman(nx)),
-        "blackmanharris" => Ok(blackmanharris(nx)),
-        "barthann" => Ok(barthann(nx)),
-        "bartlett" | "triangle" => Ok(bartlett(nx)),
-        "flattop" => Ok(flattop(nx)),
-        "cosine" => Ok(cosine(nx)),
-        "rectangular" | "boxcar" | "rect" => Ok(boxcar(nx, true)),
-        "chebwin" => Ok(chebwin(nx, 100.0)),
-        "parzen" => Ok(parzen(nx)),
-        "triang" => Ok(triang(nx)),
-        "tukey" => Ok(tukey_window(nx, 0.5)),
-        "nuttall" => Ok(nuttall_window(nx)),
-        "bohman" => Ok(bohman_window(nx)),
-        "exponential" => exponential(nx, None, 1.0, true),
+
+    match win_name {
+        "hann" | "hanning" => symmetric_or_periodic_window(nx, sym, hann),
+        "hamming" => symmetric_or_periodic_window(nx, sym, hamming),
+        "blackman" => symmetric_or_periodic_window(nx, sym, blackman),
+        "blackmanharris" => symmetric_or_periodic_window(nx, sym, blackmanharris),
+        "barthann" => symmetric_or_periodic_window(nx, sym, barthann),
+        "bartlett" | "triangle" => symmetric_or_periodic_window(nx, sym, bartlett),
+        "flattop" => symmetric_or_periodic_window(nx, sym, flattop),
+        "cosine" => symmetric_or_periodic_window(nx, sym, cosine),
+        "rectangular" | "boxcar" | "rect" => Ok(boxcar(nx, sym)),
+        "chebwin" => symmetric_or_periodic_window(nx, sym, |n| chebwin(n, 100.0)),
+        "parzen" => symmetric_or_periodic_window(nx, sym, parzen),
+        "triang" => symmetric_or_periodic_window(nx, sym, triang),
+        "tukey" => symmetric_or_periodic_window(nx, sym, |n| tukey_window(n, 0.5)),
+        "nuttall" => symmetric_or_periodic_window(nx, sym, nuttall_window),
+        "bohman" => symmetric_or_periodic_window(nx, sym, bohman_window),
+        "exponential" => exponential(nx, None, 1.0, sym),
         _ => Err(SignalError::InvalidArgument(format!(
             "unknown window type: {window}"
         ))),
@@ -9839,84 +9901,84 @@ mod tests {
 
     #[test]
     fn get_window_dispatches_hann() {
-        let w = get_window("hann", 10).unwrap();
+        let w = get_window_with_fftbins("hann", 10, false).unwrap();
         let expected = hann(10);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_hamming() {
-        let w = get_window("hamming", 10).unwrap();
+        let w = get_window_with_fftbins("hamming", 10, false).unwrap();
         let expected = hamming(10);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_blackman() {
-        let w = get_window("blackman", 10).unwrap();
+        let w = get_window_with_fftbins("blackman", 10, false).unwrap();
         let expected = blackman(10);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_blackmanharris() {
-        let w = get_window("blackmanharris", 10).unwrap();
+        let w = get_window_with_fftbins("blackmanharris", 10, false).unwrap();
         let expected = blackmanharris(10);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_barthann() {
-        let w = get_window("barthann", 10).unwrap();
+        let w = get_window_with_fftbins("barthann", 10, false).unwrap();
         let expected = barthann(10);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_chebwin() {
-        let w = get_window("chebwin,100", 5).unwrap();
+        let w = get_window_with_fftbins("chebwin,100", 5, false).unwrap();
         let expected = chebwin(5, 100.0);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_general_hamming() {
-        let w = get_window("general_hamming,0.75", 8).unwrap();
+        let w = get_window_with_fftbins("general_hamming,0.75", 8, false).unwrap();
         let expected = general_hamming(8, 0.75);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_general_cosine() {
-        let w = get_window("general_cosine,0.5,0.3,0.2", 8).unwrap();
+        let w = get_window_with_fftbins("general_cosine,0.5,0.3,0.2", 8, false).unwrap();
         let expected = general_cosine(8, &[0.5, 0.3, 0.2], true);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_gaussian() {
-        let w = get_window("gaussian,2.0", 8).unwrap();
+        let w = get_window_with_fftbins("gaussian,2.0", 8, false).unwrap();
         let expected = gaussian(8, 2.0, true);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_general_gaussian() {
-        let w = get_window("general_gaussian,1.5,2.0", 8).unwrap();
+        let w = get_window_with_fftbins("general_gaussian,1.5,2.0", 8, false).unwrap();
         let expected = general_gaussian(8, 1.5, 2.0, true);
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_exponential() {
-        let w = get_window("exponential,2.0", 8).unwrap();
+        let w = get_window_with_fftbins("exponential,2.0", 8, false).unwrap();
         let expected = exponential(8, None, 2.0, true).unwrap();
         assert_eq!(w, expected);
     }
 
     #[test]
     fn get_window_dispatches_kaiser() {
-        let w = get_window("kaiser,8.6", 10).unwrap();
+        let w = get_window_with_fftbins("kaiser,8.6", 10, false).unwrap();
         let expected = kaiser(10, 8.6);
         assert_eq!(w, expected);
     }
@@ -9929,7 +9991,7 @@ mod tests {
 
     #[test]
     fn get_window_dispatches_bartlett() {
-        let w = get_window("bartlett", 11).unwrap();
+        let w = get_window_with_fftbins("bartlett", 11, false).unwrap();
         assert_eq!(w.len(), 11);
         assert!((w[5] - 1.0).abs() < 1e-12, "peak at center");
         assert!((w[0]).abs() < 1e-12, "zero at endpoints");
@@ -9938,7 +10000,7 @@ mod tests {
 
     #[test]
     fn get_window_dispatches_flattop() {
-        let w = get_window("flattop", 11).unwrap();
+        let w = get_window_with_fftbins("flattop", 11, false).unwrap();
         assert_eq!(w.len(), 11);
         // Flattop peak is ~1.0 but slightly different due to coeffs
         let peak = w.iter().copied().fold(0.0_f64, |a: f64, b: f64| {
@@ -9953,7 +10015,7 @@ mod tests {
 
     #[test]
     fn get_window_dispatches_cosine() {
-        let w = get_window("cosine", 5).unwrap();
+        let w = get_window_with_fftbins("cosine", 5, false).unwrap();
         let expected = [
             0.3090169943749474,
             0.8090169943749475,
@@ -9969,6 +10031,96 @@ mod tests {
     #[test]
     fn get_window_unknown_rejected() {
         assert!(get_window("foobar", 10).is_err());
+    }
+
+    #[test]
+    fn get_window_defaults_to_periodic_hann() {
+        let w = get_window("hann", 8).unwrap();
+        let expected = [
+            0.0,
+            0.1464466094067262,
+            0.5,
+            0.8535533905932737,
+            1.0,
+            0.8535533905932737,
+            0.5,
+            0.1464466094067262,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn get_window_fftbins_false_returns_symmetric_hann() {
+        let w = get_window_with_fftbins("hann", 8, false).unwrap();
+        let expected = [
+            0.0,
+            0.1882550990706332,
+            0.6112604669781572,
+            0.9504844339512095,
+            0.9504844339512095,
+            0.6112604669781572,
+            0.1882550990706332,
+            0.0,
+        ];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn get_window_defaults_to_periodic_bartlett() {
+        let w = get_window("bartlett", 5).unwrap();
+        let expected = [0.0, 0.4, 0.8, 0.8, 0.4];
+        for (actual, want) in w.iter().zip(expected.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn get_window_suffixes_override_fftbins() {
+        let periodic = get_window_with_fftbins("hann_periodic", 8, false).unwrap();
+        let symmetric = get_window_with_fftbins("hann_symmetric", 8, true).unwrap();
+
+        assert!((periodic[1] - 0.1464466094067262).abs() < 1e-12);
+        assert!((periodic[7] - 0.1464466094067262).abs() < 1e-12);
+        assert!((symmetric[1] - 0.1882550990706332).abs() < 1e-12);
+        assert!(symmetric[7].abs() < 1e-12);
+    }
+
+    #[test]
+    fn get_window_parameterized_window_respects_fftbins() {
+        let periodic = get_window("gaussian,2.0", 8).unwrap();
+        let symmetric = get_window_with_fftbins("gaussian,2.0", 8, false).unwrap();
+
+        let expected_periodic = [
+            0.1353352832366127,
+            0.32465246735834974,
+            0.6065306597126334,
+            0.8824969025845955,
+            1.0,
+            0.8824969025845955,
+            0.6065306597126334,
+            0.32465246735834974,
+        ];
+        let expected_symmetric = [
+            0.2162651668298873,
+            0.45783336177161427,
+            0.7548396019890073,
+            0.9692332344763441,
+            0.9692332344763441,
+            0.7548396019890073,
+            0.45783336177161427,
+            0.2162651668298873,
+        ];
+
+        for (actual, want) in periodic.iter().zip(expected_periodic.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
+        for (actual, want) in symmetric.iter().zip(expected_symmetric.iter()) {
+            assert!((*actual - *want).abs() < 1e-12);
+        }
     }
 
     // ── STFT / ISTFT tests ─────────────────────────────────────────

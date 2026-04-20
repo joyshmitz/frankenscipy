@@ -14,8 +14,9 @@ use fsci_conformance::PacketFamily;
 use fsci_signal::{
     BaCoeffs, ConvolveMode, FilterType, FindPeaksOptions, FirWindow, SosSection, autocorrelation,
     blackman, butter, convolve, correlate, filtfilt, find_peaks, firwin, freqz, gausspulse,
-    hamming, hann, hilbert_envelope, kaiser, lfilter, lfiltic, peak_prominences, resample, ricker,
-    rms, savgol_coeffs, savgol_filter, sosfilt, spectral_centroid, spectral_flatness, stft, tf2sos,
+    get_window, get_window_with_fftbins, hamming, hann, hilbert_envelope, kaiser, lfilter, lfiltic,
+    peak_prominences, resample, ricker, rms, savgol_coeffs, savgol_filter, sosfilt,
+    spectral_centroid, spectral_flatness, stft, tf2sos,
 };
 use serde::Serialize;
 use std::f64::consts::PI;
@@ -1661,4 +1662,154 @@ fn scenario_23_lfiltic() {
     let bundle = runner.finish();
     write_bundle("scenario_23_lfiltic", &bundle);
     assert!(bundle.overall.status == "pass", "scenario_23 failed");
+}
+
+/// Scenario 24: get_window honors SciPy fftbins periodic/symmetric semantics.
+#[test]
+fn scenario_24_get_window_fftbins() {
+    let mut runner = ScenarioRunner::new("scenario_24_get_window_fftbins");
+    runner.set_signal_meta("get_window", 8, "Strict");
+
+    runner.record_step(
+        "hann_default_is_periodic",
+        "get_window('hann', 8)",
+        "SciPy default fftbins=True periodic Hann",
+        "Strict",
+        || {
+            let got = get_window("hann", 8).map_err(|e| format!("{e}"))?;
+            let expected = [
+                0.0,
+                0.1464466094067262,
+                0.5,
+                0.8535533905932737,
+                1.0,
+                0.8535533905932737,
+                0.5,
+                0.1464466094067262,
+            ];
+            let max_diff = max_abs_diff(&got, &expected);
+            if max_diff < 1e-12 {
+                Ok(format!("periodic hann max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!("periodic hann mismatch {max_diff:.2e}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "hann_explicit_symmetric",
+        "get_window_with_fftbins('hann', 8, false)",
+        "fftbins=False should return symmetric Hann",
+        "Strict",
+        || {
+            let got = get_window_with_fftbins("hann", 8, false).map_err(|e| format!("{e}"))?;
+            let expected = [
+                0.0,
+                0.1882550990706332,
+                0.6112604669781572,
+                0.9504844339512095,
+                0.9504844339512095,
+                0.6112604669781572,
+                0.1882550990706332,
+                0.0,
+            ];
+            let max_diff = max_abs_diff(&got, &expected);
+            if max_diff < 1e-12 {
+                Ok(format!("symmetric hann max_diff={max_diff:.2e}"))
+            } else {
+                Err(format!("symmetric hann mismatch {max_diff:.2e}"))
+            }
+        },
+    );
+
+    runner.record_step(
+        "suffix_overrides_flag",
+        "get_window_with_fftbins('hann_periodic', 8, false)",
+        "_periodic/_symmetric suffixes should override fftbins",
+        "Strict",
+        || {
+            let periodic =
+                get_window_with_fftbins("hann_periodic", 8, false).map_err(|e| format!("{e}"))?;
+            let symmetric =
+                get_window_with_fftbins("hann_symmetric", 8, true).map_err(|e| format!("{e}"))?;
+            let periodic_expected = [
+                0.0,
+                0.1464466094067262,
+                0.5,
+                0.8535533905932737,
+                1.0,
+                0.8535533905932737,
+                0.5,
+                0.1464466094067262,
+            ];
+            let symmetric_expected = [
+                0.0,
+                0.1882550990706332,
+                0.6112604669781572,
+                0.9504844339512095,
+                0.9504844339512095,
+                0.6112604669781572,
+                0.1882550990706332,
+                0.0,
+            ];
+            let periodic_diff = max_abs_diff(&periodic, &periodic_expected);
+            let symmetric_diff = max_abs_diff(&symmetric, &symmetric_expected);
+            if periodic_diff < 1e-12 && symmetric_diff < 1e-12 {
+                Ok(format!(
+                    "periodic_diff={periodic_diff:.2e}, symmetric_diff={symmetric_diff:.2e}"
+                ))
+            } else {
+                Err(format!(
+                    "override mismatch periodic={periodic_diff:.2e} symmetric={symmetric_diff:.2e}"
+                ))
+            }
+        },
+    );
+
+    runner.record_step(
+        "parameterized_gaussian_fftbins",
+        "get_window('gaussian,2.0', 8)",
+        "parameterized windows should respect periodic vs symmetric forms",
+        "Strict",
+        || {
+            let periodic = get_window("gaussian,2.0", 8).map_err(|e| format!("{e}"))?;
+            let symmetric =
+                get_window_with_fftbins("gaussian,2.0", 8, false).map_err(|e| format!("{e}"))?;
+            let periodic_expected = [
+                0.1353352832366127,
+                0.32465246735834974,
+                0.6065306597126334,
+                0.8824969025845955,
+                1.0,
+                0.8824969025845955,
+                0.6065306597126334,
+                0.32465246735834974,
+            ];
+            let symmetric_expected = [
+                0.2162651668298873,
+                0.45783336177161427,
+                0.7548396019890073,
+                0.9692332344763441,
+                0.9692332344763441,
+                0.7548396019890073,
+                0.45783336177161427,
+                0.2162651668298873,
+            ];
+            let periodic_diff = max_abs_diff(&periodic, &periodic_expected);
+            let symmetric_diff = max_abs_diff(&symmetric, &symmetric_expected);
+            if periodic_diff < 1e-12 && symmetric_diff < 1e-12 {
+                Ok(format!(
+                    "periodic_diff={periodic_diff:.2e}, symmetric_diff={symmetric_diff:.2e}"
+                ))
+            } else {
+                Err(format!(
+                    "gaussian mismatch periodic={periodic_diff:.2e} symmetric={symmetric_diff:.2e}"
+                ))
+            }
+        },
+    );
+
+    let bundle = runner.finish();
+    write_bundle("scenario_24_get_window_fftbins", &bundle);
+    assert!(bundle.overall.status == "pass", "scenario_24 failed");
 }
