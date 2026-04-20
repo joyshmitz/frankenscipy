@@ -10876,7 +10876,7 @@ where
 
 /// T-test from summary statistics (no raw data needed).
 ///
-/// Matches `scipy.stats.ttest_ind_from_stats`.
+/// Matches `scipy.stats.ttest_ind_from_stats(..., equal_var=...)`.
 pub fn ttest_ind_from_stats(
     mean1: f64,
     std1: f64,
@@ -10884,25 +10884,49 @@ pub fn ttest_ind_from_stats(
     mean2: f64,
     std2: f64,
     n2: usize,
+    equal_var: bool,
 ) -> TtestResult {
     let n1f = n1 as f64;
     let n2f = n2 as f64;
-    let se = (std1 * std1 / n1f + std2 * std2 / n2f).sqrt();
+    let var1 = std1 * std1;
+    let var2 = std2 * std2;
+
+    if n1 < 2 || n2 < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: if equal_var { n1f + n2f - 2.0 } else { f64::NAN },
+        };
+    }
+
+    let (se, df) = if equal_var {
+        let df = n1f + n2f - 2.0;
+        let sp2 = ((n1f - 1.0) * var1 + (n2f - 1.0) * var2) / df;
+        (sp2.mul_add(1.0 / n1f + 1.0 / n2f, 0.0).sqrt(), df)
+    } else {
+        let v1 = var1 / n1f;
+        let v2 = var2 / n2f;
+        let mut df = (v1 + v2).powi(2) / (v1 * v1 / (n1f - 1.0) + v2 * v2 / (n2f - 1.0));
+        if df.is_nan() {
+            df = 1.0;
+        }
+        ((v1 + v2).sqrt(), df)
+    };
 
     if se == 0.0 {
+        let statistic = if (mean1 - mean2).abs() == 0.0 {
+            f64::NAN
+        } else {
+            (mean1 - mean2).signum() * f64::INFINITY
+        };
         return TtestResult {
-            statistic: 0.0,
-            pvalue: 1.0,
-            df: (n1 + n2 - 2) as f64,
+            statistic,
+            pvalue: if statistic.is_nan() { f64::NAN } else { 0.0 },
+            df,
         };
     }
 
     let t = (mean1 - mean2) / se;
-
-    // Welch-Satterthwaite degrees of freedom
-    let v1 = std1 * std1 / n1f;
-    let v2 = std2 * std2 / n2f;
-    let df = (v1 + v2).powi(2) / (v1 * v1 / (n1f - 1.0) + v2 * v2 / (n2f - 1.0));
 
     let t_dist = StudentT::new(df);
     let pvalue = 2.0 * (1.0 - t_dist.cdf(t.abs()));
@@ -14081,6 +14105,44 @@ mod tests {
         );
         // Welch df should be less than n1+n2-2
         assert!(result.df < 128.0, "Welch df should be adjusted");
+    }
+
+    #[test]
+    fn ttest_ind_from_stats_equal_var_matches_scipy_reference() {
+        let result =
+            ttest_ind_from_stats(15.0, 87.5_f64.sqrt(), 13, 12.0, 39.0_f64.sqrt(), 11, true);
+        assert_close(
+            result.statistic,
+            0.9051358093310269,
+            1e-12,
+            "equal-var summary t-statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.3751996797581489,
+            1e-12,
+            "equal-var summary p-value",
+        );
+        assert_close(result.df, 22.0, 1e-12, "equal-var summary df");
+    }
+
+    #[test]
+    fn ttest_ind_from_stats_welch_matches_scipy_reference() {
+        let result =
+            ttest_ind_from_stats(15.0, 87.5_f64.sqrt(), 13, 12.0, 39.0_f64.sqrt(), 11, false);
+        assert_close(
+            result.statistic,
+            0.9358461935556048,
+            1e-12,
+            "welch summary t-statistic",
+        );
+        assert_close(
+            result.pvalue,
+            0.35999818693244234,
+            1e-12,
+            "welch summary p-value",
+        );
+        assert_close(result.df, 20.98461123342992, 1e-12, "welch summary df");
     }
 
     // ── Linear regression ─────────────────────────────────────────

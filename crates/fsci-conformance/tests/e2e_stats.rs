@@ -88,6 +88,7 @@ use fsci_stats::{
     spearmanr,
     ttest_1samp,
     ttest_ind,
+    ttest_ind_from_stats,
     ttest_rel,
     wilcoxon,
     winsorize,
@@ -3477,6 +3478,103 @@ fn e2e_035_rankdata_method_parity() {
         "rankdata([1,2], method='dense')",
         "unsupported tie methods should be rejected explicitly instead of silently coercing to average",
         &err.to_string(),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 36: ttest_ind_from_stats equal_var vs Welch parity.
+#[test]
+fn e2e_036_ttest_ind_from_stats_equal_var_parity() {
+    let scenario_id = "e2e_stats_036_ttest_ind_from_stats";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let equal_var =
+        ttest_ind_from_stats(15.0, 87.5_f64.sqrt(), 13, 12.0, 39.0_f64.sqrt(), 11, true);
+    let pass = (equal_var.statistic - 0.9051358093310269).abs() < 1e-12
+        && (equal_var.pvalue - 0.3751996797581489).abs() < 1e-12
+        && (equal_var.df - 22.0).abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "ttest_ind_from_stats_equal_var",
+        "ttest_ind_from_stats(..., equal_var=True)",
+        "summary-stat pooled-variance branch should match SciPy's equal_var=True example",
+        &format!(
+            "t={:.16}, p={:.16}, df={:.16}",
+            equal_var.statistic, equal_var.pvalue, equal_var.df
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let welch = ttest_ind_from_stats(15.0, 87.5_f64.sqrt(), 13, 12.0, 39.0_f64.sqrt(), 11, false);
+    let pass = (welch.statistic - 0.9358461935556048).abs() < 1e-12
+        && (welch.pvalue - 0.35999818693244234).abs() < 1e-12
+        && (welch.df - 20.98461123342992).abs() < 1e-12;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "ttest_ind_from_stats_welch",
+        "ttest_ind_from_stats(..., equal_var=False)",
+        "summary-stat Welch branch should match SciPy's unequal-variance result",
+        &format!(
+            "t={:.16}, p={:.16}, df={:.16}",
+            welch.statistic, welch.pvalue, welch.df
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let binary_equal = ttest_ind_from_stats(
+        0.2,
+        0.161073_f64.sqrt(),
+        150,
+        0.225,
+        0.175251_f64.sqrt(),
+        200,
+        true,
+    );
+    let binary_welch = ttest_ind_from_stats(
+        0.2,
+        0.161073_f64.sqrt(),
+        150,
+        0.225,
+        0.175251_f64.sqrt(),
+        200,
+        false,
+    );
+    let pass = (binary_equal.statistic + 0.5627187905196761).abs() < 1e-12
+        && (binary_equal.pvalue - 0.5739887114209542).abs() < 1e-12
+        && (binary_welch.statistic + 0.5661276301071694).abs() < 1e-12
+        && (binary_welch.pvalue - 0.5716942537704799).abs() < 1e-12
+        && (binary_equal.statistic - binary_welch.statistic).abs() > 1e-6;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "ttest_ind_from_stats_binary_reference",
+        "ttest_ind_from_stats(binary summaries, equal_var={True,False})",
+        "pooled and Welch summary-stat branches should both match SciPy and remain observably distinct",
+        &format!(
+            "equal_t={:.16}, equal_p={:.16}, welch_t={:.16}, welch_p={:.16}",
+            binary_equal.statistic,
+            binary_equal.pvalue,
+            binary_welch.statistic,
+            binary_welch.pvalue
+        ),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },
     ));
