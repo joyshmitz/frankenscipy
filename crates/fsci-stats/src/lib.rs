@@ -9209,6 +9209,108 @@ pub fn kstatvar(data: &[f64], n: u32) -> f64 {
     }
 }
 
+/// Compute L-moments of a sample.
+///
+/// L-moments are summary statistics based on linear combinations of
+/// order statistics. They are more robust to outliers than conventional moments.
+///
+/// Matches `scipy.stats.lmoment(sample, order, standardize=False)`.
+///
+/// # Arguments
+/// * `data` - Input sample
+/// * `order` - Order of L-moment (1, 2, 3, or 4)
+///
+/// # Returns
+/// The L-moment of specified order, or NaN for invalid input.
+pub fn lmoment(data: &[f64], order: u32) -> f64 {
+    if data.is_empty() || order < 1 || order > 4 {
+        return f64::NAN;
+    }
+
+    let mut sorted: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+    let n = sorted.len();
+    if n < order as usize {
+        return f64::NAN;
+    }
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let nf = n as f64;
+
+    match order {
+        1 => {
+            // l_1 = mean
+            sorted.iter().sum::<f64>() / nf
+        }
+        2 => {
+            // l_2 = (1/C(n,2)) * sum_{i<j} (x_j - x_i) / 2
+            // Equivalently: l_2 = (2/(n*(n-1))) * sum_i (i - (n+1)/2) * x_(i)
+            let mut sum = 0.0;
+            for (i, &x) in sorted.iter().enumerate() {
+                let weight = (2.0 * (i as f64 + 1.0) - nf - 1.0) / (nf * (nf - 1.0));
+                sum += weight * x;
+            }
+            sum
+        }
+        3 => {
+            if n < 3 {
+                return f64::NAN;
+            }
+            // l_3 using probability weighted moments: l_3 = 6*b_2 - 6*b_1 + b_0
+            // where b_r = (1/n) * sum C(i-1,r)/C(n-1,r) * x_(i)
+            let b0: f64 = sorted.iter().sum::<f64>() / nf;
+            let mut b1 = 0.0;
+            let mut b2 = 0.0;
+            for (i, &x) in sorted.iter().enumerate() {
+                let ii = i as f64;
+                b1 += ii * x / (nf - 1.0);
+                if n > 2 {
+                    b2 += ii * (ii - 1.0) * x / ((nf - 1.0) * (nf - 2.0));
+                }
+            }
+            b1 /= nf;
+            b2 /= nf;
+            6.0 * b2 - 6.0 * b1 + b0
+        }
+        4 => {
+            if n < 4 {
+                return f64::NAN;
+            }
+            // l_4 = 20*b_3 - 30*b_2 + 12*b_1 - b_0
+            let b0: f64 = sorted.iter().sum::<f64>() / nf;
+            let mut b1 = 0.0;
+            let mut b2 = 0.0;
+            let mut b3 = 0.0;
+            for (i, &x) in sorted.iter().enumerate() {
+                let ii = i as f64;
+                b1 += ii * x / (nf - 1.0);
+                b2 += ii * (ii - 1.0) * x / ((nf - 1.0) * (nf - 2.0));
+                b3 += ii * (ii - 1.0) * (ii - 2.0) * x / ((nf - 1.0) * (nf - 2.0) * (nf - 3.0));
+            }
+            b1 /= nf;
+            b2 /= nf;
+            b3 /= nf;
+            20.0 * b3 - 30.0 * b2 + 12.0 * b1 - b0
+        }
+        _ => f64::NAN,
+    }
+}
+
+/// Binomial coefficient for floating point arguments.
+fn comb(n: f64, k: f64) -> f64 {
+    if k < 0.0 || k > n || n < 0.0 {
+        return 0.0;
+    }
+    if k == 0.0 || k == n {
+        return 1.0;
+    }
+    let k = k.min(n - k);
+    let mut result = 1.0;
+    for i in 0..(k as usize) {
+        result *= (n - i as f64) / (i as f64 + 1.0);
+    }
+    result
+}
+
 /// Standard error of the mean.
 ///
 /// Matches `scipy.stats.sem(a)`.
@@ -20658,6 +20760,43 @@ mod tests {
         // Var(k1) = k2/n
         let k2 = kstat(&data, 2);
         assert!((kv1 - k2 / 5.0).abs() < 1e-10, "kstatvar(1) = {}", kv1);
+    }
+
+    // ── lmoment tests ────────────────────────────────────────────────
+
+    #[test]
+    fn lmoment_mean() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        // l_1 = mean = 5.5
+        assert!((lmoment(&data, 1) - 5.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn lmoment_l2() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        // scipy.stats.lmoment([1..10], 2) = 1.833...
+        let l2 = lmoment(&data, 2);
+        assert!(
+            (l2 - 1.833333333).abs() < 0.01,
+            "l2 = {}",
+            l2
+        );
+    }
+
+    #[test]
+    fn lmoment_symmetric_l3() {
+        // Symmetric data should have l_3 = 0
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let l3 = lmoment(&data, 3);
+        assert!(l3.abs() < 1e-10, "symmetric data l3 = {}", l3);
+    }
+
+    #[test]
+    fn lmoment_edge_cases() {
+        assert!(lmoment(&[], 1).is_nan());
+        assert!(lmoment(&[1.0], 2).is_nan());
+        assert!(lmoment(&[1.0, 2.0], 0).is_nan());
+        assert!(lmoment(&[1.0, 2.0], 5).is_nan());
     }
 
     // ── directional_stats tests ──────────────────────────────────────
