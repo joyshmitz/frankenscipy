@@ -10670,6 +10670,47 @@ fn binomial_ppf(binom: &Binomial, q: f64) -> u64 {
     binom.n
 }
 
+/// Computes quantile estimates using the Harrell-Davis method.
+///
+/// Matches `scipy.stats.mstats.hdquantiles(data, prob)`.
+/// Uses beta distribution weights for robust quantile estimation.
+pub fn hdquantiles(data: &[f64], prob: &[f64]) -> Vec<f64> {
+    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let n = sorted.len();
+    if n < 2 {
+        return prob.iter().map(|_| f64::NAN).collect();
+    }
+    let nf = n as f64;
+    prob.iter()
+        .map(|&p| {
+            if p <= 0.0 {
+                return sorted[0];
+            }
+            if p >= 1.0 {
+                return sorted[n - 1];
+            }
+            let a = (nf + 1.0) * p;
+            let b = (nf + 1.0) * (1.0 - p);
+            let beta = BetaDist::new(a, b);
+            let mut hd_sum = 0.0;
+            for k in 0..n {
+                let w = beta.cdf((k + 1) as f64 / nf) - beta.cdf(k as f64 / nf);
+                hd_sum += w * sorted[k];
+            }
+            hd_sum
+        })
+        .collect()
+}
+
+/// Computes the Harrell-Davis median estimate.
+///
+/// Matches `scipy.stats.mstats.hdmedian(data)`.
+pub fn hdmedian(data: &[f64]) -> f64 {
+    let result = hdquantiles(data, &[0.5]);
+    result[0]
+}
+
 /// Computes empirical quantiles using configurable plotting positions.
 ///
 /// Matches `scipy.stats.mstats.mquantiles(a, prob, alphap, betap)`.
@@ -26546,6 +26587,30 @@ mod tests {
     #[test]
     fn mquantiles_empty() {
         let result = mquantiles(&[], &[0.5], 0.4, 0.4);
+        assert!(result[0].is_nan());
+    }
+
+    #[test]
+    fn hdquantiles_matches_scipy() {
+        // scipy.stats.mstats.hdquantiles([1..10], [0.25,0.5,0.75]) = [2.99868695, 5.5, 8.00131305]
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let result = hdquantiles(&data, &[0.25, 0.5, 0.75]);
+        assert_close(result[0], 2.99868695, 1e-5, "hdquantiles q25");
+        assert_close(result[1], 5.5, 1e-5, "hdquantiles q50");
+        assert_close(result[2], 8.00131305, 1e-5, "hdquantiles q75");
+    }
+
+    #[test]
+    fn hdmedian_matches_scipy() {
+        // scipy.stats.mstats.hdmedian([1..10]) = 5.5
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let result = hdmedian(&data);
+        assert_close(result, 5.5, 1e-5, "hdmedian");
+    }
+
+    #[test]
+    fn hdquantiles_small_n() {
+        let result = hdquantiles(&[1.0], &[0.5]);
         assert!(result[0].is_nan());
     }
 }
