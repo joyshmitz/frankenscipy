@@ -623,8 +623,10 @@ fn hyp2f1_dispatch(
         .ok_or_else(|| broadcast_shape_error(function, mode))?;
 
     // Check if output is complex
-    let is_complex =
-        is_complex_tensor(a) || is_complex_tensor(b) || is_complex_tensor(c) || is_complex_tensor(z);
+    let is_complex = is_complex_tensor(a)
+        || is_complex_tensor(b)
+        || is_complex_tensor(c)
+        || is_complex_tensor(z);
 
     if out_len == 0 {
         // All scalars

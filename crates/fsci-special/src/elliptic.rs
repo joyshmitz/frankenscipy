@@ -182,7 +182,13 @@ pub fn exp1(z_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 
 /// Exponential integral Ei(x) = -PV∫_{-x}^∞ exp(-t)/t dt for x > 0.
 pub fn expi(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("expi", x_tensor, mode, |x| expi_scalar(x, mode))
+    map_real_or_complex(
+        "expi",
+        x_tensor,
+        mode,
+        |x| expi_scalar(x, mode),
+        |z| expi_complex_scalar(z, mode),
+    )
 }
 
 /// Generalized exponential integral E_n(x) = ∫₁^∞ exp(-xt)/t^n dt.
@@ -668,6 +674,64 @@ fn expi_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         }
     }
     Ok(sum)
+}
+
+fn expi_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    if z.re.is_nan() || z.im.is_nan() {
+        return Ok(complex_nan());
+    }
+    if !z.is_finite() {
+        if z.im == 0.0 && z.re == f64::INFINITY {
+            return Ok(Complex64::from_real(f64::INFINITY));
+        }
+        return Ok(complex_nan());
+    }
+    if z.re == 0.0 && z.im == 0.0 {
+        return Ok(Complex64::new(f64::NEG_INFINITY, 0.0));
+    }
+
+    if z.im == 0.0 {
+        return expi_scalar(z.re, mode).map(Complex64::from_real);
+    }
+
+    if z.abs() <= 40.0 {
+        return expi_complex_series(z);
+    }
+
+    expi_complex_asymptotic(z)
+}
+
+fn expi_complex_series(z: Complex64) -> Result<Complex64, SpecialError> {
+    let euler_gamma = 0.577_215_664_901_532_9;
+    let mut sum = Complex64::from_real(euler_gamma) + z.ln();
+    let mut term = z;
+    sum = sum + term;
+
+    for n in 2..400 {
+        term = term * z / n as f64;
+        let contribution = term / n as f64;
+        sum = sum + contribution;
+        if contribution.abs() < 1.0e-15 * sum.abs().max(1.0) {
+            break;
+        }
+    }
+
+    Ok(sum)
+}
+
+fn expi_complex_asymptotic(z: Complex64) -> Result<Complex64, SpecialError> {
+    let mut sum = Complex64::from_real(1.0);
+    let mut term = Complex64::from_real(1.0);
+
+    for k in 1..100 {
+        term = term * k as f64 / z;
+        sum = sum + term;
+        if term.abs() < 1.0e-15 * sum.abs().max(1.0) {
+            break;
+        }
+    }
+
+    Ok(z.exp() / z * sum)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1673,6 +1737,60 @@ mod tests {
             result.is_infinite() && result.is_sign_negative(),
             "Ei(0) = -inf"
         );
+    }
+
+    #[test]
+    fn expi_complex_real_axis_reduces_to_real_kernel() {
+        for x in [-2.0, -0.5, 1.0, 3.0] {
+            let real_result = eval_scalar(expi(&SpecialTensor::RealScalar(x), RuntimeMode::Strict));
+            let complex_result = eval_complex_scalar(expi(
+                &SpecialTensor::ComplexScalar(Complex64::from_real(x)),
+                RuntimeMode::Strict,
+            ));
+            assert_complex_close(
+                complex_result,
+                Complex64::from_real(real_result),
+                1e-12,
+                "expi real-axis reduction",
+            );
+        }
+    }
+
+    #[test]
+    fn expi_complex_imaginary_axis_matches_sici_identity() {
+        let (si, ci) = crate::convenience::sici(1.0);
+        let result = eval_complex_scalar(expi(
+            &SpecialTensor::ComplexScalar(Complex64::new(0.0, 1.0)),
+            RuntimeMode::Strict,
+        ));
+        assert_complex_close(
+            result,
+            Complex64::new(ci, si + std::f64::consts::FRAC_PI_2),
+            1e-10,
+            "Ei(i) matches Ci(1) + i*(Si(1)+π/2)",
+        );
+    }
+
+    #[test]
+    fn expi_complex_vector_preserves_shape_and_conjugation() {
+        let z = Complex64::new(1.0, 1.0);
+        let result = expi(
+            &SpecialTensor::ComplexVec(vec![z, z.conj()]),
+            RuntimeMode::Strict,
+        )
+        .expect("complex vector expi");
+        match result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_complex_close(values[1], values[0].conj(), 1e-12, "expi conjugation");
+                let scalar = eval_complex_scalar(expi(
+                    &SpecialTensor::ComplexScalar(z),
+                    RuntimeMode::Strict,
+                ));
+                assert_complex_close(values[0], scalar, 1e-12, "expi vector lane matches scalar");
+            }
+            other => panic!("expected ComplexVec, got {other:?}"),
+        }
     }
 
     #[test]
