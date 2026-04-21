@@ -134,11 +134,7 @@ pub fn gammaln(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     gammaln_dispatch("gammaln", x, mode)
 }
 
-fn gamma_dispatch(
-    function: &'static str,
-    z: &SpecialTensor,
-    mode: RuntimeMode,
-) -> SpecialResult {
+fn gamma_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     match z {
         SpecialTensor::RealScalar(x) => gamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => values
@@ -150,7 +146,10 @@ fn gamma_dispatch(
             Ok(SpecialTensor::ComplexScalar(complex_gammaln(*z_val).exp()))
         }
         SpecialTensor::ComplexVec(values) => Ok(SpecialTensor::ComplexVec(
-            values.iter().map(|&z_val| complex_gammaln(z_val).exp()).collect(),
+            values
+                .iter()
+                .map(|&z_val| complex_gammaln(z_val).exp())
+                .collect(),
         )),
         SpecialTensor::Empty => Err(SpecialError {
             function,
@@ -161,11 +160,7 @@ fn gamma_dispatch(
     }
 }
 
-fn gammaln_dispatch(
-    function: &'static str,
-    z: &SpecialTensor,
-    mode: RuntimeMode,
-) -> SpecialResult {
+fn gammaln_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     match z {
         SpecialTensor::RealScalar(x) => gammaln_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => values
@@ -192,11 +187,7 @@ pub fn digamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     digamma_dispatch("digamma", z, mode)
 }
 
-fn digamma_dispatch(
-    function: &'static str,
-    z: &SpecialTensor,
-    mode: RuntimeMode,
-) -> SpecialResult {
+fn digamma_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     match z {
         SpecialTensor::RealScalar(x) => digamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => values
@@ -208,7 +199,10 @@ fn digamma_dispatch(
             Ok(SpecialTensor::ComplexScalar(complex_digamma_scalar(*z_val)))
         }
         SpecialTensor::ComplexVec(values) => Ok(SpecialTensor::ComplexVec(
-            values.iter().map(|&z_val| complex_digamma_scalar(z_val)).collect(),
+            values
+                .iter()
+                .map(|&z_val| complex_digamma_scalar(z_val))
+                .collect(),
         )),
         SpecialTensor::Empty => Err(SpecialError {
             function,
@@ -408,7 +402,27 @@ fn polygamma_dispatch(
 }
 
 pub fn rgamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("rgamma", z, mode, |x| rgamma_scalar(x, mode))
+    match z {
+        SpecialTensor::RealScalar(x) => rgamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
+        SpecialTensor::RealVec(values) => values
+            .iter()
+            .copied()
+            .map(|x| rgamma_scalar(x, mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        SpecialTensor::ComplexScalar(z_val) => {
+            Ok(SpecialTensor::ComplexScalar(complex_rgamma_scalar(*z_val)))
+        }
+        SpecialTensor::ComplexVec(values) => Ok(SpecialTensor::ComplexVec(
+            values.iter().copied().map(complex_rgamma_scalar).collect(),
+        )),
+        SpecialTensor::Empty => Err(SpecialError {
+            function: "rgamma",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
 }
 
 pub fn multigammaln(a: &SpecialTensor, d: f64, mode: RuntimeMode) -> SpecialResult {
@@ -866,6 +880,16 @@ fn rgamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         );
     }
     Ok(value)
+}
+
+fn complex_rgamma_scalar(z: Complex64) -> Complex64 {
+    if !z.is_finite() {
+        return Complex64::new(f64::NAN, f64::NAN);
+    }
+    if z.im == 0.0 && is_negative_integer_pole(z.re) {
+        return Complex64::from_real(0.0);
+    }
+    (-complex_gammaln(z)).exp()
 }
 
 pub fn gammainc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
@@ -1848,10 +1872,7 @@ pub fn complex_digamma_scalar(z: Complex64) -> Complex64 {
     let inv4 = inv2 * inv2;
     let inv6 = inv4 * inv2;
 
-    let result = shifted.ln()
-        - inv * 0.5
-        - inv2 * (1.0 / 12.0)
-        + inv4 * (1.0 / 120.0)
+    let result = shifted.ln() - inv * 0.5 - inv2 * (1.0 / 12.0) + inv4 * (1.0 / 120.0)
         - inv6 * (1.0 / 252.0);
 
     acc + result
@@ -2307,7 +2328,10 @@ mod tests {
     fn complex_digamma_real_axis_matches_real_digamma() -> Result<(), String> {
         let x = 2.5;
         let real_result = get_scalar(digamma(&scalar(x), RuntimeMode::Strict))?;
-        let complex_result = get_digamma_complex(digamma(&digamma_complex_scalar(x, 0.0), RuntimeMode::Strict))?;
+        let complex_result = get_digamma_complex(digamma(
+            &digamma_complex_scalar(x, 0.0),
+            RuntimeMode::Strict,
+        ))?;
         assert!((complex_result.re - real_result).abs() < 1e-10);
         assert!(complex_result.im.abs() < 1e-10);
         Ok(())
@@ -2335,7 +2359,11 @@ mod tests {
     fn complex_trigamma_real_axis_matches_real_trigamma() -> Result<(), String> {
         let x = 2.5;
         let real_result = get_scalar(polygamma(1, &scalar(x), RuntimeMode::Strict))?;
-        let complex_result = get_digamma_complex(polygamma(1, &digamma_complex_scalar(x, 0.0), RuntimeMode::Strict))?;
+        let complex_result = get_digamma_complex(polygamma(
+            1,
+            &digamma_complex_scalar(x, 0.0),
+            RuntimeMode::Strict,
+        ))?;
         assert!((complex_result.re - real_result).abs() < 1e-10);
         assert!(complex_result.im.abs() < 1e-10);
         Ok(())
@@ -2345,11 +2373,17 @@ mod tests {
     fn complex_polygamma_order_two_matches_real() -> Result<(), String> {
         let x = 1.5;
         let real_result = get_scalar(polygamma(2, &scalar(x), RuntimeMode::Strict))?;
-        let complex_result = get_digamma_complex(polygamma(2, &digamma_complex_scalar(x, 0.0), RuntimeMode::Strict))?;
+        let complex_result = get_digamma_complex(polygamma(
+            2,
+            &digamma_complex_scalar(x, 0.0),
+            RuntimeMode::Strict,
+        ))?;
         // Higher-order polygamma uses numerical differentiation for complex, so tolerance is relaxed
         assert!(
             (complex_result.re - real_result).abs() < 0.01,
-            "real_result={}, complex_result.re={}", real_result, complex_result.re
+            "real_result={}, complex_result.re={}",
+            real_result,
+            complex_result.re
         );
         assert!(complex_result.im.abs() < 1e-6);
         Ok(())
@@ -2873,6 +2907,58 @@ mod tests {
     }
 
     #[test]
+    fn complex_rgamma_real_inputs_match_real_path() -> Result<(), String> {
+        let z = complex_scalar(5.0, 0.0);
+        let result = rgamma(&z, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let c = get_complex_scalar(Ok(result))?;
+
+        let real_z = scalar(5.0);
+        let real_result = rgamma(&real_z, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let expected = get_scalar(Ok(real_result))?;
+
+        assert!(
+            (c.re - expected).abs() < 1e-12,
+            "rgamma(5+0i) = {} + {}i, expected {} + 0i",
+            c.re,
+            c.im,
+            expected
+        );
+        assert!(c.im.abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_rgamma_returns_zero_at_negative_integer_poles() -> Result<(), String> {
+        for x in [-1.0, -2.0, -8.0] {
+            let actual = get_complex_scalar(rgamma(&complex_scalar(x, 0.0), RuntimeMode::Strict))?;
+            assert_eq!(actual, Complex64::from_real(0.0));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn complex_rgamma_vector_preserves_shape() -> Result<(), String> {
+        let input =
+            SpecialTensor::ComplexVec(vec![Complex64::new(2.0, 1.0), Complex64::new(5.0, 0.0)]);
+        let result = rgamma(&input, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        match result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                let lane0 =
+                    get_complex_scalar(rgamma(&complex_scalar(2.0, 1.0), RuntimeMode::Strict))?;
+                let lane1 =
+                    get_complex_scalar(rgamma(&complex_scalar(5.0, 0.0), RuntimeMode::Strict))?;
+                assert!((values[0].re - lane0.re).abs() < 1e-12);
+                assert!((values[0].im - lane0.im).abs() < 1e-12);
+                assert!((values[1].re - lane1.re).abs() < 1e-12);
+                assert!((values[1].im - lane1.im).abs() < 1e-12);
+            }
+            other => return Err(format!("expected complex vector, got {other:?}")),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn complex_gamma_with_imaginary_part() -> Result<(), String> {
         let z = complex_scalar(2.0, 1.0);
         let result = gamma(&z, RuntimeMode::Strict).map_err(|e| e.to_string())?;
@@ -2893,7 +2979,8 @@ mod tests {
         assert!(c.im.is_finite(), "gammaln(2+1i) imag part should be finite");
 
         // Verify gamma = exp(gammaln)
-        let gamma_result = gamma(&complex_scalar(2.0, 1.0), RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let gamma_result =
+            gamma(&complex_scalar(2.0, 1.0), RuntimeMode::Strict).map_err(|e| e.to_string())?;
         let gamma_c = get_complex_scalar(Ok(gamma_result))?;
         let expected = c.exp();
         assert!(
