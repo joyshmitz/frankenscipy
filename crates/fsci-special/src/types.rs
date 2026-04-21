@@ -70,6 +70,42 @@ impl Complex64 {
             im: -self.im / norm,
         }
     }
+
+    #[must_use]
+    pub fn ln(self) -> Self {
+        Self {
+            re: self.abs().ln(),
+            im: self.im.atan2(self.re),
+        }
+    }
+
+    #[must_use]
+    pub fn arg(self) -> f64 {
+        self.im.atan2(self.re)
+    }
+
+    #[must_use]
+    pub fn powf(self, n: f64) -> Self {
+        let r = self.abs();
+        let theta = self.arg();
+        let r_n = r.powf(n);
+        Self {
+            re: r_n * (n * theta).cos(),
+            im: r_n * (n * theta).sin(),
+        }
+    }
+
+    #[must_use]
+    pub fn powc(self, n: Self) -> Self {
+        if self.re == 0.0 && self.im == 0.0 {
+            if n.re > 0.0 {
+                return Self::new(0.0, 0.0);
+            } else {
+                return Self::new(f64::INFINITY, 0.0);
+            }
+        }
+        (n * self.ln()).exp()
+    }
 }
 
 impl From<f64> for Complex64 {

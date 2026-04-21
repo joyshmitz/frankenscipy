@@ -5,8 +5,8 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, not_yet_implemented, record_special_trace,
+    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor, not_yet_implemented, record_special_trace,
 };
 
 pub const GAMMA_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -113,6 +113,7 @@ pub const GAMMA_DISPATCH_PLAN: &[DispatchPlan] = &[
 ];
 
 const SQRT_2PI: f64 = 2.506_628_274_631_000_7;
+const LANCZOS_G: f64 = 7.0;
 const LANCZOS_COEFFS: [f64; 9] = [
     0.999_999_999_999_809_9,
     676.520_368_121_885_1,
@@ -138,15 +139,138 @@ pub fn digamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 }
 
 pub fn gammainc(a: &SpecialTensor, x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("gammainc", a, x, mode, |shape, arg| {
-        gammainc_scalar(shape, arg, mode)
-    })
+    gammainc_dispatch("gammainc", a, x, mode, true)
 }
 
 pub fn gammaincc(a: &SpecialTensor, x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("gammaincc", a, x, mode, |shape, arg| {
-        gammaincc_scalar(shape, arg, mode)
-    })
+    gammainc_dispatch("gammaincc", a, x, mode, false)
+}
+
+fn gammainc_dispatch(
+    function: &'static str,
+    a: &SpecialTensor,
+    x: &SpecialTensor,
+    mode: RuntimeMode,
+    lower: bool,
+) -> SpecialResult {
+    match (a, x) {
+        // Real-real cases
+        (SpecialTensor::RealScalar(a_val), SpecialTensor::RealScalar(x_val)) => {
+            if lower {
+                gammainc_scalar(*a_val, *x_val, mode).map(SpecialTensor::RealScalar)
+            } else {
+                gammaincc_scalar(*a_val, *x_val, mode).map(SpecialTensor::RealScalar)
+            }
+        }
+        (SpecialTensor::RealVec(a_vec), SpecialTensor::RealScalar(x_val)) => a_vec
+            .iter()
+            .map(|&a_val| {
+                if lower {
+                    gammainc_scalar(a_val, *x_val, mode)
+                } else {
+                    gammaincc_scalar(a_val, *x_val, mode)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(a_val), SpecialTensor::RealVec(x_vec)) => x_vec
+            .iter()
+            .map(|&x_val| {
+                if lower {
+                    gammainc_scalar(*a_val, x_val, mode)
+                } else {
+                    gammaincc_scalar(*a_val, x_val, mode)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(a_vec), SpecialTensor::RealVec(x_vec)) => {
+            if a_vec.len() != x_vec.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            a_vec
+                .iter()
+                .zip(x_vec.iter())
+                .map(|(&a_val, &x_val)| {
+                    if lower {
+                        gammainc_scalar(a_val, x_val, mode)
+                    } else {
+                        gammaincc_scalar(a_val, x_val, mode)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::RealVec)
+        }
+        // Real a, complex x cases
+        (SpecialTensor::RealScalar(a_val), SpecialTensor::ComplexScalar(x_val)) => {
+            if lower {
+                complex_gammainc_scalar(*a_val, *x_val, mode).map(SpecialTensor::ComplexScalar)
+            } else {
+                complex_gammaincc_scalar(*a_val, *x_val, mode).map(SpecialTensor::ComplexScalar)
+            }
+        }
+        (SpecialTensor::RealScalar(a_val), SpecialTensor::ComplexVec(x_vec)) => x_vec
+            .iter()
+            .map(|&x_val| {
+                if lower {
+                    complex_gammainc_scalar(*a_val, x_val, mode)
+                } else {
+                    complex_gammaincc_scalar(*a_val, x_val, mode)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(a_vec), SpecialTensor::ComplexScalar(x_val)) => a_vec
+            .iter()
+            .map(|&a_val| {
+                if lower {
+                    complex_gammainc_scalar(a_val, *x_val, mode)
+                } else {
+                    complex_gammaincc_scalar(a_val, *x_val, mode)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(a_vec), SpecialTensor::ComplexVec(x_vec)) => {
+            if a_vec.len() != x_vec.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            a_vec
+                .iter()
+                .zip(x_vec.iter())
+                .map(|(&a_val, &x_val)| {
+                    if lower {
+                        complex_gammainc_scalar(a_val, x_val, mode)
+                    } else {
+                        complex_gammaincc_scalar(a_val, x_val, mode)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        // Complex a cases - not yet implemented
+        (SpecialTensor::ComplexScalar(_), _)
+        | (SpecialTensor::ComplexVec(_), _) => {
+            not_yet_implemented(function, mode, "complex-valued a parameter not yet supported")
+        }
+        // Empty tensor cases
+        (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
 }
 
 pub fn polygamma(n: usize, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -279,83 +403,6 @@ pub fn gdtrib(a: f64, p: f64, x: f64) -> f64 {
     }
 
     gammainc_shape_inv(scaled_x, p)
-}
-
-fn map_real_binary<F>(
-    function: &'static str,
-    lhs: &SpecialTensor,
-    rhs: &SpecialTensor,
-    mode: RuntimeMode,
-    kernel: F,
-) -> SpecialResult
-where
-    F: Fn(f64, f64) -> Result<f64, SpecialError>,
-{
-    match (lhs, rhs) {
-        (SpecialTensor::RealScalar(left), SpecialTensor::RealScalar(right)) => {
-            kernel(*left, *right).map(SpecialTensor::RealScalar)
-        }
-        (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => left
-            .iter()
-            .copied()
-            .map(|value| kernel(value, *right))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => right
-            .iter()
-            .copied()
-            .map(|value| kernel(*left, value))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
-            if left.len() != right.len() {
-                record_special_trace(
-                    function,
-                    mode,
-                    "domain_error",
-                    format!("lhs_len={},rhs_len={}", left.len(), right.len()),
-                    "fail_closed",
-                    "vector inputs must have matching lengths",
-                    false,
-                );
-                return Err(SpecialError {
-                    function,
-                    kind: SpecialErrorKind::DomainError,
-                    mode,
-                    detail: "vector inputs must have matching lengths",
-                });
-            }
-            left.iter()
-                .copied()
-                .zip(right.iter().copied())
-                .map(|(l, r)| kernel(l, r))
-                .collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::RealVec)
-        }
-        (SpecialTensor::ComplexScalar(_), _)
-        | (SpecialTensor::ComplexVec(_), _)
-        | (_, SpecialTensor::ComplexScalar(_))
-        | (_, SpecialTensor::ComplexVec(_)) => {
-            not_yet_implemented(function, mode, "complex-valued path pending")
-        }
-        _ => {
-            record_special_trace(
-                function,
-                mode,
-                "domain_error",
-                "input=empty",
-                "fail_closed",
-                "empty tensor is not a valid special-function input",
-                false,
-            );
-            Err(SpecialError {
-                function,
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "empty tensor is not a valid special-function input",
-            })
-        }
-    }
 }
 
 fn map_real_input<F>(
@@ -1595,6 +1642,213 @@ pub fn zetac(s: f64) -> f64 {
     }
 }
 
+// ============================================================================
+// Complex incomplete gamma functions
+// ============================================================================
+
+/// Complex log-gamma using Lanczos approximation.
+/// Matches scipy.special.loggamma for complex arguments.
+pub fn complex_gammaln(z: Complex64) -> Complex64 {
+    if z.re < 0.5 {
+        // Reflection formula: Γ(z) = π / (sin(πz) Γ(1-z))
+        // ln Γ(z) = ln(π) - ln(sin(πz)) - ln Γ(1-z)
+        let pi_z = Complex64::new(PI * z.re, PI * z.im);
+        let sin_pi_z = complex_sin(pi_z);
+        let ln_sin = sin_pi_z.ln();
+        let one_minus_z = Complex64::new(1.0 - z.re, -z.im);
+        let ln_gamma_1mz = complex_gammaln(one_minus_z);
+        Complex64::new(PI.ln(), 0.0) - ln_sin - ln_gamma_1mz
+    } else {
+        let z_shifted = Complex64::new(z.re - 1.0, z.im);
+        let mut x = Complex64::new(LANCZOS_COEFFS[0], 0.0);
+        for (i, &coeff) in LANCZOS_COEFFS.iter().enumerate().skip(1) {
+            let denom = Complex64::new(z_shifted.re + i as f64, z_shifted.im);
+            x = x + Complex64::new(coeff, 0.0) / denom;
+        }
+        let t = Complex64::new(z_shifted.re + LANCZOS_G + 0.5, z_shifted.im);
+        // ln Γ(z) = 0.5 ln(2π) + (z - 0.5) ln(t) - t + ln(x)
+        let half_ln_2pi = 0.5 * (2.0 * PI).ln();
+        let z_minus_half = Complex64::new(z_shifted.re + 0.5, z_shifted.im);
+        let ln_t = t.ln();
+        let term1 = Complex64::new(half_ln_2pi, 0.0);
+        let term2 = z_minus_half * ln_t;
+        let term3 = Complex64::new(-t.re, -t.im);
+        let term4 = x.ln();
+        term1 + term2 + term3 + term4
+    }
+}
+
+/// Complex sine function.
+fn complex_sin(z: Complex64) -> Complex64 {
+    // sin(a + bi) = sin(a)cosh(b) + i cos(a)sinh(b)
+    Complex64::new(
+        z.re.sin() * z.im.cosh(),
+        z.re.cos() * z.im.sinh(),
+    )
+}
+
+/// Complex regularized lower incomplete gamma P(a, z) for real a > 0 and complex z.
+/// Uses series expansion: P(a,z) = z^a * e^(-z) / Γ(a) * Σ_{n=0}^∞ z^n / (a)_n
+/// where (a)_n = a(a+1)...(a+n-1) is the Pochhammer symbol.
+pub fn complex_gammainc_scalar(
+    a: f64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    const FUNCTION: &str = "gammainc";
+
+    // Domain check
+    if a.is_nan() || !z.is_finite() {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+    if a <= 0.0 {
+        record_special_trace(
+            FUNCTION,
+            mode,
+            "domain_error",
+            format!("a={a},z=({},{})", z.re, z.im),
+            "returned_nan",
+            "a must be positive",
+            false,
+        );
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+
+    // Special case: z = 0
+    if z.re == 0.0 && z.im == 0.0 {
+        return Ok(Complex64::new(0.0, 0.0));
+    }
+
+    // Use series expansion for |z| < a + 1 or continued fraction otherwise
+    let z_abs = z.abs();
+    if z_abs < a + 1.0 {
+        complex_gammainc_series(a, z, mode)
+    } else {
+        // P(a, z) = 1 - Q(a, z)
+        let q = complex_gammaincc_cf(a, z, mode)?;
+        Ok(Complex64::new(1.0 - q.re, -q.im))
+    }
+}
+
+/// Complex regularized upper incomplete gamma Q(a, z) for real a > 0 and complex z.
+pub fn complex_gammaincc_scalar(
+    a: f64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    const FUNCTION: &str = "gammaincc";
+
+    if a.is_nan() || !z.is_finite() {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+    if a <= 0.0 {
+        record_special_trace(
+            FUNCTION,
+            mode,
+            "domain_error",
+            format!("a={a},z=({},{})", z.re, z.im),
+            "returned_nan",
+            "a must be positive",
+            false,
+        );
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+
+    if z.re == 0.0 && z.im == 0.0 {
+        return Ok(Complex64::new(1.0, 0.0));
+    }
+
+    let z_abs = z.abs();
+    if z_abs < a + 1.0 {
+        // Q(a, z) = 1 - P(a, z)
+        let p = complex_gammainc_series(a, z, mode)?;
+        Ok(Complex64::new(1.0 - p.re, -p.im))
+    } else {
+        complex_gammaincc_cf(a, z, mode)
+    }
+}
+
+/// Series expansion for lower incomplete gamma.
+fn complex_gammainc_series(
+    a: f64,
+    z: Complex64,
+    _mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    const EPS: f64 = 1.0e-14;
+    const MAX_ITERS: usize = 200;
+
+    // Compute ln(Γ(a)) for normalization
+    let lg = gammaln_scalar(a, RuntimeMode::Strict)?;
+
+    // Compute z^a * e^(-z) / Γ(a)
+    let ln_z = z.ln();
+    let a_ln_z = Complex64::new(a * ln_z.re, a * ln_z.im);
+    let exp_arg = Complex64::new(a_ln_z.re - z.re - lg, a_ln_z.im - z.im);
+    let prefactor = exp_arg.exp();
+
+    // Series: sum_{n=0}^∞ z^n / (a+1)(a+2)...(a+n)
+    let mut term = Complex64::new(1.0 / a, 0.0);
+    let mut sum = term;
+
+    for n in 1..MAX_ITERS {
+        let denom = a + n as f64;
+        term = term * z / Complex64::new(denom, 0.0);
+        sum = sum + term;
+        if term.abs() <= sum.abs() * EPS {
+            break;
+        }
+    }
+
+    Ok(prefactor * sum)
+}
+
+/// Continued fraction for upper incomplete gamma (Lentz's algorithm).
+fn complex_gammaincc_cf(
+    a: f64,
+    z: Complex64,
+    _mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    const EPS: f64 = 1.0e-14;
+    const FPMIN: f64 = 1.0e-300;
+    const MAX_ITERS: usize = 200;
+
+    let lg = gammaln_scalar(a, RuntimeMode::Strict)?;
+
+    // Compute prefactor: z^a * e^(-z) / Γ(a)
+    let ln_z = z.ln();
+    let a_ln_z = Complex64::new(a * ln_z.re, a * ln_z.im);
+    let exp_arg = Complex64::new(a_ln_z.re - z.re - lg, a_ln_z.im - z.im);
+    let prefactor = exp_arg.exp();
+
+    // Continued fraction: Q(a,z) = prefactor * 1/(z + 1-a - 1*(1-a)/(z + 3-a - 2*(2-a)/(z + 5-a - ...)))
+    let mut b = Complex64::new(z.re + 1.0 - a, z.im);
+    let mut c = Complex64::new(1.0 / FPMIN, 0.0);
+    let mut d = b.recip();
+    let mut h = d;
+
+    for i in 1..=MAX_ITERS {
+        let i_f = i as f64;
+        let an = Complex64::new(-i_f * (i_f - a), 0.0);
+        b = b + Complex64::new(2.0, 0.0);
+        d = an * d + b;
+        if d.abs() < FPMIN {
+            d = Complex64::new(FPMIN, 0.0);
+        }
+        c = b + an / c;
+        if c.abs() < FPMIN {
+            c = Complex64::new(FPMIN, 0.0);
+        }
+        d = d.recip();
+        let delta = d * c;
+        h = h * delta;
+        if (delta.re - 1.0).abs() + delta.im.abs() <= EPS {
+            break;
+        }
+    }
+
+    Ok(prefactor * h)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2104,5 +2358,133 @@ mod tests {
         assert!(chdtriv(0.5, -1.0).is_nan());
         assert!(chdtriv(f64::NAN, 3.0).is_nan());
         assert!(chdtriv(0.5, f64::NAN).is_nan());
+    }
+
+    // ========================================================================
+    // Complex gammainc tests
+    // ========================================================================
+
+    fn complex_scalar(re: f64, im: f64) -> SpecialTensor {
+        SpecialTensor::ComplexScalar(Complex64::new(re, im))
+    }
+
+    fn get_complex_scalar(result: SpecialResult) -> Result<Complex64, String> {
+        match result.map_err(|err| err.to_string())? {
+            SpecialTensor::ComplexScalar(value) => Ok(value),
+            other => Err(format!("expected complex scalar, got {other:?}")),
+        }
+    }
+
+    #[test]
+    fn complex_gammainc_reduces_to_real_for_real_z() -> Result<(), String> {
+        // For real positive z, complex_gammainc_scalar should match gammainc_scalar
+        let a = 2.0;
+        let z_re = 1.5;
+        let z = Complex64::new(z_re, 0.0);
+
+        let real_result = gammainc_scalar(a, z_re, RuntimeMode::Strict).unwrap();
+        let complex_result = complex_gammainc_scalar(a, z, RuntimeMode::Strict).unwrap();
+
+        assert!(
+            (complex_result.re - real_result).abs() < 1e-10,
+            "Real parts should match: {} vs {}",
+            complex_result.re,
+            real_result
+        );
+        assert!(
+            complex_result.im.abs() < 1e-10,
+            "Imaginary part should be negligible for real input: {}",
+            complex_result.im
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn complex_gammaincc_reduces_to_real_for_real_z() -> Result<(), String> {
+        let a = 2.0;
+        let z_re = 1.5;
+        let z = Complex64::new(z_re, 0.0);
+
+        let real_result = gammaincc_scalar(a, z_re, RuntimeMode::Strict).unwrap();
+        let complex_result = complex_gammaincc_scalar(a, z, RuntimeMode::Strict).unwrap();
+
+        assert!(
+            (complex_result.re - real_result).abs() < 1e-10,
+            "Real parts should match: {} vs {}",
+            complex_result.re,
+            real_result
+        );
+        assert!(
+            complex_result.im.abs() < 1e-10,
+            "Imaginary part should be negligible for real input: {}",
+            complex_result.im
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn complex_gammainc_at_z_zero() {
+        let result = complex_gammainc_scalar(2.0, Complex64::new(0.0, 0.0), RuntimeMode::Strict)
+            .unwrap();
+        assert_eq!(result.re, 0.0);
+        assert_eq!(result.im, 0.0);
+    }
+
+    #[test]
+    fn complex_gammaincc_at_z_zero() {
+        let result = complex_gammaincc_scalar(2.0, Complex64::new(0.0, 0.0), RuntimeMode::Strict)
+            .unwrap();
+        assert_eq!(result.re, 1.0);
+        assert_eq!(result.im, 0.0);
+    }
+
+    #[test]
+    fn complex_gammainc_p_plus_q_equals_one() {
+        // P(a,z) + Q(a,z) = 1 for any a,z
+        let a = 2.5;
+        let z = Complex64::new(1.5, 0.7);
+
+        let p = complex_gammainc_scalar(a, z, RuntimeMode::Strict).unwrap();
+        let q = complex_gammaincc_scalar(a, z, RuntimeMode::Strict).unwrap();
+
+        let sum_re = p.re + q.re;
+        let sum_im = p.im + q.im;
+
+        assert!(
+            (sum_re - 1.0).abs() < 1e-10,
+            "P + Q real part should be 1: {}",
+            sum_re
+        );
+        assert!(
+            sum_im.abs() < 1e-10,
+            "P + Q imaginary part should be 0: {}",
+            sum_im
+        );
+    }
+
+    #[test]
+    fn complex_gammainc_tensor_interface() -> Result<(), String> {
+        // Test the tensor interface works for complex inputs
+        let a = scalar(2.0);
+        let z = complex_scalar(1.5, 0.5);
+
+        let result = gammainc(&a, &z, RuntimeMode::Strict);
+        let c = get_complex_scalar(result)?;
+
+        // Just verify we get a finite result
+        assert!(c.re.is_finite(), "Real part should be finite");
+        assert!(c.im.is_finite(), "Imaginary part should be finite");
+        Ok(())
+    }
+
+    #[test]
+    fn complex_gammainc_domain_error_for_nonpositive_a() {
+        let z = Complex64::new(1.0, 0.5);
+
+        let result = complex_gammainc_scalar(0.0, z, RuntimeMode::Strict).unwrap();
+        assert!(result.re.is_nan());
+
+        let result = complex_gammainc_scalar(-1.0, z, RuntimeMode::Strict).unwrap();
+        assert!(result.re.is_nan());
     }
 }
