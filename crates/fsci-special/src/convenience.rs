@@ -2379,7 +2379,17 @@ pub fn exprel_scalar(x: f64) -> f64 {
 /// Box-Cox transformation: (x^λ - 1) / λ for λ ≠ 0, ln(x) for λ = 0.
 ///
 /// Matches `scipy.special.boxcox`.
-pub fn boxcox_transform(x: f64, lam: f64) -> f64 {
+pub fn boxcox_transform(
+    x_tensor: &SpecialTensor,
+    lam_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("boxcox_transform", x_tensor, lam_tensor, mode, |x, lam| {
+        Ok(boxcox_transform_scalar(x, lam))
+    })
+}
+
+pub fn boxcox_transform_scalar(x: f64, lam: f64) -> f64 {
     if x <= 0.0 {
         return f64::NAN;
     }
@@ -2393,7 +2403,17 @@ pub fn boxcox_transform(x: f64, lam: f64) -> f64 {
 /// Inverse Box-Cox transformation.
 ///
 /// Matches `scipy.special.inv_boxcox`.
-pub fn inv_boxcox(y: f64, lam: f64) -> f64 {
+pub fn inv_boxcox(
+    y_tensor: &SpecialTensor,
+    lam_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("inv_boxcox", y_tensor, lam_tensor, mode, |y, lam| {
+        Ok(inv_boxcox_scalar(y, lam))
+    })
+}
+
+pub fn inv_boxcox_scalar(y: f64, lam: f64) -> f64 {
     if lam.abs() < 1e-15 {
         y.exp()
     } else {
@@ -2404,15 +2424,35 @@ pub fn inv_boxcox(y: f64, lam: f64) -> f64 {
 /// Box-Cox transformation with offset: ((x+1)^λ - 1) / λ.
 ///
 /// Matches `scipy.special.boxcox1p`.
-pub fn boxcox1p(x: f64, lam: f64) -> f64 {
-    boxcox_transform(1.0 + x, lam)
+pub fn boxcox1p(
+    x_tensor: &SpecialTensor,
+    lam_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("boxcox1p", x_tensor, lam_tensor, mode, |x, lam| {
+        Ok(boxcox1p_scalar(x, lam))
+    })
+}
+
+pub fn boxcox1p_scalar(x: f64, lam: f64) -> f64 {
+    boxcox_transform_scalar(1.0 + x, lam)
 }
 
 /// Inverse Box-Cox transformation with offset.
 ///
 /// Matches `scipy.special.inv_boxcox1p`.
-pub fn inv_boxcox1p(y: f64, lam: f64) -> f64 {
-    inv_boxcox(y, lam) - 1.0
+pub fn inv_boxcox1p(
+    y_tensor: &SpecialTensor,
+    lam_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("inv_boxcox1p", y_tensor, lam_tensor, mode, |y, lam| {
+        Ok(inv_boxcox1p_scalar(y, lam))
+    })
+}
+
+pub fn inv_boxcox1p_scalar(y: f64, lam: f64) -> f64 {
+    inv_boxcox_scalar(y, lam) - 1.0
 }
 
 /// Log of the standard normal CDF.
@@ -5882,6 +5922,81 @@ mod tests {
         assert!((values[1] + 3.0).abs() < 1e-14);
         assert!((values[2] + 3.0).abs() < 1e-14);
         assert!((values[3] - 2.0).abs() < 1e-14);
+        Ok(())
+    }
+
+    #[test]
+    fn boxcox_scalar_helpers_cover_lambda_zero_and_roundtrip() {
+        assert!((boxcox_transform_scalar(2.0, 0.0) - 2.0_f64.ln()).abs() < 1e-14);
+        assert!((boxcox1p_scalar(1.0, 0.0) - 2.0_f64.ln()).abs() < 1e-14);
+
+        let x = 3.5;
+        let lam = 0.25;
+        let y = boxcox_transform_scalar(x, lam);
+        assert!((inv_boxcox_scalar(y, lam) - x).abs() < 1e-12);
+
+        let x1p = 0.75;
+        let y1p = boxcox1p_scalar(x1p, lam);
+        assert!((inv_boxcox1p_scalar(y1p, lam) - x1p).abs() < 1e-12);
+    }
+
+    #[test]
+    fn boxcox_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = boxcox_transform(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealScalar(0.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - boxcox_transform_scalar(2.0, 0.0)).abs() < 1e-14);
+
+        let vector = boxcox1p(
+            &SpecialTensor::RealVec(vec![0.0, 1.0, 3.0]),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [0.0, 1.0, 3.0].map(|x| boxcox1p_scalar(x, 0.5));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn boxcox_tensor_dispatch_preserves_domain_nan_and_inverse_roundtrip() -> Result<(), String> {
+        let transformed = boxcox_transform(
+            &SpecialTensor::RealVec(vec![-1.0, 1.0, 4.0]),
+            &SpecialTensor::RealScalar(0.25),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let transformed_values = expect_real_vec(transformed)?;
+        assert!(transformed_values[0].is_nan());
+        assert!((transformed_values[1] - boxcox_transform_scalar(1.0, 0.25)).abs() < 1e-14);
+
+        let recovered = inv_boxcox(
+            &SpecialTensor::RealVec(vec![transformed_values[1], transformed_values[2]]),
+            &SpecialTensor::RealScalar(0.25),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let recovered_values = expect_real_vec(recovered)?;
+        assert!((recovered_values[0] - 1.0).abs() < 1e-12);
+        assert!((recovered_values[1] - 4.0).abs() < 1e-12);
+
+        let recovered_1p = inv_boxcox1p(
+            &SpecialTensor::RealVec(vec![boxcox1p_scalar(0.0, 0.0), boxcox1p_scalar(2.0, 0.0)]),
+            &SpecialTensor::RealScalar(0.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let recovered_1p_values = expect_real_vec(recovered_1p)?;
+        assert!(recovered_1p_values[0].abs() < 1e-12);
+        assert!((recovered_1p_values[1] - 2.0).abs() < 1e-12);
         Ok(())
     }
 
