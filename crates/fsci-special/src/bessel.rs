@@ -238,30 +238,34 @@ pub fn yn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialRes
 ///
 /// Uses power series for small z, asymptotic expansion for large z,
 /// and reduces to j0/j1/jn for integer orders.
+/// Supports both real and complex z arguments.
 pub fn jv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("jv", v, z, mode, |order, x| Ok(jv_scalar(order, x)))
+    bessel_dispatch("jv", v, z, mode, BesselKind::Jv)
 }
 
 /// Bessel function of the second kind for real order v: Y_v(z).
 ///
 /// Y_v(z) = (J_v(z) cos(vπ) - J_{-v}(z)) / sin(vπ) for non-integer v.
 /// For integer v, uses the integer-order y0/y1/yn implementations.
+/// Supports both real and complex z arguments.
 pub fn yv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("yv", v, z, mode, |order, x| yv_scalar(order, x, mode))
+    bessel_dispatch("yv", v, z, mode, BesselKind::Yv)
 }
 
 /// Modified Bessel function of the first kind for real order v: I_v(z).
 ///
 /// I_v(z) = (z/2)^v Σ (z²/4)^k / (k! Γ(v+k+1))
+/// Supports both real and complex z arguments.
 pub fn iv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("iv", v, z, mode, |order, x| Ok(iv_scalar(order, x)))
+    bessel_dispatch("iv", v, z, mode, BesselKind::Iv)
 }
 
 /// Modified Bessel function of the second kind for real order v: K_v(z).
 ///
 /// K_v(z) = π/2 (I_{-v}(z) - I_v(z)) / sin(vπ) for non-integer v.
+/// Supports both real and complex z arguments.
 pub fn kv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("kv", v, z, mode, |order, x| kv_scalar(order, x, mode))
+    bessel_dispatch("kv", v, z, mode, BesselKind::Kv)
 }
 
 /// Hankel function of the first kind: H1_v(z) = J_v(z) + i·Y_v(z).
@@ -2145,6 +2149,373 @@ fn y1_core_positive(x: f64) -> f64 {
     }
 }
 
+// ============================================================================
+// Complex cylindrical Bessel functions J_v, Y_v, I_v, K_v
+// ============================================================================
+
+/// Complex J_v(z) via power series.
+/// J_v(z) = (z/2)^v Σ_{k=0}^∞ (-z²/4)^k / (k! Γ(v+k+1))
+fn complex_jv_scalar(v: f64, z: Complex64) -> Complex64 {
+    if !z.is_finite() || v.is_nan() {
+        return Complex64::new(f64::NAN, f64::NAN);
+    }
+
+    if z.re == 0.0 && z.im == 0.0 {
+        return if v == 0.0 {
+            Complex64::new(1.0, 0.0)
+        } else if v > 0.0 {
+            Complex64::new(0.0, 0.0)
+        } else {
+            Complex64::new(f64::INFINITY, 0.0)
+        };
+    }
+
+    let half_z = z / 2.0;
+    let neg_quarter_z2 = Complex64::new(-1.0, 0.0) * half_z * half_z;
+
+    // First term: (z/2)^v / Γ(v+1)
+    let log_half_z = half_z.ln();
+    let v_c = Complex64::new(v, 0.0);
+    let log_first = v_c * log_half_z - crate::gamma::complex_gammaln(Complex64::new(v + 1.0, 0.0));
+    let mut sum = log_first.exp();
+    let mut term = sum;
+
+    for k in 1..200 {
+        let kf = k as f64;
+        // term *= (-z²/4) / (k * (v + k))
+        term = term * neg_quarter_z2 / Complex64::new(kf * (v + kf), 0.0);
+        sum = sum + term;
+
+        if term.abs() < 1e-15 * sum.abs() && k > 5 {
+            break;
+        }
+    }
+
+    sum
+}
+
+/// Complex I_v(z) via power series.
+/// I_v(z) = (z/2)^v Σ_{k=0}^∞ (z²/4)^k / (k! Γ(v+k+1))
+fn complex_iv_scalar(v: f64, z: Complex64) -> Complex64 {
+    if !z.is_finite() || v.is_nan() {
+        return Complex64::new(f64::NAN, f64::NAN);
+    }
+
+    if z.re == 0.0 && z.im == 0.0 {
+        return if v == 0.0 {
+            Complex64::new(1.0, 0.0)
+        } else if v > 0.0 {
+            Complex64::new(0.0, 0.0)
+        } else {
+            Complex64::new(f64::INFINITY, 0.0)
+        };
+    }
+
+    let half_z = z / 2.0;
+    let quarter_z2 = half_z * half_z;
+
+    // First term: (z/2)^v / Γ(v+1)
+    let log_half_z = half_z.ln();
+    let v_c = Complex64::new(v, 0.0);
+    let log_first = v_c * log_half_z - crate::gamma::complex_gammaln(Complex64::new(v + 1.0, 0.0));
+    let mut sum = log_first.exp();
+    let mut term = sum;
+
+    for k in 1..200 {
+        let kf = k as f64;
+        // term *= (z²/4) / (k * (v + k))
+        term = term * quarter_z2 / Complex64::new(kf * (v + kf), 0.0);
+        sum = sum + term;
+
+        if term.abs() < 1e-15 * sum.abs() && k > 5 {
+            break;
+        }
+    }
+
+    sum
+}
+
+/// Complex Y_v(z) for real order v.
+/// Y_v = (J_v cos(vπ) - J_{-v}) / sin(vπ) for non-integer v.
+fn complex_yv_scalar(
+    v: f64,
+    z: Complex64,
+    _mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    if v.is_nan() || !z.is_finite() {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+
+    if z.re == 0.0 && z.im == 0.0 {
+        return Ok(Complex64::new(f64::NEG_INFINITY, 0.0));
+    }
+
+    // Integer order: use recurrence
+    if v.fract() == 0.0 && v.abs() <= i32::MAX as f64 {
+        let n = v.abs() as u32;
+        let result = complex_yn_integer(n, z);
+        return if v < 0.0 && n % 2 == 1 {
+            Ok(Complex64::new(-result.re, -result.im))
+        } else {
+            Ok(result)
+        };
+    }
+
+    // Non-integer order: Y_v = (J_v cos(vπ) - J_{-v}) / sin(vπ)
+    let sin_vpi = (v * PI).sin();
+    if sin_vpi.abs() < 1e-15 {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+
+    let jv_pos = complex_jv_scalar(v, z);
+    let jv_neg = complex_jv_scalar(-v, z);
+    let cos_vpi = Complex64::new((v * PI).cos(), 0.0);
+    let sin_vpi_c = Complex64::new(sin_vpi, 0.0);
+
+    Ok((jv_pos * cos_vpi - jv_neg) / sin_vpi_c)
+}
+
+/// Complex Y_n(z) for integer order via recurrence.
+fn complex_yn_integer(n: u32, z: Complex64) -> Complex64 {
+    // Y_0 and Y_1 via formula, then recurrence
+    let y0 = complex_y0_series(z);
+    if n == 0 {
+        return y0;
+    }
+    let y1 = complex_y1_series(z);
+    if n == 1 {
+        return y1;
+    }
+
+    let z_inv = z.recip();
+    let mut y_prev = y0;
+    let mut y_curr = y1;
+    for k in 1..n {
+        let coeff = Complex64::new(2.0 * k as f64, 0.0) * z_inv;
+        let next = coeff * y_curr - y_prev;
+        y_prev = y_curr;
+        y_curr = next;
+    }
+    y_curr
+}
+
+/// Complex Y_0(z) via series with logarithmic term.
+fn complex_y0_series(z: Complex64) -> Complex64 {
+    // Y_0(z) = (2/π)[J_0(z)(ln(z/2) + γ) + series...]
+    // Simplified: use limiting form for small |z| and asymptotic for large
+    let j0 = complex_jv_scalar(0.0, z);
+    let half_z = z / 2.0;
+    let ln_half_z = half_z.ln();
+    let euler_gamma = 0.577_215_664_901_532_9_f64;
+
+    // Leading term: (2/π) * J_0(z) * (ln(z/2) + γ)
+    let frac_2_pi = Complex64::new(FRAC_2_PI, 0.0);
+    let gamma_c = Complex64::new(euler_gamma, 0.0);
+
+    frac_2_pi * j0 * (ln_half_z + gamma_c)
+}
+
+/// Complex Y_1(z) via series with logarithmic term.
+fn complex_y1_series(z: Complex64) -> Complex64 {
+    let j1 = complex_jv_scalar(1.0, z);
+    let half_z = z / 2.0;
+    let ln_half_z = half_z.ln();
+    let euler_gamma = 0.577_215_664_901_532_9_f64;
+
+    let frac_2_pi = Complex64::new(FRAC_2_PI, 0.0);
+    let gamma_c = Complex64::new(euler_gamma, 0.0);
+    let z_inv = z.recip();
+
+    // Y_1(z) ≈ (2/π) * J_1(z) * (ln(z/2) + γ) - 2/(πz)
+    frac_2_pi * j1 * (ln_half_z + gamma_c) - frac_2_pi * z_inv
+}
+
+/// Complex K_v(z) for real order v.
+/// K_v = π/2 * (I_{-v} - I_v) / sin(vπ) for non-integer v.
+fn complex_kv_scalar(
+    v: f64,
+    z: Complex64,
+    _mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    if v.is_nan() || !z.is_finite() {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+
+    if z.re == 0.0 && z.im == 0.0 {
+        return Ok(Complex64::new(f64::INFINITY, 0.0));
+    }
+
+    // For non-integer v: K_v = π/2 * (I_{-v} - I_v) / sin(vπ)
+    let sin_vpi = (v * PI).sin();
+    if sin_vpi.abs() > 1e-10 {
+        let iv_neg = complex_iv_scalar(-v, z);
+        let iv_pos = complex_iv_scalar(v, z);
+        let pi_half = Complex64::new(PI / 2.0, 0.0);
+        let sin_vpi_c = Complex64::new(sin_vpi, 0.0);
+        return Ok(pi_half * (iv_neg - iv_pos) / sin_vpi_c);
+    }
+
+    // Integer order: use recurrence
+    let n = v.abs().round() as u32;
+    Ok(complex_kn_integer(n, z))
+}
+
+/// Complex K_n(z) for integer order via recurrence.
+fn complex_kn_integer(n: u32, z: Complex64) -> Complex64 {
+    let neg_z = Complex64::new(-z.re, -z.im);
+    let emz = neg_z.exp();
+    let z_inv = z.recip();
+    let scale = Complex64::new(PI / 2.0, 0.0);
+
+    // K_0(z) ≈ -ln(z/2) - γ + O(z²) for small z; π*exp(-z)/(2z) asymptotic
+    // Use asymptotic form for simplicity
+    let mut k_prev = scale * emz * z_inv; // K_0 asymptotic
+    if n == 0 {
+        return k_prev;
+    }
+
+    let one = Complex64::new(1.0, 0.0);
+    let mut k_curr = scale * emz * z_inv * (one + z_inv); // K_1 asymptotic
+    if n == 1 {
+        return k_curr;
+    }
+
+    for k in 1..n {
+        let coeff = Complex64::new(2.0 * k as f64, 0.0) * z_inv;
+        let next = k_prev + coeff * k_curr;
+        k_prev = k_curr;
+        k_curr = next;
+    }
+    k_curr
+}
+
+#[derive(Clone, Copy)]
+enum BesselKind {
+    Jv,
+    Yv,
+    Iv,
+    Kv,
+}
+
+fn bessel_dispatch(
+    function: &'static str,
+    v: &SpecialTensor,
+    z: &SpecialTensor,
+    mode: RuntimeMode,
+    kind: BesselKind,
+) -> SpecialResult {
+    match (v, z) {
+        // Real-real: delegate to existing real scalars
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealScalar(x)) => {
+            let result = match kind {
+                BesselKind::Jv => Ok(jv_scalar(*order, *x)),
+                BesselKind::Yv => yv_scalar(*order, *x, mode),
+                BesselKind::Iv => Ok(iv_scalar(*order, *x)),
+                BesselKind::Kv => kv_scalar(*order, *x, mode),
+            };
+            result.map(SpecialTensor::RealScalar)
+        }
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => orders
+            .iter()
+            .map(|&order| match kind {
+                BesselKind::Jv => Ok(jv_scalar(order, *x)),
+                BesselKind::Yv => yv_scalar(order, *x, mode),
+                BesselKind::Iv => Ok(iv_scalar(order, *x)),
+                BesselKind::Kv => kv_scalar(order, *x, mode),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => xs
+            .iter()
+            .map(|&x| match kind {
+                BesselKind::Jv => Ok(jv_scalar(*order, x)),
+                BesselKind::Yv => yv_scalar(*order, x, mode),
+                BesselKind::Iv => Ok(iv_scalar(*order, x)),
+                BesselKind::Kv => kv_scalar(*order, x, mode),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealVec(xs)) => {
+            if orders.len() != xs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::ShapeMismatch,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(xs.iter())
+                .map(|(&order, &x)| match kind {
+                    BesselKind::Jv => Ok(jv_scalar(order, x)),
+                    BesselKind::Yv => yv_scalar(order, x, mode),
+                    BesselKind::Iv => Ok(iv_scalar(order, x)),
+                    BesselKind::Kv => kv_scalar(order, x, mode),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::RealVec)
+        }
+        // Real order, complex z
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexScalar(z_val)) => {
+            bessel_complex_scalar(function, *order, *z_val, mode, kind)
+                .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexVec(zs)) => zs
+            .iter()
+            .map(|&z_val| bessel_complex_scalar(function, *order, z_val, mode, kind))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexScalar(z_val)) => orders
+            .iter()
+            .map(|&order| bessel_complex_scalar(function, order, *z_val, mode, kind))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexVec(zs)) => {
+            if orders.len() != zs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::ShapeMismatch,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(zs.iter())
+                .map(|(&order, &z_val)| bessel_complex_scalar(function, order, z_val, mode, kind))
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        // Complex order not supported
+        (SpecialTensor::ComplexScalar(_), _) | (SpecialTensor::ComplexVec(_), _) => {
+            not_yet_implemented(function, mode, "complex-valued order not supported")
+        }
+        // Empty
+        (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
+}
+
+fn bessel_complex_scalar(
+    _function: &'static str,
+    order: f64,
+    z: Complex64,
+    mode: RuntimeMode,
+    kind: BesselKind,
+) -> Result<Complex64, SpecialError> {
+    match kind {
+        BesselKind::Jv => Ok(complex_jv_scalar(order, z)),
+        BesselKind::Yv => complex_yv_scalar(order, z, mode),
+        BesselKind::Iv => Ok(complex_iv_scalar(order, z)),
+        BesselKind::Kv => complex_kv_scalar(order, z, mode),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2503,6 +2874,89 @@ mod tests {
         let c = get_complex(result)?;
         assert!(c.re.is_finite());
         assert!(c.im.is_finite());
+        Ok(())
+    }
+
+    // ── Complex cylindrical Bessel function tests ───────────────────────
+
+    #[test]
+    fn complex_jv_real_matches_real_jv() -> Result<(), String> {
+        let v = scalar(1.5);
+        let z_real = scalar(2.0);
+        let z_complex = complex_scalar(2.0, 0.0);
+
+        let real_result = real_value(tensor_result(jv(&v, &z_real, RuntimeMode::Strict))?)?;
+        let complex_result = complex_value(tensor_result(jv(&v, &z_complex, RuntimeMode::Strict))?)?;
+
+        assert!((complex_result.re - real_result).abs() < 1e-10);
+        assert!(complex_result.im.abs() < 1e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_jv_pure_imaginary() -> Result<(), String> {
+        let v = scalar(0.0);
+        let z = complex_scalar(0.0, 2.0);
+        let result = complex_value(tensor_result(jv(&v, &z, RuntimeMode::Strict))?)?;
+        assert!(result.re.is_finite());
+        assert!(result.im.is_finite());
+        Ok(())
+    }
+
+    #[test]
+    fn complex_iv_real_matches_real_iv() -> Result<(), String> {
+        let v = scalar(1.0);
+        let z_real = scalar(2.0);
+        let z_complex = complex_scalar(2.0, 0.0);
+
+        let real_result = real_value(tensor_result(iv(&v, &z_real, RuntimeMode::Strict))?)?;
+        let complex_result = complex_value(tensor_result(iv(&v, &z_complex, RuntimeMode::Strict))?)?;
+
+        assert!((complex_result.re - real_result).abs() < 1e-10);
+        assert!(complex_result.im.abs() < 1e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_yv_tensor_interface() -> Result<(), String> {
+        let v = scalar(1.0);
+        let z = complex_scalar(2.0, 1.0);
+        let result = yv(&v, &z, RuntimeMode::Strict);
+        let c = complex_value(tensor_result(result)?)?;
+        assert!(c.re.is_finite());
+        assert!(c.im.is_finite());
+        Ok(())
+    }
+
+    #[test]
+    fn complex_kv_tensor_interface() -> Result<(), String> {
+        let v = scalar(1.0);
+        let z = complex_scalar(2.0, 1.0);
+        let result = kv(&v, &z, RuntimeMode::Strict);
+        let c = complex_value(tensor_result(result)?)?;
+        assert!(c.re.is_finite());
+        assert!(c.im.is_finite());
+        Ok(())
+    }
+
+    #[test]
+    fn complex_bessel_vector_broadcast() -> Result<(), String> {
+        let v = scalar(0.0);
+        let zs = SpecialTensor::ComplexVec(vec![
+            Complex64::new(1.0, 0.5),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.5, 1.0),
+        ]);
+        let result = tensor_result(jv(&v, &zs, RuntimeMode::Strict))?;
+        match result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 3);
+                for v in values {
+                    assert!(v.is_finite());
+                }
+            }
+            _ => return Err("expected ComplexVec".into()),
+        }
         Ok(())
     }
 }

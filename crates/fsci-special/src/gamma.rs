@@ -259,9 +259,12 @@ fn gammainc_dispatch(
                 .map(SpecialTensor::ComplexVec)
         }
         // Complex a cases - not yet implemented
-        (SpecialTensor::ComplexScalar(_), _)
-        | (SpecialTensor::ComplexVec(_), _) => {
-            not_yet_implemented(function, mode, "complex-valued a parameter not yet supported")
+        (SpecialTensor::ComplexScalar(_), _) | (SpecialTensor::ComplexVec(_), _) => {
+            not_yet_implemented(
+                function,
+                mode,
+                "complex-valued a parameter not yet supported",
+            )
         }
         // Empty tensor cases
         (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Err(SpecialError {
@@ -1681,10 +1684,7 @@ pub fn complex_gammaln(z: Complex64) -> Complex64 {
 /// Complex sine function.
 fn complex_sin(z: Complex64) -> Complex64 {
     // sin(a + bi) = sin(a)cosh(b) + i cos(a)sinh(b)
-    Complex64::new(
-        z.re.sin() * z.im.cosh(),
-        z.re.cos() * z.im.sinh(),
-    )
+    Complex64::new(z.re.sin() * z.im.cosh(), z.re.cos() * z.im.sinh())
 }
 
 /// Complex regularized lower incomplete gamma P(a, z) for real a > 0 and complex z.
@@ -2424,16 +2424,16 @@ mod tests {
 
     #[test]
     fn complex_gammainc_at_z_zero() {
-        let result = complex_gammainc_scalar(2.0, Complex64::new(0.0, 0.0), RuntimeMode::Strict)
-            .unwrap();
+        let result =
+            complex_gammainc_scalar(2.0, Complex64::new(0.0, 0.0), RuntimeMode::Strict).unwrap();
         assert_eq!(result.re, 0.0);
         assert_eq!(result.im, 0.0);
     }
 
     #[test]
     fn complex_gammaincc_at_z_zero() {
-        let result = complex_gammaincc_scalar(2.0, Complex64::new(0.0, 0.0), RuntimeMode::Strict)
-            .unwrap();
+        let result =
+            complex_gammaincc_scalar(2.0, Complex64::new(0.0, 0.0), RuntimeMode::Strict).unwrap();
         assert_eq!(result.re, 1.0);
         assert_eq!(result.im, 0.0);
     }
