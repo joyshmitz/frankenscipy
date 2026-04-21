@@ -7405,6 +7405,55 @@ pub fn ttest_1samp(data: &[f64], popmean: f64) -> TtestResult {
     }
 }
 
+/// One-sample t-test with alternative hypothesis specification.
+///
+/// Matches `scipy.stats.ttest_1samp(a, popmean, alternative=...)`.
+///
+/// # Arguments
+/// * `data` - Sample data
+/// * `popmean` - Expected population mean under H0
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn ttest_1samp_alternative(data: &[f64], popmean: f64, alternative: &str) -> TtestResult {
+    let n = data.len() as f64;
+    if data.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: n - 1.0,
+        };
+    }
+    let mean: f64 = data.iter().sum::<f64>() / n;
+    let var: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let se = (var / n).sqrt();
+    if se == 0.0 {
+        let statistic = if (mean - popmean).abs() == 0.0 {
+            f64::NAN
+        } else {
+            (mean - popmean).signum() * f64::INFINITY
+        };
+        return TtestResult {
+            statistic,
+            pvalue: if statistic.is_nan() { f64::NAN } else { 0.0 },
+            df: n - 1.0,
+        };
+    }
+    let t = (mean - popmean) / se;
+    let df = n - 1.0;
+    let tdist = StudentT::new(df);
+
+    let pvalue = match alternative {
+        "less" => tdist.cdf(t),
+        "greater" => tdist.sf(t),
+        _ => 2.0 * tdist.sf(t.abs()),
+    };
+
+    TtestResult {
+        statistic: t,
+        pvalue,
+        df,
+    }
+}
+
 /// Independent two-sample t-test (equal variance assumed).
 ///
 /// Matches `scipy.stats.ttest_ind(a, b, equal_var=True)`.
@@ -17531,6 +17580,37 @@ mod tests {
             "should reject H0, p={}",
             result.pvalue
         );
+    }
+
+    #[test]
+    fn ttest_1samp_alternative_less() {
+        let data: Vec<f64> = (0..50).map(|i| (i as f64) * 0.1).collect();
+        let two_sided = ttest_1samp(&data, 5.0);
+        let less = ttest_1samp_alternative(&data, 5.0, "less");
+        let greater = ttest_1samp_alternative(&data, 5.0, "greater");
+
+        assert!((two_sided.statistic - less.statistic).abs() < 1e-10);
+        assert!((two_sided.statistic - greater.statistic).abs() < 1e-10);
+        assert!((less.pvalue + greater.pvalue - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ttest_1samp_alternative_greater_positive_shift() {
+        let data: Vec<f64> = (0..50).map(|i| 10.0 + (i as f64) * 0.01).collect();
+        let greater = ttest_1samp_alternative(&data, 0.0, "greater");
+        let less = ttest_1samp_alternative(&data, 0.0, "less");
+
+        assert!(greater.pvalue < 0.001, "greater should be significant");
+        assert!(less.pvalue > 0.999, "less should not be significant");
+    }
+
+    #[test]
+    fn ttest_1samp_alternative_two_sided_default() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let default = ttest_1samp(&data, 3.0);
+        let two_sided = ttest_1samp_alternative(&data, 3.0, "two-sided");
+
+        assert!((default.pvalue - two_sided.pvalue).abs() < 1e-10);
     }
 
     #[test]
