@@ -38,11 +38,23 @@ impl std::error::Error for StatsError {}
 pub trait ContinuousDistribution {
     /// Probability density function.
     fn pdf(&self, x: f64) -> f64;
+    /// Log probability density function.
+    fn logpdf(&self, x: f64) -> f64 {
+        log_probability(self.pdf(x))
+    }
     /// Cumulative distribution function.
     fn cdf(&self, x: f64) -> f64;
+    /// Log cumulative distribution function.
+    fn logcdf(&self, x: f64) -> f64 {
+        log_probability(self.cdf(x))
+    }
     /// Survival function: 1 - cdf(x).
     fn sf(&self, x: f64) -> f64 {
         1.0 - self.cdf(x)
+    }
+    /// Log survival function.
+    fn logsf(&self, x: f64) -> f64 {
+        log_probability(self.sf(x))
     }
     /// Percent point function (inverse CDF) via bisection.
     /// Override for distributions with analytic inverses.
@@ -147,6 +159,14 @@ where
     D: ContinuousDistribution,
 {
     D::fit(data)
+}
+
+fn log_probability(probability: f64) -> f64 {
+    if probability < 0.0 {
+        f64::NAN
+    } else {
+        probability.ln()
+    }
 }
 
 /// Generic inverse CDF via bisection search.
@@ -362,14 +382,29 @@ impl ContinuousDistribution for Normal {
         (-0.5 * z * z).exp() / (self.scale * (2.0 * PI).sqrt())
     }
 
+    fn logpdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        -0.5 * z * z - self.scale.ln() - 0.5 * (2.0 * PI).ln()
+    }
+
     fn cdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         0.5 * (1.0 + fsci_special::erf_scalar(z * FRAC_1_SQRT_2))
     }
 
+    fn logcdf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        fsci_special::log_ndtr(z)
+    }
+
     fn sf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         0.5 * fsci_special::erfc_scalar(z * FRAC_1_SQRT_2)
+    }
+
+    fn logsf(&self, x: f64) -> f64 {
+        let z = (x - self.loc) / self.scale;
+        fsci_special::log_ndtr(-z)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -519,11 +554,7 @@ impl ContinuousDistribution for StudentT {
     }
 
     fn skewness(&self) -> f64 {
-        if self.df > 3.0 {
-            0.0
-        } else {
-            f64::NAN
-        }
+        if self.df > 3.0 { 0.0 } else { f64::NAN }
     }
 
     fn kurtosis(&self) -> f64 {
@@ -8978,6 +9009,86 @@ pub fn trim_mean(data: &[f64], proportiontocut: f64) -> f64 {
     trimmed.iter().sum::<f64>() / trimmed.len() as f64
 }
 
+/// Result of sigma clipping operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SigmaClipResult {
+    /// Clipped data array (values within bounds).
+    pub clipped: Vec<f64>,
+    /// Lower bound used for clipping.
+    pub lower: f64,
+    /// Upper bound used for clipping.
+    pub upper: f64,
+}
+
+/// Iteratively sigma-clip data to remove outliers.
+///
+/// Performs iterative sigma-clipping of array elements. Starting from the full
+/// array, elements outside the range [mean - low*std, mean + high*std] are
+/// removed. The clipping is repeated until no more elements are removed.
+///
+/// Matches `scipy.stats.sigmaclip(a, low=low, high=high)`.
+///
+/// # Arguments
+/// * `data` - Input data array
+/// * `low` - Number of standard deviations below mean for lower clipping bound
+/// * `high` - Number of standard deviations above mean for upper clipping bound
+///
+/// # Returns
+/// `SigmaClipResult` containing clipped array and final bounds.
+pub fn sigmaclip(data: &[f64], low: f64, high: f64) -> SigmaClipResult {
+    if data.is_empty() {
+        return SigmaClipResult {
+            clipped: vec![],
+            lower: f64::NAN,
+            upper: f64::NAN,
+        };
+    }
+
+    let mut clipped: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+
+    if clipped.is_empty() {
+        return SigmaClipResult {
+            clipped: vec![],
+            lower: f64::NAN,
+            upper: f64::NAN,
+        };
+    }
+
+    loop {
+        let n = clipped.len() as f64;
+        let mean_val = clipped.iter().sum::<f64>() / n;
+        let variance = clipped.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / n;
+        let std_val = variance.sqrt();
+
+        let lower = mean_val - low * std_val;
+        let upper = mean_val + high * std_val;
+
+        let new_clipped: Vec<f64> = clipped
+            .iter()
+            .copied()
+            .filter(|&x| x >= lower && x <= upper)
+            .collect();
+
+        if new_clipped.len() == clipped.len() {
+            return SigmaClipResult {
+                clipped,
+                lower,
+                upper,
+            };
+        }
+
+        if new_clipped.is_empty() {
+            return SigmaClipResult {
+                clipped: vec![],
+                lower: f64::NAN,
+                upper: f64::NAN,
+            };
+        }
+
+        clipped = new_clipped;
+    }
+}
+
 /// Exact binomial test.
 ///
 /// Tests H0: probability of success = p, given k successes in n trials.
@@ -14037,6 +14148,36 @@ mod tests {
         assert_close(n.std(), 3.0, 1e-12, "std = sqrt(var)");
     }
 
+    #[test]
+    fn trait_log_methods_default_to_probability_logs() {
+        let u = Uniform::new(-1.0, 2.0);
+        assert_close(u.logpdf(0.0), (-2.0_f64.ln()), 1e-12, "uniform logpdf(0)");
+        assert_close(u.logcdf(0.0), (-2.0_f64.ln()), 1e-12, "uniform logcdf(0)");
+        assert_close(u.logsf(0.0), (-2.0_f64.ln()), 1e-12, "uniform logsf(0)");
+        assert!(u.logpdf(5.0).is_infinite() && u.logpdf(5.0).is_sign_negative());
+        assert!(u.logcdf(-2.0).is_infinite() && u.logcdf(-2.0).is_sign_negative());
+        assert!(u.logsf(2.0).is_infinite() && u.logsf(2.0).is_sign_negative());
+    }
+
+    #[test]
+    fn normal_log_methods_remain_finite_in_extreme_tails() {
+        let n = Normal::standard();
+        let left = -40.0;
+        let right = 40.0;
+
+        assert_eq!(n.pdf(right), 0.0);
+        assert_eq!(n.cdf(left), 0.0);
+        assert_eq!(n.sf(right), 0.0);
+
+        assert!(n.logpdf(right).is_finite());
+        assert!(n.logcdf(left).is_finite());
+        assert!(n.logsf(right).is_finite());
+
+        assert!(n.logpdf(right) < -700.0);
+        assert!(n.logcdf(left) < -700.0);
+        assert!(n.logsf(right) < -700.0);
+    }
+
     // ── Exponential distribution ────────────────────────────────────
 
     #[test]
@@ -15381,7 +15522,9 @@ mod tests {
         assert!(
             (sf_x - q).abs() < 1e-6,
             "isf should satisfy sf(isf(q)) = q; got sf({})={}, expected {}",
-            x, sf_x, q
+            x,
+            sf_x,
+            q
         );
     }
 
@@ -16153,7 +16296,12 @@ mod tests {
     #[test]
     fn discrete_bernoulli_entropy() {
         let b = Bernoulli::new(0.5);
-        assert_close(b.entropy(), 2.0_f64.ln(), 1e-10, "Bernoulli(0.5) entropy = ln(2)");
+        assert_close(
+            b.entropy(),
+            2.0_f64.ln(),
+            1e-10,
+            "Bernoulli(0.5) entropy = ln(2)",
+        );
         let b0 = Bernoulli::new(0.0);
         assert_close(b0.entropy(), 0.0, 1e-10, "Bernoulli(0) entropy = 0");
         let b1 = Bernoulli::new(1.0);
@@ -16170,7 +16318,12 @@ mod tests {
     #[test]
     fn discrete_geometric_stats() {
         let g = Geometric::new(0.5);
-        assert_close(g.skewness(), 1.5 / (0.5_f64).sqrt(), 1e-10, "Geometric skewness");
+        assert_close(
+            g.skewness(),
+            1.5 / (0.5_f64).sqrt(),
+            1e-10,
+            "Geometric skewness",
+        );
         assert_close(g.kurtosis(), 6.5, 1e-10, "Geometric kurtosis");
         assert_close(g.mode(), 1.0, 1e-10, "Geometric mode = 1");
     }
@@ -16187,7 +16340,10 @@ mod tests {
         let h = Hypergeometric::new(100, 30, 20);
         assert!(h.skewness().is_finite(), "Hypergeometric skewness finite");
         assert!(h.kurtosis().is_finite(), "Hypergeometric kurtosis finite");
-        assert!(h.mode() >= 0.0 && h.mode() <= 20.0, "Hypergeometric mode in valid range");
+        assert!(
+            h.mode() >= 0.0 && h.mode() <= 20.0,
+            "Hypergeometric mode in valid range"
+        );
     }
 
     #[test]
@@ -16944,7 +17100,10 @@ mod tests {
         let result = kurtosistest(&data, None, None).expect("kurtosistest");
         assert!(result.statistic.is_finite(), "statistic should be finite");
         assert!(result.pvalue.is_finite(), "pvalue should be finite");
-        assert!(result.pvalue >= 0.0 && result.pvalue <= 1.0, "pvalue in [0,1]");
+        assert!(
+            result.pvalue >= 0.0 && result.pvalue <= 1.0,
+            "pvalue in [0,1]"
+        );
     }
 
     #[test]
@@ -16960,7 +17119,10 @@ mod tests {
     fn kurtosistest_too_small_sample() {
         let data: Vec<f64> = (0..15).map(|i| i as f64).collect();
         let result = kurtosistest(&data, None, None).expect("small sample");
-        assert!(result.statistic.is_nan(), "n<20 should return NaN statistic");
+        assert!(
+            result.statistic.is_nan(),
+            "n<20 should return NaN statistic"
+        );
         assert!(result.pvalue.is_nan(), "n<20 should return NaN pvalue");
     }
 
@@ -18085,6 +18247,63 @@ mod tests {
     #[test]
     fn trim_mean_empty() {
         assert!(trim_mean(&[], 0.1).is_nan());
+    }
+
+    // ── sigmaclip tests ──────────────────────────────────────────────
+
+    #[test]
+    fn sigmaclip_no_outliers() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = sigmaclip(&data, 3.0, 3.0);
+        assert_eq!(result.clipped.len(), 5, "no values removed");
+        assert!(result.lower.is_finite());
+        assert!(result.upper.is_finite());
+    }
+
+    #[test]
+    fn sigmaclip_removes_outlier() {
+        let mut data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        data.push(100.0); // extreme outlier
+        let result = sigmaclip(&data, 2.0, 2.0);
+        assert!(result.clipped.len() < 6, "outlier should be removed");
+        assert!(!result.clipped.contains(&100.0), "100 should be clipped");
+    }
+
+    #[test]
+    fn sigmaclip_symmetric_bounds() {
+        let data: Vec<f64> = (0..100).map(|i| i as f64).collect();
+        let result = sigmaclip(&data, 2.0, 2.0);
+        let mean = result.clipped.iter().sum::<f64>() / result.clipped.len() as f64;
+        assert!(
+            (result.upper - mean - (mean - result.lower)).abs() < 1.0,
+            "bounds should be roughly symmetric"
+        );
+    }
+
+    #[test]
+    fn sigmaclip_empty_input() {
+        let result = sigmaclip(&[], 3.0, 3.0);
+        assert!(result.clipped.is_empty());
+        assert!(result.lower.is_nan());
+        assert!(result.upper.is_nan());
+    }
+
+    #[test]
+    fn sigmaclip_handles_nan() {
+        let data = vec![1.0, 2.0, f64::NAN, 4.0, 5.0];
+        let result = sigmaclip(&data, 3.0, 3.0);
+        assert_eq!(result.clipped.len(), 4, "NaN should be filtered");
+    }
+
+    #[test]
+    fn sigmaclip_asymmetric() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 100.0];
+        let result = sigmaclip(&data, 3.0, 1.5); // tighter upper bound
+        // The extreme outlier at 100 should be removed with a tight upper bound
+        assert!(
+            result.clipped.len() < 6 || !result.clipped.contains(&100.0),
+            "asymmetric bounds work"
+        );
     }
 
     // ── binomtest tests ──────────────────────────────────────────────
@@ -19973,7 +20192,10 @@ mod tests {
         // Distributions without explicit entropy should return NaN
         // StudentT doesn't have entropy implemented yet
         let t = StudentT::new(5.0);
-        assert!(t.entropy().is_nan(), "StudentT entropy should be NaN (default)");
+        assert!(
+            t.entropy().is_nan(),
+            "StudentT entropy should be NaN (default)"
+        );
     }
 
     // ── Median tests ─────────────────────────────────────────────────────
@@ -20031,8 +20253,18 @@ mod tests {
     fn dist_skewness_symmetric() {
         // Symmetric distributions have skewness 0
         assert_close(Normal::standard().skewness(), 0.0, 1e-10, "Normal skewness");
-        assert_close(Uniform::new(0.0, 1.0).skewness(), 0.0, 1e-10, "Uniform skewness");
-        assert_close(Laplace::default().skewness(), 0.0, 1e-10, "Laplace skewness");
+        assert_close(
+            Uniform::new(0.0, 1.0).skewness(),
+            0.0,
+            1e-10,
+            "Uniform skewness",
+        );
+        assert_close(
+            Laplace::default().skewness(),
+            0.0,
+            1e-10,
+            "Laplace skewness",
+        );
     }
 
     #[test]
@@ -20088,7 +20320,12 @@ mod tests {
     fn dist_kurtosis_normal() {
         // Normal has excess kurtosis 0
         assert_close(Normal::standard().kurtosis(), 0.0, 1e-10, "Normal kurtosis");
-        assert_close(Normal::new(5.0, 3.0).kurtosis(), 0.0, 1e-10, "N(5,3) kurtosis");
+        assert_close(
+            Normal::new(5.0, 3.0).kurtosis(),
+            0.0,
+            1e-10,
+            "N(5,3) kurtosis",
+        );
     }
 
     #[test]
@@ -20221,7 +20458,12 @@ mod tests {
         assert_close(l.entropy(), 2.0, 1e-10, "Logistic(0,1) entropy");
 
         let l2 = Logistic::new(0.0, 2.0);
-        assert_close(l2.entropy(), 2.0_f64.ln() + 2.0, 1e-10, "Logistic(0,2) entropy");
+        assert_close(
+            l2.entropy(),
+            2.0_f64.ln() + 2.0,
+            1e-10,
+            "Logistic(0,2) entropy",
+        );
     }
 
     #[test]
