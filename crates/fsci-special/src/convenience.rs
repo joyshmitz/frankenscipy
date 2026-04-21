@@ -3962,8 +3962,24 @@ pub fn hard_swish_scalar(x: f64) -> f64 {
 /// hard_tanh(x, min, max) = clip(x, min, max)
 ///
 /// A clipped version of the identity function, approximating tanh.
+pub fn hard_tanh(
+    x_tensor: &SpecialTensor,
+    min_tensor: &SpecialTensor,
+    max_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_ternary(
+        "hard_tanh",
+        x_tensor,
+        min_tensor,
+        max_tensor,
+        mode,
+        |x, min_val, max_val| Ok(hard_tanh_scalar(x, min_val, max_val)),
+    )
+}
+
 #[must_use]
-pub fn hard_tanh(x: f64, min_val: f64, max_val: f64) -> f64 {
+pub fn hard_tanh_scalar(x: f64, min_val: f64, max_val: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -4024,8 +4040,24 @@ pub fn softsign_scalar(x: f64) -> f64 {
 ///   value otherwise
 ///
 /// A simple step function with configurable threshold and fill value.
+pub fn threshold(
+    x_tensor: &SpecialTensor,
+    thresh_tensor: &SpecialTensor,
+    value_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_ternary(
+        "threshold",
+        x_tensor,
+        thresh_tensor,
+        value_tensor,
+        mode,
+        |x, thresh, value| Ok(threshold_scalar(x, thresh, value)),
+    )
+}
+
 #[must_use]
-pub fn threshold(x: f64, thresh: f64, value: f64) -> f64 {
+pub fn threshold_scalar(x: f64, thresh: f64, value: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -5687,9 +5719,54 @@ mod tests {
     #[test]
     fn hard_tanh_basic() {
         // Clipped to range
-        assert!((hard_tanh(0.5, -1.0, 1.0) - 0.5).abs() < 1e-14);
-        assert!((hard_tanh(2.0, -1.0, 1.0) - 1.0).abs() < 1e-14);
-        assert!((hard_tanh(-2.0, -1.0, 1.0) - (-1.0)).abs() < 1e-14);
+        assert!((hard_tanh_scalar(0.5, -1.0, 1.0) - 0.5).abs() < 1e-14);
+        assert!((hard_tanh_scalar(2.0, -1.0, 1.0) - 1.0).abs() < 1e-14);
+        assert!((hard_tanh_scalar(-2.0, -1.0, 1.0) - (-1.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn hard_tanh_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = hard_tanh(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealScalar(-1.0),
+            &SpecialTensor::RealScalar(1.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - hard_tanh_scalar(2.0, -1.0, 1.0)).abs() < 1e-14);
+
+        let vector = hard_tanh(
+            &SpecialTensor::RealVec(vec![-2.0, 0.5, 2.0]),
+            &SpecialTensor::RealScalar(-1.0),
+            &SpecialTensor::RealScalar(1.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.5, 2.0].map(|x| hard_tanh_scalar(x, -1.0, 1.0));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hard_tanh_tensor_dispatch_preserves_nan_and_bounds() -> Result<(), String> {
+        let vector = hard_tanh(
+            &SpecialTensor::RealVec(vec![f64::NAN, -2.0, 0.25, 2.0]),
+            &SpecialTensor::RealScalar(-1.0),
+            &SpecialTensor::RealScalar(1.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!((values[1] + 1.0).abs() < 1e-14);
+        assert!((values[2] - 0.25).abs() < 1e-14);
+        assert!((values[3] - 1.0).abs() < 1e-14);
+        Ok(())
     }
 
     #[test]
@@ -5756,11 +5833,56 @@ mod tests {
     #[test]
     fn threshold_basic() {
         // Above threshold: pass through
-        assert!((threshold(5.0, 0.0, -1.0) - 5.0).abs() < 1e-14);
+        assert!((threshold_scalar(5.0, 0.0, -1.0) - 5.0).abs() < 1e-14);
         // Below threshold: use value
-        assert!((threshold(-5.0, 0.0, -1.0) - (-1.0)).abs() < 1e-14);
+        assert!((threshold_scalar(-5.0, 0.0, -1.0) - (-1.0)).abs() < 1e-14);
         // At threshold: use value (not strictly greater)
-        assert!((threshold(0.0, 0.0, -1.0) - (-1.0)).abs() < 1e-14);
+        assert!((threshold_scalar(0.0, 0.0, -1.0) - (-1.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn threshold_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = threshold(
+            &SpecialTensor::RealScalar(5.0),
+            &SpecialTensor::RealScalar(0.0),
+            &SpecialTensor::RealScalar(-1.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - threshold_scalar(5.0, 0.0, -1.0)).abs() < 1e-14);
+
+        let vector = threshold(
+            &SpecialTensor::RealVec(vec![-5.0, 0.0, 5.0]),
+            &SpecialTensor::RealScalar(0.0),
+            &SpecialTensor::RealScalar(-1.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-5.0, 0.0, 5.0].map(|x| threshold_scalar(x, 0.0, -1.0));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn threshold_tensor_dispatch_preserves_nan_and_boundaries() -> Result<(), String> {
+        let vector = threshold(
+            &SpecialTensor::RealVec(vec![f64::NAN, -1.0, 0.0, 2.0]),
+            &SpecialTensor::RealScalar(0.0),
+            &SpecialTensor::RealScalar(-3.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!((values[1] + 3.0).abs() < 1e-14);
+        assert!((values[2] + 3.0).abs() < 1e-14);
+        assert!((values[3] - 2.0).abs() < 1e-14);
+        Ok(())
     }
 
     #[test]
