@@ -8638,6 +8638,54 @@ fn rankdata_ordinal(data: &[f64]) -> Vec<f64> {
     ranks
 }
 
+/// Compute the tie correction factor for rank-based statistical tests.
+///
+/// The tie correction factor T is used to adjust test statistics when
+/// there are tied values in the data. It is defined as:
+///
+/// T = 1 - sum(t_i^3 - t_i) / (n^3 - n)
+///
+/// where t_i is the number of ties in group i and n is the total number of values.
+///
+/// Matches `scipy.stats.tiecorrect(rankvals)`.
+///
+/// # Arguments
+/// * `rankvals` - Ranked data (typically from `rankdata` with method="average")
+///
+/// # Returns
+/// The tie correction factor T, where 1.0 means no ties and values < 1.0
+/// indicate the presence of ties.
+pub fn tiecorrect(rankvals: &[f64]) -> f64 {
+    let n = rankvals.len();
+    if n < 2 {
+        return 1.0;
+    }
+
+    let mut sorted = rankvals.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+
+    let mut tie_sum = 0_i64;
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n && (sorted[j] - sorted[i]).abs() < 1e-10 {
+            j += 1;
+        }
+        let t = (j - i) as i64;
+        if t > 1 {
+            tie_sum += t * t * t - t;
+        }
+        i = j;
+    }
+
+    let n3 = (n as i64) * (n as i64) * (n as i64) - (n as i64);
+    if n3 == 0 {
+        return 1.0;
+    }
+
+    1.0 - (tie_sum as f64) / (n3 as f64)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Summary Statistics
 // ══════════════════════════════════════════════════════════════════════
@@ -15906,6 +15954,50 @@ mod tests {
                 "method must be one of {'average', 'min', 'max', 'dense', 'ordinal'}".to_string()
             )
         );
+    }
+
+    // ── tiecorrect tests ──────────────────────────────────────────
+
+    #[test]
+    fn tiecorrect_no_ties() {
+        // No ties: [1, 2, 3, 4] → T = 1.0
+        let ranks = vec![1.0, 2.0, 3.0, 4.0];
+        let t = tiecorrect(&ranks);
+        assert!((t - 1.0).abs() < 1e-10, "no ties should give T=1: {}", t);
+    }
+
+    #[test]
+    fn tiecorrect_with_ties() {
+        // Ranks with ties: [1.5, 1.5, 3, 4] (two values tied at rank 1.5)
+        let ranks = vec![1.5, 1.5, 3.0, 4.0];
+        let t = tiecorrect(&ranks);
+        // T = 1 - (2^3 - 2) / (4^3 - 4) = 1 - 6/60 = 1 - 0.1 = 0.9
+        assert!((t - 0.9).abs() < 1e-10, "one tie group of 2: {}", t);
+    }
+
+    #[test]
+    fn tiecorrect_all_tied() {
+        // All same rank: [2.5, 2.5, 2.5, 2.5]
+        let ranks = vec![2.5, 2.5, 2.5, 2.5];
+        let t = tiecorrect(&ranks);
+        // T = 1 - (4^3 - 4) / (4^3 - 4) = 0
+        assert!((t - 0.0).abs() < 1e-10, "all tied: {}", t);
+    }
+
+    #[test]
+    fn tiecorrect_multiple_tie_groups() {
+        // [1.5, 1.5, 3.5, 3.5, 5.5, 5.5]
+        let ranks = vec![1.5, 1.5, 3.5, 3.5, 5.5, 5.5];
+        let t = tiecorrect(&ranks);
+        // Three groups of 2: sum = 3*(8-2) = 18, n^3 - n = 216 - 6 = 210
+        // T = 1 - 18/210 = 1 - 3/35 ≈ 0.914
+        assert!(t < 1.0 && t > 0.9, "multiple tie groups: {}", t);
+    }
+
+    #[test]
+    fn tiecorrect_empty_and_single() {
+        assert!((tiecorrect(&[]) - 1.0).abs() < 1e-10, "empty");
+        assert!((tiecorrect(&[1.0]) - 1.0).abs() < 1e-10, "single");
     }
 
     // ── Summary statistics ────────────────────────────────────────
