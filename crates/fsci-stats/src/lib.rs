@@ -7593,6 +7593,107 @@ pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
     }
 }
 
+/// Result for Tukey's HSD test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TukeyHSDResult {
+    /// Pairwise mean differences (i,j) = mean_i - mean_j.
+    pub statistic: Vec<Vec<f64>>,
+    /// Pairwise p-values using Bonferroni correction.
+    pub pvalue: Vec<Vec<f64>>,
+}
+
+/// Tukey's HSD test for pairwise comparison of group means.
+///
+/// Post-hoc test after ANOVA to identify which groups differ.
+/// Uses Bonferroni-corrected t-tests as approximation.
+///
+/// Similar to `scipy.stats.tukey_hsd(*groups)`.
+///
+/// # Arguments
+/// * `groups` - Slice of sample arrays for each group
+///
+/// # Returns
+/// `TukeyHSDResult` with matrices of statistics and p-values.
+pub fn tukey_hsd(groups: &[&[f64]]) -> TukeyHSDResult {
+    let k = groups.len();
+    if k < 2 {
+        return TukeyHSDResult {
+            statistic: vec![],
+            pvalue: vec![],
+        };
+    }
+
+    // Compute group means
+    let means: Vec<f64> = groups
+        .iter()
+        .map(|g| {
+            if g.is_empty() {
+                f64::NAN
+            } else {
+                g.iter().sum::<f64>() / g.len() as f64
+            }
+        })
+        .collect();
+
+    // Compute pooled variance (MSE from ANOVA)
+    let n_total: usize = groups.iter().map(|g| g.len()).sum();
+    let df_within = n_total as f64 - k as f64;
+
+    if df_within <= 0.0 {
+        return TukeyHSDResult {
+            statistic: vec![vec![f64::NAN; k]; k],
+            pvalue: vec![vec![f64::NAN; k]; k],
+        };
+    }
+
+    let ss_within: f64 = groups
+        .iter()
+        .zip(means.iter())
+        .map(|(g, &m)| g.iter().map(|&x| (x - m).powi(2)).sum::<f64>())
+        .sum();
+    let mse = ss_within / df_within;
+
+    // Number of pairwise comparisons for Bonferroni
+    let num_comparisons = k * (k - 1) / 2;
+
+    // Compute pairwise statistics and p-values
+    let mut stat_matrix = vec![vec![0.0; k]; k];
+    let mut pval_matrix = vec![vec![1.0; k]; k];
+
+    let tdist = StudentT::new(df_within);
+
+    for i in 0..k {
+        for j in 0..k {
+            if i == j {
+                stat_matrix[i][j] = 0.0;
+                pval_matrix[i][j] = 1.0;
+            } else {
+                let mean_diff = means[i] - means[j];
+                stat_matrix[i][j] = mean_diff;
+
+                // Standard error for difference of means
+                let ni = groups[i].len() as f64;
+                let nj = groups[j].len() as f64;
+                let se = (mse * (1.0 / ni + 1.0 / nj)).sqrt();
+
+                if se > 0.0 {
+                    let t = mean_diff.abs() / se;
+                    let p_raw = 2.0 * (1.0 - tdist.cdf(t));
+                    // Bonferroni correction
+                    pval_matrix[i][j] = (p_raw * num_comparisons as f64).min(1.0);
+                } else {
+                    pval_matrix[i][j] = f64::NAN;
+                }
+            }
+        }
+    }
+
+    TukeyHSDResult {
+        statistic: stat_matrix,
+        pvalue: pval_matrix,
+    }
+}
+
 /// Levene's test for equal variances using median-centered absolute deviations.
 ///
 /// Matches the robust default behavior of `scipy.stats.levene(*groups)`.
@@ -20073,6 +20174,68 @@ mod tests {
         assert!(theilslopes(&[1.0], &[1.0], 0.95).slope.is_nan());
         // Different lengths
         assert!(theilslopes(&[1.0, 2.0], &[1.0], 0.95).slope.is_nan());
+    }
+
+    // ── tukey_hsd tests ──────────────────────────────────────────────
+
+    #[test]
+    fn tukey_hsd_different_means() {
+        // Group 1 has mean ~10, Group 2 has mean ~15
+        let g1 = [10.0, 11.0, 10.5, 9.5, 10.0];
+        let g2 = [15.0, 16.0, 14.5, 15.5, 14.0];
+        let result = tukey_hsd(&[&g1, &g2]);
+
+        assert_eq!(result.statistic.len(), 2);
+        assert_eq!(result.statistic[0].len(), 2);
+
+        // statistic[0][1] should be mean(g1) - mean(g2) ≈ -5
+        assert!(
+            (result.statistic[0][1] - (-5.0)).abs() < 0.5,
+            "mean diff: {}",
+            result.statistic[0][1]
+        );
+        // Diagonal should be 0
+        assert_eq!(result.statistic[0][0], 0.0);
+        assert_eq!(result.statistic[1][1], 0.0);
+        // Should be significant
+        assert!(result.pvalue[0][1] < 0.05, "pvalue: {}", result.pvalue[0][1]);
+    }
+
+    #[test]
+    fn tukey_hsd_same_means() {
+        // All groups have similar means
+        let g1 = [10.0, 10.5, 9.5, 10.2, 9.8];
+        let g2 = [10.1, 9.9, 10.3, 9.7, 10.0];
+        let result = tukey_hsd(&[&g1, &g2]);
+
+        // Should not be significant
+        assert!(
+            result.pvalue[0][1] > 0.05,
+            "similar means should not be significant: {}",
+            result.pvalue[0][1]
+        );
+    }
+
+    #[test]
+    fn tukey_hsd_three_groups() {
+        // Three groups test
+        let g1 = [10.0, 11.0, 10.5];
+        let g2 = [15.0, 16.0, 14.5];
+        let g3 = [10.5, 9.5, 10.0];
+        let result = tukey_hsd(&[&g1, &g2, &g3]);
+
+        assert_eq!(result.statistic.len(), 3);
+        assert_eq!(result.pvalue.len(), 3);
+        // g1 vs g2 should be significant
+        assert!(result.pvalue[0][1] < 0.1);
+        // g1 vs g3 should not be significant
+        assert!(result.pvalue[0][2] > 0.5);
+    }
+
+    #[test]
+    fn tukey_hsd_edge_cases() {
+        // Less than 2 groups
+        assert!(tukey_hsd(&[&[1.0, 2.0]]).statistic.is_empty());
     }
 
     // ── quantile_test tests ──────────────────────────────────────────
