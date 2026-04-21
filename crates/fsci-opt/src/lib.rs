@@ -1750,6 +1750,74 @@ where
     })
 }
 
+/// Brute-force global optimization.
+///
+/// Evaluates the objective function at each point of a multidimensional grid
+/// defined by `ranges` and `ns` (number of samples per dimension), returning
+/// the point with the lowest value.
+/// Matches `scipy.optimize.brute(func, ranges, Ns=ns)`.
+pub fn brute<F>(func: F, ranges: &[(f64, f64)], ns: usize) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let ndim = ranges.len();
+    if ndim == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "ranges must not be empty".to_string(),
+        });
+    }
+    if ns < 2 {
+        return Err(OptError::InvalidArgument {
+            detail: "ns must be at least 2".to_string(),
+        });
+    }
+    for &(lb, ub) in ranges {
+        if !lb.is_finite() || !ub.is_finite() || lb >= ub {
+            return Err(OptError::InvalidArgument {
+                detail: format!("invalid range: ({}, {})", lb, ub),
+            });
+        }
+    }
+
+    let mut best_x = vec![0.0; ndim];
+    let mut best_f = f64::INFINITY;
+    let mut nfev = 0;
+
+    let total_points = ns.pow(ndim as u32);
+    for idx in 0..total_points {
+        let mut current_idx = idx;
+        let mut x = vec![0.0; ndim];
+        for d in 0..ndim {
+            let step_idx = current_idx % ns;
+            current_idx /= ns;
+            let (lb, ub) = ranges[d];
+            x[d] = lb + (ub - lb) * (step_idx as f64) / ((ns - 1) as f64);
+        }
+
+        let f = func(&x);
+        nfev += 1;
+        if f < best_f {
+            best_f = f;
+            best_x = x;
+        }
+    }
+
+    Ok(OptimizeResult {
+        x: best_x,
+        fun: Some(best_f),
+        nit: total_points,
+        nfev,
+        njev: 0,
+        nhev: 0,
+        success: true,
+        status: ConvergenceStatus::Success,
+        message: "brute completed".to_string(),
+        jac: None,
+        hess_inv: None,
+        maxcv: None,
+    })
+}
+
 /// Simplicial homology global optimization over a bounded box.
 ///
 /// This implementation uses a bounded lattice search to identify promising
@@ -3826,6 +3894,23 @@ mod tests {
                 "particle coordinate {i} should stay in bounds [{lo}, {hi}], got {xi}"
             );
         }
+    }
+
+    #[test]
+    fn brute_finds_sphere_minimum() {
+        let result = crate::brute(
+            |x: &[f64]| x.iter().map(|&xi| xi * xi).sum(),
+            &[(-5.0, 5.0), (-5.0, 5.0)],
+            11,
+        )
+        .expect("brute sphere");
+        assert!(result.success);
+        assert!(
+            result.fun.expect("objective value") < 1e-6,
+            "expected exactly zero minimum (since 0.0 is on the grid), got {:?}",
+            result.fun
+        );
+        assert_eq!(result.x, vec![0.0, 0.0]);
     }
 
     #[test]
