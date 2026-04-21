@@ -14774,6 +14774,75 @@ pub fn theil_sen(x: &[f64], y: &[f64]) -> (f64, f64) {
     (slope, intercept)
 }
 
+/// Result for Siegel's repeated median regression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SiegelslopesResult {
+    /// Estimated slope.
+    pub slope: f64,
+    /// Estimated intercept.
+    pub intercept: f64,
+}
+
+/// Siegel's repeated median regression estimator.
+///
+/// More robust than Theil-Sen with 50% breakdown point.
+/// Computes median of median slopes.
+///
+/// Matches `scipy.stats.siegelslopes(y, x, method='hierarchical')`.
+///
+/// # Arguments
+/// * `x` - Independent variable
+/// * `y` - Dependent variable
+///
+/// # Returns
+/// `SiegelslopesResult` with slope and intercept.
+pub fn siegelslopes(x: &[f64], y: &[f64]) -> SiegelslopesResult {
+    let n = x.len();
+    if n < 2 || n != y.len() {
+        return SiegelslopesResult {
+            slope: f64::NAN,
+            intercept: f64::NAN,
+        };
+    }
+
+    // For each point j, compute median of slopes to all other points
+    let mut median_slopes = Vec::with_capacity(n);
+    for j in 0..n {
+        let mut slopes_from_j = Vec::with_capacity(n - 1);
+        for i in 0..n {
+            if i != j {
+                let dx = x[i] - x[j];
+                if dx.abs() > 1e-15 {
+                    slopes_from_j.push((y[i] - y[j]) / dx);
+                }
+            }
+        }
+        if !slopes_from_j.is_empty() {
+            median_slopes.push(median(&slopes_from_j));
+        }
+    }
+
+    if median_slopes.is_empty() {
+        return SiegelslopesResult {
+            slope: 0.0,
+            intercept: median(y),
+        };
+    }
+
+    // Final slope is median of median slopes
+    let slope = median(&median_slopes);
+
+    // Hierarchical intercept: median of (y - slope*x)
+    let intercepts: Vec<f64> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(&xi, &yi)| yi - slope * xi)
+        .collect();
+    let intercept = median(&intercepts);
+
+    SiegelslopesResult { slope, intercept }
+}
+
 /// Compute the Spearman footrule distance between two rankings.
 pub fn spearman_footrule(rank1: &[usize], rank2: &[usize]) -> f64 {
     if rank1.len() != rank2.len() {
@@ -19708,6 +19777,70 @@ mod tests {
         assert!(chatterjeexi(&[1.0, 2.0], &[1.0]).statistic.is_nan());
         // Too short
         assert!(chatterjeexi(&[1.0], &[1.0]).statistic.is_nan());
+    }
+
+    // ── siegelslopes tests ───────────────────────────────────────────
+
+    #[test]
+    fn siegelslopes_linear() {
+        // y = 2x + 1
+        let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let y: Vec<f64> = x.iter().map(|&xi| 2.0 * xi + 1.0).collect();
+        let result = siegelslopes(&x, &y);
+        assert!(
+            (result.slope - 2.0).abs() < 1e-10,
+            "slope should be 2: {}",
+            result.slope
+        );
+        assert!(
+            (result.intercept - 1.0).abs() < 1e-10,
+            "intercept should be 1: {}",
+            result.intercept
+        );
+    }
+
+    #[test]
+    fn siegelslopes_robust_to_outliers() {
+        // y = 2x with one outlier
+        let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let mut y: Vec<f64> = x.iter().map(|&xi| 2.0 * xi).collect();
+        y[5] = 100.0; // extreme outlier
+
+        let result = siegelslopes(&x, &y);
+        // Should still estimate slope ~2
+        assert!(
+            (result.slope - 2.0).abs() < 0.5,
+            "slope should be ~2 despite outlier: {}",
+            result.slope
+        );
+    }
+
+    #[test]
+    fn siegelslopes_matches_scipy() {
+        // scipy.stats.siegelslopes([2.1, 4.0, 5.9, 8.1, 10.0, 11.9, 14.0, 16.1, 18.0, 20.1],
+        //                          [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        // Returns slope=2.0, intercept=0.0
+        let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let y = vec![2.1, 4.0, 5.9, 8.1, 10.0, 11.9, 14.0, 16.1, 18.0, 20.1];
+        let result = siegelslopes(&x, &y);
+        assert!(
+            (result.slope - 2.0).abs() < 0.01,
+            "slope: {}",
+            result.slope
+        );
+        assert!(
+            result.intercept.abs() < 0.2,
+            "intercept: {}",
+            result.intercept
+        );
+    }
+
+    #[test]
+    fn siegelslopes_edge_cases() {
+        // Too short
+        assert!(siegelslopes(&[1.0], &[1.0]).slope.is_nan());
+        // Different lengths
+        assert!(siegelslopes(&[1.0, 2.0], &[1.0]).slope.is_nan());
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
