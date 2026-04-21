@@ -8772,7 +8772,11 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 2 {
                 return Err(special_invalid_fixture_error("owens_t", mode));
             }
-            Ok(special_owens_t(args[0], args[1]))
+            special_scalar_from_tensor(
+                special_owens_t(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "owens_t",
+                mode,
+            )
         }
         SpecialCaseFunction::Beta => {
             if args.len() != 2 {
@@ -9382,7 +9386,11 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("kolmogi", mode));
             }
-            special_scalar_from_tensor(special_kolmogi(&special_scalar(args[0]), mode)?, "kolmogi", mode)
+            special_scalar_from_tensor(
+                special_kolmogi(&special_scalar(args[0]), mode)?,
+                "kolmogi",
+                mode,
+            )
         }
         SpecialCaseFunction::Entr => {
             if args.len() != 1 {

@@ -2110,7 +2110,18 @@ pub fn erfi_scalar(x: f64) -> f64 {
 /// Owen's T function: T(h, a) = (1/2π) ∫₀ᵃ exp(-h²(1+t²)/2) / (1+t²) dt.
 ///
 /// Used in bivariate normal distribution. Matches `scipy.special.owens_t`.
-pub fn owens_t(h: f64, a: f64) -> f64 {
+pub fn owens_t(
+    h_tensor: &SpecialTensor,
+    a_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("owens_t", h_tensor, a_tensor, mode, |h, a| {
+        Ok(owens_t_scalar(h, a))
+    })
+}
+
+#[must_use]
+pub fn owens_t_scalar(h: f64, a: f64) -> f64 {
     if a == 0.0 {
         return 0.0;
     }
@@ -5563,6 +5574,88 @@ mod tests {
         let positive_value = expect_real_scalar(positive)?;
         let negative_value = expect_real_scalar(negative)?;
         assert!((positive_value + negative_value).abs() < 1e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn owens_t_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = owens_t(
+            &SpecialTensor::RealScalar(0.5),
+            &SpecialTensor::RealScalar(1.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - owens_t_scalar(0.5, 1.0)).abs() < 1e-14);
+
+        let vector = owens_t(
+            &SpecialTensor::RealVec(vec![0.0, 0.5, 1.0]),
+            &SpecialTensor::RealScalar(1.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [0.0, 0.5, 1.0].map(|h| owens_t_scalar(h, 1.0));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+
+        let broadcast = owens_t(
+            &SpecialTensor::RealScalar(0.5),
+            &SpecialTensor::RealVec(vec![0.0, 0.5, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let broadcast_values = expect_real_vec(broadcast)?;
+        let broadcast_expected = [0.0, 0.5, 1.0].map(|a| owens_t_scalar(0.5, a));
+        assert_eq!(broadcast_values.len(), broadcast_expected.len());
+        for (actual, expected) in broadcast_values.iter().zip(broadcast_expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn owens_t_tensor_dispatch_preserves_even_h_and_odd_a_symmetry() -> Result<(), String> {
+        let positive_h = owens_t(
+            &SpecialTensor::RealScalar(1.25),
+            &SpecialTensor::RealScalar(0.75),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let negative_h = owens_t(
+            &SpecialTensor::RealScalar(-1.25),
+            &SpecialTensor::RealScalar(0.75),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let negative_a = owens_t(
+            &SpecialTensor::RealScalar(1.25),
+            &SpecialTensor::RealScalar(-0.75),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let positive_value = expect_real_scalar(positive_h)?;
+        let negative_h_value = expect_real_scalar(negative_h)?;
+        let negative_a_value = expect_real_scalar(negative_a)?;
+        assert!((positive_value - negative_h_value).abs() < 1e-14);
+        assert!((positive_value + negative_a_value).abs() < 1e-14);
+        Ok(())
+    }
+
+    #[test]
+    fn owens_t_tensor_dispatch_handles_zero_and_nan_inputs() -> Result<(), String> {
+        let result = owens_t(
+            &SpecialTensor::RealVec(vec![0.0, 0.0, f64::NAN]),
+            &SpecialTensor::RealVec(vec![0.0, 1.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(result)?;
+        assert_eq!(values[0], 0.0);
+        assert!((values[1] - 0.125).abs() < 1e-14);
+        assert!(values[2].is_nan());
         Ok(())
     }
 
