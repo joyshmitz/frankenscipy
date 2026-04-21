@@ -127,11 +127,65 @@ const LANCZOS_COEFFS: [f64; 9] = [
 ];
 
 pub fn gamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("gamma", z, mode, |x| gamma_scalar(x, mode))
+    gamma_dispatch("gamma", z, mode)
 }
 
 pub fn gammaln(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("gammaln", x, mode, |v| gammaln_scalar(v, mode))
+    gammaln_dispatch("gammaln", x, mode)
+}
+
+fn gamma_dispatch(
+    function: &'static str,
+    z: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    match z {
+        SpecialTensor::RealScalar(x) => gamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
+        SpecialTensor::RealVec(values) => values
+            .iter()
+            .map(|&x| gamma_scalar(x, mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        SpecialTensor::ComplexScalar(z_val) => {
+            Ok(SpecialTensor::ComplexScalar(complex_gammaln(*z_val).exp()))
+        }
+        SpecialTensor::ComplexVec(values) => Ok(SpecialTensor::ComplexVec(
+            values.iter().map(|&z_val| complex_gammaln(z_val).exp()).collect(),
+        )),
+        SpecialTensor::Empty => Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
+}
+
+fn gammaln_dispatch(
+    function: &'static str,
+    z: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    match z {
+        SpecialTensor::RealScalar(x) => gammaln_scalar(*x, mode).map(SpecialTensor::RealScalar),
+        SpecialTensor::RealVec(values) => values
+            .iter()
+            .map(|&x| gammaln_scalar(x, mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        SpecialTensor::ComplexScalar(z_val) => {
+            Ok(SpecialTensor::ComplexScalar(complex_gammaln(*z_val)))
+        }
+        SpecialTensor::ComplexVec(values) => Ok(SpecialTensor::ComplexVec(
+            values.iter().map(|&z_val| complex_gammaln(z_val)).collect(),
+        )),
+        SpecialTensor::Empty => Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
 }
 
 pub fn digamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -2774,5 +2828,82 @@ mod tests {
 
         let result = complex_gammainc_scalar(-1.0, z, RuntimeMode::Strict).unwrap();
         assert!(result.re.is_nan());
+    }
+
+    #[test]
+    fn complex_gamma_real_inputs_match_real_path() -> Result<(), String> {
+        let z = complex_scalar(3.0, 0.0);
+        let result = gamma(&z, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let c = get_complex_scalar(Ok(result))?;
+
+        let real_z = scalar(3.0);
+        let real_result = gamma(&real_z, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let expected = get_scalar(Ok(real_result))?;
+
+        assert!(
+            (c.re - expected).abs() < 1e-10,
+            "gamma(3+0i) = {} + {}i, expected {} + 0i",
+            c.re,
+            c.im,
+            expected
+        );
+        assert!(c.im.abs() < 1e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_gammaln_real_inputs_match_real_path() -> Result<(), String> {
+        let z = complex_scalar(5.0, 0.0);
+        let result = gammaln(&z, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let c = get_complex_scalar(Ok(result))?;
+
+        let real_z = scalar(5.0);
+        let real_result = gammaln(&real_z, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let expected = get_scalar(Ok(real_result))?;
+
+        assert!(
+            (c.re - expected).abs() < 1e-10,
+            "gammaln(5+0i) = {} + {}i, expected {} + 0i",
+            c.re,
+            c.im,
+            expected
+        );
+        assert!(c.im.abs() < 1e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_gamma_with_imaginary_part() -> Result<(), String> {
+        let z = complex_scalar(2.0, 1.0);
+        let result = gamma(&z, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let c = get_complex_scalar(Ok(result))?;
+
+        assert!(c.re.is_finite(), "gamma(2+1i) real part should be finite");
+        assert!(c.im.is_finite(), "gamma(2+1i) imag part should be finite");
+        Ok(())
+    }
+
+    #[test]
+    fn complex_gammaln_with_imaginary_part() -> Result<(), String> {
+        let z = complex_scalar(2.0, 1.0);
+        let result = gammaln(&z, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let c = get_complex_scalar(Ok(result))?;
+
+        assert!(c.re.is_finite(), "gammaln(2+1i) real part should be finite");
+        assert!(c.im.is_finite(), "gammaln(2+1i) imag part should be finite");
+
+        // Verify gamma = exp(gammaln)
+        let gamma_result = gamma(&complex_scalar(2.0, 1.0), RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        let gamma_c = get_complex_scalar(Ok(gamma_result))?;
+        let expected = c.exp();
+        assert!(
+            (gamma_c.re - expected.re).abs() < 1e-10,
+            "gamma should equal exp(gammaln)"
+        );
+        assert!(
+            (gamma_c.im - expected.im).abs() < 1e-10,
+            "gamma should equal exp(gammaln)"
+        );
+        Ok(())
     }
 }
