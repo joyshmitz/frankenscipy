@@ -9497,6 +9497,49 @@ pub fn differential_entropy(values: &[f64], window_length: Option<usize>, base: 
     h
 }
 
+/// Apply O'Brien's transform to test for homogeneity of variance.
+///
+/// The O'Brien transform converts data for use in a one-way ANOVA to test
+/// whether the variances of multiple groups are equal. Each value x_ij is
+/// transformed to:
+///
+/// r_ij = ((n-1.5)*n*(x_ij - mean)^2 - 0.5*var*(n-1)) / ((n-1)*(n-2))
+///
+/// Matches `scipy.stats.obrientransform(*args)`.
+///
+/// # Arguments
+/// * `groups` — Slice of data groups to transform
+///
+/// # Returns
+/// Vector of transformed groups, or empty if any group has fewer than 3 elements.
+pub fn obrientransform(groups: &[&[f64]]) -> Vec<Vec<f64>> {
+    let mut result = Vec::with_capacity(groups.len());
+
+    for &group in groups {
+        let n = group.len();
+        if n < 3 {
+            return vec![];
+        }
+
+        let n_f = n as f64;
+        let mean = group.iter().sum::<f64>() / n_f;
+        let var = group.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n_f - 1.0);
+
+        let mut transformed = Vec::with_capacity(n);
+        let denom = (n_f - 1.0) * (n_f - 2.0);
+
+        for &x in group {
+            let diff_sq = (x - mean).powi(2);
+            let r = ((n_f - 1.5) * n_f * diff_sq - 0.5 * var * (n_f - 1.0)) / denom;
+            transformed.push(r);
+        }
+
+        result.push(transformed);
+    }
+
+    result
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -19249,6 +19292,45 @@ mod tests {
     fn differential_entropy_insufficient_data() {
         assert!(differential_entropy(&[], None, None).is_nan());
         assert!(differential_entropy(&[1.0], None, None).is_nan());
+    }
+
+    #[test]
+    fn obrientransform_basic() {
+        let a = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let b = [2.0, 3.0, 4.0, 5.0, 6.0];
+        let result = obrientransform(&[&a, &b]);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].len(), 5);
+        assert_eq!(result[1].len(), 5);
+        // All values should be finite
+        assert!(result[0].iter().all(|x| x.is_finite()));
+        assert!(result[1].iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn obrientransform_mean_transforms_to_negative() {
+        // The mean value transforms to a negative value
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = obrientransform(&[&data]);
+        // Middle value (at mean) should be smallest/negative
+        assert!(result[0][2] < result[0][0]);
+        assert!(result[0][2] < result[0][4]);
+    }
+
+    #[test]
+    fn obrientransform_insufficient_data() {
+        let a = [1.0, 2.0]; // too few
+        let b = [1.0, 2.0, 3.0];
+        let result = obrientransform(&[&a, &b]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn obrientransform_single_group() {
+        let data = [1.0, 2.0, 3.0, 4.0];
+        let result = obrientransform(&[&data]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 4);
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
