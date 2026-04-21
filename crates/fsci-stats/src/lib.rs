@@ -9391,6 +9391,54 @@ pub fn tsem(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
     (var / n).sqrt()
 }
 
+/// Compute the expectile at a given alpha level.
+///
+/// Expectiles are a generalization of the mean (alpha=0.5). They solve the
+/// asymmetric least squares problem where observations above the expectile
+/// are weighted by alpha and observations below are weighted by (1-alpha).
+///
+/// Matches `scipy.stats.expectile(a, alpha)`.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `alpha` — Expectile level in (0, 1). Default 0.5 gives the mean.
+///
+/// # Returns
+/// The expectile value, or NaN for empty input or invalid alpha.
+pub fn expectile(data: &[f64], alpha: f64) -> f64 {
+    if data.is_empty() || alpha <= 0.0 || alpha >= 1.0 {
+        return f64::NAN;
+    }
+
+    let filtered: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+    if filtered.is_empty() {
+        return f64::NAN;
+    }
+
+    // Start with the mean as initial guess
+    let mut mu = filtered.iter().sum::<f64>() / filtered.len() as f64;
+
+    // Iteratively solve for the expectile using weighted least squares
+    for _ in 0..100 {
+        let mut sum_w = 0.0;
+        let mut sum_wx = 0.0;
+
+        for &x in &filtered {
+            let w = if x >= mu { alpha } else { 1.0 - alpha };
+            sum_w += w;
+            sum_wx += w * x;
+        }
+
+        let new_mu = sum_wx / sum_w;
+        if (new_mu - mu).abs() < 1e-12 {
+            return new_mu;
+        }
+        mu = new_mu;
+    }
+
+    mu
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -19070,6 +19118,46 @@ mod tests {
         let result = tsem(&data, (0.0, 1.5), (true, true), 1);
         // Only 1 value passes, insufficient
         assert!(result.is_nan());
+    }
+
+    #[test]
+    fn expectile_half_equals_mean() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = expectile(&data, 0.5);
+        // alpha=0.5 should give the mean
+        assert!((result - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn expectile_low_alpha() {
+        let data = [1.0, 2.0, 3.0, 4.0, 10.0];
+        // Low alpha emphasizes lower values, result < mean
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let result = expectile(&data, 0.25);
+        assert!(result < mean, "low alpha should give result below mean");
+    }
+
+    #[test]
+    fn expectile_high_alpha() {
+        let data = [1.0, 2.0, 3.0, 4.0, 10.0];
+        // High alpha emphasizes higher values, result > mean
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let result = expectile(&data, 0.75);
+        assert!(result > mean, "high alpha should give result above mean");
+    }
+
+    #[test]
+    fn expectile_empty() {
+        assert!(expectile(&[], 0.5).is_nan());
+    }
+
+    #[test]
+    fn expectile_invalid_alpha() {
+        let data = [1.0, 2.0, 3.0];
+        assert!(expectile(&data, 0.0).is_nan());
+        assert!(expectile(&data, 1.0).is_nan());
+        assert!(expectile(&data, -0.1).is_nan());
+        assert!(expectile(&data, 1.1).is_nan());
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
