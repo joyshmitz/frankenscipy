@@ -25540,6 +25540,39 @@ mod tests {
     }
 
     #[test]
+    fn test_ks_2samp_alternative_edge_cases() {
+        // Empty arrays should return NaN
+        let empty: [f64; 0] = [];
+        let data = [1.0, 2.0, 3.0];
+        let result = ks_2samp_alternative(&empty, &data, "two-sided");
+        assert!(result.statistic.is_nan(), "empty data1 -> NaN statistic");
+        assert!(result.pvalue.is_nan(), "empty data1 -> NaN pvalue");
+
+        let result2 = ks_2samp_alternative(&data, &empty, "two-sided");
+        assert!(result2.statistic.is_nan(), "empty data2 -> NaN statistic");
+
+        // NaN in input should return NaN
+        let with_nan = [1.0, f64::NAN, 3.0];
+        let result3 = ks_2samp_alternative(&with_nan, &data, "two-sided");
+        assert!(result3.statistic.is_nan(), "NaN in data1 -> NaN statistic");
+
+        let result4 = ks_2samp_alternative(&data, &with_nan, "greater");
+        assert!(result4.statistic.is_nan(), "NaN in data2 -> NaN statistic");
+
+        // Identical samples should have statistic = 0
+        let identical = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result5 = ks_2samp_alternative(&identical, &identical, "two-sided");
+        assert_close(result5.statistic, 0.0, 1e-10, "identical -> D=0");
+        assert_close(result5.pvalue, 1.0, 1e-10, "identical -> p=1");
+
+        // Single element arrays
+        let single1 = [5.0];
+        let single2 = [3.0];
+        let result6 = ks_2samp_alternative(&single1, &single2, "two-sided");
+        assert!(result6.statistic.is_finite(), "single element should work");
+    }
+
+    #[test]
     fn test_ansari_alternative() {
         // x has larger variance than y
         let x = [1.0, 3.0, 20.0, 22.0, 38.0, 40.0];
