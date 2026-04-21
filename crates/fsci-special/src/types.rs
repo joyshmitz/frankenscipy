@@ -106,6 +106,42 @@ impl Complex64 {
         }
         (n * self.ln()).exp()
     }
+
+    #[must_use]
+    pub fn sin(self) -> Self {
+        // sin(a + bi) = sin(a)cosh(b) + i cos(a)sinh(b)
+        Self::new(
+            self.re.sin() * self.im.cosh(),
+            self.re.cos() * self.im.sinh(),
+        )
+    }
+
+    #[must_use]
+    pub fn cos(self) -> Self {
+        // cos(a + bi) = cos(a)cosh(b) - i sin(a)sinh(b)
+        Self::new(
+            self.re.cos() * self.im.cosh(),
+            -self.re.sin() * self.im.sinh(),
+        )
+    }
+
+    #[must_use]
+    pub fn sinh(self) -> Self {
+        // sinh(a + bi) = sinh(a)cos(b) + i cosh(a)sin(b)
+        Self::new(
+            self.re.sinh() * self.im.cos(),
+            self.re.cosh() * self.im.sin(),
+        )
+    }
+
+    #[must_use]
+    pub fn cosh(self) -> Self {
+        // cosh(a + bi) = cosh(a)cos(b) + i sinh(a)sin(b)
+        Self::new(
+            self.re.cosh() * self.im.cos(),
+            self.re.sinh() * self.im.sin(),
+        )
+    }
 }
 
 impl From<f64> for Complex64 {

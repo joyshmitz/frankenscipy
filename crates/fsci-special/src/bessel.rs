@@ -845,9 +845,7 @@ fn lgamma(x: f64) -> f64 {
 /// Computed via recurrence from:
 ///   j_0(z) = sin(z)/z,  j_1(z) = sin(z)/z² - cos(z)/z
 pub fn spherical_jn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("spherical_jn", n, z, mode, |order, x| {
-        spherical_jn_scalar(order, x, mode)
-    })
+    spherical_bessel_dispatch("spherical_jn", n, z, mode, SphericalKind::Jn)
 }
 
 /// Spherical Bessel function of the second kind y_n(z).
@@ -857,9 +855,7 @@ pub fn spherical_jn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> 
 /// Computed via recurrence from:
 ///   y_0(z) = -cos(z)/z,  y_1(z) = -cos(z)/z² - sin(z)/z
 pub fn spherical_yn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("spherical_yn", n, z, mode, |order, x| {
-        spherical_yn_scalar(order, x, mode)
-    })
+    spherical_bessel_dispatch("spherical_yn", n, z, mode, SphericalKind::Yn)
 }
 
 /// Modified spherical Bessel function of the first kind i_n(z).
@@ -869,9 +865,7 @@ pub fn spherical_yn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> 
 /// Computed via recurrence from:
 ///   i_0(z) = sinh(z)/z,  i_1(z) = cosh(z)/z - sinh(z)/z²
 pub fn spherical_in(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("spherical_in", n, z, mode, |order, x| {
-        spherical_in_scalar(order, x, mode)
-    })
+    spherical_bessel_dispatch("spherical_in", n, z, mode, SphericalKind::In)
 }
 
 /// Modified spherical Bessel function of the second kind k_n(z).
@@ -881,8 +875,153 @@ pub fn spherical_in(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> 
 /// Computed via recurrence from:
 ///   k_0(z) = π exp(-z)/(2z),  k_1(z) = π exp(-z)/(2z) * (1 + 1/z)
 pub fn spherical_kn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("spherical_kn", n, z, mode, |order, x| {
-        spherical_kn_scalar(order, x, mode)
+    spherical_bessel_dispatch("spherical_kn", n, z, mode, SphericalKind::Kn)
+}
+
+#[derive(Clone, Copy)]
+enum SphericalKind {
+    Jn,
+    Yn,
+    In,
+    Kn,
+}
+
+fn spherical_bessel_dispatch(
+    function: &'static str,
+    n: &SpecialTensor,
+    z: &SpecialTensor,
+    mode: RuntimeMode,
+    kind: SphericalKind,
+) -> SpecialResult {
+    match (n, z) {
+        // Real-real cases - use existing scalar implementations
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealScalar(x)) => {
+            let result = match kind {
+                SphericalKind::Jn => spherical_jn_scalar(*order, *x, mode),
+                SphericalKind::Yn => spherical_yn_scalar(*order, *x, mode),
+                SphericalKind::In => spherical_in_scalar(*order, *x, mode),
+                SphericalKind::Kn => spherical_kn_scalar(*order, *x, mode),
+            };
+            result.map(SpecialTensor::RealScalar)
+        }
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => orders
+            .iter()
+            .map(|&order| match kind {
+                SphericalKind::Jn => spherical_jn_scalar(order, *x, mode),
+                SphericalKind::Yn => spherical_yn_scalar(order, *x, mode),
+                SphericalKind::In => spherical_in_scalar(order, *x, mode),
+                SphericalKind::Kn => spherical_kn_scalar(order, *x, mode),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => xs
+            .iter()
+            .map(|&x| match kind {
+                SphericalKind::Jn => spherical_jn_scalar(*order, x, mode),
+                SphericalKind::Yn => spherical_yn_scalar(*order, x, mode),
+                SphericalKind::In => spherical_in_scalar(*order, x, mode),
+                SphericalKind::Kn => spherical_kn_scalar(*order, x, mode),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealVec(xs)) => {
+            if orders.len() != xs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(xs.iter())
+                .map(|(&order, &x)| match kind {
+                    SphericalKind::Jn => spherical_jn_scalar(order, x, mode),
+                    SphericalKind::Yn => spherical_yn_scalar(order, x, mode),
+                    SphericalKind::In => spherical_in_scalar(order, x, mode),
+                    SphericalKind::Kn => spherical_kn_scalar(order, x, mode),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::RealVec)
+        }
+        // Real n, complex z - use complex implementations
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexScalar(z_val)) => {
+            spherical_bessel_complex_scalar(function, *order, *z_val, mode, kind)
+                .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexVec(zs)) => zs
+            .iter()
+            .map(|&z_val| spherical_bessel_complex_scalar(function, *order, z_val, mode, kind))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexScalar(z_val)) => orders
+            .iter()
+            .map(|&order| spherical_bessel_complex_scalar(function, order, *z_val, mode, kind))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexVec(zs)) => {
+            if orders.len() != zs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(zs.iter())
+                .map(|(&order, &z_val)| {
+                    spherical_bessel_complex_scalar(function, order, z_val, mode, kind)
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        // Complex n - not supported
+        (SpecialTensor::ComplexScalar(_), _) | (SpecialTensor::ComplexVec(_), _) => {
+            not_yet_implemented(function, mode, "complex-valued order not supported")
+        }
+        // Empty tensor
+        (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
+}
+
+fn spherical_bessel_complex_scalar(
+    function: &'static str,
+    order: f64,
+    z: Complex64,
+    mode: RuntimeMode,
+    kind: SphericalKind,
+) -> Result<Complex64, SpecialError> {
+    if order.is_nan() || !z.is_finite() {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+
+    let n = match integer_order_or_nan(function, order, mode)? {
+        Some(v) => v,
+        None => return Ok(Complex64::new(f64::NAN, f64::NAN)),
+    };
+
+    if n < 0 {
+        return Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "spherical Bessel order must be non-negative",
+        });
+    }
+
+    Ok(match kind {
+        SphericalKind::Jn => complex_spherical_jn(n as u32, z),
+        SphericalKind::Yn => complex_spherical_yn(n as u32, z),
+        SphericalKind::In => complex_spherical_in(n as u32, z),
+        SphericalKind::Kn => complex_spherical_kn(n as u32, z),
     })
 }
 
@@ -1094,6 +1233,144 @@ fn spherical_kn_nonneg(n: u32, x: f64) -> f64 {
 
     for k in 1..n {
         let next = k_prev + (2.0 * k as f64 + 1.0) / x * k_curr;
+        k_prev = k_curr;
+        k_curr = next;
+    }
+    k_curr
+}
+
+// ============================================================================
+// Complex spherical Bessel functions
+// ============================================================================
+
+/// Complex spherical Bessel function of the first kind j_n(z).
+fn complex_spherical_jn(n: u32, z: Complex64) -> Complex64 {
+    if z.re == 0.0 && z.im == 0.0 {
+        return if n == 0 {
+            Complex64::new(1.0, 0.0)
+        } else {
+            Complex64::new(0.0, 0.0)
+        };
+    }
+
+    let sin_z = z.sin();
+    let cos_z = z.cos();
+    let z_inv = z.recip();
+
+    let mut j_prev = sin_z * z_inv; // j_0
+    if n == 0 {
+        return j_prev;
+    }
+
+    let z_inv2 = z_inv * z_inv;
+    let mut j_curr = sin_z * z_inv2 - cos_z * z_inv; // j_1
+    if n == 1 {
+        return j_curr;
+    }
+
+    for k in 1..n {
+        let coeff = Complex64::new(2.0 * k as f64 + 1.0, 0.0) * z_inv;
+        let next = coeff * j_curr - j_prev;
+        j_prev = j_curr;
+        j_curr = next;
+    }
+    j_curr
+}
+
+/// Complex spherical Bessel function of the second kind y_n(z).
+fn complex_spherical_yn(n: u32, z: Complex64) -> Complex64 {
+    if z.re == 0.0 && z.im == 0.0 {
+        return Complex64::new(f64::NEG_INFINITY, 0.0);
+    }
+
+    let sin_z = z.sin();
+    let cos_z = z.cos();
+    let z_inv = z.recip();
+
+    let mut y_prev = Complex64::new(-1.0, 0.0) * cos_z * z_inv; // y_0
+    if n == 0 {
+        return y_prev;
+    }
+
+    let z_inv2 = z_inv * z_inv;
+    let mut y_curr = Complex64::new(-1.0, 0.0) * cos_z * z_inv2 - sin_z * z_inv; // y_1
+    if n == 1 {
+        return y_curr;
+    }
+
+    for k in 1..n {
+        let coeff = Complex64::new(2.0 * k as f64 + 1.0, 0.0) * z_inv;
+        let next = coeff * y_curr - y_prev;
+        y_prev = y_curr;
+        y_curr = next;
+    }
+    y_curr
+}
+
+/// Complex modified spherical Bessel function of the first kind i_n(z).
+fn complex_spherical_in(n: u32, z: Complex64) -> Complex64 {
+    if z.re == 0.0 && z.im == 0.0 {
+        return if n == 0 {
+            Complex64::new(1.0, 0.0)
+        } else {
+            Complex64::new(0.0, 0.0)
+        };
+    }
+
+    let sinh_z = z.sinh();
+    let cosh_z = z.cosh();
+    let z_inv = z.recip();
+
+    let mut i_prev = sinh_z * z_inv; // i_0
+    if n == 0 {
+        return i_prev;
+    }
+
+    let z_inv2 = z_inv * z_inv;
+    let mut i_curr = cosh_z * z_inv - sinh_z * z_inv2; // i_1
+    if n == 1 {
+        return i_curr;
+    }
+
+    for k in 1..n {
+        let coeff = Complex64::new(2.0 * k as f64 + 1.0, 0.0) * z_inv;
+        let next = i_prev - coeff * i_curr;
+        i_prev = i_curr;
+        i_curr = next;
+    }
+    // Fix sign for modified spherical Bessel
+    if n % 2 == 0 {
+        i_curr
+    } else {
+        Complex64::new(-i_curr.re, -i_curr.im)
+    }
+}
+
+/// Complex modified spherical Bessel function of the second kind k_n(z).
+fn complex_spherical_kn(n: u32, z: Complex64) -> Complex64 {
+    if z.re == 0.0 && z.im == 0.0 {
+        return Complex64::new(f64::INFINITY, 0.0);
+    }
+
+    let neg_z = Complex64::new(-z.re, -z.im);
+    let emz = neg_z.exp();
+    let scale = Complex64::new(std::f64::consts::PI / 2.0, 0.0);
+    let z_inv = z.recip();
+
+    let mut k_prev = scale * emz * z_inv; // k_0
+    if n == 0 {
+        return k_prev;
+    }
+
+    let one_plus_zinv = Complex64::new(1.0, 0.0) + z_inv;
+    let mut k_curr = scale * emz * z_inv * one_plus_zinv; // k_1
+    if n == 1 {
+        return k_curr;
+    }
+
+    for k in 1..n {
+        let coeff = Complex64::new(2.0 * k as f64 + 1.0, 0.0) * z_inv;
+        let next = k_prev + coeff * k_curr;
         k_prev = k_curr;
         k_curr = next;
     }
@@ -2067,6 +2344,135 @@ mod tests {
             return Err("negative wright_bessel input should fail closed".to_string());
         };
         assert_eq!(err.kind, SpecialErrorKind::DomainError);
+        Ok(())
+    }
+
+    // ========================================================================
+    // Complex spherical Bessel tests
+    // ========================================================================
+
+    fn complex_scalar(re: f64, im: f64) -> SpecialTensor {
+        SpecialTensor::ComplexScalar(Complex64::new(re, im))
+    }
+
+    fn get_complex(result: SpecialResult) -> Result<Complex64, String> {
+        match result.map_err(|e| e.to_string())? {
+            SpecialTensor::ComplexScalar(c) => Ok(c),
+            other => Err(format!("expected complex scalar, got {other:?}")),
+        }
+    }
+
+    #[test]
+    fn complex_spherical_jn_reduces_to_real() -> Result<(), String> {
+        // For real positive z, complex j_n should match real j_n
+        let n = 2.0;
+        let x = 1.5;
+
+        let real_result = real_value(tensor_result(spherical_jn(
+            &scalar(n),
+            &scalar(x),
+            RuntimeMode::Strict,
+        ))?)?;
+
+        let complex_result = get_complex(spherical_jn(
+            &scalar(n),
+            &complex_scalar(x, 0.0),
+            RuntimeMode::Strict,
+        ))?;
+
+        assert!(
+            (complex_result.re - real_result).abs() < 1e-10,
+            "Real parts should match: {} vs {}",
+            complex_result.re,
+            real_result
+        );
+        assert!(
+            complex_result.im.abs() < 1e-10,
+            "Imaginary part should be negligible: {}",
+            complex_result.im
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn complex_spherical_jn_at_zero() {
+        let j0 = complex_spherical_jn(0, Complex64::new(0.0, 0.0));
+        assert_eq!(j0.re, 1.0);
+        assert_eq!(j0.im, 0.0);
+
+        let j1 = complex_spherical_jn(1, Complex64::new(0.0, 0.0));
+        assert_eq!(j1.re, 0.0);
+        assert_eq!(j1.im, 0.0);
+    }
+
+    #[test]
+    fn complex_spherical_yn_at_zero_is_negative_inf() {
+        let y0 = complex_spherical_yn(0, Complex64::new(0.0, 0.0));
+        assert!(y0.re.is_infinite() && y0.re < 0.0);
+    }
+
+    #[test]
+    fn complex_spherical_in_reduces_to_real() -> Result<(), String> {
+        let n = 1.0;
+        let x = 2.0;
+
+        let real_result = real_value(tensor_result(spherical_in(
+            &scalar(n),
+            &scalar(x),
+            RuntimeMode::Strict,
+        ))?)?;
+
+        let complex_result = get_complex(spherical_in(
+            &scalar(n),
+            &complex_scalar(x, 0.0),
+            RuntimeMode::Strict,
+        ))?;
+
+        assert!(
+            (complex_result.re - real_result).abs() < 1e-8,
+            "Real parts should match: {} vs {}",
+            complex_result.re,
+            real_result
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn complex_spherical_kn_reduces_to_real() -> Result<(), String> {
+        let n = 0.0;
+        let x = 1.0;
+
+        let real_result = real_value(tensor_result(spherical_kn(
+            &scalar(n),
+            &scalar(x),
+            RuntimeMode::Strict,
+        ))?)?;
+
+        let complex_result = get_complex(spherical_kn(
+            &scalar(n),
+            &complex_scalar(x, 0.0),
+            RuntimeMode::Strict,
+        ))?;
+
+        assert!(
+            (complex_result.re - real_result).abs() < 1e-10,
+            "Real parts should match: {} vs {}",
+            complex_result.re,
+            real_result
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn complex_spherical_jn_tensor_interface() -> Result<(), String> {
+        let result = spherical_jn(
+            &scalar(2.0),
+            &complex_scalar(1.0, 0.5),
+            RuntimeMode::Strict,
+        );
+        let c = get_complex(result)?;
+        assert!(c.re.is_finite());
+        assert!(c.im.is_finite());
         Ok(())
     }
 }
