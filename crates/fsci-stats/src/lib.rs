@@ -12407,6 +12407,70 @@ pub fn median(data: &[f64]) -> f64 {
     }
 }
 
+/// Result of mode calculation with count.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModeResult {
+    /// The most frequently occurring value.
+    pub mode: f64,
+    /// Number of occurrences of the mode.
+    pub count: usize,
+}
+
+/// Find the mode with count (most frequently occurring value) in data.
+///
+/// Returns the smallest value among equally frequent modes, along with
+/// the count of occurrences.
+/// NaN values are ignored.
+///
+/// Matches `scipy.stats.mode(a)` return format (mode, count).
+pub fn mode_full(data: &[f64]) -> ModeResult {
+    if data.is_empty() {
+        return ModeResult {
+            mode: f64::NAN,
+            count: 0,
+        };
+    }
+
+    let filtered: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+    if filtered.is_empty() {
+        return ModeResult {
+            mode: f64::NAN,
+            count: 0,
+        };
+    }
+
+    let mut sorted = filtered.clone();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+
+    let mut best_mode = sorted[0];
+    let mut best_count = 1_usize;
+    let mut current_val = sorted[0];
+    let mut current_count = 1_usize;
+
+    for &val in &sorted[1..] {
+        if (val - current_val).abs() < f64::EPSILON {
+            current_count += 1;
+        } else {
+            if current_count > best_count {
+                best_count = current_count;
+                best_mode = current_val;
+            }
+            current_val = val;
+            current_count = 1;
+        }
+    }
+
+    if current_count > best_count {
+        best_count = current_count;
+        best_mode = current_val;
+    }
+
+    ModeResult {
+        mode: best_mode,
+        count: best_count,
+    }
+}
+
 /// Winsorize data: clip extreme values to specified percentiles.
 ///
 /// Matches `scipy.stats.mstats.winsorize`.
@@ -18420,6 +18484,46 @@ mod tests {
     #[test]
     fn percentile_empty() {
         assert!(percentile(&[], 50.0).is_nan());
+    }
+
+    // ── mode_full tests ───────────────────────────────────────────────
+
+    #[test]
+    fn mode_full_basic() {
+        let data = vec![1.0, 2.0, 2.0, 3.0, 2.0, 4.0];
+        let result = mode_full(&data);
+        assert!((result.mode - 2.0).abs() < 1e-10, "mode should be 2");
+        assert_eq!(result.count, 3, "count should be 3");
+    }
+
+    #[test]
+    fn mode_full_smallest_when_tied() {
+        let data = vec![1.0, 1.0, 3.0, 3.0];
+        let result = mode_full(&data);
+        assert!((result.mode - 1.0).abs() < 1e-10, "smallest mode when tied");
+        assert_eq!(result.count, 2);
+    }
+
+    #[test]
+    fn mode_full_single_element() {
+        let result = mode_full(&[42.0]);
+        assert!((result.mode - 42.0).abs() < 1e-10);
+        assert_eq!(result.count, 1);
+    }
+
+    #[test]
+    fn mode_full_empty() {
+        let result = mode_full(&[]);
+        assert!(result.mode.is_nan());
+        assert_eq!(result.count, 0);
+    }
+
+    #[test]
+    fn mode_full_ignores_nan() {
+        let data = vec![1.0, 2.0, f64::NAN, 2.0, 3.0];
+        let result = mode_full(&data);
+        assert!((result.mode - 2.0).abs() < 1e-10);
+        assert_eq!(result.count, 2);
     }
 
     #[test]
