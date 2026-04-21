@@ -1243,10 +1243,17 @@ where
         }
 
         // Inner CG loop to solve H*d = -g approximately
-        // Using Hessian-vector products via finite differences: H*v ≈ (∇f(x+εv) - ∇f(x)) / ε
+        // Using user-provided hessp or finite differences: H*v ≈ (∇f(x+εv) - ∇f(x)) / ε
         let cg_tol = grad_norm.min(0.5); // Eisenstat-Walker forcing term
-        let (direction, nhvp) = match cg_newton_direction(&mut objective, &x, &grad, eps, cg_tol, n)
-        {
+        let (direction, nhvp) = match cg_newton_direction(
+            &mut objective,
+            &x,
+            &grad,
+            eps,
+            cg_tol,
+            n,
+            options.hessp,
+        ) {
             Ok(v) => v,
             Err(e) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, e)),
         };
@@ -1543,6 +1550,7 @@ fn cg_newton_direction<F>(
     eps: f64,
     tol: f64,
     n: usize,
+    hessp: Option<crate::types::HesspFunc>,
 ) -> Result<(Vec<f64>, usize), OptError>
 where
     F: Fn(&[f64]) -> f64,
@@ -1563,9 +1571,18 @@ where
             break;
         }
 
-        // Hessian-vector product: H*p ≈ (∇f(x + ε*p) - ∇f(x)) / ε
-        let hp = hessian_vector_product(objective, x, grad, &p, eps)?;
-        nhvp += 1;
+        // Hessian-vector product: user-provided or via finite differences
+        let hp = match hessp {
+            Some(func) => {
+                nhvp += 1;
+                func(x, &p)
+            }
+            None => {
+                let v = hessian_vector_product(objective, x, grad, &p, eps)?;
+                nhvp += 1;
+                v
+            }
+        };
 
         let p_hp = dot(&p, &hp);
         if p_hp <= 0.0 {

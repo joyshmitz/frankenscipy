@@ -95,6 +95,8 @@ impl OptimizeResult {
     }
 }
 
+pub type HesspFunc = fn(&[f64], &[f64]) -> Vec<f64>;
+
 #[derive(Debug, Clone, Copy)]
 pub struct MinimizeOptions {
     pub method: Option<OptimizeMethod>,
@@ -103,6 +105,7 @@ pub struct MinimizeOptions {
     pub maxfev: Option<usize>,
     pub gradient_eps: f64,
     pub callback: Option<MinimizeCallback>,
+    pub hessp: Option<HesspFunc>,
     pub fixture_id: Option<&'static str>,
     pub seed: Option<u64>,
     pub mode: RuntimeMode,
@@ -117,6 +120,7 @@ impl Default for MinimizeOptions {
             maxfev: None,
             gradient_eps: 1.0e-8,
             callback: None,
+            hessp: None,
             fixture_id: None,
             seed: None,
             mode: RuntimeMode::Strict,
