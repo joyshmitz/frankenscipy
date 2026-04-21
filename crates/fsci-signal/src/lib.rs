@@ -6494,6 +6494,16 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
     get_window_with_fftbins(window, nx, true)
 }
 
+fn parse_window_bool(value: &str, label: &str) -> Result<bool, SignalError> {
+    match value.trim() {
+        "true" | "1" => Ok(true),
+        "false" | "0" => Ok(false),
+        invalid => Err(SignalError::InvalidArgument(format!(
+            "invalid {label}: {invalid}"
+        ))),
+    }
+}
+
 /// Dispatch a window function by name string with explicit SciPy `fftbins` control.
 ///
 /// `fftbins=true` returns the periodic form used for FFT analysis. `fftbins=false`
@@ -6503,13 +6513,16 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
 /// # Supported windows
 /// `"hann"`, `"hamming"`, `"blackman"`, `"blackmanharris"`, `"barthann"`,
 /// `"bartlett"`, `"flattop"`, `"cosine"`, `"rectangular"` / `"boxcar"`,
+/// `"lanczos"` / `"sinc"`,
 /// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`), `"chebwin,<at>"` (e.g. `"chebwin,100"`),
 /// `"dpss,<nw>"` (e.g. `"dpss,2.5"`),
 /// `"general_hamming,<alpha>"` (e.g. `"general_hamming,0.75"`),
 /// `"general_cosine,<a0>,<a1>,..."` (e.g. `"general_cosine,0.5,0.5"`),
 /// `"gaussian,<std>"` (e.g. `"gaussian,2.0"`),
 /// `"general_gaussian,<p>,<sig>"` (e.g. `"general_gaussian,1.5,2.0"`),
-/// `"exponential,<tau>"` (e.g. `"exponential,2.0"`).
+/// `"exponential,<tau>"` (e.g. `"exponential,2.0"`),
+/// `"taylor"` / `"taylorwin"` with optional `"taylor,<nbar>[,<sll>[,<norm>]]"`
+/// parameters (e.g. `"taylor,6,45,false"`).
 pub fn get_window_with_fftbins(
     window: &str,
     nx: usize,
@@ -6612,6 +6625,29 @@ pub fn get_window_with_fftbins(
                 })?;
                 return exponential(nx, None, tau, sym);
             }
+            "taylor" | "taylorwin" => {
+                let params: Vec<&str> = rest.split(',').map(str::trim).collect();
+                if params.is_empty()
+                    || params.len() > 3
+                    || params.iter().any(|value| value.is_empty())
+                {
+                    return Err(SignalError::InvalidArgument(format!(
+                        "taylor expects nbar[,sll[,norm]] parameters: {rest}"
+                    )));
+                }
+                let nbar = params[0].parse::<usize>().map_err(|_| {
+                    SignalError::InvalidArgument(format!("invalid taylor nbar: {}", params[0]))
+                })?;
+                let sll = params.get(1).map_or(Ok(30.0), |value| {
+                    value.parse::<f64>().map_err(|_| {
+                        SignalError::InvalidArgument(format!("invalid taylor sll: {value}"))
+                    })
+                })?;
+                let norm = params
+                    .get(2)
+                    .map_or(Ok(true), |value| parse_window_bool(value, "taylor norm"))?;
+                return Ok(taylor(nx, nbar, sll, norm, sym));
+            }
             _ => {}
         }
     }
@@ -6625,6 +6661,7 @@ pub fn get_window_with_fftbins(
         "bartlett" | "triangle" => symmetric_or_periodic_window(nx, sym, bartlett),
         "flattop" => symmetric_or_periodic_window(nx, sym, flattop),
         "cosine" => symmetric_or_periodic_window(nx, sym, cosine),
+        "lanczos" | "sinc" => symmetric_or_periodic_window(nx, sym, lanczos),
         "rectangular" | "boxcar" | "rect" => Ok(boxcar(nx, sym)),
         "chebwin" => symmetric_or_periodic_window(nx, sym, |n| chebwin(n, 100.0)),
         "parzen" => symmetric_or_periodic_window(nx, sym, parzen),
@@ -6633,6 +6670,7 @@ pub fn get_window_with_fftbins(
         "nuttall" => symmetric_or_periodic_window(nx, sym, nuttall_window),
         "bohman" => symmetric_or_periodic_window(nx, sym, bohman_window),
         "exponential" => exponential(nx, None, 1.0, sym),
+        "taylor" | "taylorwin" => Ok(taylor(nx, 4, 30.0, true, sym)),
         "dpss" => Err(SignalError::InvalidArgument(
             "dpss requires a normalized half-bandwidth parameter".to_string(),
         )),
@@ -10883,6 +10921,54 @@ mod tests {
             .remove(0);
         assert_eq!(symmetric, expected_symmetric);
         assert_eq!(periodic, expected_periodic);
+    }
+
+    #[test]
+    fn get_window_dispatches_lanczos_and_sinc_alias() {
+        let symmetric = get_window_with_fftbins("lanczos", 9, false).unwrap();
+        let periodic = get_window("lanczos", 9).unwrap();
+        let alias = get_window_with_fftbins("sinc", 9, false).unwrap();
+        let expected_symmetric = lanczos(9);
+        let expected_periodic = lanczos(10).into_iter().take(9).collect::<Vec<_>>();
+
+        assert_eq!(symmetric, expected_symmetric);
+        assert_eq!(periodic, expected_periodic);
+        assert_eq!(alias, expected_symmetric);
+    }
+
+    #[test]
+    fn get_window_dispatches_taylor_defaults_and_parameters() {
+        let symmetric_default = get_window_with_fftbins("taylor", 9, false).unwrap();
+        let periodic_param = get_window("taylor,6,45,false", 9).unwrap();
+        let symmetric_alias = get_window_with_fftbins("taylorwin,5,35,true", 9, false).unwrap();
+        let forced_periodic =
+            get_window_with_fftbins("taylor_periodic,5,35,true", 9, false).unwrap();
+
+        assert_eq!(symmetric_default, taylor(9, 4, 30.0, true, true));
+        assert_eq!(periodic_param, taylor(9, 6, 45.0, false, false));
+        assert_eq!(symmetric_alias, taylor(9, 5, 35.0, true, true));
+        assert_eq!(forced_periodic, taylor(9, 5, 35.0, true, false));
+    }
+
+    #[test]
+    fn get_window_rejects_invalid_taylor_parameters() {
+        let too_many = get_window("taylor,4,30,true,false", 8).expect_err("too many taylor params");
+        assert_eq!(
+            too_many.to_string(),
+            "invalid argument: taylor expects nbar[,sll[,norm]] parameters: 4,30,true,false"
+        );
+
+        let invalid_nbar = get_window("taylor,foo", 8).expect_err("invalid taylor nbar");
+        assert_eq!(
+            invalid_nbar.to_string(),
+            "invalid argument: invalid taylor nbar: foo"
+        );
+
+        let invalid_norm = get_window("taylor,4,30,maybe", 8).expect_err("invalid taylor norm");
+        assert_eq!(
+            invalid_norm.to_string(),
+            "invalid argument: invalid taylor norm: maybe"
+        );
     }
 
     #[test]
