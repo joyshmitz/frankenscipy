@@ -664,6 +664,15 @@ impl RkSolver {
         self.nfev
     }
 
+    /// Returns true if this solver supports standalone `OdeSolver::step()`.
+    ///
+    /// Solvers created with `new_owned()` return true; those created with
+    /// `new()` return false (use `step_with()` instead).
+    #[must_use]
+    pub fn can_step(&self) -> bool {
+        self.fun.is_some()
+    }
+
     /// Perform one adaptive step, advancing the solver.
     ///
     /// This is the core step implementation matching SciPy's `RungeKutta._step_impl`.
@@ -1280,7 +1289,8 @@ mod tests {
     }
 
     #[test]
-    fn odesolver_step_fails_for_ref_created_solver() {
+    fn ref_created_solver_requires_step_with() {
+        // Solvers created with new() must use step_with() instead of step()
         let mut fun = |_t: f64, y: &[f64]| -> Vec<f64> { vec![-y[0]] };
         let config = RkSolverConfig {
             t0: 0.0,
@@ -1295,7 +1305,35 @@ mod tests {
         };
         let mut solver = RkSolver::new(&mut fun, config).expect("solver creation");
 
+        // can_step() should return false for ref-created solvers
+        assert!(!solver.can_step());
+
+        // step() returns NotYetImplemented - use step_with() instead
         let result = solver.step();
         assert!(matches!(result, Err(StepFailure::NotYetImplemented(_))));
+
+        // step_with() works correctly
+        let step_result = solver.step_with(&mut fun);
+        assert!(step_result.is_ok());
+    }
+
+    #[test]
+    fn owned_solver_supports_step() {
+        let config = RkSolverConfig {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 1.0,
+            rtol: 1e-8,
+            atol: ToleranceValue::Scalar(1e-10),
+            max_step: f64::INFINITY,
+            first_step: None,
+            mode: RuntimeMode::Strict,
+            tableau: &RK45_TABLEAU,
+        };
+        let solver =
+            RkSolver::new_owned(|_t, y| vec![-y[0]], config).expect("solver creation");
+
+        // can_step() should return true for owned solvers
+        assert!(solver.can_step());
     }
 }
