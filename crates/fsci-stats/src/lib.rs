@@ -8737,6 +8737,83 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
     }
 }
 
+/// Mann-Whitney U test with alternative hypothesis specification.
+///
+/// Matches `scipy.stats.mannwhitneyu(x, y, alternative=...)`.
+///
+/// # Arguments
+/// * `x`, `y` - Sample data
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn mannwhitneyu_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResult {
+    if x.len() < 2 || y.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let n1 = x.len();
+    let n2 = y.len();
+    let n1f = n1 as f64;
+    let n2f = n2 as f64;
+
+    let mut combined: Vec<(f64, usize)> = Vec::with_capacity(n1 + n2);
+    for &v in x {
+        combined.push((v, 0));
+    }
+    for &v in y {
+        combined.push((v, 1));
+    }
+
+    let values: Vec<f64> = combined.iter().map(|&(v, _)| v).collect();
+    let ranks = rankdata_average(&values);
+
+    let rank_sum_x: f64 = ranks
+        .iter()
+        .zip(combined.iter())
+        .filter(|(_, (_, group))| *group == 0)
+        .map(|(r, _)| *r)
+        .sum();
+
+    let u1 = rank_sum_x - n1f * (n1f + 1.0) / 2.0;
+    let u2 = n1f * n2f - u1;
+
+    let mu = n1f * n2f / 2.0;
+    let sigma = (n1f * n2f * (n1f + n2f + 1.0) / 12.0).sqrt();
+
+    if sigma == 0.0 {
+        return TtestResult {
+            statistic: u1,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+
+    let normal = Normal::standard();
+    let (u, pvalue) = match alternative {
+        "less" => {
+            let z = (u1 - mu) / sigma;
+            (u1, normal.cdf(z))
+        }
+        "greater" => {
+            let z = (u1 - mu) / sigma;
+            (u1, normal.sf(z))
+        }
+        _ => {
+            let u = u1.min(u2);
+            let z = (u - mu) / sigma;
+            (u, 2.0 * normal.cdf(z.min(0.0)))
+        }
+    };
+
+    TtestResult {
+        statistic: u,
+        pvalue,
+        df: f64::NAN,
+    }
+}
+
 /// Wilcoxon signed-rank test for paired samples.
 ///
 /// Matches `scipy.stats.wilcoxon(x, y)`.
@@ -19239,6 +19316,27 @@ mod tests {
     fn mannwhitneyu_too_few() {
         let result = mannwhitneyu(&[1.0], &[2.0]);
         assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn mannwhitneyu_alternative_one_sided() {
+        let x: Vec<f64> = (0..30).map(|i| (i as f64) * 0.1).collect();
+        let y: Vec<f64> = (0..30).map(|i| 50.0 + (i as f64) * 0.1).collect();
+
+        let less = mannwhitneyu_alternative(&x, &y, "less");
+        let greater = mannwhitneyu_alternative(&x, &y, "greater");
+
+        assert!(less.pvalue < 0.001, "x < y should be significant for 'less': {}", less.pvalue);
+        assert!(greater.pvalue > 0.5, "x < y should not be significant for 'greater': {}", greater.pvalue);
+    }
+
+    #[test]
+    fn mannwhitneyu_alternative_two_sided_matches() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![6.0, 7.0, 8.0, 9.0, 10.0];
+        let default = mannwhitneyu(&x, &y);
+        let two_sided = mannwhitneyu_alternative(&x, &y, "two-sided");
+        assert!((default.pvalue - two_sided.pvalue).abs() < 0.001);
     }
 
     // ── Goodness-of-fit tests ─────────────────────────────────────────
