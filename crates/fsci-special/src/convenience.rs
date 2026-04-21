@@ -4214,8 +4214,18 @@ pub fn negentropy_scalar(x: f64) -> f64 {
 ///
 /// Computes the cross-entropy between true label p and predicted
 /// probability q. Both p and q should be in [0, 1].
+pub fn binary_cross_entropy(
+    p_tensor: &SpecialTensor,
+    q_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("binary_cross_entropy", p_tensor, q_tensor, mode, |p, q| {
+        Ok(binary_cross_entropy_scalar(p, q))
+    })
+}
+
 #[must_use]
-pub fn binary_cross_entropy(p: f64, q: f64) -> f64 {
+pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
     if p.is_nan() || q.is_nan() {
         return f64::NAN;
     }
@@ -6615,18 +6625,59 @@ mod tests {
     #[test]
     fn binary_cross_entropy_basic() {
         // BCE(1, 1) = 0 (perfect prediction)
-        assert!((binary_cross_entropy(1.0, 1.0) - 0.0).abs() < 1e-14);
+        assert!((binary_cross_entropy_scalar(1.0, 1.0) - 0.0).abs() < 1e-14);
 
         // BCE(0, 0) = 0 (perfect prediction)
-        assert!((binary_cross_entropy(0.0, 0.0) - 0.0).abs() < 1e-14);
+        assert!((binary_cross_entropy_scalar(0.0, 0.0) - 0.0).abs() < 1e-14);
 
         // BCE(1, 0.5) = -log(0.5) = ln(2)
-        assert!((binary_cross_entropy(1.0, 0.5) - std::f64::consts::LN_2).abs() < 1e-14);
+        assert!((binary_cross_entropy_scalar(1.0, 0.5) - std::f64::consts::LN_2).abs() < 1e-14);
 
         // BCE(0, 0.5) = -log(0.5) = ln(2)
-        assert!((binary_cross_entropy(0.0, 0.5) - std::f64::consts::LN_2).abs() < 1e-14);
+        assert!((binary_cross_entropy_scalar(0.0, 0.5) - std::f64::consts::LN_2).abs() < 1e-14);
 
         // BCE(0.5, 0.5) = -0.5*log(0.5) - 0.5*log(0.5) = ln(2)
-        assert!((binary_cross_entropy(0.5, 0.5) - std::f64::consts::LN_2).abs() < 1e-14);
+        assert!((binary_cross_entropy_scalar(0.5, 0.5) - std::f64::consts::LN_2).abs() < 1e-14);
+    }
+
+    #[test]
+    fn binary_cross_entropy_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = binary_cross_entropy(
+            &SpecialTensor::RealScalar(1.0),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - binary_cross_entropy_scalar(1.0, 0.5)).abs() < 1e-14);
+
+        let vector = binary_cross_entropy(
+            &SpecialTensor::RealVec(vec![0.0, 0.5, 1.0]),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [0.0, 0.5, 1.0].map(|p| binary_cross_entropy_scalar(p, 0.5));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn binary_cross_entropy_tensor_dispatch_preserves_domain_behavior() -> Result<(), String> {
+        let vector = binary_cross_entropy(
+            &SpecialTensor::RealVec(vec![f64::NAN, 0.5, 1.0]),
+            &SpecialTensor::RealVec(vec![0.5, -0.5, 0.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!(values[1].is_infinite());
+        assert!(values[2].is_infinite());
+        Ok(())
     }
 }
