@@ -10027,8 +10027,22 @@ fn standard_normal_pdf(x: f64) -> f64 {
 }
 
 fn normal_alternative_pvalue(z: f64, alternative: &str) -> f64 {
-    if !z.is_finite() {
+    if z.is_nan() {
         return f64::NAN;
+    }
+    if z == f64::INFINITY {
+        return match alternative {
+            "two-sided" | "greater" => 0.0,
+            "less" => 1.0,
+            _ => f64::NAN,
+        };
+    }
+    if z == f64::NEG_INFINITY {
+        return match alternative {
+            "two-sided" | "less" => 0.0,
+            "greater" => 1.0,
+            _ => f64::NAN,
+        };
     }
     let normal = Normal::standard();
     match alternative {
@@ -16554,6 +16568,19 @@ mod tests {
                 vec![0.0, 0.0, 0.0, 1.0]
             ]
         );
+    }
+
+    #[test]
+    fn normal_alternative_pvalue_handles_infinite_statistics() {
+        assert_eq!(normal_alternative_pvalue(f64::INFINITY, "two-sided"), 0.0);
+        assert_eq!(normal_alternative_pvalue(f64::INFINITY, "greater"), 0.0);
+        assert_eq!(normal_alternative_pvalue(f64::INFINITY, "less"), 1.0);
+        assert_eq!(
+            normal_alternative_pvalue(f64::NEG_INFINITY, "two-sided"),
+            0.0
+        );
+        assert_eq!(normal_alternative_pvalue(f64::NEG_INFINITY, "less"), 0.0);
+        assert_eq!(normal_alternative_pvalue(f64::NEG_INFINITY, "greater"), 1.0);
     }
 
     #[test]
