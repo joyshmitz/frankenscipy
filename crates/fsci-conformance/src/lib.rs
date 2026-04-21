@@ -9648,7 +9648,11 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("spence", mode));
             }
-            Ok(special_spence(args[0]))
+            special_scalar_from_tensor(
+                special_spence(&special_scalar(args[0]), mode)?,
+                "spence",
+                mode,
+            )
         }
         SpecialCaseFunction::Zeta => {
             if args.len() != 1 {

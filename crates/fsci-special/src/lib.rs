@@ -176,6 +176,7 @@ pub use convenience::{
     softsign,
     spacing,
     spence,
+    spence_scalar,
     square,
     struve,
     struve_scalar,

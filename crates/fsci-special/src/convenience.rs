@@ -1715,7 +1715,12 @@ pub fn log_softmax(x: &[f64]) -> Vec<f64> {
 /// Spence's function (dilogarithm): Li₂(z) via integral ∫₁ᶻ ln(t)/(1-t) dt.
 ///
 /// Matches `scipy.special.spence`.
-pub fn spence(x: f64) -> f64 {
+pub fn spence(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("spence", x_tensor, mode, |x| Ok(spence_scalar(x)))
+}
+
+#[must_use]
+pub fn spence_scalar(x: f64) -> f64 {
     if x == 1.0 {
         return 0.0;
     }
@@ -1728,7 +1733,7 @@ pub fn spence(x: f64) -> f64 {
 
     // For x > 2, use transformation: spence(x) = -spence(1/x) - ln(x)²/2
     if x > 2.0 {
-        return -spence(1.0 / x) - x.ln().powi(2) / 2.0;
+        return -spence_scalar(1.0 / x) - x.ln().powi(2) / 2.0;
     }
 
     // Numerical integration: ∫₁ˣ ln(t)/(1-t) dt via Simpson's rule
@@ -5757,6 +5762,43 @@ mod tests {
         assert_eq!(recovered_values.len(), probabilities.len());
         for (actual, expected) in recovered_values.iter().zip(probabilities.iter()) {
             assert!((actual - expected).abs() < 1e-13);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn spence_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = spence(&SpecialTensor::RealScalar(0.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - spence_scalar(0.5)).abs() < 1e-12);
+
+        let vector = spence(
+            &SpecialTensor::RealVec(vec![0.0, 0.5, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [0.0, 0.5, 1.0].map(spence_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn spence_tensor_dispatch_handles_reflection_branch() -> Result<(), String> {
+        let input = vec![2.5, 3.0];
+        let result = spence(&SpecialTensor::RealVec(input.clone()), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(result)?;
+        assert_eq!(values.len(), input.len());
+        for (actual, x) in values.iter().zip(input.iter()) {
+            let expected = spence_scalar(*x);
+            assert!((actual - expected).abs() < 1e-12);
+            let reflected = -spence_scalar(1.0 / x) - x.ln().powi(2) / 2.0;
+            assert!((actual - reflected).abs() < 1e-12);
         }
         Ok(())
     }
