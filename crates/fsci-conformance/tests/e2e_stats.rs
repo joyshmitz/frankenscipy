@@ -3408,7 +3408,7 @@ fn e2e_034_skewtest_nan_policy_parity() {
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
-/// Scenario 35: Rankdata average/ordinal parity.
+/// Scenario 35: Rankdata tie-method parity.
 /// Verifies SciPy-shaped tie handling for the implemented public `rankdata`
 /// methods, plus NaN propagation and invalid-method rejection.
 #[test]
@@ -3466,19 +3466,67 @@ fn e2e_035_rankdata_method_parity() {
     ));
 
     let t = Instant::now();
-    let err = rankdata(&[1.0, 2.0], Some("dense")).expect_err("invalid method");
-    let pass = err
-        == fsci_stats::StatsError::InvalidArgument(
-            "method must be one of {'average', 'ordinal'}".to_string(),
-        );
+    let dense = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("dense")).expect("dense rankdata");
+    let pass = dense == vec![1.0, 2.0, 2.0, 3.0];
     if !pass {
         all_pass = false;
     }
     steps.push(make_step(
         4,
+        "rankdata_dense_reference",
+        "rankdata([1,2,2,4], method='dense')",
+        "tied observations should share a rank and the next distinct value should advance by one",
+        &format!("ranks={dense:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let min = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("min")).expect("min rankdata");
+    let pass = min == vec![1.0, 2.0, 2.0, 4.0];
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        5,
+        "rankdata_min_reference",
+        "rankdata([1,2,2,4], method='min')",
+        "tied observations should receive the minimum rank in their 1-based interval",
+        &format!("ranks={min:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let max = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("max")).expect("max rankdata");
+    let pass = max == vec![1.0, 3.0, 3.0, 4.0];
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        6,
+        "rankdata_max_reference",
+        "rankdata([1,2,2,4], method='max')",
+        "tied observations should receive the maximum rank in their 1-based interval",
+        &format!("ranks={max:?}"),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let err = rankdata(&[1.0, 2.0], Some("competition")).expect_err("invalid method");
+    let pass = err
+        == fsci_stats::StatsError::InvalidArgument(
+            "method must be one of {'average', 'min', 'max', 'dense', 'ordinal'}".to_string(),
+        );
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        7,
         "rankdata_invalid_method_rejected",
-        "rankdata([1,2], method='dense')",
-        "unsupported tie methods should be rejected explicitly instead of silently coercing to average",
+        "rankdata([1,2], method='competition')",
+        "unsupported tie methods should still be rejected explicitly instead of silently coercing to a supported mode",
         &err.to_string(),
         t.elapsed().as_nanos(),
         if pass { "pass" } else { "FAIL" },

@@ -7904,21 +7904,36 @@ pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
 /// Matches `scipy.stats.rankdata(a, method=...)` for the implemented methods.
 pub fn rankdata(data: &[f64], method: Option<&str>) -> Result<Vec<f64>, StatsError> {
     match method.unwrap_or("average").to_ascii_lowercase().as_str() {
-        "average" => Ok(rankdata_average(data)),
+        "average" => Ok(rankdata_ties(data, RankTieMethod::Average)),
+        "min" => Ok(rankdata_ties(data, RankTieMethod::Min)),
+        "max" => Ok(rankdata_ties(data, RankTieMethod::Max)),
+        "dense" => Ok(rankdata_ties(data, RankTieMethod::Dense)),
         "ordinal" => Ok(rankdata_ordinal(data)),
         _ => Err(StatsError::InvalidArgument(
-            "method must be one of {'average', 'ordinal'}".to_string(),
+            "method must be one of {'average', 'min', 'max', 'dense', 'ordinal'}".to_string(),
         )),
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RankTieMethod {
+    Average,
+    Min,
+    Max,
+    Dense,
+}
+
 /// Compute ranks with average tie-breaking.
 fn rankdata_average(data: &[f64]) -> Vec<f64> {
+    rankdata_ties(data, RankTieMethod::Average)
+}
+
+fn rankdata_ties(data: &[f64], method: RankTieMethod) -> Vec<f64> {
     let n = data.len();
     if data.iter().any(|v| v.is_nan()) {
         return vec![f64::NAN; n];
     }
-    // Create (value, original_index) pairs and sort by value
+
     let mut indexed: Vec<(f64, usize)> = data
         .iter()
         .copied()
@@ -7929,19 +7944,26 @@ fn rankdata_average(data: &[f64]) -> Vec<f64> {
 
     let mut ranks = vec![0.0; n];
     let mut i = 0;
+    let mut dense_rank = 1.0;
     while i < n {
-        // Find the end of the tie group
         let mut j = i + 1;
         while j < n && indexed[j].0 == indexed[i].0 {
             j += 1;
         }
-        // Average rank for the tie group (ranks are 1-based)
-        let avg_rank = (i + 1 + j) as f64 / 2.0;
+
+        let tie_rank = match method {
+            RankTieMethod::Average => (i + 1 + j) as f64 / 2.0,
+            RankTieMethod::Min => (i + 1) as f64,
+            RankTieMethod::Max => j as f64,
+            RankTieMethod::Dense => dense_rank,
+        };
         for item in &indexed[i..j] {
-            ranks[item.1] = avg_rank;
+            ranks[item.1] = tie_rank;
         }
         i = j;
+        dense_rank += 1.0;
     }
+
     ranks
 }
 
@@ -14787,6 +14809,18 @@ mod tests {
     }
 
     #[test]
+    fn rankdata_dense_min_max_match_scipy_reference() {
+        let dense = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("dense")).expect("rankdata dense");
+        assert_eq!(dense, vec![1.0, 2.0, 2.0, 3.0]);
+
+        let min = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("min")).expect("rankdata min");
+        assert_eq!(min, vec![1.0, 2.0, 2.0, 4.0]);
+
+        let max = rankdata(&[1.0, 2.0, 2.0, 4.0], Some("max")).expect("rankdata max");
+        assert_eq!(max, vec![1.0, 3.0, 3.0, 4.0]);
+    }
+
+    #[test]
     fn rankdata_nan_and_invalid_method_match_scipy_shape() {
         let ranks = rankdata(&[1.0, f64::NAN, 2.0], Some("ordinal")).expect("nan rankdata");
         assert!(
@@ -14794,10 +14828,12 @@ mod tests {
             "NaN input should propagate"
         );
 
-        let err = rankdata(&[1.0, 2.0], Some("dense")).expect_err("invalid method");
+        let err = rankdata(&[1.0, 2.0], Some("competition")).expect_err("invalid method");
         assert_eq!(
             err,
-            StatsError::InvalidArgument("method must be one of {'average', 'ordinal'}".to_string())
+            StatsError::InvalidArgument(
+                "method must be one of {'average', 'min', 'max', 'dense', 'ordinal'}".to_string()
+            )
         );
     }
 
