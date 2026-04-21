@@ -3705,8 +3705,12 @@ pub fn swish(x: f64, beta: f64) -> f64 {
 /// mish(x) = x * tanh(softplus(x)) = x * tanh(ln(1 + exp(x)))
 ///
 /// A self-regularized non-monotonic activation function.
+pub fn mish(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("mish", x_tensor, mode, |x| Ok(mish_scalar(x)))
+}
+
 #[must_use]
-pub fn mish(x: f64) -> f64 {
+pub fn mish_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -5396,16 +5400,51 @@ mod tests {
     #[test]
     fn mish_basic() {
         // mish(0) = 0
-        assert!((mish(0.0) - 0.0).abs() < 1e-14);
+        assert!((mish_scalar(0.0) - 0.0).abs() < 1e-14);
 
         // For large positive x, mish(x) ≈ x
-        assert!((mish(10.0) - 10.0).abs() < 1e-3);
+        assert!((mish_scalar(10.0) - 10.0).abs() < 1e-3);
 
         // For large negative x, mish(x) ≈ 0
-        assert!(mish(-10.0).abs() < 1e-3);
+        assert!(mish_scalar(-10.0).abs() < 1e-3);
 
         // mish is smooth and has slight negative region
-        assert!(mish(-0.5) < 0.0);
+        assert!(mish_scalar(-0.5) < 0.0);
+    }
+
+    #[test]
+    fn mish_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = mish(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - mish_scalar(2.0)).abs() < 1e-14);
+
+        let vector = mish(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(mish_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mish_tensor_dispatch_preserves_negative_lobe_and_nan() -> Result<(), String> {
+        let vector = mish(
+            &SpecialTensor::RealVec(vec![f64::NAN, -0.5, 10.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!(values[1] < 0.0);
+        assert!((values[2] - mish_scalar(10.0)).abs() < 1e-12);
+        Ok(())
     }
 
     #[test]
