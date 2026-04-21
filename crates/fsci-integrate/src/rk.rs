@@ -24,6 +24,8 @@ const SAFETY: f64 = 0.9;
 const MIN_FACTOR: f64 = 0.2;
 const MAX_FACTOR: f64 = 10.0;
 
+type OdeFn = Box<dyn FnMut(f64, &[f64]) -> Vec<f64>>;
+
 /// Butcher tableau for an explicit Runge-Kutta method.
 pub struct ButcherTableau {
     /// A coefficients (lower-triangular, row-major, n_stages × n_stages).
@@ -314,7 +316,7 @@ fn rk_step<F>(
     k: &mut [Vec<f64>],
 ) -> (Vec<f64>, Vec<f64>)
 where
-    F: FnMut(f64, &[f64]) -> Vec<f64>,
+    F: FnMut(f64, &[f64]) -> Vec<f64> + ?Sized,
 {
     let n = y.len();
     k[0] = f.to_vec();
@@ -432,10 +434,16 @@ pub struct RkSolver {
     k: Vec<Vec<f64>>,
     // Statistics
     nfev: usize,
+    // Stored ODE function for trait-object stepping (Some if created with new_owned)
+    fun: Option<OdeFn>,
 }
 
 impl RkSolver {
-    /// Create a new RK solver from configuration.
+    /// Create a new RK solver from configuration (reference-based).
+    ///
+    /// Use this constructor when you want to use `step_with(fun)` to advance
+    /// the solver. For trait-object stepping via `OdeSolver::step()`, use
+    /// `new_owned` instead.
     ///
     /// # Contract (P2C-001-D2)
     /// - Validates tolerances and step parameters.
@@ -519,6 +527,105 @@ impl RkSolver {
             error_exponent,
             k,
             nfev,
+            fun: None,
+        })
+    }
+
+    /// Create a new RK solver that owns its ODE function.
+    ///
+    /// This constructor enables the `OdeSolver::step()` trait method for
+    /// trait-object stepping. The solver stores the function internally.
+    ///
+    /// # Contract (P2C-001-D2)
+    /// - Validates tolerances and step parameters.
+    /// - Calls `select_initial_step` if no `first_step` is provided.
+    /// - Threads `RuntimeMode` through all validation paths.
+    /// - Stores the ODE function for use by `OdeSolver::step()`.
+    pub fn new_owned<F>(
+        fun: F,
+        config: RkSolverConfig<'_>,
+    ) -> Result<Self, IntegrateValidationError>
+    where
+        F: FnMut(f64, &[f64]) -> Vec<f64> + 'static,
+    {
+        let n = config.y0.len();
+
+        // Validate tolerances
+        let validated_tol = validate_tol(
+            ToleranceValue::Scalar(config.rtol),
+            config.atol.clone(),
+            n,
+            config.mode,
+        )?;
+        let rtol = validated_tol
+            .rtol
+            .into_scalar()
+            .expect("RkSolverConfig always carries scalar rtol");
+        let atol = validated_tol.atol;
+
+        // Validate max_step
+        if config.max_step.is_finite() {
+            validate_max_step(config.max_step)?;
+        }
+
+        let direction = if config.t_bound != config.t0 {
+            (config.t_bound - config.t0).signum()
+        } else {
+            1.0
+        };
+
+        // Box the function for storage and initial evaluation
+        let mut fun_box: OdeFn = Box::new(fun);
+
+        // Evaluate f0
+        let f0 = fun_box(config.t0, config.y0);
+        let nfev = 1;
+
+        // Determine initial step size
+        let h_abs = if let Some(first_step) = config.first_step {
+            validate_first_step(first_step, config.t0, config.t_bound)?
+        } else {
+            let step_request = InitialStepRequest {
+                t0: config.t0,
+                y0: config.y0,
+                t_bound: config.t_bound,
+                max_step: config.max_step,
+                f0: &f0,
+                direction,
+                order: config.tableau.error_estimator_order as f64,
+                rtol,
+                atol: atol.clone(),
+                mode: config.mode,
+            };
+            select_initial_step(&mut *fun_box, &step_request)?
+        };
+
+        let error_exponent = -1.0 / (config.tableau.error_estimator_order as f64 + 1.0);
+
+        // Allocate K storage: n_stages + 1 vectors of length n
+        let k = vec![vec![0.0; n]; config.tableau.n_stages + 1];
+
+        Ok(Self {
+            mode: config.mode,
+            state: OdeSolverState::Running,
+            tableau: config.tableau,
+            n,
+            t: config.t0,
+            y: config.y0.to_vec(),
+            t_old: None,
+            y_old: None,
+            t_bound: config.t_bound,
+            direction,
+            rtol,
+            atol,
+            max_step: config.max_step,
+            f: f0,
+            f_old: None,
+            h_abs,
+            error_exponent,
+            k,
+            nfev,
+            fun: Some(fun_box),
         })
     }
 
@@ -707,6 +814,138 @@ impl RkSolver {
                 .collect(),
         }
     }
+
+    /// Internal step implementation using the stored ODE function.
+    ///
+    /// This enables the `OdeSolver::step()` trait method to work for trait-object usage.
+    /// Requires the solver to be created with `new_owned`.
+    fn step_impl(&mut self) -> Result<StepOutcome, StepFailure> {
+        // Check early that we have a stored function
+        if self.fun.is_none() {
+            return Err(StepFailure::NotYetImplemented(
+                "OdeSolver::step requires solver created with new_owned; use step_with instead",
+            ));
+        }
+
+        if self.state != OdeSolverState::Running {
+            return Err(StepFailure::RuntimeError(
+                "Attempt to step on a finished or failed solver.",
+            ));
+        }
+
+        // Handle empty system or already at boundary
+        if self.n == 0 || self.t == self.t_bound {
+            self.t_old = Some(self.t);
+            self.y_old = Some(self.y.clone());
+            self.f_old = Some(self.f.clone());
+            self.t = self.t_bound;
+            self.state = OdeSolverState::Finished;
+            return Ok(StepOutcome {
+                message: None,
+                state: OdeSolverState::Finished,
+            });
+        }
+
+        let t = self.t;
+
+        // Minimum step: 10 * machine epsilon at current t
+        let min_step = 10.0 * (next_after(t, self.direction * f64::INFINITY) - t).abs();
+
+        let mut h_abs = self.h_abs.clamp(0.0, self.max_step);
+
+        let mut step_accepted = false;
+        let mut step_rejected = false;
+
+        while !step_accepted {
+            if h_abs < min_step {
+                // If we are extremely close to the boundary, we can allow one final tiny step
+                let remaining = (self.t_bound - t).abs();
+                if remaining < min_step {
+                    h_abs = remaining;
+                } else {
+                    self.state = OdeSolverState::Failed;
+                    return Err(StepFailure::StepSizeTooSmall);
+                }
+            }
+
+            let h = h_abs * self.direction;
+            let mut t_new = t + h;
+
+            // Clamp to boundary
+            if self.direction * (t_new - self.t_bound) > 0.0 {
+                t_new = self.t_bound;
+            }
+
+            let h = t_new - t;
+            h_abs = h.abs();
+
+            // Perform the RK step using stored function (borrow only for this call)
+            let (y_new, f_new) = {
+                let fun = self.fun.as_mut().unwrap();
+                rk_step(
+                    &mut **fun,
+                    t,
+                    &self.y,
+                    &self.f,
+                    h,
+                    self.tableau,
+                    &mut self.k,
+                )
+            };
+            self.nfev += self.tableau.n_stages - 1;
+
+            // Compute error scale
+            let scale = self.compute_scale(&self.y, &y_new);
+
+            // Estimate error
+            let err = estimate_error(&self.k, self.tableau.e, h, self.n);
+            let err_norm = error_norm(&err, &scale);
+
+            if !err_norm.is_finite() {
+                self.state = OdeSolverState::Failed;
+                return Err(StepFailure::NonFiniteState);
+            }
+
+            if err_norm < 1.0 {
+                // Step accepted
+                let factor = if err_norm == 0.0 {
+                    MAX_FACTOR
+                } else {
+                    MAX_FACTOR.min(SAFETY * err_norm.powf(self.error_exponent))
+                };
+
+                let factor = if step_rejected {
+                    factor.min(1.0)
+                } else {
+                    factor
+                };
+
+                h_abs *= factor;
+                step_accepted = true;
+
+                self.y_old = Some(self.y.clone());
+                self.t_old = Some(t);
+                self.f_old = Some(self.f.clone());
+                self.t = t_new;
+                self.y = y_new;
+                self.h_abs = h_abs;
+                self.f = f_new;
+            } else {
+                // Step rejected: decrease step size
+                h_abs *= MIN_FACTOR.max(SAFETY * err_norm.powf(self.error_exponent));
+                step_rejected = true;
+            }
+        }
+
+        if self.direction * (self.t - self.t_bound) >= 0.0 {
+            self.state = OdeSolverState::Finished;
+        }
+
+        Ok(StepOutcome {
+            message: None,
+            state: self.state,
+        })
+    }
 }
 
 /// `next_after` equivalent: the next representable f64 toward `toward`.
@@ -742,11 +981,7 @@ impl OdeSolver for RkSolver {
     }
 
     fn step(&mut self) -> Result<StepOutcome, StepFailure> {
-        // This trait method cannot accept `fun` — for trait-object usage,
-        // we store f but cannot call fun. Use `step_with` directly.
-        Err(StepFailure::NotYetImplemented(
-            "OdeSolver::step requires step_with(fun) for RkSolver",
-        ))
+        self.step_impl()
     }
 }
 
@@ -987,5 +1222,80 @@ mod tests {
             "FSAL: expected {expected_nfev} evaluations for {steps} steps, got {}",
             solver.nfev()
         );
+    }
+
+    #[test]
+    fn odesolver_step_trait_method_works() {
+        let config = RkSolverConfig {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 1.0,
+            rtol: 1e-8,
+            atol: ToleranceValue::Scalar(1e-10),
+            max_step: f64::INFINITY,
+            first_step: None,
+            mode: RuntimeMode::Strict,
+            tableau: &RK45_TABLEAU,
+        };
+        let mut solver: Box<dyn OdeSolver> =
+            Box::new(RkSolver::new_owned(|_t, y| vec![-y[0]], config).expect("solver creation"));
+
+        assert_eq!(solver.state(), OdeSolverState::Running);
+
+        let mut steps = 0;
+        while solver.state() == OdeSolverState::Running {
+            solver.step().expect("trait step should succeed");
+            steps += 1;
+            assert!(steps <= 1000, "too many steps");
+        }
+
+        assert_eq!(solver.state(), OdeSolverState::Finished);
+    }
+
+    #[test]
+    fn odesolver_step_exponential_decay_accuracy() {
+        let config = RkSolverConfig {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 1.0,
+            rtol: 1e-8,
+            atol: ToleranceValue::Scalar(1e-10),
+            max_step: f64::INFINITY,
+            first_step: None,
+            mode: RuntimeMode::Strict,
+            tableau: &RK45_TABLEAU,
+        };
+        let mut solver = RkSolver::new_owned(|_t, y| vec![-y[0]], config).expect("solver creation");
+
+        while solver.state() == OdeSolverState::Running {
+            solver.step().expect("step should succeed");
+        }
+
+        let expected = (-1.0_f64).exp();
+        assert!(
+            (solver.y()[0] - expected).abs() < 1e-6,
+            "OdeSolver::step: y(1) should be close to e^-1 ≈ {expected}, got {}",
+            solver.y()[0]
+        );
+    }
+
+    #[test]
+    fn odesolver_step_fails_for_ref_created_solver() {
+        let mut fun = |_t: f64, y: &[f64]| -> Vec<f64> { vec![-y[0]] };
+        let config = RkSolverConfig {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 1.0,
+            rtol: 1e-8,
+            atol: ToleranceValue::Scalar(1e-10),
+            max_step: f64::INFINITY,
+            first_step: None,
+            mode: RuntimeMode::Strict,
+            tableau: &RK45_TABLEAU,
+        };
+        let mut solver = RkSolver::new(&mut fun, config).expect("solver creation");
+
+        let result = solver.step();
+        assert!(matches!(result, Err(StepFailure::NotYetImplemented(_))));
     }
 }

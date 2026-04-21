@@ -38,7 +38,7 @@ pub fn select_initial_step<F>(
     request: &InitialStepRequest<'_>,
 ) -> Result<f64, IntegrateValidationError>
 where
-    F: FnMut(f64, &[f64]) -> Vec<f64>,
+    F: FnMut(f64, &[f64]) -> Vec<f64> + ?Sized,
 {
     let n = request.y0.len();
 
