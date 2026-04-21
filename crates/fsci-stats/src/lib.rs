@@ -7727,6 +7727,61 @@ pub fn ttest_ind(a: &[f64], b: &[f64]) -> TtestResult {
     }
 }
 
+/// Independent two-sample t-test with alternative hypothesis specification.
+///
+/// Matches `scipy.stats.ttest_ind(a, b, equal_var=True, alternative=...)`.
+///
+/// # Arguments
+/// * `a`, `b` - Sample data
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn ttest_ind_alternative(a: &[f64], b: &[f64], alternative: &str) -> TtestResult {
+    let n1 = a.len() as f64;
+    let n2 = b.len() as f64;
+    let df = n1 + n2 - 2.0;
+    if a.len() < 2 || b.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df,
+        };
+    }
+    let mean1: f64 = a.iter().sum::<f64>() / n1;
+    let mean2: f64 = b.iter().sum::<f64>() / n2;
+    let var1: f64 = a.iter().map(|&x| (x - mean1).powi(2)).sum::<f64>() / (n1 - 1.0);
+    let var2: f64 = b.iter().map(|&x| (x - mean2).powi(2)).sum::<f64>() / (n2 - 1.0);
+
+    let sp2 = ((n1 - 1.0) * var1 + (n2 - 1.0) * var2) / df;
+    let se = (sp2 * (1.0 / n1 + 1.0 / n2)).sqrt();
+
+    if se == 0.0 {
+        let statistic = if (mean1 - mean2).abs() == 0.0 {
+            f64::NAN
+        } else {
+            (mean1 - mean2).signum() * f64::INFINITY
+        };
+        return TtestResult {
+            statistic,
+            pvalue: if statistic.is_nan() { f64::NAN } else { 0.0 },
+            df,
+        };
+    }
+
+    let t = (mean1 - mean2) / se;
+    let tdist = StudentT::new(df);
+
+    let pvalue = match alternative {
+        "less" => tdist.cdf(t),
+        "greater" => tdist.sf(t),
+        _ => 2.0 * tdist.sf(t.abs()),
+    };
+
+    TtestResult {
+        statistic: t,
+        pvalue,
+        df,
+    }
+}
+
 /// Welch's t-test (unequal variance).
 ///
 /// Matches `scipy.stats.ttest_ind(a, b, equal_var=False)`.
@@ -17983,6 +18038,29 @@ mod tests {
             "very different samples should reject H0, p={}",
             result.pvalue
         );
+    }
+
+    #[test]
+    fn ttest_ind_alternative_one_sided() {
+        let a: Vec<f64> = (0..50).map(|i| (i as f64) * 0.01).collect();
+        let b: Vec<f64> = (0..50).map(|i| 10.0 + (i as f64) * 0.01).collect();
+
+        let two_sided = ttest_ind(&a, &b);
+        let less = ttest_ind_alternative(&a, &b, "less");
+        let greater = ttest_ind_alternative(&a, &b, "greater");
+
+        assert!((two_sided.statistic - less.statistic).abs() < 1e-10);
+        assert!(less.pvalue < 0.001, "a < b should be significant for 'less'");
+        assert!(greater.pvalue > 0.999, "a < b should not be significant for 'greater'");
+    }
+
+    #[test]
+    fn ttest_ind_alternative_two_sided_default() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let b = vec![2.0, 3.0, 4.0, 5.0, 6.0];
+        let default = ttest_ind(&a, &b);
+        let two_sided = ttest_ind_alternative(&a, &b, "two-sided");
+        assert!((default.pvalue - two_sided.pvalue).abs() < 1e-10);
     }
 
     #[test]
