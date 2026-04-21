@@ -4154,7 +4154,12 @@ pub fn log1mexp_scalar(x: f64) -> f64 {
 /// This is the same as softplus(x). Provided as an alias for
 /// compatibility with other libraries.
 #[must_use]
-pub fn log1pexp(x: f64) -> f64 {
+pub fn log1pexp(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("log1pexp", x_tensor, mode, |x| Ok(log1pexp_scalar(x)))
+}
+
+#[must_use]
+pub fn log1pexp_scalar(x: f64) -> f64 {
     softplus_scalar(x)
 }
 
@@ -6428,9 +6433,44 @@ mod tests {
     #[test]
     fn log1pexp_basic() {
         // log1pexp is same as softplus
-        assert!((log1pexp(0.0) - softplus_scalar(0.0)).abs() < 1e-14);
-        assert!((log1pexp(2.0) - softplus_scalar(2.0)).abs() < 1e-14);
-        assert!((log1pexp(-2.0) - softplus_scalar(-2.0)).abs() < 1e-14);
+        assert!((log1pexp_scalar(0.0) - softplus_scalar(0.0)).abs() < 1e-14);
+        assert!((log1pexp_scalar(2.0) - softplus_scalar(2.0)).abs() < 1e-14);
+        assert!((log1pexp_scalar(-2.0) - softplus_scalar(-2.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn log1pexp_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = log1pexp(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - log1pexp_scalar(2.0)).abs() < 1e-14);
+
+        let vector = log1pexp(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(log1pexp_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn log1pexp_tensor_dispatch_preserves_tail_stability() -> Result<(), String> {
+        let vector = log1pexp(
+            &SpecialTensor::RealVec(vec![f64::NAN, -100.0, 100.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!(values[1] < 1e-40);
+        assert!((values[2] - 100.0).abs() < 1e-10);
+        Ok(())
     }
 
     #[test]
