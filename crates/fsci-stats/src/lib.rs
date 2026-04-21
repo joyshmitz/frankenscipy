@@ -9189,6 +9189,35 @@ pub fn trim_mean(data: &[f64], proportiontocut: f64) -> f64 {
     trimmed.iter().sum::<f64>() / trimmed.len() as f64
 }
 
+/// Trim a proportion of elements from both ends of a sorted array.
+///
+/// Slices off the given proportion from **each** end of the sorted input array,
+/// returning the middle portion.
+///
+/// Matches `scipy.stats.trimboth(a, proportiontocut)`.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `proportiontocut` — Fraction to trim from each end (0.0 to 0.5)
+///
+/// # Returns
+/// A new vector containing the trimmed middle portion of the sorted data.
+pub fn trimboth(data: &[f64], proportiontocut: f64) -> Vec<f64> {
+    if data.is_empty() {
+        return vec![];
+    }
+    let prop = proportiontocut.clamp(0.0, 0.5);
+    let n = data.len();
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+
+    let ncut = (n as f64 * prop).floor() as usize;
+    if 2 * ncut >= n {
+        return vec![];
+    }
+    sorted[ncut..n - ncut].to_vec()
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -18711,6 +18740,42 @@ mod tests {
     #[test]
     fn trim_mean_empty() {
         assert!(trim_mean(&[], 0.1).is_nan());
+    }
+
+    #[test]
+    fn trimboth_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let result = trimboth(&data, 0.2);
+        // 20% from each end = 2 elements from each end
+        assert_eq!(result, vec![3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn trimboth_zero_trim() {
+        let data = [3.0, 1.0, 2.0];
+        let result = trimboth(&data, 0.0);
+        assert_eq!(result, vec![1.0, 2.0, 3.0]); // sorted
+    }
+
+    #[test]
+    fn trimboth_empty() {
+        assert!(trimboth(&[], 0.1).is_empty());
+    }
+
+    #[test]
+    fn trimboth_high_proportion() {
+        let data = [1.0, 2.0, 3.0, 4.0];
+        // 50% from each end should leave empty
+        let result = trimboth(&data, 0.5);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn trimboth_unsorted_input() {
+        let data = [5.0, 1.0, 3.0, 2.0, 4.0];
+        let result = trimboth(&data, 0.2);
+        // sorted: [1, 2, 3, 4, 5], trim 1 from each end
+        assert_eq!(result, vec![2.0, 3.0, 4.0]);
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
