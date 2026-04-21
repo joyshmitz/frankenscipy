@@ -9540,6 +9540,96 @@ pub fn obrientransform(groups: &[&[f64]]) -> Vec<Vec<f64>> {
     result
 }
 
+/// Result of Page's trend test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageTrendResult {
+    /// Page's L statistic.
+    pub statistic: f64,
+    /// Approximate p-value (one-sided, for increasing trend).
+    pub pvalue: f64,
+}
+
+/// Perform Page's L test for a monotonic trend in ranked data.
+///
+/// Tests whether there is a monotonic trend across ordered conditions.
+/// Data should be organized as rows (subjects/blocks) by columns (conditions).
+///
+/// Matches `scipy.stats.page_trend_test(data)`.
+///
+/// # Arguments
+/// * `data` — 2D data where each inner slice is a row (subject), columns are conditions
+///
+/// # Returns
+/// `PageTrendResult` with L statistic and approximate p-value.
+pub fn page_trend_test(data: &[&[f64]]) -> PageTrendResult {
+    let n = data.len(); // number of subjects/blocks
+    if n == 0 {
+        return PageTrendResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let k = data[0].len(); // number of conditions
+    if k < 2 || data.iter().any(|row| row.len() != k) {
+        return PageTrendResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    // Rank within each row
+    let mut rank_sums = vec![0.0; k];
+
+    for row in data {
+        // Get ranks for this row
+        let mut indexed: Vec<(usize, f64)> = row.iter().copied().enumerate().collect();
+        indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+        let mut ranks = vec![0.0; k];
+        let mut i = 0;
+        while i < k {
+            let mut j = i + 1;
+            while j < k && (indexed[j].1 - indexed[i].1).abs() < 1e-10 {
+                j += 1;
+            }
+            let avg_rank = (i + 1 + j) as f64 / 2.0;
+            for idx in i..j {
+                ranks[indexed[idx].0] = avg_rank;
+            }
+            i = j;
+        }
+
+        for (col, &rank) in ranks.iter().enumerate() {
+            rank_sums[col] += rank;
+        }
+    }
+
+    // Compute L statistic: sum of (condition_index + 1) * rank_sum
+    let l: f64 = rank_sums
+        .iter()
+        .enumerate()
+        .map(|(i, &r)| (i + 1) as f64 * r)
+        .sum();
+
+    // Expected value and variance under null hypothesis
+    let n_f = n as f64;
+    let k_f = k as f64;
+    let expected_l = n_f * k_f * (k_f + 1.0).powi(2) / 4.0;
+    let var_l = n_f * k_f.powi(2) * (k_f + 1.0).powi(2) * (k_f - 1.0) / 144.0;
+
+    // Z-score approximation
+    let z = (l - expected_l) / var_l.sqrt();
+
+    // One-sided p-value (testing for increasing trend)
+    let pvalue = 1.0 - standard_normal_cdf(z);
+
+    PageTrendResult {
+        statistic: l,
+        pvalue,
+    }
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -19331,6 +19421,44 @@ mod tests {
         let result = obrientransform(&[&data]);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].len(), 4);
+    }
+
+    #[test]
+    fn page_trend_test_increasing() {
+        // Clear increasing trend across conditions
+        let row1 = [1.0, 2.0, 3.0, 4.0];
+        let row2 = [1.0, 3.0, 2.0, 4.0];
+        let row3 = [2.0, 1.0, 3.0, 4.0];
+        let result = page_trend_test(&[&row1, &row2, &row3]);
+        assert!(result.statistic.is_finite());
+        assert!(result.pvalue.is_finite());
+        // Strong trend should have small p-value
+        assert!(result.pvalue < 0.1);
+    }
+
+    #[test]
+    fn page_trend_test_no_trend() {
+        // No clear trend
+        let row1 = [4.0, 1.0, 3.0, 2.0];
+        let row2 = [2.0, 4.0, 1.0, 3.0];
+        let row3 = [3.0, 2.0, 4.0, 1.0];
+        let result = page_trend_test(&[&row1, &row2, &row3]);
+        assert!(result.statistic.is_finite());
+        assert!(result.pvalue.is_finite());
+    }
+
+    #[test]
+    fn page_trend_test_empty() {
+        let result = page_trend_test(&[]);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
+    fn page_trend_test_single_condition() {
+        let row1 = [1.0];
+        let result = page_trend_test(&[&row1]);
+        assert!(result.statistic.is_nan());
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
