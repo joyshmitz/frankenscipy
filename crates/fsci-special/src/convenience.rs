@@ -4097,7 +4097,12 @@ pub fn celu(x: f64, alpha: f64) -> f64 {
 /// Numerically stable log of the sigmoid function.
 /// Equivalent to log_expit_scalar but with a more common ML name.
 #[must_use]
-pub fn logsigmoid(x: f64) -> f64 {
+pub fn logsigmoid(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("logsigmoid", x_tensor, mode, |x| Ok(logsigmoid_scalar(x)))
+}
+
+#[must_use]
+pub fn logsigmoid_scalar(x: f64) -> f64 {
     log_expit_scalar(x)
 }
 
@@ -6320,11 +6325,46 @@ mod tests {
     #[test]
     fn logsigmoid_basic() {
         // logsigmoid is same as log_expit_scalar
-        assert!((logsigmoid(0.0) - log_expit_scalar(0.0)).abs() < 1e-14);
-        assert!((logsigmoid(2.0) - log_expit_scalar(2.0)).abs() < 1e-14);
-        assert!((logsigmoid(-2.0) - log_expit_scalar(-2.0)).abs() < 1e-14);
+        assert!((logsigmoid_scalar(0.0) - log_expit_scalar(0.0)).abs() < 1e-14);
+        assert!((logsigmoid_scalar(2.0) - log_expit_scalar(2.0)).abs() < 1e-14);
+        assert!((logsigmoid_scalar(-2.0) - log_expit_scalar(-2.0)).abs() < 1e-14);
         // logsigmoid(0) = log(0.5) = -ln(2)
-        assert!((logsigmoid(0.0) - (-std::f64::consts::LN_2)).abs() < 1e-14);
+        assert!((logsigmoid_scalar(0.0) - (-std::f64::consts::LN_2)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn logsigmoid_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = logsigmoid(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - logsigmoid_scalar(2.0)).abs() < 1e-14);
+
+        let vector = logsigmoid(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(logsigmoid_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn logsigmoid_tensor_dispatch_preserves_extreme_tails_and_nan() -> Result<(), String> {
+        let vector = logsigmoid(
+            &SpecialTensor::RealVec(vec![f64::NAN, -100.0, 100.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!((values[1] - (-100.0)).abs() < 1e-10);
+        assert!(values[2].abs() < 1e-40);
+        Ok(())
     }
 
     #[test]
