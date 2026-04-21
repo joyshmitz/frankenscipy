@@ -25676,6 +25676,54 @@ mod tests {
     }
 
     #[test]
+    fn test_kendalltau_alternative_edge_cases() {
+        // Too short arrays
+        let short = [1.0];
+        let data = [1.0, 2.0, 3.0];
+        let result = kendalltau_alternative(&short, &data, "two-sided");
+        assert!(result.statistic.is_nan(), "n<2 -> NaN");
+
+        // Different lengths
+        let x = [1.0, 2.0, 3.0];
+        let y = [1.0, 2.0];
+        let result2 = kendalltau_alternative(&x, &y, "two-sided");
+        assert!(result2.statistic.is_nan(), "diff lengths -> NaN");
+    }
+
+    #[test]
+    fn test_ranksums_alternative_edge_cases() {
+        // Too short arrays (need at least 2)
+        let short = [1.0];
+        let data = [1.0, 2.0, 3.0];
+        let result = ranksums_alternative(&short, &data, "two-sided");
+        assert!(result.statistic.is_nan(), "n<2 -> NaN");
+
+        let result2 = ranksums_alternative(&data, &short, "greater");
+        assert!(result2.statistic.is_nan(), "m<2 -> NaN");
+    }
+
+    #[test]
+    fn test_pearsonr_alternative_edge_cases() {
+        // Too short arrays
+        let short = [1.0];
+        let data = [1.0, 2.0, 3.0];
+        let result = pearsonr_alternative(&short, &data, "two-sided");
+        assert!(result.statistic.is_nan(), "n<2 -> NaN");
+
+        // Different lengths
+        let x = [1.0, 2.0, 3.0];
+        let y = [1.0, 2.0];
+        let result2 = pearsonr_alternative(&x, &y, "two-sided");
+        assert!(result2.statistic.is_nan(), "diff lengths -> NaN");
+
+        // Constant input (zero variance)
+        let constant = [5.0, 5.0, 5.0, 5.0];
+        let varying = [1.0, 2.0, 3.0, 4.0];
+        let result3 = pearsonr_alternative(&constant, &varying, "two-sided");
+        assert!(result3.statistic.is_nan(), "constant input -> NaN");
+    }
+
+    #[test]
     fn test_pearsonr_alternative() {
         // Test data with positive correlation
         let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
