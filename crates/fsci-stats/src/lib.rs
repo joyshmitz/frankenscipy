@@ -9324,6 +9324,73 @@ pub fn tstd(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
     tvar(data, limits, inclusive, ddof).sqrt()
 }
 
+/// Compute the trimmed mean of an array.
+///
+/// Values outside the specified limits are excluded before computing mean.
+///
+/// Matches `scipy.stats.tmean(a, limits, inclusive)`.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `limits` — Tuple of (lower, upper) limits. Values outside are excluded.
+/// * `inclusive` — Tuple of bools: whether limits are inclusive (lower, upper)
+///
+/// # Returns
+/// The trimmed mean, or NaN if no values remain after filtering.
+pub fn tmean(data: &[f64], limits: (f64, f64), inclusive: (bool, bool)) -> f64 {
+    let filtered: Vec<f64> = data
+        .iter()
+        .copied()
+        .filter(|&x| {
+            let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
+            let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+            above_lower && below_upper
+        })
+        .collect();
+
+    if filtered.is_empty() {
+        return f64::NAN;
+    }
+
+    filtered.iter().sum::<f64>() / filtered.len() as f64
+}
+
+/// Compute the trimmed standard error of the mean.
+///
+/// Values outside the specified limits are excluded before computing SEM.
+///
+/// Matches `scipy.stats.tsem(a, limits, inclusive, ddof)`.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `limits` — Tuple of (lower, upper) limits. Values outside are excluded.
+/// * `inclusive` — Tuple of bools: whether limits are inclusive (lower, upper)
+/// * `ddof` — Delta degrees of freedom (default 1)
+///
+/// # Returns
+/// The trimmed SEM, or NaN if fewer than ddof+1 values remain.
+pub fn tsem(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usize) -> f64 {
+    let filtered: Vec<f64> = data
+        .iter()
+        .copied()
+        .filter(|&x| {
+            let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
+            let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+            above_lower && below_upper
+        })
+        .collect();
+
+    if filtered.len() <= ddof {
+        return f64::NAN;
+    }
+
+    let n = filtered.len() as f64;
+    let mean = filtered.iter().sum::<f64>() / n;
+    let sum_sq: f64 = filtered.iter().map(|&x| (x - mean).powi(2)).sum();
+    let var = sum_sq / (n - ddof as f64);
+    (var / n).sqrt()
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -18961,6 +19028,48 @@ mod tests {
         let result = tstd(&data, (0.0, 10.0), (true, true), 0);
         // population std: sqrt(sum((x-3)^2)/5) = sqrt(10/5) = sqrt(2)
         assert!((result - 2.0_f64.sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tmean_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 100.0];
+        // Exclude 100 by setting upper limit to 10
+        let result = tmean(&data, (0.0, 10.0), (true, true));
+        // [1,2,3,4,5]: mean = 3
+        assert!((result - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tmean_exclusive_limits() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        // Exclude 1 and 5 with exclusive limits
+        let result = tmean(&data, (1.0, 5.0), (false, false));
+        // [2,3,4]: mean = 3
+        assert!((result - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tmean_empty_result() {
+        let data = [1.0, 2.0, 3.0];
+        let result = tmean(&data, (10.0, 20.0), (true, true));
+        assert!(result.is_nan());
+    }
+
+    #[test]
+    fn tsem_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = tsem(&data, (0.0, 10.0), (true, true), 1);
+        // SEM = std / sqrt(n) = sqrt(2.5) / sqrt(5)
+        let expected = (2.5_f64 / 5.0).sqrt();
+        assert!((result - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tsem_insufficient_data() {
+        let data = [1.0, 2.0];
+        let result = tsem(&data, (0.0, 1.5), (true, true), 1);
+        // Only 1 value passes, insufficient
+        assert!(result.is_nan());
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
