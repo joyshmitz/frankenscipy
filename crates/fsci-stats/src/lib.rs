@@ -937,6 +937,27 @@ impl ContinuousDistribution for GammaDist {
     fn var(&self) -> f64 {
         self.a * self.scale * self.scale
     }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
+            return Self {
+                a: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+        let n = data.len() as f64;
+        let mean = data.iter().sum::<f64>() / n;
+        let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+        if var <= 0.0 || mean <= 0.0 {
+            return Self {
+                a: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+        let a = mean * mean / var;
+        let scale = var / mean;
+        Self { a, scale }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1086,6 +1107,23 @@ impl ContinuousDistribution for Lognormal {
     fn var(&self) -> f64 {
         let s2 = self.s * self.s;
         self.scale * self.scale * s2.exp() * (s2.exp() - 1.0)
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x <= 0.0) {
+            return Self {
+                s: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+        let n = data.len() as f64;
+        let log_data: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
+        let mu = log_data.iter().sum::<f64>() / n;
+        let var = log_data.iter().map(|&lx| (lx - mu).powi(2)).sum::<f64>() / n;
+        Self {
+            s: var.sqrt(),
+            scale: mu.exp(),
+        }
     }
 }
 
@@ -1279,6 +1317,17 @@ impl ContinuousDistribution for Rayleigh {
     fn var(&self) -> f64 {
         (2.0 - PI / 2.0) * self.scale * self.scale
     }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
+            return Self { scale: f64::NAN };
+        }
+        let n = data.len() as f64;
+        let sum_sq = data.iter().map(|&x| x * x).sum::<f64>();
+        Self {
+            scale: (sum_sq / (2.0 * n)).sqrt(),
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1440,6 +1489,22 @@ impl ContinuousDistribution for Logistic {
 
     fn var(&self) -> f64 {
         PI * PI * self.scale * self.scale / 3.0
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        let n = data.len() as f64;
+        if n == 0.0 {
+            return Self {
+                loc: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+        let mean = data.iter().sum::<f64>() / n;
+        let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+        Self {
+            loc: mean,
+            scale: var.sqrt() * 3.0_f64.sqrt() / PI,
+        }
     }
 }
 
@@ -2697,6 +2762,21 @@ impl ContinuousDistribution for Laplace {
 
     fn var(&self) -> f64 {
         2.0 * self.scale * self.scale
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() {
+            return Self {
+                loc: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+        let loc = median(data);
+        let scale = data.iter().map(|&x| (x - loc).abs()).sum::<f64>() / data.len() as f64;
+        Self {
+            loc,
+            scale: if scale > 0.0 { scale } else { f64::NAN },
+        }
     }
 }
 
@@ -14596,6 +14676,59 @@ mod tests {
         let fitted: Normal = fit(&[1.0, 2.0, 3.0, 4.0, 5.0]);
         assert!((fitted.loc - 3.0).abs() < 1e-10);
         assert!((fitted.scale - std::f64::consts::SQRT_2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fit_lognormal() {
+        let data: Vec<f64> = (1..=10).map(|i| (i as f64).exp()).collect();
+        let ln = Lognormal::fit(&data);
+        assert!(ln.s.is_finite());
+        assert!(ln.scale.is_finite());
+        assert!(ln.s > 0.0);
+        assert!(ln.scale > 0.0);
+    }
+
+    #[test]
+    fn test_fit_rayleigh() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let r = Rayleigh::fit(&data);
+        let sum_sq: f64 = data.iter().map(|x| x * x).sum();
+        let expected_scale = (sum_sq / (2.0 * data.len() as f64)).sqrt();
+        assert!((r.scale - expected_scale).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fit_logistic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let l = Logistic::fit(&data);
+        assert!((l.loc - 3.0).abs() < 1e-10);
+        assert!(l.scale > 0.0);
+    }
+
+    #[test]
+    fn test_fit_laplace() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let l = Laplace::fit(&data);
+        assert!((l.loc - 3.0).abs() < 1e-10);
+        assert!(l.scale > 0.0);
+    }
+
+    #[test]
+    fn test_fit_gamma() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let g = GammaDist::fit(&data);
+        assert!(g.a.is_finite() && g.a > 0.0);
+        assert!(g.scale.is_finite() && g.scale > 0.0);
+    }
+
+    #[test]
+    fn test_fit_empty_data_returns_nan() {
+        let empty: &[f64] = &[];
+        assert!(Lognormal::fit(empty).s.is_nan());
+        assert!(Rayleigh::fit(empty).scale.is_nan());
+        assert!(Logistic::fit(empty).loc.is_nan());
+        assert!(Laplace::fit(empty).loc.is_nan());
+        assert!(GammaDist::fit(empty).a.is_nan());
     }
 
     // ── Statistical tests ─────────────────────────────────────────
