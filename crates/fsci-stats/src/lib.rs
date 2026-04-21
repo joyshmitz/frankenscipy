@@ -9951,6 +9951,81 @@ pub fn skewtest(
     })
 }
 
+/// Test whether the kurtosis of a sample differs from a normal distribution.
+///
+/// Tests H0: the sample was drawn from a population with normal kurtosis.
+/// Uses the Anscombe-Glynn transformation (1983) to convert excess kurtosis
+/// to a z-score that is approximately standard normal.
+///
+/// Requires n >= 20 for valid asymptotic approximation.
+///
+/// Matches `scipy.stats.kurtosistest(data, nan_policy=..., alternative=...)`.
+pub fn kurtosistest(
+    data: &[f64],
+    nan_policy: Option<&str>,
+    alternative: Option<&str>,
+) -> Result<GoodnessOfFitResult, StatsError> {
+    let nan_policy = validate_nan_policy(nan_policy)?;
+    let alternative = validate_hypothesis_alternative(alternative)?;
+
+    let filtered;
+    let working = match nan_policy {
+        "propagate" => {
+            if data.iter().any(|value| value.is_nan()) {
+                return Ok(GoodnessOfFitResult {
+                    statistic: f64::NAN,
+                    pvalue: f64::NAN,
+                });
+            }
+            data
+        }
+        "raise" => {
+            if data.iter().any(|value| value.is_nan()) {
+                return Err(StatsError::InvalidArgument(
+                    "The input contains nan values".to_string(),
+                ));
+            }
+            data
+        }
+        "omit" => {
+            filtered = data
+                .iter()
+                .copied()
+                .filter(|value| !value.is_nan())
+                .collect::<Vec<_>>();
+            filtered.as_slice()
+        }
+        _ => unreachable!("validate_nan_policy only returns known values"),
+    };
+
+    if working.len() < 20 {
+        return Ok(GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        });
+    }
+
+    let n = working.len() as f64;
+    let mean_val = working.iter().sum::<f64>() / n;
+    let mut m2 = 0.0;
+    let mut m4 = 0.0;
+    for &x in working {
+        let d = x - mean_val;
+        let d2 = d * d;
+        m2 += d2;
+        m4 += d2 * d2;
+    }
+    let m2_n = m2 / n;
+    let m4_n = m4 / n;
+    let g2 = m4_n / (m2_n * m2_n) - 3.0;
+
+    let z = dagostino_kurttest_z(g2, n);
+    Ok(GoodnessOfFitResult {
+        statistic: z,
+        pvalue: normal_alternative_pvalue(z, alternative),
+    })
+}
+
 /// D'Agostino-Pearson omnibus test for normality.
 ///
 /// Tests H0: data was drawn from a normal distribution by combining
@@ -16653,6 +16728,59 @@ mod tests {
                 "alternative must be one of {'two-sided', 'less', 'greater'}".to_string()
             )
         );
+    }
+
+    #[test]
+    fn kurtosistest_returns_finite() {
+        let data: Vec<f64> = (0..100).map(|i| (i as f64 - 50.0) / 10.0).collect();
+        let result = kurtosistest(&data, None, None).expect("kurtosistest");
+        assert!(result.statistic.is_finite(), "statistic should be finite");
+        assert!(result.pvalue.is_finite(), "pvalue should be finite");
+        assert!(result.pvalue >= 0.0 && result.pvalue <= 1.0, "pvalue in [0,1]");
+    }
+
+    #[test]
+    fn kurtosistest_heavy_tails() {
+        let mut data: Vec<f64> = (0..50).map(|i| (i as f64 - 25.0) / 10.0).collect();
+        data.push(-100.0);
+        data.push(100.0);
+        let result = kurtosistest(&data, None, None).expect("heavy tails kurtosistest");
+        assert!(result.pvalue < 0.05, "heavy tails should reject normality");
+    }
+
+    #[test]
+    fn kurtosistest_too_small_sample() {
+        let data: Vec<f64> = (0..15).map(|i| i as f64).collect();
+        let result = kurtosistest(&data, None, None).expect("small sample");
+        assert!(result.statistic.is_nan(), "n<20 should return NaN statistic");
+        assert!(result.pvalue.is_nan(), "n<20 should return NaN pvalue");
+    }
+
+    #[test]
+    fn kurtosistest_nan_policy() {
+        let mut data: Vec<f64> = (0..25).map(|i| i as f64).collect();
+        data.push(f64::NAN);
+
+        let propagate = kurtosistest(&data, Some("propagate"), None).expect("propagate");
+        assert!(propagate.statistic.is_nan());
+
+        let omit = kurtosistest(&data, Some("omit"), None).expect("omit");
+        assert!(omit.statistic.is_finite(), "omit should work");
+    }
+
+    #[test]
+    fn kurtosistest_alternative() {
+        let mut data: Vec<f64> = (0..50).map(|i| (i as f64 - 25.0) / 10.0).collect();
+        data.push(-100.0);
+        data.push(100.0);
+
+        let greater = kurtosistest(&data, None, Some("greater")).expect("greater");
+        let less = kurtosistest(&data, None, Some("less")).expect("less");
+        let twosided = kurtosistest(&data, None, Some("two-sided")).expect("two-sided");
+
+        assert!(greater.statistic == less.statistic);
+        assert!(greater.statistic == twosided.statistic);
+        assert!((greater.pvalue + less.pvalue - 1.0).abs() < 1e-10);
     }
 
     #[test]
