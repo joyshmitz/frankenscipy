@@ -8894,6 +8894,95 @@ pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
     }
 }
 
+/// Wilcoxon signed-rank test with alternative hypothesis specification.
+///
+/// Matches `scipy.stats.wilcoxon(x, y, alternative=...)`.
+///
+/// # Arguments
+/// * `x`, `y` - Paired sample data
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn wilcoxon_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResult {
+    if x.len() != y.len()
+        || x.len() < 10
+        || x.iter().any(|v| v.is_nan())
+        || y.iter().any(|v| v.is_nan())
+    {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let diffs: Vec<f64> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(&xi, &yi)| xi - yi)
+        .filter(|&d| d.abs() > 1e-15)
+        .collect();
+
+    let nr = diffs.len();
+    if nr < 2 {
+        return TtestResult {
+            statistic: 0.0,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+
+    let abs_diffs: Vec<f64> = diffs.iter().map(|d| d.abs()).collect();
+    let ranks = rankdata_average(&abs_diffs);
+
+    let t_plus: f64 = ranks
+        .iter()
+        .zip(diffs.iter())
+        .filter(|(_, d)| **d > 0.0)
+        .map(|(r, _)| *r)
+        .sum();
+
+    let t_minus: f64 = ranks
+        .iter()
+        .zip(diffs.iter())
+        .filter(|(_, d)| **d < 0.0)
+        .map(|(r, _)| *r)
+        .sum();
+
+    let nrf = nr as f64;
+    let mu = nrf * (nrf + 1.0) / 4.0;
+    let sigma = (nrf * (nrf + 1.0) * (2.0 * nrf + 1.0) / 24.0).sqrt();
+
+    if sigma == 0.0 {
+        return TtestResult {
+            statistic: t_plus,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+
+    let normal = Normal::standard();
+    let (t_stat, pvalue) = match alternative {
+        "less" => {
+            let z = (t_plus - mu) / sigma;
+            (t_plus, normal.cdf(z))
+        }
+        "greater" => {
+            let z = (t_plus - mu) / sigma;
+            (t_plus, normal.sf(z))
+        }
+        _ => {
+            let t = t_plus.min(t_minus);
+            let z = (t - mu) / sigma;
+            (t, 2.0 * normal.cdf(z.min(0.0)))
+        }
+    };
+
+    TtestResult {
+        statistic: t_stat,
+        pvalue,
+        df: f64::NAN,
+    }
+}
+
 /// Kruskal-Wallis H-test for independent samples.
 ///
 /// Matches `scipy.stats.kruskal(*groups)`.
@@ -19255,6 +19344,27 @@ mod tests {
             "systematic shift p={}, should reject",
             result.pvalue
         );
+    }
+
+    #[test]
+    fn wilcoxon_alternative_one_sided() {
+        let x: Vec<f64> = (0..30).map(|i| (i as f64) * 0.1).collect();
+        let y: Vec<f64> = x.iter().map(|&v| v + 5.0).collect();
+
+        let less = wilcoxon_alternative(&x, &y, "less");
+        let greater = wilcoxon_alternative(&x, &y, "greater");
+
+        assert!(less.pvalue < 0.01, "x < y should be significant for 'less': {}", less.pvalue);
+        assert!(greater.pvalue > 0.5, "x < y should not be significant for 'greater': {}", greater.pvalue);
+    }
+
+    #[test]
+    fn wilcoxon_alternative_two_sided_matches() {
+        let x: Vec<f64> = (0..20).map(|i| (i as f64) * 0.1).collect();
+        let y: Vec<f64> = x.iter().map(|&v| v + 1.0).collect();
+        let default = wilcoxon(&x, &y);
+        let two_sided = wilcoxon_alternative(&x, &y, "two-sided");
+        assert!((default.pvalue - two_sided.pvalue).abs() < 0.001);
     }
 
     #[test]
