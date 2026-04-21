@@ -103,6 +103,13 @@ pub trait ContinuousDistribution {
     fn median(&self) -> f64 {
         self.ppf(0.5)
     }
+
+    /// Skewness (third standardized moment).
+    /// Returns 0 for symmetric distributions.
+    /// Matches `scipy.stats.<dist>.stats(moments='s')`.
+    fn skewness(&self) -> f64 {
+        f64::NAN
+    }
 }
 
 /// Generic fitting helper for continuous distributions with built-in MLE support.
@@ -371,6 +378,10 @@ impl ContinuousDistribution for Normal {
 
     fn entropy(&self) -> f64 {
         0.5 * (2.0 * PI * std::f64::consts::E * self.scale * self.scale).ln()
+    }
+
+    fn skewness(&self) -> f64 {
+        0.0 // Normal is symmetric
     }
 }
 
@@ -662,6 +673,10 @@ impl ContinuousDistribution for Uniform {
     fn entropy(&self) -> f64 {
         self.scale.ln()
     }
+
+    fn skewness(&self) -> f64 {
+        0.0 // Uniform is symmetric
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -771,6 +786,10 @@ impl ContinuousDistribution for Exponential {
 
     fn entropy(&self) -> f64 {
         1.0 - self.lambda.ln()
+    }
+
+    fn skewness(&self) -> f64 {
+        2.0 // Exponential always has skewness 2
     }
 }
 
@@ -2936,6 +2955,10 @@ impl ContinuousDistribution for Laplace {
 
     fn entropy(&self) -> f64 {
         1.0 + (2.0 * self.scale).ln()
+    }
+
+    fn skewness(&self) -> f64 {
+        0.0 // Laplace is symmetric
     }
 }
 
@@ -19474,5 +19497,32 @@ mod tests {
         // Median of Laplace equals loc (symmetric)
         let l = Laplace::default();
         assert_close(l.median(), 0.0, 1e-10, "Laplace(0,1) median");
+    }
+
+    // ── Skewness tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn dist_skewness_symmetric() {
+        // Symmetric distributions have skewness 0
+        assert_close(Normal::standard().skewness(), 0.0, 1e-10, "Normal skewness");
+        assert_close(Uniform::new(0.0, 1.0).skewness(), 0.0, 1e-10, "Uniform skewness");
+        assert_close(Laplace::default().skewness(), 0.0, 1e-10, "Laplace skewness");
+    }
+
+    #[test]
+    fn dist_skewness_exponential() {
+        // Exponential always has skewness 2
+        let e = Exponential::new(1.0);
+        assert_close(e.skewness(), 2.0, 1e-10, "Exp(1) skewness");
+
+        let e2 = Exponential::new(5.0);
+        assert_close(e2.skewness(), 2.0, 1e-10, "Exp(5) skewness");
+    }
+
+    #[test]
+    fn dist_skewness_default_nan() {
+        // Distributions without explicit skewness return NaN
+        let t = StudentT::new(5.0);
+        assert!(t.skewness().is_nan(), "StudentT skewness should be NaN");
     }
 }
