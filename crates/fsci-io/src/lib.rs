@@ -82,6 +82,7 @@ pub struct MmMatrix {
     pub rows: usize,
     pub cols: usize,
     pub data: Vec<f64>,
+    pub complex_data: Option<Vec<(f64, f64)>>,
     pub info: MmInfo,
 }
 
@@ -220,11 +221,6 @@ fn parse_mm_info(lines: &mut std::str::Lines<'_>) -> Result<MmInfo, IoError> {
 pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
     let mut lines = content.lines();
     let info = parse_mm_info(&mut lines)?;
-    if info.field == MmField::Complex {
-        return Err(IoError::UnsupportedFeature(
-            "Matrix Market complex field is not supported".to_string(),
-        ));
-    }
 
     match info.format {
         MmFormat::Coordinate => {
@@ -233,6 +229,11 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
             let nnz = info.nnz;
             let dense_len = checked_matrix_len(rows, cols, "Matrix Market matrix")?;
             let mut data = vec![0.0; dense_len];
+            let mut complex_data = if info.field == MmField::Complex {
+                Some(vec![(0.0, 0.0); dense_len])
+            } else {
+                None
+            };
             let mut seen_nnz = 0usize;
 
             for line in lines {
@@ -260,17 +261,32 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                         "Matrix Market col indices must be 1-based and >= 1".to_string(),
                     )
                 })?;
-                let v: f64 = if info.field == MmField::Pattern {
-                    1.0
+                let mut v: f64 = 0.0;
+                let mut v_im: f64 = 0.0;
+                if info.field == MmField::Pattern {
+                    v = 1.0;
+                } else if info.field == MmField::Complex {
+                    if vals.len() >= 4 {
+                        v = vals[2]
+                            .parse()
+                            .map_err(|e| IoError::InvalidFormat(format!("bad real: {e}")))?;
+                        v_im = vals[3]
+                            .parse()
+                            .map_err(|e| IoError::InvalidFormat(format!("bad imag: {e}")))?;
+                    } else {
+                        return Err(IoError::InvalidFormat(
+                            "complex coordinate entry missing values".to_string(),
+                        ));
+                    }
                 } else if vals.len() >= 3 {
-                    vals[2]
+                    v = vals[2]
                         .parse()
-                        .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?
+                        .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
                 } else {
                     return Err(IoError::InvalidFormat(
                         "coordinate entry missing value for non-pattern field".to_string(),
                     ));
-                };
+                }
 
                 if r >= rows || c >= cols {
                     return Err(IoError::InvalidFormat(format!(
@@ -278,31 +294,52 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                     )));
                 }
 
-                let idx = r * cols + c;
+                let add_val = |cd: &mut Option<Vec<(f64, f64)>>, d: &mut Vec<f64>, r: usize, c: usize, vr: f64, vi: f64| {
+                    let i = r * cols + c;
+                    if let Some(cdata) = cd {
+                        cdata[i].0 += vr;
+                        cdata[i].1 += vi;
+                    } else {
+                        d[i] += vr;
+                    }
+                };
+                let sub_val = |cd: &mut Option<Vec<(f64, f64)>>, d: &mut Vec<f64>, r: usize, c: usize, vr: f64, vi: f64| {
+                    let i = r * cols + c;
+                    if let Some(cdata) = cd {
+                        cdata[i].0 -= vr;
+                        cdata[i].1 -= vi;
+                    } else {
+                        d[i] -= vr;
+                    }
+                };
+
                 match info.symmetry {
                     MmSymmetry::General => {
-                        data[idx] += v;
+                        add_val(&mut complex_data, &mut data, r, c, v, v_im);
                     }
                     MmSymmetry::Symmetric | MmSymmetry::Hermitian => {
-                        data[idx] += v;
+                        add_val(&mut complex_data, &mut data, r, c, v, v_im);
                         if r != c {
-                            data[c * cols + r] += v;
+                            if info.symmetry == MmSymmetry::Hermitian {
+                                add_val(&mut complex_data, &mut data, c, r, v, -v_im);
+                            } else {
+                                add_val(&mut complex_data, &mut data, c, r, v, v_im);
+                            }
                         }
                     }
                     MmSymmetry::SkewSymmetric => {
                         if r == c {
-                            if v != 0.0 {
+                            if v != 0.0 || v_im != 0.0 {
                                 return Err(IoError::InvalidFormat(
                                     "skew-symmetric diagonal entries must be zero".to_string(),
                                 ));
                             }
                         } else {
-                            data[idx] += v;
-                            data[c * cols + r] -= v;
+                            add_val(&mut complex_data, &mut data, r, c, v, v_im);
+                            sub_val(&mut complex_data, &mut data, c, r, v, v_im);
                         }
                     }
-                }
-                seen_nnz += 1;
+                }                seen_nnz += 1;
             }
 
             if seen_nnz != nnz {
@@ -315,6 +352,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 rows,
                 cols,
                 data,
+                complex_data,
                 info,
             })
         }
@@ -323,6 +361,11 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
             let cols = info.cols;
             // Array format: column-major order
             let mut data = vec![0.0; rows * cols];
+            let mut complex_data = if info.field == MmField::Complex {
+                Some(vec![(0.0, 0.0); rows * cols])
+            } else {
+                None
+            };
             let mut idx = 0;
 
             for line in lines {
@@ -336,15 +379,37 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                         rows * cols
                     )));
                 }
-                let v: f64 = trimmed
-                    .parse()
-                    .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
+                let v: f64;
+                let mut v_im: f64 = 0.0;
+                if info.field == MmField::Complex {
+                    let vals: Vec<&str> = trimmed.split_whitespace().collect();
+                    if vals.len() >= 2 {
+                        v = vals[0]
+                            .parse()
+                            .map_err(|e| IoError::InvalidFormat(format!("bad real: {e}")))?;
+                        v_im = vals[1]
+                            .parse()
+                            .map_err(|e| IoError::InvalidFormat(format!("bad imag: {e}")))?;
+                    } else {
+                        return Err(IoError::InvalidFormat(
+                            "complex array entry missing values".to_string(),
+                        ));
+                    }
+                } else {
+                    v = trimmed
+                        .parse()
+                        .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
+                }
 
                 // Column-major to row-major conversion
                 let col = idx / rows;
                 let row = idx % rows;
                 if row < rows && col < cols {
-                    data[row * cols + col] = v;
+                    if let Some(ref mut cd) = complex_data {
+                        cd[row * cols + col] = (v, v_im);
+                    } else {
+                        data[row * cols + col] = v;
+                    }
                 }
                 idx += 1;
             }
@@ -359,6 +424,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 rows,
                 cols,
                 data,
+                complex_data,
                 info,
             })
         }
@@ -417,6 +483,61 @@ pub fn mmwrite_sparse(
             IoError::InvalidFormat("sparse col index overflowed Matrix Market encoding".to_string())
         })?;
         out.push_str(&format!("{row} {col} {v}\n"));
+    }
+
+    Ok(out)
+}
+
+/// Write a complex dense matrix in Matrix Market format.
+pub fn mmwrite_complex(rows: usize, cols: usize, data: &[(f64, f64)]) -> Result<String, IoError> {
+    let expected_len = checked_matrix_len(rows, cols, "Matrix Market matrix")?;
+    if data.len() != expected_len {
+        return Err(IoError::InvalidFormat(format!(
+            "data length {} doesn't match {}x{}",
+            data.len(),
+            rows,
+            cols
+        )));
+    }
+
+    let mut out = String::new();
+    out.push_str("%%MatrixMarket matrix array complex general\n");
+    out.push_str(&format!("{rows} {cols}\n"));
+
+    // Column-major order (Matrix Market convention)
+    for c in 0..cols {
+        for r in 0..rows {
+            let (vr, vi) = data[r * cols + c];
+            out.push_str(&format!("{vr} {vi}\n"));
+        }
+    }
+
+    Ok(out)
+}
+
+/// Write a complex sparse matrix in coordinate Matrix Market format.
+pub fn mmwrite_sparse_complex(
+    rows: usize,
+    cols: usize,
+    entries: &[(usize, usize, (f64, f64))],
+) -> Result<String, IoError> {
+    let mut out = String::new();
+    out.push_str("%%MatrixMarket matrix coordinate complex general\n");
+    out.push_str(&format!("{rows} {cols} {}\n", entries.len()));
+
+    for &(r, c, (vr, vi)) in entries {
+        if r >= rows || c >= cols {
+            return Err(IoError::InvalidFormat(format!(
+                "sparse entry ({r}, {c}) out of bounds for {rows}x{cols}"
+            )));
+        }
+        let row = r.checked_add(1).ok_or_else(|| {
+            IoError::InvalidFormat("sparse row index overflowed Matrix Market encoding".to_string())
+        })?;
+        let col = c.checked_add(1).ok_or_else(|| {
+            IoError::InvalidFormat("sparse col index overflowed Matrix Market encoding".to_string())
+        })?;
+        out.push_str(&format!("{row} {col} {vr} {vi}\n"));
     }
 
     Ok(out)
