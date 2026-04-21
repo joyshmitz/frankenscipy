@@ -7738,7 +7738,7 @@ pub fn ttest_ind_alternative(a: &[f64], b: &[f64], alternative: &str) -> TtestRe
     let n1 = a.len() as f64;
     let n2 = b.len() as f64;
     let df = n1 + n2 - 2.0;
-    if a.len() < 2 || b.len() < 2 {
+    if a.len() < 2 || b.len() < 2 || a.iter().any(|v| v.is_nan()) || b.iter().any(|v| v.is_nan()) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -8903,7 +8903,7 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
 /// * `x`, `y` - Sample data
 /// * `alternative` - "two-sided" (default), "less", or "greater"
 pub fn mannwhitneyu_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResult {
-    if x.len() < 2 || y.len() < 2 {
+    if x.len() < 2 || y.len() < 2 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -8978,11 +8978,7 @@ pub fn mannwhitneyu_alternative(x: &[f64], y: &[f64], alternative: &str) -> Ttes
 ///
 /// Non-parametric test: H0: median of x - y is zero.
 pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
-    if x.len() != y.len()
-        || x.len() < 10
-        || x.iter().any(|v| v.is_nan())
-        || y.iter().any(|v| v.is_nan())
-    {
+    if x.len() != y.len() || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -9060,11 +9056,7 @@ pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
 /// * `x`, `y` - Paired sample data
 /// * `alternative` - "two-sided" (default), "less", or "greater"
 pub fn wilcoxon_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResult {
-    if x.len() != y.len()
-        || x.len() < 10
-        || x.iter().any(|v| v.is_nan())
-        || y.iter().any(|v| v.is_nan())
-    {
+    if x.len() != y.len() || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -9197,6 +9189,50 @@ pub fn kruskal(groups: &[&[f64]]) -> TtestResult {
         pvalue,
         df,
     }
+}
+
+/// Kruskal-Wallis H-test with nan_policy parameter.
+///
+/// Matches `scipy.stats.kruskal(*groups, nan_policy=...)`.
+///
+/// * `nan_policy` - "propagate" (default), "omit", or "raise"
+pub fn kruskal_with_nan_policy(
+    groups: &[&[f64]],
+    nan_policy: Option<&str>,
+) -> Result<TtestResult, StatsError> {
+    let nan_policy = validate_nan_policy(nan_policy)?;
+
+    // Check for NaN and apply policy
+    let has_nan = groups.iter().any(|g| g.iter().any(|v| v.is_nan()));
+
+    if has_nan {
+        match nan_policy {
+            "raise" => {
+                return Err(StatsError::InvalidArgument(
+                    "input contains NaN values".to_string(),
+                ));
+            }
+            "propagate" => {
+                return Ok(TtestResult {
+                    statistic: f64::NAN,
+                    pvalue: f64::NAN,
+                    df: f64::NAN,
+                });
+            }
+            "omit" => {
+                // Filter NaN from each group
+                let cleaned: Vec<Vec<f64>> = groups
+                    .iter()
+                    .map(|g| g.iter().copied().filter(|v| !v.is_nan()).collect())
+                    .collect();
+                let cleaned_refs: Vec<&[f64]> = cleaned.iter().map(|v| v.as_slice()).collect();
+                return Ok(kruskal(&cleaned_refs));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(kruskal(groups))
 }
 
 /// Wilcoxon rank-sum test for two independent samples.
@@ -14415,7 +14451,11 @@ pub fn brunnermunzel_alternative(x: &[f64], y: &[f64], alternative: &str) -> Tte
         let w = nxf * nyf * rank_delta / (nf * denom);
         let df_num = (nxf * sx2 + nyf * sy2).powi(2);
         let df_den = (nxf * sx2).powi(2) / (nxf - 1.0) + (nyf * sy2).powi(2) / (nyf - 1.0);
-        let df = if df_den > 0.0 { df_num / df_den } else { f64::NAN };
+        let df = if df_den > 0.0 {
+            df_num / df_den
+        } else {
+            f64::NAN
+        };
         let pvalue = if df.is_finite() {
             let t_dist = StudentT::new(df);
             student_t_alternative_pvalue(w, &t_dist, alternative)
@@ -19071,6 +19111,13 @@ mod tests {
     }
 
     #[test]
+    fn ttest_ind_alternative_rejects_nan_inputs() {
+        let result = ttest_ind_alternative(&[1.0, f64::NAN, 3.0], &[1.0, 2.0, 3.0], "less");
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
     fn ttest_ind_welch_different_variances() {
         let a: Vec<f64> = (0..100).map(|i| (i as f64) * 0.001).collect();
         let b: Vec<f64> = (0..30).map(|i| 10.0 + (i as f64) * 0.1).collect();
@@ -19303,7 +19350,11 @@ mod tests {
         let y = vec![3.0, 4.0, 2.0, 7.0, 1.0, 8.0, 5.0, 10.0, 6.0, 9.0];
 
         let result = spearmanr(&x, &y);
-        assert!(result.statistic.abs() < 1.0, "should not be perfect correlation: {}", result.statistic);
+        assert!(
+            result.statistic.abs() < 1.0,
+            "should not be perfect correlation: {}",
+            result.statistic
+        );
 
         let less = spearmanr_alternative(&x, &y, "less");
         let greater = spearmanr_alternative(&x, &y, "greater");
@@ -19312,7 +19363,9 @@ mod tests {
         assert!(
             (less.pvalue + greater.pvalue - 1.0).abs() < 1e-6,
             "p-values should sum to 1: {} + {} = {}",
-            less.pvalue, greater.pvalue, less.pvalue + greater.pvalue
+            less.pvalue,
+            greater.pvalue,
+            less.pvalue + greater.pvalue
         );
     }
 
@@ -20251,6 +20304,24 @@ mod tests {
     }
 
     #[test]
+    fn wilcoxon_small_samples_remain_supported() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let y: Vec<f64> = x.iter().map(|&v| v + 1.0).collect();
+        let default = wilcoxon(&x, &y);
+        let less = wilcoxon_alternative(&x, &y, "less");
+        let two_sided = wilcoxon_alternative(&x, &y, "two-sided");
+
+        assert!(default.statistic.is_finite());
+        assert!(default.pvalue.is_finite());
+        assert!(
+            less.pvalue < 0.05,
+            "small-sample one-sided p={}",
+            less.pvalue
+        );
+        assert!((default.pvalue - two_sided.pvalue).abs() < 0.001);
+    }
+
+    #[test]
     fn kruskal_same_groups() {
         let a: Vec<f64> = (0..40).map(|i| (i as f64) * 0.025).collect();
         let b: Vec<f64> = (0..40).map(|i| (i as f64) * 0.025 + 0.001).collect();
@@ -20338,6 +20409,13 @@ mod tests {
         let default = mannwhitneyu(&x, &y);
         let two_sided = mannwhitneyu_alternative(&x, &y, "two-sided");
         assert!((default.pvalue - two_sided.pvalue).abs() < 0.001);
+    }
+
+    #[test]
+    fn mannwhitneyu_alternative_rejects_nan_inputs() {
+        let result = mannwhitneyu_alternative(&[1.0, f64::NAN, 3.0], &[4.0, 5.0, 6.0], "greater");
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
     }
 
     // ── Goodness-of-fit tests ─────────────────────────────────────────
@@ -25585,7 +25663,12 @@ mod tests {
 
         let less = ansari_alternative(&x, &y, "less");
         let greater = ansari_alternative(&x, &y, "greater");
-        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
+        assert_close(
+            less.pvalue + greater.pvalue,
+            1.0,
+            1e-10,
+            "less + greater = 1",
+        );
         // One should be smaller than two-sided
         assert!(
             less.pvalue < two_sided.pvalue || greater.pvalue < two_sided.pvalue,
@@ -25606,7 +25689,12 @@ mod tests {
 
         let less = mood_alternative(&x, &y, "less");
         let greater = mood_alternative(&x, &y, "greater");
-        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
+        assert_close(
+            less.pvalue + greater.pvalue,
+            1.0,
+            1e-10,
+            "less + greater = 1",
+        );
         // One of less/greater should be smaller than two-sided
         assert!(
             less.pvalue < two_sided.pvalue || greater.pvalue < two_sided.pvalue,
@@ -25628,8 +25716,16 @@ mod tests {
         // For positive w: "greater" gives sf(w) = small, "less" gives cdf(w) = large
         let less = brunnermunzel_alternative(&x, &y, "less");
         let greater = brunnermunzel_alternative(&x, &y, "greater");
-        assert!(greater.pvalue < two_sided.pvalue, "greater p < two-sided p when w > 0");
-        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
+        assert!(
+            greater.pvalue < two_sided.pvalue,
+            "greater p < two-sided p when w > 0"
+        );
+        assert_close(
+            less.pvalue + greater.pvalue,
+            1.0,
+            1e-10,
+            "less + greater = 1",
+        );
     }
 
     #[test]
@@ -25646,10 +25742,20 @@ mod tests {
         // x has higher ranks, so "greater" should give smaller p-value
         let greater = ranksums_alternative(&x, &y, "greater");
         assert!(greater.pvalue < two_sided.pvalue, "greater p < two-sided p");
-        assert_close(greater.pvalue, two_sided.pvalue / 2.0, 1e-10, "greater ~half");
+        assert_close(
+            greater.pvalue,
+            two_sided.pvalue / 2.0,
+            1e-10,
+            "greater ~half",
+        );
 
         let less = ranksums_alternative(&x, &y, "less");
-        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
+        assert_close(
+            less.pvalue + greater.pvalue,
+            1.0,
+            1e-10,
+            "less + greater = 1",
+        );
     }
 
     #[test]
@@ -25669,10 +25775,20 @@ mod tests {
             greater.pvalue,
             two_sided.pvalue
         );
-        assert_close(greater.pvalue, two_sided.pvalue / 2.0, 1e-10, "greater ~half");
+        assert_close(
+            greater.pvalue,
+            two_sided.pvalue / 2.0,
+            1e-10,
+            "greater ~half",
+        );
 
         let less = kendalltau_alternative(&x, &y, "less");
-        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
+        assert_close(
+            less.pvalue + greater.pvalue,
+            1.0,
+            1e-10,
+            "less + greater = 1",
+        );
     }
 
     #[test]
@@ -25724,6 +25840,33 @@ mod tests {
     }
 
     #[test]
+    fn test_kruskal_nan_policy() {
+        let g1 = [1.0, 2.0, 3.0];
+        let g2 = [4.0, 5.0, 6.0];
+        let g3 = [7.0, 8.0, 9.0];
+        let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
+
+        // Without NaN, should match original
+        let result = kruskal_with_nan_policy(&groups, None).unwrap();
+        let original = kruskal(&groups);
+        assert_close(result.statistic, original.statistic, 1e-10, "no nan match");
+
+        // With NaN and propagate
+        let g_nan = [1.0, f64::NAN, 3.0];
+        let groups_nan: Vec<&[f64]> = vec![&g_nan, &g2, &g3];
+        let result_prop = kruskal_with_nan_policy(&groups_nan, Some("propagate")).unwrap();
+        assert!(result_prop.statistic.is_nan(), "propagate -> NaN");
+
+        // With NaN and raise
+        let result_raise = kruskal_with_nan_policy(&groups_nan, Some("raise"));
+        assert!(result_raise.is_err(), "raise -> error");
+
+        // With NaN and omit
+        let result_omit = kruskal_with_nan_policy(&groups_nan, Some("omit")).unwrap();
+        assert!(result_omit.statistic.is_finite(), "omit -> finite result");
+    }
+
+    #[test]
     fn test_pearsonr_alternative() {
         // Test data with positive correlation
         let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
@@ -25732,7 +25875,12 @@ mod tests {
         // Two-sided should match original pearsonr
         let two_sided = pearsonr_alternative(&x, &y, "two-sided");
         let original = pearsonr(&x, &y);
-        assert_close(two_sided.statistic, original.statistic, 1e-10, "statistic match");
+        assert_close(
+            two_sided.statistic,
+            original.statistic,
+            1e-10,
+            "statistic match",
+        );
         assert_close(two_sided.pvalue, original.pvalue, 1e-10, "two-sided pvalue");
 
         // With positive correlation, "greater" should have smaller p-value than two-sided
@@ -25744,11 +25892,21 @@ mod tests {
             two_sided.pvalue
         );
         // For positive correlation, p(greater) should be ~half of two-sided
-        assert_close(greater.pvalue, two_sided.pvalue / 2.0, 1e-10, "greater approx half");
+        assert_close(
+            greater.pvalue,
+            two_sided.pvalue / 2.0,
+            1e-10,
+            "greater approx half",
+        );
 
         // "less" should have larger p-value (1 - p(greater))
         let less = pearsonr_alternative(&x, &y, "less");
-        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
+        assert_close(
+            less.pvalue + greater.pvalue,
+            1.0,
+            1e-10,
+            "less + greater = 1",
+        );
 
         // Test negative correlation
         let y_neg = [8.1, 7.2, 5.8, 5.1, 4.2, 2.9, 2.1, 1.2];
@@ -25756,6 +25914,9 @@ mod tests {
         let neg_less = pearsonr_alternative(&x, &y_neg, "less");
         // For negative correlation, "less" should give small p-value
         assert!(neg_less.pvalue < 0.05, "neg corr less p should be small");
-        assert!(neg_greater.pvalue > 0.5, "neg corr greater p should be large");
+        assert!(
+            neg_greater.pvalue > 0.5,
+            "neg corr greater p should be large"
+        );
     }
 }
