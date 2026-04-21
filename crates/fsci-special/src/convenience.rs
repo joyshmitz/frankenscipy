@@ -3486,8 +3486,12 @@ pub fn nan_to_num(x: f64, nan: f64, posinf: f64, neginf: f64) -> f64 {
 /// The ReLU activation function, commonly used in neural networks.
 ///
 /// Matches `scipy.special.relu(x)` (proposed).
+pub fn relu(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("relu", x_tensor, mode, |x| Ok(relu_scalar(x)))
+}
+
 #[must_use]
-pub fn relu(x: f64) -> f64 {
+pub fn relu_scalar(x: f64) -> f64 {
     if x.is_nan() {
         f64::NAN
     } else if x > 0.0 {
@@ -4957,18 +4961,53 @@ mod tests {
     #[test]
     fn relu_basic() {
         // Positive values pass through
-        assert!((relu(5.0) - 5.0).abs() < 1e-14);
-        assert!((relu(0.1) - 0.1).abs() < 1e-14);
+        assert!((relu_scalar(5.0) - 5.0).abs() < 1e-14);
+        assert!((relu_scalar(0.1) - 0.1).abs() < 1e-14);
 
         // Negative values become zero
-        assert!((relu(-5.0) - 0.0).abs() < 1e-14);
-        assert!((relu(-0.1) - 0.0).abs() < 1e-14);
+        assert!((relu_scalar(-5.0) - 0.0).abs() < 1e-14);
+        assert!((relu_scalar(-0.1) - 0.0).abs() < 1e-14);
 
         // Zero stays zero
-        assert!((relu(0.0) - 0.0).abs() < 1e-14);
+        assert!((relu_scalar(0.0) - 0.0).abs() < 1e-14);
 
         // NaN propagates
-        assert!(relu(f64::NAN).is_nan());
+        assert!(relu_scalar(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn relu_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = relu(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - relu_scalar(2.0)).abs() < 1e-14);
+
+        let vector = relu(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(relu_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn relu_tensor_dispatch_preserves_nan() -> Result<(), String> {
+        let vector = relu(
+            &SpecialTensor::RealVec(vec![f64::NAN, -1.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert_eq!(values[1], 0.0);
+        assert_eq!(values[2], 1.0);
+        Ok(())
     }
 
     #[test]
