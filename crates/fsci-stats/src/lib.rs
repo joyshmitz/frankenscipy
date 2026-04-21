@@ -13539,6 +13539,81 @@ where
     (lo, hi)
 }
 
+/// Compute BCa (bias-corrected and accelerated) bootstrap confidence interval for the mean.
+///
+/// BCa provides more accurate coverage than the percentile method by adjusting
+/// for bias and skewness in the bootstrap distribution.
+///
+/// Returns (lower, upper) bounds of the confidence interval.
+pub fn bootstrap_mean(data: &[f64], n_bootstrap: usize, confidence: f64, seed: u64) -> (f64, f64) {
+    let n = data.len();
+    if n < 2 || n_bootstrap == 0 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let original_mean: f64 = data.iter().sum::<f64>() / n as f64;
+
+    let mut rng_state = seed;
+    let next_rng = |state: &mut u64| -> usize {
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        ((*state >> 33) as usize) % n
+    };
+
+    let mut boot_means = Vec::with_capacity(n_bootstrap);
+    let mut sample = vec![0.0; n];
+
+    for _ in 0..n_bootstrap {
+        for s in sample.iter_mut() {
+            *s = data[next_rng(&mut rng_state)];
+        }
+        let mean: f64 = sample.iter().sum::<f64>() / n as f64;
+        boot_means.push(mean);
+    }
+
+    let count_below = boot_means.iter().filter(|&&x| x < original_mean).count();
+    let prop = count_below as f64 / n_bootstrap as f64;
+    let z0 = standard_normal_ppf(prop.clamp(1e-10, 1.0 - 1e-10));
+
+    let nf = n as f64;
+    let jackknife_means: Vec<f64> = (0..n)
+        .map(|i| {
+            let sum: f64 = data.iter().enumerate().filter(|&(j, _)| j != i).map(|(_, &v)| v).sum();
+            sum / (nf - 1.0)
+        })
+        .collect();
+    let jmean: f64 = jackknife_means.iter().sum::<f64>() / nf;
+    let num: f64 = jackknife_means.iter().map(|&x| (jmean - x).powi(3)).sum();
+    let denom: f64 = jackknife_means.iter().map(|&x| (jmean - x).powi(2)).sum();
+    let a = if denom.abs() > 1e-15 {
+        num / (6.0 * denom.powf(1.5))
+    } else {
+        0.0
+    };
+
+    let alpha = 1.0 - confidence;
+    let z_lo = standard_normal_ppf(alpha / 2.0);
+    let z_hi = standard_normal_ppf(1.0 - alpha / 2.0);
+
+    let bca_percentile = |z_alpha: f64| -> f64 {
+        let num = z0 + z_alpha;
+        let denom = 1.0 - a * num;
+        if denom.abs() < 1e-15 {
+            return if z_alpha < 0.0 { 0.0 } else { 1.0 };
+        }
+        standard_normal_cdf(z0 + num / denom)
+    };
+
+    let alpha_lo = bca_percentile(z_lo);
+    let alpha_hi = bca_percentile(z_hi);
+
+    boot_means.sort_by(|a, b| a.total_cmp(b));
+
+    let idx_lo = ((alpha_lo * n_bootstrap as f64).floor() as usize).clamp(0, n_bootstrap - 1);
+    let idx_hi = ((alpha_hi * n_bootstrap as f64).ceil() as usize).clamp(0, n_bootstrap - 1);
+
+    (boot_means[idx_lo], boot_means[idx_hi])
+}
+
 /// T-test from summary statistics (no raw data needed).
 ///
 /// Matches `scipy.stats.ttest_ind_from_stats(..., equal_var=...)`.
@@ -22673,6 +22748,42 @@ mod tests {
             lo < true_mean && hi > true_mean,
             "CI [{lo}, {hi}] should contain {true_mean}"
         );
+    }
+
+    #[test]
+    fn bootstrap_mean_bca_contains_true_mean() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let (lo, hi) = bootstrap_mean(&data, 2000, 0.95, 12345);
+        let true_mean = 5.5;
+        assert!(
+            lo < true_mean && hi > true_mean,
+            "BCa CI [{lo}, {hi}] should contain {true_mean}"
+        );
+    }
+
+    #[test]
+    fn bootstrap_mean_skewed_data() {
+        let data = vec![1.0, 1.0, 1.0, 1.0, 1.0, 10.0];
+        let (lo, hi) = bootstrap_mean(&data, 2000, 0.95, 999);
+        let sample_mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        assert!(lo <= sample_mean && hi >= sample_mean);
+        assert!(lo >= 1.0 && hi <= 10.0);
+    }
+
+    #[test]
+    fn bootstrap_mean_small_sample() {
+        let data = vec![2.0, 4.0];
+        let (lo, hi) = bootstrap_mean(&data, 1000, 0.95, 42);
+        assert!(lo.is_finite() && hi.is_finite());
+        assert!(lo >= 2.0 && hi <= 4.0);
+    }
+
+    #[test]
+    fn bootstrap_mean_edge_cases() {
+        let (lo, hi) = bootstrap_mean(&[1.0], 1000, 0.95, 42);
+        assert!(lo.is_nan() && hi.is_nan());
+        let (lo, hi) = bootstrap_mean(&[], 1000, 0.95, 42);
+        assert!(lo.is_nan() && hi.is_nan());
     }
 
     #[test]
