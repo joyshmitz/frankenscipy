@@ -4035,7 +4035,12 @@ pub fn log1pexp(x: f64) -> f64 {
 ///
 /// Used in entropy calculations where 0 * log(0) = 0 by convention.
 #[must_use]
-pub fn xlogx(x: f64) -> f64 {
+pub fn xlogx(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("xlogx", x_tensor, mode, |x| Ok(xlogx_scalar(x)))
+}
+
+#[must_use]
+pub fn xlogx_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -4056,7 +4061,7 @@ pub fn xlogx(x: f64) -> f64 {
 /// Returns 0 for x = 0, NaN for x < 0.
 #[must_use]
 pub fn negentropy(x: f64) -> f64 {
-    xlogx(x)
+    xlogx_scalar(x)
 }
 
 /// Binary cross-entropy loss (logistic loss).
@@ -5261,6 +5266,41 @@ mod tests {
     }
 
     #[test]
+    fn xlogx_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = xlogx(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - xlogx_scalar(2.0)).abs() < 1e-14);
+
+        let vector = xlogx(
+            &SpecialTensor::RealVec(vec![0.0, 1.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [0.0, 1.0, 2.0].map(xlogx_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn xlogx_tensor_dispatch_preserves_domain_behavior() -> Result<(), String> {
+        let vector = xlogx(
+            &SpecialTensor::RealVec(vec![-1.0, 0.0, f64::NAN]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert_eq!(values[1], 0.0);
+        assert!(values[2].is_nan());
+        Ok(())
+    }
+
+    #[test]
     fn cloglog_basic() {
         // cloglog(0.5) = log(-log(0.5)) = log(ln(2)) ≈ -0.3665
         let expected = std::f64::consts::LN_2.ln();
@@ -5491,27 +5531,27 @@ mod tests {
     #[test]
     fn xlogx_basic() {
         // xlogx(0) = 0 by convention
-        assert!((xlogx(0.0) - 0.0).abs() < 1e-14);
+        assert!((xlogx_scalar(0.0) - 0.0).abs() < 1e-14);
 
         // xlogx(1) = 1 * log(1) = 0
-        assert!((xlogx(1.0) - 0.0).abs() < 1e-14);
+        assert!((xlogx_scalar(1.0) - 0.0).abs() < 1e-14);
 
         // xlogx(e) = e * log(e) = e
-        assert!((xlogx(std::f64::consts::E) - std::f64::consts::E).abs() < 1e-14);
+        assert!((xlogx_scalar(std::f64::consts::E) - std::f64::consts::E).abs() < 1e-14);
 
         // xlogx(x) for x > 0
-        assert!((xlogx(2.0) - 2.0 * 2.0_f64.ln()).abs() < 1e-14);
+        assert!((xlogx_scalar(2.0) - 2.0 * 2.0_f64.ln()).abs() < 1e-14);
 
         // xlogx(x) is NaN for x < 0
-        assert!(xlogx(-1.0).is_nan());
+        assert!(xlogx_scalar(-1.0).is_nan());
     }
 
     #[test]
     fn negentropy_basic() {
         // negentropy is same as xlogx
-        assert!((negentropy(0.0) - xlogx(0.0)).abs() < 1e-14);
-        assert!((negentropy(0.5) - xlogx(0.5)).abs() < 1e-14);
-        assert!((negentropy(2.0) - xlogx(2.0)).abs() < 1e-14);
+        assert!((negentropy(0.0) - xlogx_scalar(0.0)).abs() < 1e-14);
+        assert!((negentropy(0.5) - xlogx_scalar(0.5)).abs() < 1e-14);
+        assert!((negentropy(2.0) - xlogx_scalar(2.0)).abs() < 1e-14);
     }
 
     #[test]

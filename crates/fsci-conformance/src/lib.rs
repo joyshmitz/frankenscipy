@@ -9358,7 +9358,11 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("xlogx", mode));
             }
-            Ok(special_xlogx(args[0]))
+            special_scalar_from_tensor(
+                special_xlogx(&special_scalar(args[0]), mode)?,
+                "xlogx",
+                mode,
+            )
         }
         SpecialCaseFunction::Kolmogorov => {
             if args.len() != 1 {
