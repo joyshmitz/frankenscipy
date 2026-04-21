@@ -13,6 +13,7 @@ pub enum OptimizeMethod {
     NelderMead,
     LBfgsB,
     NewtonCg,
+    TrustExact,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

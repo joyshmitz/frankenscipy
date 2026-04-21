@@ -78,6 +78,45 @@ def _translated_quadratic(x: Any) -> float:
     return (x[0] - 4.0) ** 2 + (x[1] + 3.0) ** 2
 
 
+def _shifted_quadratic_grad(x: Any) -> Any:
+    """Gradient of shifted_quadratic."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    return np.array([2.0 * (x[0] - 1.0), 8.0 * (x[1] + 2.0)], dtype=float)
+
+
+def _shifted_quadratic_hess(_: Any) -> Any:
+    """Hessian of shifted_quadratic."""
+    import numpy as np
+    return np.array([[2.0, 0.0], [0.0, 8.0]], dtype=float)
+
+
+def _translated_quadratic_grad(x: Any) -> Any:
+    """Gradient of translated_quadratic."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    return np.array([2.0 * (x[0] - 4.0), 4.0 * (x[1] + 3.0)], dtype=float)
+
+
+def _translated_quadratic_hess(_: Any) -> Any:
+    """Hessian of translated_quadratic."""
+    import numpy as np
+    return np.array([[2.0, 0.0], [0.0, 4.0]], dtype=float)
+
+
+def _scaled_quadratic_grad(x: Any) -> Any:
+    """Gradient of scaled_quadratic."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    return np.array([20.0 * (x[0] - 1.0), 80.0 * (x[1] + 2.0)], dtype=float)
+
+
+def _scaled_quadratic_hess(_: Any) -> Any:
+    """Hessian of scaled_quadratic."""
+    import numpy as np
+    return np.array([[20.0, 0.0], [0.0, 80.0]], dtype=float)
+
+
 def _rotated_quadratic(x: Any) -> float:
     """Rotated quadratic with minimum at (1, -2)."""
     import numpy as np
@@ -133,6 +172,16 @@ def _get_objective(name: str) -> Callable:
     return objectives.get(name, lambda x: float('nan'))
 
 
+def _get_jacobian_and_hessian(name: str) -> tuple[Callable | None, Callable | None]:
+    """Get exact derivatives for trust-region methods that require them."""
+    derivatives = {
+        "shifted_quadratic": (_shifted_quadratic_grad, _shifted_quadratic_hess),
+        "translated_quadratic": (_translated_quadratic_grad, _translated_quadratic_hess),
+        "scaled_quadratic": (_scaled_quadratic_grad, _scaled_quadratic_hess),
+    }
+    return derivatives.get(name, (None, None))
+
+
 def _get_root_function(name: str, np: Any) -> Callable:
     """Get root-finding function by name."""
     funcs = {
@@ -171,6 +220,7 @@ def _run_case(case: Dict[str, Any], optimize: Any, np: Any) -> Dict[str, Any]:
                 "TrustNcg": "trust-ncg",
                 "TrustKrylov": "trust-krylov",
                 "TrustConstr": "trust-constr",
+                "TrustExact": "trust-exact",
                 "DogLeg": "dogleg",
             }
             method = method_map.get(case.get("method"), case.get("method"))
@@ -186,13 +236,24 @@ def _run_case(case: Dict[str, Any], optimize: Any, np: Any) -> Dict[str, Any]:
                 options["maxfev"] = case["maxfev"]
 
             obj_func = _get_objective(objective_name)
+            minimize_kwargs: Dict[str, Any] = {
+                "method": method,
+                "tol": tol,
+                "options": options if options else None,
+            }
+            if method == "trust-exact":
+                jac, hess = _get_jacobian_and_hessian(objective_name)
+                if jac is None or hess is None:
+                    raise ValueError(
+                        f"objective {objective_name!r} lacks jac/hess support for trust-exact"
+                    )
+                minimize_kwargs["jac"] = jac
+                minimize_kwargs["hess"] = hess
 
             result = optimize.minimize(
                 obj_func,
                 x0,
-                method=method,
-                tol=tol,
-                options=options if options else None,
+                **minimize_kwargs,
             )
 
             return {

@@ -13,7 +13,7 @@ pub use curvefit::{
 pub use linesearch::{LineSearchResult, WolfeParams, line_search_wolfe1, line_search_wolfe2};
 pub use minimize::{
     Bound, MinimizeScalarOptions, MinimizeScalarResult, bfgs, cg_pr_plus, get_optimize_traces,
-    lbfgsb, minimize, minimize_scalar, nelder_mead, newton_cg, powell,
+    lbfgsb, minimize, minimize_scalar, nelder_mead, newton_cg, powell, trust_exact,
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, anderson,

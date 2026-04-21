@@ -246,6 +246,60 @@
       }
     },
     {
+      "operation": "minimize",
+      "case_id": "diff_shifted_quadratic_trust_exact",
+      "category": "differential",
+      "mode": "Strict",
+      "method": "TrustExact",
+      "objective": "shifted_quadratic",
+      "x0": [
+        8.0,
+        -8.0
+      ],
+      "tol": 1e-10,
+      "maxiter": 100,
+      "maxfev": 20000,
+      "expected": {
+        "kind": "minimize_point",
+        "x": [
+          1.0,
+          -2.0
+        ],
+        "fun": 0.0,
+        "atol": 1e-06,
+        "rtol": 1e-06,
+        "require_success": true,
+        "contract_ref": "fsci_opt::trust_exact"
+      }
+    },
+    {
+      "operation": "minimize",
+      "case_id": "diff_translated_quadratic_trust_exact",
+      "category": "differential",
+      "mode": "Strict",
+      "method": "TrustExact",
+      "objective": "translated_quadratic",
+      "x0": [
+        -6.0,
+        4.0
+      ],
+      "tol": 1e-10,
+      "maxiter": 100,
+      "maxfev": 20000,
+      "expected": {
+        "kind": "minimize_point",
+        "x": [
+          4.0,
+          -3.0
+        ],
+        "fun": 0.0,
+        "atol": 1e-06,
+        "rtol": 1e-06,
+        "require_success": true,
+        "contract_ref": "fsci_opt::trust_exact"
+      }
+    },
+    {
       "operation": "root",
       "case_id": "diff_root_brentq_cubic",
       "category": "differential",

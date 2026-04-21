@@ -30,6 +30,7 @@ where
         OptimizeMethod::NelderMead => nelder_mead(&fun, x0, options),
         OptimizeMethod::LBfgsB => lbfgsb(&fun, x0, options, None),
         OptimizeMethod::NewtonCg => newton_cg(&fun, x0, options),
+        OptimizeMethod::TrustExact => trust_exact(&fun, x0, options),
     }
 }
 
@@ -1335,6 +1336,203 @@ where
     Ok(result)
 }
 
+/// Trust-region exact method using finite-difference derivatives.
+///
+/// Matches `scipy.optimize.minimize(f, x0, method='trust-exact')` at the
+/// observable API level, while approximating the missing Jacobian/Hessian
+/// inputs from function evaluations.
+pub fn trust_exact<F>(
+    fun: &F,
+    x0: &[f64],
+    options: MinimizeOptions,
+) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    validate_minimize_options(options)?;
+
+    let n = x0.len();
+    let tol = options.tol.unwrap_or(1.0e-6).max(1.0e-12);
+    let maxiter = options.maxiter.unwrap_or((200 * n).max(100));
+    let maxfev = options.maxfev.unwrap_or((5000 * n).max(1_000));
+    let eps = options.gradient_eps;
+    let mut objective = Objective::new(fun, options.mode, maxfev);
+
+    let mut x = x0.to_vec();
+    let mut f = match objective.eval(&x) {
+        Ok(v) => v,
+        Err(err) => return Ok(result_from_error(x0, 0, 0, 0, err)),
+    };
+    let mut njev = 0usize;
+    let mut nhev = 0usize;
+    let mut grad = match finite_diff_gradient(&mut objective, &x, eps) {
+        Ok(v) => {
+            njev += 1;
+            v
+        }
+        Err(err) => return Ok(result_from_error(&x, 0, objective.nfev, 0, err)),
+    };
+
+    let mut delta = l2_norm(&x).clamp(1.0, 10.0);
+    let max_delta = 1_000.0;
+    let acceptance_threshold = 0.1;
+    let boundary_threshold = 0.9;
+    let mut nit = 0usize;
+
+    for iteration in 0..maxiter {
+        let grad_norm = l2_norm(&grad);
+        if grad_norm <= tol {
+            let result = OptimizeResult {
+                x: x.clone(),
+                fun: Some(f),
+                success: true,
+                status: ConvergenceStatus::Success,
+                message: String::from("optimization converged (trust-exact)"),
+                nfev: objective.nfev,
+                njev,
+                nhev,
+                nit: iteration,
+                jac: Some(grad.clone()),
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::TrustExact, options, iteration, &result);
+            return Ok(result);
+        }
+
+        if let Some(callback) = options.callback
+            && !callback(&x)
+        {
+            let result = OptimizeResult {
+                x: x.clone(),
+                fun: Some(f),
+                success: false,
+                status: ConvergenceStatus::CallbackStop,
+                message: String::from("callback requested stop"),
+                nfev: objective.nfev,
+                njev,
+                nhev,
+                nit: iteration,
+                jac: Some(grad.clone()),
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::TrustExact, options, iteration, &result);
+            return Ok(result);
+        }
+
+        let (hessian, hess_grad_evals) = match finite_diff_hessian(&mut objective, &x, &grad, eps) {
+            Ok(v) => v,
+            Err(err) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, err)),
+        };
+        njev += hess_grad_evals;
+        nhev += 1;
+
+        let mut step = trust_region_exact_step(&grad, &hessian, delta);
+        let mut predicted_reduction = trust_model_reduction(&grad, &hessian, &step);
+        let mut step_norm = l2_norm(&step);
+
+        if !predicted_reduction.is_finite() || predicted_reduction <= 0.0 || step_norm == 0.0 {
+            step = steepest_descent_step(&grad, delta);
+            predicted_reduction = trust_model_reduction(&grad, &hessian, &step);
+            step_norm = l2_norm(&step);
+        }
+
+        if !predicted_reduction.is_finite() || predicted_reduction <= 0.0 || step_norm == 0.0 {
+            let result = OptimizeResult {
+                x: x.clone(),
+                fun: Some(f),
+                success: false,
+                status: ConvergenceStatus::PrecisionLoss,
+                message: String::from("trust-exact failed to produce a descent step"),
+                nfev: objective.nfev,
+                njev,
+                nhev,
+                nit: iteration,
+                jac: Some(grad.clone()),
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::TrustExact, options, iteration, &result);
+            return Ok(result);
+        }
+
+        let candidate = add_scaled(&x, &step, 1.0);
+        let candidate_f = match objective.eval(&candidate) {
+            Ok(v) => v,
+            Err(err) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, err)),
+        };
+
+        let actual_reduction = f - candidate_f;
+        let rho = actual_reduction / predicted_reduction;
+
+        if rho < 0.25 {
+            delta = (0.25 * delta).max(1.0e-8);
+        } else if rho > 0.75 && step_norm >= boundary_threshold * delta {
+            delta = (2.0 * delta).min(max_delta);
+        }
+
+        if rho > acceptance_threshold {
+            x = candidate;
+            f = candidate_f;
+            grad = match finite_diff_gradient(&mut objective, &x, eps) {
+                Ok(v) => {
+                    njev += 1;
+                    v
+                }
+                Err(err) => {
+                    return Ok(result_from_error(&x, iteration, objective.nfev, njev, err));
+                }
+            };
+            nit = iteration + 1;
+        } else if delta <= 1.0e-8 {
+            let result = OptimizeResult {
+                x: x.clone(),
+                fun: Some(f),
+                success: false,
+                status: ConvergenceStatus::PrecisionLoss,
+                message: String::from("trust region radius collapsed without an acceptable step"),
+                nfev: objective.nfev,
+                njev,
+                nhev,
+                nit: iteration,
+                jac: Some(grad.clone()),
+                hess_inv: None,
+                maxcv: None,
+            };
+            log_completion(OptimizeMethod::TrustExact, options, iteration, &result);
+            return Ok(result);
+        }
+
+        log_iteration(
+            OptimizeMethod::TrustExact,
+            options,
+            iteration + 1,
+            f,
+            l2_norm(&grad),
+            step_norm,
+            objective.nfev,
+        );
+    }
+
+    let result = OptimizeResult {
+        x,
+        fun: Some(f),
+        success: false,
+        status: ConvergenceStatus::MaxIterations,
+        message: format!("maximum iterations reached ({maxiter})"),
+        nfev: objective.nfev,
+        njev,
+        nhev,
+        nit,
+        jac: Some(grad),
+        hess_inv: None,
+        maxcv: None,
+    };
+    log_completion(OptimizeMethod::TrustExact, options, nit, &result);
+    Ok(result)
+}
+
 /// Inner CG solver for Newton equation H*d = -g.
 /// Uses Hessian-vector products via finite differences.
 /// Returns (direction, number_of_hvps).
@@ -1418,6 +1616,192 @@ where
         hv.push((gp - g) / step);
     }
     Ok(hv)
+}
+
+fn finite_diff_hessian<F>(
+    objective: &mut Objective<'_, F>,
+    x: &[f64],
+    grad_at_x: &[f64],
+    eps: f64,
+) -> Result<(Vec<Vec<f64>>, usize), OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let n = x.len();
+    let mut hessian = vec![vec![0.0; n]; n];
+    let mut grad_evals = 0usize;
+    for column in 0..n {
+        let mut basis = vec![0.0; n];
+        basis[column] = 1.0;
+        let hv = hessian_vector_product(objective, x, grad_at_x, &basis, eps)?;
+        grad_evals += 1;
+        for row in 0..n {
+            hessian[row][column] = hv[row];
+        }
+    }
+
+    for row in 0..n {
+        let (prefix, suffix) = hessian.split_at_mut(row + 1);
+        let current_row = &mut prefix[row];
+        for (offset, mirrored_row) in suffix.iter_mut().enumerate() {
+            let column = row + 1 + offset;
+            let sym = 0.5 * (current_row[column] + mirrored_row[row]);
+            current_row[column] = sym;
+            mirrored_row[row] = sym;
+        }
+    }
+
+    Ok((hessian, grad_evals))
+}
+
+fn trust_region_exact_step(grad: &[f64], hessian: &[Vec<f64>], delta: f64) -> Vec<f64> {
+    let n = grad.len();
+    let grad_norm = l2_norm(grad);
+    if grad_norm <= f64::EPSILON {
+        return vec![0.0; n];
+    }
+
+    let rhs = scale_vector(grad, -1.0);
+    if let Some(newton_step) = solve_linear_system(hessian, &rhs)
+        && l2_norm(&newton_step) <= delta
+        && trust_model_reduction(grad, hessian, &newton_step) > 0.0
+    {
+        return newton_step;
+    }
+
+    let mut lower = 0.0;
+    let mut upper = 1.0e-6;
+    let mut boundary_step = None;
+
+    for _ in 0..60 {
+        let shifted = shifted_matrix(hessian, upper);
+        if let Some(candidate) = solve_linear_system(&shifted, &rhs) {
+            let norm = l2_norm(&candidate);
+            if norm <= delta {
+                boundary_step = Some((upper, candidate));
+                break;
+            }
+            lower = upper;
+        } else {
+            lower = upper;
+        }
+        upper *= 2.0;
+    }
+
+    if let Some((mut hi_lambda, mut hi_step)) = boundary_step {
+        let mut lo_lambda = lower;
+        for _ in 0..60 {
+            let mid_lambda = 0.5 * (lo_lambda + hi_lambda);
+            let shifted = shifted_matrix(hessian, mid_lambda);
+            let Some(candidate) = solve_linear_system(&shifted, &rhs) else {
+                lo_lambda = mid_lambda;
+                continue;
+            };
+            let norm = l2_norm(&candidate);
+            if (norm - delta).abs() <= 1.0e-10 * delta.max(1.0) {
+                hi_step = candidate;
+                break;
+            }
+            if norm > delta {
+                lo_lambda = mid_lambda;
+            } else {
+                hi_lambda = mid_lambda;
+                hi_step = candidate;
+            }
+        }
+
+        if trust_model_reduction(grad, hessian, &hi_step) > 0.0 {
+            return hi_step;
+        }
+    }
+
+    steepest_descent_step(grad, delta)
+}
+
+fn steepest_descent_step(grad: &[f64], delta: f64) -> Vec<f64> {
+    let grad_norm = l2_norm(grad);
+    if grad_norm <= f64::EPSILON {
+        return vec![0.0; grad.len()];
+    }
+    scale_vector(grad, -delta / grad_norm)
+}
+
+fn trust_model_reduction(grad: &[f64], hessian: &[Vec<f64>], step: &[f64]) -> f64 {
+    let hessian_step = matrix_vector_mul(hessian, step);
+    -(dot(grad, step) + 0.5 * dot(step, &hessian_step))
+}
+
+fn shifted_matrix(matrix: &[Vec<f64>], lambda: f64) -> Vec<Vec<f64>> {
+    let mut shifted = matrix.to_vec();
+    for (idx, row) in shifted.iter_mut().enumerate() {
+        row[idx] += lambda;
+    }
+    shifted
+}
+
+fn solve_linear_system(matrix: &[Vec<f64>], rhs: &[f64]) -> Option<Vec<f64>> {
+    let n = matrix.len();
+    if rhs.len() != n || matrix.iter().any(|row| row.len() != n) {
+        return None;
+    }
+
+    let mut aug = vec![vec![0.0; n + 1]; n];
+    for row in 0..n {
+        for column in 0..n {
+            aug[row][column] = matrix[row][column];
+        }
+        aug[row][n] = rhs[row];
+    }
+
+    for pivot in 0..n {
+        let mut pivot_row = pivot;
+        let mut pivot_abs = aug[pivot][pivot].abs();
+        for (row, candidate_row) in aug.iter().enumerate().skip(pivot + 1) {
+            let candidate = candidate_row[pivot].abs();
+            if candidate > pivot_abs {
+                pivot_abs = candidate;
+                pivot_row = row;
+            }
+        }
+
+        if pivot_abs <= 1.0e-12 {
+            return None;
+        }
+
+        if pivot_row != pivot {
+            aug.swap(pivot, pivot_row);
+        }
+
+        let pivot_value = aug[pivot][pivot];
+        let (head, tail) = aug.split_at_mut(pivot + 1);
+        let pivot_row_values = &head[pivot];
+        for current_row in tail.iter_mut() {
+            let factor = current_row[pivot] / pivot_value;
+            current_row[pivot] = 0.0;
+            for (entry, pivot_entry) in current_row
+                .iter_mut()
+                .skip(pivot + 1)
+                .zip(pivot_row_values.iter().skip(pivot + 1))
+            {
+                *entry -= factor * pivot_entry;
+            }
+        }
+    }
+
+    let mut solution = vec![0.0; n];
+    for row in (0..n).rev() {
+        let mut value = aug[row][n];
+        for column in row + 1..n {
+            value -= aug[row][column] * solution[column];
+        }
+        let denom = aug[row][row];
+        if denom.abs() <= 1.0e-12 {
+            return None;
+        }
+        solution[row] = value / denom;
+    }
+
+    Some(solution)
 }
 
 pub fn get_optimize_traces() -> Vec<OptimizeTraceEntry> {
@@ -3400,6 +3784,46 @@ mod tests {
             (result.x[0] - 1.5).abs() < 1e-4,
             "minimizer should be 1.5, got {}",
             result.x[0]
+        );
+    }
+
+    #[test]
+    fn trust_exact_shifted_quadratic_converges() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::TrustExact),
+            tol: Some(1e-10),
+            maxiter: Some(100),
+            maxfev: Some(20_000),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(
+            |x| (x[0] - 1.0).powi(2) + 4.0 * (x[1] + 2.0).powi(2),
+            &[8.0, -8.0],
+            options,
+        )
+        .expect("minimize");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!((result.x[0] - 1.0).abs() < 1.0e-6, "x={:?}", result.x);
+        assert!((result.x[1] + 2.0).abs() < 1.0e-6, "x={:?}", result.x);
+        assert!(result.fun.unwrap_or(f64::INFINITY) < 1.0e-10);
+        assert!(result.nhev > 0);
+    }
+
+    #[test]
+    fn trust_exact_rosenbrock_converges() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::TrustExact),
+            tol: Some(1e-6),
+            maxiter: Some(200),
+            maxfev: Some(50_000),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(rosenbrock, &[0.0, 0.0], options).expect("minimize");
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 1.0).abs() < 0.05 && (result.x[1] - 1.0).abs() < 0.05,
+            "x={:?}",
+            result.x
         );
     }
 }
