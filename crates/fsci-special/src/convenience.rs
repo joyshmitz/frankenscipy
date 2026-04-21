@@ -3891,7 +3891,12 @@ pub fn loglog_inv(x: f64) -> f64 {
 ///
 /// Returns -∞ for p ≤ 0, +∞ for p ≥ 1.
 #[must_use]
-pub fn cauchit(p: f64) -> f64 {
+pub fn cauchit(p_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("cauchit", p_tensor, mode, |p| Ok(cauchit_scalar(p)))
+}
+
+#[must_use]
+pub fn cauchit_scalar(p: f64) -> f64 {
     if p.is_nan() {
         return f64::NAN;
     }
@@ -3910,7 +3915,12 @@ pub fn cauchit(p: f64) -> f64 {
 ///
 /// The Cauchy CDF. Maps (-∞, +∞) to (0, 1).
 #[must_use]
-pub fn cauchit_inv(x: f64) -> f64 {
+pub fn cauchit_inv(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("cauchit_inv", x_tensor, mode, |x| Ok(cauchit_inv_scalar(x)))
+}
+
+#[must_use]
+pub fn cauchit_inv_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -5525,51 +5535,114 @@ mod tests {
     #[test]
     fn cauchit_basic() {
         // cauchit(0.5) = tan(0) = 0
-        assert!((cauchit(0.5) - 0.0).abs() < 1e-14);
+        assert!((cauchit_scalar(0.5) - 0.0).abs() < 1e-14);
 
         // cauchit(0.75) = tan(π/4) = 1
-        assert!((cauchit(0.75) - 1.0).abs() < 1e-14);
+        assert!((cauchit_scalar(0.75) - 1.0).abs() < 1e-14);
 
         // cauchit(0.25) = tan(-π/4) = -1
-        assert!((cauchit(0.25) - (-1.0)).abs() < 1e-14);
+        assert!((cauchit_scalar(0.25) - (-1.0)).abs() < 1e-14);
 
         // Monotonically increasing
-        assert!(cauchit(0.3) < cauchit(0.5));
-        assert!(cauchit(0.5) < cauchit(0.7));
+        assert!(cauchit_scalar(0.3) < cauchit_scalar(0.5));
+        assert!(cauchit_scalar(0.5) < cauchit_scalar(0.7));
 
         // Boundary behavior
-        assert!(cauchit(0.0).is_infinite() && cauchit(0.0) < 0.0);
-        assert!(cauchit(1.0).is_infinite() && cauchit(1.0) > 0.0);
+        assert!(cauchit_scalar(0.0).is_infinite() && cauchit_scalar(0.0) < 0.0);
+        assert!(cauchit_scalar(1.0).is_infinite() && cauchit_scalar(1.0) > 0.0);
     }
 
     #[test]
     fn cauchit_inv_basic() {
         // cauchit_inv(0) = 0.5
-        assert!((cauchit_inv(0.0) - 0.5).abs() < 1e-14);
+        assert!((cauchit_inv_scalar(0.0) - 0.5).abs() < 1e-14);
 
         // cauchit_inv(1) = 0.75
-        assert!((cauchit_inv(1.0) - 0.75).abs() < 1e-14);
+        assert!((cauchit_inv_scalar(1.0) - 0.75).abs() < 1e-14);
 
         // cauchit_inv(-1) = 0.25
-        assert!((cauchit_inv(-1.0) - 0.25).abs() < 1e-14);
+        assert!((cauchit_inv_scalar(-1.0) - 0.25).abs() < 1e-14);
 
         // Bounded by (0, 1) for finite x
-        assert!(cauchit_inv(-1000.0) > 0.0);
-        assert!(cauchit_inv(1000.0) < 1.0);
+        assert!(cauchit_inv_scalar(-1000.0) > 0.0);
+        assert!(cauchit_inv_scalar(1000.0) < 1.0);
     }
 
     #[test]
     fn cauchit_inverse_relationship() {
         // cauchit and cauchit_inv are inverses
         let p = 0.3;
-        assert!((cauchit_inv(cauchit(p)) - p).abs() < 1e-14);
+        assert!((cauchit_inv_scalar(cauchit_scalar(p)) - p).abs() < 1e-14);
 
         let x = 2.5;
-        assert!((cauchit(cauchit_inv(x)) - x).abs() < 1e-14);
+        assert!((cauchit_scalar(cauchit_inv_scalar(x)) - x).abs() < 1e-14);
 
         for &p in &[0.1, 0.25, 0.5, 0.75, 0.9] {
-            assert!((cauchit_inv(cauchit(p)) - p).abs() < 1e-13);
+            assert!((cauchit_inv_scalar(cauchit_scalar(p)) - p).abs() < 1e-13);
         }
+    }
+
+    #[test]
+    fn cauchit_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = cauchit(&SpecialTensor::RealScalar(0.75), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - cauchit_scalar(0.75)).abs() < 1e-14);
+
+        let vector = cauchit(
+            &SpecialTensor::RealVec(vec![0.25, 0.5, 0.75]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [0.25, 0.5, 0.75].map(cauchit_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        assert!(values[0] < values[1] && values[1] < values[2]);
+        Ok(())
+    }
+
+    #[test]
+    fn cauchit_inv_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = cauchit_inv(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - cauchit_inv_scalar(1.0)).abs() < 1e-14);
+
+        let vector = cauchit_inv(
+            &SpecialTensor::RealVec(vec![-1.0, 0.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-1.0, 0.0, 1.0].map(cauchit_inv_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        assert!(values[0] < values[1] && values[1] < values[2]);
+        Ok(())
+    }
+
+    #[test]
+    fn cauchit_tensor_roundtrip_preserves_values() -> Result<(), String> {
+        let probabilities = vec![0.1, 0.25, 0.5, 0.75, 0.9];
+        let linked = cauchit(
+            &SpecialTensor::RealVec(probabilities.clone()),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let linked_values = expect_real_vec(linked)?;
+        let recovered = cauchit_inv(&SpecialTensor::RealVec(linked_values), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let recovered_values = expect_real_vec(recovered)?;
+        assert_eq!(recovered_values.len(), probabilities.len());
+        for (actual, expected) in recovered_values.iter().zip(probabilities.iter()) {
+            assert!((actual - expected).abs() < 1e-13);
+        }
+        Ok(())
     }
 
     #[test]
