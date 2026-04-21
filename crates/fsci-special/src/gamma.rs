@@ -333,13 +333,79 @@ fn gammainc_dispatch(
                 .collect::<Result<Vec<_>, _>>()
                 .map(SpecialTensor::ComplexVec)
         }
-        // Complex a cases - not yet implemented
-        (SpecialTensor::ComplexScalar(_), _) | (SpecialTensor::ComplexVec(_), _) => {
-            not_yet_implemented(
-                function,
-                mode,
-                "complex-valued a parameter not yet supported",
-            )
+        // Complex a cases
+        (SpecialTensor::ComplexScalar(a_val), SpecialTensor::RealScalar(x_val)) => {
+            gammainc_complex_parameter_scalar(*a_val, Complex64::new(*x_val, 0.0), mode, lower)
+                .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::ComplexScalar(a_val), SpecialTensor::RealVec(x_vec)) => x_vec
+            .iter()
+            .map(|&x_val| {
+                gammainc_complex_parameter_scalar(*a_val, Complex64::new(x_val, 0.0), mode, lower)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::ComplexVec(a_vec), SpecialTensor::RealScalar(x_val)) => a_vec
+            .iter()
+            .map(|&a_val| {
+                gammainc_complex_parameter_scalar(a_val, Complex64::new(*x_val, 0.0), mode, lower)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::ComplexVec(a_vec), SpecialTensor::RealVec(x_vec)) => {
+            if a_vec.len() != x_vec.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            a_vec
+                .iter()
+                .zip(x_vec.iter())
+                .map(|(&a_val, &x_val)| {
+                    gammainc_complex_parameter_scalar(
+                        a_val,
+                        Complex64::new(x_val, 0.0),
+                        mode,
+                        lower,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexScalar(a_val), SpecialTensor::ComplexScalar(x_val)) => {
+            gammainc_complex_parameter_scalar(*a_val, *x_val, mode, lower)
+                .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::ComplexScalar(a_val), SpecialTensor::ComplexVec(x_vec)) => x_vec
+            .iter()
+            .map(|&x_val| gammainc_complex_parameter_scalar(*a_val, x_val, mode, lower))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::ComplexVec(a_vec), SpecialTensor::ComplexScalar(x_val)) => a_vec
+            .iter()
+            .map(|&a_val| gammainc_complex_parameter_scalar(a_val, *x_val, mode, lower))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::ComplexVec(a_vec), SpecialTensor::ComplexVec(x_vec)) => {
+            if a_vec.len() != x_vec.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            a_vec
+                .iter()
+                .zip(x_vec.iter())
+                .map(|(&a_val, &x_val)| {
+                    gammainc_complex_parameter_scalar(a_val, x_val, mode, lower)
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
         }
         // Empty tensor cases
         (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Err(SpecialError {
@@ -348,6 +414,35 @@ fn gammainc_dispatch(
             mode,
             detail: "empty tensor is not a valid special-function input",
         }),
+    }
+}
+
+fn gammainc_complex_parameter_scalar(
+    a: Complex64,
+    z: Complex64,
+    mode: RuntimeMode,
+    lower: bool,
+) -> Result<Complex64, SpecialError> {
+    if a.im == 0.0 {
+        if z.im == 0.0 {
+            let value = if lower {
+                gammainc_scalar(a.re, z.re, mode)?
+            } else {
+                gammaincc_scalar(a.re, z.re, mode)?
+            };
+            return Ok(Complex64::new(value, 0.0));
+        }
+        return if lower {
+            complex_gammainc_scalar(a.re, z, mode)
+        } else {
+            complex_gammaincc_scalar(a.re, z, mode)
+        };
+    }
+
+    if lower {
+        complex_parameter_gammainc_scalar(a, z, mode)
+    } else {
+        complex_parameter_gammaincc_scalar(a, z, mode)
     }
 }
 
@@ -2046,6 +2141,104 @@ pub fn complex_gammaincc_scalar(
     }
 }
 
+fn complex_parameter_gammainc_scalar(
+    a: Complex64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    const FUNCTION: &str = "gammainc";
+
+    if !a.is_finite() || !z.is_finite() {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+    if complex_gamma_pole(a) {
+        record_special_trace(
+            FUNCTION,
+            mode,
+            "domain_error",
+            format!("a=({},{}) z=({},{})", a.re, a.im, z.re, z.im),
+            "returned_nan",
+            "a must not be a non-positive integer pole",
+            false,
+        );
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+    if z == Complex64::new(0.0, 0.0) {
+        if a.re > 0.0 {
+            return Ok(Complex64::new(0.0, 0.0));
+        }
+        record_special_trace(
+            FUNCTION,
+            mode,
+            "domain_error",
+            format!("a=({},{}) z=(0,0)", a.re, a.im),
+            "returned_nan",
+            "z=0 requires Re(a) > 0",
+            false,
+        );
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+
+    if z.abs() < a.abs() + 1.0 {
+        complex_parameter_gammainc_series(a, z)
+    } else {
+        let q = complex_parameter_gammaincc_cf(a, z)?;
+        Ok(Complex64::new(1.0, 0.0) - q)
+    }
+}
+
+fn complex_parameter_gammaincc_scalar(
+    a: Complex64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    const FUNCTION: &str = "gammaincc";
+
+    if !a.is_finite() || !z.is_finite() {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+    if complex_gamma_pole(a) {
+        record_special_trace(
+            FUNCTION,
+            mode,
+            "domain_error",
+            format!("a=({},{}) z=({},{})", a.re, a.im, z.re, z.im),
+            "returned_nan",
+            "a must not be a non-positive integer pole",
+            false,
+        );
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+    if z == Complex64::new(0.0, 0.0) {
+        if a.re > 0.0 {
+            return Ok(Complex64::new(1.0, 0.0));
+        }
+        record_special_trace(
+            FUNCTION,
+            mode,
+            "domain_error",
+            format!("a=({},{}) z=(0,0)", a.re, a.im),
+            "returned_nan",
+            "z=0 requires Re(a) > 0",
+            false,
+        );
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+
+    if z.abs() < a.abs() + 1.0 {
+        let p = complex_parameter_gammainc_series(a, z)?;
+        Ok(Complex64::new(1.0, 0.0) - p)
+    } else {
+        complex_parameter_gammaincc_cf(a, z)
+    }
+}
+
+fn complex_gamma_pole(a: Complex64) -> bool {
+    const POLE_EPS: f64 = 1.0e-12;
+
+    a.im.abs() <= POLE_EPS && a.re <= 0.0 && (a.re - a.re.round()).abs() <= POLE_EPS
+}
+
 /// Series expansion for lower incomplete gamma.
 fn complex_gammainc_series(
     a: f64,
@@ -2071,6 +2264,31 @@ fn complex_gammainc_series(
     for n in 1..MAX_ITERS {
         let denom = a + n as f64;
         term = term * z / Complex64::new(denom, 0.0);
+        sum = sum + term;
+        if term.abs() <= sum.abs() * EPS {
+            break;
+        }
+    }
+
+    Ok(prefactor * sum)
+}
+
+fn complex_parameter_gammainc_series(
+    a: Complex64,
+    z: Complex64,
+) -> Result<Complex64, SpecialError> {
+    const EPS: f64 = 1.0e-14;
+    const MAX_ITERS: usize = 200;
+
+    let lg = complex_gammaln(a);
+    let prefactor = (a * z.ln() - z - lg).exp();
+
+    let mut term = Complex64::new(1.0, 0.0) / a;
+    let mut sum = term;
+
+    for n in 1..MAX_ITERS {
+        let denom = a + Complex64::new(n as f64, 0.0);
+        term = term * z / denom;
         sum = sum + term;
         if term.abs() <= sum.abs() * EPS {
             break;
@@ -2120,6 +2338,42 @@ fn complex_gammaincc_cf(
         let delta = d * c;
         h = h * delta;
         if (delta.re - 1.0).abs() + delta.im.abs() <= EPS {
+            break;
+        }
+    }
+
+    Ok(prefactor * h)
+}
+
+fn complex_parameter_gammaincc_cf(a: Complex64, z: Complex64) -> Result<Complex64, SpecialError> {
+    const EPS: f64 = 1.0e-14;
+    const FPMIN: f64 = 1.0e-300;
+    const MAX_ITERS: usize = 200;
+
+    let lg = complex_gammaln(a);
+    let prefactor = (a * z.ln() - z - lg).exp();
+
+    let mut b = z + Complex64::new(1.0, 0.0) - a;
+    let mut c = Complex64::new(1.0 / FPMIN, 0.0);
+    let mut d = b.recip();
+    let mut h = d;
+
+    for i in 1..=MAX_ITERS {
+        let i_c = Complex64::new(i as f64, 0.0);
+        let an = -i_c * (i_c - a);
+        b = b + Complex64::new(2.0, 0.0);
+        d = an * d + b;
+        if d.abs() < FPMIN {
+            d = Complex64::new(FPMIN, 0.0);
+        }
+        c = b + an / c;
+        if c.abs() < FPMIN {
+            c = Complex64::new(FPMIN, 0.0);
+        }
+        d = d.recip();
+        let delta = d * c;
+        h = h * delta;
+        if (delta - Complex64::new(1.0, 0.0)).abs() <= EPS {
             break;
         }
     }
@@ -2851,6 +3105,75 @@ mod tests {
         assert!(c.re.is_finite(), "Real part should be finite");
         assert!(c.im.is_finite(), "Imaginary part should be finite");
         Ok(())
+    }
+
+    #[test]
+    fn complex_a_gammainc_reduces_to_real_path_for_real_x() -> Result<(), String> {
+        let a = complex_scalar(2.0, 0.0);
+        let x = scalar(1.5);
+
+        let actual = get_complex_scalar(gammainc(&a, &x, RuntimeMode::Strict))?;
+        let expected = gammainc_scalar(2.0, 1.5, RuntimeMode::Strict).unwrap();
+
+        assert!((actual.re - expected).abs() < 1e-10);
+        assert!(actual.im.abs() < 1e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_a_gammainc_p_plus_q_equals_one() {
+        let a = Complex64::new(2.5, 0.75);
+        let z = Complex64::new(1.5, -0.25);
+
+        let p = complex_parameter_gammainc_scalar(a, z, RuntimeMode::Strict).unwrap();
+        let q = complex_parameter_gammaincc_scalar(a, z, RuntimeMode::Strict).unwrap();
+
+        let sum = p + q;
+        assert!((sum.re - 1.0).abs() < 1e-10, "real(sum) = {}", sum.re);
+        assert!(sum.im.abs() < 1e-10, "imag(sum) = {}", sum.im);
+    }
+
+    #[test]
+    fn complex_a_gammainc_parameter_vector_broadcasts_real_x() -> Result<(), String> {
+        let a =
+            SpecialTensor::ComplexVec(vec![Complex64::new(2.5, 0.75), Complex64::new(3.0, -0.5)]);
+        let x = scalar(1.5);
+
+        let result = gammainc(&a, &x, RuntimeMode::Strict).map_err(|e| e.to_string())?;
+        match result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                let lane0 = complex_parameter_gammainc_scalar(
+                    Complex64::new(2.5, 0.75),
+                    Complex64::new(1.5, 0.0),
+                    RuntimeMode::Strict,
+                )
+                .unwrap();
+                let lane1 = complex_parameter_gammainc_scalar(
+                    Complex64::new(3.0, -0.5),
+                    Complex64::new(1.5, 0.0),
+                    RuntimeMode::Strict,
+                )
+                .unwrap();
+                assert!((values[0].re - lane0.re).abs() < 1e-10);
+                assert!((values[0].im - lane0.im).abs() < 1e-10);
+                assert!((values[1].re - lane1.re).abs() < 1e-10);
+                assert!((values[1].im - lane1.im).abs() < 1e-10);
+            }
+            other => return Err(format!("expected complex vector, got {other:?}")),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn complex_a_gammainc_parameter_vector_mismatch_is_shape_error() {
+        let a =
+            SpecialTensor::ComplexVec(vec![Complex64::new(2.0, 0.5), Complex64::new(3.0, -0.5)]);
+        let x = SpecialTensor::RealVec(vec![0.5, 1.0, 1.5]);
+
+        let err = gammainc(&a, &x, RuntimeMode::Strict).unwrap_err();
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+        assert_eq!(err.detail, "vector inputs must have matching lengths");
     }
 
     #[test]
