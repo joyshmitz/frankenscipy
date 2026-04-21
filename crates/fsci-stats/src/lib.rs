@@ -2218,6 +2218,22 @@ pub trait DiscreteDistribution {
     fn std(&self) -> f64 {
         self.var().sqrt()
     }
+    /// Entropy in nats. Default returns NaN.
+    fn entropy(&self) -> f64 {
+        f64::NAN
+    }
+    /// Skewness. Default returns NaN.
+    fn skewness(&self) -> f64 {
+        f64::NAN
+    }
+    /// Excess kurtosis. Default returns NaN.
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
+    /// Mode (most likely value). Default returns NaN.
+    fn mode(&self) -> f64 {
+        f64::NAN
+    }
 }
 
 impl DiscreteDistribution for Poisson {
@@ -2232,6 +2248,21 @@ impl DiscreteDistribution for Poisson {
     }
     fn var(&self) -> f64 {
         Poisson::var(self)
+    }
+    fn entropy(&self) -> f64 {
+        0.5 * (2.0 * PI * std::f64::consts::E * self.mu).ln()
+            - 1.0 / (12.0 * self.mu)
+            - 1.0 / (24.0 * self.mu * self.mu)
+            - 19.0 / (360.0 * self.mu * self.mu * self.mu)
+    }
+    fn skewness(&self) -> f64 {
+        1.0 / self.mu.sqrt()
+    }
+    fn kurtosis(&self) -> f64 {
+        1.0 / self.mu
+    }
+    fn mode(&self) -> f64 {
+        self.mu.floor()
     }
 }
 
@@ -2278,6 +2309,20 @@ impl DiscreteDistribution for Binomial {
     fn var(&self) -> f64 {
         self.n as f64 * self.p * (1.0 - self.p)
     }
+
+    fn skewness(&self) -> f64 {
+        let q = 1.0 - self.p;
+        (1.0 - 2.0 * self.p) / (self.n as f64 * self.p * q).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let q = 1.0 - self.p;
+        (1.0 - 6.0 * self.p * q) / (self.n as f64 * self.p * q)
+    }
+
+    fn mode(&self) -> f64 {
+        ((self.n as f64 + 1.0) * self.p).floor()
+    }
 }
 
 /// Bernoulli distribution: single trial with probability p.
@@ -2316,6 +2361,33 @@ impl DiscreteDistribution for Bernoulli {
 
     fn var(&self) -> f64 {
         self.p * (1.0 - self.p)
+    }
+
+    fn entropy(&self) -> f64 {
+        if self.p == 0.0 || self.p == 1.0 {
+            return 0.0;
+        }
+        -self.p * self.p.ln() - (1.0 - self.p) * (1.0 - self.p).ln()
+    }
+
+    fn skewness(&self) -> f64 {
+        let q = 1.0 - self.p;
+        (1.0 - 2.0 * self.p) / (self.p * q).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let q = 1.0 - self.p;
+        (1.0 - 6.0 * self.p * q) / (self.p * q)
+    }
+
+    fn mode(&self) -> f64 {
+        if self.p > 0.5 {
+            1.0
+        } else if self.p < 0.5 {
+            0.0
+        } else {
+            f64::NAN
+        }
     }
 }
 
@@ -2359,6 +2431,23 @@ impl DiscreteDistribution for Geometric {
     fn var(&self) -> f64 {
         (1.0 - self.p) / (self.p * self.p)
     }
+
+    fn entropy(&self) -> f64 {
+        let q = 1.0 - self.p;
+        (-(q) * q.ln() - self.p * self.p.ln()) / self.p
+    }
+
+    fn skewness(&self) -> f64 {
+        (2.0 - self.p) / (1.0 - self.p).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        6.0 + self.p * self.p / (1.0 - self.p)
+    }
+
+    fn mode(&self) -> f64 {
+        1.0
+    }
 }
 
 /// Negative binomial distribution: number of failures before n successes.
@@ -2397,6 +2486,24 @@ impl DiscreteDistribution for NegBinomial {
 
     fn var(&self) -> f64 {
         self.n * (1.0 - self.p) / (self.p * self.p)
+    }
+
+    fn skewness(&self) -> f64 {
+        let q = 1.0 - self.p;
+        (2.0 - self.p) / (self.n * q).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let q = 1.0 - self.p;
+        6.0 / self.n + self.p * self.p / (self.n * q)
+    }
+
+    fn mode(&self) -> f64 {
+        if self.n > 1.0 {
+            ((self.n - 1.0) * (1.0 - self.p) / self.p).floor()
+        } else {
+            0.0
+        }
     }
 }
 
@@ -2467,6 +2574,40 @@ impl DiscreteDistribution for Hypergeometric {
         let n = self.n as f64;
         let big_n = self.big_n as f64;
         big_n * (n / m) * ((m - n) / m) * ((m - big_n) / (m - 1.0))
+    }
+
+    fn skewness(&self) -> f64 {
+        let m = self.big_m as f64;
+        let n = self.n as f64;
+        let big_n = self.big_n as f64;
+        if m <= 2.0 {
+            return f64::NAN;
+        }
+        let num = (m - 2.0 * n) * (m - 2.0 * big_n) * (m - 1.0).sqrt();
+        let den = (m - 2.0) * (n * big_n * (m - n) * (m - big_n)).sqrt();
+        num / den
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m = self.big_m as f64;
+        let n = self.n as f64;
+        let big_n = self.big_n as f64;
+        if m <= 3.0 {
+            return f64::NAN;
+        }
+        let a = (m - 1.0) * m * m;
+        let b = m * (m + 1.0) - 6.0 * n * (m - n) - 6.0 * big_n * (m - big_n);
+        let c = 3.0 * n * big_n * (m - n) * (m - big_n) * (m + 6.0);
+        let num = a * b + c;
+        let den = n * big_n * (m - n) * (m - big_n) * (m - 2.0) * (m - 3.0);
+        num / den - 3.0
+    }
+
+    fn mode(&self) -> f64 {
+        let m = self.big_m as f64;
+        let n = self.n as f64;
+        let big_n = self.big_n as f64;
+        ((n + 1.0) * (big_n + 1.0) / (m + 2.0)).floor()
     }
 }
 
@@ -2541,6 +2682,10 @@ impl DiscreteDistribution for LogSeries {
     fn var(&self) -> f64 {
         let norm = self.norm();
         self.p * (norm - self.p) / ((1.0 - self.p).powi(2) * norm * norm)
+    }
+
+    fn mode(&self) -> f64 {
+        1.0
     }
 }
 
@@ -15986,6 +16131,69 @@ mod tests {
             let mass: f64 = (1..=500).map(|k| dist.pmf(k)).sum();
             assert_close(mass, 1.0, 1e-10, &format!("LogSeries mass({p})"));
         }
+    }
+
+    #[test]
+    fn discrete_poisson_skewness_kurtosis() {
+        let p = Poisson::new(4.0);
+        assert_close(p.skewness(), 0.5, 1e-10, "Poisson(4) skewness = 1/sqrt(4)");
+        assert_close(p.kurtosis(), 0.25, 1e-10, "Poisson(4) kurtosis = 1/4");
+        assert_close(p.mode(), 4.0, 1e-10, "Poisson(4) mode");
+    }
+
+    #[test]
+    fn discrete_binomial_skewness_kurtosis() {
+        let b = Binomial::new(10, 0.5);
+        assert_close(b.skewness(), 0.0, 1e-10, "Binomial(10,0.5) symmetric");
+        let b2 = Binomial::new(10, 0.3);
+        assert!(b2.skewness() > 0.0, "Binomial(10,0.3) positive skew");
+        assert!(b2.mode() >= 0.0, "Binomial mode >= 0");
+    }
+
+    #[test]
+    fn discrete_bernoulli_entropy() {
+        let b = Bernoulli::new(0.5);
+        assert_close(b.entropy(), 2.0_f64.ln(), 1e-10, "Bernoulli(0.5) entropy = ln(2)");
+        let b0 = Bernoulli::new(0.0);
+        assert_close(b0.entropy(), 0.0, 1e-10, "Bernoulli(0) entropy = 0");
+        let b1 = Bernoulli::new(1.0);
+        assert_close(b1.entropy(), 0.0, 1e-10, "Bernoulli(1) entropy = 0");
+    }
+
+    #[test]
+    fn discrete_bernoulli_mode() {
+        assert_close(Bernoulli::new(0.3).mode(), 0.0, 1e-10, "p<0.5 mode=0");
+        assert_close(Bernoulli::new(0.7).mode(), 1.0, 1e-10, "p>0.5 mode=1");
+        assert!(Bernoulli::new(0.5).mode().is_nan(), "p=0.5 mode undefined");
+    }
+
+    #[test]
+    fn discrete_geometric_stats() {
+        let g = Geometric::new(0.5);
+        assert_close(g.skewness(), 1.5 / (0.5_f64).sqrt(), 1e-10, "Geometric skewness");
+        assert_close(g.kurtosis(), 6.5, 1e-10, "Geometric kurtosis");
+        assert_close(g.mode(), 1.0, 1e-10, "Geometric mode = 1");
+    }
+
+    #[test]
+    fn discrete_negbinomial_stats() {
+        let nb = NegBinomial::new(5.0, 0.5);
+        assert!(nb.skewness() > 0.0, "NegBinomial positive skew");
+        assert!(nb.mode() >= 0.0, "NegBinomial mode >= 0");
+    }
+
+    #[test]
+    fn discrete_hypergeometric_stats() {
+        let h = Hypergeometric::new(100, 30, 20);
+        assert!(h.skewness().is_finite(), "Hypergeometric skewness finite");
+        assert!(h.kurtosis().is_finite(), "Hypergeometric kurtosis finite");
+        assert!(h.mode() >= 0.0 && h.mode() <= 20.0, "Hypergeometric mode in valid range");
+    }
+
+    #[test]
+    fn discrete_logseries_mode() {
+        let ls = LogSeries::new(0.5);
+        assert_close(ls.mode(), 1.0, 1e-10, "LogSeries mode = 1");
     }
 
     #[test]
