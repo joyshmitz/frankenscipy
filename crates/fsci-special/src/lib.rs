@@ -83,6 +83,7 @@ pub use convenience::{
     gammainc_conv,
     gammaincc_conv,
     gammaincinv,
+    gammaincinv_scalar,
     gelu,
     gradient_approx,
     hard_sigmoid,

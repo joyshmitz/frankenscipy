@@ -750,7 +750,7 @@ impl ContinuousDistribution for ChiSquared {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        let mut x = 2.0 * fsci_special::gammaincinv(0.5 * self.df, q);
+        let mut x = 2.0 * fsci_special::gammaincinv_scalar(0.5 * self.df, q);
         // Fall back to bisection if gammaincinv gave a degenerate result
         if x <= 0.0 || !x.is_finite() || (self.cdf(x) - q).abs() > 0.1 {
             return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
@@ -1266,7 +1266,7 @@ impl ContinuousDistribution for GammaDist {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        let mut x = self.scale * fsci_special::gammaincinv(self.a, q);
+        let mut x = self.scale * fsci_special::gammaincinv_scalar(self.a, q);
         if x <= 0.0 || !x.is_finite() || (self.cdf(x) - q).abs() > 0.1 {
             return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
         }
@@ -2086,7 +2086,7 @@ impl ContinuousDistribution for Maxwell {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        let mut x = self.scale * (2.0 * fsci_special::gammaincinv(1.5, q)).sqrt();
+        let mut x = self.scale * (2.0 * fsci_special::gammaincinv_scalar(1.5, q)).sqrt();
         if x <= 0.0 || !x.is_finite() || (self.cdf(x) - q).abs() > 0.1 {
             return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
         }
@@ -3799,7 +3799,7 @@ impl ContinuousDistribution for InverseGamma {
         }
         // CDF = Q(a, 1/x) = 1 - P(a, 1/x), so P(a, 1/x) = 1 - q
         // 1/x = gammaincinv(a, 1 - q), x = 1 / gammaincinv(a, 1 - q)
-        let g = fsci_special::gammaincinv(self.a, 1.0 - q);
+        let g = fsci_special::gammaincinv_scalar(self.a, 1.0 - q);
         if g <= 0.0 {
             return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
         }
@@ -3963,7 +3963,7 @@ impl ContinuousDistribution for Pearson3 {
         let alpha = beta * beta;
         let zeta = -beta;
         let gamma_q = if beta < 0.0 { 1.0 - q } else { q };
-        let g = fsci_special::gammaincinv(alpha, gamma_q);
+        let g = fsci_special::gammaincinv_scalar(alpha, gamma_q);
         if !g.is_finite() {
             return ppf_bisection(|x| self.cdf(x), q, self.mean(), self.std());
         }
@@ -4787,7 +4787,7 @@ impl ContinuousDistribution for Chi {
             return f64::INFINITY;
         }
         // CDF = P(df/2, x²/2), so x²/2 = gammaincinv(df/2, q), x = sqrt(2*gammaincinv(df/2, q))
-        let g = fsci_special::gammaincinv(self.df / 2.0, q);
+        let g = fsci_special::gammaincinv_scalar(self.df / 2.0, q);
         let mut x = (2.0 * g).sqrt();
         if x <= 0.0 || (self.cdf(x) - q).abs() > 0.1 {
             return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
@@ -5341,7 +5341,7 @@ impl ContinuousDistribution for DoubleGamma {
         } else {
             2.0 * q - 1.0
         };
-        let g = fsci_special::gammaincinv(self.a, target);
+        let g = fsci_special::gammaincinv_scalar(self.a, target);
         if g.is_finite() && g >= 0.0 {
             if q < 0.5 { -g } else { g }
         } else {
@@ -5506,7 +5506,7 @@ impl ContinuousDistribution for Erlang {
         }
         // CDF = P(k, rate*x), so rate*x = gammaincinv(k, q), x = gammaincinv(k, q) / rate
         let k = self.k as f64;
-        let mut x = fsci_special::gammaincinv(k, q) / self.rate;
+        let mut x = fsci_special::gammaincinv_scalar(k, q) / self.rate;
         if x <= 0.0 || (self.cdf(x) - q).abs() > 0.1 {
             return ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std());
         }
@@ -6706,7 +6706,7 @@ impl ContinuousDistribution for HalfGenNorm {
         }
 
         let b = self.beta;
-        let g = fsci_special::gammaincinv(1.0 / b, q);
+        let g = fsci_special::gammaincinv_scalar(1.0 / b, q);
         if g.is_finite() && g >= 0.0 {
             g.powf(1.0 / b)
         } else {
@@ -6761,7 +6761,7 @@ impl ContinuousDistribution for LogGamma {
             return f64::INFINITY;
         }
 
-        let g = fsci_special::gammaincinv(self.c, q);
+        let g = fsci_special::gammaincinv_scalar(self.c, q);
         if g.is_finite() && g > 0.0 {
             g.ln()
         } else {
@@ -14507,7 +14507,11 @@ pub fn chi2_contingency_with_lambda(
             .flat_map(|(obs_row, exp_row)| {
                 obs_row.iter().zip(exp_row.iter()).map(|(&o, &e)| {
                     if e > 0.0 {
-                        let diff = if use_yates { ((o - e).abs() - 0.5).max(0.0) } else { o - e };
+                        let diff = if use_yates {
+                            ((o - e).abs() - 0.5).max(0.0)
+                        } else {
+                            o - e
+                        };
                         diff.powi(2) / e
                     } else {
                         0.0
@@ -14522,7 +14526,11 @@ pub fn chi2_contingency_with_lambda(
             .zip(expected.iter())
             .flat_map(|(obs_row, exp_row)| {
                 obs_row.iter().zip(exp_row.iter()).map(|(&o, &e)| {
-                    if o > 0.0 && e > 0.0 { o * (o / e).ln() } else { 0.0 }
+                    if o > 0.0 && e > 0.0 {
+                        o * (o / e).ln()
+                    } else {
+                        0.0
+                    }
                 })
             })
             .sum::<f64>()
@@ -14533,7 +14541,11 @@ pub fn chi2_contingency_with_lambda(
             .zip(expected.iter())
             .flat_map(|(obs_row, exp_row)| {
                 obs_row.iter().zip(exp_row.iter()).map(|(&o, &e)| {
-                    if o > 0.0 && e > 0.0 { e * (e / o).ln() } else { 0.0 }
+                    if o > 0.0 && e > 0.0 {
+                        e * (e / o).ln()
+                    } else {
+                        0.0
+                    }
                 })
             })
             .sum::<f64>()
@@ -14546,7 +14558,11 @@ pub fn chi2_contingency_with_lambda(
                 .zip(expected.iter())
                 .flat_map(|(obs_row, exp_row)| {
                     obs_row.iter().zip(exp_row.iter()).map(|(&o, &e)| {
-                        if o > 0.0 && e > 0.0 { o * ((o / e).powf(lambda_) - 1.0) } else { 0.0 }
+                        if o > 0.0 && e > 0.0 {
+                            o * ((o / e).powf(lambda_) - 1.0)
+                        } else {
+                            0.0
+                        }
                     })
                 })
                 .sum::<f64>()
@@ -26431,13 +26447,21 @@ mod tests {
         // lambda_=1 should match standard chi2_contingency
         let result1 = chi2_contingency_with_lambda(&observed, false, 1.0);
         let original = chi2_contingency(&observed, false);
-        assert_close(result1.statistic, original.statistic, 1e-10, "lambda=1 match");
+        assert_close(
+            result1.statistic,
+            original.statistic,
+            1e-10,
+            "lambda=1 match",
+        );
         assert_close(result1.pvalue, original.pvalue, 1e-10, "lambda=1 pvalue");
 
         // lambda_=0 is G-test (log-likelihood ratio)
         let result0 = chi2_contingency_with_lambda(&observed, false, 0.0);
         assert!(result0.statistic.is_finite(), "G-test finite");
-        assert!(result0.pvalue >= 0.0 && result0.pvalue <= 1.0, "G-test pvalue valid");
+        assert!(
+            result0.pvalue >= 0.0 && result0.pvalue <= 1.0,
+            "G-test pvalue valid"
+        );
 
         // Different lambda values should give different statistics
         let result_neg1 = chi2_contingency_with_lambda(&observed, false, -1.0);

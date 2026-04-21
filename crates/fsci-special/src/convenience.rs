@@ -1968,7 +1968,18 @@ pub fn gammaincc_conv(a: f64, x: f64) -> f64 {
 ///
 /// Finds x such that P(a, x) = y.
 /// Matches `scipy.special.gammaincinv`.
-pub fn gammaincinv(a: f64, y: f64) -> f64 {
+pub fn gammaincinv(
+    a_tensor: &SpecialTensor,
+    y_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("gammaincinv", a_tensor, y_tensor, mode, |a, y| {
+        Ok(gammaincinv_scalar(a, y))
+    })
+}
+
+/// Scalar helper for the inverse regularized incomplete gamma function.
+pub fn gammaincinv_scalar(a: f64, y: f64) -> f64 {
     if !(0.0..=1.0).contains(&y) {
         return f64::NAN;
     }
@@ -6678,6 +6689,48 @@ mod tests {
         assert!(values[0].is_nan());
         assert!(values[1].is_infinite());
         assert!(values[2].is_infinite());
+        Ok(())
+    }
+
+    #[test]
+    fn gammaincinv_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = gammaincinv(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - gammaincinv_scalar(2.0, 0.5)).abs() < 1e-12);
+
+        let vector = gammaincinv(
+            &SpecialTensor::RealVec(vec![1.0, 2.0, 3.0]),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [1.0, 2.0, 3.0].map(|a| gammaincinv_scalar(a, 0.5));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gammaincinv_tensor_dispatch_preserves_boundary_behavior() -> Result<(), String> {
+        let vector = gammaincinv(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealVec(vec![0.0, 1.0, -0.5, f64::NAN]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert_eq!(values[0], 0.0);
+        assert!(values[1].is_infinite());
+        assert!(values[2].is_nan());
+        assert!(values[3].is_nan());
         Ok(())
     }
 }
