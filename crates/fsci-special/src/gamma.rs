@@ -2671,10 +2671,10 @@ mod tests {
 
     #[test]
     fn chdtri_inverse() {
-        // chdtri should be inverse of chdtr
+        // chdtri is the inverse of chdtrc, matching scipy.special.chdtri.
         for &v in &[1.0, 2.0, 5.0, 10.0] {
             for &x in &[0.5, 1.0, 2.0, 5.0, 10.0] {
-                let p = chdtr(v, x);
+                let p = chdtrc(v, x);
                 if p > 0.01 && p < 0.99 {
                     let x_recovered = chdtri(v, p);
                     assert!(
