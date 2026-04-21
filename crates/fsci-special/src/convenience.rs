@@ -2060,7 +2060,7 @@ pub fn erfcx(x: f64) -> f64 {
 /// Imaginary error function: erfi(x) = -i * erf(ix) = 2/√π ∫₀ˣ exp(t²) dt.
 ///
 /// Matches `scipy.special.erfi`.
-pub fn erfi(x: f64) -> f64 {
+fn erfi_impl(x: f64) -> f64 {
     // erfi(x) = 2x/√π * Σ_{k=0}^∞ x^{2k} / (k! * (2k+1))
     if x.abs() < 6.0 {
         let x2 = x * x;
@@ -2080,6 +2080,14 @@ pub fn erfi(x: f64) -> f64 {
         x.signum() * erfcx(-x.abs()) * (x * x).exp()
             - x.signum() / (x.abs() * std::f64::consts::PI.sqrt())
     }
+}
+
+pub fn erfi(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("erfi", x_tensor, mode, |x| Ok(erfi_scalar(x)))
+}
+
+pub fn erfi_scalar(x: f64) -> f64 {
+    erfi_impl(x)
 }
 
 /// Owen's T function: T(h, a) = (1/2π) ∫₀ᵃ exp(-h²(1+t²)/2) / (1+t²) dt.
@@ -5216,6 +5224,39 @@ mod tests {
         let positive_value = expect_real_scalar(positive)?;
         let negative_value = expect_real_scalar(negative)?;
         assert!((positive_value + negative_value).abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn erfi_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = erfi(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - erfi_scalar(1.0)).abs() < 1e-14);
+
+        let vector = erfi(
+            &SpecialTensor::RealVec(vec![-1.0, 0.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-1.0, 0.0, 1.0].map(erfi_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn erfi_tensor_dispatch_preserves_odd_symmetry() -> Result<(), String> {
+        let positive = erfi(&SpecialTensor::RealScalar(2.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let negative = erfi(&SpecialTensor::RealScalar(-2.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let positive_value = expect_real_scalar(positive)?;
+        let negative_value = expect_real_scalar(negative)?;
+        assert!((positive_value + negative_value).abs() < 1e-10);
         Ok(())
     }
 

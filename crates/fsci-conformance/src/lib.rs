@@ -8762,7 +8762,7 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("erfi", mode));
             }
-            Ok(special_erfi(args[0]))
+            special_scalar_from_tensor(special_erfi(&special_scalar(args[0]), mode)?, "erfi", mode)
         }
         SpecialCaseFunction::OwensT => {
             if args.len() != 2 {
