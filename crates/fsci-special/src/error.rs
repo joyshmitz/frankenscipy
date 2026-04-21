@@ -6,7 +6,7 @@ use fsci_runtime::RuntimeMode;
 
 use crate::types::{
     Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
-    SpecialResult, SpecialTensor, not_yet_implemented, record_special_trace,
+    SpecialResult, SpecialTensor, record_special_trace,
 };
 
 pub const ERROR_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -94,11 +94,23 @@ pub fn erfc(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 }
 
 pub fn erfinv(y: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("erfinv", y, mode, |v| erfinv_scalar(v, mode))
+    map_unary_input(
+        "erfinv",
+        y,
+        mode,
+        |v| erfinv_scalar(v, mode),
+        |value| erfinv_complex_scalar(value, mode),
+    )
 }
 
 pub fn erfcinv(y: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("erfcinv", y, mode, |v| erfcinv_scalar(v, mode))
+    map_unary_input(
+        "erfcinv",
+        y,
+        mode,
+        |v| erfcinv_scalar(v, mode),
+        |value| erfcinv_complex_scalar(value, mode),
+    )
 }
 
 fn map_unary_input<F, G>(
@@ -129,46 +141,6 @@ where
             .map(complex_kernel)
             .collect::<Result<Vec<_>, _>>()
             .map(SpecialTensor::ComplexVec),
-        SpecialTensor::Empty => {
-            record_special_trace(
-                function,
-                mode,
-                "domain_error",
-                "input=empty",
-                "fail_closed",
-                "empty tensor is not a valid special-function input",
-                false,
-            );
-            Err(SpecialError {
-                function,
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "empty tensor is not a valid special-function input",
-            })
-        }
-    }
-}
-
-fn map_real_input<F>(
-    function: &'static str,
-    input: &SpecialTensor,
-    mode: RuntimeMode,
-    kernel: F,
-) -> SpecialResult
-where
-    F: Fn(f64) -> Result<f64, SpecialError>,
-{
-    match input {
-        SpecialTensor::RealScalar(x) => kernel(*x).map(SpecialTensor::RealScalar),
-        SpecialTensor::RealVec(values) => values
-            .iter()
-            .copied()
-            .map(kernel)
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        SpecialTensor::ComplexScalar(_) | SpecialTensor::ComplexVec(_) => {
-            not_yet_implemented(function, mode, "complex-valued path pending")
-        }
         SpecialTensor::Empty => {
             record_special_trace(
                 function,
@@ -353,6 +325,70 @@ pub fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     Ok(x)
 }
 
+fn erfinv_complex_scalar(y: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    if !y.re.is_finite() || !y.im.is_finite() {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+    if y.im == 0.0 {
+        return erfinv_scalar(y.re, mode).map(Complex64::from_real);
+    }
+    if y.re < 0.0 || (y.re == 0.0 && y.im < 0.0) {
+        return erfinv_complex_scalar(-y, mode).map(|value| -value);
+    }
+    if y == Complex64::new(0.0, 0.0) {
+        return Ok(y);
+    }
+
+    let mut x = erfinv_complex_initial_guess(y);
+    if !x.re.is_finite() || !x.im.is_finite() {
+        x = y * (PI.sqrt() / 2.0);
+    }
+
+    for _ in 0..20 {
+        let fx = erf_complex_scalar(x) - y;
+        let dfx = (-x * x).exp() * TWO_INV_SQRT_PI;
+        if dfx.abs() < 1.0e-300 {
+            break;
+        }
+        let correction = fx / dfx;
+        x = x - correction;
+        if correction.abs() <= 1.0e-14 * x.abs().max(1.0) {
+            break;
+        }
+    }
+
+    if !x.re.is_finite() || !x.im.is_finite() {
+        return match mode {
+            RuntimeMode::Strict => Ok(Complex64::new(f64::NAN, f64::NAN)),
+            RuntimeMode::Hardened => Err(SpecialError {
+                function: "erfinv",
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "complex principal-branch iteration failed to converge",
+            }),
+        };
+    }
+
+    Ok(x)
+}
+
+fn erfinv_complex_initial_guess(y: Complex64) -> Complex64 {
+    if y.abs() < 0.75 {
+        let y3 = y * y * y;
+        let y5 = y3 * y * y;
+        let c1 = PI.sqrt() / 2.0;
+        let c3 = PI.powf(1.5) / 24.0;
+        let c5 = 7.0 * PI.powf(2.5) / 960.0;
+        return y * c1 + y3 * c3 + y5 * c5;
+    }
+
+    let a = 0.147;
+    let one_minus_y2 = Complex64::from_real(1.0) - y * y;
+    let log_term = one_minus_y2.ln();
+    let t = Complex64::from_real(2.0 / (PI * a)) + log_term * 0.5;
+    complex_sqrt(complex_sqrt(t * t - log_term / a) - t)
+}
+
 fn erfcinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if y.is_nan() {
         return Ok(f64::NAN);
@@ -402,6 +438,27 @@ fn erfcinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     }
 
     Ok(-inv_norm_cdf_scalar(0.5 * y) / 2.0_f64.sqrt())
+}
+
+fn erfcinv_complex_scalar(y: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    if y.im == 0.0 {
+        return erfcinv_scalar(y.re, mode).map(Complex64::from_real);
+    }
+    erfinv_complex_scalar(Complex64::from_real(1.0) - y, mode)
+}
+
+fn complex_sqrt(z: Complex64) -> Complex64 {
+    if z.re == 0.0 && z.im == 0.0 {
+        return Complex64::from_real(0.0);
+    }
+    if !z.is_finite() {
+        return Complex64::new(f64::NAN, f64::NAN);
+    }
+    let radius = z.abs();
+    let real = ((radius + z.re) / 2.0).max(0.0).sqrt();
+    let imag_mag = ((radius - z.re) / 2.0).max(0.0).sqrt();
+    let imag = if z.im < 0.0 { -imag_mag } else { imag_mag };
+    Complex64::new(real, imag)
 }
 
 fn inv_norm_cdf_scalar(p: f64) -> f64 {
@@ -465,5 +522,108 @@ fn inv_norm_cdf_scalar(p: f64) -> f64 {
         let q = (-2.0 * (1.0 - p).ln()).sqrt();
         -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
             / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tensor_result(result: SpecialResult) -> Result<SpecialTensor, String> {
+        result.map_err(|err| format!("{err:?}"))
+    }
+
+    fn real_value(tensor: SpecialTensor) -> Result<f64, String> {
+        match tensor {
+            SpecialTensor::RealScalar(value) => Ok(value),
+            other => Err(format!("expected RealScalar, got {other:?}")),
+        }
+    }
+
+    fn complex_value(tensor: SpecialTensor) -> Result<Complex64, String> {
+        match tensor {
+            SpecialTensor::ComplexScalar(value) => Ok(value),
+            other => Err(format!("expected ComplexScalar, got {other:?}")),
+        }
+    }
+
+    fn scalar(value: f64) -> SpecialTensor {
+        SpecialTensor::RealScalar(value)
+    }
+
+    fn complex_scalar(re: f64, im: f64) -> SpecialTensor {
+        SpecialTensor::ComplexScalar(Complex64::new(re, im))
+    }
+
+    fn assert_complex_close(actual: Complex64, expected: Complex64, tol: f64) {
+        assert!(
+            (actual.re - expected.re).abs() < tol,
+            "real mismatch: actual={} expected={}",
+            actual.re,
+            expected.re
+        );
+        assert!(
+            (actual.im - expected.im).abs() < tol,
+            "imag mismatch: actual={} expected={}",
+            actual.im,
+            expected.im
+        );
+    }
+
+    #[test]
+    fn complex_erfinv_real_axis_reduces_to_scalar_path() -> Result<(), String> {
+        for y in [-0.9, -0.5, 0.0, 0.5, 0.9] {
+            let real_result = real_value(tensor_result(erfinv(&scalar(y), RuntimeMode::Strict))?)?;
+            let complex_result = complex_value(tensor_result(erfinv(
+                &complex_scalar(y, 0.0),
+                RuntimeMode::Strict,
+            ))?)?;
+            assert!((complex_result.re - real_result).abs() < 1.0e-11);
+            assert!(complex_result.im.abs() < 1.0e-11);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn complex_erfcinv_real_axis_reduces_to_scalar_path() -> Result<(), String> {
+        for y in [0.1, 0.5, 1.0, 1.5, 1.9] {
+            let real_result = real_value(tensor_result(erfcinv(&scalar(y), RuntimeMode::Strict))?)?;
+            let complex_result = complex_value(tensor_result(erfcinv(
+                &complex_scalar(y, 0.0),
+                RuntimeMode::Strict,
+            ))?)?;
+            assert!((complex_result.re - real_result).abs() < 1.0e-11);
+            assert!(complex_result.im.abs() < 1.0e-11);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn complex_erfinv_roundtrips_complex_erf_principal_branch() -> Result<(), String> {
+        let z = Complex64::new(0.5, 0.25);
+        let y = complex_value(tensor_result(erf(
+            &SpecialTensor::ComplexScalar(z),
+            RuntimeMode::Strict,
+        ))?)?;
+        let recovered = complex_value(tensor_result(erfinv(
+            &SpecialTensor::ComplexScalar(y),
+            RuntimeMode::Strict,
+        ))?)?;
+        assert_complex_close(recovered, z, 1.0e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_erfcinv_preserves_conjugation_over_vectors() -> Result<(), String> {
+        let y = Complex64::new(0.7, 0.25);
+        let inputs = SpecialTensor::ComplexVec(vec![y, y.conj()]);
+        let outputs = tensor_result(erfcinv(&inputs, RuntimeMode::Strict))?;
+        let values = match outputs {
+            SpecialTensor::ComplexVec(values) => values,
+            other => return Err(format!("expected ComplexVec, got {other:?}")),
+        };
+        assert_eq!(values.len(), 2);
+        assert_complex_close(values[1], values[0].conj(), 1.0e-10);
+        Ok(())
     }
 }
