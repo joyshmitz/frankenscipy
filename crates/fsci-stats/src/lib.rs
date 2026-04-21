@@ -8092,6 +8092,48 @@ pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
     }
 }
 
+/// One-way ANOVA with nan_policy parameter.
+///
+/// Matches `scipy.stats.f_oneway(*groups, nan_policy=...)`.
+///
+/// * `nan_policy` - "propagate" (default), "omit", or "raise"
+pub fn f_oneway_with_nan_policy(
+    groups: &[&[f64]],
+    nan_policy: Option<&str>,
+) -> Result<TtestResult, StatsError> {
+    let nan_policy = validate_nan_policy(nan_policy)?;
+
+    let has_nan = groups.iter().any(|g| g.iter().any(|v| v.is_nan()));
+
+    if has_nan {
+        match nan_policy {
+            "raise" => {
+                return Err(StatsError::InvalidArgument(
+                    "input contains NaN values".to_string(),
+                ));
+            }
+            "propagate" => {
+                return Ok(TtestResult {
+                    statistic: f64::NAN,
+                    pvalue: f64::NAN,
+                    df: f64::NAN,
+                });
+            }
+            "omit" => {
+                let cleaned: Vec<Vec<f64>> = groups
+                    .iter()
+                    .map(|g| g.iter().copied().filter(|v| !v.is_nan()).collect())
+                    .collect();
+                let cleaned_refs: Vec<&[f64]> = cleaned.iter().map(|v| v.as_slice()).collect();
+                return Ok(f_oneway(&cleaned_refs));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(f_oneway(groups))
+}
+
 /// Result for Tukey's HSD test.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TukeyHSDResult {
@@ -25863,6 +25905,33 @@ mod tests {
 
         // With NaN and omit
         let result_omit = kruskal_with_nan_policy(&groups_nan, Some("omit")).unwrap();
+        assert!(result_omit.statistic.is_finite(), "omit -> finite result");
+    }
+
+    #[test]
+    fn test_f_oneway_nan_policy() {
+        let g1 = [1.0, 2.0, 3.0, 4.0];
+        let g2 = [5.0, 6.0, 7.0, 8.0];
+        let g3 = [9.0, 10.0, 11.0, 12.0];
+        let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
+
+        // Without NaN, should match original
+        let result = f_oneway_with_nan_policy(&groups, None).unwrap();
+        let original = f_oneway(&groups);
+        assert_close(result.statistic, original.statistic, 1e-10, "no nan match");
+
+        // With NaN and propagate
+        let g_nan = [1.0, f64::NAN, 3.0, 4.0];
+        let groups_nan: Vec<&[f64]> = vec![&g_nan, &g2, &g3];
+        let result_prop = f_oneway_with_nan_policy(&groups_nan, Some("propagate")).unwrap();
+        assert!(result_prop.statistic.is_nan(), "propagate -> NaN");
+
+        // With NaN and raise
+        let result_raise = f_oneway_with_nan_policy(&groups_nan, Some("raise"));
+        assert!(result_raise.is_err(), "raise -> error");
+
+        // With NaN and omit
+        let result_omit = f_oneway_with_nan_policy(&groups_nan, Some("omit")).unwrap();
         assert!(result_omit.statistic.is_finite(), "omit -> finite result");
     }
 
