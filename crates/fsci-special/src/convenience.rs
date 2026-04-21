@@ -4011,7 +4011,12 @@ pub fn logsigmoid(x: f64) -> f64 {
 ///
 /// Returns NaN for x > 0 (since 1 - exp(x) < 0).
 #[must_use]
-pub fn log1mexp(x: f64) -> f64 {
+pub fn log1mexp(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("log1mexp", x_tensor, mode, |x| Ok(log1mexp_scalar(x)))
+}
+
+#[must_use]
+pub fn log1mexp_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -5629,16 +5634,18 @@ mod tests {
     fn log1mexp_basic() {
         // log1mexp(x) = log(1 - exp(x)) for x < 0
         // log1mexp(-ln(2)) = log(1 - 0.5) = log(0.5) = -ln(2)
-        assert!((log1mexp(-std::f64::consts::LN_2) - (-std::f64::consts::LN_2)).abs() < 1e-14);
+        assert!(
+            (log1mexp_scalar(-std::f64::consts::LN_2) - (-std::f64::consts::LN_2)).abs() < 1e-14
+        );
 
         // For x -> -inf, exp(x) -> 0, so log1mexp(x) -> log(1) = 0
-        assert!((log1mexp(-100.0) - 0.0).abs() < 1e-40);
+        assert!((log1mexp_scalar(-100.0) - 0.0).abs() < 1e-40);
 
         // log1mexp(0) = log(0) = -inf
-        assert!(log1mexp(0.0).is_infinite() && log1mexp(0.0) < 0.0);
+        assert!(log1mexp_scalar(0.0).is_infinite() && log1mexp_scalar(0.0) < 0.0);
 
         // log1mexp(x) is NaN for x > 0
-        assert!(log1mexp(1.0).is_nan());
+        assert!(log1mexp_scalar(1.0).is_nan());
     }
 
     #[test]
@@ -5647,6 +5654,41 @@ mod tests {
         assert!((log1pexp(0.0) - softplus(0.0)).abs() < 1e-14);
         assert!((log1pexp(2.0) - softplus(2.0)).abs() < 1e-14);
         assert!((log1pexp(-2.0) - softplus(-2.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn log1mexp_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = log1mexp(&SpecialTensor::RealScalar(-1.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - log1mexp_scalar(-1.0)).abs() < 1e-14);
+
+        let vector = log1mexp(
+            &SpecialTensor::RealVec(vec![-2.0, -std::f64::consts::LN_2, -1.0e-6]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, -std::f64::consts::LN_2, -1.0e-6].map(log1mexp_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn log1mexp_tensor_dispatch_preserves_domain_edges() -> Result<(), String> {
+        let vector = log1mexp(
+            &SpecialTensor::RealVec(vec![f64::NAN, 0.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!(values[1].is_infinite() && values[1].is_sign_negative());
+        assert!(values[2].is_nan());
+        Ok(())
     }
 
     #[test]
