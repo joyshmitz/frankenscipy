@@ -9870,6 +9870,73 @@ pub fn sigmaclip(data: &[f64], low: f64, high: f64) -> SigmaClipResult {
     }
 }
 
+/// Result for quantile test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuantileTestResult {
+    /// Test statistic (T1 or T2 count).
+    pub statistic: usize,
+    /// Which statistic was used (1 or 2).
+    pub statistic_type: u8,
+    /// p-value for the test.
+    pub pvalue: f64,
+}
+
+/// Nonparametric test for a population quantile.
+///
+/// Tests H0: the p-th population quantile equals q.
+/// Uses binomial distribution for the test.
+///
+/// Matches `scipy.stats.quantile_test(x, q=q, p=p)`.
+///
+/// # Arguments
+/// * `x` - Sample data
+/// * `q` - Hypothesized quantile value
+/// * `p` - Probability level (0 < p < 1), default 0.5 for median
+///
+/// # Returns
+/// `QuantileTestResult` with statistic, statistic_type, and pvalue.
+pub fn quantile_test(x: &[f64], q: f64, p: f64) -> QuantileTestResult {
+    let n = x.len();
+    if n == 0 || !(0.0..1.0).contains(&p) || p == 0.0 {
+        return QuantileTestResult {
+            statistic: 0,
+            statistic_type: 0,
+            pvalue: f64::NAN,
+        };
+    }
+
+    // T1 = count of x <= q
+    let t1 = x.iter().filter(|&&xi| xi <= q).count();
+    // T2 = count of x < q
+    let t2 = x.iter().filter(|&&xi| xi < q).count();
+
+    let binom = Binomial::new(n as u64, p);
+
+    // For two-sided: use the statistic that gives smaller p-value
+    // p_greater: P(Y <= t1) for alternative='greater'
+    // p_less: P(Y >= t2) = 1 - P(Y < t2) = 1 - P(Y <= t2-1) for alternative='less'
+
+    let p_greater = DiscreteDistribution::cdf(&binom, t1 as u64);
+    let p_less = if t2 > 0 {
+        1.0 - DiscreteDistribution::cdf(&binom, (t2 - 1) as u64)
+    } else {
+        1.0
+    };
+
+    // Two-sided: min of doubled p-values, clipped to [0, 1]
+    let (statistic, statistic_type, pvalue) = if p_greater <= p_less {
+        (t1, 1, (2.0 * p_greater).min(1.0))
+    } else {
+        (t2, 2, (2.0 * p_less).min(1.0))
+    };
+
+    QuantileTestResult {
+        statistic,
+        statistic_type,
+        pvalue,
+    }
+}
+
 /// Exact binomial test.
 ///
 /// Tests H0: probability of success = p, given k successes in n trials.
@@ -19841,6 +19908,48 @@ mod tests {
         assert!(siegelslopes(&[1.0], &[1.0]).slope.is_nan());
         // Different lengths
         assert!(siegelslopes(&[1.0, 2.0], &[1.0]).slope.is_nan());
+    }
+
+    // ── quantile_test tests ──────────────────────────────────────────
+
+    #[test]
+    fn quantile_test_median_exact() {
+        // Data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        // Median is 5.5, so testing q=5 should not reject
+        let data: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let result = quantile_test(&data, 5.0, 0.5);
+        // T1 = 5 (values <= 5), binomial(10, 0.5)
+        assert_eq!(result.statistic, 5);
+        assert_eq!(result.statistic_type, 1);
+        assert!(result.pvalue > 0.9, "pvalue should be high: {}", result.pvalue);
+    }
+
+    #[test]
+    fn quantile_test_median_reject() {
+        // Test if median is 1 (should reject with low p-value)
+        let data: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let result = quantile_test(&data, 1.0, 0.5);
+        // T1 = 1 (only value 1 is <= 1)
+        assert_eq!(result.statistic, 1);
+        assert!(result.pvalue < 0.05, "should reject: {}", result.pvalue);
+    }
+
+    #[test]
+    fn quantile_test_25th_percentile() {
+        // Test 25th percentile
+        let data: Vec<f64> = (1..=100).map(|i| i as f64).collect();
+        let result = quantile_test(&data, 25.0, 0.25);
+        // Should be close to expected
+        assert!(result.pvalue > 0.5, "25th percentile at 25: {}", result.pvalue);
+    }
+
+    #[test]
+    fn quantile_test_edge_cases() {
+        // Empty data
+        assert!(quantile_test(&[], 5.0, 0.5).pvalue.is_nan());
+        // Invalid p
+        assert!(quantile_test(&[1.0, 2.0], 1.5, 0.0).pvalue.is_nan());
+        assert!(quantile_test(&[1.0, 2.0], 1.5, 1.5).pvalue.is_nan());
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
