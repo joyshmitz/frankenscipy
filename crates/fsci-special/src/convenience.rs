@@ -2042,7 +2042,11 @@ pub fn erfcinv_conv(y: f64) -> f64 {
 /// Scaled complementary error function: exp(x²) * erfc(x).
 ///
 /// Avoids overflow for large x. Matches `scipy.special.erfcx`.
-pub fn erfcx(x: f64) -> f64 {
+pub fn erfcx(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("erfcx", x_tensor, mode, |x| Ok(erfcx_scalar(x)))
+}
+
+pub fn erfcx_scalar(x: f64) -> f64 {
     if x < 0.0 {
         // For negative x, exp(x²) * erfc(x) = exp(x²) * (2 - erfc(-x))
         // This can overflow, but erfc(-x) is near 2 and exp(x²) grows
@@ -2077,7 +2081,7 @@ fn erfi_impl(x: f64) -> f64 {
         2.0 * x / std::f64::consts::PI.sqrt() * sum
     } else {
         // For large |x|, erfi grows like exp(x²)/(x√π)
-        x.signum() * erfcx(-x.abs()) * (x * x).exp()
+        x.signum() * erfcx_scalar(-x.abs()) * (x * x).exp()
             - x.signum() / (x.abs() * std::f64::consts::PI.sqrt())
     }
 }
@@ -5267,6 +5271,38 @@ mod tests {
             .map_err(|err| err.to_string())?;
         let value = expect_real_scalar(result)?;
         let expected = 1.0 + 0.5e-8 + 1.0e-16 / 6.0 + 1.0e-24 / 24.0;
+        assert!((value - expected).abs() < 1e-16);
+        Ok(())
+    }
+
+    #[test]
+    fn erfcx_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = erfcx(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - erfcx_scalar(1.0)).abs() < 1e-14);
+
+        let vector = erfcx(
+            &SpecialTensor::RealVec(vec![-1.0, 0.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-1.0, 0.0, 1.0].map(erfcx_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn erfcx_large_x_uses_stable_asymptotic_path() -> Result<(), String> {
+        let result = erfcx(&SpecialTensor::RealScalar(30.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let value = expect_real_scalar(result)?;
+        let expected = erfcx_scalar(30.0);
+        assert!(value.is_finite());
         assert!((value - expected).abs() < 1e-16);
         Ok(())
     }
