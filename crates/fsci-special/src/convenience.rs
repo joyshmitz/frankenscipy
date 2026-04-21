@@ -682,7 +682,7 @@ fn fresnel_mid(x: f64) -> (f64, f64) {
 /// Related to the imaginary error function: D(x) = √π/2 * exp(-x²) * erfi(x)
 ///
 /// Uses Rybicki's algorithm with a Gaussian kernel series for efficiency.
-pub fn dawsn(x: f64) -> f64 {
+fn dawsn_impl(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -2211,9 +2211,14 @@ pub fn log_ndtr(x: f64) -> f64 {
 /// Compute the Dawson integral approximation for large arguments.
 ///
 /// For small x, Dawson(x) ≈ x - 2x³/3 + ...
+///
 /// Matches `scipy.special.dawsn` (scalar convenience).
+pub fn dawsn(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("dawsn", x_tensor, mode, |x| Ok(dawsn_scalar(x)))
+}
+
 pub fn dawsn_scalar(x: f64) -> f64 {
-    dawsn(x)
+    dawsn_impl(x)
 }
 
 /// Compute the Struve function H_v(x) (scalar convenience).
@@ -5178,6 +5183,39 @@ mod tests {
         let value = expect_real_scalar(result)?;
         let expected = 1.0 + 0.5e-8 + 1.0e-16 / 6.0 + 1.0e-24 / 24.0;
         assert!((value - expected).abs() < 1e-16);
+        Ok(())
+    }
+
+    #[test]
+    fn dawsn_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = dawsn(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - dawsn_scalar(1.0)).abs() < 1e-14);
+
+        let vector = dawsn(
+            &SpecialTensor::RealVec(vec![-1.0, 0.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-1.0, 0.0, 1.0].map(dawsn_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn dawsn_tensor_dispatch_preserves_odd_symmetry() -> Result<(), String> {
+        let positive = dawsn(&SpecialTensor::RealScalar(2.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let negative = dawsn(&SpecialTensor::RealScalar(-2.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let positive_value = expect_real_scalar(positive)?;
+        let negative_value = expect_real_scalar(negative)?;
+        assert!((positive_value + negative_value).abs() < 1e-12);
         Ok(())
     }
 
