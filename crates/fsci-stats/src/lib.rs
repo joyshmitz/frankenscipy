@@ -9065,6 +9065,106 @@ pub fn sem(data: &[f64]) -> f64 {
     (var / nf).sqrt()
 }
 
+/// Credible interval result (statistic with low/high bounds).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CredibleInterval {
+    /// Point estimate.
+    pub statistic: f64,
+    /// Lower bound of credible interval.
+    pub low: f64,
+    /// Upper bound of credible interval.
+    pub high: f64,
+}
+
+/// Result of Bayesian MVS estimation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BayesMvsResult {
+    /// Mean estimate with credible interval.
+    pub mean: CredibleInterval,
+    /// Variance estimate with credible interval.
+    pub variance: CredibleInterval,
+    /// Standard deviation estimate with credible interval.
+    pub std: CredibleInterval,
+}
+
+/// Bayesian credible intervals for mean, variance, and std.
+///
+/// Uses Jeffrey's prior. For mean, uses t-distribution.
+/// For variance, uses chi-squared based intervals.
+///
+/// Matches `scipy.stats.bayes_mvs(data, alpha)`.
+///
+/// # Arguments
+/// * `data` - Input data (requires at least 2 points)
+/// * `alpha` - Credible level (e.g., 0.95 for 95% interval)
+///
+/// # Returns
+/// `BayesMvsResult` with mean, variance, and std estimates.
+pub fn bayes_mvs(data: &[f64], alpha: f64) -> BayesMvsResult {
+    let n = data.len();
+    if n < 2 || alpha <= 0.0 || alpha >= 1.0 {
+        return BayesMvsResult {
+            mean: CredibleInterval {
+                statistic: f64::NAN,
+                low: f64::NAN,
+                high: f64::NAN,
+            },
+            variance: CredibleInterval {
+                statistic: f64::NAN,
+                low: f64::NAN,
+                high: f64::NAN,
+            },
+            std: CredibleInterval {
+                statistic: f64::NAN,
+                low: f64::NAN,
+                high: f64::NAN,
+            },
+        };
+    }
+
+    let nf = n as f64;
+    let xbar = data.iter().sum::<f64>() / nf;
+    let var_biased: f64 = data.iter().map(|&x| (x - xbar).powi(2)).sum::<f64>() / nf;
+
+    // For mean: t-distribution with df = n-1
+    let df = nf - 1.0;
+    let se = (var_biased / df).sqrt(); // sqrt(C / (n-1))
+    let tdist = StudentT::new(df);
+    let t_crit = tdist.ppf(1.0 - (1.0 - alpha) / 2.0);
+
+    let mean_est = CredibleInterval {
+        statistic: xbar,
+        low: xbar - t_crit * se,
+        high: xbar + t_crit * se,
+    };
+
+    // For variance: use chi-squared based interval
+    // Chi2(df) = Gamma(df/2, 2)
+    // (n-1)*s^2 / chi2(alpha/2, n-1) to (n-1)*s^2 / chi2(1-alpha/2, n-1)
+    let s2 = var_biased * nf / df; // unbiased variance
+    let chi2_dist = GammaDist::new(df / 2.0, 2.0);
+    let chi2_low = chi2_dist.ppf((1.0 - alpha) / 2.0);
+    let chi2_high = chi2_dist.ppf(1.0 - (1.0 - alpha) / 2.0);
+
+    let var_est = CredibleInterval {
+        statistic: s2,
+        low: df * s2 / chi2_high,
+        high: df * s2 / chi2_low,
+    };
+
+    let std_est = CredibleInterval {
+        statistic: s2.sqrt(),
+        low: (df * s2 / chi2_high).sqrt(),
+        high: (df * s2 / chi2_low).sqrt(),
+    };
+
+    BayesMvsResult {
+        mean: mean_est,
+        variance: var_est,
+        std: std_est,
+    }
+}
+
 /// Interquartile range (IQR = Q3 - Q1).
 ///
 /// Matches `scipy.stats.iqr(a)`.
@@ -20236,6 +20336,59 @@ mod tests {
     fn tukey_hsd_edge_cases() {
         // Less than 2 groups
         assert!(tukey_hsd(&[&[1.0, 2.0]]).statistic.is_empty());
+    }
+
+    // ── bayes_mvs tests ──────────────────────────────────────────────
+
+    #[test]
+    fn bayes_mvs_basic() {
+        let data = [6.0, 9.0, 12.0, 7.0, 8.0, 8.0, 13.0];
+        let result = bayes_mvs(&data, 0.90);
+
+        // Mean should be 9
+        assert!(
+            (result.mean.statistic - 9.0).abs() < 0.01,
+            "mean: {}",
+            result.mean.statistic
+        );
+        // Interval should contain 9
+        assert!(result.mean.low < 9.0 && result.mean.high > 9.0);
+    }
+
+    #[test]
+    fn bayes_mvs_interval_coverage() {
+        // With 95% credible interval, true mean should be in interval
+        let data: Vec<f64> = (1..=20).map(|i| i as f64).collect();
+        let true_mean = 10.5;
+        let result = bayes_mvs(&data, 0.95);
+
+        assert!(
+            result.mean.low <= true_mean && result.mean.high >= true_mean,
+            "95% interval [{}, {}] should contain {}",
+            result.mean.low,
+            result.mean.high,
+            true_mean
+        );
+    }
+
+    #[test]
+    fn bayes_mvs_variance_positive() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = bayes_mvs(&data, 0.90);
+
+        assert!(result.variance.statistic > 0.0);
+        assert!(result.variance.low > 0.0);
+        assert!(result.variance.high > result.variance.low);
+        assert!(result.std.statistic > 0.0);
+    }
+
+    #[test]
+    fn bayes_mvs_edge_cases() {
+        // Too few data points
+        assert!(bayes_mvs(&[1.0], 0.95).mean.statistic.is_nan());
+        // Invalid alpha
+        assert!(bayes_mvs(&[1.0, 2.0], 0.0).mean.statistic.is_nan());
+        assert!(bayes_mvs(&[1.0, 2.0], 1.0).mean.statistic.is_nan());
     }
 
     // ── quantile_test tests ──────────────────────────────────────────
