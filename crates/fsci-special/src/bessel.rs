@@ -269,19 +269,13 @@ pub fn kv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialRes
 }
 
 /// Hankel function of the first kind: H1_v(z) = J_v(z) + i·Y_v(z).
-///
-/// Returns the real part (imaginary part requires complex output path).
 pub fn hankel1(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    // H1_v = J_v + i*Y_v; return J_v as the real part
-    map_real_binary("hankel1", v, z, mode, |order, x| Ok(jv_scalar(order, x)))
+    hankel_dispatch("hankel1", v, z, mode, HankelKind::H1)
 }
 
 /// Hankel function of the second kind: H2_v(z) = J_v(z) - i·Y_v(z).
-///
-/// Returns the real part (imaginary part requires complex output path).
 pub fn hankel2(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    // H2_v = J_v - i*Y_v; return J_v as the real part
-    map_real_binary("hankel2", v, z, mode, |order, x| Ok(jv_scalar(order, x)))
+    hankel_dispatch("hankel2", v, z, mode, HankelKind::H2)
 }
 
 /// Wright's generalized Bessel function.
@@ -457,6 +451,12 @@ enum DerivativeRule {
     Alternating,
     Positive,
     NegativeByOrder,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HankelKind {
+    H1,
+    H2,
 }
 
 fn bessel_derivative_sum<F>(
@@ -2237,11 +2237,7 @@ fn complex_iv_scalar(v: f64, z: Complex64) -> Complex64 {
 
 /// Complex Y_v(z) for real order v.
 /// Y_v = (J_v cos(vπ) - J_{-v}) / sin(vπ) for non-integer v.
-fn complex_yv_scalar(
-    v: f64,
-    z: Complex64,
-    _mode: RuntimeMode,
-) -> Result<Complex64, SpecialError> {
+fn complex_yv_scalar(v: f64, z: Complex64, _mode: RuntimeMode) -> Result<Complex64, SpecialError> {
     if v.is_nan() || !z.is_finite() {
         return Ok(Complex64::new(f64::NAN, f64::NAN));
     }
@@ -2332,11 +2328,7 @@ fn complex_y1_series(z: Complex64) -> Complex64 {
 
 /// Complex K_v(z) for real order v.
 /// K_v = π/2 * (I_{-v} - I_v) / sin(vπ) for non-integer v.
-fn complex_kv_scalar(
-    v: f64,
-    z: Complex64,
-    _mode: RuntimeMode,
-) -> Result<Complex64, SpecialError> {
+fn complex_kv_scalar(v: f64, z: Complex64, _mode: RuntimeMode) -> Result<Complex64, SpecialError> {
     if v.is_nan() || !z.is_finite() {
         return Ok(Complex64::new(f64::NAN, f64::NAN));
     }
@@ -2387,6 +2379,127 @@ fn complex_kn_integer(n: u32, z: Complex64) -> Complex64 {
         k_curr = next;
     }
     k_curr
+}
+
+fn hankel_dispatch(
+    function: &'static str,
+    v: &SpecialTensor,
+    z: &SpecialTensor,
+    mode: RuntimeMode,
+    kind: HankelKind,
+) -> SpecialResult {
+    match (v, z) {
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealScalar(x)) => {
+            hankel_real_scalar(function, *order, *x, mode, kind).map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => orders
+            .iter()
+            .map(|&order| hankel_real_scalar(function, order, *x, mode, kind))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => xs
+            .iter()
+            .map(|&x| hankel_real_scalar(function, *order, x, mode, kind))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealVec(xs)) => {
+            if orders.len() != xs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(xs.iter())
+                .map(|(&order, &x)| hankel_real_scalar(function, order, x, mode, kind))
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexScalar(z_val)) => {
+            hankel_complex_scalar(function, *order, *z_val, mode, kind)
+                .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexVec(zs)) => zs
+            .iter()
+            .map(|&z_val| hankel_complex_scalar(function, *order, z_val, mode, kind))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexScalar(z_val)) => orders
+            .iter()
+            .map(|&order| hankel_complex_scalar(function, order, *z_val, mode, kind))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexVec(zs)) => {
+            if orders.len() != zs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(zs.iter())
+                .map(|(&order, &z_val)| hankel_complex_scalar(function, order, z_val, mode, kind))
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexScalar(_), _) | (SpecialTensor::ComplexVec(_), _) => {
+            not_yet_implemented(function, mode, "complex-valued order not supported")
+        }
+        (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
+}
+
+fn hankel_real_scalar(
+    function: &'static str,
+    order: f64,
+    x: f64,
+    mode: RuntimeMode,
+    kind: HankelKind,
+) -> Result<Complex64, SpecialError> {
+    let j = jv_scalar(order, x);
+    let y = yv_scalar(order, x, mode)?;
+    let imag = match kind {
+        HankelKind::H1 => y,
+        HankelKind::H2 => -y,
+    };
+    if !j.is_finite() || !imag.is_finite() {
+        record_special_trace(
+            function,
+            mode,
+            "non_finite_output",
+            format!("order={order},x={x}"),
+            "returned_non_finite",
+            format!("real={j},imag={imag}"),
+            false,
+        );
+    }
+    Ok(Complex64::new(j, imag))
+}
+
+fn hankel_complex_scalar(
+    function: &'static str,
+    order: f64,
+    z: Complex64,
+    mode: RuntimeMode,
+    kind: HankelKind,
+) -> Result<Complex64, SpecialError> {
+    let j = bessel_complex_scalar(function, order, z, mode, BesselKind::Jv)?;
+    let y = bessel_complex_scalar(function, order, z, mode, BesselKind::Yv)?;
+    Ok(match kind {
+        HankelKind::H1 => j + Complex64::new(-y.im, y.re),
+        HankelKind::H2 => j + Complex64::new(y.im, -y.re),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -2686,6 +2799,72 @@ mod tests {
     }
 
     #[test]
+    fn hankel_tensor_interface_returns_full_complex_parts() -> Result<(), String> {
+        let x = scalar(2.0);
+        let h1 = complex_value(tensor_result(hankel1(
+            &scalar(0.0),
+            &x,
+            RuntimeMode::Strict,
+        ))?)?;
+        let h2 = complex_value(tensor_result(hankel2(
+            &scalar(0.0),
+            &x,
+            RuntimeMode::Strict,
+        ))?)?;
+        let j = real_value(tensor_result(jv(&scalar(0.0), &x, RuntimeMode::Strict))?)?;
+        let y = real_value(tensor_result(yv(&scalar(0.0), &x, RuntimeMode::Strict))?)?;
+
+        assert!((h1.re - j).abs() < 1e-12);
+        assert!((h1.im - y).abs() < 1e-12);
+        assert!((h2.re - j).abs() < 1e-12);
+        assert!((h2.im + y).abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_hankel_tensor_interface_matches_jv_plus_minus_i_yv() -> Result<(), String> {
+        let z = complex_scalar(2.0, 1.0);
+        let j = complex_value(tensor_result(jv(&scalar(1.0), &z, RuntimeMode::Strict))?)?;
+        let y = complex_value(tensor_result(yv(&scalar(1.0), &z, RuntimeMode::Strict))?)?;
+        let h1 = complex_value(tensor_result(hankel1(
+            &scalar(1.0),
+            &z,
+            RuntimeMode::Strict,
+        ))?)?;
+        let h2 = complex_value(tensor_result(hankel2(
+            &scalar(1.0),
+            &z,
+            RuntimeMode::Strict,
+        ))?)?;
+
+        let iy = Complex64::new(-y.im, y.re);
+        assert!((h1.re - (j + iy).re).abs() < 1e-12);
+        assert!((h1.im - (j + iy).im).abs() < 1e-12);
+
+        let minus_iy = Complex64::new(y.im, -y.re);
+        assert!((h2.re - (j + minus_iy).re).abs() < 1e-12);
+        assert!((h2.im - (j + minus_iy).im).abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn hankel_broadcasts_real_vector_inputs_to_complex_vec() -> Result<(), String> {
+        let xs = SpecialTensor::RealVec(vec![1.0, 2.0]);
+        let result = tensor_result(hankel1(&scalar(0.0), &xs, RuntimeMode::Strict))?;
+        match result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                for value in values {
+                    assert!(value.re.is_finite());
+                    assert!(value.im.is_finite());
+                }
+            }
+            other => return Err(format!("expected ComplexVec, got {other:?}")),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn wright_bessel_zero_matches_rgamma_boundary() -> Result<(), String> {
         let result = real_value(tensor_result(wright_bessel(
             &scalar(0.0),
@@ -2886,7 +3065,8 @@ mod tests {
         let z_complex = complex_scalar(2.0, 0.0);
 
         let real_result = real_value(tensor_result(jv(&v, &z_real, RuntimeMode::Strict))?)?;
-        let complex_result = complex_value(tensor_result(jv(&v, &z_complex, RuntimeMode::Strict))?)?;
+        let complex_result =
+            complex_value(tensor_result(jv(&v, &z_complex, RuntimeMode::Strict))?)?;
 
         assert!((complex_result.re - real_result).abs() < 1e-10);
         assert!(complex_result.im.abs() < 1e-10);
@@ -2910,7 +3090,8 @@ mod tests {
         let z_complex = complex_scalar(2.0, 0.0);
 
         let real_result = real_value(tensor_result(iv(&v, &z_real, RuntimeMode::Strict))?)?;
-        let complex_result = complex_value(tensor_result(iv(&v, &z_complex, RuntimeMode::Strict))?)?;
+        let complex_result =
+            complex_value(tensor_result(iv(&v, &z_complex, RuntimeMode::Strict))?)?;
 
         assert!((complex_result.re - real_result).abs() < 1e-10);
         assert!(complex_result.im.abs() < 1e-10);
