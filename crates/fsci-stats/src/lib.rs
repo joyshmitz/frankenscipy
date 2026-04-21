@@ -9090,6 +9090,51 @@ pub fn ranksums(x: &[f64], y: &[f64]) -> TtestResult {
     }
 }
 
+/// Wilcoxon rank-sum test with alternative hypothesis.
+///
+/// Matches `scipy.stats.ranksums(x, y, alternative=...)`.
+///
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn ranksums_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResult {
+    if x.len() < 2 || y.len() < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let n1 = x.len() as f64;
+    let n2 = y.len() as f64;
+
+    let mut combined: Vec<f64> = Vec::with_capacity(x.len() + y.len());
+    combined.extend_from_slice(x);
+    combined.extend_from_slice(y);
+    let ranks = rankdata_average(&combined);
+
+    let rank_sum_x: f64 = ranks[..x.len()].iter().sum();
+
+    let expected = n1 * (n1 + n2 + 1.0) / 2.0;
+    let sd = (n1 * n2 * (n1 + n2 + 1.0) / 12.0).sqrt();
+
+    if sd == 0.0 {
+        return TtestResult {
+            statistic: 0.0,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+
+    let z = (rank_sum_x - expected) / sd;
+    let pvalue = normal_alternative_pvalue(z, alternative);
+
+    TtestResult {
+        statistic: z,
+        pvalue,
+        df: f64::NAN,
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Correlation and Regression
 // ══════════════════════════════════════════════════════════════════════
@@ -25128,6 +25173,26 @@ mod tests {
         // 80% CI should be (1.0, 9.0) for U(0,10)
         assert_close(lower, 1.0, 1e-10, "U(0,10) 80% lower");
         assert_close(upper, 9.0, 1e-10, "U(0,10) 80% upper");
+    }
+
+    #[test]
+    fn test_ranksums_alternative() {
+        // Sample x has higher values than y
+        let x = [6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let y = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+
+        let two_sided = ranksums_alternative(&x, &y, "two-sided");
+        let original = ranksums(&x, &y);
+        assert_close(two_sided.statistic, original.statistic, 1e-10, "stat match");
+        assert_close(two_sided.pvalue, original.pvalue, 1e-10, "two-sided pvalue");
+
+        // x has higher ranks, so "greater" should give smaller p-value
+        let greater = ranksums_alternative(&x, &y, "greater");
+        assert!(greater.pvalue < two_sided.pvalue, "greater p < two-sided p");
+        assert_close(greater.pvalue, two_sided.pvalue / 2.0, 1e-10, "greater ~half");
+
+        let less = ranksums_alternative(&x, &y, "less");
+        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
     }
 
     #[test]
