@@ -8962,6 +8962,54 @@ pub fn percentile(data: &[f64], q: f64) -> f64 {
     quantile_sorted(&sorted, q_frac)
 }
 
+/// Compute the percentile rank of a score relative to a list of scores.
+///
+/// Returns the percentage of values in `data` that are less than or equal to
+/// the given `score`, depending on the `kind` parameter.
+///
+/// # Arguments
+/// * `data` - Input data array
+/// * `score` - Score to compute percentile rank for
+/// * `kind` - Method of calculation:
+///   - `"rank"` (default): Average percentage ranking of score
+///   - `"weak"`: Percentage of values < score
+///   - `"strict"`: Percentage of values <= score
+///   - `"mean"`: Average of weak and strict
+///
+/// Matches `scipy.stats.percentileofscore(a, score, kind)`.
+pub fn percentileofscore(data: &[f64], score: f64, kind: Option<&str>) -> f64 {
+    if data.is_empty() {
+        return f64::NAN;
+    }
+    let kind = kind.unwrap_or("rank");
+    let n = data.len() as f64;
+
+    let n_less = data.iter().filter(|&&x| x < score).count() as f64;
+    let n_equal = data.iter().filter(|&&x| (x - score).abs() < f64::EPSILON).count() as f64;
+
+    match kind {
+        "rank" => {
+            // (n_less + 0.5 * n_equal) / n * 100
+            100.0 * (n_less + 0.5 * n_equal) / n
+        }
+        "weak" => {
+            // Percentage of values < score
+            100.0 * n_less / n
+        }
+        "strict" => {
+            // Percentage of values <= score
+            100.0 * (n_less + n_equal) / n
+        }
+        "mean" => {
+            // Average of weak and strict
+            let weak = n_less / n;
+            let strict = (n_less + n_equal) / n;
+            100.0 * (weak + strict) / 2.0
+        }
+        _ => f64::NAN,
+    }
+}
+
 /// Compute scores at one or more percentiles of the input sequence.
 ///
 /// Matches the implemented SciPy `scoreatpercentile(a, per, limit=..., interpolation_method=...)`
@@ -18199,6 +18247,59 @@ mod tests {
     #[test]
     fn gstd_single_element_returns_nan() {
         assert!(gstd(&[5.0]).is_nan(), "need at least 2 elements for std");
+    }
+
+    // ── percentileofscore tests ──────────────────────────────────────
+
+    #[test]
+    fn percentileofscore_rank() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        // Score 3 is at position 3 out of 4, with rank method: (2 + 0.5*1)/4 * 100 = 62.5
+        let result = percentileofscore(&data, 3.0, None);
+        assert!((result - 62.5).abs() < 1e-10, "rank method: {}", result);
+    }
+
+    #[test]
+    fn percentileofscore_weak() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        // Score 3: 2 values less than 3, so 50%
+        let result = percentileofscore(&data, 3.0, Some("weak"));
+        assert!((result - 50.0).abs() < 1e-10, "weak method: {}", result);
+    }
+
+    #[test]
+    fn percentileofscore_strict() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        // Score 3: 3 values <= 3, so 75%
+        let result = percentileofscore(&data, 3.0, Some("strict"));
+        assert!((result - 75.0).abs() < 1e-10, "strict method: {}", result);
+    }
+
+    #[test]
+    fn percentileofscore_mean() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        // Average of weak (50) and strict (75) = 62.5
+        let result = percentileofscore(&data, 3.0, Some("mean"));
+        assert!((result - 62.5).abs() < 1e-10, "mean method: {}", result);
+    }
+
+    #[test]
+    fn percentileofscore_empty() {
+        assert!(percentileofscore(&[], 5.0, None).is_nan());
+    }
+
+    #[test]
+    fn percentileofscore_below_all() {
+        let data = vec![10.0, 20.0, 30.0];
+        let result = percentileofscore(&data, 5.0, Some("strict"));
+        assert!((result - 0.0).abs() < 1e-10, "below all: {}", result);
+    }
+
+    #[test]
+    fn percentileofscore_above_all() {
+        let data = vec![10.0, 20.0, 30.0];
+        let result = percentileofscore(&data, 50.0, Some("strict"));
+        assert!((result - 100.0).abs() < 1e-10, "above all: {}", result);
     }
 
     // ── percentile tests ─────────────────────────────────────────────
