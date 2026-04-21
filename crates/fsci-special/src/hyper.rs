@@ -960,17 +960,38 @@ mod tests {
         SpecialTensor::ComplexVec(values)
     }
 
-    fn get_scalar(r: &SpecialResult) -> f64 {
-        match r.as_ref().expect("should succeed") {
-            SpecialTensor::RealScalar(v) => *v,
-            _ => panic!("expected RealScalar"),
+    fn get_scalar(r: &SpecialResult) -> Option<f64> {
+        match r.as_ref() {
+            Ok(SpecialTensor::RealScalar(v)) => Some(*v),
+            _ => None,
         }
     }
 
-    fn get_complex_scalar(r: &SpecialResult) -> Complex64 {
-        match r.as_ref().expect("should succeed") {
-            SpecialTensor::ComplexScalar(v) => *v,
-            _ => panic!("expected ComplexScalar"),
+    fn get_complex_scalar(r: &SpecialResult) -> Option<Complex64> {
+        match r.as_ref() {
+            Ok(SpecialTensor::ComplexScalar(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    fn get_real_vec(r: &SpecialResult) -> Option<&[f64]> {
+        match r.as_ref() {
+            Ok(SpecialTensor::RealVec(values)) => Some(values.as_slice()),
+            _ => None,
+        }
+    }
+
+    fn get_complex_vec(r: &SpecialResult) -> Option<&[Complex64]> {
+        match r.as_ref() {
+            Ok(SpecialTensor::ComplexVec(values)) => Some(values.as_slice()),
+            _ => None,
+        }
+    }
+
+    fn error_kind(r: &SpecialResult) -> Option<SpecialErrorKind> {
+        match r {
+            Err(err) => Some(err.kind),
+            Ok(_) => None,
         }
     }
 
@@ -996,7 +1017,7 @@ mod tests {
             RuntimeMode::Strict,
         );
         assert_complex_close(
-            get_complex_scalar(&result),
+            get_complex_scalar(&result).unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
             Complex64::from_real(1.0),
             1.0e-14,
         );
@@ -1007,8 +1028,8 @@ mod tests {
         let complex_result = hyp0f1(&complex(1.5, 0.0), &scalar(0.25), RuntimeMode::Strict);
         let real_result = hyp0f1(&scalar(1.5), &scalar(0.25), RuntimeMode::Strict);
         assert_complex_close(
-            get_complex_scalar(&complex_result),
-            Complex64::from_real(get_scalar(&real_result)),
+            get_complex_scalar(&complex_result).unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
+            Complex64::from_real(get_scalar(&real_result).unwrap_or(f64::NAN)),
             1.0e-12,
         );
     }
@@ -1028,17 +1049,17 @@ mod tests {
             RuntimeMode::Strict,
         );
         assert_complex_close(
-            get_complex_scalar(&rhs),
-            get_complex_scalar(&lhs).conj(),
+            get_complex_scalar(&rhs).unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
+            get_complex_scalar(&lhs)
+                .map_or(Complex64::new(f64::NAN, f64::NAN), |value| value.conj()),
             1.0e-12,
         );
     }
 
     #[test]
     fn hyp0f1_complex_parameter_pole_errors_hardened() {
-        let err = hyp0f1(&complex(0.0, 0.0), &scalar(1.0), RuntimeMode::Hardened)
-            .expect_err("complex pole should error in hardened mode");
-        assert_eq!(err.kind, SpecialErrorKind::PoleInput);
+        let result = hyp0f1(&complex(0.0, 0.0), &scalar(1.0), RuntimeMode::Hardened);
+        assert_eq!(error_kind(&result), Some(SpecialErrorKind::PoleInput));
     }
 
     // ── hyp1f1 tests ────────────────────────────────────────────────
@@ -1051,7 +1072,7 @@ mod tests {
             &scalar(0.0),
             RuntimeMode::Strict,
         );
-        assert!((get_scalar(&r) - 1.0).abs() < 1e-14);
+        assert!((get_scalar(&r).unwrap_or(f64::NAN) - 1.0).abs() < 1e-14);
     }
 
     #[test]
@@ -1062,7 +1083,7 @@ mod tests {
             &scalar(5.0),
             RuntimeMode::Strict,
         );
-        assert!((get_scalar(&r) - 1.0).abs() < 1e-14);
+        assert!((get_scalar(&r).unwrap_or(f64::NAN) - 1.0).abs() < 1e-14);
     }
 
     #[test]
@@ -1072,9 +1093,9 @@ mod tests {
         let r = hyp1f1(&scalar(3.0), &scalar(3.0), &scalar(z), RuntimeMode::Strict);
         let expected = z.exp();
         assert!(
-            (get_scalar(&r) - expected).abs() < 1e-10,
+            (get_scalar(&r).unwrap_or(f64::NAN) - expected).abs() < 1e-10,
             "1F1(a;a;z) should be e^z: got {} expected {expected}",
-            get_scalar(&r)
+            get_scalar(&r).unwrap_or(f64::NAN)
         );
     }
 
@@ -1088,7 +1109,7 @@ mod tests {
             RuntimeMode::Strict,
         );
         assert!(
-            (get_scalar(&r) - std::f64::consts::E).abs() < 1e-10,
+            (get_scalar(&r).unwrap_or(f64::NAN) - std::f64::consts::E).abs() < 1e-10,
             "1F1(1;1;1) should be e"
         );
     }
@@ -1104,7 +1125,7 @@ mod tests {
             &scalar(-1.0),
             RuntimeMode::Strict,
         );
-        let val = get_scalar(&r);
+        let val = get_scalar(&r).unwrap_or(f64::NAN);
         assert!(val.is_finite(), "hyp1f1 should be finite for negative z");
         assert!(val > 0.0, "hyp1f1(1,2,-1) should be positive");
     }
@@ -1118,7 +1139,7 @@ mod tests {
             &scalar(-30.0),
             RuntimeMode::Strict,
         );
-        let val = get_scalar(&r);
+        let val = get_scalar(&r).unwrap_or(f64::NAN);
         assert!(val.is_finite(), "should handle large negative z");
     }
 
@@ -1130,7 +1151,7 @@ mod tests {
             &scalar(1.0),
             RuntimeMode::Strict,
         );
-        let val = get_scalar(&r);
+        let val = get_scalar(&r).unwrap_or(f64::NAN);
         assert!(val.is_nan(), "b=0 should return NaN in strict mode");
     }
 
@@ -1149,15 +1170,11 @@ mod tests {
     fn hyp1f1_vectorized() {
         let z_vec = SpecialTensor::RealVec(vec![0.0, 1.0, 2.0]);
         let r = hyp1f1(&scalar(1.0), &scalar(1.0), &z_vec, RuntimeMode::Strict);
-        match r.expect("should succeed") {
-            SpecialTensor::RealVec(v) => {
-                assert_eq!(v.len(), 3);
-                assert!((v[0] - 1.0).abs() < 1e-14); // e^0
-                assert!((v[1] - std::f64::consts::E).abs() < 1e-10); // e^1
-                assert!((v[2] - std::f64::consts::E.powi(2)).abs() < 1e-10); // e^2
-            }
-            _ => panic!("expected RealVec"),
-        }
+        let values = get_real_vec(&r).unwrap_or(&[]);
+        assert_eq!(values.len(), 3);
+        assert!((values[0] - 1.0).abs() < 1e-14); // e^0
+        assert!((values[1] - std::f64::consts::E).abs() < 1e-10); // e^1
+        assert!((values[2] - std::f64::consts::E.powi(2)).abs() < 1e-10); // e^2
     }
 
     #[test]
@@ -1169,7 +1186,11 @@ mod tests {
             &complex(z.re, z.im),
             RuntimeMode::Strict,
         );
-        assert_complex_close(get_complex_scalar(&r), z.exp(), 1.0e-10);
+        assert_complex_close(
+            get_complex_scalar(&r).unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
+            z.exp(),
+            1.0e-10,
+        );
     }
 
     #[test]
@@ -1177,13 +1198,9 @@ mod tests {
         let z = Complex64::new(0.3, 0.4);
         let input = SpecialTensor::ComplexVec(vec![z, z.conj()]);
         let r = hyp1f1(&scalar(1.0), &scalar(1.0), &input, RuntimeMode::Strict);
-        match r.expect("complex vector hyp1f1") {
-            SpecialTensor::ComplexVec(values) => {
-                assert_eq!(values.len(), 2);
-                assert_complex_close(values[1], values[0].conj(), 1.0e-10);
-            }
-            _ => panic!("expected ComplexVec"),
-        }
+        let values = get_complex_vec(&r).unwrap_or(&[]);
+        assert_eq!(values.len(), 2);
+        assert_complex_close(values[1], values[0].conj(), 1.0e-10);
     }
 
     #[test]
@@ -1196,7 +1213,11 @@ mod tests {
             &complex(z.re, z.im),
             RuntimeMode::Strict,
         );
-        assert_complex_close(get_complex_scalar(&r), z.exp(), 1.0e-10);
+        assert_complex_close(
+            get_complex_scalar(&r).unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
+            z.exp(),
+            1.0e-10,
+        );
     }
 
     #[test]
@@ -1210,14 +1231,10 @@ mod tests {
             &complex_vec(vec![z0, z1]),
             RuntimeMode::Strict,
         );
-        match r.expect("complex parameter vector hyp1f1") {
-            SpecialTensor::ComplexVec(values) => {
-                assert_eq!(values.len(), 2);
-                assert_complex_close(values[0], z0.exp(), 1.0e-10);
-                assert_complex_close(values[1], z1.exp(), 1.0e-10);
-            }
-            _ => panic!("expected ComplexVec"),
-        }
+        let values = get_complex_vec(&r).unwrap_or(&[]);
+        assert_eq!(values.len(), 2);
+        assert_complex_close(values[0], z0.exp(), 1.0e-10);
+        assert_complex_close(values[1], z1.exp(), 1.0e-10);
     }
 
     #[test]
@@ -1235,22 +1252,21 @@ mod tests {
             RuntimeMode::Strict,
         );
         assert_complex_close(
-            get_complex_scalar(&complex_result),
-            Complex64::from_real(get_scalar(&real_result)),
+            get_complex_scalar(&complex_result).unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
+            Complex64::from_real(get_scalar(&real_result).unwrap_or(f64::NAN)),
             1.0e-12,
         );
     }
 
     #[test]
     fn hyp1f1_complex_parameter_pole_errors_hardened() {
-        let err = hyp1f1(
+        let result = hyp1f1(
             &complex(1.0, 0.0),
             &complex(0.0, 0.0),
             &scalar(1.0),
             RuntimeMode::Hardened,
-        )
-        .expect_err("complex pole should error in hardened mode");
-        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+        );
+        assert_eq!(error_kind(&result), Some(SpecialErrorKind::DomainError));
     }
 
     // ── hyp2f1 tests ────────────────────────────────────────────────
@@ -1264,7 +1280,7 @@ mod tests {
             &scalar(0.0),
             RuntimeMode::Strict,
         );
-        assert!((get_scalar(&r) - 1.0).abs() < 1e-14);
+        assert!((get_scalar(&r).unwrap_or(f64::NAN) - 1.0).abs() < 1e-14);
     }
 
     #[test]
@@ -1276,7 +1292,7 @@ mod tests {
             &scalar(0.5),
             RuntimeMode::Strict,
         );
-        assert!((get_scalar(&r) - 1.0).abs() < 1e-14);
+        assert!((get_scalar(&r).unwrap_or(f64::NAN) - 1.0).abs() < 1e-14);
     }
 
     #[test]
@@ -1292,9 +1308,9 @@ mod tests {
         );
         let expected = -(1.0 - z).ln() / z;
         assert!(
-            (get_scalar(&r) - expected).abs() < 1e-10,
+            (get_scalar(&r).unwrap_or(f64::NAN) - expected).abs() < 1e-10,
             "2F1(1,1;2;0.5) should be -ln(0.5)/0.5: got {} expected {expected}",
-            get_scalar(&r)
+            get_scalar(&r).unwrap_or(f64::NAN)
         );
     }
 
@@ -1313,9 +1329,9 @@ mod tests {
         );
         let expected = (1.0 - z).powi(2);
         assert!(
-            (get_scalar(&r) - expected).abs() < 1e-10,
+            (get_scalar(&r).unwrap_or(f64::NAN) - expected).abs() < 1e-10,
             "2F1(-2,1;1;z) should be (1-z)²: got {} expected {expected}",
-            get_scalar(&r)
+            get_scalar(&r).unwrap_or(f64::NAN)
         );
     }
 
@@ -1330,9 +1346,9 @@ mod tests {
             RuntimeMode::Strict,
         );
         assert!(
-            (get_scalar(&r) - 2.0).abs() < 1e-8,
+            (get_scalar(&r).unwrap_or(f64::NAN) - 2.0).abs() < 1e-8,
             "2F1(1,1;3;1) should be 2: got {}",
-            get_scalar(&r)
+            get_scalar(&r).unwrap_or(f64::NAN)
         );
     }
 
@@ -1345,7 +1361,7 @@ mod tests {
             &scalar(0.5),
             RuntimeMode::Strict,
         );
-        let val = get_scalar(&r);
+        let val = get_scalar(&r).unwrap_or(f64::NAN);
         assert!(val.is_nan(), "c=0 should return NaN in strict mode");
     }
 
@@ -1361,7 +1377,7 @@ mod tests {
             RuntimeMode::Strict,
         );
         let expected = -(1.0 - z).ln() / z; // = -ln(1.5)/(-0.5) = 2*ln(1.5)
-        let val = get_scalar(&r);
+        let val = get_scalar(&r).unwrap_or(f64::NAN);
         assert!(
             (val - expected).abs() < 1e-10,
             "2F1(1,1;2;-0.5): got {val} expected {expected}"
@@ -1379,7 +1395,11 @@ mod tests {
             RuntimeMode::Strict,
         );
         let expected = Complex64::from_real(1.0) / (Complex64::from_real(1.0) - z);
-        assert_complex_close(get_complex_scalar(&r), expected, 1.0e-10);
+        assert_complex_close(
+            get_complex_scalar(&r).unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
+            expected,
+            1.0e-10,
+        );
     }
 
     #[test]
@@ -1393,26 +1413,21 @@ mod tests {
             &input,
             RuntimeMode::Strict,
         );
-        match r.expect("complex vector hyp2f1") {
-            SpecialTensor::ComplexVec(values) => {
-                assert_eq!(values.len(), 2);
-                assert_complex_close(values[1], values[0].conj(), 1.0e-10);
-            }
-            _ => panic!("expected ComplexVec"),
-        }
+        let values = get_complex_vec(&r).unwrap_or(&[]);
+        assert_eq!(values.len(), 2);
+        assert_complex_close(values[1], values[0].conj(), 1.0e-10);
     }
 
     #[test]
     fn hyp2f1_complex_outside_unit_disk_errors_in_hardened_mode() {
-        let err = hyp2f1(
+        let result = hyp2f1(
             &scalar(1.0),
             &scalar(2.0),
             &scalar(2.0),
             &complex(1.25, 0.5),
             RuntimeMode::Hardened,
-        )
-        .expect_err("hardened mode should reject unsupported complex domains");
-        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+        );
+        assert_eq!(error_kind(&result), Some(SpecialErrorKind::DomainError));
     }
 
     #[test]
@@ -1427,7 +1442,7 @@ mod tests {
             RuntimeMode::Strict,
         );
         assert_complex_close(
-            get_complex_scalar(&r),
+            get_complex_scalar(&r).unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
             Complex64::from_real(1.0) - z,
             1.0e-12,
         );
@@ -1445,14 +1460,10 @@ mod tests {
             &complex_vec(vec![z0, z1]),
             RuntimeMode::Strict,
         );
-        match r.expect("complex parameter vector hyp2f1") {
-            SpecialTensor::ComplexVec(values) => {
-                assert_eq!(values.len(), 2);
-                assert_complex_close(values[0], Complex64::from_real(1.0) - z0, 1.0e-12);
-                assert_complex_close(values[1], Complex64::from_real(1.0) - z1, 1.0e-12);
-            }
-            _ => panic!("expected ComplexVec"),
-        }
+        let values = get_complex_vec(&r).unwrap_or(&[]);
+        assert_eq!(values.len(), 2);
+        assert_complex_close(values[0], Complex64::from_real(1.0) - z0, 1.0e-12);
+        assert_complex_close(values[1], Complex64::from_real(1.0) - z1, 1.0e-12);
     }
 
     #[test]
@@ -1472,22 +1483,21 @@ mod tests {
             RuntimeMode::Strict,
         );
         assert_complex_close(
-            get_complex_scalar(&complex_result),
-            Complex64::from_real(get_scalar(&real_result)),
+            get_complex_scalar(&complex_result).unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
+            Complex64::from_real(get_scalar(&real_result).unwrap_or(f64::NAN)),
             1.0e-12,
         );
     }
 
     #[test]
     fn hyp2f1_complex_parameter_pole_errors_hardened() {
-        let err = hyp2f1(
+        let result = hyp2f1(
             &scalar(1.0),
             &complex(1.0, 0.0),
             &complex(0.0, 0.0),
             &scalar(0.5),
             RuntimeMode::Hardened,
-        )
-        .expect_err("complex pole should error in hardened mode");
-        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+        );
+        assert_eq!(error_kind(&result), Some(SpecialErrorKind::DomainError));
     }
 }
