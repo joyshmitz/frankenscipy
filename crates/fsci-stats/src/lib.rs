@@ -58,6 +58,11 @@ pub trait ContinuousDistribution {
         }
         ppf_bisection(|x| self.cdf(x), q, self.mean(), self.std())
     }
+    /// Inverse survival function: ppf(1 - q).
+    /// Also known as the quantile function of the survival distribution.
+    fn isf(&self, q: f64) -> f64 {
+        self.ppf(1.0 - q)
+    }
     /// Mean of the distribution.
     fn mean(&self) -> f64;
     /// Variance of the distribution.
@@ -14896,6 +14901,39 @@ mod tests {
     fn test_fit_unsupported_distribution_still_panics() {
         let result = std::panic::catch_unwind(|| StudentT::fit(&[1.0, 2.0, 3.0]));
         assert!(result.is_err(), "unsupported fit should still panic");
+    }
+
+    // ── Inverse survival function tests ───────────────────────────
+
+    #[test]
+    fn test_isf_is_inverse_of_sf() {
+        let n = Normal::new(0.0, 1.0);
+        let q = 0.1;
+        let x = n.isf(q);
+        let sf_x = n.sf(x);
+        // Bisection ppf has limited precision
+        assert!(
+            (sf_x - q).abs() < 1e-6,
+            "isf should satisfy sf(isf(q)) = q; got sf({})={}, expected {}",
+            x, sf_x, q
+        );
+    }
+
+    #[test]
+    fn test_isf_equals_ppf_one_minus_q() {
+        let n = Normal::new(2.0, 3.0);
+        for &q in &[0.1, 0.25, 0.5, 0.75, 0.9] {
+            let isf_q = n.isf(q);
+            let ppf_1_minus_q = n.ppf(1.0 - q);
+            assert!((isf_q - ppf_1_minus_q).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn test_isf_uniform() {
+        let u = Uniform::new(0.0, 10.0);
+        let isf_half = u.isf(0.5);
+        assert!((isf_half - 5.0).abs() < 1e-10);
     }
 
     // ── Statistical tests ─────────────────────────────────────────
