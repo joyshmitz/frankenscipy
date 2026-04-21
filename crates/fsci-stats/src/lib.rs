@@ -553,6 +553,79 @@ impl ContinuousDistribution for StudentT {
         }
     }
 
+    fn fit(data: &[f64]) -> Self {
+        fn consider_student_t_df(
+            best_df: &mut f64,
+            best_error: &mut f64,
+            observed_ratio: f64,
+            df: f64,
+        ) {
+            let model = StudentT { df };
+            let model_q75 = model.ppf(0.75);
+            let model_q95 = model.ppf(0.95);
+            if !model_q75.is_finite() || !model_q95.is_finite() || model_q75 <= 0.0 {
+                return;
+            }
+            let error = (model_q95 / model_q75 - observed_ratio).abs();
+            if error < *best_error {
+                *best_error = error;
+                *best_df = df;
+            }
+        }
+
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite()) {
+            return Self { df: f64::NAN };
+        }
+
+        let qs = quantile(data, &[0.5, 0.75, 0.95]);
+        let median = qs[0];
+        let upper_quartile = qs[1];
+        let upper_tail = qs[2];
+        let interquantile = upper_quartile - median;
+        let tail_span = upper_tail - median;
+        if !interquantile.is_finite()
+            || !tail_span.is_finite()
+            || interquantile <= 0.0
+            || tail_span <= 0.0
+        {
+            return Self { df: f64::NAN };
+        }
+
+        let observed_ratio = tail_span / interquantile;
+        let mut best_df = f64::NAN;
+        let mut best_error = f64::INFINITY;
+
+        // Match a scale-free upper-tail quantile ratio so arbitrary loc/scale factors cancel out.
+        for step in 0..=796 {
+            consider_student_t_df(
+                &mut best_df,
+                &mut best_error,
+                observed_ratio,
+                1.0 + 0.25 * step as f64,
+            );
+        }
+        for &df in &[250.0, 500.0, 1.0e3, 1.0e4, 1.0e6] {
+            consider_student_t_df(&mut best_df, &mut best_error, observed_ratio, df);
+        }
+        if best_df.is_finite() {
+            let start = (best_df - 1.0).max(1.01);
+            let end = (best_df + 1.0).min(1.0e6);
+            let mut df = start;
+            while df <= end {
+                consider_student_t_df(&mut best_df, &mut best_error, observed_ratio, df);
+                df += 0.01;
+            }
+        }
+
+        Self {
+            df: if best_df.is_finite() && best_df > 0.0 {
+                best_df
+            } else {
+                f64::NAN
+            },
+        }
+    }
+
     fn skewness(&self) -> f64 {
         if self.df > 3.0 { 0.0 } else { f64::NAN }
     }
@@ -19420,9 +19493,19 @@ mod tests {
     }
 
     #[test]
-    fn test_fit_unsupported_distribution_still_panics() {
-        let result = std::panic::catch_unwind(|| StudentT::fit(&[1.0, 2.0, 3.0]));
-        assert!(result.is_err(), "unsupported fit should still panic");
+    fn test_fit_student_t_recovers_quantile_grid() {
+        let reference = StudentT::new(8.0);
+        let data: Vec<f64> = (1..200).map(|i| reference.ppf(i as f64 / 200.0)).collect();
+        let fitted = StudentT::fit(&data);
+        assert!(fitted.df.is_finite(), "student t fit should be finite");
+        assert_close(fitted.df, reference.df, 3.0, "student t fit df");
+    }
+
+    #[test]
+    fn test_fit_student_t_fail_closed_for_invalid_samples() {
+        assert!(StudentT::fit(&[]).df.is_nan());
+        assert!(StudentT::fit(&[1.0, f64::NAN, 3.0]).df.is_nan());
+        assert!(StudentT::fit(&[7.0, 7.0, 7.0]).df.is_nan());
     }
 
     // ── Inverse survival function tests ───────────────────────────
