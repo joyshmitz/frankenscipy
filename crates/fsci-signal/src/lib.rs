@@ -6216,6 +6216,223 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
     w
 }
 
+/// Normalization modes for DPSS windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DpssNorm {
+    /// Preserve the L2-normalized eigenvectors from the tridiagonal solver.
+    L2,
+    /// Match SciPy's default single-window correction for even-length windows.
+    Approximate,
+    /// Apply the FFT-based subsample correction used by SciPy.
+    Subsample,
+}
+
+/// Result bundle for `dpss`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DpssResult {
+    /// DPSS tapers. `kmax=None` still returns a single taper at `windows[0]`.
+    pub windows: Vec<Vec<f64>>,
+    /// Concentration ratios when requested.
+    pub ratios: Option<Vec<f64>>,
+}
+
+fn normalized_sinc(x: f64) -> f64 {
+    if x.abs() < 1.0e-14 {
+        1.0
+    } else {
+        let pix = std::f64::consts::PI * x;
+        pix.sin() / pix
+    }
+}
+
+fn dpss_concentration_ratio(window: &[f64], bandwidth: f64) -> f64 {
+    let mut ratio = 0.0;
+    for lag in 0..window.len() {
+        let autocorr = (0..window.len() - lag)
+            .map(|idx| window[idx] * window[idx + lag])
+            .sum::<f64>();
+        let kernel = if lag == 0 {
+            2.0 * bandwidth
+        } else {
+            4.0 * bandwidth * normalized_sinc(2.0 * bandwidth * lag as f64)
+        };
+        ratio += autocorr * kernel;
+    }
+    ratio
+}
+
+fn dpss_subsample_correction(window: &[f64]) -> Result<f64, SignalError> {
+    let spectrum = fsci_fft::rfft(window, &fsci_fft::FftOptions::default())
+        .map_err(|err| SignalError::InvalidArgument(format!("dpss subsample FFT failed: {err}")))?;
+    let n = window.len() as f64;
+    let mut real_sum = spectrum[0].0;
+    for (k, &(re, im)) in spectrum.iter().enumerate().skip(1) {
+        let shift = -(1.0 - 1.0 / n) * k as f64;
+        let angle = -std::f64::consts::PI * shift;
+        let scale_re = 2.0 * angle.cos();
+        let scale_im = 2.0 * angle.sin();
+        real_sum += re * scale_re - im * scale_im;
+    }
+    if real_sum.abs() < 1.0e-15 {
+        return Err(SignalError::InvalidArgument(
+            "dpss subsample correction became singular".to_string(),
+        ));
+    }
+    Ok(n / real_sum)
+}
+
+/// Discrete prolate spheroidal sequences (Slepian tapers).
+///
+/// Matches `scipy.signal.windows.dpss(M, NW, Kmax=None, sym=True, norm=None, return_ratios=False)`.
+pub fn dpss(
+    n: usize,
+    nw: f64,
+    kmax: Option<usize>,
+    sym: bool,
+    norm: Option<DpssNorm>,
+    return_ratios: bool,
+) -> Result<DpssResult, SignalError> {
+    let norm = norm.unwrap_or(if kmax.is_none() {
+        DpssNorm::Approximate
+    } else {
+        DpssNorm::L2
+    });
+    let k = kmax.unwrap_or(1);
+
+    if n <= 1 {
+        let window = if n == 0 { Vec::new() } else { vec![1.0] };
+        return Ok(DpssResult {
+            windows: vec![window],
+            ratios: return_ratios.then(|| vec![1.0]),
+        });
+    }
+    if k == 0 || k > n {
+        return Err(SignalError::InvalidArgument(
+            "kmax must be greater than 0 and less than or equal to M".to_string(),
+        ));
+    }
+    if !nw.is_finite() || nw <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "NW must be positive".to_string(),
+        ));
+    }
+    if nw >= n as f64 / 2.0 {
+        return Err(SignalError::InvalidArgument(
+            "NW must be less than M/2.".to_string(),
+        ));
+    }
+
+    let work_n = if sym {
+        n
+    } else {
+        n.checked_add(1).ok_or_else(|| {
+            SignalError::InvalidArgument(format!(
+                "window length overflow while building periodic DPSS for n={n}"
+            ))
+        })?
+    };
+    let bandwidth = nw / work_n as f64;
+    let cosine = (2.0 * std::f64::consts::PI * bandwidth).cos();
+    let diagonal: Vec<f64> = (0..work_n)
+        .map(|idx| {
+            let centered = (work_n as f64 - 1.0 - 2.0 * idx as f64) / 2.0;
+            centered * centered * cosine
+        })
+        .collect();
+    let off_diagonal: Vec<f64> = (1..work_n)
+        .map(|idx| idx as f64 * (work_n - idx) as f64 / 2.0)
+        .collect();
+
+    // Materialize the symmetric tridiagonal matrix and use the dense symmetric
+    // eigensolver. The dedicated tridiagonal path is not yet numerically
+    // compatible enough for SciPy DPSS parity.
+    let mut tridiagonal = vec![vec![0.0; work_n]; work_n];
+    for idx in 0..work_n {
+        tridiagonal[idx][idx] = diagonal[idx];
+        if idx + 1 < work_n {
+            tridiagonal[idx][idx + 1] = off_diagonal[idx];
+            tridiagonal[idx + 1][idx] = off_diagonal[idx];
+        }
+    }
+    let eigh = fsci_linalg::eigh(&tridiagonal, fsci_linalg::DecompOptions::default())
+        .map_err(|err| SignalError::InvalidArgument(format!("dpss eigensolve failed: {err}")))?;
+
+    let mut windows: Vec<Vec<f64>> = (work_n - k..work_n)
+        .rev()
+        .map(|col| {
+            eigh.eigenvectors
+                .iter()
+                .map(|row| row[col])
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    for (idx, window) in windows.iter_mut().enumerate() {
+        if idx.is_multiple_of(2) {
+            if window.iter().sum::<f64>() < 0.0 {
+                for value in window {
+                    *value = -*value;
+                }
+            }
+        } else {
+            let threshold = (1.0 / work_n as f64).max(1.0e-7);
+            if window
+                .iter()
+                .find(|value| **value * **value > threshold)
+                .is_some_and(|value| *value < 0.0)
+            {
+                for value in window {
+                    *value = -*value;
+                }
+            }
+        }
+    }
+
+    let ratios = if return_ratios {
+        Some(
+            windows
+                .iter()
+                .map(|window| dpss_concentration_ratio(window, bandwidth))
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    if norm != DpssNorm::L2 {
+        let max_value = windows
+            .iter()
+            .flat_map(|window| window.iter().copied())
+            .fold(f64::NEG_INFINITY, f64::max);
+        if max_value.is_finite() && max_value > 0.0 {
+            for window in &mut windows {
+                for value in window {
+                    *value /= max_value;
+                }
+            }
+        }
+        if work_n.is_multiple_of(2) {
+            let correction = match norm {
+                DpssNorm::Approximate => (work_n * work_n) as f64 / ((work_n * work_n) as f64 + nw),
+                DpssNorm::Subsample => dpss_subsample_correction(&windows[0])?,
+                DpssNorm::L2 => 1.0,
+            };
+            for window in &mut windows {
+                for value in window {
+                    *value *= correction;
+                }
+            }
+        }
+    }
+
+    if !sym {
+        for window in &mut windows {
+            window.truncate(n);
+        }
+    }
+    Ok(DpssResult { windows, ratios })
+}
+
 /// Triangular window.
 ///
 /// Matches `scipy.signal.windows.triang(n)`.
@@ -6287,6 +6504,7 @@ pub fn get_window(window: &str, nx: usize) -> Result<Vec<f64>, SignalError> {
 /// `"hann"`, `"hamming"`, `"blackman"`, `"blackmanharris"`, `"barthann"`,
 /// `"bartlett"`, `"flattop"`, `"cosine"`, `"rectangular"` / `"boxcar"`,
 /// `"kaiser,<beta>"` (e.g. `"kaiser,8.6"`), `"chebwin,<at>"` (e.g. `"chebwin,100"`),
+/// `"dpss,<nw>"` (e.g. `"dpss,2.5"`),
 /// `"general_hamming,<alpha>"` (e.g. `"general_hamming,0.75"`),
 /// `"general_cosine,<a0>,<a1>,..."` (e.g. `"general_cosine,0.5,0.5"`),
 /// `"gaussian,<std>"` (e.g. `"gaussian,2.0"`),
@@ -6322,6 +6540,13 @@ pub fn get_window_with_fftbins(
                     SignalError::InvalidArgument(format!("invalid kaiser beta: {rest}"))
                 })?;
                 return symmetric_or_periodic_window(nx, sym, |n| kaiser(n, beta));
+            }
+            "dpss" => {
+                let nw: f64 = rest.trim().parse().map_err(|_| {
+                    SignalError::InvalidArgument(format!("invalid dpss NW: {rest}"))
+                })?;
+                return dpss(nx, nw, None, sym, None, false)
+                    .map(|result| result.windows.into_iter().next().unwrap_or_default());
             }
             "chebwin" => {
                 let attenuation: f64 = rest.trim().parse().map_err(|_| {
@@ -6408,6 +6633,9 @@ pub fn get_window_with_fftbins(
         "nuttall" => symmetric_or_periodic_window(nx, sym, nuttall_window),
         "bohman" => symmetric_or_periodic_window(nx, sym, bohman_window),
         "exponential" => exponential(nx, None, 1.0, sym),
+        "dpss" => Err(SignalError::InvalidArgument(
+            "dpss requires a normalized half-bandwidth parameter".to_string(),
+        )),
         _ => Err(SignalError::InvalidArgument(format!(
             "unknown window type: {window}"
         ))),
@@ -8067,6 +8295,25 @@ mod tests {
         assert!(boxcar(0, true).is_empty());
     }
 
+    fn assert_slice_close(actual: &[f64], expected: &[f64], tol: f64, label: &str) {
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "{label} length mismatch: got {}, expected {}",
+            actual.len(),
+            expected.len()
+        );
+        for (idx, (&actual_value, &expected_value)) in
+            actual.iter().zip(expected.iter()).enumerate()
+        {
+            assert!(
+                (actual_value - expected_value).abs() < tol,
+                "{label}[{idx}] = {actual_value}, expected {expected_value}, diff={}",
+                (actual_value - expected_value).abs()
+            );
+        }
+    }
+
     #[test]
     fn gaussian_window_matches_scipy_reference() {
         let w = gaussian(5, 1.0, true);
@@ -8239,6 +8486,111 @@ mod tests {
                 "kaiser(beta=0) should be rectangular"
             );
         }
+    }
+
+    #[test]
+    fn dpss_symmetric_window_matches_scipy_reference() {
+        let result = dpss(8, 2.5, None, true, None, false).expect("dpss symmetric");
+        let expected = [
+            0.052404360853994365,
+            0.2631860434811115,
+            0.639750596958442,
+            0.9624060150375939,
+            0.9624060150375939,
+            0.639750596958442,
+            0.2631860434811115,
+            0.052404360853994365,
+        ];
+        assert_eq!(result.windows.len(), 1);
+        assert_slice_close(&result.windows[0], &expected, 1.0e-12, "dpss symmetric");
+        assert!(result.ratios.is_none());
+    }
+
+    #[test]
+    fn dpss_periodic_window_matches_scipy_reference() {
+        let result = dpss(8, 2.5, None, false, None, false).expect("dpss periodic");
+        let expected = [
+            0.04080887106381651,
+            0.2018541771042083,
+            0.5121647719505525,
+            0.8503476239828903,
+            1.0,
+            0.8503476239828905,
+            0.5121647719505525,
+            0.20185417710420828,
+        ];
+        assert_eq!(result.windows.len(), 1);
+        assert_slice_close(&result.windows[0], &expected, 1.0e-12, "dpss periodic");
+    }
+
+    #[test]
+    fn dpss_multiple_tapers_and_ratios_match_scipy_reference() {
+        let result = dpss(8, 2.5, Some(3), true, Some(DpssNorm::L2), true).expect("dpss kmax");
+        let expected_windows = [
+            [
+                0.03123383094162537,
+                0.15686305975922865,
+                0.3813015112592644,
+                0.5736092623023827,
+                0.5736092623023827,
+                0.3813015112592644,
+                0.15686305975922865,
+                0.03123383094162537,
+            ],
+            [
+                0.11133547272330951,
+                0.3749691021790795,
+                0.5282319109750825,
+                0.2607175351833948,
+                -0.2607175351833948,
+                -0.5282319109750825,
+                -0.37496910217907947,
+                -0.11133547272330951,
+            ],
+            [
+                0.26478310487439105,
+                0.5199646064881195,
+                0.24218795419331154,
+                -0.31760307022507,
+                -0.31760307022507,
+                0.24218795419331157,
+                0.5199646064881195,
+                0.26478310487439105,
+            ],
+        ];
+        let expected_ratios = [0.9999998455973096, 0.9999787214591116, 0.9988738410781977];
+
+        assert_eq!(result.windows.len(), 3);
+        for (actual_window, expected_window) in result.windows.iter().zip(expected_windows.iter()) {
+            assert_slice_close(actual_window, expected_window, 1.0e-12, "dpss taper");
+        }
+
+        let ratios = result.ratios.expect("ratios requested");
+        for (actual, want) in ratios.iter().zip(expected_ratios.iter()) {
+            assert!((*actual - *want).abs() < 1.0e-9);
+        }
+    }
+
+    #[test]
+    fn dpss_subsample_norm_matches_scipy_reference() {
+        let result =
+            dpss(5, 1.5, None, true, Some(DpssNorm::Subsample), false).expect("dpss subsample");
+        let expected = [
+            0.2608050703712001,
+            0.7407980987672104,
+            1.0,
+            0.7407980987672104,
+            0.2608050703712001,
+        ];
+        assert_slice_close(&result.windows[0], &expected, 1.0e-12, "dpss subsample");
+    }
+
+    #[test]
+    fn dpss_rejects_invalid_parameters() {
+        assert!(dpss(8, 0.0, None, true, None, false).is_err());
+        assert!(dpss(8, 4.0, None, true, None, false).is_err());
+        assert!(dpss(8, 2.5, Some(0), true, None, false).is_err());
+        assert!(dpss(8, 2.5, Some(9), true, None, false).is_err());
     }
 
     #[test]
@@ -10515,6 +10867,31 @@ mod tests {
         let w = get_window_with_fftbins("kaiser,8.6", 10, false).unwrap();
         let expected = kaiser(10, 8.6);
         assert_eq!(w, expected);
+    }
+
+    #[test]
+    fn get_window_dispatches_dpss() {
+        let symmetric = get_window_with_fftbins("dpss,2.5", 8, false).unwrap();
+        let periodic = get_window("dpss,2.5", 8).unwrap();
+        let expected_symmetric = dpss(8, 2.5, None, true, None, false)
+            .expect("direct symmetric")
+            .windows
+            .remove(0);
+        let expected_periodic = dpss(8, 2.5, None, false, None, false)
+            .expect("direct periodic")
+            .windows
+            .remove(0);
+        assert_eq!(symmetric, expected_symmetric);
+        assert_eq!(periodic, expected_periodic);
+    }
+
+    #[test]
+    fn get_window_rejects_missing_dpss_parameter() {
+        let err = get_window("dpss", 8).expect_err("missing dpss parameter");
+        assert_eq!(
+            err.to_string(),
+            "invalid argument: dpss requires a normalized half-bandwidth parameter"
+        );
     }
 
     #[test]
