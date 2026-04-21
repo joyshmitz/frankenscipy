@@ -123,6 +123,18 @@ pub trait ContinuousDistribution {
     fn mode(&self) -> f64 {
         f64::NAN
     }
+
+    /// Confidence interval containing `alpha` fraction of probability mass.
+    /// Returns (lower, upper) bounds centered around the median.
+    /// Matches `scipy.stats.<dist>.interval(alpha)`.
+    fn interval(&self, alpha: f64) -> (f64, f64) {
+        if !(0.0..=1.0).contains(&alpha) {
+            return (f64::NAN, f64::NAN);
+        }
+        let lower = self.ppf((1.0 - alpha) / 2.0);
+        let upper = self.ppf((1.0 + alpha) / 2.0);
+        (lower, upper)
+    }
 }
 
 /// Generic fitting helper for continuous distributions with built-in MLE support.
@@ -19753,5 +19765,67 @@ mod tests {
     fn dist_mode_default_nan() {
         let t = StudentT::new(5.0);
         assert!(t.mode().is_nan(), "StudentT mode should be NaN");
+    }
+
+    // ── Interval tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn dist_interval_normal() {
+        let n = Normal::standard();
+        let (lower, upper) = n.interval(0.95);
+        // 95% CI for N(0,1) is approximately (-1.96, 1.96)
+        assert!((lower - (-1.96)).abs() < 0.01, "lower = {}", lower);
+        assert!((upper - 1.96).abs() < 0.01, "upper = {}", upper);
+    }
+
+    #[test]
+    fn dist_interval_symmetric() {
+        // For symmetric distributions, interval should be symmetric around median
+        let n = Normal::new(5.0, 2.0);
+        let (lower, upper) = n.interval(0.9);
+        let median = n.median();
+        assert!(
+            ((median - lower) - (upper - median)).abs() < 1e-10,
+            "interval should be symmetric"
+        );
+    }
+
+    #[test]
+    fn dist_interval_full() {
+        // interval(1.0) should give (-inf, inf) for unbounded distributions
+        let n = Normal::standard();
+        let (lower, upper) = n.interval(1.0);
+        assert!(lower.is_infinite() && lower.is_sign_negative());
+        assert!(upper.is_infinite() && upper.is_sign_positive());
+    }
+
+    #[test]
+    fn dist_interval_zero() {
+        // interval(0.0) should give (median, median)
+        let n = Normal::new(3.0, 1.0);
+        let (lower, upper) = n.interval(0.0);
+        assert_close(lower, 3.0, 1e-10, "interval(0) lower = median");
+        assert_close(upper, 3.0, 1e-10, "interval(0) upper = median");
+    }
+
+    #[test]
+    fn dist_interval_invalid() {
+        let n = Normal::standard();
+        let (lower, upper) = n.interval(-0.1);
+        assert!(lower.is_nan());
+        assert!(upper.is_nan());
+
+        let (lower2, upper2) = n.interval(1.5);
+        assert!(lower2.is_nan());
+        assert!(upper2.is_nan());
+    }
+
+    #[test]
+    fn dist_interval_uniform() {
+        let u = Uniform::new(0.0, 10.0);
+        let (lower, upper) = u.interval(0.8);
+        // 80% CI should be (1.0, 9.0) for U(0,10)
+        assert_close(lower, 1.0, 1e-10, "U(0,10) 80% lower");
+        assert_close(upper, 9.0, 1e-10, "U(0,10) 80% upper");
     }
 }
