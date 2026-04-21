@@ -391,27 +391,7 @@ pub fn h1vp(
     derivative_order: usize,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary_complex("h1vp", v, z, mode, |order, x| {
-        let real = bessel_derivative_sum(
-            "h1vp",
-            order,
-            x,
-            derivative_order,
-            mode,
-            DerivativeRule::Alternating,
-            |shifted_order, value| Ok(jv_scalar(shifted_order, value)),
-        )?;
-        let imag = bessel_derivative_sum(
-            "h1vp",
-            order,
-            x,
-            derivative_order,
-            mode,
-            DerivativeRule::Alternating,
-            |shifted_order, value| yv_scalar(shifted_order, value, mode),
-        )?;
-        Ok(Complex64::new(real, imag))
-    })
+    hankel_derivative_dispatch("h1vp", v, z, derivative_order, mode, HankelKind::H1)
 }
 
 /// Derivative of the Hankel function `H_v^(2)(z)`.
@@ -423,27 +403,7 @@ pub fn h2vp(
     derivative_order: usize,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary_complex("h2vp", v, z, mode, |order, x| {
-        let real = bessel_derivative_sum(
-            "h2vp",
-            order,
-            x,
-            derivative_order,
-            mode,
-            DerivativeRule::Alternating,
-            |shifted_order, value| Ok(jv_scalar(shifted_order, value)),
-        )?;
-        let imag = bessel_derivative_sum(
-            "h2vp",
-            order,
-            x,
-            derivative_order,
-            mode,
-            DerivativeRule::Alternating,
-            |shifted_order, value| yv_scalar(shifted_order, value, mode),
-        )?;
-        Ok(Complex64::new(real, -imag))
-    })
+    hankel_derivative_dispatch("h2vp", v, z, derivative_order, mode, HankelKind::H2)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -505,6 +465,240 @@ where
         1.0
     };
     Ok(sign * scale * sum)
+}
+
+fn bessel_derivative_sum_complex<F>(
+    function: &'static str,
+    order: f64,
+    z: Complex64,
+    derivative_order: usize,
+    mode: RuntimeMode,
+    rule: DerivativeRule,
+    mut kernel: F,
+) -> Result<Complex64, SpecialError>
+where
+    F: FnMut(f64, Complex64) -> Result<Complex64, SpecialError>,
+{
+    if derivative_order == 0 {
+        return kernel(order, z);
+    }
+    if derivative_order > 128 {
+        return complex_domain_error_by_mode(
+            function,
+            mode,
+            format!("n={derivative_order}"),
+            "derivative order is too large for stable recurrence",
+        );
+    }
+
+    let mut binom = 1.0;
+    let mut sum = Complex64::new(0.0, 0.0);
+    for k in 0..=derivative_order {
+        let shifted_order = order - derivative_order as f64 + 2.0 * k as f64;
+        let mut term = kernel(shifted_order, z)? * binom;
+        if matches!(rule, DerivativeRule::Alternating) && k % 2 == 1 {
+            term = -term;
+        }
+        sum = sum + term;
+
+        if k < derivative_order {
+            binom *= (derivative_order - k) as f64 / (k + 1) as f64;
+        }
+    }
+
+    let scale = 0.5_f64.powi(derivative_order as i32);
+    let sign = if matches!(rule, DerivativeRule::NegativeByOrder) && derivative_order % 2 == 1 {
+        -1.0
+    } else {
+        1.0
+    };
+    Ok(sum * (sign * scale))
+}
+
+fn hankel_derivative_dispatch(
+    function: &'static str,
+    v: &SpecialTensor,
+    z: &SpecialTensor,
+    derivative_order: usize,
+    mode: RuntimeMode,
+    kind: HankelKind,
+) -> SpecialResult {
+    match (v, z) {
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealScalar(x)) => {
+            hankel_derivative_real_scalar(function, *order, *x, derivative_order, mode, kind)
+                .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => orders
+            .iter()
+            .map(|&order| {
+                hankel_derivative_real_scalar(function, order, *x, derivative_order, mode, kind)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => xs
+            .iter()
+            .map(|&x| {
+                hankel_derivative_real_scalar(function, *order, x, derivative_order, mode, kind)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealVec(xs)) => {
+            if orders.len() != xs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(xs.iter())
+                .map(|(&order, &x)| {
+                    hankel_derivative_real_scalar(function, order, x, derivative_order, mode, kind)
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexScalar(z_val)) => {
+            hankel_derivative_complex_scalar(function, *order, *z_val, derivative_order, mode, kind)
+                .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexVec(zs)) => zs
+            .iter()
+            .map(|&z_val| {
+                hankel_derivative_complex_scalar(
+                    function,
+                    *order,
+                    z_val,
+                    derivative_order,
+                    mode,
+                    kind,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexScalar(z_val)) => orders
+            .iter()
+            .map(|&order| {
+                hankel_derivative_complex_scalar(
+                    function,
+                    order,
+                    *z_val,
+                    derivative_order,
+                    mode,
+                    kind,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexVec(zs)) => {
+            if orders.len() != zs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(zs.iter())
+                .map(|(&order, &z_val)| {
+                    hankel_derivative_complex_scalar(
+                        function,
+                        order,
+                        z_val,
+                        derivative_order,
+                        mode,
+                        kind,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexScalar(_), _) | (SpecialTensor::ComplexVec(_), _) => {
+            not_yet_implemented(function, mode, "complex-valued order not supported")
+        }
+        (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
+}
+
+fn hankel_derivative_real_scalar(
+    function: &'static str,
+    order: f64,
+    x: f64,
+    derivative_order: usize,
+    mode: RuntimeMode,
+    kind: HankelKind,
+) -> Result<Complex64, SpecialError> {
+    let real = bessel_derivative_sum(
+        function,
+        order,
+        x,
+        derivative_order,
+        mode,
+        DerivativeRule::Alternating,
+        |shifted_order, value| Ok(jv_scalar(shifted_order, value)),
+    )?;
+    let imag = bessel_derivative_sum(
+        function,
+        order,
+        x,
+        derivative_order,
+        mode,
+        DerivativeRule::Alternating,
+        |shifted_order, value| yv_scalar(shifted_order, value, mode),
+    )?;
+    Ok(match kind {
+        HankelKind::H1 => Complex64::new(real, imag),
+        HankelKind::H2 => Complex64::new(real, -imag),
+    })
+}
+
+fn hankel_derivative_complex_scalar(
+    function: &'static str,
+    order: f64,
+    z: Complex64,
+    derivative_order: usize,
+    mode: RuntimeMode,
+    kind: HankelKind,
+) -> Result<Complex64, SpecialError> {
+    if z.im == 0.0 && z.re >= 0.0 {
+        return hankel_derivative_real_scalar(function, order, z.re, derivative_order, mode, kind);
+    }
+
+    let j = bessel_derivative_sum_complex(
+        function,
+        order,
+        z,
+        derivative_order,
+        mode,
+        DerivativeRule::Alternating,
+        |shifted_order, value| {
+            bessel_complex_scalar(function, shifted_order, value, mode, BesselKind::Jv)
+        },
+    )?;
+    let y = bessel_derivative_sum_complex(
+        function,
+        order,
+        z,
+        derivative_order,
+        mode,
+        DerivativeRule::Alternating,
+        |shifted_order, value| {
+            bessel_complex_scalar(function, shifted_order, value, mode, BesselKind::Yv)
+        },
+    )?;
+    Ok(match kind {
+        HankelKind::H1 => j + Complex64::new(-y.im, y.re),
+        HankelKind::H2 => j + Complex64::new(y.im, -y.re),
+    })
 }
 
 /// J_v(z) for real order v via power series.
@@ -1688,83 +1882,6 @@ where
     }
 }
 
-fn map_real_binary_complex<F>(
-    function: &'static str,
-    lhs: &SpecialTensor,
-    rhs: &SpecialTensor,
-    mode: RuntimeMode,
-    kernel: F,
-) -> SpecialResult
-where
-    F: Fn(f64, f64) -> Result<Complex64, SpecialError>,
-{
-    match (lhs, rhs) {
-        (SpecialTensor::RealScalar(left), SpecialTensor::RealScalar(right)) => {
-            kernel(*left, *right).map(SpecialTensor::ComplexScalar)
-        }
-        (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => left
-            .iter()
-            .copied()
-            .map(|value| kernel(value, *right))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::ComplexVec),
-        (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => right
-            .iter()
-            .copied()
-            .map(|value| kernel(*left, value))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::ComplexVec),
-        (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
-            if left.len() != right.len() {
-                record_special_trace(
-                    function,
-                    mode,
-                    "domain_error",
-                    format!("lhs_len={},rhs_len={}", left.len(), right.len()),
-                    "fail_closed",
-                    "vector inputs must have matching lengths",
-                    false,
-                );
-                return Err(SpecialError {
-                    function,
-                    kind: SpecialErrorKind::DomainError,
-                    mode,
-                    detail: "vector inputs must have matching lengths",
-                });
-            }
-            left.iter()
-                .copied()
-                .zip(right.iter().copied())
-                .map(|(l, r)| kernel(l, r))
-                .collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::ComplexVec)
-        }
-        (SpecialTensor::ComplexScalar(_), _)
-        | (SpecialTensor::ComplexVec(_), _)
-        | (_, SpecialTensor::ComplexScalar(_))
-        | (_, SpecialTensor::ComplexVec(_)) => {
-            not_yet_implemented(function, mode, "complex-valued input path pending")
-        }
-        _ => {
-            record_special_trace(
-                function,
-                mode,
-                "domain_error",
-                "input=empty",
-                "fail_closed",
-                "empty tensor is not a valid special-function input",
-                false,
-            );
-            Err(SpecialError {
-                function,
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "empty tensor is not a valid special-function input",
-            })
-        }
-    }
-}
-
 fn jn_scalar(order: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if order.is_nan() || x.is_nan() {
         return Ok(f64::NAN);
@@ -2771,6 +2888,139 @@ mod tests {
         assert!((h1.im - y_part).abs() < 1e-12);
         assert!((h2.re - j_part).abs() < 1e-12);
         assert!((h2.im + y_part).abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_hankel_derivative_zero_order_matches_base_hankel() -> Result<(), String> {
+        let z = complex_scalar(2.0, 1.0);
+        let h1_derivative = complex_value(tensor_result(h1vp(
+            &scalar(1.0),
+            &z,
+            0,
+            RuntimeMode::Strict,
+        ))?)?;
+        let h1_base = complex_value(tensor_result(hankel1(
+            &scalar(1.0),
+            &z,
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!((h1_derivative.re - h1_base.re).abs() < 1e-12);
+        assert!((h1_derivative.im - h1_base.im).abs() < 1e-12);
+
+        let h2_derivative = complex_value(tensor_result(h2vp(
+            &scalar(1.0),
+            &z,
+            0,
+            RuntimeMode::Strict,
+        ))?)?;
+        let h2_base = complex_value(tensor_result(hankel2(
+            &scalar(1.0),
+            &z,
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!((h2_derivative.re - h2_base.re).abs() < 1e-12);
+        assert!((h2_derivative.im - h2_base.im).abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_hankel_derivative_reduces_to_real_axis_values() -> Result<(), String> {
+        let x = 2.0;
+        let h1_real = complex_value(tensor_result(h1vp(
+            &scalar(0.0),
+            &scalar(x),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        let h1_complex = complex_value(tensor_result(h1vp(
+            &scalar(0.0),
+            &complex_scalar(x, 0.0),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!((h1_real.re - h1_complex.re).abs() < 1e-12);
+        assert!((h1_real.im - h1_complex.im).abs() < 1e-12);
+
+        let h2_real = complex_value(tensor_result(h2vp(
+            &scalar(0.0),
+            &scalar(x),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        let h2_complex = complex_value(tensor_result(h2vp(
+            &scalar(0.0),
+            &complex_scalar(x, 0.0),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!((h2_real.re - h2_complex.re).abs() < 1e-12);
+        assert!((h2_real.im - h2_complex.im).abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_hankel_derivatives_broadcast_vectors() -> Result<(), String> {
+        let zs = SpecialTensor::ComplexVec(vec![
+            Complex64::new(2.0, 0.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(3.0, 0.0),
+        ]);
+        let h1_result = tensor_result(h1vp(&scalar(0.0), &zs, 1, RuntimeMode::Strict))?;
+        match h1_result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 3);
+                for (index, value) in values.iter().enumerate() {
+                    let z = match &zs {
+                        SpecialTensor::ComplexVec(items) => items[index],
+                        _ => unreachable!(),
+                    };
+                    let expected = complex_value(tensor_result(h1vp(
+                        &scalar(0.0),
+                        &SpecialTensor::ComplexScalar(z),
+                        1,
+                        RuntimeMode::Strict,
+                    ))?)?;
+                    assert!(
+                        (value.re - expected.re).abs() < 1e-12
+                            || (value.re.is_nan() && expected.re.is_nan())
+                    );
+                    assert!(
+                        (value.im - expected.im).abs() < 1e-12
+                            || (value.im.is_nan() && expected.im.is_nan())
+                    );
+                }
+            }
+            other => return Err(format!("expected ComplexVec, got {other:?}")),
+        }
+
+        let h2_result = tensor_result(h2vp(&scalar(0.0), &zs, 1, RuntimeMode::Strict))?;
+        match h2_result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 3);
+                for (index, value) in values.iter().enumerate() {
+                    let z = match &zs {
+                        SpecialTensor::ComplexVec(items) => items[index],
+                        _ => unreachable!(),
+                    };
+                    let expected = complex_value(tensor_result(h2vp(
+                        &scalar(0.0),
+                        &SpecialTensor::ComplexScalar(z),
+                        1,
+                        RuntimeMode::Strict,
+                    ))?)?;
+                    assert!(
+                        (value.re - expected.re).abs() < 1e-12
+                            || (value.re.is_nan() && expected.re.is_nan())
+                    );
+                    assert!(
+                        (value.im - expected.im).abs() < 1e-12
+                            || (value.im.is_nan() && expected.im.is_nan())
+                    );
+                }
+            }
+            other => return Err(format!("expected ComplexVec, got {other:?}")),
+        }
         Ok(())
     }
 
