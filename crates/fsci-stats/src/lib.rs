@@ -10670,6 +10670,44 @@ fn binomial_ppf(binom: &Binomial, q: f64) -> u64 {
     binom.n
 }
 
+/// Computes empirical quantiles using configurable plotting positions.
+///
+/// Matches `scipy.stats.mstats.mquantiles(a, prob, alphap, betap)`.
+/// Returns quantiles at the specified probabilities using the formula:
+/// Q(p) = (1-g)*x[j] + g*x[j+1], where j = floor(n*p + m), m = alphap + p*(1 - alphap - betap).
+///
+/// Common (alphap, betap) values:
+/// - (0.4, 0.4): Cunnane (default) - approximately quantile unbiased
+/// - (0.5, 0.5): R type 5 - piecewise linear
+/// - (1.0, 1.0): R type 7 - R default
+/// - (0.0, 0.0): R type 6
+/// - (1/3, 1/3): R type 8 - approximately median-unbiased
+pub fn mquantiles(data: &[f64], prob: &[f64], alphap: f64, betap: f64) -> Vec<f64> {
+    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let n = sorted.len();
+    if n == 0 {
+        return prob.iter().map(|_| f64::NAN).collect();
+    }
+    let nf = n as f64;
+    prob.iter()
+        .map(|&p| {
+            if p < 0.0 || p > 1.0 {
+                return f64::NAN;
+            }
+            let m = alphap + p * (1.0 - alphap - betap);
+            let j_float = nf * p + m;
+            let j = (j_float.floor() as usize).saturating_sub(1);
+            let g = j_float - j_float.floor();
+            if j >= n - 1 {
+                sorted[n - 1]
+            } else {
+                (1.0 - g) * sorted[j] + g * sorted[j + 1]
+            }
+        })
+        .collect()
+}
+
 /// Coefficient of variation (std / mean).
 ///
 /// Matches `scipy.stats.variation(a)`.
@@ -26483,5 +26521,31 @@ mod tests {
         // CI should contain the true median (10.5)
         assert!(lo < 10.5 && hi > 10.5, "CI should contain median");
         assert!(lo < hi, "lo should be less than hi");
+    }
+
+    #[test]
+    fn mquantiles_matches_scipy() {
+        // scipy.stats.mstats.mquantiles([1..10], [0.25,0.5,0.75]) = [2.95, 5.5, 8.05]
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let result = mquantiles(&data, &[0.25, 0.5, 0.75], 0.4, 0.4);
+        assert_close(result[0], 2.95, 1e-10, "mquantiles q25");
+        assert_close(result[1], 5.5, 1e-10, "mquantiles q50");
+        assert_close(result[2], 8.05, 1e-10, "mquantiles q75");
+    }
+
+    #[test]
+    fn mquantiles_type5() {
+        // scipy.stats.mstats.mquantiles([1..10], [0.25,0.5,0.75], alphap=0.5, betap=0.5) = [3.0, 5.5, 8.0]
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let result = mquantiles(&data, &[0.25, 0.5, 0.75], 0.5, 0.5);
+        assert_close(result[0], 3.0, 1e-10, "type5 q25");
+        assert_close(result[1], 5.5, 1e-10, "type5 q50");
+        assert_close(result[2], 8.0, 1e-10, "type5 q75");
+    }
+
+    #[test]
+    fn mquantiles_empty() {
+        let result = mquantiles(&[], &[0.5], 0.4, 0.4);
+        assert!(result[0].is_nan());
     }
 }
