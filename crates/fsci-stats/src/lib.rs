@@ -517,6 +517,22 @@ impl ContinuousDistribution for StudentT {
             f64::NAN
         }
     }
+
+    fn skewness(&self) -> f64 {
+        if self.df > 3.0 {
+            0.0
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn kurtosis(&self) -> f64 {
+        if self.df > 4.0 {
+            6.0 / (self.df - 4.0)
+        } else {
+            f64::NAN
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -607,6 +623,14 @@ impl ContinuousDistribution for ChiSquared {
 
     fn var(&self) -> f64 {
         2.0 * self.df
+    }
+
+    fn skewness(&self) -> f64 {
+        (8.0 / self.df).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        12.0 / self.df
     }
 }
 
@@ -1010,6 +1034,19 @@ impl ContinuousDistribution for BetaDist {
         let ab = self.a + self.b;
         self.a * self.b / (ab * ab * (ab + 1.0))
     }
+
+    fn skewness(&self) -> f64 {
+        let (a, b) = (self.a, self.b);
+        2.0 * (b - a) * (a + b + 1.0).sqrt() / ((a + b + 2.0) * (a * b).sqrt())
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let (a, b) = (self.a, self.b);
+        let ab = a + b;
+        let num = 6.0 * ((a - b).powi(2) * (ab + 1.0) - a * b * (ab + 2.0));
+        let den = a * b * (ab + 2.0) * (ab + 3.0);
+        num / den
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1136,6 +1173,14 @@ impl ContinuousDistribution for GammaDist {
             0.0
         }
     }
+
+    fn skewness(&self) -> f64 {
+        2.0 / self.a.sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        6.0 / self.a
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1225,6 +1270,25 @@ impl ContinuousDistribution for Weibull {
         // H = gamma_euler*(1 - 1/c) + ln(scale/c) + 1
         EULER_MASCHERONI * (1.0 - 1.0 / self.c) + (self.scale / self.c).ln() + 1.0
     }
+
+    fn skewness(&self) -> f64 {
+        let g1 = ln_gamma(1.0 + 1.0 / self.c).exp();
+        let g2 = ln_gamma(1.0 + 2.0 / self.c).exp();
+        let g3 = ln_gamma(1.0 + 3.0 / self.c).exp();
+        let var = g2 - g1 * g1;
+        let std = var.sqrt();
+        (g3 - 3.0 * g1 * var - g1.powi(3)) / std.powi(3)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let g1 = ln_gamma(1.0 + 1.0 / self.c).exp();
+        let g2 = ln_gamma(1.0 + 2.0 / self.c).exp();
+        let g3 = ln_gamma(1.0 + 3.0 / self.c).exp();
+        let g4 = ln_gamma(1.0 + 4.0 / self.c).exp();
+        let var = g2 - g1 * g1;
+        let skew_num = g3 - 3.0 * g1 * var - g1.powi(3);
+        (g4 - 4.0 * g1 * skew_num - 6.0 * g1 * g1 * var - g1.powi(4)) / var.powi(2) - 3.0
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1312,6 +1376,16 @@ impl ContinuousDistribution for Lognormal {
     fn entropy(&self) -> f64 {
         // H = 0.5 + 0.5*ln(2*pi) + ln(s) + ln(scale)
         0.5 + 0.5 * (2.0 * PI).ln() + self.s.ln() + self.scale.ln()
+    }
+
+    fn skewness(&self) -> f64 {
+        let es2 = (self.s * self.s).exp();
+        (es2 + 2.0) * (es2 - 1.0).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let s2 = self.s * self.s;
+        (4.0 * s2).exp() + 2.0 * (3.0 * s2).exp() + 3.0 * (2.0 * s2).exp() - 6.0
     }
 }
 
@@ -1603,6 +1677,14 @@ impl ContinuousDistribution for Gumbel {
     fn mode(&self) -> f64 {
         self.loc
     }
+
+    fn skewness(&self) -> f64 {
+        1.139_547_099_404_648_7
+    }
+
+    fn kurtosis(&self) -> f64 {
+        2.4
+    }
 }
 
 /// Left-skewed Gumbel (extreme value type I) distribution.
@@ -1748,6 +1830,14 @@ impl ContinuousDistribution for Logistic {
 
     fn mode(&self) -> f64 {
         self.loc
+    }
+
+    fn skewness(&self) -> f64 {
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        1.2
     }
 }
 
@@ -19620,10 +19710,40 @@ mod tests {
     }
 
     #[test]
-    fn dist_skewness_default_nan() {
-        // Distributions without explicit skewness return NaN
-        let t = StudentT::new(5.0);
-        assert!(t.skewness().is_nan(), "StudentT skewness should be NaN");
+    fn dist_skewness_studentt() {
+        // StudentT with df > 3 has skewness 0
+        let t5 = StudentT::new(5.0);
+        assert_close(t5.skewness(), 0.0, 1e-10, "StudentT(5) skewness");
+
+        // StudentT with df <= 3 has undefined skewness
+        let t2 = StudentT::new(2.0);
+        assert!(t2.skewness().is_nan(), "StudentT(2) skewness should be NaN");
+    }
+
+    #[test]
+    fn dist_skewness_gamma() {
+        // Gamma(a) has skewness 2/sqrt(a)
+        let g = GammaDist::new(4.0, 1.0);
+        assert_close(g.skewness(), 1.0, 1e-10, "Gamma(4) skewness");
+    }
+
+    #[test]
+    fn dist_skewness_chi2() {
+        // Chi-squared(k) has skewness sqrt(8/k)
+        let c = ChiSquared::new(8.0);
+        assert_close(c.skewness(), 1.0, 1e-10, "Chi2(8) skewness");
+    }
+
+    #[test]
+    fn dist_skewness_logistic() {
+        let l = Logistic::new(0.0, 1.0);
+        assert_close(l.skewness(), 0.0, 1e-10, "Logistic skewness");
+    }
+
+    #[test]
+    fn dist_skewness_gumbel() {
+        let g = Gumbel::new(0.0, 1.0);
+        assert_close(g.skewness(), 1.139_547, 1e-5, "Gumbel skewness");
     }
 
     // ── Kurtosis tests ───────────────────────────────────────────────────
@@ -19660,10 +19780,72 @@ mod tests {
     }
 
     #[test]
-    fn dist_kurtosis_default_nan() {
-        // Distributions without explicit kurtosis return NaN
-        let t = StudentT::new(5.0);
-        assert!(t.kurtosis().is_nan(), "StudentT kurtosis should be NaN");
+    fn dist_kurtosis_studentt() {
+        // StudentT(df) has kurtosis 6/(df-4) for df > 4
+        let t6 = StudentT::new(6.0);
+        assert_close(t6.kurtosis(), 3.0, 1e-10, "StudentT(6) kurtosis");
+
+        let t10 = StudentT::new(10.0);
+        assert_close(t10.kurtosis(), 1.0, 1e-10, "StudentT(10) kurtosis");
+
+        // df <= 4: undefined
+        let t3 = StudentT::new(3.0);
+        assert!(t3.kurtosis().is_nan(), "StudentT(3) kurtosis should be NaN");
+    }
+
+    #[test]
+    fn dist_kurtosis_gamma() {
+        // Gamma(a) has kurtosis 6/a
+        let g = GammaDist::new(3.0, 1.0);
+        assert_close(g.kurtosis(), 2.0, 1e-10, "Gamma(3) kurtosis");
+    }
+
+    #[test]
+    fn dist_kurtosis_chi2() {
+        // Chi-squared(k) has kurtosis 12/k
+        let c = ChiSquared::new(6.0);
+        assert_close(c.kurtosis(), 2.0, 1e-10, "Chi2(6) kurtosis");
+    }
+
+    #[test]
+    fn dist_kurtosis_logistic() {
+        let l = Logistic::new(0.0, 1.0);
+        assert_close(l.kurtosis(), 1.2, 1e-10, "Logistic kurtosis");
+    }
+
+    #[test]
+    fn dist_kurtosis_gumbel() {
+        let g = Gumbel::new(0.0, 1.0);
+        assert_close(g.kurtosis(), 2.4, 1e-10, "Gumbel kurtosis");
+    }
+
+    #[test]
+    fn dist_kurtosis_beta() {
+        // Beta(2,2) is symmetric, uniform-like shape
+        let b = BetaDist::new(2.0, 2.0);
+        // kurtosis = 6*((a-b)^2*(a+b+1) - ab(a+b+2)) / (ab(a+b+2)(a+b+3))
+        // For a=b=2: 6*(0*5 - 4*6) / (4*6*7) = 6*(-24)/(168) = -144/168 = -6/7
+        assert_close(b.kurtosis(), -6.0 / 7.0, 1e-10, "Beta(2,2) kurtosis");
+    }
+
+    #[test]
+    fn dist_skewness_beta() {
+        // Beta(2,2) is symmetric, skewness = 0
+        let b = BetaDist::new(2.0, 2.0);
+        assert_close(b.skewness(), 0.0, 1e-10, "Beta(2,2) skewness");
+
+        // Beta(2,5) is left-skewed
+        let b2 = BetaDist::new(2.0, 5.0);
+        assert!(b2.skewness() > 0.0, "Beta(2,5) should be positively skewed");
+    }
+
+    #[test]
+    fn dist_skewness_lognormal() {
+        // Lognormal(s) has skewness (exp(s^2)+2)*sqrt(exp(s^2)-1)
+        let ln = Lognormal::new(1.0, 1.0);
+        let es2 = 1.0_f64.exp();
+        let expected = (es2 + 2.0) * (es2 - 1.0).sqrt();
+        assert_close(ln.skewness(), expected, 1e-10, "Lognormal(1) skewness");
     }
 
     // ── Expanded entropy tests ───────────────────────────────────────────
