@@ -1087,7 +1087,7 @@ _(See full symbol list above -- all are functions/ufuncs from `_ufuncs` or `_bas
 | `wasserstein_distance` | function | `_stats_py` | no |
 | `wasserstein_distance_nd` | function | `_stats_py` | no |
 | `energy_distance` | function | `_stats_py` | no |
-| `fit` | function | `_fit` | no |
+| `fit` | function | `_fit` | yes |
 | `ecdf` | function | `_survival` | no |
 | `logrank` | function | `_survival` | no |
 | `directional_stats` | function | `_stats_py` | no |

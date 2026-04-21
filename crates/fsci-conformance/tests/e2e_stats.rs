@@ -55,6 +55,7 @@ use fsci_stats::{
     f_oneway,
     false_discovery_control,
     fisher_exact,
+    fit,
     gzscore,
     jarque_bera,
     kendalltau,
@@ -3939,6 +3940,96 @@ fn e2e_041_ks_1samp_asymptotic_pvalue_parity() {
         ),
         t.elapsed().as_nanos(),
         if normalish_pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 42: continuous-distribution fit parity for implemented MLE helpers.
+#[test]
+fn e2e_042_continuous_distribution_fit_parity() {
+    let scenario_id = "e2e_stats_042_continuous_distribution_fit";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let normal: Normal = fit(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+    let normal_pass = (normal.loc - 3.0).abs() < 1.0e-12
+        && (normal.scale - std::f64::consts::SQRT_2).abs() < 1.0e-12;
+    if !normal_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "fit_normal_reference",
+        "fit::<Normal>([1,2,3,4,5])",
+        "normal MLE should match SciPy's norm.fit loc and scale on finite data",
+        &format!("loc={:.16}, scale={:.16}", normal.loc, normal.scale),
+        t.elapsed().as_nanos(),
+        if normal_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let uniform: Uniform = fit(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+    let uniform_pass = (uniform.loc - 1.0).abs() < 1.0e-12 && (uniform.scale - 4.0).abs() < 1.0e-12;
+    if !uniform_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "fit_uniform_reference",
+        "fit::<Uniform>([1,2,3,4,5])",
+        "uniform MLE should recover SciPy's loc=min(data) and scale=max-min",
+        &format!("loc={:.16}, scale={:.16}", uniform.loc, uniform.scale),
+        t.elapsed().as_nanos(),
+        if uniform_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let exponential: Exponential = fit(&[0.0, 1.0, 2.0, 3.0, 4.0]);
+    let exponential_pass = (exponential.lambda - 0.5).abs() < 1.0e-12;
+    if !exponential_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "fit_exponential_fixed_origin_reference",
+        "fit::<Exponential>([0,1,2,3,4])",
+        "fixed-origin exponential MLE should match SciPy's expon.fit behavior when loc stays at zero",
+        &format!("lambda={:.16}", exponential.lambda),
+        t.elapsed().as_nanos(),
+        if exponential_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let constant_normal: Normal = fit(&[7.0, 7.0, 7.0]);
+    let constant_uniform: Uniform = fit(&[7.0, 7.0, 7.0]);
+    let constant_exponential: Exponential = fit(&[0.0, 0.0, 0.0]);
+    let degenerate_pass = constant_normal.loc == 7.0
+        && constant_normal.scale == 0.0
+        && constant_uniform.loc == 7.0
+        && constant_uniform.scale == 0.0
+        && constant_exponential.lambda.is_infinite()
+        && constant_exponential.lambda.is_sign_positive();
+    if !degenerate_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "fit_degenerate_support",
+        "fit::<{Normal,Uniform,Exponential}>(degenerate samples)",
+        "degenerate data should preserve zero-width support instead of panicking",
+        &format!(
+            "normal=({:.16},{:.16}), uniform=({:.16},{:.16}), exponential_lambda={}",
+            constant_normal.loc,
+            constant_normal.scale,
+            constant_uniform.loc,
+            constant_uniform.scale,
+            constant_exponential.lambda
+        ),
+        t.elapsed().as_nanos(),
+        if degenerate_pass { "pass" } else { "FAIL" },
     ));
 
     assert_artifacts_written(scenario_id, &steps, all_pass);

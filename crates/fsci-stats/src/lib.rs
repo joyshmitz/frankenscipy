@@ -87,6 +87,18 @@ pub trait ContinuousDistribution {
     }
 }
 
+/// Generic fitting helper for continuous distributions with built-in MLE support.
+///
+/// This is the Rust-generic equivalent of SciPy's distribution-specific fit surface
+/// for the implemented continuous distributions in this crate.
+#[must_use]
+pub fn fit<D>(data: &[f64]) -> D
+where
+    D: ContinuousDistribution,
+{
+    D::fit(data)
+}
+
 /// Generic inverse CDF via bisection search.
 fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
     // Initial bracket: start around mean ± 10*std
@@ -255,11 +267,17 @@ impl ContinuousDistribution for Normal {
     fn fit(data: &[f64]) -> Self {
         let n = data.len() as f64;
         if n == 0.0 {
-            return Self::new(f64::NAN, f64::NAN);
+            return Self {
+                loc: f64::NAN,
+                scale: f64::NAN,
+            };
         }
         let mean = data.iter().sum::<f64>() / n;
         let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
-        Self::new(mean, var.sqrt())
+        Self {
+            loc: mean,
+            scale: var.sqrt(),
+        }
     }
 }
 
@@ -527,7 +545,10 @@ impl ContinuousDistribution for Uniform {
 
     fn fit(data: &[f64]) -> Self {
         if data.is_empty() {
-            return Self::new(f64::NAN, f64::NAN);
+            return Self {
+                loc: f64::NAN,
+                scale: f64::NAN,
+            };
         }
         let mut min = f64::INFINITY;
         let mut max = f64::NEG_INFINITY;
@@ -539,7 +560,10 @@ impl ContinuousDistribution for Uniform {
                 max = x;
             }
         }
-        Self::new(min, max - min)
+        Self {
+            loc: min,
+            scale: max - min,
+        }
     }
 }
 
@@ -628,6 +652,24 @@ impl ContinuousDistribution for Exponential {
 
     fn var(&self) -> f64 {
         1.0 / (self.lambda * self.lambda)
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
+            return Self { lambda: f64::NAN };
+        }
+
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        if !mean.is_finite() {
+            return Self { lambda: f64::NAN };
+        }
+        if mean == 0.0 {
+            return Self {
+                lambda: f64::INFINITY,
+            };
+        }
+
+        Self { lambda: 1.0 / mean }
     }
 }
 
@@ -14243,9 +14285,32 @@ mod tests {
 
     #[test]
     fn test_fit_exponential() {
-        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let data = [0.0, 1.0, 2.0, 3.0, 4.0];
         let e = Exponential::fit(&data);
-        assert!((e.lambda - 1.0 / 3.0).abs() < 1e-10);
+        assert!((e.lambda - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fit_handles_constant_support() {
+        let data = [7.0, 7.0, 7.0];
+
+        let normal = Normal::fit(&data);
+        assert_eq!(normal.loc, 7.0);
+        assert_eq!(normal.scale, 0.0);
+
+        let uniform = Uniform::fit(&data);
+        assert_eq!(uniform.loc, 7.0);
+        assert_eq!(uniform.scale, 0.0);
+
+        let expon = Exponential::fit(&[0.0, 0.0, 0.0]);
+        assert!(expon.lambda.is_infinite() && expon.lambda.is_sign_positive());
+    }
+
+    #[test]
+    fn test_generic_fit_dispatches_to_distribution_fit() {
+        let fitted: Normal = fit(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert!((fitted.loc - 3.0).abs() < 1e-10);
+        assert!((fitted.scale - std::f64::consts::SQRT_2).abs() < 1e-10);
     }
 
     // ── Statistical tests ─────────────────────────────────────────
