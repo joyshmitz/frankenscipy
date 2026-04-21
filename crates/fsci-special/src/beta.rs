@@ -215,9 +215,50 @@ pub fn betainc(
     x: &SpecialTensor,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_ternary("betainc", a, b, x, mode, |av, bv, xv| {
-        betainc_scalar(av, bv, xv, mode)
-    })
+    betainc_dispatch(a, b, x, mode)
+}
+
+fn betainc_dispatch(
+    a: &SpecialTensor,
+    b: &SpecialTensor,
+    x: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    match (a, b, x) {
+        (
+            SpecialTensor::RealScalar(av),
+            SpecialTensor::RealScalar(bv),
+            SpecialTensor::RealScalar(xv),
+        ) => betainc_scalar(*av, *bv, *xv, mode).map(SpecialTensor::RealScalar),
+        (
+            SpecialTensor::ComplexScalar(av),
+            SpecialTensor::ComplexScalar(bv),
+            SpecialTensor::ComplexScalar(xv),
+        ) => Ok(SpecialTensor::ComplexScalar(complex_betainc_scalar(
+            *av, *bv, *xv,
+        ))),
+        (
+            SpecialTensor::RealScalar(av),
+            SpecialTensor::RealScalar(bv),
+            SpecialTensor::ComplexScalar(xv),
+        ) => Ok(SpecialTensor::ComplexScalar(complex_betainc_scalar(
+            Complex64::from_real(*av),
+            Complex64::from_real(*bv),
+            *xv,
+        ))),
+        (
+            SpecialTensor::ComplexScalar(av),
+            SpecialTensor::ComplexScalar(bv),
+            SpecialTensor::RealScalar(xv),
+        ) => Ok(SpecialTensor::ComplexScalar(complex_betainc_scalar(
+            *av,
+            *bv,
+            Complex64::from_real(*xv),
+        ))),
+        _ => map_real_ternary("betainc", a, b, x, mode, |av, bv, xv| {
+            betainc_scalar(av, bv, xv, mode)
+        }),
+    }
 }
 
 /// Beta distribution CDF.
@@ -1041,6 +1082,82 @@ pub fn complex_betaln_scalar(a: Complex64, b: Complex64) -> Complex64 {
 
 pub fn complex_beta_scalar(a: Complex64, b: Complex64) -> Complex64 {
     complex_betaln_scalar(a, b).exp()
+}
+
+pub fn complex_betainc_scalar(a: Complex64, b: Complex64, x: Complex64) -> Complex64 {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+
+    if x.re == 0.0 && x.im == 0.0 {
+        return zero;
+    }
+    if x.re == 1.0 && x.im == 0.0 {
+        return one;
+    }
+
+    let ln_beta = complex_betaln_scalar(a, b);
+    let ln_front = a * x.ln() + b * (one - x).ln() - ln_beta;
+    let front = ln_front.exp();
+
+    let threshold = (a + one) / (a + b + Complex64::new(2.0, 0.0));
+    if x.re < threshold.re {
+        front * complex_betacf(a, b, x) / a
+    } else {
+        one - front * complex_betacf(b, a, one - x) / b
+    }
+}
+
+fn complex_betacf(a: Complex64, b: Complex64, x: Complex64) -> Complex64 {
+    const MAX_ITERS: usize = 200;
+    const EPS: f64 = 3.0e-14;
+    const MIN_NUM: f64 = 1.0e-300;
+
+    let one = Complex64::new(1.0, 0.0);
+    let qab = a + b;
+    let qap = a + one;
+    let qam = a - one;
+    let mut c = one;
+    let mut d = one - qab * x / qap;
+    if d.abs() < MIN_NUM {
+        d = Complex64::new(MIN_NUM, 0.0);
+    }
+    d = d.recip();
+    let mut h = d;
+
+    for m in 1..=MAX_ITERS {
+        let m_f = Complex64::new(m as f64, 0.0);
+        let m2 = m_f * Complex64::new(2.0, 0.0);
+        let aa = m_f * (b - m_f) * x / ((qam + m2) * (a + m2));
+        d = one + aa * d;
+        if d.abs() < MIN_NUM {
+            d = Complex64::new(MIN_NUM, 0.0);
+        }
+        c = one + aa / c;
+        if c.abs() < MIN_NUM {
+            c = Complex64::new(MIN_NUM, 0.0);
+        }
+        d = d.recip();
+        h = h * d * c;
+
+        let aa2 = (a + m_f) * (qab + m_f) * x * Complex64::new(-1.0, 0.0)
+            / ((a + m2) * (qap + m2));
+        d = one + aa2 * d;
+        if d.abs() < MIN_NUM {
+            d = Complex64::new(MIN_NUM, 0.0);
+        }
+        c = one + aa2 / c;
+        if c.abs() < MIN_NUM {
+            c = Complex64::new(MIN_NUM, 0.0);
+        }
+        d = d.recip();
+        let delta = d * c;
+        h = h * delta;
+        if (delta - one).abs() <= EPS {
+            break;
+        }
+    }
+
+    h
 }
 
 pub fn betainc_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
@@ -1877,5 +1994,72 @@ mod tests {
         // Should produce a complex result
         assert!(c.re.is_finite());
         assert!(c.im.is_finite());
+    }
+
+    #[test]
+    fn complex_betainc_real_inputs_match_real() {
+        // Complex betainc with real inputs should match real path
+        let a = SpecialTensor::ComplexScalar(Complex64::new(2.0, 0.0));
+        let b = SpecialTensor::ComplexScalar(Complex64::new(3.0, 0.0));
+        let x = SpecialTensor::ComplexScalar(Complex64::new(0.5, 0.0));
+        let result = betainc(&a, &b, &x, RuntimeMode::Strict).unwrap();
+        let c = complex_scalar(&result);
+
+        let real_a = SpecialTensor::RealScalar(2.0);
+        let real_b = SpecialTensor::RealScalar(3.0);
+        let real_x = SpecialTensor::RealScalar(0.5);
+        let real_result = betainc(&real_a, &real_b, &real_x, RuntimeMode::Strict).unwrap();
+        let expected = match real_result {
+            SpecialTensor::RealScalar(v) => v,
+            _ => panic!("expected RealScalar"),
+        };
+
+        assert!(
+            (c.re - expected).abs() < 1e-8,
+            "complex betainc(2,3,0.5) = {} + {}i, expected {} + 0i",
+            c.re,
+            c.im,
+            expected
+        );
+        assert!(
+            c.im.abs() < 1e-10,
+            "imaginary part should be ~0, got {}",
+            c.im
+        );
+    }
+
+    #[test]
+    fn complex_betainc_endpoints() {
+        // betainc(a, b, 0) = 0
+        let a = SpecialTensor::ComplexScalar(Complex64::new(2.0, 0.5));
+        let b = SpecialTensor::ComplexScalar(Complex64::new(3.0, 0.0));
+        let x = SpecialTensor::ComplexScalar(Complex64::new(0.0, 0.0));
+        let result = betainc(&a, &b, &x, RuntimeMode::Strict).unwrap();
+        let c = complex_scalar(&result);
+        assert!(c.re.abs() < 1e-10, "betainc(a,b,0) should be 0");
+        assert!(c.im.abs() < 1e-10);
+
+        // betainc(a, b, 1) = 1
+        let x1 = SpecialTensor::ComplexScalar(Complex64::new(1.0, 0.0));
+        let result1 = betainc(&a, &b, &x1, RuntimeMode::Strict).unwrap();
+        let c1 = complex_scalar(&result1);
+        assert!(
+            (c1.re - 1.0).abs() < 1e-10,
+            "betainc(a,b,1) should be 1, got {}",
+            c1.re
+        );
+        assert!(c1.im.abs() < 1e-10);
+    }
+
+    #[test]
+    fn complex_betainc_with_complex_args() {
+        // Just verify it produces finite results
+        let a = SpecialTensor::ComplexScalar(Complex64::new(2.0, 0.5));
+        let b = SpecialTensor::ComplexScalar(Complex64::new(3.0, -0.3));
+        let x = SpecialTensor::ComplexScalar(Complex64::new(0.5, 0.0));
+        let result = betainc(&a, &b, &x, RuntimeMode::Strict).unwrap();
+        let c = complex_scalar(&result);
+        assert!(c.re.is_finite(), "betainc should produce finite result");
+        assert!(c.im.is_finite(), "betainc should produce finite result");
     }
 }
