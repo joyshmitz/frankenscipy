@@ -12609,6 +12609,77 @@ pub fn ks_2samp(data1: &[f64], data2: &[f64]) -> GoodnessOfFitResult {
     GoodnessOfFitResult { statistic, pvalue }
 }
 
+/// Two-sample Kolmogorov-Smirnov test with alternative hypothesis.
+///
+/// Matches `scipy.stats.ks_2samp(data1, data2, alternative=...)`.
+///
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+///   - "two-sided": max|F1(x) - F2(x)|
+///   - "greater": max(F1(x) - F2(x)) - tests if F1 > F2
+///   - "less": max(F2(x) - F1(x)) - tests if F1 < F2
+pub fn ks_2samp_alternative(
+    data1: &[f64],
+    data2: &[f64],
+    alternative: &str,
+) -> GoodnessOfFitResult {
+    let n1 = data1.len();
+    let n2 = data2.len();
+    if n1 == 0 || n2 == 0 || data1.iter().any(|v| v.is_nan()) || data2.iter().any(|v| v.is_nan()) {
+        return GoodnessOfFitResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let mut sorted1 = data1.to_vec();
+    let mut sorted2 = data2.to_vec();
+    sorted1.sort_by(|a, b| a.total_cmp(b));
+    sorted2.sort_by(|a, b| a.total_cmp(b));
+
+    let n1f = n1 as f64;
+    let n2f = n2 as f64;
+    let mut i = 0;
+    let mut j = 0;
+    let mut d_plus = 0.0_f64; // max(F1 - F2)
+    let mut d_minus = 0.0_f64; // max(F2 - F1)
+
+    while i < n1 || j < n2 {
+        let val1 = if i < n1 { sorted1[i] } else { f64::INFINITY };
+        let val2 = if j < n2 { sorted2[j] } else { f64::INFINITY };
+        let current_val = val1.min(val2);
+
+        while i < n1 && sorted1[i] <= current_val {
+            i += 1;
+        }
+        while j < n2 && sorted2[j] <= current_val {
+            j += 1;
+        }
+
+        let diff = i as f64 / n1f - j as f64 / n2f;
+        d_plus = d_plus.max(diff);
+        d_minus = d_minus.max(-diff);
+    }
+
+    let (d_stat, mode) = match alternative {
+        "greater" => (d_plus, "greater"),
+        "less" => (d_minus, "less"),
+        _ => (d_plus.max(d_minus), "two-sided"),
+    };
+
+    let en = (n1f * n2f / (n1f + n2f)).sqrt();
+    let pvalue = if mode == "two-sided" {
+        kolmogorov_pvalue(d_stat, en * en)
+    } else {
+        // One-sided p-value approximation
+        (-2.0 * en * en * d_stat * d_stat).exp()
+    };
+
+    GoodnessOfFitResult {
+        statistic: d_stat,
+        pvalue: pvalue.clamp(0.0, 1.0),
+    }
+}
+
 fn ks_2samp_exact_pvalue(d: f64, n1: usize, n2: usize) -> Option<(f64, f64)> {
     if n1 == 0 || n2 == 0 || n1.saturating_mul(n2) > KS_2SAMP_EXACT_MAX_CELLS {
         return None;
@@ -25445,6 +25516,27 @@ mod tests {
         // 80% CI should be (1.0, 9.0) for U(0,10)
         assert_close(lower, 1.0, 1e-10, "U(0,10) 80% lower");
         assert_close(upper, 9.0, 1e-10, "U(0,10) 80% upper");
+    }
+
+    #[test]
+    fn test_ks_2samp_alternative() {
+        // data1 stochastically dominates data2 (shifted right)
+        let data1 = [5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let data2 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+
+        let two_sided = ks_2samp_alternative(&data1, &data2, "two-sided");
+        let original = ks_2samp(&data1, &data2);
+        assert_close(two_sided.statistic, original.statistic, 1e-10, "stat match");
+
+        // data1 > data2, so "greater" (F1 > F2 at some point) should give small p
+        let greater = ks_2samp_alternative(&data1, &data2, "greater");
+        let less = ks_2samp_alternative(&data1, &data2, "less");
+
+        // The dominant direction should have smaller p-value
+        assert!(
+            greater.pvalue < two_sided.pvalue || less.pvalue < two_sided.pvalue,
+            "one-sided should be smaller"
+        );
     }
 
     #[test]

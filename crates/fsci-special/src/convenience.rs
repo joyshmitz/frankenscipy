@@ -3766,7 +3766,12 @@ pub fn threshold(x: f64, thresh: f64, value: f64) -> f64 {
 ///
 /// Also known as swish-1.
 #[must_use]
-pub fn silu(x: f64) -> f64 {
+pub fn silu(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("silu", x_tensor, mode, |x| Ok(silu_scalar(x)))
+}
+
+#[must_use]
+pub fn silu_scalar(x: f64) -> f64 {
     swish(x, 1.0)
 }
 
@@ -5168,9 +5173,44 @@ mod tests {
     #[test]
     fn silu_basic() {
         // silu is just swish with beta=1
-        assert!((silu(0.0) - swish(0.0, 1.0)).abs() < 1e-14);
-        assert!((silu(2.0) - swish(2.0, 1.0)).abs() < 1e-14);
-        assert!((silu(-2.0) - swish(-2.0, 1.0)).abs() < 1e-14);
+        assert!((silu_scalar(0.0) - swish(0.0, 1.0)).abs() < 1e-14);
+        assert!((silu_scalar(2.0) - swish(2.0, 1.0)).abs() < 1e-14);
+        assert!((silu_scalar(-2.0) - swish(-2.0, 1.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn silu_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = silu(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - silu_scalar(2.0)).abs() < 1e-14);
+
+        let vector = silu(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(silu_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn silu_tensor_dispatch_preserves_nan_and_swish_reduction() -> Result<(), String> {
+        let vector = silu(
+            &SpecialTensor::RealVec(vec![f64::NAN, -1.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!((values[1] - swish(-1.0, 1.0)).abs() < 1e-14);
+        assert!((values[2] - swish(1.0, 1.0)).abs() < 1e-14);
+        Ok(())
     }
 
     #[test]
