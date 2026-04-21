@@ -9492,13 +9492,21 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 2 {
                 return Err(special_invalid_fixture_error("huber", mode));
             }
-            Ok(special_huber(args[0], args[1]))
+            special_scalar_from_tensor(
+                special_huber(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "huber",
+                mode,
+            )
         }
         SpecialCaseFunction::PseudoHuber => {
             if args.len() != 2 {
                 return Err(special_invalid_fixture_error("pseudo_huber", mode));
             }
-            Ok(special_pseudo_huber(args[0], args[1]))
+            special_scalar_from_tensor(
+                special_pseudo_huber(&special_scalar(args[0]), &special_scalar(args[1]), mode)?,
+                "pseudo_huber",
+                mode,
+            )
         }
         SpecialCaseFunction::Cosdg => {
             if args.len() != 1 {

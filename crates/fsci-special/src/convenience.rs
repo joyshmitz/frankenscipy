@@ -3555,8 +3555,18 @@ pub fn softplus_scalar(x: f64) -> f64 {
 /// linear for large errors.
 ///
 /// Matches `scipy.special.huber(delta, x)`.
+pub fn huber(
+    delta_tensor: &SpecialTensor,
+    x_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("huber", delta_tensor, x_tensor, mode, |delta, x| {
+        Ok(huber_scalar(delta, x))
+    })
+}
+
 #[must_use]
-pub fn huber(delta: f64, x: f64) -> f64 {
+pub fn huber_scalar(delta: f64, x: f64) -> f64 {
     if delta.is_nan() || x.is_nan() {
         return f64::NAN;
     }
@@ -3580,8 +3590,18 @@ pub fn huber(delta: f64, x: f64) -> f64 {
 /// continuous derivatives of all orders.
 ///
 /// Matches `scipy.special.pseudo_huber(delta, x)`.
+pub fn pseudo_huber(
+    delta_tensor: &SpecialTensor,
+    x_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("pseudo_huber", delta_tensor, x_tensor, mode, |delta, x| {
+        Ok(pseudo_huber_scalar(delta, x))
+    })
+}
+
 #[must_use]
-pub fn pseudo_huber(delta: f64, x: f64) -> f64 {
+pub fn pseudo_huber_scalar(delta: f64, x: f64) -> f64 {
     if delta.is_nan() || x.is_nan() {
         return f64::NAN;
     }
@@ -5155,20 +5175,20 @@ mod tests {
         let delta = 1.0;
 
         // For |x| <= delta, huber = 0.5 * x^2
-        assert!((huber(delta, 0.5) - 0.125).abs() < 1e-14);
-        assert!((huber(delta, -0.5) - 0.125).abs() < 1e-14);
-        assert!((huber(delta, 0.0) - 0.0).abs() < 1e-14);
+        assert!((huber_scalar(delta, 0.5) - 0.125).abs() < 1e-14);
+        assert!((huber_scalar(delta, -0.5) - 0.125).abs() < 1e-14);
+        assert!((huber_scalar(delta, 0.0) - 0.0).abs() < 1e-14);
 
         // For |x| > delta, huber = delta * (|x| - 0.5*delta)
-        assert!((huber(delta, 2.0) - 1.5).abs() < 1e-14);
-        assert!((huber(delta, -2.0) - 1.5).abs() < 1e-14);
+        assert!((huber_scalar(delta, 2.0) - 1.5).abs() < 1e-14);
+        assert!((huber_scalar(delta, -2.0) - 1.5).abs() < 1e-14);
 
         // At boundary
-        assert!((huber(delta, 1.0) - 0.5).abs() < 1e-14);
+        assert!((huber_scalar(delta, 1.0) - 0.5).abs() < 1e-14);
 
         // Invalid delta
-        assert!(huber(0.0, 1.0).is_nan());
-        assert!(huber(-1.0, 1.0).is_nan());
+        assert!(huber_scalar(0.0, 1.0).is_nan());
+        assert!(huber_scalar(-1.0, 1.0).is_nan());
     }
 
     #[test]
@@ -5176,19 +5196,114 @@ mod tests {
         let delta = 1.0;
 
         // pseudo_huber(delta, 0) = 0
-        assert!((pseudo_huber(delta, 0.0) - 0.0).abs() < 1e-14);
+        assert!((pseudo_huber_scalar(delta, 0.0) - 0.0).abs() < 1e-14);
 
         // For small x, pseudo_huber ≈ 0.5 * x^2
         let small = 0.01;
         let expected = 0.5 * small * small;
-        assert!((pseudo_huber(delta, small) - expected).abs() < 1e-6);
+        assert!((pseudo_huber_scalar(delta, small) - expected).abs() < 1e-6);
 
         // Symmetric
-        assert!((pseudo_huber(delta, 2.0) - pseudo_huber(delta, -2.0)).abs() < 1e-14);
+        assert!((pseudo_huber_scalar(delta, 2.0) - pseudo_huber_scalar(delta, -2.0)).abs() < 1e-14);
 
         // Invalid delta
-        assert!(pseudo_huber(0.0, 1.0).is_nan());
-        assert!(pseudo_huber(-1.0, 1.0).is_nan());
+        assert!(pseudo_huber_scalar(0.0, 1.0).is_nan());
+        assert!(pseudo_huber_scalar(-1.0, 1.0).is_nan());
+    }
+
+    #[test]
+    fn huber_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = huber(
+            &SpecialTensor::RealScalar(1.0),
+            &SpecialTensor::RealScalar(2.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - huber_scalar(1.0, 2.0)).abs() < 1e-14);
+
+        let vector = huber(
+            &SpecialTensor::RealScalar(1.0),
+            &SpecialTensor::RealVec(vec![-2.0, -0.5, 0.5, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, -0.5, 0.5, 2.0].map(|x| huber_scalar(1.0, x));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+
+        let broadcast = huber(
+            &SpecialTensor::RealVec(vec![0.5, 1.0, 2.0]),
+            &SpecialTensor::RealScalar(1.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let broadcast_values = expect_real_vec(broadcast)?;
+        let broadcast_expected = [0.5, 1.0, 2.0].map(|delta| huber_scalar(delta, 1.5));
+        assert_eq!(broadcast_values.len(), broadcast_expected.len());
+        for (actual, expected) in broadcast_values.iter().zip(broadcast_expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pseudo_huber_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = pseudo_huber(
+            &SpecialTensor::RealScalar(1.0),
+            &SpecialTensor::RealScalar(2.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - pseudo_huber_scalar(1.0, 2.0)).abs() < 1e-14);
+
+        let vector = pseudo_huber(
+            &SpecialTensor::RealScalar(1.0),
+            &SpecialTensor::RealVec(vec![-2.0, -0.5, 0.5, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, -0.5, 0.5, 2.0].map(|x| pseudo_huber_scalar(1.0, x));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn huber_and_pseudo_huber_tensor_dispatch_preserve_domain_behavior() -> Result<(), String> {
+        let huber_values = expect_real_vec(
+            huber(
+                &SpecialTensor::RealVec(vec![1.0, 0.0, -1.0, f64::NAN]),
+                &SpecialTensor::RealScalar(1.0),
+                RuntimeMode::Strict,
+            )
+            .map_err(|err| err.to_string())?,
+        )?;
+        assert_eq!(huber_values[0], 0.5);
+        assert!(huber_values[1].is_nan());
+        assert!(huber_values[2].is_nan());
+        assert!(huber_values[3].is_nan());
+
+        let pseudo_values = expect_real_vec(
+            pseudo_huber(
+                &SpecialTensor::RealVec(vec![1.0, 0.0, -1.0, f64::NAN]),
+                &SpecialTensor::RealScalar(1.0),
+                RuntimeMode::Strict,
+            )
+            .map_err(|err| err.to_string())?,
+        )?;
+        assert!(pseudo_values[0] > 0.0);
+        assert!(pseudo_values[1].is_nan());
+        assert!(pseudo_values[2].is_nan());
+        assert!(pseudo_values[3].is_nan());
+        Ok(())
     }
 
     #[test]
