@@ -8300,6 +8300,44 @@ pub fn levene(groups: &[&[f64]]) -> VarianceTestResult {
     }
 }
 
+/// Levene's test with nan_policy parameter.
+///
+/// Matches `scipy.stats.levene(*groups, nan_policy=...)`.
+///
+/// * `nan_policy` - "propagate" (default), "omit", or "raise"
+pub fn levene_with_nan_policy(
+    groups: &[&[f64]],
+    nan_policy: Option<&str>,
+) -> Result<VarianceTestResult, StatsError> {
+    let nan_policy = validate_nan_policy(nan_policy)?;
+
+    let has_nan = groups.iter().any(|g| g.iter().any(|v| v.is_nan()));
+
+    if has_nan {
+        match nan_policy {
+            "raise" => {
+                return Err(StatsError::InvalidArgument(
+                    "input contains NaN values".to_string(),
+                ));
+            }
+            "propagate" => {
+                return Ok(invalid_variance_test_result());
+            }
+            "omit" => {
+                let cleaned: Vec<Vec<f64>> = groups
+                    .iter()
+                    .map(|g| g.iter().copied().filter(|v| !v.is_nan()).collect())
+                    .collect();
+                let cleaned_refs: Vec<&[f64]> = cleaned.iter().map(|v| v.as_slice()).collect();
+                return Ok(levene(&cleaned_refs));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(levene(groups))
+}
+
 /// Bartlett's test for equal variances under normality.
 ///
 /// Matches `scipy.stats.bartlett(*groups)`.
@@ -25932,6 +25970,33 @@ mod tests {
 
         // With NaN and omit
         let result_omit = f_oneway_with_nan_policy(&groups_nan, Some("omit")).unwrap();
+        assert!(result_omit.statistic.is_finite(), "omit -> finite result");
+    }
+
+    #[test]
+    fn test_levene_nan_policy() {
+        let g1 = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let g2 = [2.0, 4.0, 6.0, 8.0, 10.0];
+        let g3 = [3.0, 6.0, 9.0, 12.0, 15.0];
+        let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
+
+        // Without NaN, should match original
+        let result = levene_with_nan_policy(&groups, None).unwrap();
+        let original = levene(&groups);
+        assert_close(result.statistic, original.statistic, 1e-10, "no nan match");
+
+        // With NaN and propagate
+        let g_nan = [1.0, f64::NAN, 3.0, 4.0, 5.0];
+        let groups_nan: Vec<&[f64]> = vec![&g_nan, &g2, &g3];
+        let result_prop = levene_with_nan_policy(&groups_nan, Some("propagate")).unwrap();
+        assert!(result_prop.statistic.is_nan(), "propagate -> NaN");
+
+        // With NaN and raise
+        let result_raise = levene_with_nan_policy(&groups_nan, Some("raise"));
+        assert!(result_raise.is_err(), "raise -> error");
+
+        // With NaN and omit
+        let result_omit = levene_with_nan_policy(&groups_nan, Some("omit")).unwrap();
         assert!(result_omit.statistic.is_finite(), "omit -> finite result");
     }
 
