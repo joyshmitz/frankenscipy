@@ -13,7 +13,7 @@
 use std::f64::consts::{FRAC_1_SQRT_2, LN_2, PI};
 
 use fsci_runtime::RuntimeMode;
-use rand::Rng;
+use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
 const EULER_MASCHERONI: f64 = 0.577_215_664_901_532_9;
 const KS_2SAMP_EXACT_MAX_CELLS: usize = 1_000_000;
@@ -2288,10 +2288,7 @@ impl Dirichlet {
     pub fn var(&self) -> Vec<f64> {
         let s = self.alpha_sum;
         let denom = s * s * (s + 1.0);
-        self.alpha
-            .iter()
-            .map(|&a| a * (s - a) / denom)
-            .collect()
+        self.alpha.iter().map(|&a| a * (s - a) / denom).collect()
     }
 
     /// Generate random variates from the distribution.
@@ -7522,7 +7519,10 @@ pub fn directional_stats(data: &[[f64; 2]], normalize: bool) -> DirectionalStats
     let mean_resultant_length = (mean_x * mean_x + mean_y * mean_y).sqrt();
 
     let mean_direction = if mean_resultant_length > 0.0 {
-        vec![mean_x / mean_resultant_length, mean_y / mean_resultant_length]
+        vec![
+            mean_x / mean_resultant_length,
+            mean_y / mean_resultant_length,
+        ]
     } else {
         vec![f64::NAN, f64::NAN]
     };
@@ -9364,6 +9364,63 @@ pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
     pearsonr(&rank_x, &rank_y)
 }
 
+/// Spearman correlation with alternative hypothesis specification.
+///
+/// Matches `scipy.stats.spearmanr(a, b, alternative=...)`.
+pub fn spearmanr_alternative(x: &[f64], y: &[f64], alternative: &str) -> CorrelationResult {
+    let n = x.len();
+    if n < 3 || n != y.len() {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let rank_x = rankdata_average(x);
+    let rank_y = rankdata_average(y);
+    let nf = n as f64;
+    let xmean: f64 = rank_x.iter().sum::<f64>() / nf;
+    let ymean: f64 = rank_y.iter().sum::<f64>() / nf;
+
+    let (mut ssxm, mut ssym, mut ssxym) = (0.0, 0.0, 0.0);
+    for (&xi, &yi) in rank_x.iter().zip(rank_y.iter()) {
+        let (dx, dy) = (xi - xmean, yi - ymean);
+        ssxm += dx * dx;
+        ssym += dy * dy;
+        ssxym += dx * dy;
+    }
+
+    let denom = (ssxm * ssym).sqrt();
+    if denom == 0.0 {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let r = (ssxym / denom).clamp(-1.0, 1.0);
+    let df = nf - 2.0;
+
+    let pvalue = if df > 0.0 && r.abs() < 1.0 {
+        let t = r * (df / (1.0 - r * r)).sqrt();
+        let tdist = StudentT::new(df);
+        match alternative {
+            "less" => tdist.cdf(t),
+            "greater" => tdist.sf(t),
+            _ => 2.0 * tdist.sf(t.abs()),
+        }
+    } else if r.abs() >= 1.0 {
+        0.0
+    } else {
+        f64::NAN
+    };
+
+    CorrelationResult {
+        statistic: r,
+        pvalue,
+    }
+}
+
 /// Compute ranks with a SciPy-style tie handling method.
 ///
 /// Matches `scipy.stats.rankdata(a, method=...)` for the implemented methods.
@@ -9806,15 +9863,13 @@ pub fn kstat(data: &[f64], n: u32) -> f64 {
             if nn < 3.0 {
                 return f64::NAN;
             }
-            (2.0 * s1.powi(3) - 3.0 * nn * s1 * s2 + nn * nn * s3)
-                / (nn * (nn - 1.0) * (nn - 2.0))
+            (2.0 * s1.powi(3) - 3.0 * nn * s1 * s2 + nn * nn * s3) / (nn * (nn - 1.0) * (nn - 2.0))
         }
         4 => {
             if nn < 4.0 {
                 return f64::NAN;
             }
-            ((-6.0 * s1.powi(4)
-                + 12.0 * nn * s1 * s1 * s2
+            ((-6.0 * s1.powi(4) + 12.0 * nn * s1 * s1 * s2
                 - 3.0 * nn * (nn - 1.0) * s2 * s2
                 - 4.0 * nn * (nn + 1.0) * s1 * s3
                 + nn * nn * (nn + 1.0) * s4)
@@ -10210,7 +10265,10 @@ pub fn percentileofscore(data: &[f64], score: f64, kind: Option<&str>) -> f64 {
     let n = data.len() as f64;
 
     let n_less = data.iter().filter(|&&x| x < score).count() as f64;
-    let n_equal = data.iter().filter(|&&x| (x - score).abs() < f64::EPSILON).count() as f64;
+    let n_equal = data
+        .iter()
+        .filter(|&&x| (x - score).abs() < f64::EPSILON)
+        .count() as f64;
 
     match kind {
         "rank" => {
@@ -10403,8 +10461,16 @@ pub fn tvar(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
         .iter()
         .copied()
         .filter(|&x| {
-            let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
-            let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+            let above_lower = if inclusive.0 {
+                x >= limits.0
+            } else {
+                x > limits.0
+            };
+            let below_upper = if inclusive.1 {
+                x <= limits.1
+            } else {
+                x < limits.1
+            };
             above_lower && below_upper
         })
         .collect();
@@ -10455,8 +10521,16 @@ pub fn tmean(data: &[f64], limits: (f64, f64), inclusive: (bool, bool)) -> f64 {
         .iter()
         .copied()
         .filter(|&x| {
-            let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
-            let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+            let above_lower = if inclusive.0 {
+                x >= limits.0
+            } else {
+                x > limits.0
+            };
+            let below_upper = if inclusive.1 {
+                x <= limits.1
+            } else {
+                x < limits.1
+            };
             above_lower && below_upper
         })
         .collect();
@@ -10487,8 +10561,16 @@ pub fn tsem(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
         .iter()
         .copied()
         .filter(|&x| {
-            let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
-            let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+            let above_lower = if inclusive.0 {
+                x >= limits.0
+            } else {
+                x > limits.0
+            };
+            let below_upper = if inclusive.1 {
+                x <= limits.1
+            } else {
+                x < limits.1
+            };
             above_lower && below_upper
         })
         .collect();
@@ -10522,7 +10604,12 @@ pub fn tmin(data: &[f64], lowerlimit: f64, inclusive: bool) -> f64 {
         .iter()
         .copied()
         .filter(|&x| {
-            x.is_finite() && if inclusive { x >= lowerlimit } else { x > lowerlimit }
+            x.is_finite()
+                && if inclusive {
+                    x >= lowerlimit
+                } else {
+                    x > lowerlimit
+                }
         })
         .collect();
 
@@ -10551,7 +10638,12 @@ pub fn tmax(data: &[f64], upperlimit: f64, inclusive: bool) -> f64 {
         .iter()
         .copied()
         .filter(|&x| {
-            x.is_finite() && if inclusive { x <= upperlimit } else { x < upperlimit }
+            x.is_finite()
+                && if inclusive {
+                    x <= upperlimit
+                } else {
+                    x < upperlimit
+                }
         })
         .collect();
 
@@ -10624,7 +10716,11 @@ pub fn expectile(data: &[f64], alpha: f64) -> f64 {
 ///
 /// # Returns
 /// Estimated differential entropy, or NaN for insufficient data.
-pub fn differential_entropy(values: &[f64], window_length: Option<usize>, base: Option<f64>) -> f64 {
+pub fn differential_entropy(
+    values: &[f64],
+    window_length: Option<usize>,
+    base: Option<f64>,
+) -> f64 {
     let filtered: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
     let n = filtered.len();
 
@@ -10633,7 +10729,9 @@ pub fn differential_entropy(values: &[f64], window_length: Option<usize>, base: 
     }
 
     // Default window length: floor(sqrt(n))
-    let m = window_length.unwrap_or_else(|| (n as f64).sqrt().floor() as usize).max(1);
+    let m = window_length
+        .unwrap_or_else(|| (n as f64).sqrt().floor() as usize)
+        .max(1);
 
     if 2 * m >= n {
         return f64::NAN;
@@ -10887,6 +10985,23 @@ pub struct ChatterjeeXiResult {
     pub pvalue: f64,
 }
 
+/// Result for multiscale graph correlation.
+///
+/// This is currently a distance-correlation-backed stub of SciPy's MGC API.
+/// It exposes only the global scale, so `mgc_map` is a 1x1 matrix containing
+/// `statistic` and `opt_scale` is always `(1, 1)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiscaleGraphcorrResult {
+    /// Global distance-correlation statistic in `[0, 1]`.
+    pub statistic: f64,
+    /// Permutation p-value, or `NaN` when `reps == 0`.
+    pub pvalue: f64,
+    /// Local correlation map. Stub implementation exposes the global scale only.
+    pub mgc_map: Vec<Vec<f64>>,
+    /// Optimal scale in the local correlation map. Stub always returns `(1, 1)`.
+    pub opt_scale: (usize, usize),
+}
+
 /// Compute Chatterjee's Xi correlation coefficient and independence test.
 ///
 /// Measures association between two variables. Effective even when the
@@ -10942,6 +11057,198 @@ pub fn chatterjeexi(x: &[f64], y: &[f64]) -> ChatterjeeXiResult {
     let pvalue = 1.0 - standard_normal_cdf(z);
 
     ChatterjeeXiResult { statistic, pvalue }
+}
+
+/// Compute a stubbed multiscale graph correlation statistic.
+///
+/// This currently implements only the global distance-correlation scale of
+/// SciPy's `multiscale_graphcorr`, returning a 1x1 `mgc_map` and `(1, 1)` as
+/// `opt_scale`. When `reps > 0`, a deterministic permutation test is used to
+/// estimate the p-value.
+pub fn multiscale_graphcorr(
+    x: &[Vec<f64>],
+    y: &[Vec<f64>],
+    reps: usize,
+    random_state: Option<u64>,
+) -> Result<MultiscaleGraphcorrResult, StatsError> {
+    if x.len() != y.len() {
+        return Err(StatsError::InvalidArgument(
+            "x and y must have same number of observations".to_string(),
+        ));
+    }
+    validate_graphcorr_observations("x", x)?;
+    validate_graphcorr_observations("y", y)?;
+
+    let centered_x = double_center_distance_matrix(&pairwise_euclidean_distance_matrix(x));
+    let centered_y = double_center_distance_matrix(&pairwise_euclidean_distance_matrix(y));
+    let statistic = distance_correlation_from_centered(&centered_x, &centered_y, None);
+    let pvalue = if reps == 0 {
+        f64::NAN
+    } else {
+        permutation_pvalue_from_centered(&centered_x, &centered_y, statistic, reps, random_state)
+    };
+
+    Ok(MultiscaleGraphcorrResult {
+        statistic,
+        pvalue,
+        mgc_map: vec![vec![statistic]],
+        opt_scale: (1, 1),
+    })
+}
+
+fn validate_graphcorr_observations(name: &str, data: &[Vec<f64>]) -> Result<(), StatsError> {
+    if data.len() < 2 {
+        return Err(StatsError::InvalidArgument(format!(
+            "{name} must contain at least two observations"
+        )));
+    }
+
+    let width = data.first().map_or(0, Vec::len);
+    if width == 0 {
+        return Err(StatsError::InvalidArgument(format!(
+            "{name} observations must be non-empty"
+        )));
+    }
+
+    for row in data {
+        if row.len() != width {
+            return Err(StatsError::InvalidArgument(format!(
+                "{name} must be rectangular with constant row width"
+            )));
+        }
+        if row.iter().any(|value| !value.is_finite()) {
+            return Err(StatsError::InvalidArgument(format!(
+                "{name} must contain only finite values"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn pairwise_euclidean_distance_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = data.len();
+    let mut distances = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let distance = data[i]
+                .iter()
+                .zip(data[j].iter())
+                .map(|(left, right)| {
+                    let delta = left - right;
+                    delta * delta
+                })
+                .sum::<f64>()
+                .sqrt();
+            distances[i][j] = distance;
+            distances[j][i] = distance;
+        }
+    }
+    distances
+}
+
+fn double_center_distance_matrix(distances: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = distances.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let row_means: Vec<f64> = distances
+        .iter()
+        .map(|row| row.iter().sum::<f64>() / n as f64)
+        .collect();
+    let mut column_means = vec![0.0; n];
+    for row in distances {
+        for (j, value) in row.iter().enumerate() {
+            column_means[j] += value;
+        }
+    }
+    for mean in &mut column_means {
+        *mean /= n as f64;
+    }
+    let total_mean = row_means.iter().sum::<f64>() / n as f64;
+
+    let mut centered = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            centered[i][j] = distances[i][j] - row_means[i] - column_means[j] + total_mean;
+        }
+    }
+    centered
+}
+
+fn centered_distance_variance(centered: &[Vec<f64>]) -> f64 {
+    let n = centered.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    centered
+        .iter()
+        .flat_map(|row| row.iter())
+        .map(|value| value * value)
+        .sum::<f64>()
+        / (n * n) as f64
+}
+
+fn distance_correlation_from_centered(
+    centered_x: &[Vec<f64>],
+    centered_y: &[Vec<f64>],
+    permutation: Option<&[usize]>,
+) -> f64 {
+    let n = centered_x.len();
+    if n == 0 || centered_y.len() != n {
+        return f64::NAN;
+    }
+
+    let variance_x = centered_distance_variance(centered_x);
+    let variance_y = centered_distance_variance(centered_y);
+    if !variance_x.is_finite() || !variance_y.is_finite() {
+        return f64::NAN;
+    }
+    if variance_x <= f64::EPSILON || variance_y <= f64::EPSILON {
+        return 0.0;
+    }
+
+    let mut covariance = 0.0;
+    for i in 0..n {
+        let pi = permutation.map_or(i, |indices| indices[i]);
+        for j in 0..n {
+            let pj = permutation.map_or(j, |indices| indices[j]);
+            covariance += centered_x[i][j] * centered_y[pi][pj];
+        }
+    }
+    covariance /= (n * n) as f64;
+
+    let correlation_sq = (covariance / (variance_x * variance_y).sqrt()).max(0.0);
+    if !correlation_sq.is_finite() {
+        return f64::NAN;
+    }
+
+    correlation_sq.sqrt().clamp(0.0, 1.0)
+}
+
+fn permutation_pvalue_from_centered(
+    centered_x: &[Vec<f64>],
+    centered_y: &[Vec<f64>],
+    observed: f64,
+    reps: usize,
+    random_state: Option<u64>,
+) -> f64 {
+    let n = centered_x.len();
+    let mut rng = StdRng::seed_from_u64(random_state.unwrap_or(0));
+    let mut permutation: Vec<usize> = (0..n).collect();
+    let mut exceedances = 1usize;
+
+    for _ in 0..reps {
+        permutation.shuffle(&mut rng);
+        let permuted =
+            distance_correlation_from_centered(centered_x, centered_y, Some(&permutation));
+        if permuted >= observed - 1.0e-12 {
+            exceedances += 1;
+        }
+    }
+
+    exceedances as f64 / (reps + 1) as f64
 }
 
 /// Compute ranks using max method (number of values <= this value)
@@ -14326,7 +14633,12 @@ pub fn bootstrap_mean(data: &[f64], n_bootstrap: usize, confidence: f64, seed: u
     let nf = n as f64;
     let jackknife_means: Vec<f64> = (0..n)
         .map(|i| {
-            let sum: f64 = data.iter().enumerate().filter(|&(j, _)| j != i).map(|(_, &v)| v).sum();
+            let sum: f64 = data
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, &v)| v)
+                .sum();
             sum / (nf - 1.0)
         })
         .collect();
@@ -14484,7 +14796,10 @@ pub fn yeojohnson_normmax(data: &[f64], brack: (f64, f64)) -> f64 {
     let (lo, hi) = brack;
     let nf = n as f64;
 
-    let log_term: f64 = data.iter().map(|&x| x.signum() * (x.abs() + 1.0).ln()).sum();
+    let log_term: f64 = data
+        .iter()
+        .map(|&x| x.signum() * (x.abs() + 1.0).ln())
+        .sum();
 
     let mut best_lambda = lo;
     let mut best_ll = f64::NEG_INFINITY;
@@ -14532,7 +14847,10 @@ pub fn yeojohnson_llf(lmb: f64, data: &[f64]) -> f64 {
         return f64::NEG_INFINITY;
     }
 
-    let log_term: f64 = data.iter().map(|&x| x.signum() * (x.abs() + 1.0).ln()).sum();
+    let log_term: f64 = data
+        .iter()
+        .map(|&x| x.signum() * (x.abs() + 1.0).ln())
+        .sum();
     -nf / 2.0 * var.ln() + (lmb - 1.0) * log_term
 }
 
@@ -16686,7 +17004,10 @@ mod tests {
     fn noncentralt_cdf_reduces_to_central() {
         let nct = NoncentralT::new(10.0, 0.0);
         let t = StudentT::new(10.0);
-        assert!((nct.cdf(1.5) - t.cdf(1.5)).abs() < 0.01, "nc=0 should match central t");
+        assert!(
+            (nct.cdf(1.5) - t.cdf(1.5)).abs() < 0.01,
+            "nc=0 should match central t"
+        );
     }
 
     #[test]
@@ -18216,8 +18537,14 @@ mod tests {
         let greater = ttest_ind_alternative(&a, &b, "greater");
 
         assert!((two_sided.statistic - less.statistic).abs() < 1e-10);
-        assert!(less.pvalue < 0.001, "a < b should be significant for 'less'");
-        assert!(greater.pvalue > 0.999, "a < b should not be significant for 'greater'");
+        assert!(
+            less.pvalue < 0.001,
+            "a < b should be significant for 'less'"
+        );
+        assert!(
+            greater.pvalue > 0.999,
+            "a < b should not be significant for 'greater'"
+        );
     }
 
     #[test]
@@ -18343,9 +18670,11 @@ mod tests {
     #[test]
     fn linregress_ci_contains_true_slope() {
         let x: Vec<f64> = (0..20).map(|i| i as f64).collect();
-        let y: Vec<f64> = x.iter().enumerate().map(|(i, &xi)| {
-            2.0 * xi + 3.0 + if i % 2 == 0 { 0.5 } else { -0.5 }
-        }).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| 2.0 * xi + 3.0 + if i % 2 == 0 { 0.5 } else { -0.5 })
+            .collect();
         let ci = linregress_ci(&x, &y, 0.05);
         assert!(ci.slope_lo.is_finite() && ci.slope_hi.is_finite());
         assert!(ci.slope_lo < ci.slope_hi);
@@ -18354,13 +18683,17 @@ mod tests {
     #[test]
     fn linregress_ci_narrower_with_larger_sample() {
         let x_small: Vec<f64> = (0..10).map(|i| i as f64).collect();
-        let y_small: Vec<f64> = x_small.iter().enumerate().map(|(i, &xi)| {
-            2.0 * xi + 1.0 + if i % 2 == 0 { 0.1 } else { -0.1 }
-        }).collect();
+        let y_small: Vec<f64> = x_small
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| 2.0 * xi + 1.0 + if i % 2 == 0 { 0.1 } else { -0.1 })
+            .collect();
         let x_large: Vec<f64> = (0..100).map(|i| i as f64).collect();
-        let y_large: Vec<f64> = x_large.iter().enumerate().map(|(i, &xi)| {
-            2.0 * xi + 1.0 + if i % 2 == 0 { 0.1 } else { -0.1 }
-        }).collect();
+        let y_large: Vec<f64> = x_large
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| 2.0 * xi + 1.0 + if i % 2 == 0 { 0.1 } else { -0.1 })
+            .collect();
 
         let ci_small = linregress_ci(&x_small, &y_small, 0.05);
         let ci_large = linregress_ci(&x_large, &y_large, 0.05);
@@ -18448,6 +18781,34 @@ mod tests {
     fn spearmanr_too_few() {
         let result = spearmanr(&[1.0, 2.0], &[3.0, 4.0]);
         assert!(result.statistic.is_nan(), "need at least 3 for spearmanr");
+    }
+
+    #[test]
+    fn spearmanr_alternative_sum_rule() {
+        let x = vec![1.0, 5.0, 2.0, 8.0, 3.0, 7.0, 4.0, 9.0, 6.0, 10.0];
+        let y = vec![3.0, 4.0, 2.0, 7.0, 1.0, 8.0, 5.0, 10.0, 6.0, 9.0];
+
+        let result = spearmanr(&x, &y);
+        assert!(result.statistic.abs() < 1.0, "should not be perfect correlation: {}", result.statistic);
+
+        let less = spearmanr_alternative(&x, &y, "less");
+        let greater = spearmanr_alternative(&x, &y, "greater");
+
+        assert!((less.statistic - greater.statistic).abs() < 1e-10);
+        assert!(
+            (less.pvalue + greater.pvalue - 1.0).abs() < 1e-6,
+            "p-values should sum to 1: {} + {} = {}",
+            less.pvalue, greater.pvalue, less.pvalue + greater.pvalue
+        );
+    }
+
+    #[test]
+    fn spearmanr_alternative_two_sided_matches() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![2.0, 4.0, 6.0, 8.0, 10.0];
+        let default = spearmanr(&x, &y);
+        let two_sided = spearmanr_alternative(&x, &y, "two-sided");
+        assert!((default.pvalue - two_sided.pvalue).abs() < 1e-10);
     }
 
     // ── rankdata helper ───────────────────────────────────────────
@@ -19354,8 +19715,16 @@ mod tests {
         let less = wilcoxon_alternative(&x, &y, "less");
         let greater = wilcoxon_alternative(&x, &y, "greater");
 
-        assert!(less.pvalue < 0.01, "x < y should be significant for 'less': {}", less.pvalue);
-        assert!(greater.pvalue > 0.5, "x < y should not be significant for 'greater': {}", greater.pvalue);
+        assert!(
+            less.pvalue < 0.01,
+            "x < y should be significant for 'less': {}",
+            less.pvalue
+        );
+        assert!(
+            greater.pvalue > 0.5,
+            "x < y should not be significant for 'greater': {}",
+            greater.pvalue
+        );
     }
 
     #[test]
@@ -19436,8 +19805,16 @@ mod tests {
         let less = mannwhitneyu_alternative(&x, &y, "less");
         let greater = mannwhitneyu_alternative(&x, &y, "greater");
 
-        assert!(less.pvalue < 0.001, "x < y should be significant for 'less': {}", less.pvalue);
-        assert!(greater.pvalue > 0.5, "x < y should not be significant for 'greater': {}", greater.pvalue);
+        assert!(
+            less.pvalue < 0.001,
+            "x < y should be significant for 'less': {}",
+            less.pvalue
+        );
+        assert!(
+            greater.pvalue > 0.5,
+            "x < y should not be significant for 'greater': {}",
+            greater.pvalue
+        );
     }
 
     #[test]
@@ -21676,6 +22053,85 @@ mod tests {
         assert!(chatterjeexi(&[1.0], &[1.0]).statistic.is_nan());
     }
 
+    #[test]
+    fn multiscale_graphcorr_stub_tracks_perfect_linear_relationship() {
+        let x: Vec<Vec<f64>> = (0..8).map(|i| vec![i as f64]).collect();
+        let y: Vec<Vec<f64>> = (0..8).map(|i| vec![2.0 * i as f64 + 1.0]).collect();
+        let result = multiscale_graphcorr(&x, &y, 0, Some(0)).expect("multiscale_graphcorr");
+        assert!(
+            result.statistic > 0.99,
+            "stub statistic = {}",
+            result.statistic
+        );
+        assert!(result.pvalue.is_nan(), "reps=0 should skip pvalue");
+        assert_eq!(result.opt_scale, (1, 1));
+        assert_eq!(result.mgc_map.len(), 1);
+        assert_eq!(result.mgc_map[0].len(), 1);
+        assert_close(
+            result.mgc_map[0][0],
+            result.statistic,
+            1e-12,
+            "stub mgc_map stores global statistic",
+        );
+    }
+
+    #[test]
+    fn multiscale_graphcorr_stub_permutation_pvalue_is_bounded() {
+        let x: Vec<Vec<f64>> = (0..8).map(|i| vec![i as f64]).collect();
+        let y = vec![
+            vec![4.0],
+            vec![1.0],
+            vec![7.0],
+            vec![0.0],
+            vec![6.0],
+            vec![2.0],
+            vec![5.0],
+            vec![3.0],
+        ];
+        let result =
+            multiscale_graphcorr(&x, &y, 31, Some(1234)).expect("multiscale_graphcorr pvalue");
+        assert!(
+            (0.0..=1.0).contains(&result.pvalue),
+            "pvalue out of bounds: {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn multiscale_graphcorr_stub_constant_input_collapses_to_zero() {
+        let x = vec![vec![1.0]; 6];
+        let y: Vec<Vec<f64>> = (0..6).map(|i| vec![i as f64]).collect();
+        let result = multiscale_graphcorr(&x, &y, 15, Some(7)).expect("constant input");
+        assert_eq!(result.statistic, 0.0);
+        assert_eq!(result.pvalue, 1.0);
+    }
+
+    #[test]
+    fn multiscale_graphcorr_stub_rejects_invalid_input() {
+        let err =
+            multiscale_graphcorr(&[vec![1.0], vec![2.0]], &[vec![1.0]], 0, None).expect_err("len");
+        assert_eq!(
+            err,
+            StatsError::InvalidArgument(
+                "x and y must have same number of observations".to_string()
+            )
+        );
+
+        let err = multiscale_graphcorr(
+            &[vec![1.0], vec![2.0, 3.0]],
+            &[vec![1.0], vec![2.0]],
+            0,
+            None,
+        )
+        .expect_err("rectangular");
+        assert_eq!(
+            err,
+            StatsError::InvalidArgument(
+                "x must be rectangular with constant row width".to_string()
+            )
+        );
+    }
+
     // ── siegelslopes tests ───────────────────────────────────────────
 
     #[test]
@@ -21720,11 +22176,7 @@ mod tests {
         let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
         let y = vec![2.1, 4.0, 5.9, 8.1, 10.0, 11.9, 14.0, 16.1, 18.0, 20.1];
         let result = siegelslopes(&x, &y);
-        assert!(
-            (result.slope - 2.0).abs() < 0.01,
-            "slope: {}",
-            result.slope
-        );
+        assert!((result.slope - 2.0).abs() < 0.01, "slope: {}", result.slope);
         assert!(
             result.intercept.abs() < 0.2,
             "intercept: {}",
@@ -21748,11 +22200,7 @@ mod tests {
         let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
         let y: Vec<f64> = x.iter().map(|&xi| 2.0 * xi).collect();
         let result = theilslopes(&x, &y, 0.95);
-        assert!(
-            (result.slope - 2.0).abs() < 0.01,
-            "slope: {}",
-            result.slope
-        );
+        assert!((result.slope - 2.0).abs() < 0.01, "slope: {}", result.slope);
         assert!(result.low_slope <= result.slope);
         assert!(result.high_slope >= result.slope);
     }
@@ -21765,11 +22213,7 @@ mod tests {
         let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
         let y = vec![2.1, 4.0, 5.9, 8.1, 10.0, 11.9, 14.0, 16.1, 18.0, 20.1];
         let result = theilslopes(&x, &y, 0.95);
-        assert!(
-            (result.slope - 2.0).abs() < 0.01,
-            "slope: {}",
-            result.slope
-        );
+        assert!((result.slope - 2.0).abs() < 0.01, "slope: {}", result.slope);
         assert!(result.low_slope < result.slope);
         assert!(result.high_slope > result.slope);
     }
@@ -21818,7 +22262,11 @@ mod tests {
         assert_eq!(result.statistic[0][0], 0.0);
         assert_eq!(result.statistic[1][1], 0.0);
         // Should be significant
-        assert!(result.pvalue[0][1] < 0.05, "pvalue: {}", result.pvalue[0][1]);
+        assert!(
+            result.pvalue[0][1] < 0.05,
+            "pvalue: {}",
+            result.pvalue[0][1]
+        );
     }
 
     #[test]
@@ -21925,11 +22373,7 @@ mod tests {
         let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         // k2 = unbiased variance = 9.166666...
         let k2 = kstat(&data, 2);
-        assert!(
-            (k2 - 9.166666666666666).abs() < 1e-10,
-            "k2 = {}",
-            k2
-        );
+        assert!((k2 - 9.166666666666666).abs() < 1e-10, "k2 = {}", k2);
     }
 
     #[test]
@@ -21978,11 +22422,7 @@ mod tests {
         let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         // scipy.stats.lmoment([1..10], 2) = 1.833...
         let l2 = lmoment(&data, 2);
-        assert!(
-            (l2 - 1.833333333).abs() < 0.01,
-            "l2 = {}",
-            l2
-        );
+        assert!((l2 - 1.833333333).abs() < 0.01, "l2 = {}", l2);
     }
 
     #[test]
@@ -22087,7 +22527,11 @@ mod tests {
         // T1 = 5 (values <= 5), binomial(10, 0.5)
         assert_eq!(result.statistic, 5);
         assert_eq!(result.statistic_type, 1);
-        assert!(result.pvalue > 0.9, "pvalue should be high: {}", result.pvalue);
+        assert!(
+            result.pvalue > 0.9,
+            "pvalue should be high: {}",
+            result.pvalue
+        );
     }
 
     #[test]
@@ -22106,7 +22550,11 @@ mod tests {
         let data: Vec<f64> = (1..=100).map(|i| i as f64).collect();
         let result = quantile_test(&data, 25.0, 0.25);
         // Should be close to expected
-        assert!(result.pvalue > 0.5, "25th percentile at 25: {}", result.pvalue);
+        assert!(
+            result.pvalue > 0.5,
+            "25th percentile at 25: {}",
+            result.pvalue
+        );
     }
 
     #[test]
@@ -23637,7 +24085,8 @@ mod tests {
         assert!((rv.mean() - expected_mean).abs() < 1e-10);
 
         let mu = expected_mean;
-        let expected_var = 0.2 * (1.0 - mu).powi(2) + 0.5 * (2.0 - mu).powi(2) + 0.3 * (3.0 - mu).powi(2);
+        let expected_var =
+            0.2 * (1.0 - mu).powi(2) + 0.5 * (2.0 - mu).powi(2) + 0.3 * (3.0 - mu).powi(2);
         assert!((rv.var() - expected_var).abs() < 1e-10);
     }
 
