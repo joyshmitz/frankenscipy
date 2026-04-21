@@ -2136,7 +2136,11 @@ pub fn owens_t(h: f64, a: f64) -> f64 {
 /// Relative error exponential: (exp(x) - 1) / x, accurate near x=0.
 ///
 /// Matches `scipy.special.exprel`.
-pub fn exprel(x: f64) -> f64 {
+pub fn exprel(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("exprel", x_tensor, mode, |x| Ok(exprel_scalar(x)))
+}
+
+pub fn exprel_scalar(x: f64) -> f64 {
     if x.abs() < 1e-5 {
         // Taylor series: 1 + x/2 + x²/6 + x³/24 + ...
         1.0 + x / 2.0 + x * x / 6.0 + x * x * x / 24.0
@@ -5130,6 +5134,51 @@ mod tests {
         // Symmetric property: log_expit(x) + log_expit(-x) = -log(2) - |x|... actually just test consistency
         assert!((log_expit_scalar(5.0) - expit_scalar(5.0).ln()).abs() < 1e-14);
         assert!((log_expit_scalar(-5.0) - expit_scalar(-5.0).ln()).abs() < 1e-14);
+    }
+
+    fn expect_real_scalar(tensor: SpecialTensor) -> Result<f64, String> {
+        match tensor {
+            SpecialTensor::RealScalar(value) => Ok(value),
+            other => Err(format!("expected real scalar, got {other:?}")),
+        }
+    }
+
+    fn expect_real_vec(tensor: SpecialTensor) -> Result<Vec<f64>, String> {
+        match tensor {
+            SpecialTensor::RealVec(values) => Ok(values),
+            other => Err(format!("expected real vector, got {other:?}")),
+        }
+    }
+
+    #[test]
+    fn exprel_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = exprel(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - exprel_scalar(1.0)).abs() < 1e-14);
+
+        let vector = exprel(
+            &SpecialTensor::RealVec(vec![-1.0e-6, 0.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-1.0e-6, 0.0, 1.0].map(exprel_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn exprel_near_zero_series_stays_stable() -> Result<(), String> {
+        let result = exprel(&SpecialTensor::RealScalar(1.0e-8), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let value = expect_real_scalar(result)?;
+        let expected = 1.0 + 0.5e-8 + 1.0e-16 / 6.0 + 1.0e-24 / 24.0;
+        assert!((value - expected).abs() < 1e-16);
+        Ok(())
     }
 
     #[test]
