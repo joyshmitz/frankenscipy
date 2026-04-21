@@ -5,7 +5,7 @@
 //! Matches `scipy.spatial` core types:
 //! - `KDTree` — k-d tree for fast nearest-neighbor queries
 //! - `Rectangle` — hyperrectangle utility used by SciPy spatial search
-//! - `HalfspaceIntersection` — 2D halfspace intersection via Qhull-style duality
+//! - `HalfspaceIntersection` — bounded N-D halfspace intersection
 //! - `distance` — pairwise distance computations
 
 use std::collections::BTreeMap;
@@ -1350,42 +1350,46 @@ impl ConvexHull {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Halfspace Intersection (2D)
+// Halfspace Intersection
 // ══════════════════════════════════════════════════════════════════════
 
 type Point2 = (f64, f64);
 type Halfspace2 = [f64; 3];
 type Equation2 = [f64; 3];
+type NdVertices = Vec<Vec<f64>>;
+type NdFacets = Vec<Vec<usize>>;
 
-/// Halfspace intersection result for 2D halfspaces.
+/// Halfspace intersection result for bounded N-D halfspaces.
 ///
 /// Mirrors the core public attributes of
-/// `scipy.spatial.HalfspaceIntersection(halfspaces, interior_point)` for the
-/// 2D scope currently implemented by FrankenSciPy. Halfspaces use SciPy's
-/// `A x + b <= 0` row format `[a_x, a_y, b]`. Higher-dimensional inputs must
-/// use [`HalfspaceIntersection::from_nd`], which fails closed until the crate
-/// grows a full N-D Qhull-compatible backend.
+/// `scipy.spatial.HalfspaceIntersection(halfspaces, interior_point)`. The 2D
+/// constructor retains the richer dual-hull metadata surface; `from_nd`
+/// generalizes bounded intersections to higher dimensions with vector-backed
+/// fields while leaving `dual_area`, `dual_volume`, and `dual_equations`
+/// populated only for the 2D fast path.
 #[derive(Debug, Clone)]
 pub struct HalfspaceIntersection {
-    /// Input halfspaces in SciPy row format `[a_x, a_y, b]`.
-    pub halfspaces: Vec<Halfspace2>,
+    /// Input halfspaces in SciPy row format `[a_0, ..., a_{n-1}, b]`.
+    pub halfspaces: Vec<Vec<f64>>,
     /// Feasible point that must be strictly inside every halfspace.
-    pub interior_point: Point2,
-    /// Halfspace intersections derived from the dual hull equations.
-    pub intersections: Vec<Point2>,
+    pub interior_point: Vec<f64>,
+    /// Primal intersection vertices.
+    pub intersections: Vec<Vec<f64>>,
     /// Qhull-style dual points `-A / (A * interior_point + b)`.
-    pub dual_points: Vec<Point2>,
+    pub dual_points: Vec<Vec<f64>>,
     /// Indices of dual points forming each dual convex-hull facet.
     pub dual_facets: Vec<Vec<usize>>,
     /// Indices of halfspaces that form the dual convex-hull vertices.
     pub dual_vertices: Vec<usize>,
-    /// Dual hull line equations `[normal_x, normal_y, offset]`.
-    pub dual_equations: Vec<Equation2>,
+    /// Dual hull facet equations. Populated only for the 2D fast path.
+    pub dual_equations: Vec<Vec<f64>>,
     /// Perimeter of the 2D dual convex hull, matching SciPy's `dual_area`.
+    /// `NaN` for higher-dimensional bounded intersections.
     pub dual_area: f64,
     /// Area of the 2D dual convex hull, matching SciPy's `dual_volume`.
+    /// `NaN` for higher-dimensional bounded intersections.
     pub dual_volume: f64,
-    /// Spatial dimension, fixed at 2 for this implementation.
+    /// Spatial dimension.
     pub ndim: usize,
     /// Number of input inequalities.
     pub nineq: usize,
@@ -1422,13 +1426,13 @@ impl HalfspaceIntersection {
             .collect::<Vec<_>>();
 
         Ok(Self {
-            halfspaces: halfspaces.to_vec(),
-            interior_point,
-            intersections,
-            dual_points,
+            halfspaces: halfspaces.iter().map(|row| row.to_vec()).collect(),
+            interior_point: vec![interior_point.0, interior_point.1],
+            intersections: intersections.into_iter().map(|(x, y)| vec![x, y]).collect(),
+            dual_points: dual_points.into_iter().map(|(x, y)| vec![x, y]).collect(),
             dual_facets,
             dual_vertices: dual_hull.vertices,
-            dual_equations,
+            dual_equations: dual_equations.into_iter().map(|eq| eq.to_vec()).collect(),
             dual_area: dual_hull.perimeter,
             dual_volume: dual_hull.area,
             ndim: 2,
@@ -1437,32 +1441,43 @@ impl HalfspaceIntersection {
         })
     }
 
-    /// Construct from SciPy-shaped rows, failing closed for unsupported dimensions.
+    /// Construct from SciPy-shaped rows.
     pub fn from_nd(halfspaces: &[Vec<f64>], interior_point: &[f64]) -> Result<Self, SpatialError> {
-        if interior_point.len() != 2 {
+        validate_halfspace_intersection_inputs_nd(halfspaces, interior_point)?;
+        let ndim = interior_point.len();
+        if ndim == 2 {
+            let rows = halfspaces
+                .iter()
+                .map(|row| [row[0], row[1], row[2]])
+                .collect::<Vec<_>>();
+            return Self::new(&rows, (interior_point[0], interior_point[1]));
+        }
+
+        if !halfspace_region_is_bounded_nd(halfspaces, ndim) {
             return Err(SpatialError::InvalidArgument(
-                "HalfspaceIntersection currently supports only 2D interior points".to_string(),
+                "HalfspaceIntersection currently supports only bounded regions for ndim > 2"
+                    .to_string(),
             ));
         }
-        let rows = halfspaces
-            .iter()
-            .enumerate()
-            .map(|(idx, row)| {
-                if row.len() != 3 {
-                    return Err(SpatialError::DimensionMismatch {
-                        expected: 3,
-                        actual: row.len(),
-                    });
-                }
-                if row.iter().any(|value| !value.is_finite()) {
-                    return Err(SpatialError::InvalidArgument(format!(
-                        "halfspace row {idx} contains a non-finite coefficient"
-                    )));
-                }
-                Ok([row[0], row[1], row[2]])
-            })
-            .collect::<Result<Vec<_>, SpatialError>>()?;
-        Self::new(&rows, (interior_point[0], interior_point[1]))
+
+        let dual_points = halfspace_dual_points_nd(halfspaces, interior_point);
+        let (intersections, dual_facets) = enumerate_halfspace_vertices_nd(halfspaces, ndim)?;
+        let dual_vertices = collect_dual_vertices(&dual_facets, halfspaces.len());
+
+        Ok(Self {
+            halfspaces: halfspaces.to_vec(),
+            interior_point: interior_point.to_vec(),
+            intersections,
+            dual_points,
+            dual_facets,
+            dual_vertices,
+            dual_equations: Vec::new(),
+            dual_area: f64::NAN,
+            dual_volume: f64::NAN,
+            ndim,
+            nineq: halfspaces.len(),
+            is_bounded: true,
+        })
     }
 
     /// Recompute the intersection after appending halfspaces.
@@ -1472,12 +1487,12 @@ impl HalfspaceIntersection {
     /// deterministic from the complete halfspace set.
     pub fn add_halfspaces(
         &mut self,
-        halfspaces: &[Halfspace2],
+        halfspaces: &[Vec<f64>],
         _restart: bool,
     ) -> Result<(), SpatialError> {
         let mut combined = self.halfspaces.clone();
         combined.extend_from_slice(halfspaces);
-        *self = Self::new(&combined, self.interior_point)?;
+        *self = Self::from_nd(&combined, &self.interior_point)?;
         Ok(())
     }
 
@@ -1693,12 +1708,90 @@ fn validate_halfspace_intersection_inputs(
     Ok(())
 }
 
+fn validate_halfspace_intersection_inputs_nd(
+    halfspaces: &[Vec<f64>],
+    interior_point: &[f64],
+) -> Result<(), SpatialError> {
+    let ndim = interior_point.len();
+    if ndim == 0 {
+        return Err(SpatialError::InvalidArgument(
+            "interior_point must not be empty".to_string(),
+        ));
+    }
+    if halfspaces.len() < ndim + 1 {
+        return Err(qhull_error(format!(
+            "QH6214 qhull input error: not enough halfspaces({}) to construct initial simplex (need {})",
+            halfspaces.len(),
+            ndim + 1
+        )));
+    }
+    if interior_point.iter().any(|value| !value.is_finite()) {
+        return Err(SpatialError::InvalidArgument(
+            "interior_point must contain finite coordinates".to_string(),
+        ));
+    }
+
+    for (idx, row) in halfspaces.iter().enumerate() {
+        if row.len() != ndim + 1 {
+            return Err(SpatialError::DimensionMismatch {
+                expected: ndim + 1,
+                actual: row.len(),
+            });
+        }
+        if row.iter().any(|value| !value.is_finite()) {
+            return Err(SpatialError::InvalidArgument(format!(
+                "halfspace row {idx} contains a non-finite coefficient"
+            )));
+        }
+        let normal_norm = row[..ndim]
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            .sqrt();
+        if normal_norm <= f64::EPSILON {
+            return Err(qhull_error(format!(
+                "QH6154 Qhull precision error: halfspace row {idx} has zero normal"
+            )));
+        }
+        let signed_distance = row[..ndim]
+            .iter()
+            .zip(interior_point.iter())
+            .map(|(a, x)| a * x)
+            .sum::<f64>()
+            + row[ndim];
+        let clear_inside_tol = 1e-12 * normal_norm.max(1.0);
+        if signed_distance >= -clear_inside_tol {
+            return Err(qhull_error(
+                "QH6023 qhull input error: feasible point is not clearly inside halfspace",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn halfspace_dual_points(halfspaces: &[Halfspace2], interior_point: Point2) -> Vec<Point2> {
     halfspaces
         .iter()
         .map(|&[a, b, offset]| {
             let distance = a * interior_point.0 + b * interior_point.1 + offset;
             (-a / distance, -b / distance)
+        })
+        .collect()
+}
+
+fn halfspace_dual_points_nd(halfspaces: &[Vec<f64>], interior_point: &[f64]) -> Vec<Vec<f64>> {
+    let ndim = interior_point.len();
+    halfspaces
+        .iter()
+        .map(|row| {
+            let distance = row[..ndim]
+                .iter()
+                .zip(interior_point.iter())
+                .map(|(a, x)| a * x)
+                .sum::<f64>()
+                + row[ndim];
+            row[..ndim].iter().map(|value| -value / distance).collect()
         })
         .collect()
 }
@@ -1758,6 +1851,196 @@ fn halfspace_region_is_bounded(halfspaces: &[Halfspace2]) -> bool {
         }
     }
     true
+}
+
+fn halfspace_region_is_bounded_nd(halfspaces: &[Vec<f64>], ndim: usize) -> bool {
+    let normals = halfspaces
+        .iter()
+        .map(|row| row[..ndim].to_vec())
+        .collect::<Vec<_>>();
+    let mut combos = Vec::new();
+    combinations_recursive(normals.len(), ndim + 1, 0, &mut Vec::new(), &mut combos);
+
+    combos.into_iter().any(|combo| {
+        let mut matrix = vec![vec![0.0; ndim + 1]; ndim + 1];
+        let mut rhs = vec![0.0; ndim + 1];
+        rhs[ndim] = 1.0;
+
+        for (col, &normal_idx) in combo.iter().enumerate() {
+            for row in 0..ndim {
+                matrix[row][col] = normals[normal_idx][row];
+            }
+            matrix[ndim][col] = 1.0;
+        }
+
+        solve_linear_system(&matrix, &rhs, 1e-10)
+            .is_some_and(|weights| weights.iter().all(|value| *value > 1e-9))
+    })
+}
+
+fn enumerate_halfspace_vertices_nd(
+    halfspaces: &[Vec<f64>],
+    ndim: usize,
+) -> Result<(NdVertices, NdFacets), SpatialError> {
+    let mut combos = Vec::new();
+    combinations_recursive(halfspaces.len(), ndim, 0, &mut Vec::new(), &mut combos);
+
+    let mut vertices = Vec::<Vec<f64>>::new();
+    let mut facets = Vec::<Vec<usize>>::new();
+    for combo in combos {
+        let mut matrix = vec![vec![0.0; ndim]; ndim];
+        let mut rhs = vec![0.0; ndim];
+        for (row_idx, &halfspace_idx) in combo.iter().enumerate() {
+            matrix[row_idx].copy_from_slice(&halfspaces[halfspace_idx][..ndim]);
+            rhs[row_idx] = -halfspaces[halfspace_idx][ndim];
+        }
+
+        let Some(solution) = solve_linear_system(&matrix, &rhs, 1e-10) else {
+            continue;
+        };
+        if !point_satisfies_halfspaces(&solution, halfspaces, 1e-8) {
+            continue;
+        }
+
+        if let Some(existing_idx) = vertices
+            .iter()
+            .position(|vertex| points_approx_eq(vertex, &solution, 1e-8))
+        {
+            merge_sorted_unique(&mut facets[existing_idx], &combo);
+        } else {
+            vertices.push(solution);
+            facets.push(combo);
+        }
+    }
+
+    if vertices.is_empty() {
+        return Err(qhull_error(
+            "QH6154 Qhull precision error: initial simplex is flat",
+        ));
+    }
+
+    Ok((vertices, facets))
+}
+
+fn collect_dual_vertices(facets: &[Vec<usize>], total_halfspaces: usize) -> Vec<usize> {
+    let mut present = vec![false; total_halfspaces];
+    for facet in facets {
+        for &index in facet {
+            present[index] = true;
+        }
+    }
+    present
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, used)| used.then_some(index))
+        .collect()
+}
+
+fn point_satisfies_halfspaces(point: &[f64], halfspaces: &[Vec<f64>], tol: f64) -> bool {
+    let ndim = point.len();
+    halfspaces.iter().all(|row| {
+        row[..ndim]
+            .iter()
+            .zip(point.iter())
+            .map(|(a, x)| a * x)
+            .sum::<f64>()
+            + row[ndim]
+            <= tol
+    })
+}
+
+fn points_approx_eq(lhs: &[f64], rhs: &[f64], tol: f64) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
+            .iter()
+            .zip(rhs.iter())
+            .all(|(left, right)| (left - right).abs() <= tol)
+}
+
+fn merge_sorted_unique(target: &mut Vec<usize>, incoming: &[usize]) {
+    for &value in incoming {
+        if !target.contains(&value) {
+            target.push(value);
+        }
+    }
+    target.sort_unstable();
+}
+
+fn combinations_recursive(
+    n: usize,
+    k: usize,
+    start: usize,
+    current: &mut Vec<usize>,
+    output: &mut Vec<Vec<usize>>,
+) {
+    if current.len() == k {
+        output.push(current.clone());
+        return;
+    }
+    if start >= n {
+        return;
+    }
+    for next in start..=n - (k - current.len()) {
+        current.push(next);
+        combinations_recursive(n, k, next + 1, current, output);
+        current.pop();
+    }
+}
+
+fn solve_linear_system(matrix: &[Vec<f64>], rhs: &[f64], tol: f64) -> Option<Vec<f64>> {
+    let n = matrix.len();
+    if n == 0 || rhs.len() != n || matrix.iter().any(|row| row.len() != n) {
+        return None;
+    }
+
+    let mut augmented = matrix
+        .iter()
+        .zip(rhs.iter())
+        .map(|(row, rhs_value)| {
+            let mut combined = row.clone();
+            combined.push(*rhs_value);
+            combined
+        })
+        .collect::<Vec<_>>();
+
+    for pivot in 0..n {
+        let mut best_row = pivot;
+        let mut best_value = augmented[pivot][pivot].abs();
+        for (row_idx, row) in augmented.iter().enumerate().skip(pivot + 1) {
+            let candidate = row[pivot].abs();
+            if candidate > best_value {
+                best_value = candidate;
+                best_row = row_idx;
+            }
+        }
+        if best_value <= tol {
+            return None;
+        }
+        if best_row != pivot {
+            augmented.swap(best_row, pivot);
+        }
+
+        let pivot_value = augmented[pivot][pivot];
+        for value in augmented[pivot].iter_mut().skip(pivot) {
+            *value /= pivot_value;
+        }
+
+        let pivot_row = augmented[pivot].clone();
+        for (row_idx, row) in augmented.iter_mut().enumerate() {
+            if row_idx == pivot {
+                continue;
+            }
+            let factor = row[pivot];
+            if factor.abs() <= tol {
+                continue;
+            }
+            for (value, pivot_value) in row.iter_mut().zip(pivot_row.iter()).skip(pivot) {
+                *value -= factor * *pivot_value;
+            }
+        }
+    }
+
+    Some(augmented.into_iter().map(|row| row[n]).collect())
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2834,10 +3117,10 @@ pub fn spread(points: &[Vec<f64>]) -> f64 {
 mod tests {
     use super::*;
 
-    fn point_set_contains(points: &[Point2], expected: Point2) -> bool {
+    fn point_set_contains(points: &[Vec<f64>], expected: &[f64]) -> bool {
         points
             .iter()
-            .any(|&(x, y)| (x - expected.0).abs() < 1e-10 && (y - expected.1).abs() < 1e-10)
+            .any(|point| points_approx_eq(point, expected, 1e-10))
     }
 
     #[test]
@@ -3598,14 +3881,14 @@ mod tests {
         assert!(hs.is_bounded);
         assert_eq!(hs.dual_vertices.len(), 4);
         assert_eq!(hs.dual_facets.len(), 4);
-        assert!((hs.dual_points[0].0 + 2.0).abs() < 1e-10);
-        assert!((hs.dual_points[1].1 + 2.0).abs() < 1e-10);
+        assert!((hs.dual_points[0][0] + 2.0).abs() < 1e-10);
+        assert!((hs.dual_points[1][1] + 2.0).abs() < 1e-10);
         assert!((hs.dual_volume - 8.0).abs() < 1e-10);
         assert!((hs.dual_area - 8.0 * 2.0_f64.sqrt()).abs() < 1e-10);
 
-        for expected in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+        for expected in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]] {
             assert!(
-                point_set_contains(&hs.intersections, expected),
+                point_set_contains(&hs.intersections, &expected),
                 "missing intersection {expected:?}: {:?}",
                 hs.intersections
             );
@@ -3634,24 +3917,53 @@ mod tests {
         let hs = HalfspaceIntersection::new(&halfspaces, (0.5, 0.5)).expect("halfspaces");
 
         assert!(!hs.is_bounded);
-        assert!(point_set_contains(&hs.intersections, (0.0, 0.0)));
-        assert!(point_set_contains(&hs.intersections, (1.0, 0.0)));
+        assert!(point_set_contains(&hs.intersections, &[0.0, 0.0]));
+        assert!(point_set_contains(&hs.intersections, &[1.0, 0.0]));
         assert!(
             hs.intersections
                 .iter()
-                .any(|&(x, y)| !x.is_finite() || !y.is_finite()),
+                .any(|row| row.iter().any(|value| !value.is_finite())),
             "unbounded dual edge should surface a non-finite intersection"
         );
     }
 
     #[test]
-    fn halfspace_intersection_from_nd_fails_closed_for_unsupported_dimension() {
-        let halfspaces = vec![vec![-1.0, 0.0, 0.0, 0.0]; 4];
-        let err = HalfspaceIntersection::from_nd(&halfspaces, &[0.25, 0.25, 0.25])
-            .expect_err("3D unsupported");
-        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    fn halfspace_intersection_from_nd_supports_bounded_3d_tetrahedron() {
+        let halfspaces = vec![
+            vec![-1.0, 0.0, 0.0, 0.0],
+            vec![0.0, -1.0, 0.0, 0.0],
+            vec![0.0, 0.0, -1.0, 0.0],
+            vec![1.0, 1.0, 1.0, -1.0],
+        ];
+        let hs = HalfspaceIntersection::from_nd(&halfspaces, &[0.2, 0.2, 0.2]).expect("3D bounded");
+        assert_eq!(hs.ndim, 3);
+        assert!(hs.is_bounded);
+        assert_eq!(hs.dual_vertices, vec![0, 1, 2, 3]);
+        for expected in [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ] {
+            assert!(
+                point_set_contains(&hs.intersections, &expected),
+                "missing 3D intersection {expected:?}: {:?}",
+                hs.intersections
+            );
+        }
+        assert!(hs.dual_area.is_nan());
+        assert!(hs.dual_volume.is_nan());
+        assert!(hs.dual_equations.is_empty());
+    }
 
-        let bad_rows = vec![vec![-1.0, 0.0], vec![0.0, -1.0, 0.0]];
+    #[test]
+    fn halfspace_intersection_from_nd_rejects_invalid_higher_dimensional_inputs() {
+        let too_few_halfspaces = vec![vec![-1.0, 0.0, 0.0, 0.0]; 4];
+        let err = HalfspaceIntersection::from_nd(&too_few_halfspaces, &[0.25, 0.25, 0.25, 0.25])
+            .expect_err("4D input needs at least 5 halfspaces");
+        assert!(matches!(err, SpatialError::Qhull(_)));
+
+        let bad_rows = vec![vec![-1.0, 0.0, 0.0], vec![0.0, -1.0], vec![1.0, 1.0, -1.0]];
         let err = HalfspaceIntersection::from_nd(&bad_rows, &[0.25, 0.25])
             .expect_err("row shape mismatch");
         assert!(matches!(err, SpatialError::DimensionMismatch { .. }));
@@ -3666,11 +3978,11 @@ mod tests {
         .expect("initial halfspaces");
         assert!(!hs.is_bounded);
 
-        hs.add_halfspaces(&[[0.0, 1.0, -1.0]], false)
+        hs.add_halfspaces(&[vec![0.0, 1.0, -1.0]], false)
             .expect("append y <= 1");
         assert!(hs.is_bounded);
         assert_eq!(hs.nineq, 4);
-        assert!(point_set_contains(&hs.intersections, (1.0, 1.0)));
+        assert!(point_set_contains(&hs.intersections, &[1.0, 1.0]));
     }
 
     // ── Delaunay tests ──────────────────────────────────────────────

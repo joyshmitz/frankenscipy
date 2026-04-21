@@ -3447,16 +3447,8 @@ fn execute_halfspace_intersection(case: &SpatialCase) -> SpatialObserved {
 
     match fsci_spatial::HalfspaceIntersection::from_nd(&halfspaces, &interior_point) {
         Ok(result) => SpatialObserved::HalfspaceIntersection {
-            intersections: result
-                .intersections
-                .iter()
-                .map(|&(x, y)| vec![x, y])
-                .collect(),
-            dual_points: result
-                .dual_points
-                .iter()
-                .map(|&(x, y)| vec![x, y])
-                .collect(),
+            intersections: result.intersections,
+            dual_points: result.dual_points,
             dual_vertices: result.dual_vertices,
             dual_area: result.dual_area,
             dual_volume: result.dual_volume,
