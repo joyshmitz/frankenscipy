@@ -1097,6 +1097,11 @@ impl ContinuousDistribution for GammaDist {
         let scale = var / mean;
         Self { a, scale }
     }
+
+    fn entropy(&self) -> f64 {
+        // H = a + ln(scale) + ln(Gamma(a)) + (1-a)*psi(a)
+        self.a + self.scale.ln() + ln_gamma(self.a) + (1.0 - self.a) * digamma(self.a)
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1181,6 +1186,11 @@ impl ContinuousDistribution for Weibull {
         let g2 = ln_gamma(1.0 + 2.0 / self.c).exp();
         self.scale * self.scale * (g2 - g1 * g1)
     }
+
+    fn entropy(&self) -> f64 {
+        // H = gamma_euler*(1 - 1/c) + ln(scale/c) + 1
+        EULER_MASCHERONI * (1.0 - 1.0 / self.c) + (self.scale / self.c).ln() + 1.0
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1263,6 +1273,11 @@ impl ContinuousDistribution for Lognormal {
             s: var.sqrt(),
             scale: mu.exp(),
         }
+    }
+
+    fn entropy(&self) -> f64 {
+        // H = 0.5 + 0.5*ln(2*pi) + ln(s) + ln(scale)
+        0.5 + 0.5 * (2.0 * PI).ln() + self.s.ln() + self.scale.ln()
     }
 }
 
@@ -1546,6 +1561,10 @@ impl ContinuousDistribution for Gumbel {
         let (loc, scale) = gumbel_fit_loc_scale(data);
         Self { loc, scale }
     }
+
+    fn entropy(&self) -> f64 {
+        self.scale.ln() + EULER_MASCHERONI + 1.0
+    }
 }
 
 /// Left-skewed Gumbel (extreme value type I) distribution.
@@ -1683,6 +1702,10 @@ impl ContinuousDistribution for Logistic {
             loc: mean,
             scale: var.sqrt() * 3.0_f64.sqrt() / PI,
         }
+    }
+
+    fn entropy(&self) -> f64 {
+        self.scale.ln() + 2.0
     }
 }
 
@@ -2576,6 +2599,10 @@ fn gamma_ratio_t(v: f64) -> f64 {
 
 fn ln_gamma(x: f64) -> f64 {
     fsci_special::gammaln_scalar(x, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+fn digamma(x: f64) -> f64 {
+    fsci_special::digamma_scalar(x)
 }
 
 fn lower_regularized_gamma(a: f64, x: f64) -> f64 {
@@ -19587,5 +19614,53 @@ mod tests {
         // Distributions without explicit kurtosis return NaN
         let t = StudentT::new(5.0);
         assert!(t.kurtosis().is_nan(), "StudentT kurtosis should be NaN");
+    }
+
+    // ── Expanded entropy tests ───────────────────────────────────────────
+
+    #[test]
+    fn dist_entropy_gamma() {
+        // H = a + ln(scale) + ln(Gamma(a)) + (1-a)*psi(a)
+        let g = GammaDist::new(2.0, 1.0);
+        let expected = 2.0 + 0.0_f64.ln().max(-1e10) + ln_gamma(2.0) + (1.0 - 2.0) * digamma(2.0);
+        // For a=2, scale=1: H = 2 + 0 + ln(1) + (-1)*digamma(2)
+        // digamma(2) = 1 - gamma ≈ 0.4227
+        // H ≈ 2 + 0 + 0 - 0.4227 ≈ 1.577
+        let h = g.entropy();
+        assert!(h.is_finite(), "Gamma entropy should be finite: {}", h);
+    }
+
+    #[test]
+    fn dist_entropy_weibull() {
+        // H = gamma_euler*(1 - 1/c) + ln(scale/c) + 1
+        let w = Weibull::new(1.0, 1.0);
+        // For c=1 (exponential): H = 0 + ln(1) + 1 = 1
+        assert_close(w.entropy(), 1.0, 1e-10, "Weibull(1,1) entropy");
+    }
+
+    #[test]
+    fn dist_entropy_lognormal() {
+        // H = 0.5 + 0.5*ln(2*pi) + ln(s) + ln(scale)
+        let ln = Lognormal::new(1.0, 1.0);
+        let expected = 0.5 + 0.5 * (2.0 * PI).ln() + 0.0 + 0.0; // ln(1) = 0
+        assert_close(ln.entropy(), expected, 1e-10, "Lognormal(1,1) entropy");
+    }
+
+    #[test]
+    fn dist_entropy_logistic() {
+        // H = ln(scale) + 2
+        let l = Logistic::new(0.0, 1.0);
+        assert_close(l.entropy(), 2.0, 1e-10, "Logistic(0,1) entropy");
+
+        let l2 = Logistic::new(0.0, 2.0);
+        assert_close(l2.entropy(), 2.0_f64.ln() + 2.0, 1e-10, "Logistic(0,2) entropy");
+    }
+
+    #[test]
+    fn dist_entropy_gumbel() {
+        // H = ln(scale) + gamma_euler + 1
+        let g = Gumbel::new(0.0, 1.0);
+        let expected = 0.0 + EULER_MASCHERONI + 1.0;
+        assert_close(g.entropy(), expected, 1e-10, "Gumbel(0,1) entropy");
     }
 }
