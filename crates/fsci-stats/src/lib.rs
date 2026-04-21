@@ -13815,6 +13815,75 @@ pub fn yeojohnson_inv(y: &[f64], lam: f64) -> Vec<f64> {
         .collect()
 }
 
+/// Find optimal Yeo-Johnson transformation parameter lambda.
+///
+/// Searches for the lambda that maximizes the Yeo-Johnson log-likelihood.
+/// Matches `scipy.stats.yeojohnson_normmax(x, brack)`.
+///
+/// # Arguments
+/// * `data` - Input data (can include negative values)
+/// * `brack` - Search bracket (low, high) for lambda
+pub fn yeojohnson_normmax(data: &[f64], brack: (f64, f64)) -> f64 {
+    let n = data.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+
+    let (lo, hi) = brack;
+    let nf = n as f64;
+
+    let log_term: f64 = data.iter().map(|&x| x.signum() * (x.abs() + 1.0).ln()).sum();
+
+    let mut best_lambda = lo;
+    let mut best_ll = f64::NEG_INFINITY;
+
+    let steps = 400;
+    for i in 0..=steps {
+        let lam = lo + (hi - lo) * i as f64 / steps as f64;
+        let transformed = yeojohnson(data, lam);
+
+        let mean = transformed.iter().sum::<f64>() / nf;
+        let var = transformed.iter().map(|&y| (y - mean).powi(2)).sum::<f64>() / nf;
+
+        if var <= 0.0 {
+            continue;
+        }
+
+        let ll = -nf / 2.0 * var.ln() + (lam - 1.0) * log_term;
+
+        if ll > best_ll {
+            best_ll = ll;
+            best_lambda = lam;
+        }
+    }
+
+    best_lambda
+}
+
+/// Yeo-Johnson log-likelihood function.
+///
+/// Computes the log-likelihood for a given lambda.
+/// Matches `scipy.stats.yeojohnson_llf(lmb, data)`.
+pub fn yeojohnson_llf(lmb: f64, data: &[f64]) -> f64 {
+    let n = data.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+
+    let nf = n as f64;
+    let transformed = yeojohnson(data, lmb);
+
+    let mean = transformed.iter().sum::<f64>() / nf;
+    let var = transformed.iter().map(|&y| (y - mean).powi(2)).sum::<f64>() / nf;
+
+    if var <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+
+    let log_term: f64 = data.iter().map(|&x| x.signum() * (x.abs() + 1.0).ln()).sum();
+    -nf / 2.0 * var.ln() + (lmb - 1.0) * log_term
+}
+
 /// Compute the median of a dataset.
 pub fn median(data: &[f64]) -> f64 {
     if data.is_empty() {
@@ -19480,6 +19549,44 @@ mod tests {
     #[test]
     fn boxcox_llf_empty() {
         assert!(boxcox_llf(1.0, &[]).is_nan());
+    }
+
+    // ── Yeo-Johnson tests ───────────────────────────────────────────
+
+    #[test]
+    fn yeojohnson_normmax_positive_data() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let optimal = yeojohnson_normmax(&data, (-2.0, 2.0));
+        assert!(optimal >= -2.0 && optimal <= 2.0);
+    }
+
+    #[test]
+    fn yeojohnson_normmax_negative_data() {
+        let data = vec![-5.0, -2.0, -1.0, 0.0, 1.0, 2.0, 5.0];
+        let optimal = yeojohnson_normmax(&data, (-2.0, 2.0));
+        assert!(optimal.is_finite());
+    }
+
+    #[test]
+    fn yeojohnson_normmax_empty() {
+        assert!(yeojohnson_normmax(&[], (-2.0, 2.0)).is_nan());
+    }
+
+    #[test]
+    fn yeojohnson_llf_optimal_is_max() {
+        let data = vec![-2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let optimal = yeojohnson_normmax(&data, (-2.0, 2.0));
+        let llf_optimal = yeojohnson_llf(optimal, &data);
+        let llf_other = yeojohnson_llf(optimal + 0.5, &data);
+        assert!(
+            llf_optimal >= llf_other - 1e-6,
+            "optimal lambda {optimal} should have higher llf: {llf_optimal} vs {llf_other}"
+        );
+    }
+
+    #[test]
+    fn yeojohnson_llf_empty() {
+        assert!(yeojohnson_llf(1.0, &[]).is_nan());
     }
 
     // ── Kendall's tau tests ────────────────────────────────────────
