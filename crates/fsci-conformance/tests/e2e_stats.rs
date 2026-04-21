@@ -2725,8 +2725,8 @@ fn e2e_028_multiple_testing_helper_contracts() {
 
 /// Scenario 29: Combined p-value helper contracts.
 /// Verifies SciPy-shaped `combine_pvalues` outputs for Fisher, Pearson,
-/// Tippett, and weighted Stouffer methods, plus fail-closed invalid-method
-/// handling.
+/// Tippett, weighted Stouffer, and Mudholkar-George methods, plus fail-closed
+/// invalid-method handling.
 #[test]
 fn e2e_029_combine_pvalues_helper_contracts() {
     let scenario_id = "e2e_stats_029_combine_pvalues_helpers";
@@ -2815,13 +2815,34 @@ fn e2e_029_combine_pvalues_helper_contracts() {
     ));
 
     let t = Instant::now();
+    let mudholkar_george = combine_pvalues(&[0.01, 0.03, 0.2], Some("mudholkar_george"), None)
+        .expect("mudholkar_george");
+    let pass = (mudholkar_george.statistic - 9.457_512_901_089_753).abs() < TOL
+        && (mudholkar_george.pvalue - 0.046_957_352_596_219_86).abs() < TOL;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        5,
+        "combine_pvalues_mudholkar_george_reference",
+        "combine_pvalues([0.01,0.03,0.2], Some(\"mudholkar_george\"), None)",
+        "Mudholkar-George mode should match SciPy-shaped logistic-normalized logit aggregation",
+        &format!(
+            "statistic={:.12}, pvalue={:.12}",
+            mudholkar_george.statistic, mudholkar_george.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
     let invalid = combine_pvalues(&[0.01, 0.02], Some("unknown"), None);
     let pass = invalid.is_err();
     if !pass {
         all_pass = false;
     }
     steps.push(make_step(
-        5,
+        6,
         "combine_pvalues_invalid_method_fail_closed",
         "combine_pvalues([0.01,0.02], Some(\"unknown\"), None)",
         "unsupported methods should fail closed rather than silently selecting a fallback",
