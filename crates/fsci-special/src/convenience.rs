@@ -19,8 +19,8 @@ use std::f64::consts::{FRAC_1_SQRT_2, PI, SQRT_2};
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, record_special_trace,
+    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor, record_special_trace,
 };
 
 pub const CONVENIENCE_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -1261,6 +1261,54 @@ where
     }
 }
 
+fn map_real_or_complex<F, G>(
+    function: &'static str,
+    input: &SpecialTensor,
+    mode: RuntimeMode,
+    real_kernel: F,
+    complex_kernel: G,
+) -> SpecialResult
+where
+    F: Fn(f64) -> Result<f64, SpecialError>,
+    G: Fn(Complex64) -> Result<Complex64, SpecialError>,
+{
+    match input {
+        SpecialTensor::RealScalar(x) => real_kernel(*x).map(SpecialTensor::RealScalar),
+        SpecialTensor::RealVec(values) => values
+            .iter()
+            .copied()
+            .map(real_kernel)
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        SpecialTensor::ComplexScalar(value) => {
+            complex_kernel(*value).map(SpecialTensor::ComplexScalar)
+        }
+        SpecialTensor::ComplexVec(values) => values
+            .iter()
+            .copied()
+            .map(complex_kernel)
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        SpecialTensor::Empty => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid special-function input",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid special-function input",
+            })
+        }
+    }
+}
+
 fn map_real_binary<F>(
     function: &'static str,
     lhs: &SpecialTensor,
@@ -1925,7 +1973,18 @@ pub fn spence_scalar(x: f64) -> f64 {
 /// Wright Omega function: solution of y + ln(y) = z.
 ///
 /// Matches `scipy.special.wrightomega`.
-pub fn wrightomega(z: f64) -> f64 {
+pub fn wrightomega(z_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_or_complex(
+        "wrightomega",
+        z_tensor,
+        mode,
+        |z| Ok(wrightomega_scalar(z)),
+        |z| wrightomega_complex_scalar(z, mode),
+    )
+}
+
+/// Scalar Wright Omega helper.
+pub fn wrightomega_scalar(z: f64) -> f64 {
     // Initial guess via Lambert W approximation
     let mut w = if z > 1.0 {
         z - z.ln()
@@ -1948,6 +2007,32 @@ pub fn wrightomega(z: f64) -> f64 {
     }
 
     w
+}
+
+fn wrightomega_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    if z.re.is_nan() || z.im.is_nan() {
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+    if !z.is_finite() {
+        if z.im == 0.0 && z.re == f64::INFINITY {
+            return Ok(Complex64::from_real(f64::INFINITY));
+        }
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+    if z.im == 0.0 {
+        return Ok(Complex64::from_real(wrightomega_scalar(z.re)));
+    }
+
+    let lambertw = crate::elliptic::lambertw(&SpecialTensor::ComplexScalar(z.exp()), mode)?;
+    match lambertw {
+        SpecialTensor::ComplexScalar(value) => Ok(value),
+        _ => Err(SpecialError {
+            function: "wrightomega",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "unexpected tensor shape from lambertw",
+        }),
+    }
 }
 
 /// Iterated exponential function (tetration): exp(exp(...exp(x)...)) applied n times.
@@ -6070,6 +6155,29 @@ mod tests {
         }
     }
 
+    fn expect_complex_scalar(tensor: SpecialTensor) -> Result<Complex64, String> {
+        match tensor {
+            SpecialTensor::ComplexScalar(value) => Ok(value),
+            other => Err(format!("expected complex scalar, got {other:?}")),
+        }
+    }
+
+    fn expect_complex_vec(tensor: SpecialTensor) -> Result<Vec<Complex64>, String> {
+        match tensor {
+            SpecialTensor::ComplexVec(values) => Ok(values),
+            other => Err(format!("expected complex vector, got {other:?}")),
+        }
+    }
+
+    fn assert_complex_close(actual: Complex64, expected: Complex64, tol: f64, label: &str) {
+        let diff = (actual - expected).abs();
+        let scale = expected.abs().max(1.0);
+        assert!(
+            diff <= tol * scale,
+            "{label}: actual={actual:?}, expected={expected:?}, diff={diff}"
+        );
+    }
+
     #[test]
     fn exprel_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
         let scalar = exprel(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict)
@@ -7283,6 +7391,93 @@ mod tests {
         assert!(values[1].is_finite());
         assert!(values[0] < values[1]);
         assert!(values[2].is_nan());
+        Ok(())
+    }
+
+    #[test]
+    fn wrightomega_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = wrightomega(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - wrightomega_scalar(1.0)).abs() < 1e-14);
+
+        let vector = wrightomega(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 1.0].map(wrightomega_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wrightomega_complex_real_axis_reduces_to_scalar_path() -> Result<(), String> {
+        for x in [-2.0, 0.0, 1.0, 4.0] {
+            let real_result = wrightomega(&SpecialTensor::RealScalar(x), RuntimeMode::Strict)
+                .map_err(|err| err.to_string())?;
+            let real_value = expect_real_scalar(real_result)?;
+            let complex_result = wrightomega(
+                &SpecialTensor::ComplexScalar(Complex64::from_real(x)),
+                RuntimeMode::Strict,
+            )
+            .map_err(|err| err.to_string())?;
+            let complex_value = expect_complex_scalar(complex_result)?;
+            assert_complex_close(
+                complex_value,
+                Complex64::from_real(real_value),
+                1e-12,
+                "wrightomega real-axis reduction",
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wrightomega_complex_identity_principal_branch() -> Result<(), String> {
+        let z = Complex64::new(0.5, 0.75);
+        let result = wrightomega(&SpecialTensor::ComplexScalar(z), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let value = expect_complex_scalar(result)?;
+        assert_complex_close(
+            value + value.ln(),
+            z,
+            1e-10,
+            "wrightomega principal-branch identity",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wrightomega_complex_vector_preserves_shape_and_conjugation() -> Result<(), String> {
+        let z = Complex64::new(0.4, 0.7);
+        let vector = wrightomega(
+            &SpecialTensor::ComplexVec(vec![z, z.conj()]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_complex_vec(vector)?;
+        assert_eq!(values.len(), 2);
+        assert_complex_close(
+            values[1],
+            values[0].conj(),
+            1e-12,
+            "wrightomega conjugation",
+        );
+
+        let scalar = wrightomega(&SpecialTensor::ComplexScalar(z), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_complex_scalar(scalar)?;
+        assert_complex_close(
+            values[0],
+            scalar_value,
+            1e-12,
+            "wrightomega vector lane matches scalar",
+        );
         Ok(())
     }
 }

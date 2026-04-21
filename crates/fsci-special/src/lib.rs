@@ -196,6 +196,7 @@ pub use convenience::{
     trigamma,
     trunc,
     wrightomega,
+    wrightomega_scalar,
     xlog1py,
     xlogx,
     xlogy,
