@@ -1009,12 +1009,12 @@ fn spherical_bessel_complex_scalar(
     };
 
     if n < 0 {
-        return Err(SpecialError {
+        return complex_domain_error_by_mode(
             function,
-            kind: SpecialErrorKind::DomainError,
             mode,
-            detail: "spherical Bessel order must be non-negative",
-        });
+            format!("n={n}"),
+            "spherical Bessel order must be non-negative",
+        );
     }
 
     Ok(match kind {
@@ -1338,12 +1338,7 @@ fn complex_spherical_in(n: u32, z: Complex64) -> Complex64 {
         i_prev = i_curr;
         i_curr = next;
     }
-    // Fix sign for modified spherical Bessel
-    if n % 2 == 0 {
-        i_curr
-    } else {
-        Complex64::new(-i_curr.re, -i_curr.im)
-    }
+    i_curr
 }
 
 /// Complex modified spherical Bessel function of the second kind k_n(z).
@@ -1937,6 +1932,45 @@ fn domain_error_by_mode(
     }
 }
 
+fn complex_domain_error_by_mode(
+    function: &'static str,
+    mode: RuntimeMode,
+    input_summary: String,
+    detail: &'static str,
+) -> Result<Complex64, SpecialError> {
+    match mode {
+        RuntimeMode::Strict => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                input_summary,
+                "returned_nan",
+                "strict domain fallback",
+                false,
+            );
+            Ok(Complex64::new(f64::NAN, f64::NAN))
+        }
+        RuntimeMode::Hardened => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                input_summary,
+                "fail_closed",
+                detail,
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail,
+            })
+        }
+    }
+}
+
 fn jn_nonnegative(n: u32, x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
@@ -2465,11 +2499,7 @@ mod tests {
 
     #[test]
     fn complex_spherical_jn_tensor_interface() -> Result<(), String> {
-        let result = spherical_jn(
-            &scalar(2.0),
-            &complex_scalar(1.0, 0.5),
-            RuntimeMode::Strict,
-        );
+        let result = spherical_jn(&scalar(2.0), &complex_scalar(1.0, 0.5), RuntimeMode::Strict);
         let c = get_complex(result)?;
         assert!(c.re.is_finite());
         assert!(c.im.is_finite());

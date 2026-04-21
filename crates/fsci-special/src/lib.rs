@@ -2126,6 +2126,118 @@ mod tests {
         }
     }
 
+    #[test]
+    fn spherical_bessel_complex_zero_order_closed_forms() {
+        let mode = RuntimeMode::Strict;
+        let z = Complex64::new(1.25, -0.75);
+        let z_tensor = SpecialTensor::ComplexScalar(z);
+        let order = SpecialTensor::RealScalar(0.0);
+
+        assert_complex_scalar_close(
+            spherical_jn(&order, &z_tensor, mode).expect("complex spherical_jn"),
+            z.sin() * z.recip(),
+            1.0e-12,
+        );
+        assert_complex_scalar_close(
+            spherical_yn(&order, &z_tensor, mode).expect("complex spherical_yn"),
+            -z.cos() * z.recip(),
+            1.0e-12,
+        );
+        assert_complex_scalar_close(
+            spherical_in(&order, &z_tensor, mode).expect("complex spherical_in"),
+            z.sinh() * z.recip(),
+            1.0e-12,
+        );
+        assert_complex_scalar_close(
+            spherical_kn(&order, &z_tensor, mode).expect("complex spherical_kn"),
+            Complex64::from_real(std::f64::consts::FRAC_PI_2) * (-z).exp() * z.recip(),
+            1.0e-12,
+        );
+    }
+
+    #[test]
+    fn spherical_bessel_complex_real_axis_matches_real_outputs() {
+        let mode = RuntimeMode::Strict;
+        let x = 1.75;
+        let z_complex = SpecialTensor::ComplexScalar(Complex64::from_real(x));
+
+        for order in [0.0, 1.0, 3.0] {
+            let order_tensor = SpecialTensor::RealScalar(order);
+
+            let real_jn = spherical_jn(&order_tensor, &SpecialTensor::RealScalar(x), mode)
+                .expect("real spherical_jn");
+            let complex_jn =
+                spherical_jn(&order_tensor, &z_complex, mode).expect("complex spherical_jn");
+            assert_complex_close(
+                complex_scalar_value(&complex_jn),
+                Complex64::from_real(scalar_value(&real_jn)),
+                1.0e-12,
+            );
+
+            let real_yn = spherical_yn(&order_tensor, &SpecialTensor::RealScalar(x), mode)
+                .expect("real spherical_yn");
+            let complex_yn =
+                spherical_yn(&order_tensor, &z_complex, mode).expect("complex spherical_yn");
+            assert_complex_close(
+                complex_scalar_value(&complex_yn),
+                Complex64::from_real(scalar_value(&real_yn)),
+                1.0e-12,
+            );
+
+            let real_in = spherical_in(&order_tensor, &SpecialTensor::RealScalar(x), mode)
+                .expect("real spherical_in");
+            let complex_in =
+                spherical_in(&order_tensor, &z_complex, mode).expect("complex spherical_in");
+            assert_complex_close(
+                complex_scalar_value(&complex_in),
+                Complex64::from_real(scalar_value(&real_in)),
+                1.0e-12,
+            );
+
+            let real_kn = spherical_kn(&order_tensor, &SpecialTensor::RealScalar(x), mode)
+                .expect("real spherical_kn");
+            let complex_kn =
+                spherical_kn(&order_tensor, &z_complex, mode).expect("complex spherical_kn");
+            assert_complex_close(
+                complex_scalar_value(&complex_kn),
+                Complex64::from_real(scalar_value(&real_kn)),
+                1.0e-12,
+            );
+        }
+    }
+
+    #[test]
+    fn spherical_bessel_complex_vector_preserves_conjugation() {
+        let mode = RuntimeMode::Strict;
+        let z = Complex64::new(1.0, 0.5);
+        let inputs = SpecialTensor::ComplexVec(vec![z, z.conj()]);
+        let order = SpecialTensor::RealScalar(2.0);
+
+        let jn_values = match spherical_jn(&order, &inputs, mode).expect("complex spherical_jn") {
+            SpecialTensor::ComplexVec(values) => values,
+            other => panic!("expected ComplexVec, got {other:?}"),
+        };
+        assert_complex_close(jn_values[1], jn_values[0].conj(), 1.0e-11);
+
+        let yn_values = match spherical_yn(&order, &inputs, mode).expect("complex spherical_yn") {
+            SpecialTensor::ComplexVec(values) => values,
+            other => panic!("expected ComplexVec, got {other:?}"),
+        };
+        assert_complex_close(yn_values[1], yn_values[0].conj(), 1.0e-11);
+
+        let in_values = match spherical_in(&order, &inputs, mode).expect("complex spherical_in") {
+            SpecialTensor::ComplexVec(values) => values,
+            other => panic!("expected ComplexVec, got {other:?}"),
+        };
+        assert_complex_close(in_values[1], in_values[0].conj(), 1.0e-11);
+
+        let kn_values = match spherical_kn(&order, &inputs, mode).expect("complex spherical_kn") {
+            SpecialTensor::ComplexVec(values) => values,
+            other => panic!("expected ComplexVec, got {other:?}"),
+        };
+        assert_complex_close(kn_values[1], kn_values[0].conj(), 1.0e-11);
+    }
+
     // ── Real-order Bessel function tests ─────────────────────────────
 
     #[test]
