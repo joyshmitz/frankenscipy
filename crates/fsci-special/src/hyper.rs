@@ -179,41 +179,118 @@ pub fn hyp0f1(b: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> Specia
             }
             Ok(SpecialTensor::RealVec(results))
         }
-        (b_param, SpecialTensor::RealScalar(z_val)) => {
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp0f1", mode))?;
-            let result = hyp0f1_complex_scalar(b_val, Complex64::from_real(*z_val), mode)?;
+        (SpecialTensor::RealVec(b_vec), SpecialTensor::RealScalar(z_val)) => {
+            let mut results = Vec::with_capacity(b_vec.len());
+            for &bi in b_vec {
+                results.push(hyp0f1_scalar(bi, *z_val, mode)?);
+            }
+            Ok(SpecialTensor::RealVec(results))
+        }
+        (SpecialTensor::RealVec(b_vec), SpecialTensor::RealVec(z_vec)) => {
+            if b_vec.len() != z_vec.len() {
+                return Err(broadcast_shape_error("hyp0f1", mode));
+            }
+            let mut results = Vec::with_capacity(b_vec.len());
+            for (&bi, &zi) in b_vec.iter().zip(z_vec.iter()) {
+                results.push(hyp0f1_scalar(bi, zi, mode)?);
+            }
+            Ok(SpecialTensor::RealVec(results))
+        }
+        (SpecialTensor::ComplexScalar(b_val), SpecialTensor::RealScalar(z_val)) => {
+            let result = hyp0f1_complex_scalar(*b_val, Complex64::from_real(*z_val), mode)?;
             Ok(SpecialTensor::ComplexScalar(result))
         }
-        (b_param, SpecialTensor::RealVec(z_vec)) => {
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp0f1", mode))?;
+        (SpecialTensor::ComplexScalar(b_val), SpecialTensor::RealVec(z_vec)) => {
             let mut results = Vec::with_capacity(z_vec.len());
             for &zi in z_vec {
                 results.push(hyp0f1_complex_scalar(
-                    b_val,
+                    *b_val,
                     Complex64::from_real(zi),
                     mode,
                 )?);
             }
             Ok(SpecialTensor::ComplexVec(results))
         }
-        (b_param, SpecialTensor::ComplexScalar(z_val)) => {
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp0f1", mode))?;
-            let result = hyp0f1_complex_scalar(b_val, *z_val, mode)?;
+        (SpecialTensor::ComplexScalar(b_val), SpecialTensor::ComplexScalar(z_val)) => {
+            let result = hyp0f1_complex_scalar(*b_val, *z_val, mode)?;
             Ok(SpecialTensor::ComplexScalar(result))
         }
-        (b_param, SpecialTensor::ComplexVec(z_vec)) => {
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp0f1", mode))?;
+        (SpecialTensor::ComplexScalar(b_val), SpecialTensor::ComplexVec(z_vec)) => {
             let mut results = Vec::with_capacity(z_vec.len());
             for &zi in z_vec {
-                results.push(hyp0f1_complex_scalar(b_val, zi, mode)?);
+                results.push(hyp0f1_complex_scalar(*b_val, zi, mode)?);
             }
             Ok(SpecialTensor::ComplexVec(results))
         }
-        _ => Err(scalar_parameter_error("hyp0f1", mode)),
+        (SpecialTensor::ComplexVec(b_vec), SpecialTensor::RealScalar(z_val)) => {
+            let z_complex = Complex64::from_real(*z_val);
+            let mut results = Vec::with_capacity(b_vec.len());
+            for &bi in b_vec {
+                results.push(hyp0f1_complex_scalar(bi, z_complex, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (SpecialTensor::ComplexVec(b_vec), SpecialTensor::ComplexScalar(z_val)) => {
+            let mut results = Vec::with_capacity(b_vec.len());
+            for &bi in b_vec {
+                results.push(hyp0f1_complex_scalar(bi, *z_val, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (SpecialTensor::ComplexVec(b_vec), SpecialTensor::RealVec(z_vec)) => {
+            if b_vec.len() != z_vec.len() {
+                return Err(broadcast_shape_error("hyp0f1", mode));
+            }
+            let mut results = Vec::with_capacity(b_vec.len());
+            for (&bi, &zi) in b_vec.iter().zip(z_vec.iter()) {
+                results.push(hyp0f1_complex_scalar(bi, Complex64::from_real(zi), mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (SpecialTensor::ComplexVec(b_vec), SpecialTensor::ComplexVec(z_vec)) => {
+            if b_vec.len() != z_vec.len() {
+                return Err(broadcast_shape_error("hyp0f1", mode));
+            }
+            let mut results = Vec::with_capacity(b_vec.len());
+            for (&bi, &zi) in b_vec.iter().zip(z_vec.iter()) {
+                results.push(hyp0f1_complex_scalar(bi, zi, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (SpecialTensor::RealVec(b_vec), SpecialTensor::ComplexScalar(z_val)) => {
+            let mut results = Vec::with_capacity(b_vec.len());
+            for &bi in b_vec {
+                results.push(hyp0f1_complex_scalar(
+                    Complex64::from_real(bi),
+                    *z_val,
+                    mode,
+                )?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (SpecialTensor::RealVec(b_vec), SpecialTensor::ComplexVec(z_vec)) => {
+            if b_vec.len() != z_vec.len() {
+                return Err(broadcast_shape_error("hyp0f1", mode));
+            }
+            let mut results = Vec::with_capacity(b_vec.len());
+            for (&bi, &zi) in b_vec.iter().zip(z_vec.iter()) {
+                results.push(hyp0f1_complex_scalar(Complex64::from_real(bi), zi, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (SpecialTensor::RealScalar(b_val), SpecialTensor::ComplexScalar(z_val)) => {
+            let result = hyp0f1_complex_scalar(Complex64::from_real(*b_val), *z_val, mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        }
+        (SpecialTensor::RealScalar(b_val), SpecialTensor::ComplexVec(z_vec)) => {
+            let b_complex = Complex64::from_real(*b_val);
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp0f1_complex_scalar(b_complex, zi, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Ok(SpecialTensor::Empty),
     }
 }
 
@@ -283,6 +360,15 @@ fn scalar_parameter_error(function: &'static str, mode: RuntimeMode) -> SpecialE
         kind: SpecialErrorKind::NotYetImplemented,
         mode,
         detail: "hypergeometric parameter tensors must be scalar values",
+    }
+}
+
+fn broadcast_shape_error(function: &'static str, mode: RuntimeMode) -> SpecialError {
+    SpecialError {
+        function,
+        kind: SpecialErrorKind::ShapeMismatch,
+        mode,
+        detail: "vector parameters must have the same length for element-wise operations",
     }
 }
 

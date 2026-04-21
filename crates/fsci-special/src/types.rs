@@ -198,6 +198,7 @@ pub enum SpecialErrorKind {
     OverflowRisk,
     SingularityRisk,
     NotYetImplemented,
+    ShapeMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
