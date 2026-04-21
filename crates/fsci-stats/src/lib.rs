@@ -8551,6 +8551,92 @@ pub fn mood(x: &[f64], y: &[f64]) -> TtestResult {
     }
 }
 
+/// Mood's scale test with alternative hypothesis.
+///
+/// Matches `scipy.stats.mood(x, y, alternative=...)`.
+///
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn mood_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResult {
+    let m = x.len();
+    let n = y.len();
+    let total = m + n;
+    if m == 0 || n == 0 || total < 3 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan())
+    {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let mf = m as f64;
+    let nf = n as f64;
+    let totalf = total as f64;
+    let center = (totalf + 1.0) / 2.0;
+    let sum_i = |u: f64| u * (u + 1.0) / 2.0;
+    let sum_i2 = |u: f64| u * (u + 1.0) * (2.0 * u + 1.0) / 6.0;
+
+    let mut pooled: Vec<(f64, bool)> = x
+        .iter()
+        .map(|&v| (v, true))
+        .chain(y.iter().map(|&v| (v, false)))
+        .collect();
+    pooled.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut cumulative = 0.0;
+    let mut statistic_sum = 0.0;
+    let mut tie_variance_sum = 0.0;
+    let mut i = 0;
+    while i < pooled.len() {
+        let value = pooled[i].0;
+        let start = cumulative;
+        let mut j = i;
+        let mut x_count = 0.0;
+        while j < pooled.len() && pooled[j].0 == value {
+            if pooled[j].1 {
+                x_count += 1.0;
+            }
+            j += 1;
+        }
+
+        let count = (j - i) as f64;
+        cumulative += count;
+        let lo = start + 1.0;
+        let hi = cumulative;
+        let rank_sum = sum_i(hi) - sum_i(lo - 1.0);
+        let rank_sq_sum = sum_i2(hi) - sum_i2(lo - 1.0);
+        let phi = (rank_sq_sum - 2.0 * center * rank_sum + count * center * center) / count;
+        statistic_sum += x_count * phi;
+
+        tie_variance_sum += count
+            * (count * count - 1.0)
+            * (count * count - 4.0 + 15.0 * (totalf - cumulative - start).powi(2));
+
+        i = j;
+    }
+
+    let e_m = mf * (totalf * totalf - 1.0) / 12.0;
+    let var_m = mf * nf * (totalf + 1.0) * (totalf * totalf - 4.0) / 180.0
+        - mf * nf * tie_variance_sum / (180.0 * totalf * (totalf - 1.0));
+
+    if !var_m.is_finite() || var_m <= 0.0 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let z = (statistic_sum - e_m) / var_m.sqrt();
+    let pvalue = normal_alternative_pvalue(z, alternative).clamp(0.0, 1.0);
+
+    TtestResult {
+        statistic: z,
+        pvalue,
+        df: f64::NAN,
+    }
+}
+
 /// Mood's median test for equal medians across groups.
 ///
 /// Tests H0: all groups have the same median.
@@ -25287,6 +25373,27 @@ mod tests {
         // 80% CI should be (1.0, 9.0) for U(0,10)
         assert_close(lower, 1.0, 1e-10, "U(0,10) 80% lower");
         assert_close(upper, 9.0, 1e-10, "U(0,10) 80% upper");
+    }
+
+    #[test]
+    fn test_mood_alternative() {
+        // x has larger variance than y
+        let x = [1.0, 2.0, 8.0, 9.0, 15.0, 16.0, 22.0, 23.0];
+        let y = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0];
+
+        let two_sided = mood_alternative(&x, &y, "two-sided");
+        let original = mood(&x, &y);
+        assert_close(two_sided.statistic, original.statistic, 1e-10, "stat match");
+        assert_close(two_sided.pvalue, original.pvalue, 1e-10, "two-sided pvalue");
+
+        let less = mood_alternative(&x, &y, "less");
+        let greater = mood_alternative(&x, &y, "greater");
+        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
+        // One of less/greater should be smaller than two-sided
+        assert!(
+            less.pvalue < two_sided.pvalue || greater.pvalue < two_sided.pvalue,
+            "one-sided should be smaller"
+        );
     }
 
     #[test]
