@@ -957,7 +957,7 @@ _(See full symbol list above -- all are functions/ufuncs from `_ufuncs` or `_bas
 | `anderson_ksamp` | function | `_morestats` | no |
 | `cramervonmises` | function | `_hypotests` | no |
 | `cramervonmises_2samp` | function | `_hypotests` | no |
-| `ks_1samp` | function | `_stats_py` | no |
+| `ks_1samp` | function | `_stats_py` | yes |
 | `ks_2samp` | function | `_stats_py` | no |
 | `kstest` | function | `_stats_py` | no |
 | `goodness_of_fit` | function | `_fit` | no |

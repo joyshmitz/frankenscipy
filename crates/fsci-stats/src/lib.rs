@@ -15244,6 +15244,45 @@ mod tests {
     }
 
     #[test]
+    fn ks_1samp_matches_scipy_asymptotic_reference_values() {
+        let uniform_samples: Vec<f64> = (0..100).map(|i| (i as f64 + 0.5) / 100.0).collect();
+        let uniform = ks_1samp(&uniform_samples, |x| x.clamp(0.0, 1.0));
+        assert_close(
+            uniform.statistic,
+            0.005_000_000_000_000_004_4,
+            1.0e-15,
+            "ks_1samp uniform statistic",
+        );
+        assert_close(uniform.pvalue, 1.0, 1.0e-15, "ks_1samp uniform pvalue");
+
+        let skewed_samples: Vec<f64> = (0..50).map(|i| (i as f64 / 50.0).powi(2)).collect();
+        let skewed = ks_1samp(&skewed_samples, |x| x.clamp(0.0, 1.0));
+        assert_close(skewed.statistic, 0.27, 1.0e-15, "ks_1samp skewed statistic");
+        assert_close(
+            skewed.pvalue,
+            0.001_364_656_105_079_237,
+            1.0e-15,
+            "ks_1samp skewed pvalue",
+        );
+
+        let normalish = [-1.2, -0.7, -0.2, 0.0, 0.1, 0.4, 0.9, 1.3];
+        let normal = Normal::standard();
+        let normalish_result = ks_1samp(&normalish, |x| ContinuousDistribution::cdf(&normal, x));
+        assert_close(
+            normalish_result.statistic,
+            0.170_740_290_560_896_96,
+            1.0e-15,
+            "ks_1samp normal statistic",
+        );
+        assert_close(
+            normalish_result.pvalue,
+            0.973_828_230_896_588_7,
+            1.0e-15,
+            "ks_1samp normal pvalue",
+        );
+    }
+
+    #[test]
     fn kstest_dispatches_to_one_sample() {
         fn normal_cdf(x: f64) -> f64 {
             ContinuousDistribution::cdf(&Normal::standard(), x)

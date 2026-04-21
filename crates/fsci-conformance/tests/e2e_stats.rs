@@ -3869,3 +3869,78 @@ fn e2e_040_ks_2samp_exact_pvalue_parity() {
     assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
+
+/// Scenario 41: ks_1samp asymptotic p-value parity.
+#[test]
+fn e2e_041_ks_1samp_asymptotic_pvalue_parity() {
+    let scenario_id = "e2e_stats_041_ks_1samp_asymptotic_pvalue_parity";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let uniform_samples: Vec<f64> = (0..100).map(|i| (i as f64 + 0.5) / 100.0).collect();
+    let uniform = ks_1samp(&uniform_samples, |x| x.clamp(0.0, 1.0));
+    let uniform_pass = (uniform.statistic - 0.005_000_000_000_000_004_4).abs() < 1.0e-15
+        && (uniform.pvalue - 1.0).abs() < 1.0e-15;
+    if !uniform_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "ks_1samp_asymp_uniform",
+        "ks_1samp(uniform_grid, F_uniform)",
+        "near-perfect uniform samples should match SciPy's asymptotic D and clipped p-value",
+        &format!(
+            "statistic={:.16}, pvalue={:.16}",
+            uniform.statistic, uniform.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if uniform_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let skewed_samples: Vec<f64> = (0..50).map(|i| (i as f64 / 50.0).powi(2)).collect();
+    let skewed = ks_1samp(&skewed_samples, |x| x.clamp(0.0, 1.0));
+    let skewed_pass = (skewed.statistic - 0.27).abs() < 1.0e-15
+        && (skewed.pvalue - 0.001_364_656_105_079_237).abs() < 1.0e-15;
+    if !skewed_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "ks_1samp_asymp_skewed",
+        "ks_1samp(x^2 grid, F_uniform)",
+        "skewed samples should reproduce SciPy's asymptotic rejection tail",
+        &format!(
+            "statistic={:.16}, pvalue={:.16}",
+            skewed.statistic, skewed.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if skewed_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let normal = Normal::standard();
+    let normalish = [-1.2, -0.7, -0.2, 0.0, 0.1, 0.4, 0.9, 1.3];
+    let normalish_result = ks_1samp(&normalish, |x| ContinuousDistribution::cdf(&normal, x));
+    let normalish_pass = (normalish_result.statistic - 0.170_740_290_560_896_96).abs() < 1.0e-15
+        && (normalish_result.pvalue - 0.973_828_230_896_588_7).abs() < 1.0e-15;
+    if !normalish_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "ks_1samp_asymp_normal",
+        "ks_1samp(normalish, F_normal)",
+        "moderately normal-looking samples should match SciPy's asymptotic non-rejection p-value",
+        &format!(
+            "statistic={:.16}, pvalue={:.16}",
+            normalish_result.statistic, normalish_result.pvalue
+        ),
+        t.elapsed().as_nanos(),
+        if normalish_pass { "pass" } else { "FAIL" },
+    ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
