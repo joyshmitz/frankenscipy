@@ -1495,7 +1495,7 @@ impl ContinuousDistribution for Lognormal {
         }
         // If X ~ Lognormal(mu, sigma), then ln(X) ~ Normal(mu, sigma)
         // ppf(q) = exp(mu + sigma * ndtri(q)) where mu = ln(scale)
-        self.scale * (self.s * fsci_special::ndtri(q)).exp()
+        self.scale * (self.s * fsci_special::ndtri_scalar(q)).exp()
     }
 
     fn mean(&self) -> f64 {
@@ -3956,7 +3956,7 @@ impl ContinuousDistribution for Pearson3 {
 
         let skew = self.skew;
         if skew.abs() < NORMAL_TRANSITION {
-            return fsci_special::ndtri(q);
+            return fsci_special::ndtri_scalar(q);
         }
 
         let beta = 2.0 / skew;
@@ -4092,7 +4092,7 @@ impl ContinuousDistribution for PowerNorm {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        -fsci_special::ndtri(((1.0 - q).ln() / self.c).exp())
+        -fsci_special::ndtri_scalar(((1.0 - q).ln() / self.c).exp())
     }
 
     fn mean(&self) -> f64 {
@@ -4142,7 +4142,7 @@ impl ContinuousDistribution for JohnsonSU {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        ((fsci_special::ndtri(q) - self.a) / self.b).sinh()
+        ((fsci_special::ndtri_scalar(q) - self.a) / self.b).sinh()
     }
 
     fn mean(&self) -> f64 {
@@ -4218,7 +4218,7 @@ impl ContinuousDistribution for JohnsonSB {
         if q == 1.0 {
             return 1.0;
         }
-        Self::expit((fsci_special::ndtri(q) - self.a) / self.b)
+        Self::expit((fsci_special::ndtri_scalar(q) - self.a) / self.b)
     }
 
     fn mean(&self) -> f64 {
@@ -4521,7 +4521,7 @@ impl ContinuousDistribution for HalfNormal {
             return f64::INFINITY;
         }
         // HalfNormal is the positive half of N(0,1), so ppf(q) = ndtri((1+q)/2)
-        fsci_special::ndtri((1.0 + q) / 2.0)
+        fsci_special::ndtri_scalar((1.0 + q) / 2.0)
     }
 
     fn mean(&self) -> f64 {
@@ -4665,7 +4665,7 @@ impl ContinuousDistribution for FatigueLife {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        let tmp = self.c * fsci_special::ndtri(q);
+        let tmp = self.c * fsci_special::ndtri_scalar(q);
         0.25 * (tmp + (tmp * tmp + 4.0).sqrt()).powi(2)
     }
 
@@ -5676,7 +5676,7 @@ impl ContinuousDistribution for Gilbrat {
             return f64::INFINITY;
         }
         // CDF = Φ(ln(x)), so ln(x) = ndtri(q), x = exp(ndtri(q))
-        fsci_special::ndtri(q).exp()
+        fsci_special::ndtri_scalar(q).exp()
     }
 
     fn mean(&self) -> f64 {
@@ -5744,7 +5744,7 @@ impl ContinuousDistribution for Levy {
         // erfcinv(q) = sqrt(scale/(2*z)) where z = x - loc
         // z = scale / (2 * erfcinv(q)²)
         // erfcinv(q) = -ndtri(q/2) / sqrt(2)
-        let erfcinv_q = -fsci_special::ndtri(q / 2.0) * FRAC_1_SQRT_2;
+        let erfcinv_q = -fsci_special::ndtri_scalar(q / 2.0) * FRAC_1_SQRT_2;
         if erfcinv_q <= 0.0 {
             return f64::INFINITY;
         }
@@ -5812,7 +5812,7 @@ impl ContinuousDistribution for LevyLeft {
         if q == 1.0 {
             return self.loc;
         }
-        let z = fsci_special::ndtri((q + 1.0) / 2.0);
+        let z = fsci_special::ndtri_scalar((q + 1.0) / 2.0);
         self.loc - self.scale / (z * z)
     }
 
@@ -6062,7 +6062,7 @@ impl ContinuousDistribution for Moyal {
         // exp(-x) = 2 * erfcinv(q)^2
         // x = -ln(2 * erfcinv(q)^2)
         // erfcinv(q) = -ndtri(q/2) / sqrt(2)
-        let erfcinv_q = -fsci_special::ndtri(q / 2.0) * FRAC_1_SQRT_2;
+        let erfcinv_q = -fsci_special::ndtri_scalar(q / 2.0) * FRAC_1_SQRT_2;
         if erfcinv_q <= 0.0 {
             return f64::INFINITY;
         }
@@ -6822,7 +6822,7 @@ impl ContinuousDistribution for Alpha {
             return f64::INFINITY;
         }
 
-        1.0 / (self.a - fsci_special::ndtri(q * standard_normal_cdf(self.a)))
+        1.0 / (self.a - fsci_special::ndtri_scalar(q * standard_normal_cdf(self.a)))
     }
 
     fn mean(&self) -> f64 {

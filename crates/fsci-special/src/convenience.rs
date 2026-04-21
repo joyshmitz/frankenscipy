@@ -334,8 +334,12 @@ pub fn rel_entr(
 /// Standard normal cumulative distribution function Φ(x).
 ///
 /// Matches `scipy.special.ndtr(x)`.
+pub fn ndtr(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("ndtr", x_tensor, mode, |x| Ok(ndtr_scalar(x)))
+}
+
 #[must_use]
-pub fn ndtr(x: f64) -> f64 {
+pub fn ndtr_scalar(x: f64) -> f64 {
     // Use erfc for improved tail accuracy (avoids catastrophic cancellation for x << 0).
     0.5 * crate::error::erfc_scalar(-x * FRAC_1_SQRT_2)
 }
@@ -343,8 +347,12 @@ pub fn ndtr(x: f64) -> f64 {
 /// Inverse standard normal cumulative distribution function Φ⁻¹(y).
 ///
 /// Matches `scipy.special.ndtri(y)`.
+pub fn ndtri(y_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("ndtri", y_tensor, mode, |y| Ok(ndtri_scalar(y)))
+}
+
 #[must_use]
-pub fn ndtri(y: f64) -> f64 {
+pub fn ndtri_scalar(y: f64) -> f64 {
     if y.is_nan() {
         return f64::NAN;
     }
@@ -384,7 +392,7 @@ pub fn nrdtrimn(p: f64, std: f64, x: f64) -> f64 {
         }
         return if p < 0.5 { f64::NAN } else { f64::NEG_INFINITY };
     }
-    x - std * ndtri(p)
+    x - std * ndtri_scalar(p)
 }
 
 /// Recover the standard deviation of a normal distribution from a mean, CDF value, and quantile.
@@ -404,7 +412,7 @@ pub fn nrdtrisd(mn: f64, p: f64, x: f64) -> f64 {
     if p == 0.5 {
         return delta / NRDTRISD_P50_DENOM;
     }
-    delta / ndtri(p)
+    delta / ndtri_scalar(p)
 }
 
 /// KL divergence element `x * log(x / y) - x + y`.
@@ -2209,10 +2217,10 @@ pub fn log_ndtr(x: f64) -> f64 {
     // For large negative x, use asymptotic to avoid log(tiny)
     if x > 6.0 {
         // Φ(x) ≈ 1, log(1) ≈ 0 with correction
-        let t = ndtr(x);
+        let t = ndtr_scalar(x);
         if t > 0.0 { t.ln() } else { 0.0 }
     } else if x > -20.0 {
-        let t = ndtr(x);
+        let t = ndtr_scalar(x);
         if t > 0.0 { t.ln() } else { f64::NEG_INFINITY }
     } else {
         // Asymptotic: log Φ(x) ≈ -x²/2 - log(-x√(2π)) for x << 0
@@ -4169,7 +4177,7 @@ mod tests {
         let mean = 3.0;
         let std = 2.0;
         let x = 6.0;
-        let p = ndtr((x - mean) / std);
+        let p = ndtr_scalar((x - mean) / std);
         let recovered = nrdtrimn(p, std, x);
         assert!(
             (recovered - mean).abs() <= 1.0e-12,
@@ -4211,7 +4219,7 @@ mod tests {
         let mean = 3.0;
         let std = 2.0;
         let x = 6.0;
-        let p = ndtr((x - mean) / std);
+        let p = ndtr_scalar((x - mean) / std);
         let recovered = nrdtrisd(mean, p, x);
         assert!(
             (recovered - std).abs() <= 1.0e-12,
@@ -5272,6 +5280,38 @@ mod tests {
         let value = expect_real_scalar(result)?;
         let expected = 1.0 + 0.5e-8 + 1.0e-16 / 6.0 + 1.0e-24 / 24.0;
         assert!((value - expected).abs() < 1e-16);
+        Ok(())
+    }
+
+    #[test]
+    fn ndtr_ndtri_tensor_dispatch_round_trip() -> Result<(), String> {
+        let points = vec![-3.0, 0.0, 2.0];
+        let probs = ndtr(&SpecialTensor::RealVec(points.clone()), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let prob_values = expect_real_vec(probs)?;
+        let reconstructed = ndtri(&SpecialTensor::RealVec(prob_values), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(reconstructed)?;
+        assert_eq!(values.len(), points.len());
+        for (actual, expected) in values.iter().zip(points.iter()) {
+            assert!((actual - expected).abs() < 1e-10);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ndtri_tensor_dispatch_preserves_endpoints() -> Result<(), String> {
+        let result = ndtri(
+            &SpecialTensor::RealVec(vec![0.0, 0.5, 1.0, -1.0, f64::NAN]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(result)?;
+        assert_eq!(values[0], f64::NEG_INFINITY);
+        assert_eq!(values[1], 0.0);
+        assert_eq!(values[2], f64::INFINITY);
+        assert!(values[3].is_nan());
+        assert!(values[4].is_nan());
         Ok(())
     }
 

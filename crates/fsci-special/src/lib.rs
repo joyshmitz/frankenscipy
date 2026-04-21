@@ -138,7 +138,9 @@ pub use convenience::{
     modstruve_scalar,
     nan_to_num,
     ndtr,
+    ndtr_scalar,
     ndtri,
+    ndtri_scalar,
     negative,
     negentropy,
     nextafter,
@@ -1407,19 +1409,19 @@ mod tests {
 
     #[test]
     fn ndtr_contract_points() {
-        assert!((ndtr(0.0) - 0.5).abs() <= 1.0e-12);
-        assert!((ndtr(1.959_963_984_540_054) - 0.975).abs() <= 5.0e-5);
-        let tail = ndtr(-8.0);
+        assert!((ndtr_scalar(0.0) - 0.5).abs() <= 1.0e-12);
+        assert!((ndtr_scalar(1.959_963_984_540_054) - 0.975).abs() <= 5.0e-5);
+        let tail = ndtr_scalar(-8.0);
         assert!(tail > 0.0 && tail < 1.0e-14, "ndtr(-8) tail={tail}");
-        assert!(ndtr(8.0) > 1.0 - 1.0e-12, "ndtr(8) should be ~1");
-        assert_eq!(ndtr(f64::NEG_INFINITY), 0.0);
-        assert_eq!(ndtr(f64::INFINITY), 1.0);
+        assert!(ndtr_scalar(8.0) > 1.0 - 1.0e-12, "ndtr(8) should be ~1");
+        assert_eq!(ndtr_scalar(f64::NEG_INFINITY), 0.0);
+        assert_eq!(ndtr_scalar(f64::INFINITY), 1.0);
     }
 
     #[test]
     fn ndtr_ndtri_roundtrip() {
         for x in [-4.0, -1.5, -0.25, 0.0, 0.5, 2.0, 4.0] {
-            let back = ndtri(ndtr(x));
+            let back = ndtri_scalar(ndtr_scalar(x));
             assert!(
                 (back - x).abs() <= 2.0e-4,
                 "ndtri(ndtr(x)) mismatch at x={x}: {back}"
@@ -1429,10 +1431,10 @@ mod tests {
 
     #[test]
     fn ndtri_domain_and_endpoints() {
-        assert_eq!(ndtri(0.0), f64::NEG_INFINITY);
-        assert_eq!(ndtri(1.0), f64::INFINITY);
-        assert!(ndtri(-0.1).is_nan());
-        assert!(ndtri(1.1).is_nan());
+        assert_eq!(ndtri_scalar(0.0), f64::NEG_INFINITY);
+        assert_eq!(ndtri_scalar(1.0), f64::INFINITY);
+        assert!(ndtri_scalar(-0.1).is_nan());
+        assert!(ndtri_scalar(1.1).is_nan());
     }
 
     #[test]

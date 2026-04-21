@@ -9406,13 +9406,17 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("ndtr", mode));
             }
-            Ok(special_ndtr(args[0]))
+            special_scalar_from_tensor(special_ndtr(&special_scalar(args[0]), mode)?, "ndtr", mode)
         }
         SpecialCaseFunction::Ndtri => {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("ndtri", mode));
             }
-            Ok(special_ndtri(args[0]))
+            special_scalar_from_tensor(
+                special_ndtri(&special_scalar(args[0]), mode)?,
+                "ndtri",
+                mode,
+            )
         }
         SpecialCaseFunction::Nrdtrimn => {
             if args.len() != 3 {
