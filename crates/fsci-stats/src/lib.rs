@@ -14272,6 +14272,150 @@ pub fn chi2_contingency(observed: &[Vec<f64>], correction: bool) -> Chi2Continge
     }
 }
 
+/// Chi-squared contingency test with lambda_ parameter for power divergence.
+///
+/// Matches `scipy.stats.chi2_contingency(observed, lambda_=...)`.
+///
+/// * `lambda_` - Power divergence parameter:
+///   - 1.0: Pearson chi-squared (default)
+///   - 0.0: Log-likelihood ratio (G-test)
+///   - -1.0: Modified log-likelihood ratio
+///   - -0.5: Freeman-Tukey
+///   - -2.0: Neyman
+///   - 2/3: Cressie-Read
+pub fn chi2_contingency_with_lambda(
+    observed: &[Vec<f64>],
+    correction: bool,
+    lambda_: f64,
+) -> Chi2ContingencyResult {
+    let nrows = observed.len();
+    if nrows == 0 {
+        return Chi2ContingencyResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            dof: 0,
+            expected: Vec::new(),
+        };
+    }
+    let ncols = observed[0].len();
+    if observed.iter().any(|row| row.len() != ncols) || ncols == 0 || nrows < 2 || ncols < 2 {
+        return Chi2ContingencyResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            dof: 0,
+            expected: Vec::new(),
+        };
+    }
+    if observed
+        .iter()
+        .flat_map(|row| row.iter())
+        .any(|&v| !v.is_finite() || v < 0.0)
+    {
+        return Chi2ContingencyResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            dof: 0,
+            expected: Vec::new(),
+        };
+    }
+
+    let row_totals: Vec<f64> = observed.iter().map(|row| row.iter().sum()).collect();
+    let mut col_totals = vec![0.0; ncols];
+    for row in observed {
+        for (j, &val) in row.iter().enumerate() {
+            col_totals[j] += val;
+        }
+    }
+    let grand_total: f64 = row_totals.iter().sum();
+
+    if grand_total == 0.0 {
+        return Chi2ContingencyResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            dof: 0,
+            expected: Vec::new(),
+        };
+    }
+
+    let expected: Vec<Vec<f64>> = (0..nrows)
+        .map(|i| {
+            (0..ncols)
+                .map(|j| row_totals[i] * col_totals[j] / grand_total)
+                .collect()
+        })
+        .collect();
+
+    let dof = (nrows - 1) * (ncols - 1);
+    let use_yates = correction && dof == 1;
+
+    // Compute power divergence statistic
+    let stat = if (lambda_ - 1.0).abs() < 1e-10 {
+        // Pearson chi-squared: Σ (o-e)²/e
+        observed
+            .iter()
+            .zip(expected.iter())
+            .flat_map(|(obs_row, exp_row)| {
+                obs_row.iter().zip(exp_row.iter()).map(|(&o, &e)| {
+                    if e > 0.0 {
+                        let diff = if use_yates { ((o - e).abs() - 0.5).max(0.0) } else { o - e };
+                        diff.powi(2) / e
+                    } else {
+                        0.0
+                    }
+                })
+            })
+            .sum()
+    } else if lambda_.abs() < 1e-10 {
+        // G-test (lambda=0): 2 Σ o ln(o/e)
+        2.0 * observed
+            .iter()
+            .zip(expected.iter())
+            .flat_map(|(obs_row, exp_row)| {
+                obs_row.iter().zip(exp_row.iter()).map(|(&o, &e)| {
+                    if o > 0.0 && e > 0.0 { o * (o / e).ln() } else { 0.0 }
+                })
+            })
+            .sum::<f64>()
+    } else if (lambda_ + 1.0).abs() < 1e-10 {
+        // Modified log-likelihood ratio (lambda=-1): 2 Σ e ln(e/o)
+        2.0 * observed
+            .iter()
+            .zip(expected.iter())
+            .flat_map(|(obs_row, exp_row)| {
+                obs_row.iter().zip(exp_row.iter()).map(|(&o, &e)| {
+                    if o > 0.0 && e > 0.0 { e * (e / o).ln() } else { 0.0 }
+                })
+            })
+            .sum::<f64>()
+    } else {
+        // General power divergence: 2/(λ(λ+1)) Σ o((o/e)^λ - 1)
+        let factor = 2.0 / (lambda_ * (lambda_ + 1.0));
+        factor
+            * observed
+                .iter()
+                .zip(expected.iter())
+                .flat_map(|(obs_row, exp_row)| {
+                    obs_row.iter().zip(exp_row.iter()).map(|(&o, &e)| {
+                        if o > 0.0 && e > 0.0 { o * ((o / e).powf(lambda_) - 1.0) } else { 0.0 }
+                    })
+                })
+                .sum::<f64>()
+    };
+
+    let pvalue = if dof > 0 {
+        ChiSquared::new(dof as f64).sf(stat).clamp(0.0, 1.0)
+    } else {
+        f64::NAN
+    };
+
+    Chi2ContingencyResult {
+        statistic: stat,
+        pvalue,
+        dof,
+        expected,
+    }
+}
+
 /// Power divergence statistic and test.
 ///
 /// Computes the power divergence statistic for testing whether observed
@@ -26128,6 +26272,28 @@ mod tests {
         // With NaN and omit
         let result_omit = fligner_with_nan_policy(&groups_nan, Some("omit")).unwrap();
         assert!(result_omit.statistic.is_finite(), "omit -> finite result");
+    }
+
+    #[test]
+    fn test_chi2_contingency_with_lambda() {
+        let observed = vec![vec![10.0, 20.0], vec![30.0, 40.0]];
+
+        // lambda_=1 should match standard chi2_contingency
+        let result1 = chi2_contingency_with_lambda(&observed, false, 1.0);
+        let original = chi2_contingency(&observed, false);
+        assert_close(result1.statistic, original.statistic, 1e-10, "lambda=1 match");
+        assert_close(result1.pvalue, original.pvalue, 1e-10, "lambda=1 pvalue");
+
+        // lambda_=0 is G-test (log-likelihood ratio)
+        let result0 = chi2_contingency_with_lambda(&observed, false, 0.0);
+        assert!(result0.statistic.is_finite(), "G-test finite");
+        assert!(result0.pvalue >= 0.0 && result0.pvalue <= 1.0, "G-test pvalue valid");
+
+        // Different lambda values should give different statistics
+        let result_neg1 = chi2_contingency_with_lambda(&observed, false, -1.0);
+        let result_cressie = chi2_contingency_with_lambda(&observed, false, 2.0 / 3.0);
+        assert!(result_neg1.statistic.is_finite(), "lambda=-1 finite");
+        assert!(result_cressie.statistic.is_finite(), "Cressie-Read finite");
     }
 
     #[test]
