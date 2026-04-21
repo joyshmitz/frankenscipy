@@ -7051,6 +7051,26 @@ pub fn gmean(data: &[f64]) -> f64 {
     (log_sum / n).exp()
 }
 
+/// Compute the geometric standard deviation.
+///
+/// The geometric standard deviation is defined as exp(std(log(data))).
+/// All values must be positive.
+///
+/// Matches `scipy.stats.gstd(a)`.
+pub fn gstd(data: &[f64]) -> f64 {
+    if data.is_empty() || data.len() < 2 {
+        return f64::NAN;
+    }
+    if data.iter().any(|&x| x <= 0.0 || !x.is_finite()) {
+        return f64::NAN;
+    }
+    let n = data.len() as f64;
+    let logs: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
+    let mean_log = logs.iter().sum::<f64>() / n;
+    let var_log = logs.iter().map(|&lx| (lx - mean_log).powi(2)).sum::<f64>() / (n - 1.0);
+    var_log.sqrt().exp()
+}
+
 /// Compute the harmonic mean.
 ///
 /// Matches `scipy.stats.hmean`.
@@ -14151,9 +14171,9 @@ mod tests {
     #[test]
     fn trait_log_methods_default_to_probability_logs() {
         let u = Uniform::new(-1.0, 2.0);
-        assert_close(u.logpdf(0.0), (-2.0_f64.ln()), 1e-12, "uniform logpdf(0)");
-        assert_close(u.logcdf(0.0), (-2.0_f64.ln()), 1e-12, "uniform logcdf(0)");
-        assert_close(u.logsf(0.0), (-2.0_f64.ln()), 1e-12, "uniform logsf(0)");
+        assert_close(u.logpdf(0.0), -LN_2, 1e-12, "uniform logpdf(0)");
+        assert_close(u.logcdf(0.0), -LN_2, 1e-12, "uniform logcdf(0)");
+        assert_close(u.logsf(0.0), -LN_2, 1e-12, "uniform logsf(0)");
         assert!(u.logpdf(5.0).is_infinite() && u.logpdf(5.0).is_sign_negative());
         assert!(u.logcdf(-2.0).is_infinite() && u.logcdf(-2.0).is_sign_negative());
         assert!(u.logsf(2.0).is_infinite() && u.logsf(2.0).is_sign_negative());
@@ -18143,6 +18163,42 @@ mod tests {
         // Table with zero: [[0, 5], [5, 0]]
         let result = fisher_exact(&[[0.0, 5.0], [5.0, 0.0]]);
         assert!(result.pvalue < 0.05, "p should be small: {}", result.pvalue);
+    }
+
+    // ── gstd tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn gstd_basic() {
+        // gstd([1, 2, 4, 8]) = exp(std(log([1,2,4,8])))
+        let data = vec![1.0, 2.0, 4.0, 8.0];
+        let result = gstd(&data);
+        // log values: [0, 0.693, 1.386, 2.079] - mean = 1.04, std ≈ 0.9
+        assert!(result > 1.0, "gstd should be > 1 for spread data");
+        assert!(result < 5.0, "gstd should be reasonable");
+    }
+
+    #[test]
+    fn gstd_constant() {
+        // All same values → std of logs = 0 → gstd = 1
+        let data = vec![5.0, 5.0, 5.0, 5.0];
+        let result = gstd(&data);
+        assert!((result - 1.0).abs() < 1e-10, "gstd of constant should be 1");
+    }
+
+    #[test]
+    fn gstd_negative_returns_nan() {
+        let data = vec![1.0, -2.0, 3.0];
+        assert!(gstd(&data).is_nan(), "negative values should return NaN");
+    }
+
+    #[test]
+    fn gstd_empty_returns_nan() {
+        assert!(gstd(&[]).is_nan());
+    }
+
+    #[test]
+    fn gstd_single_element_returns_nan() {
+        assert!(gstd(&[5.0]).is_nan(), "need at least 2 elements for std");
     }
 
     // ── percentile tests ─────────────────────────────────────────────
