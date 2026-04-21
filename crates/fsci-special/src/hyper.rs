@@ -53,8 +53,7 @@ pub const HYPER_DISPATCH_PLAN: &[DispatchPlan] = &[
 /// Confluent hypergeometric function 1F1(a; b; z).
 ///
 /// Also known as Kummer's function M(a, b, z).
-/// Supports scalar real or complex parameters with real or complex
-/// scalar/vector `z` inputs.
+/// Supports scalar or vector parameters with NumPy-style broadcasting.
 /// Matches `scipy.special.hyp1f1(a, b, z)`.
 pub fn hyp1f1(
     a: &SpecialTensor,
@@ -62,90 +61,162 @@ pub fn hyp1f1(
     z: &SpecialTensor,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    match (a, b, z) {
-        (
-            SpecialTensor::RealScalar(a_val),
-            SpecialTensor::RealScalar(b_val),
-            SpecialTensor::RealScalar(z_val),
-        ) => {
-            let result = hyp1f1_scalar(*a_val, *b_val, *z_val, mode)?;
+    hyp1f1_dispatch("hyp1f1", a, b, z, mode)
+}
+
+fn hyp1f1_dispatch(
+    function: &'static str,
+    a: &SpecialTensor,
+    b: &SpecialTensor,
+    z: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    // Check for empty tensors
+    if matches!(a, SpecialTensor::Empty)
+        || matches!(b, SpecialTensor::Empty)
+        || matches!(z, SpecialTensor::Empty)
+    {
+        return Ok(SpecialTensor::Empty);
+    }
+
+    // Get vector lengths (0 = scalar)
+    let a_len = tensor_vec_len(a);
+    let b_len = tensor_vec_len(b);
+    let z_len = tensor_vec_len(z);
+
+    // Check broadcast compatibility
+    let out_len = broadcast_len_3(a_len, b_len, z_len)
+        .ok_or_else(|| broadcast_shape_error(function, mode))?;
+
+    // Check if output is complex
+    let is_complex = is_complex_tensor(a) || is_complex_tensor(b) || is_complex_tensor(z);
+
+    if out_len == 0 {
+        // All scalars
+        if is_complex {
+            let a_c = tensor_as_complex_scalar(a)?;
+            let b_c = tensor_as_complex_scalar(b)?;
+            let z_c = tensor_as_complex_scalar(z)?;
+            let result = hyp1f1_complex_parameters(a_c, b_c, z_c, mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        } else {
+            let a_r = tensor_as_real_scalar(a)?;
+            let b_r = tensor_as_real_scalar(b)?;
+            let z_r = tensor_as_real_scalar(z)?;
+            let result = hyp1f1_scalar(a_r, b_r, z_r, mode)?;
             Ok(SpecialTensor::RealScalar(result))
         }
-        (
-            SpecialTensor::RealScalar(a_val),
-            SpecialTensor::RealScalar(b_val),
-            SpecialTensor::RealVec(z_vec),
-        ) => {
-            let mut results = Vec::with_capacity(z_vec.len());
-            for &zi in z_vec {
-                results.push(hyp1f1_scalar(*a_val, *b_val, zi, mode)?);
+    } else {
+        // At least one vector
+        if is_complex {
+            let mut results = Vec::with_capacity(out_len);
+            for i in 0..out_len {
+                let a_c = tensor_get_complex(a, i, a_len)?;
+                let b_c = tensor_get_complex(b, i, b_len)?;
+                let z_c = tensor_get_complex(z, i, z_len)?;
+                results.push(hyp1f1_complex_parameters(a_c, b_c, z_c, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        } else {
+            let mut results = Vec::with_capacity(out_len);
+            for i in 0..out_len {
+                let a_r = tensor_get_real(a, i, a_len)?;
+                let b_r = tensor_get_real(b, i, b_len)?;
+                let z_r = tensor_get_real(z, i, z_len)?;
+                results.push(hyp1f1_scalar(a_r, b_r, z_r, mode)?);
             }
             Ok(SpecialTensor::RealVec(results))
         }
-        (
-            SpecialTensor::RealScalar(a_val),
-            SpecialTensor::RealScalar(b_val),
-            SpecialTensor::ComplexScalar(z_val),
-        ) => {
-            let result = hyp1f1_complex_z(*a_val, *b_val, *z_val, mode)?;
-            Ok(SpecialTensor::ComplexScalar(result))
-        }
-        (
-            SpecialTensor::RealScalar(a_val),
-            SpecialTensor::RealScalar(b_val),
-            SpecialTensor::ComplexVec(z_vec),
-        ) => {
-            let mut results = Vec::with_capacity(z_vec.len());
-            for &zi in z_vec {
-                results.push(hyp1f1_complex_z(*a_val, *b_val, zi, mode)?);
-            }
-            Ok(SpecialTensor::ComplexVec(results))
-        }
-        (a_param, b_param, SpecialTensor::RealScalar(z_val)) => {
-            let a_val = scalar_tensor_as_complex(a_param)
-                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
-            let result =
-                hyp1f1_complex_parameters(a_val, b_val, Complex64::from_real(*z_val), mode)?;
-            Ok(SpecialTensor::ComplexScalar(result))
-        }
-        (a_param, b_param, SpecialTensor::RealVec(z_vec)) => {
-            let a_val = scalar_tensor_as_complex(a_param)
-                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
-            let mut results = Vec::with_capacity(z_vec.len());
-            for &zi in z_vec {
-                results.push(hyp1f1_complex_parameters(
-                    a_val,
-                    b_val,
-                    Complex64::from_real(zi),
-                    mode,
-                )?);
-            }
-            Ok(SpecialTensor::ComplexVec(results))
-        }
-        (a_param, b_param, SpecialTensor::ComplexScalar(z_val)) => {
-            let a_val = scalar_tensor_as_complex(a_param)
-                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
-            let result = hyp1f1_complex_parameters(a_val, b_val, *z_val, mode)?;
-            Ok(SpecialTensor::ComplexScalar(result))
-        }
-        (a_param, b_param, SpecialTensor::ComplexVec(z_vec)) => {
-            let a_val = scalar_tensor_as_complex(a_param)
-                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
-            let mut results = Vec::with_capacity(z_vec.len());
-            for &zi in z_vec {
-                results.push(hyp1f1_complex_parameters(a_val, b_val, zi, mode)?);
-            }
-            Ok(SpecialTensor::ComplexVec(results))
-        }
-        _ => Err(scalar_parameter_error("hyp1f1", mode)),
+    }
+}
+
+// Helper functions for broadcast dispatch
+
+fn tensor_vec_len(t: &SpecialTensor) -> usize {
+    match t {
+        SpecialTensor::RealScalar(_) | SpecialTensor::ComplexScalar(_) => 0,
+        SpecialTensor::RealVec(v) => v.len(),
+        SpecialTensor::ComplexVec(v) => v.len(),
+        SpecialTensor::Empty => 0,
+    }
+}
+
+fn is_complex_tensor(t: &SpecialTensor) -> bool {
+    matches!(
+        t,
+        SpecialTensor::ComplexScalar(_) | SpecialTensor::ComplexVec(_)
+    )
+}
+
+fn broadcast_len_4(a: usize, b: usize, c: usize, d: usize) -> Option<usize> {
+    let abc = broadcast_len_3(a, b, c)?;
+    broadcast_len_2(abc, d)
+}
+
+fn broadcast_len_3(a: usize, b: usize, c: usize) -> Option<usize> {
+    let ab = broadcast_len_2(a, b)?;
+    broadcast_len_2(ab, c)
+}
+
+fn broadcast_len_2(a: usize, b: usize) -> Option<usize> {
+    match (a, b) {
+        (0, 0) => Some(0),
+        (0, n) | (n, 0) => Some(n),
+        (m, n) if m == n => Some(m),
+        _ => None,
+    }
+}
+
+fn tensor_as_real_scalar(t: &SpecialTensor) -> Result<f64, SpecialError> {
+    match t {
+        SpecialTensor::RealScalar(v) => Ok(*v),
+        _ => Err(SpecialError {
+            function: "hyp1f1",
+            kind: SpecialErrorKind::DomainError,
+            mode: RuntimeMode::Strict,
+            detail: "expected real scalar",
+        }),
+    }
+}
+
+fn tensor_as_complex_scalar(t: &SpecialTensor) -> Result<Complex64, SpecialError> {
+    match t {
+        SpecialTensor::RealScalar(v) => Ok(Complex64::from_real(*v)),
+        SpecialTensor::ComplexScalar(v) => Ok(*v),
+        _ => Err(SpecialError {
+            function: "hyp1f1",
+            kind: SpecialErrorKind::DomainError,
+            mode: RuntimeMode::Strict,
+            detail: "expected scalar",
+        }),
+    }
+}
+
+fn tensor_get_real(t: &SpecialTensor, i: usize, len: usize) -> Result<f64, SpecialError> {
+    match t {
+        SpecialTensor::RealScalar(v) => Ok(*v),
+        SpecialTensor::RealVec(vec) => Ok(vec[if len == 0 { 0 } else { i }]),
+        _ => Err(SpecialError {
+            function: "hyp1f1",
+            kind: SpecialErrorKind::DomainError,
+            mode: RuntimeMode::Strict,
+            detail: "expected real tensor",
+        }),
+    }
+}
+
+fn tensor_get_complex(t: &SpecialTensor, i: usize, len: usize) -> Result<Complex64, SpecialError> {
+    match t {
+        SpecialTensor::RealScalar(v) => Ok(Complex64::from_real(*v)),
+        SpecialTensor::ComplexScalar(v) => Ok(*v),
+        SpecialTensor::RealVec(vec) => Ok(Complex64::from_real(vec[if len == 0 { 0 } else { i }])),
+        SpecialTensor::ComplexVec(vec) => Ok(vec[if len == 0 { 0 } else { i }]),
+        SpecialTensor::Empty => Err(SpecialError {
+            function: "hyp1f1",
+            kind: SpecialErrorKind::DomainError,
+            mode: RuntimeMode::Strict,
+            detail: "empty tensor",
+        }),
     }
 }
 
@@ -511,9 +582,8 @@ fn bessel_j_asymptotic(nu: f64, x: f64) -> f64 {
 
 /// Gauss hypergeometric function 2F1(a, b; c; z).
 ///
-/// Supports scalar real or complex parameters with real or complex
-/// scalar/vector `z` inputs. Complex-valued evaluation uses the convergent
-/// `|z| < 1` series path.
+/// Supports scalar or vector parameters with NumPy-style broadcasting.
+/// Complex-valued evaluation uses the convergent `|z| < 1` series path.
 /// Matches `scipy.special.hyp2f1(a, b, c, z)`.
 pub fn hyp2f1(
     a: &SpecialTensor,
@@ -522,115 +592,80 @@ pub fn hyp2f1(
     z: &SpecialTensor,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    match (a, b, c, z) {
-        (
-            SpecialTensor::RealScalar(a_val),
-            SpecialTensor::RealScalar(b_val),
-            SpecialTensor::RealScalar(c_val),
-            SpecialTensor::RealScalar(z_val),
-        ) => {
-            let result = hyp2f1_scalar(*a_val, *b_val, *c_val, *z_val, mode)?;
+    hyp2f1_dispatch("hyp2f1", a, b, c, z, mode)
+}
+
+fn hyp2f1_dispatch(
+    function: &'static str,
+    a: &SpecialTensor,
+    b: &SpecialTensor,
+    c: &SpecialTensor,
+    z: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    // Check for empty tensors
+    if matches!(a, SpecialTensor::Empty)
+        || matches!(b, SpecialTensor::Empty)
+        || matches!(c, SpecialTensor::Empty)
+        || matches!(z, SpecialTensor::Empty)
+    {
+        return Ok(SpecialTensor::Empty);
+    }
+
+    // Get vector lengths (0 = scalar)
+    let a_len = tensor_vec_len(a);
+    let b_len = tensor_vec_len(b);
+    let c_len = tensor_vec_len(c);
+    let z_len = tensor_vec_len(z);
+
+    // Check broadcast compatibility
+    let out_len = broadcast_len_4(a_len, b_len, c_len, z_len)
+        .ok_or_else(|| broadcast_shape_error(function, mode))?;
+
+    // Check if output is complex
+    let is_complex =
+        is_complex_tensor(a) || is_complex_tensor(b) || is_complex_tensor(c) || is_complex_tensor(z);
+
+    if out_len == 0 {
+        // All scalars
+        if is_complex {
+            let a_c = tensor_as_complex_scalar(a)?;
+            let b_c = tensor_as_complex_scalar(b)?;
+            let c_c = tensor_as_complex_scalar(c)?;
+            let z_c = tensor_as_complex_scalar(z)?;
+            let result = hyp2f1_complex_parameters(a_c, b_c, c_c, z_c, mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        } else {
+            let a_r = tensor_as_real_scalar(a)?;
+            let b_r = tensor_as_real_scalar(b)?;
+            let c_r = tensor_as_real_scalar(c)?;
+            let z_r = tensor_as_real_scalar(z)?;
+            let result = hyp2f1_scalar(a_r, b_r, c_r, z_r, mode)?;
             Ok(SpecialTensor::RealScalar(result))
         }
-        (
-            SpecialTensor::RealScalar(a_val),
-            SpecialTensor::RealScalar(b_val),
-            SpecialTensor::RealScalar(c_val),
-            SpecialTensor::RealVec(z_vec),
-        ) => {
-            let mut results = Vec::with_capacity(z_vec.len());
-            for &zi in z_vec {
-                results.push(hyp2f1_scalar(*a_val, *b_val, *c_val, zi, mode)?);
+    } else {
+        // At least one vector
+        if is_complex {
+            let mut results = Vec::with_capacity(out_len);
+            for i in 0..out_len {
+                let a_c = tensor_get_complex(a, i, a_len)?;
+                let b_c = tensor_get_complex(b, i, b_len)?;
+                let c_c = tensor_get_complex(c, i, c_len)?;
+                let z_c = tensor_get_complex(z, i, z_len)?;
+                results.push(hyp2f1_complex_parameters(a_c, b_c, c_c, z_c, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        } else {
+            let mut results = Vec::with_capacity(out_len);
+            for i in 0..out_len {
+                let a_r = tensor_get_real(a, i, a_len)?;
+                let b_r = tensor_get_real(b, i, b_len)?;
+                let c_r = tensor_get_real(c, i, c_len)?;
+                let z_r = tensor_get_real(z, i, z_len)?;
+                results.push(hyp2f1_scalar(a_r, b_r, c_r, z_r, mode)?);
             }
             Ok(SpecialTensor::RealVec(results))
         }
-        (
-            SpecialTensor::RealScalar(a_val),
-            SpecialTensor::RealScalar(b_val),
-            SpecialTensor::RealScalar(c_val),
-            SpecialTensor::ComplexScalar(z_val),
-        ) => {
-            let result = hyp2f1_complex_parameters(
-                Complex64::from_real(*a_val),
-                Complex64::from_real(*b_val),
-                Complex64::from_real(*c_val),
-                *z_val,
-                mode,
-            )?;
-            Ok(SpecialTensor::ComplexScalar(result))
-        }
-        (
-            SpecialTensor::RealScalar(a_val),
-            SpecialTensor::RealScalar(b_val),
-            SpecialTensor::RealScalar(c_val),
-            SpecialTensor::ComplexVec(z_vec),
-        ) => {
-            let mut results = Vec::with_capacity(z_vec.len());
-            for &zi in z_vec {
-                results.push(hyp2f1_complex_parameters(
-                    Complex64::from_real(*a_val),
-                    Complex64::from_real(*b_val),
-                    Complex64::from_real(*c_val),
-                    zi,
-                    mode,
-                )?);
-            }
-            Ok(SpecialTensor::ComplexVec(results))
-        }
-        (a_param, b_param, c_param, SpecialTensor::RealScalar(z_val)) => {
-            let a_val = scalar_tensor_as_complex(a_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let c_val = scalar_tensor_as_complex(c_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let result =
-                hyp2f1_complex_parameters(a_val, b_val, c_val, Complex64::from_real(*z_val), mode)?;
-            Ok(SpecialTensor::ComplexScalar(result))
-        }
-        (a_param, b_param, c_param, SpecialTensor::RealVec(z_vec)) => {
-            let a_val = scalar_tensor_as_complex(a_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let c_val = scalar_tensor_as_complex(c_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let mut results = Vec::with_capacity(z_vec.len());
-            for &zi in z_vec {
-                results.push(hyp2f1_complex_parameters(
-                    a_val,
-                    b_val,
-                    c_val,
-                    Complex64::from_real(zi),
-                    mode,
-                )?);
-            }
-            Ok(SpecialTensor::ComplexVec(results))
-        }
-        (a_param, b_param, c_param, SpecialTensor::ComplexScalar(z_val)) => {
-            let a_val = scalar_tensor_as_complex(a_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let c_val = scalar_tensor_as_complex(c_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let result = hyp2f1_complex_parameters(a_val, b_val, c_val, *z_val, mode)?;
-            Ok(SpecialTensor::ComplexScalar(result))
-        }
-        (a_param, b_param, c_param, SpecialTensor::ComplexVec(z_vec)) => {
-            let a_val = scalar_tensor_as_complex(a_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let b_val = scalar_tensor_as_complex(b_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let c_val = scalar_tensor_as_complex(c_param)
-                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
-            let mut results = Vec::with_capacity(z_vec.len());
-            for &zi in z_vec {
-                results.push(hyp2f1_complex_parameters(a_val, b_val, c_val, zi, mode)?);
-            }
-            Ok(SpecialTensor::ComplexVec(results))
-        }
-        _ => Err(scalar_parameter_error("hyp2f1", mode)),
     }
 }
 
