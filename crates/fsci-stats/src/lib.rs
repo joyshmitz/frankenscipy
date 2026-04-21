@@ -117,6 +117,12 @@ pub trait ContinuousDistribution {
     fn kurtosis(&self) -> f64 {
         f64::NAN
     }
+
+    /// Mode of the distribution (value where PDF is maximized).
+    /// Returns NaN for distributions with undefined or non-unique mode.
+    fn mode(&self) -> f64 {
+        f64::NAN
+    }
 }
 
 /// Generic fitting helper for continuous distributions with built-in MLE support.
@@ -393,6 +399,10 @@ impl ContinuousDistribution for Normal {
 
     fn kurtosis(&self) -> f64 {
         0.0 // Normal has excess kurtosis 0 by definition
+    }
+
+    fn mode(&self) -> f64 {
+        self.loc
     }
 }
 
@@ -810,6 +820,10 @@ impl ContinuousDistribution for Exponential {
     fn kurtosis(&self) -> f64 {
         6.0 // Exponential excess kurtosis is always 6
     }
+
+    fn mode(&self) -> f64 {
+        0.0
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1101,6 +1115,14 @@ impl ContinuousDistribution for GammaDist {
     fn entropy(&self) -> f64 {
         // H = a + ln(scale) + ln(Gamma(a)) + (1-a)*psi(a)
         self.a + self.scale.ln() + ln_gamma(self.a) + (1.0 - self.a) * digamma(self.a)
+    }
+
+    fn mode(&self) -> f64 {
+        if self.a >= 1.0 {
+            (self.a - 1.0) * self.scale
+        } else {
+            0.0
+        }
     }
 }
 
@@ -1565,6 +1587,10 @@ impl ContinuousDistribution for Gumbel {
     fn entropy(&self) -> f64 {
         self.scale.ln() + EULER_MASCHERONI + 1.0
     }
+
+    fn mode(&self) -> f64 {
+        self.loc
+    }
 }
 
 /// Left-skewed Gumbel (extreme value type I) distribution.
@@ -1706,6 +1732,10 @@ impl ContinuousDistribution for Logistic {
 
     fn entropy(&self) -> f64 {
         self.scale.ln() + 2.0
+    }
+
+    fn mode(&self) -> f64 {
+        self.loc
     }
 }
 
@@ -2911,6 +2941,10 @@ impl ContinuousDistribution for Cauchy {
     fn entropy(&self) -> f64 {
         (4.0 * PI * self.scale).ln()
     }
+
+    fn mode(&self) -> f64 {
+        self.loc
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3009,6 +3043,10 @@ impl ContinuousDistribution for Laplace {
 
     fn kurtosis(&self) -> f64 {
         3.0 // Laplace excess kurtosis is 3
+    }
+
+    fn mode(&self) -> f64 {
+        self.loc
     }
 }
 
@@ -19662,5 +19700,58 @@ mod tests {
         let g = Gumbel::new(0.0, 1.0);
         let expected = 0.0 + EULER_MASCHERONI + 1.0;
         assert_close(g.entropy(), expected, 1e-10, "Gumbel(0,1) entropy");
+    }
+
+    // ── Mode tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn dist_mode_normal() {
+        let n = Normal::new(5.0, 2.0);
+        assert_close(n.mode(), 5.0, 1e-10, "Normal mode = loc");
+    }
+
+    #[test]
+    fn dist_mode_exponential() {
+        let e = Exponential::new(2.0);
+        assert_close(e.mode(), 0.0, 1e-10, "Exponential mode = 0");
+    }
+
+    #[test]
+    fn dist_mode_gamma() {
+        let g = GammaDist::new(3.0, 2.0);
+        assert_close(g.mode(), 4.0, 1e-10, "Gamma(3,2) mode = (3-1)*2 = 4");
+
+        let g2 = GammaDist::new(0.5, 1.0);
+        assert_close(g2.mode(), 0.0, 1e-10, "Gamma(0.5,1) mode = 0");
+    }
+
+    #[test]
+    fn dist_mode_cauchy() {
+        let c = Cauchy::new(3.0, 1.0);
+        assert_close(c.mode(), 3.0, 1e-10, "Cauchy mode = loc");
+    }
+
+    #[test]
+    fn dist_mode_laplace() {
+        let l = Laplace::new(2.0, 1.0);
+        assert_close(l.mode(), 2.0, 1e-10, "Laplace mode = loc");
+    }
+
+    #[test]
+    fn dist_mode_logistic() {
+        let l = Logistic::new(1.0, 2.0);
+        assert_close(l.mode(), 1.0, 1e-10, "Logistic mode = loc");
+    }
+
+    #[test]
+    fn dist_mode_gumbel() {
+        let g = Gumbel::new(2.0, 1.0);
+        assert_close(g.mode(), 2.0, 1e-10, "Gumbel mode = loc");
+    }
+
+    #[test]
+    fn dist_mode_default_nan() {
+        let t = StudentT::new(5.0);
+        assert!(t.mode().is_nan(), "StudentT mode should be NaN");
     }
 }
