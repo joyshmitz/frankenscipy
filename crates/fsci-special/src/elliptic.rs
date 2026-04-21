@@ -90,7 +90,13 @@ pub fn ellipk(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 /// This is numerically stable when p is small (m close to 1).
 /// Matches `scipy.special.ellipkm1(p)`.
 pub fn ellipkm1(p_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("ellipkm1", p_tensor, mode, |p| ellipkm1_scalar(p, mode))
+    map_real_or_complex(
+        "ellipkm1",
+        p_tensor,
+        mode,
+        |p| ellipkm1_scalar(p, mode),
+        |p| ellipkm1_complex_scalar(p, mode),
+    )
 }
 
 /// Complete elliptic integral of the second kind E(m).
@@ -404,6 +410,16 @@ fn ellipe_complex_scalar(m: Complex64) -> Result<Complex64, SpecialError> {
         Complex64::from_real(PI / 2.0),
         m,
     ))
+}
+
+fn ellipkm1_complex_scalar(p: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    if !p.is_finite() {
+        return Ok(complex_nan());
+    }
+    if p.im == 0.0 && (0.0..=1.0).contains(&p.re) {
+        return ellipkm1_scalar(p.re, mode).map(Complex64::from_real);
+    }
+    ellipk_complex_scalar(Complex64::from_real(1.0) - p)
 }
 
 fn ellipkinc_complex_scalar(phi: Complex64, m: Complex64) -> Result<Complex64, SpecialError> {
@@ -1440,6 +1456,56 @@ mod tests {
                     1e-10,
                     "broadcast second element",
                 );
+            }
+            other => panic!("expected ComplexVec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ellipkm1_complex_matches_ellipk_of_complement() {
+        let p = SpecialTensor::ComplexScalar(Complex64::new(0.4, -0.2));
+        let result = eval_complex_scalar(ellipkm1(&p, RuntimeMode::Strict));
+        let expected = eval_complex_scalar(ellipk(
+            &SpecialTensor::ComplexScalar(Complex64::new(0.6, 0.2)),
+            RuntimeMode::Strict,
+        ));
+        assert_complex_close(result, expected, 1e-12, "ellipkm1 complex complement");
+    }
+
+    #[test]
+    fn ellipkm1_complex_real_axis_reduces_to_real_kernel() {
+        let p = 0.3;
+        let real_result = eval_scalar(ellipkm1(&SpecialTensor::RealScalar(p), RuntimeMode::Strict));
+        let complex_result = eval_complex_scalar(ellipkm1(
+            &SpecialTensor::ComplexScalar(Complex64::from_real(p)),
+            RuntimeMode::Strict,
+        ));
+        assert_complex_close(
+            complex_result,
+            Complex64::from_real(real_result),
+            1e-12,
+            "ellipkm1 real-axis reduction",
+        );
+    }
+
+    #[test]
+    fn ellipkm1_complex_broadcasts_vector_inputs() {
+        let values = vec![Complex64::from_real(0.2), Complex64::new(0.4, -0.2)];
+        let result = ellipkm1(
+            &SpecialTensor::ComplexVec(values.clone()),
+            RuntimeMode::Strict,
+        )
+        .expect("complex ellipkm1 vector broadcast");
+        match result {
+            SpecialTensor::ComplexVec(items) => {
+                assert_eq!(items.len(), values.len());
+                for (value, actual) in values.iter().zip(items.iter()) {
+                    let expected = eval_complex_scalar(ellipkm1(
+                        &SpecialTensor::ComplexScalar(*value),
+                        RuntimeMode::Strict,
+                    ));
+                    assert_complex_close(*actual, expected, 1e-12, "ellipkm1 vector lane");
+                }
             }
             other => panic!("expected ComplexVec, got {other:?}"),
         }
