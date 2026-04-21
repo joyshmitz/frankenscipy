@@ -3710,7 +3710,12 @@ pub fn hard_tanh(x: f64, min_val: f64, max_val: f64) -> f64 {
 /// A smooth approximation to absolute value loss. For large |x|,
 /// log_cosh(x) ≈ |x| - ln(2).
 #[must_use]
-pub fn log_cosh(x: f64) -> f64 {
+pub fn log_cosh(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("log_cosh", x_tensor, mode, |x| Ok(log_cosh_scalar(x)))
+}
+
+#[must_use]
+pub fn log_cosh_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -5112,14 +5117,14 @@ mod tests {
     #[test]
     fn log_cosh_basic() {
         // log_cosh(0) = 0
-        assert!((log_cosh(0.0) - 0.0).abs() < 1e-14);
+        assert!((log_cosh_scalar(0.0) - 0.0).abs() < 1e-14);
         // Symmetric
-        assert!((log_cosh(2.0) - log_cosh(-2.0)).abs() < 1e-14);
+        assert!((log_cosh_scalar(2.0) - log_cosh_scalar(-2.0)).abs() < 1e-14);
         // For large |x|, log_cosh(x) ≈ |x| - ln(2)
         let large = 30.0;
-        assert!((log_cosh(large) - (large - std::f64::consts::LN_2)).abs() < 1e-10);
+        assert!((log_cosh_scalar(large) - (large - std::f64::consts::LN_2)).abs() < 1e-10);
         // Always non-negative
-        assert!(log_cosh(-5.0) >= 0.0);
+        assert!(log_cosh_scalar(-5.0) >= 0.0);
     }
 
     #[test]
@@ -5344,6 +5349,42 @@ mod tests {
         assert!(values[0].is_nan());
         assert_eq!(values[1], 0.0);
         assert_eq!(values[2], 1.0);
+        Ok(())
+    }
+
+    #[test]
+    fn log_cosh_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = log_cosh(&SpecialTensor::RealScalar(0.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - log_cosh_scalar(0.5)).abs() < 1e-14);
+
+        let vector = log_cosh(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(log_cosh_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn log_cosh_tensor_dispatch_preserves_large_tail_and_nan() -> Result<(), String> {
+        let vector = log_cosh(
+            &SpecialTensor::RealVec(vec![f64::NAN, -30.0, 30.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!((values[1] - values[2]).abs() < 1e-14);
+        let expected_tail = 30.0 - std::f64::consts::LN_2;
+        assert!((values[2] - expected_tail).abs() < 1e-10);
         Ok(())
     }
 
