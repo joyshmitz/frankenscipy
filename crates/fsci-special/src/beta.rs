@@ -4,8 +4,8 @@ use fsci_runtime::RuntimeMode;
 
 use crate::gamma;
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, not_yet_implemented, record_special_trace,
+    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor, not_yet_implemented, record_special_trace,
 };
 
 pub const BETA_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -58,11 +58,155 @@ pub const BETA_DISPATCH_PLAN: &[DispatchPlan] = &[
 ];
 
 pub fn beta(a: &SpecialTensor, b: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("beta", a, b, mode, |x, y| beta_scalar(x, y, mode))
+    beta_dispatch(a, b, mode)
 }
 
 pub fn betaln(a: &SpecialTensor, b: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_binary("betaln", a, b, mode, |x, y| betaln_scalar(x, y, mode))
+    betaln_dispatch(a, b, mode)
+}
+
+fn beta_dispatch(a: &SpecialTensor, b: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    match (a, b) {
+        (SpecialTensor::RealScalar(av), SpecialTensor::RealScalar(bv)) => {
+            beta_scalar(*av, *bv, mode).map(SpecialTensor::RealScalar)
+        }
+        (SpecialTensor::RealVec(av), SpecialTensor::RealScalar(bv)) => av
+            .iter()
+            .map(|x| beta_scalar(*x, *bv, mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(av), SpecialTensor::RealVec(bv)) => bv
+            .iter()
+            .map(|y| beta_scalar(*av, *y, mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(av), SpecialTensor::RealVec(bv)) => {
+            if av.len() != bv.len() {
+                return Err(SpecialError {
+                    function: "beta",
+                    kind: SpecialErrorKind::ShapeMismatch,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            av.iter()
+                .zip(bv.iter())
+                .map(|(x, y)| beta_scalar(*x, *y, mode))
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::ComplexScalar(av), SpecialTensor::ComplexScalar(bv)) => {
+            Ok(SpecialTensor::ComplexScalar(complex_beta_scalar(*av, *bv)))
+        }
+        (SpecialTensor::ComplexVec(av), SpecialTensor::ComplexScalar(bv)) => Ok(
+            SpecialTensor::ComplexVec(av.iter().map(|x| complex_beta_scalar(*x, *bv)).collect()),
+        ),
+        (SpecialTensor::ComplexScalar(av), SpecialTensor::ComplexVec(bv)) => Ok(
+            SpecialTensor::ComplexVec(bv.iter().map(|y| complex_beta_scalar(*av, *y)).collect()),
+        ),
+        (SpecialTensor::ComplexVec(av), SpecialTensor::ComplexVec(bv)) => {
+            if av.len() != bv.len() {
+                return Err(SpecialError {
+                    function: "beta",
+                    kind: SpecialErrorKind::ShapeMismatch,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            Ok(SpecialTensor::ComplexVec(
+                av.iter()
+                    .zip(bv.iter())
+                    .map(|(x, y)| complex_beta_scalar(*x, *y))
+                    .collect(),
+            ))
+        }
+        (SpecialTensor::RealScalar(av), SpecialTensor::ComplexScalar(bv)) => Ok(
+            SpecialTensor::ComplexScalar(complex_beta_scalar(Complex64::from_real(*av), *bv)),
+        ),
+        (SpecialTensor::ComplexScalar(av), SpecialTensor::RealScalar(bv)) => Ok(
+            SpecialTensor::ComplexScalar(complex_beta_scalar(*av, Complex64::from_real(*bv))),
+        ),
+        _ => Err(SpecialError {
+            function: "beta",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "unsupported tensor combination",
+        }),
+    }
+}
+
+fn betaln_dispatch(a: &SpecialTensor, b: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    match (a, b) {
+        (SpecialTensor::RealScalar(av), SpecialTensor::RealScalar(bv)) => {
+            betaln_scalar(*av, *bv, mode).map(SpecialTensor::RealScalar)
+        }
+        (SpecialTensor::RealVec(av), SpecialTensor::RealScalar(bv)) => av
+            .iter()
+            .map(|x| betaln_scalar(*x, *bv, mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(av), SpecialTensor::RealVec(bv)) => bv
+            .iter()
+            .map(|y| betaln_scalar(*av, *y, mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(av), SpecialTensor::RealVec(bv)) => {
+            if av.len() != bv.len() {
+                return Err(SpecialError {
+                    function: "betaln",
+                    kind: SpecialErrorKind::ShapeMismatch,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            av.iter()
+                .zip(bv.iter())
+                .map(|(x, y)| betaln_scalar(*x, *y, mode))
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::ComplexScalar(av), SpecialTensor::ComplexScalar(bv)) => {
+            Ok(SpecialTensor::ComplexScalar(complex_betaln_scalar(*av, *bv)))
+        }
+        (SpecialTensor::ComplexVec(av), SpecialTensor::ComplexScalar(bv)) => {
+            Ok(SpecialTensor::ComplexVec(
+                av.iter().map(|x| complex_betaln_scalar(*x, *bv)).collect(),
+            ))
+        }
+        (SpecialTensor::ComplexScalar(av), SpecialTensor::ComplexVec(bv)) => {
+            Ok(SpecialTensor::ComplexVec(
+                bv.iter().map(|y| complex_betaln_scalar(*av, *y)).collect(),
+            ))
+        }
+        (SpecialTensor::ComplexVec(av), SpecialTensor::ComplexVec(bv)) => {
+            if av.len() != bv.len() {
+                return Err(SpecialError {
+                    function: "betaln",
+                    kind: SpecialErrorKind::ShapeMismatch,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            Ok(SpecialTensor::ComplexVec(
+                av.iter()
+                    .zip(bv.iter())
+                    .map(|(x, y)| complex_betaln_scalar(*x, *y))
+                    .collect(),
+            ))
+        }
+        (SpecialTensor::RealScalar(av), SpecialTensor::ComplexScalar(bv)) => Ok(
+            SpecialTensor::ComplexScalar(complex_betaln_scalar(Complex64::from_real(*av), *bv)),
+        ),
+        (SpecialTensor::ComplexScalar(av), SpecialTensor::RealScalar(bv)) => Ok(
+            SpecialTensor::ComplexScalar(complex_betaln_scalar(*av, Complex64::from_real(*bv))),
+        ),
+        _ => Err(SpecialError {
+            function: "betaln",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "unsupported tensor combination",
+        }),
+    }
 }
 
 pub fn betainc(
@@ -888,6 +1032,17 @@ pub fn betaln_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialEr
     Ok(lg_a + lg_b - lg_ab)
 }
 
+pub fn complex_betaln_scalar(a: Complex64, b: Complex64) -> Complex64 {
+    let lg_a = gamma::complex_gammaln(a);
+    let lg_b = gamma::complex_gammaln(b);
+    let lg_ab = gamma::complex_gammaln(a + b);
+    lg_a + lg_b - lg_ab
+}
+
+pub fn complex_beta_scalar(a: Complex64, b: Complex64) -> Complex64 {
+    complex_betaln_scalar(a, b).exp()
+}
+
 pub fn betainc_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if a.is_nan() || b.is_nan() || x.is_nan() {
         return Ok(f64::NAN);
@@ -1578,5 +1733,149 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn complex_scalar(tensor: &SpecialTensor) -> Complex64 {
+        match tensor {
+            SpecialTensor::ComplexScalar(c) => *c,
+            _ => panic!("expected ComplexScalar"),
+        }
+    }
+
+    #[test]
+    fn complex_betaln_real_inputs_match_real_path() {
+        let a = SpecialTensor::ComplexScalar(Complex64::new(2.0, 0.0));
+        let b = SpecialTensor::ComplexScalar(Complex64::new(3.0, 0.0));
+        let result = betaln(&a, &b, RuntimeMode::Strict).unwrap();
+        let c = complex_scalar(&result);
+
+        let real_a = SpecialTensor::RealScalar(2.0);
+        let real_b = SpecialTensor::RealScalar(3.0);
+        let real_result = betaln(&real_a, &real_b, RuntimeMode::Strict).unwrap();
+        let expected = match real_result {
+            SpecialTensor::RealScalar(v) => v,
+            _ => panic!("expected RealScalar"),
+        };
+
+        assert!(
+            (c.re - expected).abs() < 1e-10,
+            "complex betaln(2+0i, 3+0i) = {} + {}i, expected {} + 0i",
+            c.re,
+            c.im,
+            expected
+        );
+        assert!(
+            c.im.abs() < 1e-10,
+            "imaginary part should be ~0, got {}",
+            c.im
+        );
+    }
+
+    #[test]
+    fn complex_beta_real_inputs_match_real_path() {
+        let a = SpecialTensor::ComplexScalar(Complex64::new(2.0, 0.0));
+        let b = SpecialTensor::ComplexScalar(Complex64::new(3.0, 0.0));
+        let result = beta(&a, &b, RuntimeMode::Strict).unwrap();
+        let c = complex_scalar(&result);
+
+        let real_a = SpecialTensor::RealScalar(2.0);
+        let real_b = SpecialTensor::RealScalar(3.0);
+        let real_result = beta(&real_a, &real_b, RuntimeMode::Strict).unwrap();
+        let expected = match real_result {
+            SpecialTensor::RealScalar(v) => v,
+            _ => panic!("expected RealScalar"),
+        };
+
+        assert!(
+            (c.re - expected).abs() < 1e-10,
+            "complex beta(2+0i, 3+0i) = {} + {}i, expected {} + 0i",
+            c.re,
+            c.im,
+            expected
+        );
+        assert!(
+            c.im.abs() < 1e-10,
+            "imaginary part should be ~0, got {}",
+            c.im
+        );
+    }
+
+    #[test]
+    fn complex_betaln_with_imaginary_parts() {
+        // Verify complex betaln produces finite results for complex inputs
+        let a = SpecialTensor::ComplexScalar(Complex64::new(1.0, 1.0));
+        let b = SpecialTensor::ComplexScalar(Complex64::new(2.0, 0.5));
+        let result = betaln(&a, &b, RuntimeMode::Strict).unwrap();
+        let c = complex_scalar(&result);
+
+        assert!(c.re.is_finite(), "betaln result should be finite");
+        assert!(c.im.is_finite(), "betaln result should be finite");
+        // Verify symmetry: betaln(a, b) = betaln(b, a)
+        let result_sym = betaln(&b, &a, RuntimeMode::Strict).unwrap();
+        let c_sym = complex_scalar(&result_sym);
+        assert!(
+            (c.re - c_sym.re).abs() < 1e-10,
+            "betaln should be symmetric"
+        );
+        assert!(
+            (c.im - c_sym.im).abs() < 1e-10,
+            "betaln should be symmetric"
+        );
+    }
+
+    #[test]
+    fn complex_beta_with_imaginary_parts() {
+        // Verify complex beta produces finite results
+        let a = SpecialTensor::ComplexScalar(Complex64::new(1.0, 1.0));
+        let b = SpecialTensor::ComplexScalar(Complex64::new(2.0, 0.5));
+        let result = beta(&a, &b, RuntimeMode::Strict).unwrap();
+        let c = complex_scalar(&result);
+
+        assert!(c.re.is_finite(), "beta result should be finite");
+        assert!(c.im.is_finite(), "beta result should be finite");
+        // beta = exp(betaln)
+        let ln_result = betaln(&a, &b, RuntimeMode::Strict).unwrap();
+        let ln_c = complex_scalar(&ln_result);
+        let expected = ln_c.exp();
+        assert!(
+            (c.re - expected.re).abs() < 1e-10,
+            "beta should equal exp(betaln)"
+        );
+        assert!(
+            (c.im - expected.im).abs() < 1e-10,
+            "beta should equal exp(betaln)"
+        );
+    }
+
+    #[test]
+    fn complex_betaln_vector() {
+        let a = SpecialTensor::ComplexVec(vec![
+            Complex64::new(2.0, 0.0),
+            Complex64::new(1.0, 1.0),
+        ]);
+        let b = SpecialTensor::ComplexScalar(Complex64::new(3.0, 0.0));
+        let result = betaln(&a, &b, RuntimeMode::Strict).unwrap();
+        match result {
+            SpecialTensor::ComplexVec(v) => {
+                assert_eq!(v.len(), 2);
+                // first entry (real inputs) should have near-zero imaginary part
+                assert!(v[0].im.abs() < 1e-10, "real inputs should have im~0");
+                assert!(v[0].re.is_finite());
+                assert!(v[1].re.is_finite());
+                assert!(v[1].im.is_finite());
+            }
+            _ => panic!("expected ComplexVec"),
+        }
+    }
+
+    #[test]
+    fn complex_beta_mixed_real_complex() {
+        let a = SpecialTensor::RealScalar(2.0);
+        let b = SpecialTensor::ComplexScalar(Complex64::new(3.0, 0.5));
+        let result = beta(&a, &b, RuntimeMode::Strict).unwrap();
+        let c = complex_scalar(&result);
+        // Should produce a complex result
+        assert!(c.re.is_finite());
+        assert!(c.im.is_finite());
     }
 }
