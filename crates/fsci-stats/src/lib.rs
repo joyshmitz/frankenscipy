@@ -90,6 +90,13 @@ pub trait ContinuousDistribution {
     {
         unimplemented!("fit method not implemented for this distribution")
     }
+
+    /// Differential entropy H(X) = -∫ f(x) log f(x) dx.
+    /// Returns entropy in nats (natural logarithm base).
+    /// Matches `scipy.stats.<dist>.entropy()`.
+    fn entropy(&self) -> f64 {
+        f64::NAN
+    }
 }
 
 /// Generic fitting helper for continuous distributions with built-in MLE support.
@@ -354,6 +361,10 @@ impl ContinuousDistribution for Normal {
             loc: mean,
             scale: var.sqrt(),
         }
+    }
+
+    fn entropy(&self) -> f64 {
+        0.5 * (2.0 * PI * std::f64::consts::E * self.scale * self.scale).ln()
     }
 }
 
@@ -641,6 +652,10 @@ impl ContinuousDistribution for Uniform {
             scale: max - min,
         }
     }
+
+    fn entropy(&self) -> f64 {
+        self.scale.ln()
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -746,6 +761,10 @@ impl ContinuousDistribution for Exponential {
         }
 
         Self { lambda: 1.0 / mean }
+    }
+
+    fn entropy(&self) -> f64 {
+        1.0 - self.lambda.ln()
     }
 }
 
@@ -2817,6 +2836,10 @@ impl ContinuousDistribution for Cauchy {
     fn var(&self) -> f64 {
         f64::NAN // Cauchy has no finite variance
     }
+
+    fn entropy(&self) -> f64 {
+        (4.0 * PI * self.scale).ln()
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2903,6 +2926,10 @@ impl ContinuousDistribution for Laplace {
             loc,
             scale: if scale > 0.0 { scale } else { f64::NAN },
         }
+    }
+
+    fn entropy(&self) -> f64 {
+        1.0 + (2.0 * self.scale).ln()
     }
 }
 
@@ -19333,5 +19360,64 @@ mod tests {
         let g2 = [1.0];
         let result2 = fligner(&[&g1, &g2]);
         assert!(result2.statistic.is_nan());
+    }
+
+    // ── Distribution entropy tests ─────────────────────────────────────────
+
+    #[test]
+    fn dist_entropy_normal() {
+        // H = 0.5 * ln(2*pi*e*sigma^2)
+        let n = Normal::standard();
+        let expected = 0.5 * (2.0 * PI * std::f64::consts::E).ln();
+        assert_close(n.entropy(), expected, 1e-12, "N(0,1) entropy");
+
+        let n2 = Normal::new(0.0, 2.0);
+        let expected2 = 0.5 * (2.0 * PI * std::f64::consts::E * 4.0).ln();
+        assert_close(n2.entropy(), expected2, 1e-12, "N(0,2) entropy");
+    }
+
+    #[test]
+    fn dist_entropy_uniform() {
+        // H = ln(scale)
+        let u = Uniform::new(0.0, 1.0);
+        assert_close(u.entropy(), 0.0, 1e-12, "U(0,1) entropy = ln(1) = 0");
+
+        let u2 = Uniform::new(0.0, 10.0);
+        assert_close(u2.entropy(), 10.0_f64.ln(), 1e-12, "U(0,10) entropy");
+    }
+
+    #[test]
+    fn dist_entropy_exponential() {
+        // H = 1 - ln(lambda)
+        let e = Exponential::new(1.0);
+        assert_close(e.entropy(), 1.0, 1e-12, "Exp(1) entropy = 1");
+
+        let e2 = Exponential::new(2.0);
+        let expected = 1.0 - 2.0_f64.ln();
+        assert_close(e2.entropy(), expected, 1e-12, "Exp(2) entropy");
+    }
+
+    #[test]
+    fn dist_entropy_laplace() {
+        // H = 1 + ln(2*scale)
+        let l = Laplace::default();
+        let expected = 1.0 + 2.0_f64.ln();
+        assert_close(l.entropy(), expected, 1e-12, "Laplace(0,1) entropy");
+    }
+
+    #[test]
+    fn dist_entropy_cauchy() {
+        // H = ln(4*pi*scale)
+        let c = Cauchy::default();
+        let expected = (4.0 * PI).ln();
+        assert_close(c.entropy(), expected, 1e-12, "Cauchy(0,1) entropy");
+    }
+
+    #[test]
+    fn dist_entropy_default_returns_nan() {
+        // Distributions without explicit entropy should return NaN
+        // StudentT doesn't have entropy implemented yet
+        let t = StudentT::new(5.0);
+        assert!(t.entropy().is_nan(), "StudentT entropy should be NaN (default)");
     }
 }
