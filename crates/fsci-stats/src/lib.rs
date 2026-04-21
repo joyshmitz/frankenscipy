@@ -13283,6 +13283,72 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
     }
 }
 
+/// Kendall's tau correlation with alternative hypothesis.
+///
+/// Matches `scipy.stats.kendalltau(x, y, alternative=...)`.
+///
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn kendalltau_alternative(x: &[f64], y: &[f64], alternative: &str) -> CorrelationResult {
+    let n = x.len();
+    if n < 2 || x.len() != y.len() {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let mut concordant: i64 = 0;
+    let mut discordant: i64 = 0;
+    let mut x_ties: i64 = 0;
+    let mut y_ties: i64 = 0;
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let dx = x[i] - x[j];
+            let dy = y[i] - y[j];
+            let x_tied = x[i] == x[j];
+            let y_tied = y[i] == y[j];
+
+            if x_tied {
+                x_ties += 1;
+            }
+            if y_tied {
+                y_ties += 1;
+            }
+
+            let product = dx * dy;
+            if !x_tied && !y_tied && product > 0.0 {
+                concordant += 1;
+            } else if !x_tied && !y_tied && product < 0.0 {
+                discordant += 1;
+            }
+        }
+    }
+
+    let n_pairs = (n * (n - 1) / 2) as f64;
+    let denom = ((n_pairs - x_ties as f64) * (n_pairs - y_ties as f64)).sqrt();
+
+    if denom == 0.0 {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let tau = (concordant - discordant) as f64 / denom;
+
+    let n_f = n as f64;
+    let var = (2.0 * (2.0 * n_f + 5.0)) / (9.0 * n_f * (n_f - 1.0));
+    let z = tau / var.sqrt();
+
+    let pvalue = normal_alternative_pvalue(z, alternative);
+
+    CorrelationResult {
+        statistic: tau,
+        pvalue,
+    }
+}
+
 /// Standard normal CDF approximation.
 fn standard_normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + fsci_special::erf_scalar(x / std::f64::consts::SQRT_2))
@@ -25062,6 +25128,29 @@ mod tests {
         // 80% CI should be (1.0, 9.0) for U(0,10)
         assert_close(lower, 1.0, 1e-10, "U(0,10) 80% lower");
         assert_close(upper, 9.0, 1e-10, "U(0,10) 80% upper");
+    }
+
+    #[test]
+    fn test_kendalltau_alternative() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let y = [1.1, 2.2, 2.8, 4.1, 5.3, 5.7, 7.0, 8.2, 9.1, 10.0];
+
+        let two_sided = kendalltau_alternative(&x, &y, "two-sided");
+        let original = kendalltau(&x, &y);
+        assert_close(two_sided.statistic, original.statistic, 1e-10, "tau match");
+        assert_close(two_sided.pvalue, original.pvalue, 1e-10, "two-sided pvalue");
+
+        let greater = kendalltau_alternative(&x, &y, "greater");
+        assert!(
+            greater.pvalue < two_sided.pvalue,
+            "greater p {} < two-sided p {}",
+            greater.pvalue,
+            two_sided.pvalue
+        );
+        assert_close(greater.pvalue, two_sided.pvalue / 2.0, 1e-10, "greater ~half");
+
+        let less = kendalltau_alternative(&x, &y, "less");
+        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
     }
 
     #[test]
