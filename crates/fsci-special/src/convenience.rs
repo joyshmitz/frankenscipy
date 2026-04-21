@@ -3514,8 +3514,12 @@ pub fn relu_scalar(x: f64) -> f64 {
 /// A smooth approximation to ReLU. Computed in a numerically stable way.
 ///
 /// Matches `scipy.special.softplus(x)` (proposed).
+pub fn softplus(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("softplus", x_tensor, mode, |x| Ok(softplus_scalar(x)))
+}
+
 #[must_use]
-pub fn softplus(x: f64) -> f64 {
+pub fn softplus_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -3815,7 +3819,7 @@ pub fn log_expit_scalar(x: f64) -> f64 {
         return f64::NAN;
     }
     // log(expit(x)) = -log(1 + exp(-x)) = -softplus(-x)
-    -softplus(-x)
+    -softplus_scalar(-x)
 }
 
 /// Complementary log-log function.
@@ -4090,7 +4094,7 @@ pub fn log1mexp_scalar(x: f64) -> f64 {
 /// compatibility with other libraries.
 #[must_use]
 pub fn log1pexp(x: f64) -> f64 {
-    softplus(x)
+    softplus_scalar(x)
 }
 
 /// x * log(x) with proper handling of x = 0.
@@ -5060,21 +5064,56 @@ mod tests {
     #[test]
     fn softplus_basic() {
         // softplus(0) = ln(2)
-        assert!((softplus(0.0) - std::f64::consts::LN_2).abs() < 1e-14);
+        assert!((softplus_scalar(0.0) - std::f64::consts::LN_2).abs() < 1e-14);
 
         // For large positive x, softplus(x) ≈ x
-        assert!((softplus(100.0) - 100.0).abs() < 1e-10);
+        assert!((softplus_scalar(100.0) - 100.0).abs() < 1e-10);
 
         // For large negative x, softplus(x) ≈ 0
-        assert!(softplus(-100.0) < 1e-40);
+        assert!(softplus_scalar(-100.0) < 1e-40);
 
         // softplus is always positive
-        assert!(softplus(-10.0) > 0.0);
-        assert!(softplus(0.0) > 0.0);
-        assert!(softplus(10.0) > 0.0);
+        assert!(softplus_scalar(-10.0) > 0.0);
+        assert!(softplus_scalar(0.0) > 0.0);
+        assert!(softplus_scalar(10.0) > 0.0);
 
         // NaN propagates
-        assert!(softplus(f64::NAN).is_nan());
+        assert!(softplus_scalar(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn softplus_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = softplus(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - softplus_scalar(2.0)).abs() < 1e-14);
+
+        let vector = softplus(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(softplus_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn softplus_tensor_dispatch_preserves_tail_stability() -> Result<(), String> {
+        let vector = softplus(
+            &SpecialTensor::RealVec(vec![f64::NAN, -100.0, 100.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!(values[1] < 1e-40);
+        assert!((values[2] - 100.0).abs() < 1e-10);
+        Ok(())
     }
 
     #[test]
@@ -5968,9 +6007,9 @@ mod tests {
     #[test]
     fn log1pexp_basic() {
         // log1pexp is same as softplus
-        assert!((log1pexp(0.0) - softplus(0.0)).abs() < 1e-14);
-        assert!((log1pexp(2.0) - softplus(2.0)).abs() < 1e-14);
-        assert!((log1pexp(-2.0) - softplus(-2.0)).abs() < 1e-14);
+        assert!((log1pexp(0.0) - softplus_scalar(0.0)).abs() < 1e-14);
+        assert!((log1pexp(2.0) - softplus_scalar(2.0)).abs() < 1e-14);
+        assert!((log1pexp(-2.0) - softplus_scalar(-2.0)).abs() < 1e-14);
     }
 
     #[test]
