@@ -8686,6 +8686,70 @@ pub fn tiecorrect(rankvals: &[f64]) -> f64 {
     1.0 - (tie_sum as f64) / (n3 as f64)
 }
 
+/// Result of `find_repeats`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepeatsResult {
+    /// Values that appear more than once.
+    pub values: Vec<f64>,
+    /// Count of each repeated value.
+    pub counts: Vec<usize>,
+}
+
+/// Find repeated values in an array.
+///
+/// Returns a list of all values that appear more than once, along with
+/// their occurrence counts.
+///
+/// Matches `scipy.stats.find_repeats(arr)`.
+///
+/// # Arguments
+/// * `arr` - Input data array
+///
+/// # Returns
+/// `RepeatsResult` containing vectors of repeated values and their counts.
+pub fn find_repeats(arr: &[f64]) -> RepeatsResult {
+    use std::collections::BTreeMap;
+
+    if arr.is_empty() {
+        return RepeatsResult {
+            values: vec![],
+            counts: vec![],
+        };
+    }
+
+    // Count occurrences using ordered bits for f64 keys (to handle sorting)
+    let mut count_map: BTreeMap<i64, (f64, usize)> = BTreeMap::new();
+    for &val in arr {
+        if val.is_nan() {
+            continue;
+        }
+        let bits = val.to_bits() as i64;
+        count_map
+            .entry(bits)
+            .and_modify(|(_, count)| *count += 1)
+            .or_insert((val, 1));
+    }
+
+    // Extract only values with count > 1
+    let mut values = Vec::new();
+    let mut counts = Vec::new();
+
+    for (_, (val, count)) in count_map {
+        if count > 1 {
+            values.push(val);
+            counts.push(count);
+        }
+    }
+
+    // Sort by value (ascending)
+    let mut pairs: Vec<_> = values.into_iter().zip(counts).collect();
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let (values, counts): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+
+    RepeatsResult { values, counts }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Summary Statistics
 // ══════════════════════════════════════════════════════════════════════
@@ -16062,6 +16126,53 @@ mod tests {
     fn tiecorrect_empty_and_single() {
         assert!((tiecorrect(&[]) - 1.0).abs() < 1e-10, "empty");
         assert!((tiecorrect(&[1.0]) - 1.0).abs() < 1e-10, "single");
+    }
+
+    #[test]
+    fn find_repeats_basic() {
+        let data = [1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0];
+        let result = find_repeats(&data);
+        assert_eq!(result.values, vec![2.0, 3.0]);
+        assert_eq!(result.counts, vec![2, 3]);
+    }
+
+    #[test]
+    fn find_repeats_no_repeats() {
+        let data = [1.0, 2.0, 3.0, 4.0];
+        let result = find_repeats(&data);
+        assert!(result.values.is_empty());
+        assert!(result.counts.is_empty());
+    }
+
+    #[test]
+    fn find_repeats_empty() {
+        let result = find_repeats(&[]);
+        assert!(result.values.is_empty());
+        assert!(result.counts.is_empty());
+    }
+
+    #[test]
+    fn find_repeats_all_same() {
+        let data = [5.0, 5.0, 5.0, 5.0];
+        let result = find_repeats(&data);
+        assert_eq!(result.values, vec![5.0]);
+        assert_eq!(result.counts, vec![4]);
+    }
+
+    #[test]
+    fn find_repeats_negative_values() {
+        let data = [-1.0, -1.0, 0.0, 1.0, 1.0];
+        let result = find_repeats(&data);
+        assert_eq!(result.values, vec![-1.0, 1.0]);
+        assert_eq!(result.counts, vec![2, 2]);
+    }
+
+    #[test]
+    fn find_repeats_ignores_nan() {
+        let data = [1.0, f64::NAN, 1.0, 2.0];
+        let result = find_repeats(&data);
+        assert_eq!(result.values, vec![1.0]);
+        assert_eq!(result.counts, vec![2]);
     }
 
     // ── Summary statistics ────────────────────────────────────────
