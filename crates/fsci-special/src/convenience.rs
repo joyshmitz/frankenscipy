@@ -2235,11 +2235,15 @@ pub fn inv_boxcox1p(y: f64, lam: f64) -> f64 {
     inv_boxcox(y, lam) - 1.0
 }
 
-/// Log of the number of combinations: ln(C(n, k)).
+/// Log of the standard normal CDF.
 ///
-/// More numerically stable than computing C(n,k) directly.
-/// Matches `scipy.special.gammaln`-based combination counting.
-pub fn log_ndtr(x: f64) -> f64 {
+/// Matches `scipy.special.log_ndtr`.
+pub fn log_ndtr(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("log_ndtr", x_tensor, mode, |x| Ok(log_ndtr_scalar(x)))
+}
+
+/// Scalar helper for `log_ndtr`.
+pub fn log_ndtr_scalar(x: f64) -> f64 {
     // log(Φ(x)) where Φ is the standard normal CDF
     // For large negative x, use asymptotic to avoid log(tiny)
     if x > 6.0 {
@@ -6731,6 +6735,42 @@ mod tests {
         assert!(values[1].is_infinite());
         assert!(values[2].is_nan());
         assert!(values[3].is_nan());
+        Ok(())
+    }
+
+    #[test]
+    fn log_ndtr_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = log_ndtr(&SpecialTensor::RealScalar(-1.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - log_ndtr_scalar(-1.0)).abs() < 1e-14);
+
+        let vector = log_ndtr(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(log_ndtr_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn log_ndtr_tensor_dispatch_preserves_extreme_negative_tails() -> Result<(), String> {
+        let vector = log_ndtr(
+            &SpecialTensor::RealVec(vec![-50.0, -25.0, f64::NAN]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_finite());
+        assert!(values[1].is_finite());
+        assert!(values[0] < values[1]);
+        assert!(values[2].is_nan());
         Ok(())
     }
 }

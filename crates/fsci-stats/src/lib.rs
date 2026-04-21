@@ -394,7 +394,7 @@ impl ContinuousDistribution for Normal {
 
     fn logcdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
-        fsci_special::log_ndtr(z)
+        fsci_special::log_ndtr_scalar(z)
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -404,7 +404,7 @@ impl ContinuousDistribution for Normal {
 
     fn logsf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
-        fsci_special::log_ndtr(-z)
+        fsci_special::log_ndtr_scalar(-z)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -3998,13 +3998,13 @@ impl ContinuousDistribution for ExponNorm {
     fn pdf(&self, x: f64) -> f64 {
         let inv_k = 1.0 / self.k;
         let exp_arg = inv_k * (0.5 * inv_k - x);
-        (exp_arg + fsci_special::log_ndtr(x - inv_k)).exp() / self.k
+        (exp_arg + fsci_special::log_ndtr_scalar(x - inv_k)).exp() / self.k
     }
 
     fn cdf(&self, x: f64) -> f64 {
         let inv_k = 1.0 / self.k;
         let exp_arg = inv_k * (0.5 * inv_k - x);
-        standard_normal_cdf(x) - (exp_arg + fsci_special::log_ndtr(x - inv_k)).exp()
+        standard_normal_cdf(x) - (exp_arg + fsci_special::log_ndtr_scalar(x - inv_k)).exp()
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -4044,7 +4044,7 @@ impl PowerNorm {
     }
 
     fn log_sf(&self, x: f64) -> f64 {
-        self.c * fsci_special::log_ndtr(-x)
+        self.c * fsci_special::log_ndtr_scalar(-x)
     }
 
     fn raw_moment(&self, order: i32) -> f64 {
@@ -4074,7 +4074,7 @@ impl PowerNorm {
 impl ContinuousDistribution for PowerNorm {
     fn pdf(&self, x: f64) -> f64 {
         (self.c.ln() - 0.5 * x * x - 0.5 * (2.0 * PI).ln()
-            + (self.c - 1.0) * fsci_special::log_ndtr(-x))
+            + (self.c - 1.0) * fsci_special::log_ndtr_scalar(-x))
         .exp()
     }
 
@@ -4202,9 +4202,9 @@ impl ContinuousDistribution for JohnsonSB {
         }
         let z = self.a + self.b * (x / (1.0 - x)).ln();
         if z >= 0.0 {
-            -fsci_special::log_ndtr(-z).exp_m1()
+            -fsci_special::log_ndtr_scalar(-z).exp_m1()
         } else {
-            fsci_special::log_ndtr(z).exp()
+            fsci_special::log_ndtr_scalar(z).exp()
         }
     }
 

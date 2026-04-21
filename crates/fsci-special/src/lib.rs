@@ -115,6 +115,7 @@ pub use convenience::{
     log_cosh,
     log_expit_scalar,
     log_ndtr,
+    log_ndtr_scalar,
     log_softmax,
     log1mexp,
     log1p,

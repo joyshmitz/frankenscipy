@@ -75,22 +75,22 @@ use fsci_special::{
     j1 as special_j1, jn as special_jn, jvp as special_jvp, kei as special_kei, ker as special_ker,
     kl_div as special_kl_div, kolmogi as special_kolmogi, kolmogorov as special_kolmogorov,
     kv as special_kv, kvp as special_kvp, lambertw as special_lambertw,
-    log_ndtr as special_log_ndtr, log1p as special_log1p, logaddexp as special_logaddexp,
-    logaddexp2 as special_logaddexp2, logit as special_logit, logsumexp as special_logsumexp,
-    lpmv as special_lpmv, modstruve as special_modstruve, multigammaln as special_multigammaln,
-    nbdtr as special_nbdtr, nbdtrc as special_nbdtrc, nbdtri as special_nbdtri,
-    ndtr as special_ndtr, ndtri as special_ndtri, nrdtrimn as special_nrdtrimn,
-    nrdtrisd as special_nrdtrisd, owens_t as special_owens_t, pdtr as special_pdtr,
-    pdtrc as special_pdtrc, pdtri as special_pdtri, pdtrik as special_pdtrik, perm as special_perm,
-    poch as special_poch, polygamma as special_polygamma, pseudo_huber as special_pseudo_huber,
-    radian as special_radian, rel_entr as special_rel_entr, rgamma as special_rgamma,
-    roots_chebyt as special_roots_chebyt, roots_chebyu as special_roots_chebyu,
-    roots_gegenbauer as special_roots_gegenbauer, roots_genlaguerre as special_roots_genlaguerre,
-    roots_hermite as special_roots_hermite, roots_hermitenorm as special_roots_hermitenorm,
-    roots_jacobi as special_roots_jacobi, roots_laguerre as special_roots_laguerre,
-    roots_legendre as special_roots_legendre, shichi as special_shichi, sici as special_sici,
-    sinc as special_sinc, sindg as special_sindg, softplus as special_softplus,
-    spence as special_spence, spherical_in as special_spherical_in,
+    log_ndtr_scalar as special_log_ndtr_scalar, log1p as special_log1p,
+    logaddexp as special_logaddexp, logaddexp2 as special_logaddexp2, logit as special_logit,
+    logsumexp as special_logsumexp, lpmv as special_lpmv, modstruve as special_modstruve,
+    multigammaln as special_multigammaln, nbdtr as special_nbdtr, nbdtrc as special_nbdtrc,
+    nbdtri as special_nbdtri, ndtr as special_ndtr, ndtri as special_ndtri,
+    nrdtrimn as special_nrdtrimn, nrdtrisd as special_nrdtrisd, owens_t as special_owens_t,
+    pdtr as special_pdtr, pdtrc as special_pdtrc, pdtri as special_pdtri, pdtrik as special_pdtrik,
+    perm as special_perm, poch as special_poch, polygamma as special_polygamma,
+    pseudo_huber as special_pseudo_huber, radian as special_radian, rel_entr as special_rel_entr,
+    rgamma as special_rgamma, roots_chebyt as special_roots_chebyt,
+    roots_chebyu as special_roots_chebyu, roots_gegenbauer as special_roots_gegenbauer,
+    roots_genlaguerre as special_roots_genlaguerre, roots_hermite as special_roots_hermite,
+    roots_hermitenorm as special_roots_hermitenorm, roots_jacobi as special_roots_jacobi,
+    roots_laguerre as special_roots_laguerre, roots_legendre as special_roots_legendre,
+    shichi as special_shichi, sici as special_sici, sinc as special_sinc, sindg as special_sindg,
+    softplus as special_softplus, spence as special_spence, spherical_in as special_spherical_in,
     spherical_jn as special_spherical_jn, spherical_kn as special_spherical_kn,
     spherical_yn as special_spherical_yn, stdtr as special_stdtr, stdtrc as special_stdtrc,
     stdtridf as special_stdtridf, stdtrit as special_stdtrit, struve as special_struve,
@@ -9446,7 +9446,7 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("log_ndtr", mode));
             }
-            Ok(special_log_ndtr(args[0]))
+            Ok(special_log_ndtr_scalar(args[0]))
         }
         SpecialCaseFunction::Logsumexp => {
             if args.is_empty() {
