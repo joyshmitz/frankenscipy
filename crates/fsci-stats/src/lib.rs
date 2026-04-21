@@ -97,6 +97,12 @@ pub trait ContinuousDistribution {
     fn entropy(&self) -> f64 {
         f64::NAN
     }
+
+    /// Median of the distribution (50th percentile).
+    /// Default uses ppf(0.5); override for analytic formulas.
+    fn median(&self) -> f64 {
+        self.ppf(0.5)
+    }
 }
 
 /// Generic fitting helper for continuous distributions with built-in MLE support.
@@ -19419,5 +19425,54 @@ mod tests {
         // StudentT doesn't have entropy implemented yet
         let t = StudentT::new(5.0);
         assert!(t.entropy().is_nan(), "StudentT entropy should be NaN (default)");
+    }
+
+    // ── Median tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn dist_median_normal() {
+        // Median of normal equals mean (symmetric)
+        let n = Normal::standard();
+        assert_close(n.median(), 0.0, 1e-10, "N(0,1) median");
+
+        let n2 = Normal::new(5.0, 2.0);
+        assert_close(n2.median(), 5.0, 1e-10, "N(5,2) median");
+    }
+
+    #[test]
+    fn dist_median_uniform() {
+        // Median of uniform is midpoint
+        let u = Uniform::new(0.0, 1.0);
+        assert_close(u.median(), 0.5, 1e-10, "U(0,1) median");
+
+        let u2 = Uniform::new(2.0, 8.0);
+        assert_close(u2.median(), 6.0, 1e-10, "U(2,10) median");
+    }
+
+    #[test]
+    fn dist_median_exponential() {
+        // Median of Exp(lambda) = ln(2)/lambda
+        let e = Exponential::new(1.0);
+        assert_close(e.median(), 2.0_f64.ln(), 1e-10, "Exp(1) median");
+
+        let e2 = Exponential::new(2.0);
+        assert_close(e2.median(), 2.0_f64.ln() / 2.0, 1e-10, "Exp(2) median");
+    }
+
+    #[test]
+    fn dist_median_cauchy() {
+        // Median of Cauchy equals loc (symmetric)
+        let c = Cauchy::default();
+        assert_close(c.median(), 0.0, 1e-10, "Cauchy(0,1) median");
+
+        let c2 = Cauchy::new(3.0, 2.0);
+        assert_close(c2.median(), 3.0, 1e-10, "Cauchy(3,2) median");
+    }
+
+    #[test]
+    fn dist_median_laplace() {
+        // Median of Laplace equals loc (symmetric)
+        let l = Laplace::default();
+        assert_close(l.median(), 0.0, 1e-10, "Laplace(0,1) median");
     }
 }
