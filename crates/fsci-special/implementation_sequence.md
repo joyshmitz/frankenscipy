@@ -17,7 +17,7 @@ Functions: `jv`, `yv`, `iv`, `kv`, `hankel1`, `hankel2`
 Functions: `erf`, `erfc`, `erfinv`, `erfcinv`
 
 5. `hyper.rs`
-Functions: `hyp1f1`, `hyp2f1`
+Functions: `hyp0f1`, `hyp1f1`, `hyp2f1`
 
 6. `types.rs`
 Shared tensor abstraction, dispatch-plan metadata, and strict/hardened error taxonomy.
@@ -61,8 +61,8 @@ Shared tensor abstraction, dispatch-plan metadata, and strict/hardened error tax
 ### Hypergeometric family
 - Primary regimes: `series -> continued fraction -> recurrence -> asymptotic`
 - Key edge handling:
+  - denominator-parameter pole exclusions for `hyp0f1` / `hyp1f1` / `hyp2f1`
   - `hyp2f1` branch behavior near `z=1`
-  - `c` pole exclusions for `hyp2f1`
   - bounded iteration policy in hardened mode
 
 ## Strict vs Hardened Mode Seams
@@ -82,4 +82,3 @@ Shared tensor abstraction, dispatch-plan metadata, and strict/hardened error tax
 2. Add per-function fixture-driven parity tests from P2C-006 contract rows.
 3. Wire structured logs for domain/overflow/cancellation events.
 4. Confirm `fsci-special` quality gates (fmt/check/clippy/tests) before opening P2C-006-E.
-

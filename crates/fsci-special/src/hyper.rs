@@ -53,7 +53,8 @@ pub const HYPER_DISPATCH_PLAN: &[DispatchPlan] = &[
 /// Confluent hypergeometric function 1F1(a; b; z).
 ///
 /// Also known as Kummer's function M(a, b, z).
-/// Supports real parameters with real or complex scalar/vector `z` inputs.
+/// Supports scalar real or complex parameters with real or complex
+/// scalar/vector `z` inputs.
 /// Matches `scipy.special.hyp1f1(a, b, z)`.
 pub fn hyp1f1(
     a: &SpecialTensor,
@@ -100,12 +101,51 @@ pub fn hyp1f1(
             }
             Ok(SpecialTensor::ComplexVec(results))
         }
-        _ => Err(SpecialError {
-            function: "hyp1f1",
-            kind: SpecialErrorKind::NotYetImplemented,
-            mode,
-            detail: "complex parameter support for hyp1f1 is not yet implemented",
-        }),
+        (a_param, b_param, SpecialTensor::RealScalar(z_val)) => {
+            let a_val = scalar_tensor_as_complex(a_param)
+                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
+            let result =
+                hyp1f1_complex_parameters(a_val, b_val, Complex64::from_real(*z_val), mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        }
+        (a_param, b_param, SpecialTensor::RealVec(z_vec)) => {
+            let a_val = scalar_tensor_as_complex(a_param)
+                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp1f1_complex_parameters(
+                    a_val,
+                    b_val,
+                    Complex64::from_real(zi),
+                    mode,
+                )?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (a_param, b_param, SpecialTensor::ComplexScalar(z_val)) => {
+            let a_val = scalar_tensor_as_complex(a_param)
+                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
+            let result = hyp1f1_complex_parameters(a_val, b_val, *z_val, mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        }
+        (a_param, b_param, SpecialTensor::ComplexVec(z_vec)) => {
+            let a_val = scalar_tensor_as_complex(a_param)
+                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp1f1", mode))?;
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp1f1_complex_parameters(a_val, b_val, zi, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        _ => Err(scalar_parameter_error("hyp1f1", mode)),
     }
 }
 
@@ -116,6 +156,8 @@ pub fn hyp1f1(
 ///
 /// Related to Bessel functions: J_n(x) = (x/2)^n / Γ(n+1) * 0F1(; n+1; -x²/4)
 ///
+/// Supports scalar real or complex parameters with real or complex
+/// scalar/vector `z` inputs.
 /// Matches `scipy.special.hyp0f1(b, z)`.
 ///
 /// # Arguments
@@ -137,12 +179,41 @@ pub fn hyp0f1(b: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> Specia
             }
             Ok(SpecialTensor::RealVec(results))
         }
-        _ => Err(SpecialError {
-            function: "hyp0f1",
-            kind: SpecialErrorKind::NotYetImplemented,
-            mode,
-            detail: "complex parameter support for hyp0f1 is not yet implemented",
-        }),
+        (b_param, SpecialTensor::RealScalar(z_val)) => {
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp0f1", mode))?;
+            let result = hyp0f1_complex_scalar(b_val, Complex64::from_real(*z_val), mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        }
+        (b_param, SpecialTensor::RealVec(z_vec)) => {
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp0f1", mode))?;
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp0f1_complex_scalar(
+                    b_val,
+                    Complex64::from_real(zi),
+                    mode,
+                )?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (b_param, SpecialTensor::ComplexScalar(z_val)) => {
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp0f1", mode))?;
+            let result = hyp0f1_complex_scalar(b_val, *z_val, mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        }
+        (b_param, SpecialTensor::ComplexVec(z_vec)) => {
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp0f1", mode))?;
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp0f1_complex_scalar(b_val, zi, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        _ => Err(scalar_parameter_error("hyp0f1", mode)),
     }
 }
 
@@ -196,6 +267,96 @@ fn hyp0f1_series(b: f64, z: f64) -> f64 {
     }
 
     sum
+}
+
+fn scalar_tensor_as_complex(value: &SpecialTensor) -> Option<Complex64> {
+    match value {
+        SpecialTensor::RealScalar(value) => Some(Complex64::from_real(*value)),
+        SpecialTensor::ComplexScalar(value) => Some(*value),
+        _ => None,
+    }
+}
+
+fn scalar_parameter_error(function: &'static str, mode: RuntimeMode) -> SpecialError {
+    SpecialError {
+        function,
+        kind: SpecialErrorKind::NotYetImplemented,
+        mode,
+        detail: "hypergeometric parameter tensors must be scalar values",
+    }
+}
+
+fn complex_is_zero(value: Complex64) -> bool {
+    value.re == 0.0 && value.im == 0.0
+}
+
+fn complex_is_nonpositive_integer(value: Complex64) -> bool {
+    value.im == 0.0 && value.re <= 0.0 && value.re == value.re.floor()
+}
+
+fn complex_series_converged(term: Complex64, sum: Complex64, tol: f64) -> bool {
+    term.abs() <= tol * sum.abs().max(1.0)
+}
+
+fn hyp0f1_complex_scalar(
+    b: Complex64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    if complex_is_nonpositive_integer(b) {
+        if mode == RuntimeMode::Hardened {
+            return Err(SpecialError {
+                function: "hyp0f1",
+                kind: SpecialErrorKind::PoleInput,
+                mode,
+                detail: "hyp0f1: b must not be a non-positive integer",
+            });
+        }
+        return Ok(complex_nan());
+    }
+
+    if complex_is_zero(z) {
+        return Ok(Complex64::from_real(1.0));
+    }
+
+    hyp0f1_series_complex(b, z, mode)
+}
+
+fn hyp0f1_series_complex(
+    b: Complex64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    let max_terms = 4_000;
+    let tol = 1.0e-14;
+
+    let mut sum = Complex64::from_real(1.0);
+    let mut term = Complex64::from_real(1.0);
+
+    for n in 1..=max_terms {
+        let nf = n as f64;
+        let denom = (b + Complex64::from_real(nf - 1.0)) * nf;
+        term = term * z / denom;
+
+        if !term.is_finite() || !sum.is_finite() {
+            if mode == RuntimeMode::Hardened {
+                return Err(SpecialError {
+                    function: "hyp0f1",
+                    kind: SpecialErrorKind::OverflowRisk,
+                    mode,
+                    detail: "series evaluation overflowed for complex-valued hyp0f1",
+                });
+            }
+            return Ok(complex_nan());
+        }
+
+        sum = sum + term;
+        if complex_series_converged(term, sum, tol) {
+            return Ok(sum);
+        }
+    }
+
+    Ok(sum)
 }
 
 /// Asymptotic expansion for 0F1(; b; z) for large |z|.
@@ -264,8 +425,9 @@ fn bessel_j_asymptotic(nu: f64, x: f64) -> f64 {
 
 /// Gauss hypergeometric function 2F1(a, b; c; z).
 ///
-/// Supports real parameters with real or complex scalar/vector `z` inputs.
-/// Complex `z` currently uses the convergent `|z| < 1` series path.
+/// Supports scalar real or complex parameters with real or complex
+/// scalar/vector `z` inputs. Complex-valued evaluation uses the convergent
+/// `|z| < 1` series path.
 /// Matches `scipy.special.hyp2f1(a, b, c, z)`.
 pub fn hyp2f1(
     a: &SpecialTensor,
@@ -302,7 +464,13 @@ pub fn hyp2f1(
             SpecialTensor::RealScalar(c_val),
             SpecialTensor::ComplexScalar(z_val),
         ) => {
-            let result = hyp2f1_complex_z(*a_val, *b_val, *c_val, *z_val, mode)?;
+            let result = hyp2f1_complex_parameters(
+                Complex64::from_real(*a_val),
+                Complex64::from_real(*b_val),
+                Complex64::from_real(*c_val),
+                *z_val,
+                mode,
+            )?;
             Ok(SpecialTensor::ComplexScalar(result))
         }
         (
@@ -313,16 +481,70 @@ pub fn hyp2f1(
         ) => {
             let mut results = Vec::with_capacity(z_vec.len());
             for &zi in z_vec {
-                results.push(hyp2f1_complex_z(*a_val, *b_val, *c_val, zi, mode)?);
+                results.push(hyp2f1_complex_parameters(
+                    Complex64::from_real(*a_val),
+                    Complex64::from_real(*b_val),
+                    Complex64::from_real(*c_val),
+                    zi,
+                    mode,
+                )?);
             }
             Ok(SpecialTensor::ComplexVec(results))
         }
-        _ => Err(SpecialError {
-            function: "hyp2f1",
-            kind: SpecialErrorKind::NotYetImplemented,
-            mode,
-            detail: "complex parameter support for hyp2f1 is not yet implemented",
-        }),
+        (a_param, b_param, c_param, SpecialTensor::RealScalar(z_val)) => {
+            let a_val = scalar_tensor_as_complex(a_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let c_val = scalar_tensor_as_complex(c_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let result =
+                hyp2f1_complex_parameters(a_val, b_val, c_val, Complex64::from_real(*z_val), mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        }
+        (a_param, b_param, c_param, SpecialTensor::RealVec(z_vec)) => {
+            let a_val = scalar_tensor_as_complex(a_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let c_val = scalar_tensor_as_complex(c_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp2f1_complex_parameters(
+                    a_val,
+                    b_val,
+                    c_val,
+                    Complex64::from_real(zi),
+                    mode,
+                )?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        (a_param, b_param, c_param, SpecialTensor::ComplexScalar(z_val)) => {
+            let a_val = scalar_tensor_as_complex(a_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let c_val = scalar_tensor_as_complex(c_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let result = hyp2f1_complex_parameters(a_val, b_val, c_val, *z_val, mode)?;
+            Ok(SpecialTensor::ComplexScalar(result))
+        }
+        (a_param, b_param, c_param, SpecialTensor::ComplexVec(z_vec)) => {
+            let a_val = scalar_tensor_as_complex(a_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let b_val = scalar_tensor_as_complex(b_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let c_val = scalar_tensor_as_complex(c_param)
+                .ok_or_else(|| scalar_parameter_error("hyp2f1", mode))?;
+            let mut results = Vec::with_capacity(z_vec.len());
+            for &zi in z_vec {
+                results.push(hyp2f1_complex_parameters(a_val, b_val, c_val, zi, mode)?);
+            }
+            Ok(SpecialTensor::ComplexVec(results))
+        }
+        _ => Err(scalar_parameter_error("hyp2f1", mode)),
     }
 }
 
@@ -397,11 +619,20 @@ fn hyp1f1_complex_z(
     z: Complex64,
     mode: RuntimeMode,
 ) -> Result<Complex64, SpecialError> {
-    if z.im == 0.0 {
-        return Ok(Complex64::from_real(hyp1f1_scalar(a, b, z.re, mode)?));
+    hyp1f1_complex_parameters(Complex64::from_real(a), Complex64::from_real(b), z, mode)
+}
+
+fn hyp1f1_complex_parameters(
+    a: Complex64,
+    b: Complex64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    if z.im == 0.0 && a.im == 0.0 && b.im == 0.0 {
+        return Ok(Complex64::from_real(hyp1f1_scalar(a.re, b.re, z.re, mode)?));
     }
 
-    if b == 0.0 || (b < 0.0 && b == b.floor()) {
+    if complex_is_zero(b) || complex_is_nonpositive_integer(b) {
         if mode == RuntimeMode::Hardened {
             return Err(SpecialError {
                 function: "hyp1f1",
@@ -413,7 +644,7 @@ fn hyp1f1_complex_z(
         return Ok(complex_nan());
     }
 
-    if z == Complex64::from_real(0.0) || a == 0.0 {
+    if complex_is_zero(z) || complex_is_zero(a) {
         return Ok(Complex64::from_real(1.0));
     }
 
@@ -421,8 +652,8 @@ fn hyp1f1_complex_z(
 }
 
 fn hyp1f1_series_complex(
-    a: f64,
-    b: f64,
+    a: Complex64,
+    b: Complex64,
     z: Complex64,
     mode: RuntimeMode,
 ) -> Result<Complex64, SpecialError> {
@@ -434,8 +665,8 @@ fn hyp1f1_series_complex(
 
     for n in 0..max_terms {
         let nf = n as f64;
-        let scale = (a + nf) / ((b + nf) * (nf + 1.0));
-        term = term * z * scale;
+        let scale = (a + Complex64::from_real(nf)) / ((b + Complex64::from_real(nf)) * (nf + 1.0));
+        term = term * scale * z;
 
         if !term.is_finite() || !sum.is_finite() {
             if mode == RuntimeMode::Hardened {
@@ -450,7 +681,7 @@ fn hyp1f1_series_complex(
         }
 
         sum = sum + term;
-        if term.abs() <= tol * sum.abs().max(1.0) {
+        if complex_series_converged(term, sum, tol) {
             return Ok(sum);
         }
     }
@@ -569,18 +800,20 @@ fn hyp2f1_series(a: f64, b: f64, c: f64, z: f64) -> Result<f64, SpecialError> {
     Ok(sum)
 }
 
-fn hyp2f1_complex_z(
-    a: f64,
-    b: f64,
-    c: f64,
+fn hyp2f1_complex_parameters(
+    a: Complex64,
+    b: Complex64,
+    c: Complex64,
     z: Complex64,
     mode: RuntimeMode,
 ) -> Result<Complex64, SpecialError> {
-    if z.im == 0.0 {
-        return Ok(Complex64::from_real(hyp2f1_scalar(a, b, c, z.re, mode)?));
+    if z.im == 0.0 && a.im == 0.0 && b.im == 0.0 && c.im == 0.0 {
+        return Ok(Complex64::from_real(hyp2f1_scalar(
+            a.re, b.re, c.re, z.re, mode,
+        )?));
     }
 
-    if c == 0.0 || (c < 0.0 && c == c.floor()) {
+    if complex_is_zero(c) || complex_is_nonpositive_integer(c) {
         if mode == RuntimeMode::Hardened {
             return Err(SpecialError {
                 function: "hyp2f1",
@@ -592,7 +825,7 @@ fn hyp2f1_complex_z(
         return Ok(complex_nan());
     }
 
-    if z == Complex64::from_real(0.0) || a == 0.0 || b == 0.0 {
+    if complex_is_zero(z) || complex_is_zero(a) || complex_is_zero(b) {
         return Ok(Complex64::from_real(1.0));
     }
 
@@ -605,7 +838,7 @@ fn hyp2f1_complex_z(
             function: "hyp2f1",
             kind: SpecialErrorKind::DomainError,
             mode,
-            detail: "complex z currently requires |z| < 1 for stable hyp2f1 evaluation",
+            detail: "complex-valued hyp2f1 currently requires |z| < 1 for stable evaluation",
         });
     }
 
@@ -613,9 +846,9 @@ fn hyp2f1_complex_z(
 }
 
 fn hyp2f1_series_complex(
-    a: f64,
-    b: f64,
-    c: f64,
+    a: Complex64,
+    b: Complex64,
+    c: Complex64,
     z: Complex64,
     mode: RuntimeMode,
 ) -> Result<Complex64, SpecialError> {
@@ -627,8 +860,9 @@ fn hyp2f1_series_complex(
 
     for n in 0..max_terms {
         let nf = n as f64;
-        let scale = ((a + nf) * (b + nf)) / ((c + nf) * (nf + 1.0));
-        term = term * z * scale;
+        let scale = ((a + Complex64::from_real(nf)) * (b + Complex64::from_real(nf)))
+            / ((c + Complex64::from_real(nf)) * (nf + 1.0));
+        term = term * scale * z;
 
         if !term.is_finite() || !sum.is_finite() {
             if mode == RuntimeMode::Hardened {
@@ -643,7 +877,7 @@ fn hyp2f1_series_complex(
         }
 
         sum = sum + term;
-        if term.abs() <= tol * sum.abs().max(1.0) {
+        if complex_series_converged(term, sum, tol) {
             return Ok(sum);
         }
     }
@@ -722,6 +956,10 @@ mod tests {
         SpecialTensor::ComplexScalar(Complex64::new(re, im))
     }
 
+    fn complex_vec(values: Vec<Complex64>) -> SpecialTensor {
+        SpecialTensor::ComplexVec(values)
+    }
+
     fn get_scalar(r: &SpecialResult) -> f64 {
         match r.as_ref().expect("should succeed") {
             SpecialTensor::RealScalar(v) => *v,
@@ -746,6 +984,61 @@ mod tests {
             actual.re,
             actual.im
         );
+    }
+
+    // ── hyp0f1 tests ────────────────────────────────────────────────
+
+    #[test]
+    fn hyp0f1_complex_parameter_zero_z_is_one() {
+        let result = hyp0f1(
+            &complex(1.25, -0.5),
+            &complex(0.0, 0.0),
+            RuntimeMode::Strict,
+        );
+        assert_complex_close(
+            get_complex_scalar(&result),
+            Complex64::from_real(1.0),
+            1.0e-14,
+        );
+    }
+
+    #[test]
+    fn hyp0f1_complex_real_parameter_matches_real_path() {
+        let complex_result = hyp0f1(&complex(1.5, 0.0), &scalar(0.25), RuntimeMode::Strict);
+        let real_result = hyp0f1(&scalar(1.5), &scalar(0.25), RuntimeMode::Strict);
+        assert_complex_close(
+            get_complex_scalar(&complex_result),
+            Complex64::from_real(get_scalar(&real_result)),
+            1.0e-12,
+        );
+    }
+
+    #[test]
+    fn hyp0f1_complex_parameter_preserves_parameter_conjugation_symmetry() {
+        let b = Complex64::new(1.25, 0.5);
+        let z = Complex64::new(0.2, -0.1);
+        let lhs = hyp0f1(
+            &complex(b.re, b.im),
+            &complex(z.re, z.im),
+            RuntimeMode::Strict,
+        );
+        let rhs = hyp0f1(
+            &complex(b.re, -b.im),
+            &complex(z.re, -z.im),
+            RuntimeMode::Strict,
+        );
+        assert_complex_close(
+            get_complex_scalar(&rhs),
+            get_complex_scalar(&lhs).conj(),
+            1.0e-12,
+        );
+    }
+
+    #[test]
+    fn hyp0f1_complex_parameter_pole_errors_hardened() {
+        let err = hyp0f1(&complex(0.0, 0.0), &scalar(1.0), RuntimeMode::Hardened)
+            .expect_err("complex pole should error in hardened mode");
+        assert_eq!(err.kind, SpecialErrorKind::PoleInput);
     }
 
     // ── hyp1f1 tests ────────────────────────────────────────────────
@@ -891,6 +1184,73 @@ mod tests {
             }
             _ => panic!("expected ComplexVec"),
         }
+    }
+
+    #[test]
+    fn hyp1f1_complex_parameters_match_exp_identity() {
+        let a = Complex64::new(1.25, -0.5);
+        let z = Complex64::new(0.25, -0.75);
+        let r = hyp1f1(
+            &complex(a.re, a.im),
+            &complex(a.re, a.im),
+            &complex(z.re, z.im),
+            RuntimeMode::Strict,
+        );
+        assert_complex_close(get_complex_scalar(&r), z.exp(), 1.0e-10);
+    }
+
+    #[test]
+    fn hyp1f1_complex_parameter_vector_matches_exp_identity() {
+        let a = Complex64::new(0.75, 0.4);
+        let z0 = Complex64::new(0.15, 0.2);
+        let z1 = z0.conj();
+        let r = hyp1f1(
+            &complex(a.re, a.im),
+            &complex(a.re, a.im),
+            &complex_vec(vec![z0, z1]),
+            RuntimeMode::Strict,
+        );
+        match r.expect("complex parameter vector hyp1f1") {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_complex_close(values[0], z0.exp(), 1.0e-10);
+                assert_complex_close(values[1], z1.exp(), 1.0e-10);
+            }
+            _ => panic!("expected ComplexVec"),
+        }
+    }
+
+    #[test]
+    fn hyp1f1_complex_real_parameters_match_real_path() {
+        let complex_result = hyp1f1(
+            &complex(1.0, 0.0),
+            &complex(2.0, 0.0),
+            &scalar(0.5),
+            RuntimeMode::Strict,
+        );
+        let real_result = hyp1f1(
+            &scalar(1.0),
+            &scalar(2.0),
+            &scalar(0.5),
+            RuntimeMode::Strict,
+        );
+        assert_complex_close(
+            get_complex_scalar(&complex_result),
+            Complex64::from_real(get_scalar(&real_result)),
+            1.0e-12,
+        );
+    }
+
+    #[test]
+    fn hyp1f1_complex_parameter_pole_errors_hardened() {
+        let err = hyp1f1(
+            &complex(1.0, 0.0),
+            &complex(0.0, 0.0),
+            &scalar(1.0),
+            RuntimeMode::Hardened,
+        )
+        .expect_err("complex pole should error in hardened mode");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
     }
 
     // ── hyp2f1 tests ────────────────────────────────────────────────
@@ -1052,6 +1412,82 @@ mod tests {
             RuntimeMode::Hardened,
         )
         .expect_err("hardened mode should reject unsupported complex domains");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+    }
+
+    #[test]
+    fn hyp2f1_complex_parameter_linear_identity_holds() {
+        let b = Complex64::new(1.25, -0.5);
+        let z = Complex64::new(0.2, 0.3);
+        let r = hyp2f1(
+            &scalar(-1.0),
+            &complex(b.re, b.im),
+            &complex(b.re, b.im),
+            &complex(z.re, z.im),
+            RuntimeMode::Strict,
+        );
+        assert_complex_close(
+            get_complex_scalar(&r),
+            Complex64::from_real(1.0) - z,
+            1.0e-12,
+        );
+    }
+
+    #[test]
+    fn hyp2f1_complex_parameter_vector_matches_linear_identity() {
+        let b = Complex64::new(0.75, 0.6);
+        let z0 = Complex64::new(0.15, -0.25);
+        let z1 = z0.conj();
+        let r = hyp2f1(
+            &scalar(-1.0),
+            &complex(b.re, b.im),
+            &complex(b.re, b.im),
+            &complex_vec(vec![z0, z1]),
+            RuntimeMode::Strict,
+        );
+        match r.expect("complex parameter vector hyp2f1") {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_complex_close(values[0], Complex64::from_real(1.0) - z0, 1.0e-12);
+                assert_complex_close(values[1], Complex64::from_real(1.0) - z1, 1.0e-12);
+            }
+            _ => panic!("expected ComplexVec"),
+        }
+    }
+
+    #[test]
+    fn hyp2f1_complex_real_parameters_match_real_path() {
+        let complex_result = hyp2f1(
+            &complex(1.0, 0.0),
+            &complex(1.0, 0.0),
+            &complex(2.0, 0.0),
+            &scalar(0.5),
+            RuntimeMode::Strict,
+        );
+        let real_result = hyp2f1(
+            &scalar(1.0),
+            &scalar(1.0),
+            &scalar(2.0),
+            &scalar(0.5),
+            RuntimeMode::Strict,
+        );
+        assert_complex_close(
+            get_complex_scalar(&complex_result),
+            Complex64::from_real(get_scalar(&real_result)),
+            1.0e-12,
+        );
+    }
+
+    #[test]
+    fn hyp2f1_complex_parameter_pole_errors_hardened() {
+        let err = hyp2f1(
+            &scalar(1.0),
+            &complex(1.0, 0.0),
+            &complex(0.0, 0.0),
+            &scalar(0.5),
+            RuntimeMode::Hardened,
+        )
+        .expect_err("complex pole should error in hardened mode");
         assert_eq!(err.kind, SpecialErrorKind::DomainError);
     }
 }
