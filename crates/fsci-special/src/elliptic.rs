@@ -162,7 +162,13 @@ pub fn ellipeinc(
 /// Solves w * exp(w) = x for w.
 /// Domain: x >= -1/e.
 pub fn lambertw(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("lambertw", x_tensor, mode, |x| lambertw_scalar(x, mode))
+    map_real_or_complex(
+        "lambertw",
+        x_tensor,
+        mode,
+        |x| lambertw_scalar(x, mode),
+        |z| lambertw_complex_scalar(z, mode),
+    )
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -511,6 +517,74 @@ fn lambertw_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         w -= f / denom;
     }
     Ok(w)
+}
+
+fn lambertw_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    if z.re.is_nan() || z.im.is_nan() {
+        return Ok(complex_nan());
+    }
+    if !z.is_finite() {
+        if z.im == 0.0 && z.re == f64::INFINITY {
+            return Ok(Complex64::from_real(f64::INFINITY));
+        }
+        return Ok(complex_nan());
+    }
+    if z.re == 0.0 && z.im == 0.0 {
+        return Ok(Complex64::from_real(0.0));
+    }
+
+    let min_x = -1.0 / std::f64::consts::E;
+    if z.im == 0.0 && z.re >= min_x {
+        return lambertw_scalar(z.re, mode).map(Complex64::from_real);
+    }
+
+    let mut w = lambertw_complex_initial_guess(z);
+    let one = Complex64::from_real(1.0);
+    let two = Complex64::from_real(2.0);
+
+    for _ in 0..80 {
+        let ew = w.exp();
+        let wew = w * ew;
+        let f = wew - z;
+        if f.abs() < 1.0e-14 * (1.0 + z.abs()) {
+            return Ok(w);
+        }
+
+        let w_plus_one = w + one;
+        let denom = ew * w_plus_one - (w + two) * f / (w_plus_one * 2.0);
+        if denom.abs() < 1.0e-30 {
+            break;
+        }
+
+        let step = f / denom;
+        w = w - step;
+        if step.abs() < 1.0e-14 * (1.0 + w.abs()) {
+            return Ok(w);
+        }
+    }
+
+    Ok(w)
+}
+
+fn lambertw_complex_initial_guess(z: Complex64) -> Complex64 {
+    let branch_delta = Complex64::from_real(std::f64::consts::E) * z + Complex64::from_real(1.0);
+    if branch_delta.abs() < 0.3 {
+        let p = complex_sqrt(branch_delta * 2.0);
+        let p2 = p * p;
+        let p3 = p2 * p;
+        return Complex64::from_real(-1.0) + p - p2 / 3.0 + p3 * (11.0 / 72.0);
+    }
+
+    if z.abs() < 0.5 {
+        return z - z * z;
+    }
+
+    let log_z = z.ln();
+    if log_z.abs() < 1.0e-6 {
+        return z;
+    }
+
+    log_z - log_z.ln()
 }
 
 fn exp1_scalar(z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
@@ -1058,60 +1132,6 @@ where
         sum = sum + value;
     }
     sum * half_width
-}
-
-fn map_real<F>(
-    function: &'static str,
-    input: &SpecialTensor,
-    mode: RuntimeMode,
-    kernel: F,
-) -> SpecialResult
-where
-    F: Fn(f64) -> Result<f64, SpecialError>,
-{
-    match input {
-        SpecialTensor::RealScalar(x) => kernel(*x).map(SpecialTensor::RealScalar),
-        SpecialTensor::RealVec(values) => values
-            .iter()
-            .copied()
-            .map(&kernel)
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        SpecialTensor::ComplexScalar(_) | SpecialTensor::ComplexVec(_) => {
-            record_special_trace(
-                function,
-                mode,
-                "not_implemented",
-                "input=complex",
-                "fail_closed",
-                "complex-valued path pending",
-                false,
-            );
-            Err(SpecialError {
-                function,
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "complex-valued path pending",
-            })
-        }
-        SpecialTensor::Empty => {
-            record_special_trace(
-                function,
-                mode,
-                "domain_error",
-                "input=empty",
-                "fail_closed",
-                "empty tensor is not a valid special-function input",
-                false,
-            );
-            Err(SpecialError {
-                function,
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "empty tensor is not a valid special-function input",
-            })
-        }
-    }
 }
 
 fn domain_error(
@@ -1700,6 +1720,75 @@ mod tests {
         let x = SpecialTensor::RealScalar(-1.0); // < -1/e
         let result = lambertw(&x, RuntimeMode::Hardened);
         assert!(result.is_err(), "should reject x < -1/e in hardened mode");
+    }
+
+    #[test]
+    fn lambertw_complex_real_axis_reduces_to_real_kernel() {
+        for x in [-1.0 / std::f64::consts::E, -0.2, 0.5, 3.0] {
+            let real_result =
+                eval_scalar(lambertw(&SpecialTensor::RealScalar(x), RuntimeMode::Strict));
+            let complex_result = eval_complex_scalar(lambertw(
+                &SpecialTensor::ComplexScalar(Complex64::from_real(x)),
+                RuntimeMode::Strict,
+            ));
+            assert_complex_close(
+                complex_result,
+                Complex64::from_real(real_result),
+                1e-12,
+                "lambertw real-axis reduction",
+            );
+        }
+    }
+
+    #[test]
+    fn lambertw_complex_identity_principal_branch() {
+        let z = Complex64::new(0.5, 0.75);
+        let w = eval_complex_scalar(lambertw(
+            &SpecialTensor::ComplexScalar(z),
+            RuntimeMode::Strict,
+        ));
+        assert_complex_close(w * w.exp(), z, 1e-10, "lambertw complex identity");
+    }
+
+    #[test]
+    fn lambertw_complex_negative_real_uses_principal_branch() {
+        let z = Complex64::from_real(-1.0);
+        let w = eval_complex_scalar(lambertw(
+            &SpecialTensor::ComplexScalar(z),
+            RuntimeMode::Strict,
+        ));
+        assert!(
+            w.im > 0.0,
+            "principal branch should choose the upper-half-plane value on the cut",
+        );
+        assert_complex_close(w * w.exp(), z, 1e-10, "lambertw branch-cut identity");
+    }
+
+    #[test]
+    fn lambertw_complex_vector_preserves_shape_and_conjugation() {
+        let z = Complex64::new(0.4, 0.7);
+        let result = lambertw(
+            &SpecialTensor::ComplexVec(vec![z, z.conj()]),
+            RuntimeMode::Strict,
+        )
+        .expect("complex vector lambertw");
+        match result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_complex_close(values[1], values[0].conj(), 1e-12, "lambertw conjugation");
+                let scalar = eval_complex_scalar(lambertw(
+                    &SpecialTensor::ComplexScalar(z),
+                    RuntimeMode::Strict,
+                ));
+                assert_complex_close(
+                    values[0],
+                    scalar,
+                    1e-12,
+                    "lambertw vector lane matches scalar",
+                );
+            }
+            other => panic!("expected ComplexVec, got {other:?}"),
+        }
     }
 
     // ── Exponential integrals ─────────────────────────────────────
