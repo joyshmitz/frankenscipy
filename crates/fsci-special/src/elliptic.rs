@@ -16,8 +16,8 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 
 use crate::types::{
-    DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind, SpecialResult,
-    SpecialTensor, record_special_trace,
+    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor, record_special_trace,
 };
 
 pub const ELLIPTIC_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -74,7 +74,13 @@ pub const ELLIPTIC_DISPATCH_PLAN: &[DispatchPlan] = &[
 /// Uses the arithmetic-geometric mean (AGM) iteration.
 /// Domain: m in [0, 1).
 pub fn ellipk(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("ellipk", m_tensor, mode, |m| ellipk_scalar(m, mode))
+    map_real_or_complex(
+        "ellipk",
+        m_tensor,
+        mode,
+        |m| ellipk_scalar(m, mode),
+        ellipk_complex_scalar,
+    )
 }
 
 /// Complete elliptic integral of the first kind with complementary argument.
@@ -94,7 +100,13 @@ pub fn ellipkm1(p_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 /// Uses the AGM method with E accumulator.
 /// Domain: m in [0, 1].
 pub fn ellipe(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("ellipe", m_tensor, mode, |m| ellipe_scalar(m, mode))
+    map_real_or_complex(
+        "ellipe",
+        m_tensor,
+        mode,
+        |m| ellipe_scalar(m, mode),
+        ellipe_complex_scalar,
+    )
 }
 
 /// Incomplete elliptic integral of the first kind F(φ, m).
@@ -107,9 +119,14 @@ pub fn ellipkinc(
     m_tensor: &SpecialTensor,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("ellipkinc", phi_tensor, m_tensor, mode, |phi, m| {
-        ellipkinc_scalar(phi, m, mode)
-    })
+    map_real_or_complex_binary(
+        "ellipkinc",
+        phi_tensor,
+        m_tensor,
+        mode,
+        |phi, m| ellipkinc_scalar(phi, m, mode),
+        ellipkinc_complex_scalar,
+    )
 }
 
 /// Incomplete elliptic integral of the second kind E(φ, m).
@@ -120,9 +137,14 @@ pub fn ellipeinc(
     m_tensor: &SpecialTensor,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("ellipeinc", phi_tensor, m_tensor, mode, |phi, m| {
-        ellipeinc_scalar(phi, m, mode)
-    })
+    map_real_or_complex_binary(
+        "ellipeinc",
+        phi_tensor,
+        m_tensor,
+        mode,
+        |phi, m| ellipeinc_scalar(phi, m, mode),
+        ellipeinc_complex_scalar,
+    )
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -352,6 +374,64 @@ fn ellipeinc_scalar(phi: f64, m: f64, mode: RuntimeMode) -> Result<f64, SpecialE
     Ok(result)
 }
 
+fn ellipk_complex_scalar(m: Complex64) -> Result<Complex64, SpecialError> {
+    if !m.is_finite() {
+        return Ok(complex_nan());
+    }
+    if m.re == 0.0 && m.im == 0.0 {
+        return Ok(Complex64::from_real(PI / 2.0));
+    }
+    if m.re == 1.0 && m.im == 0.0 {
+        return Ok(Complex64::new(f64::INFINITY, 0.0));
+    }
+    Ok(complex_gauss_legendre_elliptic_f(
+        Complex64::from_real(PI / 2.0),
+        m,
+    ))
+}
+
+fn ellipe_complex_scalar(m: Complex64) -> Result<Complex64, SpecialError> {
+    if !m.is_finite() {
+        return Ok(complex_nan());
+    }
+    if m.re == 0.0 && m.im == 0.0 {
+        return Ok(Complex64::from_real(PI / 2.0));
+    }
+    if m.re == 1.0 && m.im == 0.0 {
+        return Ok(Complex64::from_real(1.0));
+    }
+    Ok(complex_gauss_legendre_elliptic_e(
+        Complex64::from_real(PI / 2.0),
+        m,
+    ))
+}
+
+fn ellipkinc_complex_scalar(phi: Complex64, m: Complex64) -> Result<Complex64, SpecialError> {
+    if !phi.is_finite() || !m.is_finite() {
+        return Ok(complex_nan());
+    }
+    if phi.re == 0.0 && phi.im == 0.0 {
+        return Ok(Complex64::from_real(0.0));
+    }
+    if phi.im == 0.0 && (phi.re - PI / 2.0).abs() < 1.0e-15 {
+        return ellipk_complex_scalar(m);
+    }
+    Ok(complex_gauss_legendre_elliptic_f(phi, m))
+}
+
+fn ellipeinc_complex_scalar(phi: Complex64, m: Complex64) -> Result<Complex64, SpecialError> {
+    if !phi.is_finite() || !m.is_finite() {
+        return Ok(complex_nan());
+    }
+    if phi.re == 0.0 && phi.im == 0.0 {
+        return Ok(Complex64::from_real(0.0));
+    }
+    if phi.im == 0.0 && (phi.re - PI / 2.0).abs() < 1.0e-15 {
+        return ellipe_complex_scalar(m);
+    }
+    Ok(complex_gauss_legendre_elliptic_e(phi, m))
+}
+
 fn lambertw_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if x.is_nan() {
         return Ok(f64::NAN);
@@ -491,6 +571,328 @@ fn expi_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
 // Helpers
 // ══════════════════════════════════════════════════════════════════════
 
+fn map_real_or_complex<F, G>(
+    function: &'static str,
+    input: &SpecialTensor,
+    mode: RuntimeMode,
+    real_kernel: F,
+    complex_kernel: G,
+) -> SpecialResult
+where
+    F: Fn(f64) -> Result<f64, SpecialError>,
+    G: Fn(Complex64) -> Result<Complex64, SpecialError>,
+{
+    match input {
+        SpecialTensor::RealScalar(x) => real_kernel(*x).map(SpecialTensor::RealScalar),
+        SpecialTensor::RealVec(values) => values
+            .iter()
+            .copied()
+            .map(&real_kernel)
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        SpecialTensor::ComplexScalar(value) => {
+            complex_kernel(*value).map(SpecialTensor::ComplexScalar)
+        }
+        SpecialTensor::ComplexVec(values) => values
+            .iter()
+            .copied()
+            .map(&complex_kernel)
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        SpecialTensor::Empty => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid special-function input",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid special-function input",
+            })
+        }
+    }
+}
+
+fn map_real_or_complex_binary<F, G>(
+    function: &'static str,
+    lhs: &SpecialTensor,
+    rhs: &SpecialTensor,
+    mode: RuntimeMode,
+    real_kernel: F,
+    complex_kernel: G,
+) -> SpecialResult
+where
+    F: Fn(f64, f64) -> Result<f64, SpecialError>,
+    G: Fn(Complex64, Complex64) -> Result<Complex64, SpecialError>,
+{
+    match (lhs, rhs) {
+        (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => {
+            record_special_trace(
+                function,
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid special-function input",
+                false,
+            );
+            Err(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid special-function input",
+            })
+        }
+        (SpecialTensor::RealScalar(left), SpecialTensor::RealScalar(right)) => {
+            real_kernel(*left, *right).map(SpecialTensor::RealScalar)
+        }
+        (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => left
+            .iter()
+            .copied()
+            .map(|value| real_kernel(value, *right))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => right
+            .iter()
+            .copied()
+            .map(|value| real_kernel(*left, value))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
+            if left.len() != right.len() {
+                return vector_length_error(function, mode);
+            }
+            left.iter()
+                .copied()
+                .zip(right.iter().copied())
+                .map(|(left_value, right_value)| real_kernel(left_value, right_value))
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::ComplexScalar(left), SpecialTensor::ComplexScalar(right)) => {
+            complex_kernel(*left, *right).map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::ComplexVec(left), SpecialTensor::ComplexScalar(right)) => left
+            .iter()
+            .copied()
+            .map(|value| complex_kernel(value, *right))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::ComplexScalar(left), SpecialTensor::ComplexVec(right)) => right
+            .iter()
+            .copied()
+            .map(|value| complex_kernel(*left, value))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::ComplexVec(left), SpecialTensor::ComplexVec(right)) => {
+            if left.len() != right.len() {
+                return vector_length_error(function, mode);
+            }
+            left.iter()
+                .copied()
+                .zip(right.iter().copied())
+                .map(|(left_value, right_value)| complex_kernel(left_value, right_value))
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::RealScalar(left), SpecialTensor::ComplexScalar(right)) => {
+            complex_kernel(Complex64::from_real(*left), *right).map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::ComplexScalar(left), SpecialTensor::RealScalar(right)) => {
+            complex_kernel(*left, Complex64::from_real(*right)).map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealVec(left), SpecialTensor::ComplexScalar(right)) => left
+            .iter()
+            .copied()
+            .map(|value| complex_kernel(Complex64::from_real(value), *right))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::ComplexScalar(left), SpecialTensor::RealVec(right)) => right
+            .iter()
+            .copied()
+            .map(|value| complex_kernel(*left, Complex64::from_real(value)))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealScalar(left), SpecialTensor::ComplexVec(right)) => right
+            .iter()
+            .copied()
+            .map(|value| complex_kernel(Complex64::from_real(*left), value))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::ComplexVec(left), SpecialTensor::RealScalar(right)) => left
+            .iter()
+            .copied()
+            .map(|value| complex_kernel(value, Complex64::from_real(*right)))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(left), SpecialTensor::ComplexVec(right)) => {
+            if left.len() != right.len() {
+                return vector_length_error(function, mode);
+            }
+            left.iter()
+                .copied()
+                .zip(right.iter().copied())
+                .map(|(left_value, right_value)| {
+                    complex_kernel(Complex64::from_real(left_value), right_value)
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexVec(left), SpecialTensor::RealVec(right)) => {
+            if left.len() != right.len() {
+                return vector_length_error(function, mode);
+            }
+            left.iter()
+                .copied()
+                .zip(right.iter().copied())
+                .map(|(left_value, right_value)| {
+                    complex_kernel(left_value, Complex64::from_real(right_value))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+    }
+}
+
+fn vector_length_error(
+    function: &'static str,
+    mode: RuntimeMode,
+) -> Result<SpecialTensor, SpecialError> {
+    record_special_trace(
+        function,
+        mode,
+        "domain_error",
+        "lhs_len!=rhs_len",
+        "fail_closed",
+        "vector inputs must have matching lengths",
+        false,
+    );
+    Err(SpecialError {
+        function,
+        kind: SpecialErrorKind::DomainError,
+        mode,
+        detail: "vector inputs must have matching lengths",
+    })
+}
+
+fn complex_nan() -> Complex64 {
+    Complex64::new(f64::NAN, f64::NAN)
+}
+
+fn complex_sqrt(z: Complex64) -> Complex64 {
+    if z.re == 0.0 && z.im == 0.0 {
+        return Complex64::from_real(0.0);
+    }
+    if !z.is_finite() {
+        return complex_nan();
+    }
+    let radius = z.abs();
+    let real = ((radius + z.re) / 2.0).max(0.0).sqrt();
+    let imag_mag = ((radius - z.re) / 2.0).max(0.0).sqrt();
+    let imag = if z.im < 0.0 { -imag_mag } else { imag_mag };
+    Complex64::new(real, imag)
+}
+
+fn complex_gauss_legendre_elliptic_f(phi: Complex64, m: Complex64) -> Complex64 {
+    complex_integrate_unit_interval(&|t| {
+        let theta = phi * t;
+        let sin_theta = theta.sin();
+        let inside = Complex64::from_real(1.0) - m * sin_theta * sin_theta;
+        phi / complex_sqrt(inside)
+    })
+}
+
+fn complex_gauss_legendre_elliptic_e(phi: Complex64, m: Complex64) -> Complex64 {
+    complex_integrate_unit_interval(&|t| {
+        let theta = phi * t;
+        let sin_theta = theta.sin();
+        let inside = Complex64::from_real(1.0) - m * sin_theta * sin_theta;
+        phi * complex_sqrt(inside)
+    })
+}
+
+fn complex_integrate_unit_interval<F>(kernel: &F) -> Complex64
+where
+    F: Fn(f64) -> Complex64,
+{
+    let whole = complex_gauss_legendre_interval(kernel, 0.0, 1.0);
+    complex_integrate_recursive(kernel, 0.0, 1.0, whole, 0)
+}
+
+fn complex_integrate_recursive<F>(
+    kernel: &F,
+    start: f64,
+    end: f64,
+    estimate: Complex64,
+    depth: usize,
+) -> Complex64
+where
+    F: Fn(f64) -> Complex64,
+{
+    const MAX_DEPTH: usize = 12;
+    const REL_TOL: f64 = 1.0e-12;
+
+    let mid = 0.5 * (start + end);
+    let left = complex_gauss_legendre_interval(kernel, start, mid);
+    let right = complex_gauss_legendre_interval(kernel, mid, end);
+    let refined = left + right;
+
+    if depth >= MAX_DEPTH || (refined - estimate).abs() <= REL_TOL * refined.abs().max(1.0) {
+        return refined;
+    }
+
+    complex_integrate_recursive(kernel, start, mid, left, depth + 1)
+        + complex_integrate_recursive(kernel, mid, end, right, depth + 1)
+}
+
+fn complex_gauss_legendre_interval<F>(kernel: &F, start: f64, end: f64) -> Complex64
+where
+    F: Fn(f64) -> Complex64,
+{
+    const NODES: [f64; 8] = [
+        0.987_992_518_020_485_4,
+        0.937_273_392_400_706,
+        0.848_206_583_410_427_2,
+        0.724_417_731_360_170_1,
+        0.570_972_172_608_538_8,
+        0.394_151_347_077_563_4,
+        0.201_194_093_997_435,
+        0.0,
+    ];
+    const WEIGHTS: [f64; 8] = [
+        0.030_753_241_996_117_3,
+        0.070_366_047_488_108_1,
+        0.107_159_220_467_171_9,
+        0.139_570_677_926_154_1,
+        0.166_269_205_816_994,
+        0.186_161_000_015_562_2,
+        0.198_431_485_327_111_6,
+        0.202_578_241_925_561_3,
+    ];
+
+    let half_width = 0.5 * (end - start);
+    let midpoint = 0.5 * (start + end);
+    let mut sum = Complex64::from_real(0.0);
+    for idx in 0..8 {
+        let offset = half_width * NODES[idx];
+        let t_pos = midpoint + offset;
+        let t_neg = midpoint - offset;
+        let value = if idx == 7 {
+            kernel(t_pos) * WEIGHTS[idx]
+        } else {
+            (kernel(t_pos) + kernel(t_neg)) * WEIGHTS[idx]
+        };
+        sum = sum + value;
+    }
+    sum * half_width
+}
+
 fn map_real<F>(
     function: &'static str,
     input: &SpecialTensor,
@@ -526,97 +928,6 @@ where
             })
         }
         SpecialTensor::Empty => {
-            record_special_trace(
-                function,
-                mode,
-                "domain_error",
-                "input=empty",
-                "fail_closed",
-                "empty tensor is not a valid special-function input",
-                false,
-            );
-            Err(SpecialError {
-                function,
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "empty tensor is not a valid special-function input",
-            })
-        }
-    }
-}
-
-fn map_real_binary<F>(
-    function: &'static str,
-    lhs: &SpecialTensor,
-    rhs: &SpecialTensor,
-    mode: RuntimeMode,
-    kernel: F,
-) -> SpecialResult
-where
-    F: Fn(f64, f64) -> Result<f64, SpecialError>,
-{
-    match (lhs, rhs) {
-        (SpecialTensor::RealScalar(left), SpecialTensor::RealScalar(right)) => {
-            kernel(*left, *right).map(SpecialTensor::RealScalar)
-        }
-        (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => left
-            .iter()
-            .copied()
-            .map(|value| kernel(value, *right))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => right
-            .iter()
-            .copied()
-            .map(|value| kernel(*left, value))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
-            if left.len() != right.len() {
-                record_special_trace(
-                    function,
-                    mode,
-                    "domain_error",
-                    format!("lhs_len={},rhs_len={}", left.len(), right.len()),
-                    "fail_closed",
-                    "vector inputs must have matching lengths",
-                    false,
-                );
-                return Err(SpecialError {
-                    function,
-                    kind: SpecialErrorKind::DomainError,
-                    mode,
-                    detail: "vector inputs must have matching lengths",
-                });
-            }
-            left.iter()
-                .copied()
-                .zip(right.iter().copied())
-                .map(|(left_value, right_value)| kernel(left_value, right_value))
-                .collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::RealVec)
-        }
-        (SpecialTensor::ComplexScalar(_), _)
-        | (SpecialTensor::ComplexVec(_), _)
-        | (_, SpecialTensor::ComplexScalar(_))
-        | (_, SpecialTensor::ComplexVec(_)) => {
-            record_special_trace(
-                function,
-                mode,
-                "not_implemented",
-                "input=complex",
-                "fail_closed",
-                "complex-valued path pending",
-                false,
-            );
-            Err(SpecialError {
-                function,
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "complex-valued path pending",
-            })
-        }
-        _ => {
             record_special_trace(
                 function,
                 mode,
@@ -819,10 +1130,29 @@ mod tests {
         );
     }
 
+    fn assert_complex_close(actual: Complex64, expected: Complex64, tol: f64, msg: &str) {
+        let delta = (actual - expected).abs();
+        assert!(
+            delta <= tol,
+            "{msg}: got {}+{}i, expected {}+{}i (|delta|={delta})",
+            actual.re,
+            actual.im,
+            expected.re,
+            expected.im,
+        );
+    }
+
     fn eval_scalar(result: SpecialResult) -> f64 {
         match result.expect("should succeed") {
             SpecialTensor::RealScalar(v) => v,
             other => panic!("expected RealScalar, got {other:?}"),
+        }
+    }
+
+    fn eval_complex_scalar(result: SpecialResult) -> Complex64 {
+        match result.expect("should succeed") {
+            SpecialTensor::ComplexScalar(v) => v,
+            other => panic!("expected ComplexScalar, got {other:?}"),
         }
     }
 
@@ -967,6 +1297,152 @@ mod tests {
         let err = ellipkinc(&phi, &m, RuntimeMode::Strict)
             .expect_err("mismatched vector lengths should error");
         assert_eq!(err.kind, SpecialErrorKind::DomainError);
+    }
+
+    #[test]
+    fn ellipk_complex_reference_value() {
+        let m = SpecialTensor::ComplexScalar(Complex64::new(0.5, 0.25));
+        let result = eval_complex_scalar(ellipk(&m, RuntimeMode::Strict));
+        assert_complex_close(
+            result,
+            Complex64::new(1.802_606_224_637_205_2, 0.194_528_590_856_802_02),
+            1e-10,
+            "complex ellipk reference",
+        );
+    }
+
+    #[test]
+    fn ellipe_complex_reference_value() {
+        let m = SpecialTensor::ComplexScalar(Complex64::new(0.5, 0.25));
+        let result = eval_complex_scalar(ellipe(&m, RuntimeMode::Strict));
+        assert_complex_close(
+            result,
+            Complex64::new(1.360_868_682_163_129_7, -0.123_873_344_256_178_68),
+            1e-10,
+            "complex ellipe reference",
+        );
+    }
+
+    #[test]
+    fn ellipkinc_complex_reference_value() {
+        let phi = SpecialTensor::ComplexScalar(Complex64::new(0.3, 0.4));
+        let m = SpecialTensor::ComplexScalar(Complex64::new(0.5, 0.25));
+        let result = eval_complex_scalar(ellipkinc(&phi, &m, RuntimeMode::Strict));
+        assert_complex_close(
+            result,
+            Complex64::new(0.288_721_883_612_193_9, 0.398_838_834_080_766),
+            1e-10,
+            "complex ellipkinc reference",
+        );
+    }
+
+    #[test]
+    fn ellipeinc_complex_reference_value() {
+        let phi = SpecialTensor::ComplexScalar(Complex64::new(0.3, 0.4));
+        let m = SpecialTensor::ComplexScalar(Complex64::new(0.5, 0.25));
+        let result = eval_complex_scalar(ellipeinc(&phi, &m, RuntimeMode::Strict));
+        assert_complex_close(
+            result,
+            Complex64::new(0.311_621_477_340_673_9, 0.400_835_393_840_843_63),
+            1e-10,
+            "complex ellipeinc reference",
+        );
+    }
+
+    #[test]
+    fn elliptic_complex_real_axis_reduces_to_real_kernels() {
+        let real_m = 0.2;
+        let real_phi = 0.7;
+
+        let k_real = eval_scalar(ellipk(
+            &SpecialTensor::RealScalar(real_m),
+            RuntimeMode::Strict,
+        ));
+        let k_complex = eval_complex_scalar(ellipk(
+            &SpecialTensor::ComplexScalar(Complex64::from_real(real_m)),
+            RuntimeMode::Strict,
+        ));
+        assert_complex_close(
+            k_complex,
+            Complex64::from_real(k_real),
+            1e-12,
+            "ellipk real axis",
+        );
+
+        let e_real = eval_scalar(ellipe(
+            &SpecialTensor::RealScalar(real_m),
+            RuntimeMode::Strict,
+        ));
+        let e_complex = eval_complex_scalar(ellipe(
+            &SpecialTensor::ComplexScalar(Complex64::from_real(real_m)),
+            RuntimeMode::Strict,
+        ));
+        assert_complex_close(
+            e_complex,
+            Complex64::from_real(e_real),
+            1e-12,
+            "ellipe real axis",
+        );
+
+        let f_real = eval_scalar(ellipkinc(
+            &SpecialTensor::RealScalar(real_phi),
+            &SpecialTensor::RealScalar(real_m),
+            RuntimeMode::Strict,
+        ));
+        let f_complex = eval_complex_scalar(ellipkinc(
+            &SpecialTensor::ComplexScalar(Complex64::from_real(real_phi)),
+            &SpecialTensor::ComplexScalar(Complex64::from_real(real_m)),
+            RuntimeMode::Strict,
+        ));
+        assert_complex_close(
+            f_complex,
+            Complex64::from_real(f_real),
+            1e-12,
+            "ellipkinc real axis",
+        );
+
+        let ei_real = eval_scalar(ellipeinc(
+            &SpecialTensor::RealScalar(real_phi),
+            &SpecialTensor::RealScalar(real_m),
+            RuntimeMode::Strict,
+        ));
+        let ei_complex = eval_complex_scalar(ellipeinc(
+            &SpecialTensor::ComplexScalar(Complex64::from_real(real_phi)),
+            &SpecialTensor::ComplexScalar(Complex64::from_real(real_m)),
+            RuntimeMode::Strict,
+        ));
+        assert_complex_close(
+            ei_complex,
+            Complex64::from_real(ei_real),
+            1e-12,
+            "ellipeinc real axis",
+        );
+    }
+
+    #[test]
+    fn ellipkinc_complex_broadcasts_scalar_phi_over_vector_m() {
+        let phi = SpecialTensor::ComplexScalar(Complex64::new(0.3, 0.4));
+        let z = Complex64::new(0.5, 0.25);
+        let m = SpecialTensor::ComplexVec(vec![z, z.conj()]);
+        let result = ellipkinc(&phi, &m, RuntimeMode::Strict).expect("complex broadcast");
+        match result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_complex_close(
+                    values[0],
+                    Complex64::new(0.288_721_883_612_193_9, 0.398_838_834_080_766),
+                    1e-10,
+                    "broadcast first element",
+                );
+                assert_complex_close(
+                    values[1],
+                    Complex64::new(0.291_734_331_966_050_5, 0.408_643_099_789_330_1),
+                    1e-10,
+                    "broadcast second element",
+                );
+            }
+            other => panic!("expected ComplexVec, got {other:?}"),
+        }
     }
 
     // ── Lambert W function ────────────────────────────────────────
