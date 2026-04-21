@@ -13,10 +13,11 @@
 
 use fsci_opt::types::OptimizeTraceEntry;
 use fsci_opt::{
-    ConvergenceStatus, CurveFitOptions, DifferentialEvolutionOptions, LeastSquaresOptions,
-    LinprogResult, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, curve_fit,
-    differential_evolution, fsolve, get_optimize_traces, halley, least_squares, linprog, minimize,
-    newton_scalar, ridder, root_scalar, secant, toms748,
+    ConvergenceStatus, CurveFitOptions, DifferentialEvolutionOptions, Integrality,
+    LeastSquaresOptions, LinprogResult, MilpOptions, MilpProblem, MinimizeOptions, OptimizeMethod,
+    RootMethod, RootOptions, curve_fit, differential_evolution, fsolve, get_optimize_traces,
+    halley, least_squares, linprog, milp, minimize, newton_scalar, ridder, root_scalar, secant,
+    toms748,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -1326,6 +1327,81 @@ fn e2e_p2c003_14_fsolve_multivariate() {
                 result.x[0], result.x[1], result.x[2], max_residual
             ),
             result.function_calls,
+        ))
+    });
+
+    let bundle = runner.finish();
+    assert_bundle_pass(&bundle);
+}
+
+#[test]
+fn e2e_p2c003_15_free_variable_linear_programs() {
+    let mut runner = ScenarioRunner::new("p2c003_15_free_variable_linear_programs");
+
+    runner.record_step("solve_free_variable_linprog", "linprog", || {
+        // Minimize x subject to x >= 1, with x otherwise free.
+        let c = vec![1.0];
+        let a_ub = vec![vec![-1.0]];
+        let b_ub = vec![-1.0];
+        let bounds = vec![(None, None)];
+
+        let result = linprog(&c, &a_ub, &b_ub, &[], &[], &bounds, None)
+            .map_err(|e| format!("linprog failed: {e}"))?;
+
+        if !result.success {
+            return Err(format!("linprog did not converge: {}", result.message));
+        }
+        if (result.x[0] - 1.0).abs() > 0.01 || (result.fun - 1.0).abs() > 0.01 {
+            return Err(format!(
+                "free-variable LP solution incorrect: x={:?}, f={:.4}, expected x=[1], f=1",
+                result.x, result.fun
+            ));
+        }
+
+        Ok(StepOutcome::new(
+            format!(
+                "optimal free-variable LP: x=[{:.4}], f={:.4}",
+                result.x[0], result.fun
+            ),
+            0,
+        ))
+    });
+
+    runner.record_step("solve_free_integer_milp", "milp", || {
+        // Maximize x (minimize -x) subject to -2.2 <= x <= 2.2, x integer.
+        let c = vec![-1.0];
+        let a_ub = vec![vec![1.0], vec![-1.0]];
+        let b_ub = vec![2.2, 2.2];
+        let result = milp(
+            MilpProblem {
+                c: &c,
+                integrality: &[Integrality::Integer],
+                a_ub: &a_ub,
+                b_ub: &b_ub,
+                a_eq: &[],
+                b_eq: &[],
+                bounds: &[(None, None)],
+            },
+            MilpOptions::default(),
+        )
+        .map_err(|e| format!("milp failed: {e}"))?;
+
+        if !result.success {
+            return Err(format!("milp did not converge: {}", result.message));
+        }
+        if result.x != vec![2.0] || (result.fun - (-2.0)).abs() > 0.01 {
+            return Err(format!(
+                "free-variable MILP solution incorrect: x={:?}, f={:.4}, expected x=[2], f=-2",
+                result.x, result.fun
+            ));
+        }
+
+        Ok(StepOutcome::new(
+            format!(
+                "optimal free-integer MILP: x=[{:.4}], f={:.4}",
+                result.x[0], result.fun
+            ),
+            0,
         ))
     });
 

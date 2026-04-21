@@ -447,6 +447,87 @@ pub struct MilpOptions {
     pub lp_maxiter: Option<usize>,
 }
 
+#[derive(Debug, Clone)]
+struct StandardFormVariable {
+    offset: f64,
+    terms: Vec<(usize, f64)>,
+}
+
+#[derive(Debug, Clone)]
+struct StandardFormTransform {
+    original_vars: Vec<StandardFormVariable>,
+    decision_var_count: usize,
+    upper_bound_rows: Vec<(usize, f64)>,
+}
+
+fn validate_variable_bounds(index: usize, lo: f64, hi: f64) -> Result<(), OptError> {
+    if lo.is_nan() || hi.is_nan() {
+        return Err(OptError::InvalidBounds {
+            detail: format!("variable {index}: bounds must not be NaN (got {lo}, {hi})"),
+        });
+    }
+    if lo == f64::INFINITY {
+        return Err(OptError::InvalidBounds {
+            detail: format!("variable {index}: lower bound must not be +inf"),
+        });
+    }
+    if hi == f64::NEG_INFINITY {
+        return Err(OptError::InvalidBounds {
+            detail: format!("variable {index}: upper bound must not be -inf"),
+        });
+    }
+    if lo > hi {
+        return Err(OptError::InvalidBounds {
+            detail: format!("variable {index}: lower bound {lo} > upper bound {hi}"),
+        });
+    }
+    Ok(())
+}
+
+fn build_standard_form_transform(
+    var_bounds: &[(f64, f64)],
+) -> Result<StandardFormTransform, OptError> {
+    let mut original_vars = Vec::with_capacity(var_bounds.len());
+    let mut upper_bound_rows = Vec::new();
+    let mut next_index = 0usize;
+
+    for (index, &(lo, hi)) in var_bounds.iter().enumerate() {
+        validate_variable_bounds(index, lo, hi)?;
+        if lo.is_finite() {
+            let std_index = next_index;
+            next_index += 1;
+            original_vars.push(StandardFormVariable {
+                offset: lo,
+                terms: vec![(std_index, 1.0)],
+            });
+            if hi.is_finite() {
+                upper_bound_rows.push((std_index, hi - lo));
+            }
+        } else if hi.is_finite() {
+            let std_index = next_index;
+            next_index += 1;
+            original_vars.push(StandardFormVariable {
+                offset: hi,
+                terms: vec![(std_index, -1.0)],
+            });
+        } else {
+            let pos_index = next_index;
+            let neg_index = next_index + 1;
+            next_index += 2;
+            original_vars.push(StandardFormVariable {
+                offset: 0.0,
+                terms: vec![(pos_index, 1.0), (neg_index, -1.0)],
+            });
+        }
+    }
+
+    Ok(StandardFormTransform {
+        original_vars,
+        decision_var_count: next_index,
+        upper_bound_rows,
+    })
+}
+
 /// Solve a linear programming problem using the revised simplex method.
 ///
 /// Matches `scipy.optimize.linprog(c, A_ub, b_ub, A_eq, b_eq, bounds, method)`.
@@ -531,49 +612,30 @@ pub fn linprog(
             .collect()
     };
 
-    // Check bounds feasibility and finiteness of lower bounds.
-    // Our simplex implementation requires finite lower bounds (shifting to standard form).
-    // Free variables (lo = -inf) would need variable splitting which is not yet implemented.
-    for (i, &(lo, hi)) in var_bounds.iter().enumerate() {
-        if !lo.is_finite() {
-            return Err(OptError::InvalidBounds {
-                detail: format!(
-                    "variable {i}: lower bound must be finite (got {lo}); \
-                     free variables are not yet supported"
-                ),
-            });
-        }
-        if lo > hi {
-            return Err(OptError::InvalidBounds {
-                detail: format!("variable {i}: lower bound {lo} > upper bound {hi}"),
-            });
-        }
-    }
+    let transform = build_standard_form_transform(&var_bounds)?;
 
     // Transform to standard form: minimize c^T x, A x = b, x >= 0.
-    // 1. Shift variables so lower bounds are 0: x_i' = x_i - lb_i.
-    // 2. Add slack variables for inequality constraints.
-    // 3. Add slack for upper bounds.
+    // 1. Finite-lower-bound variables are shifted to y >= 0.
+    // 2. Upper-only variables are reflected as x = ub - y with y >= 0.
+    // 3. Free variables are split as x = x_pos - x_neg with x_pos, x_neg >= 0.
+    // 4. Add slack variables for inequality constraints and finite shifted upper bounds.
     let m_ub = a_ub.len();
     let m_eq = a_eq.len();
-
-    // Count finite upper bounds that need slack variables.
-    // Only include when both bounds are finite (otherwise bound_diff would be infinite).
-    let ub_slacks: Vec<(usize, f64)> = var_bounds
-        .iter()
-        .enumerate()
-        .filter(|(_, b)| b.0.is_finite() && b.1.is_finite())
-        .map(|(i, b)| (i, b.1 - b.0))
-        .collect();
+    let decision_var_count = transform.decision_var_count;
+    let ub_slacks = &transform.upper_bound_rows;
     let n_ub_slack = ub_slacks.len();
 
-    // Total variables: original n + m_ub slack + n_ub_slack upper-bound slack.
-    let total_vars = n + m_ub + n_ub_slack;
+    // Total variables: transformed decision vars + inequality slack + upper-bound slack.
+    let total_vars = decision_var_count + m_ub + n_ub_slack;
     let total_constraints = m_ub + m_eq + n_ub_slack;
 
     // Build standard-form objective: c' = [c, 0, 0, ...]
     let mut c_std = vec![0.0; total_vars];
-    c_std[..n].copy_from_slice(c);
+    for (&coeff, transformed) in c.iter().zip(transform.original_vars.iter()) {
+        for &(std_index, std_coeff) in &transformed.terms {
+            c_std[std_index] += coeff * std_coeff;
+        }
+    }
 
     // Build constraint matrix A_std and b_std.
     let mut a_std = vec![vec![0.0; total_vars]; total_constraints];
@@ -581,37 +643,32 @@ pub fn linprog(
 
     // Row 0..m_ub: inequality constraints → A_ub x + s = b_ub.
     for i in 0..m_ub {
-        for j in 0..n {
-            a_std[i][j] = a_ub[i][j];
-        }
-        a_std[i][n + i] = 1.0; // slack variable
         b_std[i] = b_ub[i];
-        // Adjust for shifted variables.
-        for (j, &(lo, _)) in var_bounds.iter().enumerate() {
-            if lo.is_finite() {
-                b_std[i] -= a_ub[i][j] * lo;
+        for (j, transformed) in transform.original_vars.iter().enumerate() {
+            for &(std_index, std_coeff) in &transformed.terms {
+                a_std[i][std_index] += a_ub[i][j] * std_coeff;
             }
+            b_std[i] -= a_ub[i][j] * transformed.offset;
         }
+        a_std[i][decision_var_count + i] = 1.0; // slack variable
     }
 
     // Row m_ub..m_ub+m_eq: equality constraints.
     for i in 0..m_eq {
-        for j in 0..n {
-            a_std[m_ub + i][j] = a_eq[i][j];
-        }
         b_std[m_ub + i] = b_eq[i];
-        for (j, &(lo, _)) in var_bounds.iter().enumerate() {
-            if lo.is_finite() {
-                b_std[m_ub + i] -= a_eq[i][j] * lo;
+        for (j, transformed) in transform.original_vars.iter().enumerate() {
+            for &(std_index, std_coeff) in &transformed.terms {
+                a_std[m_ub + i][std_index] += a_eq[i][j] * std_coeff;
             }
+            b_std[m_ub + i] -= a_eq[i][j] * transformed.offset;
         }
     }
 
-    // Row m_ub+m_eq..: upper bound constraints: x_i' + s_ub = ub_i - lb_i.
-    for (k, &(var_idx, bound_diff)) in ub_slacks.iter().enumerate() {
+    // Row m_ub+m_eq..: shifted finite upper bounds: y_i + s_ub = ub_i - lb_i.
+    for (k, &(std_index, bound_diff)) in ub_slacks.iter().enumerate() {
         let row = m_ub + m_eq + k;
-        a_std[row][var_idx] = 1.0;
-        a_std[row][n + m_ub + k] = 1.0;
+        a_std[row][std_index] = 1.0;
+        a_std[row][decision_var_count + m_ub + k] = 1.0;
         b_std[row] = bound_diff;
     }
 
@@ -768,11 +825,14 @@ pub fn linprog(
     // and no positive column entry would have been caught during iteration).
     // The simplex_iterate returns Err for unbounded.
 
-    // Unshift variables: x_i = x_i' + lb_i.
+    // Recover original decision variables from the transformed non-negative basis.
     let mut x_orig = vec![0.0; n];
-    for i in 0..n {
-        let lb = var_bounds[i].0;
-        x_orig[i] = x_std[i] + if lb.is_finite() { lb } else { 0.0 };
+    for (i, transformed) in transform.original_vars.iter().enumerate() {
+        let mut value = transformed.offset;
+        for &(std_index, std_coeff) in &transformed.terms {
+            value += std_coeff * x_std[std_index];
+        }
+        x_orig[i] = value;
     }
 
     // Compute slack: s = b_ub - A_ub @ x.
@@ -873,20 +933,18 @@ pub fn milp(problem: MilpProblem<'_>, options: MilpOptions) -> Result<MilpResult
 
     let mut root_bounds = default_milp_bounds(n, bounds)?;
     for (i, (bound, kind)) in root_bounds.iter_mut().zip(integrality.iter()).enumerate() {
-        if !bound.0.is_finite() {
-            return Err(OptError::InvalidBounds {
-                detail: format!(
-                    "variable {i}: lower bound must be finite (got {}); free MILP variables are not supported",
-                    bound.0
-                ),
-            });
-        }
+        validate_variable_bounds(i, bound.0, bound.1)?;
         match kind {
             Integrality::Continuous | Integrality::Integer => {}
             Integrality::Binary => {
                 bound.0 = bound.0.max(0.0);
                 bound.1 = bound.1.min(1.0);
             }
+        }
+        if bound.0.is_nan() || bound.1.is_nan() {
+            return Err(OptError::InvalidBounds {
+                detail: format!("variable {i}: bounds became NaN after integrality adjustment"),
+            });
         }
         if bound.0 > bound.1 {
             return Ok(MilpResult {
@@ -3333,6 +3391,46 @@ mod tests {
     }
 
     #[test]
+    fn linprog_supports_free_variables() {
+        // Minimize x, subject to x >= 1 with x otherwise free.
+        let c = vec![1.0];
+        let a_ub = vec![vec![-1.0]];
+        let b_ub = vec![-1.0];
+        let bounds = vec![(None, None)];
+        let result = linprog(&c, &a_ub, &b_ub, &[], &[], &bounds, None).unwrap();
+        assert!(result.success, "linprog failed: {}", result.message);
+        assert!(
+            (result.x[0] - 1.0).abs() < 0.01,
+            "x={}, expected 1.0",
+            result.x[0]
+        );
+        assert!(
+            (result.fun - 1.0).abs() < 0.01,
+            "obj={}, expected 1.0",
+            result.fun
+        );
+    }
+
+    #[test]
+    fn linprog_supports_upper_only_bounds() {
+        // Minimize -x, subject only to x <= 5.
+        let c = vec![-1.0];
+        let bounds = vec![(None, Some(5.0))];
+        let result = linprog(&c, &[], &[], &[], &[], &bounds, None).unwrap();
+        assert!(result.success, "linprog failed: {}", result.message);
+        assert!(
+            (result.x[0] - 5.0).abs() < 0.01,
+            "x={}, expected 5.0",
+            result.x[0]
+        );
+        assert!(
+            (result.fun - (-5.0)).abs() < 0.01,
+            "obj={}, expected -5.0",
+            result.fun
+        );
+    }
+
+    #[test]
     fn linprog_dimension_mismatch() {
         let c = vec![1.0, 2.0];
         let a_ub = vec![vec![1.0]]; // wrong number of columns
@@ -3409,6 +3507,29 @@ mod tests {
         .expect("milp");
         assert!(!result.success);
         assert_eq!(result.status, 2);
+    }
+
+    #[test]
+    fn milp_supports_free_integer_variables() {
+        let c = vec![-1.0];
+        let a_ub = vec![vec![1.0], vec![-1.0]];
+        let b_ub = vec![2.2, 2.2];
+        let result = milp(
+            MilpProblem {
+                c: &c,
+                integrality: &[Integrality::Integer],
+                a_ub: &a_ub,
+                b_ub: &b_ub,
+                a_eq: &[],
+                b_eq: &[],
+                bounds: &[(None, None)],
+            },
+            MilpOptions::default(),
+        )
+        .expect("milp");
+        assert!(result.success, "milp failed: {}", result.message);
+        assert_eq!(result.x, vec![2.0]);
+        assert!((result.fun + 2.0).abs() < 1e-9);
     }
 
     #[test]
