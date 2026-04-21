@@ -9372,13 +9372,17 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("kolmogorov", mode));
             }
-            Ok(special_kolmogorov(args[0]))
+            special_scalar_from_tensor(
+                special_kolmogorov(&special_scalar(args[0]), mode)?,
+                "kolmogorov",
+                mode,
+            )
         }
         SpecialCaseFunction::Kolmogi => {
             if args.len() != 1 {
                 return Err(special_invalid_fixture_error("kolmogi", mode));
             }
-            Ok(special_kolmogi(args[0]))
+            special_scalar_from_tensor(special_kolmogi(&special_scalar(args[0]), mode)?, "kolmogi", mode)
         }
         SpecialCaseFunction::Entr => {
             if args.len() != 1 {
