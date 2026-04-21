@@ -4,6 +4,7 @@
 //!
 //! Matches `scipy.spatial` core types:
 //! - `KDTree` — k-d tree for fast nearest-neighbor queries
+//! - `cKDTree` — SciPy parity alias to `KDTree`
 //! - `Rectangle` — hyperrectangle utility used by SciPy spatial search
 //! - `HalfspaceIntersection` — bounded N-D halfspace intersection
 //! - `distance` — pairwise distance computations
@@ -1041,6 +1042,13 @@ impl KDTree {
         Ok(entries)
     }
 }
+
+/// SciPy parity alias for `KDTree`.
+///
+/// SciPy exposes both `KDTree` and `cKDTree`. FrankenSciPy uses one Rust
+/// implementation for both surfaces.
+#[allow(non_camel_case_types)]
+pub type cKDTree = KDTree;
 
 fn ball_search_count(nodes: &[KDNode], node_idx: usize, query: &[f64], r_sq: f64) -> usize {
     let node = &nodes[node_idx];
@@ -3249,6 +3257,27 @@ mod tests {
         let tree = KDTree::new(&data).expect("kdtree");
         let (idx, _) = tree.query(&[0.0, 0.0]).expect("query");
         assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn ckdtree_alias_construction_and_query() {
+        let data = vec![vec![0.0, 0.0], vec![2.0, 0.0], vec![0.0, 2.0]];
+        let tree = cKDTree::new(&data).expect("ckdtree");
+        let (idx, dist) = tree.query(&[0.2, 0.1]).expect("query");
+        assert_eq!(idx, 0);
+        assert!(dist < 0.25);
+    }
+
+    #[test]
+    fn ckdtree_alias_supports_cross_tree_methods() {
+        let left = cKDTree::new(&[vec![0.0, 0.0], vec![2.0, 0.0]]).expect("left");
+        let right = cKDTree::new(&[vec![0.5, 0.0], vec![2.5, 0.0], vec![9.0, 9.0]]).expect("right");
+
+        let neighbors = left.query_ball_tree(&right, 0.75).expect("neighbors");
+        assert_eq!(neighbors, vec![vec![0], vec![1]]);
+
+        let count = left.count_neighbors(&right, 0.75).expect("count");
+        assert_eq!(count, 2);
     }
 
     // ── New distance metrics ───────────────────────────────────
