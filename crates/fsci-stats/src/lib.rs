@@ -9115,6 +9115,100 @@ pub fn moment(data: &[f64], k: u32) -> f64 {
         / n
 }
 
+/// Compute the n-th k-statistic (unbiased cumulant estimator).
+///
+/// K-statistics are unbiased estimators of cumulants:
+/// - k1 = sample mean (estimator of population mean)
+/// - k2 = unbiased sample variance (estimator of variance)
+/// - k3, k4 = higher cumulant estimators
+///
+/// Matches `scipy.stats.kstat(data, n)`.
+///
+/// # Arguments
+/// * `data` - Input array
+/// * `n` - Order of k-statistic (1, 2, 3, or 4)
+///
+/// # Returns
+/// The n-th k-statistic, or NaN for invalid input.
+pub fn kstat(data: &[f64], n: u32) -> f64 {
+    if data.is_empty() || n < 1 || n > 4 {
+        return f64::NAN;
+    }
+
+    let filtered: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+    let nn = filtered.len() as f64;
+    if nn < n as f64 {
+        return f64::NAN;
+    }
+
+    // Compute power sums S[k] = sum(x^k)
+    let s1: f64 = filtered.iter().sum();
+    let s2: f64 = filtered.iter().map(|&x| x * x).sum();
+    let s3: f64 = filtered.iter().map(|&x| x * x * x).sum();
+    let s4: f64 = filtered.iter().map(|&x| x.powi(4)).sum();
+
+    match n {
+        1 => s1 / nn,
+        2 => (nn * s2 - s1 * s1) / (nn * (nn - 1.0)),
+        3 => {
+            if nn < 3.0 {
+                return f64::NAN;
+            }
+            (2.0 * s1.powi(3) - 3.0 * nn * s1 * s2 + nn * nn * s3)
+                / (nn * (nn - 1.0) * (nn - 2.0))
+        }
+        4 => {
+            if nn < 4.0 {
+                return f64::NAN;
+            }
+            ((-6.0 * s1.powi(4)
+                + 12.0 * nn * s1 * s1 * s2
+                - 3.0 * nn * (nn - 1.0) * s2 * s2
+                - 4.0 * nn * (nn + 1.0) * s1 * s3
+                + nn * nn * (nn + 1.0) * s4)
+                / (nn * (nn - 1.0) * (nn - 2.0) * (nn - 3.0)))
+        }
+        _ => f64::NAN,
+    }
+}
+
+/// Compute the variance of k-statistic under normality assumption.
+///
+/// Returns the variance of the n-th k-statistic assuming the data
+/// comes from a normal distribution.
+///
+/// Matches `scipy.stats.kstatvar(data, n)`.
+///
+/// # Arguments
+/// * `data` - Input array (only length is used)
+/// * `n` - Order of k-statistic (1 or 2)
+///
+/// # Returns
+/// Variance of k-statistic, or NaN for invalid input.
+pub fn kstatvar(data: &[f64], n: u32) -> f64 {
+    let filtered: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+    let nn = filtered.len() as f64;
+
+    if nn < 2.0 || n < 1 || n > 2 {
+        return f64::NAN;
+    }
+
+    // Compute k2 (unbiased variance estimate)
+    let k2 = kstat(&filtered, 2);
+
+    match n {
+        1 => k2 / nn, // Var(k1) = k2/n
+        2 => {
+            // Var(k2) = 2*k2^2 / (n-1) for normal
+            if nn < 3.0 {
+                return f64::NAN;
+            }
+            2.0 * k2 * k2 / (nn - 1.0)
+        }
+        _ => f64::NAN,
+    }
+}
+
 /// Standard error of the mean.
 ///
 /// Matches `scipy.stats.sem(a)`.
@@ -20511,6 +20605,59 @@ mod tests {
         // Invalid alpha
         assert!(bayes_mvs(&[1.0, 2.0], 0.0).mean.statistic.is_nan());
         assert!(bayes_mvs(&[1.0, 2.0], 1.0).mean.statistic.is_nan());
+    }
+
+    // ── kstat tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn kstat_mean() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        // k1 = mean = 5.5
+        assert!((kstat(&data, 1) - 5.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn kstat_variance() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        // k2 = unbiased variance = 9.166666...
+        let k2 = kstat(&data, 2);
+        assert!(
+            (k2 - 9.166666666666666).abs() < 1e-10,
+            "k2 = {}",
+            k2
+        );
+    }
+
+    #[test]
+    fn kstat_skewness() {
+        // Symmetric data should have k3 = 0
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let k3 = kstat(&data, 3);
+        assert!(k3.abs() < 1e-10, "symmetric data k3 = {}", k3);
+    }
+
+    #[test]
+    fn kstat_kurtosis() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let k4 = kstat(&data, 4);
+        assert!((k4 - (-100.83333333333333)).abs() < 1e-6, "k4 = {}", k4);
+    }
+
+    #[test]
+    fn kstat_edge_cases() {
+        assert!(kstat(&[], 1).is_nan());
+        assert!(kstat(&[1.0], 2).is_nan()); // need at least n samples for kn
+        assert!(kstat(&[1.0, 2.0], 0).is_nan()); // invalid n
+        assert!(kstat(&[1.0, 2.0], 5).is_nan()); // n > 4
+    }
+
+    #[test]
+    fn kstatvar_variance_of_mean() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let kv1 = kstatvar(&data, 1);
+        // Var(k1) = k2/n
+        let k2 = kstat(&data, 2);
+        assert!((kv1 - k2 / 5.0).abs() < 1e-10, "kstatvar(1) = {}", kv1);
     }
 
     // ── directional_stats tests ──────────────────────────────────────
