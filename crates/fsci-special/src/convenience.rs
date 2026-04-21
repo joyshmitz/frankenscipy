@@ -4199,8 +4199,12 @@ pub fn xlogx_scalar(x: f64) -> f64 {
 ///
 /// The negation of entropy contribution. Same as xlogx.
 /// Returns 0 for x = 0, NaN for x < 0.
+pub fn negentropy(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("negentropy", x_tensor, mode, |x| Ok(negentropy_scalar(x)))
+}
+
 #[must_use]
-pub fn negentropy(x: f64) -> f64 {
+pub fn negentropy_scalar(x: f64) -> f64 {
     xlogx_scalar(x)
 }
 
@@ -6568,9 +6572,44 @@ mod tests {
     #[test]
     fn negentropy_basic() {
         // negentropy is same as xlogx
-        assert!((negentropy(0.0) - xlogx_scalar(0.0)).abs() < 1e-14);
-        assert!((negentropy(0.5) - xlogx_scalar(0.5)).abs() < 1e-14);
-        assert!((negentropy(2.0) - xlogx_scalar(2.0)).abs() < 1e-14);
+        assert!((negentropy_scalar(0.0) - xlogx_scalar(0.0)).abs() < 1e-14);
+        assert!((negentropy_scalar(0.5) - xlogx_scalar(0.5)).abs() < 1e-14);
+        assert!((negentropy_scalar(2.0) - xlogx_scalar(2.0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn negentropy_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = negentropy(&SpecialTensor::RealScalar(0.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - negentropy_scalar(0.5)).abs() < 1e-14);
+
+        let vector = negentropy(
+            &SpecialTensor::RealVec(vec![0.0, 0.5, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [0.0, 0.5, 2.0].map(negentropy_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn negentropy_tensor_dispatch_preserves_domain_behavior() -> Result<(), String> {
+        let vector = negentropy(
+            &SpecialTensor::RealVec(vec![f64::NAN, -1.0, 0.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!(values[1].is_nan());
+        assert_eq!(values[2], 0.0);
+        Ok(())
     }
 
     #[test]
