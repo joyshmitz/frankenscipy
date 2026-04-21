@@ -1332,6 +1332,163 @@ where
     }
 }
 
+fn map_real_ternary<F>(
+    function: &'static str,
+    first: &SpecialTensor,
+    second: &SpecialTensor,
+    third: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+) -> SpecialResult
+where
+    F: Fn(f64, f64, f64) -> Result<f64, SpecialError>,
+{
+    fn broadcast_len(tensor: &SpecialTensor) -> Option<usize> {
+        match tensor {
+            SpecialTensor::RealScalar(_) => Some(1),
+            SpecialTensor::RealVec(values) => Some(values.len()),
+            _ => None,
+        }
+    }
+
+    fn broadcast_value(tensor: &SpecialTensor, idx: usize) -> Option<f64> {
+        match tensor {
+            SpecialTensor::RealScalar(value) => Some(*value),
+            SpecialTensor::RealVec(values) => {
+                if values.is_empty() {
+                    None
+                } else if values.len() == 1 {
+                    Some(values[0])
+                } else {
+                    values.get(idx).copied()
+                }
+            }
+            _ => None,
+        }
+    }
+
+    let Some(first_len) = broadcast_len(first) else {
+        record_special_trace(
+            function,
+            mode,
+            "domain_error",
+            "unsupported_first_input",
+            "fail_closed",
+            "unsupported input type for ternary convenience function",
+            false,
+        );
+        return Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "unsupported input type",
+        });
+    };
+    let Some(second_len) = broadcast_len(second) else {
+        record_special_trace(
+            function,
+            mode,
+            "domain_error",
+            "unsupported_second_input",
+            "fail_closed",
+            "unsupported input type for ternary convenience function",
+            false,
+        );
+        return Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "unsupported input type",
+        });
+    };
+    let Some(third_len) = broadcast_len(third) else {
+        record_special_trace(
+            function,
+            mode,
+            "domain_error",
+            "unsupported_third_input",
+            "fail_closed",
+            "unsupported input type for ternary convenience function",
+            false,
+        );
+        return Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "unsupported input type",
+        });
+    };
+
+    let target_len = first_len.max(second_len).max(third_len);
+    if ![first_len, second_len, third_len]
+        .into_iter()
+        .all(|len| len == 1 || len == target_len)
+    {
+        record_special_trace(
+            function,
+            mode,
+            "domain_error",
+            format!("first_len={first_len},second_len={second_len},third_len={third_len}"),
+            "fail_closed",
+            "vector inputs must be broadcast-compatible",
+            false,
+        );
+        return Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "vector inputs must be broadcast-compatible",
+        });
+    }
+
+    if target_len == 1 {
+        let first_value = broadcast_value(first, 0).ok_or(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "unsupported input type",
+        })?;
+        let second_value = broadcast_value(second, 0).ok_or(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "unsupported input type",
+        })?;
+        let third_value = broadcast_value(third, 0).ok_or(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "unsupported input type",
+        })?;
+        return kernel(first_value, second_value, third_value).map(SpecialTensor::RealScalar);
+    }
+
+    (0..target_len)
+        .map(|idx| {
+            let first_value = broadcast_value(first, idx).ok_or(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "unsupported input type",
+            })?;
+            let second_value = broadcast_value(second, idx).ok_or(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "unsupported input type",
+            })?;
+            let third_value = broadcast_value(third, idx).ok_or(SpecialError {
+                function,
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "unsupported input type",
+            })?;
+            kernel(first_value, second_value, third_value)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(SpecialTensor::RealVec)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Kelvin Functions
 // ══════════════════════════════════════════════════════════════════════
@@ -1897,12 +2054,35 @@ fn betainc_conv(a: f64, b: f64, x: f64) -> f64 {
 ///
 /// Finds x such that I_x(a, b) = y.
 /// Matches `scipy.special.betaincinv`.
-pub fn betaincinv(a: f64, b: f64, y: f64) -> f64 {
-    if y <= 0.0 {
+pub fn betaincinv(
+    a_tensor: &SpecialTensor,
+    b_tensor: &SpecialTensor,
+    y_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_ternary(
+        "betaincinv",
+        a_tensor,
+        b_tensor,
+        y_tensor,
+        mode,
+        |a, b, y| Ok(betaincinv_scalar(a, b, y)),
+    )
+}
+
+/// Scalar helper for the inverse regularized incomplete beta function.
+pub fn betaincinv_scalar(a: f64, b: f64, y: f64) -> f64 {
+    if a.is_nan() || b.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if y == 0.0 {
         return 0.0;
     }
-    if y >= 1.0 {
+    if y == 1.0 {
         return 1.0;
+    }
+    if !(0.0..=1.0).contains(&y) {
+        return f64::NAN;
     }
 
     let mode = fsci_runtime::RuntimeMode::Strict;
@@ -6735,6 +6915,61 @@ mod tests {
         assert!(values[1].is_infinite());
         assert!(values[2].is_nan());
         assert!(values[3].is_nan());
+        Ok(())
+    }
+
+    #[test]
+    fn betaincinv_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = betaincinv(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealScalar(3.0),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - betaincinv_scalar(2.0, 3.0, 0.5)).abs() < 1e-12);
+
+        let vector = betaincinv(
+            &SpecialTensor::RealVec(vec![2.0, 4.0, 6.0]),
+            &SpecialTensor::RealScalar(3.0),
+            &SpecialTensor::RealVec(vec![0.25, 0.5, 0.75]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected =
+            [(2.0, 0.25), (4.0, 0.5), (6.0, 0.75)].map(|(a, y)| betaincinv_scalar(a, 3.0, y));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn betaincinv_tensor_dispatch_preserves_boundary_and_broadcast_behavior() -> Result<(), String>
+    {
+        let vector = betaincinv(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealScalar(3.0),
+            &SpecialTensor::RealVec(vec![0.0, 1.0, -0.5, f64::NAN]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert_eq!(values[0], 0.0);
+        assert_eq!(values[1], 1.0);
+        assert!(values[2].is_nan());
+        assert!(values[3].is_nan());
+
+        let mismatch = betaincinv(
+            &SpecialTensor::RealVec(vec![1.0, 2.0]),
+            &SpecialTensor::RealVec(vec![3.0, 4.0, 5.0]),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        );
+        assert!(mismatch.is_err());
         Ok(())
     }
 

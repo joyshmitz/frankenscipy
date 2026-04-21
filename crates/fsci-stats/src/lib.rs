@@ -523,7 +523,7 @@ impl ContinuousDistribution for StudentT {
         } else {
             (2.0 * (1.0 - q), 1.0)
         };
-        let w = fsci_special::betaincinv(0.5 * v, 0.5, p);
+        let w = fsci_special::betaincinv_scalar(0.5 * v, 0.5, p);
         let mut x = sign * (v * (1.0 - w) / w).sqrt();
         // Newton refinement for accuracy
         for _ in 0..8 {
@@ -1070,7 +1070,7 @@ impl ContinuousDistribution for FDistribution {
         }
         let d1 = self.dfn;
         let d2 = self.dfd;
-        let w = fsci_special::betaincinv(0.5 * d1, 0.5 * d2, q);
+        let w = fsci_special::betaincinv_scalar(0.5 * d1, 0.5 * d2, q);
         if w >= 1.0 {
             return f64::INFINITY;
         }
@@ -1163,7 +1163,7 @@ impl ContinuousDistribution for BetaDist {
         if q == 1.0 {
             return 1.0;
         }
-        let mut x = fsci_special::betaincinv(self.a, self.b, q);
+        let mut x = fsci_special::betaincinv_scalar(self.a, self.b, q);
         for _ in 0..8 {
             let err = self.cdf(x) - q;
             if err.abs() < 1e-14 {
@@ -16231,7 +16231,7 @@ impl ContinuousDistribution for BetaPrime {
             return f64::INFINITY;
         }
         // CDF = I_{x/(1+x)}(a,b), so t = betaincinv(a,b,q), x = t/(1-t)
-        let t = fsci_special::betaincinv(self.a, self.b, q);
+        let t = fsci_special::betaincinv_scalar(self.a, self.b, q);
         if t >= 1.0 {
             return f64::INFINITY;
         }

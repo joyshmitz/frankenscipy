@@ -33,6 +33,7 @@ pub use convenience::{
     bernoulli,
     // Convenience wrappers
     betaincinv,
+    betaincinv_scalar,
     binary_cross_entropy,
     boxcox_transform,
     boxcox1p,
