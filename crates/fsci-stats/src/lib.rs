@@ -12099,6 +12099,65 @@ fn find_optimal_boxcox_lambda(data: &[f64]) -> f64 {
     best_lambda
 }
 
+/// Find optimal Box-Cox transformation parameter lambda.
+///
+/// Searches for the lambda that maximizes the Box-Cox log-likelihood.
+/// Matches `scipy.stats.boxcox_normmax(x, brack, method='mle')`.
+///
+/// # Arguments
+/// * `data` - Input data (must be positive)
+/// * `brack` - Search bracket (low, high) for lambda
+pub fn boxcox_normmax(data: &[f64], brack: (f64, f64)) -> f64 {
+    let n = data.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    for &v in data {
+        if v <= 0.0 {
+            return f64::NAN;
+        }
+    }
+
+    let (lo, hi) = brack;
+    let nf = n as f64;
+    let log_sum: f64 = data.iter().map(|&x| x.ln()).sum();
+
+    let mut best_lambda = lo;
+    let mut best_ll = f64::NEG_INFINITY;
+
+    let steps = 400;
+    for i in 0..=steps {
+        let lambda = lo + (hi - lo) * i as f64 / steps as f64;
+
+        let transformed: Vec<f64> = data
+            .iter()
+            .map(|&x| {
+                if lambda.abs() < 1e-10 {
+                    x.ln()
+                } else {
+                    (x.powf(lambda) - 1.0) / lambda
+                }
+            })
+            .collect();
+
+        let mean = transformed.iter().sum::<f64>() / nf;
+        let var = transformed.iter().map(|&y| (y - mean).powi(2)).sum::<f64>() / nf;
+
+        if var <= 0.0 {
+            continue;
+        }
+
+        let ll = -nf / 2.0 * var.ln() + (lambda - 1.0) * log_sum;
+
+        if ll > best_ll {
+            best_ll = ll;
+            best_lambda = lambda;
+        }
+    }
+
+    best_lambda
+}
+
 /// Box-Cox log-likelihood function.
 ///
 /// Computes the log-likelihood of observing the data given a Box-Cox parameter lambda.
@@ -19357,6 +19416,34 @@ mod tests {
     #[test]
     fn boxcox_negative_data_rejected() {
         assert!(boxcox(&[1.0, -1.0, 2.0], Some(1.0)).is_err());
+    }
+
+    #[test]
+    fn boxcox_normmax_matches_internal() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let optimal = boxcox_normmax(&data, (-2.0, 2.0));
+        let from_boxcox = boxcox(&data, None).unwrap().lmbda;
+        assert!(
+            (optimal - from_boxcox).abs() < 0.02,
+            "normmax {optimal} should match boxcox optimal {from_boxcox}"
+        );
+    }
+
+    #[test]
+    fn boxcox_normmax_custom_bracket() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let narrow = boxcox_normmax(&data, (0.0, 1.0));
+        assert!(narrow >= 0.0 && narrow <= 1.0);
+    }
+
+    #[test]
+    fn boxcox_normmax_negative_data() {
+        assert!(boxcox_normmax(&[1.0, -1.0], (-2.0, 2.0)).is_nan());
+    }
+
+    #[test]
+    fn boxcox_normmax_empty() {
+        assert!(boxcox_normmax(&[], (-2.0, 2.0)).is_nan());
     }
 
     #[test]
