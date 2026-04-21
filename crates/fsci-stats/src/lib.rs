@@ -9218,6 +9218,59 @@ pub fn trimboth(data: &[f64], proportiontocut: f64) -> Vec<f64> {
     sorted[ncut..n - ncut].to_vec()
 }
 
+/// Trim a proportion of elements from one tail of a sorted array.
+///
+/// Slices off the given proportion from the specified tail of the sorted input,
+/// returning the remaining portion.
+///
+/// Matches `scipy.stats.trim1(a, proportiontocut, tail)`.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `proportiontocut` — Fraction to trim (0.0 to 1.0)
+/// * `tail` — Which tail to trim: `"right"` (high values), `"left"` (low values),
+///   or `"both"` (equivalent to `trimboth`)
+///
+/// # Returns
+/// A new vector containing the trimmed sorted data.
+pub fn trim1(data: &[f64], proportiontocut: f64, tail: &str) -> Vec<f64> {
+    if data.is_empty() {
+        return vec![];
+    }
+    let prop = proportiontocut.clamp(0.0, 1.0);
+    let n = data.len();
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+
+    let ncut = (n as f64 * prop).floor() as usize;
+
+    match tail {
+        "left" => {
+            if ncut >= n {
+                vec![]
+            } else {
+                sorted[ncut..].to_vec()
+            }
+        }
+        "right" => {
+            if ncut >= n {
+                vec![]
+            } else {
+                sorted[..n - ncut].to_vec()
+            }
+        }
+        "both" => {
+            let ncut_both = (n as f64 * prop.min(0.5)).floor() as usize;
+            if 2 * ncut_both >= n {
+                vec![]
+            } else {
+                sorted[ncut_both..n - ncut_both].to_vec()
+            }
+        }
+        _ => sorted, // unknown tail, return sorted data unchanged
+    }
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -18776,6 +18829,42 @@ mod tests {
         let result = trimboth(&data, 0.2);
         // sorted: [1, 2, 3, 4, 5], trim 1 from each end
         assert_eq!(result, vec![2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn trim1_right() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = trim1(&data, 0.2, "right");
+        // 20% of 5 = 1 element trimmed from right (high end)
+        assert_eq!(result, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn trim1_left() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = trim1(&data, 0.2, "left");
+        // 20% of 5 = 1 element trimmed from left (low end)
+        assert_eq!(result, vec![2.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn trim1_both() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = trim1(&data, 0.2, "both");
+        // equivalent to trimboth
+        assert_eq!(result, vec![2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn trim1_empty() {
+        assert!(trim1(&[], 0.2, "right").is_empty());
+    }
+
+    #[test]
+    fn trim1_full_trim() {
+        let data = [1.0, 2.0, 3.0];
+        let result = trim1(&data, 1.0, "right");
+        assert!(result.is_empty());
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
