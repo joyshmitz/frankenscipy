@@ -417,23 +417,6 @@ fn hyp0f1_series(b: f64, z: f64) -> f64 {
     sum
 }
 
-fn scalar_tensor_as_complex(value: &SpecialTensor) -> Option<Complex64> {
-    match value {
-        SpecialTensor::RealScalar(value) => Some(Complex64::from_real(*value)),
-        SpecialTensor::ComplexScalar(value) => Some(*value),
-        _ => None,
-    }
-}
-
-fn scalar_parameter_error(function: &'static str, mode: RuntimeMode) -> SpecialError {
-    SpecialError {
-        function,
-        kind: SpecialErrorKind::NotYetImplemented,
-        mode,
-        detail: "hypergeometric parameter tensors must be scalar values",
-    }
-}
-
 fn broadcast_shape_error(function: &'static str, mode: RuntimeMode) -> SpecialError {
     SpecialError {
         function,
@@ -734,15 +717,6 @@ fn hyp1f1_series(a: f64, b: f64, z: f64) -> Result<f64, SpecialError> {
 
 fn complex_nan() -> Complex64 {
     Complex64::new(f64::NAN, f64::NAN)
-}
-
-fn hyp1f1_complex_z(
-    a: f64,
-    b: f64,
-    z: Complex64,
-    mode: RuntimeMode,
-) -> Result<Complex64, SpecialError> {
-    hyp1f1_complex_parameters(Complex64::from_real(a), Complex64::from_real(b), z, mode)
 }
 
 fn hyp1f1_complex_parameters(
@@ -1185,6 +1159,36 @@ mod tests {
         assert_eq!(error_kind(&result), Some(SpecialErrorKind::PoleInput));
     }
 
+    #[test]
+    fn hyp0f1_parameter_vector_broadcast_matches_scalar_evaluations() {
+        let params = complex_vec(vec![Complex64::new(1.25, 0.5), Complex64::new(1.25, -0.5)]);
+        let z = complex(0.2, -0.1);
+        let result = hyp0f1(&params, &z, RuntimeMode::Strict);
+        let values = get_complex_vec(&result).unwrap_or(&[]);
+
+        assert_eq!(values.len(), 2);
+        assert_complex_close(
+            values[0],
+            hyp0f1_complex_scalar(
+                Complex64::new(1.25, 0.5),
+                Complex64::new(0.2, -0.1),
+                RuntimeMode::Strict,
+            )
+            .unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
+            1.0e-12,
+        );
+        assert_complex_close(
+            values[1],
+            hyp0f1_complex_scalar(
+                Complex64::new(1.25, -0.5),
+                Complex64::new(0.2, -0.1),
+                RuntimeMode::Strict,
+            )
+            .unwrap_or(Complex64::new(f64::NAN, f64::NAN)),
+            1.0e-12,
+        );
+    }
+
     // ── hyp1f1 tests ────────────────────────────────────────────────
 
     #[test]
@@ -1390,6 +1394,30 @@ mod tests {
             RuntimeMode::Hardened,
         );
         assert_eq!(error_kind(&result), Some(SpecialErrorKind::DomainError));
+    }
+
+    #[test]
+    fn hyp1f1_parameter_vectors_broadcast_with_scalar_z() {
+        let a = complex_vec(vec![Complex64::new(0.75, 0.4), Complex64::new(0.75, -0.4)]);
+        let b = complex_vec(vec![Complex64::new(0.75, 0.4), Complex64::new(0.75, -0.4)]);
+        let z = complex(0.15, 0.2);
+        let result = hyp1f1(&a, &b, &z, RuntimeMode::Strict);
+        let values = get_complex_vec(&result).unwrap_or(&[]);
+
+        assert_eq!(values.len(), 2);
+        assert_complex_close(values[0], Complex64::new(0.15, 0.2).exp(), 1.0e-10);
+        assert_complex_close(values[1], Complex64::new(0.15, 0.2).exp(), 1.0e-10);
+    }
+
+    #[test]
+    fn hyp1f1_parameter_vector_mismatch_is_shape_error() {
+        let result = hyp1f1(
+            &SpecialTensor::RealVec(vec![1.0, 2.0]),
+            &SpecialTensor::RealVec(vec![1.0]),
+            &scalar(0.5),
+            RuntimeMode::Hardened,
+        );
+        assert_eq!(error_kind(&result), Some(SpecialErrorKind::ShapeMismatch));
     }
 
     // ── hyp2f1 tests ────────────────────────────────────────────────
@@ -1622,5 +1650,26 @@ mod tests {
             RuntimeMode::Hardened,
         );
         assert_eq!(error_kind(&result), Some(SpecialErrorKind::DomainError));
+    }
+
+    #[test]
+    fn hyp2f1_parameter_vectors_broadcast_with_scalar_z() {
+        let b = complex_vec(vec![Complex64::new(0.75, 0.6), Complex64::new(0.75, -0.6)]);
+        let c = complex_vec(vec![Complex64::new(0.75, 0.6), Complex64::new(0.75, -0.6)]);
+        let z = complex(0.15, -0.25);
+        let result = hyp2f1(&scalar(-1.0), &b, &c, &z, RuntimeMode::Strict);
+        let values = get_complex_vec(&result).unwrap_or(&[]);
+
+        assert_eq!(values.len(), 2);
+        assert_complex_close(
+            values[0],
+            Complex64::from_real(1.0) - Complex64::new(0.15, -0.25),
+            1.0e-12,
+        );
+        assert_complex_close(
+            values[1],
+            Complex64::from_real(1.0) - Complex64::new(0.15, -0.25),
+            1.0e-12,
+        );
     }
 }
