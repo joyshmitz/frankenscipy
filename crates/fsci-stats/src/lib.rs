@@ -12099,6 +12099,44 @@ fn find_optimal_boxcox_lambda(data: &[f64]) -> f64 {
     best_lambda
 }
 
+/// Box-Cox log-likelihood function.
+///
+/// Computes the log-likelihood of observing the data given a Box-Cox parameter lambda.
+/// Matches `scipy.stats.boxcox_llf(lmb, data)`.
+pub fn boxcox_llf(lmb: f64, data: &[f64]) -> f64 {
+    let n = data.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    for &v in data {
+        if v <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+    }
+
+    let nf = n as f64;
+    let transformed: Vec<f64> = data
+        .iter()
+        .map(|&x| {
+            if lmb.abs() < 1e-10 {
+                x.ln()
+            } else {
+                (x.powf(lmb) - 1.0) / lmb
+            }
+        })
+        .collect();
+
+    let mean = transformed.iter().sum::<f64>() / nf;
+    let var = transformed.iter().map(|&y| (y - mean).powi(2)).sum::<f64>() / nf;
+
+    if var <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+
+    let log_sum: f64 = data.iter().map(|&x| x.ln()).sum();
+    -nf / 2.0 * var.ln() + (lmb - 1.0) * log_sum
+}
+
 /// Kendall's tau rank correlation coefficient.
 ///
 /// Matches `scipy.stats.kendalltau(x, y)`.
@@ -19319,6 +19357,42 @@ mod tests {
     #[test]
     fn boxcox_negative_data_rejected() {
         assert!(boxcox(&[1.0, -1.0, 2.0], Some(1.0)).is_err());
+    }
+
+    #[test]
+    fn boxcox_llf_lambda1() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let llf = boxcox_llf(1.0, &data);
+        assert!(llf.is_finite());
+    }
+
+    #[test]
+    fn boxcox_llf_lambda0() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let llf = boxcox_llf(0.0, &data);
+        assert!(llf.is_finite());
+    }
+
+    #[test]
+    fn boxcox_llf_optimal_is_max() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let optimal = boxcox(&data, None).unwrap().lmbda;
+        let llf_optimal = boxcox_llf(optimal, &data);
+        let llf_other = boxcox_llf(optimal + 0.5, &data);
+        assert!(
+            llf_optimal >= llf_other,
+            "optimal lambda {optimal} should have higher llf: {llf_optimal} vs {llf_other}"
+        );
+    }
+
+    #[test]
+    fn boxcox_llf_negative_data() {
+        assert!(boxcox_llf(1.0, &[1.0, -1.0]).is_infinite());
+    }
+
+    #[test]
+    fn boxcox_llf_empty() {
+        assert!(boxcox_llf(1.0, &[]).is_nan());
     }
 
     // ── Kendall's tau tests ────────────────────────────────────────
