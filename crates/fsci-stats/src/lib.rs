@@ -4902,6 +4902,112 @@ fn riemann_zeta(s: f64) -> f64 {
     sum
 }
 
+/// Generic discrete distribution from custom PMF values.
+///
+/// Matches `scipy.stats.rv_discrete(values=(xk, pk))`.
+#[derive(Debug, Clone)]
+pub struct RvDiscrete {
+    xk: Vec<f64>,
+    pk: Vec<f64>,
+    cdf_vals: Vec<f64>,
+}
+
+impl RvDiscrete {
+    /// Create from support points xk and their probabilities pk.
+    pub fn new(xk: Vec<f64>, pk: Vec<f64>) -> Self {
+        assert_eq!(xk.len(), pk.len(), "xk and pk must have same length");
+        assert!(!xk.is_empty(), "must have at least one value");
+
+        let total: f64 = pk.iter().sum();
+        let pk: Vec<f64> = pk.iter().map(|&p| p / total).collect();
+
+        let mut indices: Vec<usize> = (0..xk.len()).collect();
+        indices.sort_by(|&a, &b| xk[a].total_cmp(&xk[b]));
+
+        let xk_sorted: Vec<f64> = indices.iter().map(|&i| xk[i]).collect();
+        let pk_sorted: Vec<f64> = indices.iter().map(|&i| pk[i]).collect();
+
+        let mut cdf_vals = Vec::with_capacity(pk_sorted.len());
+        let mut cumsum = 0.0;
+        for &p in &pk_sorted {
+            cumsum += p;
+            cdf_vals.push(cumsum.min(1.0));
+        }
+
+        Self {
+            xk: xk_sorted,
+            pk: pk_sorted,
+            cdf_vals,
+        }
+    }
+
+    /// Probability mass function.
+    pub fn pmf(&self, x: f64) -> f64 {
+        for (i, &xi) in self.xk.iter().enumerate() {
+            if (x - xi).abs() < 1e-10 {
+                return self.pk[i];
+            }
+        }
+        0.0
+    }
+
+    /// Cumulative distribution function.
+    pub fn cdf(&self, x: f64) -> f64 {
+        let mut result = 0.0;
+        for (i, &xi) in self.xk.iter().enumerate() {
+            if xi <= x {
+                result = self.cdf_vals[i];
+            } else {
+                break;
+            }
+        }
+        result
+    }
+
+    /// Percent point function (inverse CDF).
+    pub fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        for (i, &cdf_val) in self.cdf_vals.iter().enumerate() {
+            if cdf_val >= q {
+                return self.xk[i];
+            }
+        }
+        *self.xk.last().unwrap()
+    }
+
+    /// Expected value (mean).
+    pub fn mean(&self) -> f64 {
+        self.xk.iter().zip(&self.pk).map(|(&x, &p)| x * p).sum()
+    }
+
+    /// Variance.
+    pub fn var(&self) -> f64 {
+        let mu = self.mean();
+        self.xk
+            .iter()
+            .zip(&self.pk)
+            .map(|(&x, &p)| (x - mu).powi(2) * p)
+            .sum()
+    }
+
+    /// Standard deviation.
+    pub fn std(&self) -> f64 {
+        self.var().sqrt()
+    }
+
+    /// Support points.
+    pub fn support(&self) -> &[f64] {
+        &self.xk
+    }
+
+    /// Probabilities.
+    pub fn probs(&self) -> &[f64] {
+        &self.pk
+    }
+}
+
 /// Double Weibull distribution.
 ///
 /// Matches `scipy.stats.dweibull`.
@@ -22728,6 +22834,67 @@ mod tests {
         assert!(z.pmf(2) > z.pmf(3));
         let c = z.cdf(10);
         assert!(c > 0.9); // most mass in first 10 terms
+    }
+
+    #[test]
+    fn rv_discrete_basic() {
+        let xk = vec![1.0, 2.0, 3.0];
+        let pk = vec![0.2, 0.5, 0.3];
+        let rv = RvDiscrete::new(xk, pk);
+
+        assert!((rv.pmf(1.0) - 0.2).abs() < 1e-10);
+        assert!((rv.pmf(2.0) - 0.5).abs() < 1e-10);
+        assert!((rv.pmf(3.0) - 0.3).abs() < 1e-10);
+        assert!((rv.pmf(4.0) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rv_discrete_cdf() {
+        let xk = vec![1.0, 2.0, 3.0];
+        let pk = vec![0.2, 0.5, 0.3];
+        let rv = RvDiscrete::new(xk, pk);
+
+        assert!((rv.cdf(0.5) - 0.0).abs() < 1e-10);
+        assert!((rv.cdf(1.0) - 0.2).abs() < 1e-10);
+        assert!((rv.cdf(1.5) - 0.2).abs() < 1e-10);
+        assert!((rv.cdf(2.0) - 0.7).abs() < 1e-10);
+        assert!((rv.cdf(3.0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rv_discrete_ppf() {
+        let xk = vec![1.0, 2.0, 3.0];
+        let pk = vec![0.2, 0.5, 0.3];
+        let rv = RvDiscrete::new(xk, pk);
+
+        assert!((rv.ppf(0.1) - 1.0).abs() < 1e-10);
+        assert!((rv.ppf(0.2) - 1.0).abs() < 1e-10);
+        assert!((rv.ppf(0.3) - 2.0).abs() < 1e-10);
+        assert!((rv.ppf(0.7) - 2.0).abs() < 1e-10);
+        assert!((rv.ppf(0.8) - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rv_discrete_mean_var() {
+        let xk = vec![1.0, 2.0, 3.0];
+        let pk = vec![0.2, 0.5, 0.3];
+        let rv = RvDiscrete::new(xk, pk);
+
+        let expected_mean = 0.2 * 1.0 + 0.5 * 2.0 + 0.3 * 3.0;
+        assert!((rv.mean() - expected_mean).abs() < 1e-10);
+
+        let mu = expected_mean;
+        let expected_var = 0.2 * (1.0 - mu).powi(2) + 0.5 * (2.0 - mu).powi(2) + 0.3 * (3.0 - mu).powi(2);
+        assert!((rv.var() - expected_var).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rv_discrete_normalizes() {
+        let xk = vec![0.0, 1.0];
+        let pk = vec![2.0, 2.0];
+        let rv = RvDiscrete::new(xk, pk);
+        assert!((rv.pmf(0.0) - 0.5).abs() < 1e-10);
+        assert!((rv.pmf(1.0) - 0.5).abs() < 1e-10);
     }
 
     #[test]
