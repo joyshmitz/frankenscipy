@@ -567,6 +567,126 @@ impl ContinuousDistribution for StudentT {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Non-central t-Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Non-central t-distribution.
+///
+/// Matches `scipy.stats.nct(df, nc)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoncentralT {
+    pub df: f64,
+    pub nc: f64,
+}
+
+impl NoncentralT {
+    #[must_use]
+    pub fn new(df: f64, nc: f64) -> Self {
+        assert!(df > 0.0, "df must be positive, got {df}");
+        Self { df, nc }
+    }
+
+    /// CDF via numerical integration.
+    fn nct_cdf_integrate(&self, t: f64) -> f64 {
+        if t.is_infinite() {
+            return if t > 0.0 { 1.0 } else { 0.0 };
+        }
+
+        if self.nc.abs() < 1e-10 {
+            return StudentT::new(self.df).cdf(t);
+        }
+
+        let lower = t - 50.0 * (1.0 + self.df.sqrt());
+        let steps = 2000usize;
+        let h = (t - lower) / steps as f64;
+
+        let central_t = StudentT::new(self.df);
+        let norm = Normal::new(0.0, 1.0);
+
+        let integrand = |x: f64| {
+            let pdf_t = central_t.pdf(x);
+            let arg = x * (self.df / (self.df + x * x)).sqrt() - self.nc;
+            pdf_t * norm.cdf(arg)
+        };
+
+        let mut sum = 0.5 * (integrand(lower) + integrand(t));
+        for i in 1..steps {
+            sum += integrand(lower + i as f64 * h);
+        }
+
+        (sum * h).clamp(0.0, 1.0)
+    }
+}
+
+impl ContinuousDistribution for NoncentralT {
+    fn pdf(&self, x: f64) -> f64 {
+        let h = 1e-6;
+        let cdf_plus = self.cdf(x + h);
+        let cdf_minus = self.cdf(x - h);
+        ((cdf_plus - cdf_minus) / (2.0 * h)).max(0.0)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        self.nct_cdf_integrate(x)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+
+        let mut lo = self.nc - 10.0 * (1.0 + self.df).sqrt();
+        let mut hi = self.nc + 10.0 * (1.0 + self.df).sqrt();
+
+        for _ in 0..100 {
+            let mid = (lo + hi) / 2.0;
+            let cdf_mid = self.cdf(mid);
+            if (cdf_mid - q).abs() < 1e-12 {
+                return mid;
+            }
+            if cdf_mid < q {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo + hi) / 2.0
+    }
+
+    fn mean(&self) -> f64 {
+        if self.df > 1.0 {
+            self.nc * (self.df / 2.0).sqrt() * ln_gamma((self.df - 1.0) / 2.0).exp()
+                / ln_gamma(self.df / 2.0).exp()
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.df > 2.0 {
+            let mu = self.mean();
+            self.df * (1.0 + self.nc * self.nc) / (self.df - 2.0) - mu * mu
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn skewness(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Chi-Squared Distribution
 // ══════════════════════════════════════════════════════════════════════
 
@@ -16337,6 +16457,36 @@ mod tests {
         assert!(n.logpdf(right) < -700.0);
         assert!(n.logcdf(left) < -700.0);
         assert!(n.logsf(right) < -700.0);
+    }
+
+    // ── Non-central t-distribution ─────────────────────────────────
+
+    #[test]
+    fn noncentralt_cdf_reduces_to_central() {
+        let nct = NoncentralT::new(10.0, 0.0);
+        let t = StudentT::new(10.0);
+        assert!((nct.cdf(1.5) - t.cdf(1.5)).abs() < 0.01, "nc=0 should match central t");
+    }
+
+    #[test]
+    fn noncentralt_cdf_monotonic() {
+        let nct = NoncentralT::new(10.0, 2.0);
+        assert!(nct.cdf(-5.0) < nct.cdf(0.0));
+        assert!(nct.cdf(0.0) < nct.cdf(5.0));
+        assert!(nct.cdf(5.0) < 1.0);
+    }
+
+    #[test]
+    fn noncentralt_pdf_positive() {
+        let nct = NoncentralT::new(10.0, 1.5);
+        assert!(nct.pdf(0.0) > 0.0);
+        assert!(nct.pdf(2.0) > 0.0);
+    }
+
+    #[test]
+    fn noncentralt_mean_positive_nc() {
+        let nct = NoncentralT::new(10.0, 2.0);
+        assert!(nct.mean() > 0.0, "mean should be positive for positive nc");
     }
 
     // ── Exponential distribution ────────────────────────────────────
