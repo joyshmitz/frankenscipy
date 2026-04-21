@@ -3971,9 +3971,19 @@ pub fn cauchit_inv_scalar(x: f64) -> f64 {
 ///
 /// A thresholding function that sets values with magnitude below λ to zero.
 /// Used in sparse signal processing and neural networks.
+pub fn hardshrink(
+    x_tensor: &SpecialTensor,
+    lambda_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("hardshrink", x_tensor, lambda_tensor, mode, |x, lambda| {
+        Ok(hardshrink_scalar(x, lambda))
+    })
+}
+
 #[must_use]
-pub fn hardshrink(x: f64, lambda: f64) -> f64 {
-    if x.is_nan() {
+pub fn hardshrink_scalar(x: f64, lambda: f64) -> f64 {
+    if x.is_nan() || lambda.is_nan() {
         return f64::NAN;
     }
     if x.abs() > lambda { x } else { 0.0 }
@@ -3988,9 +3998,19 @@ pub fn hardshrink(x: f64, lambda: f64) -> f64 {
 ///
 /// Shrinks values toward zero by λ. Used in LASSO regression,
 /// wavelet denoising, and neural networks.
+pub fn softshrink(
+    x_tensor: &SpecialTensor,
+    lambda_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("softshrink", x_tensor, lambda_tensor, mode, |x, lambda| {
+        Ok(softshrink_scalar(x, lambda))
+    })
+}
+
 #[must_use]
-pub fn softshrink(x: f64, lambda: f64) -> f64 {
-    if x.is_nan() {
+pub fn softshrink_scalar(x: f64, lambda: f64) -> f64 {
+    if x.is_nan() || lambda.is_nan() {
         return f64::NAN;
     }
     if x > lambda {
@@ -4350,8 +4370,11 @@ mod tests {
     #[test]
     fn kolmogi_tensor_dispatch_round_trips() -> Result<(), String> {
         let expected = vec![0.5, 1.0, 1.5];
-        let probabilities = kolmogorov(&SpecialTensor::RealVec(expected.clone()), RuntimeMode::Strict)
-            .map_err(|err| err.to_string())?;
+        let probabilities = kolmogorov(
+            &SpecialTensor::RealVec(expected.clone()),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
         let probability_values = expect_real_vec(probabilities)?;
         let recovered = kolmogi(
             &SpecialTensor::RealVec(probability_values),
@@ -5683,6 +5706,116 @@ mod tests {
     }
 
     #[test]
+    fn hardshrink_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = hardshrink(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - hardshrink_scalar(2.0, 0.5)).abs() < 1e-14);
+
+        let vector = hardshrink(
+            &SpecialTensor::RealVec(vec![-2.0, -0.5, 0.3, 2.0]),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, -0.5, 0.3, 2.0].map(|x| hardshrink_scalar(x, 0.5));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+
+        let broadcast = hardshrink(
+            &SpecialTensor::RealScalar(1.0),
+            &SpecialTensor::RealVec(vec![0.0, 1.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let broadcast_values = expect_real_vec(broadcast)?;
+        let broadcast_expected = [0.0, 1.0, 2.0].map(|lambda| hardshrink_scalar(1.0, lambda));
+        assert_eq!(broadcast_values.len(), broadcast_expected.len());
+        for (actual, expected) in broadcast_values.iter().zip(broadcast_expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hardshrink_tensor_dispatch_preserves_nan_and_boundary_behavior() -> Result<(), String> {
+        let result = hardshrink(
+            &SpecialTensor::RealVec(vec![f64::NAN, 0.5, -0.5, 0.6]),
+            &SpecialTensor::RealVec(vec![0.1, 0.5, 0.5, f64::NAN]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(result)?;
+        assert!(values[0].is_nan());
+        assert_eq!(values[1], 0.0);
+        assert_eq!(values[2], 0.0);
+        assert!(values[3].is_nan());
+        Ok(())
+    }
+
+    #[test]
+    fn softshrink_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = softshrink(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - softshrink_scalar(2.0, 0.5)).abs() < 1e-14);
+
+        let vector = softshrink(
+            &SpecialTensor::RealVec(vec![-2.0, -0.5, 0.3, 2.0]),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, -0.5, 0.3, 2.0].map(|x| softshrink_scalar(x, 0.5));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+
+        let broadcast = softshrink(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealVec(vec![0.0, 0.5, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let broadcast_values = expect_real_vec(broadcast)?;
+        let broadcast_expected = [0.0, 0.5, 2.0].map(|lambda| softshrink_scalar(2.0, lambda));
+        assert_eq!(broadcast_values.len(), broadcast_expected.len());
+        for (actual, expected) in broadcast_values.iter().zip(broadcast_expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn softshrink_tensor_dispatch_preserves_nan_and_threshold_behavior() -> Result<(), String> {
+        let result = softshrink(
+            &SpecialTensor::RealVec(vec![f64::NAN, 0.5, -0.5, 2.0]),
+            &SpecialTensor::RealVec(vec![0.1, 0.5, 0.5, f64::NAN]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(result)?;
+        assert!(values[0].is_nan());
+        assert_eq!(values[1], 0.0);
+        assert_eq!(values[2], 0.0);
+        assert!(values[3].is_nan());
+        Ok(())
+    }
+
+    #[test]
     fn cloglog_basic() {
         // cloglog(0.5) = log(-log(0.5)) = log(ln(2)) ≈ -0.3665
         let expected = std::f64::consts::LN_2.ln();
@@ -5931,24 +6064,24 @@ mod tests {
     #[test]
     fn hardshrink_basic() {
         // hardshrink(x, λ) = x if |x| > λ, else 0
-        assert!((hardshrink(2.0, 0.5) - 2.0).abs() < 1e-14);
-        assert!((hardshrink(-2.0, 0.5) - (-2.0)).abs() < 1e-14);
-        assert!((hardshrink(0.3, 0.5) - 0.0).abs() < 1e-14);
-        assert!((hardshrink(-0.3, 0.5) - 0.0).abs() < 1e-14);
+        assert!((hardshrink_scalar(2.0, 0.5) - 2.0).abs() < 1e-14);
+        assert!((hardshrink_scalar(-2.0, 0.5) - (-2.0)).abs() < 1e-14);
+        assert!((hardshrink_scalar(0.3, 0.5) - 0.0).abs() < 1e-14);
+        assert!((hardshrink_scalar(-0.3, 0.5) - 0.0).abs() < 1e-14);
         // At threshold
-        assert!((hardshrink(0.5, 0.5) - 0.0).abs() < 1e-14);
+        assert!((hardshrink_scalar(0.5, 0.5) - 0.0).abs() < 1e-14);
     }
 
     #[test]
     fn softshrink_basic() {
         // softshrink shrinks toward zero by λ
-        assert!((softshrink(2.0, 0.5) - 1.5).abs() < 1e-14);
-        assert!((softshrink(-2.0, 0.5) - (-1.5)).abs() < 1e-14);
-        assert!((softshrink(0.3, 0.5) - 0.0).abs() < 1e-14);
-        assert!((softshrink(-0.3, 0.5) - 0.0).abs() < 1e-14);
+        assert!((softshrink_scalar(2.0, 0.5) - 1.5).abs() < 1e-14);
+        assert!((softshrink_scalar(-2.0, 0.5) - (-1.5)).abs() < 1e-14);
+        assert!((softshrink_scalar(0.3, 0.5) - 0.0).abs() < 1e-14);
+        assert!((softshrink_scalar(-0.3, 0.5) - 0.0).abs() < 1e-14);
         // At threshold
-        assert!((softshrink(0.5, 0.5) - 0.0).abs() < 1e-14);
-        assert!((softshrink(-0.5, 0.5) - 0.0).abs() < 1e-14);
+        assert!((softshrink_scalar(0.5, 0.5) - 0.0).abs() < 1e-14);
+        assert!((softshrink_scalar(-0.5, 0.5) - 0.0).abs() < 1e-14);
     }
 
     #[test]
