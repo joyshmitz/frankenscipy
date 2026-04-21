@@ -110,6 +110,13 @@ pub trait ContinuousDistribution {
     fn skewness(&self) -> f64 {
         f64::NAN
     }
+
+    /// Excess kurtosis (fourth standardized moment minus 3).
+    /// Normal distribution has excess kurtosis 0.
+    /// Matches `scipy.stats.<dist>.stats(moments='k')`.
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
 }
 
 /// Generic fitting helper for continuous distributions with built-in MLE support.
@@ -382,6 +389,10 @@ impl ContinuousDistribution for Normal {
 
     fn skewness(&self) -> f64 {
         0.0 // Normal is symmetric
+    }
+
+    fn kurtosis(&self) -> f64 {
+        0.0 // Normal has excess kurtosis 0 by definition
     }
 }
 
@@ -677,6 +688,10 @@ impl ContinuousDistribution for Uniform {
     fn skewness(&self) -> f64 {
         0.0 // Uniform is symmetric
     }
+
+    fn kurtosis(&self) -> f64 {
+        -1.2 // Uniform excess kurtosis = -6/5
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -790,6 +805,10 @@ impl ContinuousDistribution for Exponential {
 
     fn skewness(&self) -> f64 {
         2.0 // Exponential always has skewness 2
+    }
+
+    fn kurtosis(&self) -> f64 {
+        6.0 // Exponential excess kurtosis is always 6
     }
 }
 
@@ -2959,6 +2978,10 @@ impl ContinuousDistribution for Laplace {
 
     fn skewness(&self) -> f64 {
         0.0 // Laplace is symmetric
+    }
+
+    fn kurtosis(&self) -> f64 {
+        3.0 // Laplace excess kurtosis is 3
     }
 }
 
@@ -19524,5 +19547,45 @@ mod tests {
         // Distributions without explicit skewness return NaN
         let t = StudentT::new(5.0);
         assert!(t.skewness().is_nan(), "StudentT skewness should be NaN");
+    }
+
+    // ── Kurtosis tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn dist_kurtosis_normal() {
+        // Normal has excess kurtosis 0
+        assert_close(Normal::standard().kurtosis(), 0.0, 1e-10, "Normal kurtosis");
+        assert_close(Normal::new(5.0, 3.0).kurtosis(), 0.0, 1e-10, "N(5,3) kurtosis");
+    }
+
+    #[test]
+    fn dist_kurtosis_uniform() {
+        // Uniform has excess kurtosis -6/5 = -1.2
+        let u = Uniform::new(0.0, 1.0);
+        assert_close(u.kurtosis(), -1.2, 1e-10, "Uniform kurtosis");
+    }
+
+    #[test]
+    fn dist_kurtosis_exponential() {
+        // Exponential has excess kurtosis 6
+        let e = Exponential::new(1.0);
+        assert_close(e.kurtosis(), 6.0, 1e-10, "Exp(1) kurtosis");
+
+        let e2 = Exponential::new(5.0);
+        assert_close(e2.kurtosis(), 6.0, 1e-10, "Exp(5) kurtosis");
+    }
+
+    #[test]
+    fn dist_kurtosis_laplace() {
+        // Laplace has excess kurtosis 3
+        let l = Laplace::default();
+        assert_close(l.kurtosis(), 3.0, 1e-10, "Laplace kurtosis");
+    }
+
+    #[test]
+    fn dist_kurtosis_default_nan() {
+        // Distributions without explicit kurtosis return NaN
+        let t = StudentT::new(5.0);
+        assert!(t.kurtosis().is_nan(), "StudentT kurtosis should be NaN");
     }
 }
