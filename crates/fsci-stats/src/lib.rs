@@ -10599,6 +10599,27 @@ pub fn iqr(data: &[f64]) -> f64 {
     quantile_sorted(&sorted, 0.75) - quantile_sorted(&sorted, 0.25)
 }
 
+/// Returns ideal fourths (robust quartile estimators).
+///
+/// Matches `scipy.stats.mstats.idealfourths(data)`.
+/// Returns (lower_quartile, upper_quartile) using the ideal fourths algorithm.
+pub fn idealfourths(data: &[f64]) -> (f64, f64) {
+    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let n = sorted.len();
+    if n < 3 {
+        return (f64::NAN, f64::NAN);
+    }
+    let nf = n as f64;
+    let frac = nf / 4.0 + 5.0 / 12.0;
+    let j = frac.floor() as usize;
+    let h = frac - frac.floor();
+    let qlo = (1.0 - h) * sorted[j - 1] + h * sorted[j];
+    let k = n - j;
+    let qup = (1.0 - h) * sorted[k] + h * sorted[k - 1];
+    (qlo, qup)
+}
+
 /// Coefficient of variation (std / mean).
 ///
 /// Matches `scipy.stats.variation(a)`.
@@ -26348,5 +26369,43 @@ mod tests {
             neg_greater.pvalue > 0.5,
             "neg corr greater p should be large"
         );
+    }
+
+    #[test]
+    fn idealfourths_matches_scipy() {
+        // scipy.stats.mstats.idealfourths([1..10]) = [2.9166666666666665, 8.083333333333334]
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let (qlo, qup) = idealfourths(&data);
+        assert_close(qlo, 2.9166666666666665, 1e-10, "idealfourths qlo");
+        assert_close(qup, 8.083333333333334, 1e-10, "idealfourths qup");
+
+        // scipy.stats.mstats.idealfourths([1..5]) = [1.6666666666666667, 4.333333333333333]
+        let data2: Vec<f64> = (1..=5).map(|x| x as f64).collect();
+        let (qlo2, qup2) = idealfourths(&data2);
+        assert_close(qlo2, 1.6666666666666667, 1e-10, "idealfourths small qlo");
+        assert_close(qup2, 4.333333333333333, 1e-10, "idealfourths small qup");
+    }
+
+    #[test]
+    fn idealfourths_small_n() {
+        // n < 3 returns NaN
+        let (qlo, qup) = idealfourths(&[1.0, 2.0]);
+        assert!(qlo.is_nan() && qup.is_nan());
+        let (qlo, qup) = idealfourths(&[1.0]);
+        assert!(qlo.is_nan() && qup.is_nan());
+        let (qlo, qup) = idealfourths(&[]);
+        assert!(qlo.is_nan() && qup.is_nan());
+    }
+
+    #[test]
+    fn idealfourths_ignores_nan() {
+        // NaN values should be filtered out
+        let data = vec![1.0, f64::NAN, 2.0, 3.0, 4.0, 5.0];
+        let (qlo, qup) = idealfourths(&data);
+        // Same as idealfourths([1,2,3,4,5])
+        let clean: Vec<f64> = (1..=5).map(|x| x as f64).collect();
+        let (qlo_clean, qup_clean) = idealfourths(&clean);
+        assert_close(qlo, qlo_clean, 1e-10, "nan filtered qlo");
+        assert_close(qup, qup_clean, 1e-10, "nan filtered qup");
     }
 }

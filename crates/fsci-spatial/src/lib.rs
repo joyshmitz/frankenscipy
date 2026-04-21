@@ -936,6 +936,33 @@ impl KDTree {
         Ok(results)
     }
 
+    /// Find all unique in-tree point pairs within distance `r`.
+    ///
+    /// Matches `scipy.spatial.KDTree.query_pairs(r)`.
+    ///
+    /// Returns lexicographically sorted `(i, j)` pairs with `i < j`.
+    pub fn query_pairs(&self, r: f64) -> Result<Vec<(usize, usize)>, SpatialError> {
+        if !r.is_finite() || r < 0.0 {
+            return Err(SpatialError::InvalidArgument(
+                "radius must be finite and nonnegative".to_string(),
+            ));
+        }
+        if self.nodes.len() < 2 {
+            return Ok(Vec::new());
+        }
+
+        let mut pairs = Vec::new();
+        for node in &self.nodes {
+            for neighbor_index in self.query_ball_point(&node.point, r)? {
+                if neighbor_index > node.index {
+                    pairs.push((node.index, neighbor_index));
+                }
+            }
+        }
+        pairs.sort_unstable();
+        Ok(pairs)
+    }
+
     /// Count pairs of points within distance `r` between this tree and another.
     ///
     /// Matches `scipy.spatial.KDTree.count_neighbors(other, r)`.
@@ -3280,6 +3307,20 @@ mod tests {
         assert_eq!(count, 2);
     }
 
+    #[test]
+    fn ckdtree_alias_supports_query_pairs() {
+        let tree = cKDTree::new(&[
+            vec![0.0, 0.0],
+            vec![0.5, 0.0],
+            vec![1.2, 0.0],
+            vec![5.0, 5.0],
+        ])
+        .expect("tree");
+
+        let pairs = tree.query_pairs(0.8).expect("pairs");
+        assert_eq!(pairs, vec![(0, 1), (1, 2)]);
+    }
+
     // ── New distance metrics ───────────────────────────────────
 
     #[test]
@@ -3698,6 +3739,28 @@ mod tests {
         let err = tree1
             .query_ball_tree(&tree2, -1.0)
             .expect_err("negative radius");
+        assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn kdtree_query_pairs_basic() {
+        let tree = KDTree::new(&[
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![2.0, 0.0],
+            vec![5.0, 5.0],
+        ])
+        .unwrap();
+
+        let pairs = tree.query_pairs(1.01).unwrap();
+        assert_eq!(pairs, vec![(0, 1), (0, 2), (1, 3)]);
+    }
+
+    #[test]
+    fn kdtree_query_pairs_negative_radius_rejected() {
+        let tree = KDTree::new(&[vec![0.0, 0.0], vec![1.0, 0.0]]).unwrap();
+        let err = tree.query_pairs(-1.0).expect_err("negative radius");
         assert!(matches!(err, SpatialError::InvalidArgument(_)));
     }
 
