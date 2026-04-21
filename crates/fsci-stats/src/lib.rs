@@ -9271,6 +9271,59 @@ pub fn trim1(data: &[f64], proportiontocut: f64, tail: &str) -> Vec<f64> {
     }
 }
 
+/// Compute the trimmed variance of an array.
+///
+/// Values outside the specified limits are excluded before computing variance.
+///
+/// Matches `scipy.stats.tvar(a, limits, inclusive, ddof)`.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `limits` — Tuple of (lower, upper) limits. Values outside are excluded.
+/// * `inclusive` — Tuple of bools: whether limits are inclusive (lower, upper)
+/// * `ddof` — Delta degrees of freedom (default 1 for sample variance)
+///
+/// # Returns
+/// The trimmed variance, or NaN if fewer than ddof+1 values remain.
+pub fn tvar(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usize) -> f64 {
+    let filtered: Vec<f64> = data
+        .iter()
+        .copied()
+        .filter(|&x| {
+            let above_lower = if inclusive.0 { x >= limits.0 } else { x > limits.0 };
+            let below_upper = if inclusive.1 { x <= limits.1 } else { x < limits.1 };
+            above_lower && below_upper
+        })
+        .collect();
+
+    if filtered.len() <= ddof {
+        return f64::NAN;
+    }
+
+    let n = filtered.len() as f64;
+    let mean = filtered.iter().sum::<f64>() / n;
+    let sum_sq: f64 = filtered.iter().map(|&x| (x - mean).powi(2)).sum();
+    sum_sq / (n - ddof as f64)
+}
+
+/// Compute the trimmed standard deviation of an array.
+///
+/// Values outside the specified limits are excluded before computing std dev.
+///
+/// Matches `scipy.stats.tstd(a, limits, inclusive, ddof)`.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `limits` — Tuple of (lower, upper) limits. Values outside are excluded.
+/// * `inclusive` — Tuple of bools: whether limits are inclusive (lower, upper)
+/// * `ddof` — Delta degrees of freedom (default 1 for sample std dev)
+///
+/// # Returns
+/// The trimmed standard deviation, or NaN if fewer than ddof+1 values remain.
+pub fn tstd(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usize) -> f64 {
+    tvar(data, limits, inclusive, ddof).sqrt()
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -18865,6 +18918,49 @@ mod tests {
         let data = [1.0, 2.0, 3.0];
         let result = trim1(&data, 1.0, "right");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn tvar_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 100.0];
+        // Exclude 100 by setting upper limit to 10
+        let result = tvar(&data, (0.0, 10.0), (true, true), 1);
+        // [1,2,3,4,5]: mean=3, var = sum((x-3)^2)/4 = 10/4 = 2.5
+        assert!((result - 2.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tvar_exclusive_limits() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        // Exclude 1 and 5 with exclusive limits
+        let result = tvar(&data, (1.0, 5.0), (false, false), 1);
+        // [2,3,4]: mean=3, var = (1+0+1)/2 = 1
+        assert!((result - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tvar_insufficient_data() {
+        let data = [1.0, 2.0];
+        // With ddof=1, need at least 2 values
+        let result = tvar(&data, (0.0, 1.5), (true, true), 1);
+        // Only 1 value (1.0) passes, insufficient for ddof=1
+        assert!(result.is_nan());
+    }
+
+    #[test]
+    fn tstd_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = tstd(&data, (0.0, 10.0), (true, true), 1);
+        // std = sqrt(var) = sqrt(2.5)
+        assert!((result - 2.5_f64.sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tstd_ddof_zero() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = tstd(&data, (0.0, 10.0), (true, true), 0);
+        // population std: sqrt(sum((x-3)^2)/5) = sqrt(10/5) = sqrt(2)
+        assert!((result - 2.0_f64.sqrt()).abs() < 1e-10);
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
