@@ -303,17 +303,15 @@ pub fn jvp(
     derivative_order: usize,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("jvp", v, z, mode, |order, x| {
-        bessel_derivative_sum(
-            "jvp",
-            order,
-            x,
-            derivative_order,
-            mode,
-            DerivativeRule::Alternating,
-            |shifted_order, value| Ok(jv_scalar(shifted_order, value)),
-        )
-    })
+    bessel_derivative_dispatch(
+        "jvp",
+        v,
+        z,
+        derivative_order,
+        mode,
+        BesselKind::Jv,
+        DerivativeRule::Alternating,
+    )
 }
 
 /// Derivative of the Bessel function `Y_v(z)`.
@@ -325,17 +323,15 @@ pub fn yvp(
     derivative_order: usize,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("yvp", v, z, mode, |order, x| {
-        bessel_derivative_sum(
-            "yvp",
-            order,
-            x,
-            derivative_order,
-            mode,
-            DerivativeRule::Alternating,
-            |shifted_order, value| yv_scalar(shifted_order, value, mode),
-        )
-    })
+    bessel_derivative_dispatch(
+        "yvp",
+        v,
+        z,
+        derivative_order,
+        mode,
+        BesselKind::Yv,
+        DerivativeRule::Alternating,
+    )
 }
 
 /// Derivative of the modified Bessel function `I_v(z)`.
@@ -347,17 +343,15 @@ pub fn ivp(
     derivative_order: usize,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("ivp", v, z, mode, |order, x| {
-        bessel_derivative_sum(
-            "ivp",
-            order,
-            x,
-            derivative_order,
-            mode,
-            DerivativeRule::Positive,
-            |shifted_order, value| Ok(iv_scalar(shifted_order, value)),
-        )
-    })
+    bessel_derivative_dispatch(
+        "ivp",
+        v,
+        z,
+        derivative_order,
+        mode,
+        BesselKind::Iv,
+        DerivativeRule::Positive,
+    )
 }
 
 /// Derivative of the modified Bessel function `K_v(z)`.
@@ -369,17 +363,15 @@ pub fn kvp(
     derivative_order: usize,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("kvp", v, z, mode, |order, x| {
-        bessel_derivative_sum(
-            "kvp",
-            order,
-            x,
-            derivative_order,
-            mode,
-            DerivativeRule::NegativeByOrder,
-            |shifted_order, value| kv_scalar(shifted_order, value, mode),
-        )
-    })
+    bessel_derivative_dispatch(
+        "kvp",
+        v,
+        z,
+        derivative_order,
+        mode,
+        BesselKind::Kv,
+        DerivativeRule::NegativeByOrder,
+    )
 }
 
 /// Derivative of the Hankel function `H_v^(1)(z)`.
@@ -513,6 +505,214 @@ where
         1.0
     };
     Ok(sum * (sign * scale))
+}
+
+fn bessel_derivative_dispatch(
+    function: &'static str,
+    v: &SpecialTensor,
+    z: &SpecialTensor,
+    derivative_order: usize,
+    mode: RuntimeMode,
+    kind: BesselKind,
+    rule: DerivativeRule,
+) -> SpecialResult {
+    match (v, z) {
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealScalar(x)) => {
+            bessel_derivative_real_scalar(function, *order, *x, derivative_order, mode, kind, rule)
+                .map(SpecialTensor::RealScalar)
+        }
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => orders
+            .iter()
+            .map(|&order| {
+                bessel_derivative_real_scalar(
+                    function,
+                    order,
+                    *x,
+                    derivative_order,
+                    mode,
+                    kind,
+                    rule,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => xs
+            .iter()
+            .map(|&x| {
+                bessel_derivative_real_scalar(
+                    function,
+                    *order,
+                    x,
+                    derivative_order,
+                    mode,
+                    kind,
+                    rule,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealVec(xs)) => {
+            if orders.len() != xs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(xs.iter())
+                .map(|(&order, &x)| {
+                    bessel_derivative_real_scalar(
+                        function,
+                        order,
+                        x,
+                        derivative_order,
+                        mode,
+                        kind,
+                        rule,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexScalar(z_val)) => {
+            bessel_derivative_complex_scalar(
+                function,
+                *order,
+                *z_val,
+                derivative_order,
+                mode,
+                kind,
+                rule,
+            )
+            .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexVec(zs)) => zs
+            .iter()
+            .map(|&z_val| {
+                bessel_derivative_complex_scalar(
+                    function,
+                    *order,
+                    z_val,
+                    derivative_order,
+                    mode,
+                    kind,
+                    rule,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexScalar(z_val)) => orders
+            .iter()
+            .map(|&order| {
+                bessel_derivative_complex_scalar(
+                    function,
+                    order,
+                    *z_val,
+                    derivative_order,
+                    mode,
+                    kind,
+                    rule,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexVec(zs)) => {
+            if orders.len() != zs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(zs.iter())
+                .map(|(&order, &z_val)| {
+                    bessel_derivative_complex_scalar(
+                        function,
+                        order,
+                        z_val,
+                        derivative_order,
+                        mode,
+                        kind,
+                        rule,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexScalar(_), _) | (SpecialTensor::ComplexVec(_), _) => {
+            not_yet_implemented(function, mode, "complex-valued order not supported")
+        }
+        (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
+}
+
+fn bessel_derivative_real_scalar(
+    function: &'static str,
+    order: f64,
+    x: f64,
+    derivative_order: usize,
+    mode: RuntimeMode,
+    kind: BesselKind,
+    rule: DerivativeRule,
+) -> Result<f64, SpecialError> {
+    bessel_derivative_sum(
+        function,
+        order,
+        x,
+        derivative_order,
+        mode,
+        rule,
+        |shifted_order, value| match kind {
+            BesselKind::Jv => Ok(jv_scalar(shifted_order, value)),
+            BesselKind::Yv => yv_scalar(shifted_order, value, mode),
+            BesselKind::Iv => Ok(iv_scalar(shifted_order, value)),
+            BesselKind::Kv => kv_scalar(shifted_order, value, mode),
+        },
+    )
+}
+
+fn bessel_derivative_complex_scalar(
+    function: &'static str,
+    order: f64,
+    z: Complex64,
+    derivative_order: usize,
+    mode: RuntimeMode,
+    kind: BesselKind,
+    rule: DerivativeRule,
+) -> Result<Complex64, SpecialError> {
+    if z.im == 0.0 && z.re >= 0.0 {
+        return bessel_derivative_real_scalar(
+            function,
+            order,
+            z.re,
+            derivative_order,
+            mode,
+            kind,
+            rule,
+        )
+        .map(|value| Complex64::new(value, 0.0));
+    }
+
+    bessel_derivative_sum_complex(
+        function,
+        order,
+        z,
+        derivative_order,
+        mode,
+        rule,
+        |shifted_order, value| bessel_complex_scalar(function, shifted_order, value, mode, kind),
+    )
 }
 
 fn hankel_derivative_dispatch(
@@ -2853,6 +3053,149 @@ mod tests {
             RuntimeMode::Strict,
         ))?)?;
         assert!((kv_derivative - kv_expected).abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_bessel_derivative_zero_order_matches_base_functions() -> Result<(), String> {
+        let z = complex_scalar(1.25, 0.75);
+
+        let jvp_zero = complex_value(tensor_result(jvp(
+            &scalar(0.5),
+            &z,
+            0,
+            RuntimeMode::Strict,
+        ))?)?;
+        let jv_base = complex_value(tensor_result(jv(&scalar(0.5), &z, RuntimeMode::Strict))?)?;
+        assert!((jvp_zero.re - jv_base.re).abs() < 1e-12);
+        assert!((jvp_zero.im - jv_base.im).abs() < 1e-12);
+
+        let yvp_zero = complex_value(tensor_result(yvp(
+            &scalar(0.5),
+            &z,
+            0,
+            RuntimeMode::Strict,
+        ))?)?;
+        let yv_base = complex_value(tensor_result(yv(&scalar(0.5), &z, RuntimeMode::Strict))?)?;
+        assert!((yvp_zero.re - yv_base.re).abs() < 1e-12);
+        assert!((yvp_zero.im - yv_base.im).abs() < 1e-12);
+
+        let ivp_zero = complex_value(tensor_result(ivp(
+            &scalar(0.5),
+            &z,
+            0,
+            RuntimeMode::Strict,
+        ))?)?;
+        let iv_base = complex_value(tensor_result(iv(&scalar(0.5), &z, RuntimeMode::Strict))?)?;
+        assert!((ivp_zero.re - iv_base.re).abs() < 1e-12);
+        assert!((ivp_zero.im - iv_base.im).abs() < 1e-12);
+
+        let kvp_zero = complex_value(tensor_result(kvp(
+            &scalar(0.5),
+            &z,
+            0,
+            RuntimeMode::Strict,
+        ))?)?;
+        let kv_base = complex_value(tensor_result(kv(&scalar(0.5), &z, RuntimeMode::Strict))?)?;
+        assert!((kvp_zero.re - kv_base.re).abs() < 1e-12);
+        assert!((kvp_zero.im - kv_base.im).abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_bessel_derivative_reduces_to_real_axis_values() -> Result<(), String> {
+        let x = 1.8;
+
+        let j_real = real_value(tensor_result(jvp(
+            &scalar(0.0),
+            &scalar(x),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        let j_complex = complex_value(tensor_result(jvp(
+            &scalar(0.0),
+            &complex_scalar(x, 0.0),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!((j_real - j_complex.re).abs() < 1e-12);
+        assert!(j_complex.im.abs() < 1e-12);
+
+        let y_real = real_value(tensor_result(yvp(
+            &scalar(0.0),
+            &scalar(x),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        let y_complex = complex_value(tensor_result(yvp(
+            &scalar(0.0),
+            &complex_scalar(x, 0.0),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!((y_real - y_complex.re).abs() < 1e-12);
+        assert!(y_complex.im.abs() < 1e-12);
+
+        let i_real = real_value(tensor_result(ivp(
+            &scalar(0.0),
+            &scalar(x),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        let i_complex = complex_value(tensor_result(ivp(
+            &scalar(0.0),
+            &complex_scalar(x, 0.0),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!((i_real - i_complex.re).abs() < 1e-12);
+        assert!(i_complex.im.abs() < 1e-12);
+
+        let k_real = real_value(tensor_result(kvp(
+            &scalar(0.0),
+            &scalar(x),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        let k_complex = complex_value(tensor_result(kvp(
+            &scalar(0.0),
+            &complex_scalar(x, 0.0),
+            1,
+            RuntimeMode::Strict,
+        ))?)?;
+        assert!((k_real - k_complex.re).abs() < 1e-12);
+        assert!(k_complex.im.abs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn complex_bessel_derivative_broadcasts_complex_vectors() -> Result<(), String> {
+        let zs = SpecialTensor::ComplexVec(vec![
+            Complex64::new(1.0, 0.5),
+            Complex64::new(1.5, -0.25),
+            Complex64::new(2.0, 0.0),
+        ]);
+        let result = tensor_result(jvp(&scalar(0.5), &zs, 1, RuntimeMode::Strict))?;
+        match result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 3);
+                for (index, value) in values.iter().enumerate() {
+                    let lane = match &zs {
+                        SpecialTensor::ComplexVec(items) => items[index],
+                        _ => unreachable!(),
+                    };
+                    let expected = complex_value(tensor_result(jvp(
+                        &scalar(0.5),
+                        &SpecialTensor::ComplexScalar(lane),
+                        1,
+                        RuntimeMode::Strict,
+                    ))?)?;
+                    assert!((value.re - expected.re).abs() < 1e-12);
+                    assert!((value.im - expected.im).abs() < 1e-12);
+                }
+            }
+            other => return Err(format!("expected ComplexVec, got {other:?}")),
+        }
         Ok(())
     }
 
