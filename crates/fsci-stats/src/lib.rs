@@ -8758,6 +8758,57 @@ pub fn linregress(x: &[f64], y: &[f64]) -> LinregressResult {
     }
 }
 
+/// Result of linregress confidence intervals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinregressCIResult {
+    pub slope_lo: f64,
+    pub slope_hi: f64,
+    pub intercept_lo: f64,
+    pub intercept_hi: f64,
+}
+
+/// Compute confidence intervals for linear regression slope and intercept.
+///
+/// # Arguments
+/// * `x` - Independent variable data
+/// * `y` - Dependent variable data
+/// * `alpha` - Significance level (e.g., 0.05 for 95% CI)
+pub fn linregress_ci(x: &[f64], y: &[f64], alpha: f64) -> LinregressCIResult {
+    let n = x.len();
+    if n < 3 || x.len() != y.len() {
+        return LinregressCIResult {
+            slope_lo: f64::NAN,
+            slope_hi: f64::NAN,
+            intercept_lo: f64::NAN,
+            intercept_hi: f64::NAN,
+        };
+    }
+
+    let result = linregress(x, y);
+    if result.stderr.is_nan() {
+        return LinregressCIResult {
+            slope_lo: f64::NAN,
+            slope_hi: f64::NAN,
+            intercept_lo: f64::NAN,
+            intercept_hi: f64::NAN,
+        };
+    }
+
+    let df = n as f64 - 2.0;
+    let tdist = StudentT::new(df);
+    let t_crit = tdist.ppf(1.0 - alpha / 2.0);
+
+    let slope_margin = t_crit * result.stderr;
+    let intercept_margin = t_crit * result.intercept_stderr;
+
+    LinregressCIResult {
+        slope_lo: result.slope - slope_margin,
+        slope_hi: result.slope + slope_margin,
+        intercept_lo: result.intercept - intercept_margin,
+        intercept_hi: result.intercept + intercept_margin,
+    }
+}
+
 /// Result of a correlation test.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorrelationResult {
@@ -17746,6 +17797,45 @@ mod tests {
     fn linregress_constant_x() {
         let result = linregress(&[5.0, 5.0, 5.0], &[1.0, 2.0, 3.0]);
         assert!(result.slope.is_nan(), "constant x => undefined slope");
+    }
+
+    #[test]
+    fn linregress_ci_contains_true_slope() {
+        let x: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let y: Vec<f64> = x.iter().enumerate().map(|(i, &xi)| {
+            2.0 * xi + 3.0 + if i % 2 == 0 { 0.5 } else { -0.5 }
+        }).collect();
+        let ci = linregress_ci(&x, &y, 0.05);
+        assert!(ci.slope_lo.is_finite() && ci.slope_hi.is_finite());
+        assert!(ci.slope_lo < ci.slope_hi);
+    }
+
+    #[test]
+    fn linregress_ci_narrower_with_larger_sample() {
+        let x_small: Vec<f64> = (0..10).map(|i| i as f64).collect();
+        let y_small: Vec<f64> = x_small.iter().enumerate().map(|(i, &xi)| {
+            2.0 * xi + 1.0 + if i % 2 == 0 { 0.1 } else { -0.1 }
+        }).collect();
+        let x_large: Vec<f64> = (0..100).map(|i| i as f64).collect();
+        let y_large: Vec<f64> = x_large.iter().enumerate().map(|(i, &xi)| {
+            2.0 * xi + 1.0 + if i % 2 == 0 { 0.1 } else { -0.1 }
+        }).collect();
+
+        let ci_small = linregress_ci(&x_small, &y_small, 0.05);
+        let ci_large = linregress_ci(&x_large, &y_large, 0.05);
+
+        let width_small = ci_small.slope_hi - ci_small.slope_lo;
+        let width_large = ci_large.slope_hi - ci_large.slope_lo;
+        assert!(
+            width_large < width_small || (width_small < 1e-10 && width_large < 1e-10),
+            "larger sample should have narrower CI: {width_large} vs {width_small}"
+        );
+    }
+
+    #[test]
+    fn linregress_ci_too_few_points() {
+        let ci = linregress_ci(&[1.0, 2.0], &[3.0, 4.0], 0.05);
+        assert!(ci.slope_lo.is_nan());
     }
 
     // ── Pearson correlation ───────────────────────────────────────
