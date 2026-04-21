@@ -171,7 +171,13 @@ pub fn lambertw(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 
 /// Exponential integral E₁(z) = ∫₁^∞ exp(-zt)/t dt for z > 0.
 pub fn exp1(z_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("exp1", z_tensor, mode, |z| exp1_scalar(z, mode))
+    map_real_or_complex(
+        "exp1",
+        z_tensor,
+        mode,
+        |z| exp1_scalar(z, mode),
+        |z| exp1_complex_scalar(z, mode),
+    )
 }
 
 /// Exponential integral Ei(x) = -PV∫_{-x}^∞ exp(-t)/t dt for x > 0.
@@ -550,6 +556,87 @@ fn exp1_scalar(z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         }
         Ok((-z).exp() * h)
     }
+}
+
+fn exp1_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    if z.re.is_nan() || z.im.is_nan() {
+        return Ok(complex_nan());
+    }
+    if !z.is_finite() {
+        if z.im == 0.0 && z.re == f64::INFINITY {
+            return Ok(Complex64::from_real(0.0));
+        }
+        return Ok(complex_nan());
+    }
+    if z.re == 0.0 && z.im == 0.0 {
+        return Ok(Complex64::new(f64::INFINITY, 0.0));
+    }
+
+    if z.im == 0.0 {
+        if z.re > 0.0 {
+            return exp1_scalar(z.re, mode).map(Complex64::from_real);
+        }
+        if z.re < 0.0 {
+            return expi_scalar(-z.re, mode).map(|value| Complex64::new(-value, -PI));
+        }
+    }
+
+    if z.abs() <= 2.0 {
+        return exp1_complex_series(z);
+    }
+
+    exp1_complex_continued_fraction(z)
+}
+
+fn exp1_complex_series(z: Complex64) -> Result<Complex64, SpecialError> {
+    let euler_gamma = 0.577_215_664_901_532_9;
+    let mut sum = Complex64::from_real(-euler_gamma) - z.ln();
+    let mut term = Complex64::from_real(1.0);
+
+    for n in 1..400 {
+        term = term * z / n as f64;
+        let sign = if n % 2 == 1 { 1.0 } else { -1.0 };
+        let contribution = term * sign / n as f64;
+        sum = sum + contribution;
+        if contribution.abs() < 1.0e-15 * sum.abs().max(1.0) {
+            break;
+        }
+    }
+
+    Ok(sum)
+}
+
+fn exp1_complex_continued_fraction(z: Complex64) -> Result<Complex64, SpecialError> {
+    let tiny = 1.0e-30;
+    let one = Complex64::from_real(1.0);
+    let mut d = one / z;
+    let mut c = Complex64::from_real(1.0 / tiny);
+    let mut h = d;
+
+    for n in 1..200 {
+        let a_n = ((n + 1) / 2) as f64;
+        let b_n = if n % 2 == 1 { one } else { z };
+
+        let mut d_denom = b_n + d * a_n;
+        if d_denom.abs() < tiny {
+            d_denom = Complex64::from_real(tiny);
+        }
+        d = one / d_denom;
+
+        let mut c_term = b_n + Complex64::from_real(a_n) / c;
+        if c_term.abs() < tiny {
+            c_term = Complex64::from_real(tiny);
+        }
+        c = c_term;
+
+        let delta = c * d;
+        h = h * delta;
+        if (delta - one).abs() < 1.0e-15 {
+            break;
+        }
+    }
+
+    Ok((-z).exp() * h)
 }
 
 fn expi_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
@@ -1593,6 +1680,60 @@ mod tests {
         let z = SpecialTensor::RealScalar(-1.0);
         let result = exp1(&z, RuntimeMode::Hardened);
         assert!(result.is_err(), "should reject z <= 0 in hardened mode");
+    }
+
+    #[test]
+    fn exp1_complex_positive_real_axis_reduces_to_real_kernel() {
+        let x = 0.7;
+        let real_result = eval_scalar(exp1(&SpecialTensor::RealScalar(x), RuntimeMode::Strict));
+        let complex_result = eval_complex_scalar(exp1(
+            &SpecialTensor::ComplexScalar(Complex64::from_real(x)),
+            RuntimeMode::Strict,
+        ));
+        assert_complex_close(
+            complex_result,
+            Complex64::from_real(real_result),
+            1e-12,
+            "exp1 real-axis reduction",
+        );
+    }
+
+    #[test]
+    fn exp1_complex_negative_real_uses_principal_branch() {
+        let x = 3.0;
+        let result = eval_complex_scalar(exp1(
+            &SpecialTensor::ComplexScalar(Complex64::from_real(-x)),
+            RuntimeMode::Strict,
+        ));
+        let expected_real = -expi_scalar(x, RuntimeMode::Strict).expect("Ei(x) should succeed");
+        assert_complex_close(
+            result,
+            Complex64::new(expected_real, -PI),
+            1e-12,
+            "exp1 principal branch on negative real axis",
+        );
+    }
+
+    #[test]
+    fn exp1_complex_vector_preserves_shape_and_conjugation() {
+        let z = Complex64::new(1.0, 1.0);
+        let result = exp1(
+            &SpecialTensor::ComplexVec(vec![z, z.conj()]),
+            RuntimeMode::Strict,
+        )
+        .expect("complex vector exp1");
+        match result {
+            SpecialTensor::ComplexVec(values) => {
+                assert_eq!(values.len(), 2);
+                assert_complex_close(values[1], values[0].conj(), 1e-12, "exp1 conjugation");
+                let scalar = eval_complex_scalar(exp1(
+                    &SpecialTensor::ComplexScalar(z),
+                    RuntimeMode::Strict,
+                ));
+                assert_complex_close(values[0], scalar, 1e-12, "exp1 vector lane matches scalar");
+            }
+            other => panic!("expected ComplexVec, got {other:?}"),
+        }
     }
 
     // ── Vector inputs ─────────────────────────────────────────────
