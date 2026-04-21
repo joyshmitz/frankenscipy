@@ -9344,6 +9344,66 @@ pub fn pearsonr(x: &[f64], y: &[f64]) -> CorrelationResult {
     }
 }
 
+/// Calculate Pearson correlation with alternative hypothesis.
+///
+/// Matches `scipy.stats.pearsonr(x, y, alternative=...)`.
+///
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn pearsonr_alternative(x: &[f64], y: &[f64], alternative: &str) -> CorrelationResult {
+    let n = x.len();
+    if n < 2 || n != y.len() {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+    let nf = n as f64;
+
+    let xmean: f64 = x.iter().sum::<f64>() / nf;
+    let ymean: f64 = y.iter().sum::<f64>() / nf;
+
+    let mut ssxm = 0.0;
+    let mut ssym = 0.0;
+    let mut ssxym = 0.0;
+    for (&xi, &yi) in x.iter().zip(y.iter()) {
+        let dx = xi - xmean;
+        let dy = yi - ymean;
+        ssxm += dx * dx;
+        ssym += dy * dy;
+        ssxym += dx * dy;
+    }
+
+    let denom = (ssxm * ssym).sqrt();
+    if denom == 0.0 {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let r = (ssxym / denom).clamp(-1.0, 1.0);
+    let df = nf - 2.0;
+
+    let pvalue = if df > 0.0 && r.abs() < 1.0 {
+        let t = r * (df / (1.0 - r * r)).sqrt();
+        let tdist = StudentT::new(df);
+        match alternative {
+            "less" => tdist.cdf(t),
+            "greater" => tdist.sf(t),
+            _ => 2.0 * tdist.sf(t.abs()),
+        }
+    } else if r.abs() >= 1.0 {
+        0.0
+    } else {
+        f64::NAN
+    };
+
+    CorrelationResult {
+        statistic: r,
+        pvalue,
+    }
+}
+
 /// Calculate the Spearman rank-order correlation coefficient and p-value.
 ///
 /// Matches `scipy.stats.spearmanr(a, b)`.
@@ -25002,5 +25062,41 @@ mod tests {
         // 80% CI should be (1.0, 9.0) for U(0,10)
         assert_close(lower, 1.0, 1e-10, "U(0,10) 80% lower");
         assert_close(upper, 9.0, 1e-10, "U(0,10) 80% upper");
+    }
+
+    #[test]
+    fn test_pearsonr_alternative() {
+        // Test data with positive correlation
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let y = [1.2, 2.1, 2.9, 4.2, 5.1, 5.8, 7.2, 8.1];
+
+        // Two-sided should match original pearsonr
+        let two_sided = pearsonr_alternative(&x, &y, "two-sided");
+        let original = pearsonr(&x, &y);
+        assert_close(two_sided.statistic, original.statistic, 1e-10, "statistic match");
+        assert_close(two_sided.pvalue, original.pvalue, 1e-10, "two-sided pvalue");
+
+        // With positive correlation, "greater" should have smaller p-value than two-sided
+        let greater = pearsonr_alternative(&x, &y, "greater");
+        assert!(
+            greater.pvalue < two_sided.pvalue,
+            "greater p {} should be < two-sided p {}",
+            greater.pvalue,
+            two_sided.pvalue
+        );
+        // For positive correlation, p(greater) should be ~half of two-sided
+        assert_close(greater.pvalue, two_sided.pvalue / 2.0, 1e-10, "greater approx half");
+
+        // "less" should have larger p-value (1 - p(greater))
+        let less = pearsonr_alternative(&x, &y, "less");
+        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
+
+        // Test negative correlation
+        let y_neg = [8.1, 7.2, 5.8, 5.1, 4.2, 2.9, 2.1, 1.2];
+        let neg_greater = pearsonr_alternative(&x, &y_neg, "greater");
+        let neg_less = pearsonr_alternative(&x, &y_neg, "less");
+        // For negative correlation, "less" should give small p-value
+        assert!(neg_less.pvalue < 0.05, "neg corr less p should be small");
+        assert!(neg_greater.pvalue > 0.5, "neg corr greater p should be large");
     }
 }
