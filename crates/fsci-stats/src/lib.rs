@@ -2102,6 +2102,111 @@ impl MultivariateNormal {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Dirichlet Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Dirichlet distribution - multivariate generalization of Beta.
+///
+/// Matches `scipy.stats.dirichlet(alpha)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dirichlet {
+    pub alpha: Vec<f64>,
+    alpha_sum: f64,
+    log_norm: f64,
+}
+
+impl Dirichlet {
+    /// Create a Dirichlet distribution with concentration parameters alpha.
+    pub fn new(alpha: &[f64]) -> Self {
+        assert!(!alpha.is_empty(), "alpha must be non-empty");
+        assert!(
+            alpha.iter().all(|&a| a > 0.0),
+            "all alpha values must be positive"
+        );
+
+        let alpha_sum: f64 = alpha.iter().sum();
+        let log_norm = alpha.iter().map(|&a| ln_gamma(a)).sum::<f64>() - ln_gamma(alpha_sum);
+
+        Self {
+            alpha: alpha.to_vec(),
+            alpha_sum,
+            log_norm,
+        }
+    }
+
+    /// Log probability density function.
+    pub fn logpdf(&self, x: &[f64]) -> f64 {
+        if x.len() != self.alpha.len() {
+            return f64::NEG_INFINITY;
+        }
+
+        let sum: f64 = x.iter().sum();
+        if (sum - 1.0).abs() > 1e-10 || x.iter().any(|&xi| xi < 0.0 || xi > 1.0) {
+            return f64::NEG_INFINITY;
+        }
+
+        let log_x: f64 = x
+            .iter()
+            .zip(&self.alpha)
+            .map(|(&xi, &ai)| (ai - 1.0) * xi.ln())
+            .sum();
+
+        log_x - self.log_norm
+    }
+
+    /// Probability density function.
+    pub fn pdf(&self, x: &[f64]) -> f64 {
+        self.logpdf(x).exp()
+    }
+
+    /// Mean of the distribution.
+    pub fn mean(&self) -> Vec<f64> {
+        self.alpha.iter().map(|&a| a / self.alpha_sum).collect()
+    }
+
+    /// Variance of each component.
+    pub fn var(&self) -> Vec<f64> {
+        let s = self.alpha_sum;
+        let denom = s * s * (s + 1.0);
+        self.alpha
+            .iter()
+            .map(|&a| a * (s - a) / denom)
+            .collect()
+    }
+
+    /// Generate random variates from the distribution.
+    pub fn rvs(&self, n: usize, rng: &mut impl Rng) -> Vec<Vec<f64>> {
+        let mut samples = Vec::with_capacity(n);
+        for _ in 0..n {
+            let gamma_samples: Vec<f64> = self
+                .alpha
+                .iter()
+                .map(|&a| {
+                    let gamma = GammaDist::new(a, 1.0);
+                    gamma.rvs(1, rng)[0]
+                })
+                .collect();
+            let sum: f64 = gamma_samples.iter().sum();
+            let normalized: Vec<f64> = gamma_samples.iter().map(|&g| g / sum).collect();
+            samples.push(normalized);
+        }
+        samples
+    }
+
+    /// Entropy of the distribution.
+    pub fn entropy(&self) -> f64 {
+        let k = self.alpha.len() as f64;
+        self.log_norm
+            - (k - self.alpha_sum) * digamma(self.alpha_sum)
+            - self
+                .alpha
+                .iter()
+                .map(|&a| (a - 1.0) * digamma(a))
+                .sum::<f64>()
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Von Mises Distribution
 // ══════════════════════════════════════════════════════════════════════
 
@@ -16458,6 +16563,48 @@ mod tests {
         let mean1 = samples.iter().map(|row| row[1]).sum::<f64>() / samples.len() as f64;
         assert!((mean0 - 1.0).abs() < 0.08, "sample mean0 = {mean0}");
         assert!((mean1 + 2.0).abs() < 0.08, "sample mean1 = {mean1}");
+    }
+
+    #[test]
+    fn dirichlet_pdf_at_mean() {
+        let d = Dirichlet::new(&[2.0, 2.0, 2.0]);
+        let mean = d.mean();
+        let pdf = d.pdf(&mean);
+        assert!(pdf > 0.0, "pdf at mean should be positive");
+    }
+
+    #[test]
+    fn dirichlet_mean_sums_to_one() {
+        let d = Dirichlet::new(&[1.0, 2.0, 3.0]);
+        let mean = d.mean();
+        let sum: f64 = mean.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-10, "mean should sum to 1");
+    }
+
+    #[test]
+    fn dirichlet_symmetric_equal_mean() {
+        let d = Dirichlet::new(&[5.0, 5.0, 5.0]);
+        let mean = d.mean();
+        assert!((mean[0] - mean[1]).abs() < 1e-10);
+        assert!((mean[1] - mean[2]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn dirichlet_rvs_sum_to_one() {
+        let d = Dirichlet::new(&[1.0, 2.0, 3.0]);
+        let mut rng = rand::rng();
+        let samples = d.rvs(100, &mut rng);
+        for sample in &samples {
+            let sum: f64 = sample.iter().sum();
+            assert!((sum - 1.0).abs() < 1e-10, "sample should sum to 1");
+        }
+    }
+
+    #[test]
+    fn dirichlet_pdf_invalid_x() {
+        let d = Dirichlet::new(&[1.0, 1.0]);
+        assert!(d.pdf(&[0.5, 0.6]).abs() < 1e-300);
+        assert!(d.pdf(&[-0.1, 1.1]).abs() < 1e-300);
     }
 
     #[test]
