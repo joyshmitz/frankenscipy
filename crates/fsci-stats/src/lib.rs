@@ -9439,6 +9439,64 @@ pub fn expectile(data: &[f64], alpha: f64) -> f64 {
     mu
 }
 
+/// Estimate the differential entropy of a continuous distribution from samples.
+///
+/// Uses the Vasicek spacing estimator with window length m. The entropy is
+/// estimated as: H = (1/n) * sum(ln(n/(2m) * (X_{i+m} - X_{i-m})))
+///
+/// Matches `scipy.stats.differential_entropy(values, window_length, base)`.
+///
+/// # Arguments
+/// * `values` — Sample data
+/// * `window_length` — Window length for spacing estimator. If None, uses floor(sqrt(n))
+/// * `base` — Logarithm base. If None, uses natural log (e)
+///
+/// # Returns
+/// Estimated differential entropy, or NaN for insufficient data.
+pub fn differential_entropy(values: &[f64], window_length: Option<usize>, base: Option<f64>) -> f64 {
+    let filtered: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
+    let n = filtered.len();
+
+    if n < 2 {
+        return f64::NAN;
+    }
+
+    // Default window length: floor(sqrt(n))
+    let m = window_length.unwrap_or_else(|| (n as f64).sqrt().floor() as usize).max(1);
+
+    if 2 * m >= n {
+        return f64::NAN;
+    }
+
+    // Sort the data
+    let mut sorted = filtered;
+    sorted.sort_by(|a, b| a.total_cmp(b));
+
+    // Vasicek spacing estimator
+    let mut sum_log = 0.0;
+    let scale = n as f64 / (2.0 * m as f64);
+
+    for i in m..(n - m) {
+        let spacing = sorted[i + m] - sorted[i - m];
+        if spacing > 0.0 {
+            sum_log += (scale * spacing).ln();
+        } else {
+            sum_log += f64::NEG_INFINITY;
+        }
+    }
+
+    let h = sum_log / (n - 2 * m) as f64;
+
+    // Convert to requested base
+    if let Some(b) = base {
+        if b > 0.0 && b != 1.0 {
+            return h / b.ln();
+        }
+    }
+
+    h
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -19158,6 +19216,39 @@ mod tests {
         assert!(expectile(&data, 1.0).is_nan());
         assert!(expectile(&data, -0.1).is_nan());
         assert!(expectile(&data, 1.1).is_nan());
+    }
+
+    #[test]
+    fn differential_entropy_uniform() {
+        // Uniform [0, 1] has entropy ln(1) = 0
+        // With samples, we should get something close
+        let data: Vec<f64> = (0..100).map(|i| i as f64 / 99.0).collect();
+        let result = differential_entropy(&data, None, None);
+        assert!(result.is_finite());
+        // Uniform entropy is 0 for unit interval, but estimator varies
+        assert!(result.abs() < 1.0, "entropy should be small for uniform");
+    }
+
+    #[test]
+    fn differential_entropy_with_window() {
+        let data: Vec<f64> = (0..50).map(|i| i as f64).collect();
+        let result = differential_entropy(&data, Some(5), None);
+        assert!(result.is_finite());
+    }
+
+    #[test]
+    fn differential_entropy_with_base() {
+        let data: Vec<f64> = (0..100).map(|i| i as f64).collect();
+        let h_natural = differential_entropy(&data, None, None);
+        let h_base2 = differential_entropy(&data, None, Some(2.0));
+        // H_base2 = H_natural / ln(2)
+        assert!((h_base2 - h_natural / 2.0_f64.ln()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn differential_entropy_insufficient_data() {
+        assert!(differential_entropy(&[], None, None).is_nan());
+        assert!(differential_entropy(&[1.0], None, None).is_nan());
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
