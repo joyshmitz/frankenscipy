@@ -14841,6 +14841,115 @@ pub fn theil_sen(x: &[f64], y: &[f64]) -> (f64, f64) {
     (slope, intercept)
 }
 
+/// Result for Theil-Sen regression with confidence interval.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TheilslopesResult {
+    /// Theil slope estimate.
+    pub slope: f64,
+    /// Intercept estimate.
+    pub intercept: f64,
+    /// Lower bound of confidence interval on slope.
+    pub low_slope: f64,
+    /// Upper bound of confidence interval on slope.
+    pub high_slope: f64,
+}
+
+/// Theil-Sen regression with confidence interval on slope.
+///
+/// Robust regression using median of pairwise slopes.
+/// Returns slope, intercept, and confidence interval bounds.
+///
+/// Matches `scipy.stats.theilslopes(y, x, alpha, method='separate')`.
+///
+/// # Arguments
+/// * `x` - Independent variable
+/// * `y` - Dependent variable
+/// * `alpha` - Confidence level (default 0.95)
+///
+/// # Returns
+/// `TheilslopesResult` with slope, intercept, low_slope, high_slope.
+pub fn theilslopes(x: &[f64], y: &[f64], alpha: f64) -> TheilslopesResult {
+    let n = x.len();
+    if n < 2 || n != y.len() {
+        return TheilslopesResult {
+            slope: f64::NAN,
+            intercept: f64::NAN,
+            low_slope: f64::NAN,
+            high_slope: f64::NAN,
+        };
+    }
+
+    // Compute all pairwise slopes where deltax > 0
+    let mut slopes = Vec::with_capacity(n * (n - 1) / 2);
+    for i in 0..n {
+        for j in 0..n {
+            let dx = x[i] - x[j];
+            if dx > 1e-15 {
+                slopes.push((y[i] - y[j]) / dx);
+            }
+        }
+    }
+
+    if slopes.is_empty() {
+        return TheilslopesResult {
+            slope: 0.0,
+            intercept: median(y),
+            low_slope: f64::NAN,
+            high_slope: f64::NAN,
+        };
+    }
+
+    slopes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let medslope = median(&slopes);
+
+    // Intercept using 'separate' method: median(y) - slope * median(x)
+    let medinter = median(y) - medslope * median(x);
+
+    // Confidence interval using Sen (1968) equation 2.6
+    let alpha_adj = if alpha > 0.5 { 1.0 - alpha } else { alpha };
+    let z = Normal::new(0.0, 1.0).ppf(alpha_adj / 2.0);
+
+    // Find repeats for tie correction
+    let x_reps = find_repeats(x);
+    let y_reps = find_repeats(y);
+
+    let nt = slopes.len() as f64;
+    let ny = n as f64;
+
+    // Sen (1968) equation 2.6
+    let mut sigsq = ny * (ny - 1.0) * (2.0 * ny + 5.0) / 18.0;
+    for &k in &x_reps.counts {
+        let kf = k as f64;
+        sigsq -= kf * (kf - 1.0) * (2.0 * kf + 5.0) / 18.0;
+    }
+    for &k in &y_reps.counts {
+        let kf = k as f64;
+        sigsq -= kf * (kf - 1.0) * (2.0 * kf + 5.0) / 18.0;
+    }
+
+    let sigma = sigsq.sqrt();
+    let ru = ((nt - z * sigma) / 2.0).round() as usize;
+    let rl = ((nt + z * sigma) / 2.0).round() as usize;
+
+    let low_slope = if rl > 0 && rl <= slopes.len() {
+        slopes[rl - 1]
+    } else {
+        f64::NAN
+    };
+    let high_slope = if ru < slopes.len() {
+        slopes[ru]
+    } else {
+        f64::NAN
+    };
+
+    TheilslopesResult {
+        slope: medslope,
+        intercept: medinter,
+        low_slope,
+        high_slope,
+    }
+}
+
 /// Result for Siegel's repeated median regression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SiegelslopesResult {
@@ -19908,6 +20017,62 @@ mod tests {
         assert!(siegelslopes(&[1.0], &[1.0]).slope.is_nan());
         // Different lengths
         assert!(siegelslopes(&[1.0, 2.0], &[1.0]).slope.is_nan());
+    }
+
+    // ── theilslopes tests ────────────────────────────────────────────
+
+    #[test]
+    fn theilslopes_linear() {
+        // y = 2x
+        let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let y: Vec<f64> = x.iter().map(|&xi| 2.0 * xi).collect();
+        let result = theilslopes(&x, &y, 0.95);
+        assert!(
+            (result.slope - 2.0).abs() < 0.01,
+            "slope: {}",
+            result.slope
+        );
+        assert!(result.low_slope <= result.slope);
+        assert!(result.high_slope >= result.slope);
+    }
+
+    #[test]
+    fn theilslopes_matches_scipy() {
+        // scipy.stats.theilslopes([2.1, 4.0, 5.9, 8.1, 10.0, 11.9, 14.0, 16.1, 18.0, 20.1],
+        //                         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        // Returns slope=2.0, low_slope=1.98, high_slope≈2.03
+        let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let y = vec![2.1, 4.0, 5.9, 8.1, 10.0, 11.9, 14.0, 16.1, 18.0, 20.1];
+        let result = theilslopes(&x, &y, 0.95);
+        assert!(
+            (result.slope - 2.0).abs() < 0.01,
+            "slope: {}",
+            result.slope
+        );
+        assert!(result.low_slope < result.slope);
+        assert!(result.high_slope > result.slope);
+    }
+
+    #[test]
+    fn theilslopes_confidence_interval() {
+        // Confidence interval should contain true slope
+        let x: Vec<f64> = (1..=20).map(|i| i as f64).collect();
+        let y: Vec<f64> = x.iter().map(|&xi| 3.0 * xi + 1.0).collect();
+        let result = theilslopes(&x, &y, 0.95);
+        assert!(
+            result.low_slope <= 3.0 && result.high_slope >= 3.0,
+            "CI [{}, {}] should contain 3.0",
+            result.low_slope,
+            result.high_slope
+        );
+    }
+
+    #[test]
+    fn theilslopes_edge_cases() {
+        // Too short
+        assert!(theilslopes(&[1.0], &[1.0], 0.95).slope.is_nan());
+        // Different lengths
+        assert!(theilslopes(&[1.0, 2.0], &[1.0], 0.95).slope.is_nan());
     }
 
     // ── quantile_test tests ──────────────────────────────────────────
