@@ -6,7 +6,7 @@
 //! - `KDTree` — k-d tree for fast nearest-neighbor queries
 //! - `cKDTree` — SciPy parity alias to `KDTree`
 //! - `Rectangle` — hyperrectangle utility used by SciPy spatial search
-//! - `HalfspaceIntersection` — bounded N-D halfspace intersection
+//! - `HalfspaceIntersection` — N-D halfspace intersection
 //! - `distance` — pairwise distance computations
 
 use std::collections::BTreeMap;
@@ -1488,13 +1488,7 @@ impl HalfspaceIntersection {
             return Self::new(&rows, (interior_point[0], interior_point[1]));
         }
 
-        if !halfspace_region_is_bounded_nd(halfspaces, ndim) {
-            return Err(SpatialError::InvalidArgument(
-                "HalfspaceIntersection currently supports only bounded regions for ndim > 2"
-                    .to_string(),
-            ));
-        }
-
+        let is_bounded = halfspace_region_is_bounded_nd(halfspaces, ndim);
         let dual_points = halfspace_dual_points_nd(halfspaces, interior_point);
         let (intersections, dual_facets) = enumerate_halfspace_vertices_nd(halfspaces, ndim)?;
         let dual_vertices = collect_dual_vertices(&dual_facets, halfspaces.len());
@@ -1511,7 +1505,7 @@ impl HalfspaceIntersection {
             dual_volume: f64::NAN,
             ndim,
             nineq: halfspaces.len(),
-            is_bounded: true,
+            is_bounded,
         })
     }
 
@@ -4043,6 +4037,33 @@ mod tests {
                 hs.intersections
             );
         }
+        assert!(hs.dual_area.is_nan());
+        assert!(hs.dual_volume.is_nan());
+        assert!(hs.dual_equations.is_empty());
+    }
+
+    #[test]
+    fn halfspace_intersection_from_nd_marks_unbounded_3d_region() {
+        let halfspaces = vec![
+            vec![-1.0, 0.0, 0.0, 0.0],
+            vec![0.0, -1.0, 0.0, 0.0],
+            vec![0.0, 0.0, -1.0, 0.0],
+            vec![1.0, 1.0, 0.0, -1.0],
+        ];
+        let hs =
+            HalfspaceIntersection::from_nd(&halfspaces, &[0.2, 0.2, 0.2]).expect("3D unbounded");
+
+        assert_eq!(hs.ndim, 3);
+        assert!(!hs.is_bounded);
+        assert_eq!(hs.dual_vertices, vec![0, 1, 2, 3]);
+        for expected in [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+            assert!(
+                point_set_contains(&hs.intersections, &expected),
+                "missing 3D unbounded vertex {expected:?}: {:?}",
+                hs.intersections
+            );
+        }
+        assert_eq!(hs.intersections.len(), 3);
         assert!(hs.dual_area.is_nan());
         assert!(hs.dual_volume.is_nan());
         assert!(hs.dual_equations.is_empty());
