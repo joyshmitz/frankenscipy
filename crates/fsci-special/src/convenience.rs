@@ -3949,7 +3949,12 @@ pub fn softshrink(x: f64, lambda: f64) -> f64 {
 /// A smooth shrinkage function that subtracts the bounded tanh.
 /// Approaches 0 for small x, approaches x for large |x|.
 #[must_use]
-pub fn tanhshrink(x: f64) -> f64 {
+pub fn tanhshrink(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("tanhshrink", x_tensor, mode, |x| Ok(tanhshrink_scalar(x)))
+}
+
+#[must_use]
+pub fn tanhshrink_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -5301,6 +5306,39 @@ mod tests {
     }
 
     #[test]
+    fn tanhshrink_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = tanhshrink(&SpecialTensor::RealScalar(0.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - tanhshrink_scalar(0.5)).abs() < 1e-14);
+
+        let vector = tanhshrink(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(tanhshrink_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tanhshrink_tensor_dispatch_preserves_odd_symmetry() -> Result<(), String> {
+        let positive = tanhshrink(&SpecialTensor::RealScalar(2.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let negative = tanhshrink(&SpecialTensor::RealScalar(-2.5), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let positive_value = expect_real_scalar(positive)?;
+        let negative_value = expect_real_scalar(negative)?;
+        assert!((positive_value + negative_value).abs() < 1e-14);
+        Ok(())
+    }
+
+    #[test]
     fn cloglog_basic() {
         // cloglog(0.5) = log(-log(0.5)) = log(ln(2)) ≈ -0.3665
         let expected = std::f64::consts::LN_2.ln();
@@ -5472,12 +5510,12 @@ mod tests {
     #[test]
     fn tanhshrink_basic() {
         // tanhshrink(x) = x - tanh(x)
-        assert!((tanhshrink(0.0) - 0.0).abs() < 1e-14);
+        assert!((tanhshrink_scalar(0.0) - 0.0).abs() < 1e-14);
         // For small x, tanhshrink ≈ x^3/3
-        assert!((tanhshrink(0.1) - (0.1 - 0.1_f64.tanh())).abs() < 1e-14);
+        assert!((tanhshrink_scalar(0.1) - (0.1 - 0.1_f64.tanh())).abs() < 1e-14);
         // For large |x|, tanhshrink ≈ x - sign(x)
-        assert!((tanhshrink(10.0) - 9.0).abs() < 1e-5);
-        assert!((tanhshrink(-10.0) - (-9.0)).abs() < 1e-5);
+        assert!((tanhshrink_scalar(10.0) - 9.0).abs() < 1e-5);
+        assert!((tanhshrink_scalar(-10.0) - (-9.0)).abs() < 1e-5);
     }
 
     #[test]
