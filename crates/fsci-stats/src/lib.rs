@@ -8757,6 +8757,78 @@ pub fn ansari(x: &[f64], y: &[f64]) -> TtestResult {
     }
 }
 
+/// Ansari-Bradley scale test with alternative hypothesis.
+///
+/// Matches `scipy.stats.ansari(x, y, alternative=...)`.
+///
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn ansari_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResult {
+    let n = x.len();
+    let m = y.len();
+    if n < 1 || m < 1 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let total = n + m;
+    let mut pooled = Vec::with_capacity(total);
+    pooled.extend_from_slice(x);
+    pooled.extend_from_slice(y);
+    let ranks = rankdata_average(&pooled);
+    let total_f = total as f64;
+    let symranks: Vec<f64> = ranks.iter().map(|&r| r.min(total_f - r + 1.0)).collect();
+    let statistic: f64 = symranks[..n].iter().sum();
+
+    let repeats = {
+        let mut sorted = pooled.clone();
+        sorted.sort_by(|a, b| a.total_cmp(b));
+        sorted.windows(2).any(|w| w[0].total_cmp(&w[1]).is_eq())
+    };
+
+    let n_f = n as f64;
+    let m_f = m as f64;
+    let mean = if total % 2 == 1 {
+        n_f * (total_f + 1.0).powi(2) / (4.0 * total_f)
+    } else {
+        n_f * (total_f + 2.0) / 4.0
+    };
+
+    let variance = if repeats {
+        let fac: f64 = symranks.iter().map(|r| r * r).sum();
+        if total % 2 == 1 {
+            m_f * n_f * (16.0 * total_f * fac - (total_f + 1.0).powi(4))
+                / (16.0 * total_f.powi(2) * (total_f - 1.0))
+        } else {
+            m_f * n_f * (16.0 * fac - total_f * (total_f + 2.0).powi(2))
+                / (16.0 * total_f * (total_f - 1.0))
+        }
+    } else if total % 2 == 1 {
+        n_f * m_f * (total_f + 1.0) * (3.0 + total_f.powi(2)) / (48.0 * total_f.powi(2))
+    } else {
+        m_f * n_f * (total_f + 2.0) * (total_f - 2.0) / (48.0 * (total_f - 1.0))
+    };
+
+    if variance <= 0.0 {
+        return TtestResult {
+            statistic,
+            pvalue: 1.0,
+            df: f64::NAN,
+        };
+    }
+
+    let z = (mean - statistic) / variance.sqrt();
+    let pvalue = normal_alternative_pvalue(z, alternative).clamp(0.0, 1.0);
+
+    TtestResult {
+        statistic,
+        pvalue,
+        df: f64::NAN,
+    }
+}
+
 ///
 /// Matches `scipy.stats.mannwhitneyu(x, y, alternative='two-sided')`.
 ///
@@ -25373,6 +25445,27 @@ mod tests {
         // 80% CI should be (1.0, 9.0) for U(0,10)
         assert_close(lower, 1.0, 1e-10, "U(0,10) 80% lower");
         assert_close(upper, 9.0, 1e-10, "U(0,10) 80% upper");
+    }
+
+    #[test]
+    fn test_ansari_alternative() {
+        // x has larger variance than y
+        let x = [1.0, 3.0, 20.0, 22.0, 38.0, 40.0];
+        let y = [18.0, 19.0, 20.0, 21.0, 22.0, 23.0];
+
+        let two_sided = ansari_alternative(&x, &y, "two-sided");
+        let original = ansari(&x, &y);
+        assert_close(two_sided.statistic, original.statistic, 1e-10, "stat match");
+        assert_close(two_sided.pvalue, original.pvalue, 1e-10, "two-sided pvalue");
+
+        let less = ansari_alternative(&x, &y, "less");
+        let greater = ansari_alternative(&x, &y, "greater");
+        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
+        // One should be smaller than two-sided
+        assert!(
+            less.pvalue < two_sided.pvalue || greater.pvalue < two_sided.pvalue,
+            "one-sided should be smaller"
+        );
     }
 
     #[test]
