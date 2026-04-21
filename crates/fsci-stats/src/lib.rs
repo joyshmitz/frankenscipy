@@ -7138,6 +7138,70 @@ pub fn circstd(data: &[f64]) -> f64 {
     (-2.0 * (1.0 - v).ln()).sqrt()
 }
 
+/// Result for directional statistics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DirectionalStatsResult {
+    /// Mean direction as unit vector.
+    pub mean_direction: Vec<f64>,
+    /// Mean resultant length (0 to 1, higher = less dispersed).
+    pub mean_resultant_length: f64,
+}
+
+/// Compute directional statistics for 2D vector data.
+///
+/// Computes mean direction and mean resultant length for a set of
+/// 2D vectors (e.g., unit vectors on a circle).
+///
+/// Similar to `scipy.stats.directional_stats` for 2D case.
+///
+/// # Arguments
+/// * `data` - Slice of 2D vectors as [x, y] pairs
+/// * `normalize` - If true, normalize input vectors to unit length
+///
+/// # Returns
+/// `DirectionalStatsResult` with mean_direction and mean_resultant_length.
+pub fn directional_stats(data: &[[f64; 2]], normalize: bool) -> DirectionalStatsResult {
+    let n = data.len();
+    if n == 0 {
+        return DirectionalStatsResult {
+            mean_direction: vec![f64::NAN, f64::NAN],
+            mean_resultant_length: f64::NAN,
+        };
+    }
+
+    let nf = n as f64;
+    let mut sum_x = 0.0;
+    let mut sum_y = 0.0;
+
+    for &[x, y] in data {
+        if normalize {
+            let norm = (x * x + y * y).sqrt();
+            if norm > 0.0 {
+                sum_x += x / norm;
+                sum_y += y / norm;
+            }
+        } else {
+            sum_x += x;
+            sum_y += y;
+        }
+    }
+
+    let mean_x = sum_x / nf;
+    let mean_y = sum_y / nf;
+    let mean_resultant_length = (mean_x * mean_x + mean_y * mean_y).sqrt();
+
+    let mean_direction = if mean_resultant_length > 0.0 {
+        vec![mean_x / mean_resultant_length, mean_y / mean_resultant_length]
+    } else {
+        vec![f64::NAN, f64::NAN]
+    };
+
+    DirectionalStatsResult {
+        mean_direction,
+        mean_resultant_length,
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Statistical Tests
 // ══════════════════════════════════════════════════════════════════════
@@ -20389,6 +20453,53 @@ mod tests {
         // Invalid alpha
         assert!(bayes_mvs(&[1.0, 2.0], 0.0).mean.statistic.is_nan());
         assert!(bayes_mvs(&[1.0, 2.0], 1.0).mean.statistic.is_nan());
+    }
+
+    // ── directional_stats tests ──────────────────────────────────────
+
+    #[test]
+    fn directional_stats_uniform_direction() {
+        // All vectors point in same direction
+        let data = [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]];
+        let result = directional_stats(&data, true);
+        assert!(
+            (result.mean_resultant_length - 1.0).abs() < 1e-10,
+            "uniform direction should have resultant=1: {}",
+            result.mean_resultant_length
+        );
+        assert!((result.mean_direction[0] - 1.0).abs() < 1e-10);
+        assert!(result.mean_direction[1].abs() < 1e-10);
+    }
+
+    #[test]
+    fn directional_stats_opposite_directions() {
+        // Vectors cancel out
+        let data = [[1.0, 0.0], [-1.0, 0.0]];
+        let result = directional_stats(&data, true);
+        assert!(
+            result.mean_resultant_length < 1e-10,
+            "opposite directions should cancel: {}",
+            result.mean_resultant_length
+        );
+    }
+
+    #[test]
+    fn directional_stats_normalize() {
+        // Different magnitudes but same direction
+        let data = [[2.0, 0.0], [0.5, 0.0], [10.0, 0.0]];
+        let result = directional_stats(&data, true);
+        assert!(
+            (result.mean_resultant_length - 1.0).abs() < 1e-10,
+            "normalized same direction: {}",
+            result.mean_resultant_length
+        );
+    }
+
+    #[test]
+    fn directional_stats_empty() {
+        let data: &[[f64; 2]] = &[];
+        let result = directional_stats(data, true);
+        assert!(result.mean_resultant_length.is_nan());
     }
 
     // ── quantile_test tests ──────────────────────────────────────────
