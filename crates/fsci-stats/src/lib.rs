@@ -9656,6 +9656,64 @@ pub fn tsem(data: &[f64], limits: (f64, f64), inclusive: (bool, bool), ddof: usi
     (var / n).sqrt()
 }
 
+/// Compute the trimmed minimum.
+///
+/// Returns the minimum value greater than (or equal to) the lower limit.
+///
+/// Matches `scipy.stats.tmin(a, lowerlimit, inclusive=True)`.
+///
+/// # Arguments
+/// * `data` - Input array
+/// * `lowerlimit` - Values below this are ignored
+/// * `inclusive` - If true, values equal to limit are included
+///
+/// # Returns
+/// The trimmed minimum, or NaN if no values remain.
+pub fn tmin(data: &[f64], lowerlimit: f64, inclusive: bool) -> f64 {
+    let filtered: Vec<f64> = data
+        .iter()
+        .copied()
+        .filter(|&x| {
+            x.is_finite() && if inclusive { x >= lowerlimit } else { x > lowerlimit }
+        })
+        .collect();
+
+    if filtered.is_empty() {
+        return f64::NAN;
+    }
+
+    filtered.iter().copied().fold(f64::INFINITY, f64::min)
+}
+
+/// Compute the trimmed maximum.
+///
+/// Returns the maximum value less than (or equal to) the upper limit.
+///
+/// Matches `scipy.stats.tmax(a, upperlimit, inclusive=True)`.
+///
+/// # Arguments
+/// * `data` - Input array
+/// * `upperlimit` - Values above this are ignored
+/// * `inclusive` - If true, values equal to limit are included
+///
+/// # Returns
+/// The trimmed maximum, or NaN if no values remain.
+pub fn tmax(data: &[f64], upperlimit: f64, inclusive: bool) -> f64 {
+    let filtered: Vec<f64> = data
+        .iter()
+        .copied()
+        .filter(|&x| {
+            x.is_finite() && if inclusive { x <= upperlimit } else { x < upperlimit }
+        })
+        .collect();
+
+    if filtered.is_empty() {
+        return f64::NAN;
+    }
+
+    filtered.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+}
+
 /// Compute the expectile at a given alpha level.
 ///
 /// Expectiles are a generalization of the mean (alpha=0.5). They solve the
@@ -20500,6 +20558,34 @@ mod tests {
         let data: &[[f64; 2]] = &[];
         let result = directional_stats(data, true);
         assert!(result.mean_resultant_length.is_nan());
+    }
+
+    // ── tmin/tmax tests ──────────────────────────────────────────────
+
+    #[test]
+    fn tmin_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        assert_eq!(tmin(&data, 3.0, true), 3.0);
+        assert_eq!(tmin(&data, 3.0, false), 4.0); // exclusive
+    }
+
+    #[test]
+    fn tmax_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        assert_eq!(tmax(&data, 7.0, true), 7.0);
+        assert_eq!(tmax(&data, 7.0, false), 6.0); // exclusive
+    }
+
+    #[test]
+    fn tmin_all_filtered() {
+        let data = [1.0, 2.0, 3.0];
+        assert!(tmin(&data, 10.0, true).is_nan()); // all below limit
+    }
+
+    #[test]
+    fn tmax_all_filtered() {
+        let data = [10.0, 11.0, 12.0];
+        assert!(tmax(&data, 5.0, true).is_nan()); // all above limit
     }
 
     // ── quantile_test tests ──────────────────────────────────────────
