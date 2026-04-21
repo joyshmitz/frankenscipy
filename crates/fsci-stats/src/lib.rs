@@ -10620,6 +10620,56 @@ pub fn idealfourths(data: &[f64]) -> (f64, f64) {
     (qlo, qup)
 }
 
+/// Computes alpha-level confidence interval for the median.
+///
+/// Matches `scipy.stats.mstats.median_cihs(data, alpha)`.
+/// Uses the Hettmasperger-Sheather method based on binomial distribution.
+/// Returns (lower_bound, upper_bound).
+pub fn median_cihs(data: &[f64], alpha: f64) -> (f64, f64) {
+    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let n = sorted.len();
+    if n < 2 {
+        return (f64::NAN, f64::NAN);
+    }
+    let alpha = alpha.min(1.0 - alpha);
+    let binom = Binomial::new(n as u64, 0.5);
+
+    let mut k = binomial_ppf(&binom, alpha / 2.0);
+    let mut gk = binom.cdf(n as u64 - k) - binom.cdf(k.saturating_sub(1));
+    if gk < 1.0 - alpha {
+        k = k.saturating_sub(1);
+        gk = binom.cdf(n as u64 - k) - binom.cdf(k.saturating_sub(1));
+    }
+    let gkk = binom.cdf(n as u64 - k - 1) - binom.cdf(k);
+    let i_val = (gk - 1.0 + alpha) / (gk - gkk);
+    let n_minus_k = n as f64 - k as f64;
+    let lambd = n_minus_k * i_val / (k as f64 + (n as f64 - 2.0 * k as f64) * i_val);
+
+    let k_idx = k as usize;
+    if k_idx == 0 || k_idx > n || n - k_idx > n {
+        return (f64::NAN, f64::NAN);
+    }
+    let lo = lambd * sorted[k_idx] + (1.0 - lambd) * sorted[k_idx - 1];
+    let hi = lambd * sorted[n - k_idx - 1] + (1.0 - lambd) * sorted[n - k_idx];
+    (lo, hi)
+}
+
+fn binomial_ppf(binom: &Binomial, q: f64) -> u64 {
+    if q <= 0.0 {
+        return 0;
+    }
+    if q >= 1.0 {
+        return binom.n;
+    }
+    for k in 0..=binom.n {
+        if binom.cdf(k) >= q {
+            return k;
+        }
+    }
+    binom.n
+}
+
 /// Coefficient of variation (std / mean).
 ///
 /// Matches `scipy.stats.variation(a)`.
@@ -26407,5 +26457,31 @@ mod tests {
         let (qlo_clean, qup_clean) = idealfourths(&clean);
         assert_close(qlo, qlo_clean, 1e-10, "nan filtered qlo");
         assert_close(qup, qup_clean, 1e-10, "nan filtered qup");
+    }
+
+    #[test]
+    fn median_cihs_matches_scipy() {
+        // scipy.stats.mstats.median_cihs([1..10]) = (2.6576576576576576, 8.342342342342342)
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let (lo, hi) = median_cihs(&data, 0.05);
+        assert_close(lo, 2.6576576576576576, 1e-10, "median_cihs lo");
+        assert_close(hi, 8.342342342342342, 1e-10, "median_cihs hi");
+    }
+
+    #[test]
+    fn median_cihs_small_n() {
+        // Very small n should return NaN or valid bounds
+        let (lo, hi) = median_cihs(&[1.0], 0.05);
+        assert!(lo.is_nan() && hi.is_nan());
+    }
+
+    #[test]
+    fn median_cihs_larger_sample() {
+        // Test with larger sample
+        let data: Vec<f64> = (1..=20).map(|x| x as f64).collect();
+        let (lo, hi) = median_cihs(&data, 0.05);
+        // CI should contain the true median (10.5)
+        assert!(lo < 10.5 && hi > 10.5, "CI should contain median");
+        assert!(lo < hi, "lo should be less than hi");
     }
 }
