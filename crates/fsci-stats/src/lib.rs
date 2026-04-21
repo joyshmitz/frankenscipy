@@ -9707,6 +9707,89 @@ fn rank_values(data: &[f64]) -> Vec<f64> {
     ranks
 }
 
+/// Result for Chatterjee's Xi correlation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatterjeeXiResult {
+    /// Xi correlation statistic.
+    pub statistic: f64,
+    /// p-value for independence test.
+    pub pvalue: f64,
+}
+
+/// Compute Chatterjee's Xi correlation coefficient and independence test.
+///
+/// Measures association between two variables. Effective even when the
+/// association is not monotonic. Returns ~0 for independent variables
+/// and ~1 when Y is a measurable function of X.
+///
+/// Matches `scipy.stats.chatterjeexi(x, y, y_continuous=True)`.
+///
+/// # Arguments
+/// * `x` - Observations of the independent variable
+/// * `y` - Corresponding observations of the dependent variable
+///
+/// # Returns
+/// `ChatterjeeXiResult` with statistic and p-value.
+///
+/// # References
+/// Chatterjee, S. (2021). A new coefficient of correlation.
+/// Journal of the American Statistical Association.
+pub fn chatterjeexi(x: &[f64], y: &[f64]) -> ChatterjeeXiResult {
+    let n = x.len();
+    if n != y.len() || n < 2 {
+        return ChatterjeeXiResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    // Sort indices by x values
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| x[a].total_cmp(&x[b]));
+
+    // Reorder y by sorted x
+    let y_sorted: Vec<f64> = indices.iter().map(|&i| y[i]).collect();
+
+    // Compute ranks of y_sorted using max method
+    let r = rank_max(&y_sorted);
+
+    // Compute sum of |r_{i+1} - r_i|
+    let mut num = 0.0;
+    for i in 0..(n - 1) {
+        num += (r[i + 1] - r[i]).abs();
+    }
+
+    // Using y_continuous=True formula: xi = 1 - 3 * num / (n^2 - 1)
+    let n_f = n as f64;
+    let statistic = 1.0 - 3.0 * num / (n_f * n_f - 1.0);
+
+    // Asymptotic standard deviation for continuous Y: sqrt(2/5) / sqrt(n)
+    let std = (2.0_f64 / 5.0).sqrt() / n_f.sqrt();
+
+    // p-value from standard normal (one-tailed, greater)
+    let z = statistic / std;
+    let pvalue = 1.0 - standard_normal_cdf(z);
+
+    ChatterjeeXiResult { statistic, pvalue }
+}
+
+/// Compute ranks using max method (number of values <= this value)
+fn rank_max(data: &[f64]) -> Vec<f64> {
+    let n = data.len();
+    let mut ranks = vec![0.0; n];
+
+    for i in 0..n {
+        let mut count = 0.0;
+        for j in 0..n {
+            if data[j] <= data[i] {
+                count += 1.0;
+            }
+        }
+        ranks[i] = count;
+    }
+    ranks
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -19575,6 +19658,56 @@ mod tests {
         let x = [1.0];
         let y = [1.0];
         assert!(weightedtau(&x, &y).is_nan());
+    }
+
+    // ── chatterjeexi tests ───────────────────────────────────────────
+
+    #[test]
+    fn chatterjeexi_functional_relationship() {
+        // Y = X^2 should give high xi
+        let x: Vec<f64> = (-20..=20).map(|i| i as f64 * 0.1).collect();
+        let y: Vec<f64> = x.iter().map(|&xi| xi * xi).collect();
+        let result = chatterjeexi(&x, &y);
+        assert!(
+            result.statistic > 0.8,
+            "functional relationship should have high xi: {}",
+            result.statistic
+        );
+        assert!(result.pvalue < 0.01, "should be significant");
+    }
+
+    #[test]
+    fn chatterjeexi_independent_low() {
+        // Independent uniform random should give xi close to 0
+        let x = [0.1, 0.5, 0.2, 0.9, 0.3, 0.7, 0.4, 0.8, 0.6, 0.0];
+        let y = [0.8, 0.3, 0.7, 0.1, 0.6, 0.2, 0.9, 0.4, 0.0, 0.5];
+        let result = chatterjeexi(&x, &y);
+        assert!(
+            result.statistic.abs() < 0.5,
+            "independent data should have low |xi|: {}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn chatterjeexi_monotonic() {
+        // Perfect monotonic relationship
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let y = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0];
+        let result = chatterjeexi(&x, &y);
+        assert!(
+            result.statistic > 0.4,
+            "monotonic relationship: {}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn chatterjeexi_edge_cases() {
+        // Different lengths
+        assert!(chatterjeexi(&[1.0, 2.0], &[1.0]).statistic.is_nan());
+        // Too short
+        assert!(chatterjeexi(&[1.0], &[1.0]).statistic.is_nan());
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
