@@ -9630,6 +9630,83 @@ pub fn page_trend_test(data: &[&[f64]]) -> PageTrendResult {
     }
 }
 
+/// Compute a weighted Kendall's tau correlation.
+///
+/// Weighted tau gives more importance to elements with higher ranks.
+/// Uses the default hyperbolic weigher: w(i, j) = 1/(i+1) + 1/(j+1).
+///
+/// Matches `scipy.stats.weightedtau(x, y)` with default parameters.
+///
+/// # Arguments
+/// * `x` — First ranking
+/// * `y` — Second ranking
+///
+/// # Returns
+/// Weighted tau correlation coefficient, or NaN for insufficient data.
+pub fn weightedtau(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len();
+    if n != y.len() || n < 2 {
+        return f64::NAN;
+    }
+
+    // Get ranks for both arrays
+    let rank_x = rank_values(x);
+    let rank_y = rank_values(y);
+
+    // Compute weighted concordance/discordance
+    let mut weighted_concordant = 0.0;
+    let mut weighted_discordant = 0.0;
+    let mut total_weight = 0.0;
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            // Weight based on ranks in x (hyperbolic weigher)
+            let w = 1.0 / (rank_x[i] + 1.0) + 1.0 / (rank_x[j] + 1.0);
+
+            let x_diff = x[i] - x[j];
+            let y_diff = y[i] - y[j];
+            let sign = x_diff * y_diff;
+
+            if sign > 0.0 {
+                weighted_concordant += w;
+            } else if sign < 0.0 {
+                weighted_discordant += w;
+            }
+            // ties contribute 0
+
+            total_weight += w;
+        }
+    }
+
+    if total_weight == 0.0 {
+        return f64::NAN;
+    }
+
+    (weighted_concordant - weighted_discordant) / total_weight
+}
+
+/// Helper to get ranks (0-indexed) for weighted tau
+fn rank_values(data: &[f64]) -> Vec<f64> {
+    let n = data.len();
+    let mut indexed: Vec<(usize, f64)> = data.iter().copied().enumerate().collect();
+    indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+    let mut ranks = vec![0.0; n];
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n && (indexed[j].1 - indexed[i].1).abs() < 1e-10 {
+            j += 1;
+        }
+        let avg_rank = (i + j - 1) as f64 / 2.0;
+        for k in i..j {
+            ranks[indexed[k].0] = avg_rank;
+        }
+        i = j;
+    }
+    ranks
+}
+
 /// Result of sigma clipping operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigmaClipResult {
@@ -19459,6 +19536,45 @@ mod tests {
         let row1 = [1.0];
         let result = page_trend_test(&[&row1]);
         assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn weightedtau_perfect_agreement() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = weightedtau(&x, &y);
+        assert!((result - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn weightedtau_perfect_disagreement() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = [5.0, 4.0, 3.0, 2.0, 1.0];
+        let result = weightedtau(&x, &y);
+        assert!((result - (-1.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn weightedtau_partial() {
+        let x = [1.0, 2.0, 3.0, 4.0];
+        let y = [1.0, 3.0, 2.0, 4.0];
+        let result = weightedtau(&x, &y);
+        // Should be positive but less than 1
+        assert!(result > 0.0 && result < 1.0);
+    }
+
+    #[test]
+    fn weightedtau_different_lengths() {
+        let x = [1.0, 2.0, 3.0];
+        let y = [1.0, 2.0];
+        assert!(weightedtau(&x, &y).is_nan());
+    }
+
+    #[test]
+    fn weightedtau_too_short() {
+        let x = [1.0];
+        let y = [1.0];
+        assert!(weightedtau(&x, &y).is_nan());
     }
 
     // ── sigmaclip tests ──────────────────────────────────────────────
