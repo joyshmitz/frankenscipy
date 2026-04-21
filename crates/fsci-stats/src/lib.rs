@@ -14098,6 +14098,120 @@ pub fn brunnermunzel(x: &[f64], y: &[f64]) -> TtestResult {
     }
 }
 
+/// Brunner-Munzel test with alternative hypothesis.
+///
+/// Matches `scipy.stats.brunnermunzel(x, y, alternative=...)`.
+///
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn brunnermunzel_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResult {
+    let nx = x.len();
+    let ny = y.len();
+    if nx < 2 || ny < 2 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
+
+    let nxf = nx as f64;
+    let nyf = ny as f64;
+
+    let mut combined: Vec<(f64, usize)> = x
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (v, i))
+        .chain(y.iter().enumerate().map(|(i, &v)| (v, nx + i)))
+        .collect();
+    combined.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut ranks = vec![0.0; nx + ny];
+    let mut i = 0;
+    while i < combined.len() {
+        let mut j = i + 1;
+        while j < combined.len() && combined[j].0 == combined[i].0 {
+            j += 1;
+        }
+        let avg_rank = (i + j + 1) as f64 / 2.0;
+        for k in i..j {
+            ranks[combined[k].1] = avg_rank;
+        }
+        i = j;
+    }
+
+    let mean_rx: f64 = ranks[..nx].iter().sum::<f64>() / nxf;
+    let mean_ry: f64 = ranks[nx..].iter().sum::<f64>() / nyf;
+
+    let rank_within = |data: &[f64]| -> Vec<f64> {
+        let mut indexed: Vec<(usize, f64)> = data.iter().cloned().enumerate().collect();
+        indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut r = vec![0.0; data.len()];
+        let mut k = 0;
+        while k < indexed.len() {
+            let mut l = k + 1;
+            while l < indexed.len() && indexed[l].1.total_cmp(&indexed[k].1).is_eq() {
+                l += 1;
+            }
+            let avg = (k + l + 1) as f64 / 2.0;
+            for m in k..l {
+                r[indexed[m].0] = avg;
+            }
+            k = l;
+        }
+        r
+    };
+
+    let rx_within = rank_within(x);
+    let ry_within = rank_within(y);
+
+    let sx2: f64 = ranks[..nx]
+        .iter()
+        .zip(rx_within.iter())
+        .map(|(&ri, &rwi)| (ri - rwi - mean_rx + (nxf + 1.0) / 2.0).powi(2))
+        .sum::<f64>()
+        / (nxf - 1.0);
+
+    let sy2: f64 = ranks[nx..]
+        .iter()
+        .zip(ry_within.iter())
+        .map(|(&ri, &rwi)| (ri - rwi - mean_ry + (nyf + 1.0) / 2.0).powi(2))
+        .sum::<f64>()
+        / (nyf - 1.0);
+
+    let nf = nxf + nyf;
+    let rank_delta = mean_ry - mean_rx;
+    let denom = (nxf * sx2 + nyf * sy2).sqrt();
+
+    let (w, df, pvalue) = if denom > 0.0 {
+        let w = nxf * nyf * rank_delta / (nf * denom);
+        let df_num = (nxf * sx2 + nyf * sy2).powi(2);
+        let df_den = (nxf * sx2).powi(2) / (nxf - 1.0) + (nyf * sy2).powi(2) / (nyf - 1.0);
+        let df = if df_den > 0.0 { df_num / df_den } else { f64::NAN };
+        let pvalue = if df.is_finite() {
+            let t_dist = StudentT::new(df);
+            student_t_alternative_pvalue(w, &t_dist, alternative)
+        } else {
+            f64::NAN
+        };
+        (w, df, pvalue)
+    } else {
+        let w = if rank_delta > 0.0 {
+            f64::INFINITY
+        } else if rank_delta < 0.0 {
+            f64::NEG_INFINITY
+        } else {
+            f64::NAN
+        };
+        (w, f64::NAN, f64::NAN)
+    };
+
+    TtestResult {
+        statistic: w,
+        pvalue: pvalue.clamp(0.0, 1.0),
+        df,
+    }
+}
+
 /// Alexander-Govern test for comparing means of k groups.
 ///
 /// More robust alternative to one-way ANOVA for unequal variances.
@@ -25173,6 +25287,24 @@ mod tests {
         // 80% CI should be (1.0, 9.0) for U(0,10)
         assert_close(lower, 1.0, 1e-10, "U(0,10) 80% lower");
         assert_close(upper, 9.0, 1e-10, "U(0,10) 80% upper");
+    }
+
+    #[test]
+    fn test_brunnermunzel_alternative() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let y = [5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+
+        let two_sided = brunnermunzel_alternative(&x, &y, "two-sided");
+        let original = brunnermunzel(&x, &y);
+        assert_close(two_sided.statistic, original.statistic, 1e-10, "stat match");
+        assert_close(two_sided.pvalue, original.pvalue, 1e-10, "two-sided pvalue");
+
+        // w > 0 when y > x (rank_delta = mean_ry - mean_rx > 0)
+        // For positive w: "greater" gives sf(w) = small, "less" gives cdf(w) = large
+        let less = brunnermunzel_alternative(&x, &y, "less");
+        let greater = brunnermunzel_alternative(&x, &y, "greater");
+        assert!(greater.pvalue < two_sided.pvalue, "greater p < two-sided p when w > 0");
+        assert_close(less.pvalue + greater.pvalue, 1.0, 1e-10, "less + greater = 1");
     }
 
     #[test]
