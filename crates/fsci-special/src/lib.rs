@@ -89,6 +89,7 @@ pub use convenience::{
     gradient_approx,
     hard_sigmoid,
     hard_swish,
+    hard_swish_scalar,
     hard_tanh,
     hardshrink,
     heaviside,

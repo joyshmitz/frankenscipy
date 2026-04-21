@@ -3945,8 +3945,12 @@ pub fn hard_sigmoid_scalar(x: f64) -> f64 {
 /// hard_swish(x) = x * hard_sigmoid(x) = x * clip((x + 3) / 6, 0, 1)
 ///
 /// A piecewise linear approximation to swish, used in MobileNetV3.
+pub fn hard_swish(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("hard_swish", x_tensor, mode, |x| Ok(hard_swish_scalar(x)))
+}
+
 #[must_use]
-pub fn hard_swish(x: f64) -> f64 {
+pub fn hard_swish_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -5671,13 +5675,13 @@ mod tests {
     #[test]
     fn hard_swish_basic() {
         // hard_swish(0) = 0 * 0.5 = 0
-        assert!((hard_swish(0.0) - 0.0).abs() < 1e-14);
+        assert!((hard_swish_scalar(0.0) - 0.0).abs() < 1e-14);
         // hard_swish(-3) = -3 * 0 = 0
-        assert!((hard_swish(-3.0) - 0.0).abs() < 1e-14);
+        assert!((hard_swish_scalar(-3.0) - 0.0).abs() < 1e-14);
         // hard_swish(3) = 3 * 1 = 3
-        assert!((hard_swish(3.0) - 3.0).abs() < 1e-14);
+        assert!((hard_swish_scalar(3.0) - 3.0).abs() < 1e-14);
         // For large positive x, hard_swish(x) ≈ x
-        assert!((hard_swish(10.0) - 10.0).abs() < 1e-14);
+        assert!((hard_swish_scalar(10.0) - 10.0).abs() < 1e-14);
     }
 
     #[test]
@@ -6139,6 +6143,42 @@ mod tests {
         assert!(values[0].is_nan());
         assert_eq!(values[1], 0.0);
         assert_eq!(values[2], 1.0);
+        Ok(())
+    }
+
+    #[test]
+    fn hard_swish_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = hard_swish(&SpecialTensor::RealScalar(3.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - hard_swish_scalar(3.0)).abs() < 1e-14);
+
+        let vector = hard_swish(
+            &SpecialTensor::RealVec(vec![-4.0, 0.0, 4.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-4.0, 0.0, 4.0].map(hard_swish_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hard_swish_tensor_dispatch_preserves_nan_and_clipping_behavior() -> Result<(), String> {
+        let vector = hard_swish(
+            &SpecialTensor::RealVec(vec![f64::NAN, -10.0, -3.0, 10.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert_eq!(values[1], 0.0);
+        assert_eq!(values[2], 0.0);
+        assert!((values[3] - 10.0).abs() < 1e-14);
         Ok(())
     }
 
