@@ -3802,7 +3802,12 @@ pub fn log_cosh_scalar(x: f64) -> f64 {
 /// A smooth, bounded activation function similar to tanh but with
 /// slower saturation.
 #[must_use]
-pub fn softsign(x: f64) -> f64 {
+pub fn softsign(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("softsign", x_tensor, mode, |x| Ok(softsign_scalar(x)))
+}
+
+#[must_use]
+pub fn softsign_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -5446,14 +5451,49 @@ mod tests {
     #[test]
     fn softsign_basic() {
         // softsign(0) = 0
-        assert!((softsign(0.0) - 0.0).abs() < 1e-14);
+        assert!((softsign_scalar(0.0) - 0.0).abs() < 1e-14);
         // Bounded by [-1, 1]
-        assert!(softsign(100.0) < 1.0);
-        assert!(softsign(-100.0) > -1.0);
+        assert!(softsign_scalar(100.0) < 1.0);
+        assert!(softsign_scalar(-100.0) > -1.0);
         // Antisymmetric
-        assert!((softsign(2.0) + softsign(-2.0)).abs() < 1e-14);
+        assert!((softsign_scalar(2.0) + softsign_scalar(-2.0)).abs() < 1e-14);
         // softsign(1) = 0.5
-        assert!((softsign(1.0) - 0.5).abs() < 1e-14);
+        assert!((softsign_scalar(1.0) - 0.5).abs() < 1e-14);
+    }
+
+    #[test]
+    fn softsign_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = softsign(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - softsign_scalar(2.0)).abs() < 1e-14);
+
+        let vector = softsign(
+            &SpecialTensor::RealVec(vec![-2.0, 0.0, 2.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-2.0, 0.0, 2.0].map(softsign_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn softsign_tensor_dispatch_preserves_odd_symmetry_and_nan() -> Result<(), String> {
+        let vector = softsign(
+            &SpecialTensor::RealVec(vec![f64::NAN, -3.0, 3.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert!((values[1] + values[2]).abs() < 1e-14);
+        assert!((values[2] - softsign_scalar(3.0)).abs() < 1e-14);
+        Ok(())
     }
 
     #[test]
