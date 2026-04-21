@@ -5924,6 +5924,86 @@ impl ContinuousDistribution for LaplaceAsymmetric {
     }
 }
 
+/// Kappa 4-parameter distribution.
+///
+/// Matches `scipy.stats.kappa4`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Kappa4 {
+    pub h: f64,
+    pub k: f64,
+}
+
+impl Kappa4 {
+    const SHAPE_TOL: f64 = 1e-15;
+
+    #[must_use]
+    pub fn new(h: f64, k: f64) -> Self {
+        Self { h, k }
+    }
+
+    fn normalized_shapes(&self) -> (f64, f64) {
+        let h = if self.h.abs() < Self::SHAPE_TOL {
+            0.0
+        } else {
+            self.h
+        };
+        let k = if self.k.abs() < Self::SHAPE_TOL {
+            0.0
+        } else {
+            self.k
+        };
+        (h, k)
+    }
+
+    fn support(&self) -> (f64, f64) {
+        let (h, k) = self.normalized_shapes();
+        if h > 0.0 && k > 0.0 {
+            ((1.0 - h.powf(-k)) / k, 1.0 / k)
+        } else if h > 0.0 && k == 0.0 {
+            (h.ln(), f64::INFINITY)
+        } else if h > 0.0 && k < 0.0 {
+            ((1.0 - h.powf(-k)) / k, f64::INFINITY)
+        } else if k > 0.0 {
+            (f64::NEG_INFINITY, 1.0 / k)
+        } else if k == 0.0 {
+            (f64::NEG_INFINITY, f64::INFINITY)
+        } else {
+            (1.0 / k, f64::INFINITY)
+        }
+    }
+
+    fn moment_exists(&self, order: f64) -> bool {
+        let (h, k) = self.normalized_shapes();
+        if k < 0.0 {
+            order < -1.0 / k
+        } else if h < 0.0 && k > 0.0 {
+            order < -k / h
+        } else {
+            true
+        }
+    }
+
+    fn raw_moment(&self, order: i32) -> f64 {
+        if !self.moment_exists(order as f64) {
+            return f64::NAN;
+        }
+        // Quantile-space integration keeps the numerical surface finite even
+        // when the support is semi-infinite.
+        simpson_integrate_adaptive(
+            |q| {
+                let x = self.ppf(q);
+                x.powi(order)
+            },
+            1e-12,
+            1.0 - 1e-12,
+            4_096,
+            1e-12,
+            1e-12,
+            10,
+        )
+    }
+}
+
 /// Argus distribution (used in high-energy physics).
 ///
 /// Matches `scipy.stats.argus`.
@@ -6006,6 +6086,133 @@ impl ContinuousDistribution for Argus {
         let gamma5 = p5 * gamma_half5;
         let second_moment = 1.0 - gamma5 / (a * gamma3);
         (second_moment - mean * mean).max(0.0)
+    }
+}
+
+impl ContinuousDistribution for Kappa4 {
+    fn pdf(&self, x: f64) -> f64 {
+        if x.is_nan() {
+            return f64::NAN;
+        }
+
+        let (h, k) = self.normalized_shapes();
+        let (lower, upper) = self.support();
+        if x < lower || x > upper {
+            return 0.0;
+        }
+
+        if h != 0.0 && k != 0.0 {
+            let base = 1.0 - k * x;
+            if base < 0.0 {
+                return 0.0;
+            }
+            let transformed = base.powf(1.0 / k);
+            let inner = 1.0 - h * transformed;
+            if inner < 0.0 {
+                return 0.0;
+            }
+            base.powf(1.0 / k - 1.0) * inner.powf(1.0 / h - 1.0)
+        } else if h == 0.0 && k != 0.0 {
+            let base = 1.0 - k * x;
+            if base < 0.0 {
+                return 0.0;
+            }
+            let transformed = base.powf(1.0 / k);
+            base.powf(1.0 / k - 1.0) * (-transformed).exp()
+        } else if h != 0.0 {
+            let exp_neg_x = (-x).exp();
+            let inner = 1.0 - h * exp_neg_x;
+            if inner < 0.0 {
+                return 0.0;
+            }
+            exp_neg_x * inner.powf(1.0 / h - 1.0)
+        } else {
+            let exp_neg_x = (-x).exp();
+            (-x - exp_neg_x).exp()
+        }
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x.is_nan() {
+            return f64::NAN;
+        }
+
+        let (lower, upper) = self.support();
+        if x <= lower {
+            return 0.0;
+        }
+        if x >= upper {
+            return 1.0;
+        }
+
+        let (h, k) = self.normalized_shapes();
+        if h != 0.0 && k != 0.0 {
+            let transformed = (1.0 - k * x).powf(1.0 / k);
+            (1.0 - h * transformed).powf(1.0 / h)
+        } else if h == 0.0 && k != 0.0 {
+            (-(1.0 - k * x).powf(1.0 / k)).exp()
+        } else if h != 0.0 {
+            (1.0 - h * (-x).exp()).powf(1.0 / h)
+        } else {
+            (-(-x).exp()).exp()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+
+        let (lower, upper) = self.support();
+        if q == 0.0 {
+            return lower;
+        }
+        if q == 1.0 {
+            return upper;
+        }
+
+        let (h, k) = self.normalized_shapes();
+        if h != 0.0 && k != 0.0 {
+            let transformed = ((1.0 - q.powf(h)) / h).powf(k);
+            (1.0 - transformed) / k
+        } else if h == 0.0 && k != 0.0 {
+            (1.0 - (-q.ln()).powf(k)) / k
+        } else if h != 0.0 {
+            -((1.0 - q.powf(h)) / h).ln()
+        } else {
+            -(-q.ln()).ln()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        let (h, k) = self.normalized_shapes();
+        if h == 0.0 {
+            return GenExtreme::new(k).mean();
+        }
+        if (h - 1.0).abs() < Self::SHAPE_TOL {
+            return GenPareto::new(-k).mean();
+        }
+
+        self.raw_moment(1)
+    }
+
+    fn var(&self) -> f64 {
+        let (h, k) = self.normalized_shapes();
+        if h == 0.0 {
+            return GenExtreme::new(k).var();
+        }
+        if (h - 1.0).abs() < Self::SHAPE_TOL {
+            return GenPareto::new(-k).var();
+        }
+
+        let mean = self.mean();
+        let second_moment = self.raw_moment(2);
+        let variance = second_moment - mean * mean;
+        if variance.is_nan() {
+            f64::NAN
+        } else {
+            variance.max(0.0)
+        }
     }
 }
 
@@ -17718,6 +17925,167 @@ mod tests {
     }
 
     #[test]
+    fn kappa4_general_case_matches_scipy_reference() {
+        let dist = Kappa4::new(0.5, 0.2);
+        let (lower, upper) = dist.support();
+        assert_close(
+            lower,
+            -0.743_491_774_985_175_5,
+            1e-12,
+            "Kappa4 support lower",
+        );
+        assert_close(upper, 5.0, 1e-12, "Kappa4 support upper");
+
+        let x_cases = [
+            (-0.5, 0.285_126_154_499_999_6, 0.037_925_615_024_999_89),
+            (0.0, 0.5, 0.25),
+            (0.5, 0.462_389_755_5, 0.496_679_610_025_000_05),
+            (1.0, 0.342_491_136, 0.699_163_545_599_999_9),
+            (2.0, 0.124_561_152, 0.923_751_654_400_000_1),
+        ];
+        for &(x, pdf, cdf) in &x_cases {
+            assert_close(dist.pdf(x), pdf, 1e-12, "Kappa4 pdf");
+            assert_close(dist.cdf(x), cdf, 1e-12, "Kappa4 cdf");
+        }
+
+        let q_cases = [
+            (0.2, -0.101_377_638_263_455_7),
+            (0.5, 0.507_191_923_390_026_8),
+            (0.8, 1.336_582_473_069_422_7),
+        ];
+        for &(q, x) in &q_cases {
+            assert_close(dist.ppf(q), x, 1e-12, "Kappa4 ppf");
+        }
+
+        assert_close(dist.mean(), 0.648_869_867_435_464_7, 1e-7, "Kappa4 mean");
+        assert_close(dist.var(), 0.703_200_955_990_783, 1e-7, "Kappa4 variance");
+    }
+
+    #[test]
+    fn kappa4_reductions_match_existing_distributions() {
+        let gumbel = Kappa4::new(0.0, 0.0);
+        let gumbel_ref = Gumbel::new(0.0, 1.0);
+        for &x in &[-1.0, 0.0, 1.5] {
+            assert_close(gumbel.pdf(x), gumbel_ref.pdf(x), 1e-12, "Kappa4 Gumbel pdf");
+            assert_close(gumbel.cdf(x), gumbel_ref.cdf(x), 1e-12, "Kappa4 Gumbel cdf");
+        }
+        for &q in &[0.2, 0.5, 0.8] {
+            assert_close(gumbel.ppf(q), gumbel_ref.ppf(q), 1e-12, "Kappa4 Gumbel ppf");
+        }
+        assert_close(
+            gumbel.mean(),
+            gumbel_ref.mean(),
+            1e-12,
+            "Kappa4 Gumbel mean",
+        );
+        assert_close(
+            gumbel.var(),
+            gumbel_ref.var(),
+            1e-12,
+            "Kappa4 Gumbel variance",
+        );
+
+        let exponential = Kappa4::new(1.0, 0.0);
+        let exponential_ref = Exponential::new(1.0);
+        for &x in &[0.0, 0.5, 2.0] {
+            assert_close(
+                exponential.pdf(x),
+                exponential_ref.pdf(x),
+                1e-12,
+                "Kappa4 Exponential pdf",
+            );
+            assert_close(
+                exponential.cdf(x),
+                exponential_ref.cdf(x),
+                1e-12,
+                "Kappa4 Exponential cdf",
+            );
+        }
+        for &q in &[0.2, 0.5, 0.8] {
+            assert_close(
+                exponential.ppf(q),
+                exponential_ref.ppf(q),
+                1e-12,
+                "Kappa4 Exponential ppf",
+            );
+        }
+        assert_close(
+            exponential.mean(),
+            exponential_ref.mean(),
+            1e-12,
+            "Kappa4 Exponential mean",
+        );
+        assert_close(
+            exponential.var(),
+            exponential_ref.var(),
+            1e-12,
+            "Kappa4 Exponential variance",
+        );
+
+        let uniform = Kappa4::new(1.0, 1.0);
+        let uniform_ref = Uniform::new(0.0, 1.0);
+        for &x in &[0.0, 0.25, 0.75, 1.0] {
+            assert_close(
+                uniform.pdf(x),
+                uniform_ref.pdf(x),
+                1e-12,
+                "Kappa4 Uniform pdf",
+            );
+            assert_close(
+                uniform.cdf(x),
+                uniform_ref.cdf(x),
+                1e-12,
+                "Kappa4 Uniform cdf",
+            );
+        }
+        for &q in &[0.2, 0.5, 0.8] {
+            assert_close(
+                uniform.ppf(q),
+                uniform_ref.ppf(q),
+                1e-12,
+                "Kappa4 Uniform ppf",
+            );
+        }
+        assert_close(
+            uniform.mean(),
+            uniform_ref.mean(),
+            1e-12,
+            "Kappa4 Uniform mean",
+        );
+        assert_close(
+            uniform.var(),
+            uniform_ref.var(),
+            1e-12,
+            "Kappa4 Uniform variance",
+        );
+    }
+
+    #[test]
+    fn kappa4_support_and_divergent_moments_behave() {
+        let finite_upper = Kappa4::new(-0.3, 0.4);
+        assert!(finite_upper.ppf(0.0).is_infinite() && finite_upper.ppf(0.0).is_sign_negative());
+        assert_close(
+            finite_upper.ppf(1.0),
+            2.5,
+            1e-12,
+            "Kappa4 bounded upper support",
+        );
+
+        let finite_lower = Kappa4::new(0.5, -0.4);
+        assert_close(
+            finite_lower.ppf(0.0),
+            -0.605_354_291_862_002_5,
+            1e-12,
+            "Kappa4 bounded lower support",
+        );
+        assert!(finite_lower.ppf(1.0).is_infinite() && finite_lower.ppf(1.0).is_sign_positive());
+
+        let divergent = Kappa4::new(-2.0, 0.5);
+        assert!(divergent.mean().is_nan());
+        assert!(divergent.var().is_nan());
+    }
+
+    #[test]
     fn expon_weibull_moments_match_scipy_reference_values() {
         let cases = [
             ((1.0, 1.0), (1.0, 1.0)),
@@ -17781,6 +18149,9 @@ mod tests {
         }
         for &chi in &[1.0, 2.0, 5.0] {
             assert!(Argus::new(chi).var() >= 0.0, "Argus({chi}) variance");
+        }
+        for &(h, k) in &[(0.0, 0.0), (0.5, 0.2), (1.0, 0.0), (1.0, 1.0)] {
+            assert!(Kappa4::new(h, k).var() >= 0.0, "Kappa4({h}, {k}) variance");
         }
         for &(a, c) in &[(1.0, 1.0), (2.0, 0.5), (1.5, 2.0)] {
             assert!(
