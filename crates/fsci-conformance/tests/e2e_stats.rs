@@ -4015,7 +4015,7 @@ fn e2e_041_ks_1samp_asymptotic_pvalue_parity() {
     assert!(all_pass, "scenario {scenario_id} had failures");
 }
 
-/// Scenario 42: continuous-distribution fit parity for implemented MLE helpers.
+/// Scenario 42: continuous-distribution fit parity for implemented fit helpers.
 #[test]
 fn e2e_042_continuous_distribution_fit_parity() {
     let scenario_id = "e2e_stats_042_continuous_distribution_fit";
@@ -4072,6 +4072,40 @@ fn e2e_042_continuous_distribution_fit_parity() {
     ));
 
     let t = Instant::now();
+    let pareto: Pareto = fit(&[1.0, 2.0, 4.0, 8.0]);
+    let pareto_pass =
+        (pareto.scale - 1.0).abs() < 1.0e-12 && (pareto.b - (4.0 / 64.0_f64.ln())).abs() < 1.0e-12;
+    if !pareto_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        4,
+        "fit_pareto_reference",
+        "fit::<Pareto>([1,2,4,8])",
+        "Pareto MLE should recover scale=min(data) and shape=n/sum(log(x/scale))",
+        &format!("shape={:.16}, scale={:.16}", pareto.b, pareto.scale),
+        t.elapsed().as_nanos(),
+        if pareto_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
+    let maxwell: Maxwell = fit(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+    let maxwell_expected_scale = (11.0_f64 / 3.0).sqrt();
+    let maxwell_pass = (maxwell.scale - maxwell_expected_scale).abs() < 1.0e-12;
+    if !maxwell_pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        5,
+        "fit_maxwell_reference",
+        "fit::<Maxwell>([1,2,3,4,5])",
+        "Maxwell MLE should recover sqrt(sum(x^2)/(3n)) for non-negative samples",
+        &format!("scale={:.16}", maxwell.scale),
+        t.elapsed().as_nanos(),
+        if maxwell_pass { "pass" } else { "FAIL" },
+    ));
+
+    let t = Instant::now();
     let constant_normal: Normal = fit(&[7.0, 7.0, 7.0]);
     let constant_uniform: Uniform = fit(&[7.0, 7.0, 7.0]);
     let constant_exponential: Exponential = fit(&[0.0, 0.0, 0.0]);
@@ -4085,7 +4119,7 @@ fn e2e_042_continuous_distribution_fit_parity() {
         all_pass = false;
     }
     steps.push(make_step(
-        4,
+        6,
         "fit_degenerate_support",
         "fit::<{Normal,Uniform,Exponential}>(degenerate samples)",
         "degenerate data should preserve zero-width support instead of panicking",

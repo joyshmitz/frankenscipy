@@ -85,6 +85,7 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 **Missing (LOW priority):**
 - Some exotic distributions (~80+ remaining from SciPy's 100+)
 - `fit` method for all distributions
+  Current direct support covers Normal, Uniform, Exponential, Gamma, Lognormal, Rayleigh, Logistic, Laplace, Pareto, Gumbel, GumbelL, and Maxwell.
 - Full `rv_continuous`/`rv_discrete` base class compatibility
 
 ### fsci-signal (86% coverage - near-complete)

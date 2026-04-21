@@ -144,6 +144,77 @@ fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
+fn gumbel_fit_loc_scale(data: &[f64]) -> (f64, f64) {
+    if data.is_empty() || data.iter().any(|&x| !x.is_finite()) {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let n = data.len() as f64;
+    let mean = data.iter().sum::<f64>() / n;
+    let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+    if !var.is_finite() {
+        return (f64::NAN, f64::NAN);
+    }
+    if var == 0.0 {
+        return (mean, 0.0);
+    }
+
+    let mut scale = (6.0 * var).sqrt() / PI;
+    if !scale.is_finite() || scale <= 0.0 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    for _ in 0..32 {
+        let inv_scale = 1.0 / scale;
+        let max_exponent = data
+            .iter()
+            .map(|&x| -x * inv_scale)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let mut sum_w = 0.0;
+        let mut sum_xw = 0.0;
+        let mut sum_x2w = 0.0;
+        for &x in data {
+            let w = (-x * inv_scale - max_exponent).exp();
+            sum_w += w;
+            sum_xw += x * w;
+            sum_x2w += x * x * w;
+        }
+        if !sum_w.is_finite() || sum_w == 0.0 {
+            break;
+        }
+
+        let weighted_mean = sum_xw / sum_w;
+        let weighted_var = (sum_x2w / sum_w - weighted_mean * weighted_mean).max(0.0);
+        let residual = mean - weighted_mean - scale;
+        if residual.abs() <= 1.0e-12 * scale.max(1.0) {
+            break;
+        }
+
+        let derivative = -weighted_var / (scale * scale) - 1.0;
+        let next_scale = scale - residual / derivative;
+        if !next_scale.is_finite() || next_scale <= 0.0 {
+            break;
+        }
+        scale = next_scale;
+    }
+
+    let inv_scale = 1.0 / scale;
+    let max_exponent = data
+        .iter()
+        .map(|&x| -x * inv_scale)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let sum_w = data
+        .iter()
+        .map(|&x| (-x * inv_scale - max_exponent).exp())
+        .sum::<f64>();
+    if !sum_w.is_finite() || sum_w == 0.0 {
+        return (mean - EULER_MASCHERONI * scale, scale);
+    }
+
+    let loc = -scale * (max_exponent + (sum_w / n).ln());
+    (loc, scale)
+}
+
 fn simpson_integrate(f: impl Fn(f64) -> f64, a: f64, b: f64, n: usize) -> f64 {
     let n = n + (n % 2);
     let h = (b - a) / n as f64;
@@ -1194,6 +1265,24 @@ impl ContinuousDistribution for Pareto {
             self.scale * self.scale * self.b / ((self.b - 1.0).powi(2) * (self.b - 2.0))
         }
     }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x <= 0.0) {
+            return Self {
+                b: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+
+        let scale = data.iter().copied().fold(f64::INFINITY, f64::min);
+        let log_sum = data.iter().map(|&x| (x / scale).ln()).sum::<f64>();
+        let b = if log_sum == 0.0 {
+            f64::INFINITY
+        } else {
+            data.len() as f64 / log_sum
+        };
+        Self { b, scale }
+    }
 }
 
 /// Lomax distribution.
@@ -1384,6 +1473,11 @@ impl ContinuousDistribution for Gumbel {
     fn var(&self) -> f64 {
         PI * PI * self.scale * self.scale / 6.0
     }
+
+    fn fit(data: &[f64]) -> Self {
+        let (loc, scale) = gumbel_fit_loc_scale(data);
+        Self { loc, scale }
+    }
 }
 
 /// Left-skewed Gumbel (extreme value type I) distribution.
@@ -1434,6 +1528,22 @@ impl ContinuousDistribution for GumbelLeft {
 
     fn var(&self) -> f64 {
         PI * PI * self.scale * self.scale / 6.0
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite()) {
+            return Self {
+                loc: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+
+        let mirrored: Vec<f64> = data.iter().map(|&x| -x).collect();
+        let (mirrored_loc, scale) = gumbel_fit_loc_scale(&mirrored);
+        Self {
+            loc: -mirrored_loc,
+            scale,
+        }
     }
 }
 
@@ -1625,6 +1735,17 @@ impl ContinuousDistribution for Maxwell {
 
     fn var(&self) -> f64 {
         self.scale * self.scale * (3.0 - 8.0 / PI)
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
+            return Self { scale: f64::NAN };
+        }
+        let n = data.len() as f64;
+        let sum_sq = data.iter().map(|&x| x * x).sum::<f64>();
+        Self {
+            scale: (sum_sq / (3.0 * n)).sqrt(),
+        }
     }
 }
 
@@ -14722,6 +14843,42 @@ mod tests {
     }
 
     #[test]
+    fn test_fit_pareto() {
+        let data = [1.0, 2.0, 4.0, 8.0];
+        let p = Pareto::fit(&data);
+        let expected_shape = data.len() as f64 / data.iter().map(|&x| x.ln()).sum::<f64>();
+        assert_close(p.scale, 1.0, 1e-12, "pareto fit scale");
+        assert_close(p.b, expected_shape, 1e-12, "pareto fit shape");
+    }
+
+    #[test]
+    fn test_fit_gumbel_recovers_quantile_grid() {
+        let reference = Gumbel::new(1.25, 0.8);
+        let data: Vec<f64> = (1..100).map(|i| reference.ppf(i as f64 / 100.0)).collect();
+        let fitted = Gumbel::fit(&data);
+        assert_close(fitted.loc, reference.loc, 5e-2, "gumbel fit loc");
+        assert_close(fitted.scale, reference.scale, 5e-2, "gumbel fit scale");
+    }
+
+    #[test]
+    fn test_fit_gumbel_left_recovers_quantile_grid() {
+        let reference = GumbelLeft::new(-0.75, 1.1);
+        let data: Vec<f64> = (1..100).map(|i| reference.ppf(i as f64 / 100.0)).collect();
+        let fitted = GumbelLeft::fit(&data);
+        assert_close(fitted.loc, reference.loc, 5e-2, "gumbel left fit loc");
+        assert_close(fitted.scale, reference.scale, 5e-2, "gumbel left fit scale");
+    }
+
+    #[test]
+    fn test_fit_maxwell() {
+        let data = [1.0, 2.0, 3.0, 4.0];
+        let m = Maxwell::fit(&data);
+        let expected_scale =
+            (data.iter().map(|&x| x * x).sum::<f64>() / (3.0 * data.len() as f64)).sqrt();
+        assert_close(m.scale, expected_scale, 1e-12, "maxwell fit scale");
+    }
+
+    #[test]
     fn test_fit_empty_data_returns_nan() {
         let empty: &[f64] = &[];
         assert!(Lognormal::fit(empty).s.is_nan());
@@ -14729,6 +14886,16 @@ mod tests {
         assert!(Logistic::fit(empty).loc.is_nan());
         assert!(Laplace::fit(empty).loc.is_nan());
         assert!(GammaDist::fit(empty).a.is_nan());
+        assert!(Pareto::fit(empty).b.is_nan());
+        assert!(Gumbel::fit(empty).loc.is_nan());
+        assert!(GumbelLeft::fit(empty).loc.is_nan());
+        assert!(Maxwell::fit(empty).scale.is_nan());
+    }
+
+    #[test]
+    fn test_fit_unsupported_distribution_still_panics() {
+        let result = std::panic::catch_unwind(|| StudentT::fit(&[1.0, 2.0, 3.0]));
+        assert!(result.is_err(), "unsupported fit should still panic");
     }
 
     // ── Statistical tests ─────────────────────────────────────────
