@@ -76,6 +76,15 @@ pub trait ContinuousDistribution {
             })
             .collect()
     }
+
+    /// Fit distribution to data (maximum likelihood estimation).
+    /// Default implementation panics.
+    fn fit(_data: &[f64]) -> Self
+    where
+        Self: Sized,
+    {
+        unimplemented!("fit method not implemented for this distribution")
+    }
 }
 
 /// Generic inverse CDF via bisection search.
@@ -241,6 +250,16 @@ impl ContinuousDistribution for Normal {
 
     fn var(&self) -> f64 {
         self.scale * self.scale
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        let n = data.len() as f64;
+        if n == 0.0 {
+            return Self::new(f64::NAN, f64::NAN);
+        }
+        let mean = data.iter().sum::<f64>() / n;
+        let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+        Self::new(mean, var.sqrt())
     }
 }
 
@@ -504,6 +523,23 @@ impl ContinuousDistribution for Uniform {
 
     fn var(&self) -> f64 {
         self.scale * self.scale / 12.0
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() {
+            return Self::new(f64::NAN, f64::NAN);
+        }
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        for &x in data {
+            if x < min {
+                min = x;
+            }
+            if x > max {
+                max = x;
+            }
+        }
+        Self::new(min, max - min)
     }
 }
 
@@ -14187,6 +14223,29 @@ mod tests {
             samples.iter().all(|&x| x >= 0.0),
             "exponential samples should be non-negative"
         );
+    }
+
+    #[test]
+    fn test_fit_normal() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let n = Normal::fit(&data);
+        assert!((n.loc - 3.0).abs() < 1e-10);
+        assert!((n.scale - std::f64::consts::SQRT_2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fit_uniform() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let u = Uniform::fit(&data);
+        assert!((u.loc - 1.0).abs() < 1e-10);
+        assert!((u.scale - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fit_exponential() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let e = Exponential::fit(&data);
+        assert!((e.lambda - 1.0 / 3.0).abs() < 1e-10);
     }
 
     // ── Statistical tests ─────────────────────────────────────────
