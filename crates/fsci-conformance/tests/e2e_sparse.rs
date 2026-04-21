@@ -2704,3 +2704,105 @@ fn e2e_022_lil_matrix_slicing_parity() {
     write_bundle(scenario_id, &bundle);
     assert!(overall_pass, "LIL slicing parity should match SciPy");
 }
+
+/// Scenario 23: CSC boolean index parity.
+#[test]
+fn e2e_023_csc_boolean_index_parity() {
+    let scenario_id = "e2e_sparse_023_csc_boolean_index";
+    let overall_start = Instant::now();
+    let mut steps = Vec::new();
+
+    let csc = CooMatrix::from_triplets(
+        Shape2D::new(3, 4),
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        vec![0, 0, 1, 1, 2, 2],
+        vec![0, 2, 1, 3, 0, 2],
+        false,
+    )
+    .expect("valid coo")
+    .to_csc()
+    .expect("coo->csc");
+
+    let t_start = Instant::now();
+    let row_indexed = csc
+        .boolean_row_index(&[true, false, true])
+        .expect("row boolean index");
+    let row_dense = dense_from_coo(&row_indexed.to_coo().expect("row indexed coo"));
+    let row_pass = row_dense == vec![vec![1.0, 0.0, 2.0, 0.0], vec![5.0, 0.0, 6.0, 0.0]];
+    steps.push(make_step(
+        1,
+        "boolean_row_index",
+        "csc[rows_bool, :]",
+        "SciPy csc_matrix boolean row indexing preserves CSC format and rebases kept rows",
+        &format!("dense={row_dense:?}"),
+        t_start.elapsed().as_nanos(),
+        if row_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let col_indexed = csc
+        .boolean_col_index(&[false, true, true, false])
+        .expect("col boolean index");
+    let col_dense = dense_from_coo(&col_indexed.to_coo().expect("col indexed coo"));
+    let col_pass = col_dense == vec![vec![0.0, 2.0], vec![3.0, 0.0], vec![0.0, 6.0]];
+    steps.push(make_step(
+        2,
+        "boolean_col_index",
+        "csc[:, cols_bool]",
+        "SciPy csc_matrix boolean column indexing preserves CSC format and rebases kept columns",
+        &format!("dense={col_dense:?}"),
+        t_start.elapsed().as_nanos(),
+        if col_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let submatrix = csc
+        .boolean_index(&[true, false, true], &[false, true, true, false])
+        .expect("boolean submatrix");
+    let sub_dense = dense_from_coo(&submatrix.to_coo().expect("submatrix coo"));
+    let sub_pass = sub_dense == vec![vec![0.0, 2.0], vec![0.0, 6.0]];
+    steps.push(make_step(
+        3,
+        "boolean_submatrix",
+        "csc[rows_bool, :][:, cols_bool]",
+        "composed boolean row/column indexing should match SciPy's CSC submatrix result",
+        &format!("dense={sub_dense:?}"),
+        t_start.elapsed().as_nanos(),
+        if sub_pass { "ok" } else { "fail" },
+    ));
+
+    let t_start = Instant::now();
+    let mask_values = csc
+        .boolean_mask_values(&[
+            vec![false, true, true, false],
+            vec![false, false, false, true],
+            vec![true, false, false, false],
+        ])
+        .expect("boolean mask values");
+    let mask_pass = mask_values == vec![0.0, 2.0, 4.0, 5.0];
+    steps.push(make_step(
+        4,
+        "boolean_mask_values",
+        "csc[mask_2d]",
+        "full-shape boolean masking should include implicit zeros in the SciPy-selected order",
+        &format!("values={mask_values:?}"),
+        t_start.elapsed().as_nanos(),
+        if mask_pass { "ok" } else { "fail" },
+    ));
+
+    let overall_pass = row_pass && col_pass && sub_pass && mask_pass;
+    let bundle = ForensicLogBundle {
+        scenario_id: scenario_id.to_string(),
+        steps,
+        artifacts: vec![],
+        environment: make_env(),
+        overall: OverallResult {
+            status: if overall_pass { "pass" } else { "fail" }.to_string(),
+            total_duration_ns: overall_start.elapsed().as_nanos(),
+            replay_command: replay_cmd(scenario_id),
+            error_chain: None,
+        },
+    };
+    write_bundle(scenario_id, &bundle);
+    assert!(overall_pass, "CSC boolean indexing should match SciPy");
+}

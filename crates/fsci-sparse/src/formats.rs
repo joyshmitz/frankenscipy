@@ -277,6 +277,116 @@ impl CscMatrix {
         &self.indptr
     }
 
+    pub fn get(&self, row: usize, col: usize) -> SparseResult<f64> {
+        validate_coordinate(self.shape, row, col)?;
+        let start = self.indptr[col];
+        let end = self.indptr[col + 1];
+        let rows = &self.indices[start..end];
+        Ok(match rows.binary_search(&row) {
+            Ok(offset) => self.data[start + offset],
+            Err(_) => 0.0,
+        })
+    }
+
+    pub fn boolean_row_index(&self, row_mask: &[bool]) -> SparseResult<Self> {
+        validate_boolean_mask(row_mask, self.shape.rows, "row")?;
+        let row_map = boolean_mask_index_map(row_mask);
+        let kept_rows = row_mask.iter().filter(|&&keep| keep).count();
+
+        let mut data = Vec::with_capacity(self.data.len());
+        let mut indices = Vec::with_capacity(self.indices.len());
+        let mut indptr = Vec::with_capacity(self.shape.cols + 1);
+        indptr.push(0);
+
+        for col in 0..self.shape.cols {
+            for idx in self.indptr[col]..self.indptr[col + 1] {
+                if let Some(new_row) = row_map[self.indices[idx]] {
+                    data.push(self.data[idx]);
+                    indices.push(new_row);
+                }
+            }
+            indptr.push(data.len());
+        }
+
+        Self::from_components(
+            Shape2D::new(kept_rows, self.shape.cols),
+            data,
+            indices,
+            indptr,
+            false,
+        )
+    }
+
+    pub fn boolean_col_index(&self, col_mask: &[bool]) -> SparseResult<Self> {
+        validate_boolean_mask(col_mask, self.shape.cols, "col")?;
+        let kept_cols = col_mask.iter().filter(|&&keep| keep).count();
+
+        let mut data = Vec::with_capacity(self.data.len());
+        let mut indices = Vec::with_capacity(self.indices.len());
+        let mut indptr = Vec::with_capacity(kept_cols + 1);
+        indptr.push(0);
+
+        for (col, &keep) in col_mask.iter().enumerate() {
+            if !keep {
+                continue;
+            }
+            let start = self.indptr[col];
+            let end = self.indptr[col + 1];
+            data.extend_from_slice(&self.data[start..end]);
+            indices.extend_from_slice(&self.indices[start..end]);
+            indptr.push(data.len());
+        }
+
+        Self::from_components(
+            Shape2D::new(self.shape.rows, kept_cols),
+            data,
+            indices,
+            indptr,
+            false,
+        )
+    }
+
+    pub fn boolean_index(&self, row_mask: &[bool], col_mask: &[bool]) -> SparseResult<Self> {
+        self.boolean_row_index(row_mask)?
+            .boolean_col_index(col_mask)
+    }
+
+    pub fn boolean_mask_values(&self, mask: &[Vec<bool>]) -> SparseResult<Vec<f64>> {
+        if mask.len() != self.shape.rows {
+            return Err(SparseError::InvalidArgument {
+                message: format!(
+                    "bool index has shape ({}, {}) instead of ({}, {})",
+                    mask.len(),
+                    mask.first().map_or(0, Vec::len),
+                    self.shape.rows,
+                    self.shape.cols
+                ),
+            });
+        }
+
+        let mut values = Vec::new();
+        for (row, row_mask) in mask.iter().enumerate() {
+            if row_mask.len() != self.shape.cols {
+                return Err(SparseError::InvalidArgument {
+                    message: format!(
+                        "bool index has shape ({}, {}) instead of ({}, {})",
+                        mask.len(),
+                        row_mask.len(),
+                        self.shape.rows,
+                        self.shape.cols
+                    ),
+                });
+            }
+            for (col, &keep) in row_mask.iter().enumerate() {
+                if keep {
+                    values.push(self.get(row, col)?);
+                }
+            }
+        }
+
+        Ok(values)
+    }
+
     #[must_use]
     pub fn construction_log(
         &self,
@@ -1603,6 +1713,36 @@ fn validate_slice_spec(
         });
     }
     Ok(())
+}
+
+fn validate_boolean_mask(
+    mask: &[bool],
+    expected_len: usize,
+    axis: &'static str,
+) -> SparseResult<()> {
+    if mask.len() != expected_len {
+        return Err(SparseError::InvalidArgument {
+            message: format!(
+                "bool index for {axis} has shape ({},) instead of ({expected_len},)",
+                mask.len()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn boolean_mask_index_map(mask: &[bool]) -> Vec<Option<usize>> {
+    let mut mapping = Vec::with_capacity(mask.len());
+    let mut next_index = 0usize;
+    for &keep in mask {
+        if keep {
+            mapping.push(Some(next_index));
+            next_index += 1;
+        } else {
+            mapping.push(None);
+        }
+    }
+    mapping
 }
 
 fn slice_len(spec: SparseSliceSpec) -> usize {

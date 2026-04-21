@@ -361,6 +361,97 @@ mod tests {
     }
 
     #[test]
+    fn csc_boolean_row_and_column_index_match_scipy_dense_semantics() {
+        let csc = CooMatrix::from_triplets(
+            Shape2D::new(3, 4),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![0, 0, 1, 1, 2, 2],
+            vec![0, 2, 1, 3, 0, 2],
+            false,
+        )
+        .expect("valid coo")
+        .to_csc()
+        .expect("coo->csc");
+
+        let row_indexed = csc
+            .boolean_row_index(&[true, false, true])
+            .expect("row boolean index");
+        assert_eq!(row_indexed.shape(), Shape2D::new(2, 4));
+        let row_dense = dense_from_coo(&row_indexed.to_coo().expect("row indexed coo"));
+        assert_matrix_close(
+            &row_dense,
+            &[vec![1.0, 0.0, 2.0, 0.0], vec![5.0, 0.0, 6.0, 0.0]],
+        );
+
+        let col_indexed = csc
+            .boolean_col_index(&[false, true, true, false])
+            .expect("col boolean index");
+        assert_eq!(col_indexed.shape(), Shape2D::new(3, 2));
+        let col_dense = dense_from_coo(&col_indexed.to_coo().expect("col indexed coo"));
+        assert_matrix_close(
+            &col_dense,
+            &[vec![0.0, 2.0], vec![3.0, 0.0], vec![0.0, 6.0]],
+        );
+
+        let submatrix = csc
+            .boolean_index(&[true, false, true], &[false, true, true, false])
+            .expect("boolean submatrix");
+        assert_eq!(submatrix.shape(), Shape2D::new(2, 2));
+        let sub_dense = dense_from_coo(&submatrix.to_coo().expect("submatrix coo"));
+        assert_matrix_close(&sub_dense, &[vec![0.0, 2.0], vec![0.0, 6.0]]);
+    }
+
+    #[test]
+    fn csc_boolean_mask_values_include_implicit_zeros() {
+        let csc = CooMatrix::from_triplets(
+            Shape2D::new(3, 4),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![0, 0, 1, 1, 2, 2],
+            vec![0, 2, 1, 3, 0, 2],
+            false,
+        )
+        .expect("valid coo")
+        .to_csc()
+        .expect("coo->csc");
+
+        let values = csc
+            .boolean_mask_values(&[
+                vec![false, true, true, false],
+                vec![false, false, false, true],
+                vec![true, false, false, false],
+            ])
+            .expect("boolean mask values");
+        assert_vec_close(&values, &[0.0, 2.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn csc_boolean_index_rejects_mask_length_mismatch() {
+        let csc = CscMatrix::from_components(
+            Shape2D::new(3, 2),
+            vec![1.0, 2.0, 3.0],
+            vec![0, 2, 1],
+            vec![0, 2, 3],
+            false,
+        )
+        .expect("valid csc");
+
+        let row_err = csc
+            .boolean_row_index(&[true, false])
+            .expect_err("row boolean length mismatch");
+        assert!(matches!(row_err, SparseError::InvalidArgument { .. }));
+
+        let col_err = csc
+            .boolean_col_index(&[true, false, true])
+            .expect_err("col boolean length mismatch");
+        assert!(matches!(col_err, SparseError::InvalidArgument { .. }));
+
+        let mask_err = csc
+            .boolean_mask_values(&[vec![true, false]])
+            .expect_err("matrix boolean shape mismatch");
+        assert!(matches!(mask_err, SparseError::InvalidArgument { .. }));
+    }
+
+    #[test]
     fn coo_rejects_length_mismatch() {
         let err =
             CooMatrix::from_triplets(Shape2D::new(2, 2), vec![1.0], vec![0, 1], vec![1], false)
