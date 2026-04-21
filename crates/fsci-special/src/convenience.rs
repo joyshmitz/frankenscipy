@@ -3663,7 +3663,14 @@ pub fn mish(x: f64) -> f64 {
 ///
 /// A piecewise linear approximation to sigmoid, faster to compute.
 #[must_use]
-pub fn hard_sigmoid(x: f64) -> f64 {
+pub fn hard_sigmoid(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real("hard_sigmoid", x_tensor, mode, |x| {
+        Ok(hard_sigmoid_scalar(x))
+    })
+}
+
+#[must_use]
+pub fn hard_sigmoid_scalar(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
@@ -3680,7 +3687,7 @@ pub fn hard_swish(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
-    x * hard_sigmoid(x)
+    x * hard_sigmoid_scalar(x)
 }
 
 /// Hard tanh activation function.
@@ -5073,13 +5080,13 @@ mod tests {
     #[test]
     fn hard_sigmoid_basic() {
         // hard_sigmoid(-3) = 0
-        assert!((hard_sigmoid(-3.0) - 0.0).abs() < 1e-14);
+        assert!((hard_sigmoid_scalar(-3.0) - 0.0).abs() < 1e-14);
         // hard_sigmoid(3) = 1
-        assert!((hard_sigmoid(3.0) - 1.0).abs() < 1e-14);
+        assert!((hard_sigmoid_scalar(3.0) - 1.0).abs() < 1e-14);
         // hard_sigmoid(0) = 0.5
-        assert!((hard_sigmoid(0.0) - 0.5).abs() < 1e-14);
+        assert!((hard_sigmoid_scalar(0.0) - 0.5).abs() < 1e-14);
         // Linear region
-        assert!((hard_sigmoid(1.0) - (4.0 / 6.0)).abs() < 1e-14);
+        assert!((hard_sigmoid_scalar(1.0) - (4.0 / 6.0)).abs() < 1e-14);
     }
 
     #[test]
@@ -5302,6 +5309,41 @@ mod tests {
         assert!(values[0].is_nan());
         assert_eq!(values[1], 0.0);
         assert!(values[2].is_nan());
+        Ok(())
+    }
+
+    #[test]
+    fn hard_sigmoid_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = hard_sigmoid(&SpecialTensor::RealScalar(0.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - hard_sigmoid_scalar(0.0)).abs() < 1e-14);
+
+        let vector = hard_sigmoid(
+            &SpecialTensor::RealVec(vec![-4.0, 0.0, 4.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [-4.0, 0.0, 4.0].map(hard_sigmoid_scalar);
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hard_sigmoid_tensor_dispatch_preserves_nan_and_bounds() -> Result<(), String> {
+        let vector = hard_sigmoid(
+            &SpecialTensor::RealVec(vec![f64::NAN, -10.0, 10.0]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert!(values[0].is_nan());
+        assert_eq!(values[1], 0.0);
+        assert_eq!(values[2], 1.0);
         Ok(())
     }
 
