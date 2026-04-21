@@ -10910,7 +10910,8 @@ pub fn multipletests_fdr_bh(pvalues: &[f64], alpha: f64) -> MultitestResult {
 
 /// Combine independent p-values into a single test statistic and p-value.
 ///
-/// Supported methods: `"fisher"` (default), `"pearson"`, `"tippett"`, `"stouffer"`.
+/// Supported methods: `"fisher"` (default), `"pearson"`, `"tippett"`, `"stouffer"`,
+/// `"mudholkar_george"`.
 ///
 /// Matches the core behavior of `scipy.stats.combine_pvalues`.
 pub fn combine_pvalues(
@@ -10989,6 +10990,47 @@ pub fn combine_pvalues(
                 .sum::<f64>()
                 / weight_norm;
             let pvalue = Normal::standard().sf(statistic).clamp(0.0, 1.0);
+            GoodnessOfFitResult { statistic, pvalue }
+        }
+        "mudholkar_george" => {
+            let mut has_zero = false;
+            let mut has_one = false;
+            let mut logit_sum = 0.0;
+
+            for &p in pvalues {
+                if p == 0.0 {
+                    has_zero = true;
+                } else if p == 1.0 {
+                    has_one = true;
+                } else {
+                    logit_sum += p.ln() - (1.0 - p).ln();
+                }
+            }
+
+            let statistic = if has_zero && has_one {
+                f64::NAN
+            } else if has_zero {
+                f64::NEG_INFINITY
+            } else if has_one {
+                f64::INFINITY
+            } else {
+                -logit_sum
+            };
+
+            let pvalue = if !statistic.is_finite() {
+                if statistic.is_nan() {
+                    f64::NAN
+                } else if statistic == f64::INFINITY {
+                    0.0
+                } else {
+                    1.0
+                }
+            } else {
+                let c = (k * std::f64::consts::PI * std::f64::consts::PI / 3.0).sqrt();
+                let normalized = statistic / c;
+                Logistic::new(0.0, 1.0).sf(normalized).clamp(0.0, 1.0)
+            };
+
             GoodnessOfFitResult { statistic, pvalue }
         }
         _ => {
@@ -18617,6 +18659,48 @@ mod tests {
         assert_close(result.statistic, 0.03, 1e-12, "tippett statistic");
         let expected_pvalue = 1.0 - (1.0 - 0.03_f64).powi(pvalues.len() as i32);
         assert_close(result.pvalue, expected_pvalue, 1e-12, "tippett pvalue");
+    }
+
+    #[test]
+    fn combine_pvalues_mudholkar_george_basic() {
+        let pvalues = [0.01, 0.03, 0.2];
+        let result =
+            combine_pvalues(&pvalues, Some("mudholkar_george"), None).expect("mudholkar_george");
+
+        let expected_statistic: f64 = -pvalues
+            .iter()
+            .map(|&p| p.ln() - (1.0 - p).ln())
+            .sum::<f64>();
+        assert_close(
+            result.statistic,
+            expected_statistic,
+            1e-12,
+            "mudholkar_george statistic",
+        );
+
+        assert!(result.pvalue >= 0.0 && result.pvalue <= 1.0);
+        assert!(
+            result.pvalue < 0.1,
+            "combined evidence should be significant for small p-values"
+        );
+    }
+
+    #[test]
+    fn combine_pvalues_mudholkar_george_boundary_cases() {
+        let result = combine_pvalues(&[0.0, 0.5], Some("mudholkar_george"), None)
+            .expect("mudholkar_george zero");
+        assert!(result.statistic == f64::NEG_INFINITY);
+        assert!((result.pvalue - 1.0).abs() < 1e-12);
+
+        let result = combine_pvalues(&[1.0, 0.5], Some("mudholkar_george"), None)
+            .expect("mudholkar_george one");
+        assert!(result.statistic == f64::INFINITY);
+        assert!(result.pvalue.abs() < 1e-12);
+
+        let result = combine_pvalues(&[0.0, 1.0], Some("mudholkar_george"), None)
+            .expect("mudholkar_george both");
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
     }
 
     #[test]
