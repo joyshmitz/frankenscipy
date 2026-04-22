@@ -235,11 +235,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
             let nnz = info.nnz;
             let dense_len = checked_matrix_len(rows, cols, "Matrix Market matrix")?;
             let mut data = vec![0.0; dense_len];
-            let mut complex_data = if info.field == MmField::Complex {
-                Some(vec![(0.0, 0.0); dense_len])
-            } else {
-                None
-            };
+            let mut complex_data: Option<Vec<(f64, f64)>> = None;
             let mut seen_nnz = 0usize;
 
             for line in lines {
@@ -267,23 +263,9 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                         "Matrix Market col indices must be 1-based and >= 1".to_string(),
                     )
                 })?;
-                let mut v: f64 = 0.0;
-                let mut v_im: f64 = 0.0;
+                let v: f64;
                 if info.field == MmField::Pattern {
                     v = 1.0;
-                } else if info.field == MmField::Complex {
-                    if vals.len() >= 4 {
-                        v = vals[2]
-                            .parse()
-                            .map_err(|e| IoError::InvalidFormat(format!("bad real: {e}")))?;
-                        v_im = vals[3]
-                            .parse()
-                            .map_err(|e| IoError::InvalidFormat(format!("bad imag: {e}")))?;
-                    } else {
-                        return Err(IoError::InvalidFormat(
-                            "complex coordinate entry missing values".to_string(),
-                        ));
-                    }
                 } else if vals.len() >= 3 {
                     v = vals[2]
                         .parse()
@@ -293,6 +275,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                         "coordinate entry missing value for non-pattern field".to_string(),
                     ));
                 }
+                let v_im = 0.0;
 
                 if r >= rows || c >= cols {
                     return Err(IoError::InvalidFormat(format!(
@@ -300,7 +283,12 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                     )));
                 }
 
-                let add_val = |cd: &mut Option<Vec<(f64, f64)>>, d: &mut Vec<f64>, r: usize, c: usize, vr: f64, vi: f64| {
+                let add_val = |cd: &mut Option<Vec<(f64, f64)>>,
+                               d: &mut Vec<f64>,
+                               r: usize,
+                               c: usize,
+                               vr: f64,
+                               vi: f64| {
                     let i = r * cols + c;
                     if let Some(cdata) = cd {
                         cdata[i].0 += vr;
@@ -309,7 +297,12 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                         d[i] += vr;
                     }
                 };
-                let sub_val = |cd: &mut Option<Vec<(f64, f64)>>, d: &mut Vec<f64>, r: usize, c: usize, vr: f64, vi: f64| {
+                let sub_val = |cd: &mut Option<Vec<(f64, f64)>>,
+                               d: &mut Vec<f64>,
+                               r: usize,
+                               c: usize,
+                               vr: f64,
+                               vi: f64| {
                     let i = r * cols + c;
                     if let Some(cdata) = cd {
                         cdata[i].0 -= vr;
@@ -345,7 +338,8 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                             sub_val(&mut complex_data, &mut data, c, r, v, v_im);
                         }
                     }
-                }                seen_nnz += 1;
+                }
+                seen_nnz += 1;
             }
 
             if seen_nnz != nnz {
@@ -367,11 +361,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
             let cols = info.cols;
             // Array format: column-major order
             let mut data = vec![0.0; rows * cols];
-            let mut complex_data = if info.field == MmField::Complex {
-                Some(vec![(0.0, 0.0); rows * cols])
-            } else {
-                None
-            };
+            let mut complex_data: Option<Vec<(f64, f64)>> = None;
             let mut idx = 0;
 
             for line in lines {
@@ -385,27 +375,10 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                         rows * cols
                     )));
                 }
-                let v: f64;
-                let mut v_im: f64 = 0.0;
-                if info.field == MmField::Complex {
-                    let vals: Vec<&str> = trimmed.split_whitespace().collect();
-                    if vals.len() >= 2 {
-                        v = vals[0]
-                            .parse()
-                            .map_err(|e| IoError::InvalidFormat(format!("bad real: {e}")))?;
-                        v_im = vals[1]
-                            .parse()
-                            .map_err(|e| IoError::InvalidFormat(format!("bad imag: {e}")))?;
-                    } else {
-                        return Err(IoError::InvalidFormat(
-                            "complex array entry missing values".to_string(),
-                        ));
-                    }
-                } else {
-                    v = trimmed
-                        .parse()
-                        .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
-                }
+                let v = trimmed
+                    .parse()
+                    .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
+                let v_im = 0.0;
 
                 // Column-major to row-major conversion
                 let col = idx / rows;
