@@ -1608,6 +1608,44 @@ impl ContinuousDistribution for Weibull {
         let skew_num = g3 - 3.0 * g1 * var - g1.powi(3);
         (g4 - 4.0 * g1 * skew_num - 6.0 * g1 * g1 * var - g1.powi(4)) / var.powi(2) - 3.0
     }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|v| v.is_nan() || *v <= 0.0) {
+            return Self {
+                c: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+        let n = data.len() as f64;
+        let ln_data: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
+        let mean_ln: f64 = ln_data.iter().sum::<f64>() / n;
+
+        let mut c = 1.0;
+        for _ in 0..50 {
+            let xc: Vec<f64> = data.iter().map(|&x| x.powf(c)).collect();
+            let sum_xc: f64 = xc.iter().sum();
+            let sum_xc_ln: f64 = xc.iter().zip(ln_data.iter()).map(|(&x, &lx)| x * lx).sum();
+            let f = 1.0 / c + mean_ln - sum_xc_ln / sum_xc;
+            if f.abs() < 1e-10 {
+                break;
+            }
+            let sum_xc_ln2: f64 = xc
+                .iter()
+                .zip(ln_data.iter())
+                .map(|(&x, &lx)| x * lx * lx)
+                .sum();
+            let df = -1.0 / (c * c)
+                - (sum_xc * sum_xc_ln2 - sum_xc_ln * sum_xc_ln) / (sum_xc * sum_xc);
+            if df.abs() < 1e-15 {
+                break;
+            }
+            c -= f / df;
+            c = c.max(1e-6);
+        }
+        let xc_sum: f64 = data.iter().map(|&x| x.powf(c)).sum();
+        let scale = (xc_sum / n).powf(1.0 / c);
+        Self { c, scale }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1855,6 +1893,18 @@ impl ContinuousDistribution for Lomax {
         } else {
             self.c / ((self.c - 1.0).powi(2) * (self.c - 2.0))
         }
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|v| v.is_nan() || *v < 0.0) {
+            return Self { c: f64::NAN };
+        }
+        let n = data.len() as f64;
+        let log_sum: f64 = data.iter().map(|&x| (1.0 + x).ln()).sum();
+        if log_sum <= 0.0 {
+            return Self { c: f64::NAN };
+        }
+        Self { c: n / log_sum }
     }
 }
 
@@ -3829,6 +3879,23 @@ impl ContinuousDistribution for Triangular {
     fn var(&self) -> f64 {
         let (a, c, b) = (self.left, self.mode, self.right);
         (a * a + b * b + c * c - a * b - a * c - b * c) / 18.0
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.len() < 3 || data.iter().any(|v| v.is_nan()) {
+            return Self {
+                left: f64::NAN,
+                mode: f64::NAN,
+                right: f64::NAN,
+            };
+        }
+        let left = data.iter().cloned().fold(f64::INFINITY, f64::min);
+        let right = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let n = data.len() as f64;
+        let mean = data.iter().sum::<f64>() / n;
+        let mode = 3.0 * mean - left - right;
+        let mode = mode.clamp(left, right);
+        Self { left, mode, right }
     }
 }
 
