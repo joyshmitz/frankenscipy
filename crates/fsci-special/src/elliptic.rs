@@ -657,7 +657,8 @@ fn exp1_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, Spe
             return exp1_scalar(z.re, mode).map(Complex64::from_real);
         }
         if z.re < 0.0 {
-            return expi_scalar(-z.re, mode).map(|value| Complex64::new(-value, -PI));
+            let sign_pi = if z.im.is_sign_negative() { PI } else { -PI };
+            return expi_scalar(-z.re, mode).map(|value| Complex64::new(-value, sign_pi));
         }
     }
 
@@ -1923,6 +1924,23 @@ mod tests {
             1e-12,
             "exp1 principal branch on negative real axis",
         );
+    }
+
+    #[test]
+    fn exp1_complex_negative_real_signed_zero_selects_lower_branch() {
+        let x = 3.0;
+        let result = eval_complex_scalar(exp1(
+            &SpecialTensor::ComplexScalar(Complex64::new(-x, -0.0)),
+            RuntimeMode::Strict,
+        ));
+        let expected_real = -expi_scalar(x, RuntimeMode::Strict).expect("Ei(x) should succeed");
+        assert_complex_close(
+            result,
+            Complex64::new(expected_real, PI),
+            1e-12,
+            "exp1 lower branch on negative real axis",
+        );
+        assert!(result.im.is_sign_positive());
     }
 
     #[test]
