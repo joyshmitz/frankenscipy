@@ -981,7 +981,7 @@ fn complex_rgamma_scalar(z: Complex64) -> Complex64 {
     if !z.is_finite() {
         return Complex64::new(f64::NAN, f64::NAN);
     }
-    if z.im == 0.0 && is_negative_integer_pole(z.re) {
+    if is_complex_real_gamma_pole(z) {
         return Complex64::from_real(0.0);
     }
     (-complex_gammaln(z)).exp()
@@ -1307,6 +1307,10 @@ fn factorial_f64(order: usize) -> f64 {
 
 fn is_negative_integer_pole(x: f64) -> bool {
     x.is_finite() && x < 0.0 && x.fract() == 0.0
+}
+
+fn is_complex_real_gamma_pole(z: Complex64) -> bool {
+    z.im == 0.0 && (z.re == 0.0 || is_negative_integer_pole(z.re))
 }
 
 /// Log-gamma function computed directly via Stirling series.
@@ -1891,6 +1895,10 @@ pub fn zetac(s: f64) -> f64 {
 /// Complex log-gamma using Lanczos approximation.
 /// Matches scipy.special.loggamma for complex arguments.
 pub fn complex_gammaln(z: Complex64) -> Complex64 {
+    if is_complex_real_gamma_pole(z) {
+        return Complex64::new(f64::NAN, f64::NAN);
+    }
+
     if z.re < 0.5 {
         // Reflection formula: Γ(z) = π / (sin(πz) Γ(1-z))
         // ln Γ(z) = ln(π) - ln(sin(πz)) - ln Γ(1-z)
@@ -1941,6 +1949,9 @@ fn complex_cot(z: Complex64) -> Complex64 {
 /// ψ(z) = d/dz ln(Γ(z))
 pub fn complex_digamma_scalar(z: Complex64) -> Complex64 {
     if !z.is_finite() {
+        return Complex64::new(f64::NAN, f64::NAN);
+    }
+    if is_complex_real_gamma_pole(z) {
         return Complex64::new(f64::NAN, f64::NAN);
     }
 
@@ -2610,6 +2621,36 @@ mod tests {
     }
 
     #[test]
+    fn complex_digamma_returns_nan_at_real_poles() -> Result<(), String> {
+        for x in [0.0, -1.0, -2.0, -8.0] {
+            let actual = get_digamma_complex(digamma(
+                &digamma_complex_scalar(x, 0.0),
+                RuntimeMode::Strict,
+            ))?;
+            assert!(
+                actual.re.is_nan(),
+                "digamma({x}+0i) real part should be NaN"
+            );
+            assert!(
+                actual.im.is_nan(),
+                "digamma({x}+0i) imag part should be NaN"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn complex_digamma_near_real_poles_stays_finite() -> Result<(), String> {
+        let actual = get_digamma_complex(digamma(
+            &digamma_complex_scalar(-1.0, 1.0e-12),
+            RuntimeMode::Strict,
+        ))?;
+        assert!(actual.re.is_finite());
+        assert!(actual.im.is_finite());
+        Ok(())
+    }
+
+    #[test]
     fn complex_trigamma_real_axis_matches_real_trigamma() -> Result<(), String> {
         let x = 2.5;
         let real_result = get_scalar(polygamma(1, &scalar(x), RuntimeMode::Strict))?;
@@ -3252,10 +3293,35 @@ mod tests {
 
     #[test]
     fn complex_rgamma_returns_zero_at_negative_integer_poles() -> Result<(), String> {
-        for x in [-1.0, -2.0, -8.0] {
+        for x in [0.0, -1.0, -2.0, -8.0] {
             let actual = get_complex_scalar(rgamma(&complex_scalar(x, 0.0), RuntimeMode::Strict))?;
             assert_eq!(actual, Complex64::from_real(0.0));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn complex_gammaln_returns_nan_at_real_poles() -> Result<(), String> {
+        for x in [0.0, -1.0, -2.0, -8.0] {
+            let actual = get_complex_scalar(gammaln(&complex_scalar(x, 0.0), RuntimeMode::Strict))?;
+            assert!(
+                actual.re.is_nan(),
+                "gammaln({x}+0i) real part should be NaN"
+            );
+            assert!(
+                actual.im.is_nan(),
+                "gammaln({x}+0i) imag part should be NaN"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn complex_gammaln_near_real_poles_stays_finite() -> Result<(), String> {
+        let actual =
+            get_complex_scalar(gammaln(&complex_scalar(-1.0, 1.0e-12), RuntimeMode::Strict))?;
+        assert!(actual.re.is_finite());
+        assert!(actual.im.is_finite());
         Ok(())
     }
 
