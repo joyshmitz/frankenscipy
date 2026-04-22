@@ -11909,6 +11909,38 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn scipy_fft_oracle_preserves_complex_paths_and_split_shapes() {
+        let script_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python_oracle/scipy_fft_oracle.py");
+
+        let output = Command::new("python3")
+            .arg(&script_path)
+            .arg("--self-check")
+            .output()
+            .expect("run scipy fft oracle self-check");
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("No module named") {
+                eprintln!("skipping fft oracle self-check: {stderr}");
+                return;
+            }
+            panic!(
+                "fft oracle self-check should pass\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                stderr
+            );
+        }
+
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("fft oracle shape/complex self-check passed"),
+            "unexpected fft oracle self-check output:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn scipy_optimize_oracle_rejects_unknown_objective_and_root_names() {
         let unique = format!("fsci-conformance-test-opt-{}", super::now_unix_ms());
         let root = PathBuf::from("/tmp").join(unique);

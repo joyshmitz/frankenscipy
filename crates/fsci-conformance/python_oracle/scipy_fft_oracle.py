@@ -32,19 +32,43 @@ def _complex_input_to_numpy(data: List[List[float]], np: Any) -> Any:
     return np.array([complex(r, i) for r, i in data], dtype=np.complex128)
 
 
+def _shape_tuple(case: Dict[str, Any], field: str) -> Any:
+    """Normalize optional shape fields into tuples of ints."""
+    shape = case.get(field)
+    if shape is None:
+        return None
+    return tuple(int(dim) for dim in shape)
+
+
+def _resolve_fft_shapes(case: Dict[str, Any]) -> tuple[Any, Any]:
+    """Resolve reshape vs output-shape hints without ambiguous legacy mixing."""
+    input_shape = _shape_tuple(case, "input_shape")
+    output_shape = _shape_tuple(case, "output_shape")
+    legacy_shape = _shape_tuple(case, "shape")
+
+    if legacy_shape is not None and (input_shape is not None or output_shape is not None):
+        raise ValueError(
+            "shape is deprecated for multi-dimensional FFT hints; use input_shape/output_shape without mixing"
+        )
+
+    if input_shape is None:
+        input_shape = legacy_shape
+    if output_shape is None:
+        output_shape = legacy_shape
+
+    return input_shape, output_shape
+
+
 def _reshape_input(case: Dict[str, Any], x: Any, np: Any) -> Any:
     """Reshape flat inputs for multi-dimensional transforms when possible."""
-    input_shape = case.get("input_shape")
-    if input_shape:
-        return x.reshape(tuple(input_shape))
-    shape = case.get("shape")
-    if shape:
-        try:
-            expected = int(np.prod(shape))
-            if x.size == expected:
-                return x.reshape(tuple(shape))
-        except Exception:  # noqa: BLE001
-            pass
+    input_shape, _ = _resolve_fft_shapes(case)
+    if input_shape is not None:
+        expected = int(np.prod(input_shape))
+        if x.size != expected:
+            raise ValueError(
+                f"input size {x.size} does not match input_shape {list(input_shape)}"
+            )
+        return x.reshape(input_shape)
     return x
 
 
@@ -81,28 +105,28 @@ def _run_case(case: Dict[str, Any], fft: Any, np: Any) -> Dict[str, Any]:
             result = fft.irfft(x, n=n, norm=normalization)
         elif transform == "dct":
             dct_type = case.get("dct_type", 2)
-            result = fft.dct(x.real if np.iscomplexobj(x) else x, type=dct_type, norm=normalization)
+            result = fft.dct(x, type=dct_type, norm=normalization)
         elif transform == "idct":
             dct_type = case.get("dct_type", 2)
-            result = fft.idct(x.real if np.iscomplexobj(x) else x, type=dct_type, norm=normalization)
+            result = fft.idct(x, type=dct_type, norm=normalization)
         elif transform == "dst":
             dst_type = case.get("dst_type", 2)
-            result = fft.dst(x.real if np.iscomplexobj(x) else x, type=dst_type, norm=normalization)
+            result = fft.dst(x, type=dst_type, norm=normalization)
         elif transform == "idst":
             dst_type = case.get("dst_type", 2)
-            result = fft.idst(x.real if np.iscomplexobj(x) else x, type=dst_type, norm=normalization)
+            result = fft.idst(x, type=dst_type, norm=normalization)
         elif transform == "fft2":
-            shape = tuple(case["shape"]) if case.get("shape") else None
-            result = fft.fft2(_reshape_input(case, x, np), s=shape, norm=normalization)
+            _, output_shape = _resolve_fft_shapes(case)
+            result = fft.fft2(_reshape_input(case, x, np), s=output_shape, norm=normalization)
         elif transform == "ifft2":
-            shape = tuple(case["shape"]) if case.get("shape") else None
-            result = fft.ifft2(_reshape_input(case, x, np), s=shape, norm=normalization)
+            _, output_shape = _resolve_fft_shapes(case)
+            result = fft.ifft2(_reshape_input(case, x, np), s=output_shape, norm=normalization)
         elif transform == "fftn":
-            shape = tuple(case["shape"]) if case.get("shape") else None
-            result = fft.fftn(_reshape_input(case, x, np), s=shape, norm=normalization)
+            _, output_shape = _resolve_fft_shapes(case)
+            result = fft.fftn(_reshape_input(case, x, np), s=output_shape, norm=normalization)
         elif transform == "ifftn":
-            shape = tuple(case["shape"]) if case.get("shape") else None
-            result = fft.ifftn(_reshape_input(case, x, np), s=shape, norm=normalization)
+            _, output_shape = _resolve_fft_shapes(case)
+            result = fft.ifftn(_reshape_input(case, x, np), s=output_shape, norm=normalization)
         elif transform == "fftfreq":
             n_pts = int(case.get("n_points", len(x)))
             d = case.get("sample_spacing", 1.0)
@@ -155,15 +179,97 @@ def _run_case(case: Dict[str, Any], fft: Any, np: Any) -> Dict[str, Any]:
         }
 
 
+def _oracle_values_to_complex_array(values: List[List[float]], np: Any) -> Any:
+    """Convert oracle [[real, imag], ...] payloads back into numpy complex arrays."""
+    return np.array([complex(real, imag) for real, imag in values], dtype=np.complex128)
+
+
+def _self_check_shape_and_complex_paths() -> List[str]:
+    """Verify complex DCT/DST support and split shape semantics."""
+    try:
+        import numpy as np
+        from scipy import fft
+    except ModuleNotFoundError as exc:
+        return [str(exc)]
+
+    errors: List[str] = []
+
+    complex_input = [[1.0, 2.0], [3.0, -4.0], [0.5, 0.25]]
+    complex_array = _complex_input_to_numpy(complex_input, np)
+
+    dct_case = {
+        "case_id": "self_check_dct_complex",
+        "transform": "dct",
+        "complex_input": complex_input,
+    }
+    dct_result = _run_case(dct_case, fft=fft, np=np)
+    expected_dct = fft.dct(complex_array, type=2, norm="backward")
+    if dct_result["status"] != "ok" or dct_result["result_kind"] != "complex_vector":
+        errors.append(f"complex dct self-check failed: {dct_result}")
+    else:
+        observed_dct = _oracle_values_to_complex_array(dct_result["result"]["values"], np)
+        if not np.allclose(observed_dct, expected_dct, atol=1.0e-12, rtol=1.0e-12):
+            errors.append("complex dct self-check mismatch")
+
+    dst_case = {
+        "case_id": "self_check_dst_complex",
+        "transform": "dst",
+        "complex_input": complex_input,
+    }
+    dst_result = _run_case(dst_case, fft=fft, np=np)
+    expected_dst = fft.dst(complex_array, type=2, norm="backward")
+    if dst_result["status"] != "ok" or dst_result["result_kind"] != "complex_vector":
+        errors.append(f"complex dst self-check failed: {dst_result}")
+    else:
+        observed_dst = _oracle_values_to_complex_array(dst_result["result"]["values"], np)
+        if not np.allclose(observed_dst, expected_dst, atol=1.0e-12, rtol=1.0e-12):
+            errors.append("complex dst self-check mismatch")
+
+    shape_case = {
+        "case_id": "self_check_fft2_split_shape",
+        "transform": "fft2",
+        "real_input": [float(i) for i in range(9)],
+        "input_shape": [3, 3],
+        "output_shape": [5, 5],
+    }
+    shape_result = _run_case(shape_case, fft=fft, np=np)
+    expected_shape = fft.fft2(np.arange(9.0).reshape((3, 3)), s=(5, 5), norm="backward")
+    if shape_result["status"] != "ok":
+        errors.append(f"split shape self-check failed: {shape_result}")
+    else:
+        observed_shape = _oracle_values_to_complex_array(shape_result["result"]["values"], np)
+        if observed_shape.shape != expected_shape.shape or not np.allclose(
+            observed_shape, expected_shape.ravel(), atol=1.0e-12, rtol=1.0e-12
+        ):
+            errors.append("split shape self-check mismatch")
+
+    ambiguous_case = {
+        "case_id": "self_check_fft2_ambiguous_shape",
+        "transform": "fft2",
+        "real_input": [float(i) for i in range(9)],
+        "shape": [3, 3],
+        "output_shape": [5, 5],
+    }
+    ambiguous_result = _run_case(ambiguous_case, fft=fft, np=np)
+    if ambiguous_result["status"] != "error" or "deprecated" not in (
+        ambiguous_result.get("error") or ""
+    ):
+        errors.append(f"ambiguous shape self-check should fail closed: {ambiguous_result}")
+
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Capture SciPy FFT oracle outputs")
-    parser.add_argument("--fixture", required=True, help="Input packet fixture JSON path")
-    parser.add_argument("--output", required=True, help="Output oracle capture JSON path")
-    parser.add_argument("--oracle-root", required=True, help="Legacy oracle root path")
+    parser.add_argument("--fixture", help="Input packet fixture JSON path")
+    parser.add_argument("--output", help="Output oracle capture JSON path")
+    parser.add_argument("--oracle-root", help="Legacy oracle root path")
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="Verify split shape semantics and complex DCT/DST handling",
+    )
     args = parser.parse_args()
-
-    fixture_path = Path(args.fixture)
-    output_path = Path(args.output)
 
     try:
         import numpy as np
@@ -171,6 +277,20 @@ def main() -> int:
     except ModuleNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    if args.self_check:
+        errors = _self_check_shape_and_complex_paths()
+        if errors:
+            print("\n".join(errors), file=sys.stderr)
+            return 1
+        print("fft oracle shape/complex self-check passed")
+        return 0
+
+    if not args.fixture or not args.output or not args.oracle_root:
+        parser.error("--fixture, --output, and --oracle-root are required unless --self-check is used")
+
+    fixture_path = Path(args.fixture)
+    output_path = Path(args.output)
 
     try:
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
