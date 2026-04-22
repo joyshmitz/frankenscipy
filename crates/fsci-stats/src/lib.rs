@@ -849,6 +849,19 @@ impl ContinuousDistribution for ChiSquared {
         2.0 * self.df
     }
 
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
+            return Self { df: f64::NAN };
+        }
+
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        if !mean.is_finite() || mean <= 0.0 {
+            return Self { df: f64::NAN };
+        }
+
+        Self { df: mean }
+    }
+
     fn skewness(&self) -> f64 {
         (8.0 / self.df).sqrt()
     }
@@ -1181,6 +1194,52 @@ impl ContinuousDistribution for FDistribution {
             f64::NAN
         }
     }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
+            return Self {
+                dfn: f64::NAN,
+                dfd: f64::NAN,
+            };
+        }
+
+        let n = data.len() as f64;
+        let mean = data.iter().sum::<f64>() / n;
+        let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+        if !mean.is_finite() || !var.is_finite() || mean <= 1.0 || var <= 0.0 {
+            return Self {
+                dfn: f64::NAN,
+                dfd: f64::NAN,
+            };
+        }
+
+        let dfd = 2.0 * mean / (mean - 1.0);
+        if !dfd.is_finite() || dfd <= 4.0 {
+            return Self {
+                dfn: f64::NAN,
+                dfd: f64::NAN,
+            };
+        }
+
+        let base_variance = 2.0 * dfd * dfd / ((dfd - 2.0).powi(2) * (dfd - 4.0));
+        let variance_ratio = var / base_variance;
+        if !variance_ratio.is_finite() || variance_ratio <= 1.0 {
+            return Self {
+                dfn: f64::NAN,
+                dfd: f64::NAN,
+            };
+        }
+
+        let dfn = (dfd - 2.0) / (variance_ratio - 1.0);
+        if !dfn.is_finite() || dfn <= 0.0 {
+            return Self {
+                dfn: f64::NAN,
+                dfd: f64::NAN,
+            };
+        }
+
+        Self { dfn, dfd }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1257,6 +1316,42 @@ impl ContinuousDistribution for BetaDist {
     fn var(&self) -> f64 {
         let ab = self.a + self.b;
         self.a * self.b / (ab * ab * (ab + 1.0))
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty()
+            || data
+                .iter()
+                .any(|&x| !x.is_finite() || !(0.0..=1.0).contains(&x))
+        {
+            return Self {
+                a: f64::NAN,
+                b: f64::NAN,
+            };
+        }
+
+        let n = data.len() as f64;
+        let mean = data.iter().sum::<f64>() / n;
+        let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+        if !mean.is_finite() || !var.is_finite() || mean <= 0.0 || mean >= 1.0 || var <= 0.0 {
+            return Self {
+                a: f64::NAN,
+                b: f64::NAN,
+            };
+        }
+
+        let common = mean * (1.0 - mean) / var - 1.0;
+        if !common.is_finite() || common <= 0.0 {
+            return Self {
+                a: f64::NAN,
+                b: f64::NAN,
+            };
+        }
+
+        Self {
+            a: mean * common,
+            b: (1.0 - mean) * common,
+        }
     }
 
     fn skewness(&self) -> f64 {
@@ -3509,6 +3604,27 @@ impl ContinuousDistribution for Cauchy {
 
     fn var(&self) -> f64 {
         f64::NAN // Cauchy has no finite variance
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite()) {
+            return Self {
+                loc: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+
+        let qs = quantile(data, &[0.25, 0.5, 0.75]);
+        let loc = qs[1];
+        let scale = 0.5 * (qs[2] - qs[0]);
+        if !loc.is_finite() || !scale.is_finite() || scale <= 0.0 {
+            return Self {
+                loc: f64::NAN,
+                scale: f64::NAN,
+            };
+        }
+
+        Self { loc, scale }
     }
 
     fn entropy(&self) -> f64 {
@@ -10080,9 +10196,7 @@ pub fn plotting_positions(data: &[f64], alpha: f64, beta: f64) -> Vec<f64> {
         return vec![];
     }
     let denom = n as f64 + 1.0 - alpha - beta;
-    (1..=n)
-        .map(|i| (i as f64 - alpha) / denom)
-        .collect()
+    (1..=n).map(|i| (i as f64 - alpha) / denom).collect()
 }
 
 /// Counts tied groups in data by tie size.
@@ -10470,11 +10584,11 @@ pub fn kstat(data: &[f64], n: u32) -> f64 {
             if nn < 4.0 {
                 return f64::NAN;
             }
-            ((-6.0 * s1.powi(4) + 12.0 * nn * s1 * s1 * s2
+            (-6.0 * s1.powi(4) + 12.0 * nn * s1 * s1 * s2
                 - 3.0 * nn * (nn - 1.0) * s2 * s2
                 - 4.0 * nn * (nn + 1.0) * s1 * s3
                 + nn * nn * (nn + 1.0) * s4)
-                / (nn * (nn - 1.0) * (nn - 2.0) * (nn - 3.0)))
+                / (nn * (nn - 1.0) * (nn - 2.0) * (nn - 3.0))
         }
         _ => f64::NAN,
     }
@@ -10604,6 +10718,7 @@ pub fn lmoment(data: &[f64], order: u32) -> f64 {
 }
 
 /// Binomial coefficient for floating point arguments.
+#[allow(dead_code)]
 fn comb(n: f64, k: f64) -> f64 {
     if k < 0.0 || k > n || n < 0.0 {
         return 0.0;
@@ -11721,7 +11836,6 @@ pub fn weightedtau(x: &[f64], y: &[f64]) -> f64 {
 
     // Get ranks for both arrays
     let rank_x = rank_values(x);
-    let rank_y = rank_values(y);
 
     // Compute weighted concordance/discordance
     let mut weighted_concordant = 0.0;
@@ -19566,6 +19680,52 @@ mod tests {
     }
 
     #[test]
+    fn test_fit_chi_squared() {
+        let data = [2.0, 4.0, 6.0];
+        let fitted = ChiSquared::fit(&data);
+        assert_close(fitted.df, 4.0, 1e-12, "chi-squared fit df");
+    }
+
+    #[test]
+    fn test_fit_f_distribution_matches_moments() {
+        let reference = FDistribution::new(20.0, 30.0);
+        let mean = reference.mean();
+        let var = reference.var();
+        let delta = (1.5 * var).sqrt();
+        let data = [mean - delta, mean, mean + delta];
+        let fitted = FDistribution::fit(&data);
+        assert_close(fitted.dfn, reference.dfn, 1e-10, "F fit dfn");
+        assert_close(fitted.dfd, reference.dfd, 1e-10, "F fit dfd");
+    }
+
+    #[test]
+    fn test_fit_beta_matches_moments() {
+        let reference = BetaDist::new(2.0, 5.0);
+        let mean = reference.mean();
+        let var = reference.var();
+        let delta = (1.5 * var).sqrt();
+        let data = [mean - delta, mean, mean + delta];
+        let fitted = BetaDist::fit(&data);
+        assert_close(fitted.a, reference.a, 1e-10, "beta fit a");
+        assert_close(fitted.b, reference.b, 1e-10, "beta fit b");
+    }
+
+    #[test]
+    fn test_fit_cauchy_recovers_quartiles() {
+        let reference = Cauchy::new(1.5, 0.8);
+        let data = [
+            reference.loc - 2.0 * reference.scale,
+            reference.loc - reference.scale,
+            reference.loc,
+            reference.loc + reference.scale,
+            reference.loc + 2.0 * reference.scale,
+        ];
+        let fitted = Cauchy::fit(&data);
+        assert_close(fitted.loc, reference.loc, 1e-12, "cauchy fit loc");
+        assert_close(fitted.scale, reference.scale, 1e-12, "cauchy fit scale");
+    }
+
+    #[test]
     fn test_fit_pareto() {
         let data = [1.0, 2.0, 4.0, 8.0];
         let p = Pareto::fit(&data);
@@ -19604,6 +19764,9 @@ mod tests {
     #[test]
     fn test_fit_empty_data_returns_nan() {
         let empty: &[f64] = &[];
+        assert!(ChiSquared::fit(empty).df.is_nan());
+        assert!(FDistribution::fit(empty).dfn.is_nan());
+        assert!(BetaDist::fit(empty).a.is_nan());
         assert!(Lognormal::fit(empty).s.is_nan());
         assert!(Rayleigh::fit(empty).scale.is_nan());
         assert!(Logistic::fit(empty).loc.is_nan());
@@ -19613,6 +19776,15 @@ mod tests {
         assert!(Gumbel::fit(empty).loc.is_nan());
         assert!(GumbelLeft::fit(empty).loc.is_nan());
         assert!(Maxwell::fit(empty).scale.is_nan());
+        assert!(Cauchy::fit(empty).loc.is_nan());
+    }
+
+    #[test]
+    fn test_fit_fail_closed_for_invalid_samples() {
+        assert!(ChiSquared::fit(&[-1.0, 2.0, 3.0]).df.is_nan());
+        assert!(FDistribution::fit(&[-1.0, 2.0, 3.0]).dfn.is_nan());
+        assert!(BetaDist::fit(&[0.2, 1.2, 0.4]).a.is_nan());
+        assert!(Cauchy::fit(&[1.0, f64::NAN, 3.0]).loc.is_nan());
     }
 
     #[test]
@@ -26106,7 +26278,7 @@ mod tests {
     fn dist_entropy_gamma() {
         // H = a + ln(scale) + ln(Gamma(a)) + (1-a)*psi(a)
         let g = GammaDist::new(2.0, 1.0);
-        let expected = 2.0 + 0.0_f64.ln().max(-1e10) + ln_gamma(2.0) + (1.0 - 2.0) * digamma(2.0);
+        let _expected = 2.0 + 0.0_f64.ln().max(-1e10) + ln_gamma(2.0) + (1.0 - 2.0) * digamma(2.0);
         // For a=2, scale=1: H = 2 + 0 + ln(1) + (-1)*digamma(2)
         // digamma(2) = 1 - gamma ≈ 0.4227
         // H ≈ 2 + 0 + 0 - 0.4227 ≈ 1.577
