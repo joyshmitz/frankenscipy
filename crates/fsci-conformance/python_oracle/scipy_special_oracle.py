@@ -118,6 +118,12 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             x_arr = np.asarray(x)
             return special.gammainc(a_arr, x_arr) + special.gammaincc(a_arr, x_arr)
 
+        def btdtrc(a: Any, b: Any, x: Any) -> Any:
+            a_arr = np.asarray(a)
+            b_arr = np.asarray(b)
+            x_arr = np.asarray(x)
+            return special.betainc(b_arr, a_arr, 1.0 - x_arr)
+
         def rel_jn_recurrence(n: Any, x: Any) -> Any:
             n_val = np.asarray(n, dtype=float)
             x_arr = np.asarray(x)
@@ -185,7 +191,7 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "betainc": special.betainc,
             "betaincinv": special.betaincinv,
             "btdtr": special.betainc,
-            "btdtrc": lambda a, b, x: 1.0 - special.betainc(a, b, x),
+            "btdtrc": btdtrc,
             "btdtri": special.betaincinv,
             "btdtria": special.btdtria,
             "btdtrib": special.btdtrib,

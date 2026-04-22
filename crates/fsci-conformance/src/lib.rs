@@ -11963,6 +11963,13 @@ def sinc(value):
 
 def errstate(**_kwargs):
     return _ErrState()
+
+def __getattr__(name):
+    def _placeholder(*args, **_kwargs):
+        if args:
+            return args[0]
+        raise RuntimeError(f"unexpected numpy access: {name}")
+    return _placeholder
 "#,
         )
         .expect("write fake numpy module");
@@ -12159,6 +12166,145 @@ def __getattr__(name):
         assert!(
             unsupported.is_empty(),
             "fixture still contains unsupported oracle functions: {unsupported:?}"
+        );
+    }
+
+    #[test]
+    fn scipy_special_oracle_btdtrc_uses_symmetry_to_preserve_near_one_precision() {
+        let unique = format!(
+            "fsci-conformance-test-btdtrc-symmetry-{}",
+            super::now_unix_ms()
+        );
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let pythonpath = root.join("pythonpath");
+        let fake_scipy = pythonpath.join("scipy");
+        fs::create_dir_all(&fake_scipy).expect("create fake scipy package");
+
+        fs::write(
+            pythonpath.join("numpy.py"),
+            r#"__version__ = "mock-numpy-1.0"
+
+class _ErrState:
+    def __enter__(self):
+        return None
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+def asarray(value, dtype=None):
+    if dtype is float:
+        return float(value)
+    return value
+
+nan = float("nan")
+
+def isscalar(value):
+    return not isinstance(value, (list, tuple, dict))
+
+def iscomplexobj(value):
+    if isinstance(value, (list, tuple)):
+        return any(iscomplexobj(item) for item in value)
+    return isinstance(value, complex)
+
+def where(condition, when_true, when_false):
+    return when_true if condition else when_false
+
+def log1p(value):
+    return value
+
+def expm1(value):
+    return value
+
+def sinc(value):
+    return value
+
+def errstate(**_kwargs):
+    return _ErrState()
+
+def __getattr__(name):
+    def _placeholder(*args, **_kwargs):
+        if args:
+            return args[0]
+        raise RuntimeError(f"unexpected numpy access: {name}")
+    return _placeholder
+"#,
+        )
+        .expect("write fake numpy module");
+        fs::write(
+            fake_scipy.join("__init__.py"),
+            r#"from . import special
+
+__version__ = "mock-scipy-1.0"
+"#,
+        )
+        .expect("write fake scipy package");
+        fs::write(
+            fake_scipy.join("special.py"),
+            r#"def _close(a, b, tol=1e-12):
+    return abs(a - b) <= tol
+
+def betainc(a, b, x):
+    if _close(a, 2.0) and _close(b, 3.0) and _close(x, 0.999999):
+        return 1.0 - 4e-18
+    if _close(a, 3.0) and _close(b, 2.0) and _close(x, 1e-6):
+        return 4e-18
+    raise RuntimeError(f"unexpected betainc arguments: {(a, b, x)!r}")
+
+def __getattr__(name):
+    def _placeholder(*_args, **_kwargs):
+        raise RuntimeError(f"unexpected scipy.special access: {name}")
+    return _placeholder
+"#,
+        )
+        .expect("write fake scipy.special module");
+
+        let fixture_path = root.join("fixture.json");
+        let output_path = root.join("oracle.json");
+        let fixture = serde_json::json!({
+            "packet_id": "TEST-BTDTRC-SYMMETRY",
+            "family": "special_core",
+            "cases": [
+                {
+                    "case_id": "btdtrc-near-one",
+                    "function": "btdtrc",
+                    "args": [2.0, 3.0, 0.999999]
+                }
+            ]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize btdtrc fixture"),
+        )
+        .expect("write fixture");
+
+        let script_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python_oracle/scipy_special_oracle.py");
+        let status = Command::new("python3")
+            .env("PYTHONPATH", &pythonpath)
+            .arg(&script_path)
+            .arg("--fixture")
+            .arg(&fixture_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--oracle-root")
+            .arg("/tmp/nonexistent-oracle")
+            .status()
+            .expect("run scipy special oracle");
+        assert!(status.success(), "oracle script should exit successfully");
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output_path).expect("read oracle output"))
+                .expect("parse oracle output");
+        let output = &payload["case_outputs"][0];
+        assert_eq!(output["status"], "ok");
+        assert_eq!(output["result_kind"], "scalar");
+        let value = output["result"]["value"]
+            .as_f64()
+            .expect("btdtrc result should be an f64");
+        assert!(value > 0.0, "expected non-zero tail, got {value}");
+        assert!(
+            (value - 4e-18).abs() <= 1e-30,
+            "expected symmetry-preserved tail, got {value}"
         );
     }
 
