@@ -26547,6 +26547,32 @@ mod tests {
     }
 
     #[test]
+    fn test_ansari_equal_scale() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = [2.0, 3.0, 4.0, 5.0, 6.0];
+        let result = ansari(&x, &y);
+        assert!(result.pvalue > 0.05, "equal scale should not reject H0");
+        assert!(result.statistic.is_finite(), "statistic should be finite");
+    }
+
+    #[test]
+    fn test_ansari_different_scale() {
+        let x = [1.0, 2.0, 10.0, 11.0, 20.0, 21.0];
+        let y = [9.0, 10.0, 11.0, 12.0, 13.0, 14.0];
+        let result = ansari(&x, &y);
+        assert!(result.pvalue < 0.3, "different scale should have smaller p-value");
+    }
+
+    #[test]
+    fn test_ansari_small_samples() {
+        let x = [1.0, 2.0, 3.0];
+        let y = [4.0, 5.0, 6.0];
+        let result = ansari(&x, &y);
+        assert!(result.statistic.is_finite());
+        assert!(result.pvalue >= 0.0 && result.pvalue <= 1.0);
+    }
+
+    #[test]
     fn test_brunnermunzel_alternative() {
         let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let y = [5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
