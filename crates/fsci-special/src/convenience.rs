@@ -1985,25 +1985,34 @@ pub fn wrightomega(z_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult
 
 /// Scalar Wright Omega helper.
 pub fn wrightomega_scalar(z: f64) -> f64 {
+    let exp_z = z.exp();
+
     // Initial guess via Lambert W approximation
     let mut w = if z > 1.0 {
         z - z.ln()
     } else if z > -2.0 {
         z.exp() / (1.0 + z.exp())
     } else {
-        z.exp()
+        if exp_z <= 1.0e-8 {
+            return exp_z;
+        }
+        exp_z
     };
 
     // Newton iteration: f(w) = w + ln(w) - z, f'(w) = 1 + 1/w
     for _ in 0..50 {
-        if w <= 0.0 {
-            w = 1e-15;
+        if z < 0.0 && (!w.is_finite() || w <= 0.0) {
+            return exp_z;
         }
         let residual = w + w.ln() - z;
         if residual.abs() < 1e-15 {
             break;
         }
-        w -= residual / (1.0 + 1.0 / w);
+        let next = w - residual / (1.0 + 1.0 / w);
+        if z < 0.0 && (!next.is_finite() || next <= 0.0) {
+            return exp_z;
+        }
+        w = next;
     }
 
     w
@@ -7405,8 +7414,21 @@ mod tests {
     }
 
     #[test]
+    fn wrightomega_negative_tail_matches_exponential_limit() {
+        let expected_twenty = (-20.0f64).exp();
+        let actual_twenty = wrightomega_scalar(-20.0);
+        assert!(((actual_twenty / expected_twenty) - 1.0).abs() < 1.0e-6);
+
+        let expected_hundred = (-100.0f64).exp();
+        let actual_hundred = wrightomega_scalar(-100.0);
+        assert!(((actual_hundred / expected_hundred) - 1.0).abs() < 1.0e-12);
+
+        assert_eq!(wrightomega_scalar(-800.0), 0.0);
+    }
+
+    #[test]
     fn wrightomega_complex_real_axis_reduces_to_scalar_path() -> Result<(), String> {
-        for x in [-2.0, 0.0, 1.0, 4.0] {
+        for x in [-100.0, -20.0, -2.0, 0.0, 1.0, 4.0] {
             let real_result = wrightomega(&SpecialTensor::RealScalar(x), RuntimeMode::Strict)
                 .map_err(|err| err.to_string())?;
             let real_value = expect_real_scalar(real_result)?;
