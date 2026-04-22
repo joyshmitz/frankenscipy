@@ -4435,14 +4435,14 @@ pub fn run_signal_packet(
 // Stats Conformance Harness
 // ══════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsPacketFixture {
     pub packet_id: String,
     pub family: String,
     pub cases: Vec<StatsCase>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsCase {
     pub case_id: String,
     pub category: String,
@@ -4458,7 +4458,7 @@ impl StatsCase {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsExpected {
     pub kind: String,
     pub value: Option<f64>,
@@ -6233,6 +6233,291 @@ fn compare_linalg_case_against_oracle(
     }
 }
 
+fn stats_expected_tolerance(expected: &StatsExpected) -> (f64, f64) {
+    (
+        expected.atol.unwrap_or(1e-10),
+        expected.rtol.unwrap_or(1e-10),
+    )
+}
+
+fn stats_oracle_case_to_expected(
+    case: &StatsCase,
+    oracle_case: &OracleCaseOutput,
+) -> Result<StatsExpected, String> {
+    let (atol, rtol) = stats_expected_tolerance(&case.expected);
+    let contract_ref = case.expected.contract_ref.clone();
+
+    let mut expected = StatsExpected {
+        kind: oracle_case.result_kind.clone(),
+        value: None,
+        nobs: None,
+        minmax: None,
+        mean: None,
+        variance: None,
+        skewness: None,
+        kurtosis: None,
+        statistic: None,
+        pvalue: None,
+        slope: None,
+        intercept: None,
+        rvalue: None,
+        stderr: None,
+        array_value: None,
+        atol: Some(atol),
+        rtol: Some(rtol),
+        contract_ref,
+    };
+
+    match oracle_case.result_kind.as_str() {
+        "scalar" => {
+            expected.value = Some(oracle_result_field(
+                &oracle_case.result,
+                "value",
+                case.case_id(),
+            )?);
+        }
+        "array" => {
+            expected.array_value = Some(oracle_result_field(
+                &oracle_case.result,
+                "values",
+                case.case_id(),
+            )?);
+        }
+        "describe_result" => {
+            expected.nobs = Some(oracle_result_field(
+                &oracle_case.result,
+                "nobs",
+                case.case_id(),
+            )?);
+            expected.minmax = Some(oracle_result_field(
+                &oracle_case.result,
+                "minmax",
+                case.case_id(),
+            )?);
+            expected.mean = Some(oracle_result_field(
+                &oracle_case.result,
+                "mean",
+                case.case_id(),
+            )?);
+            expected.variance = Some(oracle_result_field(
+                &oracle_case.result,
+                "variance",
+                case.case_id(),
+            )?);
+            expected.skewness = Some(oracle_result_field(
+                &oracle_case.result,
+                "skewness",
+                case.case_id(),
+            )?);
+            expected.kurtosis = Some(oracle_result_field(
+                &oracle_case.result,
+                "kurtosis",
+                case.case_id(),
+            )?);
+        }
+        "correlation_result" | "ttest_result" | "goodness_result" => {
+            expected.statistic = Some(oracle_result_field(
+                &oracle_case.result,
+                "statistic",
+                case.case_id(),
+            )?);
+            expected.pvalue = Some(oracle_result_field(
+                &oracle_case.result,
+                "pvalue",
+                case.case_id(),
+            )?);
+        }
+        "linregress_result" => {
+            expected.slope = Some(oracle_result_field(
+                &oracle_case.result,
+                "slope",
+                case.case_id(),
+            )?);
+            expected.intercept = Some(oracle_result_field(
+                &oracle_case.result,
+                "intercept",
+                case.case_id(),
+            )?);
+            expected.rvalue = Some(oracle_result_field(
+                &oracle_case.result,
+                "rvalue",
+                case.case_id(),
+            )?);
+            expected.pvalue = Some(oracle_result_field(
+                &oracle_case.result,
+                "pvalue",
+                case.case_id(),
+            )?);
+            expected.stderr = Some(oracle_result_field(
+                &oracle_case.result,
+                "stderr",
+                case.case_id(),
+            )?);
+        }
+        other => {
+            return Err(format!(
+                "oracle result for {} has unsupported result_kind `{other}`",
+                case.case_id()
+            ));
+        }
+    }
+
+    Ok(expected)
+}
+
+fn compare_stats_case_against_oracle(
+    case: &StatsCase,
+    oracle_case: &OracleCaseOutput,
+    observed: &StatsObserved,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    if oracle_case.status != "ok" {
+        return match observed {
+            StatsObserved::Error(actual) => (
+                true,
+                format!(
+                    "both raised errors (oracle=`{}`, rust=`{actual}`)",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+            _ => (
+                false,
+                format!(
+                    "oracle errored (`{}`) but rust succeeded",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+        };
+    }
+
+    match stats_oracle_case_to_expected(case, oracle_case) {
+        Ok(expected) => {
+            let mut oracle_case_fixture = case.clone();
+            oracle_case_fixture.expected = expected;
+            compare_stats_case_differential(&oracle_case_fixture, observed)
+        }
+        Err(message) => (false, message, None, None),
+    }
+}
+
+fn oracle_status_from_capture_error(error: &HarnessError) -> OracleStatus {
+    match error {
+        HarnessError::PythonScriptMissing { path } => OracleStatus::Missing {
+            reason: format!("script not found: {}", path.display()),
+        },
+        HarnessError::PythonSciPyMissing { stderr } => OracleStatus::Missing {
+            reason: format!("scipy not available: {stderr}"),
+        },
+        HarnessError::PythonLaunch { python_bin, source } => OracleStatus::Missing {
+            reason: format!("failed to launch python oracle `{python_bin}`: {source}"),
+        },
+        HarnessError::PythonFailed { stderr, .. } => OracleStatus::Failed {
+            reason: stderr.clone(),
+        },
+        HarnessError::OracleParse { path, source } => OracleStatus::Failed {
+            reason: format!(
+                "oracle capture parse failed for {}: {source}",
+                path.display()
+            ),
+        },
+        other => OracleStatus::Failed {
+            reason: other.to_string(),
+        },
+    }
+}
+
+fn default_differential_oracle_script_path(family: &str) -> PathBuf {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if family.contains("stats") {
+        manifest.join("python_oracle/scipy_stats_oracle.py")
+    } else {
+        DifferentialOracleConfig::default().script_path
+    }
+}
+
+fn resolve_differential_oracle_config(
+    config: &DifferentialOracleConfig,
+    family: &str,
+) -> DifferentialOracleConfig {
+    let default_script_path = DifferentialOracleConfig::default().script_path;
+    let script_path = if config.script_path == default_script_path {
+        default_differential_oracle_script_path(family)
+    } else {
+        config.script_path.clone()
+    };
+
+    DifferentialOracleConfig {
+        python_path: config.python_path.clone(),
+        script_path,
+        timeout_secs: config.timeout_secs,
+        required: config.required,
+    }
+}
+
+fn capture_stats_oracle_inner(
+    fixture_path: &Path,
+    fixture_raw: &str,
+    packet_id: &str,
+    oracle_root: &Path,
+    oracle: &DifferentialOracleConfig,
+) -> Result<OracleCapture, HarnessError> {
+    let output_dir = differential_artifact_dir_for_fixture(fixture_path, packet_id);
+    fs::create_dir_all(&output_dir).map_err(|source| HarnessError::ArtifactIo {
+        path: output_dir.clone(),
+        source,
+    })?;
+    let output_path = output_dir.join("oracle_capture.json");
+
+    if !oracle.script_path.exists() {
+        return Err(HarnessError::PythonScriptMissing {
+            path: oracle.script_path.clone(),
+        });
+    }
+
+    let python_bin = oracle.python_path.display().to_string();
+    let output = Command::new(&oracle.python_path)
+        .arg(&oracle.script_path)
+        .arg(as_os_str("--fixture"))
+        .arg(fixture_path)
+        .arg(as_os_str("--output"))
+        .arg(&output_path)
+        .arg(as_os_str("--oracle-root"))
+        .arg(oracle_root)
+        .output()
+        .map_err(|source| HarnessError::PythonLaunch {
+            python_bin: python_bin.clone(),
+            source,
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        if stderr.contains("No module named 'scipy'") {
+            return Err(HarnessError::PythonSciPyMissing { stderr });
+        }
+        return Err(HarnessError::PythonFailed { python_bin, stderr });
+    }
+
+    let mut parsed = load_oracle_capture(&output_path)?;
+    attach_oracle_capture_provenance(&mut parsed, fixture_raw.as_bytes())?;
+    let normalized =
+        serde_json::to_vec_pretty(&parsed).map_err(|e| HarnessError::RaptorQ(e.to_string()))?;
+    fs::write(&output_path, normalized).map_err(|source| HarnessError::ArtifactIo {
+        path: output_path,
+        source,
+    })?;
+
+    Ok(parsed)
+}
+
 pub fn load_packet_reports(config: &HarnessConfig) -> Result<Vec<PacketReport>, HarnessError> {
     let artifact_root = config.fixture_root.join("artifacts");
     if !artifact_root.exists() {
@@ -7767,13 +8052,61 @@ fn run_differential_stats(
             source,
         })?;
 
-    let oracle_status = probe_oracle_availability(oracle_config);
+    let resolved_oracle_config = resolve_differential_oracle_config(oracle_config, &fixture.family);
+    let probed_oracle_status = probe_oracle_availability(&resolved_oracle_config);
+    let mut capture_failure_status = None;
+    let oracle_capture = if resolved_oracle_config.required
+        || matches!(probed_oracle_status, OracleStatus::Available)
+    {
+        match capture_stats_oracle_inner(
+            fixture_path,
+            raw,
+            &fixture.packet_id,
+            &HarnessConfig::default_paths().oracle_root,
+            &resolved_oracle_config,
+        ) {
+            Ok(capture) => Some(capture),
+            Err(error) => {
+                if resolved_oracle_config.required {
+                    return Err(error);
+                }
+                capture_failure_status = Some(oracle_status_from_capture_error(&error));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let oracle_cases = oracle_capture.as_ref().map(|capture| {
+        capture
+            .case_outputs
+            .iter()
+            .map(|case| (case.case_id.as_str(), case))
+            .collect::<std::collections::HashMap<_, _>>()
+    });
+    let oracle_status = match (&oracle_capture, resolved_oracle_config.required) {
+        (Some(_), _) => OracleStatus::Available,
+        (None, true) => probed_oracle_status.clone(),
+        (None, false) => capture_failure_status.unwrap_or(probed_oracle_status),
+    };
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
         let observed = execute_stats_case(case);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_stats_case_differential(case, &observed);
+        let (passed, message, max_diff, tolerance_used) = match oracle_cases.as_ref() {
+            Some(cases) => match cases.get(case.case_id()) {
+                Some(oracle_case) => {
+                    compare_stats_case_against_oracle(case, oracle_case, &observed)
+                }
+                None => (
+                    false,
+                    format!("oracle capture missing stats case `{}`", case.case_id()),
+                    None,
+                    None,
+                ),
+            },
+            None => compare_stats_case_differential(case, &observed),
+        };
 
         per_case_results.push(DifferentialCaseResult {
             case_id: case.case_id().to_owned(),
@@ -11258,12 +11591,13 @@ mod tests {
         ConformanceReport, DifferentialOracleConfig, FftPacketFixture, HarnessConfig,
         IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome, LinalgPacketFixture,
         OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig, SignalPacketFixture,
-        SpatialPacketFixture, SpecialPacketFixture, StatsPacketFixture, aggregate_packet_reports,
-        discover_fixtures, ensure_artifact_layout, load_oracle_capture, run_array_api_packet,
-        run_casp_packet, run_cluster_packet, run_differential_test, run_fft_packet,
-        run_integrate_packet, run_linalg_packet, run_linalg_packet_with_oracle_capture,
-        run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet,
-        run_special_packet, run_stats_packet, run_validate_tol_packet, write_parity_artifacts,
+        SpatialPacketFixture, SpecialPacketFixture, StatsCase, StatsExpected, StatsPacketFixture,
+        aggregate_packet_reports, discover_fixtures, ensure_artifact_layout, load_oracle_capture,
+        run_array_api_packet, run_casp_packet, run_cluster_packet, run_differential_test,
+        run_fft_packet, run_integrate_packet, run_linalg_packet,
+        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_signal_packet, run_smoke,
+        run_sparse_packet, run_spatial_packet, run_special_packet, run_stats_packet,
+        run_validate_tol_packet, write_parity_artifacts,
     };
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
@@ -11568,6 +11902,107 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 .capture_blake3
                 .len()
                 >= 10
+        );
+    }
+
+    #[test]
+    fn run_differential_stats_with_mock_oracle_uses_oracle_values() {
+        let unique = format!("fsci-conformance-stats-mock-run-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let fixtures = root.join("fixtures");
+        fs::create_dir_all(&fixtures).expect("create fixtures");
+
+        let fixture_dst = fixtures.join("FSCI-P2C-012_stats_core.json");
+        let fixture = StatsPacketFixture {
+            packet_id: "FSCI-P2C-012".to_owned(),
+            family: "stats_core".to_owned(),
+            cases: vec![StatsCase {
+                case_id: "sem_basic".to_owned(),
+                category: "differential".to_owned(),
+                mode: "strict".to_owned(),
+                function: "sem".to_owned(),
+                args: vec![serde_json::json!([1.0, 2.0, 3.0, 4.0])],
+                expected: StatsExpected {
+                    kind: "scalar".to_owned(),
+                    value: Some(999.0),
+                    nobs: None,
+                    minmax: None,
+                    mean: None,
+                    variance: None,
+                    skewness: None,
+                    kurtosis: None,
+                    statistic: None,
+                    pvalue: None,
+                    slope: None,
+                    intercept: None,
+                    rvalue: None,
+                    stderr: None,
+                    array_value: None,
+                    atol: Some(1e-12),
+                    rtol: Some(1e-12),
+                    contract_ref: "sem".to_owned(),
+                },
+            }],
+        };
+        fs::write(
+            &fixture_dst,
+            serde_json::to_vec_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let script_path = root.join("mock_stats_oracle.py");
+        let script = r#"
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--fixture", required=True)
+parser.add_argument("--output", required=True)
+parser.add_argument("--oracle-root", required=True)
+args = parser.parse_args()
+
+fixture = json.loads(Path(args.fixture).read_text())
+result = {
+    "packet_id": fixture["packet_id"],
+    "family": fixture["family"],
+    "generated_unix_ms": 0,
+    "runtime": {
+        "python_version": "3.11.0",
+        "numpy_version": "2.0.0",
+        "scipy_version": "mock-1.0",
+    },
+    "case_outputs": [
+        {
+            "case_id": "sem_basic",
+            "status": "ok",
+            "result_kind": "scalar",
+            "result": {"value": 0.6454972243679028},
+            "error": None,
+        }
+    ],
+}
+Path(args.output).write_text(json.dumps(result, indent=2))
+"#;
+        fs::write(&script_path, script).expect("write mock script");
+
+        let oracle = DifferentialOracleConfig {
+            python_path: PathBuf::from("python3"),
+            script_path,
+            timeout_secs: 30,
+            required: true,
+        };
+
+        let report =
+            run_differential_test(&fixture_dst, &oracle).expect("oracle-backed stats fixture runs");
+        assert_eq!(report.fail_count, 0);
+        assert_eq!(report.pass_count, 1);
+        assert_eq!(report.oracle_status, OracleStatus::Available);
+        assert!(
+            report.per_case_results[0].message.contains("scalar match"),
+            "unexpected message: {}",
+            report.per_case_results[0].message
         );
     }
 
