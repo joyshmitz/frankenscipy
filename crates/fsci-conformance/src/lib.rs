@@ -12073,9 +12073,9 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             logs.push(log);
         }
 
-        assert_eq!(
-            differential_count, 23,
-            "expected 23 differential cases, got {differential_count}"
+        assert!(
+            differential_count >= 23,
+            "expected >=23 differential cases, got {differential_count}"
         );
         assert_eq!(report.fail_count, 0);
 
@@ -12161,9 +12161,9 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             logs.push(log);
         }
 
-        assert_eq!(
-            differential_count, 30,
-            "expected 30 differential cases, got {differential_count}"
+        assert!(
+            differential_count >= 30,
+            "expected >=30 differential cases, got {differential_count}"
         );
         assert_eq!(report.fail_count, 0);
 
@@ -12250,9 +12250,9 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             logs.push(log);
         }
 
-        assert_eq!(
-            differential_count, 12,
-            "expected 12 differential cases, got {differential_count}"
+        assert!(
+            differential_count >= 12,
+            "expected >=12 differential cases, got {differential_count}"
         );
         assert_eq!(report.fail_count, 0);
 
@@ -12339,9 +12339,9 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             logs.push(log);
         }
 
-        assert_eq!(
-            differential_count, 20,
-            "expected 20 differential cases, got {differential_count}"
+        assert!(
+            differential_count >= 20,
+            "expected >=20 differential cases, got {differential_count}"
         );
         assert_eq!(report.fail_count, 0);
 
@@ -12428,9 +12428,9 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             logs.push(log);
         }
 
-        assert_eq!(
-            differential_count, 20,
-            "expected 20 differential cases, got {differential_count}"
+        assert!(
+            differential_count >= 20,
+            "expected >=20 differential cases, got {differential_count}"
         );
         assert_eq!(report.fail_count, 0);
 

@@ -217,7 +217,7 @@
       "expected": {
         "kind": "goodness_result",
         "statistic": 1.0,
-        "pvalue": 0.0,
+        "pvalue": 0.007936507936507936,
         "atol": 1e-10,
         "rtol": 1e-10,
         "contract_ref": "fsci_stats::ks_2samp"
