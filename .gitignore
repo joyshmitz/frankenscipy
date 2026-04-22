@@ -17,7 +17,6 @@
 legacy_scipy_code/
 
 # Beads / bv local issue tracker and caches
-.beads/
 .bv/
 
 # IDE / editor
