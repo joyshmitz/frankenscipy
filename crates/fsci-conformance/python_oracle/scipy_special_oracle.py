@@ -107,7 +107,6 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "factorial2": special.factorial2,
             "comb": special.comb,
             "perm": special.perm,
-            "stirling2": lambda n, k: special.comb(n, k, exact=True) * special.factorial(k, exact=True) if k <= n else 0,
             "expit": special.expit,
             "logit": special.logit,
             "log_expit": special.log_expit,

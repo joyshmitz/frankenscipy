@@ -11751,6 +11751,97 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn scipy_special_oracle_rejects_stirling2_until_verified_dispatch_exists() {
+        let unique = format!("fsci-conformance-test-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let pythonpath = root.join("pythonpath");
+        let fake_scipy = pythonpath.join("scipy");
+        fs::create_dir_all(&fake_scipy).expect("create fake scipy package");
+
+        fs::write(
+            pythonpath.join("numpy.py"),
+            r#"__version__ = "mock-numpy-1.0"
+
+def isscalar(_value):
+    return True
+
+def __getattr__(name):
+    def _placeholder(*_args, **_kwargs):
+        raise RuntimeError(f"unexpected numpy access: {name}")
+    return _placeholder
+"#,
+        )
+        .expect("write fake numpy module");
+        fs::write(
+            fake_scipy.join("__init__.py"),
+            r#"from . import special
+
+__version__ = "mock-scipy-1.0"
+"#,
+        )
+        .expect("write fake scipy package");
+        fs::write(
+            fake_scipy.join("special.py"),
+            r#"def __getattr__(name):
+    def _placeholder(*_args, **_kwargs):
+        raise RuntimeError(f"unexpected scipy.special access: {name}")
+    return _placeholder
+"#,
+        )
+        .expect("write fake scipy.special module");
+
+        let fixture_path = root.join("fixture.json");
+        let output_path = root.join("oracle.json");
+        let fixture = serde_json::json!({
+            "packet_id": "TEST-STIRLING2",
+            "family": "special_core",
+            "cases": [
+                {
+                    "case_id": "stirling2-case",
+                    "function": "stirling2",
+                    "args": [3, 2]
+                }
+            ]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize stirling2 fixture"),
+        )
+        .expect("write fixture");
+
+        let script_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python_oracle/scipy_special_oracle.py");
+        let status = Command::new("python3")
+            .env("PYTHONPATH", &pythonpath)
+            .arg(&script_path)
+            .arg("--fixture")
+            .arg(&fixture_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--oracle-root")
+            .arg("/tmp/nonexistent-oracle")
+            .status()
+            .expect("run scipy special oracle");
+        assert!(status.success(), "oracle script should exit successfully");
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output_path).expect("read oracle output"))
+                .expect("parse oracle output");
+        let output = &payload["case_outputs"][0];
+        assert_eq!(output["case_id"], "stirling2-case");
+        assert_eq!(output["status"], "error");
+        assert_eq!(output["result_kind"], "unsupported_function");
+        assert!(
+            output["error"]
+                .as_str()
+                .expect("string error")
+                .contains("stirling2"),
+            "unexpected oracle error payload: {output:?}"
+        );
+    }
+
+    #[test]
     fn run_linalg_packet_with_mock_oracle_uses_oracle_values() {
         let unique = format!("fsci-conformance-mock-run-{}", super::now_unix_ms());
         let root = PathBuf::from("/tmp").join(unique);
