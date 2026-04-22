@@ -3078,8 +3078,7 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0);
             let diff = (exp - got).abs();
-            let tol = atol + rtol * exp.abs();
-            if diff <= tol {
+            if allclose_scalar(*got, exp, atol, rtol) {
                 (true, format!("scalar matched: {got}"))
             } else {
                 (
@@ -3102,9 +3101,7 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                 );
             }
             for (i, (&e, &g)) in exp.iter().zip(got.iter()).enumerate() {
-                let diff = (e - g).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (
                         false,
                         format!("array mismatch at [{i}]: expected {e}, got {g}"),
@@ -3131,9 +3128,7 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                     return (false, format!("matrix cols mismatch at row {i}"));
                 }
                 for (j, (&e, &g)) in er.iter().zip(gr.iter()).enumerate() {
-                    let diff = (e - g).abs();
-                    let tol = atol + rtol * e.abs();
-                    if diff > tol {
+                    if !allclose_scalar(g, e, atol, rtol) {
                         return (
                             false,
                             format!("matrix mismatch at [{i},{j}]: expected {e}, got {g}"),
@@ -3174,9 +3169,7 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
             }
             for (i, (er, gr)) in exp.iter().zip(got.iter()).enumerate() {
                 for j in 0..4 {
-                    let diff = (er[j] - gr[j]).abs();
-                    let tol = atol + rtol * er[j].abs();
-                    if diff > tol {
+                    if !allclose_scalar(gr[j], er[j], atol, rtol) {
                         return (
                             false,
                             format!(
@@ -3202,9 +3195,7 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                 return (false, "vq dists length mismatch".to_string());
             }
             for (i, (&e, &g)) in exp_dists.iter().zip(dists.iter()).enumerate() {
-                let diff = (e - g).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (
                         false,
                         format!("vq dists mismatch at [{i}]: expected {e}, got {g}"),
@@ -3564,8 +3555,7 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0);
             let diff = (got - expected).abs();
-            let tol = atol + rtol * expected.abs();
-            if diff <= tol {
+            if allclose_scalar(*got, expected, atol, rtol) {
                 (true, format!("scalar match: {got}"))
             } else {
                 (
@@ -3592,9 +3582,7 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                 );
             }
             for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
-                let diff = (g - e).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (false, format!("array[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
@@ -3622,9 +3610,7 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                     return (false, format!("row[{i}] length mismatch"));
                 }
                 for (j, (&g, &e)) in grow.iter().zip(erow.iter()).enumerate() {
-                    let diff = (g - e).abs();
-                    let tol = atol + rtol * e.abs();
-                    if diff > tol {
+                    if !allclose_scalar(g, e, atol, rtol) {
                         return (
                             false,
                             format!("matrix[{i}][{j}] mismatch: got {g}, expected {e}"),
@@ -3650,9 +3636,7 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                     format!("index mismatch: got {index}, expected {exp_idx}"),
                 );
             }
-            let diff = (distance - exp_dist).abs();
-            let tol = atol + rtol * exp_dist.abs();
-            if diff > tol {
+            if !allclose_scalar(*distance, exp_dist, atol, rtol) {
                 return (
                     false,
                     format!("distance mismatch: got {distance}, expected {exp_dist}"),
@@ -3672,9 +3656,7 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                     format!("vertices mismatch: got {vertices:?}, expected {exp_vertices:?}"),
                 );
             }
-            let diff = (area - exp_area).abs();
-            let tol = atol + rtol * exp_area.abs();
-            if diff > tol {
+            if !allclose_scalar(*area, exp_area, atol, rtol) {
                 return (
                     false,
                     format!("area mismatch: got {area}, expected {exp_area}"),
@@ -3690,9 +3672,7 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
         }
         ("procrustes_result", SpatialObserved::Procrustes { disparity }) => {
             let exp_disparity = case.expected.disparity.unwrap_or(0.0);
-            let diff = (disparity - exp_disparity).abs();
-            let tol = atol + rtol * exp_disparity.abs();
-            if diff > tol {
+            if !allclose_scalar(*disparity, exp_disparity, atol, rtol) {
                 return (
                     false,
                     format!("disparity mismatch: got {disparity}, expected {exp_disparity}"),
@@ -3769,8 +3749,7 @@ fn compare_halfspace_intersection_outcome(
     for (field, got) in [("dual_area", *dual_area), ("dual_volume", *dual_volume)] {
         if let Some(expected_value) = expected.get(field).and_then(|value| value.as_f64()) {
             let diff = (got - expected_value).abs();
-            let tol = atol + rtol * expected_value.abs();
-            if diff > tol {
+            if !allclose_scalar(got, expected_value, atol, rtol) {
                 return (
                     false,
                     format!("{field} mismatch: got {got}, expected {expected_value}, diff {diff}"),
@@ -3886,9 +3865,7 @@ fn compare_ordered_matrix(
             return Err(format!("{label}[{row_idx}] length mismatch"));
         }
         for (col_idx, (&g, &e)) in got_row.iter().zip(expected_row.iter()).enumerate() {
-            let diff = (g - e).abs();
-            let tol = atol + rtol * e.abs();
-            if diff > tol {
+            if !allclose_scalar(g, e, atol, rtol) {
                 return Err(format!(
                     "{label}[{row_idx}][{col_idx}] mismatch: got {g}, expected {e}"
                 ));
@@ -3929,13 +3906,10 @@ fn compare_unordered_points(
 
 fn points_close(got: &[f64], expected: &[f64], atol: f64, rtol: f64) -> bool {
     got.len() == expected.len()
-        && got.iter().zip(expected.iter()).all(|(&g, &e)| {
-            if g.is_finite() && e.is_finite() {
-                (g - e).abs() <= atol + rtol * e.abs()
-            } else {
-                g.is_nan() == e.is_nan() && g.is_sign_positive() == e.is_sign_positive()
-            }
-        })
+        && got
+            .iter()
+            .zip(expected.iter())
+            .all(|(&g, &e)| allclose_scalar(g, e, atol, rtol))
 }
 
 /// Run the spatial conformance packet.
@@ -4267,9 +4241,7 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
                 );
             }
             for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
-                let diff = (g - e).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (false, format!("array[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
@@ -4307,16 +4279,12 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
                 );
             }
             for (i, (&g, &e)) in b.iter().zip(exp_b.iter()).enumerate() {
-                let diff = (g - e).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (false, format!("b[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
             for (i, (&g, &e)) in a.iter().zip(exp_a.iter()).enumerate() {
-                let diff = (g - e).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (false, format!("a[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
@@ -4333,23 +4301,17 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
                 );
             }
             for (i, (&g, &e)) in w.iter().zip(exp_w.iter()).enumerate() {
-                let diff = (g - e).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (false, format!("w[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
             for (i, (&g, &e)) in h_mag.iter().zip(exp_h_mag.iter()).enumerate() {
-                let diff = (g - e).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (false, format!("h_mag[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
             for (i, (&g, &e)) in h_phase.iter().zip(exp_h_phase.iter()).enumerate() {
-                let diff = (g - e).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (
                         false,
                         format!("h_phase[{i}] mismatch: got {g}, expected {e}"),
@@ -4368,16 +4330,12 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
                 );
             }
             for (i, (&g, &e)) in real.iter().zip(exp_real.iter()).enumerate() {
-                let diff = (g - e).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (false, format!("real[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
             for (i, (&g, &e)) in imag.iter().zip(exp_imag.iter()).enumerate() {
-                let diff = (g - e).abs();
-                let tol = atol + rtol * e.abs();
-                if diff > tol {
+                if !allclose_scalar(g, e, atol, rtol) {
                     return (false, format!("imag[{i}] mismatch: got {g}, expected {e}"));
                 }
             }
@@ -4722,8 +4680,7 @@ fn compare_stats_outcome(case: &StatsCase, observed: &StatsObserved) -> (bool, S
     let rtol = case.expected.rtol.unwrap_or(1e-10);
 
     fn close(a: f64, b: f64, atol: f64, rtol: f64) -> bool {
-        let diff = (a - b).abs();
-        diff <= atol + rtol * b.abs()
+        allclose_scalar(a, b, atol, rtol)
     }
 
     match (case.expected.kind.as_str(), observed) {
@@ -5279,7 +5236,7 @@ fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved)
     let rtol = case.expected.rtol.unwrap_or(1e-12);
 
     fn close(a: f64, b: f64, atol: f64, rtol: f64) -> bool {
-        (a - b).abs() <= atol + rtol * b.abs()
+        allclose_scalar(a, b, atol, rtol)
     }
 
     match (case.expected.kind.as_str(), observed) {
@@ -11656,6 +11613,124 @@ mod tests {
         assert!(super::allclose_scalar(f64::NAN, f64::NAN, 1.0e-12, 1.0e-12));
         assert!(!super::allclose_scalar(f64::NAN, 0.0, 1.0e-12, 1.0e-12));
         assert!(!super::allclose_scalar(0.0, f64::NAN, 1.0e-12, 1.0e-12));
+    }
+
+    #[test]
+    fn signal_compare_uses_allclose_scalar_for_nonfinite_values() {
+        let case = super::SignalCase {
+            case_id: "signal-nonfinite".to_owned(),
+            category: "unit".to_owned(),
+            mode: "Strict".to_owned(),
+            function: "window".to_owned(),
+            args: Vec::new(),
+            expected: super::SignalExpected {
+                kind: "array".to_owned(),
+                value: Some(vec![f64::INFINITY, f64::NAN]),
+                b: None,
+                a: None,
+                w: None,
+                h_mag: None,
+                h_phase: None,
+                real: None,
+                imag: None,
+                atol: Some(1.0e-12),
+                rtol: Some(1.0e-12),
+                contract_ref: String::new(),
+            },
+        };
+
+        let observed = super::SignalObserved::Array(vec![f64::INFINITY, f64::NAN]);
+        let (passed, message) = super::compare_signal_outcome(&case, &observed);
+        assert!(passed, "{message}");
+
+        let wrong_sign = super::SignalObserved::Array(vec![f64::NEG_INFINITY, f64::NAN]);
+        let (passed, message) = super::compare_signal_outcome(&case, &wrong_sign);
+        assert!(!passed, "{message}");
+    }
+
+    #[test]
+    fn points_close_uses_allclose_scalar_for_nonfinite_values() {
+        assert!(super::points_close(
+            &[f64::INFINITY, f64::NAN],
+            &[f64::INFINITY, f64::NAN],
+            1.0e-12,
+            1.0e-12
+        ));
+        assert!(!super::points_close(
+            &[f64::NEG_INFINITY, f64::NAN],
+            &[f64::INFINITY, f64::NAN],
+            1.0e-12,
+            1.0e-12
+        ));
+    }
+
+    #[test]
+    fn stats_compare_uses_allclose_scalar_for_nonfinite_values() {
+        let inf_case = StatsCase {
+            case_id: "stats-inf".to_owned(),
+            category: "summary".to_owned(),
+            mode: "Strict".to_owned(),
+            function: "sem".to_owned(),
+            args: vec![serde_json::json!([1.0, 2.0, 3.0])],
+            expected: StatsExpected {
+                kind: "scalar".to_owned(),
+                value: Some(f64::INFINITY),
+                nobs: None,
+                minmax: None,
+                mean: None,
+                variance: None,
+                skewness: None,
+                kurtosis: None,
+                statistic: None,
+                pvalue: None,
+                slope: None,
+                intercept: None,
+                rvalue: None,
+                stderr: None,
+                array_value: None,
+                atol: Some(1.0e-12),
+                rtol: Some(1.0e-12),
+                contract_ref: String::new(),
+            },
+        };
+        let observed = StatsObserved::Scalar(f64::INFINITY);
+        let (passed, message) = super::compare_stats_outcome(&inf_case, &observed);
+        assert!(passed, "{message}");
+
+        let wrong_sign = StatsObserved::Scalar(f64::NEG_INFINITY);
+        let (passed, message) = super::compare_stats_outcome(&inf_case, &wrong_sign);
+        assert!(!passed, "{message}");
+
+        let nan_case = StatsCase {
+            case_id: "stats-nan".to_owned(),
+            category: "summary".to_owned(),
+            mode: "Strict".to_owned(),
+            function: "sem".to_owned(),
+            args: vec![serde_json::json!([1.0, 2.0, 3.0])],
+            expected: StatsExpected {
+                kind: "scalar".to_owned(),
+                value: Some(f64::NAN),
+                nobs: None,
+                minmax: None,
+                mean: None,
+                variance: None,
+                skewness: None,
+                kurtosis: None,
+                statistic: None,
+                pvalue: None,
+                slope: None,
+                intercept: None,
+                rvalue: None,
+                stderr: None,
+                array_value: None,
+                atol: Some(1.0e-12),
+                rtol: Some(1.0e-12),
+                contract_ref: String::new(),
+            },
+        };
+        let observed = StatsObserved::Scalar(f64::NAN);
+        let (passed, message) = super::compare_stats_outcome(&nan_case, &observed);
+        assert!(passed, "{message}");
     }
 
     #[test]
