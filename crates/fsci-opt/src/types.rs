@@ -14,6 +14,9 @@ pub enum OptimizeMethod {
     LBfgsB,
     NewtonCg,
     TrustExact,
+    Tnc,
+    Slsqp,
+    TrustConstr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
