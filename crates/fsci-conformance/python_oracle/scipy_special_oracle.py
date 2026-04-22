@@ -155,6 +155,7 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "ive": special.ive,
             "j0": special.j0,
             "j1": special.j1,
+            "jn": special.jn,
             "jv": special.jv,
             "jvp": special.jvp,
             "jve": special.jve,
