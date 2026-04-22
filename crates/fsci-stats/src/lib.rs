@@ -10837,6 +10837,56 @@ pub fn hdmedian(data: &[f64]) -> f64 {
     result[0]
 }
 
+/// Computes standard error of Harrell-Davis quantile estimates by jackknife.
+///
+/// Matches `scipy.stats.mstats.hdquantiles_sd(data, prob)`.
+pub fn hdquantiles_sd(data: &[f64], prob: &[f64]) -> Vec<f64> {
+    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let n = sorted.len();
+    if n < 2 {
+        return prob.iter().map(|_| f64::NAN).collect();
+    }
+    let nf = n as f64;
+    let nm1 = n - 1;
+    let nm1f = nm1 as f64;
+
+    prob.iter()
+        .map(|&p| {
+            if p <= 0.0 || p >= 1.0 {
+                return f64::NAN;
+            }
+            let a = nf * p;
+            let b = nf * (1.0 - p);
+            let beta = BetaDist::new(a, b);
+
+            let vv: Vec<f64> = (0..n).map(|i| i as f64 / nm1f).collect();
+            let beta_cdf: Vec<f64> = vv.iter().map(|&v| beta.cdf(v)).collect();
+            let w: Vec<f64> = (0..nm1).map(|i| beta_cdf[i + 1] - beta_cdf[i]).collect();
+
+            let mut mx = vec![0.0; n];
+            let mut cumsum = 0.0;
+            for i in 1..n {
+                cumsum += w[i - 1] * sorted[i - 1];
+                mx[i] = cumsum;
+            }
+            let mut right_cumsum: Vec<f64> = vec![0.0; nm1];
+            cumsum = 0.0;
+            for i in (0..nm1).rev() {
+                cumsum += w[i] * sorted[i + 1];
+                right_cumsum[i] = cumsum;
+            }
+            for i in 0..nm1 {
+                mx[i] += right_cumsum[i];
+            }
+
+            let mean_mx = mx.iter().sum::<f64>() / nf;
+            let var_mx = mx.iter().map(|&x| (x - mean_mx).powi(2)).sum::<f64>() / nf;
+            (var_mx * nm1f).sqrt()
+        })
+        .collect()
+}
+
 /// Computes empirical quantiles using configurable plotting positions.
 ///
 /// Matches `scipy.stats.mstats.mquantiles(a, prob, alphap, betap)`.
@@ -26809,5 +26859,21 @@ mod tests {
         assert_close(result2[0], 0.1, 1e-10, "hazen pp[0]");
         assert_close(result2[2], 0.5, 1e-10, "hazen pp[2]");
         assert_close(result2[4], 0.9, 1e-10, "hazen pp[4]");
+    }
+
+    #[test]
+    fn hdquantiles_sd_matches_scipy() {
+        // scipy.stats.mstats.hdquantiles_sd([1..10], [0.25,0.5,0.75]) = [1.09519654, 1.24658932, 1.09519654]
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let result = hdquantiles_sd(&data, &[0.25, 0.5, 0.75]);
+        assert_close(result[0], 1.09519654, 0.1, "hdquantiles_sd q25");
+        assert_close(result[1], 1.24658932, 0.1, "hdquantiles_sd q50");
+        assert_close(result[2], 1.09519654, 0.1, "hdquantiles_sd q75");
+    }
+
+    #[test]
+    fn hdquantiles_sd_small_n() {
+        let result = hdquantiles_sd(&[1.0], &[0.5]);
+        assert!(result[0].is_nan());
     }
 }
