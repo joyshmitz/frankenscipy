@@ -7236,6 +7236,9 @@ fn allclose_scalar(actual: f64, expected: f64, atol: f64, rtol: f64) -> bool {
     if actual.is_nan() && expected.is_nan() {
         return true;
     }
+    if actual.is_infinite() || expected.is_infinite() {
+        return actual == expected;
+    }
     (actual - expected).abs() <= atol + rtol * expected.abs()
 }
 
@@ -11612,6 +11615,47 @@ mod tests {
         assert!(report.oracle_present, "oracle repo should be present");
         assert!(report.fixture_count >= 1, "expected at least one fixture");
         assert!(report.strict_mode);
+    }
+
+    #[test]
+    fn allclose_scalar_preserves_infinity_sign() {
+        assert!(super::allclose_scalar(
+            f64::INFINITY,
+            f64::INFINITY,
+            1.0e-12,
+            1.0e-12
+        ));
+        assert!(super::allclose_scalar(
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+            1.0e-12,
+            1.0e-12
+        ));
+        assert!(!super::allclose_scalar(
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1.0e-12,
+            1.0e-12
+        ));
+        assert!(!super::allclose_scalar(
+            f64::INFINITY,
+            1.0e308,
+            1.0e-12,
+            1.0e-12
+        ));
+        assert!(!super::allclose_scalar(
+            1.0e308,
+            f64::NEG_INFINITY,
+            1.0e-12,
+            1.0e-12
+        ));
+    }
+
+    #[test]
+    fn allclose_scalar_keeps_equal_nan_behavior() {
+        assert!(super::allclose_scalar(f64::NAN, f64::NAN, 1.0e-12, 1.0e-12));
+        assert!(!super::allclose_scalar(f64::NAN, 0.0, 1.0e-12, 1.0e-12));
+        assert!(!super::allclose_scalar(0.0, f64::NAN, 1.0e-12, 1.0e-12));
     }
 
     #[test]
