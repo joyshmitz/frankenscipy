@@ -411,7 +411,9 @@ dependencies = [
  "fsci-runtime",
  "fsci-sparse",
  "fsci-special",
+ "fsci-stats",
  "libfuzzer-sys",
+ "rand",
  "serde",
  "serde_json",
 ]
