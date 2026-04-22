@@ -2460,38 +2460,43 @@ where
     let mut objective = Objective::new(fun, options.mode, maxfev);
 
     let mut x = x0.to_vec();
-    let mut f = match objective.eval(&x) {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let mut f = objective.eval(&x)?;
     let mut njev = 0usize;
 
     let mut grad = match finite_diff_gradient(&mut objective, &x, options.gradient_eps) {
-        Ok(v) => { njev += 1; v }
+        Ok(v) => {
+            njev += 1;
+            v
+        }
         Err(e) => return Err(e),
     };
     let mut hess_approx = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        hess_approx[i][i] = 1.0;
+    for (i, row) in hess_approx.iter_mut().enumerate().take(n) {
+        row[i] = 1.0;
     }
 
     for iteration in 0..maxiter {
         let grad_norm = l2_norm(&grad);
         if grad_norm < tol {
-            log_completion(OptimizeMethod::Tnc, options, iteration, &OptimizeResult {
-                x: x.clone(),
-                fun: Some(f),
-                success: true,
-                status: ConvergenceStatus::Success,
-                message: String::from("Convergence: gradient norm below tolerance"),
-                nfev: objective.nfev,
-                njev,
-                nhev: 0,
-                nit: iteration,
-                jac: Some(grad.clone()),
-                hess_inv: None,
-                maxcv: None,
-            });
+            log_completion(
+                OptimizeMethod::Tnc,
+                options,
+                iteration,
+                &OptimizeResult {
+                    x: x.clone(),
+                    fun: Some(f),
+                    success: true,
+                    status: ConvergenceStatus::Success,
+                    message: String::from("Convergence: gradient norm below tolerance"),
+                    nfev: objective.nfev,
+                    njev,
+                    nhev: 0,
+                    nit: iteration,
+                    jac: Some(grad.clone()),
+                    hess_inv: None,
+                    maxcv: None,
+                },
+            );
             return Ok(OptimizeResult {
                 x,
                 fun: Some(f),
@@ -2538,18 +2543,34 @@ where
         let x_new: Vec<f64> = x.iter().zip(s.iter()).map(|(xi, si)| xi + si).collect();
 
         let grad_new = match finite_diff_gradient(&mut objective, &x_new, options.gradient_eps) {
-            Ok(v) => { njev += 1; v }
-            Err(e) => return Ok(result_from_error(&x_new, iteration, objective.nfev, njev, e)),
+            Ok(v) => {
+                njev += 1;
+                v
+            }
+            Err(e) => {
+                return Ok(result_from_error(
+                    &x_new,
+                    iteration,
+                    objective.nfev,
+                    njev,
+                    e,
+                ));
+            }
         };
 
-        let y: Vec<f64> = grad_new.iter().zip(grad.iter()).map(|(gn, go)| gn - go).collect();
+        let y: Vec<f64> = grad_new
+            .iter()
+            .zip(grad.iter())
+            .map(|(gn, go)| gn - go)
+            .collect();
         let sy: f64 = s.iter().zip(y.iter()).map(|(si, yi)| si * yi).sum();
 
         if sy > 1.0e-12 {
             let rho = 1.0 / sy;
             for i in 0..n {
                 for j in 0..n {
-                    hess_approx[i][j] += rho * (s[i] * y[j] + y[i] * s[j]) - rho * rho * sy * s[i] * s[j];
+                    hess_approx[i][j] +=
+                        rho * (s[i] * y[j] + y[i] * s[j]) - rho * rho * sy * s[i] * s[j];
                     if i == j {
                         hess_approx[i][j] = hess_approx[i][j].max(1.0e-8);
                     }
@@ -2653,34 +2674,36 @@ where
     let mut objective = Objective::new(fun, options.mode, maxfev);
 
     let mut x = x0.to_vec();
-    let mut f = match objective.eval(&x) {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let mut f = objective.eval(&x)?;
 
     let mut grad = finite_diff_gradient(&mut objective, &x, options.gradient_eps)?;
     let mut hess_approx = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        hess_approx[i][i] = 1.0;
+    for (i, row) in hess_approx.iter_mut().enumerate().take(n) {
+        row[i] = 1.0;
     }
 
     for iteration in 0..maxiter {
         let grad_norm = grad.iter().map(|g| g * g).sum::<f64>().sqrt();
         if grad_norm < tol {
-            log_completion(OptimizeMethod::Slsqp, options, iteration, &OptimizeResult {
-                x: x.clone(),
-                fun: Some(f),
-                success: true,
-                status: ConvergenceStatus::Success,
-                message: String::from("Convergence: gradient norm below tolerance"),
-                nfev: objective.nfev,
-                njev: iteration,
-                nhev: 0,
-                nit: iteration,
-                jac: Some(grad.clone()),
-                hess_inv: None,
-                maxcv: None,
-            });
+            log_completion(
+                OptimizeMethod::Slsqp,
+                options,
+                iteration,
+                &OptimizeResult {
+                    x: x.clone(),
+                    fun: Some(f),
+                    success: true,
+                    status: ConvergenceStatus::Success,
+                    message: String::from("Convergence: gradient norm below tolerance"),
+                    nfev: objective.nfev,
+                    njev: iteration,
+                    nhev: 0,
+                    nit: iteration,
+                    jac: Some(grad.clone()),
+                    hess_inv: None,
+                    maxcv: None,
+                },
+            );
             return Ok(OptimizeResult {
                 x,
                 fun: Some(f),
@@ -2725,7 +2748,11 @@ where
         let x_new: Vec<f64> = x.iter().zip(s.iter()).map(|(xi, si)| xi + si).collect();
         let grad_new = finite_diff_gradient(&mut objective, &x_new, options.gradient_eps)?;
 
-        let y: Vec<f64> = grad_new.iter().zip(grad.iter()).map(|(gn, go)| gn - go).collect();
+        let y: Vec<f64> = grad_new
+            .iter()
+            .zip(grad.iter())
+            .map(|(gn, go)| gn - go)
+            .collect();
         let sy: f64 = s.iter().zip(y.iter()).map(|(si, yi)| si * yi).sum();
 
         if sy > 1.0e-12 {
@@ -2734,20 +2761,25 @@ where
 
         let step_norm: f64 = s.iter().map(|si| si * si).sum::<f64>().sqrt();
         if step_norm < tol * (1.0 + x.iter().map(|xi| xi.abs()).sum::<f64>() / n as f64) {
-            log_completion(OptimizeMethod::Slsqp, options, iteration + 1, &OptimizeResult {
-                x: x_new.clone(),
-                fun: Some(f_new),
-                success: true,
-                status: ConvergenceStatus::Success,
-                message: String::from("Convergence: step size below tolerance"),
-                nfev: objective.nfev,
-                njev: iteration + 1,
-                nhev: 0,
-                nit: iteration + 1,
-                jac: Some(grad_new.clone()),
-                hess_inv: None,
-                maxcv: None,
-            });
+            log_completion(
+                OptimizeMethod::Slsqp,
+                options,
+                iteration + 1,
+                &OptimizeResult {
+                    x: x_new.clone(),
+                    fun: Some(f_new),
+                    success: true,
+                    status: ConvergenceStatus::Success,
+                    message: String::from("Convergence: step size below tolerance"),
+                    nfev: objective.nfev,
+                    njev: iteration + 1,
+                    nhev: 0,
+                    nit: iteration + 1,
+                    jac: Some(grad_new.clone()),
+                    hess_inv: None,
+                    maxcv: None,
+                },
+            );
             return Ok(OptimizeResult {
                 x: x_new,
                 fun: Some(f_new),
@@ -2768,23 +2800,23 @@ where
         f = f_new;
         grad = grad_new;
 
-        if let Some(cb) = options.callback {
-            if cb(&x) {
-                return Ok(OptimizeResult {
-                    x,
-                    fun: Some(f),
-                    success: false,
-                    status: ConvergenceStatus::CallbackStop,
-                    message: String::from("Optimization stopped by callback"),
-                    nfev: objective.nfev,
-                    njev: iteration + 1,
-                    nhev: 0,
-                    nit: iteration + 1,
-                    jac: Some(grad),
-                    hess_inv: None,
-                    maxcv: None,
-                });
-            }
+        if let Some(cb) = options.callback
+            && cb(&x)
+        {
+            return Ok(OptimizeResult {
+                x,
+                fun: Some(f),
+                success: false,
+                status: ConvergenceStatus::CallbackStop,
+                message: String::from("Optimization stopped by callback"),
+                nfev: objective.nfev,
+                njev: iteration + 1,
+                nhev: 0,
+                nit: iteration + 1,
+                jac: Some(grad),
+                hess_inv: None,
+                maxcv: None,
+            });
         }
     }
 
@@ -2840,7 +2872,11 @@ fn bfgs_update(h: &mut [Vec<f64>], s: &[f64], y: &[f64], sy: f64) {
 // Trust-Constr (Trust-Region Constrained)
 // ══════════════════════════════════════════════════════════════════════
 
-pub fn trust_constr<F>(fun: &F, x0: &[f64], options: MinimizeOptions) -> Result<OptimizeResult, OptError>
+pub fn trust_constr<F>(
+    fun: &F,
+    x0: &[f64],
+    options: MinimizeOptions,
+) -> Result<OptimizeResult, OptError>
 where
     F: Fn(&[f64]) -> f64,
 {
@@ -2853,10 +2889,7 @@ where
     let mut objective = Objective::new(fun, options.mode, maxfev);
 
     let mut x = x0.to_vec();
-    let mut f = match objective.eval(&x) {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let mut f = objective.eval(&x)?;
 
     let mut grad = finite_diff_gradient(&mut objective, &x, options.gradient_eps)?;
     let mut trust_radius = 1.0;
@@ -2865,20 +2898,25 @@ where
     for iteration in 0..maxiter {
         let grad_norm = grad.iter().map(|g| g * g).sum::<f64>().sqrt();
         if grad_norm < tol {
-            log_completion(OptimizeMethod::TrustConstr, options, iteration, &OptimizeResult {
-                x: x.clone(),
-                fun: Some(f),
-                success: true,
-                status: ConvergenceStatus::Success,
-                message: String::from("Convergence: gradient norm below tolerance"),
-                nfev: objective.nfev,
-                njev: iteration,
-                nhev: iteration,
-                nit: iteration,
-                jac: Some(grad.clone()),
-                hess_inv: None,
-                maxcv: None,
-            });
+            log_completion(
+                OptimizeMethod::TrustConstr,
+                options,
+                iteration,
+                &OptimizeResult {
+                    x: x.clone(),
+                    fun: Some(f),
+                    success: true,
+                    status: ConvergenceStatus::Success,
+                    message: String::from("Convergence: gradient norm below tolerance"),
+                    nfev: objective.nfev,
+                    njev: iteration,
+                    nhev: iteration,
+                    nit: iteration,
+                    jac: Some(grad.clone()),
+                    hess_inv: None,
+                    maxcv: None,
+                },
+            );
             return Ok(OptimizeResult {
                 x,
                 fun: Some(f),
@@ -2919,13 +2957,23 @@ where
             Err(e) => return Err(e),
         };
 
-        let predicted = -grad.iter().zip(step.iter()).map(|(gi, si)| gi * si).sum::<f64>();
+        let predicted = -grad
+            .iter()
+            .zip(step.iter())
+            .map(|(gi, si)| gi * si)
+            .sum::<f64>();
         let actual = f - f_new;
-        let rho = if predicted.abs() > 1.0e-15 { actual / predicted } else { 0.0 };
+        let rho = if predicted.abs() > 1.0e-15 {
+            actual / predicted
+        } else {
+            0.0
+        };
 
         if rho < 0.25 {
             trust_radius *= 0.25;
-        } else if rho > 0.75 && (step.iter().map(|s| s * s).sum::<f64>().sqrt() - trust_radius).abs() < 1.0e-10 {
+        } else if rho > 0.75
+            && (step.iter().map(|s| s * s).sum::<f64>().sqrt() - trust_radius).abs() < 1.0e-10
+        {
             trust_radius = (2.0 * trust_radius).min(100.0);
         }
 
@@ -2952,23 +3000,23 @@ where
             });
         }
 
-        if let Some(cb) = options.callback {
-            if cb(&x) {
-                return Ok(OptimizeResult {
-                    x,
-                    fun: Some(f),
-                    success: false,
-                    status: ConvergenceStatus::CallbackStop,
-                    message: String::from("Optimization stopped by callback"),
-                    nfev: objective.nfev,
-                    njev: iteration + 1,
-                    nhev: iteration + 1,
-                    nit: iteration + 1,
-                    jac: Some(grad),
-                    hess_inv: None,
-                    maxcv: None,
-                });
-            }
+        if let Some(cb) = options.callback
+            && cb(&x)
+        {
+            return Ok(OptimizeResult {
+                x,
+                fun: Some(f),
+                success: false,
+                status: ConvergenceStatus::CallbackStop,
+                message: String::from("Optimization stopped by callback"),
+                nfev: objective.nfev,
+                njev: iteration + 1,
+                nhev: iteration + 1,
+                nit: iteration + 1,
+                jac: Some(grad),
+                hess_inv: None,
+                maxcv: None,
+            });
         }
     }
 
