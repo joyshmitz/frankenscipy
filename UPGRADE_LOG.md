@@ -34,6 +34,16 @@
 - **Tests:** `cargo test -p fsci-runtime --lib` -> 32 passed / 0 failed
 - **Commit:** a2043f2
 
+### ftui: 0.2.1 -> 0.3.1 (MAJOR)
+
+- **Before:** `ftui = { version = "0.2.1", default-features = false }`
+- **After:**  `ftui = { version = "0.3.1", default-features = false }`
+- **Lock changes:** ftui + all sub-crates (ftui-backend, ftui-core, ftui-i18n, ftui-layout, ftui-render, ftui-runtime, ftui-style, ftui-text, ftui-widgets) 0.2.1 -> 0.3.1. New crate ftui-a11y 0.3.1 added.
+- **Call sites (all in fsci-conformance):** `ftui::core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers}`, `ftui::layout::{Constraint, Flex, Rect}`, `ftui::render::frame::Frame`, `ftui::runtime::{App, Cmd, Model, ScreenMode}`, `ftui::widgets::Widget`, `ftui::widgets::paragraph::Paragraph`, `ftui::{PackedRgba, Style}`.
+- **Breaking:** None in the API surfaces we use; all the module paths above are preserved in 0.3.
+- **Checks:** `cargo check --workspace --all-targets` exit=0 (including the `conformance_dashboard` binary under the `dashboard` feature).
+- **Tests:** `cargo test -p fsci-conformance --lib --no-run` builds cleanly.
+
 ### toml: 0.8 -> 1.1 (MAJOR)
 
 - **Before:** `toml = "0.8"`
