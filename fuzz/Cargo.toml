@@ -103,3 +103,10 @@ path = "fuzz_targets/p2c006_special_oracle_roundtrip.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c006_special_elliptic_complex"
+path = "fuzz_targets/p2c006_special_elliptic_complex.rs"
+test = false
+doc = false
+bench = false
