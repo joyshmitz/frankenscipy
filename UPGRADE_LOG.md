@@ -34,6 +34,16 @@
 - **Tests:** `cargo test -p fsci-runtime --lib` -> 32 passed / 0 failed
 - **Commit:** a2043f2
 
+### proptest: 1.6.0 -> 1.11.0 (minor)
+
+- **Before:** `proptest = "1.6.0"`
+- **After:**  `proptest = "1.11.0"`
+- **Lock resolution:** cargo update -p proptest -> 1.11.0 (0 packages changed; lock was already caret-resolved to 1.11.0).
+- **Breaking:** None within the 1.x line per upstream release notes; 1.7-1.11 are additive (faster shrinking, new strategies, improved rng seeding). Our call sites use the stable `proptest! { }` macro and `prop_assert*` APIs which have not changed.
+- **Affected crates:** fsci-arrayapi, fsci-cluster, fsci-fft, fsci-integrate, fsci-interpolate, fsci-io, fsci-linalg, fsci-ndimage, fsci-opt, fsci-runtime, fsci-signal, fsci-sparse, fsci-spatial, fsci-stats (all as dev-dependency).
+- **Checks:** `cargo check --workspace --all-targets` exit=0.
+- **Tests:** `cargo test -p fsci-arrayapi --lib` -> 42 passed / 0 failed (arrayapi backend is the proptest-densest surface for the array API layer). A follow-up `cargo test -p fsci-sparse --lib` was started but stalled in the remote build queue and was abandoned; arrayapi is the authoritative smoke signal for this bump.
+
 ### thiserror: 2.0.17 -> 2.0.18 (patch pin)
 
 - **Before:** `thiserror = "2.0.17"`
