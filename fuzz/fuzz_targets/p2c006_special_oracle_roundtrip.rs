@@ -65,9 +65,41 @@ impl ToleranceInput {
 
 #[derive(Clone, Copy, Debug, Arbitrary)]
 enum FunctionChoice {
+    Gamma,
+    Gammaln,
+    Digamma,
+    Polygamma,
+    Rgamma,
+    Comb,
+    Zeta,
     Erf,
+    Erfc,
+    Erfinv,
     Erfcinv,
+    Exp1,
+    Expi,
     Betainc,
+    Beta,
+    Betaln,
+    Ellipe,
+    Ellipkinc,
+    EllipjSn,
+    Hyp0f1,
+    Hyp1f1,
+    Jn,
+    Iv,
+    Kv,
+    SphericalJn,
+    WrightBessel,
+    EvalChebyt,
+    EvalHermite,
+    EvalLegendre,
+    EvalLaguerre,
+    Lpmv,
+    Expit,
+    Logit,
+    FresnelS,
+    Dawsn,
     Gammainc,
     Lambertw,
     Ellipk,
@@ -78,15 +110,243 @@ enum FunctionChoice {
 impl FunctionChoice {
     fn into_function(self) -> SpecialCaseFunction {
         match self {
+            Self::Gamma => SpecialCaseFunction::Gamma,
+            Self::Gammaln => SpecialCaseFunction::Gammaln,
+            Self::Digamma => SpecialCaseFunction::Digamma,
+            Self::Polygamma => SpecialCaseFunction::Polygamma,
+            Self::Rgamma => SpecialCaseFunction::Rgamma,
+            Self::Comb => SpecialCaseFunction::Comb,
+            Self::Zeta => SpecialCaseFunction::Zeta,
             Self::Erf => SpecialCaseFunction::Erf,
+            Self::Erfc => SpecialCaseFunction::Erfc,
+            Self::Erfinv => SpecialCaseFunction::Erfinv,
             Self::Erfcinv => SpecialCaseFunction::Erfcinv,
+            Self::Exp1 => SpecialCaseFunction::Exp1,
+            Self::Expi => SpecialCaseFunction::Expi,
             Self::Betainc => SpecialCaseFunction::Betainc,
+            Self::Beta => SpecialCaseFunction::Beta,
+            Self::Betaln => SpecialCaseFunction::Betaln,
+            Self::Ellipe => SpecialCaseFunction::Ellipe,
+            Self::Ellipkinc => SpecialCaseFunction::Ellipkinc,
+            Self::EllipjSn => SpecialCaseFunction::EllipjSn,
+            Self::Hyp0f1 => SpecialCaseFunction::Hyp0f1,
+            Self::Hyp1f1 => SpecialCaseFunction::Hyp1f1,
+            Self::Jn => SpecialCaseFunction::Jn,
+            Self::Iv => SpecialCaseFunction::Iv,
+            Self::Kv => SpecialCaseFunction::Kv,
+            Self::SphericalJn => SpecialCaseFunction::SphericalJn,
+            Self::WrightBessel => SpecialCaseFunction::WrightBessel,
+            Self::EvalChebyt => SpecialCaseFunction::EvalChebyt,
+            Self::EvalHermite => SpecialCaseFunction::EvalHermite,
+            Self::EvalLegendre => SpecialCaseFunction::EvalLegendre,
+            Self::EvalLaguerre => SpecialCaseFunction::EvalLaguerre,
+            Self::Lpmv => SpecialCaseFunction::Lpmv,
+            Self::Expit => SpecialCaseFunction::Expit,
+            Self::Logit => SpecialCaseFunction::Logit,
+            Self::FresnelS => SpecialCaseFunction::FresnelS,
+            Self::Dawsn => SpecialCaseFunction::Dawsn,
             Self::Gammainc => SpecialCaseFunction::Gammainc,
             Self::Lambertw => SpecialCaseFunction::Lambertw,
             Self::Ellipk => SpecialCaseFunction::Ellipk,
             Self::Hyp2f1 => SpecialCaseFunction::Hyp2f1,
             Self::Jvp => SpecialCaseFunction::Jvp,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FunctionCoverageBucket {
+    Gamma,
+    Error,
+    BetaAndDistribution,
+    Elliptic,
+    HyperAndBessel,
+    Orthopoly,
+    Convenience,
+    Identity,
+}
+
+fn function_coverage_bucket(function: SpecialCaseFunction) -> FunctionCoverageBucket {
+    match function {
+        SpecialCaseFunction::Gamma
+        | SpecialCaseFunction::Gammaln
+        | SpecialCaseFunction::Multigammaln
+        | SpecialCaseFunction::Digamma
+        | SpecialCaseFunction::Polygamma
+        | SpecialCaseFunction::Rgamma
+        | SpecialCaseFunction::Gammainc
+        | SpecialCaseFunction::Gammaincc
+        | SpecialCaseFunction::Factorial
+        | SpecialCaseFunction::Factorial2
+        | SpecialCaseFunction::Comb
+        | SpecialCaseFunction::Perm
+        | SpecialCaseFunction::Poch
+        | SpecialCaseFunction::Zeta
+        | SpecialCaseFunction::Zetac
+        | SpecialCaseFunction::HurwitzZeta => FunctionCoverageBucket::Gamma,
+        SpecialCaseFunction::Erf
+        | SpecialCaseFunction::Erfc
+        | SpecialCaseFunction::Erfinv
+        | SpecialCaseFunction::Erfcinv
+        | SpecialCaseFunction::Erfcx
+        | SpecialCaseFunction::Erfi
+        | SpecialCaseFunction::OwensT
+        | SpecialCaseFunction::Exp1
+        | SpecialCaseFunction::Expi
+        | SpecialCaseFunction::Expn => FunctionCoverageBucket::Error,
+        SpecialCaseFunction::Beta
+        | SpecialCaseFunction::Betaln
+        | SpecialCaseFunction::Betainc
+        | SpecialCaseFunction::Btdtr
+        | SpecialCaseFunction::Btdtrc
+        | SpecialCaseFunction::Btdtri
+        | SpecialCaseFunction::Btdtria
+        | SpecialCaseFunction::Btdtrib
+        | SpecialCaseFunction::Fdtr
+        | SpecialCaseFunction::Fdtrc
+        | SpecialCaseFunction::Fdtri
+        | SpecialCaseFunction::Fdtridfd
+        | SpecialCaseFunction::Stdtr
+        | SpecialCaseFunction::Stdtrc
+        | SpecialCaseFunction::Stdtridf
+        | SpecialCaseFunction::Stdtrit
+        | SpecialCaseFunction::Bdtr
+        | SpecialCaseFunction::Bdtrc
+        | SpecialCaseFunction::Bdtri
+        | SpecialCaseFunction::Nbdtr
+        | SpecialCaseFunction::Nbdtrc
+        | SpecialCaseFunction::Nbdtri
+        | SpecialCaseFunction::Pdtr
+        | SpecialCaseFunction::Pdtrc
+        | SpecialCaseFunction::Pdtri
+        | SpecialCaseFunction::Pdtrik
+        | SpecialCaseFunction::Chdtr
+        | SpecialCaseFunction::Chdtrc
+        | SpecialCaseFunction::Chdtri
+        | SpecialCaseFunction::Chdtriv
+        | SpecialCaseFunction::Gdtr
+        | SpecialCaseFunction::Gdtrc
+        | SpecialCaseFunction::Gdtria
+        | SpecialCaseFunction::Gdtrib
+        | SpecialCaseFunction::Gdtrix => FunctionCoverageBucket::BetaAndDistribution,
+        SpecialCaseFunction::Ellipk
+        | SpecialCaseFunction::Ellipkm1
+        | SpecialCaseFunction::Ellipe
+        | SpecialCaseFunction::Ellipkinc
+        | SpecialCaseFunction::Ellipeinc
+        | SpecialCaseFunction::EllipjSn
+        | SpecialCaseFunction::EllipjCn
+        | SpecialCaseFunction::EllipjDn
+        | SpecialCaseFunction::EllipjPh => FunctionCoverageBucket::Elliptic,
+        SpecialCaseFunction::Lambertw
+        | SpecialCaseFunction::Hyp0f1
+        | SpecialCaseFunction::Hyp1f1
+        | SpecialCaseFunction::Hyp2f1
+        | SpecialCaseFunction::J0
+        | SpecialCaseFunction::J1
+        | SpecialCaseFunction::Jn
+        | SpecialCaseFunction::Y0
+        | SpecialCaseFunction::Y1
+        | SpecialCaseFunction::Yn
+        | SpecialCaseFunction::Iv
+        | SpecialCaseFunction::Kv
+        | SpecialCaseFunction::WrightBessel
+        | SpecialCaseFunction::Jvp
+        | SpecialCaseFunction::Yvp
+        | SpecialCaseFunction::Ivp
+        | SpecialCaseFunction::Kvp
+        | SpecialCaseFunction::SphericalJn
+        | SpecialCaseFunction::SphericalYn
+        | SpecialCaseFunction::SphericalIn
+        | SpecialCaseFunction::SphericalKn
+        | SpecialCaseFunction::Lpmv
+        | SpecialCaseFunction::Struve
+        | SpecialCaseFunction::Modstruve
+        | SpecialCaseFunction::Ber
+        | SpecialCaseFunction::Bei
+        | SpecialCaseFunction::Ker
+        | SpecialCaseFunction::Kei => FunctionCoverageBucket::HyperAndBessel,
+        SpecialCaseFunction::EvalLegendre
+        | SpecialCaseFunction::EvalChebyt
+        | SpecialCaseFunction::EvalChebyu
+        | SpecialCaseFunction::EvalHermite
+        | SpecialCaseFunction::EvalHermitenorm
+        | SpecialCaseFunction::EvalLaguerre
+        | SpecialCaseFunction::EvalGenlaguerre
+        | SpecialCaseFunction::EvalJacobi
+        | SpecialCaseFunction::EvalGegenbauer
+        | SpecialCaseFunction::EvalShLegendre
+        | SpecialCaseFunction::EvalShChebyt
+        | SpecialCaseFunction::EvalShChebyu
+        | SpecialCaseFunction::RootsChebytNode
+        | SpecialCaseFunction::RootsChebytWeight
+        | SpecialCaseFunction::RootsChebyuNode
+        | SpecialCaseFunction::RootsChebyuWeight
+        | SpecialCaseFunction::RootsHermiteNode
+        | SpecialCaseFunction::RootsHermiteWeight
+        | SpecialCaseFunction::RootsHermitenormNode
+        | SpecialCaseFunction::RootsHermitenormWeight
+        | SpecialCaseFunction::RootsLaguerreNode
+        | SpecialCaseFunction::RootsLaguerreWeight
+        | SpecialCaseFunction::RootsGenlaguerreNode
+        | SpecialCaseFunction::RootsGenlaguerreWeight
+        | SpecialCaseFunction::RootsJacobiNode
+        | SpecialCaseFunction::RootsJacobiWeight
+        | SpecialCaseFunction::RootsGegenbauerNode
+        | SpecialCaseFunction::RootsGegenbauerWeight
+        | SpecialCaseFunction::RootsLegendreNode
+        | SpecialCaseFunction::RootsLegendreWeight => FunctionCoverageBucket::Orthopoly,
+        SpecialCaseFunction::Sinc
+        | SpecialCaseFunction::Xlogy
+        | SpecialCaseFunction::Xlog1py
+        | SpecialCaseFunction::Xlogx
+        | SpecialCaseFunction::Kolmogorov
+        | SpecialCaseFunction::Kolmogi
+        | SpecialCaseFunction::Entr
+        | SpecialCaseFunction::RelEntr
+        | SpecialCaseFunction::KlDiv
+        | SpecialCaseFunction::Ndtr
+        | SpecialCaseFunction::Ndtri
+        | SpecialCaseFunction::Nrdtrimn
+        | SpecialCaseFunction::Nrdtrisd
+        | SpecialCaseFunction::LogNdtr
+        | SpecialCaseFunction::Logsumexp
+        | SpecialCaseFunction::Log1p
+        | SpecialCaseFunction::Expm1
+        | SpecialCaseFunction::Logaddexp
+        | SpecialCaseFunction::Logaddexp2
+        | SpecialCaseFunction::Softplus
+        | SpecialCaseFunction::Huber
+        | SpecialCaseFunction::PseudoHuber
+        | SpecialCaseFunction::Cosdg
+        | SpecialCaseFunction::Sindg
+        | SpecialCaseFunction::Tandg
+        | SpecialCaseFunction::Cotdg
+        | SpecialCaseFunction::Radian
+        | SpecialCaseFunction::Cbrt
+        | SpecialCaseFunction::Exp2
+        | SpecialCaseFunction::Exp10
+        | SpecialCaseFunction::Boxcox
+        | SpecialCaseFunction::InvBoxcox
+        | SpecialCaseFunction::Boxcox1p
+        | SpecialCaseFunction::InvBoxcox1p
+        | SpecialCaseFunction::FresnelS
+        | SpecialCaseFunction::FresnelC
+        | SpecialCaseFunction::Dawsn
+        | SpecialCaseFunction::SiciSi
+        | SpecialCaseFunction::SiciCi
+        | SpecialCaseFunction::ShichiShi
+        | SpecialCaseFunction::ShichiChi
+        | SpecialCaseFunction::Spence
+        | SpecialCaseFunction::Expit
+        | SpecialCaseFunction::Logit
+        | SpecialCaseFunction::Exprel => FunctionCoverageBucket::Convenience,
+        SpecialCaseFunction::RelErfErfcIdentity
+        | SpecialCaseFunction::RelGammaRecurrence
+        | SpecialCaseFunction::RelBetaSymmetry
+        | SpecialCaseFunction::RelGammaincComplement
+        | SpecialCaseFunction::RelJnRecurrence
+        | SpecialCaseFunction::RelErfinvComposition => FunctionCoverageBucket::Identity,
     }
 }
 
@@ -369,6 +629,8 @@ fn build_future_case(packet_tag: u16, input: CaseInput) -> FutureCase {
         .iter()
         .map(|value| value.raw())
         .collect();
+    let function = input.function.into_function();
+    let _coverage_bucket = function_coverage_bucket(function);
 
     FutureCase {
         case_id: case_id.clone(),
@@ -378,7 +640,7 @@ fn build_future_case(packet_tag: u16, input: CaseInput) -> FutureCase {
         } else {
             RuntimeMode::Strict
         },
-        function: input.function.into_function(),
+        function,
         args,
         expected: build_future_expected(input.expected, &case_id),
     }
