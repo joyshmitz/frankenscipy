@@ -34,6 +34,16 @@
 - **Tests:** `cargo test -p fsci-runtime --lib` -> 32 passed / 0 failed
 - **Commit:** a2043f2
 
+### serde_json: 1.0.145 -> 1.0.149 (patch pin)
+
+- **Before:** `serde_json = { version = "1.0.145", features = ["preserve_order"] }`
+- **After:**  `serde_json = { version = "1.0.149", features = ["preserve_order"] }`
+- **Lock resolution:** Cargo.lock already at 1.0.149 via caret; manifest pin advanced to match.
+- **Breaking:** None (patch-level JSON parser/formatter fixes). `preserve_order` feature preserved.
+- **Checks:** `cargo check --workspace --all-targets` exit=0.
+- **Tests:** `cargo test -p fsci-runtime --lib` -> 32 passed / 0 failed.
+- **Commit:** (next)
+
 ### blake3: 1.8.2 -> 1.8.4 (patch pin)
 
 - **Before:** `blake3 = "1.8.2"`

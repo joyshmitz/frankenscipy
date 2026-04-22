@@ -51,7 +51,7 @@ asupersync = { version = "0.3.1", default-features = false, features = ["test-in
 ftui = { version = "0.2.1", default-features = false }
 blake3 = "1.8.4"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { version = "1.0.145", features = ["preserve_order"] }
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
 thiserror = "2.0.17"
 proptest = "1.6.0"
 criterion = { version = "0.5.1", features = ["html_reports"] }
