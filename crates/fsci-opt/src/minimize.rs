@@ -2532,8 +2532,8 @@ where
             Err(e) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, e)),
         };
 
-        let alpha = search.step;
-        let f_new = search.f_new;
+        let alpha = search.alpha;
+        let f_new = search.f;
         let s: Vec<f64> = direction.iter().map(|d| alpha * d).collect();
         let x_new: Vec<f64> = x.iter().zip(s.iter()).map(|(xi, si)| xi + si).collect();
 
@@ -2658,7 +2658,7 @@ where
         Err(e) => return Err(e),
     };
 
-    let mut grad = numerical_gradient(&mut objective, &x)?;
+    let mut grad = finite_diff_gradient(&mut objective, &x, options.gradient_eps)?;
     let mut hess_approx = vec![vec![0.0; n]; n];
     for i in 0..n {
         hess_approx[i][i] = 1.0;
@@ -2699,11 +2699,31 @@ where
 
         let direction = solve_qp_subproblem(&hess_approx, &grad);
 
-        let (alpha, f_new) = backtracking_line_search(&mut objective, &x, &direction, f, &grad)?;
+        let line = match armijo_backtracking(&mut objective, &x, f, &grad, &direction)? {
+            Some(value) => value,
+            None => {
+                return Ok(OptimizeResult {
+                    x,
+                    fun: Some(f),
+                    success: false,
+                    status: ConvergenceStatus::PrecisionLoss,
+                    message: String::from("SLSQP line search failed"),
+                    nfev: objective.nfev,
+                    njev: iteration,
+                    nhev: 0,
+                    nit: iteration,
+                    jac: Some(grad),
+                    hess_inv: None,
+                    maxcv: None,
+                });
+            }
+        };
+        let alpha = line.alpha;
+        let f_new = line.f;
 
         let s: Vec<f64> = direction.iter().map(|d| alpha * d).collect();
         let x_new: Vec<f64> = x.iter().zip(s.iter()).map(|(xi, si)| xi + si).collect();
-        let grad_new = numerical_gradient(&mut objective, &x_new)?;
+        let grad_new = finite_diff_gradient(&mut objective, &x_new, options.gradient_eps)?;
 
         let y: Vec<f64> = grad_new.iter().zip(grad.iter()).map(|(gn, go)| gn - go).collect();
         let sy: f64 = s.iter().zip(y.iter()).map(|(si, yi)| si * yi).sum();
@@ -2838,7 +2858,7 @@ where
         Err(e) => return Err(e),
     };
 
-    let mut grad = numerical_gradient(&mut objective, &x)?;
+    let mut grad = finite_diff_gradient(&mut objective, &x, options.gradient_eps)?;
     let mut trust_radius = 1.0;
     let eta = 0.15;
 
@@ -2880,7 +2900,7 @@ where
         let x_new: Vec<f64> = x.iter().zip(step.iter()).map(|(xi, si)| xi + si).collect();
         let f_new = match objective.eval(&x_new) {
             Ok(v) => v,
-            Err(OptError::MaxEvaluations { .. }) => {
+            Err(OptError::EvaluationBudgetExceeded { .. }) => {
                 return Ok(OptimizeResult {
                     x,
                     fun: Some(f),
@@ -2912,7 +2932,7 @@ where
         if rho > eta {
             x = x_new;
             f = f_new;
-            grad = numerical_gradient(&mut objective, &x)?;
+            grad = finite_diff_gradient(&mut objective, &x, options.gradient_eps)?;
         }
 
         if trust_radius < tol * 1.0e-6 {
