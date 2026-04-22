@@ -129,6 +129,47 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
                     + special.jv(n_val + 1.0, x_arr)
                 )
 
+        def scalar_item(value: Any) -> Any:
+            arr = np.asarray(value)
+            if hasattr(arr, "item"):
+                try:
+                    return arr.item()
+                except ValueError:
+                    return arr
+            return arr
+
+        def ellipj_component(component_index: int) -> Any:
+            def inner(u: Any, m: Any) -> Any:
+                return special.ellipj(np.asarray(u), np.asarray(m))[component_index]
+
+            return inner
+
+        def fresnel_component(component_index: int) -> Any:
+            def inner(x: Any) -> Any:
+                return special.fresnel(np.asarray(x))[component_index]
+
+            return inner
+
+        def unary_tuple_component(tuple_fn: Any, component_index: int) -> Any:
+            def inner(x: Any) -> Any:
+                return tuple_fn(np.asarray(x))[component_index]
+
+            return inner
+
+        def roots_component(root_fn: Any, component_index: int) -> Any:
+            def inner(*raw_args: Any) -> Any:
+                if len(raw_args) < 2:
+                    raise ValueError(
+                        "root component lookup requires parameters plus a component index"
+                    )
+                *shape_args, element_index = raw_args
+                order = int(scalar_item(shape_args[0]))
+                evaluated_args = [order, *(scalar_item(arg) for arg in shape_args[1:])]
+                roots = root_fn(*evaluated_args)
+                return roots[component_index][int(scalar_item(element_index))]
+
+            return inner
+
         # Map function name to scipy.special function
         func_map = {
             "gamma": special.gamma,
@@ -143,10 +184,18 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "betaln": special.betaln,
             "betainc": special.betainc,
             "betaincinv": special.betaincinv,
+            "btdtr": special.betainc,
+            "btdtrc": lambda a, b, x: 1.0 - special.betainc(a, b, x),
+            "btdtri": special.betaincinv,
+            "btdtria": special.btdtria,
+            "btdtrib": special.btdtrib,
             "erf": special.erf,
             "erfc": special.erfc,
             "erfinv": special.erfinv,
             "erfcinv": special.erfcinv,
+            "erfcx": special.erfcx,
+            "erfi": special.erfi,
+            "dawsn": special.dawsn,
             "i0": special.i0,
             "i1": special.i1,
             "i0e": special.i0e,
@@ -179,16 +228,29 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "factorial2": special.factorial2,
             "comb": special.comb,
             "perm": special.perm,
+            "poch": special.poch,
             "multigammaln": special.multigammaln,
+            "bdtr": special.bdtr,
+            "bdtrc": special.bdtrc,
+            "bdtri": special.bdtri,
             "chdtr": special.chdtr,
             "chdtrc": special.chdtrc,
             "chdtri": special.chdtri,
             "chdtriv": special.chdtriv,
+            "fdtr": special.fdtr,
+            "fdtrc": special.fdtrc,
+            "fdtri": special.fdtri,
+            "fdtridfd": special.fdtridfd,
             "gdtr": special.gdtr,
             "gdtrc": special.gdtrc,
             "gdtrix": special.gdtrix,
             "gdtria": special.gdtria,
             "gdtrib": special.gdtrib,
+            "nbdtr": special.nbdtr,
+            "nbdtrc": special.nbdtrc,
+            "nbdtri": special.nbdtri,
+            "nrdtrimn": special.nrdtrimn,
+            "nrdtrisd": special.nrdtrisd,
             "pdtr": special.pdtr,
             "pdtrc": special.pdtrc,
             "pdtri": special.pdtri,
@@ -199,9 +261,17 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "log_ndtr": special.log_ndtr,
             "ndtr": special.ndtr,
             "ndtri": special.ndtri,
+            "stdtr": special.stdtr,
+            "stdtrc": lambda df, t: special.stdtr(df, -np.asarray(t)),
+            "stdtridf": special.stdtridf,
+            "stdtrit": special.stdtrit,
             "log1p": np.log1p,
             "expm1": np.expm1,
+            "logaddexp": np.logaddexp,
+            "logaddexp2": np.logaddexp2,
             "sinc": np.sinc,
+            "softplus": special.softplus,
+            "xlogx": lambda x: special.xlogy(x, x),
             "xlogy": special.xlogy,
             "xlog1py": special.xlog1py,
             "entr": special.entr,
@@ -212,11 +282,28 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "softmax": special.softmax,
             "log_softmax": special.log_softmax,
             "logsumexp": special.logsumexp,
+            "exp1": special.exp1,
+            "expi": special.expi,
+            "expn": special.expn,
+            "exp10": special.exp10,
+            "exp2": special.exp2,
             "exprel": special.exprel,
+            "cbrt": special.cbrt,
+            "radian": special.radian,
+            "sindg": special.sindg,
+            "cosdg": special.cosdg,
+            "tandg": special.tandg,
+            "cotdg": special.cotdg,
             "airy": special.airy,
             "airye": special.airye,
             "ai_zeros": special.ai_zeros,
             "bi_zeros": special.bi_zeros,
+            "fresnel_c": fresnel_component(1),
+            "fresnel_s": fresnel_component(0),
+            "sici_si": unary_tuple_component(special.sici, 0),
+            "sici_ci": unary_tuple_component(special.sici, 1),
+            "shichi_shi": unary_tuple_component(special.shichi, 0),
+            "shichi_chi": unary_tuple_component(special.shichi, 1),
             "hyp0f1": special.hyp0f1,
             "hyp1f1": special.hyp1f1,
             "hyp2f1": special.hyp2f1,
@@ -227,6 +314,12 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "spherical_yn": special.spherical_yn,
             "spherical_in": special.spherical_in,
             "spherical_kn": special.spherical_kn,
+            "ber": special.ber,
+            "bei": special.bei,
+            "ker": special.ker,
+            "kei": special.kei,
+            "struve": special.struve,
+            "modstruve": special.modstruve,
             "eval_legendre": special.eval_legendre,
             "eval_chebyt": special.eval_chebyt,
             "eval_chebyu": special.eval_chebyu,
@@ -248,6 +341,24 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "roots_genlaguerre": special.roots_genlaguerre,
             "roots_jacobi": special.roots_jacobi,
             "roots_gegenbauer": special.roots_gegenbauer,
+            "roots_legendre_node": roots_component(special.roots_legendre, 0),
+            "roots_legendre_weight": roots_component(special.roots_legendre, 1),
+            "roots_chebyt_node": roots_component(special.roots_chebyt, 0),
+            "roots_chebyt_weight": roots_component(special.roots_chebyt, 1),
+            "roots_chebyu_node": roots_component(special.roots_chebyu, 0),
+            "roots_chebyu_weight": roots_component(special.roots_chebyu, 1),
+            "roots_hermite_node": roots_component(special.roots_hermite, 0),
+            "roots_hermite_weight": roots_component(special.roots_hermite, 1),
+            "roots_hermitenorm_node": roots_component(special.roots_hermitenorm, 0),
+            "roots_hermitenorm_weight": roots_component(special.roots_hermitenorm, 1),
+            "roots_laguerre_node": roots_component(special.roots_laguerre, 0),
+            "roots_laguerre_weight": roots_component(special.roots_laguerre, 1),
+            "roots_genlaguerre_node": roots_component(special.roots_genlaguerre, 0),
+            "roots_genlaguerre_weight": roots_component(special.roots_genlaguerre, 1),
+            "roots_jacobi_node": roots_component(special.roots_jacobi, 0),
+            "roots_jacobi_weight": roots_component(special.roots_jacobi, 1),
+            "roots_gegenbauer_node": roots_component(special.roots_gegenbauer, 0),
+            "roots_gegenbauer_weight": roots_component(special.roots_gegenbauer, 1),
             "lpmv": special.lpmv,
             "sph_harm_y": special.sph_harm_y,
             "rel_erf_erfc_identity": rel_erf_erfc_identity,
@@ -259,6 +370,10 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "ellipkm1": special.ellipkm1,
             "ellipe": special.ellipe,
             "ellipj": special.ellipj,
+            "ellipj_sn": ellipj_component(0),
+            "ellipj_cn": ellipj_component(1),
+            "ellipj_dn": ellipj_component(2),
+            "ellipj_ph": ellipj_component(3),
             "ellipkinc": special.ellipkinc,
             "ellipeinc": special.ellipeinc,
             "elliprc": special.elliprc,
@@ -268,6 +383,15 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "elliprj": special.elliprj,
             "lambertw": special.lambertw,
             "wrightomega": special.wrightomega,
+            "hurwitz_zeta": lambda x, q: special.zeta(x, q),
+            "owens_t": special.owens_t,
+            "boxcox": special.boxcox,
+            "boxcox1p": special.boxcox1p,
+            "inv_boxcox": special.inv_boxcox,
+            "inv_boxcox1p": special.inv_boxcox1p,
+            "kolmogorov": special.kolmogorov,
+            "kolmogi": special.kolmogi,
+            "spence": special.spence,
         }
 
         if function_name not in func_map:

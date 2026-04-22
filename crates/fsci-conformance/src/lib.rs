@@ -12072,6 +12072,67 @@ def __getattr__(name):
     }
 
     #[test]
+    fn scipy_special_oracle_supports_all_current_special_fixture_functions() {
+        let unique = format!(
+            "fsci-conformance-test-special-fixture-coverage-{}",
+            super::now_unix_ms()
+        );
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/FSCI-P2C-006_special_core.json");
+        let output_path = root.join("oracle.json");
+        let script_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python_oracle/scipy_special_oracle.py");
+
+        let output = Command::new("python3")
+            .arg(&script_path)
+            .arg("--fixture")
+            .arg(&fixture_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--oracle-root")
+            .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../legacy_scipy_code/scipy"))
+            .output()
+            .expect("run scipy special oracle");
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("No module named 'scipy'") {
+                eprintln!("skipping live special-fixture oracle coverage test: {stderr}");
+                return;
+            }
+            panic!(
+                "oracle script should exit successfully\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                stderr
+            );
+        }
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output_path).expect("read oracle output"))
+                .expect("parse oracle output");
+        let outputs = payload["case_outputs"]
+            .as_array()
+            .expect("oracle outputs should be an array");
+        let unsupported: Vec<String> = outputs
+            .iter()
+            .filter(|output| output["result_kind"] == "unsupported_function")
+            .map(|output| {
+                format!(
+                    "{}: {}",
+                    output["case_id"].as_str().unwrap_or("<missing-case-id>"),
+                    output["error"].as_str().unwrap_or("<missing-error>")
+                )
+            })
+            .collect();
+        assert!(
+            unsupported.is_empty(),
+            "fixture still contains unsupported oracle functions: {unsupported:?}"
+        );
+    }
+
+    #[test]
     fn scipy_special_oracle_rel_gamma_recurrence_accepts_complex_args() {
         let unique = format!(
             "fsci-conformance-test-runtime-error-{}",

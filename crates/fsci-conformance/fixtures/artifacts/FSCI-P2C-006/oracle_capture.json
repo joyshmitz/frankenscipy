@@ -190,17 +190,21 @@
     },
     {
       "case_id": "diff_poch_2p5_3",
-      "error": "unsupported function: poch",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 39.375
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_poch_neg2_3",
-      "error": "unsupported function: poch",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_erf_one",
@@ -240,24 +244,30 @@
     },
     {
       "case_id": "diff_erfcx_one",
-      "error": "unsupported function: erfcx",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.427583576155807
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_erfi_one",
-      "error": "unsupported function: erfi",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.6504257587975428
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_owens_t_0p5_1",
-      "error": "unsupported function: owens_t",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.10667106296144852
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_beta_2_3",
@@ -288,157 +298,201 @@
     },
     {
       "case_id": "diff_btdtr_2_5_0p3",
-      "error": "unsupported function: btdtr",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5798250000000003
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_btdtrc_2_5_0p3",
-      "error": "unsupported function: btdtrc",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.42017499999999974
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_btdtri_2_5_0p4",
-      "error": "unsupported function: btdtri",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.2225835336154239
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_btdtria_0p5_2_0p3",
-      "error": "unsupported function: btdtria",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.0249306894715173
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_btdtria_high_tail_complement_branch",
-      "error": "unsupported function: btdtria",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 5.915066688085389
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_btdtrib_2_0p5_0p3",
-      "error": "unsupported function: btdtrib",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 4.246702175718102
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_btdtrib_high_tail_complement_branch",
-      "error": "unsupported function: btdtrib",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 21.60864146301538
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_fdtr_5_2_1p25",
-      "error": "unsupported function: fdtr",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.49953413669564345
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_fdtrc_5_2_1p25",
-      "error": "unsupported function: fdtrc",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5004658633043565
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_fdtri_5_2_0p7",
-      "error": "unsupported function: fdtri",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 2.6084273054201277
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_fdtridfd_5_0p7_1p5",
-      "error": "unsupported function: fdtridfd",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 7.1205455518861855
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_fdtridfd_5_0p5_0",
-      "error": "unsupported function: fdtridfd",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1e-100
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_stdtr_10_1p25",
-      "error": "unsupported function: stdtr",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.8801196948723322
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_stdtrc_10_1p25",
-      "error": "unsupported function: stdtrc",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.1198803051276678
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_stdtridf_0p8_1p25",
-      "error": "unsupported function: stdtridf",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.2176499408295116
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_stdtrit_10_0p8",
-      "error": "unsupported function: stdtrit",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.8790578285505889
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_bdtr_3_10_0p4",
-      "error": "unsupported function: bdtr",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.3822806016000002
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_bdtrc_3_10_0p4",
-      "error": "unsupported function: bdtrc",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.6177193983999998
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_bdtri_3_10_0p6",
-      "error": "unsupported function: bdtri",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.3183961714766643
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nbdtr_4_3_0p5",
-      "error": "unsupported function: nbdtr",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.7734375000000002
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nbdtrc_4_3_0p5",
-      "error": "unsupported function: nbdtrc",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.2265624999999998
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nbdtri_4_3_0p65",
-      "error": "unsupported function: nbdtri",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.4331406303324592
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_pdtr_3_2p5",
@@ -1072,38 +1126,48 @@
     },
     {
       "case_id": "diff_xlogx_2",
-      "error": "unsupported function: xlogx",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.3862943611198906
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_kolmogorov_1",
-      "error": "unsupported function: kolmogorov",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.26999967167735456
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_kolmogorov_1p5",
-      "error": "unsupported function: kolmogorov",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.022217962616525127
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_kolmogi_0p27",
-      "error": "unsupported function: kolmogi",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.999999693714313
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_kolmogi_0p1",
-      "error": "unsupported function: kolmogi",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.2238478702170823
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_log1p_1",
@@ -1125,24 +1189,30 @@
     },
     {
       "case_id": "diff_logaddexp_1_2",
-      "error": "unsupported function: logaddexp",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 2.313261687518223
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_logaddexp2_1_2",
-      "error": "unsupported function: logaddexp2",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 2.584962500721156
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_softplus_1",
-      "error": "unsupported function: softplus",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.3132616875182228
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_huber_1_2",
@@ -1164,87 +1234,111 @@
     },
     {
       "case_id": "diff_cosdg_90",
-      "error": "unsupported function: cosdg",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -0.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_sindg_30",
-      "error": "unsupported function: sindg",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.49999999999999994
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_tandg_45",
-      "error": "unsupported function: tandg",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_cotdg_45",
-      "error": "unsupported function: cotdg",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_radian_180",
-      "error": "unsupported function: radian",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 3.141592653589793
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_cbrt_neg8",
-      "error": "unsupported function: cbrt",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -2.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_exp2_3",
-      "error": "unsupported function: exp2",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 8.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_exp10_2",
-      "error": "unsupported function: exp10",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 100.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_boxcox_2_0p5",
-      "error": "unsupported function: boxcox",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.8284271247461901
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_inv_boxcox_0p828_0p5",
-      "error": "unsupported function: inv_boxcox",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 2.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_boxcox1p_1_0p5",
-      "error": "unsupported function: boxcox1p",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.8284271247461901
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_inv_boxcox1p_0p828_0p5",
-      "error": "unsupported function: inv_boxcox1p",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_entr_half",
@@ -1311,59 +1405,75 @@
     },
     {
       "case_id": "diff_nrdtrimn_0p8_2_1",
-      "error": "unsupported function: nrdtrimn",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -0.6832424671458288
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nrdtrimn_0p5_1_1",
-      "error": "unsupported function: nrdtrimn",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.9999999999999999
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nrdtrimn_p0_invalid",
-      "error": "unsupported function: nrdtrimn",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": NaN
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nrdtrimn_p1_invalid",
-      "error": "unsupported function: nrdtrimn",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": NaN
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nrdtrisd_3_0p9331927987311419_6",
-      "error": "unsupported function: nrdtrisd",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 2.0000000000000004
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nrdtrisd_0p5_0p5_0p5",
-      "error": "unsupported function: nrdtrisd",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nrdtrisd_midpoint_sentinel",
-      "error": "unsupported function: nrdtrisd",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -7532401279578852.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_nrdtrisd_p0_invalid",
-      "error": "unsupported function: nrdtrisd",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": NaN
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_log_ndtr_neg8",
@@ -1383,101 +1493,129 @@
     },
     {
       "case_id": "diff_fresnel_s_1",
-      "error": "unsupported function: fresnel_s",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.4382591473903547
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_fresnel_c_1",
-      "error": "unsupported function: fresnel_c",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.779893400376823
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_dawsn_1",
-      "error": "unsupported function: dawsn",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5380795069127684
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_sici_si_1",
-      "error": "unsupported function: sici_si",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.9460830703671831
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_sici_ci_1",
-      "error": "unsupported function: sici_ci",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.33740392290096816
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_shichi_shi_1",
-      "error": "unsupported function: shichi_shi",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.0572508753757286
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_shichi_chi_1",
-      "error": "unsupported function: shichi_chi",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.8378669409802082
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_struve_0_1",
-      "error": "unsupported function: struve",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5686566270482881
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_modstruve_0_1",
-      "error": "unsupported function: modstruve",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.710243185937891
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_ber_1",
-      "error": "unsupported function: ber",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.984381781213087
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_bei_1",
-      "error": "unsupported function: bei",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.24956604003665972
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_ker_1",
-      "error": "unsupported function: ker",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.28670620872831604
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_kei_1",
-      "error": "unsupported function: kei",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -0.49499463651872
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_spence_half",
-      "error": "unsupported function: spence",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5822405264650135
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_zeta_2",
@@ -1499,10 +1637,12 @@
     },
     {
       "case_id": "diff_hurwitz_zeta_2_half",
-      "error": "unsupported function: hurwitz_zeta",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 4.93480220054468
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_expit_zero",
@@ -1605,31 +1745,39 @@
     },
     {
       "case_id": "diff_ellipj_sn_0p7_0p2",
-      "error": "unsupported function: ellipj_sn",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.6362806256364313
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_ellipj_cn_0p7_0p2",
-      "error": "unsupported function: ellipj_cn",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.771457688690515
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_ellipj_dn_0p7_0p2",
-      "error": "unsupported function: ellipj_dn",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.9586602073143238
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_ellipj_ph_0p7_0p2",
-      "error": "unsupported function: ellipj_ph",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.6896673935732983
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_lpmv_1_3_0p5",
@@ -1773,206 +1921,264 @@
     },
     {
       "case_id": "diff_roots_chebyt_4_node_left",
-      "error": "unsupported function: roots_chebyt_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -0.9238795325112867
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_chebyt_4_node_right",
-      "error": "unsupported function: roots_chebyt_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.9238795325112867
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_chebyt_4_weight_left",
-      "error": "unsupported function: roots_chebyt_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.7853981633974483
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_chebyu_4_node_left",
-      "error": "unsupported function: roots_chebyu_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -0.8090169943749473
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_chebyu_4_node_right",
-      "error": "unsupported function: roots_chebyu_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.8090169943749475
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_chebyu_4_weight_left",
-      "error": "unsupported function: roots_chebyu_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.21707871342270607
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_chebyu_4_weight_inner",
-      "error": "unsupported function: roots_chebyu_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5683194499747424
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_hermite_3_node_left",
-      "error": "unsupported function: roots_hermite_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -1.224744871391589
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_hermite_3_node_mid",
-      "error": "unsupported function: roots_hermite_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_hermite_3_weight_mid",
-      "error": "unsupported function: roots_hermite_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.1816359006036774
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_hermitenorm_3_node_left",
-      "error": "unsupported function: roots_hermitenorm_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -1.7320508075688774
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_hermitenorm_3_node_mid",
-      "error": "unsupported function: roots_hermitenorm_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_hermitenorm_3_weight_mid",
-      "error": "unsupported function: roots_hermitenorm_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.6710855164206668
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_laguerre_3_node_left",
-      "error": "unsupported function: roots_laguerre_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.41577455678347913
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_laguerre_3_node_right",
-      "error": "unsupported function: roots_laguerre_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 6.289945082937478
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_laguerre_3_weight_left",
-      "error": "unsupported function: roots_laguerre_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.7110930099291731
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_laguerre_3_weight_right",
-      "error": "unsupported function: roots_laguerre_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.010389256501586133
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_genlaguerre_4_1p5_node_inner",
-      "error": "unsupported function: roots_genlaguerre_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 6.319300497896596
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_genlaguerre_4_1p5_weight_inner",
-      "error": "unsupported function: roots_genlaguerre_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.11894878057553862
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_jacobi_4_0p5_1_node_inner",
-      "error": "unsupported function: roots_jacobi_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -0.23082864090118665
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_jacobi_4_0p5_1_weight_inner",
-      "error": "unsupported function: roots_jacobi_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5011891464890381
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_gegenbauer_4_1p25_node_inner",
-      "error": "unsupported function: roots_gegenbauer_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.29640932576492884
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_gegenbauer_4_1p25_weight_inner",
-      "error": "unsupported function: roots_gegenbauer_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5366920142035819
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_legendre_3_node_left",
-      "error": "unsupported function: roots_legendre_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": -0.7745966692414834
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_legendre_3_node_mid",
-      "error": "unsupported function: roots_legendre_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.0
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_legendre_3_node_right",
-      "error": "unsupported function: roots_legendre_node",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.7745966692414834
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_legendre_3_weight_left",
-      "error": "unsupported function: roots_legendre_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5555555555555558
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_legendre_3_weight_mid",
-      "error": "unsupported function: roots_legendre_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.8888888888888883
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_roots_legendre_3_weight_right",
-      "error": "unsupported function: roots_legendre_weight",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.5555555555555558
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_lambertw_one",
@@ -2007,38 +2213,54 @@
     },
     {
       "case_id": "diff_exp1_one",
-      "error": "unsupported function: exp1",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.2193839343955205
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_exp1_negative_real_branch",
-      "error": "unsupported function: exp1",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": {
+          "im": -3.141592653589793,
+          "re": -9.933832570625416
+        }
+      },
+      "result_kind": "complex_scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_expi_one",
-      "error": "unsupported function: expi",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 1.895117816355937
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_expi_imaginary_axis",
-      "error": "unsupported function: expi",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": {
+          "im": 2.5168793971620795,
+          "re": 0.33740392290096816
+        }
+      },
+      "result_kind": "complex_scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_expn_2_1",
-      "error": "unsupported function: expn",
-      "result": {},
-      "result_kind": "unsupported_function",
-      "status": "error"
+      "error": null,
+      "result": {
+        "value": 0.14849550677592194
+      },
+      "result_kind": "scalar",
+      "status": "ok"
     },
     {
       "case_id": "diff_hyp0f1_1p5_0p25",
@@ -2069,7 +2291,7 @@
     }
   ],
   "family": "special_core",
-  "generated_unix_ms": 1776892550079,
+  "generated_unix_ms": 1776893025929,
   "packet_id": "FSCI-P2C-006",
   "runtime": {
     "numpy_version": "2.4.3",
