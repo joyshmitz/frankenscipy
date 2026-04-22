@@ -34,6 +34,15 @@
 - **Tests:** `cargo test -p fsci-runtime --lib` -> 32 passed / 0 failed
 - **Commit:** a2043f2
 
+### thiserror: 2.0.17 -> 2.0.18 (patch pin)
+
+- **Before:** `thiserror = "2.0.17"`
+- **After:**  `thiserror = "2.0.18"`
+- **Lock resolution:** Cargo.lock already at 2.0.18 via caret; manifest pin advanced.
+- **Breaking:** None (patch).
+- **Checks:** `cargo check --workspace --all-targets` exit=0.
+- **Tests:** `cargo test -p fsci-runtime --lib` -> 32 passed / 0 failed.
+
 ### serde_json: 1.0.145 -> 1.0.149 (patch pin)
 
 - **Before:** `serde_json = { version = "1.0.145", features = ["preserve_order"] }`
