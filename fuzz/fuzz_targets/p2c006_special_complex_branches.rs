@@ -5,7 +5,7 @@ use fsci_runtime::RuntimeMode;
 use fsci_special::{
     Complex64, SpecialResult, SpecialTensor,
     SpecialTensor::{ComplexScalar, ComplexVec, RealScalar, RealVec},
-    erfcinv, erfinv, exp1, expi, lambertw, wrightomega,
+    digamma, erfcinv, erfinv, exp1, expi, gamma, gammaln, lambertw, rgamma, wrightomega,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -21,12 +21,15 @@ enum EdgeF64 {
     NegZero,
     One,
     NegOne,
+    Half,
+    NegHalf,
     Tiny,
     NegTiny,
     PosInf,
     NegInf,
     Nan,
     LambertBranch,
+    GammaPole,
 }
 
 impl EdgeF64 {
@@ -38,12 +41,15 @@ impl EdgeF64 {
             Self::NegZero => -0.0,
             Self::One => 1.0,
             Self::NegOne => -1.0,
+            Self::Half => 0.5,
+            Self::NegHalf => -0.5,
             Self::Tiny => f64::MIN_POSITIVE,
             Self::NegTiny => -f64::MIN_POSITIVE,
             Self::PosInf => f64::INFINITY,
             Self::NegInf => f64::NEG_INFINITY,
             Self::Nan => f64::NAN,
             Self::LambertBranch => -1.0 / std::f64::consts::E,
+            Self::GammaPole => -1.0,
         }
     }
 }
@@ -143,6 +149,55 @@ fn check_unary(name: &str, func: UnarySpecialFn, z: Complex64, mode: RuntimeMode
     }
 }
 
+fn check_gamma_family(z: Complex64, mode: RuntimeMode, vectorize: bool) {
+    for (name, func) in [
+        ("gamma", gamma as UnarySpecialFn),
+        ("gammaln", gammaln as UnarySpecialFn),
+        ("rgamma", rgamma as UnarySpecialFn),
+        ("digamma", digamma as UnarySpecialFn),
+    ] {
+        check_unary(name, func, z, mode, vectorize);
+    }
+
+    let gamma_value = complex_from_result(gamma(&ComplexScalar(z), mode));
+    let gammaln_value = complex_from_result(gammaln(&ComplexScalar(z), mode));
+    if let (Some(gamma_z), Some(gammaln_z)) = (gamma_value, gammaln_value)
+        && gamma_z.is_finite()
+        && gammaln_z.is_finite()
+    {
+        let expected = gammaln_z.exp();
+        assert!(
+            approx_eq_complex(gamma_z, expected),
+            "gamma/gammaln mismatch for {z:?}: {gamma_z:?} vs {expected:?}"
+        );
+    }
+
+    let rgamma_value = complex_from_result(rgamma(&ComplexScalar(z), mode));
+    if let (Some(gamma_z), Some(rgamma_z)) = (gamma_value, rgamma_value)
+        && gamma_z.is_finite()
+        && rgamma_z.is_finite()
+        && gamma_z.abs() > 1.0e-8
+    {
+        let product = gamma_z * rgamma_z;
+        assert!(
+            approx_eq_complex(product, Complex64::from_real(1.0)),
+            "gamma*rgamma should equal 1 for {z:?}, got {product:?}"
+        );
+    }
+
+    if z.im == 0.0
+        && z.re <= 0.0
+        && z.re.fract() == 0.0
+        && let Some(rgamma_z) = rgamma_value
+        && rgamma_z.is_finite()
+    {
+        assert!(
+            approx_eq_complex(rgamma_z, Complex64::from_real(0.0)),
+            "rgamma should vanish at negative-integer poles for {z:?}, got {rgamma_z:?}"
+        );
+    }
+}
+
 fuzz_target!(|input: ComplexBranchInput| {
     let z = Complex64::new(input.re.raw(), input.im.raw());
     let mode = mode_from_flag(input.hardened);
@@ -157,4 +212,6 @@ fuzz_target!(|input: ComplexBranchInput| {
     ] {
         check_unary(name, func, z, mode, input.vectorize);
     }
+
+    check_gamma_family(z, mode, input.vectorize);
 });

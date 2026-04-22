@@ -100,6 +100,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c006_special_bessel_base_complex"
+path = "fuzz_targets/p2c006_special_bessel_base_complex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c006_special_oracle_roundtrip"
 path = "fuzz_targets/p2c006_special_oracle_roundtrip.rs"
 test = false
@@ -109,6 +116,27 @@ bench = false
 [[bin]]
 name = "p2c006_special_elliptic_complex"
 path = "fuzz_targets/p2c006_special_elliptic_complex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c006_special_hankel_complex"
+path = "fuzz_targets/p2c006_special_hankel_complex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c006_special_airy_complex"
+path = "fuzz_targets/p2c006_special_airy_complex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c006_special_hyper_complex"
+path = "fuzz_targets/p2c006_special_hyper_complex.rs"
 test = false
 doc = false
 bench = false
