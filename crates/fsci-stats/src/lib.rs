@@ -10040,6 +10040,26 @@ fn rankdata_ordinal(data: &[f64]) -> Vec<f64> {
     ranks
 }
 
+/// Returns sign of array elements (-1.0, 0.0, or 1.0).
+///
+/// Matches `scipy.stats.mstats.msign(x)`.
+/// NaN values return NaN.
+pub fn msign(data: &[f64]) -> Vec<f64> {
+    data.iter()
+        .map(|&x| {
+            if x.is_nan() {
+                f64::NAN
+            } else if x > 0.0 {
+                1.0
+            } else if x < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
 /// Computes plotting positions for probability plots.
 ///
 /// Matches `scipy.stats.mstats.plotting_positions(data, alpha, beta)`.
@@ -26875,5 +26895,18 @@ mod tests {
     fn hdquantiles_sd_small_n() {
         let result = hdquantiles_sd(&[1.0], &[0.5]);
         assert!(result[0].is_nan());
+    }
+
+    #[test]
+    fn msign_matches_scipy() {
+        // scipy.stats.mstats.msign([1,-2,0,3]) = [1,-1,0,1]
+        let result = msign(&[1.0, -2.0, 0.0, 3.0]);
+        assert_eq!(result, vec![1.0, -1.0, 0.0, 1.0]);
+
+        // NaN handling
+        let result_nan = msign(&[1.0, f64::NAN, -1.0]);
+        assert_eq!(result_nan[0], 1.0);
+        assert!(result_nan[1].is_nan());
+        assert_eq!(result_nan[2], -1.0);
     }
 }
