@@ -2018,7 +2018,7 @@ pub fn wrightomega_scalar(z: f64) -> f64 {
     w
 }
 
-fn wrightomega_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+fn wrightomega_complex_scalar(z: Complex64, _mode: RuntimeMode) -> Result<Complex64, SpecialError> {
     if z.re.is_nan() || z.im.is_nan() {
         return Ok(Complex64::new(f64::NAN, f64::NAN));
     }
@@ -2032,16 +2032,72 @@ fn wrightomega_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex
         return Ok(Complex64::from_real(wrightomega_scalar(z.re)));
     }
 
-    let lambertw = crate::elliptic::lambertw(&SpecialTensor::ComplexScalar(z.exp()), mode)?;
-    match lambertw {
-        SpecialTensor::ComplexScalar(value) => Ok(value),
-        _ => Err(SpecialError {
-            function: "wrightomega",
-            kind: SpecialErrorKind::DomainError,
-            mode,
-            detail: "unexpected tensor shape from lambertw",
-        }),
+    let one = Complex64::from_real(1.0);
+    let two = Complex64::from_real(2.0);
+    let mut w = wrightomega_complex_initial_guess(z);
+    if w.norm_sqr() < 1.0e-24 {
+        w = Complex64::new(1.0e-12, 0.0);
     }
+
+    for _ in 0..100 {
+        if w.norm_sqr() < 1.0e-24 {
+            w = Complex64::new(1.0e-12, 0.0);
+        }
+
+        let f = w + w.ln() - z;
+        if f.abs() < 1.0e-14 * (1.0 + z.abs()) {
+            return Ok(w);
+        }
+
+        let fp = one + one / w;
+        if fp.abs() < 1.0e-30 {
+            break;
+        }
+        let fpp = -one / (w * w);
+        let denom = two * fp * fp - f * fpp;
+        let mut step = if denom.abs() < 1.0e-30 {
+            f / fp
+        } else {
+            two * f * fp / denom
+        };
+        let mut next = w - step;
+
+        if !next.is_finite() || next.norm_sqr() < 1.0e-24 {
+            step = f / fp;
+            next = w - step;
+            if !next.is_finite() || next.norm_sqr() < 1.0e-24 {
+                break;
+            }
+        }
+
+        w = next;
+        if step.abs() < 1.0e-14 * (1.0 + w.abs()) {
+            return Ok(w);
+        }
+    }
+
+    Ok(w)
+}
+
+fn wrightomega_complex_initial_guess(z: Complex64) -> Complex64 {
+    if z.re < -2.0 && z.im.abs() < std::f64::consts::FRAC_PI_2 {
+        let exp_z = z.exp();
+        if exp_z.abs() < 1.0e-8 {
+            return exp_z;
+        }
+    }
+
+    if z.re > 1.0 || z.im.abs() > 1.0 {
+        return z - z.ln();
+    }
+
+    let exp_z = z.exp();
+    let denom = Complex64::from_real(1.0) + exp_z;
+    if denom.norm_sqr() < 1.0e-24 {
+        return Complex64::from_real(0.5);
+    }
+
+    exp_z / denom
 }
 
 /// Iterated exponential function (tetration): exp(exp(...exp(x)...)) applied n times.
@@ -7460,6 +7516,51 @@ mod tests {
             1e-10,
             "wrightomega principal-branch identity",
         );
+        Ok(())
+    }
+
+    #[test]
+    fn wrightomega_complex_large_real_part_stays_finite() -> Result<(), String> {
+        let z = Complex64::new(1000.0, 1.0);
+        let result = wrightomega(&SpecialTensor::ComplexScalar(z), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let value = expect_complex_scalar(result)?;
+        let expected = Complex64::new(993.099_168_966_944_7, 0.998_994_064_481_437_6);
+        assert!(value.re.is_finite());
+        assert!(value.im.is_finite());
+        assert_complex_close(
+            value,
+            expected,
+            1e-10,
+            "wrightomega large-real complex asymptotic",
+        );
+        assert_complex_close(
+            value + value.ln(),
+            z,
+            1e-10,
+            "wrightomega large-real complex identity",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wrightomega_complex_does_not_alias_two_pi_periods() -> Result<(), String> {
+        let z = Complex64::new(0.0, 2.0 * std::f64::consts::PI);
+        let result = wrightomega(&SpecialTensor::ComplexScalar(z), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let value = expect_complex_scalar(result)?;
+        let expected = Complex64::new(-1.533_913_319_793_574_4, 4.375_185_153_061_897_5);
+        assert_complex_close(
+            value,
+            expected,
+            1e-10,
+            "wrightomega outside principal strip should not collapse to omega(0)",
+        );
+        assert!(
+            (value - Complex64::from_real(wrightomega_scalar(0.0))).abs() > 1.0,
+            "wrightomega(z) must not reduce modulo 2πi to omega(0)",
+        );
+        assert_complex_close(value + value.ln(), z, 1e-10, "wrightomega 2πi identity");
         Ok(())
     }
 
