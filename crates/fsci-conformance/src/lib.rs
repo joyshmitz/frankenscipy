@@ -41,7 +41,7 @@ use fsci_opt::{
 };
 use fsci_runtime::{AuditLedger, RuntimeMode, SolverPortfolio};
 use fsci_special::{
-    SpecialError as FsciSpecialError, SpecialErrorKind as FsciSpecialErrorKind,
+    Complex64, SpecialError as FsciSpecialError, SpecialErrorKind as FsciSpecialErrorKind,
     SpecialTensor as FsciSpecialTensor, bdtr as special_bdtr, bdtrc as special_bdtrc,
     bdtri as special_bdtri, bei as special_bei, ber as special_ber, beta as special_beta,
     betainc as special_betainc, betaln as special_betaln,
@@ -755,10 +755,52 @@ pub enum SpecialValueClass {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpecialComplexValue {
+    pub re: f64,
+    pub im: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum SpecialArgument {
+    RealScalar(f64),
+    ComplexScalar(SpecialComplexValue),
+    RealVector { values: Vec<f64> },
+    ComplexVector { values: Vec<SpecialComplexValue> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SpecialExpectedOutcome {
     Scalar {
         value: f64,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    Vector {
+        values: Vec<f64>,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    ComplexScalar {
+        value: SpecialComplexValue,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+        #[serde(default)]
+        contract_ref: Option<String>,
+    },
+    ComplexVector {
+        values: Vec<SpecialComplexValue>,
         #[serde(default)]
         atol: Option<f64>,
         #[serde(default)]
@@ -781,13 +823,23 @@ pub struct SpecialCase {
     pub mode: RuntimeMode,
     pub function: SpecialCaseFunction,
     #[serde(default)]
-    pub args: Vec<f64>,
+    pub args: Vec<SpecialArgument>,
     pub expected: SpecialExpectedOutcome,
 }
 
 impl SpecialCase {
     fn case_id(&self) -> &str {
         &self.case_id
+    }
+
+    fn real_scalar_args(&self) -> Option<Vec<f64>> {
+        self.args
+            .iter()
+            .map(|arg| match arg {
+                SpecialArgument::RealScalar(value) => Some(*value),
+                _ => None,
+            })
+            .collect()
     }
 
     #[cfg(test)]
@@ -801,6 +853,14 @@ pub struct SpecialPacketFixture {
     pub packet_id: String,
     pub family: String,
     pub cases: Vec<SpecialCase>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum SpecialObservedOutcome {
+    Scalar(f64),
+    Vector(Vec<f64>),
+    ComplexScalar([f64; 2]),
+    ComplexVector(Vec<[f64; 2]>),
 }
 
 // ---------- Sparse packet fixture types ----------
@@ -8591,9 +8651,14 @@ fn fixture_max_diff_seq(
         })
 }
 
-fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
+fn execute_special_case_scalar(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
     let mode = case.mode;
-    let args = &case.args;
+    let args = case.real_scalar_args().ok_or(FsciSpecialError {
+        function: "special_fixture",
+        kind: FsciSpecialErrorKind::DomainError,
+        mode,
+        detail: "special scalar path requires real scalar fixture args",
+    })?;
     match case.function {
         SpecialCaseFunction::Gamma => {
             if args.len() != 1 {
@@ -9452,7 +9517,7 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
             if args.is_empty() {
                 return Err(special_invalid_fixture_error("logsumexp", mode));
             }
-            Ok(special_logsumexp(args))
+            Ok(special_logsumexp(&args))
         }
         SpecialCaseFunction::Log1p => {
             if args.len() != 1 {
@@ -10104,8 +10169,209 @@ fn execute_special_case(case: &SpecialCase) -> Result<f64, FsciSpecialError> {
     }
 }
 
+fn execute_special_case(case: &SpecialCase) -> Result<SpecialObservedOutcome, FsciSpecialError> {
+    let mode = case.mode;
+    let args = &case.args;
+    match case.function {
+        SpecialCaseFunction::Beta => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("beta", mode));
+            }
+            Ok(special_observed_from_tensor(special_beta(
+                &special_tensor_from_argument(&args[0]),
+                &special_tensor_from_argument(&args[1]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Betaln => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("betaln", mode));
+            }
+            Ok(special_observed_from_tensor(special_betaln(
+                &special_tensor_from_argument(&args[0]),
+                &special_tensor_from_argument(&args[1]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Betainc => {
+            if args.len() != 3 {
+                return Err(special_invalid_fixture_error("betainc", mode));
+            }
+            Ok(special_observed_from_tensor(special_betainc(
+                &special_tensor_from_argument(&args[0]),
+                &special_tensor_from_argument(&args[1]),
+                &special_tensor_from_argument(&args[2]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Ellipk => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ellipk", mode));
+            }
+            Ok(special_observed_from_tensor(special_ellipk(
+                &special_tensor_from_argument(&args[0]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Ellipkm1 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ellipkm1", mode));
+            }
+            Ok(special_observed_from_tensor(special_ellipkm1(
+                &special_tensor_from_argument(&args[0]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Ellipe => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("ellipe", mode));
+            }
+            Ok(special_observed_from_tensor(special_ellipe(
+                &special_tensor_from_argument(&args[0]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Ellipkinc => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("ellipkinc", mode));
+            }
+            Ok(special_observed_from_tensor(special_ellipkinc(
+                &special_tensor_from_argument(&args[0]),
+                &special_tensor_from_argument(&args[1]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Ellipeinc => {
+            if args.len() != 2 {
+                return Err(special_invalid_fixture_error("ellipeinc", mode));
+            }
+            Ok(special_observed_from_tensor(special_ellipeinc(
+                &special_tensor_from_argument(&args[0]),
+                &special_tensor_from_argument(&args[1]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Lambertw => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("lambertw", mode));
+            }
+            Ok(special_observed_from_tensor(special_lambertw(
+                &special_tensor_from_argument(&args[0]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Exp1 => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("exp1", mode));
+            }
+            Ok(special_observed_from_tensor(special_exp1(
+                &special_tensor_from_argument(&args[0]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Expi => {
+            if args.len() != 1 {
+                return Err(special_invalid_fixture_error("expi", mode));
+            }
+            Ok(special_observed_from_tensor(special_expi(
+                &special_tensor_from_argument(&args[0]),
+                mode,
+            )?))
+        }
+        SpecialCaseFunction::Jvp => {
+            execute_special_bessel_derivative_case("jvp", args, mode, special_jvp)
+        }
+        SpecialCaseFunction::Yvp => {
+            execute_special_bessel_derivative_case("yvp", args, mode, special_yvp)
+        }
+        SpecialCaseFunction::Ivp => {
+            execute_special_bessel_derivative_case("ivp", args, mode, special_ivp)
+        }
+        SpecialCaseFunction::Kvp => {
+            execute_special_bessel_derivative_case("kvp", args, mode, special_kvp)
+        }
+        _ => execute_special_case_scalar(case).map(SpecialObservedOutcome::Scalar),
+    }
+}
+
 fn special_scalar(value: f64) -> FsciSpecialTensor {
     FsciSpecialTensor::RealScalar(value)
+}
+
+fn special_complex_value_to_complex64(value: &SpecialComplexValue) -> Complex64 {
+    Complex64::new(value.re, value.im)
+}
+
+fn special_tensor_from_argument(arg: &SpecialArgument) -> FsciSpecialTensor {
+    match arg {
+        SpecialArgument::RealScalar(value) => FsciSpecialTensor::RealScalar(*value),
+        SpecialArgument::ComplexScalar(value) => {
+            FsciSpecialTensor::ComplexScalar(special_complex_value_to_complex64(value))
+        }
+        SpecialArgument::RealVector { values } => FsciSpecialTensor::RealVec(values.clone()),
+        SpecialArgument::ComplexVector { values } => FsciSpecialTensor::ComplexVec(
+            values
+                .iter()
+                .map(special_complex_value_to_complex64)
+                .collect(),
+        ),
+    }
+}
+
+fn special_observed_from_tensor(tensor: FsciSpecialTensor) -> SpecialObservedOutcome {
+    match tensor {
+        FsciSpecialTensor::Empty => SpecialObservedOutcome::Vector(Vec::new()),
+        FsciSpecialTensor::RealScalar(value) => SpecialObservedOutcome::Scalar(value),
+        FsciSpecialTensor::RealVec(values) => SpecialObservedOutcome::Vector(values),
+        FsciSpecialTensor::ComplexScalar(value) => {
+            SpecialObservedOutcome::ComplexScalar([value.re, value.im])
+        }
+        FsciSpecialTensor::ComplexVec(values) => SpecialObservedOutcome::ComplexVector(
+            values.into_iter().map(|v| [v.re, v.im]).collect(),
+        ),
+    }
+}
+
+fn execute_special_bessel_derivative_case(
+    function: &'static str,
+    args: &[SpecialArgument],
+    mode: RuntimeMode,
+    kernel: fn(
+        &FsciSpecialTensor,
+        &FsciSpecialTensor,
+        usize,
+        RuntimeMode,
+    ) -> Result<FsciSpecialTensor, FsciSpecialError>,
+) -> Result<SpecialObservedOutcome, FsciSpecialError> {
+    if args.len() != 3 {
+        return Err(special_invalid_fixture_error(function, mode));
+    }
+    let derivative_order =
+        special_derivative_order_argument_from_fixture(function, mode, &args[2])?;
+    Ok(special_observed_from_tensor(kernel(
+        &special_tensor_from_argument(&args[0]),
+        &special_tensor_from_argument(&args[1]),
+        derivative_order,
+        mode,
+    )?))
+}
+
+fn special_derivative_order_argument_from_fixture(
+    function: &'static str,
+    mode: RuntimeMode,
+    arg: &SpecialArgument,
+) -> Result<usize, FsciSpecialError> {
+    match arg {
+        SpecialArgument::RealScalar(value) => {
+            special_derivative_order_from_fixture(function, mode, *value)
+        }
+        _ => Err(FsciSpecialError {
+            function,
+            kind: FsciSpecialErrorKind::DomainError,
+            mode,
+            detail: "derivative order fixture must be a real scalar",
+        }),
+    }
 }
 
 fn special_derivative_order_from_fixture(
@@ -10252,7 +10518,7 @@ fn special_invalid_fixture_error(function: &'static str, mode: RuntimeMode) -> F
 
 fn compare_special_case_differential(
     case: &SpecialCase,
-    observed: &Result<f64, FsciSpecialError>,
+    observed: &Result<SpecialObservedOutcome, FsciSpecialError>,
 ) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
     match (&case.expected, observed) {
         (
@@ -10262,11 +10528,11 @@ fn compare_special_case_differential(
                 rtol,
                 contract_ref,
             },
-            Ok(actual),
+            Ok(SpecialObservedOutcome::Scalar(actual)),
         ) => {
             let tolerance =
                 resolve_special_contract_tolerance(contract_ref.as_deref(), *atol, *rtol);
-            let diff = (*actual - *value).abs();
+            let diff = (actual - *value).abs();
             let pass = allclose_scalar(*actual, *value, tolerance.atol, tolerance.rtol);
             let msg = if pass {
                 format!("special scalar matched (diff={diff:.2e})")
@@ -10278,8 +10544,115 @@ fn compare_special_case_differential(
             };
             (pass, msg, Some(diff), Some(tolerance))
         }
+        (
+            SpecialExpectedOutcome::Vector {
+                values,
+                atol,
+                rtol,
+                contract_ref,
+            },
+            Ok(SpecialObservedOutcome::Vector(actual)),
+        ) => {
+            let tolerance =
+                resolve_special_contract_tolerance(contract_ref.as_deref(), *atol, *rtol);
+            if values.len() != actual.len() {
+                return (
+                    false,
+                    format!(
+                        "special vector length mismatch: expected={}, got={}",
+                        values.len(),
+                        actual.len()
+                    ),
+                    None,
+                    Some(tolerance),
+                );
+            }
+            let diff = values
+                .iter()
+                .zip(actual.iter())
+                .map(|(expected, got)| (got - expected).abs())
+                .fold(0.0, f64::max);
+            let pass = values.iter().zip(actual.iter()).all(|(expected, got)| {
+                allclose_scalar(*got, *expected, tolerance.atol, tolerance.rtol)
+            });
+            let msg = if pass {
+                format!("special vector matched (max_diff={diff:.2e})")
+            } else {
+                format!(
+                    "special vector mismatch: expected={values:?}, got={actual:?}, max_diff={diff:.2e}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(diff), Some(tolerance))
+        }
+        (
+            SpecialExpectedOutcome::ComplexScalar {
+                value,
+                atol,
+                rtol,
+                contract_ref,
+            },
+            Ok(SpecialObservedOutcome::ComplexScalar(actual)),
+        ) => {
+            let tolerance =
+                resolve_special_contract_tolerance(contract_ref.as_deref(), *atol, *rtol);
+            let expected = [value.re, value.im];
+            let diff = special_componentwise_max_diff(*actual, expected);
+            let pass = special_complex_allclose(*actual, expected, tolerance.atol, tolerance.rtol);
+            let msg = if pass {
+                format!("special complex scalar matched (max_diff={diff:.2e})")
+            } else {
+                format!(
+                    "special complex scalar mismatch: expected={expected:?}, got={actual:?}, max_diff={diff:.2e}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(diff), Some(tolerance))
+        }
+        (
+            SpecialExpectedOutcome::ComplexVector {
+                values,
+                atol,
+                rtol,
+                contract_ref,
+            },
+            Ok(SpecialObservedOutcome::ComplexVector(actual)),
+        ) => {
+            let tolerance =
+                resolve_special_contract_tolerance(contract_ref.as_deref(), *atol, *rtol);
+            if values.len() != actual.len() {
+                return (
+                    false,
+                    format!(
+                        "special complex vector length mismatch: expected={}, got={}",
+                        values.len(),
+                        actual.len()
+                    ),
+                    None,
+                    Some(tolerance),
+                );
+            }
+            let expected: Vec<[f64; 2]> = values.iter().map(|value| [value.re, value.im]).collect();
+            let diff = expected
+                .iter()
+                .zip(actual.iter())
+                .map(|(expected, got)| special_componentwise_max_diff(*got, *expected))
+                .fold(0.0, f64::max);
+            let pass = expected.iter().zip(actual.iter()).all(|(expected, got)| {
+                special_complex_allclose(*got, *expected, tolerance.atol, tolerance.rtol)
+            });
+            let msg = if pass {
+                format!("special complex vector matched (max_diff={diff:.2e})")
+            } else {
+                format!(
+                    "special complex vector mismatch: expected={expected:?}, got={actual:?}, max_diff={diff:.2e}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(diff), Some(tolerance))
+        }
         (SpecialExpectedOutcome::Class { class }, Ok(actual)) => {
-            let observed_class = classify_special_value(*actual);
+            let observed_class = classify_special_observed(actual);
             let pass = observed_class == *class;
             let msg = if pass {
                 format!("value class matched ({observed_class:?})")
@@ -10304,6 +10677,58 @@ fn compare_special_case_differential(
             None,
             None,
         ),
+    }
+}
+
+fn special_componentwise_max_diff(actual: [f64; 2], expected: [f64; 2]) -> f64 {
+    (actual[0] - expected[0])
+        .abs()
+        .max((actual[1] - expected[1]).abs())
+}
+
+fn special_complex_allclose(actual: [f64; 2], expected: [f64; 2], atol: f64, rtol: f64) -> bool {
+    allclose_scalar(actual[0], expected[0], atol, rtol)
+        && allclose_scalar(actual[1], expected[1], atol, rtol)
+}
+
+fn classify_special_observed(observed: &SpecialObservedOutcome) -> SpecialValueClass {
+    match observed {
+        SpecialObservedOutcome::Scalar(value) => classify_special_value(*value),
+        SpecialObservedOutcome::Vector(values) => {
+            classify_special_sequence(values.iter().copied().map(classify_special_value))
+        }
+        SpecialObservedOutcome::ComplexScalar(value) => {
+            classify_special_sequence(value.iter().copied().map(classify_special_value))
+        }
+        SpecialObservedOutcome::ComplexVector(values) => classify_special_sequence(
+            values
+                .iter()
+                .flat_map(|value| value.iter().copied())
+                .map(classify_special_value),
+        ),
+    }
+}
+
+fn classify_special_sequence<I>(classes: I) -> SpecialValueClass
+where
+    I: IntoIterator<Item = SpecialValueClass>,
+{
+    let mut saw_pos_inf = false;
+    let mut saw_neg_inf = false;
+    for class in classes {
+        match class {
+            SpecialValueClass::Nan => return SpecialValueClass::Nan,
+            SpecialValueClass::PosInf => saw_pos_inf = true,
+            SpecialValueClass::NegInf => saw_neg_inf = true,
+            SpecialValueClass::Finite => {}
+        }
+    }
+    if saw_pos_inf {
+        SpecialValueClass::PosInf
+    } else if saw_neg_inf {
+        SpecialValueClass::NegInf
+    } else {
+        SpecialValueClass::Finite
     }
 }
 
@@ -11222,6 +11647,31 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 contract_ref,
             } => format!(
                 "scalar value={value:.16e} atol={atol:?} rtol={rtol:?} contract_ref={contract_ref:?}"
+            ),
+            super::SpecialExpectedOutcome::Vector {
+                values,
+                atol,
+                rtol,
+                contract_ref,
+            } => format!(
+                "vector values={values:?} atol={atol:?} rtol={rtol:?} contract_ref={contract_ref:?}"
+            ),
+            super::SpecialExpectedOutcome::ComplexScalar {
+                value,
+                atol,
+                rtol,
+                contract_ref,
+            } => format!(
+                "complex_scalar value=({}, {}) atol={atol:?} rtol={rtol:?} contract_ref={contract_ref:?}",
+                value.re, value.im
+            ),
+            super::SpecialExpectedOutcome::ComplexVector {
+                values,
+                atol,
+                rtol,
+                contract_ref,
+            } => format!(
+                "complex_vector values={values:?} atol={atol:?} rtol={rtol:?} contract_ref={contract_ref:?}"
             ),
             super::SpecialExpectedOutcome::Class { class } => {
                 format!("class={class:?}")

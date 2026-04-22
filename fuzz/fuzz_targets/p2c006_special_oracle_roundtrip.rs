@@ -2,8 +2,8 @@
 
 use arbitrary::Arbitrary;
 use fsci_conformance::{
-    SpecialCase, SpecialCaseFunction, SpecialExpectedOutcome, SpecialPacketFixture,
-    SpecialValueClass,
+    SpecialArgument, SpecialCase, SpecialCaseFunction, SpecialExpectedOutcome,
+    SpecialPacketFixture, SpecialValueClass,
 };
 use fsci_runtime::RuntimeMode;
 use libfuzzer_sys::fuzz_target;
@@ -636,7 +636,12 @@ fn to_current_packet(packet: &FuturePacketFixture) -> Option<SpecialPacketFixtur
                 category: case.category.clone(),
                 mode: case.mode,
                 function: case.function,
-                args: case.args.clone(),
+                args: case
+                    .args
+                    .iter()
+                    .copied()
+                    .map(SpecialArgument::RealScalar)
+                    .collect(),
                 expected: match &case.expected {
                     FutureExpectedOutcome::Scalar {
                         value,
@@ -694,10 +699,15 @@ fn assert_same_current_packet(lhs: &SpecialPacketFixture, rhs: &SpecialPacketFix
         for (arg_index, (left_arg, right_arg)) in
             left.args.iter().zip(right.args.iter()).enumerate()
         {
-            assert!(
-                same_f64_bits(*left_arg, *right_arg),
-                "current arg bits mismatch at {index}/{arg_index}"
-            );
+            match (left_arg, right_arg) {
+                (SpecialArgument::RealScalar(left), SpecialArgument::RealScalar(right)) => {
+                    assert!(
+                        same_f64_bits(*left, *right),
+                        "current arg bits mismatch at {index}/{arg_index}"
+                    );
+                }
+                _ => panic!("current arg variant mismatch at {index}/{arg_index}"),
+            }
         }
 
         match (&left.expected, &right.expected) {

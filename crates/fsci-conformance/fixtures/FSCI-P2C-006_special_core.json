@@ -1783,6 +1783,30 @@
       }
     },
     {
+      "case_id": "diff_jvp_complex_z_n1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "jvp",
+      "args": [
+        0.5,
+        {
+          "re": 1.25,
+          "im": 0.75
+        },
+        1.0
+      ],
+      "expected": {
+        "kind": "complex_scalar",
+        "value": {
+          "re": -0.11214969843562081,
+          "im": -0.4076726886839208
+        },
+        "atol": 1e-9,
+        "rtol": 1e-9,
+        "contract_ref": "fsci_special::jvp"
+      }
+    },
+    {
       "case_id": "diff_yvp_v0_x1p75_n1",
       "category": "differential",
       "mode": "Strict",
@@ -1797,6 +1821,30 @@
         "value": 0.2539729859462456,
         "atol": 0.0005,
         "rtol": 0.0005,
+        "contract_ref": "fsci_special::yvp"
+      }
+    },
+    {
+      "case_id": "diff_yvp_complex_z_n1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "yvp",
+      "args": [
+        0.5,
+        {
+          "re": 1.25,
+          "im": 0.75
+        },
+        1.0
+      ],
+      "expected": {
+        "kind": "complex_scalar",
+        "value": {
+          "re": 0.7637865221106478,
+          "im": -0.24054051327926187
+        },
+        "atol": 1e-9,
+        "rtol": 1e-9,
         "contract_ref": "fsci_special::yvp"
       }
     },
@@ -1819,6 +1867,30 @@
       }
     },
     {
+      "case_id": "diff_ivp_complex_z_n1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ivp",
+      "args": [
+        0.5,
+        {
+          "re": 1.25,
+          "im": 0.75
+        },
+        1.0
+      ],
+      "expected": {
+        "kind": "complex_scalar",
+        "value": {
+          "re": 0.6780846475208375,
+          "im": 0.44317266980331826
+        },
+        "atol": 1e-9,
+        "rtol": 1e-9,
+        "contract_ref": "fsci_special::ivp"
+      }
+    },
+    {
       "case_id": "diff_kvp_v0_x1p1_n1",
       "category": "differential",
       "mode": "Strict",
@@ -1833,6 +1905,30 @@
         "value": -0.5097600271670271,
         "atol": 1e-8,
         "rtol": 1e-8,
+        "contract_ref": "fsci_special::kvp"
+      }
+    },
+    {
+      "case_id": "diff_kvp_complex_z_n1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kvp",
+      "args": [
+        0.5,
+        {
+          "re": 1.25,
+          "im": 0.75
+        },
+        1.0
+      ],
+      "expected": {
+        "kind": "complex_scalar",
+        "value": {
+          "re": -0.1566369922006784,
+          "im": 0.3554607702130256
+        },
+        "atol": 1e-9,
+        "rtol": 1e-9,
         "contract_ref": "fsci_special::kvp"
       }
     },
@@ -4068,6 +4164,64 @@
       }
     },
     {
+      "case_id": "diff_lambertw_branch_cut_neg1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "lambertw",
+      "args": [
+        {
+          "re": -1.0,
+          "im": 0.0
+        }
+      ],
+      "expected": {
+        "kind": "complex_scalar",
+        "value": {
+          "re": -0.3181315052047642,
+          "im": 1.3372357014306893
+        },
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::lambertw"
+      }
+    },
+    {
+      "case_id": "diff_lambertw_complex_vector_conjugates",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "lambertw",
+      "args": [
+        {
+          "values": [
+            {
+              "re": 0.4,
+              "im": 0.7
+            },
+            {
+              "re": 0.4,
+              "im": -0.7
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "kind": "complex_vector",
+        "values": [
+          {
+            "re": 0.408340591652994,
+            "im": 0.34711702315061466
+          },
+          {
+            "re": 0.408340591652994,
+            "im": -0.34711702315061466
+          }
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_special::lambertw"
+      }
+    },
+    {
       "case_id": "diff_exp1_one",
       "category": "differential",
       "mode": "Strict",
@@ -4084,6 +4238,28 @@
       }
     },
     {
+      "case_id": "diff_exp1_negative_real_branch",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "exp1",
+      "args": [
+        {
+          "re": -3.0,
+          "im": 0.0
+        }
+      ],
+      "expected": {
+        "kind": "complex_scalar",
+        "value": {
+          "re": -9.933832570625416,
+          "im": -3.141592653589793
+        },
+        "atol": 1e-9,
+        "rtol": 1e-9,
+        "contract_ref": "fsci_special::exp1"
+      }
+    },
+    {
       "case_id": "diff_expi_one",
       "category": "differential",
       "mode": "Strict",
@@ -4094,6 +4270,28 @@
       "expected": {
         "kind": "scalar",
         "value": 1.895117816355937,
+        "atol": 1e-9,
+        "rtol": 1e-9,
+        "contract_ref": "fsci_special::expi"
+      }
+    },
+    {
+      "case_id": "diff_expi_imaginary_axis",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "expi",
+      "args": [
+        {
+          "re": 0.0,
+          "im": 1.0
+        }
+      ],
+      "expected": {
+        "kind": "complex_scalar",
+        "value": {
+          "re": 0.33740392290096816,
+          "im": 2.5168793971620795
+        },
         "atol": 1e-9,
         "rtol": 1e-9,
         "contract_ref": "fsci_special::expi"
