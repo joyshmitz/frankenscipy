@@ -144,7 +144,8 @@ impl Default for HarnessConfig {
 pub struct HarnessReport {
     pub suite: &'static str,
     pub oracle_present: bool,
-    pub fixture_count: usize,
+    pub cases_run: usize,
+    pub failed_cases: usize,
     pub strict_mode: bool,
 }
 
@@ -1535,19 +1536,15 @@ enum OptimizeObservedOutcome {
 }
 
 #[must_use]
-pub fn run_smoke(config: &HarnessConfig) -> HarnessReport {
-    let fixture_count = fs::read_dir(&config.fixture_root)
-        .ok()
-        .into_iter()
-        .flat_map(|it| it.filter_map(Result::ok))
-        .count();
-
-    HarnessReport {
+pub fn run_smoke(config: &HarnessConfig) -> Result<HarnessReport, HarnessError> {
+    let packet = run_validate_tol_packet(config, "FSCI-P2C-001_validate_tol.json")?;
+    Ok(HarnessReport {
         suite: "smoke",
         oracle_present: config.oracle_root.exists(),
-        fixture_count,
+        cases_run: packet.passed_cases + packet.failed_cases,
+        failed_cases: packet.failed_cases,
         strict_mode: config.strict_mode,
-    }
+    })
 }
 
 pub fn run_validate_tol_packet(
@@ -11611,9 +11608,10 @@ mod tests {
     #[test]
     fn smoke_harness_finds_oracle_and_fixtures() {
         let cfg = HarnessConfig::default_paths();
-        let report = run_smoke(&cfg);
+        let report = run_smoke(&cfg).expect("smoke packet should run");
         assert!(report.oracle_present, "oracle repo should be present");
-        assert!(report.fixture_count >= 1, "expected at least one fixture");
+        assert!(report.cases_run >= 1, "expected at least one executed case");
+        assert_eq!(report.failed_cases, 0, "smoke packet should pass");
         assert!(report.strict_mode);
     }
 
