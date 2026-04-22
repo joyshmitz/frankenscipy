@@ -3142,6 +3142,428 @@ pub fn spread(points: &[Vec<f64>]) -> f64 {
     points.iter().map(|p| euclidean(p, &center)).sum::<f64>() / n
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Rotation (scipy.spatial.transform.Rotation)
+// ══════════════════════════════════════════════════════════════════════
+
+/// 3D rotation represented internally as a unit quaternion.
+///
+/// Matches `scipy.spatial.transform.Rotation`.
+///
+/// Quaternion convention: `[x, y, z, w]` where `w` is the scalar component.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rotation {
+    quat: [f64; 4],
+}
+
+impl Rotation {
+    /// Create the identity rotation.
+    #[must_use]
+    pub fn identity() -> Self {
+        Self { quat: [0.0, 0.0, 0.0, 1.0] }
+    }
+
+    /// Create a rotation from a unit quaternion `[x, y, z, w]`.
+    ///
+    /// The quaternion is normalized if not already unit.
+    #[must_use]
+    pub fn from_quat(quat: [f64; 4]) -> Self {
+        let [x, y, z, w] = quat;
+        let norm = (x * x + y * y + z * z + w * w).sqrt();
+        if norm < 1e-15 {
+            return Self::identity();
+        }
+        Self {
+            quat: [x / norm, y / norm, z / norm, w / norm],
+        }
+    }
+
+    /// Create a rotation from a 3x3 rotation matrix.
+    #[must_use]
+    pub fn from_matrix(matrix: [[f64; 3]; 3]) -> Self {
+        let m = matrix;
+        let trace = m[0][0] + m[1][1] + m[2][2];
+
+        let (x, y, z, w) = if trace > 0.0 {
+            let s = 0.5 / (trace + 1.0).sqrt();
+            let w = 0.25 / s;
+            let x = (m[2][1] - m[1][2]) * s;
+            let y = (m[0][2] - m[2][0]) * s;
+            let z = (m[1][0] - m[0][1]) * s;
+            (x, y, z, w)
+        } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
+            let s = 2.0 * (1.0 + m[0][0] - m[1][1] - m[2][2]).sqrt();
+            let w = (m[2][1] - m[1][2]) / s;
+            let x = 0.25 * s;
+            let y = (m[0][1] + m[1][0]) / s;
+            let z = (m[0][2] + m[2][0]) / s;
+            (x, y, z, w)
+        } else if m[1][1] > m[2][2] {
+            let s = 2.0 * (1.0 + m[1][1] - m[0][0] - m[2][2]).sqrt();
+            let w = (m[0][2] - m[2][0]) / s;
+            let x = (m[0][1] + m[1][0]) / s;
+            let y = 0.25 * s;
+            let z = (m[1][2] + m[2][1]) / s;
+            (x, y, z, w)
+        } else {
+            let s = 2.0 * (1.0 + m[2][2] - m[0][0] - m[1][1]).sqrt();
+            let w = (m[1][0] - m[0][1]) / s;
+            let x = (m[0][2] + m[2][0]) / s;
+            let y = (m[1][2] + m[2][1]) / s;
+            let z = 0.25 * s;
+            (x, y, z, w)
+        };
+
+        Self::from_quat([x, y, z, w])
+    }
+
+    /// Create a rotation from a rotation vector (axis-angle representation).
+    ///
+    /// The rotation vector's direction is the axis and its magnitude is the angle in radians.
+    #[must_use]
+    pub fn from_rotvec(rotvec: [f64; 3]) -> Self {
+        let [rx, ry, rz] = rotvec;
+        let angle = (rx * rx + ry * ry + rz * rz).sqrt();
+
+        if angle < 1e-15 {
+            return Self::identity();
+        }
+
+        let half_angle = angle / 2.0;
+        let s = half_angle.sin() / angle;
+
+        Self::from_quat([rx * s, ry * s, rz * s, half_angle.cos()])
+    }
+
+    /// Create a rotation from Euler angles.
+    ///
+    /// `seq` is a 3-character string like "xyz", "zyx", "XYZ", etc.
+    /// Lowercase = extrinsic (rotations about fixed axes), uppercase = intrinsic (rotations about body axes).
+    /// `angles` are in radians.
+    #[must_use]
+    pub fn from_euler(seq: &str, angles: [f64; 3]) -> Self {
+        if seq.len() != 3 {
+            return Self::identity();
+        }
+
+        let intrinsic = seq.chars().next().map_or(false, |c| c.is_uppercase());
+        let axes: Vec<char> = seq.to_lowercase().chars().collect();
+
+        let mut result = Self::identity();
+        let order: Vec<usize> = if intrinsic { vec![0, 1, 2] } else { vec![2, 1, 0] };
+
+        for &i in &order {
+            let idx = if intrinsic { i } else { 2 - i };
+            let angle = angles[idx];
+            let elem = Self::from_single_axis(axes[idx], angle);
+            result = if intrinsic {
+                result.multiply(&elem)
+            } else {
+                elem.multiply(&result)
+            };
+        }
+
+        result
+    }
+
+    fn from_single_axis(axis: char, angle: f64) -> Self {
+        let half = angle / 2.0;
+        let (s, c) = (half.sin(), half.cos());
+        match axis {
+            'x' => Self::from_quat([s, 0.0, 0.0, c]),
+            'y' => Self::from_quat([0.0, s, 0.0, c]),
+            'z' => Self::from_quat([0.0, 0.0, s, c]),
+            _ => Self::identity(),
+        }
+    }
+
+    /// Return the quaternion representation `[x, y, z, w]`.
+    #[must_use]
+    pub fn as_quat(&self) -> [f64; 4] {
+        self.quat
+    }
+
+    /// Return the 3x3 rotation matrix.
+    #[must_use]
+    pub fn as_matrix(&self) -> [[f64; 3]; 3] {
+        let [x, y, z, w] = self.quat;
+
+        let xx = x * x;
+        let yy = y * y;
+        let zz = z * z;
+        let xy = x * y;
+        let xz = x * z;
+        let yz = y * z;
+        let wx = w * x;
+        let wy = w * y;
+        let wz = w * z;
+
+        [
+            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+        ]
+    }
+
+    /// Return the rotation vector (axis * angle).
+    #[must_use]
+    pub fn as_rotvec(&self) -> [f64; 3] {
+        let [x, y, z, w] = self.quat;
+        let sin_half = (x * x + y * y + z * z).sqrt();
+
+        if sin_half < 1e-15 {
+            return [0.0, 0.0, 0.0];
+        }
+
+        let angle = 2.0 * sin_half.atan2(w.abs());
+        let scale = if w < 0.0 { -angle / sin_half } else { angle / sin_half };
+
+        [x * scale, y * scale, z * scale]
+    }
+
+    /// Return Euler angles for the given sequence.
+    ///
+    /// `seq` is a 3-character string like "xyz", "zyx", etc.
+    #[must_use]
+    pub fn as_euler(&self, seq: &str) -> [f64; 3] {
+        let m = self.as_matrix();
+        let intrinsic = seq.chars().next().map_or(false, |c| c.is_uppercase());
+        let axes: Vec<char> = seq.to_lowercase().chars().collect();
+
+        if axes.len() != 3 {
+            return [0.0, 0.0, 0.0];
+        }
+
+        let (i, j, k) = (
+            Self::axis_index(axes[0]),
+            Self::axis_index(axes[1]),
+            Self::axis_index(axes[2]),
+        );
+
+        let (a, b, c) = if i == k {
+            Self::euler_symmetric(&m, i, j)
+        } else {
+            Self::euler_asymmetric(&m, i, j, k)
+        };
+
+        if intrinsic { [a, b, c] } else { [c, b, a] }
+    }
+
+    fn axis_index(c: char) -> usize {
+        match c {
+            'x' => 0,
+            'y' => 1,
+            'z' => 2,
+            _ => 0,
+        }
+    }
+
+    fn euler_symmetric(m: &[[f64; 3]; 3], i: usize, j: usize) -> (f64, f64, f64) {
+        let k = 3 - i - j;
+        let sign = if (j as i32 - i as i32 + 3) % 3 == 1 { 1.0 } else { -1.0 };
+
+        let b = m[i][i].clamp(-1.0, 1.0).acos();
+        let (a, c) = if b.sin().abs() < 1e-10 {
+            (m[j][k].atan2(m[j][j]), 0.0)
+        } else {
+            (
+                (m[i][j] * sign).atan2(m[i][k]),
+                (m[j][i] * sign).atan2(-m[k][i]),
+            )
+        };
+
+        (a, b, c)
+    }
+
+    fn euler_asymmetric(m: &[[f64; 3]; 3], i: usize, j: usize, k: usize) -> (f64, f64, f64) {
+        let sign = if (j as i32 - i as i32 + 3) % 3 == 1 { 1.0 } else { -1.0 };
+
+        let b = (sign * m[i][k]).clamp(-1.0, 1.0).asin();
+        let (a, c) = if b.cos().abs() < 1e-10 {
+            ((-sign * m[j][i]).atan2(m[j][j]), 0.0)
+        } else {
+            (
+                (-sign * m[j][k]).atan2(m[k][k]),
+                (-sign * m[i][j]).atan2(m[i][i]),
+            )
+        };
+
+        (a, b, c)
+    }
+
+    /// Apply this rotation to a 3D vector.
+    #[must_use]
+    pub fn apply(&self, vector: [f64; 3]) -> [f64; 3] {
+        let m = self.as_matrix();
+        let [x, y, z] = vector;
+        [
+            m[0][0] * x + m[0][1] * y + m[0][2] * z,
+            m[1][0] * x + m[1][1] * y + m[1][2] * z,
+            m[2][0] * x + m[2][1] * y + m[2][2] * z,
+        ]
+    }
+
+    /// Return the inverse rotation.
+    #[must_use]
+    pub fn inv(&self) -> Self {
+        let [x, y, z, w] = self.quat;
+        Self { quat: [-x, -y, -z, w] }
+    }
+
+    /// Compose this rotation with another (self * other).
+    #[must_use]
+    pub fn multiply(&self, other: &Self) -> Self {
+        let [x1, y1, z1, w1] = self.quat;
+        let [x2, y2, z2, w2] = other.quat;
+
+        Self::from_quat([
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        ])
+    }
+
+    /// Return the rotation angle in radians.
+    #[must_use]
+    pub fn magnitude(&self) -> f64 {
+        let [x, y, z, w] = self.quat;
+        let sin_half = (x * x + y * y + z * z).sqrt();
+        2.0 * sin_half.atan2(w.abs())
+    }
+
+    /// Check if this is approximately the identity rotation.
+    #[must_use]
+    pub fn is_identity(&self, tol: f64) -> bool {
+        self.magnitude() < tol
+    }
+
+    /// Create a random rotation (uniform over SO(3)).
+    #[must_use]
+    pub fn random() -> Self {
+        use std::f64::consts::PI;
+
+        fn simple_rand(seed: &mut u64) -> f64 {
+            *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (*seed >> 33) as f64 / (1u64 << 31) as f64
+        }
+
+        let mut seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(12345, |d| d.as_nanos() as u64);
+
+        let u1 = simple_rand(&mut seed);
+        let u2 = simple_rand(&mut seed);
+        let u3 = simple_rand(&mut seed);
+
+        let sqrt_u1 = u1.sqrt();
+        let sqrt_1mu1 = (1.0 - u1).sqrt();
+
+        Self::from_quat([
+            sqrt_1mu1 * (2.0 * PI * u2).sin(),
+            sqrt_1mu1 * (2.0 * PI * u2).cos(),
+            sqrt_u1 * (2.0 * PI * u3).sin(),
+            sqrt_u1 * (2.0 * PI * u3).cos(),
+        ])
+    }
+
+    /// Spherical linear interpolation between two rotations.
+    ///
+    /// `t` in [0, 1]: 0 returns `self`, 1 returns `other`.
+    #[must_use]
+    pub fn slerp(&self, other: &Self, t: f64) -> Self {
+        let [x1, y1, z1, w1] = self.quat;
+        let [mut x2, mut y2, mut z2, mut w2] = other.quat;
+
+        let mut dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
+
+        if dot < 0.0 {
+            x2 = -x2;
+            y2 = -y2;
+            z2 = -z2;
+            w2 = -w2;
+            dot = -dot;
+        }
+
+        if dot > 0.9995 {
+            let x = x1 + t * (x2 - x1);
+            let y = y1 + t * (y2 - y1);
+            let z = z1 + t * (z2 - z1);
+            let w = w1 + t * (w2 - w1);
+            return Self::from_quat([x, y, z, w]);
+        }
+
+        let theta_0 = dot.clamp(-1.0, 1.0).acos();
+        let theta = theta_0 * t;
+        let sin_theta = theta.sin();
+        let sin_theta_0 = theta_0.sin();
+
+        let s0 = theta.cos() - dot * sin_theta / sin_theta_0;
+        let s1 = sin_theta / sin_theta_0;
+
+        Self::from_quat([
+            s0 * x1 + s1 * x2,
+            s0 * y1 + s1 * y2,
+            s0 * z1 + s1 * z2,
+            s0 * w1 + s1 * w2,
+        ])
+    }
+
+    /// Mean rotation of a set of rotations.
+    #[must_use]
+    pub fn mean(rotations: &[Self]) -> Self {
+        if rotations.is_empty() {
+            return Self::identity();
+        }
+        if rotations.len() == 1 {
+            return rotations[0];
+        }
+
+        let mut sum = [[0.0; 4]; 4];
+        for r in rotations {
+            let q = r.quat;
+            for i in 0..4 {
+                for j in 0..4 {
+                    sum[i][j] += q[i] * q[j];
+                }
+            }
+        }
+
+        let mut eigenvec = [0.0, 0.0, 0.0, 1.0];
+        for _ in 0..20 {
+            let mut new_vec = [0.0; 4];
+            for i in 0..4 {
+                for j in 0..4 {
+                    new_vec[i] += sum[i][j] * eigenvec[j];
+                }
+            }
+            let norm = (new_vec[0].powi(2) + new_vec[1].powi(2) + new_vec[2].powi(2) + new_vec[3].powi(2)).sqrt();
+            if norm > 1e-15 {
+                for v in &mut new_vec {
+                    *v /= norm;
+                }
+            }
+            eigenvec = new_vec;
+        }
+
+        Self::from_quat(eigenvec)
+    }
+}
+
+impl std::ops::Mul for Rotation {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        self.multiply(&rhs)
+    }
+}
+
+impl Default for Rotation {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4509,5 +4931,111 @@ mod tests {
         assert_eq!(indices.len(), 1);
         assert!(indices[0].is_none());
         assert_eq!(distances[0], f64::INFINITY);
+    }
+
+    // ── Rotation tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn rotation_identity() {
+        let r = Rotation::identity();
+        let v = [1.0, 2.0, 3.0];
+        let rv = r.apply(v);
+        assert!((rv[0] - v[0]).abs() < 1e-12);
+        assert!((rv[1] - v[1]).abs() < 1e-12);
+        assert!((rv[2] - v[2]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rotation_from_quat_normalized() {
+        let r = Rotation::from_quat([0.0, 0.0, 2.0, 2.0]);
+        let q = r.as_quat();
+        let norm = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+        assert!((norm - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rotation_90_deg_z_axis() {
+        use std::f64::consts::FRAC_PI_2;
+        let r = Rotation::from_rotvec([0.0, 0.0, FRAC_PI_2]);
+        let v = [1.0, 0.0, 0.0];
+        let rv = r.apply(v);
+        assert!((rv[0]).abs() < 1e-12);
+        assert!((rv[1] - 1.0).abs() < 1e-12);
+        assert!((rv[2]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rotation_matrix_roundtrip() {
+        use std::f64::consts::FRAC_PI_4;
+        let r1 = Rotation::from_rotvec([FRAC_PI_4, 0.0, 0.0]);
+        let m = r1.as_matrix();
+        let r2 = Rotation::from_matrix(m);
+        let v = [1.0, 1.0, 1.0];
+        let rv1 = r1.apply(v);
+        let rv2 = r2.apply(v);
+        assert!((rv1[0] - rv2[0]).abs() < 1e-10);
+        assert!((rv1[1] - rv2[1]).abs() < 1e-10);
+        assert!((rv1[2] - rv2[2]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rotation_inverse() {
+        use std::f64::consts::FRAC_PI_3;
+        let r = Rotation::from_rotvec([0.0, FRAC_PI_3, 0.0]);
+        let r_inv = r.inv();
+        let composed = r.multiply(&r_inv);
+        assert!(composed.is_identity(1e-10));
+    }
+
+    #[test]
+    fn rotation_multiply() {
+        use std::f64::consts::FRAC_PI_2;
+        let r1 = Rotation::from_rotvec([0.0, 0.0, FRAC_PI_2]);
+        let r2 = Rotation::from_rotvec([0.0, 0.0, FRAC_PI_2]);
+        let composed = r1 * r2;
+        let v = [1.0, 0.0, 0.0];
+        let rv = composed.apply(v);
+        assert!((rv[0] + 1.0).abs() < 1e-10);
+        assert!((rv[1]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rotation_euler_roundtrip() {
+        let angles = [0.1, 0.2, 0.3];
+        let r = Rotation::from_euler("xyz", angles);
+        let v = [1.0, 0.0, 0.0];
+        let rv = r.apply(v);
+        let m = r.as_matrix();
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        assert!((det - 1.0).abs() < 1e-10);
+        assert!((rv[0] * rv[0] + rv[1] * rv[1] + rv[2] * rv[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rotation_magnitude() {
+        use std::f64::consts::PI;
+        let r = Rotation::from_rotvec([0.0, PI / 3.0, 0.0]);
+        assert!((r.magnitude() - PI / 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rotation_slerp_endpoints() {
+        let r1 = Rotation::from_rotvec([0.1, 0.0, 0.0]);
+        let r2 = Rotation::from_rotvec([0.0, 0.5, 0.0]);
+        let s0 = r1.slerp(&r2, 0.0);
+        let s1 = r1.slerp(&r2, 1.0);
+
+        let v = [1.0, 0.0, 0.0];
+        let vs0 = s0.apply(v);
+        let vr1 = r1.apply(v);
+        assert!((vs0[0] - vr1[0]).abs() < 1e-10);
+        assert!((vs0[1] - vr1[1]).abs() < 1e-10);
+
+        let vs1 = s1.apply(v);
+        let vr2 = r2.apply(v);
+        assert!((vs1[0] - vr2[0]).abs() < 1e-10);
+        assert!((vs1[1] - vr2[1]).abs() < 1e-10);
     }
 }
