@@ -86,3 +86,10 @@ path = "fuzz_targets/p2c006_special_incomplete_gamma_beta.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c006_special_bessel_derivatives"
+path = "fuzz_targets/p2c006_special_bessel_derivatives.rs"
+test = false
+doc = false
+bench = false
