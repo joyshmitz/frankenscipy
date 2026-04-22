@@ -11795,6 +11795,38 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn scipy_optimize_oracle_declared_derivatives_match_finite_differences() {
+        let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("python_oracle/scipy_optimize_oracle.py");
+
+        let output = Command::new("python3")
+            .arg(&script_path)
+            .arg("--self-check")
+            .output()
+            .expect("run scipy optimize oracle self-check");
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("No module named") {
+                eprintln!("skipping optimize oracle self-check: {stderr}");
+                return;
+            }
+            panic!(
+                "optimize oracle self-check should pass\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                stderr
+            );
+        }
+
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("optimize oracle derivative self-check passed"),
+            "unexpected optimize oracle self-check output:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn scipy_special_oracle_rejects_stirling2_until_verified_dispatch_exists() {
         let unique = format!("fsci-conformance-test-rel-jn-{}", super::now_unix_ms());
         let root = PathBuf::from("/tmp").join(unique);

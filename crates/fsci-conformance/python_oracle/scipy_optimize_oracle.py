@@ -95,26 +95,99 @@ def _translated_quadratic_grad(x: Any) -> Any:
     """Gradient of translated_quadratic."""
     import numpy as np
     x = np.asarray(x, dtype=float)
-    return np.array([2.0 * (x[0] - 4.0), 4.0 * (x[1] + 3.0)], dtype=float)
+    return np.array([2.0 * (x[0] - 4.0), 2.0 * (x[1] + 3.0)], dtype=float)
 
 
 def _translated_quadratic_hess(_: Any) -> Any:
     """Hessian of translated_quadratic."""
     import numpy as np
-    return np.array([[2.0, 0.0], [0.0, 4.0]], dtype=float)
+    return np.array([[2.0, 0.0], [0.0, 2.0]], dtype=float)
 
 
 def _scaled_quadratic_grad(x: Any) -> Any:
     """Gradient of scaled_quadratic."""
     import numpy as np
     x = np.asarray(x, dtype=float)
-    return np.array([20.0 * (x[0] - 1.0), 80.0 * (x[1] + 2.0)], dtype=float)
+    return np.array([2.0 * (x[0] - 1.0), 8.0 * (x[1] + 2.0)], dtype=float)
 
 
 def _scaled_quadratic_hess(_: Any) -> Any:
     """Hessian of scaled_quadratic."""
     import numpy as np
-    return np.array([[20.0, 0.0], [0.0, 80.0]], dtype=float)
+    return np.array([[2.0, 0.0], [0.0, 8.0]], dtype=float)
+
+
+def _finite_difference_gradient(func: Callable[[Any], float], x: Any, step: float = 1e-6) -> Any:
+    """Central-difference gradient approximation."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    grad = np.zeros_like(x, dtype=float)
+    for i in range(x.size):
+        direction = np.zeros_like(x, dtype=float)
+        direction[i] = step
+        grad[i] = (func(x + direction) - func(x - direction)) / (2.0 * step)
+    return grad
+
+
+def _finite_difference_hessian(func: Callable[[Any], float], x: Any, step: float = 1e-5) -> Any:
+    """Central-difference Hessian approximation."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    hessian = np.zeros((x.size, x.size), dtype=float)
+    f_x = func(x)
+    for i in range(x.size):
+        e_i = np.zeros_like(x, dtype=float)
+        e_i[i] = step
+        hessian[i, i] = (func(x + e_i) - 2.0 * f_x + func(x - e_i)) / (step ** 2)
+        for j in range(i + 1, x.size):
+            e_j = np.zeros_like(x, dtype=float)
+            e_j[j] = step
+            mixed = (
+                func(x + e_i + e_j)
+                - func(x + e_i - e_j)
+                - func(x - e_i + e_j)
+                + func(x - e_i - e_j)
+            ) / (4.0 * step ** 2)
+            hessian[i, j] = mixed
+            hessian[j, i] = mixed
+    return hessian
+
+
+def _self_check_declared_derivatives() -> list[str]:
+    """Verify hand-written optimize derivatives against finite differences."""
+    import numpy as np
+
+    sample_points = {
+        "shifted_quadratic": np.array([0.5, -1.0], dtype=float),
+        "translated_quadratic": np.array([2.0, -1.0], dtype=float),
+        "scaled_quadratic": np.array([0.5, -1.0], dtype=float),
+    }
+    errors: list[str] = []
+
+    for name, point in sample_points.items():
+        objective = _get_objective(name)
+        jacobian, hessian = _get_jacobian_and_hessian(name)
+        if jacobian is None or hessian is None:
+            errors.append(f"{name}: missing declared jacobian/hessian")
+            continue
+
+        expected_grad = _finite_difference_gradient(objective, point)
+        expected_hess = _finite_difference_hessian(objective, point)
+        actual_grad = np.asarray(jacobian(point), dtype=float)
+        actual_hess = np.asarray(hessian(point), dtype=float)
+
+        if not np.allclose(actual_grad, expected_grad, atol=1e-6, rtol=1e-6):
+            errors.append(
+                f"{name}: gradient mismatch at {point.tolist()} actual={actual_grad.tolist()} "
+                f"expected={expected_grad.tolist()}"
+            )
+        if not np.allclose(actual_hess, expected_hess, atol=1e-5, rtol=1e-5):
+            errors.append(
+                f"{name}: hessian mismatch at {point.tolist()} actual={actual_hess.tolist()} "
+                f"expected={expected_hess.tolist()}"
+            )
+
+    return errors
 
 
 def _rotated_quadratic(x: Any) -> float:
@@ -163,6 +236,7 @@ def _get_objective(name: str) -> Callable:
         "rastrigin2": _rastrigin,
         "ackley": _ackley,
         "ackley2": _ackley,
+        "shifted_quadratic": _scaled_quadratic,
         "scaled_quadratic": _scaled_quadratic,
         "translated_quadratic": _translated_quadratic,
         "rotated_quadratic": _rotated_quadratic,
@@ -342,13 +416,15 @@ def _run_case(case: Dict[str, Any], optimize: Any, np: Any) -> Dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Capture SciPy optimize oracle outputs")
-    parser.add_argument("--fixture", required=True, help="Input packet fixture JSON path")
-    parser.add_argument("--output", required=True, help="Output oracle capture JSON path")
-    parser.add_argument("--oracle-root", required=True, help="Legacy oracle root path")
+    parser.add_argument("--fixture", help="Input packet fixture JSON path")
+    parser.add_argument("--output", help="Output oracle capture JSON path")
+    parser.add_argument("--oracle-root", help="Legacy oracle root path")
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="Verify declared jacobian/hessian helpers against finite differences",
+    )
     args = parser.parse_args()
-
-    fixture_path = Path(args.fixture)
-    output_path = Path(args.output)
 
     try:
         import numpy as np
@@ -356,6 +432,20 @@ def main() -> int:
     except ModuleNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    if args.self_check:
+        errors = _self_check_declared_derivatives()
+        if errors:
+            print("\n".join(errors), file=sys.stderr)
+            return 1
+        print("optimize oracle derivative self-check passed")
+        return 0
+
+    if not args.fixture or not args.output or not args.oracle_root:
+        parser.error("--fixture, --output, and --oracle-root are required unless --self-check is used")
+
+    fixture_path = Path(args.fixture)
+    output_path = Path(args.output)
 
     try:
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
