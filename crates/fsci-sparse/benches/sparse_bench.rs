@@ -1,8 +1,9 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     CscMatrix, CsrMatrix, FormatConvertible, Shape2D, add_csr, diags, eye, random, scale_csr,
     spmv_csr,
 };
+use std::hint::black_box;
 
 /// Matrix configurations: (rows/cols, density).
 const CONFIGS: &[(usize, f64)] = &[

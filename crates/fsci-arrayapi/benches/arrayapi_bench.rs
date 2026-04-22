@@ -1,9 +1,10 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_arrayapi::{
     ArrayApiArray, ArrayApiBackend, CoreArrayBackend, CreationRequest, DType, ExecutionMode,
     FullRequest, IndexExpr, IndexRequest, IndexingMode, MemoryOrder, ScalarValue, Shape, SliceSpec,
     from_slice, full, getitem, promote_and_broadcast, zeros,
 };
+use std::hint::black_box;
 
 const SIZES: &[usize] = &[10, 100, 1000, 10_000];
 const DTYPES: &[DType] = &[DType::Float32, DType::Float64, DType::Complex128];

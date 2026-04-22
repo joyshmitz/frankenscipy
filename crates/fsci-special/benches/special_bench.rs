@@ -1,10 +1,11 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialTensor, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, gamma, gammainc,
     gammaln, j0, j1, rgamma, y0,
 };
 use std::f64::consts::PI;
+use std::hint::black_box;
 
 fn scalar(x: f64) -> SpecialTensor {
     SpecialTensor::RealScalar(x)

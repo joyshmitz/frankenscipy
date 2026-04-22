@@ -1,5 +1,6 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_fft::{FftOptions, fft, fft2, ifft, irfft, rfft};
+use std::hint::black_box;
 
 type Complex64 = (f64, f64);
 
