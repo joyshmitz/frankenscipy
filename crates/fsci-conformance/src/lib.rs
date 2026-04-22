@@ -12098,7 +12098,7 @@ def __getattr__(name):
             .expect("run scipy special oracle");
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("No module named 'scipy'") {
+            if stderr.contains("No module named") {
                 eprintln!("skipping live special-fixture oracle coverage test: {stderr}");
                 return;
             }
