@@ -34,6 +34,16 @@
 - **Tests:** `cargo test -p fsci-runtime --lib` -> 32 passed / 0 failed
 - **Commit:** a2043f2
 
+### criterion: 0.5.1 -> 0.8.2 (MAJOR, dev-dependency only)
+
+- **Before:** `criterion = { version = "0.5.1", features = ["html_reports"] }`
+- **After:**  `criterion = { version = "0.8.2", features = ["html_reports"] }`
+- **Lock changes:** criterion 0.5.1 -> 0.8.2, criterion-plot 0.5.0 -> 0.8.2, new transient deps alloca 0.4.0 / itertools 0.13.0 / page_size 0.6.0, is-terminal 0.4.17 removed.
+- **Affected bench targets:** fsci-fft/benches/fft_bench.rs, fsci-linalg/benches/linalg_bench.rs, fsci-special/benches/special_bench.rs, fsci-arrayapi/benches/arrayapi_bench.rs, fsci-sparse/benches/sparse_bench.rs, fsci-integrate/benches/integrate_bench.rs, fsci-opt/benches/optimize_bench.rs, fsci-runtime/benches/runtime_bench.rs.
+- **Breaking API surface actually hit:** `criterion::black_box` is now deprecated (criterion 0.6+). Our benches still import and use it -> deprecation warnings but compilation still succeeds because the symbol is retained as a deprecated re-export pointing at `std::hint::black_box`.
+- **Checks:** `cargo check --workspace --all-targets` exit=0 with deprecation warnings only.
+- **Tests:** `cargo test -p fsci-runtime --lib` -> 32/32; `cargo bench -p fsci-fft --no-run` links successfully.
+
 ### proptest: 1.6.0 -> 1.11.0 (minor)
 
 - **Before:** `proptest = "1.6.0"`
@@ -80,3 +90,4 @@
 ## Needs Attention
 
 - **fsci-conformance lib tests (pre-existing, unrelated to this session):** 5 failures in `tests::differential_integrate_quota_and_structured_logs`, `tests::differential_spatial_quota_and_structured_logs`, `tests::differential_stats_quota_and_structured_logs`, `tests::differential_test_stats_fixture`, `tests::stats_packet_runner_passes`. Root cause appears to be a differential-case quota assertion that hasn't been updated after new cases were added (got 28, expected 23). Not introduced by any dep bump in this session; reproduces on HEAD.
+- **Criterion bench `black_box` deprecation (low-priority follow-up):** criterion 0.8 still exports `criterion::black_box` but deprecates it. Bench targets across 8 crates emit ~60 warnings total. One-line per bench fix: switch `use criterion::{..., black_box, ...}` to `use std::hint::black_box` (or drop `black_box` from the criterion import and add a `std::hint::black_box` import). Not blocking; didn't touch here to keep the bump focused.
