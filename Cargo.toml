@@ -56,4 +56,4 @@ thiserror = "2.0.18"
 proptest = "1.11.0"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 rand = "0.9.1"
-toml = "0.8"
+toml = "1.1"

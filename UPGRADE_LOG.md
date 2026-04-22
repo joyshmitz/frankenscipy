@@ -34,6 +34,16 @@
 - **Tests:** `cargo test -p fsci-runtime --lib` -> 32 passed / 0 failed
 - **Commit:** a2043f2
 
+### toml: 0.8 -> 1.1 (MAJOR)
+
+- **Before:** `toml = "0.8"`
+- **After:**  `toml = "1.1"` (resolves to 1.1.2+spec-1.1.0)
+- **Lock changes:** toml 0.8.23 -> 1.1.2, serde_spanned 0.6.9 -> 1.1.1, toml_datetime 0.6.11 -> 1.1.1, winnow 0.7.15 -> 1.0.2. toml_edit/toml_write removed; new toml_parser/toml_writer added. itertools 0.10 dropped.
+- **Call sites:** single usage in `crates/fsci-conformance/src/quality_gates.rs` -> `toml::from_str(&content)`. This API is stable across the 0.8 -> 1.x transition (the stability story for 1.0 was "nothing in the high-level Deserialize surface changes"; only the `toml_edit` low-level span API was restructured, which we don't use).
+- **Breaking:** None in our code path.
+- **Checks:** `cargo check --workspace --all-targets` exit=0.
+- **Tests:** `cargo test -p fsci-conformance --lib quality_gates` -> 17 passed / 0 failed.
+
 ### criterion: 0.5.1 -> 0.8.2 (MAJOR, dev-dependency only)
 
 - **Before:** `criterion = { version = "0.5.1", features = ["html_reports"] }`

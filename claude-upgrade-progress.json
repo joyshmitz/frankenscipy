@@ -2,9 +2,9 @@
   "status": "in_progress",
   "agent": "Clawdstein-libupdater-frankenscipy",
   "started": "2026-04-22T01:07:00Z",
-  "current": "toml",
-  "completed": ["asupersync", "blake3", "serde_json", "thiserror", "proptest", "criterion"],
+  "current": "ftui",
+  "completed": ["asupersync", "blake3", "serde_json", "thiserror", "proptest", "criterion", "toml"],
   "failed": [],
   "skipped": ["serde"],
-  "pending": ["toml", "ftui", "rand"]
+  "pending": ["ftui", "rand"]
 }
