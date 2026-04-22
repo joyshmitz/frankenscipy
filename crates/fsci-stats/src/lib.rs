@@ -10040,6 +10040,34 @@ fn rankdata_ordinal(data: &[f64]) -> Vec<f64> {
     ranks
 }
 
+/// Counts tied groups in data by tie size.
+///
+/// Matches `scipy.stats.mstats.count_tied_groups(data)`.
+/// Returns a map where keys are tie sizes and values are counts of groups with that size.
+/// Groups of size 1 (no ties) are not included.
+pub fn count_tied_groups(data: &[f64]) -> std::collections::HashMap<usize, usize> {
+    use std::collections::HashMap;
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+    if data.is_empty() || data.iter().any(|v| v.is_nan()) {
+        return counts;
+    }
+    let mut sorted = data.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let mut i = 0;
+    while i < sorted.len() {
+        let mut j = i + 1;
+        while j < sorted.len() && sorted[j] == sorted[i] {
+            j += 1;
+        }
+        let tie_size = j - i;
+        if tie_size > 1 {
+            *counts.entry(tie_size).or_insert(0) += 1;
+        }
+        i = j;
+    }
+    counts
+}
+
 /// Compute the tie correction factor for rank-based statistical tests.
 ///
 /// The tie correction factor T is used to adjust test statistics when
@@ -26719,5 +26747,26 @@ mod tests {
     fn hdquantiles_small_n() {
         let result = hdquantiles(&[1.0], &[0.5]);
         assert!(result[0].is_nan());
+    }
+
+    #[test]
+    fn count_tied_groups_matches_scipy() {
+        // scipy.stats.mstats.count_tied_groups([1,2,2,3,3,3,4]) = {2: 1, 3: 1}
+        let data = [1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0];
+        let result = count_tied_groups(&data);
+        assert_eq!(result.get(&2), Some(&1));
+        assert_eq!(result.get(&3), Some(&1));
+        assert_eq!(result.len(), 2);
+
+        // [1,1,1,1] = {4: 1}
+        let data2 = [1.0, 1.0, 1.0, 1.0];
+        let result2 = count_tied_groups(&data2);
+        assert_eq!(result2.get(&4), Some(&1));
+        assert_eq!(result2.len(), 1);
+
+        // No ties = empty
+        let data3 = [1.0, 2.0, 3.0, 4.0];
+        let result3 = count_tied_groups(&data3);
+        assert!(result3.is_empty());
     }
 }
