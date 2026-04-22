@@ -13,8 +13,9 @@ pub mod types;
 
 pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
 pub use bessel::{
-    BESSEL_DISPATCH_PLAN, h1vp, h2vp, hankel1, hankel2, iv, ivp, j0, j1, jn, jv, jvp, kv, kvp,
-    spherical_in, spherical_jn, spherical_kn, spherical_yn, wright_bessel, y0, y1, yn, yv, yvp,
+    BESSEL_DISPATCH_PLAN, h1vp, h2vp, hankel1, hankel2, i0, i0_scalar, i1, i1_scalar, iv, ivp, j0,
+    j1, jn, jv, jvp, kv, kvp, spherical_in, spherical_jn, spherical_kn, spherical_yn,
+    wright_bessel, y0, y1, yn, yv, yvp,
 };
 pub use beta::{
     BETA_DISPATCH_PLAN, bdtr, bdtrc, bdtri, beta, betainc, betainc_scalar, betaln, betaln_scalar,
@@ -2616,5 +2617,32 @@ mod tests {
         // In hardened mode, pole should return error
         let result = hyp0f1_scalar(-1.0, 1.0, RuntimeMode::Hardened);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn i0_matches_scipy_reference() {
+        // scipy.special.i0(0) = 1.0
+        assert!((i0_scalar(0.0) - 1.0).abs() < 1e-14);
+        // scipy.special.i0(1) ≈ 1.2660658777520082
+        assert!((i0_scalar(1.0) - 1.2660658777520082).abs() < 1e-10);
+        // scipy.special.i0(2) ≈ 2.2795853023360673
+        assert!((i0_scalar(2.0) - 2.2795853023360673).abs() < 1e-10);
+    }
+
+    #[test]
+    fn i1_matches_scipy_reference() {
+        // scipy.special.i1(0) = 0.0
+        assert!(i1_scalar(0.0).abs() < 1e-14);
+        // scipy.special.i1(1) ≈ 0.5651591039924851
+        assert!((i1_scalar(1.0) - 0.5651591039924851).abs() < 1e-10);
+        // scipy.special.i1(2) ≈ 1.5906368546373291
+        assert!((i1_scalar(2.0) - 1.5906368546373291).abs() < 1e-10);
+    }
+
+    #[test]
+    fn i0_i1_negative_argument() {
+        // I_0(-x) = I_0(x), I_1(-x) = -I_1(x)
+        assert!((i0_scalar(-1.0) - i0_scalar(1.0)).abs() < 1e-14);
+        assert!((i1_scalar(-1.0) + i1_scalar(1.0)).abs() < 1e-14);
     }
 }

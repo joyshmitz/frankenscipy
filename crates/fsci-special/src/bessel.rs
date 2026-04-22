@@ -260,6 +260,32 @@ pub fn iv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialRes
     bessel_dispatch("iv", v, z, mode, BesselKind::Iv)
 }
 
+/// Modified Bessel function of the first kind of order 0: I_0(z).
+///
+/// Convenience wrapper for iv(0, z). Matches `scipy.special.i0(z)`.
+pub fn i0(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_input("i0", z, mode, |x| Ok(iv_scalar(0.0, x)))
+}
+
+/// Modified Bessel function of the first kind of order 1: I_1(z).
+///
+/// Convenience wrapper for iv(1, z). Matches `scipy.special.i1(z)`.
+pub fn i1(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_input("i1", z, mode, |x| Ok(iv_scalar(1.0, x)))
+}
+
+/// Scalar convenience function for I_0(x).
+#[must_use]
+pub fn i0_scalar(x: f64) -> f64 {
+    iv_scalar(0.0, x)
+}
+
+/// Scalar convenience function for I_1(x).
+#[must_use]
+pub fn i1_scalar(x: f64) -> f64 {
+    iv_scalar(1.0, x)
+}
+
 /// Modified Bessel function of the second kind for real order v: K_v(z).
 ///
 /// K_v(z) = π/2 (I_{-v}(z) - I_v(z)) / sin(vπ) for non-integer v.
