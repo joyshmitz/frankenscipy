@@ -10040,6 +10040,31 @@ fn rankdata_ordinal(data: &[f64]) -> Vec<f64> {
     ranks
 }
 
+/// Computes plotting positions for probability plots.
+///
+/// Matches `scipy.stats.mstats.plotting_positions(data, alpha, beta)`.
+/// Uses the formula: p_i = (i - alpha) / (n + 1 - alpha - beta), where i is the rank.
+///
+/// Common (alpha, beta) values:
+/// - (0.4, 0.4): Cunnane (default)
+/// - (0.5, 0.5): Hazen
+/// - (0.0, 0.0): Weibull
+/// - (1.0, 1.0): R default
+/// - (0.375, 0.375): Blom
+/// - (1/3, 1/3): approximately median-unbiased
+pub fn plotting_positions(data: &[f64], alpha: f64, beta: f64) -> Vec<f64> {
+    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let n = sorted.len();
+    if n == 0 {
+        return vec![];
+    }
+    let denom = n as f64 + 1.0 - alpha - beta;
+    (1..=n)
+        .map(|i| (i as f64 - alpha) / denom)
+        .collect()
+}
+
 /// Counts tied groups in data by tie size.
 ///
 /// Matches `scipy.stats.mstats.count_tied_groups(data)`.
@@ -26768,5 +26793,21 @@ mod tests {
         let data3 = [1.0, 2.0, 3.0, 4.0];
         let result3 = count_tied_groups(&data3);
         assert!(result3.is_empty());
+    }
+
+    #[test]
+    fn plotting_positions_matches_scipy() {
+        // scipy.stats.mstats.plotting_positions([1..5]) with default alpha=0.4, beta=0.4
+        let data: Vec<f64> = (1..=5).map(|x| x as f64).collect();
+        let result = plotting_positions(&data, 0.4, 0.4);
+        assert_close(result[0], 0.11538462, 1e-6, "pp[0]");
+        assert_close(result[2], 0.5, 1e-6, "pp[2]");
+        assert_close(result[4], 0.88461538, 1e-6, "pp[4]");
+
+        // With alpha=0.5, beta=0.5 (Hazen)
+        let result2 = plotting_positions(&data, 0.5, 0.5);
+        assert_close(result2[0], 0.1, 1e-10, "hazen pp[0]");
+        assert_close(result2[2], 0.5, 1e-10, "hazen pp[2]");
+        assert_close(result2[4], 0.9, 1e-10, "hazen pp[4]");
     }
 }
