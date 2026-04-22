@@ -7248,6 +7248,12 @@ struct ContractEntry {
 
 #[derive(Debug, Clone, Deserialize)]
 struct ContractTable {
+    #[serde(default)]
+    #[cfg_attr(not(test), allow(dead_code))]
+    packet_id: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(not(test), allow(dead_code))]
+    domain: Option<String>,
     contracts: Vec<ContractEntry>,
 }
 
@@ -11544,14 +11550,15 @@ mod tests {
     #[cfg(feature = "dashboard")]
     use super::style_for_case_result;
     use super::{
-        AggregateParityReport, ArrayApiPacketFixture, CaspPacketFixture, ClusterPacketFixture,
-        ConformanceReport, DifferentialOracleConfig, FftPacketFixture, HarnessConfig,
-        IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome, LinalgPacketFixture,
-        OptimizePacketFixture, OracleCaseOutput, OracleStatus, PacketFamily, PythonOracleConfig,
-        SignalPacketFixture, SpatialPacketFixture, SpecialPacketFixture, StatsCase, StatsExpected,
-        StatsObserved, StatsPacketFixture, aggregate_packet_reports,
+        AggregateParityReport, ArrayApiExpectedOutcome, ArrayApiPacketFixture, CaspPacketFixture,
+        ClusterPacketFixture, ConformanceReport, DifferentialOracleConfig, FftPacketFixture,
+        HarnessConfig, IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome,
+        LinalgPacketFixture, OptimizePacketFixture, OracleCaseOutput, OracleStatus, PacketFamily,
+        PythonOracleConfig, SignalPacketFixture, SpatialPacketFixture, SpecialPacketFixture,
+        StatsCase, StatsExpected, StatsObserved, StatsPacketFixture, aggregate_packet_reports,
         compare_linalg_case_against_oracle, compare_stats_case_against_oracle, discover_fixtures,
-        ensure_artifact_layout, load_oracle_capture, run_array_api_packet, run_casp_packet,
+        ensure_artifact_layout, load_array_api_contract_table, load_oracle_capture,
+        resolve_array_api_contract_tolerance, run_array_api_packet, run_casp_packet,
         run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
         run_linalg_packet, run_linalg_packet_with_oracle_capture, run_optimize_packet,
         run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
@@ -13919,6 +13926,61 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             serde_json::to_string_pretty(&report).unwrap()
         );
         assert!(report.pass_count >= 29);
+    }
+
+    #[test]
+    fn array_api_contract_table_matches_fixture_contract_refs() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-007_arrayapi_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read array api fixture");
+        let fixture: ArrayApiPacketFixture =
+            serde_json::from_str(&raw).expect("parse array api fixture");
+        let table = load_array_api_contract_table().expect("load array api contract table");
+
+        assert_eq!(table.packet_id.as_deref(), Some("FSCI-P2C-007"));
+        assert_eq!(table.domain.as_deref(), Some("arrayapi"));
+
+        let fixture_refs = fixture
+            .cases
+            .iter()
+            .filter_map(|case| match case.expected() {
+                ArrayApiExpectedOutcome::Array { contract_ref, .. }
+                | ArrayApiExpectedOutcome::Shape { contract_ref, .. }
+                | ArrayApiExpectedOutcome::Dtype { contract_ref, .. }
+                | ArrayApiExpectedOutcome::Bool { contract_ref, .. } => contract_ref.clone(),
+                ArrayApiExpectedOutcome::ErrorKind { .. } => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let table_refs = table
+            .contracts
+            .iter()
+            .map(|entry| entry.function_name.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(fixture_refs.len(), 9);
+        assert_eq!(table_refs, fixture_refs);
+    }
+
+    #[test]
+    fn array_api_contract_table_provides_expected_tolerances() {
+        let linspace = resolve_array_api_contract_tolerance(
+            Some("fsci_arrayapi::creation::linspace"),
+            None,
+            None,
+        );
+        assert_eq!(linspace.comparison_mode, "mixed");
+        assert_eq!(linspace.atol, 1.0e-12);
+        assert_eq!(linspace.rtol, 1.0e-12);
+
+        let zeros = resolve_array_api_contract_tolerance(
+            Some("fsci_arrayapi::creation::zeros"),
+            None,
+            None,
+        );
+        assert_eq!(zeros.comparison_mode, "exact");
+        assert_eq!(zeros.atol, 0.0);
+        assert_eq!(zeros.rtol, 0.0);
     }
 
     #[test]
