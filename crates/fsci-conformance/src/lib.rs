@@ -11706,7 +11706,7 @@ mod tests {
 
     #[test]
     fn mock_python_oracle_capture_parses() {
-        let unique = format!("fsci-conformance-test-{}", super::now_unix_ms());
+        let unique = format!("fsci-conformance-test-rel-gamma-{}", super::now_unix_ms());
         let root = PathBuf::from("/tmp").join(unique);
         fs::create_dir_all(&root).expect("create temp root");
         let fixtures = root.join("fixtures");
@@ -11796,7 +11796,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
     #[test]
     fn scipy_special_oracle_rejects_stirling2_until_verified_dispatch_exists() {
-        let unique = format!("fsci-conformance-test-{}", super::now_unix_ms());
+        let unique = format!("fsci-conformance-test-rel-jn-{}", super::now_unix_ms());
         let root = PathBuf::from("/tmp").join(unique);
         fs::create_dir_all(&root).expect("create temp root");
         let pythonpath = root.join("pythonpath");
@@ -11882,6 +11882,370 @@ __version__ = "mock-scipy-1.0"
                 .expect("string error")
                 .contains("stirling2"),
             "unexpected oracle error payload: {output:?}"
+        );
+    }
+
+    #[test]
+    fn scipy_special_oracle_rel_gamma_recurrence_accepts_complex_args() {
+        let unique = format!(
+            "fsci-conformance-test-runtime-error-{}",
+            super::now_unix_ms()
+        );
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let pythonpath = root.join("pythonpath");
+        let fake_scipy = pythonpath.join("scipy");
+        fs::create_dir_all(&fake_scipy).expect("create fake scipy package");
+
+        fs::write(
+            pythonpath.join("numpy.py"),
+            r#"__version__ = "mock-numpy-1.0"
+
+class _ErrState:
+    def __enter__(self):
+        return None
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+def asarray(value, dtype=None):
+    if dtype is float:
+        return float(value)
+    return value
+
+nan = float("nan")
+
+def isscalar(value):
+    return not isinstance(value, (list, tuple, dict))
+
+def iscomplexobj(value):
+    if isinstance(value, (list, tuple)):
+        return any(iscomplexobj(item) for item in value)
+    return isinstance(value, complex)
+
+def where(condition, when_true, when_false):
+    return when_true if condition else when_false
+
+def log1p(value):
+    return value
+
+def expm1(value):
+    return value
+
+def sinc(value):
+    return value
+
+def errstate(**_kwargs):
+    return _ErrState()
+"#,
+        )
+        .expect("write fake numpy module");
+        fs::write(
+            fake_scipy.join("__init__.py"),
+            r#"from . import special
+
+__version__ = "mock-scipy-1.0"
+"#,
+        )
+        .expect("write fake scipy package");
+        fs::write(
+            fake_scipy.join("special.py"),
+            r#"def gamma(value):
+    if value == complex(2.0, 1.0):
+        return complex(5.0, -3.0)
+    if value == complex(3.0, 1.0):
+        return complex(2.0, 1.0) * complex(5.0, -3.0)
+    raise RuntimeError(f"unexpected gamma argument: {value!r}")
+
+def __getattr__(name):
+    def _placeholder(*_args, **_kwargs):
+        raise RuntimeError(f"unexpected scipy.special access: {name}")
+    return _placeholder
+"#,
+        )
+        .expect("write fake scipy.special module");
+
+        let fixture_path = root.join("fixture.json");
+        let output_path = root.join("oracle.json");
+        let fixture = serde_json::json!({
+            "packet_id": "TEST-REL-GAMMA",
+            "family": "special_core",
+            "cases": [
+                {
+                    "case_id": "rel-gamma-complex",
+                    "function": "rel_gamma_recurrence",
+                    "args": [
+                        {
+                            "re": 2.0,
+                            "im": 1.0
+                        }
+                    ]
+                }
+            ]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize rel_gamma fixture"),
+        )
+        .expect("write fixture");
+
+        let script_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python_oracle/scipy_special_oracle.py");
+        let status = Command::new("python3")
+            .env("PYTHONPATH", &pythonpath)
+            .arg(&script_path)
+            .arg("--fixture")
+            .arg(&fixture_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--oracle-root")
+            .arg("/tmp/nonexistent-oracle")
+            .status()
+            .expect("run scipy special oracle");
+        assert!(status.success(), "oracle script should exit successfully");
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output_path).expect("read oracle output"))
+                .expect("parse oracle output");
+        let output = &payload["case_outputs"][0];
+        assert_eq!(output["case_id"], "rel-gamma-complex");
+        assert_eq!(output["status"], "ok");
+        assert_eq!(output["result_kind"], "complex_scalar");
+        let value = &output["result"]["value"];
+        assert!(
+            value["re"].as_f64().expect("real component").abs() < 1.0e-12,
+            "expected recurrence residual near zero, got {output:?}"
+        );
+        assert!(
+            value["im"].as_f64().expect("imag component").abs() < 1.0e-12,
+            "expected recurrence residual near zero, got {output:?}"
+        );
+    }
+
+    #[test]
+    fn scipy_special_oracle_rel_jn_recurrence_accepts_complex_args() {
+        let unique = format!("fsci-conformance-test-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let pythonpath = root.join("pythonpath");
+        let fake_scipy = pythonpath.join("scipy");
+        fs::create_dir_all(&fake_scipy).expect("create fake scipy package");
+
+        fs::write(
+            pythonpath.join("numpy.py"),
+            r#"__version__ = "mock-numpy-1.0"
+
+class _ErrState:
+    def __enter__(self):
+        return None
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+def asarray(value, dtype=None):
+    if dtype is float:
+        return float(value)
+    return value
+
+nan = float("nan")
+
+def isscalar(value):
+    return not isinstance(value, (list, tuple, dict))
+
+def iscomplexobj(value):
+    if isinstance(value, (list, tuple)):
+        return any(iscomplexobj(item) for item in value)
+    return isinstance(value, complex)
+
+def where(condition, when_true, when_false):
+    return when_true if condition else when_false
+
+def log1p(value):
+    return value
+
+def expm1(value):
+    return value
+
+def sinc(value):
+    return value
+
+def errstate(**_kwargs):
+    return _ErrState()
+"#,
+        )
+        .expect("write fake numpy module");
+        fs::write(
+            fake_scipy.join("__init__.py"),
+            r#"from . import special
+
+__version__ = "mock-scipy-1.0"
+"#,
+        )
+        .expect("write fake scipy package");
+        fs::write(
+            fake_scipy.join("special.py"),
+            r#"def jv(order, x):
+    if order == 1.0:
+        return complex(1.0, 0.0)
+    if order == 2.0:
+        return x / 4.0
+    if order == 3.0:
+        return complex(0.0, 0.0)
+    raise RuntimeError(f"unexpected jv order: {order!r}")
+
+def __getattr__(name):
+    def _placeholder(*_args, **_kwargs):
+        raise RuntimeError(f"unexpected scipy.special access: {name}")
+    return _placeholder
+"#,
+        )
+        .expect("write fake scipy.special module");
+
+        let fixture_path = root.join("fixture.json");
+        let output_path = root.join("oracle.json");
+        let fixture = serde_json::json!({
+            "packet_id": "TEST-REL-JN",
+            "family": "special_core",
+            "cases": [
+                {
+                    "case_id": "rel-jn-complex",
+                    "function": "rel_jn_recurrence",
+                    "args": [
+                        2.0,
+                        {
+                            "re": 1.25,
+                            "im": 0.75
+                        }
+                    ]
+                }
+            ]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize rel_jn fixture"),
+        )
+        .expect("write fixture");
+
+        let script_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python_oracle/scipy_special_oracle.py");
+        let status = Command::new("python3")
+            .env("PYTHONPATH", &pythonpath)
+            .arg(&script_path)
+            .arg("--fixture")
+            .arg(&fixture_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--oracle-root")
+            .arg("/tmp/nonexistent-oracle")
+            .status()
+            .expect("run scipy special oracle");
+        assert!(status.success(), "oracle script should exit successfully");
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output_path).expect("read oracle output"))
+                .expect("parse oracle output");
+        let output = &payload["case_outputs"][0];
+        assert_eq!(output["case_id"], "rel-jn-complex");
+        assert_eq!(output["status"], "ok");
+        assert_eq!(output["result_kind"], "complex_scalar");
+        let value = &output["result"]["value"];
+        assert!(
+            value["re"].as_f64().expect("real component").abs() < 1.0e-12,
+            "expected recurrence residual near zero, got {output:?}"
+        );
+        assert!(
+            value["im"].as_f64().expect("imag component").abs() < 1.0e-12,
+            "expected recurrence residual near zero, got {output:?}"
+        );
+    }
+
+    #[test]
+    fn scipy_special_oracle_unexpected_runtime_error_propagates() {
+        let unique = format!("fsci-conformance-test-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let pythonpath = root.join("pythonpath");
+        let fake_scipy = pythonpath.join("scipy");
+        fs::create_dir_all(&fake_scipy).expect("create fake scipy package");
+
+        fs::write(
+            pythonpath.join("numpy.py"),
+            r#"__version__ = "mock-numpy-1.0"
+
+def asarray(value, dtype=None):
+    return value
+
+def log1p(value):
+    return value
+
+def expm1(value):
+    return value
+
+def sinc(value):
+    return value
+
+def isscalar(value):
+    return not isinstance(value, (list, tuple, dict))
+
+def iscomplexobj(value):
+    return isinstance(value, complex)
+"#,
+        )
+        .expect("write fake numpy module");
+        fs::write(
+            fake_scipy.join("__init__.py"),
+            r#"from . import special
+
+__version__ = "mock-scipy-1.0"
+"#,
+        )
+        .expect("write fake scipy package");
+        fs::write(
+            fake_scipy.join("special.py"),
+            r#"def gamma(*_args, **_kwargs):
+    raise RuntimeError("boom")
+
+def __getattr__(name):
+    def _placeholder(*_args, **_kwargs):
+        raise RuntimeError(f"unexpected scipy.special access: {name}")
+    return _placeholder
+"#,
+        )
+        .expect("write fake scipy.special module");
+
+        let fixture_path = root.join("fixture.json");
+        let output_path = root.join("oracle.json");
+        let fixture = serde_json::json!({
+            "packet_id": "TEST-RUNTIME-ERROR",
+            "family": "special_core",
+            "cases": [
+                {
+                    "case_id": "gamma-runtime-error",
+                    "function": "gamma",
+                    "args": [1.0]
+                }
+            ]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize runtime error fixture"),
+        )
+        .expect("write fixture");
+
+        let script_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python_oracle/scipy_special_oracle.py");
+        let status = Command::new("python3")
+            .env("PYTHONPATH", &pythonpath)
+            .arg(&script_path)
+            .arg("--fixture")
+            .arg(&fixture_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--oracle-root")
+            .arg("/tmp/nonexistent-oracle")
+            .status()
+            .expect("run scipy special oracle");
+        assert!(
+            !status.success(),
+            "unexpected runtime errors must propagate and fail the oracle script"
         );
     }
 

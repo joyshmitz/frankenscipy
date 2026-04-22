@@ -14,42 +14,113 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-def _to_list(value: Any) -> Any:
-    if hasattr(value, "tolist"):
-        return value.tolist()
+def _decode_arg(value: Any) -> Any:
+    if isinstance(value, dict):
+        if set(value.keys()) == {"re", "im"}:
+            return complex(float(value["re"]), float(value["im"]))
+        return {key: _decode_arg(inner) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [_decode_arg(item) for item in value]
     return value
 
 
 def _as_float(value: Any) -> float:
+    if hasattr(value, "item"):
+        value = value.item()
     return float(value)
+
+
+def _complex_payload(value: Any) -> Dict[str, float]:
+    if hasattr(value, "item"):
+        value = value.item()
+    return {"re": float(value.real), "im": float(value.imag)}
+
+
+def _normalize_value(value: Any, np: Any) -> Any:
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, list):
+        return [_normalize_value(item, np) for item in value]
+    if isinstance(value, tuple):
+        return [_normalize_value(item, np) for item in value]
+    if np.iscomplexobj(value):
+        return _complex_payload(value)
+    return _as_float(value)
+
+
+def _result_payload(case_id: str, result: Any, np: Any) -> Dict[str, Any]:
+    if isinstance(result, tuple):
+        values = [_normalize_value(value, np) for value in result]
+        return {
+            "case_id": case_id,
+            "status": "ok",
+            "result_kind": "tuple",
+            "result": {"values": values},
+            "error": None,
+        }
+
+    if np.isscalar(result) or (hasattr(result, "ndim") and result.ndim == 0):
+        if np.iscomplexobj(result):
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "complex_scalar",
+                "result": {"value": _complex_payload(result)},
+                "error": None,
+            }
+        return {
+            "case_id": case_id,
+            "status": "ok",
+            "result_kind": "scalar",
+            "result": {"value": _as_float(result)},
+            "error": None,
+        }
+
+    values = _normalize_value(result, np)
+    if np.iscomplexobj(result):
+        return {
+            "case_id": case_id,
+            "status": "ok",
+            "result_kind": "complex_vector",
+            "result": {"values": values},
+            "error": None,
+        }
+    return {
+        "case_id": case_id,
+        "status": "ok",
+        "result_kind": "vector",
+        "result": {"values": values},
+        "error": None,
+    }
 
 
 def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
     case_id = case["case_id"]
     function_name = case.get("function")
-    args = case.get("args", [])
+    args = [_decode_arg(arg) for arg in case.get("args", [])]
 
     try:
         def rel_erf_erfc_identity(x: Any) -> Any:
-            return special.erf(x) + special.erfc(x)
+            x_arr = np.asarray(x)
+            return special.erf(x_arr) + special.erfc(x_arr)
 
         def rel_gamma_recurrence(x: Any) -> Any:
-            x_arr = np.asarray(x, dtype=float)
+            x_arr = np.asarray(x)
             return special.gamma(x_arr + 1.0) - x_arr * special.gamma(x_arr)
 
         def rel_beta_symmetry(a: Any, b: Any) -> Any:
-            a_arr = np.asarray(a, dtype=float)
-            b_arr = np.asarray(b, dtype=float)
+            a_arr = np.asarray(a)
+            b_arr = np.asarray(b)
             return special.beta(a_arr, b_arr) - special.beta(b_arr, a_arr)
 
         def rel_gammainc_complement(a: Any, x: Any) -> Any:
-            a_arr = np.asarray(a, dtype=float)
-            x_arr = np.asarray(x, dtype=float)
+            a_arr = np.asarray(a)
+            x_arr = np.asarray(x)
             return special.gammainc(a_arr, x_arr) + special.gammaincc(a_arr, x_arr)
 
         def rel_jn_recurrence(n: Any, x: Any) -> Any:
             n_val = np.asarray(n, dtype=float)
-            x_arr = np.asarray(x, dtype=float)
+            x_arr = np.asarray(x)
             with np.errstate(divide="ignore", invalid="ignore"):
                 denom = np.where(x_arr == 0, np.nan, x_arr)
                 return (
@@ -162,36 +233,9 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
 
         func = func_map[function_name]
         result = func(*args)
+        return _result_payload(case_id, result, np)
 
-        # Handle different return types
-        if isinstance(result, tuple):
-            # Multi-output functions like airy
-            values = [_as_float(v) if np.isscalar(v) else _to_list(v) for v in result]
-            return {
-                "case_id": case_id,
-                "status": "ok",
-                "result_kind": "tuple",
-                "result": {"values": values},
-                "error": None,
-            }
-        elif np.isscalar(result) or (hasattr(result, 'ndim') and result.ndim == 0):
-            return {
-                "case_id": case_id,
-                "status": "ok",
-                "result_kind": "scalar",
-                "result": {"value": _as_float(result)},
-                "error": None,
-            }
-        else:
-            return {
-                "case_id": case_id,
-                "status": "ok",
-                "result_kind": "vector",
-                "result": {"values": [float(v) for v in _to_list(result)]},
-                "error": None,
-            }
-
-    except Exception as exc:  # noqa: BLE001
+    except (ArithmeticError, FloatingPointError, OverflowError, TypeError, ValueError) as exc:
         return {
             "case_id": case_id,
             "status": "error",
