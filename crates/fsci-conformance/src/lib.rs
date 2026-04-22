@@ -6198,9 +6198,9 @@ fn compare_linalg_case_against_oracle(
     if oracle_case.status != "ok" {
         return match observed {
             Err(actual) => (
-                true,
+                false,
                 format!(
-                    "both raised errors (oracle=`{}`, rust=`{actual}`)",
+                    "oracle errored (`{}`) and rust errored (`{actual}`) too; case is unjudgeable",
                     oracle_case
                         .error
                         .as_deref()
@@ -6370,9 +6370,9 @@ fn compare_stats_case_against_oracle(
     if oracle_case.status != "ok" {
         return match observed {
             StatsObserved::Error(actual) => (
-                true,
+                false,
                 format!(
-                    "both raised errors (oracle=`{}`, rust=`{actual}`)",
+                    "oracle errored (`{}`) and rust errored (`{actual}`) too; case is unjudgeable",
                     oracle_case
                         .error
                         .as_deref()
@@ -11590,15 +11590,17 @@ mod tests {
         AggregateParityReport, ArrayApiPacketFixture, CaspPacketFixture, ClusterPacketFixture,
         ConformanceReport, DifferentialOracleConfig, FftPacketFixture, HarnessConfig,
         IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome, LinalgPacketFixture,
-        OptimizePacketFixture, OracleStatus, PacketFamily, PythonOracleConfig, SignalPacketFixture,
-        SpatialPacketFixture, SpecialPacketFixture, StatsCase, StatsExpected, StatsPacketFixture,
-        aggregate_packet_reports, discover_fixtures, ensure_artifact_layout, load_oracle_capture,
-        run_array_api_packet, run_casp_packet, run_cluster_packet, run_differential_test,
-        run_fft_packet, run_integrate_packet, run_linalg_packet,
-        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_signal_packet, run_smoke,
-        run_sparse_packet, run_spatial_packet, run_special_packet, run_stats_packet,
-        run_validate_tol_packet, write_parity_artifacts,
+        OptimizePacketFixture, OracleCaseOutput, OracleStatus, PacketFamily, PythonOracleConfig,
+        SignalPacketFixture, SpatialPacketFixture, SpecialPacketFixture, StatsCase, StatsExpected,
+        StatsObserved, StatsPacketFixture, aggregate_packet_reports,
+        compare_linalg_case_against_oracle, compare_stats_case_against_oracle, discover_fixtures,
+        ensure_artifact_layout, load_oracle_capture, run_array_api_packet, run_casp_packet,
+        run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
+        run_linalg_packet, run_linalg_packet_with_oracle_capture, run_optimize_packet,
+        run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
+        run_stats_packet, run_validate_tol_packet, write_parity_artifacts,
     };
+    use fsci_linalg::LinalgError;
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
     use std::fs;
@@ -14469,6 +14471,89 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             serde_json::to_string_pretty(&report).unwrap()
         );
         assert!(report.pass_count >= 56);
+    }
+
+    #[test]
+    fn linalg_oracle_error_and_rust_error_is_not_an_auto_pass() {
+        let case = LinalgCase::Solve {
+            case_id: "oracle_missing_solve".to_owned(),
+            mode: RuntimeMode::Strict,
+            a: vec![vec![1.0]],
+            b: vec![1.0],
+            assume_a: None,
+            lower: None,
+            transposed: None,
+            check_finite: None,
+            expected: LinalgExpectedOutcome::Vector {
+                values: vec![1.0],
+                atol: 1.0e-12,
+                rtol: 1.0e-12,
+                expect_warning_ill_conditioned: None,
+            },
+        };
+        let oracle_case = OracleCaseOutput {
+            case_id: "oracle_missing_solve".to_owned(),
+            status: "error".to_owned(),
+            result_kind: "unsupported_function".to_owned(),
+            result: serde_json::json!({}),
+            error: Some("unsupported function: solve".to_owned()),
+        };
+        let observed = Err(LinalgError::SingularMatrix);
+
+        let (passed, message, max_diff, tolerance_used) =
+            compare_linalg_case_against_oracle(&case, &oracle_case, &observed);
+
+        assert!(!passed, "oracle error + rust error must fail closed");
+        assert!(message.contains("unjudgeable"), "{message}");
+        assert!(max_diff.is_none());
+        assert!(tolerance_used.is_none());
+    }
+
+    #[test]
+    fn stats_oracle_error_and_rust_error_is_not_an_auto_pass() {
+        let case = StatsCase {
+            case_id: "oracle_missing_stats".to_owned(),
+            category: "summary".to_owned(),
+            mode: "Strict".to_owned(),
+            function: "describe".to_owned(),
+            args: vec![serde_json::json!([1.0, 2.0, 3.0])],
+            expected: StatsExpected {
+                kind: "scalar".to_owned(),
+                value: Some(0.0),
+                nobs: None,
+                minmax: None,
+                mean: None,
+                variance: None,
+                skewness: None,
+                kurtosis: None,
+                statistic: None,
+                pvalue: None,
+                slope: None,
+                intercept: None,
+                rvalue: None,
+                stderr: None,
+                array_value: None,
+                atol: Some(1.0e-12),
+                rtol: Some(1.0e-12),
+                contract_ref: String::new(),
+            },
+        };
+        let oracle_case = OracleCaseOutput {
+            case_id: "oracle_missing_stats".to_owned(),
+            status: "error".to_owned(),
+            result_kind: "unsupported_function".to_owned(),
+            result: serde_json::json!({}),
+            error: Some("unsupported function: describe".to_owned()),
+        };
+        let observed = StatsObserved::Error("describe unavailable".to_owned());
+
+        let (passed, message, max_diff, tolerance_used) =
+            compare_stats_case_against_oracle(&case, &oracle_case, &observed);
+
+        assert!(!passed, "oracle error + rust error must fail closed");
+        assert!(message.contains("unjudgeable"), "{message}");
+        assert!(max_diff.is_none());
+        assert!(tolerance_used.is_none());
     }
 
     #[test]
