@@ -457,7 +457,11 @@ fn complex_sqrt(z: Complex64) -> Complex64 {
     let radius = z.abs();
     let real = ((radius + z.re) / 2.0).max(0.0).sqrt();
     let imag_mag = ((radius - z.re) / 2.0).max(0.0).sqrt();
-    let imag = if z.im < 0.0 { -imag_mag } else { imag_mag };
+    let imag = if z.im.is_sign_negative() {
+        -imag_mag
+    } else {
+        imag_mag
+    };
     Complex64::new(real, imag)
 }
 
@@ -568,6 +572,18 @@ mod tests {
             actual.im,
             expected.im
         );
+    }
+
+    #[test]
+    fn complex_sqrt_preserves_signed_zero_branch_on_negative_real_axis() {
+        let upper = complex_sqrt(Complex64::new(-1.0, 0.0));
+        let lower = complex_sqrt(Complex64::new(-1.0, -0.0));
+        assert!(upper.re.abs() < 1.0e-12);
+        assert!(lower.re.abs() < 1.0e-12);
+        assert!((upper.im - 1.0).abs() < 1.0e-12);
+        assert!((lower.im + 1.0).abs() < 1.0e-12);
+        assert!(upper.im.is_sign_positive());
+        assert!(lower.im.is_sign_negative());
     }
 
     #[test]
