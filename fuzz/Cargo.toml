@@ -16,7 +16,9 @@ fsci-opt = { path = "../crates/fsci-opt" }
 fsci-runtime = { path = "../crates/fsci-runtime" }
 fsci-special = { path = "../crates/fsci-special" }
 fsci-sparse = { path = "../crates/fsci-sparse" }
+fsci-stats = { path = "../crates/fsci-stats" }
 libfuzzer-sys = "0.4.12"
+rand = "0.10.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 
@@ -107,6 +109,27 @@ bench = false
 [[bin]]
 name = "p2c006_special_elliptic_complex"
 path = "fuzz_targets/p2c006_special_elliptic_complex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c007_stats_fit_survives_nan_inf"
+path = "fuzz_targets/p2c007_stats_fit_survives_nan_inf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c007_stats_pdf_cdf_ppf_identity"
+path = "fuzz_targets/p2c007_stats_pdf_cdf_ppf_identity.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c007_stats_rvs_determinism"
+path = "fuzz_targets/p2c007_stats_rvs_determinism.rs"
 test = false
 doc = false
 bench = false
