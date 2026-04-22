@@ -17,10 +17,11 @@
 
 ## Summary (this session)
 
-- **Updated:** TBD
+- **Updated:** 8 (asupersync, blake3, serde_json, thiserror, proptest, criterion, toml, ftui)
 - **Skipped (already latest):** serde 1.0.228
-- **Failed:** TBD
-- **Needs attention:** TBD
+- **Deferred (needs human judgment):** rand 0.9.1 -> 0.10.1 (numerical-parity-sensitive; see Needs Attention)
+- **Failed:** 0
+- **Circuit breaker:** not tripped
 
 ## Updates
 
@@ -111,3 +112,4 @@
 
 - **fsci-conformance lib tests (pre-existing, unrelated to this session):** 5 failures in `tests::differential_integrate_quota_and_structured_logs`, `tests::differential_spatial_quota_and_structured_logs`, `tests::differential_stats_quota_and_structured_logs`, `tests::differential_test_stats_fixture`, `tests::stats_packet_runner_passes`. Root cause appears to be a differential-case quota assertion that hasn't been updated after new cases were added (got 28, expected 23). Not introduced by any dep bump in this session; reproduces on HEAD.
 - **Criterion bench `black_box` deprecation (low-priority follow-up):** criterion 0.8 still exports `criterion::black_box` but deprecates it. Bench targets across 8 crates emit ~60 warnings total. One-line per bench fix: switch `use criterion::{..., black_box, ...}` to `use std::hint::black_box` (or drop `black_box` from the criterion import and add a `std::hint::black_box` import). Not blocking; didn't touch here to keep the bump focused.
+- **rand 0.9.1 -> 0.10.1 (DEFERRED; needs human judgment):** rand is called out in the session brief as numerical-parity-sensitive. 0.9 -> 0.10 is a MAJOR bump whose API-level breakage is small (our call sites use `rand::rng()`, `StdRng`, `SeedableRng::seed_from_u64`, `SeedableRng::from_os_rng`, `Rng`, `SliceRandom` -- all preserved), but the **RNG output sequence for a given seed is not guaranteed stable across a rand major version**. In `crates/fsci-stats/src/lib.rs` and `crates/fsci-opt/src/lib.rs` the seeded RNG is used for bootstrap resampling, permutation tests, Monte Carlo integration, and stochastic optimization inits -- all of which feed into scipy-parity assertions. A quiet ULP-level drift here can silently flip parity tests days after the merge. Recommend: bump rand on a dedicated branch, run the full conformance suite (including the differential packets), and only merge once parity is confirmed (or re-seed/fixture-freeze the affected tests). Logged here instead of attempted in this session.
