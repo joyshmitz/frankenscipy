@@ -2,13 +2,14 @@
 
 use arbitrary::Arbitrary;
 use fsci_sparse::{
-    find, hstack, tril, triu, vstack, CooMatrix, CscMatrix, CsrMatrix, FormatConvertible,
-    Shape2D, SparseError,
+    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, Shape2D, SparseError, find, hstack, tril,
+    triu, vstack,
 };
 use libfuzzer_sys::fuzz_target;
 
-const MAX_DIM: usize = 6;
-const MAX_ENTRIES: usize = 24;
+const MAX_DIM: usize = 64;
+const MAX_ENTRIES: usize = 1024;
+const MAX_DIAGONAL_OFFSET: isize = 64;
 
 #[derive(Clone, Copy, Debug, Arbitrary)]
 enum MatrixFormat {
@@ -82,7 +83,7 @@ impl FormatConvertible for SparseInputMatrix {
 }
 
 fn clamp_dimension(raw: u8) -> usize {
-    usize::from(raw) % MAX_DIM
+    usize::from(raw) % (MAX_DIM + 1)
 }
 
 fn normalize_value(raw: i8) -> f64 {
@@ -254,7 +255,11 @@ fn hstack_dense(left: &[Vec<f64>], right: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> 
 }
 
 fn assert_dense_eq(actual: &[Vec<f64>], expected: &[Vec<f64>], context: &str) {
-    assert_eq!(actual.len(), expected.len(), "{context}: row count mismatch");
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "{context}: row count mismatch"
+    );
     for (row_idx, (actual_row, expected_row)) in actual.iter().zip(expected.iter()).enumerate() {
         assert_eq!(
             actual_row.len(),
@@ -281,7 +286,7 @@ fuzz_target!(|input: SparseHelpersInput| {
     };
     let primary_dense = dense_from_spec(&input.primary);
     let secondary_dense = dense_from_spec(&input.secondary);
-    let diagonal_offset = isize::from(input.k).clamp(-8, 8);
+    let diagonal_offset = isize::from(input.k).clamp(-MAX_DIAGONAL_OFFSET, MAX_DIAGONAL_OFFSET);
 
     let find_result = find(&primary);
     assert!(find_result.is_ok(), "find should succeed");
@@ -296,7 +301,10 @@ fuzz_target!(|input: SparseHelpersInput| {
             .collect(),
     );
     let expected_find = sorted_triplets(find_triplets_from_dense(&primary_dense));
-    assert_eq!(actual_find, expected_find, "find should match dense semantics");
+    assert_eq!(
+        actual_find, expected_find,
+        "find should match dense semantics"
+    );
 
     let tril_result = tril(&primary, diagonal_offset);
     assert!(tril_result.is_ok(), "tril should succeed");
@@ -329,7 +337,10 @@ fuzz_target!(|input: SparseHelpersInput| {
                 return;
             };
             let actual_coo_result = actual.to_coo();
-            assert!(actual_coo_result.is_ok(), "vstack result should convert to COO");
+            assert!(
+                actual_coo_result.is_ok(),
+                "vstack result should convert to COO"
+            );
             let Ok(actual_coo) = actual_coo_result else {
                 return;
             };
@@ -351,7 +362,10 @@ fuzz_target!(|input: SparseHelpersInput| {
                 return;
             };
             let actual_coo_result = actual.to_coo();
-            assert!(actual_coo_result.is_ok(), "hstack result should convert to COO");
+            assert!(
+                actual_coo_result.is_ok(),
+                "hstack result should convert to COO"
+            );
             let Ok(actual_coo) = actual_coo_result else {
                 return;
             };

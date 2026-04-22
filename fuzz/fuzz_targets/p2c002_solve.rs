@@ -5,6 +5,8 @@ use fsci_linalg::{SolveOptions, solve};
 use fsci_runtime::RuntimeMode;
 use libfuzzer_sys::fuzz_target;
 
+const MAX_DIM: usize = 64;
+
 #[derive(Debug, Arbitrary)]
 struct SolveInput {
     rows: u8,
@@ -35,9 +37,13 @@ fn build_vector(len: usize, values: &[f64]) -> Vec<f64> {
     out
 }
 
+fn clamp_dimension(raw: u8) -> usize {
+    usize::from(raw) % (MAX_DIM + 1)
+}
+
 fuzz_target!(|input: SolveInput| {
-    let rows = usize::from(input.rows % 8);
-    let cols = usize::from(input.cols % 8);
+    let rows = clamp_dimension(input.rows);
+    let cols = clamp_dimension(input.cols);
     let mode = if input.hardened {
         RuntimeMode::Hardened
     } else {

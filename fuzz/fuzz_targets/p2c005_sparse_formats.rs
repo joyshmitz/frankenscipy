@@ -6,10 +6,11 @@ use arbitrary::Arbitrary;
 use fsci_sparse::{BsrMatrix, DokMatrix, FormatConvertible, LilMatrix, Shape2D, SparseError};
 use libfuzzer_sys::fuzz_target;
 
-const MAX_DIM: usize = 6;
-const MAX_ENTRIES: usize = 24;
-const MAX_OPS: usize = 16;
-const MAX_BLOCK_DIM: usize = 3;
+const MAX_DIM: usize = 64;
+const MAX_ENTRIES: usize = 1024;
+const MAX_OPS: usize = 96;
+const MAX_BLOCK_DIM: usize = 8;
+const MAX_MUTATION_INDEX: usize = MAX_DIM + 16;
 
 #[derive(Clone, Copy, Debug, Arbitrary)]
 struct Entry {
@@ -41,7 +42,7 @@ enum NormalizedMutation {
 }
 
 fn clamp_dimension(raw: u8) -> usize {
-    usize::from(raw) % MAX_DIM
+    usize::from(raw) % (MAX_DIM + 1)
 }
 
 fn clamp_block_dimension(raw: u8) -> usize {
@@ -49,7 +50,7 @@ fn clamp_block_dimension(raw: u8) -> usize {
 }
 
 fn clamp_mutation_index(raw: u8) -> usize {
-    usize::from(raw) % (MAX_DIM + 2)
+    usize::from(raw) % MAX_MUTATION_INDEX
 }
 
 fn normalize_value(raw: i8) -> f64 {
@@ -161,7 +162,11 @@ fn initial_dok_entries(triplets: &[(usize, usize, f64)]) -> BTreeMap<(usize, usi
 }
 
 fn assert_dense_eq(actual: &[Vec<f64>], expected: &[Vec<f64>], context: &str) {
-    assert_eq!(actual.len(), expected.len(), "{context}: row count mismatch");
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "{context}: row count mismatch"
+    );
     for (row_idx, (actual_row, expected_row)) in actual.iter().zip(expected.iter()).enumerate() {
         assert_eq!(
             actual_row.len(),
@@ -240,7 +245,10 @@ fn assert_lil_invariants(
             assert_eq!(actual_value, expected_value, "{context}: get mismatch");
 
             let contains_result = lil.contains(row, col);
-            assert!(contains_result.is_ok(), "{context}: contains should succeed");
+            assert!(
+                contains_result.is_ok(),
+                "{context}: contains should succeed"
+            );
             let Ok(actual_contains) = contains_result else {
                 return;
             };
@@ -304,7 +312,10 @@ fn assert_dok_invariants(
             assert_eq!(actual_value, expected_value, "{context}: get mismatch");
 
             let contains_result = dok.contains(row, col);
-            assert!(contains_result.is_ok(), "{context}: contains should succeed");
+            assert!(
+                contains_result.is_ok(),
+                "{context}: contains should succeed"
+            );
             let Ok(actual_contains) = contains_result else {
                 return;
             };
@@ -354,16 +365,32 @@ fuzz_target!(|input: SparseFormatsInput| {
     let mutations = normalized_mutations(&input);
     let expected_dense = dense_from_triplets(shape, &triplets);
 
-    let lil_result = LilMatrix::from_triplets(shape, data.clone(), row_indices.clone(), col_indices.clone());
-    assert!(lil_result.is_ok(), "LIL constructor should succeed for normalized triplets");
+    let lil_result = LilMatrix::from_triplets(
+        shape,
+        data.clone(),
+        row_indices.clone(),
+        col_indices.clone(),
+    );
+    assert!(
+        lil_result.is_ok(),
+        "LIL constructor should succeed for normalized triplets"
+    );
     let Ok(mut lil) = lil_result else {
         return;
     };
     let mut expected_lil_entries = initial_lil_entries(&triplets);
     assert_lil_invariants(&lil, shape, &expected_lil_entries, "lil/from_triplets");
 
-    let dok_result = DokMatrix::from_triplets(shape, data.clone(), row_indices.clone(), col_indices.clone());
-    assert!(dok_result.is_ok(), "DOK constructor should succeed for normalized triplets");
+    let dok_result = DokMatrix::from_triplets(
+        shape,
+        data.clone(),
+        row_indices.clone(),
+        col_indices.clone(),
+    );
+    assert!(
+        dok_result.is_ok(),
+        "DOK constructor should succeed for normalized triplets"
+    );
     let Ok(mut dok) = dok_result else {
         return;
     };
@@ -391,12 +418,21 @@ fuzz_target!(|input: SparseFormatsInput| {
         && shape.rows % block_shape.rows == 0
         && shape.cols % block_shape.cols == 0;
     if valid_block_shape {
-        assert!(bsr_result.is_ok(), "BSR constructor should succeed for valid block shapes");
+        assert!(
+            bsr_result.is_ok(),
+            "BSR constructor should succeed for valid block shapes"
+        );
         let Ok(bsr) = bsr_result else {
             return;
         };
-        assert!(bsr.canonical_meta().sorted_indices, "BSR indices should be sorted");
-        assert!(bsr.canonical_meta().deduplicated, "BSR blocks should be deduplicated");
+        assert!(
+            bsr.canonical_meta().sorted_indices,
+            "BSR indices should be sorted"
+        );
+        assert!(
+            bsr.canonical_meta().deduplicated,
+            "BSR blocks should be deduplicated"
+        );
         assert_eq!(
             bsr.nnz_blocks(),
             expected_bsr_blocks(&triplets, block_shape).len(),
@@ -420,7 +456,10 @@ fuzz_target!(|input: SparseFormatsInput| {
             return;
         };
         let csr_coo_result = csr.to_coo();
-        assert!(csr_coo_result.is_ok(), "BSR CSR roundtrip should convert to COO");
+        assert!(
+            csr_coo_result.is_ok(),
+            "BSR CSR roundtrip should convert to COO"
+        );
         let Ok(csr_coo) = csr_coo_result else {
             return;
         };
@@ -436,7 +475,10 @@ fuzz_target!(|input: SparseFormatsInput| {
             return;
         };
         let csc_coo_result = csc.to_coo();
-        assert!(csc_coo_result.is_ok(), "BSR CSC roundtrip should convert to COO");
+        assert!(
+            csc_coo_result.is_ok(),
+            "BSR CSC roundtrip should convert to COO"
+        );
         let Ok(csc_coo) = csc_coo_result else {
             return;
         };
@@ -470,8 +512,20 @@ fuzz_target!(|input: SparseFormatsInput| {
         match mutation {
             NormalizedMutation::Insert { row, col, value } => {
                 if row >= shape.rows || col >= shape.cols {
-                    assert_index_out_of_bounds(lil.insert(row, col, value), shape, row, col, "lil insert");
-                    assert_index_out_of_bounds(dok.insert(row, col, value), shape, row, col, "dok insert");
+                    assert_index_out_of_bounds(
+                        lil.insert(row, col, value),
+                        shape,
+                        row,
+                        col,
+                        "lil insert",
+                    );
+                    assert_index_out_of_bounds(
+                        dok.insert(row, col, value),
+                        shape,
+                        row,
+                        col,
+                        "dok insert",
+                    );
                     continue;
                 }
 
@@ -481,7 +535,10 @@ fuzz_target!(|input: SparseFormatsInput| {
                 let Ok(lil_previous) = lil_insert_result else {
                     return;
                 };
-                assert_eq!(lil_previous, lil_expected_previous, "LIL insert previous value mismatch");
+                assert_eq!(
+                    lil_previous, lil_expected_previous,
+                    "LIL insert previous value mismatch"
+                );
 
                 let dok_expected_previous = expected_dok_entries.get(&(row, col)).copied();
                 if value == 0.0 {
@@ -494,7 +551,10 @@ fuzz_target!(|input: SparseFormatsInput| {
                 let Ok(dok_previous) = dok_insert_result else {
                     return;
                 };
-                assert_eq!(dok_previous, dok_expected_previous, "DOK insert previous value mismatch");
+                assert_eq!(
+                    dok_previous, dok_expected_previous,
+                    "DOK insert previous value mismatch"
+                );
             }
             NormalizedMutation::Remove { row, col } => {
                 if row >= shape.rows || col >= shape.cols {
@@ -509,7 +569,10 @@ fuzz_target!(|input: SparseFormatsInput| {
                 let Ok(lil_previous) = lil_remove_result else {
                     return;
                 };
-                assert_eq!(lil_previous, lil_expected_previous, "LIL remove previous value mismatch");
+                assert_eq!(
+                    lil_previous, lil_expected_previous,
+                    "LIL remove previous value mismatch"
+                );
 
                 let dok_expected_previous = expected_dok_entries.remove(&(row, col));
                 let dok_remove_result = dok.remove(row, col);
@@ -517,7 +580,10 @@ fuzz_target!(|input: SparseFormatsInput| {
                 let Ok(dok_previous) = dok_remove_result else {
                     return;
                 };
-                assert_eq!(dok_previous, dok_expected_previous, "DOK remove previous value mismatch");
+                assert_eq!(
+                    dok_previous, dok_expected_previous,
+                    "DOK remove previous value mismatch"
+                );
             }
         }
     }
