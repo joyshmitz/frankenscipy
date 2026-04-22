@@ -14,6 +14,7 @@ type DerivativeFn = fn(&SpecialTensor, &SpecialTensor, usize, RuntimeMode) -> Sp
 
 const ABS_TOL: f64 = 1.0e-8;
 const REL_TOL: f64 = 1.0e-6;
+const WIDE_EDGE_LIMIT: f64 = 1.0e300;
 
 #[derive(Clone, Copy, Debug, Arbitrary)]
 enum EdgeF64 {
@@ -24,6 +25,10 @@ enum EdgeF64 {
     NegOne,
     Tiny,
     NegTiny,
+    Underflow,
+    Huge,
+    NegHuge,
+    Overflow,
     PosInf,
     NegInf,
     Nan,
@@ -32,7 +37,9 @@ enum EdgeF64 {
 impl EdgeF64 {
     fn raw(self) -> f64 {
         match self {
-            Self::Finite(value) if value.is_finite() => value.clamp(-1.0e3, 1.0e3),
+            Self::Finite(value) if value.is_finite() => {
+                value.clamp(-WIDE_EDGE_LIMIT, WIDE_EDGE_LIMIT)
+            }
             Self::Finite(_) => 0.0,
             Self::Zero => 0.0,
             Self::NegZero => -0.0,
@@ -40,6 +47,10 @@ impl EdgeF64 {
             Self::NegOne => -1.0,
             Self::Tiny => f64::MIN_POSITIVE,
             Self::NegTiny => -f64::MIN_POSITIVE,
+            Self::Underflow => f64::MIN_POSITIVE * 0.5,
+            Self::Huge => 1.0e300,
+            Self::NegHuge => -1.0e300,
+            Self::Overflow => f64::MAX,
             Self::PosInf => f64::INFINITY,
             Self::NegInf => f64::NEG_INFINITY,
             Self::Nan => f64::NAN,
