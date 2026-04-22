@@ -13,7 +13,7 @@
 use std::f64::consts::{FRAC_1_SQRT_2, LN_2, PI};
 
 use fsci_runtime::RuntimeMode;
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use rand::{Rng, RngExt, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
 const EULER_MASCHERONI: f64 = 0.577_215_664_901_532_9;
 const KS_2SAMP_EXACT_MAX_CELLS: usize = 1_000_000;
@@ -1610,7 +1610,7 @@ impl ContinuousDistribution for Weibull {
     }
 
     fn fit(data: &[f64]) -> Self {
-        if data.is_empty() || data.iter().any(|v| v.is_nan() || *v <= 0.0) {
+        if data.is_empty() || data.iter().any(|v| !v.is_finite() || *v <= 0.0) {
             return Self {
                 c: f64::NAN,
                 scale: f64::NAN,
@@ -1896,7 +1896,7 @@ impl ContinuousDistribution for Lomax {
     }
 
     fn fit(data: &[f64]) -> Self {
-        if data.is_empty() || data.iter().any(|v| v.is_nan() || *v < 0.0) {
+        if data.is_empty() || data.iter().any(|v| !v.is_finite() || *v < 0.0) {
             return Self { c: f64::NAN };
         }
         let n = data.len() as f64;
@@ -3882,15 +3882,19 @@ impl ContinuousDistribution for Triangular {
     }
 
     fn fit(data: &[f64]) -> Self {
-        if data.len() < 3 || data.iter().any(|v| v.is_nan()) {
-            return Self {
-                left: f64::NAN,
-                mode: f64::NAN,
-                right: f64::NAN,
-            };
+        let nan = Self {
+            left: f64::NAN,
+            mode: f64::NAN,
+            right: f64::NAN,
+        };
+        if data.len() < 3 || data.iter().any(|v| !v.is_finite()) {
+            return nan;
         }
         let left = data.iter().cloned().fold(f64::INFINITY, f64::min);
         let right = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        if !(left < right) {
+            return nan;
+        }
         let n = data.len() as f64;
         let mean = data.iter().sum::<f64>() / n;
         let mode = 3.0 * mean - left - right;
@@ -10274,10 +10278,10 @@ pub fn plotting_positions(data: &[f64], alpha: f64, beta: f64) -> Vec<f64> {
 pub fn count_tied_groups(data: &[f64]) -> std::collections::HashMap<usize, usize> {
     use std::collections::HashMap;
     let mut counts: HashMap<usize, usize> = HashMap::new();
-    if data.is_empty() || data.iter().any(|v| v.is_nan()) {
+    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    if sorted.is_empty() {
         return counts;
     }
-    let mut sorted = data.to_vec();
     sorted.sort_by(|a, b| a.total_cmp(b));
     let mut i = 0;
     while i < sorted.len() {
@@ -19855,6 +19859,29 @@ mod tests {
     }
 
     #[test]
+    fn test_fit_weibull_lomax_triangular_reject_non_finite() {
+        for bad in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let sample = [1.0, 2.0, bad, 3.0];
+            assert!(Weibull::fit(&sample).c.is_nan(), "Weibull accepted {bad}");
+            assert!(Lomax::fit(&sample).c.is_nan(), "Lomax accepted {bad}");
+            assert!(
+                Triangular::fit(&sample).left.is_nan(),
+                "Triangular accepted {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_fit_triangular_rejects_zero_width_samples() {
+        let constant = [5.0, 5.0, 5.0, 5.0];
+        let fitted = Triangular::fit(&constant);
+        assert!(
+            fitted.left.is_nan() && fitted.mode.is_nan() && fitted.right.is_nan(),
+            "Triangular::fit must fail closed on zero-width samples, got {fitted:?}"
+        );
+    }
+
+    #[test]
     fn test_fit_student_t_recovers_quantile_grid() {
         let reference = StudentT::new(8.0);
         let data: Vec<f64> = (1..200).map(|i| reference.ppf(i as f64 / 200.0)).collect();
@@ -27128,6 +27155,18 @@ mod tests {
         let data3 = [1.0, 2.0, 3.0, 4.0];
         let result3 = count_tied_groups(&data3);
         assert!(result3.is_empty());
+
+        // SciPy parity: NaN entries are filtered, not a full-kill signal.
+        // scipy.stats.mstats.count_tied_groups([1.0, nan, 1.0]) -> {2: 1}
+        let data4 = [1.0, f64::NAN, 1.0];
+        let result4 = count_tied_groups(&data4);
+        assert_eq!(result4.get(&2), Some(&1));
+        assert_eq!(result4.len(), 1);
+
+        // All-NaN should return empty.
+        let data5 = [f64::NAN, f64::NAN];
+        let result5 = count_tied_groups(&data5);
+        assert!(result5.is_empty());
     }
 
     #[test]

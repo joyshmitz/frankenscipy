@@ -222,6 +222,12 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
     let mut lines = content.lines();
     let info = parse_mm_info(&mut lines)?;
 
+    if info.field == MmField::Complex {
+        return Err(IoError::UnsupportedFeature(
+            "Matrix Market complex field is not supported".to_string(),
+        ));
+    }
+
     match info.format {
         MmFormat::Coordinate => {
             let rows = info.rows;

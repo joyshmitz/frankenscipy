@@ -47,6 +47,11 @@ Verified against the crates.io API:
 - `crates/fsci-conformance/Cargo.toml`
   - `tempfile`: `3` → `3.27.0`
 
+### Fuzz crate (workspace-excluded)
+
+- `fuzz/Cargo.toml`
+  - `libfuzzer-sys`: `0.4.10` → `0.4.12` (2026-04-22, cc-scipy) — no breaking changes; patch-level bumps of libFuzzer upstream and `rand`/`flate2` transitive pins.
+
 ## asupersync Consistency
 
 - Workspace dependency is pinned to `asupersync = 0.3.1`
@@ -67,3 +72,7 @@ Current known blocker before/after upgrade:
 - `crates/fsci-opt/src/types.rs`
 
 Those files currently fail workspace compilation independent of these dependency bumps.
+
+## 2026-04-22 Re-verification (cc-scipy)
+
+Re-ran crates.io lookups for all 12 workspace deps plus fuzz-crate deps (`arbitrary`, `libfuzzer-sys`). All are at latest stable. Only delta was `libfuzzer-sys 0.4.10 → 0.4.12` in `fuzz/Cargo.toml` (see above). The `fsci-opt` compile breakage in `minimize.rs` persists and is tracked as a separate workstream — it was not introduced by any dep bump.

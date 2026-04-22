@@ -4050,7 +4050,6 @@ pub fn mish_scalar(x: f64) -> f64 {
 /// hard_sigmoid(x) = clip((x + 3) / 6, 0, 1)
 ///
 /// A piecewise linear approximation to sigmoid, faster to compute.
-#[must_use]
 pub fn hard_sigmoid(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("hard_sigmoid", x_tensor, mode, |x| {
         Ok(hard_sigmoid_scalar(x))
@@ -4117,7 +4116,6 @@ pub fn hard_tanh_scalar(x: f64, min_val: f64, max_val: f64) -> f64 {
 ///
 /// A smooth approximation to absolute value loss. For large |x|,
 /// log_cosh(x) ≈ |x| - ln(2).
-#[must_use]
 pub fn log_cosh(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("log_cosh", x_tensor, mode, |x| Ok(log_cosh_scalar(x)))
 }
@@ -4145,7 +4143,6 @@ pub fn log_cosh_scalar(x: f64) -> f64 {
 ///
 /// A smooth, bounded activation function similar to tanh but with
 /// slower saturation.
-#[must_use]
 pub fn softsign(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("softsign", x_tensor, mode, |x| Ok(softsign_scalar(x)))
 }
@@ -4194,7 +4191,6 @@ pub fn threshold_scalar(x: f64, thresh: f64, value: f64) -> f64 {
 /// silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
 ///
 /// Also known as swish-1.
-#[must_use]
 pub fn silu(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("silu", x_tensor, mode, |x| Ok(silu_scalar(x)))
 }
@@ -4324,7 +4320,6 @@ pub fn loglog_inv(x: f64) -> f64 {
 /// distributions. Maps (0, 1) to (-∞, +∞).
 ///
 /// Returns -∞ for p ≤ 0, +∞ for p ≥ 1.
-#[must_use]
 pub fn cauchit(p_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("cauchit", p_tensor, mode, |p| Ok(cauchit_scalar(p)))
 }
@@ -4348,7 +4343,6 @@ pub fn cauchit_scalar(p: f64) -> f64 {
 /// cauchit_inv(x) = 0.5 + arctan(x) / π
 ///
 /// The Cauchy CDF. Maps (-∞, +∞) to (0, 1).
-#[must_use]
 pub fn cauchit_inv(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("cauchit_inv", x_tensor, mode, |x| Ok(cauchit_inv_scalar(x)))
 }
@@ -4424,7 +4418,6 @@ pub fn softshrink_scalar(x: f64, lambda: f64) -> f64 {
 ///
 /// A smooth shrinkage function that subtracts the bounded tanh.
 /// Approaches 0 for small x, approaches x for large |x|.
-#[must_use]
 pub fn tanhshrink(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("tanhshrink", x_tensor, mode, |x| Ok(tanhshrink_scalar(x)))
 }
@@ -4461,7 +4454,6 @@ pub fn celu(x: f64, alpha: f64) -> f64 {
 ///
 /// Numerically stable log of the sigmoid function.
 /// Equivalent to log_expit_scalar but with a more common ML name.
-#[must_use]
 pub fn logsigmoid(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("logsigmoid", x_tensor, mode, |x| Ok(logsigmoid_scalar(x)))
 }
@@ -4479,7 +4471,6 @@ pub fn logsigmoid_scalar(x: f64) -> f64 {
 /// Uses log1p for x close to 0 and direct computation otherwise.
 ///
 /// Returns NaN for x > 0 (since 1 - exp(x) < 0).
-#[must_use]
 pub fn log1mexp(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("log1mexp", x_tensor, mode, |x| Ok(log1mexp_scalar(x)))
 }
@@ -4513,7 +4504,6 @@ pub fn log1mexp_scalar(x: f64) -> f64 {
 ///
 /// This is the same as softplus(x). Provided as an alias for
 /// compatibility with other libraries.
-#[must_use]
 pub fn log1pexp(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("log1pexp", x_tensor, mode, |x| Ok(log1pexp_scalar(x)))
 }
@@ -4530,7 +4520,6 @@ pub fn log1pexp_scalar(x: f64) -> f64 {
 ///          = NaN       for x < 0
 ///
 /// Used in entropy calculations where 0 * log(0) = 0 by convention.
-#[must_use]
 pub fn xlogx(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real("xlogx", x_tensor, mode, |x| Ok(xlogx_scalar(x)))
 }

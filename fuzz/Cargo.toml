@@ -16,7 +16,7 @@ fsci-opt = { path = "../crates/fsci-opt" }
 fsci-runtime = { path = "../crates/fsci-runtime" }
 fsci-special = { path = "../crates/fsci-special" }
 fsci-sparse = { path = "../crates/fsci-sparse" }
-libfuzzer-sys = "0.4.10"
+libfuzzer-sys = "0.4.12"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 
