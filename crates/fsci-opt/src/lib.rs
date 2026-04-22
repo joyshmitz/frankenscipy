@@ -1290,7 +1290,7 @@ where
     }
     let mut rng: rand::rngs::StdRng = match opts.seed {
         Some(s) => rand::rngs::StdRng::seed_from_u64(s),
-        None => rand::rngs::StdRng::from_os_rng(),
+        None => rand::rngs::StdRng::from_rng(&mut rand::rng()),
     };
 
     // Initialize population uniformly within bounds.
@@ -1530,7 +1530,7 @@ where
 
     let mut rng: rand::rngs::StdRng = match opts.seed {
         Some(s) => rand::rngs::StdRng::seed_from_u64(s),
-        None => rand::rngs::StdRng::from_os_rng(),
+        None => rand::rngs::StdRng::from_rng(&mut rand::rng()),
     };
 
     let minimize_opts = MinimizeOptions {
