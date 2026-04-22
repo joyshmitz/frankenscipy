@@ -2498,9 +2498,22 @@ fn y1_core_positive(x: f64) -> f64 {
 
 /// Complex J_v(z) via power series.
 /// J_v(z) = (z/2)^v Σ_{k=0}^∞ (-z²/4)^k / (k! Γ(v+k+1))
+fn negative_integer_order(v: f64) -> Option<u32> {
+    if !v.is_finite() || v >= 0.0 || v.fract() != 0.0 || v.abs() > u32::MAX as f64 {
+        return None;
+    }
+
+    Some((-v) as u32)
+}
+
 fn complex_jv_scalar(v: f64, z: Complex64) -> Complex64 {
     if !z.is_finite() || v.is_nan() {
         return Complex64::new(f64::NAN, f64::NAN);
+    }
+
+    if let Some(n) = negative_integer_order(v) {
+        let value = complex_jv_scalar(-v, z);
+        return if n % 2 == 0 { value } else { -value };
     }
 
     if z.re == 0.0 && z.im == 0.0 {
@@ -2542,6 +2555,10 @@ fn complex_jv_scalar(v: f64, z: Complex64) -> Complex64 {
 fn complex_iv_scalar(v: f64, z: Complex64) -> Complex64 {
     if !z.is_finite() || v.is_nan() {
         return Complex64::new(f64::NAN, f64::NAN);
+    }
+
+    if negative_integer_order(v).is_some() {
+        return complex_iv_scalar(-v, z);
     }
 
     if z.re == 0.0 && z.im == 0.0 {
@@ -2998,6 +3015,21 @@ mod tests {
         }
     }
 
+    fn assert_complex_close(actual: Complex64, expected: Complex64, tol: f64) {
+        assert!(
+            (actual.re - expected.re).abs() < tol,
+            "real mismatch: actual={} expected={}",
+            actual.re,
+            expected.re
+        );
+        assert!(
+            (actual.im - expected.im).abs() < tol,
+            "imag mismatch: actual={} expected={}",
+            actual.im,
+            expected.im
+        );
+    }
+
     #[test]
     fn jvp_zero_order_matches_jv() -> Result<(), String> {
         let v = scalar(2.0);
@@ -3126,6 +3158,37 @@ mod tests {
         assert!((kvp_zero.re - kv_base.re).abs() < 1e-12);
         assert!((kvp_zero.im - kv_base.im).abs() < 1e-12);
         Ok(())
+    }
+
+    #[test]
+    fn complex_bessel_negative_integer_orders_stay_finite() {
+        let z = Complex64::new(1.0, 0.0);
+
+        assert_complex_close(
+            complex_jv_scalar(-1.0, z),
+            Complex64::new(-0.440_050_585_744_933_5, 0.0),
+            1.0e-12,
+        );
+        assert_complex_close(
+            complex_jv_scalar(-2.0, z),
+            Complex64::new(0.114_903_484_931_900_5, 0.0),
+            1.0e-12,
+        );
+        assert_complex_close(
+            complex_iv_scalar(-1.0, z),
+            Complex64::new(0.565_159_103_992_485, 0.0),
+            1.0e-12,
+        );
+        assert_complex_close(
+            complex_jv_scalar(-1.0, Complex64::new(0.0, 0.0)),
+            Complex64::new(0.0, 0.0),
+            1.0e-12,
+        );
+        assert_complex_close(
+            complex_iv_scalar(-1.0, Complex64::new(0.0, 0.0)),
+            Complex64::new(0.0, 0.0),
+            1.0e-12,
+        );
     }
 
     #[test]
