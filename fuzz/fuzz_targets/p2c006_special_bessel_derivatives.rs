@@ -56,19 +56,6 @@ impl EdgeF64 {
             Self::Nan => f64::NAN,
         }
     }
-
-    fn bounded(self) -> f64 {
-        let raw = self.raw();
-        if raw.is_finite() {
-            raw.clamp(-16.0, 16.0)
-        } else if raw.is_sign_positive() {
-            16.0
-        } else if raw.is_sign_negative() {
-            -16.0
-        } else {
-            0.0
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Arbitrary)]
@@ -245,7 +232,7 @@ fn check_bessel_derivative(
 }
 
 fuzz_target!(|input: BesselDerivativeInput| {
-    let v = input.order.bounded();
+    let v = input.order.raw();
     let z = Complex64::new(input.re.raw(), input.im.raw());
     let case = DerivativeCase {
         v,

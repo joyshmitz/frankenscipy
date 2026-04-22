@@ -51,19 +51,6 @@ impl EdgeF64 {
             Self::PiOverTwo => std::f64::consts::FRAC_PI_2,
         }
     }
-
-    fn bounded(self) -> f64 {
-        let raw = self.raw();
-        if raw.is_finite() {
-            raw.clamp(-8.0, 8.0)
-        } else if raw.is_sign_positive() {
-            8.0
-        } else if raw.is_sign_negative() {
-            -8.0
-        } else {
-            0.0
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Arbitrary)]
@@ -254,8 +241,8 @@ fn check_binary(
 
 fuzz_target!(|input: EllipticInput| {
     let mode = mode_from_flag(input.hardened);
-    let m = Complex64::new(input.m_re.bounded(), input.m_im.bounded());
-    let phi = Complex64::new(input.phi_re.bounded(), input.phi_im.bounded());
+    let m = Complex64::new(input.m_re.raw(), input.m_im.raw());
+    let phi = Complex64::new(input.phi_re.raw(), input.phi_im.raw());
 
     for (name, func) in [
         ("ellipk", ellipk as UnarySpecialFn),

@@ -140,9 +140,9 @@ fuzz_target!(|input: IncompleteInput| {
     let x_beta = input.x.unit();
     let alt_real = input.alt.positive_param();
 
-    let a_complex = Complex64::new(input.a.bounded(), input.alt.bounded());
-    let b_complex = Complex64::new(input.b.bounded(), -input.alt.bounded());
-    let x_complex = Complex64::new(input.x.bounded(), input.y.bounded());
+    let a_complex = Complex64::new(input.a.raw(), input.alt.raw());
+    let b_complex = Complex64::new(input.b.raw(), -input.alt.raw());
+    let x_complex = Complex64::new(input.x.raw(), input.y.raw());
 
     let _ = beta(
         &SpecialTensor::ComplexScalar(a_complex),
