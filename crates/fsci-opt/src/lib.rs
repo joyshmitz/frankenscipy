@@ -1163,7 +1163,7 @@ fn simplex_iterate(
 // Global Optimization: differential_evolution, basinhopping
 // ══════════════════════════════════════════════════════════════════════
 
-use rand::Rng;
+use rand::{Rng, RngExt, SeedableRng};
 
 /// Strategy for differential evolution mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1289,8 +1289,8 @@ where
         }
     }
     let mut rng: rand::rngs::StdRng = match opts.seed {
-        Some(s) => rand::SeedableRng::seed_from_u64(s),
-        None => rand::SeedableRng::from_os_rng(),
+        Some(s) => rand::rngs::StdRng::seed_from_u64(s),
+        None => rand::rngs::StdRng::from_os_rng(),
     };
 
     // Initialize population uniformly within bounds.
@@ -1529,8 +1529,8 @@ where
     }
 
     let mut rng: rand::rngs::StdRng = match opts.seed {
-        Some(s) => rand::SeedableRng::seed_from_u64(s),
-        None => rand::SeedableRng::from_os_rng(),
+        Some(s) => rand::rngs::StdRng::seed_from_u64(s),
+        None => rand::rngs::StdRng::from_os_rng(),
     };
 
     let minimize_opts = MinimizeOptions {
