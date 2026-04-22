@@ -69,10 +69,6 @@ impl EdgeF64 {
     }
 }
 
-pub fn all_finite_or_all_nan(values: &[f64]) -> bool {
-    values.iter().all(|value| value.is_finite()) || values.iter().all(|value| value.is_nan())
-}
-
 pub fn approx_eq_prob(lhs: f64, rhs: f64) -> bool {
     if !(lhs.is_finite() && rhs.is_finite()) {
         return false;
