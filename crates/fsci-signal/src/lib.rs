@@ -4559,6 +4559,83 @@ pub fn freqz_sos(sos: &[SosSection], n_freqs: Option<usize>) -> Result<FreqzResu
     Ok(FreqzResult { w, h_mag, h_phase })
 }
 
+/// Compute the frequency response of a digital filter in SOS format.
+///
+/// Alias for `freqz_sos`. Matches `scipy.signal.sosfreqz(sos, worN)`.
+pub fn sosfreqz(sos: &[SosSection], n_freqs: Option<usize>) -> Result<FreqzResult, SignalError> {
+    freqz_sos(sos, n_freqs)
+}
+
+/// Compute the frequency response of a digital filter in SOS format over
+/// half or the whole unit circle.
+///
+/// Matches `scipy.signal.sosfreqz(sos, worN, whole=...)`.
+///
+/// When `whole` is false, evaluates on `[0, π)`. When `whole` is true,
+/// evaluates on `[0, 2π)` with scipy's `endpoint=False` spacing.
+pub fn sosfreqz_with_whole(
+    sos: &[SosSection],
+    n_freqs: Option<usize>,
+    whole: bool,
+) -> Result<FreqzResult, SignalError> {
+    if sos.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "sos must not be empty".to_string(),
+        ));
+    }
+
+    let n = n_freqs.unwrap_or(512);
+    if n == 0 {
+        return Err(SignalError::InvalidArgument(
+            "n_freqs must be > 0".to_string(),
+        ));
+    }
+
+    let mut w = Vec::with_capacity(n);
+    let mut h_mag = Vec::with_capacity(n);
+    let mut h_phase = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let omega = if whole {
+            std::f64::consts::TAU * i as f64 / n as f64
+        } else {
+            std::f64::consts::PI * i as f64 / n as f64
+        };
+        w.push(omega);
+
+        let mut total_re = 1.0;
+        let mut total_im = 0.0;
+
+        for section in sos {
+            let sec_b = &[section[0], section[1], section[2]];
+            let sec_a = &[section[3], section[4], section[5]];
+
+            let (b_re, b_im) = eval_poly_on_unit_circle(sec_b, omega);
+            let (a_re, a_im) = eval_poly_on_unit_circle(sec_a, omega);
+
+            let denom = a_re * a_re + a_im * a_im;
+            if denom < 1e-30 {
+                total_re = f64::INFINITY;
+                total_im = 0.0;
+                break;
+            }
+
+            let h_re = (b_re * a_re + b_im * a_im) / denom;
+            let h_im = (b_im * a_re - b_re * a_im) / denom;
+
+            let new_re = total_re * h_re - total_im * h_im;
+            let new_im = total_re * h_im + total_im * h_re;
+            total_re = new_re;
+            total_im = new_im;
+        }
+
+        h_mag.push((total_re * total_re + total_im * total_im).sqrt());
+        h_phase.push(total_im.atan2(total_re));
+    }
+
+    Ok(FreqzResult { w, h_mag, h_phase })
+}
+
 /// Compute the frequency response of an analog filter.
 ///
 /// Matches `scipy.signal.freqs(b, a, worN)`.
@@ -12549,5 +12626,26 @@ mod tests {
         for (i, (a, b)) in y_method.iter().zip(y_standalone.iter()).enumerate() {
             assert!((a - b).abs() < 1e-12, "y[{i}]: {} vs {}", a, b);
         }
+    }
+
+    #[test]
+    fn sosfreqz_matches_freqz_sos() {
+        let sos: Vec<SosSection> = vec![[1.0, 0.5, 0.0, 1.0, -0.3, 0.1]];
+        let r1 = freqz_sos(&sos, Some(64)).expect("freqz_sos");
+        let r2 = sosfreqz(&sos, Some(64)).expect("sosfreqz");
+        assert_eq!(r1.w.len(), r2.w.len());
+        for (i, (a, b)) in r1.h_mag.iter().zip(r2.h_mag.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-14, "h_mag[{i}]: {} vs {}", a, b);
+        }
+    }
+
+    #[test]
+    fn sosfreqz_with_whole_unit_circle() {
+        let sos: Vec<SosSection> = vec![[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]];
+        let half = sosfreqz(&sos, Some(128)).expect("half");
+        let whole = sosfreqz_with_whole(&sos, Some(256), true).expect("whole");
+        assert_eq!(half.w.len(), 128);
+        assert_eq!(whole.w.len(), 256);
+        assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
     }
 }
