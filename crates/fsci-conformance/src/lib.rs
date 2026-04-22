@@ -11825,6 +11825,125 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn scipy_optimize_oracle_rejects_unknown_objective_and_root_names() {
+        let unique = format!("fsci-conformance-test-opt-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let pythonpath = root.join("pythonpath");
+        let fake_scipy = pythonpath.join("scipy");
+        fs::create_dir_all(&fake_scipy).expect("create fake scipy package");
+
+        fs::write(
+            pythonpath.join("numpy.py"),
+            r#"__version__ = "mock-numpy-1.0"
+
+def array(values, dtype=None):
+    return list(values)
+
+def __getattr__(name):
+    def _placeholder(*_args, **_kwargs):
+        raise RuntimeError(f"unexpected numpy access: {name}")
+    return _placeholder
+"#,
+        )
+        .expect("write fake numpy module");
+        fs::write(
+            fake_scipy.join("__init__.py"),
+            r#"from . import optimize
+
+__version__ = "mock-scipy-1.0"
+"#,
+        )
+        .expect("write fake scipy package");
+        fs::write(
+            fake_scipy.join("optimize.py"),
+            r#"def minimize(*_args, **_kwargs):
+    raise RuntimeError("minimize should not run for unknown objective")
+
+def root_scalar(*_args, **_kwargs):
+    raise RuntimeError("root_scalar should not run for unknown root function")
+"#,
+        )
+        .expect("write fake scipy.optimize module");
+
+        let fixture_path = root.join("fixture.json");
+        let output_path = root.join("oracle.json");
+        let fixture = serde_json::json!({
+            "packet_id": "FSCI-P2C-003",
+            "family": "optimize",
+            "cases": [
+                {
+                    "case_id": "unknown_objective",
+                    "operation": "minimize",
+                    "objective": "totally_unknown",
+                    "method": "Powell",
+                    "x0": [0.0, 0.0]
+                },
+                {
+                    "case_id": "unknown_root",
+                    "operation": "root",
+                    "objective": "totally_unknown_root",
+                    "method": "Brentq",
+                    "bracket": [0.0, 1.0]
+                }
+            ]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_string_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("python_oracle/scipy_optimize_oracle.py");
+        let output = Command::new("python3")
+            .arg(&script_path)
+            .arg("--fixture")
+            .arg(&fixture_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--oracle-root")
+            .arg(&root)
+            .env("PYTHONPATH", &pythonpath)
+            .output()
+            .expect("run scipy optimize oracle script");
+
+        assert!(
+            output.status.success(),
+            "optimize oracle script should complete even when cases fail\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let raw = fs::read_to_string(&output_path).expect("read oracle output");
+        let payload: serde_json::Value =
+            serde_json::from_str(&raw).expect("parse oracle output json");
+        let cases = payload["case_outputs"]
+            .as_array()
+            .expect("case_outputs should be an array");
+
+        assert_eq!(cases.len(), 2);
+        assert_eq!(cases[0]["status"], "error");
+        assert!(
+            cases[0]["error"]
+                .as_str()
+                .expect("error should be a string")
+                .contains("unknown objective"),
+            "unexpected objective error payload: {:?}",
+            cases[0]
+        );
+        assert_eq!(cases[1]["status"], "error");
+        assert!(
+            cases[1]["error"]
+                .as_str()
+                .expect("error should be a string")
+                .contains("unknown root function"),
+            "unexpected root error payload: {:?}",
+            cases[1]
+        );
+    }
+
+    #[test]
     fn scipy_special_oracle_rejects_stirling2_until_verified_dispatch_exists() {
         let unique = format!("fsci-conformance-test-rel-jn-{}", super::now_unix_ms());
         let root = PathBuf::from("/tmp").join(unique);

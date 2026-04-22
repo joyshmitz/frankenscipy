@@ -71,6 +71,13 @@ def _scaled_quadratic(x: Any) -> float:
     return (x[0] - 1.0) ** 2 + 4.0 * (x[1] + 2.0) ** 2
 
 
+def _shifted_quadratic(x: Any) -> float:
+    """Shifted quadratic with minimum at (1, -2)."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    return (x[0] - 1.0) ** 2 + 4.0 * (x[1] + 2.0) ** 2
+
+
 def _translated_quadratic(x: Any) -> float:
     """Translated quadratic with minimum at (4, -3)."""
     import numpy as np
@@ -157,12 +164,28 @@ def _self_check_declared_derivatives() -> list[str]:
     """Verify hand-written optimize derivatives against finite differences."""
     import numpy as np
 
+    objective_names = set(_objective_map())
+    derivative_names = set(_derivative_map())
     sample_points = {
         "shifted_quadratic": np.array([0.5, -1.0], dtype=float),
         "translated_quadratic": np.array([2.0, -1.0], dtype=float),
         "scaled_quadratic": np.array([0.5, -1.0], dtype=float),
     }
     errors: list[str] = []
+
+    missing_objectives = sorted(derivative_names - objective_names)
+    if missing_objectives:
+        errors.append(
+            "missing objective definitions for derivative helpers: "
+            + ", ".join(missing_objectives)
+        )
+
+    missing_derivatives = sorted(sample_points.keys() - derivative_names)
+    if missing_derivatives:
+        errors.append(
+            "missing derivative definitions for sampled objectives: "
+            + ", ".join(missing_derivatives)
+        )
 
     for name, point in sample_points.items():
         objective = _get_objective(name)
@@ -219,9 +242,8 @@ def _flat_quartic(x: Any) -> float:
     return float(np.sum(x ** 4))
 
 
-def _get_objective(name: str) -> Callable:
-    """Get objective function by name."""
-    objectives = {
+def _objective_map() -> Dict[str, Callable]:
+    return {
         "rosenbrock2": _rosenbrock,
         "rosenbrock": _rosenbrock,
         "rosenbrock4": _rosenbrock,
@@ -236,29 +258,38 @@ def _get_objective(name: str) -> Callable:
         "rastrigin2": _rastrigin,
         "ackley": _ackley,
         "ackley2": _ackley,
-        "shifted_quadratic": _scaled_quadratic,
+        "shifted_quadratic": _shifted_quadratic,
         "scaled_quadratic": _scaled_quadratic,
         "translated_quadratic": _translated_quadratic,
         "rotated_quadratic": _rotated_quadratic,
         "nan_branch": _nan_branch,
         "flat_quartic": _flat_quartic,
     }
-    return objectives.get(name, lambda x: float('nan'))
 
 
-def _get_jacobian_and_hessian(name: str) -> tuple[Callable | None, Callable | None]:
-    """Get exact derivatives for trust-region methods that require them."""
-    derivatives = {
+def _get_objective(name: str) -> Callable:
+    """Get objective function by name."""
+    try:
+        return _objective_map()[name]
+    except KeyError as exc:
+        raise KeyError(f"unknown objective: {name}") from exc
+
+
+def _derivative_map() -> Dict[str, tuple[Callable, Callable]]:
+    return {
         "shifted_quadratic": (_shifted_quadratic_grad, _shifted_quadratic_hess),
         "translated_quadratic": (_translated_quadratic_grad, _translated_quadratic_hess),
         "scaled_quadratic": (_scaled_quadratic_grad, _scaled_quadratic_hess),
     }
-    return derivatives.get(name, (None, None))
 
 
-def _get_root_function(name: str, np: Any) -> Callable:
-    """Get root-finding function by name."""
-    funcs = {
+def _get_jacobian_and_hessian(name: str) -> tuple[Callable | None, Callable | None]:
+    """Get exact derivatives for trust-region methods that require them."""
+    return _derivative_map().get(name, (None, None))
+
+
+def _root_function_map(np: Any) -> Dict[str, Callable]:
+    return {
         "linear_shift_03": lambda x: x - 0.3,
         "linear_shift": lambda x: x - 0.3,
         "linear_shift03": lambda x: x - 0.3,
@@ -272,7 +303,14 @@ def _get_root_function(name: str, np: Any) -> Callable:
         "exp_root": lambda x: np.exp(x) - 2,
         "nan_branch": lambda x: np.nan,
     }
-    return funcs.get(name, lambda x: float('nan'))
+
+
+def _get_root_function(name: str, np: Any) -> Callable:
+    """Get root-finding function by name."""
+    try:
+        return _root_function_map(np)[name]
+    except KeyError as exc:
+        raise KeyError(f"unknown root function: {name}") from exc
 
 
 def _run_case(case: Dict[str, Any], optimize: Any, np: Any) -> Dict[str, Any]:
