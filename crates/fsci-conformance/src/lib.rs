@@ -6053,6 +6053,118 @@ fn compare_integrate_case_differential(
             };
             (pass, msg, None, None)
         }
+        ("ivp_result", IntegrateObserved::IvpResult { t, y }) => {
+            // br-9cla-2/9cla-3: element-wise compare under case tolerances.
+            let expected_obj = match &case.expected.value {
+                Some(serde_json::Value::Object(o)) => o,
+                _ => {
+                    return (
+                        false,
+                        "expected ivp_result object missing".to_owned(),
+                        None,
+                        None,
+                    );
+                }
+            };
+            let exp_t = match expected_obj.get("t") {
+                Some(serde_json::Value::Array(a)) => a,
+                _ => return (false, "expected.value.t missing/not array".to_owned(), None, None),
+            };
+            let exp_y = match expected_obj.get("y") {
+                Some(serde_json::Value::Array(a)) => a,
+                _ => return (false, "expected.value.y missing/not array".to_owned(), None, None),
+            };
+            let mut max_diff = 0.0_f64;
+            if exp_t.len() != t.len() {
+                return (
+                    false,
+                    format!(
+                        "ivp t length mismatch: expected={}, got={}",
+                        exp_t.len(),
+                        t.len()
+                    ),
+                    None,
+                    Some(tolerance),
+                );
+            }
+            for (got_v, exp_v) in t.iter().zip(exp_t.iter()) {
+                let ev = exp_v.as_f64().unwrap_or(f64::NAN);
+                max_diff = max_diff.max((got_v - ev).abs());
+                if !allclose_scalar(*got_v, ev, tolerance.atol, tolerance.rtol) {
+                    return (
+                        false,
+                        format!(
+                            "ivp t mismatch: got {got_v}, expected {ev}, diff={:.2e}",
+                            (got_v - ev).abs()
+                        ),
+                        Some(max_diff),
+                        Some(tolerance),
+                    );
+                }
+            }
+            if exp_y.len() != y.len() {
+                return (
+                    false,
+                    format!(
+                        "ivp y outer length mismatch: expected={}, got={}",
+                        exp_y.len(),
+                        y.len()
+                    ),
+                    Some(max_diff),
+                    Some(tolerance),
+                );
+            }
+            for (var_idx, (got_row, exp_row_v)) in y.iter().zip(exp_y.iter()).enumerate() {
+                let exp_row = match exp_row_v {
+                    serde_json::Value::Array(a) => a,
+                    _ => {
+                        return (
+                            false,
+                            format!("ivp y[{var_idx}] not an array"),
+                            Some(max_diff),
+                            Some(tolerance),
+                        );
+                    }
+                };
+                if got_row.len() != exp_row.len() {
+                    return (
+                        false,
+                        format!(
+                            "ivp y[{var_idx}] length mismatch: expected={}, got={}",
+                            exp_row.len(),
+                            got_row.len()
+                        ),
+                        Some(max_diff),
+                        Some(tolerance),
+                    );
+                }
+                for (j, (gv, ev_json)) in got_row.iter().zip(exp_row.iter()).enumerate() {
+                    let ev = ev_json.as_f64().unwrap_or(f64::NAN);
+                    max_diff = max_diff.max((gv - ev).abs());
+                    if !allclose_scalar(*gv, ev, tolerance.atol, tolerance.rtol) {
+                        return (
+                            false,
+                            format!(
+                                "ivp y[{var_idx}][{j}] mismatch: got {gv}, expected {ev}, diff={:.2e}",
+                                (gv - ev).abs()
+                            ),
+                            Some(max_diff),
+                            Some(tolerance),
+                        );
+                    }
+                }
+            }
+            (
+                true,
+                format!(
+                    "integrate ivp matched ({} steps, {} vars, max_diff={max_diff:.2e})",
+                    t.len(),
+                    y.len()
+                ),
+                Some(max_diff),
+                Some(tolerance),
+            )
+        }
         (expected_kind, actual) => (
             false,
             format!("shape mismatch: expected kind={expected_kind}, got {actual:?}"),
