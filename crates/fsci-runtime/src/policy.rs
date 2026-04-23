@@ -5,6 +5,23 @@
 //! The [`PolicyController`] evaluates [`DecisionSignals`] against a
 //! log-odds model to produce a posterior over risk states, then selects
 //! the action with minimum expected loss under the mode-specific loss matrix.
+//!
+//! # Status
+//!
+//! **Currently exercised only by CASP conformance tests** (per
+//! frankenscipy-s5e2). No production solver path (fsci-linalg,
+//! fsci-integrate, fsci-sparse, fsci-ndimage, fsci-signal, etc.)
+//! consults `PolicyController::decide` before dispatch; each crate
+//! re-implements its Hardened-mode validation via local ifs. The
+//! framework is tested (including NaN fail-closed at policy.rs:234) and
+//! benchmarked but not wired into production dispatch.
+//!
+//! Until integrated, the loss matrices and Bayesian posterior are
+//! conformance-only observables. Callers needing fail-closed behaviour
+//! should invoke the per-crate validators directly; see the Hardened
+//! chain in `fsci-integrate::validate_tol` / `fsci-fft::
+//! validate_finite_complex` / `fsci-linalg::solve_with_audit` for the
+//! ad-hoc implementations.
 
 use serde::{Deserialize, Serialize};
 
