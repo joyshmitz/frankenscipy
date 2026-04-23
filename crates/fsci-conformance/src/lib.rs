@@ -1,5 +1,51 @@
 #![forbid(unsafe_code)]
 
+//! SciPy-parity conformance harness.
+//!
+//! # Three entry-point hierarchies (per frankenscipy-aqm6)
+//!
+//! The crate exposes THREE parallel ways to run conformance for a family:
+//!
+//! 1. **`run_<family>_packet(config, fixture_name)`** — self-check lane.
+//!    Executes the Rust implementation against each case in the fixture
+//!    and compares the result to the fixture-embedded `expected` value.
+//!    NO scipy oracle is consulted. Use when you want a pure
+//!    reproducibility check of the Rust side. Families:
+//!    `validate_tol`, `linalg`, `optimize`, `special`, `array_api`,
+//!    `sparse`, `fft`, `casp`, `cluster`, `spatial`. (stats / signal /
+//!    integrate / ndimage / interpolate / io do not yet have a packet
+//!    runner.)
+//!
+//! 2. **`run_<family>_packet_with_oracle_capture(config, fixture_name, oracle)`**
+//!    — oracle-backed lane. Invokes the scipy Python oracle to capture
+//!    reference outputs, then compares the Rust implementation against
+//!    those. Only `linalg` has this variant today
+//!    (`run_linalg_packet_with_oracle_capture`). New oracle-backed
+//!    entry points should follow this naming convention.
+//!
+//! 3. **`run_differential_test(fixture_path, oracle_config)`** — dispatch
+//!    front door. Reads the fixture envelope, routes to
+//!    `run_differential_<family>` based on `family` (exact-match per
+//!    frankenscipy-ubkg), and emits per-case differential artifacts
+//!    with audit ledgers for all 12 families per frankenscipy-mhuk.
+//!    Most runners today fall back to self-check semantics because
+//!    their scipy oracle is absent or wiring is incomplete; tracked by
+//!    frankenscipy-ivg5.
+//!
+//! ## Which to call?
+//!
+//! - **Tests and quick local runs**: `run_<family>_packet`.
+//! - **Oracle-backed parity verification**: `run_<family>_packet_with_oracle_capture`
+//!   where available, or `run_differential_test` for the dispatch path.
+//! - **CI G3/G5**: `run_differential_test` aggregates dispatch and
+//!   artifact emission.
+//!
+//! ## Report provenance
+//!
+//! Each `PacketReport` carries a `report_kind` tag
+//! (`Unspecified`/`OracleBacked`/`SelfCheck`, per frankenscipy-fytm) so
+//! downstream dashboards (crate `dashboard`) can distinguish the lanes.
+
 pub mod ci_gates;
 pub mod dashboard;
 pub mod e2e;
