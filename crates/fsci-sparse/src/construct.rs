@@ -77,21 +77,59 @@ pub fn random(shape: Shape2D, density: f64, seed: u64) -> SparseResult<CooMatrix
         })?;
 
     let mut state = seed.max(1);
-    let mut rows = Vec::new();
-    let mut cols = Vec::new();
-    let mut data = Vec::new();
+    let mut rows: Vec<usize>;
+    let mut cols: Vec<usize>;
+    let mut data: Vec<f64>;
 
-    for index in 0..total {
-        state = xorshift64(state);
-        let sample = (state as f64) / (u64::MAX as f64);
-        if sample <= density {
-            let row = index / shape.cols.max(1);
-            let col = index % shape.cols.max(1);
+    // Per frankenscipy-sw4o: switch from O(rows*cols) dense Bernoulli
+    // sampling to O(nnz) position sampling whenever density * total would
+    // produce fewer than total/8 expected entries. That threshold keeps
+    // the legacy O(total) path for dense-like densities (where position
+    // rejection sampling is dominated by collisions) and takes the
+    // O(nnz) path everywhere else.
+    let expected_nnz_f = density * total as f64;
+    let expected_nnz = expected_nnz_f.round().max(0.0).min(total as f64) as usize;
+
+    if expected_nnz > 0 && expected_nnz <= total / 8 {
+        // O(nnz) path via flat-index sampling with dedupe.
+        use std::collections::BTreeSet;
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        rows = Vec::with_capacity(expected_nnz);
+        cols = Vec::with_capacity(expected_nnz);
+        data = Vec::with_capacity(expected_nnz);
+        let mut attempts = 0usize;
+        let max_attempts = expected_nnz.saturating_mul(8).max(32);
+        while seen.len() < expected_nnz && attempts < max_attempts {
             state = xorshift64(state);
-            let value = ((state as f64) / (u64::MAX as f64)) * 2.0 - 1.0;
-            rows.push(row.min(shape.rows.saturating_sub(1)));
-            cols.push(col.min(shape.cols.saturating_sub(1)));
-            data.push(value);
+            let flat = (state as usize) % total;
+            if seen.insert(flat) {
+                let row = flat / shape.cols.max(1);
+                let col = flat % shape.cols.max(1);
+                state = xorshift64(state);
+                let value = ((state as f64) / (u64::MAX as f64)) * 2.0 - 1.0;
+                rows.push(row.min(shape.rows.saturating_sub(1)));
+                cols.push(col.min(shape.cols.saturating_sub(1)));
+                data.push(value);
+            }
+            attempts += 1;
+        }
+    } else {
+        // O(rows*cols) legacy path for dense-like densities.
+        rows = Vec::new();
+        cols = Vec::new();
+        data = Vec::new();
+        for index in 0..total {
+            state = xorshift64(state);
+            let sample = (state as f64) / (u64::MAX as f64);
+            if sample <= density {
+                let row = index / shape.cols.max(1);
+                let col = index % shape.cols.max(1);
+                state = xorshift64(state);
+                let value = ((state as f64) / (u64::MAX as f64)) * 2.0 - 1.0;
+                rows.push(row.min(shape.rows.saturating_sub(1)));
+                cols.push(col.min(shape.cols.saturating_sub(1)));
+                data.push(value);
+            }
         }
     }
 
@@ -128,8 +166,23 @@ pub fn block_diag(matrices: &[&CsrMatrix]) -> SparseResult<CsrMatrix> {
         return eye(0);
     }
 
-    let total_rows: usize = matrices.iter().map(|m| m.shape().rows).sum();
-    let total_cols: usize = matrices.iter().map(|m| m.shape().cols).sum();
+    // Per frankenscipy-sw4o: checked_add instead of plain .sum() so huge
+    // matrices can't silently wrap to a small total (debug panics instead
+    // of release-wrapping; either path is worse than an explicit error).
+    let total_rows: usize =
+        matrices.iter().try_fold(0usize, |acc, m| {
+            acc.checked_add(m.shape().rows)
+                .ok_or_else(|| SparseError::IndexOverflow {
+                    message: "block_diag total rows overflow".to_string(),
+                })
+        })?;
+    let total_cols: usize =
+        matrices.iter().try_fold(0usize, |acc, m| {
+            acc.checked_add(m.shape().cols)
+                .ok_or_else(|| SparseError::IndexOverflow {
+                    message: "block_diag total cols overflow".to_string(),
+                })
+        })?;
     let shape = Shape2D::new(total_rows, total_cols);
 
     let mut rows = Vec::new();
