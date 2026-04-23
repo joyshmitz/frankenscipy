@@ -7712,6 +7712,28 @@ fn allclose_scalar(actual: f64, expected: f64, atol: f64, rtol: f64) -> bool {
     (actual - expected).abs() <= atol + rtol * expected.abs()
 }
 
+/// Parse a fixture-supplied error-kind string into the typed
+/// `FsciSpecialErrorKind` enum. Returns `None` when the string doesn't
+/// correspond to a known variant — the caller then surfaces a judgeable
+/// mismatch rather than silently passing. Per frankenscipy-yxml: typed
+/// comparison replaces `format!("{:?}", ...)` string-match so the
+/// fixture is robust to Debug-repr changes AND surfaces typos as
+/// explicit errors.
+fn parse_special_error_kind(s: &str) -> Option<FsciSpecialErrorKind> {
+    match s {
+        "DomainError" => Some(FsciSpecialErrorKind::DomainError),
+        "FixtureSchemaError" => Some(FsciSpecialErrorKind::FixtureSchemaError),
+        "PoleInput" => Some(FsciSpecialErrorKind::PoleInput),
+        "NonFiniteInput" => Some(FsciSpecialErrorKind::NonFiniteInput),
+        "CancellationRisk" => Some(FsciSpecialErrorKind::CancellationRisk),
+        "OverflowRisk" => Some(FsciSpecialErrorKind::OverflowRisk),
+        "SingularityRisk" => Some(FsciSpecialErrorKind::SingularityRisk),
+        "NotYetImplemented" => Some(FsciSpecialErrorKind::NotYetImplemented),
+        "ShapeMismatch" => Some(FsciSpecialErrorKind::ShapeMismatch),
+        _ => None,
+    }
+}
+
 /// Match a fixture-declared error-contract string against the actual Rust
 /// Display output of an error. Uses normalized substring match (case-fold,
 /// whitespace collapsed) rather than exact equality, so rewording the error
@@ -11542,8 +11564,27 @@ fn compare_special_case_differential(
             (pass, msg, None, None)
         }
         (SpecialExpectedOutcome::ErrorKind { error }, Err(actual)) => {
+            // Previously compared format!("{:?}", actual.kind) == *error as
+            // strings. That broke when the Debug repr changed (e.g.,
+            // variants growing fields), and silently accepted any typo in
+            // the fixture. Replaced with typed enum comparison via
+            // parse_special_error_kind; unknown fixture strings are
+            // surfaced as a judgeable mismatch. See frankenscipy-yxml.
+            let Some(expected_kind) = parse_special_error_kind(error) else {
+                return (
+                    false,
+                    format!(
+                        "unknown error kind `{error}` in fixture (expected one of \
+                         DomainError, FixtureSchemaError, PoleInput, NonFiniteInput, \
+                         CancellationRisk, OverflowRisk, SingularityRisk, \
+                         NotYetImplemented, ShapeMismatch)"
+                    ),
+                    None,
+                    None,
+                );
+            };
+            let pass = actual.kind == expected_kind;
             let observed_kind = format!("{:?}", actual.kind);
-            let pass = observed_kind == *error;
             let msg = if pass {
                 format!("error kind matched ({observed_kind})")
             } else {
