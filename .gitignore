@@ -65,6 +65,27 @@ crates/fsci-conformance/fixtures/artifacts/P2C-007/threats/
 crates/fsci-conformance/fixtures/artifacts/P2C-006/*
 !crates/fsci-conformance/fixtures/artifacts/P2C-006/contracts/
 !crates/fsci-conformance/fixtures/artifacts/P2C-006/contracts/contract_table.json
+# P2C-009/010/011/012/013 contract tables — per frankenscipy-bcv7
+!crates/fsci-conformance/fixtures/artifacts/P2C-009/
+crates/fsci-conformance/fixtures/artifacts/P2C-009/*
+!crates/fsci-conformance/fixtures/artifacts/P2C-009/contracts/
+!crates/fsci-conformance/fixtures/artifacts/P2C-009/contracts/contract_table.json
+!crates/fsci-conformance/fixtures/artifacts/P2C-010/
+crates/fsci-conformance/fixtures/artifacts/P2C-010/*
+!crates/fsci-conformance/fixtures/artifacts/P2C-010/contracts/
+!crates/fsci-conformance/fixtures/artifacts/P2C-010/contracts/contract_table.json
+!crates/fsci-conformance/fixtures/artifacts/P2C-011/
+crates/fsci-conformance/fixtures/artifacts/P2C-011/*
+!crates/fsci-conformance/fixtures/artifacts/P2C-011/contracts/
+!crates/fsci-conformance/fixtures/artifacts/P2C-011/contracts/contract_table.json
+!crates/fsci-conformance/fixtures/artifacts/P2C-012/
+crates/fsci-conformance/fixtures/artifacts/P2C-012/*
+!crates/fsci-conformance/fixtures/artifacts/P2C-012/contracts/
+!crates/fsci-conformance/fixtures/artifacts/P2C-012/contracts/contract_table.json
+!crates/fsci-conformance/fixtures/artifacts/P2C-013/
+crates/fsci-conformance/fixtures/artifacts/P2C-013/*
+!crates/fsci-conformance/fixtures/artifacts/P2C-013/contracts/
+!crates/fsci-conformance/fixtures/artifacts/P2C-013/contracts/contract_table.json
 
 # Ephemeral files (core dumps, profiling, agent config backups, etc.)
 core.*

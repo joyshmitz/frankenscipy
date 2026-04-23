@@ -7825,6 +7825,11 @@ struct ContractTable {
 static OPTIMIZE_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
 static SPECIAL_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
 static ARRAY_API_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
+static CLUSTER_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
+static SPATIAL_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
+static SIGNAL_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
+static STATS_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
+static INTEGRATE_CONTRACT_TABLE: OnceLock<Option<ContractTable>> = OnceLock::new();
 
 fn load_optimize_contract_table() -> Option<&'static ContractTable> {
     OPTIMIZE_CONTRACT_TABLE
@@ -7853,6 +7858,70 @@ fn load_array_api_contract_table() -> Option<&'static ContractTable> {
         .get_or_init(|| {
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("fixtures/artifacts/P2C-007/contracts/contract_table.json");
+            let raw = fs::read_to_string(path).ok()?;
+            serde_json::from_str::<ContractTable>(&raw).ok()
+        })
+        .as_ref()
+}
+
+/// Contract-table loaders for the 5 families (cluster, spatial, signal,
+/// stats, integrate) whose fixtures already carry contract_ref fields but
+/// previously had no consuming code path. Each loader mirrors the existing
+/// three (optimize/special/array_api) pattern. Per frankenscipy-bcv7.
+#[allow(dead_code)]
+fn load_cluster_contract_table() -> Option<&'static ContractTable> {
+    CLUSTER_CONTRACT_TABLE
+        .get_or_init(|| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/artifacts/P2C-009/contracts/contract_table.json");
+            let raw = fs::read_to_string(path).ok()?;
+            serde_json::from_str::<ContractTable>(&raw).ok()
+        })
+        .as_ref()
+}
+
+#[allow(dead_code)]
+fn load_spatial_contract_table() -> Option<&'static ContractTable> {
+    SPATIAL_CONTRACT_TABLE
+        .get_or_init(|| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/artifacts/P2C-010/contracts/contract_table.json");
+            let raw = fs::read_to_string(path).ok()?;
+            serde_json::from_str::<ContractTable>(&raw).ok()
+        })
+        .as_ref()
+}
+
+#[allow(dead_code)]
+fn load_signal_contract_table() -> Option<&'static ContractTable> {
+    SIGNAL_CONTRACT_TABLE
+        .get_or_init(|| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/artifacts/P2C-011/contracts/contract_table.json");
+            let raw = fs::read_to_string(path).ok()?;
+            serde_json::from_str::<ContractTable>(&raw).ok()
+        })
+        .as_ref()
+}
+
+#[allow(dead_code)]
+fn load_stats_contract_table() -> Option<&'static ContractTable> {
+    STATS_CONTRACT_TABLE
+        .get_or_init(|| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/artifacts/P2C-012/contracts/contract_table.json");
+            let raw = fs::read_to_string(path).ok()?;
+            serde_json::from_str::<ContractTable>(&raw).ok()
+        })
+        .as_ref()
+}
+
+#[allow(dead_code)]
+fn load_integrate_contract_table() -> Option<&'static ContractTable> {
+    INTEGRATE_CONTRACT_TABLE
+        .get_or_init(|| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/artifacts/P2C-013/contracts/contract_table.json");
             let raw = fs::read_to_string(path).ok()?;
             serde_json::from_str::<ContractTable>(&raw).ok()
         })

@@ -1,0 +1,136 @@
+{
+  "contracts": [
+    {
+      "function_name": "fsci_spatial::ConvexHull",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::HalfspaceIntersection",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::HalfspaceIntersection::from_nd",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::KDTree::query",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::QhullError",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::cdist",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::chebyshev",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::cityblock",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::correlation",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::cosine",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::directed_hausdorff",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::euclidean",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::geometric_slerp",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::pdist",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::procrustes",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::squareform_to_matrix",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    }
+  ],
+  "domain": "spatial",
+  "generated_at": "2026-04-23T00:00:00Z",
+  "packet_id": "FSCI-P2C-010",
+  "schema_version": 1
+}

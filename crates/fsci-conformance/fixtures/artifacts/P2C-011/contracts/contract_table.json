@@ -1,0 +1,104 @@
+{
+  "contracts": [
+    {
+      "function_name": "fsci_signal::blackman",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::butter",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::convolve",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::correlate",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::detrend",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::find_peaks",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::freqz",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::hamming",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::hann",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::hilbert",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::kaiser",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::savgol_filter (mode=nearest)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    }
+  ],
+  "domain": "signal",
+  "generated_at": "2026-04-23T00:00:00Z",
+  "packet_id": "FSCI-P2C-011",
+  "schema_version": 1
+}
