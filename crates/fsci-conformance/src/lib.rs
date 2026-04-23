@@ -276,8 +276,10 @@ pub enum HarnessError {
 /// site distinguishes install-time from script-time failures (br-wbzg).
 ///
 /// Matches Python's two common "module missing" phrasings:
-///   - `ModuleNotFoundError: No module named 'scipy'`
-///   - `ImportError: No module named scipy`
+///
+/// - `ModuleNotFoundError: No module named 'scipy'`
+/// - `ImportError: No module named scipy`
+///
 /// and special-cases scipy to return `PythonSciPyMissing` for
 /// backward compatibility with existing callers. numpy / sklearn /
 /// any other missing module routes to `PythonModuleMissing`.
@@ -300,7 +302,7 @@ fn extract_missing_module(stderr: &str) -> Option<String> {
     let needle = "No module named ";
     let idx = stderr.find(needle)?;
     let rest = &stderr[idx + needle.len()..];
-    let rest = rest.trim_start_matches(|c: char| c == '\'' || c == '"');
+    let rest = rest.trim_start_matches(['\'', '"']);
     let end = rest
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
         .unwrap_or(rest.len());
@@ -1760,7 +1762,6 @@ enum OptimizeObservedOutcome {
     },
 }
 
-#[must_use]
 pub fn run_smoke(config: &HarnessConfig) -> Result<HarnessReport, HarnessError> {
     let packet = run_validate_tol_packet(config, "FSCI-P2C-001_validate_tol.json")?;
     Ok(HarnessReport {
@@ -4340,12 +4341,11 @@ fn compare_unordered_points(
         false
     }
 
-    for e in 0..n {
+    for (e, expected_point) in expected.iter().enumerate().take(n) {
         let mut visited = vec![false; got.len()];
         if !try_augment(e, &adj, &mut match_of_got, &mut visited) {
             return Err(format!(
-                "{label} missing expected point {:?}; got {got:?}",
-                expected[e]
+                "{label} missing expected point {expected_point:?}; got {got:?}"
             ));
         }
     }
@@ -8578,7 +8578,7 @@ impl From<&ConformanceReport> for PacketReport {
             // ConformanceReport comes from the differential lane; mark as
             // OracleBacked when the oracle_status indicates availability,
             // otherwise SelfCheck. Per frankenscipy-fytm.
-            report_kind: if matches!(report.oracle_status, OracleStatus::Available { .. }) {
+            report_kind: if matches!(report.oracle_status, OracleStatus::Available) {
                 ReportKind::OracleBacked
             } else {
                 ReportKind::SelfCheck
@@ -16305,7 +16305,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     #[test]
     fn differential_case_runner_catches_panics_and_continues() {
         let oracle_status = OracleStatus::Available;
-        let results = vec![
+        let results = [
             super::run_case_with_panic_capture("case-1", &oracle_status, None, || {
                 (true, "ok".to_owned(), Some(0.0), None)
             }),

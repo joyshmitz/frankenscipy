@@ -60,8 +60,10 @@ pub trait ContinuousDistribution {
     /// Distribution implementations that have a precision-preserving
     /// closed form SHOULD override this method. Examples already
     /// overriding sf():
-    ///   - Weibull (line ~1567): exp(-(x/scale)^c)
-    ///   - Normal (line ~400):   erfc(x/sqrt(2))/2
+    ///
+    /// - Weibull (line ~1567): exp(-(x/scale)^c)
+    /// - Normal (line ~400):   erfc(x/sqrt(2))/2
+    ///
     /// Distributions inheriting the default expose the precision loss
     /// for tail p-values.
     fn sf(&self, x: f64) -> f64 {
@@ -2516,7 +2518,7 @@ impl Dirichlet {
         }
 
         let sum: f64 = x.iter().sum();
-        if (sum - 1.0).abs() > 1e-10 || x.iter().any(|&xi| xi < 0.0 || xi > 1.0) {
+        if (sum - 1.0).abs() > 1e-10 || x.iter().any(|&xi| !(0.0..=1.0).contains(&xi)) {
             return f64::NEG_INFINITY;
         }
 
@@ -3929,7 +3931,7 @@ impl ContinuousDistribution for Triangular {
         }
         let left = data.iter().cloned().fold(f64::INFINITY, f64::min);
         let right = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        if !(left < right) {
+        if left >= right {
             return nan;
         }
         let n = data.len() as f64;
@@ -10663,7 +10665,7 @@ pub fn moment(data: &[f64], k: u32) -> f64 {
 /// # Returns
 /// The n-th k-statistic, or NaN for invalid input.
 pub fn kstat(data: &[f64], n: u32) -> f64 {
-    if data.is_empty() || n < 1 || n > 4 {
+    if data.is_empty() || !(1..=4).contains(&n) {
         return f64::NAN;
     }
 
@@ -10719,7 +10721,7 @@ pub fn kstatvar(data: &[f64], n: u32) -> f64 {
     let filtered: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
     let nn = filtered.len() as f64;
 
-    if nn < 2.0 || n < 1 || n > 2 {
+    if nn < 2.0 || !(1..=2).contains(&n) {
         return f64::NAN;
     }
 
@@ -10753,7 +10755,7 @@ pub fn kstatvar(data: &[f64], n: u32) -> f64 {
 /// # Returns
 /// The L-moment of specified order, or NaN for invalid input.
 pub fn lmoment(data: &[f64], order: u32) -> f64 {
-    if data.is_empty() || order < 1 || order > 4 {
+    if data.is_empty() || !(1..=4).contains(&order) {
         return f64::NAN;
     }
 
@@ -11016,7 +11018,11 @@ pub fn median_cihs(data: &[f64], alpha: f64) -> (f64, f64) {
     let lambd = n_minus_k * i_val / (k as f64 + (n as f64 - 2.0 * k as f64) * i_val);
 
     let k_idx = k as usize;
-    if k_idx == 0 || k_idx > n || n - k_idx > n {
+    // `k_idx > n` already guards against underflow in `n - k_idx` below;
+    // the former `|| n - k_idx > n` dead code was a C-style overflow
+    // check that does not translate to Rust's checked/panicking usize
+    // arithmetic (br-q4md).
+    if k_idx == 0 || k_idx > n {
         return (f64::NAN, f64::NAN);
     }
     let lo = lambd * sorted[k_idx] + (1.0 - lambd) * sorted[k_idx - 1];
@@ -11063,9 +11069,9 @@ pub fn hdquantiles(data: &[f64], prob: &[f64]) -> Vec<f64> {
             let b = (nf + 1.0) * (1.0 - p);
             let beta = BetaDist::new(a, b);
             let mut hd_sum = 0.0;
-            for k in 0..n {
+            for (k, &val) in sorted.iter().enumerate() {
                 let w = beta.cdf((k + 1) as f64 / nf) - beta.cdf(k as f64 / nf);
-                hd_sum += w * sorted[k];
+                hd_sum += w * val;
             }
             hd_sum
         })
@@ -11152,7 +11158,7 @@ pub fn mquantiles(data: &[f64], prob: &[f64], alphap: f64, betap: f64) -> Vec<f6
     let nf = n as f64;
     prob.iter()
         .map(|&p| {
-            if p < 0.0 || p > 1.0 {
+            if !(0.0..=1.0).contains(&p) {
                 return f64::NAN;
             }
             let m = alphap + p * (1.0 - alphap - betap);
@@ -11781,10 +11787,11 @@ pub fn differential_entropy(
     let h = sum_log / (n - 2 * m) as f64;
 
     // Convert to requested base
-    if let Some(b) = base {
-        if b > 0.0 && b != 1.0 {
-            return h / b.ln();
-        }
+    if let Some(b) = base
+        && b > 0.0
+        && b != 1.0
+    {
+        return h / b.ln();
     }
 
     h
@@ -22496,7 +22503,7 @@ mod tests {
     fn boxcox_normmax_custom_bracket() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let narrow = boxcox_normmax(&data, (0.0, 1.0));
-        assert!(narrow >= 0.0 && narrow <= 1.0);
+        assert!((0.0..=1.0).contains(&narrow));
     }
 
     #[test]
@@ -22551,7 +22558,7 @@ mod tests {
     fn yeojohnson_normmax_positive_data() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let optimal = yeojohnson_normmax(&data, (-2.0, 2.0));
-        assert!(optimal >= -2.0 && optimal <= 2.0);
+        assert!((-2.0..=2.0).contains(&optimal));
     }
 
     #[test]
@@ -27419,14 +27426,14 @@ mod tests {
     #[test]
     fn hdquantiles_sd_matches_scipy() {
         // scipy.stats.mstats.hdquantiles_sd([1..=10], [0.25,0.5,0.75])
-        //   = [1.0951965400145034, 1.2465893235211445, 1.0951965400145040]
+        //   = [1.0951965400145034, 1.2465893235211445, 1.095_196_540_014_504]
         // br-3dg8: tighten absolute tolerance from 0.1 (10%) to 1e-9 now
         // that the expected values were recaptured from scipy.
         let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
         let result = hdquantiles_sd(&data, &[0.25, 0.5, 0.75]);
         assert_close(result[0], 1.0951965400145034, 1e-9, "hdquantiles_sd q25");
         assert_close(result[1], 1.2465893235211445, 1e-9, "hdquantiles_sd q50");
-        assert_close(result[2], 1.0951965400145040, 1e-9, "hdquantiles_sd q75");
+        assert_close(result[2], 1.095_196_540_014_504, 1e-9, "hdquantiles_sd q75");
     }
 
     #[test]
@@ -27438,7 +27445,7 @@ mod tests {
         let default_result = hdquantiles_sd(&data, &[0.25, 0.5, 0.75]);
         assert_close(default_result[0], 1.0951965400145034, 1e-9, "default q25");
         assert_close(default_result[1], 1.2465893235211445, 1e-9, "default q50");
-        assert_close(default_result[2], 1.0951965400145040, 1e-9, "default q75");
+        assert_close(default_result[2], 1.095_196_540_014_504, 1e-9, "default q75");
     }
 
     #[test]
