@@ -6817,11 +6817,34 @@ fn oracle_status_from_capture_error(error: &HarnessError) -> OracleStatus {
 
 fn default_differential_oracle_script_path(family: &str) -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if family.contains("stats") {
-        manifest.join("python_oracle/scipy_stats_oracle.py")
+    // Route by family substring to the corresponding oracle script.
+    // Ordered longest/most-specific first so e.g. "arrayapi" never matches
+    // a hypothetical shorter token. Families without a dedicated script
+    // fall back to the linalg default (preserves historical behavior).
+    let script_name = if family.contains("stats") {
+        "scipy_stats_oracle.py"
+    } else if family.contains("cluster") {
+        "scipy_cluster_oracle.py"
+    } else if family.contains("spatial") {
+        "scipy_spatial_oracle.py"
+    } else if family.contains("signal") {
+        "scipy_signal_oracle.py"
+    } else if family.contains("integrate") {
+        "scipy_integrate_oracle.py"
+    } else if family.contains("optimize") {
+        "scipy_optimize_oracle.py"
+    } else if family.contains("sparse") {
+        "scipy_sparse_oracle.py"
+    } else if family.contains("special") {
+        "scipy_special_oracle.py"
+    } else if family.contains("fft") {
+        "scipy_fft_oracle.py"
+    } else if family.contains("linalg") {
+        "scipy_linalg_oracle.py"
     } else {
-        DifferentialOracleConfig::default().script_path
-    }
+        return DifferentialOracleConfig::default().script_path;
+    };
+    manifest.join("python_oracle").join(script_name)
 }
 
 fn resolve_differential_oracle_config(
