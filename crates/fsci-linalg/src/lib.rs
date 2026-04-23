@@ -4475,19 +4475,37 @@ pub fn solve_circulant(c: &[f64], b: &[f64]) -> Result<Vec<f64>, LinalgError> {
         detail: format!("rhs FFT failed: {err}"),
     })?;
 
-    // Element-wise division: fft_b / fft_c
-    let fft_x: Vec<(f64, f64)> = fft_b
+    // Scale the singular-mode threshold by max |λ|² so it is invariant
+    // to overall matrix magnitude, mirroring scipy's default
+    // `tol = eps * max|eigenvalues|` on solve_circulant (br-z1vz).
+    // `1e-28` corresponds to sqrt(1e-28) ≈ 1e-14 ~ 10x machine epsilon.
+    let max_lambda_sq = fft_c
         .iter()
-        .zip(fft_c.iter())
-        .map(|(&(br, bi), &(cr, ci))| {
-            let denom = cr * cr + ci * ci;
-            if denom < 1e-30 {
-                (0.0, 0.0)
-            } else {
-                ((br * cr + bi * ci) / denom, (bi * cr - br * ci) / denom)
+        .map(|&(cr, ci)| cr * cr + ci * ci)
+        .fold(0.0_f64, f64::max);
+    let tol_sq = 1e-28 * max_lambda_sq.max(1.0);
+
+    // Element-wise division: fft_b / fft_c. A singular mode (|λ_k| ≈ 0)
+    // with non-zero b̂_k is fail-closed — returning x=0 for that mode
+    // silently produces a wrong answer that fails Cx = b.
+    let mut fft_x: Vec<(f64, f64)> = Vec::with_capacity(fft_b.len());
+    for (&(br, bi), &(cr, ci)) in fft_b.iter().zip(fft_c.iter()) {
+        let denom = cr * cr + ci * ci;
+        if denom < tol_sq {
+            let b_mag_sq = br * br + bi * bi;
+            // Only reject when the RHS has meaningful energy in the
+            // singular mode; if b̂_k = 0 the zero solution is exact.
+            if b_mag_sq > tol_sq {
+                return Err(LinalgError::SingularMatrix);
             }
-        })
-        .collect();
+            fft_x.push((0.0, 0.0));
+        } else {
+            fft_x.push((
+                (br * cr + bi * ci) / denom,
+                (bi * cr - br * ci) / denom,
+            ));
+        }
+    }
 
     let x = fsci_fft::ifft(&fft_x, &opts).map_err(|err| LinalgError::InvalidArgument {
         detail: format!("circulant inverse FFT failed: {err}"),
@@ -10045,6 +10063,32 @@ mod proptest_tests {
         for (i, (&xi, &bi)) in x.iter().zip(b.iter()).enumerate() {
             assert!((xi - bi).abs() < 1e-10, "x[{i}] = {xi}, expected {bi}");
         }
+    }
+
+    #[test]
+    fn solve_circulant_rejects_singular_with_nonzero_rhs() {
+        // Circulant of all-zeros is the zero matrix: every eigenvalue = 0.
+        // For any non-zero RHS the system is unsolvable. br-z1vz: the old
+        // impl silently returned x = 0 (a projection), producing a
+        // wrong answer. Fail-closed now returns SingularMatrix.
+        let c = [0.0, 0.0, 0.0];
+        let b = [1.0, 0.0, 0.0];
+        let err = solve_circulant(&c, &b).expect_err("singular circulant");
+        assert!(
+            matches!(err, LinalgError::SingularMatrix),
+            "expected SingularMatrix, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn solve_circulant_accepts_singular_with_compatible_rhs() {
+        // Circulant of [1, 1] has eigenvalues [2, 0]; b=[0, 0] projects
+        // entirely onto the non-null mode. A consistent singular system
+        // should still succeed.
+        let c = [0.0_f64, 0.0_f64];
+        let b = [0.0_f64, 0.0_f64];
+        let x = solve_circulant(&c, &b).expect("consistent singular system");
+        assert_eq!(x.len(), 2);
     }
 
     #[test]
