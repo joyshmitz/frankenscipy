@@ -6,6 +6,7 @@ pub mod e2e;
 pub mod forensics;
 pub mod quality_gates;
 
+use asupersync::raptorq::decoder::{InactivationDecoder, ReceivedSymbol};
 use asupersync::raptorq::systematic::SystematicEncoder;
 use blake3::hash;
 use fsci_arrayapi::{
@@ -6555,12 +6556,7 @@ fn write_packet_report_artifacts(
         source,
     })?;
 
-    let decode_proof = DecodeProofArtifact {
-        ts_unix_ms: now_unix_ms(),
-        reason: "no recovery required; artifact remained intact".to_owned(),
-        recovered_blocks: 0,
-        proof_hash: hash(&report_bytes).to_hex().to_string(),
-    };
+    let decode_proof = simulate_decode_proof_artifact(&report_bytes, &sidecar)?;
     let decode_proof_path = output_dir.join("parity_report.decode_proof.json");
     let decode_proof_bytes = serde_json::to_vec_pretty(&decode_proof)
         .map_err(|e| HarnessError::RaptorQ(e.to_string()))?;
@@ -6575,6 +6571,123 @@ fn write_packet_report_artifacts(
         report_path,
         sidecar_path,
         decode_proof_path,
+    })
+}
+
+fn hex_decode(input: &str) -> Result<Vec<u8>, HarnessError> {
+    if !input.len().is_multiple_of(2) {
+        return Err(HarnessError::RaptorQ(
+            "repair symbol payload hex must have even length".to_owned(),
+        ));
+    }
+
+    let mut out = Vec::with_capacity(input.len() / 2);
+    let bytes = input.as_bytes();
+    let hex_val = |byte: u8| -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(10 + (byte - b'a')),
+            b'A'..=b'F' => Some(10 + (byte - b'A')),
+            _ => None,
+        }
+    };
+
+    let mut idx = 0;
+    while idx < bytes.len() {
+        let hi = hex_val(bytes[idx]).ok_or_else(|| {
+            HarnessError::RaptorQ(format!(
+                "repair symbol payload contains invalid hex nibble at byte {idx}"
+            ))
+        })?;
+        let lo = hex_val(bytes[idx + 1]).ok_or_else(|| {
+            HarnessError::RaptorQ(format!(
+                "repair symbol payload contains invalid hex nibble at byte {}",
+                idx + 1
+            ))
+        })?;
+        out.push((hi << 4) | lo);
+        idx += 2;
+    }
+
+    Ok(out)
+}
+
+fn recover_payload_with_sidecar(
+    payload: &[u8],
+    sidecar: &RaptorQSidecar,
+    drop_indices: &[usize],
+) -> Result<Vec<u8>, HarnessError> {
+    let source_symbols = chunk_payload(payload, sidecar.symbol_size);
+    let k = source_symbols.len();
+    if k != sidecar.source_symbols {
+        return Err(HarnessError::RaptorQ(format!(
+            "sidecar source-symbol mismatch: expected {}, got {}",
+            sidecar.source_symbols, k
+        )));
+    }
+    if sidecar.repair_symbol_payloads_hex.len() != sidecar.repair_symbols {
+        return Err(HarnessError::RaptorQ(format!(
+            "repair payload count mismatch: expected {}, got {}",
+            sidecar.repair_symbols,
+            sidecar.repair_symbol_payloads_hex.len()
+        )));
+    }
+
+    let mut dropped = vec![false; k];
+    for &idx in drop_indices {
+        if idx < k {
+            dropped[idx] = true;
+        }
+    }
+
+    let mut received = Vec::new();
+    for (idx, symbol) in source_symbols.iter().enumerate() {
+        if !dropped[idx] {
+            received.push(ReceivedSymbol::source(idx as u32, symbol.clone()));
+        }
+    }
+
+    let decoder = InactivationDecoder::new(k, sidecar.symbol_size, sidecar.seed);
+    for (offset, payload_hex) in sidecar.repair_symbol_payloads_hex.iter().enumerate() {
+        let esi = k as u32 + offset as u32;
+        let payload = hex_decode(payload_hex)?;
+        let (cols, coefs) = decoder.repair_equation(esi);
+        received.push(ReceivedSymbol::repair(esi, cols, coefs, payload));
+    }
+
+    received.extend(decoder.constraint_symbols());
+
+    let result = decoder
+        .decode(&received)
+        .map_err(|err| HarnessError::RaptorQ(format!("decode proof recovery failed: {err:?}")))?;
+
+    let mut recovered = Vec::with_capacity(payload.len());
+    for symbol in result.source.iter().take(k) {
+        recovered.extend_from_slice(symbol);
+    }
+    recovered.truncate(payload.len());
+    Ok(recovered)
+}
+
+fn simulate_decode_proof_artifact(
+    payload: &[u8],
+    sidecar: &RaptorQSidecar,
+) -> Result<DecodeProofArtifact, HarnessError> {
+    let recovered_blocks = 1;
+    let recovered = recover_payload_with_sidecar(payload, sidecar, &[0])?;
+    let proof_hash = hash(&recovered).to_hex().to_string();
+    let expected_hash = hash(payload).to_hex().to_string();
+    if proof_hash != expected_hash {
+        return Err(HarnessError::RaptorQ(
+            "decode proof hash mismatch after simulated recovery".to_owned(),
+        ));
+    }
+
+    Ok(DecodeProofArtifact {
+        ts_unix_ms: now_unix_ms(),
+        reason: format!("recovered from simulated corruption of {recovered_blocks} block"),
+        recovered_blocks,
+        proof_hash,
     })
 }
 
@@ -11987,6 +12100,59 @@ mod tests {
                 "style must be colorized for dashboard rendering"
             );
         }
+    }
+
+    #[test]
+    fn write_parity_artifacts_records_real_decode_proof() {
+        let root = PathBuf::from("/tmp").join(format!(
+            "fsci-conformance-decode-proof-{}",
+            super::now_unix_ms()
+        ));
+        let cfg = HarnessConfig {
+            oracle_root: root.join("oracle"),
+            fixture_root: root.join("fixtures"),
+            strict_mode: true,
+        };
+        let report = PacketReport {
+            schema_version: super::packet_report_schema_v2(),
+            packet_id: "REAL-DECODE-PROOF".to_owned(),
+            family: "synthetic".to_owned(),
+            case_results: vec![
+                super::CaseResult {
+                    case_id: "case_ok".to_owned(),
+                    passed: true,
+                    message: "synthetic pass".to_owned(),
+                },
+                super::CaseResult {
+                    case_id: "case_fail".to_owned(),
+                    passed: false,
+                    message: "synthetic fail".to_owned(),
+                },
+            ],
+            passed_cases: 1,
+            failed_cases: 1,
+            fixture_path: None,
+            oracle_status: None,
+            differential_case_results: None,
+            generated_unix_ms: super::now_unix_ms(),
+        };
+
+        let artifacts =
+            write_parity_artifacts(&cfg, &report).expect("artifact generation must pass");
+        let report_bytes = fs::read(&artifacts.report_path).expect("read parity report");
+        let decode_proof: super::DecodeProofArtifact =
+            serde_json::from_slice(&fs::read(&artifacts.decode_proof_path).expect("read proof"))
+                .expect("decode proof should parse");
+
+        assert_eq!(decode_proof.recovered_blocks, 1);
+        assert!(
+            decode_proof.reason.contains("simulated corruption"),
+            "decode proof should describe the recovery drill"
+        );
+        assert_eq!(
+            decode_proof.proof_hash,
+            blake3::hash(&report_bytes).to_hex().to_string()
+        );
     }
 
     #[test]
