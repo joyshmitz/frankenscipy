@@ -169,7 +169,13 @@ fn compute_stats(timings: &[u128]) -> (u128, u128, u128, u128, u128) {
 
 // ── Main test ──────────────────────────────────────────────────────────────────
 
+// Runs ~354s on CI; gate it behind `--ignored` so that
+// `cargo test --workspace --all-targets` stays reliable on rch-offloaded
+// builds where long-running binaries were being reaped before later
+// tests could launch (br-smhw). Opt-in with
+// `cargo test -p fsci-conformance --test perf_linalg -- --ignored`.
 #[test]
+#[ignore = "long-running perf baseline — run with --ignored (see br-smhw)"]
 fn perf_p2c002_full_profile() {
     let mut benchmarks: Vec<OperationBenchmark> = Vec::new();
 
