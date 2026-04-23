@@ -742,6 +742,25 @@ pub enum SpecialCaseFunction {
     Expit,
     Logit,
     Exprel,
+    // ── Metamorphic-identity evaluators (strength-4 per /testing-fuzzing) ──
+    //
+    // Each variant below combines multiple fsci-special functions to
+    // evaluate a mathematical identity (e.g. erf(x)+erfc(x)=1). The
+    // comparator checks the result against the fixture-embedded expected
+    // value.
+    //
+    // IMPORTANT: these are **self-consistency** oracles. They verify that
+    // the Rust implementations agree WITH EACH OTHER. A bug that is
+    // compensated between two identity legs (e.g., erf off by +ε and erfc
+    // off by −ε) will still pass the identity check. Per bead
+    // frankenscipy-tfd7: these are strength-4 metamorphic relations, NOT
+    // strength-1 scipy-reference comparisons. They catch gross asymmetries
+    // and sign flips but not shared arithmetic drift.
+    //
+    // For true scipy-parity verification of individual special functions,
+    // use cases with category='differential' that dispatch to
+    // scipy_special_oracle.py (per v2tz / ivg5 chains). The identity cases
+    // below are complementary coverage, not a substitute.
     RelErfErfcIdentity,
     RelGammaRecurrence,
     RelBetaSymmetry,
