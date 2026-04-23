@@ -6147,6 +6147,13 @@ pub fn run_linalg_packet_with_oracle_capture(
     match capture_linalg_oracle(config, fixture_name, oracle) {
         Ok(output_path) => {
             let capture = load_oracle_capture(&output_path)?;
+            let fixture_path = config.fixture_root.join(fixture_name);
+            let fixture_raw = fs::read_to_string(&fixture_path)
+                .map_err(|source| HarnessError::FixtureIo {
+                    path: fixture_path.clone(),
+                    source,
+                })?;
+            verify_oracle_capture_provenance(&capture, fixture_raw.as_bytes(), fixture_name)?;
             run_linalg_packet_against_oracle_capture(config, fixture_name, &capture)
         }
         Err(err) => {
@@ -6249,6 +6256,39 @@ pub fn load_oracle_capture(path: &Path) -> Result<OracleCapture, HarnessError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+/// Verify that a loaded oracle capture's provenance hashes still match the
+/// current fixture bytes. If the fixture has been edited since the oracle
+/// was generated (new cases, changed args, reworded typos), the stored
+/// `capture.provenance.fixture_input_blake3` will no longer equal
+/// blake3(fixture_input) and we emit an OracleCaptureMismatch rather than
+/// silently comparing Rust outputs against stale oracle values.
+///
+/// No-op when the capture has no recorded provenance (legacy captures
+/// generated before attach_oracle_capture_provenance existed). Once all
+/// captures are regenerated this relaxation can be tightened to require
+/// provenance. Tracked via frankenscipy-cpn9.
+fn verify_oracle_capture_provenance(
+    capture: &OracleCapture,
+    fixture_input: &[u8],
+    fixture_label: &str,
+) -> Result<(), HarnessError> {
+    let Some(provenance) = capture.provenance.as_ref() else {
+        return Ok(());
+    };
+    let current_fixture_hash = hash(fixture_input).to_hex().to_string();
+    if current_fixture_hash != provenance.fixture_input_blake3 {
+        return Err(HarnessError::OracleCaptureMismatch {
+            detail: format!(
+                "stale oracle capture for {fixture_label}: fixture input blake3 differs \
+                 (capture recorded {} but fixture now hashes to {}). \
+                 Re-run the oracle capture script to regenerate.",
+                provenance.fixture_input_blake3, current_fixture_hash
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn attach_oracle_capture_provenance(
@@ -12156,6 +12196,72 @@ mod tests {
             "tolerance must be positive",
             "domain error"
         ));
+    }
+
+    #[test]
+    fn verify_oracle_capture_provenance_rejects_stale_fixture() {
+        use super::{
+            OracleCapture, OracleCaptureProvenance, verify_oracle_capture_provenance,
+        };
+        let fixture_raw = b"{\"packet_id\":\"P2C-001\",\"cases\":[]}";
+        let current_hash = blake3::hash(fixture_raw).to_hex().to_string();
+
+        // A capture recorded with the CURRENT fixture hash: verification passes.
+        let fresh_capture = OracleCapture {
+            packet_id: "P2C-001".into(),
+            family: "test".into(),
+            generated_unix_ms: 0,
+            runtime: None,
+            case_outputs: Vec::new(),
+            provenance: Some(OracleCaptureProvenance {
+                fixture_input_blake3: current_hash.clone(),
+                oracle_output_blake3: "0".into(),
+                capture_blake3: "0".into(),
+            }),
+        };
+        assert!(super::verify_oracle_capture_provenance(
+            &fresh_capture,
+            fixture_raw,
+            "test_fixture.json"
+        )
+        .is_ok());
+
+        // A capture whose stored hash doesn't match: rejected.
+        let stale_capture = OracleCapture {
+            packet_id: "P2C-001".into(),
+            family: "test".into(),
+            generated_unix_ms: 0,
+            runtime: None,
+            case_outputs: Vec::new(),
+            provenance: Some(OracleCaptureProvenance {
+                fixture_input_blake3: "deadbeef".into(),
+                oracle_output_blake3: "0".into(),
+                capture_blake3: "0".into(),
+            }),
+        };
+        let err = verify_oracle_capture_provenance(
+            &stale_capture,
+            fixture_raw,
+            "test_fixture.json",
+        )
+        .expect_err("stale fixture must fail");
+        assert!(err.to_string().contains("stale oracle capture"));
+
+        // Legacy capture without provenance: no-op passes.
+        let legacy_capture = OracleCapture {
+            packet_id: "P2C-001".into(),
+            family: "test".into(),
+            generated_unix_ms: 0,
+            runtime: None,
+            case_outputs: Vec::new(),
+            provenance: None,
+        };
+        assert!(super::verify_oracle_capture_provenance(
+            &legacy_capture,
+            fixture_raw,
+            "test_fixture.json"
+        )
+        .is_ok());
     }
 
     #[test]
