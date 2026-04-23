@@ -1,0 +1,78 @@
+name: Fuzz (nightly ASan+UBSan)
+
+# Scheduled nightly fuzz run for fsci-special oracle-roundtrip and
+# related complex-branch harnesses. Runs with ASan + UBSan per
+# /testing-fuzzing hard rule 5. br-n3au.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"  # 04:17 UTC nightly
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/fsci-special/**"
+      - "fuzz/fuzz_targets/p2c006_special_*.rs"
+      - "fuzz/corpus/p2c006_special_*/**"
+      - "fuzz/Cargo.toml"
+      - ".github/workflows/fuzz_nightly.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  special-nightly:
+    name: "fuzz special (900s/target)"
+    runs-on: ubuntu-latest
+    # PR runs are short; scheduled runs get the full 900s/target budget.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run fuzz targets with ASan+UBSan (900s each)
+        env:
+          RUSTFLAGS: "-Zsanitizer=address,undefined"
+          ASAN_OPTIONS: "detect_leaks=0"
+          UBSAN_OPTIONS: "print_stacktrace=1"
+        run: |
+          set -e
+          for t in p2c006_special_airy_complex \
+                   p2c006_special_bessel_base_complex \
+                   p2c006_special_bessel_derivatives \
+                   p2c006_special_complex_branches \
+                   p2c006_special_elliptic_complex \
+                   p2c006_special_hankel_complex \
+                   p2c006_special_hyper_complex \
+                   p2c006_special_incomplete_gamma_beta \
+                   p2c006_special_oracle_roundtrip; do
+            echo "=== fuzz $t (900s, ASan+UBSan) ==="
+            timeout 920 cargo fuzz run "$t" -- -max_total_time=900 || \
+              { echo "$t failed"; exit 1; }
+          done
+        timeout-minutes: 180
+
+  special-pr-gate:
+    name: "fuzz special (60s/target, PR lane)"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run fuzz targets with ASan+UBSan (60s each)
+        env:
+          RUSTFLAGS: "-Zsanitizer=address,undefined"
+          ASAN_OPTIONS: "detect_leaks=0"
+          UBSAN_OPTIONS: "print_stacktrace=1"
+        run: |
+          set -e
+          for t in p2c006_special_complex_branches \
+                   p2c006_special_oracle_roundtrip; do
+            echo "=== fuzz $t (60s, ASan+UBSan, PR lane) ==="
+            timeout 80 cargo fuzz run "$t" -- -max_total_time=60 || \
+              { echo "$t failed"; exit 1; }
+          done
+        timeout-minutes: 15
