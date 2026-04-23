@@ -70,7 +70,9 @@ impl GateId {
             Self::G2UnitTests => &["cargo test --workspace -- --nocapture"],
             Self::G3Conformance => &[
                 "cargo test -p fsci-conformance --test golden_journeys -- --nocapture",
-                "cargo test -p fsci-conformance --test schema_validation -- --nocapture",
+                "cargo test -p fsci-conformance --test diff_fft -- --nocapture",
+                "cargo test -p fsci-conformance --test diff_sparse -- --nocapture",
+                "cargo test -p fsci-conformance --lib tests::differential -- --nocapture",
             ],
             Self::G4Adversarial => &["cargo test -p fsci-conformance --test smoke -- --nocapture"],
             Self::G5E2e => &[
@@ -95,9 +97,19 @@ impl GateId {
                 "cargo test -p fsci-conformance --test perf_ivp -- --nocapture",
                 "cargo test -p fsci-conformance --test perf_arrayapi -- --nocapture",
             ],
-            Self::G7Schema => {
-                &["cargo test -p fsci-conformance --test schema_validation -- --nocapture"]
-            }
+            Self::G7Schema => &[
+                "cargo test -p fsci-conformance --test schema_validation -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c001 -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c002 -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c003 -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c004 -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c005 -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c006 -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c007 -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c008 -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c012 -- --nocapture",
+                "cargo test -p fsci-conformance --test evidence_p2c016 -- --nocapture",
+            ],
             Self::G8RaptorQ => {
                 &["cargo test -p fsci-conformance --test raptorq_proofs -- --nocapture"]
             }

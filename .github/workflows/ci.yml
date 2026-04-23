@@ -33,6 +33,11 @@ jobs:
         timeout-minutes: 5
 
   # ── G3: Differential Oracle Conformance ───────────────────────────
+  # Runs the actual differential test suite (diff_fft, diff_sparse) PLUS
+  # golden-journey artifact checks. Per bead frankenscipy-zi0q: G3 was
+  # previously golden_journeys + schema_validation only; the real
+  # differential_<family>_quota_and_structured_logs tests in lib.rs
+  # (exercised via `--test differential`) now also run here.
   g3-conformance:
     name: "G3: differential conformance"
     needs: g2-unit-tests
@@ -42,8 +47,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo test -p fsci-conformance --test golden_journeys -- --nocapture
         timeout-minutes: 5
-      - run: cargo test -p fsci-conformance --test schema_validation -- --nocapture
+      - run: cargo test -p fsci-conformance --test diff_fft -- --nocapture
         timeout-minutes: 5
+      - run: cargo test -p fsci-conformance --test diff_sparse -- --nocapture
+        timeout-minutes: 5
+      - run: cargo test -p fsci-conformance --lib tests::differential -- --nocapture
+        timeout-minutes: 10
 
   # ── G4: Adversarial/Fuzz Regression ───────────────────────────────
   # Runs the smoke test plus a 60-second replay of every fuzz corpus target.
@@ -99,9 +108,13 @@ jobs:
           done
         timeout-minutes: 10
 
-  # ── G7: Artifact Schema Validation (parallel) ────────────────────
+  # ── G7: Artifact Schema Validation + Evidence Packs (parallel) ────
+  # Previously duplicated G3's schema_validation invocation. Now the
+  # schema gate is owned solely by G7; G3 handles differential+goldens.
+  # Plus G7 runs all evidence_p2c* packs to exercise the end-to-end
+  # evidence-bundling pipeline that conformance ships to users.
   g7-schema:
-    name: "G7: schema validation"
+    name: "G7: schema + evidence packs"
     needs: g2-unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -109,6 +122,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo test -p fsci-conformance --test schema_validation -- --nocapture
         timeout-minutes: 5
+      - run: |
+          set -e
+          for test in evidence_p2c001 evidence_p2c002 evidence_p2c003 \
+                      evidence_p2c004 evidence_p2c005 evidence_p2c006 \
+                      evidence_p2c007 evidence_p2c008 evidence_p2c012 \
+                      evidence_p2c016; do
+            echo "=== Running $test ==="
+            cargo test -p fsci-conformance --test "$test" -- --nocapture
+          done
+        timeout-minutes: 15
 
   # ── G8: RaptorQ Decode-Proof Verification (parallel) ─────────────
   g8-raptorq:
