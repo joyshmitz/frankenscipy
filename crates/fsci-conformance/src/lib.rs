@@ -2992,7 +2992,7 @@ pub struct ClusterPacketFixture {
 pub struct ClusterCase {
     pub case_id: String,
     pub category: String,
-    pub mode: String,
+    pub mode: RuntimeMode,
     pub function: String,
     pub args: serde_json::Value,
     pub expected: ClusterExpected,
@@ -3432,7 +3432,7 @@ pub struct SpatialPacketFixture {
 pub struct SpatialCase {
     pub case_id: String,
     pub category: String,
-    pub mode: String,
+    pub mode: RuntimeMode,
     pub function: String,
     pub args: Vec<serde_json::Value>,
     pub expected: SpatialExpected,
@@ -4131,7 +4131,7 @@ pub struct SignalPacketFixture {
 pub struct SignalCase {
     pub case_id: String,
     pub category: String,
-    pub mode: String,
+    pub mode: RuntimeMode,
     pub function: String,
     pub args: Vec<serde_json::Value>,
     pub expected: SignalExpected,
@@ -4586,7 +4586,7 @@ pub struct StatsPacketFixture {
 pub struct StatsCase {
     pub case_id: String,
     pub category: String,
-    pub mode: String,
+    pub mode: RuntimeMode,
     pub function: String,
     pub args: Vec<serde_json::Value>,
     pub expected: StatsExpected,
@@ -5130,7 +5130,7 @@ pub struct IntegratePacketFixture {
 pub struct IntegrateCase {
     pub case_id: String,
     pub category: String,
-    pub mode: String,
+    pub mode: RuntimeMode,
     pub function: String,
     pub args: IntegrateArgs,
     pub expected: IntegrateExpected,
@@ -12444,7 +12444,7 @@ mod tests {
         let case = super::SignalCase {
             case_id: "signal-nonfinite".to_owned(),
             category: "unit".to_owned(),
-            mode: "Strict".to_owned(),
+            mode: RuntimeMode::Strict,
             function: "window".to_owned(),
             args: Vec::new(),
             expected: super::SignalExpected {
@@ -12493,7 +12493,7 @@ mod tests {
         let inf_case = StatsCase {
             case_id: "stats-inf".to_owned(),
             category: "summary".to_owned(),
-            mode: "Strict".to_owned(),
+            mode: RuntimeMode::Strict,
             function: "sem".to_owned(),
             args: vec![serde_json::json!([1.0, 2.0, 3.0])],
             expected: StatsExpected {
@@ -12528,7 +12528,7 @@ mod tests {
         let nan_case = StatsCase {
             case_id: "stats-nan".to_owned(),
             category: "summary".to_owned(),
-            mode: "Strict".to_owned(),
+            mode: RuntimeMode::Strict,
             function: "sem".to_owned(),
             args: vec![serde_json::json!([1.0, 2.0, 3.0])],
             expected: StatsExpected {
@@ -13947,7 +13947,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             cases: vec![StatsCase {
                 case_id: "sem_basic".to_owned(),
                 category: "differential".to_owned(),
-                mode: "strict".to_owned(),
+                mode: RuntimeMode::Strict,
                 function: "sem".to_owned(),
                 args: vec![serde_json::json!([1.0, 2.0, 3.0, 4.0])],
                 expected: StatsExpected {
@@ -14154,7 +14154,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
     fn integrate_case_input_summary(case: &super::IntegrateCase) -> String {
         format!(
-            "function={} mode={} args={:?}",
+            "function={} mode={:?} args={:?}",
             case.function, case.mode, case.args
         )
     }
@@ -14168,7 +14168,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
     fn stats_case_input_summary(case: &super::StatsCase) -> String {
         format!(
-            "function={} mode={} args={:?}",
+            "function={} mode={:?} args={:?}",
             case.function, case.mode, case.args
         )
     }
@@ -14179,7 +14179,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
     fn signal_case_input_summary(case: &super::SignalCase) -> String {
         format!(
-            "function={} mode={} args={:?}",
+            "function={} mode={:?} args={:?}",
             case.function, case.mode, case.args
         )
     }
@@ -14190,7 +14190,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
     fn spatial_case_input_summary(case: &super::SpatialCase) -> String {
         format!(
-            "function={} mode={} args={:?}",
+            "function={} mode={:?} args={:?}",
             case.function, case.mode, case.args
         )
     }
@@ -14201,7 +14201,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
     fn cluster_case_input_summary(case: &super::ClusterCase) -> String {
         format!(
-            "function={} mode={} args={:?}",
+            "function={} mode={:?} args={:?}",
             case.function, case.mode, case.args
         )
     }
@@ -15585,7 +15585,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let case = StatsCase {
             case_id: "oracle_missing_stats".to_owned(),
             category: "summary".to_owned(),
-            mode: "Strict".to_owned(),
+            mode: RuntimeMode::Strict,
             function: "describe".to_owned(),
             args: vec![serde_json::json!([1.0, 2.0, 3.0])],
             expected: StatsExpected {
