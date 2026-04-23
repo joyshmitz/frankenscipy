@@ -71,10 +71,10 @@ use fsci_arrayapi::{
 };
 use fsci_fft::sync_audit_ledger as fft_sync_audit_ledger;
 use fsci_integrate::{
-    CubatureOptions, ToleranceValue, cubature, cubature_scalar, cumulative_simpson,
-    cumulative_trapezoid, fixed_quad, gauss_legendre, newton_cotes, romb, simpson,
-    sync_audit_ledger as integrate_sync_audit_ledger, trapezoid, validate_tol,
-    validate_tol_with_audit,
+    CubatureOptions, DblquadOptions, QuadOptions, ToleranceValue, cubature, cubature_scalar,
+    cumulative_simpson, cumulative_trapezoid, dblquad, fixed_quad, gauss_legendre, newton_cotes,
+    quad, quad_vec, romb, simpson, sync_audit_ledger as integrate_sync_audit_ledger, tplquad,
+    trapezoid, validate_tol, validate_tol_with_audit,
 };
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
@@ -5499,6 +5499,10 @@ fn execute_integrate_case(case: &IntegrateCase) -> IntegrateObserved {
         "gauss_legendre" => execute_integrate_gauss_legendre(case),
         "cubature" => execute_integrate_cubature(case),
         "solve_ivp" => execute_integrate_solve_ivp(case),
+        "quad" => execute_integrate_quad(case),
+        "quad_vec" => execute_integrate_quad_vec(case),
+        "dblquad" => execute_integrate_dblquad(case),
+        "tplquad" => execute_integrate_tplquad(case),
         _ => IntegrateObserved::Error(format!("unknown function: {}", case.function)),
     }
 }
@@ -5745,6 +5749,160 @@ fn make_cubature_vector_func(func_str: &str) -> Option<CubatureVectorFn> {
         "powers_1d" => Some(Box::new(|x| vec![x[0], x[0] * x[0]])),
         "zero_dim_pair" => Some(Box::new(|_| vec![42.0, -7.0])),
         _ => None,
+    }
+}
+
+// br-9cla-5: scalar integrand registry for quad().
+//
+// Keys MUST match scipy_integrate_oracle.py's _build_callable so both
+// sides integrate the same function.
+fn make_integrate_quad_func(name: &str) -> Option<Box<dyn Fn(f64) -> f64>> {
+    make_integrate_func(name)
+}
+
+// br-9cla-5: vector integrand registry for quad_vec().
+//
+// Returns a fixed-length Vec<f64>. The dimensions are encoded into the
+// name ("linear_square" always returns 2 components).
+fn make_integrate_quad_vec_func(name: &str) -> Option<Box<dyn Fn(f64) -> Vec<f64>>> {
+    match name {
+        "linear_square" => Some(Box::new(|x| vec![x, x * x])),
+        _ => None,
+    }
+}
+
+// br-9cla-5: 2D integrand registry for dblquad().
+//
+// scipy.integrate.dblquad takes f(y, x) (inner variable first); we
+// follow the same convention since fsci_integrate::dblquad does too.
+// Inner bounds are named-integrand specific and returned alongside
+// the callable so the oracle side stays in sync.
+#[allow(clippy::type_complexity)]
+fn make_integrate_dblquad_func(name: &str) -> Option<(Box<dyn Fn(f64, f64) -> f64>, f64, f64)> {
+    match name {
+        // ∫_0^b ∫_y_lo^y_hi x*y dy dx (outer bounds come from the case).
+        "xy_prod_unit_y" => Some((Box::new(|y, x| x * y), 0.0, 1.0)),
+        _ => None,
+    }
+}
+
+// br-9cla-5: 3D integrand registry for tplquad().
+//
+// scipy.integrate.tplquad takes f(z, y, x) with z innermost. fsci
+// mirrors this. Inner+middle bounds are baked into the named integrand.
+#[allow(clippy::type_complexity)]
+fn make_integrate_tplquad_func(
+    name: &str,
+) -> Option<(Box<dyn Fn(f64, f64, f64) -> f64>, f64, f64, f64, f64)> {
+    match name {
+        // ∫_0^b ∫_0^1 ∫_0^1 x*y*z dz dy dx (outer bounds from the case).
+        "xyz_prod_unit_yz" => Some((Box::new(|z, y, x| x * y * z), 0.0, 1.0, 0.0, 1.0)),
+        _ => None,
+    }
+}
+
+fn execute_integrate_quad(case: &IntegrateCase) -> IntegrateObserved {
+    let Some(func_str) = case.args.func.as_deref() else {
+        return IntegrateObserved::Error("quad: missing func".to_string());
+    };
+    let Some(a) = case.args.a else {
+        return IntegrateObserved::Error("quad: missing a".to_string());
+    };
+    let Some(b) = case.args.b else {
+        return IntegrateObserved::Error("quad: missing b".to_string());
+    };
+    let Some(f) = make_integrate_quad_func(func_str) else {
+        return IntegrateObserved::Error(format!("quad: unknown func: {func_str}"));
+    };
+    let options = QuadOptions {
+        epsabs: case.args.atol.unwrap_or(1.49e-8),
+        epsrel: case.args.rtol.unwrap_or(1.49e-8),
+        limit: case.args.max_subdivisions.unwrap_or(50),
+    };
+    match quad(&*f, a, b, options) {
+        Ok(result) => IntegrateObserved::Scalar(result.integral),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn execute_integrate_quad_vec(case: &IntegrateCase) -> IntegrateObserved {
+    let Some(func_str) = case.args.func.as_deref() else {
+        return IntegrateObserved::Error("quad_vec: missing func".to_string());
+    };
+    let Some(a) = case.args.a else {
+        return IntegrateObserved::Error("quad_vec: missing a".to_string());
+    };
+    let Some(b) = case.args.b else {
+        return IntegrateObserved::Error("quad_vec: missing b".to_string());
+    };
+    let Some(f) = make_integrate_quad_vec_func(func_str) else {
+        return IntegrateObserved::Error(format!("quad_vec: unknown func: {func_str}"));
+    };
+    let options = QuadOptions {
+        epsabs: case.args.atol.unwrap_or(1.49e-8),
+        epsrel: case.args.rtol.unwrap_or(1.49e-8),
+        limit: case.args.max_subdivisions.unwrap_or(50),
+    };
+    match quad_vec(&*f, a, b, options) {
+        Ok(result) => IntegrateObserved::Array(result.integral),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn execute_integrate_dblquad(case: &IntegrateCase) -> IntegrateObserved {
+    let Some(func_str) = case.args.func.as_deref() else {
+        return IntegrateObserved::Error("dblquad: missing func".to_string());
+    };
+    let Some(a) = case.args.a else {
+        return IntegrateObserved::Error("dblquad: missing a".to_string());
+    };
+    let Some(b) = case.args.b else {
+        return IntegrateObserved::Error("dblquad: missing b".to_string());
+    };
+    let Some((f, y_lo, y_hi)) = make_integrate_dblquad_func(func_str) else {
+        return IntegrateObserved::Error(format!("dblquad: unknown func: {func_str}"));
+    };
+    let options = DblquadOptions {
+        epsabs: case.args.atol.unwrap_or(1.49e-8),
+        epsrel: case.args.rtol.unwrap_or(1.49e-8),
+        limit: case.args.max_subdivisions.unwrap_or(50),
+    };
+    match dblquad(&*f, a, b, |_| y_lo, |_| y_hi, options) {
+        Ok(result) => IntegrateObserved::Scalar(result.integral),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+fn execute_integrate_tplquad(case: &IntegrateCase) -> IntegrateObserved {
+    let Some(func_str) = case.args.func.as_deref() else {
+        return IntegrateObserved::Error("tplquad: missing func".to_string());
+    };
+    let Some(a) = case.args.a else {
+        return IntegrateObserved::Error("tplquad: missing a".to_string());
+    };
+    let Some(b) = case.args.b else {
+        return IntegrateObserved::Error("tplquad: missing b".to_string());
+    };
+    let Some((f, y_lo, y_hi, z_lo, z_hi)) = make_integrate_tplquad_func(func_str) else {
+        return IntegrateObserved::Error(format!("tplquad: unknown func: {func_str}"));
+    };
+    let options = DblquadOptions {
+        epsabs: case.args.atol.unwrap_or(1.49e-8),
+        epsrel: case.args.rtol.unwrap_or(1.49e-8),
+        limit: case.args.max_subdivisions.unwrap_or(50),
+    };
+    match tplquad(
+        &*f,
+        a,
+        b,
+        |_| y_lo,
+        |_| y_hi,
+        |_, _| z_lo,
+        |_, _| z_hi,
+        options,
+    ) {
+        Ok(result) => IntegrateObserved::Scalar(result.integral),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
     }
 }
 

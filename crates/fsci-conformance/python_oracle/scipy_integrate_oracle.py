@@ -269,6 +269,86 @@ def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
                 },
             )
 
+        if function == "quad":
+            # br-9cla-5: scipy.integrate.quad adaptive scalar quadrature.
+            # Named scalar integrand lookup; identical registry keyed
+            # by `func` lives in the Rust runner's make_integrate_func.
+            fn = _build_callable(args["func"])
+            a = float(args["a"])
+            b = float(args["b"])
+            epsabs = float(args.get("atol", 1.49e-8))
+            epsrel = float(args.get("rtol", 1.49e-8))
+            limit = int(args.get("max_subdivisions", 50))
+            value, _err = integrate.quad(
+                fn, a, b, epsabs=epsabs, epsrel=epsrel, limit=limit
+            )
+            return _ok(case_id, "scalar", {"value": float(value)})
+
+        if function == "quad_vec":
+            # br-9cla-5: scipy.integrate.quad_vec. Named vector integrand.
+            # Only a handful of named vector integrands are supported;
+            # each must match make_integrate_quad_vec_func on the Rust
+            # side.
+            name = args["func"]
+            if name == "linear_square":
+                vec_fn = lambda x: np.array([x, x * x], dtype=float)  # noqa: E731
+            else:
+                raise ValueError(f"quad_vec: unknown func: {name}")
+            a = float(args["a"])
+            b = float(args["b"])
+            epsabs = float(args.get("atol", 1.49e-8))
+            epsrel = float(args.get("rtol", 1.49e-8))
+            limit = int(args.get("max_subdivisions", 50))
+            result = integrate.quad_vec(
+                vec_fn, a, b, epsabs=epsabs, epsrel=epsrel, limit=limit
+            )
+            integral = result[0]
+            return _ok(
+                case_id,
+                "array",
+                {"value": [float(v) for v in np.atleast_1d(integral).tolist()]},
+            )
+
+        if function == "dblquad":
+            # br-9cla-5: scipy.integrate.dblquad. Named 2D integrand with
+            # constant-in-x inner bounds baked into the registry so the
+            # fixture schema stays flat.
+            name = args["func"]
+            if name == "xy_prod_unit_y":
+                # scipy takes f(y, x); we keep the same convention.
+                inner_fn = lambda y, x: x * y  # noqa: E731
+                y_lo, y_hi = 0.0, 1.0
+            else:
+                raise ValueError(f"dblquad: unknown func: {name}")
+            a = float(args["a"])
+            b = float(args["b"])
+            epsabs = float(args.get("atol", 1.49e-8))
+            epsrel = float(args.get("rtol", 1.49e-8))
+            value, _err = integrate.dblquad(
+                inner_fn, a, b, y_lo, y_hi, epsabs=epsabs, epsrel=epsrel
+            )
+            return _ok(case_id, "scalar", {"value": float(value)})
+
+        if function == "tplquad":
+            # br-9cla-5: scipy.integrate.tplquad. Named 3D integrand
+            # with constant inner+middle bounds baked into the registry.
+            name = args["func"]
+            if name == "xyz_prod_unit_yz":
+                # scipy takes f(z, y, x).
+                inner_fn = lambda z, y, x: x * y * z  # noqa: E731
+                y_lo, y_hi = 0.0, 1.0
+                z_lo, z_hi = 0.0, 1.0
+            else:
+                raise ValueError(f"tplquad: unknown func: {name}")
+            a = float(args["a"])
+            b = float(args["b"])
+            epsabs = float(args.get("atol", 1.49e-8))
+            epsrel = float(args.get("rtol", 1.49e-8))
+            value, _err = integrate.tplquad(
+                inner_fn, a, b, y_lo, y_hi, z_lo, z_hi, epsabs=epsabs, epsrel=epsrel
+            )
+            return _ok(case_id, "scalar", {"value": float(value)})
+
         if function == "cubature":
             lower = [float(v) for v in args["lower"]]
             upper = [float(v) for v in args["upper"]]

@@ -878,6 +878,78 @@
         "rtol": 1e-06,
         "contract_ref": "fsci_integrate::solve_ivp"
       }
+    },
+    {
+      "case_id": "quad_x_squared_unit",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "quad",
+      "args": {
+        "func": "x^2",
+        "a": 0.0,
+        "b": 1.0
+      },
+      "expected": {
+        "kind": "scalar",
+        "value": 0.3333333333333333,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.integrate.quad / fsci_integrate::quad"
+      }
+    },
+    {
+      "case_id": "quad_vec_linear_square_unit",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "quad_vec",
+      "args": {
+        "func": "linear_square",
+        "a": 0.0,
+        "b": 1.0
+      },
+      "expected": {
+        "kind": "array",
+        "value": [0.5, 0.3333333333333333],
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.integrate.quad_vec / fsci_integrate::quad_vec"
+      }
+    },
+    {
+      "case_id": "dblquad_xy_unit_square",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "dblquad",
+      "args": {
+        "func": "xy_prod_unit_y",
+        "a": 0.0,
+        "b": 1.0
+      },
+      "expected": {
+        "kind": "scalar",
+        "value": 0.25,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.integrate.dblquad / fsci_integrate::dblquad"
+      }
+    },
+    {
+      "case_id": "tplquad_xyz_unit_cube",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "tplquad",
+      "args": {
+        "func": "xyz_prod_unit_yz",
+        "a": 0.0,
+        "b": 1.0
+      },
+      "expected": {
+        "kind": "scalar",
+        "value": 0.125,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.integrate.tplquad / fsci_integrate::tplquad"
+      }
     }
   ]
 }
