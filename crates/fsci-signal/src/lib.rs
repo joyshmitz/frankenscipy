@@ -2,9 +2,40 @@
 
 //! Signal processing routines for FrankenSciPy.
 //!
-//! Matches `scipy.signal` core functions:
-//! - `savgol_filter` — Savitzky-Golay smoothing filter
-//! - `savgol_coeffs` — filter coefficients
+//! Implements ~158 public functions matching `scipy.signal` (module
+//! docstring previously listed only 2 of those — per bead
+//! frankenscipy-s9tt). High-level index by category:
+//!
+//! - **Windows**: `boxcar`, `hann`, `hamming`, `general_hamming`,
+//!   `blackman`, `kaiser`, `tukey_window`, `blackmanharris`, `barthann`,
+//!   `nuttall_window`, `bohman_window`.
+//! - **Convolution / correlation**: `convolve`, `deconvolve`,
+//!   `fftconvolve`, `correlate`, `correlate2d`.
+//! - **Analytic signal**: `hilbert`, `hilbert_envelope`.
+//! - **Spectral**: `lombscargle`, `czt`, `zoom_fft`, `chirp`,
+//!   `gausspulse`, `sweep_poly`, `max_len_seq`, `matched_filter`.
+//! - **Wavelets**: `ricker`, `morlet`, `cwt`.
+//! - **Peaks / extrema**: `find_peaks`, `peak_prominences`,
+//!   `peak_widths`, `argrelmax`, `argrelmin`, `argrelextrema`,
+//!   `vectorstrength`, `order_filter`, `unwrap_phase`,
+//!   `instantaneous_frequency`.
+//! - **Savitzky-Golay**: `savgol_coeffs`, `savgol_filter`.
+//! - **FIR/IIR design**: `firwin`, `firwin2`, `kaiserord`, `butter`,
+//!   `cheby1`, `cheby2`, `ellip`, `bessel`, `iirdesign`, `iirfilter`.
+//! - **Filter application**: `lfilter`, `filtfilt`, `sosfilt`,
+//!   `sosfiltfilt`, `resample`, `resample_poly`, `decimate`.
+//! - **Transfer / LTI**: `DLTI`, `tf2zpk`, `zpk2tf`, `bilinear`,
+//!   `freqz`, `dlsim`.
+//!
+//! Full enumeration: `grep -E '^pub fn' crates/fsci-signal/src/lib.rs`.
+//!
+//! # Known ergonomic gap
+//!
+//! `SignalError` has only three variants (`InvalidWindowLength`,
+//! `InvalidPolyOrder`, `InvalidArgument(String)`) and 201 of 208
+//! error-raise sites use the stringly-typed `InvalidArgument`. Callers
+//! cannot dispatch on failure mode without substring parsing. Variant
+//! expansion is tracked as the second half of frankenscipy-s9tt.
 
 /// Error type for signal processing operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
