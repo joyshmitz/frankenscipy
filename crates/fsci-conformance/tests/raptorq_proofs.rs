@@ -312,11 +312,15 @@ fn recovery_drill_parity_report() {
     let passed_cases = case_results.iter().filter(|c| c.passed).count();
     let failed_cases = case_results.len() - passed_cases;
     let report = PacketReport {
+        schema_version: 1,
         packet_id: "RECOVERY-DRILL".to_string(),
         family: "linalg".to_string(),
         case_results,
         passed_cases,
         failed_cases,
+        fixture_path: None,
+        oracle_status: None,
+        differential_case_results: None,
         generated_unix_ms: now_unix_ms(),
     };
 

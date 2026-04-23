@@ -421,6 +421,7 @@ mod tests {
 
     fn report(packet_id: &str, failed_cases: usize) -> PacketReport {
         PacketReport {
+            schema_version: 1,
             packet_id: packet_id.to_owned(),
             family: "demo".to_owned(),
             case_results: vec![
@@ -437,6 +438,9 @@ mod tests {
             ],
             passed_cases: if failed_cases == 0 { 2 } else { 1 },
             failed_cases,
+            fixture_path: None,
+            oracle_status: None,
+            differential_case_results: None,
             generated_unix_ms: 0,
         }
     }
@@ -538,6 +542,44 @@ mod tests {
             .expect("load filtered state");
         assert_eq!(state.reports().len(), 1);
         assert_eq!(state.reports()[0].packet_id, "FSCI-P2C-002");
+    }
+
+    #[test]
+    fn dashboard_loader_accepts_rich_differential_reports() {
+        let root = temp_dir("rich-report");
+        let packet = root.join("FSCI-P2C-777");
+        fs::create_dir_all(&packet).expect("create packet dir");
+
+        let rich_report = r#"{
+  "schema_version": 2,
+  "packet_id": "FSCI-P2C-777",
+  "family": "stats",
+  "case_results": [{"case_id":"ok","passed":true,"message":"scalar match"}],
+  "passed_cases": 1,
+  "failed_cases": 0,
+  "fixture_path": "fixtures/FSCI-P2C-777_stats.json",
+  "oracle_status": {"status":"available"},
+  "differential_case_results": [{
+    "case_id":"ok",
+    "passed":true,
+    "message":"scalar match",
+    "max_diff":1e-12,
+    "tolerance_used":{"atol":1e-12,"rtol":1e-12,"comparison_mode":"scalar"},
+    "oracle_status":{"status":"available"}
+  }],
+  "generated_unix_ms": 0
+}"#;
+        fs::write(packet.join("parity_report.json"), rich_report).expect("write report");
+
+        let state = load_dashboard_state_from_artifact_root(&root, None).expect("load state");
+        assert_eq!(state.reports().len(), 1);
+        let report = &state.reports()[0];
+        assert_eq!(report.schema_version, 2);
+        assert_eq!(
+            report.fixture_path.as_deref(),
+            Some("fixtures/FSCI-P2C-777_stats.json")
+        );
+        assert!(report.differential_case_results.is_some());
     }
 
     #[test]

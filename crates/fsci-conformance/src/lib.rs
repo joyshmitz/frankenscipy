@@ -1395,13 +1395,29 @@ pub struct CaseResult {
     pub message: String,
 }
 
+const fn packet_report_schema_v1() -> u8 {
+    1
+}
+
+const fn packet_report_schema_v2() -> u8 {
+    2
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PacketReport {
+    #[serde(default = "packet_report_schema_v1")]
+    pub schema_version: u8,
     pub packet_id: String,
     pub family: String,
     pub case_results: Vec<CaseResult>,
     pub passed_cases: usize,
     pub failed_cases: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixture_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle_status: Option<OracleStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub differential_case_results: Option<Vec<DifferentialCaseResult>>,
     pub generated_unix_ms: u128,
 }
 
@@ -6512,24 +6528,12 @@ pub fn load_packet_reports(config: &HarnessConfig) -> Result<Vec<PacketReport>, 
     Ok(reports)
 }
 
-#[must_use]
-pub fn packet_summary(report: &PacketReport) -> PacketSummary {
-    PacketSummary {
-        packet_id: report.packet_id.clone(),
-        family: report.family.clone(),
-        passed_cases: report.passed_cases,
-        failed_cases: report.failed_cases,
-        total_cases: report.case_results.len(),
-    }
-}
-
-pub fn write_parity_artifacts(
-    config: &HarnessConfig,
+fn write_packet_report_artifacts(
+    output_dir: &Path,
     report: &PacketReport,
 ) -> Result<ParityArtifactBundle, HarnessError> {
-    let output_dir = config.artifact_dir_for(&report.packet_id);
-    fs::create_dir_all(&output_dir).map_err(|source| HarnessError::ArtifactIo {
-        path: output_dir.clone(),
+    fs::create_dir_all(output_dir).map_err(|source| HarnessError::ArtifactIo {
+        path: output_dir.to_path_buf(),
         source,
     })?;
 
@@ -6571,6 +6575,34 @@ pub fn write_parity_artifacts(
         sidecar_path,
         decode_proof_path,
     })
+}
+
+#[must_use]
+pub fn packet_summary(report: &PacketReport) -> PacketSummary {
+    PacketSummary {
+        packet_id: report.packet_id.clone(),
+        family: report.family.clone(),
+        passed_cases: report.passed_cases,
+        failed_cases: report.failed_cases,
+        total_cases: report.case_results.len(),
+    }
+}
+
+pub fn write_parity_artifacts(
+    config: &HarnessConfig,
+    report: &PacketReport,
+) -> Result<ParityArtifactBundle, HarnessError> {
+    let output_dir = config.artifact_dir_for(&report.packet_id);
+    write_packet_report_artifacts(&output_dir, report)
+}
+
+pub fn write_differential_parity_artifacts(
+    fixture_path: &Path,
+    report: &ConformanceReport,
+) -> Result<ParityArtifactBundle, HarnessError> {
+    let output_dir = differential_artifact_dir_for_fixture(fixture_path, &report.packet_id);
+    let packet_report = PacketReport::from(report);
+    write_packet_report_artifacts(&output_dir, &packet_report)
 }
 
 #[cfg(feature = "dashboard")]
@@ -7224,11 +7256,15 @@ fn build_packet_report(
     let passed_cases = case_results.iter().filter(|r| r.passed).count();
     let failed_cases = case_results.len().saturating_sub(passed_cases);
     PacketReport {
+        schema_version: packet_report_schema_v1(),
         packet_id,
         family,
         case_results,
         passed_cases,
         failed_cases,
+        fixture_path: None,
+        oracle_status: None,
+        differential_case_results: None,
         generated_unix_ms: now_unix_ms(),
     }
 }
@@ -7580,6 +7616,33 @@ pub struct ConformanceReport {
     pub generated_unix_ms: u128,
 }
 
+impl From<&DifferentialCaseResult> for CaseResult {
+    fn from(result: &DifferentialCaseResult) -> Self {
+        Self {
+            case_id: result.case_id.clone(),
+            passed: result.passed,
+            message: result.message.clone(),
+        }
+    }
+}
+
+impl From<&ConformanceReport> for PacketReport {
+    fn from(report: &ConformanceReport) -> Self {
+        Self {
+            schema_version: packet_report_schema_v2(),
+            packet_id: report.packet_id.clone(),
+            family: report.family.clone(),
+            case_results: report.per_case_results.iter().map(Into::into).collect(),
+            passed_cases: report.pass_count,
+            failed_cases: report.fail_count,
+            fixture_path: Some(report.fixture_path.clone()),
+            oracle_status: Some(report.oracle_status.clone()),
+            differential_case_results: Some(report.per_case_results.clone()),
+            generated_unix_ms: report.generated_unix_ms,
+        }
+    }
+}
+
 /// Fixture envelope: minimal structure to detect fixture type.
 #[derive(Debug, Clone, Deserialize)]
 struct FixtureEnvelope {
@@ -7647,7 +7710,7 @@ pub fn run_differential_test(
         })?;
 
     let family = envelope.family.as_str();
-    if family.contains("validate_tol") {
+    let report = if family.contains("validate_tol") {
         run_differential_validate_tol(fixture_path, &raw, oracle_config)
     } else if family.contains("linalg") {
         run_differential_linalg(fixture_path, &raw, oracle_config)
@@ -7676,7 +7739,10 @@ pub fn run_differential_test(
             path: fixture_path.to_path_buf(),
             source: serde::de::Error::custom(format!("unknown fixture family: {family}")),
         })
-    }
+    }?;
+
+    let _ = write_differential_parity_artifacts(fixture_path, &report)?;
+    Ok(report)
 }
 
 fn run_differential_validate_tol(
@@ -11551,18 +11617,19 @@ mod tests {
     use super::style_for_case_result;
     use super::{
         AggregateParityReport, ArrayApiExpectedOutcome, ArrayApiPacketFixture, CaspPacketFixture,
-        ClusterPacketFixture, ConformanceReport, DifferentialOracleConfig, FftPacketFixture,
-        HarnessConfig, IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome,
+        ClusterPacketFixture, ConformanceReport, DifferentialCaseResult, DifferentialOracleConfig,
+        FftPacketFixture, HarnessConfig, IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome,
         LinalgPacketFixture, OptimizePacketFixture, OracleCaseOutput, OracleStatus, PacketFamily,
-        PythonOracleConfig, SignalPacketFixture, SpatialPacketFixture, SpecialPacketFixture,
-        StatsCase, StatsExpected, StatsObserved, StatsPacketFixture, aggregate_packet_reports,
-        compare_linalg_case_against_oracle, compare_stats_case_against_oracle, discover_fixtures,
-        ensure_artifact_layout, load_array_api_contract_table, load_oracle_capture,
-        resolve_array_api_contract_tolerance, run_array_api_packet, run_casp_packet,
-        run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
-        run_linalg_packet, run_linalg_packet_with_oracle_capture, run_optimize_packet,
-        run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
-        run_stats_packet, run_validate_tol_packet, write_parity_artifacts,
+        PacketReport, PythonOracleConfig, SignalPacketFixture, SpatialPacketFixture,
+        SpecialPacketFixture, StatsCase, StatsExpected, StatsObserved, StatsPacketFixture,
+        ToleranceUsed, aggregate_packet_reports, compare_linalg_case_against_oracle,
+        compare_stats_case_against_oracle, discover_fixtures, ensure_artifact_layout,
+        load_array_api_contract_table, load_oracle_capture, resolve_array_api_contract_tolerance,
+        run_array_api_packet, run_casp_packet, run_cluster_packet, run_differential_test,
+        run_fft_packet, run_integrate_packet, run_linalg_packet,
+        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_signal_packet, run_smoke,
+        run_sparse_packet, run_spatial_packet, run_special_packet, run_stats_packet,
+        run_validate_tol_packet, write_differential_parity_artifacts, write_parity_artifacts,
     };
     use fsci_linalg::LinalgError;
     use fsci_runtime::RuntimeMode;
@@ -14914,6 +14981,59 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert_eq!(parsed.per_case_results.len(), report.per_case_results.len());
     }
 
+    #[test]
+    fn differential_parity_artifacts_preserve_rich_case_data() {
+        let unique = format!("fsci-diff-artifacts-{}", super::now_unix_ms());
+        let fixture_root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&fixture_root).expect("create temp dir");
+        let fixture_path = fixture_root.join("FSCI-P2C-777_stats.json");
+        fs::write(&fixture_path, "{}").expect("write placeholder fixture");
+
+        let report = ConformanceReport {
+            fixture_path: fixture_path.display().to_string(),
+            packet_id: "FSCI-P2C-777".to_owned(),
+            family: "stats".to_owned(),
+            pass_count: 1,
+            fail_count: 0,
+            oracle_status: OracleStatus::Available,
+            per_case_results: vec![DifferentialCaseResult {
+                case_id: "case-1".to_owned(),
+                passed: true,
+                message: "scalar match".to_owned(),
+                max_diff: Some(1.0e-12),
+                tolerance_used: Some(ToleranceUsed {
+                    atol: 1.0e-12,
+                    rtol: 1.0e-10,
+                    comparison_mode: "scalar".to_owned(),
+                }),
+                oracle_status: OracleStatus::Available,
+            }],
+            generated_unix_ms: 42,
+        };
+
+        let artifacts = write_differential_parity_artifacts(&fixture_path, &report)
+            .expect("rich differential artifacts should persist");
+        let raw = fs::read_to_string(&artifacts.report_path).expect("read persisted report");
+        let parsed: PacketReport =
+            serde_json::from_str(&raw).expect("packet report should round-trip");
+
+        assert_eq!(parsed.schema_version, super::packet_report_schema_v2());
+        assert_eq!(
+            parsed.fixture_path.as_deref(),
+            Some(report.fixture_path.as_str())
+        );
+        assert_eq!(parsed.oracle_status, Some(OracleStatus::Available));
+        assert_eq!(parsed.passed_cases, report.pass_count);
+        assert_eq!(parsed.failed_cases, report.fail_count);
+        assert_eq!(parsed.case_results.len(), report.per_case_results.len());
+        assert_eq!(
+            parsed.differential_case_results.as_ref(),
+            Some(&report.per_case_results)
+        );
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // Packet runner registry tests (§bd-3jh.19.10)
     // ═══════════════════════════════════════════════════════════════
@@ -15010,19 +15130,27 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
         let reports = vec![
             super::PacketReport {
+                schema_version: super::packet_report_schema_v1(),
                 packet_id: "FSCI-P2C-001".to_owned(),
                 family: "validate_tol".to_owned(),
                 case_results: cases_1,
                 passed_cases: 10,
                 failed_cases: 2,
+                fixture_path: None,
+                oracle_status: None,
+                differential_case_results: None,
                 generated_unix_ms: 0,
             },
             super::PacketReport {
+                schema_version: super::packet_report_schema_v1(),
                 packet_id: "FSCI-P2C-002".to_owned(),
                 family: "linalg_core".to_owned(),
                 case_results: cases_2,
                 passed_cases: 20,
                 failed_cases: 1,
+                fixture_path: None,
+                oracle_status: None,
+                differential_case_results: None,
                 generated_unix_ms: 0,
             },
         ];
