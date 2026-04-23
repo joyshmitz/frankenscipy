@@ -31,8 +31,9 @@ use fsci_integrate::{
 };
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
-    SolveOptions, TriangularSolveOptions, TriangularTranspose, det, inv, lstsq, pinv, solve,
-    solve_banded, solve_triangular, solve_with_audit,
+    SolveOptions, TriangularSolveOptions, TriangularTranspose, det, det_with_audit, inv,
+    inv_with_audit, lstsq, lstsq_with_audit, pinv, pinv_with_audit, solve, solve_banded,
+    solve_banded_with_audit, solve_triangular, solve_triangular_with_audit, solve_with_audit,
     sync_audit_ledger as linalg_sync_audit_ledger,
 };
 use fsci_opt::{
@@ -6821,7 +6822,140 @@ fn execute_linalg_case_with_differential_audit(
                 warning_ill_conditioned: result.warning.is_some(),
             })
         }
-        _ => execute_linalg_case(case),
+        LinalgCase::SolveTriangular {
+            mode,
+            a,
+            b,
+            trans,
+            lower,
+            unit_diagonal,
+            check_finite,
+            ..
+        } => {
+            let result = solve_triangular_with_audit(
+                a,
+                b,
+                TriangularSolveOptions {
+                    mode: *mode,
+                    trans: trans
+                        .clone()
+                        .map(Into::into)
+                        .unwrap_or(TriangularTranspose::NoTranspose),
+                    lower: lower.unwrap_or(false),
+                    unit_diagonal: unit_diagonal.unwrap_or(false),
+                    check_finite: check_finite.unwrap_or(true),
+                },
+                audit_ledger,
+            )?;
+            Ok(LinalgObservedOutcome::Vector {
+                values: result.x,
+                warning_ill_conditioned: result.warning.is_some(),
+            })
+        }
+        LinalgCase::SolveBanded {
+            mode,
+            l_and_u,
+            ab,
+            b,
+            check_finite,
+            ..
+        } => {
+            let result = solve_banded_with_audit(
+                (l_and_u[0], l_and_u[1]),
+                ab,
+                b,
+                SolveOptions {
+                    mode: *mode,
+                    check_finite: check_finite.unwrap_or(true),
+                    ..SolveOptions::default()
+                },
+                audit_ledger,
+            )?;
+            Ok(LinalgObservedOutcome::Vector {
+                values: result.x,
+                warning_ill_conditioned: result.warning.is_some(),
+            })
+        }
+        LinalgCase::Inv {
+            mode,
+            a,
+            assume_a,
+            lower,
+            check_finite,
+            ..
+        } => {
+            let result = inv_with_audit(
+                a,
+                InvOptions {
+                    mode: *mode,
+                    check_finite: check_finite.unwrap_or(true),
+                    assume_a: assume_a.clone().map(Into::into),
+                    lower: lower.unwrap_or(false),
+                },
+                audit_ledger,
+            )?;
+            Ok(LinalgObservedOutcome::Matrix {
+                values: result.inverse,
+            })
+        }
+        LinalgCase::Det {
+            mode,
+            a,
+            check_finite,
+            ..
+        } => {
+            let value = det_with_audit(a, *mode, check_finite.unwrap_or(true), audit_ledger)?;
+            Ok(LinalgObservedOutcome::Scalar { value })
+        }
+        LinalgCase::Lstsq {
+            mode,
+            a,
+            b,
+            cond,
+            check_finite,
+            ..
+        } => {
+            let result = lstsq_with_audit(
+                a,
+                b,
+                LstsqOptions {
+                    mode: *mode,
+                    cond: *cond,
+                    check_finite: check_finite.unwrap_or(true),
+                    driver: LstsqDriver::default(),
+                },
+                audit_ledger,
+            )?;
+            Ok(LinalgObservedOutcome::Lstsq {
+                x: result.x,
+                residuals: result.residuals,
+                rank: result.rank,
+                singular_values: result.singular_values,
+            })
+        }
+        LinalgCase::Pinv {
+            mode,
+            a,
+            atol,
+            rtol,
+            check_finite,
+            ..
+        } => {
+            let result = pinv_with_audit(
+                a,
+                PinvOptions {
+                    mode: *mode,
+                    check_finite: check_finite.unwrap_or(true),
+                    atol: *atol,
+                    rtol: *rtol,
+                },
+                audit_ledger,
+            )?;
+            Ok(LinalgObservedOutcome::Pinv {
+                values: result.pseudo_inverse,
+                rank: result.rank,
+            })
+        }
     }
 }
 
@@ -13571,6 +13705,38 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(!audit_jsonl.trim().is_empty());
         assert!(audit_jsonl.contains("\"kind\":\"mode_decision\""));
         assert!(audit_jsonl.contains("\"kind\":\"fail_closed\""));
+    }
+
+    #[test]
+    fn differential_linalg_audit_records_non_solve_case() {
+        let case = LinalgCase::Det {
+            case_id: "det_non_solve_audit".to_string(),
+            mode: RuntimeMode::Strict,
+            a: vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            check_finite: Some(true),
+            expected: LinalgExpectedOutcome::Scalar {
+                value: -2.0,
+                atol: 1.0e-12,
+                rtol: 1.0e-12,
+            },
+        };
+        let audit_ledger = fsci_linalg::sync_audit_ledger();
+
+        let observed =
+            super::execute_linalg_case_with_differential_audit(&case, &audit_ledger).expect("det");
+        assert!(matches!(
+            observed,
+            super::LinalgObservedOutcome::Scalar { value } if (value + 2.0).abs() < 1.0e-12
+        ));
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        assert!(
+            ledger.entries().iter().any(|entry| matches!(
+                entry.action,
+                fsci_runtime::AuditAction::ModeDecision { .. }
+            ))
+        );
     }
 
     #[test]

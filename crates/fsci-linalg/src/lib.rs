@@ -113,6 +113,71 @@ fn record_casp_decision(
     }
 }
 
+fn record_mode_decision(
+    ledger: &SyncSharedAuditLedger,
+    input_bytes: &[u8],
+    mode: RuntimeMode,
+    outcome: &str,
+) {
+    let event = AuditEvent::new(
+        casp_now_unix_ms(),
+        AuditLedger::fingerprint_bytes(input_bytes),
+        AuditAction::ModeDecision { mode },
+        outcome,
+    );
+    if let Ok(mut guard) = ledger.lock() {
+        guard.record(event);
+    }
+}
+
+fn fail_closed_reason(error: &LinalgError) -> Option<&'static str> {
+    match error {
+        LinalgError::RaggedMatrix => Some("ragged_matrix"),
+        LinalgError::ExpectedSquareMatrix => Some("non_square_matrix"),
+        LinalgError::IncompatibleShapes { .. } => Some("incompatible_shapes"),
+        LinalgError::NonFiniteInput => Some("non_finite_input"),
+        LinalgError::InvalidBandShape { .. } => Some("invalid_band_shape"),
+        LinalgError::InvalidPinvThreshold => Some("invalid_pinv_threshold"),
+        LinalgError::UnsupportedAssumption => Some("unsupported_assumption"),
+        LinalgError::ConditionTooHigh { .. } => Some("condition_too_high"),
+        LinalgError::ResourceExhausted { .. } => Some("resource_exhausted"),
+        LinalgError::InvalidArgument { .. } => Some("invalid_argument"),
+        LinalgError::NotSupported { .. } | LinalgError::ConvergenceFailure { .. } => {
+            Some("not_supported")
+        }
+        LinalgError::SingularMatrix => None,
+    }
+}
+
+fn record_operation_audit<T>(
+    ledger: &SyncSharedAuditLedger,
+    input_bytes: &[u8],
+    operation: &str,
+    mode: RuntimeMode,
+    result: &Result<T, LinalgError>,
+) {
+    match result {
+        Ok(_) => record_mode_decision(ledger, input_bytes, mode, &format!("{operation} executed")),
+        Err(error) => {
+            if let Some(reason) = fail_closed_reason(error) {
+                record_fail_closed(
+                    ledger,
+                    input_bytes,
+                    reason,
+                    &format!("{operation} rejected: {error}"),
+                );
+            } else {
+                record_mode_decision(
+                    ledger,
+                    input_bytes,
+                    mode,
+                    &format!("{operation} errored: {error}"),
+                );
+            }
+        }
+    }
+}
+
 /// Compute a fingerprint for matrix input (first 1KB of flattened data).
 fn matrix_fingerprint(a: &[Vec<f64>]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(1024);
@@ -647,6 +712,24 @@ pub fn solve_triangular(
     result
 }
 
+pub fn solve_triangular_with_audit(
+    a: &[Vec<f64>],
+    b: &[f64],
+    options: TriangularSolveOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<SolveResult, LinalgError> {
+    let fingerprint = matrix_fingerprint(a);
+    let result = solve_triangular(a, b, options);
+    record_operation_audit(
+        audit_ledger,
+        &fingerprint,
+        "solve_triangular",
+        options.mode,
+        &result,
+    );
+    result
+}
+
 pub fn solve_banded(
     l_and_u: (usize, usize),
     ab: &[Vec<f64>],
@@ -682,9 +765,39 @@ pub fn solve_banded(
     )
 }
 
+pub fn solve_banded_with_audit(
+    l_and_u: (usize, usize),
+    ab: &[Vec<f64>],
+    b: &[f64],
+    options: SolveOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<SolveResult, LinalgError> {
+    let fingerprint = matrix_fingerprint(ab);
+    let result = solve_banded(l_and_u, ab, b, options);
+    record_operation_audit(
+        audit_ledger,
+        &fingerprint,
+        "solve_banded",
+        options.mode,
+        &result,
+    );
+    result
+}
+
 pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError> {
     let mut portfolio = SolverPortfolio::new(options.mode, 1);
     inv_with_casp(a, options, &mut portfolio)
+}
+
+pub fn inv_with_audit(
+    a: &[Vec<f64>],
+    options: InvOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<InvResult, LinalgError> {
+    let fingerprint = matrix_fingerprint(a);
+    let result = inv(a, options);
+    record_operation_audit(audit_ledger, &fingerprint, "inv", options.mode, &result);
+    result
 }
 
 pub fn det(a: &[Vec<f64>], mode: RuntimeMode, check_finite: bool) -> Result<f64, LinalgError> {
@@ -711,14 +824,49 @@ pub fn det(a: &[Vec<f64>], mode: RuntimeMode, check_finite: bool) -> Result<f64,
     Ok(result)
 }
 
+pub fn det_with_audit(
+    a: &[Vec<f64>],
+    mode: RuntimeMode,
+    check_finite: bool,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<f64, LinalgError> {
+    let fingerprint = matrix_fingerprint(a);
+    let result = det(a, mode, check_finite);
+    record_operation_audit(audit_ledger, &fingerprint, "det", mode, &result);
+    result
+}
+
 pub fn lstsq(a: &[Vec<f64>], b: &[f64], options: LstsqOptions) -> Result<LstsqResult, LinalgError> {
     let mut portfolio = SolverPortfolio::new(options.mode, 1);
     lstsq_with_casp(a, b, options, &mut portfolio)
 }
 
+pub fn lstsq_with_audit(
+    a: &[Vec<f64>],
+    b: &[f64],
+    options: LstsqOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<LstsqResult, LinalgError> {
+    let fingerprint = matrix_fingerprint(a);
+    let result = lstsq(a, b, options);
+    record_operation_audit(audit_ledger, &fingerprint, "lstsq", options.mode, &result);
+    result
+}
+
 pub fn pinv(a: &[Vec<f64>], options: PinvOptions) -> Result<PinvResult, LinalgError> {
     let mut portfolio = SolverPortfolio::new(options.mode, 1);
     pinv_with_casp(a, options, &mut portfolio)
+}
+
+pub fn pinv_with_audit(
+    a: &[Vec<f64>],
+    options: PinvOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<PinvResult, LinalgError> {
+    let fingerprint = matrix_fingerprint(a);
+    let result = pinv(a, options);
+    record_operation_audit(audit_ledger, &fingerprint, "pinv", options.mode, &result);
+    result
 }
 
 /// Solve Aᵀ x = b using LU factorization PA = LU => Aᵀ = Uᵀ Lᵀ P.
@@ -9097,6 +9245,44 @@ mod tests {
             }
             other => panic!("expected FailClosed for incompatible_shapes, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn det_with_audit_records_mode_decision() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let audit_ledger = sync_audit_ledger();
+
+        let result = det_with_audit(&a, RuntimeMode::Strict, true, &audit_ledger);
+        assert_eq!(result.expect("det"), -2.0);
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        let entry = &ledger.entries()[0];
+        match &entry.action {
+            AuditAction::ModeDecision { mode } => assert_eq!(*mode, RuntimeMode::Strict),
+            other => panic!("expected ModeDecision, got {other:?}"),
+        }
+        assert!(entry.outcome.contains("det"));
+    }
+
+    #[test]
+    fn det_with_audit_records_fail_closed_on_non_finite_input() {
+        let a = vec![vec![f64::NAN, 2.0], vec![3.0, 4.0]];
+        let audit_ledger = sync_audit_ledger();
+
+        let result = det_with_audit(&a, RuntimeMode::Hardened, false, &audit_ledger);
+        assert!(result.is_err());
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        let entry = &ledger.entries()[0];
+        match &entry.action {
+            AuditAction::FailClosed { reason } => {
+                assert!(reason.contains("non_finite"));
+            }
+            other => panic!("expected FailClosed, got {other:?}"),
+        }
+        assert!(entry.outcome.contains("det rejected"));
     }
 
     #[test]
