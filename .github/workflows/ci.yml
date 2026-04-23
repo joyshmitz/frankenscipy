@@ -46,6 +46,9 @@ jobs:
         timeout-minutes: 5
 
   # ── G4: Adversarial/Fuzz Regression ───────────────────────────────
+  # Runs the smoke test plus a 60-second replay of every fuzz corpus target.
+  # Per /testing-fuzzing hard rule 10: crash artifacts must become regression
+  # tests. This step replays the committed fuzz/seeds/ as a regression gate.
   g4-adversarial:
     name: "G4: adversarial regression"
     needs: g2-unit-tests
@@ -57,6 +60,10 @@ jobs:
         timeout-minutes: 5
 
   # ── G5: E2E Scenario Orchestration (parallel with G3/G4) ─────────
+  # Runs ALL e2e_* integration tests. NO '|| true' suppression — a genuine
+  # test failure fails the gate. Per bead frankenscipy-m0cn: previously
+  # '|| true' silently swallowed failures in G5, turning it into a log-only
+  # step; that is fixed here.
   g5-e2e:
     name: "G5: E2E scenarios"
     needs: g2-unit-tests
@@ -65,13 +72,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - run: |
-          for test in e2e_linalg e2e_ivp e2e_optimize e2e_sparse e2e_fft e2e_special e2e_casp; do
+          set -e
+          for test in e2e_casp e2e_cluster e2e_fft e2e_interpolate e2e_io \
+                      e2e_ivp e2e_linalg e2e_ndimage e2e_optimize \
+                      e2e_orchestrator e2e_signal e2e_sparse e2e_spatial \
+                      e2e_special e2e_stats; do
             echo "=== Running $test ==="
-            cargo test -p fsci-conformance --test "$test" -- --nocapture || true
+            cargo test -p fsci-conformance --test "$test" -- --nocapture
           done
-        timeout-minutes: 15
+        timeout-minutes: 25
 
   # ── G6: Performance Regression (parallel) ─────────────────────────
+  # Runs perf_* targets with real failure propagation (no '|| true').
   g6-perf:
     name: "G6: perf regression"
     needs: g2-unit-tests
@@ -80,9 +92,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - run: |
+          set -e
           for test in perf_linalg perf_ivp perf_arrayapi; do
             echo "=== Running $test ==="
-            cargo test -p fsci-conformance --test "$test" -- --nocapture || true
+            cargo test -p fsci-conformance --test "$test" -- --nocapture
           done
         timeout-minutes: 10
 

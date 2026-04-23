@@ -57,6 +57,10 @@ impl GateId {
     }
 
     /// The cargo command(s) this gate runs.
+    ///
+    /// Kept in sync with `.github/workflows/ci.yml`. When editing either file,
+    /// update both. Drift between this manifest and the workflow was the
+    /// precipitating issue in frankenscipy-m0cn.
     pub fn commands(self) -> &'static [&'static str] {
         match self {
             Self::G1Lint => &[
@@ -69,10 +73,28 @@ impl GateId {
                 "cargo test -p fsci-conformance --test schema_validation -- --nocapture",
             ],
             Self::G4Adversarial => &["cargo test -p fsci-conformance --test smoke -- --nocapture"],
-            Self::G5E2e => &["cargo test -p fsci-conformance --test e2e_linalg -- --nocapture"],
-            Self::G6Performance => {
-                &["cargo test -p fsci-conformance --test perf_linalg -- --nocapture"]
-            }
+            Self::G5E2e => &[
+                "cargo test -p fsci-conformance --test e2e_casp -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_cluster -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_fft -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_interpolate -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_io -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_ivp -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_linalg -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_ndimage -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_optimize -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_orchestrator -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_signal -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_sparse -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_spatial -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_special -- --nocapture",
+                "cargo test -p fsci-conformance --test e2e_stats -- --nocapture",
+            ],
+            Self::G6Performance => &[
+                "cargo test -p fsci-conformance --test perf_linalg -- --nocapture",
+                "cargo test -p fsci-conformance --test perf_ivp -- --nocapture",
+                "cargo test -p fsci-conformance --test perf_arrayapi -- --nocapture",
+            ],
             Self::G7Schema => {
                 &["cargo test -p fsci-conformance --test schema_validation -- --nocapture"]
             }
