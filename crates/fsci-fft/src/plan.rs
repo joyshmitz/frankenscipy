@@ -68,6 +68,22 @@ pub struct PlanMetadata {
 }
 
 /// Control-plane configuration for plan caching.
+///
+/// # Status
+///
+/// **Most fields are not consumed in production** (per frankenscipy-9vmw).
+/// The actual plan cache is an unbounded global `HashMap` at
+/// `SHARED_PLAN_CACHE`; `capacity`, `max_working_set_bytes`, and
+/// `admission_policy` are declared here and have `Default` values, but
+/// `store_shared_plan` inserts unconditionally regardless. Only
+/// `planning_strategy` is wired (read by transforms.rs when building a
+/// fingerprint).
+///
+/// The `PlanCacheBackend` trait similarly has zero `impl` blocks; it
+/// exists as a future-facing abstraction, not live infrastructure.
+///
+/// Until the real cache is implemented, treat these fields as
+/// telemetry / roadmap rather than enforced bounds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanCacheConfig {
     pub capacity: usize,
@@ -87,7 +103,14 @@ impl Default for PlanCacheConfig {
     }
 }
 
-/// Storage interface to decouple planning from cache implementation details.
+/// Storage interface to decouple planning from cache implementation
+/// details.
+///
+/// # Status
+///
+/// **Zero production implementations** (per frankenscipy-9vmw). The
+/// trait is public API but no type implements it; the shared cache
+/// uses a plain `HashMap` directly. Treat as roadmap scaffolding.
 pub trait PlanCacheBackend {
     fn lookup(&self, key: &PlanKey) -> Option<PlanMetadata>;
     fn store(&mut self, metadata: PlanMetadata) -> bool;
