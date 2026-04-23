@@ -497,15 +497,33 @@ impl TestLogEntry {
     }
 }
 
+/// Returns true if `actual` and `expected` are close within a combined
+/// absolute and relative tolerance, matching SciPy's
+/// `numpy.testing.assert_allclose(..., equal_nan=True)` semantics.
+///
+/// Per frankenscipy-gtcn: also handles NaN/Inf without the naive
+/// `(actual - expected).abs() <= atol + rtol * expected.abs()` pathology
+/// that returns false for (+Inf == +Inf) and (NaN == NaN).
+#[must_use]
+pub fn close_within_tol(actual: f64, expected: f64, atol: f64, rtol: f64) -> bool {
+    if actual.is_nan() && expected.is_nan() {
+        return true;
+    }
+    if actual.is_infinite() || expected.is_infinite() {
+        return actual == expected;
+    }
+    (actual - expected).abs() <= atol + rtol * expected.abs()
+}
+
 /// Assert two f64 values are close within combined absolute and relative tolerance.
 ///
-/// Uses the formula: |actual - expected| <= atol + rtol * |expected|
-///
-/// This matches SciPy's `numpy.testing.assert_allclose` semantics.
+/// Uses the formula: |actual - expected| <= atol + rtol * |expected|,
+/// with NaN-NaN and Inf-Inf handled per numpy.testing.assert_allclose
+/// (equal_nan=True). Per frankenscipy-gtcn.
 pub fn assert_close(actual: f64, expected: f64, atol: f64, rtol: f64) {
     let tol = atol + rtol * expected.abs();
     assert!(
-        (actual - expected).abs() <= tol,
+        close_within_tol(actual, expected, atol, rtol),
         "assert_close failed: actual={actual} expected={expected} diff={} tol={tol} (atol={atol}, rtol={rtol})",
         (actual - expected).abs()
     );
@@ -523,7 +541,7 @@ pub fn assert_close_slice(actual: &[f64], expected: &[f64], atol: f64, rtol: f64
     for (idx, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
         let tol = atol + rtol * e.abs();
         assert!(
-            (a - e).abs() <= tol,
+            close_within_tol(*a, *e, atol, rtol),
             "assert_close_slice[{idx}]: actual={a} expected={e} diff={} tol={tol} (atol={atol}, rtol={rtol})",
             (a - e).abs()
         );
@@ -548,7 +566,7 @@ pub fn assert_close_matrix(actual: &[Vec<f64>], expected: &[Vec<f64>], atol: f64
         for (col_idx, (a, e)) in a_row.iter().zip(e_row.iter()).enumerate() {
             let tol = atol + rtol * e.abs();
             assert!(
-                (a - e).abs() <= tol,
+                close_within_tol(*a, *e, atol, rtol),
                 "assert_close_matrix[{row_idx},{col_idx}]: actual={a} expected={e} diff={} tol={tol}",
                 (a - e).abs()
             );
@@ -556,11 +574,11 @@ pub fn assert_close_matrix(actual: &[Vec<f64>], expected: &[Vec<f64>], atol: f64
     }
 }
 
-/// Check if a value is within absolute tolerance of expected.
+/// Check if a value is within absolute tolerance of expected. Handles
+/// NaN-NaN and Inf-Inf correctly per frankenscipy-gtcn.
 #[must_use]
 pub fn within_tolerance(actual: f64, expected: f64, atol: f64, rtol: f64) -> bool {
-    let tol = atol + rtol * expected.abs();
-    (actual - expected).abs() <= tol
+    close_within_tol(actual, expected, atol, rtol)
 }
 
 #[cfg(test)]
@@ -802,6 +820,17 @@ mod tests {
     fn test_helpers_within_tolerance() {
         assert!(within_tolerance(1.0, 1.0, 1e-12, 1e-12));
         assert!(!within_tolerance(1.0, 2.0, 1e-12, 1e-12));
+    }
+
+    #[test]
+    fn within_tolerance_handles_nan_and_infinity() {
+        // Per frankenscipy-gtcn: (NaN, NaN) accepted; (Inf, Inf) accepted
+        // but sign-preserving; (Inf, -Inf) rejected.
+        assert!(within_tolerance(f64::NAN, f64::NAN, 1e-12, 1e-12));
+        assert!(within_tolerance(f64::INFINITY, f64::INFINITY, 1e-12, 1e-12));
+        assert!(within_tolerance(f64::NEG_INFINITY, f64::NEG_INFINITY, 1e-12, 1e-12));
+        assert!(!within_tolerance(f64::INFINITY, f64::NEG_INFINITY, 1e-12, 1e-12));
+        assert!(!within_tolerance(f64::NAN, 1.0, 1e-12, 1e-12));
     }
 
     #[test]
