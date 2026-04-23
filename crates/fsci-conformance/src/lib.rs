@@ -212,10 +212,39 @@ pub enum HarnessError {
     ArtifactIo { path: PathBuf, source: io::Error },
     #[error("raptorq sidecar generation failed: {0}")]
     RaptorQ(String),
+    #[error("serialization failed: {0}")]
+    Serialization(String),
+    #[error("audit ledger mutex poisoned: {0}")]
+    AuditLedgerPoisoned(String),
     #[error("linalg execution failed: {0}")]
     Linalg(#[from] LinalgError),
     #[error("optimize execution failed: {0}")]
     Optimize(#[from] OptError),
+    // Typed forwarding for the remaining fsci-* crate errors per
+    // frankenscipy-rkzk. Consumers can `matches!(err, HarnessError::Special(_))`
+    // instead of string-parsing a RaptorQ/Serialization blob.
+    #[error("special function error: {0}")]
+    Special(#[from] fsci_special::SpecialError),
+    #[error("fft execution failed: {0}")]
+    Fft(#[from] fsci_fft::FftError),
+    #[error("sparse execution failed: {0}")]
+    Sparse(#[from] fsci_sparse::SparseError),
+    #[error("integrate validation failed: {0}")]
+    Integrate(#[from] fsci_integrate::IntegrateValidationError),
+    #[error("cluster execution failed: {0}")]
+    Cluster(#[from] fsci_cluster::ClusterError),
+    #[error("spatial execution failed: {0}")]
+    Spatial(#[from] fsci_spatial::SpatialError),
+    #[error("signal execution failed: {0}")]
+    Signal(#[from] fsci_signal::SignalError),
+    #[error("array-api execution failed: {0}")]
+    ArrayApi(#[from] fsci_arrayapi::ArrayApiError),
+    #[error("interpolate execution failed: {0}")]
+    Interpolate(#[from] fsci_interpolate::InterpError),
+    #[error("ndimage execution failed: {0}")]
+    Ndimage(#[from] fsci_ndimage::NdimageError),
+    #[error("io execution failed: {0}")]
+    Io(#[from] fsci_io::IoError),
     #[error("failed to launch python oracle `{python_bin}`: {source}")]
     PythonLaunch {
         python_bin: String,
