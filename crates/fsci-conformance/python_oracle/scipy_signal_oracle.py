@@ -105,15 +105,17 @@ def _run_case(case: Dict[str, Any], np: Any, signal: Any, windows: Any) -> Dict[
             "error": f"unsupported function: {function}",
         }
 
-    except (ArithmeticError, OverflowError, TypeError, ValueError, KeyError, IndexError) as exc:
-        return {
-            "case_id": case_id,
-            "status": "error",
-            "result_kind": "exception",
-            "result": {},
-            "error": str(exc),
-        }
-    except Exception as exc:  # noqa: BLE001
+    # See br-p3be: narrow catch. RuntimeError covers scipy.signal-raised
+    # filter/window failures without swallowing MemoryError or OSError.
+    except (
+        ArithmeticError,
+        OverflowError,
+        TypeError,
+        ValueError,
+        KeyError,
+        IndexError,
+        RuntimeError,
+    ) as exc:
         return {
             "case_id": case_id,
             "status": "error",

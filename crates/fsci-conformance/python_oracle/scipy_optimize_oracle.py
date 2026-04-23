@@ -442,13 +442,22 @@ def _run_case(case: Dict[str, Any], optimize: Any, np: Any) -> Dict[str, Any]:
                 "error": f"unsupported operation: {operation}",
             }
 
-    except Exception as exc:  # noqa: BLE001
+    # br-p3be: narrow catch; let MemoryError / OSError propagate.
+    except (
+        ArithmeticError,
+        OverflowError,
+        TypeError,
+        ValueError,
+        KeyError,
+        IndexError,
+        RuntimeError,
+    ) as exc:
         return {
             "case_id": case_id,
             "status": "error",
             "result_kind": "exception",
             "result": {},
-            "error": str(exc),
+            "error": f"{type(exc).__name__}: {exc}",
         }
 
 

@@ -118,15 +118,19 @@ def _run_case(case: Dict[str, Any], np: Any, spatial: Any, distance: Any) -> Dic
             "error": f"unsupported function: {function}",
         }
 
-    except (ArithmeticError, OverflowError, TypeError, ValueError, KeyError, IndexError) as exc:
-        return {
-            "case_id": case_id,
-            "status": "error",
-            "result_kind": "exception",
-            "result": {},
-            "error": str(exc),
-        }
-    except Exception as exc:  # noqa: BLE001 — QhullError and other scipy-raised errors are not ABC-classified
+    # RuntimeError catches scipy.spatial._qhull.QhullError (RuntimeError
+    # subclass) for degenerate halfspace/convex-hull inputs. We deliberately
+    # do NOT catch bare Exception — MemoryError/RecursionError/OSError
+    # indicate oracle-side failure and should propagate per br-p3be.
+    except (
+        ArithmeticError,
+        OverflowError,
+        TypeError,
+        ValueError,
+        KeyError,
+        IndexError,
+        RuntimeError,
+    ) as exc:
         return {
             "case_id": case_id,
             "status": "error",
