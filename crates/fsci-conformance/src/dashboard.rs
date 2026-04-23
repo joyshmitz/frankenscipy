@@ -37,6 +37,35 @@ impl DashboardPanel {
     }
 }
 
+/// How a parity_report.json was produced. Derived from the per-packet
+/// artifact set so dashboard consumers can distinguish oracle-backed
+/// from self-check reports without having to open each file. Per
+/// frankenscipy-7h9o.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportSource {
+    /// No parity_report.json present for this packet.
+    None,
+    /// oracle_capture.json exists alongside the report AND has no sibling
+    /// oracle_capture.error.txt — report values were compared against a
+    /// scipy-produced reference.
+    OracleBacked,
+    /// oracle_capture.error.txt is present (scipy probe failed) OR the
+    /// oracle_capture.json is missing entirely — report values were
+    /// compared against fixture-embedded expected values only. Equivalent
+    /// to the self-check lane in ivg5's taxonomy.
+    SelfCheck,
+}
+
+impl ReportSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::OracleBacked => "oracle",
+            Self::SelfCheck => "self-check",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PacketArtifactPresence {
     pub packet_id: String,
@@ -45,6 +74,11 @@ pub struct PacketArtifactPresence {
     pub has_decode_proof: bool,
     pub has_oracle_capture: bool,
     pub has_oracle_error: bool,
+    /// Classification of how the parity_report.json (if any) was produced.
+    /// Per frankenscipy-7h9o: previously the dashboard showed pass/fail
+    /// counts without distinguishing oracle-verified vs self-check. This
+    /// field surfaces that distinction so consumers can tell at a glance.
+    pub report_source: ReportSource,
 }
 
 impl PacketArtifactPresence {
@@ -57,7 +91,20 @@ impl PacketArtifactPresence {
             has_decode_proof: false,
             has_oracle_capture: false,
             has_oracle_error: false,
+            report_source: ReportSource::None,
         }
+    }
+
+    /// Derive the report_source from the currently-populated flags. Must
+    /// be called after all has_* fields have been set.
+    pub fn classify_report_source(&mut self) {
+        self.report_source = if !self.has_report {
+            ReportSource::None
+        } else if self.has_oracle_capture && !self.has_oracle_error {
+            ReportSource::OracleBacked
+        } else {
+            ReportSource::SelfCheck
+        };
     }
 }
 
@@ -71,6 +118,15 @@ pub struct DashboardMetrics {
     pub packets_with_sidecar: usize,
     pub packets_with_decode_proof: usize,
     pub packets_with_oracle_capture: usize,
+    /// Packets whose parity_report.json was produced via an oracle-backed
+    /// comparison path (oracle_capture.json present, no error sidecar).
+    /// Per frankenscipy-7h9o: previously the dashboard reported
+    /// pass/fail counts uniformly; now consumers can see that a 100%
+    /// pass on a packet without an oracle backing is self-check only.
+    pub packets_oracle_backed: usize,
+    /// Packets whose parity_report.json was produced via self-check
+    /// (no oracle, or oracle_capture.error.txt present).
+    pub packets_self_check: usize,
 }
 
 type DiscoveryResult = (Vec<PacketReport>, Vec<PacketArtifactPresence>, Vec<String>);
@@ -240,6 +296,17 @@ impl DashboardState {
             .filter(|presence| presence.has_oracle_capture)
             .count();
 
+        let packets_oracle_backed = self
+            .artifact_presence
+            .iter()
+            .filter(|presence| presence.report_source == ReportSource::OracleBacked)
+            .count();
+        let packets_self_check = self
+            .artifact_presence
+            .iter()
+            .filter(|presence| presence.report_source == ReportSource::SelfCheck)
+            .count();
+
         DashboardMetrics {
             total_packets,
             failed_packets,
@@ -249,6 +316,8 @@ impl DashboardState {
             packets_with_sidecar,
             packets_with_decode_proof,
             packets_with_oracle_capture,
+            packets_oracle_backed,
+            packets_self_check,
         }
     }
 
@@ -374,6 +443,7 @@ fn discover_reports_best_effort(artifact_root: &Path) -> Result<DiscoveryResult,
         packet_presence.has_decode_proof = decode_proof_path.exists();
         packet_presence.has_oracle_capture = oracle_capture_path.exists();
         packet_presence.has_oracle_error = oracle_error_path.exists();
+        packet_presence.classify_report_source();
 
         if report_path.exists() {
             match fs::read_to_string(&report_path) {
