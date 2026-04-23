@@ -2566,6 +2566,8 @@ pub struct RbfInterpolator {
     dim: usize,
 }
 
+const MAX_RBF_POINTS: usize = 4096;
+
 impl RbfInterpolator {
     /// Create a new RBF interpolator.
     ///
@@ -2593,6 +2595,18 @@ impl RbfInterpolator {
                 y_len: values.len(),
             });
         }
+        if n > MAX_RBF_POINTS {
+            return Err(InterpError::InvalidArgument {
+                detail: format!(
+                    "RbfInterpolator point count {n} exceeds dense solver safety bound {MAX_RBF_POINTS}"
+                ),
+            });
+        }
+        if !epsilon.is_finite() || epsilon <= 0.0 {
+            return Err(InterpError::InvalidArgument {
+                detail: "RbfInterpolator epsilon must be finite and positive".to_string(),
+            });
+        }
         let dim = points[0].len();
         if dim == 0 {
             return Err(InterpError::InvalidArgument {
@@ -2608,6 +2622,14 @@ impl RbfInterpolator {
                     ),
                 });
             }
+            if point.iter().any(|coord| !coord.is_finite()) {
+                return Err(InterpError::NonFiniteX);
+            }
+        }
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err(InterpError::InvalidArgument {
+                detail: "RbfInterpolator values must be finite".to_string(),
+            });
         }
 
         // Build the RBF matrix: Φ[i,j] = φ(||points[i] - points[j]||)
@@ -5011,6 +5033,42 @@ mod tests {
     fn rbf_empty_rejected() {
         let err = RbfInterpolator::new(&[], &[], RbfKernel::Gaussian, 1.0).expect_err("empty");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn rbf_rejects_non_finite_points() {
+        let points = vec![vec![0.0], vec![f64::NAN]];
+        let values = vec![0.0, 1.0];
+        let err =
+            RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect_err("nan");
+        assert_eq!(err, InterpError::NonFiniteX);
+    }
+
+    #[test]
+    fn rbf_rejects_non_finite_values() {
+        let points = vec![vec![0.0], vec![1.0]];
+        let values = vec![0.0, f64::INFINITY];
+        let err =
+            RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect_err("inf");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn rbf_rejects_non_finite_epsilon() {
+        let points = vec![vec![0.0], vec![1.0]];
+        let values = vec![0.0, 1.0];
+        let err =
+            RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, f64::NAN).expect_err("nan");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn rbf_rejects_excessive_point_count() {
+        let points: Vec<Vec<f64>> = (0..=MAX_RBF_POINTS).map(|i| vec![i as f64]).collect();
+        let values = vec![0.0; points.len()];
+        let err = RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0)
+            .expect_err("safety bound");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
     }
 
     #[test]
