@@ -1,3 +1,18 @@
+/// Planned integration point between fsci-arrayapi and a consumer crate.
+///
+/// # Status
+///
+/// **Aspirational declarations, not live integration** (per
+/// frankenscipy-8ghr). The `consumer_crate` entries below name
+/// fsci-linalg / fsci-opt / fsci-sparse as consumers, but none of those
+/// three crates currently has a Cargo dependency on fsci-arrayapi
+/// (verified by grep). The actual importer is fsci-conformance for its
+/// P2C-011 Array API tests. Treat this module as design intent /
+/// roadmap, not as a live contract that can be relied on.
+///
+/// When a `consumer_crate` here actually adds fsci-arrayapi to its
+/// Cargo.toml and routes input normalization through its modules,
+/// update this docstring to declare the seam "live".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IntegrationSeam {
     pub consumer_crate: &'static str,
