@@ -39,6 +39,36 @@ fn clamp_dimension(raw: u8) -> usize {
     usize::from(raw) % (MAX_DIM + 1)
 }
 
+/// Check A @ A_inv ≈ I with a scale-aware loose bound. Returns true
+/// when the product is within tolerance or when numerical issues
+/// prevent adjudication (non-finite intermediates).
+fn check_inverse_identity(a: &[Vec<f64>], a_inv: &[Vec<f64>]) -> bool {
+    let n = a.len();
+    if n == 0 || a_inv.len() != n || a[0].len() != n || a_inv[0].len() != n {
+        return true;
+    }
+    let mut max_off = 0.0_f64;
+    let mut max_diag = 0.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            let mut prod = 0.0_f64;
+            for k in 0..n {
+                prod += a[i][k] * a_inv[k][j];
+            }
+            if !prod.is_finite() {
+                return true;
+            }
+            if i == j {
+                max_diag = max_diag.max((prod - 1.0).abs());
+            } else {
+                max_off = max_off.max(prod.abs());
+            }
+        }
+    }
+    let max_err = max_off.max(max_diag);
+    max_err < 1e-3
+}
+
 fuzz_target!(|input: FactorizationInput| {
     let rows = clamp_dimension(input.rows);
     let cols = clamp_dimension(input.cols);
@@ -50,7 +80,7 @@ fuzz_target!(|input: FactorizationInput| {
     let a = build_matrix(rows, cols, &input.values);
     let b = build_vector(rows, &input.rhs);
 
-    let _ = inv(
+    if let Ok(inv_result) = inv(
         &a,
         InvOptions {
             mode,
@@ -58,7 +88,17 @@ fuzz_target!(|input: FactorizationInput| {
             assume_a: None,
             lower: false,
         },
-    );
+    ) && rows == cols
+        && rows > 0
+        && a.iter().flatten().all(|v| v.is_finite())
+        && inv_result.inverse.iter().flatten().all(|v| v.is_finite())
+    {
+        // br-66c2: metamorphic oracle — A @ A_inv ≈ I.
+        assert!(
+            check_inverse_identity(&a, &inv_result.inverse),
+            "inv returned Ok but A @ A_inv diverges from identity"
+        );
+    }
     let _ = det(&a, mode, input.check_finite);
     let _ = lstsq(
         &a,
