@@ -34,6 +34,42 @@ impl std::fmt::Display for StatsError {
 
 impl std::error::Error for StatsError {}
 
+/// Error type for `ContinuousDistribution::try_fit` — the non-panicking
+/// counterpart to `fit()`. Callers that cannot tolerate a panic on
+/// distributions without MLE support should use `try_fit` and match on
+/// this error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FitError {
+    /// MLE is not implemented for this distribution. The default
+    /// `try_fit` returns this variant; individual distributions can
+    /// override to provide a closed-form or numerical MLE.
+    NotImplemented { distribution: &'static str },
+    /// The provided sample is too small (or degenerate) to fit.
+    InsufficientData { required: usize, actual: usize },
+    /// The sample violates a distribution-specific support constraint
+    /// (e.g. negative values for HalfNormal, data not in [0,1] for Beta).
+    UnsupportedData(String),
+    /// Numerical fitting did not converge within the configured budget.
+    NonConvergent(String),
+}
+
+impl std::fmt::Display for FitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotImplemented { distribution } => {
+                write!(f, "fit not implemented for {distribution}")
+            }
+            Self::InsufficientData { required, actual } => {
+                write!(f, "insufficient data: need {required}, got {actual}")
+            }
+            Self::UnsupportedData(msg) => write!(f, "unsupported data: {msg}"),
+            Self::NonConvergent(msg) => write!(f, "fit did not converge: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for FitError {}
+
 /// Trait for continuous probability distributions.
 pub trait ContinuousDistribution {
     /// Probability density function.
@@ -123,7 +159,9 @@ pub trait ContinuousDistribution {
     /// `entropy`/`skewness`/`kurtosis` defaults which return NaN.
     /// Callers working generically over distributions must either:
     ///   (a) restrict to distribution types that override `fit`, or
-    ///   (b) wrap invocations in `std::panic::catch_unwind`.
+    ///   (b) wrap invocations in `std::panic::catch_unwind`, or
+    ///   (c) use [`Self::try_fit`] which returns a typed error instead
+    ///       of panicking (br-d692).
     ///
     /// Consider this contract unstable: the asymmetry (panic vs NaN)
     /// is tracked for consolidation.
@@ -132,6 +170,24 @@ pub trait ContinuousDistribution {
         Self: Sized,
     {
         unimplemented!("fit method not implemented for this distribution")
+    }
+
+    /// Non-panicking MLE fit. Returns `Err(FitError::NotImplemented { … })`
+    /// by default; distributions override to provide a closed-form or
+    /// numerical fit. Callers that must not panic (generic driver code,
+    /// fuzz harnesses, library consumers) should use `try_fit` and match
+    /// on `FitError` variants.
+    ///
+    /// When overriding, return the same typed errors used by other
+    /// distributions — `InsufficientData` for degenerate samples,
+    /// `UnsupportedData` for values outside the support.
+    fn try_fit(_data: &[f64]) -> Result<Self, FitError>
+    where
+        Self: Sized,
+    {
+        Err(FitError::NotImplemented {
+            distribution: std::any::type_name::<Self>(),
+        })
     }
 
     /// Differential entropy H(X) = -∫ f(x) log f(x) dx.
@@ -473,6 +529,21 @@ impl ContinuousDistribution for Normal {
             loc: mean,
             scale: var.sqrt(),
         }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|v| !v.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "Normal::fit: non-finite samples".to_owned(),
+            ));
+        }
+        Ok(Self::fit(data))
     }
 
     fn entropy(&self) -> f64 {
@@ -1003,6 +1074,21 @@ impl ContinuousDistribution for Uniform {
         }
     }
 
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|v| !v.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "Uniform::fit: non-finite samples".to_owned(),
+            ));
+        }
+        Ok(Self::fit(data))
+    }
+
     fn entropy(&self) -> f64 {
         self.scale.ln()
     }
@@ -1119,6 +1205,26 @@ impl ContinuousDistribution for Exponential {
         }
 
         Self { lambda: 1.0 / mean }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "Exponential::fit: non-finite samples".to_owned(),
+            ));
+        }
+        if data.iter().any(|&x| x < 0.0) {
+            return Err(FitError::UnsupportedData(
+                "Exponential::fit: negative sample (support is x >= 0)".to_owned(),
+            ));
+        }
+        Ok(Self::fit(data))
     }
 
     fn entropy(&self) -> f64 {
@@ -3809,6 +3915,27 @@ impl ContinuousDistribution for Laplace {
             loc,
             scale: if scale > 0.0 { scale } else { f64::NAN },
         }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|v| !v.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "Laplace::fit: non-finite samples".to_owned(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.scale.is_finite() || fitted.scale <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "Laplace::fit: degenerate sample (all values equal median)".to_owned(),
+            ));
+        }
+        Ok(fitted)
     }
 
     fn entropy(&self) -> f64 {
@@ -19899,6 +20026,68 @@ mod tests {
         let data = [0.0, 1.0, 2.0, 3.0, 4.0];
         let e = Exponential::fit(&data);
         assert!((e.lambda - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_try_fit_default_returns_not_implemented() {
+        // br-d692: distributions without a closed-form MLE override
+        // must return FitError::NotImplemented from try_fit rather than
+        // panic via the legacy fit() default.
+        let data = [1.0, 2.0, 3.0];
+        let result = <Chi as ContinuousDistribution>::try_fit(&data);
+        match result {
+            Err(FitError::NotImplemented { distribution: _ }) => {}
+            Err(other) => panic!("expected NotImplemented, got err {other:?}"),
+            Ok(_) => panic!("expected NotImplemented, got Ok"),
+        }
+    }
+
+    #[test]
+    fn test_try_fit_rejects_empty_data() {
+        let err = Normal::try_fit(&[]).expect_err("empty data must error");
+        assert!(
+            matches!(
+                err,
+                FitError::InsufficientData {
+                    required: 1,
+                    actual: 0
+                }
+            ),
+            "expected InsufficientData, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_try_fit_rejects_nonfinite() {
+        let data = [1.0, 2.0, f64::NAN, 4.0];
+        let err = Normal::try_fit(&data).expect_err("NaN must error");
+        assert!(
+            matches!(err, FitError::UnsupportedData(_)),
+            "expected UnsupportedData, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_try_fit_exponential_rejects_negative() {
+        let data = [1.0, -0.5, 2.0];
+        let err = Exponential::try_fit(&data).expect_err("negative sample must error");
+        assert!(matches!(err, FitError::UnsupportedData(msg) if msg.contains("negative")));
+    }
+
+    #[test]
+    fn test_try_fit_normal_matches_fit() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let fitted = Normal::fit(&data);
+        let try_fitted = Normal::try_fit(&data).expect("try_fit must succeed on clean data");
+        assert_eq!(fitted.loc, try_fitted.loc);
+        assert_eq!(fitted.scale, try_fitted.scale);
+    }
+
+    #[test]
+    fn test_try_fit_laplace_detects_degenerate() {
+        let data = [7.0, 7.0, 7.0];
+        let err = Laplace::try_fit(&data).expect_err("all-equal must error");
+        assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
     #[test]
