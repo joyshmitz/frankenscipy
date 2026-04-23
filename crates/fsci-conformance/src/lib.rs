@@ -103,9 +103,11 @@ use fsci_special::{
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::any::Any;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -1615,7 +1617,7 @@ pub fn run_validate_tol_packet(
                 (pass, msg)
             }
             (ExpectedOutcome::Error { error }, Err(actual)) => {
-                let pass = error == &actual.to_string();
+                let pass = matches_error_contract(&actual.to_string(), error);
                 let msg = if pass {
                     "error matched expected contract".to_owned()
                 } else {
@@ -7328,7 +7330,7 @@ fn compare_optimize_case_differential(
             (pass, msg, None, None)
         }
         (OptimizeExpectedOutcome::Error { error }, Err(actual)) => {
-            let pass = error == &actual.to_string();
+            let pass = matches_error_contract(&actual.to_string(), error);
             let msg = if pass {
                 "error matched".to_owned()
             } else {
@@ -7453,7 +7455,7 @@ fn compare_linalg_case(
             (pass, msg)
         }
         (LinalgExpectedOutcome::Error { error }, Err(actual)) => {
-            let pass = error == &actual.to_string();
+            let pass = matches_error_contract(&actual.to_string(), error);
             let msg = if pass {
                 "linalg error matched expected contract".to_owned()
             } else {
@@ -7473,6 +7475,29 @@ fn allclose_scalar(actual: f64, expected: f64, atol: f64, rtol: f64) -> bool {
         return actual == expected;
     }
     (actual - expected).abs() <= atol + rtol * expected.abs()
+}
+
+/// Match a fixture-declared error-contract string against the actual Rust
+/// Display output of an error. Uses normalized substring match (case-fold,
+/// whitespace collapsed) rather than exact equality, so rewording the error
+/// message (e.g. "must be non-negative" → "must be >= 0") doesn't flip a
+/// previously-passing conformance case to fail.
+///
+/// Per /testing-conformance-harnesses anti-pattern 6 ("Check error message
+/// strings"): checking error types/categories is preferred, but until all
+/// fixtures are migrated to typed error_kind fields, this substring rule
+/// keeps the blast radius of harmless rewording contained. See
+/// frankenscipy-gnun.
+fn matches_error_contract(actual: &str, expected: &str) -> bool {
+    let normalize = |s: &str| -> String {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let n_actual = normalize(actual);
+    let n_expected = normalize(expected);
+    n_expected.is_empty() || n_actual == n_expected || n_actual.contains(&n_expected)
 }
 
 fn allclose_vec(actual: &[f64], expected: &[f64], atol: f64, rtol: f64) -> bool {
@@ -7929,6 +7954,59 @@ fn emit_differential_audit_ledger_for_fixture(
     })
 }
 
+fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
+    match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(message) => (*message).to_owned(),
+            Err(_) => "non-string panic payload".to_owned(),
+        },
+    }
+}
+
+fn run_case_with_panic_capture<F>(
+    case_id: &str,
+    oracle_status: &OracleStatus,
+    audit_ledger: Option<&std::sync::Mutex<AuditLedger>>,
+    run: F,
+) -> DifferentialCaseResult
+where
+    F: FnOnce() -> (bool, String, Option<f64>, Option<ToleranceUsed>),
+{
+    match panic::catch_unwind(AssertUnwindSafe(run)) {
+        Ok((passed, message, max_diff, tolerance_used)) => DifferentialCaseResult {
+            case_id: case_id.to_owned(),
+            passed,
+            message,
+            max_diff,
+            tolerance_used,
+            oracle_status: oracle_status.clone(),
+        },
+        Err(payload) => {
+            if let Some(ledger) = audit_ledger {
+                ledger.clear_poison();
+            }
+            DifferentialCaseResult {
+                case_id: case_id.to_owned(),
+                passed: false,
+                message: format!("PANIC: {}", panic_payload_message(payload)),
+                max_diff: None,
+                tolerance_used: None,
+                oracle_status: oracle_status.clone(),
+            }
+        }
+    }
+}
+
+fn recover_sync_audit_ledger<'a>(
+    ledger: &'a std::sync::Mutex<AuditLedger>,
+) -> std::sync::MutexGuard<'a, AuditLedger> {
+    match ledger.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 /// Run a differential conformance test against a fixture file.
 ///
 /// This is the generic entry point for the conformance harness. It:
@@ -8008,72 +8086,68 @@ fn run_differential_validate_tol(
     let audit_ledger = integrate_sync_audit_ledger();
 
     for case in &fixture.cases {
-        let outcome = validate_tol_with_audit(
-            case.rtol.clone().into(),
-            case.atol.clone().into(),
-            case.n,
-            case.mode,
-            Some(&audit_ledger),
-        );
+        per_case_results.push(run_case_with_panic_capture(
+            &case.case_id,
+            &oracle_status,
+            Some(audit_ledger.as_ref()),
+            || {
+                let outcome = validate_tol_with_audit(
+                    case.rtol.clone().into(),
+                    case.atol.clone().into(),
+                    case.n,
+                    case.mode,
+                    Some(&audit_ledger),
+                );
 
-        let (passed, message, max_diff, tolerance_used) = match (&case.expected, outcome) {
-            (
-                ExpectedOutcome::Ok {
-                    rtol,
-                    atol,
-                    warning_rtol_clamped,
-                },
-                Ok(actual),
-            ) => {
-                let actual_warning = !actual.warnings.is_empty();
-                let expected_rtol: ToleranceValue = rtol.clone().into();
-                let expected_atol: ToleranceValue = atol.clone().into();
-                let pass = actual.rtol == expected_rtol
-                    && actual.atol == expected_atol
-                    && actual_warning == *warning_rtol_clamped;
-                let msg = if pass {
-                    "tolerance contract matched".to_owned()
-                } else {
-                    format!(
-                        "tolerance mismatch: expected rtol={expected_rtol:?}, atol={expected_atol:?}, warning={warning_rtol_clamped}; got rtol={:?}, atol={:?}, warning={actual_warning}",
-                        actual.rtol, actual.atol
-                    )
-                };
-                (pass, msg, None, None)
-            }
-            (ExpectedOutcome::Error { error }, Err(actual)) => {
-                let pass = error == &actual.to_string();
-                let msg = if pass {
-                    "error matched".to_owned()
-                } else {
-                    format!("error mismatch: expected `{error}`, got `{actual}`")
-                };
-                (pass, msg, None, None)
-            }
-            (expected, result) => (
-                false,
-                format!("shape mismatch: expected {expected:?}, got {result:?}"),
-                None,
-                None,
-            ),
-        };
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id.clone(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+                match (&case.expected, outcome) {
+                    (
+                        ExpectedOutcome::Ok {
+                            rtol,
+                            atol,
+                            warning_rtol_clamped,
+                        },
+                        Ok(actual),
+                    ) => {
+                        let actual_warning = !actual.warnings.is_empty();
+                        let expected_rtol: ToleranceValue = rtol.clone().into();
+                        let expected_atol: ToleranceValue = atol.clone().into();
+                        let pass = actual.rtol == expected_rtol
+                            && actual.atol == expected_atol
+                            && actual_warning == *warning_rtol_clamped;
+                        let msg = if pass {
+                            "tolerance contract matched".to_owned()
+                        } else {
+                            format!(
+                                "tolerance mismatch: expected rtol={expected_rtol:?}, atol={expected_atol:?}, warning={warning_rtol_clamped}; got rtol={:?}, atol={:?}, warning={actual_warning}",
+                                actual.rtol, actual.atol
+                            )
+                        };
+                        (pass, msg, None, None)
+                    }
+                    (ExpectedOutcome::Error { error }, Err(actual)) => {
+                        let pass = matches_error_contract(&actual.to_string(), error);
+                        let msg = if pass {
+                            "error matched".to_owned()
+                        } else {
+                            format!("error mismatch: expected `{error}`, got `{actual}`")
+                        };
+                        (pass, msg, None, None)
+                    }
+                    (expected, result) => (
+                        false,
+                        format!("shape mismatch: expected {expected:?}, got {result:?}"),
+                        None,
+                        None,
+                    ),
+                }
+            },
+        ));
     }
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
     {
-        let ledger = audit_ledger
-            .lock()
-            .map_err(|error| HarnessError::RaptorQ(format!("audit ledger poisoned: {error}")))?;
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
         let _ =
             emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
@@ -8106,26 +8180,21 @@ fn run_differential_linalg(
     let audit_ledger = linalg_sync_audit_ledger();
 
     for case in &fixture.cases {
-        let observed = execute_linalg_case_with_differential_audit(case, &audit_ledger);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_linalg_case_differential(case.expected(), &observed);
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            Some(audit_ledger.as_ref()),
+            || {
+                let observed = execute_linalg_case_with_differential_audit(case, &audit_ledger);
+                compare_linalg_case_differential(case.expected(), &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
     {
-        let ledger = audit_ledger
-            .lock()
-            .map_err(|error| HarnessError::RaptorQ(format!("audit ledger poisoned: {error}")))?;
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
         let _ =
             emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
@@ -8157,17 +8226,15 @@ fn run_differential_array_api(
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
-        let observed = execute_array_api_case(case);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_array_api_case_differential(case, &observed);
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            None,
+            || {
+                let observed = execute_array_api_case(case);
+                compare_array_api_case_differential(case, &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
@@ -8200,18 +8267,15 @@ fn run_differential_optimize(
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
-        let observed = execute_optimize_case(case);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_optimize_case_differential(case.expected(), &observed);
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            None,
+            || {
+                let observed = execute_optimize_case(case);
+                compare_optimize_case_differential(case.expected(), &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
@@ -8244,18 +8308,15 @@ fn run_differential_special(
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
-        let observed = execute_special_case(case);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_special_case_differential(case, &observed);
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            None,
+            || {
+                let observed = execute_special_case(case);
+                compare_special_case_differential(case, &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
@@ -8288,18 +8349,15 @@ fn run_differential_integrate(
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
-        let observed = execute_integrate_case(case);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_integrate_case_differential(case, &observed);
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            None,
+            || {
+                let observed = execute_integrate_case(case);
+                compare_integrate_case_differential(case, &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
@@ -8368,30 +8426,28 @@ fn run_differential_stats(
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
-        let observed = execute_stats_case(case);
-        let (passed, message, max_diff, tolerance_used) = match oracle_cases.as_ref() {
-            Some(cases) => match cases.get(case.case_id()) {
-                Some(oracle_case) => {
-                    compare_stats_case_against_oracle(case, oracle_case, &observed)
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            None,
+            || {
+                let observed = execute_stats_case(case);
+                match oracle_cases.as_ref() {
+                    Some(cases) => match cases.get(case.case_id()) {
+                        Some(oracle_case) => {
+                            compare_stats_case_against_oracle(case, oracle_case, &observed)
+                        }
+                        None => (
+                            false,
+                            format!("oracle capture missing stats case `{}`", case.case_id()),
+                            None,
+                            None,
+                        ),
+                    },
+                    None => compare_stats_case_differential(case, &observed),
                 }
-                None => (
-                    false,
-                    format!("oracle capture missing stats case `{}`", case.case_id()),
-                    None,
-                    None,
-                ),
             },
-            None => compare_stats_case_differential(case, &observed),
-        };
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        ));
     }
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
@@ -8424,18 +8480,15 @@ fn run_differential_signal(
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
-        let observed = execute_signal_case(case);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_signal_case_differential(case, &observed);
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            None,
+            || {
+                let observed = execute_signal_case(case);
+                compare_signal_case_differential(case, &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
@@ -8468,18 +8521,15 @@ fn run_differential_spatial(
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
-        let observed = execute_spatial_case(case);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_spatial_case_differential(case, &observed);
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            None,
+            || {
+                let observed = execute_spatial_case(case);
+                compare_spatial_case_differential(case, &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results
@@ -8515,18 +8565,15 @@ fn run_differential_cluster(
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
-        let observed = execute_cluster_case(case);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_cluster_case_differential(case, &observed);
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            None,
+            || {
+                let observed = execute_cluster_case(case);
+                compare_cluster_case_differential(case, &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results
@@ -8562,18 +8609,15 @@ fn run_differential_casp(
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
 
     for case in &fixture.cases {
-        let observed = execute_casp_case(case);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_casp_case_differential(case, &observed);
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            None,
+            || {
+                let observed = execute_casp_case(case);
+                compare_casp_case_differential(case, &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results
@@ -8610,18 +8654,15 @@ fn run_differential_fft(
     let audit_ledger = fft_sync_audit_ledger();
 
     for case in &fixture.cases {
-        let observed = execute_fft_case_with_differential_audit(case, &audit_ledger);
-        let (passed, message, max_diff, tolerance_used) =
-            compare_fft_case_differential(case, &observed);
-
-        per_case_results.push(DifferentialCaseResult {
-            case_id: case.case_id().to_owned(),
-            passed,
-            message,
-            max_diff,
-            tolerance_used,
-            oracle_status: oracle_status.clone(),
-        });
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            Some(audit_ledger.as_ref()),
+            || {
+                let observed = execute_fft_case_with_differential_audit(case, &audit_ledger);
+                compare_fft_case_differential(case, &observed)
+            },
+        ));
     }
 
     let pass_count = per_case_results
@@ -8630,14 +8671,9 @@ fn run_differential_fft(
         .count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
 
-    if let Ok(ledger) = audit_ledger.lock() {
-        if !ledger.is_empty() {
-            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
-        }
-    } else {
-        return Err(HarnessError::RaptorQ(
-            "fft audit ledger poisoned".to_owned(),
-        ));
+    let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+    if !ledger.is_empty() {
+        emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -11507,7 +11543,7 @@ fn compare_linalg_case_differential(
             )
         }
         (LinalgExpectedOutcome::Error { error }, Err(actual)) => {
-            let pass = error == &actual.to_string();
+            let pass = matches_error_contract(&actual.to_string(), error);
             let msg = if pass {
                 "error matched".to_owned()
             } else {
@@ -11893,6 +11929,38 @@ mod tests {
         assert!(report.cases_run >= 1, "expected at least one executed case");
         assert_eq!(report.failed_cases, 0, "smoke packet should pass");
         assert!(report.strict_mode);
+    }
+
+    #[test]
+    fn matches_error_contract_normalizes_case_and_whitespace() {
+        // Exact match still passes.
+        assert!(super::matches_error_contract(
+            "tolerance must be non-negative",
+            "tolerance must be non-negative"
+        ));
+        // Case-insensitive.
+        assert!(super::matches_error_contract(
+            "Tolerance must be non-negative",
+            "tolerance must be non-negative"
+        ));
+        // Whitespace-normalized.
+        assert!(super::matches_error_contract(
+            "tolerance   must\tbe  non-negative",
+            "tolerance must be non-negative"
+        ));
+        // Expected as substring of actual (e.g., actual has a prefix like
+        // "IoError(InvalidArgument {...}): ...").
+        assert!(super::matches_error_contract(
+            "LinalgError::SingularMatrix: matrix is singular",
+            "matrix is singular"
+        ));
+        // Empty expected passes (used for 'any error').
+        assert!(super::matches_error_contract("whatever", ""));
+        // Non-overlapping text fails.
+        assert!(!super::matches_error_contract(
+            "tolerance must be positive",
+            "domain error"
+        ));
     }
 
     #[test]
@@ -15295,6 +15363,45 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let oracle = default_test_oracle();
         let result = run_differential_test(&fixture_path, &oracle);
         assert!(result.is_err(), "unknown family should produce an error");
+    }
+
+    #[test]
+    fn differential_case_runner_catches_panics_and_continues() {
+        let oracle_status = OracleStatus::Available;
+        let results = vec![
+            super::run_case_with_panic_capture("case-1", &oracle_status, None, || {
+                (true, "ok".to_owned(), Some(0.0), None)
+            }),
+            super::run_case_with_panic_capture("case-2", &oracle_status, None, || panic!("boom")),
+            super::run_case_with_panic_capture("case-3", &oracle_status, None, || {
+                (true, "still running".to_owned(), None, None)
+            }),
+        ];
+
+        assert!(results[0].passed);
+        assert!(!results[1].passed);
+        assert!(results[1].message.starts_with("PANIC: boom"));
+        assert!(results[2].passed);
+    }
+
+    #[test]
+    fn differential_case_runner_clears_poisoned_audit_ledgers_after_panic() {
+        let oracle_status = OracleStatus::Available;
+        let audit_ledger = std::sync::Mutex::new(super::AuditLedger::new());
+
+        let result = super::run_case_with_panic_capture(
+            "case-poison",
+            &oracle_status,
+            Some(&audit_ledger),
+            || {
+                let _guard = audit_ledger.lock().expect("lock");
+                panic!("audit poison");
+            },
+        );
+
+        assert!(!result.passed);
+        assert!(result.message.starts_with("PANIC: audit poison"));
+        assert!(audit_ledger.lock().is_ok(), "poison should be cleared");
     }
 
     #[test]
