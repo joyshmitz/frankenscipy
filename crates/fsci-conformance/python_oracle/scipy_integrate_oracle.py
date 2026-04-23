@@ -75,6 +75,26 @@ def _build_callable(expr_or_name: str) -> Callable[..., float]:
     return dispatched
 
 
+def _build_ivp_rhs(name: str) -> Callable[..., list]:
+    """Named RHS dispatcher for solve_ivp fixtures (br-9cla-1).
+
+    The Rust runner maintains an identically-keyed lookup table so both
+    sides of the differential comparison integrate the *same* ODE. Do
+    not add entries here without mirroring the Rust side in slice 9cla-2.
+    """
+    if name == "exponential_decay":
+        # dy/dt = -y; y(0) = y0 → y(t) = y0 * exp(-t).
+        return lambda t, y: [-y[0]]
+    if name == "linear_growth":
+        # dy/dt = 1; y(0) = y0 → y(t) = y0 + t.
+        return lambda t, y: [1.0]
+    if name == "harmonic_oscillator":
+        # d²x/dt² + x = 0 → [dy0/dt, dy1/dt] = [y1, -y0]. Energy
+        # E = 0.5*(y0² + y1²) is conserved.
+        return lambda t, y: [y[1], -y[0]]
+    raise ValueError(f"unknown ivp rhs: {name!r}")
+
+
 def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
     case_id = case.get("case_id", "<missing>")
     function = case.get("function", "<missing>")
@@ -150,6 +170,42 @@ def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
                 total += wi * fn(mid + half * xi)
             total *= half
             return _ok(case_id, "scalar", {"value": float(total)})
+
+        if function == "solve_ivp":
+            # br-9cla-1: named-RHS dispatch. The Rust runner (9cla-2)
+            # mirrors this name -> closure table so both sides agree on
+            # the ODE being integrated.
+            rhs_name = args["rhs"]
+            t_span = tuple(float(v) for v in args["t_span"])
+            y0 = [float(v) for v in args["y0"]]
+            method = args.get("method", "RK45")
+            rtol = float(args.get("rtol", 1e-3))
+            atol = float(args.get("atol", 1e-6))
+            t_eval_raw = args.get("t_eval")
+            t_eval = None
+            if t_eval_raw is not None:
+                t_eval = [float(v) for v in t_eval_raw]
+            rhs = _build_ivp_rhs(rhs_name)
+            res = integrate.solve_ivp(
+                rhs,
+                t_span,
+                y0,
+                method=method,
+                rtol=rtol,
+                atol=atol,
+                t_eval=t_eval,
+            )
+            return _ok(
+                case_id,
+                "ivp_result",
+                {
+                    "t": [float(v) for v in res.t.tolist()],
+                    "y": [[float(v) for v in row] for row in res.y.tolist()],
+                    "status": int(res.status),
+                    "success": bool(res.success),
+                    "nfev": int(res.nfev),
+                },
+            )
 
         if function == "cubature":
             lower = [float(v) for v in args["lower"]]
