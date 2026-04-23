@@ -1634,8 +1634,8 @@ impl ContinuousDistribution for Weibull {
                 .zip(ln_data.iter())
                 .map(|(&x, &lx)| x * lx * lx)
                 .sum();
-            let df = -1.0 / (c * c)
-                - (sum_xc * sum_xc_ln2 - sum_xc_ln * sum_xc_ln) / (sum_xc * sum_xc);
+            let df =
+                -1.0 / (c * c) - (sum_xc * sum_xc_ln2 - sum_xc_ln * sum_xc_ln) / (sum_xc * sum_xc);
             if df.abs() < 1e-15 {
                 break;
             }
@@ -13450,6 +13450,237 @@ fn ks_2samp_exact_pvalue(d: f64, n1: usize, n2: usize) -> Option<(f64, f64)> {
     Some((snapped_d, (1.0 - inside_prob[n2]).clamp(0.0, 1.0)))
 }
 
+fn shapiro_poly(coeffs: &[f64], x: f64) -> f64 {
+    let nord = coeffs.len();
+    let mut result = coeffs[0];
+    if nord == 1 {
+        return result;
+    }
+
+    let mut p = x * coeffs[nord - 1];
+    if nord == 2 {
+        return result + p;
+    }
+
+    for ind in (1..=(nord - 2)).rev() {
+        p = (p + coeffs[ind]) * x;
+    }
+    result += p;
+    result
+}
+
+fn shapiro_ppnd(p: f64) -> f64 {
+    const SPLIT: f64 = 0.42;
+    const A0: f64 = 2.50662823884;
+    const A1: f64 = -18.61500062529;
+    const A2: f64 = 41.39119773534;
+    const A3: f64 = -25.44106049637;
+    const B1: f64 = -8.47351093090;
+    const B2: f64 = 23.08336743743;
+    const B3: f64 = -21.06224101826;
+    const B4: f64 = 3.13082909833;
+    const C0: f64 = -2.78718931138;
+    const C1: f64 = -2.29796479134;
+    const C2: f64 = 4.85014127135;
+    const C3: f64 = 2.32121276858;
+    const D1: f64 = 3.54388924762;
+    const D2: f64 = 1.63706781897;
+
+    let q = p - 0.5;
+    if q.abs() <= SPLIT {
+        let r = q * q;
+        let mut temp = q * (((A3 * r + A2) * r + A1) * r + A0);
+        temp /= ((((B4 * r + B3) * r + B2) * r + B1) * r) + 1.0;
+        return temp;
+    }
+
+    let mut r = if q > 0.0 { 1.0 - p } else { p };
+    if r <= 0.0 {
+        return 0.0;
+    }
+
+    r = (-r.ln()).sqrt();
+    let mut temp = (((C3 * r + C2) * r + C1) * r) + C0;
+    temp /= ((D2 * r + D1) * r) + 1.0;
+    if q < 0.0 { -temp } else { temp }
+}
+
+fn shapiro_alnorm(x: f64, upper: bool) -> f64 {
+    const LTONE: f64 = 7.0;
+    const UTZERO: f64 = 38.0;
+    const CON: f64 = 1.28;
+    const A1: f64 = 0.398_942_280_444;
+    const A2: f64 = 0.399_903_438_504;
+    const A3: f64 = 5.758_854_804_58;
+    const A4: f64 = 29.821_355_780_8;
+    const A5: f64 = 2.624_331_216_79;
+    const A6: f64 = 48.695_993_069_2;
+    const A7: f64 = 5.928_857_244_38;
+    const B1: f64 = 0.398_942_280_385;
+    const B2: f64 = 3.8052e-8;
+    const B3: f64 = 1.000_006_153_02;
+    const B4: f64 = 3.980_647_94e-4;
+    const B5: f64 = 1.986_153_813_64;
+    const B6: f64 = 0.151_679_116_635;
+    const B7: f64 = 5.293_303_249_26;
+    const B8: f64 = 4.838_591_280_8;
+    const B9: f64 = 15.150_897_245_1;
+    const B10: f64 = 0.742_380_924_027;
+    const B11: f64 = 30.789_933_034;
+    const B12: f64 = 3.990_194_170_11;
+
+    let mut z = x;
+    let mut upper_tail = upper;
+    if !matches!(z.partial_cmp(&0.0), Some(std::cmp::Ordering::Greater)) {
+        upper_tail = false;
+        z = -z;
+    }
+
+    if !((z <= LTONE) || (upper_tail && z <= UTZERO)) {
+        return if upper_tail { 0.0 } else { 1.0 };
+    }
+
+    let y = 0.5 * z * z;
+    let temp = if z <= CON {
+        0.5 - z * (A1 - A2 * y / (y + A3 - A4 / (y + A5 + A6 / (y + A7))))
+    } else {
+        B1 * (-y).exp()
+            / (z - B2
+                + B3 / (z + B4 + B5 / (z - B6 + B7 / (z + B8 - B9 / (z + B10 + B11 / (z + B12))))))
+    };
+    if upper_tail { temp } else { 1.0 - temp }
+}
+
+fn shapiro_swilk(sorted: &[f64]) -> GoodnessOfFitResult {
+    const C1: [f64; 6] = [0.0, 0.221157, -0.147981, -2.07119, 4.434685, -2.706056];
+    const C2: [f64; 6] = [0.0, 0.042981, -0.293762, -1.752461, 5.682633, -3.582633];
+    const C3: [f64; 4] = [0.5440, -0.39978, 0.025054, -0.0006714];
+    const C4: [f64; 4] = [1.3822, -0.77857, 0.062767, -0.0020322];
+    const C5: [f64; 4] = [-1.5861, -0.31082, -0.083751, 0.0038915];
+    const C6: [f64; 3] = [-0.4803, -0.082676, 0.0030302];
+    const G: [f64; 2] = [-2.273, 0.459];
+    const SMALL: f64 = 1e-19;
+    const SQRTH: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    const PI6: f64 = 6.0 / std::f64::consts::PI;
+
+    let n = sorted.len();
+    let n2 = n / 2;
+    let an = n as f64;
+    let mut a = vec![0.0; n2];
+
+    if n == 3 {
+        a[0] = SQRTH;
+    } else {
+        let an25 = an + 0.25;
+        let mut summ2 = 0.0;
+        for (index, coeff) in a.iter_mut().enumerate() {
+            let temp = shapiro_ppnd((index as f64 + 1.0 - 0.375) / an25);
+            *coeff = temp;
+            summ2 += temp * temp;
+        }
+        summ2 *= 2.0;
+
+        let ssumm2 = summ2.sqrt();
+        let rsn = 1.0 / an.sqrt();
+        let a1 = shapiro_poly(&C1, rsn) - (a[0] / ssumm2);
+
+        let (start, fac) = if n > 5 {
+            let a2 = -(a[1] / ssumm2) + shapiro_poly(&C2, rsn);
+            let numerator = summ2 - (2.0 * a[0] * a[0]) - (2.0 * a[1] * a[1]);
+            let denominator = 1.0 - (2.0 * a1 * a1) - (2.0 * a2 * a2);
+            a[1] = a2;
+            (2, (numerator / denominator).sqrt())
+        } else {
+            let numerator = summ2 - (2.0 * a[0] * a[0]);
+            let denominator = 1.0 - (2.0 * a1 * a1);
+            (1, (numerator / denominator).sqrt())
+        };
+
+        a[0] = a1;
+        for coeff in a.iter_mut().skip(start) {
+            *coeff *= -1.0 / fac;
+        }
+    }
+
+    let range = sorted[n - 1] - sorted[0];
+    if range < SMALL {
+        return GoodnessOfFitResult {
+            statistic: 1.0,
+            pvalue: 1.0,
+        };
+    }
+
+    let mut sx = sorted[0] / range;
+    let mut sa = -a[0];
+    let mut mirrored = n - 2;
+    for index in 1..n {
+        let xi = sorted[index] / range;
+        sx += xi;
+        if index != mirrored {
+            let sign = if index < mirrored { -1.0 } else { 1.0 };
+            sa += sign * a[index.min(mirrored)];
+        }
+        mirrored = mirrored.saturating_sub(1);
+    }
+
+    sa /= an;
+    sx /= an;
+
+    let mut ssa = 0.0;
+    let mut ssx = 0.0;
+    let mut sax = 0.0;
+    mirrored = n - 1;
+    for (index, &value) in sorted.iter().enumerate() {
+        let asa = if index != mirrored {
+            let sign = if index < mirrored { -1.0 } else { 1.0 };
+            sign * a[index.min(mirrored)] - sa
+        } else {
+            -sa
+        };
+        let xsx = value / range - sx;
+        ssa += asa * asa;
+        ssx += xsx * xsx;
+        sax += asa * xsx;
+        mirrored = mirrored.saturating_sub(1);
+    }
+
+    let ssassx = (ssa * ssx).sqrt();
+    let w1 = (ssassx - sax) * (ssassx + sax) / (ssa * ssx);
+    let w = 1.0 - w1;
+
+    let pvalue = if n == 3 {
+        if w < 0.75 {
+            return GoodnessOfFitResult {
+                statistic: 0.75,
+                pvalue: 0.0,
+            };
+        }
+        1.0 - PI6 * w.sqrt().acos()
+    } else {
+        let mut y = w1.ln();
+        let xx = an.ln();
+        let (m, s) = if n <= 11 {
+            let gamma = shapiro_poly(&G, an);
+            if y >= gamma {
+                return GoodnessOfFitResult {
+                    statistic: w,
+                    pvalue: SMALL,
+                };
+            }
+            y = -(gamma - y).ln();
+            (shapiro_poly(&C3, an), shapiro_poly(&C4, an).exp())
+        } else {
+            (shapiro_poly(&C5, xx), shapiro_poly(&C6, xx).exp())
+        };
+        shapiro_alnorm((y - m) / s, true)
+    };
+
+    GoodnessOfFitResult {
+        statistic: w,
+        pvalue: pvalue.clamp(0.0, 1.0),
+    }
+}
+
 /// Shapiro-Wilk test for normality.
 ///
 /// Tests H0: data was drawn from a normal distribution.
@@ -13457,80 +13688,18 @@ fn ks_2samp_exact_pvalue(d: f64, n1: usize, n2: usize) -> Option<(f64, f64)> {
 ///
 /// Matches `scipy.stats.shapiro(data)`.
 ///
-/// Uses the Royston (1992) algorithm with approximated coefficients
-/// for n <= 5000.
+/// Uses the Royston (1995) `swilk` algorithm that SciPy wraps.
 pub fn shapiro(data: &[f64]) -> GoodnessOfFitResult {
-    let n = data.len();
-    if n < 3 {
+    if data.len() < 3 {
         return GoodnessOfFitResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
         };
     }
 
-    let nf = n as f64;
-    let mean_val = data.iter().sum::<f64>() / nf;
-
     let mut sorted = data.to_vec();
     sorted.sort_by(|a, b| a.total_cmp(b));
-
-    // Compute the Shapiro-Wilk W statistic.
-    // W = (sum(a_i * x_(i))^2) / (sum(x_i - mean)^2)
-    // where a_i are optimal coefficients derived from normal order statistics.
-
-    // Generate approximate coefficients using the normal ppf (Blom's approximation)
-    let mut m = vec![0.0; n];
-    for (i, mi) in m.iter_mut().enumerate() {
-        *mi = standard_normal_ppf((i as f64 + 1.0 - 0.375) / (nf + 0.25));
-    }
-
-    // Normalize the m vector
-    let m_sq_sum: f64 = m.iter().map(|&v| v * v).sum();
-    let m_norm = m_sq_sum.sqrt();
-
-    // Compute approximate weights a_i = m_i / ||m||
-    let a: Vec<f64> = m.iter().map(|&v| v / m_norm).collect();
-
-    // W = (sum(a_i * x_(i)))^2 / SS
-    let numerator: f64 = a
-        .iter()
-        .zip(sorted.iter())
-        .map(|(&ai, &xi)| ai * xi)
-        .sum::<f64>();
-    let ss: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum();
-
-    if ss == 0.0 {
-        return GoodnessOfFitResult {
-            statistic: 1.0,
-            pvalue: 1.0,
-        };
-    }
-
-    let w = (numerator * numerator) / ss;
-
-    // Approximate p-value using Royston's normal transformation
-    // For n >= 7, use ln(1 - W) transformation
-    let pvalue = if n <= 6 {
-        // Small sample: use simple approximation
-        // Based on Shapiro-Francia for tiny n
-        let z = (-((1.0 - w).ln()) - (0.0 + 0.221 * nf.ln() - 0.0174 * nf)) / (1.0 + 0.042 / nf);
-        let norm = Normal::standard();
-        1.0 - ContinuousDistribution::cdf(&norm, z)
-    } else {
-        // Royston approximation: transform ln(1-W) to approximate normality
-        let ln_1mw = (1.0 - w).ln();
-        let mu =
-            0.0038915 * nf.ln().powi(3) - 0.083751 * nf.ln().powi(2) - 0.31082 * nf.ln() - 1.5861;
-        let sigma = (0.0030302 * nf.ln().powi(2) - 0.082676 * nf.ln() - 0.4803).exp();
-        let z = (ln_1mw - mu) / sigma;
-        let norm = Normal::standard();
-        1.0 - ContinuousDistribution::cdf(&norm, z)
-    };
-
-    GoodnessOfFitResult {
-        statistic: w,
-        pvalue: pvalue.clamp(0.0, 1.0),
-    }
+    shapiro_swilk(&sorted)
 }
 
 /// D'Agostino's skewness test for normality.
@@ -21646,6 +21815,24 @@ mod tests {
     }
 
     #[test]
+    fn shapiro_matches_scipy_canonical_sample() {
+        let data = [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5];
+        let result = shapiro(&data);
+        assert_close(
+            result.statistic,
+            0.9780016294384769,
+            1e-14,
+            "shapiro canonical W",
+        );
+        assert_close(
+            result.pvalue,
+            0.9492885624975852,
+            1e-14,
+            "shapiro canonical p",
+        );
+    }
+
+    #[test]
     fn shapiro_exponential_data() {
         // Exponential-like data (heavily skewed) → lower W
         let data: Vec<f64> = (1..=50).map(|i| (i as f64 * 0.1).exp()).collect();
@@ -26654,7 +26841,10 @@ mod tests {
         let x = [1.0, 2.0, 10.0, 11.0, 20.0, 21.0];
         let y = [9.0, 10.0, 11.0, 12.0, 13.0, 14.0];
         let result = ansari(&x, &y);
-        assert!(result.pvalue < 0.3, "different scale should have smaller p-value");
+        assert!(
+            result.pvalue < 0.3,
+            "different scale should have smaller p-value"
+        );
     }
 
     #[test]
