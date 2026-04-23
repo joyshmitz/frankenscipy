@@ -8586,6 +8586,22 @@ fn recover_sync_audit_ledger<'a>(
 /// If the oracle is unavailable and `oracle_config.required == false`,
 /// the report marks oracle_status as `Missing` and still validates
 /// against the fixture's embedded expected values.
+///
+/// # Oracle wiring state (as of br-ivg5)
+///
+/// Step 4 currently covers the **stats** family via
+/// `scipy_stats_oracle.py` (cpgl landed the path wiring). The
+/// family-specific scripts for cluster / spatial / signal / integrate
+/// / optimize / sparse / special / fft / linalg now exist on disk and
+/// are dispatched by `default_differential_oracle_script_path(family)`
+/// (br-ivg5), but only runners that invoke the capture step will
+/// actually shell out. Runners that only probe oracle availability and
+/// then compare Rust output against the fixture's embedded expected
+/// values (validate_tol, most family packets) are **self-checking**,
+/// not differential, even when `oracle_status == Available`. The
+/// `oracle_status` field reports probe result; it does not always
+/// imply that a scipy script was executed. Track frankenscipy-ivg5
+/// for the remaining per-family wiring.
 pub fn run_differential_test(
     fixture_path: &Path,
     oracle_config: &DifferentialOracleConfig,
