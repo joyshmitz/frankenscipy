@@ -686,7 +686,7 @@ pub fn gaussian_filter(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    if sigma <= 0.0 {
+    if !sigma.is_finite() || sigma <= 0.0 {
         return Err(NdimageError::InvalidArgument(
             "sigma must be positive".to_string(),
         ));
@@ -2174,6 +2174,11 @@ pub fn gaussian_filter_multi_sigma(
 
     let mut current = input.clone();
     for (axis, &sigma) in sigmas.iter().enumerate() {
+        if !sigma.is_finite() {
+            return Err(NdimageError::InvalidArgument(
+                "sigmas must be finite".to_string(),
+            ));
+        }
         if sigma <= 0.0 {
             continue;
         }
@@ -3161,6 +3166,26 @@ mod tests {
         for &v in &result.data {
             assert!((v - 5.0).abs() < 1e-10, "constant image changed: {v}");
         }
+    }
+
+    #[test]
+    fn gaussian_filter_rejects_non_finite_sigma() {
+        let input = NdArray::new(vec![1.0; 9], vec![3, 3]).unwrap();
+        assert!(gaussian_filter(&input, f64::NAN, BoundaryMode::Reflect, 0.0).is_err());
+        assert!(gaussian_filter(&input, f64::INFINITY, BoundaryMode::Reflect, 0.0).is_err());
+    }
+
+    #[test]
+    fn gaussian_filter_multi_sigma_rejects_non_finite_sigma() {
+        let input = NdArray::new(vec![1.0; 9], vec![3, 3]).unwrap();
+        assert!(
+            gaussian_filter_multi_sigma(&input, &[1.0, f64::NAN], BoundaryMode::Reflect, 0.0)
+                .is_err()
+        );
+        assert!(
+            gaussian_filter_multi_sigma(&input, &[1.0, f64::INFINITY], BoundaryMode::Reflect, 0.0,)
+                .is_err()
+        );
     }
 
     #[test]
