@@ -2481,13 +2481,25 @@ pub fn procrustes(
         }
     }
 
-    // R = M * (M^T M)^{-1/2} via Denman-Beavers iteration for matrix square root inverse
-    // Y_{k+1} = 0.5 * Y_k * (3I - B Y_k²) where B = M^T M, converges to B^{-1/2}
+    // R = M * (M^T M)^{-1/2} via Newton-Schulz iteration
+    // (NOT Denman-Beavers despite the prior comment — per frankenscipy-l15l
+    // this implements Y_{k+1} = 0.5 * Y_k * (3I - B Y_k^2) with Y_0 = I,
+    // which converges to B^{-1/2} only when eigenvalues of B = M^T M lie
+    // in (0, 2). For rank-deficient or near-rank-deficient M the
+    // iteration DIVERGES; the magnitude of Y grows unboundedly.
     let mut y = vec![vec![0.0; d]; d];
     for (i, row) in y.iter_mut().enumerate().take(d) {
         row[i] = 1.0;
     }
 
+    // Divergence detector: track ||Y||_∞ across iterations. If it grows
+    // past a conservative cap, bail out rather than silently returning
+    // garbage. Per frankenscipy-l15l: B=diag(1,1,0) empirically reaches
+    // y_max ≈ 1.9e5 by iter 30; we cap well below that so caller gets
+    // an explicit signal.
+    const NEWTON_SCHULZ_BAIL_MAG: f64 = 1.0e3;
+    let mut converged = false;
+    let mut diverged = false;
     for _ in 0..30 {
         let y2 = mat_mul(&y, &y, d);
         let by2 = mat_mul(&mtm, &y2, d);
@@ -2499,16 +2511,33 @@ pub fn procrustes(
         }
         let y_new = mat_mul(&y, &rhs, d);
         let mut max_diff = 0.0_f64;
+        let mut max_magnitude = 0.0_f64;
         for i in 0..d {
             for j in 0..d {
-                max_diff = max_diff.max((y_new[i][j] * 0.5 - y[i][j]).abs());
-                y[i][j] = y_new[i][j] * 0.5;
+                let new_val = y_new[i][j] * 0.5;
+                max_diff = max_diff.max((new_val - y[i][j]).abs());
+                max_magnitude = max_magnitude.max(new_val.abs());
+                y[i][j] = new_val;
             }
         }
+        if max_magnitude > NEWTON_SCHULZ_BAIL_MAG || !max_magnitude.is_finite() {
+            diverged = true;
+            break;
+        }
         if max_diff < 1e-14 {
+            converged = true;
             break;
         }
     }
+    if diverged {
+        return Err(SpatialError::InvalidArgument(
+            "procrustes: matrix-inverse-sqrt iteration diverged \
+             (input is rank-deficient or near-rank-deficient; scipy uses \
+             SVD which handles this case correctly, see frankenscipy-l15l)"
+                .to_string(),
+        ));
+    }
+    let _ = converged;
     let rotation = mat_mul(&m, &y, d);
 
     // Apply rotation: mtx2_aligned = mtx2 * R
@@ -4733,6 +4762,33 @@ mod tests {
             "scaled data should align: disparity = {}",
             result.disparity
         );
+    }
+
+    #[test]
+    fn procrustes_rank_deficient_bails_out() {
+        // Per frankenscipy-l15l: procrustes' Newton-Schulz iteration
+        // diverges for rank-deficient M = mtx2^T @ mtx1. Construct
+        // data1 and data2 so that the cross-product is singular
+        // (data2 is orthogonal to data1 after centering + normalizing).
+        // The solver should now return Err instead of silently
+        // returning garbage (y_max ≈ 1.9e5 previously).
+        let data1 = vec![vec![1.0, 0.0], vec![-1.0, 0.0]]; // along x-axis
+        let data2 = vec![vec![0.0, 1.0], vec![0.0, -1.0]]; // along y-axis
+        let result = procrustes(&data1, &data2);
+        // Either we converge to a sensible answer OR we bail out with
+        // Err(InvalidArgument). What we must NOT do is silently return
+        // Ok with a nonsensical disparity.
+        match result {
+            Ok(res) => assert!(
+                res.disparity.is_finite() && res.disparity < 1e3,
+                "orthogonal inputs should give finite small disparity or bail"
+            ),
+            Err(SpatialError::InvalidArgument(msg)) => assert!(
+                msg.contains("diverged") || msg.contains("rank-deficient"),
+                "unexpected error text: {msg}"
+            ),
+            Err(other) => panic!("unexpected error kind: {other:?}"),
+        }
     }
 
     // ── Geometric SLERP tests ────────────────────────────────────────
