@@ -5245,12 +5245,12 @@ pub fn firwin2(
 /// # Returns
 /// `(numtaps, beta)` — Number of taps and Kaiser beta parameter.
 pub fn kaiserord(ripple: f64, width: f64) -> Result<(usize, f64), SignalError> {
-    if ripple <= 0.0 {
+    if !ripple.is_finite() || ripple <= 0.0 {
         return Err(SignalError::InvalidArgument(
             "ripple must be positive (in dB)".to_string(),
         ));
     }
-    if width <= 0.0 || width >= 1.0 {
+    if !width.is_finite() || width <= 0.0 || width >= 1.0 {
         return Err(SignalError::InvalidArgument(
             "width must be in (0, 1)".to_string(),
         ));
@@ -5614,9 +5614,14 @@ pub fn chirp(
     f1: f64,
     method: ChirpMethod,
 ) -> Result<Vec<f64>, SignalError> {
-    if t1 <= 0.0 {
+    if !t1.is_finite() || t1 <= 0.0 {
         return Err(SignalError::InvalidArgument(
             "t1 must be positive".to_string(),
+        ));
+    }
+    if !f0.is_finite() || !f1.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "f0 and f1 must be finite".to_string(),
         ));
     }
     if method == ChirpMethod::Logarithmic && (f0 <= 0.0 || f1 <= 0.0) {
@@ -7822,7 +7827,7 @@ impl Dlti {
                 "denominator cannot be all zeros".to_string(),
             ));
         }
-        if dt <= 0.0 {
+        if !dt.is_finite() || dt <= 0.0 {
             return Err(SignalError::InvalidArgument(
                 "sampling period dt must be positive".to_string(),
             ));
@@ -10629,6 +10634,14 @@ mod tests {
     }
 
     #[test]
+    fn kaiserord_rejects_non_finite_args() {
+        assert!(kaiserord(f64::NAN, 0.1).is_err());
+        assert!(kaiserord(60.0, f64::NAN).is_err());
+        assert!(kaiserord(f64::INFINITY, 0.1).is_err());
+        assert!(kaiserord(60.0, f64::INFINITY).is_err());
+    }
+
+    #[test]
     fn firwin_invalid_args() {
         assert!(firwin(0, &[0.3], FirWindow::Hamming, true).is_err());
         assert!(firwin(21, &[], FirWindow::Hamming, true).is_err());
@@ -10688,6 +10701,16 @@ mod tests {
     fn chirp_logarithmic_rejects_zero_freq() {
         let t = vec![0.0];
         assert!(chirp(&t, 0.0, 1.0, 10.0, ChirpMethod::Logarithmic).is_err());
+    }
+
+    #[test]
+    fn chirp_rejects_non_finite_parameters() {
+        let t = vec![0.0, 0.5, 1.0];
+        assert!(chirp(&t, 1.0, f64::NAN, 2.0, ChirpMethod::Linear).is_err());
+        assert!(chirp(&t, 1.0, f64::INFINITY, 2.0, ChirpMethod::Linear).is_err());
+        assert!(chirp(&t, f64::NAN, 1.0, 2.0, ChirpMethod::Linear).is_err());
+        assert!(chirp(&t, 1.0, 1.0, f64::INFINITY, ChirpMethod::Linear).is_err());
+        assert!(chirp(&t, f64::NAN, 1.0, 2.0, ChirpMethod::Logarithmic).is_err());
     }
 
     // ── Sawtooth / Square tests ────────────────────────────────────
@@ -12502,6 +12525,15 @@ mod tests {
     #[test]
     fn dlti_new_zero_dt_rejected() {
         let err = Dlti::new(vec![1.0], vec![1.0], 0.0).expect_err("zero dt");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn dlti_new_non_finite_dt_rejected() {
+        let err = Dlti::new(vec![1.0], vec![1.0], f64::NAN).expect_err("nan dt");
+        assert!(matches!(err, SignalError::InvalidArgument(_)));
+
+        let err = Dlti::new(vec![1.0], vec![1.0], f64::INFINITY).expect_err("inf dt");
         assert!(matches!(err, SignalError::InvalidArgument(_)));
     }
 
