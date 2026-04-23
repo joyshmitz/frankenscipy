@@ -341,6 +341,34 @@ pub fn summarize_failure(params: &FailureSummaryParams<'_>) -> FailureSummary {
     }
 }
 
+/// Check if `needle` appears in `haystack` as a standalone word/token,
+/// rather than a substring of a larger word. Per frankenscipy-vp77: the
+/// prior classify_failure used raw substring match which triggered on
+/// 'nan' in 'nanometer', 'inf' in 'information', 'shape' in 'reshape',
+/// etc. Here we require the match to be preceded/followed by non-
+/// alphabetic characters (word boundaries).
+fn contains_token(haystack: &str, needle: &str) -> bool {
+    let hay = haystack;
+    let n = needle.len();
+    let mut start = 0usize;
+    while let Some(off) = hay[start..].find(needle) {
+        let pos = start + off;
+        let end = pos + n;
+        let prev_ok = pos == 0
+            || !hay.as_bytes()[pos - 1].is_ascii_alphabetic();
+        let next_ok = end == hay.len()
+            || !hay.as_bytes()[end].is_ascii_alphabetic();
+        if prev_ok && next_ok {
+            return true;
+        }
+        start = pos + 1;
+        if start >= hay.len() {
+            break;
+        }
+    }
+    false
+}
+
 /// Classify a failure message into a category.
 fn classify_failure(
     message: &str,
@@ -348,19 +376,50 @@ fn classify_failure(
     tolerance: Option<f64>,
 ) -> FailureCategory {
     let msg = message.to_lowercase();
-    if msg.contains("oracle") && (msg.contains("missing") || msg.contains("unavailable")) {
+    if (contains_token(&msg, "oracle") || contains_token(&msg, "scipy"))
+        && (contains_token(&msg, "missing")
+            || contains_token(&msg, "unavailable")
+            || contains_token(&msg, "not available"))
+    {
         return FailureCategory::OracleMissing;
     }
-    if msg.contains("nan") || msg.contains("inf") || msg.contains("non-finite") {
+    // NaN / Inf / non-finite: require token boundary to avoid matching
+    // 'nanometer', 'information', 'infuse', etc.
+    if contains_token(&msg, "nan")
+        || contains_token(&msg, "+inf")
+        || contains_token(&msg, "-inf")
+        || msg.contains("non-finite")
+        || msg.contains("not finite")
+        || msg.contains("not-finite")
+    {
         return FailureCategory::NonFiniteOutput;
     }
-    if msg.contains("shape") || msg.contains("dimension") {
+    if msg.contains("shape mismatch")
+        || msg.contains("dimension mismatch")
+        || msg.contains("incompatible shape")
+        || msg.contains("incompatible dimension")
+        || msg.contains("wrong shape")
+        || msg.contains("shape error")
+    {
         return FailureCategory::ShapeMismatch;
     }
-    if msg.contains("converge") || msg.contains("diverge") {
+    if contains_token(&msg, "converge")
+        || contains_token(&msg, "converged")
+        || contains_token(&msg, "convergence")
+        || contains_token(&msg, "not convergent")
+        || contains_token(&msg, "diverge")
+        || contains_token(&msg, "divergence")
+        || msg.contains("failed to converge")
+        || msg.contains("did not converge")
+        || msg.contains("maxiter")
+    {
         return FailureCategory::ConvergenceFailure;
     }
-    if msg.contains("error") && (msg.contains("expected") || msg.contains("mismatch")) {
+    if msg.contains("error mismatch")
+        || msg.contains("error kind mismatch")
+        || msg.contains("expected error")
+        || msg.contains("unexpected error")
+    {
         return FailureCategory::ErrorMismatch;
     }
     if let (Some(diff), Some(tol)) = (max_diff, tolerance)
