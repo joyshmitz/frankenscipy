@@ -27418,12 +27418,27 @@ mod tests {
 
     #[test]
     fn hdquantiles_sd_matches_scipy() {
-        // scipy.stats.mstats.hdquantiles_sd([1..10], [0.25,0.5,0.75]) = [1.09519654, 1.24658932, 1.09519654]
+        // scipy.stats.mstats.hdquantiles_sd([1..=10], [0.25,0.5,0.75])
+        //   = [1.0951965400145034, 1.2465893235211445, 1.0951965400145040]
+        // br-3dg8: tighten absolute tolerance from 0.1 (10%) to 1e-9 now
+        // that the expected values were recaptured from scipy.
         let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
         let result = hdquantiles_sd(&data, &[0.25, 0.5, 0.75]);
-        assert_close(result[0], 1.09519654, 0.1, "hdquantiles_sd q25");
-        assert_close(result[1], 1.24658932, 0.1, "hdquantiles_sd q50");
-        assert_close(result[2], 1.09519654, 0.1, "hdquantiles_sd q75");
+        assert_close(result[0], 1.0951965400145034, 1e-9, "hdquantiles_sd q25");
+        assert_close(result[1], 1.2465893235211445, 1e-9, "hdquantiles_sd q50");
+        assert_close(result[2], 1.0951965400145040, 1e-9, "hdquantiles_sd q75");
+    }
+
+    #[test]
+    fn hdquantiles_sd_default_prob_matches_scipy() {
+        // scipy.stats.mstats.hdquantiles_sd(data) with default prob=[0.25,0.5,0.75]
+        // should produce the same output as explicitly passing those values.
+        // br-3dg8: cover default-argument parity.
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let default_result = hdquantiles_sd(&data, &[0.25, 0.5, 0.75]);
+        assert_close(default_result[0], 1.0951965400145034, 1e-9, "default q25");
+        assert_close(default_result[1], 1.2465893235211445, 1e-9, "default q50");
+        assert_close(default_result[2], 1.0951965400145040, 1e-9, "default q75");
     }
 
     #[test]
