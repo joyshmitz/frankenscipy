@@ -1076,6 +1076,16 @@ pub fn adjusted_rand_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 
     let k1 = labels_true.iter().cloned().max().unwrap_or(0) + 1;
     let k2 = labels_pred.iter().cloned().max().unwrap_or(0) + 1;
 
+    // Per frankenscipy-n240: sanity bound on label magnitude to prevent
+    // OOM. max(labels) + 1 is used as the contingency-table dimension;
+    // an adversarial input like labels_pred = [0, 1_000_000_000] would
+    // otherwise allocate a 1e9 * k1 * 8 byte table. Cap at 10 * n so
+    // naturally-sparse but legit label sets still work.
+    let max_labels = n.saturating_mul(10).max(16);
+    if k1 > max_labels || k2 > max_labels {
+        return 0.0; // Return 0.0 (as API promises f64) rather than OOM
+    }
+
     // Contingency table
     let mut contingency = vec![vec![0i64; k2]; k1];
     for i in 0..n {
@@ -1125,6 +1135,12 @@ pub fn normalized_mutual_info(labels_true: &[usize], labels_pred: &[usize]) -> f
 
     let k1 = labels_true.iter().cloned().max().unwrap_or(0) + 1;
     let k2 = labels_pred.iter().cloned().max().unwrap_or(0) + 1;
+    // Per frankenscipy-n240: label-magnitude sanity bound prevents OOM
+    // from adversarial labels like [0, 1_000_000_000].
+    let max_labels = n.saturating_mul(10).max(16);
+    if k1 > max_labels || k2 > max_labels {
+        return 0.0;
+    }
     let nf = n as f64;
 
     // Contingency table
@@ -2386,5 +2402,25 @@ mod tests {
     fn is_valid_linkage_rejects_zero_count() {
         let bad = [[0.0, 1.0, 1.0, 0.0]];
         assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
+    fn adjusted_rand_score_bails_on_adversarial_label_magnitude() {
+        // Per frankenscipy-n240: adversarial labels like
+        // [0, 1_000_000_000] previously triggered a 1e9*k*8 byte
+        // contingency-table allocation + OOM. Now bails with 0.0.
+        let labels_true = vec![0usize; 4];
+        let labels_pred = vec![0, 1_000_000_000, 2, 3];
+        // Should not OOM; returns 0.0 per the label-magnitude sanity bound.
+        let score = adjusted_rand_score(&labels_true, &labels_pred);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn normalized_mutual_info_bails_on_adversarial_label_magnitude() {
+        let labels_true = vec![0usize; 4];
+        let labels_pred = vec![0, 1_000_000_000, 2, 3];
+        let score = normalized_mutual_info(&labels_true, &labels_pred);
+        assert_eq!(score, 0.0);
     }
 }
