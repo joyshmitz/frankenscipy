@@ -5456,6 +5456,12 @@ pub struct IntegrateArgs {
     pub rtol: Option<f64>,
     pub max_subdivisions: Option<usize>,
     pub points: Option<Vec<Vec<f64>>>,
+    // br-9cla-2: IVP fields. Mirrors scipy.integrate.solve_ivp kwargs.
+    pub rhs: Option<String>,
+    pub t_span: Option<[f64; 2]>,
+    pub y0: Option<Vec<f64>>,
+    pub method: Option<String>,
+    pub t_eval: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5472,6 +5478,12 @@ pub struct IntegrateExpected {
 enum IntegrateObserved {
     Scalar(f64),
     Array(Vec<f64>),
+    /// IVP result (t, y) — `t` is the sample grid, `y[i]` is the i-th
+    /// state-variable trajectory of length `t.len()`. br-9cla-2.
+    IvpResult {
+        t: Vec<f64>,
+        y: Vec<Vec<f64>>,
+    },
     Error(String),
 }
 
@@ -5486,7 +5498,86 @@ fn execute_integrate_case(case: &IntegrateCase) -> IntegrateObserved {
         "fixed_quad" => execute_integrate_fixed_quad(case),
         "gauss_legendre" => execute_integrate_gauss_legendre(case),
         "cubature" => execute_integrate_cubature(case),
+        "solve_ivp" => execute_integrate_solve_ivp(case),
         _ => IntegrateObserved::Error(format!("unknown function: {}", case.function)),
+    }
+}
+
+/// br-9cla-2: named RHS dispatch for solve_ivp fixtures.
+///
+/// Keys MUST match `_build_ivp_rhs` in scipy_integrate_oracle.py so
+/// both sides integrate the same ODE.
+fn ivp_rhs_by_name(name: &str) -> Option<fn(f64, &[f64]) -> Vec<f64>> {
+    match name {
+        "exponential_decay" => Some(|_t, y| vec![-y[0]]),
+        "linear_growth" => Some(|_t, _y| vec![1.0]),
+        "harmonic_oscillator" => Some(|_t, y| vec![y[1], -y[0]]),
+        _ => None,
+    }
+}
+
+fn parse_solver_kind(method: &str) -> Option<fsci_integrate::SolverKind> {
+    use fsci_integrate::SolverKind;
+    match method {
+        "RK45" => Some(SolverKind::Rk45),
+        "RK23" => Some(SolverKind::Rk23),
+        "DOP853" => Some(SolverKind::Dop853),
+        "Radau" => Some(SolverKind::Radau),
+        "BDF" => Some(SolverKind::Bdf),
+        "LSODA" => Some(SolverKind::Lsoda),
+        _ => None,
+    }
+}
+
+fn execute_integrate_solve_ivp(case: &IntegrateCase) -> IntegrateObserved {
+    let args = &case.args;
+    let Some(rhs_name) = &args.rhs else {
+        return IntegrateObserved::Error("missing rhs".to_string());
+    };
+    let Some(rhs_fn) = ivp_rhs_by_name(rhs_name) else {
+        return IntegrateObserved::Error(format!("unknown rhs: {rhs_name}"));
+    };
+    let Some(t_span) = args.t_span else {
+        return IntegrateObserved::Error("missing t_span".to_string());
+    };
+    let Some(y0) = args.y0.as_ref() else {
+        return IntegrateObserved::Error("missing y0".to_string());
+    };
+    let method_str = args.method.as_deref().unwrap_or("RK45");
+    let Some(method) = parse_solver_kind(method_str) else {
+        return IntegrateObserved::Error(format!("unknown method: {method_str}"));
+    };
+    let rtol = args.rtol.unwrap_or(1e-3);
+    let atol = args.atol.unwrap_or(1e-6);
+    let opts = fsci_integrate::SolveIvpOptions {
+        t_span: (t_span[0], t_span[1]),
+        y0,
+        method,
+        t_eval: args.t_eval.as_deref(),
+        dense_output: false,
+        events: None,
+        rtol,
+        atol: fsci_integrate::ToleranceValue::Scalar(atol),
+        first_step: None,
+        max_step: f64::INFINITY,
+        mode: case.mode,
+    };
+    let mut rhs_mut = rhs_fn;
+    match fsci_integrate::solve_ivp(&mut rhs_mut, &opts) {
+        Ok(res) => {
+            // scipy stores y as shape (n_vars, n_points); fsci returns
+            // y as Vec<Vec<f64>> with outer = timestep, inner = state.
+            // Transpose to the (n_vars, n_points) shape the oracle emits.
+            let n_vars = res.y.first().map_or(0, Vec::len);
+            let mut y_t: Vec<Vec<f64>> = (0..n_vars).map(|_| Vec::with_capacity(res.y.len())).collect();
+            for step in &res.y {
+                for (i, &v) in step.iter().enumerate() {
+                    y_t[i].push(v);
+                }
+            }
+            IntegrateObserved::IvpResult { t: res.t, y: y_t }
+        }
+        Err(e) => IntegrateObserved::Error(format!("{e:?}")),
     }
 }
 
@@ -5779,6 +5870,68 @@ fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved)
                 }
             }
             (true, format!("array match ({} elements)", got.len()))
+        }
+        ("ivp_result", IntegrateObserved::IvpResult { t, y }) => {
+            // br-9cla-2: expected value is a JSON object {t: [...], y: [[...], ...]}
+            let expected_obj = match &case.expected.value {
+                Some(serde_json::Value::Object(o)) => o,
+                _ => return (false, "expected ivp_result object missing".to_string()),
+            };
+            let Some(serde_json::Value::Array(exp_t)) = expected_obj.get("t") else {
+                return (false, "expected.value.t missing or not array".to_string());
+            };
+            let Some(serde_json::Value::Array(exp_y)) = expected_obj.get("y") else {
+                return (false, "expected.value.y missing or not array".to_string());
+            };
+            if exp_t.len() != t.len() {
+                return (
+                    false,
+                    format!("ivp t length mismatch: got {}, expected {}", t.len(), exp_t.len()),
+                );
+            }
+            for (i, (g, e)) in t.iter().zip(exp_t.iter()).enumerate() {
+                let ev = e.as_f64().unwrap_or(f64::NAN);
+                if !close(*g, ev, atol, rtol) {
+                    return (
+                        false,
+                        format!("ivp t[{i}] mismatch: got {g}, expected {ev}"),
+                    );
+                }
+            }
+            if exp_y.len() != y.len() {
+                return (
+                    false,
+                    format!("ivp y outer length mismatch: got {}, expected {}", y.len(), exp_y.len()),
+                );
+            }
+            for (var_idx, (got_row, exp_row_v)) in y.iter().zip(exp_y.iter()).enumerate() {
+                let exp_row = match exp_row_v {
+                    serde_json::Value::Array(a) => a,
+                    _ => return (false, format!("ivp y[{var_idx}] not an array")),
+                };
+                if got_row.len() != exp_row.len() {
+                    return (
+                        false,
+                        format!(
+                            "ivp y[{var_idx}] length mismatch: got {}, expected {}",
+                            got_row.len(),
+                            exp_row.len()
+                        ),
+                    );
+                }
+                for (j, (gv, ev_json)) in got_row.iter().zip(exp_row.iter()).enumerate() {
+                    let ev = ev_json.as_f64().unwrap_or(f64::NAN);
+                    if !close(*gv, ev, atol, rtol) {
+                        return (
+                            false,
+                            format!(
+                                "ivp y[{var_idx}][{j}] mismatch: got {gv}, expected {ev}"
+                            ),
+                        );
+                    }
+                }
+            }
+            (true, format!("ivp match ({} steps, {} vars)", t.len(), y.len()))
         }
         ("error", IntegrateObserved::Error(msg))
         | ("error_kind", IntegrateObserved::Error(msg)) => {
