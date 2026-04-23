@@ -75,6 +75,39 @@ def _build_callable(expr_or_name: str) -> Callable[..., float]:
     return dispatched
 
 
+def _build_bvp_problem(name: str):
+    """Named BVP (f, bc) pair dispatcher for solve_bvp fixtures (br-9cla-4).
+
+    Returns (f, bc) where:
+      f(x, y)  — vectorized RHS: x is shape (n,), y is shape (k, n),
+                 returns dy/dx shape (k, n).
+      bc(ya, yb) — boundary-condition residuals: ya, yb are length-k,
+                   returns length-k residual vector.
+    """
+    import numpy as np
+
+    if name == "linear_y_double_prime_zero":
+        # y'' = 0, y(0) = 0, y(1) = 1. Exact: y(x) = x.
+        # System: y0' = y1, y1' = 0.
+        def f(x, y):
+            return np.vstack([y[1], np.zeros_like(x)])
+
+        def bc(ya, yb):
+            return np.array([ya[0], yb[0] - 1.0])
+
+        return f, bc
+    if name == "poisson_constant_source":
+        # y'' = -1, y(0) = 0, y(1) = 0. Exact: y(x) = x(1-x)/2.
+        def f(x, y):
+            return np.vstack([y[1], -np.ones_like(x)])
+
+        def bc(ya, yb):
+            return np.array([ya[0], yb[0]])
+
+        return f, bc
+    raise ValueError(f"unknown bvp problem: {name!r}")
+
+
 def _build_ivp_rhs(name: str) -> Callable[..., list]:
     """Named RHS dispatcher for solve_ivp fixtures (br-9cla-1).
 
@@ -170,6 +203,35 @@ def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
                 total += wi * fn(mid + half * xi)
             total *= half
             return _ok(case_id, "scalar", {"value": float(total)})
+
+        if function == "solve_bvp":
+            # br-9cla-4: collocation-based BVP. Named (f, bc) pair
+            # plus a mesh `x` and an initial guess `y_init` of shape
+            # (k, len(x)). Returns solution sampled at `x_eval` points
+            # via scipy's interpolating `.sol(x_eval)` callable.
+            problem = args["problem"]
+            f, bc = _build_bvp_problem(problem)
+            x = np.asarray(args["x"], dtype=float)
+            y_init = np.asarray(args["y_init"], dtype=float)
+            tol = float(args.get("tol", 1e-8))
+            x_eval = np.asarray(
+                args.get("x_eval", args["x"]), dtype=float
+            )
+            res = integrate.solve_bvp(f, bc, x, y_init, tol=tol)
+            y_sampled = res.sol(x_eval)
+            return _ok(
+                case_id,
+                "bvp_result",
+                {
+                    "x": [float(v) for v in x_eval.tolist()],
+                    "y": [[float(v) for v in row] for row in y_sampled.tolist()],
+                    "success": bool(res.success),
+                    "niter": int(res.niter),
+                    "rms_residuals": [
+                        float(v) for v in np.atleast_1d(res.rms_residuals).tolist()
+                    ],
+                },
+            )
 
         if function == "solve_ivp":
             # br-9cla-1: named-RHS dispatch. The Rust runner (9cla-2)
