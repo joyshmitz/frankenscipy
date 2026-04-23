@@ -1146,6 +1146,19 @@ pub struct CaspCase {
     pub condition_state: Option<String>,
     /// For calibrator: sequence of backward error observations
     pub observations: Option<Vec<f64>>,
+    /// PolicyController/SolverPortfolio ring-buffer capacity. Defaults to
+    /// 64 for backwards compatibility with existing fixtures. Per
+    /// frankenscipy-p71m: previously hardcoded in execute_casp_case.
+    #[serde(default)]
+    pub capacity: Option<usize>,
+    /// ConformalCalibrator significance level (alpha). Defaults to 0.05.
+    /// Per frankenscipy-p71m.
+    #[serde(default)]
+    pub alpha: Option<f64>,
+    /// ConformalCalibrator history capacity. Defaults to 200 per the
+    /// calibrator convention. Per frankenscipy-p71m.
+    #[serde(default)]
+    pub calibrator_capacity: Option<usize>,
     pub expected: CaspExpectedOutcome,
 }
 
@@ -2976,6 +2989,12 @@ fn solver_action_name(action: &fsci_runtime::SolverAction) -> &'static str {
 }
 
 fn execute_casp_case(case: &CaspCase) -> CaspObserved {
+    // Per frankenscipy-p71m: read tunables from fixture, defaulting to
+    // the legacy magic numbers so existing fixtures keep passing.
+    let capacity = case.capacity.unwrap_or(64);
+    let alpha = case.alpha.unwrap_or(0.05);
+    let calibrator_capacity = case.calibrator_capacity.unwrap_or(200);
+
     match case.test_kind {
         CaspTestKind::PolicyDecision => {
             let cond = case.condition_signal.unwrap_or(0.0);
@@ -2983,7 +3002,7 @@ fn execute_casp_case(case: &CaspCase) -> CaspObserved {
             let anom = case.anomaly_signal.unwrap_or(0.0);
 
             let signals = fsci_runtime::DecisionSignals::new(cond, meta, anom);
-            let mut controller = fsci_runtime::PolicyController::new(case.mode, 64);
+            let mut controller = fsci_runtime::PolicyController::new(case.mode, capacity);
             let decision = controller.decide(signals);
             CaspObserved::PolicyAction(policy_action_name(&decision.action).to_owned())
         }
@@ -3002,7 +3021,7 @@ fn execute_casp_case(case: &CaspCase) -> CaspObserved {
                     return CaspObserved::Error(format!("unknown condition state: {state_str}"));
                 }
             };
-            let portfolio = fsci_runtime::SolverPortfolio::new(case.mode, 64);
+            let portfolio = fsci_runtime::SolverPortfolio::new(case.mode, capacity);
             let rcond = match state {
                 fsci_runtime::MatrixConditionState::WellConditioned => 1e-2,
                 fsci_runtime::MatrixConditionState::ModerateCondition => 1e-6,
@@ -3021,7 +3040,8 @@ fn execute_casp_case(case: &CaspCase) -> CaspObserved {
                     );
                 }
             };
-            let mut calibrator = fsci_runtime::ConformalCalibrator::new(0.05, 200);
+            let mut calibrator =
+                fsci_runtime::ConformalCalibrator::new(alpha, calibrator_capacity);
             for obs in &observations {
                 calibrator.observe(*obs);
             }
