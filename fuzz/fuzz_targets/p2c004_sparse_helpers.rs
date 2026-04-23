@@ -324,6 +324,73 @@ fuzz_target!(|input: SparseHelpersInput| {
     let expected_triu = upper_triangle_dense(&primary_dense, diagonal_offset);
     assert_dense_eq(&actual_triu, &expected_triu, "triu");
 
+    // Metamorphic properties per br-66c2:
+    //
+    // 1. Idempotence: tril(tril(A, k), k) == tril(A, k). Applying the
+    //    filter to an already-filtered matrix must be a no-op.
+    // 2. Sparsity non-increase: nnz(tril(A, k)) <= nnz(A) and
+    //    nnz(triu(A, k)) <= nnz(A). Dropping entries cannot add any.
+    // 3. Disjoint decomposition at boundary k+1: tril(A, k) and
+    //    triu(A, k+1) cover disjoint index sets whose union is all of
+    //    A, so elementwise sum of their dense forms equals A.
+    //
+    // All three were missing from this harness; they give fuzzing a way
+    // to catch index-math off-by-ones that the single dense-shadow oracle
+    // above would miss only if the bug happened to flip cells that are
+    // both zero in the input (silently passing the shadow check).
+
+    let tril_idem = tril(&actual_tril_sparse, diagonal_offset)
+        .expect("tril on an already-lower matrix should succeed");
+    assert_dense_eq(
+        &dense_from_coo(&tril_idem),
+        &actual_tril,
+        "tril idempotence",
+    );
+
+    let triu_idem = triu(&actual_triu_sparse, diagonal_offset)
+        .expect("triu on an already-upper matrix should succeed");
+    assert_dense_eq(
+        &dense_from_coo(&triu_idem),
+        &actual_triu,
+        "triu idempotence",
+    );
+
+    let primary_nnz = find_triplets_from_dense(&primary_dense).len();
+    assert!(
+        actual_tril_sparse.nnz() <= primary_nnz,
+        "tril nnz must not exceed input nnz: \
+         tril_nnz={}, input_nnz={}, k={diagonal_offset}",
+        actual_tril_sparse.nnz(),
+        primary_nnz
+    );
+    assert!(
+        actual_triu_sparse.nnz() <= primary_nnz,
+        "triu nnz must not exceed input nnz: \
+         triu_nnz={}, input_nnz={}, k={diagonal_offset}",
+        actual_triu_sparse.nnz(),
+        primary_nnz
+    );
+
+    // Disjoint decomposition: tril(A, k) + triu(A, k+1) == A as dense.
+    // Skip when k == isize::MAX (the clamp already caps at MAX_DIAGONAL_OFFSET
+    // so this is only theoretical, but keep the guard explicit).
+    if let Some(k_upper) = diagonal_offset.checked_add(1)
+        && let Ok(upper_complement) = triu(&primary, k_upper)
+    {
+        let upper_complement_dense = dense_from_coo(&upper_complement);
+        let mut combined = actual_tril.clone();
+        for (row, upper_row) in combined.iter_mut().zip(&upper_complement_dense) {
+            for (slot, &value) in row.iter_mut().zip(upper_row) {
+                *slot += value;
+            }
+        }
+        assert_dense_eq(
+            &combined,
+            &primary_dense,
+            "tril(A, k) + triu(A, k+1) partitions A",
+        );
+    }
+
     let blocks = [
         primary.as_format_convertible(),
         secondary.as_format_convertible(),
