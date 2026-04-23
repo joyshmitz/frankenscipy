@@ -6,7 +6,9 @@
 //! Matches `scipy.integrate.solve_ivp(method='BDF')`.
 
 use crate::solver::{OdeSolverState, StepFailure, StepOutcome};
-use crate::validation::ToleranceValue;
+use crate::validation::{
+    ToleranceValue, validate_first_step, validate_max_step, validate_tol,
+};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
@@ -85,6 +87,27 @@ impl BdfSolver {
         F: FnMut(f64, &[f64]) -> Vec<f64>,
     {
         let n = config.y0.len();
+
+        // Input validation mirrors RkSolver::new (per frankenscipy-ljmg):
+        // previously BdfSolver::new did ZERO validation — a caller passing
+        // rtol=NaN, max_step=NaN, first_step=Some(NaN) etc. started a solver
+        // that then burned Newton iterations until StepSizeTooSmall.
+        let _validated_tol = validate_tol(
+            ToleranceValue::Scalar(config.rtol),
+            config.atol.clone(),
+            n,
+            config.mode,
+        )?;
+        if config.max_step.is_nan() {
+            return Err(crate::IntegrateValidationError::MaxStepMustBePositive);
+        }
+        if config.max_step.is_finite() {
+            validate_max_step(config.max_step)?;
+        }
+        if let Some(first) = config.first_step {
+            validate_first_step(first, config.t0, config.t_bound)?;
+        }
+
         let direction = if config.t_bound >= config.t0 {
             1.0
         } else {

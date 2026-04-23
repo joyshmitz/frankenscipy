@@ -468,7 +468,12 @@ impl RkSolver {
             .expect("RkSolverConfig always carries scalar rtol");
         let atol = validated_tol.atol;
 
-        // Validate max_step
+        // Validate max_step (per frankenscipy-ljmg / i9vw): NaN fails
+        // closed via validate_max_step; Inf is accepted as "no cap" per
+        // scipy convention (default max_step = Inf).
+        if config.max_step.is_nan() {
+            return Err(IntegrateValidationError::MaxStepMustBePositive);
+        }
         if config.max_step.is_finite() {
             validate_max_step(config.max_step)?;
         }
@@ -563,7 +568,12 @@ impl RkSolver {
             .expect("RkSolverConfig always carries scalar rtol");
         let atol = validated_tol.atol;
 
-        // Validate max_step
+        // Validate max_step (per frankenscipy-ljmg / i9vw): NaN fails
+        // closed via validate_max_step; Inf is accepted as "no cap" per
+        // scipy convention (default max_step = Inf).
+        if config.max_step.is_nan() {
+            return Err(IntegrateValidationError::MaxStepMustBePositive);
+        }
         if config.max_step.is_finite() {
             validate_max_step(config.max_step)?;
         }
