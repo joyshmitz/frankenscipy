@@ -266,6 +266,7 @@ pub enum ExpectedOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ValidateTolCase {
     pub case_id: String,
     pub mode: RuntimeMode,
@@ -477,6 +478,7 @@ impl LinalgCase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct LinalgPacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -606,6 +608,7 @@ impl OptimizeCase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct OptimizePacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -887,6 +890,7 @@ pub enum SpecialExpectedOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SpecialCase {
     pub case_id: String,
     pub category: String,
@@ -919,6 +923,7 @@ impl SpecialCase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SpecialPacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -979,6 +984,7 @@ pub enum SparseExpectedOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SparseCase {
     pub case_id: String,
     pub category: String,
@@ -1004,6 +1010,7 @@ impl SparseCase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SparsePacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -1071,6 +1078,7 @@ pub enum FftExpectedOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct FftCase {
     pub case_id: String,
     pub category: String,
@@ -1097,6 +1105,7 @@ impl FftCase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct FftPacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -1123,6 +1132,7 @@ pub enum CaspExpectedOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct CaspCase {
     pub case_id: String,
     pub category: String,
@@ -1146,6 +1156,7 @@ impl CaspCase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct CaspPacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -1433,6 +1444,7 @@ impl ArrayApiCase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ArrayApiPacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -3081,6 +3093,7 @@ fn compare_casp_outcome(expected: &CaspExpectedOutcome, observed: &CaspObserved)
 
 /// Fixture for cluster conformance testing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClusterPacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -3089,6 +3102,7 @@ pub struct ClusterPacketFixture {
 
 /// A single cluster conformance test case.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClusterCase {
     pub case_id: String,
     pub category: String,
@@ -3522,6 +3536,7 @@ pub fn run_cluster_packet(
 // ══════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpatialPacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -3529,6 +3544,7 @@ pub struct SpatialPacketFixture {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpatialCase {
     pub case_id: String,
     pub category: String,
@@ -4221,6 +4237,7 @@ pub fn run_spatial_packet(
 // ══════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignalPacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -4228,6 +4245,7 @@ pub struct SignalPacketFixture {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignalCase {
     pub case_id: String,
     pub category: String,
@@ -4676,6 +4694,7 @@ pub fn run_signal_packet(
 // ══════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StatsPacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -4683,6 +4702,7 @@ pub struct StatsPacketFixture {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StatsCase {
     pub case_id: String,
     pub category: String,
@@ -5220,6 +5240,7 @@ pub fn run_stats_packet(
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntegratePacketFixture {
     pub packet_id: String,
     pub family: String,
@@ -5227,6 +5248,7 @@ pub struct IntegratePacketFixture {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntegrateCase {
     pub case_id: String,
     pub category: String,
