@@ -142,6 +142,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c006_special_hyper_broadcast"
+path = "fuzz_targets/p2c006_special_hyper_broadcast.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c007_stats_fit_survives_nan_inf"
 path = "fuzz_targets/p2c007_stats_fit_survives_nan_inf.rs"
 test = false
