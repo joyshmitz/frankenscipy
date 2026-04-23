@@ -1661,10 +1661,15 @@ pub struct PythonOracleConfig {
 
 impl Default for PythonOracleConfig {
     fn default() -> Self {
+        // Sentinel script path that does not exist; callers MUST either
+        // route via `resolve_differential_oracle_config(family)` or set
+        // `script_path` explicitly. This avoids the latent misrouting
+        // where a non-linalg family silently invoked scipy_linalg_oracle.py
+        // because the old default pointed there (bpmm).
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         Self {
             python_bin: PathBuf::from("python3"),
-            script_path: manifest.join("python_oracle/scipy_linalg_oracle.py"),
+            script_path: manifest.join("python_oracle/NO_DEFAULT_ORACLE_SET.py"),
             required: false,
         }
     }
@@ -8341,10 +8346,16 @@ pub struct DifferentialOracleConfig {
 
 impl Default for DifferentialOracleConfig {
     fn default() -> Self {
+        // Sentinel script path that does not exist; callers MUST route
+        // via `resolve_differential_oracle_config(family)` to pick the
+        // correct scipy_<family>_oracle.py, or set `script_path` explicitly.
+        // See bpmm — the prior default pointed at scipy_linalg_oracle.py,
+        // which silently misrouted non-linalg families in any code path
+        // that skipped the resolve step.
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         Self {
             python_path: PathBuf::from("python3"),
-            script_path: manifest.join("python_oracle/scipy_linalg_oracle.py"),
+            script_path: manifest.join("python_oracle/NO_DEFAULT_ORACLE_SET.py"),
             timeout_secs: 30,
             required: false,
         }
@@ -14236,6 +14247,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
         let oracle = PythonOracleConfig {
             required: true,
+            script_path: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("python_oracle/scipy_linalg_oracle.py"),
             ..PythonOracleConfig::default()
         };
 
