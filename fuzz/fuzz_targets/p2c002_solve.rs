@@ -41,6 +41,41 @@ fn clamp_dimension(raw: u8) -> usize {
     usize::from(raw) % (MAX_DIM + 1)
 }
 
+/// Residual oracle: for a successful solve, ||Ax - b||_inf must be
+/// small relative to ||A||_inf * ||x||_inf + ||b||_inf (scale-aware).
+/// This is strength-4 (metamorphic) — see br-66c2. Failures here
+/// indicate solve returned an `Ok` with a garbage x.
+fn check_residual(a: &[Vec<f64>], x: &[f64], b: &[f64]) -> bool {
+    if a.is_empty() || x.is_empty() || b.is_empty() {
+        return true;
+    }
+    let n = a.len();
+    let mut resid = 0.0_f64;
+    let mut ax_scale = 0.0_f64;
+    let mut b_scale = 0.0_f64;
+    for i in 0..n {
+        if a[i].len() != x.len() {
+            return true; // shape handled elsewhere
+        }
+        let mut ax_i = 0.0_f64;
+        for (j, &xj) in x.iter().enumerate() {
+            ax_i += a[i][j] * xj;
+        }
+        if !ax_i.is_finite() {
+            return true; // fp overflow — oracle cannot adjudicate
+        }
+        let bi = b[i];
+        ax_scale = ax_scale.max(ax_i.abs());
+        b_scale = b_scale.max(bi.abs());
+        resid = resid.max((ax_i - bi).abs());
+    }
+    let scale = ax_scale.max(b_scale).max(1.0);
+    // Loose tolerance: a conforming solve usually achieves < 1e-8
+    // relative residual; we guard against orders-of-magnitude failures
+    // rather than tight accuracy. Tight oracle lives in conformance.
+    resid / scale < 1e-4
+}
+
 fuzz_target!(|input: SolveInput| {
     let rows = clamp_dimension(input.rows);
     let cols = clamp_dimension(input.cols);
@@ -58,5 +93,17 @@ fuzz_target!(|input: SolveInput| {
         lower: input.lower,
         transposed: input.transposed,
     };
-    let _ = solve(&a, &b, options);
+    if let Ok(result) = solve(&a, &b, options)
+        && rows == cols
+        && rows > 0
+        && !input.transposed
+        && result.x.iter().all(|v| v.is_finite())
+        && a.iter().flatten().all(|v| v.is_finite())
+        && b.iter().all(|v| v.is_finite())
+    {
+        assert!(
+            check_residual(&a, &result.x, &b),
+            "solve returned Ok but ||Ax - b|| exceeded sanity bound"
+        );
+    }
 });
