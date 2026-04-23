@@ -1662,7 +1662,22 @@ pub fn run_linalg_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_linalg_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_linalg_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_linalg_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message) = compare_linalg_case(case.expected(), &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -1705,7 +1720,22 @@ fn run_linalg_packet_against_oracle_capture(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_linalg_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_linalg_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_linalg_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let Some(oracle_case) = oracle_capture
             .case_outputs
             .iter()
@@ -1752,7 +1782,22 @@ pub fn run_optimize_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_optimize_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_optimize_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_optimize_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message, _, _) =
             compare_optimize_case_differential(case.expected(), &observed);
         case_results.push(CaseResult {
@@ -1786,7 +1831,22 @@ pub fn run_special_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_special_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_special_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_special_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message, _, _) = compare_special_case_differential(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -1819,7 +1879,22 @@ pub fn run_array_api_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_array_api_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_array_api_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_array_api_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message, _, _) = compare_array_api_case_differential(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -1852,7 +1927,22 @@ pub fn run_sparse_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_sparse_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_sparse_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_sparse_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message) = compare_sparse_outcome(&case.expected, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -2121,7 +2211,22 @@ pub fn run_fft_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_fft_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_fft_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_fft_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message) = compare_fft_outcome(&case.expected, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -2691,7 +2796,22 @@ pub fn run_casp_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_casp_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_casp_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_casp_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message) = compare_casp_outcome(&case.expected, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -3266,7 +3386,22 @@ pub fn run_cluster_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_cluster_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_cluster_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_cluster_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message) = compare_cluster_outcome(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -3950,7 +4085,22 @@ pub fn run_spatial_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_spatial_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_spatial_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_spatial_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message) = compare_spatial_outcome(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -4390,7 +4540,22 @@ pub fn run_signal_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_signal_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_signal_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_signal_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message) = compare_signal_outcome(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -4919,7 +5084,22 @@ pub fn run_stats_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_stats_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_stats_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_stats_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message) = compare_stats_outcome(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -5928,7 +6108,22 @@ pub fn run_integrate_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = execute_integrate_case(case);
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_integrate_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_integrate_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
         let (passed, message) = compare_integrate_outcome(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
