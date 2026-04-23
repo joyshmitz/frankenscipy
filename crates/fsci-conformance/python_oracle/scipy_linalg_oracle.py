@@ -203,6 +203,142 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
                 "error": None,
             }
 
+        # --- Decompositions (added per frankenscipy-5dr4) -----------------
+        # The following dispatchers expand oracle coverage beyond the
+        # solve/inv/det/lstsq/pinv set. Each uses np.asarray WITHOUT a
+        # forced float64 dtype so complex fixture inputs survive.
+        if operation == "lu":
+            a = np.asarray(case["a"])
+            permute_l = bool(case.get("permute_l", False))
+            if permute_l:
+                pl, u = linalg.lu(a, permute_l=True)
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "lu_permute_l",
+                    "result": {
+                        "pl": _to_list(pl),
+                        "u": _to_list(u),
+                    },
+                    "error": None,
+                }
+            p, l, u = linalg.lu(a)
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "lu",
+                "result": {
+                    "p": _to_list(p),
+                    "l": _to_list(l),
+                    "u": _to_list(u),
+                },
+                "error": None,
+            }
+
+        if operation == "qr":
+            a = np.asarray(case["a"])
+            mode = case.get("mode", "full")
+            if mode == "r":
+                r, = linalg.qr(a, mode="r")
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "qr_r_only",
+                    "result": {"r": _to_list(r)},
+                    "error": None,
+                }
+            q, r = linalg.qr(a, mode="full" if mode != "economic" else "economic")
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "qr",
+                "result": {
+                    "q": _to_list(q),
+                    "r": _to_list(r),
+                },
+                "error": None,
+            }
+
+        if operation == "svd":
+            a = np.asarray(case["a"])
+            full_matrices = bool(case.get("full_matrices", True))
+            compute_uv = bool(case.get("compute_uv", True))
+            if not compute_uv:
+                s = linalg.svd(a, compute_uv=False)
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "svdvals",
+                    "result": {"singular_values": [float(v) for v in _to_list(s)]},
+                    "error": None,
+                }
+            u, s, vh = linalg.svd(a, full_matrices=full_matrices)
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "svd",
+                "result": {
+                    "u": _to_list(u),
+                    "s": [float(v) for v in _to_list(s)],
+                    "vh": _to_list(vh),
+                },
+                "error": None,
+            }
+
+        if operation == "cholesky":
+            a = np.asarray(case["a"])
+            lower = bool(case.get("lower", False))
+            result = linalg.cholesky(a, lower=lower)
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "cholesky",
+                "result": {"factor": _to_list(result), "lower": lower},
+                "error": None,
+            }
+
+        if operation == "eig":
+            a = np.asarray(case["a"])
+            w, v = linalg.eig(a)
+            # eigenvalues may be complex; encode re+im pairs
+            w_list = [[float(x.real), float(x.imag)] for x in _to_list(w)]
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "eig",
+                "result": {
+                    "eigenvalues_reim": w_list,
+                    "eigenvectors": _to_list(v),
+                },
+                "error": None,
+            }
+
+        if operation == "eigh":
+            a = np.asarray(case["a"])
+            lower = bool(case.get("lower", True))
+            w, v = linalg.eigh(a, lower=lower)
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "eigh",
+                "result": {
+                    "eigenvalues": [float(x) for x in _to_list(w)],
+                    "eigenvectors": _to_list(v),
+                },
+                "error": None,
+            }
+
+        if operation == "expm":
+            a = np.asarray(case["a"])
+            result = linalg.expm(a)
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "expm",
+                "result": {"values": _to_list(result)},
+                "error": None,
+            }
+
         return {
             "case_id": case_id,
             "status": "error",
