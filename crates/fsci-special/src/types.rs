@@ -264,6 +264,7 @@ pub struct DispatchPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpecialErrorKind {
     DomainError,
+    FixtureSchemaError,
     PoleInput,
     NonFiniteInput,
     CancellationRisk,

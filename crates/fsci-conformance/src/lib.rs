@@ -10663,7 +10663,7 @@ fn special_derivative_order_argument_from_fixture(
         }
         _ => Err(FsciSpecialError {
             function,
-            kind: FsciSpecialErrorKind::DomainError,
+            kind: FsciSpecialErrorKind::FixtureSchemaError,
             mode,
             detail: "derivative order fixture must be a real scalar",
         }),
@@ -10680,7 +10680,7 @@ fn special_derivative_order_from_fixture(
     }
     Err(FsciSpecialError {
         function,
-        kind: FsciSpecialErrorKind::DomainError,
+        kind: FsciSpecialErrorKind::FixtureSchemaError,
         mode,
         detail: "derivative order fixture must be a non-negative integer",
     })
@@ -10700,7 +10700,7 @@ fn special_i32_from_fixture(
     }
     Err(FsciSpecialError {
         function,
-        kind: FsciSpecialErrorKind::DomainError,
+        kind: FsciSpecialErrorKind::FixtureSchemaError,
         mode,
         detail: "fixture argument must be a finite i32 integer",
     })
@@ -10720,7 +10720,7 @@ fn special_i64_from_fixture(
     }
     Err(FsciSpecialError {
         function,
-        kind: FsciSpecialErrorKind::DomainError,
+        kind: FsciSpecialErrorKind::FixtureSchemaError,
         mode,
         detail: "fixture argument must be a finite i64 integer",
     })
@@ -10736,7 +10736,7 @@ fn special_u32_from_fixture(
     }
     Err(FsciSpecialError {
         function,
-        kind: FsciSpecialErrorKind::DomainError,
+        kind: FsciSpecialErrorKind::FixtureSchemaError,
         mode,
         detail: "fixture argument must be a finite u32 integer",
     })
@@ -10752,7 +10752,7 @@ fn special_u64_from_fixture(
     }
     Err(FsciSpecialError {
         function,
-        kind: FsciSpecialErrorKind::DomainError,
+        kind: FsciSpecialErrorKind::FixtureSchemaError,
         mode,
         detail: "fixture argument must be a finite u64 integer",
     })
@@ -10768,7 +10768,7 @@ fn special_usize_from_fixture(
     }
     Err(FsciSpecialError {
         function,
-        kind: FsciSpecialErrorKind::DomainError,
+        kind: FsciSpecialErrorKind::FixtureSchemaError,
         mode,
         detail: "fixture argument must be a finite usize integer",
     })
@@ -10781,7 +10781,7 @@ fn roots_component(
 ) -> Result<f64, FsciSpecialError> {
     component.copied().ok_or(FsciSpecialError {
         function,
-        kind: FsciSpecialErrorKind::DomainError,
+        kind: FsciSpecialErrorKind::FixtureSchemaError,
         mode,
         detail: "roots fixture index is out of range",
     })
@@ -10796,7 +10796,7 @@ fn special_scalar_from_tensor(
         FsciSpecialTensor::RealScalar(value) => Ok(value),
         _ => Err(FsciSpecialError {
             function,
-            kind: FsciSpecialErrorKind::NotYetImplemented,
+            kind: FsciSpecialErrorKind::FixtureSchemaError,
             mode,
             detail: "expected scalar output in conformance fixture",
         }),
@@ -10806,7 +10806,7 @@ fn special_scalar_from_tensor(
 fn special_invalid_fixture_error(function: &'static str, mode: RuntimeMode) -> FsciSpecialError {
     FsciSpecialError {
         function,
-        kind: FsciSpecialErrorKind::DomainError,
+        kind: FsciSpecialErrorKind::FixtureSchemaError,
         mode,
         detail: "invalid fixture arity for special case",
     }
@@ -11620,6 +11620,30 @@ mod tests {
         assert!(super::allclose_scalar(f64::NAN, f64::NAN, 1.0e-12, 1.0e-12));
         assert!(!super::allclose_scalar(f64::NAN, 0.0, 1.0e-12, 1.0e-12));
         assert!(!super::allclose_scalar(0.0, f64::NAN, 1.0e-12, 1.0e-12));
+    }
+
+    #[test]
+    fn special_fixture_schema_errors_do_not_match_domain_errors() {
+        let case = super::SpecialCase {
+            case_id: "fixture_arity".to_owned(),
+            category: "differential".to_owned(),
+            mode: RuntimeMode::Strict,
+            function: super::SpecialCaseFunction::Gamma,
+            args: vec![],
+            expected: super::SpecialExpectedOutcome::ErrorKind {
+                error: "DomainError".to_owned(),
+            },
+        };
+        let observed = Err(super::special_invalid_fixture_error(
+            "gamma",
+            RuntimeMode::Strict,
+        ));
+
+        let (passed, message, _, _) = super::compare_special_case_differential(&case, &observed);
+
+        assert!(!passed);
+        assert!(message.contains("expected=DomainError"));
+        assert!(message.contains("FixtureSchemaError"));
     }
 
     #[test]
