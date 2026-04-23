@@ -18856,7 +18856,9 @@ mod tests {
     fn multivariate_normal_rvs_tracks_mean() {
         let rv = MultivariateNormal::new(&[1.0, -2.0], &[vec![1.0, 0.3], vec![0.3, 1.5]])
             .expect("multivariate normal");
-        let mut rng = rand::rng();
+        // br-otdp: deterministic seed eliminates ~6e-7 per-axis flake rate
+        // from thread-local rand::rng().
+        let mut rng = StdRng::seed_from_u64(42);
         let samples = rv.rvs(4000, &mut rng);
         let mean0 = samples.iter().map(|row| row[0]).sum::<f64>() / samples.len() as f64;
         let mean1 = samples.iter().map(|row| row[1]).sum::<f64>() / samples.len() as f64;
@@ -18891,7 +18893,7 @@ mod tests {
     #[test]
     fn dirichlet_rvs_sum_to_one() {
         let d = Dirichlet::new(&[1.0, 2.0, 3.0]);
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let samples = d.rvs(100, &mut rng);
         for sample in &samples {
             let sum: f64 = sample.iter().sum();
@@ -19836,7 +19838,9 @@ mod tests {
     #[test]
     fn rvs_normal_sample_mean() {
         let n = Normal::new(5.0, 1.0);
-        let mut rng = rand::rng();
+        // br-otdp: deterministic seed eliminates ~0.27% flake rate
+        // (exceeded the quality_gates max_flake_rate of 0.001).
+        let mut rng = StdRng::seed_from_u64(42);
         let samples = n.rvs(10_000, &mut rng);
         let mean: f64 = samples.iter().sum::<f64>() / samples.len() as f64;
         assert!(
@@ -19848,7 +19852,7 @@ mod tests {
     #[test]
     fn rvs_uniform_bounds() {
         let u = Uniform::new(2.0, 3.0); // [2, 5]
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let samples = u.rvs(1000, &mut rng);
         assert!(
             samples.iter().all(|&x| (2.0..=5.0).contains(&x)),
@@ -19859,7 +19863,7 @@ mod tests {
     #[test]
     fn rvs_exponential_positive() {
         let e = Exponential::new(1.0);
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let samples = e.rvs(1000, &mut rng);
         assert!(
             samples.iter().all(|&x| x >= 0.0),
