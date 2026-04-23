@@ -4252,16 +4252,56 @@ fn compare_unordered_points(
         ));
     }
 
-    let mut matched = vec![false; got.len()];
-    for expected_point in expected {
-        let Some(match_idx) = got.iter().enumerate().position(|(idx, candidate)| {
-            !matched[idx] && points_close(candidate, expected_point, atol, rtol)
-        }) else {
+    // Maximum bipartite matching via DFS augmenting paths (Hungarian
+    // matching phase). Greedy `position(...)` fails when an early
+    // expected point consumes a `got` candidate that is the ONLY
+    // within-tolerance match for a later expected point — see br-cwgm.
+    // This runs in O(E * V); conformance point sets are small (<100).
+    let n = expected.len();
+    // adj[e] = list of got indices within tolerance of expected[e].
+    let mut adj: Vec<Vec<usize>> = Vec::with_capacity(n);
+    for ep in expected {
+        let mut row = Vec::new();
+        for (idx, gp) in got.iter().enumerate() {
+            if points_close(gp, ep, atol, rtol) {
+                row.push(idx);
+            }
+        }
+        adj.push(row);
+    }
+
+    // match_of_got[g] = expected index currently matched to got[g], or None.
+    let mut match_of_got: Vec<Option<usize>> = vec![None; got.len()];
+
+    fn try_augment(
+        e: usize,
+        adj: &[Vec<usize>],
+        match_of_got: &mut [Option<usize>],
+        visited: &mut [bool],
+    ) -> bool {
+        for &g in &adj[e] {
+            if visited[g] {
+                continue;
+            }
+            visited[g] = true;
+            if match_of_got[g].is_none()
+                || try_augment(match_of_got[g].unwrap(), adj, match_of_got, visited)
+            {
+                match_of_got[g] = Some(e);
+                return true;
+            }
+        }
+        false
+    }
+
+    for e in 0..n {
+        let mut visited = vec![false; got.len()];
+        if !try_augment(e, &adj, &mut match_of_got, &mut visited) {
             return Err(format!(
-                "{label} missing expected point {expected_point:?}; got {got:?}"
+                "{label} missing expected point {:?}; got {got:?}",
+                expected[e]
             ));
-        };
-        matched[match_idx] = true;
+        }
     }
     Ok(())
 }
@@ -16448,6 +16488,24 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(PacketFamily::Special.has_runner());
         assert!(PacketFamily::ArrayApi.has_runner());
         assert!(PacketFamily::RuntimeCasp.has_runner());
+    }
+
+    #[test]
+    fn compare_unordered_points_handles_greedy_trap() {
+        // br-cwgm: greedy matching would assign A→X first, leaving B with
+        // only the out-of-tol Y, but optimal matches A→Y and B→X. Hungarian
+        // (augmenting paths) must find the optimal matching.
+        let expected = vec![
+            vec![0.0, 0.0], // A
+            vec![0.4, 0.0], // B
+        ];
+        let got = vec![
+            vec![0.1, 0.0], // X: diff 0.1 from A, diff 0.3 from B
+            vec![0.5, 0.0], // Y: diff 0.5 from A (within tol), diff 1.1 from B (out of tol)
+        ];
+        // atol = 0.6 so A is within tol of both X and Y; B is within tol of X only.
+        let r = super::compare_unordered_points(&got, &expected, 0.6, 0.0, "cwgm-test");
+        assert!(r.is_ok(), "must find optimal matching, got err: {r:?}");
     }
 
     #[test]
