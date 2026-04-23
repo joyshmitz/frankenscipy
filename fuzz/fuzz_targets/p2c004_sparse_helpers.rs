@@ -2,8 +2,8 @@
 
 use arbitrary::Arbitrary;
 use fsci_sparse::{
-    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, Shape2D, SparseError, find, hstack, tril,
-    triu, vstack,
+    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, Shape2D, SparseError, add_csr, find,
+    hstack, sub_csr, tril, triu, vstack,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -443,6 +443,56 @@ fuzz_target!(|input: SparseHelpersInput| {
                 matches!(hstack(&blocks), Err(SparseError::IncompatibleShape { .. })),
                 "hstack should reject mismatched row counts"
             );
+        }
+    }
+
+    // Metamorphic properties of sparse addition per br-66c2:
+    //
+    // 1. Commutativity — add_csr(A, B) == add_csr(B, A) (as dense). When
+    //    shapes mismatch, both directions must error identically (no
+    //    spooky order-dependent acceptance).
+    // 2. Subtractive inverse — (A + B) - B == A (as dense) when the
+    //    shapes allow. Exercises the sign path in combine_coo as well
+    //    as cancellation of coincident (row, col) entries.
+    //
+    // Shape mismatch is the norm since primary and secondary are
+    // independently sized; the assertions therefore cover both the
+    // accept and the reject paths.
+    let primary_csr_result = primary.as_format_convertible().to_csr();
+    let secondary_csr_result = secondary.as_format_convertible().to_csr();
+    if let (Ok(primary_csr), Ok(secondary_csr)) = (primary_csr_result, secondary_csr_result) {
+        let ab = add_csr(&primary_csr, &secondary_csr);
+        let ba = add_csr(&secondary_csr, &primary_csr);
+        match (ab, ba) {
+            (Ok(lhs), Ok(rhs)) => {
+                let lhs_coo = lhs.to_coo().expect("add_csr result must round-trip to COO");
+                let rhs_coo = rhs.to_coo().expect("add_csr result must round-trip to COO");
+                assert_dense_eq(
+                    &dense_from_coo(&lhs_coo),
+                    &dense_from_coo(&rhs_coo),
+                    "add commutativity",
+                );
+                // (A + B) - B == A. sub_csr shares shape-check and
+                // combine_coo plumbing so this catches sign-path bugs
+                // the forward direction alone would miss.
+                if let Ok(inverse) = sub_csr(&lhs, &secondary_csr) {
+                    let inverse_coo = inverse
+                        .to_coo()
+                        .expect("sub_csr result must round-trip to COO");
+                    assert_dense_eq(
+                        &dense_from_coo(&inverse_coo),
+                        &primary_dense,
+                        "subtractive inverse: (A + B) - B == A",
+                    );
+                }
+            }
+            (
+                Err(SparseError::IncompatibleShape { .. }),
+                Err(SparseError::IncompatibleShape { .. }),
+            ) => {}
+            (lhs, rhs) => panic!(
+                "add_csr commutativity broken: A+B={lhs:?} but B+A={rhs:?}",
+            ),
         }
     }
 });
