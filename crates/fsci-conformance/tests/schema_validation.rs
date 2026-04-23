@@ -614,3 +614,98 @@ fn artifact_topology_document_exists() {
         "document must include governance section"
     );
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Fixture envelope validation (per frankenscipy-vh06)
+// ══════════════════════════════════════════════════════════════════════
+//
+// Loads every FSCI-P2C-*.json fixture under fixtures/ and checks its
+// common envelope: packet_id, family, cases array. For each case,
+// verifies a case_id is present. Goes beyond the inline-sample tests
+// above which only exercise the 3 contract schemas against hand-typed
+// JSON — this sweep covers the actual fixtures used by the packet
+// runners.
+
+#[test]
+fn all_fixtures_have_valid_envelope() {
+    let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let mut violations: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+
+    let entries = fs::read_dir(&fixtures_dir)
+        .unwrap_or_else(|e| panic!("read fixtures dir {fixtures_dir:?}: {e}"));
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !(name.starts_with("FSCI-P2C-") && name.ends_with(".json")) {
+            continue;
+        }
+        let raw = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                violations.push(format!("{name}: read failed: {e}"));
+                continue;
+            }
+        };
+        let value: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                violations.push(format!("{name}: JSON parse failed: {e}"));
+                continue;
+            }
+        };
+        let obj = match value.as_object() {
+            Some(o) => o,
+            None => {
+                violations.push(format!("{name}: top-level is not an object"));
+                continue;
+            }
+        };
+        for req in ["packet_id", "family", "cases"] {
+            if !obj.contains_key(req) {
+                violations.push(format!("{name}: missing required field `{req}`"));
+            }
+        }
+        // Validate cases array shape if present.
+        if let Some(cases) = obj.get("cases").and_then(|v| v.as_array()) {
+            for (i, case) in cases.iter().enumerate() {
+                let Some(case_obj) = case.as_object() else {
+                    violations.push(format!("{name}: cases[{i}] is not an object"));
+                    continue;
+                };
+                if !case_obj.contains_key("case_id") && !case_obj.contains_key("fixture_id") {
+                    violations.push(format!("{name}: cases[{i}] missing `case_id` / `fixture_id`"));
+                }
+                // Expected outcome must be present (either `expected` or
+                // its legacy names). validate_tol fixtures use `expected`;
+                // constants uses `expected_properties`.
+                let has_expected = case_obj.contains_key("expected")
+                    || case_obj.contains_key("expected_properties");
+                if !has_expected {
+                    let case_id = case_obj
+                        .get("case_id")
+                        .or_else(|| case_obj.get("fixture_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("<missing>");
+                    violations.push(format!(
+                        "{name}: cases[{i}] case_id={case_id} missing `expected` or `expected_properties`"
+                    ));
+                }
+            }
+        } else if obj.contains_key("cases") {
+            violations.push(format!("{name}: `cases` is present but not an array"));
+        }
+        checked += 1;
+    }
+
+    assert!(checked > 0, "no fixtures found under {fixtures_dir:?}");
+    assert!(
+        violations.is_empty(),
+        "fixture envelope violations across {checked} files:\n  - {}",
+        violations.join("\n  - ")
+    );
+    eprintln!("\n── Fixture envelope validation ──\n  {checked} fixtures passed envelope check");
+}
