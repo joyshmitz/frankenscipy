@@ -225,6 +225,17 @@ where
     ))
 }
 
+/// Root finder dispatched as `brenth`.
+///
+/// # Implementation note
+/// This is currently an ALIAS for [`brentq`]; it runs Brent's method with
+/// inverse-quadratic interpolation and relabels the output. SciPy's
+/// `brenth` uses hyperbolic interpolation (Harris 1970) which has
+/// different convergence dynamics on functions with near-horizontal
+/// tangents. A caller selecting `brenth` for its documented Brent-Harris
+/// convergence behavior will observe `brentq`-equivalent iteration counts
+/// and numerical traces here. Tracked by frankenscipy-88gz; the algorithm
+/// swap-in will change this docstring.
 pub fn brenth<F>(f: F, bracket: (f64, f64), options: RootOptions) -> Result<RootResult, OptError>
 where
     F: Fn(f64) -> f64,
@@ -407,10 +418,19 @@ where
     ))
 }
 
-/// TOMS Algorithm 748: high-order bracketing root finder.
+/// Root finder dispatched as `toms748`.
 ///
-/// Combines inverse cubic interpolation with bisection as fallback.
-/// Matches `scipy.optimize.toms748`.
+/// # Implementation note
+/// This currently implements an **Illinois-modified Regula Falsi**
+/// (secant-interpolant with a mid-50% fallback to bisection), NOT the
+/// TOMS Algorithm 748 of Alefeld-Potra-Shi 1995 whose cubic inverse
+/// interpolation yields an asymptotic convergence rate of
+/// `4^(1/3) ≈ 1.587`. Regula-Falsi convergence here is golden-ratio
+/// (`≈ 1.618`). A scipy-migrating caller selecting `toms748` for the
+/// AP-Shi convergence proof or the double-length interval taking
+/// technique will observe different iteration dynamics here. Tracked
+/// by frankenscipy-88gz; the algorithm swap-in will change this
+/// docstring.
 pub fn toms748<F>(f: F, bracket: (f64, f64), options: RootOptions) -> Result<RootResult, OptError>
 where
     F: Fn(f64) -> f64,
