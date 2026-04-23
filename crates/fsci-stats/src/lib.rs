@@ -49,10 +49,29 @@ pub trait ContinuousDistribution {
         log_probability(self.cdf(x))
     }
     /// Survival function: 1 - cdf(x).
+    ///
+    /// # Precision
+    ///
+    /// **The default `1.0 - self.cdf(x)` loses precision in the right
+    /// tail** (per frankenscipy-wofb). For x far in the tail where
+    /// cdf(x) is near 1, the subtraction drops most significant digits
+    /// (Normal.sf(10) via default returns 0.0 vs. true ~7.6e-24).
+    ///
+    /// Distribution implementations that have a precision-preserving
+    /// closed form SHOULD override this method. Examples already
+    /// overriding sf():
+    ///   - Weibull (line ~1567): exp(-(x/scale)^c)
+    ///   - Normal (line ~400):   erfc(x/sqrt(2))/2
+    /// Distributions inheriting the default expose the precision loss
+    /// for tail p-values.
     fn sf(&self, x: f64) -> f64 {
         1.0 - self.cdf(x)
     }
     /// Log survival function.
+    ///
+    /// Inherits the precision loss of the default `sf()` (per
+    /// frankenscipy-wofb). For tail work, distributions should override
+    /// logsf directly (e.g. using log1p(-cdf(x)) or a closed form).
     fn logsf(&self, x: f64) -> f64 {
         log_probability(self.sf(x))
     }
@@ -95,7 +114,17 @@ pub trait ContinuousDistribution {
     }
 
     /// Fit distribution to data (maximum likelihood estimation).
-    /// Default implementation panics.
+    ///
+    /// # Default behavior (per frankenscipy-wofb)
+    ///
+    /// **Default PANICS via `unimplemented!()`**. Asymmetric vs. the
+    /// `entropy`/`skewness`/`kurtosis` defaults which return NaN.
+    /// Callers working generically over distributions must either:
+    ///   (a) restrict to distribution types that override `fit`, or
+    ///   (b) wrap invocations in `std::panic::catch_unwind`.
+    ///
+    /// Consider this contract unstable: the asymmetry (panic vs NaN)
+    /// is tracked for consolidation.
     fn fit(_data: &[f64]) -> Self
     where
         Self: Sized,
@@ -106,6 +135,14 @@ pub trait ContinuousDistribution {
     /// Differential entropy H(X) = -∫ f(x) log f(x) dx.
     /// Returns entropy in nats (natural logarithm base).
     /// Matches `scipy.stats.<dist>.entropy()`.
+    ///
+    /// # Default behavior (per frankenscipy-wofb)
+    ///
+    /// **Default returns `f64::NAN`**, silently indistinguishable from
+    /// a genuinely-undefined entropy. Distributions that don't
+    /// override this method appear to have undefined entropy; callers
+    /// cannot tell unimplemented apart from legitimately NaN without
+    /// inspecting the impl.
     fn entropy(&self) -> f64 {
         f64::NAN
     }
