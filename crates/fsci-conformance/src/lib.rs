@@ -8342,6 +8342,17 @@ pub(crate) fn differential_audit_ledger_path_for_fixture(
     differential_artifact_dir_for_fixture(fixture_path, packet_id).join("audit_ledger.jsonl")
 }
 
+/// Neutral shared audit ledger for differential runners that don't wire
+/// through a family-specific ledger (fsci-array_api, fsci-special,
+/// fsci-optimize, fsci-casp, fsci-cluster, fsci-spatial, fsci-signal,
+/// fsci-stats, fsci-integrate-differential). Per frankenscipy-mhuk: each
+/// differential runner now emits an audit ledger artifact — possibly
+/// empty — so downstream consumers can distinguish "family ran, no audit
+/// events" from "family was never audit-instrumented."
+fn neutral_audit_ledger() -> std::sync::Arc<std::sync::Mutex<AuditLedger>> {
+    std::sync::Arc::new(std::sync::Mutex::new(AuditLedger::new()))
+}
+
 fn emit_differential_audit_ledger_for_fixture(
     fixture_path: &Path,
     packet_id: &str,
@@ -8650,12 +8661,13 @@ fn run_differential_array_api(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
             case.case_id(),
             &oracle_status,
-            None,
+            Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_array_api_case(case);
                 compare_array_api_case_differential(case, &observed)
@@ -8665,6 +8677,15 @@ fn run_differential_array_api(
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ = emit_differential_audit_ledger_for_fixture(
+            fixture_path,
+            &fixture.packet_id,
+            &ledger,
+        )?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -8691,12 +8712,13 @@ fn run_differential_optimize(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
             case.case_id(),
             &oracle_status,
-            None,
+            Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_optimize_case(case);
                 compare_optimize_case_differential(case.expected(), &observed)
@@ -8706,6 +8728,15 @@ fn run_differential_optimize(
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ = emit_differential_audit_ledger_for_fixture(
+            fixture_path,
+            &fixture.packet_id,
+            &ledger,
+        )?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -8732,12 +8763,13 @@ fn run_differential_special(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
             case.case_id(),
             &oracle_status,
-            None,
+            Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_special_case(case);
                 compare_special_case_differential(case, &observed)
@@ -8747,6 +8779,15 @@ fn run_differential_special(
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ = emit_differential_audit_ledger_for_fixture(
+            fixture_path,
+            &fixture.packet_id,
+            &ledger,
+        )?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -8850,12 +8891,13 @@ fn run_differential_stats(
         (None, false) => capture_failure_status.unwrap_or(probed_oracle_status),
     };
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
             case.case_id(),
             &oracle_status,
-            None,
+            Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_stats_case(case);
                 match oracle_cases.as_ref() {
@@ -8878,6 +8920,15 @@ fn run_differential_stats(
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ = emit_differential_audit_ledger_for_fixture(
+            fixture_path,
+            &fixture.packet_id,
+            &ledger,
+        )?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -8904,12 +8955,13 @@ fn run_differential_signal(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
             case.case_id(),
             &oracle_status,
-            None,
+            Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_signal_case(case);
                 compare_signal_case_differential(case, &observed)
@@ -8919,6 +8971,15 @@ fn run_differential_signal(
 
     let pass_count = per_case_results.iter().filter(|r| r.passed).count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ = emit_differential_audit_ledger_for_fixture(
+            fixture_path,
+            &fixture.packet_id,
+            &ledger,
+        )?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -8945,12 +9006,13 @@ fn run_differential_spatial(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
             case.case_id(),
             &oracle_status,
-            None,
+            Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_spatial_case(case);
                 compare_spatial_case_differential(case, &observed)
@@ -8963,6 +9025,15 @@ fn run_differential_spatial(
         .filter(|result| result.passed)
         .count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ = emit_differential_audit_ledger_for_fixture(
+            fixture_path,
+            &fixture.packet_id,
+            &ledger,
+        )?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -8989,12 +9060,13 @@ fn run_differential_cluster(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
             case.case_id(),
             &oracle_status,
-            None,
+            Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_cluster_case(case);
                 compare_cluster_case_differential(case, &observed)
@@ -9007,6 +9079,15 @@ fn run_differential_cluster(
         .filter(|result| result.passed)
         .count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ = emit_differential_audit_ledger_for_fixture(
+            fixture_path,
+            &fixture.packet_id,
+            &ledger,
+        )?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
@@ -9033,12 +9114,13 @@ fn run_differential_casp(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
             case.case_id(),
             &oracle_status,
-            None,
+            Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_casp_case(case);
                 compare_casp_case_differential(case, &observed)
@@ -9051,6 +9133,15 @@ fn run_differential_casp(
         .filter(|result| result.passed)
         .count();
     let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ = emit_differential_audit_ledger_for_fixture(
+            fixture_path,
+            &fixture.packet_id,
+            &ledger,
+        )?;
+    }
 
     Ok(ConformanceReport {
         fixture_path: fixture_path.display().to_string(),
