@@ -182,16 +182,53 @@ pub fn check_coverage(
 // ─── Runtime Checks ───────────────────────────────────────────────────
 
 /// Check runtime SLO for a suite execution.
+///
+/// Equivalent to `check_runtime_for_crate(..., None)`. Callers who know
+/// the crate whose suite ran should prefer that API so per-crate runtime
+/// overrides in quality_gates.toml apply.
 pub fn check_runtime(
     config: &QualityGatesConfig,
     suite_name: &str,
     elapsed: Duration,
 ) -> RuntimeSloCheck {
-    let budget = match suite_name {
+    check_runtime_for_crate(config, None, suite_name, elapsed)
+}
+
+/// Check runtime SLO honoring per-crate overrides declared in
+/// `[runtime.per_crate]` of quality_gates.toml. Per frankenscipy-symn:
+/// previously check_runtime ignored runtime.per_crate entirely; the
+/// fsci-conformance override of `unit_max_seconds = 180` had no effect
+/// because the global budget of 120s was always used.
+pub fn check_runtime_for_crate(
+    config: &QualityGatesConfig,
+    crate_name: Option<&str>,
+    suite_name: &str,
+    elapsed: Duration,
+) -> RuntimeSloCheck {
+    let global_budget = match suite_name {
         "unit" => config.runtime.unit_suite_max_seconds,
         "e2e" => config.runtime.e2e_suite_max_seconds,
         "benchmark" => config.runtime.benchmark_suite_max_seconds,
         _ => config.runtime.unit_suite_max_seconds,
+    };
+
+    // Resolve per-crate override for unit/e2e suites. benchmark has no
+    // per-crate field today (neither does the toml schema). Default to
+    // the global budget when no override is present.
+    let budget = match (crate_name, suite_name) {
+        (Some(name), "unit") => config
+            .runtime
+            .per_crate
+            .get(name)
+            .and_then(|o| o.unit_max_seconds)
+            .unwrap_or(global_budget),
+        (Some(name), "e2e") => config
+            .runtime
+            .per_crate
+            .get(name)
+            .and_then(|o| o.e2e_max_seconds)
+            .unwrap_or(global_budget),
+        _ => global_budget,
     };
 
     let elapsed_secs = elapsed.as_secs_f64();
@@ -365,6 +402,67 @@ mod tests {
         assert_eq!(config.runtime.e2e_suite_max_seconds, 600);
         assert_eq!(config.severity.coverage_violation, ViolationAction::Warn);
         assert_eq!(config.severity.runtime_violation, ViolationAction::Fail);
+    }
+
+    #[test]
+    fn check_runtime_for_crate_honors_per_crate_override() {
+        use super::{CrateRuntimeOverride, QualityGatesConfig, RuntimeConfig,
+                    SeverityConfig, ViolationAction, check_runtime_for_crate};
+        use std::collections::BTreeMap;
+
+        let mut per_crate = BTreeMap::new();
+        per_crate.insert(
+            "fsci-conformance".to_string(),
+            CrateRuntimeOverride {
+                unit_max_seconds: Some(180),
+                e2e_max_seconds: Some(600),
+            },
+        );
+        let config = QualityGatesConfig {
+            coverage: super::CoverageConfig {
+                default_line_coverage: 80,
+                default_branch_coverage: 70,
+                per_crate: BTreeMap::new(),
+            },
+            flake: super::FlakeConfig {
+                max_flake_rate: 0.02,
+                rerun_count: 3,
+            },
+            runtime: RuntimeConfig {
+                unit_suite_max_seconds: 120,
+                e2e_suite_max_seconds: 300,
+                benchmark_suite_max_seconds: 600,
+                per_test_timeout_seconds: 60,
+                per_crate,
+            },
+            severity: SeverityConfig {
+                coverage_violation: ViolationAction::Warn,
+                flake_violation: ViolationAction::Warn,
+                runtime_violation: ViolationAction::Warn,
+                critical_coverage_floor: 60,
+                critical_runtime_multiplier: 1.5,
+            },
+        };
+
+        // 150s: pass under fsci-conformance 180s override, but would fail
+        // against the global 120s.
+        let chk = check_runtime_for_crate(
+            &config,
+            Some("fsci-conformance"),
+            "unit",
+            Duration::from_secs(150),
+        );
+        assert_eq!(chk.budget_seconds, 180, "crate override should apply");
+        assert!(chk.pass, "150s should pass under 180s override");
+
+        // Without a crate name: the global budget is used.
+        let global =
+            check_runtime_for_crate(&config, None, "unit", Duration::from_secs(150));
+        assert_eq!(
+            global.budget_seconds, 120,
+            "global budget should be used when no crate override"
+        );
+        assert!(!global.pass, "150s fails against global 120s budget");
     }
 
     #[test]
