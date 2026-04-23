@@ -8361,35 +8361,56 @@ pub fn run_differential_test(
         })?;
 
     let family = envelope.family.as_str();
-    let report = if family.contains("validate_tol") {
-        run_differential_validate_tol(fixture_path, &raw, oracle_config)
-    } else if family.contains("linalg") {
-        run_differential_linalg(fixture_path, &raw, oracle_config)
-    } else if family.contains("array_api") {
-        run_differential_array_api(fixture_path, &raw, oracle_config)
-    } else if family.contains("special") {
-        run_differential_special(fixture_path, &raw, oracle_config)
-    } else if family.contains("fft") {
-        run_differential_fft(fixture_path, &raw, oracle_config)
-    } else if family.contains("optim") {
-        run_differential_optimize(fixture_path, &raw, oracle_config)
-    } else if family.contains("casp") {
-        run_differential_casp(fixture_path, &raw, oracle_config)
-    } else if family.contains("cluster") {
-        run_differential_cluster(fixture_path, &raw, oracle_config)
-    } else if family.contains("spatial") {
-        run_differential_spatial(fixture_path, &raw, oracle_config)
-    } else if family.contains("signal") {
-        run_differential_signal(fixture_path, &raw, oracle_config)
-    } else if family.contains("stats") {
-        run_differential_stats(fixture_path, &raw, oracle_config)
-    } else if family.contains("integrate") {
-        run_differential_integrate(fixture_path, &raw, oracle_config)
-    } else {
-        Err(HarnessError::FixtureParse {
+    // Exact-family dispatch per frankenscipy-ubkg. The previous cascade
+    // used `family.contains(...)` which caused fragile matches (e.g.
+    // family='integrate.validate_tol' matched BOTH 'validate_tol' AND
+    // 'integrate'; family='sparse_ops' would never match 'sparse' because
+    // there was no sparse arm, but the unambiguous-substring anti-pattern
+    // is still wrong even where it happens to produce the intended result
+    // today). Match on exact canonical family names.
+    let report = match family {
+        // validate_tol packet (also integrate.validate_tol for the
+        // shared-tolerance lane).
+        "validate_tol" | "integrate.validate_tol" => {
+            run_differential_validate_tol(fixture_path, &raw, oracle_config)
+        }
+        "linalg_core" | "linalg" => {
+            run_differential_linalg(fixture_path, &raw, oracle_config)
+        }
+        "array_api" | "array_api_core" => {
+            run_differential_array_api(fixture_path, &raw, oracle_config)
+        }
+        "special_core" | "special" => {
+            run_differential_special(fixture_path, &raw, oracle_config)
+        }
+        "fft_core" | "fft" => {
+            run_differential_fft(fixture_path, &raw, oracle_config)
+        }
+        "optimize_core" | "optimize" => {
+            run_differential_optimize(fixture_path, &raw, oracle_config)
+        }
+        "runtime_casp" | "casp" | "casp_core" => {
+            run_differential_casp(fixture_path, &raw, oracle_config)
+        }
+        "cluster_core" | "cluster" => {
+            run_differential_cluster(fixture_path, &raw, oracle_config)
+        }
+        "spatial_core" | "spatial" => {
+            run_differential_spatial(fixture_path, &raw, oracle_config)
+        }
+        "signal_core" | "signal" => {
+            run_differential_signal(fixture_path, &raw, oracle_config)
+        }
+        "stats_core" | "stats" => {
+            run_differential_stats(fixture_path, &raw, oracle_config)
+        }
+        "integrate_core" | "integrate" => {
+            run_differential_integrate(fixture_path, &raw, oracle_config)
+        }
+        _ => Err(HarnessError::FixtureParse {
             path: fixture_path.to_path_buf(),
             source: serde::de::Error::custom(format!("unknown fixture family: {family}")),
-        })
+        }),
     }?;
 
     let _ = write_differential_parity_artifacts(fixture_path, &report)?;
