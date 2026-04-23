@@ -168,3 +168,10 @@ path = "fuzz_targets/p2c007_stats_rvs_determinism.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c008_integrate_quad_additivity"
+path = "fuzz_targets/p2c008_integrate_quad_additivity.rs"
+test = false
+doc = false
+bench = false
