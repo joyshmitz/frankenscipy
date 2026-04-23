@@ -172,7 +172,9 @@ pub fn validate_first_step_with_audit(
     t_bound: f64,
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<f64, IntegrateValidationError> {
-    if first_step <= 0.0 {
+    // NaN first_step falls through `<= 0.0` silently (NaN < 0.0 == false);
+    // is_finite-first catches NaN + Inf. Per frankenscipy-i9vw.
+    if !first_step.is_finite() || first_step <= 0.0 {
         let fingerprint = audit_fingerprint(
             "validate_first_step",
             format!("first_step={first_step};t0={t0};t_bound={t_bound}"),
@@ -180,7 +182,7 @@ pub fn validate_first_step_with_audit(
         record_fail_closed(
             audit_ledger,
             &fingerprint,
-            "first_step_must_be_positive",
+            "first_step_must_be_positive_and_finite",
             "rejected",
         );
         return Err(IntegrateValidationError::FirstStepMustBePositive);
@@ -209,12 +211,14 @@ pub fn validate_max_step_with_audit(
     max_step: f64,
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<f64, IntegrateValidationError> {
-    if max_step <= 0.0 {
+    // NaN max_step must be rejected; Inf is legitimate (means "no cap").
+    // Per frankenscipy-i9vw.
+    if max_step.is_nan() || max_step <= 0.0 {
         let fingerprint = audit_fingerprint("validate_max_step", format!("max_step={max_step}"));
         record_fail_closed(
             audit_ledger,
             &fingerprint,
-            "max_step_must_be_positive",
+            "max_step_must_be_positive_and_not_nan",
             "rejected",
         );
         return Err(IntegrateValidationError::MaxStepMustBePositive);
@@ -243,6 +247,18 @@ pub fn validate_tol_with_audit(
         "validate_tol",
         format!("rtol={rtol:?};atol={atol:?};n={n};mode={mode:?}"),
     );
+    // NaN in rtol or atol falls through every `<` and `<=` predicate
+    // silently. Reject up front so Hardened callers see a fail-closed
+    // error rather than NaN propagating into the adaptive step controller.
+    // Per frankenscipy-i9vw.
+    if rtol.clone().any(|x| x.is_nan()) {
+        record_fail_closed(audit_ledger, &fingerprint, "rtol_must_not_be_nan", "rejected");
+        return Err(IntegrateValidationError::AtolMustBePositive);
+    }
+    if atol.clone().any(|x| x.is_nan()) {
+        record_fail_closed(audit_ledger, &fingerprint, "atol_must_not_be_nan", "rejected");
+        return Err(IntegrateValidationError::AtolMustBePositive);
+    }
     let needs_clamp = rtol.clone().any(|x| x < MIN_RTOL);
     let rtol = if needs_clamp {
         warnings.push(ToleranceWarning::RtolClamped { minimum: MIN_RTOL });
@@ -420,18 +436,18 @@ mod tests {
         assert_eq!(err, IntegrateValidationError::AtolMustBePositive);
     }
 
-    // 8. NaN input in atol -> appropriate behavior
+    // 8. NaN input in atol -> rejected (was accepted pre-i9vw)
     #[test]
-    fn test_validation_tol_nan_atol() {
-        // NaN is not < 0 so it passes the negative check but is pathological
+    fn test_validation_tol_nan_atol_rejected() {
+        // Per frankenscipy-i9vw: NaN atol now fails closed rather than
+        // falling through every `<` predicate silently.
         let report = validate_tol(
             ToleranceValue::Scalar(1e-3),
             ToleranceValue::Scalar(f64::NAN),
             1,
             RuntimeMode::Strict,
         );
-        // NaN passes the any(|x| x < 0.0) check because NaN < 0.0 is false
-        assert!(report.is_ok());
+        assert!(report.is_err(), "NaN atol should fail closed");
     }
 
     // 9. Inf input in atol -> accepted (SciPy allows)
@@ -667,7 +683,7 @@ mod tests {
         assert_eq!(ledger.len(), 1);
         assert!(matches!(
             ledger.entries()[0].action,
-            AuditAction::FailClosed { ref reason } if reason == "first_step_must_be_positive"
+            AuditAction::FailClosed { ref reason } if reason == "first_step_must_be_positive_and_finite"
         ));
     }
 }
