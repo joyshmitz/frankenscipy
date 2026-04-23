@@ -225,7 +225,7 @@ where
             detail: "integration bounds must be finite".to_string(),
         });
     }
-    if options.epsabs < 0.0 || options.epsrel < 0.0 {
+    if options.epsabs.is_nan() || options.epsrel.is_nan() || options.epsabs < 0.0 || options.epsrel < 0.0 {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
             detail: "tolerances must be non-negative".to_string(),
         });
@@ -279,7 +279,7 @@ where
             detail: "integration bounds must be finite".to_string(),
         });
     }
-    if options.epsabs < 0.0 || options.epsrel < 0.0 {
+    if options.epsabs.is_nan() || options.epsrel.is_nan() || options.epsabs < 0.0 || options.epsrel < 0.0 {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
             detail: "tolerances must be non-negative".to_string(),
         });
@@ -1476,7 +1476,7 @@ fn validate_cubature_inputs(
             detail: "cubature bounds must have the same dimensionality".to_string(),
         });
     }
-    if options.atol < 0.0 || options.rtol < 0.0 {
+    if options.atol.is_nan() || options.rtol.is_nan() || options.atol < 0.0 || options.rtol < 0.0 {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
             detail: "cubature tolerances must be non-negative".to_string(),
         });
