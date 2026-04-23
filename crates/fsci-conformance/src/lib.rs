@@ -15154,17 +15154,34 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             logs.push(log);
         }
 
+        // br-8h5u: derive expected quotas from the fixture so that
+        // accidental category drift trips the test. Keep a floor as a
+        // sanity check that the fixture itself has not shrunk.
+        let (expected_diff, expected_meta, expected_adv) =
+            fixture
+                .cases
+                .iter()
+                .fold((0, 0, 0), |(d, m, a), c| match c.category() {
+                    "differential" => (d + 1, m, a),
+                    "metamorphic" => (d, m + 1, a),
+                    "adversarial" => (d, m, a + 1),
+                    _ => (d, m, a),
+                });
         assert!(
-            differential_count >= 15,
-            "expected >=15 differential cases, got {differential_count}"
+            expected_diff >= 15 && expected_meta >= 6 && expected_adv >= 8,
+            "fixture quota floor check: diff={expected_diff}, meta={expected_meta}, adv={expected_adv}"
         );
-        assert!(
-            metamorphic_count >= 6,
-            "expected >=6 metamorphic cases, got {metamorphic_count}"
+        assert_eq!(
+            differential_count, expected_diff,
+            "differential coverage drifted from fixture"
         );
-        assert!(
-            adversarial_count >= 8,
-            "expected >=8 adversarial cases, got {adversarial_count}"
+        assert_eq!(
+            metamorphic_count, expected_meta,
+            "metamorphic coverage drifted from fixture"
+        );
+        assert_eq!(
+            adversarial_count, expected_adv,
+            "adversarial coverage drifted from fixture"
         );
         assert_eq!(report.fail_count, 0);
 
@@ -15256,17 +15273,33 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             logs.push(log);
         }
 
+        // br-8h5u: derive expected quotas from the fixture; floor below
+        // guards against fixture shrinkage.
+        let (expected_diff, expected_meta, expected_adv) =
+            fixture
+                .cases
+                .iter()
+                .fold((0, 0, 0), |(d, m, a), c| match c.category() {
+                    "differential" => (d + 1, m, a),
+                    "metamorphic" => (d, m + 1, a),
+                    "adversarial" => (d, m, a + 1),
+                    _ => (d, m, a),
+                });
         assert!(
-            differential_count >= 15,
-            "expected >=15 differential cases, got {differential_count}"
+            expected_diff >= 15 && expected_meta >= 6 && expected_adv >= 8,
+            "fixture quota floor check: diff={expected_diff}, meta={expected_meta}, adv={expected_adv}"
         );
-        assert!(
-            metamorphic_count >= 6,
-            "expected >=6 metamorphic cases, got {metamorphic_count}"
+        assert_eq!(
+            differential_count, expected_diff,
+            "differential coverage drifted from fixture"
         );
-        assert!(
-            adversarial_count >= 8,
-            "expected >=8 adversarial cases, got {adversarial_count}"
+        assert_eq!(
+            metamorphic_count, expected_meta,
+            "metamorphic coverage drifted from fixture"
+        );
+        assert_eq!(
+            adversarial_count, expected_adv,
+            "adversarial coverage drifted from fixture"
         );
         assert_eq!(report.fail_count, 0);
 
@@ -15413,17 +15446,32 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             logs.push(log);
         }
 
+        // br-8h5u: derive quotas from fixture; floors guard against shrinkage.
+        let (expected_diff, expected_meta, expected_adv) =
+            fixture
+                .cases
+                .iter()
+                .fold((0, 0, 0), |(d, m, a), c| match c.category() {
+                    "differential" => (d + 1, m, a),
+                    "metamorphic" => (d, m + 1, a),
+                    "adversarial" => (d, m, a + 1),
+                    _ => (d, m, a),
+                });
         assert!(
-            differential_count >= 15,
-            "expected >=15 differential cases, got {differential_count}"
+            expected_diff >= 15 && expected_meta >= 6 && expected_adv >= 8,
+            "fixture quota floor check: diff={expected_diff}, meta={expected_meta}, adv={expected_adv}"
         );
-        assert!(
-            metamorphic_count >= 6,
-            "expected >=6 metamorphic cases, got {metamorphic_count}"
+        assert_eq!(
+            differential_count, expected_diff,
+            "differential coverage drifted from fixture"
         );
-        assert!(
-            adversarial_count >= 8,
-            "expected >=8 adversarial cases, got {adversarial_count}"
+        assert_eq!(
+            metamorphic_count, expected_meta,
+            "metamorphic coverage drifted from fixture"
+        );
+        assert_eq!(
+            adversarial_count, expected_adv,
+            "adversarial coverage drifted from fixture"
         );
         assert_eq!(report.fail_count, 0);
 
