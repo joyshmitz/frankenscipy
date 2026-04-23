@@ -432,7 +432,20 @@ fn discover_reports_best_effort(artifact_root: &Path) -> Result<DiscoveryResult,
         };
 
         let mut packet_presence = PacketArtifactPresence::new(packet_name.clone());
-        let report_path = packet_dir.join("parity_report.json");
+        // Per frankenscipy-szb5: packet directories come in two flavors:
+        //   FSCI-P2C-N/  -- runner output, parity_report.json at top level
+        //   P2C-N/       -- evidence_p2c*.rs output, parity_report.json
+        //                   under evidence/ subdirectory
+        // Probe both locations so dashboards don't show the 10 P2C-N/
+        // dirs as zombie packets with no report.
+        let report_path = {
+            let top = packet_dir.join("parity_report.json");
+            if top.exists() {
+                top
+            } else {
+                packet_dir.join("evidence").join("parity_report.json")
+            }
+        };
         let sidecar_path = packet_dir.join("parity_report.raptorq.json");
         let decode_proof_path = packet_dir.join("parity_report.decode_proof.json");
         let oracle_capture_path = packet_dir.join("oracle_capture.json");
