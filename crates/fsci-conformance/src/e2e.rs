@@ -669,10 +669,45 @@ fn build_replay_command(
 ) -> String {
     format!(
         "cargo run -p fsci-conformance --bin e2e_orchestrator -- --artifact-root {} --packet {} --scenario {}",
-        config.artifact_root.display(),
-        packet_id,
-        scenario_id
+        shell_quote_posix(&config.artifact_root.display().to_string()),
+        shell_quote_posix(packet_id),
+        shell_quote_posix(scenario_id),
     )
+}
+
+/// POSIX single-quote a string so that copy-pasting the resulting
+/// command into `sh`/`bash`/`zsh` cannot trigger command substitution,
+/// parameter expansion, or meta-character interpretation. An embedded
+/// single-quote is encoded as `'\''` (close, escape, reopen).
+///
+/// Empty strings become `''`.
+///
+/// Per br-y18q: prior code did bare `{}` interpolation of fixture-owned
+/// packet_id / scenario_id, which would emit a runnable `'; rm -rf /'`
+/// if a fixture ever contained shell metacharacters.
+fn shell_quote_posix(s: &str) -> String {
+    if s.is_empty() {
+        return String::from("''");
+    }
+    // Fast path: plain alnum / dash / underscore / dot / slash / equals
+    // needs no quoting.
+    let needs_quote = s.chars().any(|c| {
+        !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '=' | ':' | '+'))
+    });
+    if !needs_quote {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 fn sanitize_path_component(value: &str) -> String {
@@ -803,6 +838,40 @@ mod tests {
     use fsci_runtime::{AuditAction, AuditEvent, casp_now_unix_ms};
     use std::io::BufRead;
     use tempfile::TempDir;
+
+    #[test]
+    fn shell_quote_posix_passes_through_safe_strings() {
+        assert_eq!(shell_quote_posix("FSCI-P2C-002"), "FSCI-P2C-002");
+        assert_eq!(
+            shell_quote_posix("/tmp/artifacts"),
+            "/tmp/artifacts"
+        );
+        assert_eq!(shell_quote_posix("x=1"), "x=1");
+    }
+
+    #[test]
+    fn shell_quote_posix_quotes_dangerous_input() {
+        // br-y18q: a fixture scenario_id that looks like a command
+        // injection MUST be rendered as a literal single-quoted string,
+        // not a shell-interpreted fragment.
+        assert_eq!(
+            shell_quote_posix("scenario; rm -rf /tmp/x"),
+            "'scenario; rm -rf /tmp/x'"
+        );
+        assert_eq!(shell_quote_posix("$(id)"), "'$(id)'");
+        assert_eq!(shell_quote_posix("`id`"), "'`id`'");
+        assert_eq!(shell_quote_posix("a b"), "'a b'");
+    }
+
+    #[test]
+    fn shell_quote_posix_escapes_embedded_quote() {
+        assert_eq!(shell_quote_posix("a'b"), r"'a'\''b'");
+    }
+
+    #[test]
+    fn shell_quote_posix_empty_is_empty_quotes() {
+        assert_eq!(shell_quote_posix(""), "''");
+    }
 
     #[test]
     fn emit_audit_ledger_writes_jsonl() {
