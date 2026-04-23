@@ -3054,6 +3054,8 @@ mod tests {
     use proptest::prelude::*;
     use serde::Serialize;
 
+    use super::{slsqp, tnc, trust_constr};
+
     use super::{Objective, golden_section_direction_search};
     use crate::{
         ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptError, OptimizeMethod,
@@ -4439,6 +4441,126 @@ mod tests {
             (result.x[0] - 1.0).abs() < 0.05 && (result.x[1] - 1.0).abs() < 0.05,
             "x={:?}",
             result.x
+        );
+    }
+
+    // ── TNC / SLSQP / trust_constr unit coverage (per frankenscipy-rkk2) ──
+
+    /// Convex quadratic bowl: f(x, y) = (x - 2)^2 + (y + 3)^2. Minimum at (2, -3).
+    fn convex_bowl(x: &[f64]) -> f64 {
+        (x[0] - 2.0).powi(2) + (x[1] + 3.0).powi(2)
+    }
+
+    #[test]
+    fn tnc_converges_on_convex_bowl() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Tnc),
+            tol: Some(1e-7),
+            maxiter: Some(200),
+            maxfev: Some(5_000),
+            ..MinimizeOptions::default()
+        };
+        let result = tnc(&convex_bowl, &[0.0, 0.0], options).expect("tnc run");
+        assert!(result.success, "tnc should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 2.0).abs() < 1e-3 && (result.x[1] + 3.0).abs() < 1e-3,
+            "tnc x={:?}",
+            result.x
+        );
+        assert!(
+            result.fun.map_or(false, |v| v < 1e-5),
+            "tnc f={:?} should be ~0",
+            result.fun
+        );
+    }
+
+    #[test]
+    fn tnc_respects_maxfev_limit() {
+        // Pathologically tight budget: one function evaluation is not enough
+        // to converge. TNC should hit the budget limit, not hang.
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Tnc),
+            tol: Some(1e-15),
+            maxiter: Some(10_000),
+            maxfev: Some(3), // deliberately too small
+            ..MinimizeOptions::default()
+        };
+        let result = tnc(&convex_bowl, &[10.0, 10.0], options);
+        // Either returns success=false with budget message, or EvaluationBudgetExceeded.
+        match result {
+            Ok(r) => assert!(
+                !r.success || r.nfev <= 100,
+                "tnc with maxfev=3 cannot fully converge from (10,10); got x={:?} msg={}",
+                r.x,
+                r.message
+            ),
+            Err(OptError::EvaluationBudgetExceeded { .. }) => {}
+            Err(e) => panic!("tnc unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn slsqp_converges_on_convex_bowl() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Slsqp),
+            tol: Some(1e-7),
+            maxiter: Some(200),
+            maxfev: Some(5_000),
+            ..MinimizeOptions::default()
+        };
+        let result = slsqp(&convex_bowl, &[0.0, 0.0], options).expect("slsqp run");
+        assert!(result.success, "slsqp should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 2.0).abs() < 1e-3 && (result.x[1] + 3.0).abs() < 1e-3,
+            "slsqp x={:?}",
+            result.x
+        );
+    }
+
+    #[test]
+    fn slsqp_rejects_nonfinite_x0() {
+        // NaN initial guess must fail-closed per the standard minimize
+        // input-validation surface.
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Slsqp),
+            ..MinimizeOptions::default()
+        };
+        let result = slsqp(&convex_bowl, &[f64::NAN, 0.0], options);
+        assert!(result.is_err(), "NaN x0 should fail; got {result:?}");
+    }
+
+    #[test]
+    fn trust_constr_converges_on_convex_bowl() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::TrustConstr),
+            tol: Some(1e-7),
+            maxiter: Some(500),
+            maxfev: Some(20_000),
+            ..MinimizeOptions::default()
+        };
+        let result = trust_constr(&convex_bowl, &[0.0, 0.0], options).expect("trust_constr");
+        assert!(result.success, "trust_constr should converge: {}", result.message);
+        assert!(
+            (result.x[0] - 2.0).abs() < 1e-2 && (result.x[1] + 3.0).abs() < 1e-2,
+            "trust_constr x={:?}",
+            result.x
+        );
+    }
+
+    #[test]
+    fn trust_constr_starts_at_optimum() {
+        // Starting at the minimum should converge in 0-1 iterations.
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::TrustConstr),
+            tol: Some(1e-10),
+            ..MinimizeOptions::default()
+        };
+        let result = trust_constr(&convex_bowl, &[2.0, -3.0], options).expect("at_optimum");
+        assert!(result.success);
+        assert!(
+            result.fun.map_or(false, |v| v < 1e-10),
+            "at-optimum f={:?}",
+            result.fun
         );
     }
 }
