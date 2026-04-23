@@ -542,6 +542,26 @@ pub struct IterativeSolveResult {
     pub residual_norm: f64,
 }
 
+fn validate_iterative_finite_inputs(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: IterativeSolveOptions,
+) -> SparseResult<()> {
+    let must_check = options.check_finite || options.mode == RuntimeMode::Hardened;
+    let x0_has_non_finite = x0.is_some_and(|initial| initial.iter().any(|v| !v.is_finite()));
+    if must_check
+        && (a.data().iter().any(|v| !v.is_finite())
+            || b.iter().any(|v| !v.is_finite())
+            || x0_has_non_finite)
+    {
+        return Err(SparseError::NonFiniteInput {
+            message: "matrix/rhs/initial guess contains NaN or Inf".to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Conjugate Gradient solver for symmetric positive-definite sparse systems.
 ///
 /// Solves Ax = b where A is SPD. If A is not SPD, the solver may diverge.
@@ -564,13 +584,7 @@ pub fn cg(
             message: "rhs length must match matrix rows".to_string(),
         });
     }
-    if options.check_finite
-        && (a.data().iter().any(|v| !v.is_finite()) || b.iter().any(|v| !v.is_finite()))
-    {
-        return Err(SparseError::NonFiniteInput {
-            message: "matrix/rhs contains NaN or Inf".to_string(),
-        });
-    }
+    validate_iterative_finite_inputs(a, b, x0, options)?;
 
     let max_iter = options.max_iter.unwrap_or(n * 10);
 
@@ -805,14 +819,7 @@ pub fn gmres(
             message: "rhs length must match matrix rows".to_string(),
         });
     }
-    if options.check_finite
-        && (a.data().iter().any(|v| !v.is_finite()) || b.iter().any(|v| !v.is_finite()))
-    {
-        return Err(SparseError::NonFiniteInput {
-            message: "matrix/rhs contains NaN or Inf".to_string(),
-        });
-    }
-
+    validate_iterative_finite_inputs(a, b, x0, options)?;
     let max_iter = options.max_iter.unwrap_or(n * 10);
     let restart = n.min(30); // Krylov subspace dimension before restart
 
@@ -1341,6 +1348,7 @@ pub fn bicg(
             message: "rhs length must match matrix rows".to_string(),
         });
     }
+    validate_iterative_finite_inputs(a, b, x0, options)?;
 
     let max_iter = options.max_iter.unwrap_or(n * 10);
 
@@ -1486,6 +1494,7 @@ pub fn cgs(
             message: "rhs length must match matrix rows".to_string(),
         });
     }
+    validate_iterative_finite_inputs(a, b, x0, options)?;
 
     let max_iter = options.max_iter.unwrap_or(n * 10);
 
@@ -1632,6 +1641,7 @@ pub fn bicgstab(
             message: "rhs length must match matrix rows".to_string(),
         });
     }
+    validate_iterative_finite_inputs(a, b, x0, options)?;
 
     let max_iter = options.max_iter.unwrap_or(n * 10);
 
@@ -3884,6 +3894,14 @@ mod tests {
         .expect("csr")
     }
 
+    fn hardened_unchecked_iterative_options() -> IterativeSolveOptions {
+        IterativeSolveOptions {
+            mode: RuntimeMode::Hardened,
+            check_finite: false,
+            ..IterativeSolveOptions::default()
+        }
+    }
+
     #[test]
     fn cg_spd_system_converges() {
         let a = spd_csr_3x3();
@@ -3953,6 +3971,19 @@ mod tests {
         let err =
             cg(&a, &[1.0, 2.0], None, IterativeSolveOptions::default()).expect_err("mismatch");
         assert!(matches!(err, SparseError::IncompatibleShape { .. }));
+    }
+
+    #[test]
+    fn cg_hardened_rejects_non_finite_when_check_disabled() {
+        let a = spd_csr_3x3();
+        let err = cg(
+            &a,
+            &[f64::NAN, 1.0, 1.0],
+            None,
+            hardened_unchecked_iterative_options(),
+        )
+        .expect_err("hardened finite guard");
+        assert!(matches!(err, SparseError::NonFiniteInput { .. }));
     }
 
     #[test]
@@ -4089,6 +4120,19 @@ mod tests {
     }
 
     #[test]
+    fn gmres_hardened_rejects_non_finite_when_check_disabled() {
+        let a = nonsymmetric_csr_3x3();
+        let err = gmres(
+            &a,
+            &[f64::NAN, 1.0, 1.0],
+            None,
+            hardened_unchecked_iterative_options(),
+        )
+        .expect_err("hardened finite guard");
+        assert!(matches!(err, SparseError::NonFiniteInput { .. }));
+    }
+
+    #[test]
     fn gmres_spd_system_matches_cg() {
         // GMRES should work on SPD systems too
         let a = spd_csr_3x3();
@@ -4161,6 +4205,19 @@ mod tests {
             bicgstab(&a, &b, None, IterativeSolveOptions::default()).expect("bicgstab works");
         assert!(result.converged);
         assert_eq!(result.iterations, 0);
+    }
+
+    #[test]
+    fn bicgstab_hardened_rejects_non_finite_when_check_disabled() {
+        let a = nonsymmetric_csr_3x3();
+        let err = bicgstab(
+            &a,
+            &[f64::NAN, 1.0, 1.0],
+            None,
+            hardened_unchecked_iterative_options(),
+        )
+        .expect_err("hardened finite guard");
+        assert!(matches!(err, SparseError::NonFiniteInput { .. }));
     }
 
     // ── MINRES iterative solver tests ───────────────────────────────
@@ -4848,6 +4905,19 @@ mod tests {
         assert!(matches!(err, SparseError::InvalidShape { .. }));
     }
 
+    #[test]
+    fn bicg_hardened_rejects_non_finite_when_check_disabled() {
+        let a = diagonally_dominant_csr_3x3();
+        let err = bicg(
+            &a,
+            &[f64::NAN, 1.0, 1.0],
+            None,
+            hardened_unchecked_iterative_options(),
+        )
+        .expect_err("hardened finite guard");
+        assert!(matches!(err, SparseError::NonFiniteInput { .. }));
+    }
+
     // ── CGS iterative solver tests ──────────────────────────────────
 
     #[test]
@@ -4898,6 +4968,19 @@ mod tests {
         let err =
             cgs(&a, &[1.0, 2.0], None, IterativeSolveOptions::default()).expect_err("non-square");
         assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn cgs_hardened_rejects_non_finite_when_check_disabled() {
+        let a = diagonally_dominant_csr_3x3();
+        let err = cgs(
+            &a,
+            &[f64::NAN, 1.0, 1.0],
+            None,
+            hardened_unchecked_iterative_options(),
+        )
+        .expect_err("hardened finite guard");
+        assert!(matches!(err, SparseError::NonFiniteInput { .. }));
     }
 
     // ── LGMRES iterative solver tests ───────────────────────────────
