@@ -155,6 +155,74 @@ def _run_case(case: dict[str, Any], stats: Any) -> dict[str, Any]:
                 "error": None,
             }
 
+        # --- Distribution method dispatcher (per frankenscipy-ygq3) ---
+        # Routes every distribution pdf/cdf/ppf/sf/isf/logpdf/logcdf/mean/
+        # var/entropy/fit/rvs query through scipy.stats.<dist>(...)(*args).
+        # Fixture schema:
+        #     function: "distribution_method"
+        #     distribution: "norm" | "weibull_min" | "gamma" | ...
+        #     method: "pdf" | "cdf" | "ppf" | "sf" | "mean" | "var" | "fit"
+        #     params: {loc: 0.0, scale: 1.0}   # frozen distribution kwargs
+        #     args: [...]                       # positional args to method
+        if function_name == "distribution_method":
+            dist_name = case["distribution"]
+            method_name = case["method"]
+            params = case.get("params", {}) or {}
+            dist_cls = getattr(stats, dist_name, None)
+            if dist_cls is None:
+                return {
+                    "case_id": case_id,
+                    "status": "error",
+                    "result_kind": "unsupported_distribution",
+                    "result": {},
+                    "error": f"scipy.stats has no distribution `{dist_name}`",
+                }
+            # fit is a class method on the unfrozen distribution; other
+            # methods are resolved on the frozen instance.
+            if method_name == "fit":
+                result = dist_cls.fit(*args, **params)
+            else:
+                frozen = dist_cls(**params)
+                method = getattr(frozen, method_name, None)
+                if method is None:
+                    return {
+                        "case_id": case_id,
+                        "status": "error",
+                        "result_kind": "unsupported_method",
+                        "result": {},
+                        "error": f"distribution `{dist_name}` has no method `{method_name}`",
+                    }
+                result = method(*args)
+            # Pack result based on method:
+            # scalar methods -> scalar; array methods -> array; fit -> tuple of floats
+            if method_name == "fit":
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "fit_params",
+                    "result": {"params": [_as_float(v) for v in result]},
+                    "error": None,
+                }
+            if method_name == "rvs":
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "array",
+                    "result": {"values": _as_float_list(result)},
+                    "error": None,
+                }
+            # pdf/cdf/ppf/sf/isf/logpdf/logcdf can return scalar OR array
+            # depending on whether args[0] is a scalar or array
+            if hasattr(result, "__iter__") and not isinstance(result, (str, bytes)):
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "array",
+                    "result": {"values": _as_float_list(result)},
+                    "error": None,
+                }
+            return _scalar_case(case_id, result)
+
         return {
             "case_id": case_id,
             "status": "error",
