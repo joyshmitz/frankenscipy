@@ -8172,6 +8172,17 @@ pub enum OracleStatus {
 pub struct ToleranceUsed {
     pub atol: f64,
     pub rtol: f64,
+    /// Descriptive tag naming the comparator that the case-specific code
+    /// actually ran. **Does NOT branch comparator behaviour** — every
+    /// comparator today uses allclose semantics via
+    /// `allclose_scalar(atol, rtol)` or an equivalent inline formula. The
+    /// tag is emitted into the ToleranceUsed record purely as a telemetry
+    /// / audit hint for dashboards and post-hoc analysis so reviewers can
+    /// see at a glance which comparator class was invoked. If/when a
+    /// comparator dispatch actually varies on this field, the behaviour
+    /// change should be called out explicitly in the bead log. Per
+    /// frankenscipy-ka5i (currently the field is set at 12+ sites but
+    /// never read by any branching code).
     pub comparison_mode: String,
 }
 
