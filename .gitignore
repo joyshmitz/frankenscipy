@@ -65,6 +65,11 @@ crates/fsci-conformance/fixtures/artifacts/P2C-007/threats/
 crates/fsci-conformance/fixtures/artifacts/P2C-006/*
 !crates/fsci-conformance/fixtures/artifacts/P2C-006/contracts/
 !crates/fsci-conformance/fixtures/artifacts/P2C-006/contracts/contract_table.json
+# P2C-003 optimize contract table — committed per frankenscipy-xjav
+!crates/fsci-conformance/fixtures/artifacts/P2C-003/
+crates/fsci-conformance/fixtures/artifacts/P2C-003/*
+!crates/fsci-conformance/fixtures/artifacts/P2C-003/contracts/
+!crates/fsci-conformance/fixtures/artifacts/P2C-003/contracts/contract_table.json
 # P2C-009/010/011/012/013 contract tables — per frankenscipy-bcv7
 !crates/fsci-conformance/fixtures/artifacts/P2C-009/
 crates/fsci-conformance/fixtures/artifacts/P2C-009/*
