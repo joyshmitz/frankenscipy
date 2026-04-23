@@ -71,7 +71,12 @@ pub const PLANCK: f64 = 6.626_070_15e-34;
 pub const H: f64 = PLANCK;
 
 /// Reduced Planck constant ℏ = h/(2π) [J·s]
-pub const HBAR: f64 = 1.054_571_817e-34;
+///
+/// Defined as `PLANCK / TAU` so precision is automatically correct to
+/// machine epsilon. The prior hand-typed `1.054_571_817e-34` truncated
+/// 4-5 significant digits vs scipy.constants.hbar (6.13e-10 relative
+/// error). Per frankenscipy-h0su.
+pub const HBAR: f64 = PLANCK / TAU;
 
 /// Newtonian constant of gravitation [m³/(kg·s²)]
 pub const GRAVITATIONAL_CONSTANT: f64 = 6.674_30e-11;
@@ -150,7 +155,11 @@ pub const NUCLEAR_MAGNETON: f64 = 5.050_783_746_1e-27;
 pub const MAGNETIC_FLUX_QUANTUM: f64 = 2.067_833_848e-15;
 
 /// Conductance quantum G₀ = 2e²/h [S]
-pub const CONDUCTANCE_QUANTUM: f64 = 7.748_091_729e-5;
+///
+/// Derived as `2 * ELEMENTARY_CHARGE^2 / PLANCK` so precision tracks the
+/// SI-exact inputs. Per frankenscipy-h0su.
+pub const CONDUCTANCE_QUANTUM: f64 =
+    2.0 * ELEMENTARY_CHARGE * ELEMENTARY_CHARGE / PLANCK;
 
 /// Josephson constant K_J = 2e/h [Hz/V]
 pub const JOSEPHSON: f64 = 4.835_978_484e14;
@@ -197,7 +206,10 @@ pub const ATMOSPHERE: f64 = 101_325.0;
 pub const ATM: f64 = ATMOSPHERE;
 
 /// Torr (mmHg) [Pa]
-pub const TORR: f64 = 133.322_368_421_053;
+///
+/// Defined as `ATMOSPHERE / 760.0` — the physics-exact ratio.
+/// Per frankenscipy-h0su.
+pub const TORR: f64 = ATMOSPHERE / 760.0;
 /// Shorthand alias
 pub const MMHG: f64 = TORR;
 
