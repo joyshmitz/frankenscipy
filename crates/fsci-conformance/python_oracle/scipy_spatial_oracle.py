@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""SciPy-backed oracle capture for FrankenSciPy spatial fixture.
+
+Closes the spatial slice of frankenscipy-di9p. Covers distance
+functions (pdist / cdist / euclidean / cityblock / chebyshev / cosine /
+correlation), squareform, kdtree_query, directed_hausdorff,
+convex_hull, halfspace_intersection, procrustes, geometric_slerp.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+def _run_case(case: Dict[str, Any], np: Any, spatial: Any, distance: Any) -> Dict[str, Any]:
+    case_id = case.get("case_id", "<missing>")
+    function = case.get("function", "<missing>")
+    args = case.get("args", [])
+
+    try:
+        if function == "pdist":
+            x = np.asarray(args[0], dtype=float)
+            metric = args[1] if len(args) > 1 else "euclidean"
+            result = distance.pdist(x, metric=metric)
+            return _ok(case_id, "array", {"values": [float(v) for v in result.tolist()]})
+
+        if function == "cdist":
+            xa = np.asarray(args[0], dtype=float)
+            xb = np.asarray(args[1], dtype=float)
+            metric = args[2] if len(args) > 2 else "euclidean"
+            result = distance.cdist(xa, xb, metric=metric)
+            return _ok(case_id, "matrix", {
+                "values": [[float(v) for v in row] for row in result.tolist()],
+            })
+
+        if function == "squareform_to_matrix":
+            condensed = np.asarray(args[0], dtype=float)
+            result = distance.squareform(condensed)
+            return _ok(case_id, "matrix", {
+                "values": [[float(v) for v in row] for row in result.tolist()],
+            })
+
+        if function == "kdtree_query":
+            points = np.asarray(args[0], dtype=float)
+            query = np.asarray(args[1], dtype=float)
+            tree = spatial.cKDTree(points)
+            dist, idx = tree.query(query)
+            return _ok(case_id, "kdtree_result", {
+                "distance": float(dist) if np.isscalar(dist) else [float(v) for v in np.atleast_1d(dist).tolist()],
+                "index": int(idx) if np.isscalar(idx) else [int(v) for v in np.atleast_1d(idx).tolist()],
+            })
+
+        if function == "directed_hausdorff":
+            a = np.asarray(args[0], dtype=float)
+            b = np.asarray(args[1], dtype=float)
+            dist, _i, _j = spatial.distance.directed_hausdorff(a, b)
+            return _ok(case_id, "scalar", {"value": float(dist)})
+
+        if function == "convex_hull":
+            points = np.asarray(args[0], dtype=float)
+            hull = spatial.ConvexHull(points)
+            return _ok(case_id, "convex_hull", {
+                "vertices": [int(v) for v in hull.vertices.tolist()],
+                "volume": float(hull.volume),
+                "area": float(hull.area),
+            })
+
+        if function == "halfspace_intersection":
+            halfspaces = np.asarray(args[0], dtype=float)
+            interior_point = np.asarray(args[1], dtype=float)
+            hs = spatial.HalfspaceIntersection(halfspaces, interior_point)
+            return _ok(case_id, "halfspace_intersection", {
+                "intersections": [[float(v) for v in row] for row in hs.intersections.tolist()],
+            })
+
+        if function == "procrustes":
+            data1 = np.asarray(args[0], dtype=float)
+            data2 = np.asarray(args[1], dtype=float)
+            mtx1, mtx2, disparity = spatial.procrustes(data1, data2)
+            return _ok(case_id, "procrustes_result", {
+                "disparity": float(disparity),
+                "mtx1": [[float(v) for v in row] for row in mtx1.tolist()],
+                "mtx2": [[float(v) for v in row] for row in mtx2.tolist()],
+            })
+
+        if function == "geometric_slerp":
+            start = np.asarray(args[0], dtype=float)
+            end = np.asarray(args[1], dtype=float)
+            t = np.asarray(args[2], dtype=float)
+            result = spatial.geometric_slerp(start, end, t)
+            return _ok(case_id, "matrix", {
+                "values": [[float(v) for v in row] for row in result.tolist()],
+            })
+
+        # Scalar pairwise-distance functions
+        if function in {"euclidean", "cityblock", "chebyshev", "cosine", "correlation",
+                        "hamming", "jaccard", "canberra", "braycurtis", "mahalanobis"}:
+            a = np.asarray(args[0], dtype=float)
+            b = np.asarray(args[1], dtype=float)
+            fn = getattr(distance, function)
+            if function == "mahalanobis" and len(args) > 2:
+                vi = np.asarray(args[2], dtype=float)
+                result = float(fn(a, b, vi))
+            else:
+                result = float(fn(a, b))
+            return _ok(case_id, "scalar", {"value": result})
+
+        return {
+            "case_id": case_id,
+            "status": "error",
+            "result_kind": "unsupported_function",
+            "result": {},
+            "error": f"unsupported function: {function}",
+        }
+
+    except (ArithmeticError, OverflowError, TypeError, ValueError, KeyError, IndexError) as exc:
+        return {
+            "case_id": case_id,
+            "status": "error",
+            "result_kind": "exception",
+            "result": {},
+            "error": str(exc),
+        }
+    except Exception as exc:  # noqa: BLE001 — QhullError and other scipy-raised errors are not ABC-classified
+        return {
+            "case_id": case_id,
+            "status": "error",
+            "result_kind": "exception",
+            "result": {},
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _ok(case_id: str, result_kind: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "case_id": case_id,
+        "status": "ok",
+        "result_kind": result_kind,
+        "result": result,
+        "error": None,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Capture SciPy spatial oracle outputs")
+    parser.add_argument("--fixture", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--oracle-root", required=False, default="")
+    args = parser.parse_args()
+
+    try:
+        import numpy as np
+        from scipy import spatial
+        from scipy.spatial import distance
+    except ModuleNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    fixture_path = Path(args.fixture)
+    output_path = Path(args.output)
+
+    try:
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"Invalid JSON in fixture: {exc}", file=sys.stderr)
+        return 1
+
+    case_outputs: List[Dict[str, Any]] = []
+    for case in fixture.get("cases", []):
+        case_outputs.append(_run_case(case, np=np, spatial=spatial, distance=distance))
+
+    payload = {
+        "packet_id": fixture.get("packet_id", "unknown"),
+        "family": fixture.get("family", "unknown"),
+        "generated_unix_ms": int(time.time() * 1000),
+        "runtime": {
+            "python_version": sys.version.split()[0],
+            "numpy_version": getattr(np, "__version__", "unknown"),
+            "scipy_version": getattr(sys.modules.get("scipy"), "__version__", "unknown"),
+        },
+        "case_outputs": case_outputs,
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
