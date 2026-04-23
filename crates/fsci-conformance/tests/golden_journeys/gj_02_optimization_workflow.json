@@ -1,0 +1,13 @@
+{
+  "journey_id": "gj_02_optimization_workflow",
+  "description": "Define objective → minimize BFGS → compare CG → verify convergence",
+  "category": "basic_usage",
+  "packet": "P2C-003",
+  "steps": 4,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "bfgs_nfev": 15,
+    "cg_nfev": 15
+  }
+}

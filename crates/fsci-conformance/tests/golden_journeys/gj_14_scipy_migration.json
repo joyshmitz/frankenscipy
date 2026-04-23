@@ -1,0 +1,21 @@
+{
+  "journey_id": "gj_14_scipy_migration",
+  "description": "SciPy migration: linalg.solve → inv → optimize.brentq → special.erf → minimize",
+  "category": "migration",
+  "packet": "cross-packet",
+  "steps": 5,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "solve_x": [
+      0.6666666666666667,
+      1.5,
+      1.3333333333333333
+    ],
+    "gamma_root": 3.0000000000000067,
+    "rosenbrock_min": [
+      1.0000000006301621,
+      1.0000000012359216
+    ]
+  }
+}

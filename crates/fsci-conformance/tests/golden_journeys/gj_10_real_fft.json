@@ -1,0 +1,14 @@
+{
+  "journey_id": "gj_10_real_fft",
+  "description": "Real signal → rfft → irfft → verify roundtrip",
+  "category": "advanced",
+  "packet": "P2C-005",
+  "steps": 3,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "n": 128,
+    "spectrum_len": 65,
+    "max_err": 5.551115123125783e-16
+  }
+}

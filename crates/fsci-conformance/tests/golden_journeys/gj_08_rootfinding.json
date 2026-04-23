@@ -1,0 +1,13 @@
+{
+  "journey_id": "gj_08_rootfinding",
+  "description": "brentq finds root → verify → bisect agrees",
+  "category": "basic_usage",
+  "packet": "P2C-003",
+  "steps": 3,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "root": 2.0945514815423287,
+    "f_root": 2.4868995751603507e-14
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "journey_id": "gj_04_fft_analysis",
+  "description": "Create signal → FFT → IFFT → verify roundtrip",
+  "category": "basic_usage",
+  "packet": "P2C-005",
+  "steps": 4,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "n": 64,
+    "max_roundtrip_err": 3.14018491736755e-16
+  }
+}

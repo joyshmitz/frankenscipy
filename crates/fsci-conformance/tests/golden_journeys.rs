@@ -2,8 +2,8 @@
 //! bd-3jh.20: [FOUNDATION] User Workflow Scenario Corpus + Golden Journeys
 //!
 //! 14 golden journey scenarios covering all 8 packets, written from user perspective.
-//! Each journey exercises a realistic end-to-end workflow and emits fixture snapshots
-//! at `fixtures/artifacts/golden_journeys/`.
+//! Each journey exercises a realistic end-to-end workflow and compares against
+//! committed golden snapshots under `tests/golden_journeys/`.
 
 use std::fs;
 use std::path::PathBuf;
@@ -23,11 +23,11 @@ use fsci_opt::{MinimizeOptions, OptimizeMethod, RootOptions, bfgs, bisect, brent
 use fsci_runtime::{DecisionSignals, PolicyAction, PolicyController, RuntimeMode, SolverPortfolio};
 use fsci_sparse::{FormatConvertible, Shape2D, eye, random, scale_csr, spmv_csr};
 use fsci_special::{SpecialTensor, erf, erfc, gamma, gammaln, rgamma};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 type Complex64 = (f64, f64);
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 struct JourneyResult {
     journey_id: String,
     description: String,
@@ -39,15 +39,58 @@ struct JourneyResult {
     snapshot: serde_json::Value,
 }
 
-fn output_dir() -> PathBuf {
+fn golden_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden_journeys")
+}
+
+fn actual_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/artifacts/golden_journeys")
 }
 
+fn normalized_result(result: &JourneyResult) -> JourneyResult {
+    let mut normalized = result.clone();
+    normalized.duration_ns = 0;
+    normalized
+}
+
 fn write_journey(result: &JourneyResult) {
-    let dir = output_dir();
-    fs::create_dir_all(&dir).unwrap();
-    let json = serde_json::to_string_pretty(result).unwrap();
-    fs::write(dir.join(format!("{}.json", result.journey_id)), &json).unwrap();
+    let normalized = normalized_result(result);
+    let golden_path = golden_dir().join(format!("{}.json", normalized.journey_id));
+    let actual_json = serde_json::to_string_pretty(&normalized).unwrap();
+
+    if std::env::var_os("UPDATE_GOLDENS").is_some() {
+        fs::create_dir_all(golden_dir()).unwrap();
+        fs::write(&golden_path, &actual_json).unwrap();
+        return;
+    }
+
+    let expected_raw = fs::read_to_string(&golden_path).unwrap_or_else(|err| {
+        panic!(
+            "missing golden journey {} at {} ({err}); rerun with UPDATE_GOLDENS=1",
+            normalized.journey_id,
+            golden_path.display()
+        )
+    });
+    let _expected: JourneyResult = serde_json::from_str(&expected_raw).unwrap_or_else(|err| {
+        panic!(
+            "golden journey {} is invalid JSON at {} ({err})",
+            normalized.journey_id,
+            golden_path.display()
+        )
+    });
+    let expected_json = expected_raw.replace("\r\n", "\n");
+
+    if actual_json != expected_json {
+        let actual_path = actual_dir().join(format!("{}.actual.json", normalized.journey_id));
+        fs::create_dir_all(actual_dir()).unwrap();
+        fs::write(&actual_path, &actual_json).unwrap();
+        panic!(
+            "golden journey mismatch for {}.\nexpected: {}\nactual: {}",
+            normalized.journey_id,
+            golden_path.display(),
+            actual_path.display()
+        );
+    }
 }
 
 fn real_val(t: &SpecialTensor) -> f64 {

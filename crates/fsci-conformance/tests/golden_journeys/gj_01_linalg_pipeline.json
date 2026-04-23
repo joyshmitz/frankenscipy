@@ -1,0 +1,13 @@
+{
+  "journey_id": "gj_01_linalg_pipeline",
+  "description": "Construct matrix → det → solve Ax=b → verify residual",
+  "category": "basic_usage",
+  "packet": "P2C-002",
+  "steps": 4,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "det": 9701.000000000002,
+    "max_residual": 0.0
+  }
+}

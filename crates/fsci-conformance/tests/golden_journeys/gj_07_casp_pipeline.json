@@ -1,0 +1,13 @@
+{
+  "journey_id": "gj_07_casp_pipeline",
+  "description": "CASP controller → benign allow → risky validate → portfolio select",
+  "category": "basic_usage",
+  "packet": "P2C-008",
+  "steps": 4,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "benign_action": "Allow",
+    "risky_action": "FailClosed"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "journey_id": "gj_13_array_api_pipeline",
+  "description": "zeros/ones → linspace → arange → reshape → transpose → broadcast",
+  "category": "basic_usage",
+  "packet": "P2C-007",
+  "steps": 7,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "zeros_shape": [
+      3,
+      4
+    ],
+    "linspace_len": 10,
+    "transposed_shape": [
+      4,
+      3
+    ],
+    "broadcast_result": [
+      3,
+      4
+    ]
+  }
+}

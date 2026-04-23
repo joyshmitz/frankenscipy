@@ -1,0 +1,20 @@
+{
+  "journey_id": "gj_12_cross_packet",
+  "description": "Special funcs → linalg solve → FFT roundtrip → CASP decision",
+  "category": "advanced",
+  "packet": "cross-packet",
+  "steps": 4,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "gamma_vals": [
+      1.7724538509055163,
+      0.9999999999999999,
+      0.8862269254527587,
+      1.0000000000000004,
+      1.3293403881791386
+    ],
+    "fft_err": 1.6653345369377348e-16,
+    "casp_action": "Allow"
+  }
+}

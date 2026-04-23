@@ -1,0 +1,13 @@
+{
+  "journey_id": "gj_06_special_functions",
+  "description": "gamma(5)=24 → gammaln → erf+erfc=1 → gamma*rgamma=1",
+  "category": "basic_usage",
+  "packet": "P2C-006",
+  "steps": 4,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "gamma5": 24.000000000000004,
+    "erf_erfc_sum": 1.0
+  }
+}

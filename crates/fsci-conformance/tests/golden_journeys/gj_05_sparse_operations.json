@@ -1,0 +1,14 @@
+{
+  "journey_id": "gj_05_sparse_operations",
+  "description": "Create sparse → spmv → scale → format conversion roundtrip",
+  "category": "basic_usage",
+  "packet": "P2C-004",
+  "steps": 4,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "n": 100,
+    "nnz": 512,
+    "identity_err": 0.0
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "journey_id": "gj_03_ivp_pipeline",
+  "description": "Define ODE → set tolerances → integrate → verify y(t)=e^(-t)",
+  "category": "basic_usage",
+  "packet": "P2C-001",
+  "steps": 4,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "y_final": 0.006737947094324278,
+    "expected": 0.006737946999085467,
+    "err": 9.523881076139995e-11,
+    "nfev": 319
+  }
+}

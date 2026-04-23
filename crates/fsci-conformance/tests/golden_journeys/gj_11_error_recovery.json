@@ -1,0 +1,13 @@
+{
+  "journey_id": "gj_11_error_recovery",
+  "description": "Encounter errors → handle gracefully → retry with correct params",
+  "category": "error_recovery",
+  "packet": "cross-packet",
+  "steps": 4,
+  "all_pass": true,
+  "duration_ns": 0,
+  "snapshot": {
+    "tol_error_caught": true,
+    "bracket_error_caught": true
+  }
+}
