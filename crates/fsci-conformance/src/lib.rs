@@ -8781,6 +8781,9 @@ pub fn run_differential_test(
         "integrate_core" | "integrate" => {
             run_differential_integrate(fixture_path, &raw, oracle_config)
         }
+        "constants_core" | "constants" => {
+            run_differential_constants(fixture_path, &raw, oracle_config)
+        }
         _ => Err(HarnessError::FixtureParse {
             path: fixture_path.to_path_buf(),
             source: serde::de::Error::custom(format!("unknown fixture family: {family}")),
@@ -9475,6 +9478,288 @@ fn run_differential_fft(
     let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
     if !ledger.is_empty() {
         emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
+    }
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+// ============================================================================
+// Constants (fsci-constants / scipy.constants) differential dispatch.
+//
+// Per frankenscipy-utus: the original FSCI-P2C-016 fixture used a prose-only
+// {fixture_id, expected_properties} schema that no dispatch arm could consume.
+// This runner uses the canonical {case_id, function, args, expected} shape and
+// compares fsci-constants values/helpers against scipy.constants via the
+// paired scipy_constants_oracle.py.
+// ============================================================================
+
+/// Fixture for constants conformance testing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConstantsPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<ConstantsCase>,
+}
+
+/// A single constants conformance test case.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConstantsCase {
+    pub case_id: String,
+    pub category: String,
+    pub mode: RuntimeMode,
+    pub function: String,
+    pub args: Vec<serde_json::Value>,
+    pub expected: ConstantsExpected,
+}
+
+impl ConstantsCase {
+    fn case_id(&self) -> &str {
+        &self.case_id
+    }
+}
+
+/// Expected outcome for a constants conformance case.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConstantsExpected {
+    pub kind: String,
+    #[serde(default)]
+    pub value: Option<f64>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub atol: Option<f64>,
+    #[serde(default)]
+    pub rtol: Option<f64>,
+    #[serde(default)]
+    pub contract_ref: Option<String>,
+}
+
+#[derive(Debug)]
+enum ConstantsObserved {
+    Scalar(f64),
+    Error(String),
+}
+
+fn constant_value_by_name(name: &str) -> Option<f64> {
+    // Maps Rust const identifiers (case-insensitive) to their compiled
+    // values. Kept tight to the public API actually exported by
+    // fsci-constants so typos in fixture args fail closed.
+    match name.to_ascii_uppercase().as_str() {
+        "PI" => Some(fsci_constants::PI),
+        "TAU" => Some(fsci_constants::TAU),
+        "E" => Some(fsci_constants::E),
+        "GOLDEN_RATIO" => Some(fsci_constants::GOLDEN_RATIO),
+        "SPEED_OF_LIGHT" | "C" => Some(fsci_constants::SPEED_OF_LIGHT),
+        "PLANCK" | "H" => Some(fsci_constants::PLANCK),
+        "HBAR" => Some(fsci_constants::HBAR),
+        "GRAVITATIONAL_CONSTANT" | "G" => Some(fsci_constants::GRAVITATIONAL_CONSTANT),
+        "G_N" => Some(fsci_constants::G_N),
+        "ELEMENTARY_CHARGE" | "E_CHARGE" => Some(fsci_constants::ELEMENTARY_CHARGE),
+        "GAS_CONSTANT" | "R" => Some(fsci_constants::GAS_CONSTANT),
+        "AVOGADRO" | "N_A" => Some(fsci_constants::AVOGADRO),
+        "BOLTZMANN" | "K_B" => Some(fsci_constants::BOLTZMANN),
+        "STEFAN_BOLTZMANN" | "SIGMA" => Some(fsci_constants::STEFAN_BOLTZMANN),
+        "WIEN" => Some(fsci_constants::WIEN),
+        "RYDBERG" => Some(fsci_constants::RYDBERG),
+        "ELECTRON_MASS" | "M_E" => Some(fsci_constants::ELECTRON_MASS),
+        "PROTON_MASS" | "M_P" => Some(fsci_constants::PROTON_MASS),
+        "NEUTRON_MASS" | "M_N" => Some(fsci_constants::NEUTRON_MASS),
+        "ATOMIC_MASS" | "U" => Some(fsci_constants::ATOMIC_MASS),
+        "FINE_STRUCTURE" | "ALPHA" => Some(fsci_constants::FINE_STRUCTURE),
+        "BOHR_RADIUS" => Some(fsci_constants::BOHR_RADIUS),
+        "ELECTRON_VOLT" | "EV" => Some(fsci_constants::ELECTRON_VOLT),
+        "CALORIE" => Some(fsci_constants::CALORIE),
+        "ATMOSPHERE" | "ATM" => Some(fsci_constants::ATMOSPHERE),
+        "BAR" => Some(fsci_constants::BAR),
+        "POUND" => Some(fsci_constants::POUND),
+        "INCH" => Some(fsci_constants::INCH),
+        "FOOT" => Some(fsci_constants::FOOT),
+        "DEGREE" => Some(fsci_constants::DEGREE),
+        _ => None,
+    }
+}
+
+fn execute_constants_case(case: &ConstantsCase) -> ConstantsObserved {
+    fn arg_str(case: &ConstantsCase, idx: usize) -> Result<String, String> {
+        case.args
+            .get(idx)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("missing string arg[{idx}] for {}", case.function))
+    }
+    fn arg_f64(case: &ConstantsCase, idx: usize) -> Result<f64, String> {
+        case.args
+            .get(idx)
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| format!("missing f64 arg[{idx}] for {}", case.function))
+    }
+
+    match case.function.as_str() {
+        "constant_value" => match arg_str(case, 0) {
+            Ok(name) => match constant_value_by_name(&name) {
+                Some(value) => ConstantsObserved::Scalar(value),
+                None => ConstantsObserved::Error(format!("unknown constant: {name}")),
+            },
+            Err(e) => ConstantsObserved::Error(e),
+        },
+        "convert_temperature" => {
+            let value = match arg_f64(case, 0) {
+                Ok(v) => v,
+                Err(e) => return ConstantsObserved::Error(e),
+            };
+            let from = match arg_str(case, 1) {
+                Ok(v) => v,
+                Err(e) => return ConstantsObserved::Error(e),
+            };
+            let to = match arg_str(case, 2) {
+                Ok(v) => v,
+                Err(e) => return ConstantsObserved::Error(e),
+            };
+            match fsci_constants::convert_temperature(value, &from, &to) {
+                Ok(v) => ConstantsObserved::Scalar(v),
+                Err(e) => ConstantsObserved::Error(e),
+            }
+        }
+        "ev_to_joules" => match arg_f64(case, 0) {
+            Ok(x) => ConstantsObserved::Scalar(fsci_constants::ev_to_joules(x)),
+            Err(e) => ConstantsObserved::Error(e),
+        },
+        "joules_to_ev" => match arg_f64(case, 0) {
+            Ok(x) => ConstantsObserved::Scalar(fsci_constants::joules_to_ev(x)),
+            Err(e) => ConstantsObserved::Error(e),
+        },
+        "wavelength_to_freq" => match arg_f64(case, 0) {
+            Ok(x) => ConstantsObserved::Scalar(fsci_constants::wavelength_to_freq(x)),
+            Err(e) => ConstantsObserved::Error(e),
+        },
+        "freq_to_wavelength" => match arg_f64(case, 0) {
+            Ok(x) => ConstantsObserved::Scalar(fsci_constants::freq_to_wavelength(x)),
+            Err(e) => ConstantsObserved::Error(e),
+        },
+        "deg2rad" => match arg_f64(case, 0) {
+            Ok(x) => ConstantsObserved::Scalar(fsci_constants::deg2rad(x)),
+            Err(e) => ConstantsObserved::Error(e),
+        },
+        "rad2deg" => match arg_f64(case, 0) {
+            Ok(x) => ConstantsObserved::Scalar(fsci_constants::rad2deg(x)),
+            Err(e) => ConstantsObserved::Error(e),
+        },
+        "lb_to_kg" => match arg_f64(case, 0) {
+            Ok(x) => ConstantsObserved::Scalar(fsci_constants::lb_to_kg(x)),
+            Err(e) => ConstantsObserved::Error(e),
+        },
+        "kg_to_lb" => match arg_f64(case, 0) {
+            Ok(x) => ConstantsObserved::Scalar(fsci_constants::kg_to_lb(x)),
+            Err(e) => ConstantsObserved::Error(e),
+        },
+        other => ConstantsObserved::Error(format!("unknown function: {other}")),
+    }
+}
+
+fn compare_constants_case_differential(
+    case: &ConstantsCase,
+    observed: &ConstantsObserved,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    let atol = case.expected.atol.unwrap_or(0.0);
+    let rtol = case.expected.rtol.unwrap_or(0.0);
+    let tolerance = ToleranceUsed {
+        atol,
+        rtol,
+        comparison_mode: "allclose".to_owned(),
+    };
+
+    match (case.expected.kind.as_str(), observed) {
+        ("scalar", ConstantsObserved::Scalar(actual)) => {
+            let Some(expected) = case.expected.value else {
+                return (
+                    false,
+                    "expected.value missing for scalar kind".to_owned(),
+                    None,
+                    Some(tolerance),
+                );
+            };
+            let diff = (actual - expected).abs();
+            let threshold = atol + rtol * expected.abs();
+            let pass = diff <= threshold;
+            let msg = if pass {
+                format!("match within tolerance (diff={diff:e}, thr={threshold:e})")
+            } else {
+                format!(
+                    "scalar mismatch: expected={expected:?}, actual={actual:?}, diff={diff:e}, thr={threshold:e}"
+                )
+            };
+            (pass, msg, Some(diff), Some(tolerance))
+        }
+        ("error", ConstantsObserved::Error(actual)) => {
+            let expected = case.expected.error.as_deref().unwrap_or("");
+            let pass = matches_error_contract(actual, expected);
+            let msg = if pass {
+                "error matched".to_owned()
+            } else {
+                format!("error mismatch: expected `{expected}`, got `{actual}`")
+            };
+            (pass, msg, None, Some(tolerance))
+        }
+        (expected_kind, actual_obs) => (
+            false,
+            format!("shape mismatch: expected kind `{expected_kind}`, got {actual_obs:?}"),
+            None,
+            Some(tolerance),
+        ),
+    }
+}
+
+fn run_differential_constants(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: ConstantsPacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
+
+    for case in &fixture.cases {
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            Some(audit_ledger.as_ref()),
+            || {
+                let observed = execute_constants_case(case);
+                compare_constants_case_differential(case, &observed)
+            },
+        ));
+    }
+
+    let pass_count = per_case_results
+        .iter()
+        .filter(|result| result.passed)
+        .count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ = emit_differential_audit_ledger_for_fixture(
+            fixture_path,
+            &fixture.packet_id,
+            &ledger,
+        )?;
     }
 
     Ok(ConformanceReport {
@@ -15878,6 +16163,30 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let payload = serde_json::to_vec_pretty(&logs).expect("serialize spatial logs");
         fs::write(&output_path, payload).expect("write spatial structured logs");
         assert!(output_path.exists());
+    }
+
+    #[test]
+    fn differential_test_constants_fixture() {
+        // frankenscipy-utus: FSCI-P2C-016 was a dead fixture (prose-only
+        // schema, no dispatch arm). After rewrite it must parse, dispatch
+        // through run_differential_constants, and match fsci-constants
+        // values bit-exactly against fixture expected values.
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-016_constants_core.json");
+        let oracle = default_test_oracle();
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("differential constants runs");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-016");
+        assert_eq!(report.family, "constants_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 20);
     }
 
     #[test]
