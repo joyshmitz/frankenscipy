@@ -3275,7 +3275,7 @@ impl Rotation {
             return Self::identity();
         }
 
-        let intrinsic = seq.chars().next().map_or(false, |c| c.is_uppercase());
+        let intrinsic = seq.chars().next().is_some_and(|c| c.is_uppercase());
         let axes: Vec<char> = seq.to_lowercase().chars().collect();
 
         let mut result = Self::identity();
@@ -3356,7 +3356,7 @@ impl Rotation {
     #[must_use]
     pub fn as_euler(&self, seq: &str) -> [f64; 3] {
         let m = self.as_matrix();
-        let intrinsic = seq.chars().next().map_or(false, |c| c.is_uppercase());
+        let intrinsic = seq.chars().next().is_some_and(|c| c.is_uppercase());
         let axes: Vec<char> = seq.to_lowercase().chars().collect();
 
         if axes.len() != 3 {

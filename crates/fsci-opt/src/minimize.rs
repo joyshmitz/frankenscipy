@@ -4468,7 +4468,7 @@ mod tests {
             result.x
         );
         assert!(
-            result.fun.map_or(false, |v| v < 1e-5),
+            result.fun.is_some_and(|v| v < 1e-5),
             "tnc f={:?} should be ~0",
             result.fun
         );
@@ -4558,7 +4558,7 @@ mod tests {
         let result = trust_constr(&convex_bowl, &[2.0, -3.0], options).expect("at_optimum");
         assert!(result.success);
         assert!(
-            result.fun.map_or(false, |v| v < 1e-10),
+            result.fun.is_some_and(|v| v < 1e-10),
             "at-optimum f={:?}",
             result.fun
         );

@@ -2636,7 +2636,7 @@ mod tests {
         // scipy.special.i1(1) ≈ 0.5651591039924851
         assert!((i1_scalar(1.0) - 0.5651591039924851).abs() < 1e-10);
         // scipy.special.i1(2) ≈ 1.5906368546373291
-        assert!((i1_scalar(2.0) - 1.5906368546373291).abs() < 1e-10);
+        assert!((i1_scalar(2.0) - 1.590_636_854_637_329_5_f64).abs() < 1e-10);
     }
 
     #[test]
