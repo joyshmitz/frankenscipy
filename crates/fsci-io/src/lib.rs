@@ -86,12 +86,24 @@ pub struct MmMatrix {
     pub info: MmInfo,
 }
 
+const MAX_MM_DENSE_ELEMENTS: usize = 128 * 1024 * 1024;
+
 fn checked_matrix_len(rows: usize, cols: usize, context: &str) -> Result<usize, IoError> {
     rows.checked_mul(cols).ok_or_else(|| {
         IoError::InvalidFormat(format!(
             "{context} dimensions {rows}x{cols} overflowed usize"
         ))
     })
+}
+
+fn checked_mm_dense_read_len(rows: usize, cols: usize) -> Result<usize, IoError> {
+    let dense_len = checked_matrix_len(rows, cols, "Matrix Market matrix")?;
+    if dense_len > MAX_MM_DENSE_ELEMENTS {
+        return Err(IoError::InvalidFormat(format!(
+            "Matrix Market matrix dimensions {rows}x{cols} exceed dense read safety bound of {MAX_MM_DENSE_ELEMENTS} elements"
+        )));
+    }
+    Ok(dense_len)
 }
 
 fn parse_mm_info(lines: &mut std::str::Lines<'_>) -> Result<MmInfo, IoError> {
@@ -233,7 +245,7 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
             let rows = info.rows;
             let cols = info.cols;
             let nnz = info.nnz;
-            let dense_len = checked_matrix_len(rows, cols, "Matrix Market matrix")?;
+            let dense_len = checked_mm_dense_read_len(rows, cols)?;
             let mut data = vec![0.0; dense_len];
             let mut complex_data: Option<Vec<(f64, f64)>> = None;
             let mut seen_nnz = 0usize;
@@ -359,8 +371,9 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
         MmFormat::Array => {
             let rows = info.rows;
             let cols = info.cols;
+            let dense_len = checked_mm_dense_read_len(rows, cols)?;
             // Array format: column-major order
-            let mut data = vec![0.0; rows * cols];
+            let mut data = vec![0.0; dense_len];
             let mut complex_data: Option<Vec<(f64, f64)>> = None;
             let mut idx = 0;
 
@@ -369,10 +382,10 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 if trimmed.is_empty() || trimmed.starts_with('%') {
                     continue;
                 }
-                if idx >= rows * cols {
+                if idx >= dense_len {
                     return Err(IoError::InvalidFormat(format!(
                         "array format has more than the declared {} values",
-                        rows * cols
+                        dense_len
                     )));
                 }
                 let v = trimmed
@@ -392,10 +405,10 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
                 }
                 idx += 1;
             }
-            if idx != rows * cols {
+            if idx != dense_len {
                 return Err(IoError::InvalidFormat(format!(
                     "array format expected {} values but found {idx}",
-                    rows * cols
+                    dense_len
                 )));
             }
 
@@ -1445,6 +1458,18 @@ mod tests {
             IoError::InvalidFormat(format!(
                 "Matrix Market matrix dimensions {}x2 overflowed usize",
                 usize::MAX
+            ))
+        );
+    }
+
+    #[test]
+    fn mmread_rejects_coordinate_dense_allocation_dos() {
+        let content = "%%MatrixMarket matrix coordinate real general\n1000000 1000000 1\n1 1 1.0\n";
+        let err = mmread(content).expect_err("hostile dense allocation should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat(format!(
+                "Matrix Market matrix dimensions 1000000x1000000 exceed dense read safety bound of {MAX_MM_DENSE_ELEMENTS} elements"
             ))
         );
     }
