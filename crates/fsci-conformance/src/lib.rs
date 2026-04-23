@@ -256,6 +256,12 @@ pub enum HarnessError {
     PythonFailed { python_bin: String, stderr: String },
     #[error("python oracle requires scipy but it is unavailable: {stderr}")]
     PythonSciPyMissing { stderr: String },
+    /// A Python module required by the oracle (other than scipy) was
+    /// missing at import time — typically numpy or sklearn. Broken out
+    /// from PythonFailed (br-wbzg) so triage can distinguish install
+    /// problems from script bugs.
+    #[error("python oracle is missing module `{module}`: {stderr}")]
+    PythonModuleMissing { module: String, stderr: String },
     #[error("oracle capture parse failed for {path}: {source}")]
     OracleParse {
         path: PathBuf,
@@ -263,6 +269,46 @@ pub enum HarnessError {
     },
     #[error("oracle capture mismatch: {detail}")]
     OracleCaptureMismatch { detail: String },
+}
+
+/// Classify a Python interpreter stderr blob into a `HarnessError`.
+/// Centralizes the `No module named ...` parsing so every oracle call
+/// site distinguishes install-time from script-time failures (br-wbzg).
+///
+/// Matches Python's two common "module missing" phrasings:
+///   - `ModuleNotFoundError: No module named 'scipy'`
+///   - `ImportError: No module named scipy`
+/// and special-cases scipy to return `PythonSciPyMissing` for
+/// backward compatibility with existing callers. numpy / sklearn /
+/// any other missing module routes to `PythonModuleMissing`.
+fn classify_python_stderr(python_bin: String, stderr: String) -> HarnessError {
+    if let Some(module) = extract_missing_module(&stderr) {
+        if module == "scipy" {
+            return HarnessError::PythonSciPyMissing { stderr };
+        }
+        return HarnessError::PythonModuleMissing { module, stderr };
+    }
+    HarnessError::PythonFailed { python_bin, stderr }
+}
+
+/// Extract the module name from a `No module named <x>` fragment in
+/// `stderr`. Returns `None` when no such fragment is present.
+fn extract_missing_module(stderr: &str) -> Option<String> {
+    // Look for "No module named" and take the next word (strip quotes,
+    // take up to the first non-identifier char for dotted imports we
+    // split on the first `.`).
+    let needle = "No module named ";
+    let idx = stderr.find(needle)?;
+    let rest = &stderr[idx + needle.len()..];
+    let rest = rest.trim_start_matches(|c: char| c == '\'' || c == '"');
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+        .unwrap_or(rest.len());
+    let raw = &rest[..end];
+    if raw.is_empty() {
+        return None;
+    }
+    Some(raw.split('.').next().unwrap_or(raw).to_owned())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -6482,10 +6528,7 @@ pub fn capture_linalg_oracle(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        if stderr.contains("No module named 'scipy'") {
-            return Err(HarnessError::PythonSciPyMissing { stderr });
-        }
-        return Err(HarnessError::PythonFailed { python_bin, stderr });
+        return Err(classify_python_stderr(python_bin, stderr));
     }
 
     let mut parsed = load_oracle_capture(&output_path)?;
@@ -6985,10 +7028,7 @@ fn capture_stats_oracle_inner(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        if stderr.contains("No module named 'scipy'") {
-            return Err(HarnessError::PythonSciPyMissing { stderr });
-        }
-        return Err(HarnessError::PythonFailed { python_bin, stderr });
+        return Err(classify_python_stderr(python_bin, stderr));
     }
 
     let mut parsed = load_oracle_capture(&output_path)?;
@@ -16554,6 +16594,44 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         // atol = 0.6 so A is within tol of both X and Y; B is within tol of X only.
         let r = super::compare_unordered_points(&got, &expected, 0.6, 0.0, "cwgm-test");
         assert!(r.is_ok(), "must find optimal matching, got err: {r:?}");
+    }
+
+    #[test]
+    fn classify_python_stderr_buckets_missing_modules() {
+        use super::{HarnessError, classify_python_stderr};
+        // br-wbzg: scipy missing → PythonSciPyMissing (legacy variant).
+        let err = classify_python_stderr(
+            "python3".into(),
+            "ModuleNotFoundError: No module named 'scipy'".into(),
+        );
+        assert!(matches!(err, HarnessError::PythonSciPyMissing { .. }));
+
+        // numpy missing → PythonModuleMissing with module="numpy".
+        let err = classify_python_stderr(
+            "python3".into(),
+            "ModuleNotFoundError: No module named 'numpy'".into(),
+        );
+        assert!(matches!(
+            err,
+            HarnessError::PythonModuleMissing { ref module, .. } if module == "numpy"
+        ));
+
+        // Unquoted form (older Python / ImportError path).
+        let err = classify_python_stderr(
+            "python3".into(),
+            "ImportError: No module named sklearn.metrics".into(),
+        );
+        assert!(matches!(
+            err,
+            HarnessError::PythonModuleMissing { ref module, .. } if module == "sklearn"
+        ));
+
+        // Non-module failure falls through to PythonFailed.
+        let err = classify_python_stderr(
+            "python3".into(),
+            "AttributeError: module scipy has no attribute btdtr".into(),
+        );
+        assert!(matches!(err, HarnessError::PythonFailed { .. }));
     }
 
     #[test]
