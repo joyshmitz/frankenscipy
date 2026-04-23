@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""SciPy-backed oracle capture for FrankenSciPy integrate fixture.
+
+Per frankenscipy-di9p: fsci-integrate previously had NO scipy oracle
+script. This closes that gap for the FSCI-P2C-013 quadrature surface
+(trapezoid / simpson / cumulative_* / romb / newton_cotes / fixed_quad /
+gauss_legendre / cubature). IVP/solve_ivp/bvp are the subject of
+frankenscipy-9cla (fixture extension) and remain un-oracled here.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+import time
+from pathlib import Path
+from typing import Any, Callable, Dict, List
+
+
+def _translate(expr: str) -> str:
+    """Translate fixture expression syntax to valid Python.
+
+    `^` is the XOR operator in Python; fixtures use it for powers.
+    """
+    return expr.replace("^", "**")
+
+
+def _build_callable(expr_or_name: str) -> Callable[..., float]:
+    """Resolve a fixture `func` string to a callable.
+
+    Named identifiers map to specific closures. Generic math expressions
+    are compiled with a restricted `math` namespace.
+    """
+    named_1d = {
+        "constant_1": (1, lambda x: 1.0),
+        "powers_1d": (1, lambda x: x ** 3 + 2.0 * x ** 2 + 3.0 * x + 4.0),
+    }
+    named_nd = {
+        # 2D pair-input: used by cubature zero-dim test cases.
+        "zero_dim_pair": (2, lambda x, y: 0.0),
+    }
+    if expr_or_name in named_1d:
+        arity, fn = named_1d[expr_or_name]
+        return lambda x: fn(x)
+    if expr_or_name in named_nd:
+        arity, fn = named_nd[expr_or_name]
+        return lambda *xs: fn(*xs[:arity])
+
+    py = _translate(expr_or_name)
+    # Discover variable names present in the expression.
+    candidates = sorted(
+        {tok for tok in ("x", "x0", "x1", "x2", "x3", "y") if tok in py}
+    )
+    if not candidates:
+        # Pure constant expression (e.g. "1.0").
+        def const_fn(*_args: float) -> float:
+            return float(eval(py, {"__builtins__": {}}, vars(math)))  # noqa: S307
+        return const_fn
+    # Use a fresh namespace with math functions available.
+    namespace = {"__builtins__": {}}
+    for name in ("sin", "cos", "tan", "exp", "log", "log10", "sqrt", "pi", "e"):
+        namespace[name] = getattr(math, name)
+
+    def dispatched(*args: float) -> float:
+        local = dict(namespace)
+        for i, tok in enumerate(candidates):
+            if i < len(args):
+                local[tok] = args[i]
+            else:
+                local[tok] = 0.0
+        return float(eval(py, {"__builtins__": {}}, local))  # noqa: S307
+
+    return dispatched
+
+
+def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
+    case_id = case.get("case_id", "<missing>")
+    function = case.get("function", "<missing>")
+    args = case.get("args", {}) if isinstance(case.get("args"), dict) else {}
+
+    try:
+        if function == "trapezoid":
+            y = np.asarray(args["y"], dtype=float)
+            x = np.asarray(args["x"], dtype=float) if args.get("x") is not None else None
+            result = float(integrate.trapezoid(y, x=x))
+            return _ok(case_id, "scalar", {"value": result})
+
+        if function == "simpson":
+            y = np.asarray(args["y"], dtype=float)
+            x = np.asarray(args["x"], dtype=float) if args.get("x") is not None else None
+            result = float(integrate.simpson(y, x=x))
+            return _ok(case_id, "scalar", {"value": result})
+
+        if function == "cumulative_trapezoid":
+            y = np.asarray(args["y"], dtype=float)
+            x = np.asarray(args["x"], dtype=float) if args.get("x") is not None else None
+            result = integrate.cumulative_trapezoid(y, x=x, initial=0.0)
+            return _ok(case_id, "array", {"values": [float(v) for v in result.tolist()]})
+
+        if function == "cumulative_simpson":
+            y = np.asarray(args["y"], dtype=float)
+            x = np.asarray(args["x"], dtype=float) if args.get("x") is not None else None
+            result = integrate.cumulative_simpson(y, x=x, initial=0.0)
+            return _ok(case_id, "array", {"values": [float(v) for v in result.tolist()]})
+
+        if function == "romb":
+            y = np.asarray(args["y"], dtype=float)
+            dx = float(args.get("dx", 1.0))
+            result = float(integrate.romb(y, dx=dx))
+            return _ok(case_id, "scalar", {"value": result})
+
+        if function == "newton_cotes":
+            n = int(args["n"])
+            weights, error = integrate.newton_cotes(n)
+            return _ok(
+                case_id,
+                "newton_cotes",
+                {
+                    "weights": [float(w) for w in weights.tolist()],
+                    "error": float(error),
+                },
+            )
+
+        if function == "fixed_quad":
+            fn = _build_callable(args["func"])
+            a = float(args["a"])
+            b = float(args["b"])
+            n = int(args.get("n", 5))
+            # scipy.integrate.fixed_quad passes arrays; adapt.
+            def vec_fn(xs: Any) -> Any:
+                return np.asarray([fn(float(x)) for x in np.atleast_1d(xs)], dtype=float)
+            value, _none = integrate.fixed_quad(vec_fn, a, b, n=n)
+            return _ok(case_id, "scalar", {"value": float(value)})
+
+        if function == "gauss_legendre":
+            # scipy exposes gauss_legendre weights+nodes via roots_legendre.
+            from scipy.special import roots_legendre
+
+            n = int(args.get("n", 5))
+            a = float(args["a"])
+            b = float(args["b"])
+            fn = _build_callable(args["func"])
+            nodes, weights = roots_legendre(n)
+            half = (b - a) / 2.0
+            mid = (a + b) / 2.0
+            total = 0.0
+            for xi, wi in zip(nodes, weights):
+                total += wi * fn(mid + half * xi)
+            total *= half
+            return _ok(case_id, "scalar", {"value": float(total)})
+
+        if function == "cubature":
+            lower = [float(v) for v in args["lower"]]
+            upper = [float(v) for v in args["upper"]]
+            atol = float(args.get("atol", 1e-10))
+            rtol = float(args.get("rtol", 1e-10))
+            fn = _build_callable(args["func"])
+            # scipy.integrate.cubature was added in scipy 1.15; fall back
+            # to nquad for older installs.
+            if hasattr(integrate, "cubature"):
+                def cube_fn(xs: Any) -> Any:
+                    # scipy.integrate.cubature expects f(x) where x is
+                    # (..., ndim). Flatten leading axes and apply.
+                    x = np.atleast_2d(xs)
+                    return np.asarray([fn(*row) for row in x], dtype=float)
+                res = integrate.cubature(cube_fn, lower, upper, atol=atol, rtol=rtol)
+                value = float(res.estimate) if hasattr(res, "estimate") else float(res[0])
+                return _ok(case_id, "cubature_scalar", {
+                    "value": value,
+                    "status": "converged",
+                })
+            # Fallback via nquad for older scipy.
+            def nquad_fn(*xs: float) -> float:
+                return fn(*xs)
+            ranges = list(zip(lower, upper))
+            value, _err = integrate.nquad(nquad_fn, ranges, opts={"epsabs": atol, "epsrel": rtol})
+            return _ok(case_id, "cubature_scalar", {
+                "value": float(value),
+                "status": "converged_via_nquad",
+            })
+
+        return {
+            "case_id": case_id,
+            "status": "error",
+            "result_kind": "unsupported_function",
+            "result": {},
+            "error": f"unsupported function: {function}",
+        }
+
+    except (ArithmeticError, OverflowError, TypeError, ValueError, KeyError) as exc:
+        return {
+            "case_id": case_id,
+            "status": "error",
+            "result_kind": "exception",
+            "result": {},
+            "error": str(exc),
+        }
+
+
+def _ok(case_id: str, result_kind: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "case_id": case_id,
+        "status": "ok",
+        "result_kind": result_kind,
+        "result": result,
+        "error": None,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Capture SciPy integrate oracle outputs")
+    parser.add_argument("--fixture", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--oracle-root", required=False, default="")
+    args = parser.parse_args()
+
+    try:
+        import numpy as np
+        from scipy import integrate
+    except ModuleNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    fixture_path = Path(args.fixture)
+    output_path = Path(args.output)
+
+    try:
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"Invalid JSON in fixture: {exc}", file=sys.stderr)
+        return 1
+
+    case_outputs: List[Dict[str, Any]] = []
+    for case in fixture.get("cases", []):
+        case_outputs.append(_run_case(case, integrate=integrate, np=np))
+
+    payload = {
+        "packet_id": fixture.get("packet_id", "unknown"),
+        "family": fixture.get("family", "unknown"),
+        "generated_unix_ms": int(time.time() * 1000),
+        "runtime": {
+            "python_version": sys.version.split()[0],
+            "numpy_version": getattr(np, "__version__", "unknown"),
+            "scipy_version": getattr(sys.modules.get("scipy"), "__version__", "unknown"),
+        },
+        "case_outputs": case_outputs,
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
