@@ -3188,6 +3188,30 @@ pub struct ClusterExpected {
     pub rtol: Option<f64>,
     #[serde(default)]
     pub contract_ref: Option<String>,
+    /// Opt in to exact-equality label comparison. Default is
+    /// permutation-invariant (first-occurrence canonicalization) because
+    /// cluster labelings carry no intrinsic ID — see br-7eaq.
+    #[serde(default)]
+    pub deterministic_labels: bool,
+}
+
+/// Canonicalize cluster labels by first-occurrence order: the first
+/// distinct label becomes 0, the next becomes 1, and so on. Two
+/// labelings that differ only by cluster-ID permutation produce the
+/// same canonical vector.
+fn canonicalize_labels_first_occurrence(labels: &[usize]) -> Vec<usize> {
+    let mut mapping: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut next_id = 0usize;
+    let mut out = Vec::with_capacity(labels.len());
+    for &l in labels {
+        let id = *mapping.entry(l).or_insert_with(|| {
+            let v = next_id;
+            next_id += 1;
+            v
+        });
+        out.push(id);
+    }
+    out
 }
 
 #[derive(Debug)]
@@ -3453,7 +3477,20 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                 .as_ref()
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
-            if exp == *got {
+            // Cluster labels are permutation-invariant: a k-means or
+            // dbscan that names the same partition with different
+            // integer IDs is semantically identical. Default to
+            // first-occurrence canonicalization (br-7eaq); opt back
+            // into exact comparison via `deterministic_labels: true`.
+            let (exp_cmp, got_cmp) = if case.expected.deterministic_labels {
+                (exp.clone(), got.clone())
+            } else {
+                (
+                    canonicalize_labels_first_occurrence(&exp),
+                    canonicalize_labels_first_occurrence(got),
+                )
+            };
+            if exp_cmp == got_cmp {
                 (true, format!("labels matched: {got:?}"))
             } else {
                 (
@@ -16411,5 +16448,21 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(PacketFamily::Special.has_runner());
         assert!(PacketFamily::ArrayApi.has_runner());
         assert!(PacketFamily::RuntimeCasp.has_runner());
+    }
+
+    #[test]
+    fn canonicalize_labels_renames_permuted_ids() {
+        use super::canonicalize_labels_first_occurrence as canon;
+        // Same partition, different IDs → same canonical form.
+        let a = canon(&[0, 1, 1, 2, 0]);
+        let b = canon(&[1, 2, 2, 0, 1]);
+        assert_eq!(a, b, "br-7eaq: permuted cluster IDs must canonicalize equal");
+
+        // Different partition → different canonical form.
+        let c = canon(&[0, 1, 0, 1, 0]);
+        assert_ne!(a, c, "br-7eaq: different partitions must not canonicalize equal");
+
+        // First-occurrence ordering: first distinct ID seen maps to 0.
+        assert_eq!(canon(&[5, 5, 7, 7, 5]), vec![0, 0, 1, 1, 0]);
     }
 }
