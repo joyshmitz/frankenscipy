@@ -141,6 +141,107 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
                 "error": None,
             }
 
+        # --- FSCI-P2C-004_sparse_ops dispatchers (per frankenscipy-dvd6) ---
+        # The primary sparse conformance fixture uses a flat schema
+        # (rows/cols/data/row_indices/col_indices/format/rhs/scalar) rather
+        # than the nested "matrix": {...} schema used by the above 7
+        # dispatchers. Build a scipy.sparse matrix from the flat schema and
+        # run the requested operation, returning the result in the shape
+        # the Rust runner already expects (vector/scalar/matrix_triplets/
+        # csr_components per compare_sparse_outcome).
+        if operation in {"spmv", "spsolve", "add", "scale", "format_roundtrip"}:
+            rows = int(case["rows"])
+            cols = int(case["cols"])
+            data = [float(v) for v in case.get("data", [])]
+            row_indices = [int(v) for v in case.get("row_indices", [])]
+            col_indices = [int(v) for v in case.get("col_indices", [])]
+            fmt = str(case.get("format", "csr")).lower()
+            # Build a COO first, then coerce to requested format.
+            coo = sparse.coo_matrix(
+                (data, (row_indices, col_indices)),
+                shape=(rows, cols),
+            )
+            if fmt == "csr":
+                mat = coo.tocsr()
+            elif fmt == "csc":
+                mat = coo.tocsc()
+            elif fmt == "coo":
+                mat = coo
+            elif fmt == "dok":
+                mat = coo.todok()
+            elif fmt == "lil":
+                mat = coo.tolil()
+            else:
+                mat = coo.tocsr()
+
+            if operation == "spmv":
+                rhs = np.asarray([float(v) for v in case.get("rhs", [])])
+                y = mat @ rhs
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "vector",
+                    "result": {"values": [float(v) for v in y.tolist()]},
+                    "error": None,
+                }
+
+            if operation == "spsolve":
+                rhs = np.asarray([float(v) for v in case.get("rhs", [])])
+                from scipy.sparse import linalg as splinalg
+                x = splinalg.spsolve(mat.tocsr(), rhs)
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "vector",
+                    "result": {"values": [float(v) for v in np.atleast_1d(x).tolist()]},
+                    "error": None,
+                }
+
+            if operation == "scale":
+                scalar = float(case.get("scalar", 1.0))
+                scaled = (mat.tocoo() * scalar).tocoo()
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "matrix_triplets",
+                    "result": _matrix_result(scaled),
+                    "error": None,
+                }
+
+            if operation == "add":
+                # fixture convention: rhs is either a list of data values
+                # (same sparsity as lhs) OR None/missing meaning "add to
+                # self" (shape-preservation test).
+                rhs_raw = case.get("rhs")
+                if rhs_raw is None or (hasattr(rhs_raw, "__len__") and len(rhs_raw) == 0):
+                    rhs_mat = mat.tocsr()
+                else:
+                    rhs_data = [float(v) for v in rhs_raw]
+                    rhs_mat = sparse.coo_matrix(
+                        (rhs_data, (row_indices, col_indices)),
+                        shape=(rows, cols),
+                    ).tocsr()
+                result = (mat.tocsr() + rhs_mat).tocoo()
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "matrix_triplets",
+                    "result": _matrix_result(result),
+                    "error": None,
+                }
+
+            if operation == "format_roundtrip":
+                # Round-trip through CSR->COO->CSC->COO->requested format;
+                # the expected output is structurally identical to input.
+                result = mat.tocsr().tocoo().tocsc().tocoo()
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "matrix_triplets",
+                    "result": _matrix_result(result),
+                    "error": None,
+                }
+
         return {
             "case_id": case_id,
             "status": "error",
