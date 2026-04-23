@@ -263,7 +263,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Capture SciPy FFT oracle outputs")
     parser.add_argument("--fixture", help="Input packet fixture JSON path")
     parser.add_argument("--output", help="Output oracle capture JSON path")
-    parser.add_argument("--oracle-root", help="Legacy oracle root path")
+    parser.add_argument("--oracle-root", default="",
+                        help="(unused) legacy oracle root path — kept for CLI backwards compat")
     parser.add_argument(
         "--self-check",
         action="store_true",
@@ -286,8 +287,8 @@ def main() -> int:
         print("fft oracle shape/complex self-check passed")
         return 0
 
-    if not args.fixture or not args.output or not args.oracle_root:
-        parser.error("--fixture, --output, and --oracle-root are required unless --self-check is used")
+    if not args.fixture or not args.output:
+        parser.error("--fixture and --output are required unless --self-check is used")
 
     fixture_path = Path(args.fixture)
     output_path = Path(args.output)

@@ -427,7 +427,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Capture SciPy special oracle outputs")
     parser.add_argument("--fixture", required=True, help="Input packet fixture JSON path")
     parser.add_argument("--output", required=True, help="Output oracle capture JSON path")
-    parser.add_argument("--oracle-root", required=True, help="Legacy oracle root path")
+    parser.add_argument("--oracle-root", required=False, default="",
+                        help="(unused) legacy oracle root path — kept for CLI backwards compat")
     args = parser.parse_args()
 
     fixture_path = Path(args.fixture)
