@@ -182,6 +182,14 @@ impl SparseIluFactorization {
     }
 }
 
+/// Dense-conversion sanity bound for the V1 spsolve / splu
+/// implementations. Per frankenscipy-ke96: both functions convert their
+/// sparse input to dense before invoking nalgebra's LU, so n=100_000
+/// triggers an 80 GB allocation. Cap the dense-convert path at this
+/// limit (≈ 8 GB matrix) and return a typed error directing callers to
+/// the iterative solvers (cg / gmres / bicgstab) for larger systems.
+const SPSOLVE_DENSE_MAX_N: usize = 32_768;
+
 pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<SolveResult> {
     let shape = a.shape();
     if !shape.is_square() {
@@ -192,6 +200,19 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
     if b.len() != shape.rows {
         return Err(SparseError::IncompatibleShape {
             message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+    if shape.rows > SPSOLVE_DENSE_MAX_N {
+        return Err(SparseError::Unsupported {
+            feature: format!(
+                "spsolve currently dense-converts before LU (V1 limitation); \
+                 n={} > {} would allocate {} GiB. Use fsci_sparse::linalg::cg \
+                 or gmres for iterative solve, or wait for a native sparse \
+                 direct solver. See frankenscipy-ke96.",
+                shape.rows,
+                SPSOLVE_DENSE_MAX_N,
+                (shape.rows as f64 * shape.rows as f64 * 8.0 / 1024.0 / 1024.0 / 1024.0) as u64,
+            ),
         });
     }
     if options.check_finite
@@ -237,6 +258,16 @@ pub fn splu(a: &CscMatrix, options: LuOptions) -> SparseResult<SparseLuFactoriza
     if !(0.0..=1.0).contains(&options.diag_pivot_thresh) {
         return Err(SparseError::InvalidArgument {
             message: "diag_pivot_thresh must be in [0, 1]".to_string(),
+        });
+    }
+    if shape.rows > SPSOLVE_DENSE_MAX_N {
+        return Err(SparseError::Unsupported {
+            feature: format!(
+                "splu currently dense-converts (V1 limitation); n={} > {} \
+                 would allocate a prohibitively large dense matrix. See \
+                 frankenscipy-ke96.",
+                shape.rows, SPSOLVE_DENSE_MAX_N
+            ),
         });
     }
 
