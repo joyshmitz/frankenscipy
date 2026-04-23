@@ -1426,6 +1426,32 @@ const fn packet_report_schema_v2() -> u8 {
     2
 }
 
+/// How a `PacketReport` was produced, recorded in the emitted JSON so
+/// downstream dashboard / audit consumers can distinguish self-check from
+/// oracle-backed reports without heuristic filesystem probing. Per
+/// frankenscipy-fytm: evidence_p2c*.rs tests were writing
+/// `parity_report.json` with Rust-only self-check identities; the name
+/// suggests scipy-parity verification but the content was self-consistent.
+/// The `report_kind` field (skipped when serializing the default
+/// `Unspecified`) now makes the distinction explicit in the JSON.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportKind {
+    /// Legacy/unknown origin. Present when an old writer didn't set the
+    /// field; serializers skip it. Treat as 'unknown' — do NOT assume
+    /// scipy-backed.
+    #[default]
+    Unspecified,
+    /// Report generated from a scipy-backed differential comparison
+    /// (run_*_packet_with_oracle_capture or run_differential_* with
+    /// oracle_status.available).
+    OracleBacked,
+    /// Report generated from Rust-only self-check identities and/or
+    /// fixture-embedded expected values. No scipy consulted. Includes
+    /// the evidence_p2c*.rs final-pack outputs.
+    SelfCheck,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PacketReport {
     #[serde(default = "packet_report_schema_v1")]
@@ -1441,7 +1467,16 @@ pub struct PacketReport {
     pub oracle_status: Option<OracleStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub differential_case_results: Option<Vec<DifferentialCaseResult>>,
+    /// Classification of how the report was produced. Defaults to
+    /// `Unspecified` for backwards compatibility — evidence_p2c*.rs
+    /// tests should set this to `SelfCheck` per frankenscipy-fytm.
+    #[serde(default, skip_serializing_if = "is_unspecified_report_kind")]
+    pub report_kind: ReportKind,
     pub generated_unix_ms: u128,
+}
+
+fn is_unspecified_report_kind(kind: &ReportKind) -> bool {
+    matches!(kind, ReportKind::Unspecified)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -7813,6 +7848,12 @@ fn build_packet_report(
         fixture_path: None,
         oracle_status: None,
         differential_case_results: None,
+        // Leave as Unspecified to preserve the serialized-bytes shape for
+        // existing hash-pinned consumers (raptorq sidecar drills etc.).
+        // Self-check writers that want the explicit tag — including the
+        // evidence_p2c*.rs final-pack tests — should overwrite this field
+        // to ReportKind::SelfCheck after construction. Per frankenscipy-fytm.
+        report_kind: ReportKind::Unspecified,
         generated_unix_ms: now_unix_ms(),
     }
 }
@@ -8266,6 +8307,14 @@ impl From<&ConformanceReport> for PacketReport {
             fixture_path: Some(report.fixture_path.clone()),
             oracle_status: Some(report.oracle_status.clone()),
             differential_case_results: Some(report.per_case_results.clone()),
+            // ConformanceReport comes from the differential lane; mark as
+            // OracleBacked when the oracle_status indicates availability,
+            // otherwise SelfCheck. Per frankenscipy-fytm.
+            report_kind: if matches!(report.oracle_status, OracleStatus::Available { .. }) {
+                ReportKind::OracleBacked
+            } else {
+                ReportKind::SelfCheck
+            },
             generated_unix_ms: report.generated_unix_ms,
         }
     }
@@ -12664,6 +12713,7 @@ mod tests {
             fixture_path: None,
             oracle_status: None,
             differential_case_results: None,
+            report_kind: super::ReportKind::Unspecified,
             generated_unix_ms: super::now_unix_ms(),
         };
 
@@ -16040,6 +16090,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 fixture_path: None,
                 oracle_status: None,
                 differential_case_results: None,
+                report_kind: super::ReportKind::Unspecified,
                 generated_unix_ms: 0,
             },
             super::PacketReport {
@@ -16052,6 +16103,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 fixture_path: None,
                 oracle_status: None,
                 differential_case_results: None,
+                report_kind: super::ReportKind::Unspecified,
                 generated_unix_ms: 0,
             },
         ];

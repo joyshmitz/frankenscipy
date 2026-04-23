@@ -321,6 +321,7 @@ fn recovery_drill_parity_report() {
         fixture_path: None,
         oracle_status: None,
         differential_case_results: None,
+        report_kind: fsci_conformance::ReportKind::Unspecified,
         generated_unix_ms: now_unix_ms(),
     };
 

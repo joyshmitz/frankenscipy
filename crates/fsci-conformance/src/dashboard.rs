@@ -511,6 +511,7 @@ mod tests {
             fixture_path: None,
             oracle_status: None,
             differential_case_results: None,
+            report_kind: crate::ReportKind::Unspecified,
             generated_unix_ms: 0,
         }
     }
