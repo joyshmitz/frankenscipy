@@ -75,6 +75,45 @@ def _build_callable(expr_or_name: str) -> Callable[..., float]:
     return dispatched
 
 
+def _build_vec_callable(name: str):
+    """Named vector-valued 1D integrand for quad_vec (br-9cla-5).
+
+    Mirror this table on the Rust side (`make_integrate_quad_vec_func`).
+    Returns f(x) -> list[float].
+    """
+    if name == "linear_square":
+        # [x, x²] — integrals over [0,1] are [0.5, 1/3].
+        return lambda x: [x, x * x]
+    raise ValueError(f"unknown vec1d integrand: {name!r}")
+
+
+def _build_dblquad_problem(name: str):
+    """Named 2-D integrand for dblquad (br-9cla-5).
+
+    Outer bounds (a, b) are supplied by the fixture; inner bounds come
+    from this registry alongside the integrand so both sides stay
+    aligned with `make_integrate_dblquad_func`.
+    Returns (f, y_lo, y_hi) with f(y, x) matching scipy's convention.
+    """
+    if name == "xy_prod_unit_y":
+        # f(y, x) = x·y with y ∈ [0, 1].
+        return (lambda y, x: x * y, 0.0, 1.0)
+    raise ValueError(f"unknown dblquad problem: {name!r}")
+
+
+def _build_tplquad_problem(name: str):
+    """Named 3-D integrand for tplquad (br-9cla-5).
+
+    Mirrors `make_integrate_tplquad_func`. Outer bounds (a, b) come
+    from the fixture. Inner (y) and innermost (z) bounds are baked in.
+    Returns (f, y_lo, y_hi, z_lo, z_hi) with f(z, y, x).
+    """
+    if name == "xyz_prod_unit_yz":
+        # f(z, y, x) = x·y·z with y ∈ [0,1], z ∈ [0,1].
+        return (lambda z, y, x: x * y * z, 0.0, 1.0, 0.0, 1.0)
+    raise ValueError(f"unknown tplquad problem: {name!r}")
+
+
 def _build_bvp_problem(name: str):
     """Named BVP (f, bc) pair dispatcher for solve_bvp fixtures (br-9cla-4).
 
@@ -203,6 +242,62 @@ def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
                 total += wi * fn(mid + half * xi)
             total *= half
             return _ok(case_id, "scalar", {"value": float(total)})
+
+        if function == "quad":
+            # br-9cla-5: adaptive 1-D scalar quadrature. Uses the same
+            # `_build_callable` as fixed_quad so expression strings like
+            # "x*x" / "sin(x)" work uniformly. Falls back to named closures.
+            fn = _build_callable(args["func"])
+            a = float(args["a"])
+            b = float(args["b"])
+            epsabs = float(args.get("epsabs", 1.49e-8))
+            epsrel = float(args.get("epsrel", 1.49e-8))
+            limit = int(args.get("limit", 50))
+            value, error = integrate.quad(
+                fn, a, b, epsabs=epsabs, epsrel=epsrel, limit=limit
+            )
+            return _ok(case_id, "scalar", {"value": float(value)})
+
+        if function == "quad_vec":
+            # Wrap the named integrand with np.asarray so scipy's
+            # quad_vec can treat it uniformly.
+            inner = _build_vec_callable(args["func"])
+            fn = lambda x: np.asarray(inner(float(x)), dtype=float)  # noqa: E731
+            a = float(args["a"])
+            b = float(args["b"])
+            epsabs = float(args.get("epsabs", 1.49e-8))
+            epsrel = float(args.get("epsrel", 1.49e-8))
+            res, _err = integrate.quad_vec(fn, a, b, epsabs=epsabs, epsrel=epsrel)
+            return _ok(
+                case_id,
+                "array",
+                {"values": [float(v) for v in np.atleast_1d(res).tolist()]},
+            )
+
+        if function == "dblquad":
+            # Outer bounds a, b come from the fixture. Inner (y) bounds
+            # are part of the named problem so both sides integrate the
+            # same region.
+            f, y_lo, y_hi = _build_dblquad_problem(args["func"])
+            a = float(args["a"])
+            b = float(args["b"])
+            epsabs = float(args.get("epsabs", 1.49e-8))
+            epsrel = float(args.get("epsrel", 1.49e-8))
+            value, _err = integrate.dblquad(
+                f, a, b, y_lo, y_hi, epsabs=epsabs, epsrel=epsrel
+            )
+            return _ok(case_id, "scalar", {"value": float(value)})
+
+        if function == "tplquad":
+            f, y_lo, y_hi, z_lo, z_hi = _build_tplquad_problem(args["func"])
+            a = float(args["a"])
+            b = float(args["b"])
+            epsabs = float(args.get("epsabs", 1.49e-8))
+            epsrel = float(args.get("epsrel", 1.49e-8))
+            value, _err = integrate.tplquad(
+                f, a, b, y_lo, y_hi, z_lo, z_hi, epsabs=epsabs, epsrel=epsrel
+            )
+            return _ok(case_id, "scalar", {"value": float(value)})
 
         if function == "solve_bvp":
             # br-9cla-4: collocation-based BVP. Named (f, bc) pair

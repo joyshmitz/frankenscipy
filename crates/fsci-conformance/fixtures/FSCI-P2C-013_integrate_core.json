@@ -909,7 +909,10 @@
       },
       "expected": {
         "kind": "array",
-        "value": [0.5, 0.3333333333333333],
+        "value": [
+          0.5,
+          0.3333333333333333
+        ],
         "atol": 1e-10,
         "rtol": 1e-10,
         "contract_ref": "scipy.integrate.quad_vec / fsci_integrate::quad_vec"
@@ -949,6 +952,99 @@
         "atol": 1e-10,
         "rtol": 1e-10,
         "contract_ref": "scipy.integrate.tplquad / fsci_integrate::tplquad"
+      }
+    },
+    {
+      "case_id": "quad_x_over_0_1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "quad",
+      "args": {
+        "func": "x",
+        "a": 0.0,
+        "b": 1.0
+      },
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_integrate::quad"
+      }
+    },
+    {
+      "case_id": "quad_sin_over_0_pi",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "quad",
+      "args": {
+        "func": "sin(x)",
+        "a": 0.0,
+        "b": 3.141592653589793
+      },
+      "expected": {
+        "kind": "scalar",
+        "value": 2.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_integrate::quad"
+      }
+    },
+    {
+      "case_id": "quad_vec_linear_square",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "quad_vec",
+      "args": {
+        "func": "linear_square",
+        "a": 0.0,
+        "b": 1.0
+      },
+      "expected": {
+        "kind": "array",
+        "value": [
+          0.4999999999999999,
+          0.33333333333333337
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_integrate::quad_vec"
+      }
+    },
+    {
+      "case_id": "dblquad_xy_prod_unit",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "dblquad",
+      "args": {
+        "func": "xy_prod_unit_y",
+        "a": 0.0,
+        "b": 1.0
+      },
+      "expected": {
+        "kind": "scalar",
+        "value": 0.24999999999999997,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_integrate::dblquad"
+      }
+    },
+    {
+      "case_id": "tplquad_xyz_prod_unit",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "tplquad",
+      "args": {
+        "func": "xyz_prod_unit_yz",
+        "a": 0.0,
+        "b": 1.0
+      },
+      "expected": {
+        "kind": "scalar",
+        "value": 0.12499999999999999,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_integrate::tplquad"
       }
     }
   ]
