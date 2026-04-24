@@ -32,6 +32,22 @@ pub fn broadcast_shapes(shapes: &[Shape]) -> ArrayApiResult<Shape> {
     Ok(Shape::new(out))
 }
 
+pub fn broadcast_shapes_with_audit(
+    shapes: &[Shape],
+    ledger: &crate::audit::SyncSharedAuditLedger,
+) -> ArrayApiResult<Shape> {
+    let result = broadcast_shapes(shapes);
+    if let Err(err) = &result {
+        crate::audit::record_array_api_error(
+            ledger,
+            "broadcast_shapes",
+            format!("{shapes:?}").as_bytes(),
+            err.kind,
+        );
+    }
+    result
+}
+
 pub fn promote_and_broadcast<B: ArrayApiBackend>(
     backend: &B,
     arrays: &[&B::Array],

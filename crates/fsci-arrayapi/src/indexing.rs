@@ -33,12 +33,48 @@ pub fn getitem<B: ArrayApiBackend>(
     }
 }
 
+pub fn getitem_with_audit<B: ArrayApiBackend>(
+    backend: &B,
+    array: &B::Array,
+    request: &IndexRequest,
+    ledger: &crate::audit::SyncSharedAuditLedger,
+) -> ArrayApiResult<B::Array> {
+    let result = getitem(backend, array, request);
+    if let Err(err) = &result {
+        crate::audit::record_array_api_error(
+            ledger,
+            "getitem",
+            format!("shape={:?}; request={request:?}", backend.shape_of(array)).as_bytes(),
+            err.kind,
+        );
+    }
+    result
+}
+
 pub fn reshape<B: ArrayApiBackend>(
     backend: &B,
     array: &B::Array,
     new_shape: &Shape,
 ) -> ArrayApiResult<B::Array> {
     backend.reshape(array, new_shape)
+}
+
+pub fn reshape_with_audit<B: ArrayApiBackend>(
+    backend: &B,
+    array: &B::Array,
+    new_shape: &Shape,
+    ledger: &crate::audit::SyncSharedAuditLedger,
+) -> ArrayApiResult<B::Array> {
+    let result = reshape(backend, array, new_shape);
+    if let Err(err) = &result {
+        crate::audit::record_array_api_error(
+            ledger,
+            "reshape",
+            format!("from={:?}; to={new_shape:?}", backend.shape_of(array)).as_bytes(),
+            err.kind,
+        );
+    }
+    result
 }
 
 pub fn transpose<B: ArrayApiBackend>(backend: &B, array: &B::Array) -> ArrayApiResult<B::Array> {

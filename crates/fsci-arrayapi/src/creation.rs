@@ -95,6 +95,23 @@ pub fn arange<B: ArrayApiBackend>(
     backend.arange(request.start, request.stop, request.step, request.dtype)
 }
 
+pub fn arange_with_audit<B: ArrayApiBackend>(
+    backend: &B,
+    request: &ArangeRequest,
+    ledger: &crate::audit::SyncSharedAuditLedger,
+) -> ArrayApiResult<B::Array> {
+    let result = arange(backend, request);
+    if let Err(err) = &result {
+        crate::audit::record_array_api_error(
+            ledger,
+            "arange",
+            format!("{request:?}").as_bytes(),
+            err.kind,
+        );
+    }
+    result
+}
+
 pub fn linspace<B: ArrayApiBackend>(
     backend: &B,
     request: &LinspaceRequest,
@@ -115,6 +132,24 @@ pub fn from_slice<B: ArrayApiBackend>(
 ) -> ArrayApiResult<B::Array> {
     validate_shape(&request.shape)?;
     backend.array_from_slice(values, &request.shape, request.dtype, request.order)
+}
+
+pub fn from_slice_with_audit<B: ArrayApiBackend>(
+    backend: &B,
+    values: &[ScalarValue],
+    request: &CreationRequest,
+    ledger: &crate::audit::SyncSharedAuditLedger,
+) -> ArrayApiResult<B::Array> {
+    let result = from_slice(backend, values, request);
+    if let Err(err) = &result {
+        crate::audit::record_array_api_error(
+            ledger,
+            "from_slice",
+            format!("request={request:?}; values_len={}", values.len()).as_bytes(),
+            err.kind,
+        );
+    }
+    result
 }
 
 fn scalar_is_zero(value: ScalarValue) -> bool {

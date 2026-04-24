@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod audit;
 pub mod backend;
 pub mod broadcast;
 pub mod creation;
@@ -9,17 +10,22 @@ pub mod indexing;
 pub mod integration;
 pub mod types;
 
+pub use audit::{SyncSharedAuditLedger, record_fail_closed, sync_audit_ledger};
 pub use backend::{
     ArrayApiArray, ArrayApiBackend, CoreArray, CoreArrayBackend, DTypeDispatchLog, ShapeMismatchLog,
 };
+pub use broadcast::broadcast_shapes_with_audit;
 pub use broadcast::{broadcast_shapes, promote_and_broadcast};
 pub use creation::{
     ArangeRequest, CreationRequest, FullRequest, LinspaceRequest, arange, empty, from_slice, full,
     linspace, ones, zeros,
 };
+pub use creation::{arange_with_audit, from_slice_with_audit};
 pub use dtype::{default_float_dtype, result_type};
 pub use error::{ArrayApiError, ArrayApiErrorKind, ArrayApiResult};
-pub use indexing::{IndexRequest, IndexingMode, getitem, reshape, transpose};
+pub use indexing::{
+    IndexRequest, IndexingMode, getitem, getitem_with_audit, reshape, reshape_with_audit, transpose,
+};
 pub use integration::{INTEGRATION_SEAMS, NALGEBRA_DMATRIX_INTEGRATION_POINTS};
 pub use types::{DType, ExecutionMode, IndexExpr, MemoryOrder, ScalarValue, Shape, SliceSpec};
 
@@ -53,8 +59,7 @@ mod tests {
     /// consumer wires up.
     #[test]
     fn integration_seam_declarations_are_aspirational() {
-        let declared: Vec<&str> =
-            INTEGRATION_SEAMS.iter().map(|s| s.consumer_crate).collect();
+        let declared: Vec<&str> = INTEGRATION_SEAMS.iter().map(|s| s.consumer_crate).collect();
         // Live consumers (have a Cargo dep on fsci-arrayapi):
         //   - fsci-conformance (not in INTEGRATION_SEAMS; it's the
         //     Array API test packet driver, not an integration seam).
@@ -66,5 +71,48 @@ mod tests {
                 "{name} dropped from INTEGRATION_SEAMS but was expected to be aspirational"
             );
         }
+    }
+
+    #[test]
+    fn audit_wrappers_emit_fail_closed_for_rejections() {
+        let backend = CoreArrayBackend::new(ExecutionMode::Hardened);
+        let ledger = sync_audit_ledger();
+
+        let bad_arange = ArangeRequest {
+            start: ScalarValue::I64(0),
+            stop: ScalarValue::I64(3),
+            step: ScalarValue::I64(0),
+            dtype: Some(DType::Float64),
+        };
+        let err =
+            arange_with_audit(&backend, &bad_arange, &ledger).expect_err("zero step must reject");
+        assert_eq!(err.kind, ArrayApiErrorKind::InvalidStep);
+
+        let bad_from_slice = CreationRequest {
+            shape: Shape::new(vec![2, 2]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        };
+        let err = from_slice_with_audit(
+            &backend,
+            &[ScalarValue::F64(1.0), ScalarValue::F64(2.0)],
+            &bad_from_slice,
+            &ledger,
+        )
+        .expect_err("length mismatch must reject");
+        assert_eq!(err.kind, ArrayApiErrorKind::InvalidShape);
+
+        let err =
+            broadcast_shapes_with_audit(&[Shape::new(vec![2, 3]), Shape::new(vec![3, 2])], &ledger)
+                .expect_err("incompatible broadcast must reject");
+        assert_eq!(err.kind, ArrayApiErrorKind::BroadcastIncompatible);
+
+        let guard = ledger.lock().expect("audit ledger lock");
+        assert_eq!(guard.len(), 3);
+        assert!(
+            guard.entries().iter().all(|entry| {
+                matches!(entry.action, fsci_runtime::AuditAction::FailClosed { .. })
+            })
+        );
     }
 }

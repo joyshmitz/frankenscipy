@@ -37,6 +37,48 @@ where
     }
 }
 
+pub fn minimize_with_audit<F>(
+    fun: F,
+    x0: &[f64],
+    options: MinimizeOptions,
+    ledger: &crate::audit::SyncSharedAuditLedger,
+) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let input_fingerprint = format!(
+        "method={:?}; mode={:?}; x0={:?}; maxiter={:?}; maxfev={:?}",
+        options.method, options.mode, x0, options.maxiter, options.maxfev
+    );
+    let result = minimize(fun, x0, options);
+    match &result {
+        Err(error) => crate::audit::record_fail_closed(
+            ledger,
+            input_fingerprint.as_bytes(),
+            &format!("minimize::{error:?}"),
+            "rejected",
+        ),
+        Ok(output)
+            if options.mode == fsci_runtime::RuntimeMode::Hardened
+                && matches!(
+                    output.status,
+                    ConvergenceStatus::NanEncountered
+                        | ConvergenceStatus::InvalidInput
+                        | ConvergenceStatus::OutOfBounds
+                ) =>
+        {
+            crate::audit::record_fail_closed(
+                ledger,
+                input_fingerprint.as_bytes(),
+                &format!("minimize::{:?}", output.status),
+                "rejected",
+            );
+        }
+        _ => {}
+    }
+    result
+}
+
 pub fn bfgs<F>(fun: &F, x0: &[f64], options: MinimizeOptions) -> Result<OptimizeResult, OptError>
 where
     F: Fn(&[f64]) -> f64,
@@ -3810,6 +3852,26 @@ mod tests {
             &result,
             124,
         );
+    }
+
+    #[test]
+    fn minimize_with_audit_emits_fail_closed_for_hardened_nan() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            mode: RuntimeMode::Hardened,
+            ..MinimizeOptions::default()
+        };
+        let ledger = crate::audit::sync_audit_ledger();
+        let result = super::minimize_with_audit(|_| f64::NAN, &[0.0], options, &ledger)
+            .expect("execution should return an OptimizeResult");
+
+        assert_eq!(result.status, ConvergenceStatus::NanEncountered);
+        let guard = ledger.lock().expect("audit ledger lock");
+        assert_eq!(guard.len(), 1);
+        assert!(matches!(
+            guard.entries()[0].action,
+            fsci_runtime::AuditAction::FailClosed { .. }
+        ));
     }
 
     #[test]

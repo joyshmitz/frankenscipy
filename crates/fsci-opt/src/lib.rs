@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
+pub mod audit;
 pub mod curvefit;
 pub mod linesearch;
 pub mod minimize;
 pub mod root;
 pub mod types;
 
+pub use audit::{SyncSharedAuditLedger, record_fail_closed, sync_audit_ledger};
 pub use curvefit::{
     CurveFitOptions, CurveFitResult, LeastSquaresOptions, LeastSquaresResult, curve_fit,
     least_squares,
@@ -13,7 +15,8 @@ pub use curvefit::{
 pub use linesearch::{LineSearchResult, WolfeParams, line_search_wolfe1, line_search_wolfe2};
 pub use minimize::{
     Bound, MinimizeScalarOptions, MinimizeScalarResult, bfgs, cg_pr_plus, get_optimize_traces,
-    lbfgsb, minimize, minimize_scalar, nelder_mead, newton_cg, powell, trust_exact,
+    lbfgsb, minimize, minimize_scalar, minimize_with_audit, nelder_mead, newton_cg, powell,
+    trust_exact,
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, anderson,

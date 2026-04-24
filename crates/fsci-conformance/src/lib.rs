@@ -64,10 +64,15 @@ use fsci_arrayapi::{
     IndexingMode as FsciArrayApiIndexingMode, LinspaceRequest as ArrayApiLinspaceRequest,
     MemoryOrder as FsciArrayApiMemoryOrder, ScalarValue as FsciArrayApiScalarValue,
     Shape as FsciArrayApiShape, SliceSpec as FsciArrayApiSliceSpec, arange as arrayapi_arange,
-    broadcast_shapes as arrayapi_broadcast_shapes, from_slice as arrayapi_from_slice,
-    full as arrayapi_full, getitem as arrayapi_getitem, linspace as arrayapi_linspace,
-    ones as arrayapi_ones, reshape as arrayapi_reshape, result_type as arrayapi_result_type,
-    transpose as arrayapi_transpose, zeros as arrayapi_zeros,
+    arange_with_audit as arrayapi_arange_with_audit, broadcast_shapes as arrayapi_broadcast_shapes,
+    broadcast_shapes_with_audit as arrayapi_broadcast_shapes_with_audit,
+    from_slice as arrayapi_from_slice, from_slice_with_audit as arrayapi_from_slice_with_audit,
+    full as arrayapi_full, getitem as arrayapi_getitem,
+    getitem_with_audit as arrayapi_getitem_with_audit, linspace as arrayapi_linspace,
+    ones as arrayapi_ones, reshape as arrayapi_reshape,
+    reshape_with_audit as arrayapi_reshape_with_audit, result_type as arrayapi_result_type,
+    sync_audit_ledger as array_api_sync_audit_ledger, transpose as arrayapi_transpose,
+    zeros as arrayapi_zeros,
 };
 use fsci_fft::sync_audit_ledger as fft_sync_audit_ledger;
 use fsci_integrate::{
@@ -83,10 +88,11 @@ use fsci_linalg::{
     solve_banded_with_audit, solve_triangular, solve_triangular_with_audit, solve_with_audit,
     sync_audit_ledger as linalg_sync_audit_ledger,
 };
+use fsci_opt::sync_audit_ledger as opt_sync_audit_ledger;
 use fsci_opt::{
     BasinhoppingOptions, ConvergenceStatus as OptConvergenceStatus, DifferentialEvolutionOptions,
     MinimizeOptions, OptError, OptimizeMethod, RootMethod, RootOptions, basinhopping, brute,
-    differential_evolution, dual_annealing, minimize, root_scalar,
+    differential_evolution, dual_annealing, minimize, minimize_with_audit, root_scalar,
 };
 use fsci_runtime::{AuditLedger, RuntimeMode, SolverPortfolio};
 use fsci_special::{
@@ -8709,6 +8715,20 @@ fn execute_linalg_case_with_differential_audit(
 }
 
 fn execute_optimize_case(case: &OptimizeCase) -> Result<OptimizeObservedOutcome, OptError> {
+    execute_optimize_case_inner(case, None)
+}
+
+fn execute_optimize_case_with_differential_audit(
+    case: &OptimizeCase,
+    audit_ledger: &fsci_opt::SyncSharedAuditLedger,
+) -> Result<OptimizeObservedOutcome, OptError> {
+    execute_optimize_case_inner(case, Some(audit_ledger))
+}
+
+fn execute_optimize_case_inner(
+    case: &OptimizeCase,
+    audit_ledger: Option<&fsci_opt::SyncSharedAuditLedger>,
+) -> Result<OptimizeObservedOutcome, OptError> {
     match case {
         OptimizeCase::Minimize {
             mode,
@@ -8722,19 +8742,24 @@ fn execute_optimize_case(case: &OptimizeCase) -> Result<OptimizeObservedOutcome,
             ..
         } => {
             let objective = objective.clone();
-            let result = minimize(
-                |x| evaluate_minimize_objective(&objective, x),
-                x0,
-                MinimizeOptions {
-                    method: Some(*method),
-                    tol: *tol,
-                    maxiter: *maxiter,
-                    maxfev: *maxfev,
-                    seed: *seed,
-                    mode: *mode,
-                    ..MinimizeOptions::default()
-                },
-            )?;
+            let options = MinimizeOptions {
+                method: Some(*method),
+                tol: *tol,
+                maxiter: *maxiter,
+                maxfev: *maxfev,
+                seed: *seed,
+                mode: *mode,
+                ..MinimizeOptions::default()
+            };
+            let result = match audit_ledger {
+                Some(ledger) => minimize_with_audit(
+                    |x| evaluate_minimize_objective(&objective, x),
+                    x0,
+                    options,
+                    ledger,
+                ),
+                None => minimize(|x| evaluate_minimize_objective(&objective, x), x0, options),
+            }?;
             Ok(OptimizeObservedOutcome::Minimize {
                 x: result.x,
                 fun: result.fun,
@@ -10274,7 +10299,7 @@ fn run_differential_array_api(
         (None, false) => capture_failure_status.unwrap_or(probed_oracle_status),
     };
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
-    let audit_ledger = neutral_audit_ledger();
+    let audit_ledger = array_api_sync_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
@@ -10282,7 +10307,7 @@ fn run_differential_array_api(
             &oracle_status,
             Some(audit_ledger.as_ref()),
             || {
-                let observed = execute_array_api_case(case);
+                let observed = execute_array_api_case_with_differential_audit(case, &audit_ledger);
                 match oracle_cases.as_ref() {
                     Some(cases) => match cases.get(case.case_id()) {
                         Some(oracle_case) => {
@@ -10335,7 +10360,7 @@ fn run_differential_optimize(
 
     let oracle_status = probe_oracle_availability(oracle_config);
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
-    let audit_ledger = neutral_audit_ledger();
+    let audit_ledger = opt_sync_audit_ledger();
 
     for case in &fixture.cases {
         per_case_results.push(run_case_with_panic_capture(
@@ -10343,7 +10368,7 @@ fn run_differential_optimize(
             &oracle_status,
             Some(audit_ledger.as_ref()),
             || {
-                let observed = execute_optimize_case(case);
+                let observed = execute_optimize_case_with_differential_audit(case, &audit_ledger);
                 compare_optimize_case_differential(case.expected(), &observed)
             },
         ));
@@ -11050,12 +11075,18 @@ fn constants_oracle_case_to_expected(
 
     match oracle_case.result_kind.as_str() {
         "scalar" => {
-            expected.value =
-                Some(oracle_result_field(&oracle_case.result, "value", case.case_id())?);
+            expected.value = Some(oracle_result_field(
+                &oracle_case.result,
+                "value",
+                case.case_id(),
+            )?);
         }
         "error" => {
-            expected.error =
-                Some(oracle_result_field(&oracle_case.result, "error", case.case_id())?);
+            expected.error = Some(oracle_result_field(
+                &oracle_case.result,
+                "error",
+                case.case_id(),
+            )?);
         }
         other => {
             return Err(format!(
@@ -11213,6 +11244,20 @@ fn run_differential_constants(
 }
 
 fn execute_array_api_case(case: &ArrayApiCase) -> Result<ArrayApiObservedOutcome, String> {
+    execute_array_api_case_inner(case, None)
+}
+
+fn execute_array_api_case_with_differential_audit(
+    case: &ArrayApiCase,
+    audit_ledger: &fsci_arrayapi::SyncSharedAuditLedger,
+) -> Result<ArrayApiObservedOutcome, String> {
+    execute_array_api_case_inner(case, Some(audit_ledger))
+}
+
+fn execute_array_api_case_inner(
+    case: &ArrayApiCase,
+    audit_ledger: Option<&fsci_arrayapi::SyncSharedAuditLedger>,
+) -> Result<ArrayApiObservedOutcome, String> {
     let mode = array_api_exec_mode(match case {
         ArrayApiCase::Zeros { mode, .. }
         | ArrayApiCase::Ones { mode, .. }
@@ -11290,7 +11335,11 @@ fn execute_array_api_case(case: &ArrayApiCase) -> Result<ArrayApiObservedOutcome
                 step: fixture_scalar_to_runtime(*step),
                 dtype: dtype.map(fixture_dtype_to_runtime),
             };
-            let array = arrayapi_arange(&backend, &request).map_err(array_api_error_kind)?;
+            let array = match audit_ledger {
+                Some(ledger) => arrayapi_arange_with_audit(&backend, &request, ledger),
+                None => arrayapi_arange(&backend, &request),
+            }
+            .map_err(array_api_error_kind)?;
             Ok(observed_array(&array))
         }
         ArrayApiCase::Linspace {
@@ -11321,7 +11370,11 @@ fn execute_array_api_case(case: &ArrayApiCase) -> Result<ArrayApiObservedOutcome
                 .iter()
                 .map(|shape| FsciArrayApiShape::new(shape.clone()))
                 .collect::<Vec<_>>();
-            let out = arrayapi_broadcast_shapes(&runtime_shapes).map_err(array_api_error_kind)?;
+            let out = match audit_ledger {
+                Some(ledger) => arrayapi_broadcast_shapes_with_audit(&runtime_shapes, ledger),
+                None => arrayapi_broadcast_shapes(&runtime_shapes),
+            }
+            .map_err(array_api_error_kind)?;
             Ok(ArrayApiObservedOutcome::Shape { dims: out.dims })
         }
         ArrayApiCase::ResultType {
@@ -11356,8 +11409,13 @@ fn execute_array_api_case(case: &ArrayApiCase) -> Result<ArrayApiObservedOutcome
                 .iter()
                 .map(|value| fixture_scalar_to_runtime(*value))
                 .collect::<Vec<_>>();
-            let array = arrayapi_from_slice(&backend, &runtime_values, &request)
-                .map_err(array_api_error_kind)?;
+            let array = match audit_ledger {
+                Some(ledger) => {
+                    arrayapi_from_slice_with_audit(&backend, &runtime_values, &request, ledger)
+                }
+                None => arrayapi_from_slice(&backend, &runtime_values, &request),
+            }
+            .map_err(array_api_error_kind)?;
             Ok(observed_array(&array))
         }
         ArrayApiCase::Getitem {
@@ -11380,8 +11438,11 @@ fn execute_array_api_case(case: &ArrayApiCase) -> Result<ArrayApiObservedOutcome
                 mode: fixture_indexing_mode_to_runtime(*indexing_mode),
                 index: fixture_index_to_runtime(index),
             };
-            let array =
-                arrayapi_getitem(&backend, &source, &request).map_err(array_api_error_kind)?;
+            let array = match audit_ledger {
+                Some(ledger) => arrayapi_getitem_with_audit(&backend, &source, &request, ledger),
+                None => arrayapi_getitem(&backend, &source, &request),
+            }
+            .map_err(array_api_error_kind)?;
             Ok(observed_array(&array))
         }
         ArrayApiCase::Reshape {
@@ -11399,11 +11460,13 @@ fn execute_array_api_case(case: &ArrayApiCase) -> Result<ArrayApiObservedOutcome
                 *source_dtype,
                 FsciArrayApiMemoryOrder::C,
             )?;
-            let array = arrayapi_reshape(
-                &backend,
-                &source,
-                &FsciArrayApiShape::new(new_shape.clone()),
-            )
+            let runtime_shape = FsciArrayApiShape::new(new_shape.clone());
+            let array = match audit_ledger {
+                Some(ledger) => {
+                    arrayapi_reshape_with_audit(&backend, &source, &runtime_shape, ledger)
+                }
+                None => arrayapi_reshape(&backend, &source, &runtime_shape),
+            }
             .map_err(array_api_error_kind)?;
             Ok(observed_array(&array))
         }
@@ -11630,9 +11693,7 @@ fn array_api_expected_metadata(
         } => (*atol, *rtol, contract_ref.clone()),
         ArrayApiExpectedOutcome::Shape { contract_ref, .. }
         | ArrayApiExpectedOutcome::Dtype { contract_ref, .. }
-        | ArrayApiExpectedOutcome::Bool { contract_ref, .. } => {
-            (None, None, contract_ref.clone())
-        }
+        | ArrayApiExpectedOutcome::Bool { contract_ref, .. } => (None, None, contract_ref.clone()),
         ArrayApiExpectedOutcome::ErrorKind { .. } => (None, None, None),
     }
 }
@@ -17173,6 +17234,50 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn differential_optimize_hardened_minimize_emits_audit_ledger() {
+        let unique = format!("fsci-conformance-opt-audit-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let fixture_path = root.join("FSCI-P2C-003_optimize_audit.json");
+        let fixture = serde_json::json!({
+            "packet_id": "FSCI-P2C-003-AUDIT",
+            "family": "optimize_core",
+            "cases": [{
+                "operation": "minimize",
+                "case_id": "hardened_minimize_nan_audit",
+                "category": "hardened",
+                "mode": "Hardened",
+                "method": "Bfgs",
+                "objective": "nan_branch",
+                "x0": [0.0, 0.0],
+                "expected": {
+                    "kind": "minimize_status",
+                    "status": "NanEncountered",
+                    "success": false
+                }
+            }]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize optimize audit fixture"),
+        )
+        .expect("write optimize audit fixture");
+
+        let report =
+            run_differential_test(&fixture_path, &default_test_oracle()).expect("fixture runs");
+        assert_eq!(report.fail_count, 0);
+        assert_eq!(report.pass_count, 1);
+
+        let audit_path =
+            super::differential_audit_ledger_path_for_fixture(&fixture_path, &report.packet_id);
+        let audit_jsonl = fs::read_to_string(&audit_path).expect("read optimize audit ledger");
+        assert!(audit_path.exists());
+        assert!(audit_jsonl.contains("\"kind\":\"fail_closed\""));
+        assert!(audit_jsonl.contains("minimize::NanEncountered"));
+    }
+
+    #[test]
     fn differential_test_special_fixture() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root
@@ -17564,6 +17669,126 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         let payload = serde_json::to_vec_pretty(&logs).expect("serialize array api logs");
         fs::write(&output_path, payload).expect("write array_api structured logs");
         assert!(output_path.exists());
+    }
+
+    #[test]
+    fn differential_array_api_hardened_rejections_emit_audit_ledger() {
+        let unique = format!("fsci-conformance-array-api-audit-{}", super::now_unix_ms());
+        let root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let fixture_path = root.join("FSCI-P2C-007_arrayapi_audit.json");
+        let fixture = serde_json::json!({
+            "packet_id": "FSCI-P2C-007-AUDIT",
+            "family": "array_api_core",
+            "cases": [
+                {
+                    "operation": "arange",
+                    "case_id": "hardened_arange_zero_step_audit",
+                    "category": "hardened",
+                    "mode": "Hardened",
+                    "start": { "kind": "i64", "value": 0 },
+                    "stop": { "kind": "i64", "value": 4 },
+                    "step": { "kind": "i64", "value": 0 },
+                    "dtype": "float64",
+                    "expected": {
+                        "kind": "error_kind",
+                        "error": "InvalidStep"
+                    }
+                },
+                {
+                    "operation": "from_slice",
+                    "case_id": "hardened_from_slice_mismatch_audit",
+                    "category": "hardened",
+                    "mode": "Hardened",
+                    "values": [
+                        { "kind": "f64", "value": 1.0 },
+                        { "kind": "f64", "value": 2.0 },
+                        { "kind": "f64", "value": 3.0 }
+                    ],
+                    "shape": [2, 2],
+                    "dtype": "float64",
+                    "expected": {
+                        "kind": "error_kind",
+                        "error": "InvalidShape"
+                    }
+                },
+                {
+                    "operation": "getitem",
+                    "case_id": "hardened_getitem_mode_mismatch_audit",
+                    "category": "hardened",
+                    "mode": "Hardened",
+                    "source_values": [
+                        { "kind": "f64", "value": 1.0 },
+                        { "kind": "f64", "value": 2.0 },
+                        { "kind": "f64", "value": 3.0 }
+                    ],
+                    "source_shape": [3],
+                    "source_dtype": "float64",
+                    "indexing_mode": "basic",
+                    "index": {
+                        "kind": "advanced",
+                        "indices": [[0]]
+                    },
+                    "expected": {
+                        "kind": "error_kind",
+                        "error": "InvalidIndex"
+                    }
+                },
+                {
+                    "operation": "reshape",
+                    "case_id": "hardened_reshape_size_mismatch_audit",
+                    "category": "hardened",
+                    "mode": "Hardened",
+                    "source_values": [
+                        { "kind": "f64", "value": 1.0 },
+                        { "kind": "f64", "value": 2.0 },
+                        { "kind": "f64", "value": 3.0 },
+                        { "kind": "f64", "value": 4.0 }
+                    ],
+                    "source_shape": [4],
+                    "source_dtype": "float64",
+                    "new_shape": [3, 2],
+                    "expected": {
+                        "kind": "error_kind",
+                        "error": "InvalidShape"
+                    }
+                },
+                {
+                    "operation": "broadcast_shapes",
+                    "case_id": "hardened_broadcast_incompatible_audit",
+                    "category": "hardened",
+                    "mode": "Hardened",
+                    "shapes": [[2, 3], [3, 2]],
+                    "expected": {
+                        "kind": "error_kind",
+                        "error": "BroadcastIncompatible"
+                    }
+                }
+            ]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize array api audit fixture"),
+        )
+        .expect("write array api audit fixture");
+
+        let report =
+            run_differential_test(&fixture_path, &default_test_oracle()).expect("fixture runs");
+        assert_eq!(report.fail_count, 0);
+        assert_eq!(report.pass_count, 5);
+
+        let audit_path =
+            super::differential_audit_ledger_path_for_fixture(&fixture_path, &report.packet_id);
+        let audit_jsonl = fs::read_to_string(&audit_path).expect("read array api audit ledger");
+        assert!(audit_path.exists());
+        assert_eq!(audit_jsonl.lines().count(), 5);
+        assert!(audit_jsonl.contains("\"kind\":\"fail_closed\""));
+        assert!(audit_jsonl.contains("arange::InvalidStep"));
+        assert!(audit_jsonl.contains("from_slice::InvalidShape"));
+        assert!(audit_jsonl.contains("getitem::InvalidIndex"));
+        assert!(audit_jsonl.contains("reshape::InvalidShape"));
+        assert!(audit_jsonl.contains("broadcast_shapes::BroadcastIncompatible"));
     }
 
     #[test]

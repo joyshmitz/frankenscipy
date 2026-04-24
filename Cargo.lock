@@ -621,6 +621,7 @@ name = "fsci-arrayapi"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "fsci-runtime",
  "nalgebra",
  "proptest",
  "serde",
