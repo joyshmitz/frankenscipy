@@ -560,6 +560,14 @@ pub struct LinalgPacketFixture {
     pub packet_id: String,
     pub family: String,
     pub cases: Vec<LinalgCase>,
+    /// Optional provenance metadata captured alongside the cases by
+    /// the fixture-generation tooling. Shape is intentionally opaque
+    /// (serde_json::Value) — we only carry it end-to-end so consumers
+    /// that want to inspect it can, without breaking the strict
+    /// `deny_unknown_fields` contract on the packet. See
+    /// `fixtures/PROVENANCE.md` for the human-readable counterpart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle_provenance: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
