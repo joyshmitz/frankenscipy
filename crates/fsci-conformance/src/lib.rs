@@ -81,7 +81,11 @@ use fsci_integrate::{
     quad, quad_vec, romb, simpson, sync_audit_ledger as integrate_sync_audit_ledger, tplquad,
     trapezoid, validate_tol, validate_tol_with_audit,
 };
-use fsci_interpolate::{Interp1d, Interp1dOptions, InterpKind as FsciInterpKind};
+use fsci_interpolate::{
+    BSpline, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpKind as FsciInterpKind,
+    RegularGridInterpolator, RegularGridMethod as FsciRegularGridMethod,
+    SplineBc as FsciSplineBc,
+};
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
     SolveOptions, TriangularSolveOptions, TriangularTranspose, det, det_with_audit, inv,
@@ -869,6 +873,23 @@ pub enum InterpolateInterpKind {
     Nearest,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InterpolateRegularGridMethod {
+    Linear,
+    Nearest,
+    Pchip,
+    Cubic,
+    Quintic,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InterpolateSplineBc {
+    Natural,
+    NotAKnot,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InterpolateExpectedOutcome {
@@ -901,18 +922,60 @@ pub enum InterpolateCase {
         fill_value: Option<f64>,
         expected: InterpolateExpectedOutcome,
     },
+    RegularGridInterpolator {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        method: InterpolateRegularGridMethod,
+        points: Vec<Vec<f64>>,
+        values: Vec<f64>,
+        xi: Vec<Vec<f64>>,
+        #[serde(default)]
+        bounds_error: Option<bool>,
+        #[serde(default)]
+        fill_value: Option<f64>,
+        expected: InterpolateExpectedOutcome,
+    },
+    CubicSpline {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        x: Vec<f64>,
+        y: Vec<f64>,
+        x_new: Vec<f64>,
+        #[serde(default)]
+        bc: Option<InterpolateSplineBc>,
+        expected: InterpolateExpectedOutcome,
+    },
+    #[serde(rename = "bspline")]
+    BSpline {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        knots: Vec<f64>,
+        coefficients: Vec<f64>,
+        degree: usize,
+        x_new: Vec<f64>,
+        expected: InterpolateExpectedOutcome,
+    },
 }
 
 impl InterpolateCase {
     fn case_id(&self) -> &str {
         match self {
-            Self::Interp1d { case_id, .. } => case_id,
+            Self::Interp1d { case_id, .. }
+            | Self::RegularGridInterpolator { case_id, .. }
+            | Self::CubicSpline { case_id, .. }
+            | Self::BSpline { case_id, .. } => case_id,
         }
     }
 
     fn expected(&self) -> &InterpolateExpectedOutcome {
         match self {
-            Self::Interp1d { expected, .. } => expected,
+            Self::Interp1d { expected, .. }
+            | Self::RegularGridInterpolator { expected, .. }
+            | Self::CubicSpline { expected, .. }
+            | Self::BSpline { expected, .. } => expected,
         }
     }
 }
@@ -9242,6 +9305,25 @@ fn fixture_interpolate_kind_to_runtime(kind: InterpolateInterpKind) -> FsciInter
     }
 }
 
+fn fixture_regular_grid_method_to_runtime(
+    method: InterpolateRegularGridMethod,
+) -> FsciRegularGridMethod {
+    match method {
+        InterpolateRegularGridMethod::Linear => FsciRegularGridMethod::Linear,
+        InterpolateRegularGridMethod::Nearest => FsciRegularGridMethod::Nearest,
+        InterpolateRegularGridMethod::Pchip => FsciRegularGridMethod::Pchip,
+        InterpolateRegularGridMethod::Cubic => FsciRegularGridMethod::Cubic,
+        InterpolateRegularGridMethod::Quintic => FsciRegularGridMethod::Quintic,
+    }
+}
+
+fn fixture_spline_bc_to_runtime(bc: InterpolateSplineBc) -> FsciSplineBc {
+    match bc {
+        InterpolateSplineBc::Natural => FsciSplineBc::Natural,
+        InterpolateSplineBc::NotAKnot => FsciSplineBc::NotAKnot,
+    }
+}
+
 fn execute_interpolate_case(case: &InterpolateCase) -> InterpolateObservedOutcome {
     match case {
         InterpolateCase::Interp1d {
@@ -9269,6 +9351,47 @@ fn execute_interpolate_case(case: &InterpolateCase) -> InterpolateObservedOutcom
                 Err(error) => InterpolateObservedOutcome::Error(error.to_string()),
             }
         }
+        InterpolateCase::RegularGridInterpolator {
+            method,
+            points,
+            values,
+            xi,
+            bounds_error,
+            fill_value,
+            ..
+        } => match RegularGridInterpolator::new(
+            points.clone(),
+            values.clone(),
+            fixture_regular_grid_method_to_runtime(*method),
+            bounds_error.unwrap_or(true),
+            *fill_value,
+        ) {
+            Ok(interpolator) => match interpolator.eval_many(xi) {
+                Ok(values) => InterpolateObservedOutcome::Vector(values),
+                Err(error) => InterpolateObservedOutcome::Error(error.to_string()),
+            },
+            Err(error) => InterpolateObservedOutcome::Error(error.to_string()),
+        },
+        InterpolateCase::CubicSpline {
+            x, y, x_new, bc, ..
+        } => match CubicSplineStandalone::new(
+            x,
+            y,
+            fixture_spline_bc_to_runtime(bc.unwrap_or(InterpolateSplineBc::Natural)),
+        ) {
+            Ok(spline) => InterpolateObservedOutcome::Vector(spline.eval_many(x_new)),
+            Err(error) => InterpolateObservedOutcome::Error(error.to_string()),
+        },
+        InterpolateCase::BSpline {
+            knots,
+            coefficients,
+            degree,
+            x_new,
+            ..
+        } => match BSpline::new(knots.clone(), coefficients.clone(), *degree) {
+            Ok(spline) => InterpolateObservedOutcome::Vector(spline.eval_many(x_new)),
+            Err(error) => InterpolateObservedOutcome::Error(error.to_string()),
+        },
     }
 }
 
@@ -9293,10 +9416,10 @@ fn compare_interpolate_case_differential(
             };
             let pass = allclose_vec(got, values, tolerance.atol, tolerance.rtol);
             let msg = if pass {
-                format!("interp1d vector matched (max_diff={max_diff:.2e})")
+                format!("interpolate vector matched (max_diff={max_diff:.2e})")
             } else {
                 format!(
-                    "interp1d vector mismatch: expected={values:?}, got={got:?}, atol={:.2e}, rtol={:.2e}",
+                    "interpolate vector mismatch: expected={values:?}, got={got:?}, atol={:.2e}, rtol={:.2e}",
                     tolerance.atol, tolerance.rtol
                 )
             };
@@ -9395,7 +9518,10 @@ fn compare_interpolate_case_against_oracle(
         Ok(expected) => {
             let mut oracle_case_fixture = case.clone();
             match &mut oracle_case_fixture {
-                InterpolateCase::Interp1d { expected: slot, .. } => *slot = expected,
+                InterpolateCase::Interp1d { expected: slot, .. }
+                | InterpolateCase::RegularGridInterpolator { expected: slot, .. }
+                | InterpolateCase::CubicSpline { expected: slot, .. }
+                | InterpolateCase::BSpline { expected: slot, .. } => *slot = expected,
             }
             compare_interpolate_case_differential(&oracle_case_fixture, observed)
         }
@@ -17669,7 +17795,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(
             report.per_case_results[0]
                 .message
-                .contains("interp1d vector matched"),
+                .contains("interpolate vector matched"),
             "unexpected message: {}",
             report.per_case_results[0].message
         );

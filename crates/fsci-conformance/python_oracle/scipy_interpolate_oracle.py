@@ -66,10 +66,67 @@ def _run_interp1d(case: Dict[str, Any], interpolate: Any, np: Any) -> Dict[str, 
         return _err(case_id, _fixture_error(case, str(exc)))
 
 
+def _run_regular_grid_interpolator(
+    case: Dict[str, Any], interpolate: Any, np: Any
+) -> Dict[str, Any]:
+    case_id = case["case_id"]
+    try:
+        points = [np.array(axis, dtype=np.float64) for axis in case["points"]]
+        shape = tuple(len(axis) for axis in points)
+        values = np.array(case["values"], dtype=np.float64).reshape(shape)
+        xi = np.array(case["xi"], dtype=np.float64)
+        kwargs: Dict[str, Any] = {
+            "method": case.get("method", "linear"),
+            "bounds_error": bool(case.get("bounds_error", True)),
+        }
+        if "fill_value" in case:
+            kwargs["fill_value"] = float(case["fill_value"])
+
+        interpolator = interpolate.RegularGridInterpolator(points, values, **kwargs)
+        return _ok(case_id, "vector", {"values": _float_list(interpolator(xi))})
+    except (ArithmeticError, OverflowError, TypeError, ValueError) as exc:
+        return _err(case_id, _fixture_error(case, str(exc)))
+
+
+def _run_cubic_spline(case: Dict[str, Any], interpolate: Any, np: Any) -> Dict[str, Any]:
+    case_id = case["case_id"]
+    try:
+        bc = case.get("bc", "natural").replace("_", "-")
+        spline = interpolate.CubicSpline(
+            np.array(case["x"], dtype=np.float64),
+            np.array(case["y"], dtype=np.float64),
+            bc_type=bc,
+        )
+        values = spline(np.array(case["x_new"], dtype=np.float64))
+        return _ok(case_id, "vector", {"values": _float_list(values)})
+    except (ArithmeticError, OverflowError, TypeError, ValueError) as exc:
+        return _err(case_id, _fixture_error(case, str(exc)))
+
+
+def _run_bspline(case: Dict[str, Any], interpolate: Any, np: Any) -> Dict[str, Any]:
+    case_id = case["case_id"]
+    try:
+        spline = interpolate.BSpline(
+            np.array(case["knots"], dtype=np.float64),
+            np.array(case["coefficients"], dtype=np.float64),
+            int(case["degree"]),
+        )
+        values = spline(np.array(case["x_new"], dtype=np.float64))
+        return _ok(case_id, "vector", {"values": _float_list(values)})
+    except (ArithmeticError, OverflowError, TypeError, ValueError) as exc:
+        return _err(case_id, _fixture_error(case, str(exc)))
+
+
 def _run_case(case: Dict[str, Any], interpolate: Any, np: Any) -> Dict[str, Any]:
     operation = case.get("operation")
     if operation == "interp1d":
         return _run_interp1d(case, interpolate, np)
+    if operation == "regular_grid_interpolator":
+        return _run_regular_grid_interpolator(case, interpolate, np)
+    if operation == "cubic_spline":
+        return _run_cubic_spline(case, interpolate, np)
+    if operation == "bspline":
+        return _run_bspline(case, interpolate, np)
     return {
         "case_id": case.get("case_id", "<missing>"),
         "status": "error",
