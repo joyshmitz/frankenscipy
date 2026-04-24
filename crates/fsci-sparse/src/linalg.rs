@@ -509,6 +509,9 @@ fn map_linalg_error(err: LinalgError) -> SparseError {
         LinalgError::ConvergenceFailure { detail } => {
             SparseError::InvalidArgument { message: detail }
         }
+        LinalgError::PolicyRejected { reason } => SparseError::InvalidArgument {
+            message: format!("policy rejected sparse linalg operation: {reason}"),
+        },
         LinalgError::ConditionTooHigh { rcond, threshold } => SparseError::InvalidArgument {
             message: format!("condition too high: rcond={rcond} threshold={threshold}"),
         },

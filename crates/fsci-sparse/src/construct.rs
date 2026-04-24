@@ -92,14 +92,11 @@ pub fn random(shape: Shape2D, density: f64, seed: u64) -> SparseResult<CooMatrix
 
     if expected_nnz > 0 && expected_nnz <= total / 8 {
         // O(nnz) path via flat-index sampling with dedupe.
-        use std::collections::BTreeSet;
-        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        let mut seen: HashSet<usize> = HashSet::with_capacity(expected_nnz);
         rows = Vec::with_capacity(expected_nnz);
         cols = Vec::with_capacity(expected_nnz);
         data = Vec::with_capacity(expected_nnz);
-        let mut attempts = 0usize;
-        let max_attempts = expected_nnz.saturating_mul(8).max(32);
-        while seen.len() < expected_nnz && attempts < max_attempts {
+        while seen.len() < expected_nnz {
             state = xorshift64(state);
             let flat = (state as usize) % total;
             if seen.insert(flat) {
@@ -111,7 +108,6 @@ pub fn random(shape: Shape2D, density: f64, seed: u64) -> SparseResult<CooMatrix
                 cols.push(col.min(shape.cols.saturating_sub(1)));
                 data.push(value);
             }
-            attempts += 1;
         }
     } else {
         // O(rows*cols) legacy path for dense-like densities.
@@ -169,20 +165,18 @@ pub fn block_diag(matrices: &[&CsrMatrix]) -> SparseResult<CsrMatrix> {
     // Per frankenscipy-sw4o: checked_add instead of plain .sum() so huge
     // matrices can't silently wrap to a small total (debug panics instead
     // of release-wrapping; either path is worse than an explicit error).
-    let total_rows: usize =
-        matrices.iter().try_fold(0usize, |acc, m| {
-            acc.checked_add(m.shape().rows)
-                .ok_or_else(|| SparseError::IndexOverflow {
-                    message: "block_diag total rows overflow".to_string(),
-                })
-        })?;
-    let total_cols: usize =
-        matrices.iter().try_fold(0usize, |acc, m| {
-            acc.checked_add(m.shape().cols)
-                .ok_or_else(|| SparseError::IndexOverflow {
-                    message: "block_diag total cols overflow".to_string(),
-                })
-        })?;
+    let total_rows: usize = matrices.iter().try_fold(0usize, |acc, m| {
+        acc.checked_add(m.shape().rows)
+            .ok_or_else(|| SparseError::IndexOverflow {
+                message: "block_diag total rows overflow".to_string(),
+            })
+    })?;
+    let total_cols: usize = matrices.iter().try_fold(0usize, |acc, m| {
+        acc.checked_add(m.shape().cols)
+            .ok_or_else(|| SparseError::IndexOverflow {
+                message: "block_diag total cols overflow".to_string(),
+            })
+    })?;
     let shape = Shape2D::new(total_rows, total_cols);
 
     let mut rows = Vec::new();
@@ -264,8 +258,18 @@ pub fn bmat(blocks: &[Vec<Option<&CsrMatrix>>]) -> SparseResult<CsrMatrix> {
         }
     }
 
-    let total_rows: usize = row_heights.iter().sum();
-    let total_cols: usize = col_widths.iter().sum();
+    let total_rows: usize = row_heights.iter().try_fold(0usize, |acc, &height| {
+        acc.checked_add(height)
+            .ok_or_else(|| SparseError::IndexOverflow {
+                message: "bmat total rows overflow".to_string(),
+            })
+    })?;
+    let total_cols: usize = col_widths.iter().try_fold(0usize, |acc, &width| {
+        acc.checked_add(width)
+            .ok_or_else(|| SparseError::IndexOverflow {
+                message: "bmat total cols overflow".to_string(),
+            })
+    })?;
     let shape = Shape2D::new(total_rows, total_cols);
 
     let mut all_rows = Vec::new();
@@ -716,6 +720,22 @@ mod tests {
     }
 
     #[test]
+    fn random_large_sparse_samples_expected_nnz() {
+        let coo = random(Shape2D::new(1_000_000, 1_000_000), 1e-9, 42).expect("random");
+        assert_eq!(coo.shape(), Shape2D::new(1_000_000, 1_000_000));
+        assert_eq!(coo.nnz(), 1_000);
+
+        let mut coordinates = HashSet::with_capacity(coo.nnz());
+        for idx in 0..coo.nnz() {
+            let row = coo.row_indices()[idx];
+            let col = coo.col_indices()[idx];
+            assert!(row < 1_000_000);
+            assert!(col < 1_000_000);
+            assert!(coordinates.insert((row, col)));
+        }
+    }
+
+    #[test]
     fn random_zero_dimension_returns_empty() {
         let coo = random(Shape2D::new(0, 7), 1.0, 99).expect("random");
         assert_eq!(coo.nnz(), 0);
@@ -759,6 +779,19 @@ mod tests {
         let result = block_diag(&[&a]).expect("block_diag single");
         assert_eq!(result.shape(), Shape2D::new(3, 3));
         assert_eq!(result.nnz(), 3);
+    }
+
+    #[test]
+    fn block_diag_rejects_dimension_overflow() {
+        let huge = CsrMatrix::from_components_unchecked(
+            Shape2D::new(usize::MAX / 2 + 1, 1),
+            Vec::new(),
+            Vec::new(),
+            vec![0],
+        );
+
+        let err = block_diag(&[&huge, &huge]).expect_err("overflow");
+        assert!(matches!(err, SparseError::IndexOverflow { .. }));
     }
 
     // ── bmat tests ──────────────────────────────────────────────────
@@ -809,6 +842,19 @@ mod tests {
         let a = eye(2).expect("eye(2)");
         let err = bmat(&[vec![Some(&a), Some(&a)], vec![Some(&a)]]).expect_err("ragged");
         assert!(matches!(err, SparseError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn bmat_rejects_dimension_overflow() {
+        let huge = CsrMatrix::from_components_unchecked(
+            Shape2D::new(usize::MAX / 2 + 1, 1),
+            Vec::new(),
+            Vec::new(),
+            vec![0],
+        );
+
+        let err = bmat(&[vec![Some(&huge)], vec![Some(&huge)]]).expect_err("overflow");
+        assert!(matches!(err, SparseError::IndexOverflow { .. }));
     }
 
     #[test]
@@ -927,8 +973,15 @@ mod tests {
             ("dok", SparseFormat::Dok),
             ("lil", SparseFormat::Lil),
         ] {
-            let result = hstack_with_format(&[&left, &right], Some(format))
-                .unwrap_or_else(|err| panic!("hstack format {format} failed: {err}"));
+            let result = hstack_with_format(&[&left, &right], Some(format));
+            assert!(
+                result.is_ok(),
+                "hstack format {format} failed: {:?}",
+                result.as_ref().err()
+            );
+            let Ok(result) = result else {
+                continue;
+            };
             assert_eq!(result.format(), expected, "format mismatch for {format}");
             assert_eq!(
                 dense_from_coo(&result.to_coo().expect("output->coo")),
