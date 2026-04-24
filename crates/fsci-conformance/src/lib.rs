@@ -8402,6 +8402,8 @@ fn default_differential_oracle_script_path(family: &str) -> PathBuf {
         "scipy_stats_oracle.py"
     } else if family.contains("interpolate") {
         "scipy_interpolate_oracle.py"
+    } else if family.contains("ndimage") {
+        "scipy_ndimage_oracle.py"
     } else if family.contains("cluster") {
         "scipy_cluster_oracle.py"
     } else if family.contains("spatial") {
@@ -9819,6 +9821,91 @@ fn compare_ndimage_case_differential(
             None,
             None,
         ),
+    }
+}
+
+fn ndimage_expected_tolerance(expected: &NdimageExpectedOutcome) -> (Option<f64>, Option<f64>) {
+    match expected {
+        NdimageExpectedOutcome::Array { atol, rtol, .. } => (*atol, *rtol),
+        NdimageExpectedOutcome::Label { .. } | NdimageExpectedOutcome::Error { .. } => (None, None),
+    }
+}
+
+fn ndimage_oracle_case_to_expected(
+    case: &NdimageCase,
+    oracle_case: &OracleCaseOutput,
+) -> Result<NdimageExpectedOutcome, String> {
+    let (atol, rtol) = ndimage_expected_tolerance(case.expected());
+
+    match oracle_case.result_kind.as_str() {
+        "array" => Ok(NdimageExpectedOutcome::Array {
+            values: oracle_result_field(&oracle_case.result, "values", case.case_id())?,
+            shape: oracle_result_field(&oracle_case.result, "shape", case.case_id())?,
+            atol,
+            rtol,
+        }),
+        "label" => Ok(NdimageExpectedOutcome::Label {
+            labels: oracle_result_field(&oracle_case.result, "labels", case.case_id())?,
+            shape: oracle_result_field(&oracle_case.result, "shape", case.case_id())?,
+            num_features: oracle_result_field(&oracle_case.result, "num_features", case.case_id())?,
+        }),
+        "error" => Ok(NdimageExpectedOutcome::Error {
+            error: oracle_result_field(&oracle_case.result, "error", case.case_id())?,
+        }),
+        other => Err(format!(
+            "oracle result for {} has unsupported result_kind `{other}`",
+            case.case_id()
+        )),
+    }
+}
+
+fn compare_ndimage_case_against_oracle(
+    case: &NdimageCase,
+    oracle_case: &OracleCaseOutput,
+    observed: &NdimageObservedOutcome,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    if oracle_case.status != "ok" {
+        return match observed {
+            NdimageObservedOutcome::Error(actual) => (
+                false,
+                format!(
+                    "oracle errored (`{}`) and rust errored (`{actual}`) too; case is unjudgeable",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+            NdimageObservedOutcome::Array { .. } | NdimageObservedOutcome::Label { .. } => (
+                false,
+                format!(
+                    "oracle errored (`{}`) but rust succeeded",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+        };
+    }
+
+    match ndimage_oracle_case_to_expected(case, oracle_case) {
+        Ok(expected) => {
+            let mut oracle_case_fixture = case.clone();
+            match &mut oracle_case_fixture {
+                NdimageCase::GaussianFilter { expected: slot, .. }
+                | NdimageCase::Label { expected: slot, .. }
+                | NdimageCase::BinaryErosion { expected: slot, .. }
+                | NdimageCase::BinaryDilation { expected: slot, .. }
+                | NdimageCase::DistanceTransformEdt { expected: slot, .. } => *slot = expected,
+            }
+            compare_ndimage_case_differential(&oracle_case_fixture, observed)
+        }
+        Err(message) => (false, message, None, None),
     }
 }
 
@@ -11297,7 +11384,43 @@ fn run_differential_ndimage(
             source,
         })?;
 
-    let oracle_status = probe_oracle_availability(oracle_config);
+    let resolved_oracle_config = resolve_differential_oracle_config(oracle_config, &fixture.family);
+    let probed_oracle_status = probe_oracle_availability(&resolved_oracle_config);
+    let mut capture_failure_status = None;
+    let oracle_capture = if resolved_oracle_config.required
+        || matches!(probed_oracle_status, OracleStatus::Available)
+    {
+        match capture_python_oracle_inner(
+            fixture_path,
+            raw,
+            &fixture.packet_id,
+            &HarnessConfig::default_paths().oracle_root,
+            &resolved_oracle_config,
+        ) {
+            Ok(capture) => Some(capture),
+            Err(error) => {
+                if resolved_oracle_config.required {
+                    return Err(error);
+                }
+                capture_failure_status = Some(oracle_status_from_capture_error(&error));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let oracle_cases = oracle_capture.as_ref().map(|capture| {
+        capture
+            .case_outputs
+            .iter()
+            .map(|case| (case.case_id.as_str(), case))
+            .collect::<std::collections::HashMap<_, _>>()
+    });
+    let oracle_status = match (&oracle_capture, resolved_oracle_config.required) {
+        (Some(_), _) => OracleStatus::Available,
+        (None, true) => probed_oracle_status.clone(),
+        (None, false) => capture_failure_status.unwrap_or(probed_oracle_status),
+    };
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
     let audit_ledger = neutral_audit_ledger();
 
@@ -11308,7 +11431,20 @@ fn run_differential_ndimage(
             Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_ndimage_case(case);
-                compare_ndimage_case_differential(case, &observed)
+                match oracle_cases.as_ref() {
+                    Some(cases) => match cases.get(case.case_id()) {
+                        Some(oracle_case) => {
+                            compare_ndimage_case_against_oracle(case, oracle_case, &observed)
+                        }
+                        None => (
+                            false,
+                            format!("oracle capture missing ndimage case `{}`", case.case_id()),
+                            None,
+                            None,
+                        ),
+                    },
+                    None => compare_ndimage_case_differential(case, &observed),
+                }
             },
         ));
     }
@@ -18182,6 +18318,15 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
             Some("scipy_interpolate_oracle.py")
+        );
+    }
+
+    #[test]
+    fn ndimage_default_oracle_routes_to_ndimage_script() {
+        let path = super::default_differential_oracle_script_path("ndimage_core");
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("scipy_ndimage_oracle.py")
         );
     }
 

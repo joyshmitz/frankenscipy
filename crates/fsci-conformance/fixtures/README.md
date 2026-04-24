@@ -27,6 +27,7 @@ This folder stores normalized oracle-vs-target fixtures for fsci-conformance.
   - `gaussian_filter` constant preservation and reject paths
   - `label` connected-component labels and feature counts
   - `binary_erosion`, `binary_dilation`, and `distance_transform_edt`
+  - oracle capture via `python_oracle/scipy_ndimage_oracle.py`
 - `FSCI-P2C-016_constants_core.json`: constants/core helper evidence fixture for:
   - exact fundamental values
   - name/alias lookup via `value` and `find`

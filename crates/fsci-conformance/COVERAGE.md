@@ -27,7 +27,7 @@ fixture.
 | arrayapi   | N/A  | ~60 | 34 | 34 |
 | constants  | ~140 | ~50 | 24 | 24 |
 | interpolate| ~40  | ~15 | 0  | 0 (no fixture yet) |
-| ndimage    | ~100 | ~30 | 6  | 0 (self-check packet; oracle TBD) |
+| ndimage    | ~100 | ~30 | 6  | 6 |
 | io         | ~15  | ~5  | 0  | 0 (no fixture yet) |
 
 _Numbers are best-effort rough counts. Refine by running the coverage
@@ -70,9 +70,9 @@ adding to both the oracle dispatcher and the fixture.
   fixture packet yet, so there is no oracle-backed dashboard lane to
   count. Add fixture packets before reporting parity percentages for
   those families (tracked in frankenscipy-di9p).
-- ndimage now has a self-check P2C packet for core filtering,
-  morphology, labeling, and distance-transform smoke coverage, but no
-  SciPy oracle-backed capture lane yet.
+- ndimage has a P2C packet and SciPy oracle capture lane for core
+  filtering, morphology, labeling, and distance-transform smoke
+  coverage.
 
 ## Update procedure
 
