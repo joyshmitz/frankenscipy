@@ -1,9 +1,12 @@
 #![forbid(unsafe_code)]
 
+pub mod audit;
 pub mod construct;
 pub mod formats;
 pub mod linalg;
 pub mod ops;
+
+pub use audit::{SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger};
 
 pub use construct::{
     HstackOutput, block_diag, bmat, diags, eye, hstack, hstack_with_format, kron, random, vstack,
@@ -1386,6 +1389,47 @@ mod tests {
         let err = csr_to_csc_with_mode(&csr, RuntimeMode::Hardened, "hardened-csr")
             .expect_err("hardened must reject unsorted csr");
         assert!(matches!(err, SparseError::InvalidSparseStructure { .. }));
+    }
+
+    #[test]
+    fn csr_to_csc_with_mode_and_audit_emits_failclosed() {
+        // br-egba-4: _with_audit variant records FailClosed on
+        // hardened rejection. Strict leaves ledger untouched.
+        let csr = CsrMatrix::from_components(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0, 3.0],
+            vec![2, 0, 1],
+            vec![0, 2, 3],
+            false,
+        )
+        .expect("non-canonical csr");
+
+        let ledger = super::sync_audit_ledger();
+
+        // Strict: conversion succeeds without rejection, no emit.
+        let _ = crate::ops::csr_to_csc_with_mode_and_audit(
+            &csr,
+            RuntimeMode::Strict,
+            "strict-audit",
+            &ledger,
+        )
+        .expect("strict should succeed");
+        assert_eq!(ledger.lock().unwrap().len(), 0, "strict must not emit");
+
+        // Hardened: rejects unsorted CSR; expect one FailClosed event.
+        let err = crate::ops::csr_to_csc_with_mode_and_audit(
+            &csr,
+            RuntimeMode::Hardened,
+            "hardened-audit",
+            &ledger,
+        )
+        .expect_err("hardened must reject");
+        assert!(matches!(err, SparseError::InvalidSparseStructure { .. }));
+        assert_eq!(
+            ledger.lock().unwrap().len(),
+            1,
+            "hardened rejection must emit FailClosed"
+        );
     }
 
     #[test]

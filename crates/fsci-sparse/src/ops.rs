@@ -202,7 +202,37 @@ pub fn csr_to_csc_with_mode(
     mode: RuntimeMode,
     operation_id: impl Into<String>,
 ) -> SparseResult<(CscMatrix, ConversionLogEntry)> {
+    csr_to_csc_with_mode_inner(csr, mode, operation_id, None)
+}
+
+/// Audit-emitting variant of [`csr_to_csc_with_mode`] (br-egba-4).
+/// Records an AuditAction::FailClosed event when Hardened mode
+/// rejects a non-canonical CSR. Strict mode never rejects, so no
+/// emission occurs.
+pub fn csr_to_csc_with_mode_and_audit(
+    csr: &CsrMatrix,
+    mode: RuntimeMode,
+    operation_id: impl Into<String>,
+    ledger: &crate::audit::SyncSharedAuditLedger,
+) -> SparseResult<(CscMatrix, ConversionLogEntry)> {
+    csr_to_csc_with_mode_inner(csr, mode, operation_id, Some(ledger))
+}
+
+fn csr_to_csc_with_mode_inner(
+    csr: &CsrMatrix,
+    mode: RuntimeMode,
+    operation_id: impl Into<String>,
+    ledger: Option<&crate::audit::SyncSharedAuditLedger>,
+) -> SparseResult<(CscMatrix, ConversionLogEntry)> {
     if mode == RuntimeMode::Hardened && !csr.canonical.sorted_indices {
+        if let Some(ledger) = ledger {
+            crate::audit::record_fail_closed(
+                ledger,
+                format!("csr_shape={:?}", csr.shape()).as_bytes(),
+                "csr_to_csc::unsorted_indices",
+                "rejected",
+            );
+        }
         return Err(SparseError::InvalidSparseStructure {
             message: "hardened conversion requires sorted CSR indices".to_string(),
         });
