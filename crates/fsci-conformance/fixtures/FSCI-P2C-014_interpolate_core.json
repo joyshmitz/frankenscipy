@@ -1,0 +1,193 @@
+{
+  "packet_id": "FSCI-P2C-014",
+  "family": "interpolate_core",
+  "cases": [
+    {
+      "operation": "interp1d",
+      "case_id": "interp1d_linear_midpoints",
+      "category": "differential",
+      "mode": "Strict",
+      "kind": "linear",
+      "x": [
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ],
+      "y": [
+        1.0,
+        3.0,
+        5.0,
+        7.0
+      ],
+      "x_new": [
+        0.5,
+        1.5,
+        3.0
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          2.0,
+          4.0,
+          7.0
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "interp1d",
+      "case_id": "interp1d_nearest_non_tie",
+      "category": "differential",
+      "mode": "Strict",
+      "kind": "nearest",
+      "x": [
+        0.0,
+        1.0,
+        2.0
+      ],
+      "y": [
+        0.0,
+        10.0,
+        20.0
+      ],
+      "x_new": [
+        0.2,
+        1.8
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          0.0,
+          20.0
+        ],
+        "atol": 0.0,
+        "rtol": 0.0
+      }
+    },
+    {
+      "operation": "interp1d",
+      "case_id": "interp1d_fill_value_outside_bounds",
+      "category": "edge",
+      "mode": "Strict",
+      "kind": "linear",
+      "x": [
+        0.0,
+        1.0
+      ],
+      "y": [
+        0.0,
+        10.0
+      ],
+      "x_new": [
+        -1.0,
+        0.5,
+        2.0
+      ],
+      "bounds_error": false,
+      "fill_value": -99.0,
+      "expected": {
+        "kind": "vector",
+        "values": [
+          -99.0,
+          5.0,
+          -99.0
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "interp1d",
+      "case_id": "interp1d_empty_eval",
+      "category": "edge",
+      "mode": "Strict",
+      "kind": "linear",
+      "x": [
+        0.0,
+        1.0
+      ],
+      "y": [
+        0.0,
+        10.0
+      ],
+      "x_new": [],
+      "expected": {
+        "kind": "vector",
+        "values": [],
+        "atol": 0.0,
+        "rtol": 0.0
+      }
+    },
+    {
+      "operation": "interp1d",
+      "case_id": "interp1d_unsorted_x_rejects",
+      "category": "adversarial",
+      "mode": "Strict",
+      "kind": "linear",
+      "x": [
+        0.0,
+        2.0,
+        1.0
+      ],
+      "y": [
+        0.0,
+        20.0,
+        10.0
+      ],
+      "x_new": [
+        0.5
+      ],
+      "expected": {
+        "kind": "error",
+        "error": "strictly increasing"
+      }
+    },
+    {
+      "operation": "interp1d",
+      "case_id": "interp1d_length_mismatch_rejects",
+      "category": "adversarial",
+      "mode": "Strict",
+      "kind": "linear",
+      "x": [
+        0.0,
+        1.0,
+        2.0
+      ],
+      "y": [
+        0.0,
+        10.0
+      ],
+      "x_new": [
+        0.5
+      ],
+      "expected": {
+        "kind": "error",
+        "error": "same length"
+      }
+    },
+    {
+      "operation": "interp1d",
+      "case_id": "interp1d_bounds_error_rejects",
+      "category": "adversarial",
+      "mode": "Strict",
+      "kind": "linear",
+      "x": [
+        0.0,
+        1.0
+      ],
+      "y": [
+        0.0,
+        10.0
+      ],
+      "x_new": [
+        2.0
+      ],
+      "expected": {
+        "kind": "error",
+        "error": "out of bounds"
+      }
+    }
+  ]
+}

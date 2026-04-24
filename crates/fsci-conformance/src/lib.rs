@@ -12,8 +12,8 @@
 //!    NO scipy oracle is consulted. Use when you want a pure
 //!    reproducibility check of the Rust side. Families:
 //!    `validate_tol`, `linalg`, `optimize`, `special`, `array_api`,
-//!    `sparse`, `fft`, `casp`, `cluster`, `spatial`. (stats / signal /
-//!    integrate / ndimage / interpolate / io do not yet have a packet
+//!    `sparse`, `fft`, `casp`, `cluster`, `spatial`, `signal`, `stats`,
+//!    `integrate`, `interpolate`. (ndimage / io do not yet have a packet
 //!    runner.)
 //!
 //! 2. **`run_<family>_packet_with_oracle_capture(config, fixture_name, oracle)`**
@@ -81,6 +81,7 @@ use fsci_integrate::{
     quad, quad_vec, romb, simpson, sync_audit_ledger as integrate_sync_audit_ledger, tplquad,
     trapezoid, validate_tol, validate_tol_with_audit,
 };
+use fsci_interpolate::{Interp1d, Interp1dOptions, InterpKind as FsciInterpKind};
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
     SolveOptions, TriangularSolveOptions, TriangularTranspose, det, det_with_audit, inv,
@@ -859,6 +860,69 @@ pub struct OptimizePacketFixture {
     pub packet_id: String,
     pub family: String,
     pub cases: Vec<OptimizeCase>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InterpolateInterpKind {
+    Linear,
+    Nearest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InterpolateExpectedOutcome {
+    Vector {
+        values: Vec<f64>,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+    },
+    Error {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum InterpolateCase {
+    Interp1d {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        kind: InterpolateInterpKind,
+        x: Vec<f64>,
+        y: Vec<f64>,
+        x_new: Vec<f64>,
+        #[serde(default)]
+        bounds_error: Option<bool>,
+        #[serde(default)]
+        fill_value: Option<f64>,
+        expected: InterpolateExpectedOutcome,
+    },
+}
+
+impl InterpolateCase {
+    fn case_id(&self) -> &str {
+        match self {
+            Self::Interp1d { case_id, .. } => case_id,
+        }
+    }
+
+    fn expected(&self) -> &InterpolateExpectedOutcome {
+        match self {
+            Self::Interp1d { expected, .. } => expected,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct InterpolatePacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<InterpolateCase>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -2173,6 +2237,12 @@ enum OptimizeObservedOutcome {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum InterpolateObservedOutcome {
+    Vector(Vec<f64>),
+    Error(String),
+}
+
 pub fn run_smoke(config: &HarnessConfig) -> Result<HarnessReport, HarnessError> {
     let packet = run_validate_tol_packet(config, "FSCI-P2C-001_validate_tol.json")?;
     Ok(HarnessReport {
@@ -2417,6 +2487,54 @@ pub fn run_optimize_packet(
         };
         let (passed, message, _, _) =
             compare_optimize_case_differential(case.expected(), &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+pub fn run_interpolate_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: InterpolatePacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_interpolate_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_interpolate_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
+        let (passed, message, _, _) = compare_interpolate_case_differential(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
             passed,
@@ -9115,6 +9233,97 @@ fn compare_optimize_case_differential(
     }
 }
 
+fn fixture_interpolate_kind_to_runtime(kind: InterpolateInterpKind) -> FsciInterpKind {
+    match kind {
+        InterpolateInterpKind::Linear => FsciInterpKind::Linear,
+        InterpolateInterpKind::Nearest => FsciInterpKind::Nearest,
+    }
+}
+
+fn execute_interpolate_case(case: &InterpolateCase) -> InterpolateObservedOutcome {
+    match case {
+        InterpolateCase::Interp1d {
+            mode,
+            kind,
+            x,
+            y,
+            x_new,
+            bounds_error,
+            fill_value,
+            ..
+        } => {
+            let options = Interp1dOptions {
+                kind: fixture_interpolate_kind_to_runtime(*kind),
+                mode: *mode,
+                bounds_error: bounds_error.unwrap_or(true),
+                fill_value: *fill_value,
+                ..Interp1dOptions::default()
+            };
+            match Interp1d::new(x, y, options) {
+                Ok(interpolator) => match interpolator.eval_many(x_new) {
+                    Ok(values) => InterpolateObservedOutcome::Vector(values),
+                    Err(error) => InterpolateObservedOutcome::Error(error.to_string()),
+                },
+                Err(error) => InterpolateObservedOutcome::Error(error.to_string()),
+            }
+        }
+    }
+}
+
+fn compare_interpolate_case_differential(
+    case: &InterpolateCase,
+    observed: &InterpolateObservedOutcome,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    match (case.expected(), observed) {
+        (
+            InterpolateExpectedOutcome::Vector { values, atol, rtol },
+            InterpolateObservedOutcome::Vector(got),
+        ) => {
+            let tolerance = ToleranceUsed {
+                atol: atol.unwrap_or(1.0e-12),
+                rtol: rtol.unwrap_or(1.0e-12),
+                comparison_mode: "allclose".to_owned(),
+            };
+            let max_diff = if got.len() == values.len() {
+                max_diff_vec(got, values)
+            } else {
+                f64::INFINITY
+            };
+            let pass = allclose_vec(got, values, tolerance.atol, tolerance.rtol);
+            let msg = if pass {
+                format!("interp1d vector matched (max_diff={max_diff:.2e})")
+            } else {
+                format!(
+                    "interp1d vector mismatch: expected={values:?}, got={got:?}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(max_diff), Some(tolerance))
+        }
+        (InterpolateExpectedOutcome::Error { error }, InterpolateObservedOutcome::Error(got)) => {
+            let pass = matches_error_contract(got, error);
+            let msg = if pass {
+                "error matched".to_owned()
+            } else {
+                format!("error mismatch: expected=`{error}`, got=`{got}`")
+            };
+            (pass, msg, None, None)
+        }
+        (InterpolateExpectedOutcome::Error { error }, InterpolateObservedOutcome::Vector(got)) => (
+            false,
+            format!("expected error `{error}` but got vector {got:?}"),
+            None,
+            None,
+        ),
+        (InterpolateExpectedOutcome::Vector { .. }, InterpolateObservedOutcome::Error(error)) => (
+            false,
+            format!("unexpected interpolate error: {error}"),
+            None,
+            None,
+        ),
+    }
+}
+
 fn compare_linalg_case(
     expected: &LinalgExpectedOutcome,
     observed: &Result<LinalgObservedOutcome, LinalgError>,
@@ -10086,6 +10295,9 @@ pub fn run_differential_test(
         "optimize_core" | "optimize" => {
             run_differential_optimize(fixture_path, &raw, oracle_config)
         }
+        "interpolate_core" | "interpolate" => {
+            run_differential_interpolate(fixture_path, &raw, oracle_config)
+        }
         "runtime_casp" | "casp" | "casp_core" => {
             run_differential_casp(fixture_path, &raw, oracle_config)
         }
@@ -10370,6 +10582,54 @@ fn run_differential_optimize(
             || {
                 let observed = execute_optimize_case_with_differential_audit(case, &audit_ledger);
                 compare_optimize_case_differential(case.expected(), &observed)
+            },
+        ));
+    }
+
+    let pass_count = per_case_results.iter().filter(|r| r.passed).count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
+    }
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+fn run_differential_interpolate(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: InterpolatePacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
+
+    for case in &fixture.cases {
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            Some(audit_ledger.as_ref()),
+            || {
+                let observed = execute_interpolate_case(case);
+                compare_interpolate_case_differential(case, &observed)
             },
         ));
     }
@@ -14362,11 +14622,13 @@ pub enum PacketFamily {
     Stats,
     /// P2C-013: Integration (quadrature, ODE solvers)
     IntegrateCore,
+    /// P2C-014: Interpolation routines
+    InterpolateCore,
 }
 
 impl PacketFamily {
     /// All known packet families for enumeration.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::ValidateTol,
         Self::LinalgCore,
         Self::Optimize,
@@ -14380,6 +14642,7 @@ impl PacketFamily {
         Self::Signal,
         Self::Stats,
         Self::IntegrateCore,
+        Self::InterpolateCore,
     ];
 
     /// Canonical packet ID for this family (e.g., "FSCI-P2C-001").
@@ -14399,6 +14662,7 @@ impl PacketFamily {
             Self::Signal => "FSCI-P2C-011",
             Self::Stats => "FSCI-P2C-012",
             Self::IntegrateCore => "FSCI-P2C-013",
+            Self::InterpolateCore => "FSCI-P2C-014",
         }
     }
 
@@ -14419,6 +14683,7 @@ impl PacketFamily {
             Self::Signal => "signal_core",
             Self::Stats => "stats_core",
             Self::IntegrateCore => "integrate_core",
+            Self::InterpolateCore => "interpolate_core",
         }
     }
 
@@ -14451,6 +14716,8 @@ impl PacketFamily {
             Some(Self::Stats)
         } else if s.contains("integrate") {
             Some(Self::IntegrateCore)
+        } else if s.contains("interpolate") {
+            Some(Self::InterpolateCore)
         } else {
             None
         }
@@ -14474,6 +14741,7 @@ impl PacketFamily {
                 | Self::Signal
                 | Self::Stats
                 | Self::IntegrateCore
+                | Self::InterpolateCore
         )
     }
 
@@ -14594,6 +14862,7 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
             PacketFamily::Signal => run_signal_packet(config, fixture_name)?,
             PacketFamily::Stats => run_stats_packet(config, fixture_name)?,
             PacketFamily::IntegrateCore => run_integrate_packet(config, fixture_name)?,
+            PacketFamily::InterpolateCore => run_interpolate_packet(config, fixture_name)?,
         };
         reports.push(report);
     }
@@ -14617,10 +14886,10 @@ mod tests {
         ensure_artifact_layout, load_array_api_contract_table, load_oracle_capture,
         resolve_array_api_contract_tolerance, run_array_api_packet, run_casp_packet,
         run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
-        run_linalg_packet, run_linalg_packet_with_oracle_capture, run_optimize_packet,
-        run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
-        run_stats_packet, run_validate_tol_packet, write_differential_parity_artifacts,
-        write_parity_artifacts,
+        run_interpolate_packet, run_linalg_packet, run_linalg_packet_with_oracle_capture,
+        run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet,
+        run_special_packet, run_stats_packet, run_validate_tol_packet,
+        write_differential_parity_artifacts, write_parity_artifacts,
     };
     use fsci_linalg::LinalgError;
     use fsci_runtime::RuntimeMode;
@@ -17114,6 +17383,29 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn interpolate_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_interpolate_packet(&cfg, "FSCI-P2C-014_interpolate_core.json")
+            .expect("interpolate packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one interpolate test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("interpolate parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
     fn differential_test_optimize_fixture() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root
@@ -17131,6 +17423,26 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             serde_json::to_string_pretty(&report).unwrap()
         );
         assert!(report.pass_count >= 29);
+    }
+
+    #[test]
+    fn differential_test_interpolate_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-014_interpolate_core.json");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle)
+            .expect("differential interpolate should succeed");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-014");
+        assert_eq!(report.family, "interpolate_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 1);
     }
 
     #[test]
@@ -18715,8 +19027,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn packet_family_all_has_13_entries() {
-        assert_eq!(PacketFamily::ALL.len(), 13);
+    fn packet_family_all_has_14_entries() {
+        assert_eq!(PacketFamily::ALL.len(), 14);
     }
 
     #[test]
@@ -18765,6 +19077,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(families.contains(&PacketFamily::ValidateTol));
         assert!(families.contains(&PacketFamily::LinalgCore));
         assert!(families.contains(&PacketFamily::Optimize));
+        assert!(families.contains(&PacketFamily::InterpolateCore));
     }
 
     #[test]
@@ -18876,6 +19189,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(PacketFamily::Special.has_runner());
         assert!(PacketFamily::ArrayApi.has_runner());
         assert!(PacketFamily::RuntimeCasp.has_runner());
+        assert!(PacketFamily::InterpolateCore.has_runner());
     }
 
     #[test]

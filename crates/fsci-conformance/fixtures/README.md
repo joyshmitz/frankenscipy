@@ -17,6 +17,9 @@ This folder stores normalized oracle-vs-target fixtures for fsci-conformance.
   adversarial conformance cases for:
   - `minimize` (`BFGS`, `CG`, `Powell`) on Rosenbrock/Ackley/Rastrigin + invariance quadratics
   - `root_scalar` (`brentq`, `brenth`, `bisect`, `ridder`) with scalar root contracts
+- `FSCI-P2C-014_interpolate_core.json`: interpolate differential + edge +
+  adversarial conformance cases for:
+  - `interp1d` (`linear`, `nearest`) vector evaluation, fill-value, and reject paths
 - `FSCI-P2C-016_constants_core.json`: constants/core helper evidence fixture for:
   - exact fundamental values
   - name/alias lookup via `value` and `find`
