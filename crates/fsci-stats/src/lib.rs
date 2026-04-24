@@ -228,7 +228,7 @@ pub trait ContinuousDistribution {
     ///
     /// # Default behavior (per frankenscipy-wofb)
     ///
-    /// **Default PANICS via `unimplemented!()`**. Asymmetric vs. the
+    /// **Default panics with `FitError::NotImplemented`**. Asymmetric vs. the
     /// `entropy`/`skewness`/`kurtosis` defaults which return NaN.
     /// Callers working generically over distributions must either:
     ///   (a) restrict to distribution types that override `fit`, or
@@ -242,7 +242,10 @@ pub trait ContinuousDistribution {
     where
         Self: Sized,
     {
-        unimplemented!("fit method not implemented for this distribution")
+        match Self::try_fit(_data) {
+            Ok(fitted) => fitted,
+            Err(err) => std::panic::panic_any(err),
+        }
     }
 
     /// Non-panicking MLE fit. Returns `Err(FitError::NotImplemented { … })`
@@ -12803,7 +12806,11 @@ fn scoreatpercentile_single(
         }
         "lower" => sorted[lower],
         "higher" => sorted[upper],
-        _ => unreachable!("validated interpolation method"),
+        other => {
+            return Err(StatsError::InvalidArgument(format!(
+                "interpolation_method must be one of {{'fraction', 'lower', 'higher'}}, got {other}"
+            )));
+        }
     };
     Ok(value)
 }
@@ -14043,7 +14050,11 @@ pub fn skewtest(
                 .collect::<Vec<_>>();
             filtered.as_slice()
         }
-        _ => unreachable!("validate_nan_policy only returns known values"),
+        other => {
+            return Err(StatsError::InvalidArgument(format!(
+                "nan_policy must be one of {{'propagate', 'raise', 'omit'}}, got {other}"
+            )));
+        }
     };
 
     if working.len() < 8 {
@@ -14104,7 +14115,11 @@ pub fn kurtosistest(
                 .collect::<Vec<_>>();
             filtered.as_slice()
         }
-        _ => unreachable!("validate_nan_policy only returns known values"),
+        other => {
+            return Err(StatsError::InvalidArgument(format!(
+                "nan_policy must be one of {{'propagate', 'raise', 'omit'}}, got {other}"
+            )));
+        }
     };
 
     if working.len() < 20 {

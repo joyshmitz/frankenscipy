@@ -285,18 +285,16 @@ mod tests {
         let res_inf = erf(&inf, RuntimeMode::Strict).unwrap();
         let res_neg_inf = erf(&neg_inf, RuntimeMode::Strict).unwrap();
 
-        match res_inf {
-            SpecialTensor::RealScalar(v) => assert_eq!(v, 1.0, "erf(inf) should be 1.0"),
-            _ => {
-                panic!("expected scalar");
-            }
-        }
-        match res_neg_inf {
-            SpecialTensor::RealScalar(v) => assert_eq!(v, -1.0, "erf(-inf) should be -1.0"),
-            _ => {
-                panic!("expected scalar");
-            }
-        }
+        assert_eq!(
+            expect_real_scalar(res_inf, "erf(inf)"),
+            1.0,
+            "erf(inf) should be 1.0"
+        );
+        assert_eq!(
+            expect_real_scalar(res_neg_inf, "erf(-inf)"),
+            -1.0,
+            "erf(-inf) should be -1.0"
+        );
     }
 
     #[test]
@@ -306,17 +304,11 @@ mod tests {
         let v = SpecialTensor::RealScalar(0.5);
         let z = SpecialTensor::RealScalar(500.0);
         let result = iv(&v, &z, RuntimeMode::Strict).expect("iv(0.5, 500)");
-        match result {
-            SpecialTensor::RealScalar(val) => {
-                assert!(
-                    val > 1e214 && val < 1e216,
-                    "iv(0.5, 500) should be ~1e215, got {val}"
-                );
-            }
-            _ => {
-                panic!("expected scalar");
-            }
-        }
+        let val = expect_real_scalar(result, "iv(0.5, 500)");
+        assert!(
+            val > 1e214 && val < 1e216,
+            "iv(0.5, 500) should be ~1e215, got {val}"
+        );
     }
 
     #[test]
@@ -376,15 +368,11 @@ mod tests {
 
         let tiny = SpecialTensor::RealScalar(1.0e-308);
         let strict = beta(&tiny, &tiny, RuntimeMode::Strict).expect("strict must evaluate");
-        match strict {
-            SpecialTensor::RealScalar(value) => assert!(
-                value.is_infinite() || value > 1.0e308,
-                "expected very large or infinite strict beta, got {value}"
-            ),
-            _ => {
-                panic!("expected real scalar output");
-            }
-        }
+        let value = expect_real_scalar(strict, "beta tiny strict");
+        assert!(
+            value.is_infinite() || value > 1.0e308,
+            "expected very large or infinite strict beta, got {value}"
+        );
 
         let hardened = beta(&tiny, &tiny, RuntimeMode::Hardened).expect_err("hardened rejects");
         assert_eq!(hardened.kind, SpecialErrorKind::OverflowRisk);
@@ -509,24 +497,12 @@ mod tests {
         let neg_one = SpecialTensor::RealScalar(-1.0);
 
         let y0_zero = y0(&zero, RuntimeMode::Strict).expect("strict y0(0) should diverge");
-        match y0_zero {
-            SpecialTensor::RealScalar(value) => {
-                assert!(value.is_infinite() && value.is_sign_negative())
-            }
-            _ => {
-                panic!("expected real scalar");
-            }
-        }
+        let value = expect_real_scalar(y0_zero, "y0(0)");
+        assert!(value.is_infinite() && value.is_sign_negative());
 
         let y1_zero = y1(&zero, RuntimeMode::Strict).expect("strict y1(0) should diverge");
-        match y1_zero {
-            SpecialTensor::RealScalar(value) => {
-                assert!(value.is_infinite() && value.is_sign_negative())
-            }
-            _ => {
-                panic!("expected real scalar");
-            }
-        }
+        let value = expect_real_scalar(y1_zero, "y1(0)");
+        assert!(value.is_infinite() && value.is_sign_negative());
 
         let jn_zero = jn(&zero, &one, RuntimeMode::Strict).expect("jn(0,x)=j0(x)");
         let j0_one = j0(&one, RuntimeMode::Strict).expect("j0(1)");
@@ -1064,10 +1040,8 @@ mod tests {
         let vec_input = SpecialTensor::RealVec(vec![-1.0, 0.0, 1.0]);
         let erf_vec = erf(&vec_input, mode).expect("erf vec");
         let erfc_vec = erfc(&vec_input, mode).expect("erfc vec");
-        let (erf_vals, erfc_vals) = match (&erf_vec, &erfc_vec) {
-            (SpecialTensor::RealVec(lhs), SpecialTensor::RealVec(rhs)) => (lhs, rhs),
-            _ => panic!("expected vector outputs"),
-        };
+        let erf_vals = expect_real_vec_ref(&erf_vec, "erf vector");
+        let erfc_vals = expect_real_vec_ref(&erfc_vec, "erfc vector");
         assert_eq!(erf_vals.len(), 3);
         assert_eq!(erfc_vals.len(), 3);
         for (idx, (lhs, rhs)) in erf_vals.iter().zip(erfc_vals.iter()).enumerate() {
@@ -1095,10 +1069,7 @@ mod tests {
             mode,
         )
         .expect("beta vector+scalar");
-        let beta_vals = match beta_vec {
-            SpecialTensor::RealVec(values) => values,
-            _ => panic!("expected vector output"),
-        };
+        let beta_vals = expect_real_vec(beta_vec, "beta vector+scalar");
         assert_eq!(beta_vals.len(), 3);
         assert!((beta_vals[0] - 0.5).abs() <= 1e-12);
         assert!((beta_vals[1] - (1.0 / 6.0)).abs() <= 1e-12);
@@ -1138,10 +1109,7 @@ mod tests {
         ));
 
         let j0_vec = j0(&SpecialTensor::RealVec(vec![0.0, 1.0, 2.0]), mode).expect("j0 vec");
-        let j0_vals = match j0_vec {
-            SpecialTensor::RealVec(values) => values,
-            _ => panic!("expected vector output"),
-        };
+        let j0_vals = expect_real_vec(j0_vec, "j0 vector");
         assert_eq!(j0_vals.len(), 3);
         assert!((j0_vals[0] - 1.0).abs() <= 1e-8);
         push_test_log(test_log_json(
@@ -1172,35 +1140,19 @@ mod tests {
             erfinv(&SpecialTensor::RealScalar(-1.0), RuntimeMode::Strict).expect("erfinv(-1)");
         let erfinv_right =
             erfinv(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict).expect("erfinv(1)");
-        match erfinv_left {
-            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_negative()),
-            _ => {
-                panic!("expected scalar");
-            }
-        }
-        match erfinv_right {
-            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_positive()),
-            _ => {
-                panic!("expected scalar");
-            }
-        }
+        let left = expect_real_scalar(erfinv_left, "erfinv(-1)");
+        let right = expect_real_scalar(erfinv_right, "erfinv(1)");
+        assert!(left.is_infinite() && left.is_sign_negative());
+        assert!(right.is_infinite() && right.is_sign_positive());
 
         let erfcinv_zero =
             erfcinv(&SpecialTensor::RealScalar(0.0), RuntimeMode::Strict).expect("erfcinv(0)");
         let erfcinv_two =
             erfcinv(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict).expect("erfcinv(2)");
-        match erfcinv_zero {
-            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_positive()),
-            _ => {
-                panic!("expected scalar");
-            }
-        }
-        match erfcinv_two {
-            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_negative()),
-            _ => {
-                panic!("expected scalar");
-            }
-        }
+        let zero = expect_real_scalar(erfcinv_zero, "erfcinv(0)");
+        let two = expect_real_scalar(erfcinv_two, "erfcinv(2)");
+        assert!(zero.is_infinite() && zero.is_sign_positive());
+        assert!(two.is_infinite() && two.is_sign_negative());
 
         let strict_bad_order = jn(
             &SpecialTensor::RealScalar(0.5),
@@ -1615,52 +1567,83 @@ mod tests {
             SpecialTensor::ComplexVec(vec![Complex64::new(0.0, 0.5), Complex64::new(0.0, -0.5)]);
 
         let output = erf(&input, mode).expect("complex vector erf");
-        let values = match output {
-            SpecialTensor::ComplexVec(values) => values,
-            _ => panic!("expected complex vector output"),
-        };
+        let values = expect_complex_vec(output, "complex vector erf");
 
         assert_eq!(values.len(), 2);
         assert_complex_close(values[0], -values[1], 1.0e-12);
     }
 
-    fn assert_real_scalar_close(actual: SpecialTensor, expected: f64, tol: f64) {
-        match actual {
-            SpecialTensor::RealScalar(value) => {
-                assert!(
-                    (value - expected).abs() <= tol,
-                    "expected {expected}, got {value}"
-                );
-            }
-            _ => {
-                panic!("expected real scalar output");
-            }
+    fn expect_real_scalar(tensor: SpecialTensor, context: &str) -> f64 {
+        match tensor {
+            SpecialTensor::RealScalar(value) => value,
+            other => unexpected_tensor(&other, context, "real scalar output"),
         }
+    }
+
+    fn expect_real_scalar_ref(tensor: &SpecialTensor, context: &str) -> f64 {
+        match tensor {
+            SpecialTensor::RealScalar(value) => *value,
+            other => unexpected_tensor(other, context, "real scalar output"),
+        }
+    }
+
+    fn expect_real_vec(tensor: SpecialTensor, context: &str) -> Vec<f64> {
+        match tensor {
+            SpecialTensor::RealVec(values) => values,
+            other => unexpected_tensor(&other, context, "real vector output"),
+        }
+    }
+
+    fn expect_real_vec_ref<'a>(tensor: &'a SpecialTensor, context: &str) -> &'a [f64] {
+        match tensor {
+            SpecialTensor::RealVec(values) => values,
+            other => unexpected_tensor(other, context, "real vector output"),
+        }
+    }
+
+    fn expect_complex_scalar(tensor: SpecialTensor, context: &str) -> Complex64 {
+        match tensor {
+            SpecialTensor::ComplexScalar(value) => value,
+            other => unexpected_tensor(&other, context, "complex scalar output"),
+        }
+    }
+
+    fn expect_complex_vec(tensor: SpecialTensor, context: &str) -> Vec<Complex64> {
+        match tensor {
+            SpecialTensor::ComplexVec(values) => values,
+            other => unexpected_tensor(&other, context, "complex vector output"),
+        }
+    }
+
+    fn unexpected_tensor<T>(actual: &SpecialTensor, context: &str, expected: &str) -> T {
+        std::panic::panic_any(format!("{context}: expected {expected}, got {actual:?}"))
+    }
+
+    fn assert_real_scalar_close(actual: SpecialTensor, expected: f64, tol: f64) {
+        let value = expect_real_scalar(actual, "assert_real_scalar_close");
+        assert!(
+            (value - expected).abs() <= tol,
+            "expected {expected}, got {value}"
+        );
     }
 
     fn assert_real_scalar_nan(actual: SpecialTensor) {
-        match actual {
-            SpecialTensor::RealScalar(value) => assert!(value.is_nan(), "expected NaN"),
-            _ => {
-                panic!("expected real scalar output");
-            }
-        }
+        let value = expect_real_scalar(actual, "assert_real_scalar_nan");
+        assert!(value.is_nan(), "expected NaN");
     }
 
     fn assert_real_scalars_close(actual: SpecialTensor, expected: SpecialTensor, tol: f64) {
-        match (actual, expected) {
-            (SpecialTensor::RealScalar(lhs), SpecialTensor::RealScalar(rhs)) => {
-                assert!((lhs - rhs).abs() <= tol, "expected {rhs}, got {lhs}");
-            }
-            _ => panic!("expected scalar outputs"),
-        }
+        let lhs = expect_real_scalar(actual, "assert_real_scalars_close actual");
+        let rhs = expect_real_scalar(expected, "assert_real_scalars_close expected");
+        assert!((lhs - rhs).abs() <= tol, "expected {rhs}, got {lhs}");
     }
 
     fn assert_complex_scalar_close(actual: SpecialTensor, expected: Complex64, tol: f64) {
-        match actual {
-            SpecialTensor::ComplexScalar(value) => assert_complex_close(value, expected, tol),
-            _ => panic!("expected complex scalar output"),
-        }
+        assert_complex_close(
+            expect_complex_scalar(actual, "assert_complex_scalar_close"),
+            expected,
+            tol,
+        );
     }
 
     fn assert_complex_close(actual: Complex64, expected: Complex64, tol: f64) {
@@ -1684,16 +1667,13 @@ mod tests {
     }
 
     fn scalar_value(tensor: &SpecialTensor) -> f64 {
-        match tensor {
-            SpecialTensor::RealScalar(value) => *value,
-            _ => panic!("expected scalar tensor"),
-        }
+        expect_real_scalar_ref(tensor, "scalar_value")
     }
 
     fn complex_scalar_value(tensor: &SpecialTensor) -> Complex64 {
         match tensor {
             SpecialTensor::ComplexScalar(value) => *value,
-            _ => panic!("expected complex scalar tensor"),
+            other => unexpected_tensor(other, "complex_scalar_value", "complex scalar tensor"),
         }
     }
 
@@ -1954,7 +1934,7 @@ mod tests {
                 &SpecialTensor::RealScalar(0.0),
                 mode,
             )
-            .unwrap_or_else(|_| panic!("j_{n}(0)"));
+            .expect("j_n(0)");
             assert_real_scalar_close(jn_0, 0.0, 1e-12);
         }
     }
@@ -2024,12 +2004,8 @@ mod tests {
             mode,
         )
         .expect("y_0(0)");
-        match result {
-            SpecialTensor::RealScalar(v) => assert!(v.is_infinite() && v.is_sign_negative()),
-            _ => {
-                panic!("expected scalar");
-            }
-        }
+        let value = expect_real_scalar(result, "spherical_yn(0, 0)");
+        assert!(value.is_infinite() && value.is_sign_negative());
     }
 
     #[test]
@@ -2093,12 +2069,7 @@ mod tests {
             mode,
         )
         .expect("k_0(0)");
-        match result {
-            SpecialTensor::RealScalar(v) => assert!(v.is_infinite()),
-            _ => {
-                panic!("expected scalar");
-            }
-        }
+        assert!(expect_real_scalar(result, "spherical_kn(0, 0)").is_infinite());
     }
 
     #[test]
@@ -2230,28 +2201,28 @@ mod tests {
         let inputs = SpecialTensor::ComplexVec(vec![z, z.conj()]);
         let order = SpecialTensor::RealScalar(2.0);
 
-        let jn_values = match spherical_jn(&order, &inputs, mode).expect("complex spherical_jn") {
-            SpecialTensor::ComplexVec(values) => values,
-            other => panic!("expected ComplexVec, got {other:?}"),
-        };
+        let jn_values = expect_complex_vec(
+            spherical_jn(&order, &inputs, mode).expect("complex spherical_jn"),
+            "complex spherical_jn",
+        );
         assert_complex_close(jn_values[1], jn_values[0].conj(), 1.0e-11);
 
-        let yn_values = match spherical_yn(&order, &inputs, mode).expect("complex spherical_yn") {
-            SpecialTensor::ComplexVec(values) => values,
-            other => panic!("expected ComplexVec, got {other:?}"),
-        };
+        let yn_values = expect_complex_vec(
+            spherical_yn(&order, &inputs, mode).expect("complex spherical_yn"),
+            "complex spherical_yn",
+        );
         assert_complex_close(yn_values[1], yn_values[0].conj(), 1.0e-11);
 
-        let in_values = match spherical_in(&order, &inputs, mode).expect("complex spherical_in") {
-            SpecialTensor::ComplexVec(values) => values,
-            other => panic!("expected ComplexVec, got {other:?}"),
-        };
+        let in_values = expect_complex_vec(
+            spherical_in(&order, &inputs, mode).expect("complex spherical_in"),
+            "complex spherical_in",
+        );
         assert_complex_close(in_values[1], in_values[0].conj(), 1.0e-11);
 
-        let kn_values = match spherical_kn(&order, &inputs, mode).expect("complex spherical_kn") {
-            SpecialTensor::ComplexVec(values) => values,
-            other => panic!("expected ComplexVec, got {other:?}"),
-        };
+        let kn_values = expect_complex_vec(
+            spherical_kn(&order, &inputs, mode).expect("complex spherical_kn"),
+            "complex spherical_kn",
+        );
         assert_complex_close(kn_values[1], kn_values[0].conj(), 1.0e-11);
     }
 
@@ -2317,14 +2288,8 @@ mod tests {
             mode,
         )
         .expect("yv(0.5, 1)");
-        match result {
-            SpecialTensor::RealScalar(v) => {
-                assert!(v.is_finite(), "Y_0.5(1) should be finite: {v}")
-            }
-            _ => {
-                panic!("expected scalar");
-            }
-        }
+        let value = expect_real_scalar(result, "yv(0.5, 1)");
+        assert!(value.is_finite(), "Y_0.5(1) should be finite: {value}");
     }
 
     #[test]
@@ -2390,14 +2355,11 @@ mod tests {
             mode,
         )
         .expect("kv(0.5, 1)");
-        match result {
-            SpecialTensor::RealScalar(v) => {
-                assert!(v.is_finite() && v > 0.0, "K_0.5(1) should be positive: {v}")
-            }
-            _ => {
-                panic!("expected scalar");
-            }
-        }
+        let value = expect_real_scalar(result, "kv(0.5, 1)");
+        assert!(
+            value.is_finite() && value > 0.0,
+            "K_0.5(1) should be positive: {value}"
+        );
     }
 
     #[test]
@@ -2409,12 +2371,7 @@ mod tests {
             mode,
         )
         .expect("kv(0,0)");
-        match result {
-            SpecialTensor::RealScalar(v) => assert!(v.is_infinite()),
-            _ => {
-                panic!("expected scalar");
-            }
-        }
+        assert!(expect_real_scalar(result, "kv(0,0)").is_infinite());
     }
 
     #[test]
@@ -2431,22 +2388,16 @@ mod tests {
                 &SpecialTensor::RealScalar(1.0),
                 mode,
             )
-            .unwrap_or_else(|_| panic!("kv({n}, 1)"));
-            match result {
-                SpecialTensor::RealScalar(v) => {
-                    assert!(
-                        v.is_finite() && v > 0.0,
-                        "K_{n}(1) should be positive finite: {v}"
-                    );
-                    assert!(
-                        (v - target).abs() <= 2.0e-10,
-                        "K_{n}(1) mismatch: expected {target}, got {v}"
-                    );
-                }
-                _ => {
-                    panic!("expected scalar");
-                }
-            }
+            .expect("kv integer order should evaluate");
+            let value = expect_real_scalar(result, "kv integer order");
+            assert!(
+                value.is_finite() && value > 0.0,
+                "K_{n}(1) should be positive finite: {value}"
+            );
+            assert!(
+                (value - target).abs() <= 2.0e-10,
+                "K_{n}(1) mismatch: expected {target}, got {value}"
+            );
         }
     }
 
