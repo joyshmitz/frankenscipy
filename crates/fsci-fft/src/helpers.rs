@@ -1,5 +1,7 @@
 use crate::transforms::FftError;
 
+const DIRECT_POLYMUL_CUTOFF: usize = 16;
+
 /// Sample frequencies for the length-`n` complex FFT.
 pub fn fftfreq(n: usize, sample_spacing: f64) -> Result<Vec<f64>, FftError> {
     validate_frequency_args(n, sample_spacing)?;
@@ -59,6 +61,89 @@ fn rotate_left_owned<T: Clone>(input: &[T], shift: usize) -> Vec<T> {
         .cloned()
         .chain(input[..split].iter().cloned())
         .collect()
+}
+
+/// Multiply two real-coefficient polynomials using FFT convolution.
+///
+/// Coefficients are ordered by ascending power:
+/// `a[0] + a[1] x + ...`. Empty inputs return an empty product.
+/// Small products use the exact direct kernel so tiny scientific kernels do
+/// not pay FFT setup costs; larger products use the convolution theorem.
+pub fn polynomial_multiply_fft(
+    a: &[f64],
+    b: &[f64],
+    options: &crate::FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    if a.is_empty() || b.is_empty() {
+        return Ok(Vec::new());
+    }
+    validate_polynomial_coefficients(a, options)?;
+    validate_polynomial_coefficients(b, options)?;
+
+    let output_len = a
+        .len()
+        .checked_add(b.len())
+        .and_then(|len| len.checked_sub(1))
+        .ok_or(FftError::InvalidShape {
+            detail: "polynomial product length overflow",
+        })?;
+    if output_len <= DIRECT_POLYMUL_CUTOFF {
+        return Ok(polynomial_multiply_direct(a, b));
+    }
+    let fft_len = output_len
+        .checked_next_power_of_two()
+        .ok_or(FftError::InvalidShape {
+            detail: "polynomial FFT length overflow",
+        })?;
+
+    let mut transform_options = options.clone();
+    transform_options.normalization = crate::Normalization::Backward;
+
+    let mut lhs: Vec<(f64, f64)> = a.iter().map(|&value| (value, 0.0)).collect();
+    lhs.resize(fft_len, (0.0, 0.0));
+    let mut rhs: Vec<(f64, f64)> = b.iter().map(|&value| (value, 0.0)).collect();
+    rhs.resize(fft_len, (0.0, 0.0));
+
+    let lhs_spectrum = crate::fft(&lhs, &transform_options)?;
+    let rhs_spectrum = crate::fft(&rhs, &transform_options)?;
+    let product_spectrum: Vec<(f64, f64)> = lhs_spectrum
+        .iter()
+        .zip(rhs_spectrum.iter())
+        .map(|(&(lhs_re, lhs_im), &(rhs_re, rhs_im))| {
+            (
+                lhs_re * rhs_re - lhs_im * rhs_im,
+                lhs_re * rhs_im + lhs_im * rhs_re,
+            )
+        })
+        .collect();
+
+    let product = crate::ifft(&product_spectrum, &transform_options)?;
+    Ok(product
+        .iter()
+        .take(output_len)
+        .map(|&(real, _)| real)
+        .collect())
+}
+
+fn validate_polynomial_coefficients(
+    coeffs: &[f64],
+    options: &crate::FftOptions,
+) -> Result<(), FftError> {
+    let should_check = options.check_finite || options.mode == fsci_runtime::RuntimeMode::Hardened;
+    if should_check && coeffs.iter().any(|value| !value.is_finite()) {
+        return Err(FftError::NonFiniteInput);
+    }
+    Ok(())
+}
+
+fn polynomial_multiply_direct(a: &[f64], b: &[f64]) -> Vec<f64> {
+    let mut product = vec![0.0; a.len() + b.len() - 1];
+    for (i, &lhs) in a.iter().enumerate() {
+        for (j, &rhs) in b.iter().enumerate() {
+            product[i + j] += lhs * rhs;
+        }
+    }
+    product
 }
 
 /// FFT-based convolution of two 1D real signals.
@@ -314,7 +399,12 @@ pub fn analytic_signal(x: &[f64]) -> Result<Vec<(f64, f64)>, FftError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fftconvolve, fftfreq, fftshift_1d, ifftshift_1d, rfftfreq};
+    use fsci_runtime::RuntimeMode;
+
+    use super::{
+        fftconvolve, fftfreq, fftshift_1d, ifftshift_1d, polynomial_multiply_fft, rfftfreq,
+    };
+    use crate::FftOptions;
 
     #[test]
     fn fftfreq_even_length_matches_expected_ordering() {
@@ -412,6 +502,56 @@ mod tests {
         for (i, (&r, &e)) in result.iter().zip(expected.iter()).enumerate() {
             assert!((r - e).abs() < 1e-10, "idx {i}: {r} != {e}");
         }
+    }
+
+    #[test]
+    fn polynomial_multiply_fft_matches_direct_known_product() {
+        let lhs = vec![3.0, -2.0, 5.0, 1.0];
+        let rhs = vec![4.0, 0.5, -1.0];
+        let got = polynomial_multiply_fft(&lhs, &rhs, &FftOptions::default()).unwrap();
+        let expected = [12.0, -6.5, 16.0, 8.5, -4.5, -1.0];
+        assert_eq!(got.len(), expected.len());
+        for (idx, (&actual, &expected)) in got.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-10,
+                "coefficient {idx}: {actual} != {expected}",
+            );
+        }
+    }
+
+    #[test]
+    fn polynomial_multiply_fft_handles_empty_input() {
+        let got = polynomial_multiply_fft(&[], &[1.0, 2.0], &FftOptions::default()).unwrap();
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn polynomial_multiply_fft_large_product_uses_convolution_theorem() {
+        let lhs: Vec<f64> = (0..24).map(|idx| (idx % 7) as f64 - 3.0).collect();
+        let rhs: Vec<f64> = (0..19).map(|idx| (idx % 5) as f64 * 0.25 - 0.5).collect();
+        let got = polynomial_multiply_fft(&lhs, &rhs, &FftOptions::default()).unwrap();
+
+        let mut expected = vec![0.0; lhs.len() + rhs.len() - 1];
+        for (i, &left) in lhs.iter().enumerate() {
+            for (j, &right) in rhs.iter().enumerate() {
+                expected[i + j] += left * right;
+            }
+        }
+
+        assert_eq!(got.len(), expected.len());
+        for (idx, (&actual, &expected)) in got.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-8,
+                "coefficient {idx}: {actual} != {expected}",
+            );
+        }
+    }
+
+    #[test]
+    fn polynomial_multiply_fft_hardened_mode_rejects_non_finite_coefficients() {
+        let options = FftOptions::default().with_mode(RuntimeMode::Hardened);
+        let err = polynomial_multiply_fft(&[1.0, f64::NAN], &[2.0], &options).unwrap_err();
+        assert_eq!(err, crate::FftError::NonFiniteInput);
     }
 
     #[test]
