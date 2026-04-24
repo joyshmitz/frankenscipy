@@ -3613,6 +3613,8 @@ pub struct ClusterCase {
     pub category: String,
     pub mode: RuntimeMode,
     pub function: String,
+    #[serde(default)]
+    pub seed: Option<u64>,
     pub args: serde_json::Value,
     pub expected: ClusterExpected,
 }
@@ -3681,6 +3683,7 @@ fn execute_cluster_case(case: &ClusterCase) -> ClusterObserved {
     match case.function.as_str() {
         "linkage" => execute_linkage(case),
         "fcluster" => execute_fcluster(case),
+        "kmeans" => execute_kmeans(case),
         "vq" => execute_vq(case),
         "whiten" => execute_whiten(case),
         "cophenet" => execute_cophenet(case),
@@ -3729,6 +3732,32 @@ fn execute_fcluster(case: &ClusterCase) -> ClusterObserved {
         Err(e) => return ClusterObserved::Error(format!("parse max_clusters: {e}")),
     };
     ClusterObserved::Labels(fsci_cluster::fcluster(&z, max_clusters))
+}
+
+fn execute_kmeans(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let data: Vec<Vec<f64>> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse data: {e}")),
+    };
+    let k: usize = match serde_json::from_value(args[1].clone()) {
+        Ok(k) => k,
+        Err(e) => return ClusterObserved::Error(format!("parse k: {e}")),
+    };
+    let max_iter = match args.get(2) {
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(max_iter) => max_iter,
+            Err(e) => return ClusterObserved::Error(format!("parse max_iter: {e}")),
+        },
+        None => 100,
+    };
+    let Some(seed) = case.seed else {
+        return ClusterObserved::Error("kmeans requires an explicit seed".to_owned());
+    };
+    match fsci_cluster::kmeans(&data, k, max_iter, seed) {
+        Ok(result) => ClusterObserved::Labels(result.labels),
+        Err(e) => ClusterObserved::Error(format!("{e:?}")),
+    }
 }
 
 fn execute_vq(case: &ClusterCase) -> ClusterObserved {
@@ -7048,7 +7077,15 @@ fn compare_cluster_case_differential(
                 .as_ref()
                 .and_then(|value| serde_json::from_value(value.clone()).ok())
                 .unwrap_or_default();
-            let diff = if actual == &expected {
+            let (expected_cmp, actual_cmp) = if case.expected.deterministic_labels {
+                (expected, actual.clone())
+            } else {
+                (
+                    canonicalize_labels_first_occurrence(&expected),
+                    canonicalize_labels_first_occurrence(actual),
+                )
+            };
+            let diff = if actual_cmp == expected_cmp {
                 0.0
             } else {
                 f64::INFINITY
@@ -15996,8 +16033,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
     fn cluster_case_input_summary(case: &super::ClusterCase) -> String {
         format!(
-            "function={} mode={:?} args={:?}",
-            case.function, case.mode, case.args
+            "function={} mode={:?} seed={:?} args={:?}",
+            case.function, case.mode, case.seed, case.args
         )
     }
 

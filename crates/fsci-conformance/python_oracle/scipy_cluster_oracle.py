@@ -3,8 +3,8 @@
 
 Closes the cluster slice of frankenscipy-di9p. Covers the 12 functions
 used by FSCI-P2C-009: linkage / fcluster / vq / whiten / cophenet /
-inconsistent / silhouette_score / adjusted_rand_score / is_valid_linkage
-/ is_monotonic / leaves_list / num_obs_linkage.
+inconsistent / kmeans / silhouette_score / adjusted_rand_score /
+is_valid_linkage / is_monotonic / leaves_list / num_obs_linkage.
 """
 
 from __future__ import annotations
@@ -43,6 +43,22 @@ def _run_case(case: Dict[str, Any], np: Any, hierarchy: Any, vq_mod: Any, metric
             labels = hierarchy.fcluster(z, t=t, criterion=criterion)
             return _ok(case_id, "array", {
                 "values": [int(v) for v in labels.tolist()],
+            })
+
+        if function == "kmeans":
+            data = np.asarray(args[0], dtype=float)
+            k = int(args[1])
+            max_iter = int(args[2]) if len(args) > 2 else 100
+            centroids, labels = vq_mod.kmeans2(
+                data,
+                k,
+                iter=max_iter,
+                minit="++",
+                seed=case.get("seed"),
+            )
+            return _ok(case_id, "kmeans_result", {
+                "centroids": [[float(v) for v in row] for row in centroids.tolist()],
+                "labels": [int(v) for v in labels.tolist()],
             })
 
         if function == "vq":
