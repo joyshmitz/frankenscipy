@@ -429,6 +429,78 @@
         "rtol": 1e-12,
         "contract_ref": "fsci_cluster::num_obs_linkage"
       }
+    },
+    {
+      "case_id": "hardened_is_valid_linkage_valid_5pt",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "is_valid_linkage",
+      "args": [
+        [[0.0, 1.0, 1.0, 2.0], [2.0, 3.0, 1.0, 2.0], [5.0, 6.0, 3.0, 4.0], [4.0, 7.0, 4.0, 5.0]]
+      ],
+      "expected": {
+        "kind": "boolean",
+        "value": true,
+        "contract_ref": "fsci_cluster::is_valid_linkage"
+      }
+    },
+    {
+      "case_id": "hardened_is_valid_linkage_bad_index",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "is_valid_linkage",
+      "args": [
+        [[10.0, 0.0, 1.0, 2.0]]
+      ],
+      "expected": {
+        "kind": "boolean",
+        "value": false,
+        "contract_ref": "fsci_cluster::is_valid_linkage"
+      }
+    },
+    {
+      "case_id": "hardened_is_valid_linkage_negative_dist",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "is_valid_linkage",
+      "args": [
+        [[0.0, 1.0, -1.0, 2.0]]
+      ],
+      "expected": {
+        "kind": "boolean",
+        "value": false,
+        "contract_ref": "fsci_cluster::is_valid_linkage"
+      }
+    },
+    {
+      "case_id": "hardened_is_monotonic_not_monotonic",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "is_monotonic",
+      "args": [
+        [[0.0, 1.0, 5.0, 2.0], [2.0, 3.0, 1.0, 3.0]]
+      ],
+      "expected": {
+        "kind": "boolean",
+        "value": false,
+        "contract_ref": "fsci_cluster::is_monotonic"
+      }
+    },
+    {
+      "case_id": "hardened_num_obs_linkage_5pt",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "num_obs_linkage",
+      "args": [
+        [[0.0, 1.0, 1.0, 2.0], [2.0, 3.0, 1.0, 2.0], [5.0, 6.0, 3.0, 4.0], [4.0, 7.0, 4.0, 5.0]]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 5.0,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_cluster::num_obs_linkage"
+      }
     }
   ]
 }

@@ -17809,7 +17809,15 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             logs.push(log);
         }
 
-        assert_eq!(case_count, 56, "expected 56 cases, got {case_count}");
+        let expected_case_count = fixture.cases.len();
+        assert!(
+            expected_case_count >= 56,
+            "fft fixture quota floor regressed: got {expected_case_count}"
+        );
+        assert_eq!(
+            case_count, expected_case_count,
+            "expected {expected_case_count} cases, got {case_count}"
+        );
         assert_eq!(report.fail_count, 0);
 
         let output_dir = HarnessConfig::default_paths()

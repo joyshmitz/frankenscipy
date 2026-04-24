@@ -282,9 +282,19 @@
       "case_id": "inv_hardened_neg_inf_matrix_rejected",
       "passed": true,
       "message": "linalg error matched expected contract"
+    },
+    {
+      "case_id": "det_hardened_nan_matrix_rejected",
+      "passed": true,
+      "message": "linalg error matched expected contract"
+    },
+    {
+      "case_id": "lstsq_hardened_inf_rhs_rejected",
+      "passed": true,
+      "message": "linalg error matched expected contract"
     }
   ],
-  "passed_cases": 56,
+  "passed_cases": 58,
   "failed_cases": 0,
-  "generated_unix_ms": 1777002336308
+  "generated_unix_ms": 1777015560079
 }

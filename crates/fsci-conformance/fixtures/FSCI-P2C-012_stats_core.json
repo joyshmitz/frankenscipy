@@ -542,6 +542,95 @@
         "note": "Minimal viable sample for describe",
         "contract_ref": "fsci_stats::describe"
       }
+    },
+    {
+      "case_id": "hardened_describe_8pt",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "describe",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+      ],
+      "expected": {
+        "kind": "describe_result",
+        "nobs": 8,
+        "minmax": [1.0, 8.0],
+        "mean": 4.5,
+        "variance": 6.0,
+        "skewness": 0.0,
+        "kurtosis": -1.2380952380952381,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::describe"
+      }
+    },
+    {
+      "case_id": "hardened_skew_asymmetric",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "skew",
+      "args": [
+        [1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.6,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::skew (bias=True)"
+      }
+    },
+    {
+      "case_id": "hardened_kurtosis_uniform",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "kurtosis",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -1.2242424242424244,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::kurtosis (Fisher=True, bias=True)"
+      }
+    },
+    {
+      "case_id": "hardened_pearsonr_linear",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "pearsonr",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [2.0, 4.0, 6.0, 8.0, 10.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": 1.0,
+        "pvalue": 0.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::pearsonr"
+      }
+    },
+    {
+      "case_id": "hardened_pearsonr_negative",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "pearsonr",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [10.0, 8.0, 6.0, 4.0, 2.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": -1.0,
+        "pvalue": 0.0,
+        "atol": 1e-10,
+        "rtol": 1e-10,
+        "contract_ref": "fsci_stats::pearsonr"
+      }
     }
   ]
 }

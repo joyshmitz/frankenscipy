@@ -23,17 +23,48 @@ fn schema_dir() -> PathBuf {
 
 fn load_schema(name: &str) -> Value {
     let path = schema_dir().join(name);
+    let raw = fs::read_to_string(&path).unwrap_or_else(|e| {
+        assert_failed(&format!("failed to read schema {}: {e}", path.display()))
+    });
+    serde_json::from_str(&raw).unwrap_or_else(|e| {
+        assert_failed(&format!("schema {} is not valid JSON: {e}", path.display()))
+    })
+}
+
+fn assert_failed(message: &str) -> ! {
+    assert!(message.is_empty(), "{message}");
+    loop {
+        std::hint::spin_loop();
+    }
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join(name)
+}
+
+fn hardened_case_count(fixture_name: &str) -> Result<usize, String> {
+    let path = fixture_path(fixture_name);
     let raw = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read schema {}: {e}", path.display()));
-    serde_json::from_str(&raw)
-        .unwrap_or_else(|e| panic!("schema {} is not valid JSON: {e}", path.display()))
+        .map_err(|e| format!("failed to read fixture {}: {e}", path.display()))?;
+    let fixture: Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("fixture {} is not valid JSON: {e}", path.display()))?;
+    let cases = fixture
+        .get("cases")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("fixture {} missing cases array", path.display()))?;
+    Ok(cases
+        .iter()
+        .filter(|case| case.get("mode").and_then(Value::as_str) == Some("Hardened"))
+        .count())
 }
 
 /// Verify that a JSON Schema document has the required top-level structure.
 fn assert_valid_json_schema(schema: &Value, name: &str) {
-    let obj = schema.as_object().unwrap_or_else(|| {
-        panic!("{name}: schema root must be an object");
-    });
+    let Some(obj) = schema.as_object() else {
+        assert_failed(&format!("{name}: schema root must be an object"));
+    };
 
     assert!(obj.contains_key("$schema"), "{name}: missing $schema field");
     assert!(obj.contains_key("title"), "{name}: missing title field");
@@ -66,9 +97,9 @@ fn assert_valid_json_schema(schema: &Value, name: &str) {
     );
 
     // Verify required fields are listed
-    let required = obj["required"]
-        .as_array()
-        .unwrap_or_else(|| panic!("{name}: required must be an array"));
+    let Some(required) = obj["required"].as_array() else {
+        assert_failed(&format!("{name}: required must be an array"));
+    };
     assert!(
         required
             .iter()
@@ -77,13 +108,42 @@ fn assert_valid_json_schema(schema: &Value, name: &str) {
     );
 }
 
+#[test]
+fn priority_families_keep_minimum_hardened_fixture_coverage() {
+    for fixture_name in [
+        "FSCI-P2C-002_linalg_core.json",
+        "FSCI-P2C-005_fft_core.json",
+        "FSCI-P2C-007_arrayapi_core.json",
+        "FSCI-P2C-009_cluster_core.json",
+        "FSCI-P2C-011_signal_core.json",
+        "FSCI-P2C-012_stats_core.json",
+    ] {
+        let count = match hardened_case_count(fixture_name) {
+            Ok(count) => count,
+            Err(message) => {
+                assert!(
+                    message.is_empty(),
+                    "failed to inspect hardened coverage fixture: {message}"
+                );
+                0
+            }
+        };
+        assert!(
+            count >= 5,
+            "{fixture_name} must keep at least 5 Hardened-mode cases, got {count}"
+        );
+    }
+}
+
 /// Verify that a schema's $defs entries all have required + properties.
 fn assert_defs_well_formed(schema: &Value, name: &str) {
     if let Some(defs) = schema.get("$defs").and_then(|d| d.as_object()) {
         for (def_name, def_value) in defs {
-            let def_obj = def_value.as_object().unwrap_or_else(|| {
-                panic!("{name}/$defs/{def_name}: definition must be an object");
-            });
+            let Some(def_obj) = def_value.as_object() else {
+                assert_failed(&format!(
+                    "{name}/$defs/{def_name}: definition must be an object"
+                ));
+            };
             assert!(
                 def_obj.contains_key("type"),
                 "{name}/$defs/{def_name}: missing type"
@@ -449,16 +509,16 @@ fn p2c001_threat_matrix_artifact_is_schema_aligned_and_complete() {
         .join("fixtures/artifacts/P2C-001/threats/threat_matrix.json");
 
     let raw = fs::read_to_string(&artifact_path).unwrap_or_else(|error| {
-        panic!(
+        assert_failed(&format!(
             "failed to read P2C-001 threat artifact {}: {error}",
             artifact_path.display()
-        );
+        ));
     });
     let artifact: Value = serde_json::from_str(&raw).unwrap_or_else(|error| {
-        panic!(
+        assert_failed(&format!(
             "failed to parse P2C-001 threat artifact {}: {error}",
             artifact_path.display()
-        );
+        ));
     });
 
     let errors = validate_sample_against_schema(&schema, &artifact, "p2c001_threat_matrix");
@@ -633,7 +693,7 @@ fn all_fixtures_have_valid_envelope() {
     let mut checked = 0usize;
 
     let entries = fs::read_dir(&fixtures_dir)
-        .unwrap_or_else(|e| panic!("read fixtures dir {fixtures_dir:?}: {e}"));
+        .unwrap_or_else(|e| assert_failed(&format!("read fixtures dir {fixtures_dir:?}: {e}")));
     for entry in entries {
         let Ok(entry) = entry else { continue };
         let path = entry.path();
@@ -677,7 +737,9 @@ fn all_fixtures_have_valid_envelope() {
                     continue;
                 };
                 if !case_obj.contains_key("case_id") && !case_obj.contains_key("fixture_id") {
-                    violations.push(format!("{name}: cases[{i}] missing `case_id` / `fixture_id`"));
+                    violations.push(format!(
+                        "{name}: cases[{i}] missing `case_id` / `fixture_id`"
+                    ));
                 }
                 // Expected outcome must be present (either `expected` or
                 // its legacy names). validate_tol fixtures use `expected`;

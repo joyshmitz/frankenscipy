@@ -2296,6 +2296,50 @@
         "kind": "error",
         "error": "array must not contain infs or NaNs"
       }
+    },
+    {
+      "operation": "det",
+      "case_id": "det_hardened_nan_matrix_rejected",
+      "mode": "Hardened",
+      "a": [
+        [
+          1.0,
+          "NaN"
+        ],
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "check_finite": false,
+      "expected": {
+        "kind": "error",
+        "error": "array must not contain infs or NaNs"
+      }
+    },
+    {
+      "operation": "lstsq",
+      "case_id": "lstsq_hardened_inf_rhs_rejected",
+      "mode": "Hardened",
+      "a": [
+        [
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0
+        ]
+      ],
+      "b": [
+        1.0,
+        "Infinity"
+      ],
+      "check_finite": false,
+      "expected": {
+        "kind": "error",
+        "error": "array must not contain infs or NaNs"
+      }
     }
   ],
   "oracle_provenance": {

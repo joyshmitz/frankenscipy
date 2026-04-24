@@ -1071,6 +1071,38 @@
         "kind": "error",
         "error": "non-finite input rejected by policy"
       }
+    },
+    {
+      "case_id": "irfft_hardened_rejects_nan_spectrum",
+      "category": "hardened",
+      "mode": "Hardened",
+      "transform": "irfft",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [[1.0, 0.0], ["NaN", 0.0], [0.0, 0.0]],
+      "output_len": 4,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "error",
+        "error": "non-finite input rejected by policy"
+      }
+    },
+    {
+      "case_id": "dct_hardened_rejects_inf_real",
+      "category": "hardened",
+      "mode": "Hardened",
+      "transform": "dct",
+      "normalization": "backward",
+      "real_input": [1.0, "Infinity", 0.0, 0.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "error",
+        "error": "non-finite input rejected by policy"
+      }
     }
   ]
 }
