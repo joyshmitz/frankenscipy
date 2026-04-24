@@ -22,6 +22,11 @@ This folder stores normalized oracle-vs-target fixtures for fsci-conformance.
   - `interp1d` (`linear`, `nearest`) vector evaluation, fill-value, and reject paths
   - `RegularGridInterpolator` (`linear`, `nearest`) grid evaluation and fill-value behavior
   - `CubicSpline` and `BSpline` spline evaluation packets
+- `FSCI-P2C-015_ndimage_core.json`: ndimage differential + edge +
+  adversarial conformance cases for:
+  - `gaussian_filter` constant preservation and reject paths
+  - `label` connected-component labels and feature counts
+  - `binary_erosion`, `binary_dilation`, and `distance_transform_edt`
 - `FSCI-P2C-016_constants_core.json`: constants/core helper evidence fixture for:
   - exact fundamental values
   - name/alias lookup via `value` and `find`

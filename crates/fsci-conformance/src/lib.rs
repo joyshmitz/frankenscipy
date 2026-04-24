@@ -13,8 +13,8 @@
 //!    reproducibility check of the Rust side. Families:
 //!    `validate_tol`, `linalg`, `optimize`, `special`, `array_api`,
 //!    `sparse`, `fft`, `casp`, `cluster`, `spatial`, `signal`, `stats`,
-//!    `integrate`, `interpolate`. (ndimage / io do not yet have a packet
-//!    runner.)
+//!    `integrate`, `interpolate`, `ndimage`. (`io` does not yet have a
+//!    packet runner.)
 //!
 //! 2. **`run_<family>_packet_with_oracle_capture(config, fixture_name, oracle)`**
 //!    — oracle-backed lane. Invokes the scipy Python oracle to capture
@@ -83,8 +83,7 @@ use fsci_integrate::{
 };
 use fsci_interpolate::{
     BSpline, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpKind as FsciInterpKind,
-    RegularGridInterpolator, RegularGridMethod as FsciRegularGridMethod,
-    SplineBc as FsciSplineBc,
+    RegularGridInterpolator, RegularGridMethod as FsciRegularGridMethod, SplineBc as FsciSplineBc,
 };
 use fsci_linalg::{
     InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
@@ -92,6 +91,12 @@ use fsci_linalg::{
     inv_with_audit, lstsq, lstsq_with_audit, pinv, pinv_with_audit, solve, solve_banded,
     solve_banded_with_audit, solve_triangular, solve_triangular_with_audit, solve_with_audit,
     sync_audit_ledger as linalg_sync_audit_ledger,
+};
+use fsci_ndimage::{
+    BoundaryMode as FsciNdimageBoundaryMode, NdArray as FsciNdimageArray,
+    binary_dilation as ndimage_binary_dilation, binary_erosion as ndimage_binary_erosion,
+    distance_transform_edt as ndimage_distance_transform_edt,
+    gaussian_filter as ndimage_gaussian_filter, label as ndimage_label,
 };
 use fsci_opt::sync_audit_ledger as opt_sync_audit_ledger;
 use fsci_opt::{
@@ -986,6 +991,121 @@ pub struct InterpolatePacketFixture {
     pub packet_id: String,
     pub family: String,
     pub cases: Vec<InterpolateCase>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NdimageBoundaryMode {
+    Reflect,
+    Constant,
+    Nearest,
+    Wrap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NdimageExpectedOutcome {
+    Array {
+        values: Vec<f64>,
+        shape: Vec<usize>,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+    },
+    Label {
+        labels: Vec<f64>,
+        shape: Vec<usize>,
+        num_features: usize,
+    },
+    Error {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum NdimageCase {
+    GaussianFilter {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        input: Vec<f64>,
+        shape: Vec<usize>,
+        sigma: f64,
+        boundary: NdimageBoundaryMode,
+        #[serde(default)]
+        cval: f64,
+        expected: NdimageExpectedOutcome,
+    },
+    Label {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        input: Vec<f64>,
+        shape: Vec<usize>,
+        expected: NdimageExpectedOutcome,
+    },
+    BinaryErosion {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        input: Vec<f64>,
+        shape: Vec<usize>,
+        structure_size: usize,
+        iterations: usize,
+        expected: NdimageExpectedOutcome,
+    },
+    BinaryDilation {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        input: Vec<f64>,
+        shape: Vec<usize>,
+        structure_size: usize,
+        iterations: usize,
+        expected: NdimageExpectedOutcome,
+    },
+    DistanceTransformEdt {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        input: Vec<f64>,
+        shape: Vec<usize>,
+        #[serde(default)]
+        sampling: Option<Vec<f64>>,
+        expected: NdimageExpectedOutcome,
+    },
+}
+
+impl NdimageCase {
+    fn case_id(&self) -> &str {
+        match self {
+            Self::GaussianFilter { case_id, .. }
+            | Self::Label { case_id, .. }
+            | Self::BinaryErosion { case_id, .. }
+            | Self::BinaryDilation { case_id, .. }
+            | Self::DistanceTransformEdt { case_id, .. } => case_id,
+        }
+    }
+
+    fn expected(&self) -> &NdimageExpectedOutcome {
+        match self {
+            Self::GaussianFilter { expected, .. }
+            | Self::Label { expected, .. }
+            | Self::BinaryErosion { expected, .. }
+            | Self::BinaryDilation { expected, .. }
+            | Self::DistanceTransformEdt { expected, .. } => expected,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct NdimagePacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<NdimageCase>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -2306,6 +2426,20 @@ enum InterpolateObservedOutcome {
     Error(String),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum NdimageObservedOutcome {
+    Array {
+        values: Vec<f64>,
+        shape: Vec<usize>,
+    },
+    Label {
+        labels: Vec<f64>,
+        shape: Vec<usize>,
+        num_features: usize,
+    },
+    Error(String),
+}
+
 pub fn run_smoke(config: &HarnessConfig) -> Result<HarnessReport, HarnessError> {
     let packet = run_validate_tol_packet(config, "FSCI-P2C-001_validate_tol.json")?;
     Ok(HarnessReport {
@@ -2598,6 +2732,54 @@ pub fn run_interpolate_packet(
             }
         };
         let (passed, message, _, _) = compare_interpolate_case_differential(case, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+pub fn run_ndimage_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: NdimagePacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_ndimage_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_ndimage_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
+        let (passed, message, _, _) = compare_ndimage_case_differential(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
             passed,
@@ -9449,6 +9631,197 @@ fn compare_interpolate_case_differential(
     }
 }
 
+fn fixture_ndimage_boundary_to_runtime(mode: NdimageBoundaryMode) -> FsciNdimageBoundaryMode {
+    match mode {
+        NdimageBoundaryMode::Reflect => FsciNdimageBoundaryMode::Reflect,
+        NdimageBoundaryMode::Constant => FsciNdimageBoundaryMode::Constant,
+        NdimageBoundaryMode::Nearest => FsciNdimageBoundaryMode::Nearest,
+        NdimageBoundaryMode::Wrap => FsciNdimageBoundaryMode::Wrap,
+    }
+}
+
+fn execute_ndimage_case(case: &NdimageCase) -> NdimageObservedOutcome {
+    match case {
+        NdimageCase::GaussianFilter {
+            input,
+            shape,
+            sigma,
+            boundary,
+            cval,
+            ..
+        } => match FsciNdimageArray::new(input.clone(), shape.clone()).and_then(|array| {
+            ndimage_gaussian_filter(
+                &array,
+                *sigma,
+                fixture_ndimage_boundary_to_runtime(*boundary),
+                *cval,
+            )
+        }) {
+            Ok(array) => NdimageObservedOutcome::Array {
+                values: array.data,
+                shape: array.shape,
+            },
+            Err(error) => NdimageObservedOutcome::Error(error.to_string()),
+        },
+        NdimageCase::Label { input, shape, .. } => {
+            match FsciNdimageArray::new(input.clone(), shape.clone()).and_then(|array| {
+                let (labels, num_features) = ndimage_label(&array)?;
+                Ok((labels, num_features))
+            }) {
+                Ok((labels, num_features)) => NdimageObservedOutcome::Label {
+                    labels: labels.data,
+                    shape: labels.shape,
+                    num_features,
+                },
+                Err(error) => NdimageObservedOutcome::Error(error.to_string()),
+            }
+        }
+        NdimageCase::BinaryErosion {
+            input,
+            shape,
+            structure_size,
+            iterations,
+            ..
+        } => match FsciNdimageArray::new(input.clone(), shape.clone())
+            .and_then(|array| ndimage_binary_erosion(&array, *structure_size, *iterations))
+        {
+            Ok(array) => NdimageObservedOutcome::Array {
+                values: array.data,
+                shape: array.shape,
+            },
+            Err(error) => NdimageObservedOutcome::Error(error.to_string()),
+        },
+        NdimageCase::BinaryDilation {
+            input,
+            shape,
+            structure_size,
+            iterations,
+            ..
+        } => match FsciNdimageArray::new(input.clone(), shape.clone())
+            .and_then(|array| ndimage_binary_dilation(&array, *structure_size, *iterations))
+        {
+            Ok(array) => NdimageObservedOutcome::Array {
+                values: array.data,
+                shape: array.shape,
+            },
+            Err(error) => NdimageObservedOutcome::Error(error.to_string()),
+        },
+        NdimageCase::DistanceTransformEdt {
+            input,
+            shape,
+            sampling,
+            ..
+        } => match FsciNdimageArray::new(input.clone(), shape.clone())
+            .and_then(|array| ndimage_distance_transform_edt(&array, sampling.as_deref()))
+        {
+            Ok(array) => NdimageObservedOutcome::Array {
+                values: array.data,
+                shape: array.shape,
+            },
+            Err(error) => NdimageObservedOutcome::Error(error.to_string()),
+        },
+    }
+}
+
+fn compare_ndimage_case_differential(
+    case: &NdimageCase,
+    observed: &NdimageObservedOutcome,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    match (case.expected(), observed) {
+        (
+            NdimageExpectedOutcome::Array {
+                values,
+                shape,
+                atol,
+                rtol,
+            },
+            NdimageObservedOutcome::Array {
+                values: got,
+                shape: got_shape,
+            },
+        ) => {
+            let tolerance = ToleranceUsed {
+                atol: atol.unwrap_or(1.0e-12),
+                rtol: rtol.unwrap_or(1.0e-12),
+                comparison_mode: "allclose".to_owned(),
+            };
+            if got_shape != shape {
+                return (
+                    false,
+                    format!("ndimage shape mismatch: expected={shape:?}, got={got_shape:?}"),
+                    Some(f64::INFINITY),
+                    Some(tolerance),
+                );
+            }
+            let max_diff = if got.len() == values.len() {
+                max_diff_vec(got, values)
+            } else {
+                f64::INFINITY
+            };
+            let pass = allclose_vec(got, values, tolerance.atol, tolerance.rtol);
+            let msg = if pass {
+                format!("ndimage array matched (max_diff={max_diff:.2e})")
+            } else {
+                format!(
+                    "ndimage array mismatch: expected={values:?}, got={got:?}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(max_diff), Some(tolerance))
+        }
+        (
+            NdimageExpectedOutcome::Label {
+                labels,
+                shape,
+                num_features,
+            },
+            NdimageObservedOutcome::Label {
+                labels: got_labels,
+                shape: got_shape,
+                num_features: got_features,
+            },
+        ) => {
+            let pass = got_shape == shape && got_labels == labels && got_features == num_features;
+            let diff = if pass { 0.0 } else { f64::INFINITY };
+            let msg = if pass {
+                format!("ndimage labels matched ({num_features} features)")
+            } else {
+                format!(
+                    "ndimage label mismatch: expected shape={shape:?}, labels={labels:?}, num_features={num_features}; got shape={got_shape:?}, labels={got_labels:?}, num_features={got_features}"
+                )
+            };
+            (pass, msg, Some(diff), None)
+        }
+        (NdimageExpectedOutcome::Error { error }, NdimageObservedOutcome::Error(got)) => {
+            let pass = matches_error_contract(got, error);
+            let msg = if pass {
+                "error matched".to_owned()
+            } else {
+                format!("error mismatch: expected=`{error}`, got=`{got}`")
+            };
+            (pass, msg, None, None)
+        }
+        (NdimageExpectedOutcome::Error { error }, observed) => (
+            false,
+            format!("expected error `{error}` but got {observed:?}"),
+            None,
+            None,
+        ),
+        (expected, NdimageObservedOutcome::Error(error)) => (
+            false,
+            format!("unexpected ndimage error for expected {expected:?}: {error}"),
+            None,
+            None,
+        ),
+        (expected, observed) => (
+            false,
+            format!("ndimage outcome kind mismatch: expected={expected:?}, got={observed:?}"),
+            None,
+            None,
+        ),
+    }
+}
+
 fn interpolate_expected_tolerance(
     expected: &InterpolateExpectedOutcome,
 ) -> (Option<f64>, Option<f64>) {
@@ -10503,6 +10876,7 @@ pub fn run_differential_test(
         "interpolate_core" | "interpolate" => {
             run_differential_interpolate(fixture_path, &raw, oracle_config)
         }
+        "ndimage_core" | "ndimage" => run_differential_ndimage(fixture_path, &raw, oracle_config),
         "runtime_casp" | "casp" | "casp_core" => {
             run_differential_casp(fixture_path, &raw, oracle_config)
         }
@@ -10887,6 +11261,54 @@ fn run_differential_interpolate(
                     },
                     None => compare_interpolate_case_differential(case, &observed),
                 }
+            },
+        ));
+    }
+
+    let pass_count = per_case_results.iter().filter(|r| r.passed).count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
+    }
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+fn run_differential_ndimage(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: NdimagePacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let oracle_status = probe_oracle_availability(oracle_config);
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
+
+    for case in &fixture.cases {
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            Some(audit_ledger.as_ref()),
+            || {
+                let observed = execute_ndimage_case(case);
+                compare_ndimage_case_differential(case, &observed)
             },
         ));
     }
@@ -14881,11 +15303,13 @@ pub enum PacketFamily {
     IntegrateCore,
     /// P2C-014: Interpolation routines
     InterpolateCore,
+    /// P2C-015: ndimage filtering, morphology, measurements, and transforms
+    NdimageCore,
 }
 
 impl PacketFamily {
     /// All known packet families for enumeration.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::ValidateTol,
         Self::LinalgCore,
         Self::Optimize,
@@ -14900,6 +15324,7 @@ impl PacketFamily {
         Self::Stats,
         Self::IntegrateCore,
         Self::InterpolateCore,
+        Self::NdimageCore,
     ];
 
     /// Canonical packet ID for this family (e.g., "FSCI-P2C-001").
@@ -14920,6 +15345,7 @@ impl PacketFamily {
             Self::Stats => "FSCI-P2C-012",
             Self::IntegrateCore => "FSCI-P2C-013",
             Self::InterpolateCore => "FSCI-P2C-014",
+            Self::NdimageCore => "FSCI-P2C-015",
         }
     }
 
@@ -14941,6 +15367,7 @@ impl PacketFamily {
             Self::Stats => "stats_core",
             Self::IntegrateCore => "integrate_core",
             Self::InterpolateCore => "interpolate_core",
+            Self::NdimageCore => "ndimage_core",
         }
     }
 
@@ -14975,6 +15402,8 @@ impl PacketFamily {
             Some(Self::IntegrateCore)
         } else if s.contains("interpolate") {
             Some(Self::InterpolateCore)
+        } else if s.contains("ndimage") {
+            Some(Self::NdimageCore)
         } else {
             None
         }
@@ -14999,6 +15428,7 @@ impl PacketFamily {
                 | Self::Stats
                 | Self::IntegrateCore
                 | Self::InterpolateCore
+                | Self::NdimageCore
         )
     }
 
@@ -15120,6 +15550,7 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
             PacketFamily::Stats => run_stats_packet(config, fixture_name)?,
             PacketFamily::IntegrateCore => run_integrate_packet(config, fixture_name)?,
             PacketFamily::InterpolateCore => run_interpolate_packet(config, fixture_name)?,
+            PacketFamily::NdimageCore => run_ndimage_packet(config, fixture_name)?,
         };
         reports.push(report);
     }
@@ -15144,8 +15575,8 @@ mod tests {
         resolve_array_api_contract_tolerance, run_array_api_packet, run_casp_packet,
         run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
         run_interpolate_packet, run_linalg_packet, run_linalg_packet_with_oracle_capture,
-        run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet,
-        run_special_packet, run_stats_packet, run_validate_tol_packet,
+        run_ndimage_packet, run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet,
+        run_spatial_packet, run_special_packet, run_stats_packet, run_validate_tol_packet,
         write_differential_parity_artifacts, write_parity_artifacts,
     };
     use fsci_linalg::LinalgError;
@@ -17663,6 +18094,29 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn ndimage_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report = run_ndimage_packet(&cfg, "FSCI-P2C-015_ndimage_core.json")
+            .expect("ndimage packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 1,
+            "expected at least one ndimage test case"
+        );
+
+        let artifacts = write_parity_artifacts(&cfg, &report)
+            .expect("ndimage parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
     fn differential_test_optimize_fixture() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root
@@ -17693,6 +18147,26 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
         assert_eq!(report.packet_id, "FSCI-P2C-014");
         assert_eq!(report.family, "interpolate_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 1);
+    }
+
+    #[test]
+    fn differential_test_ndimage_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-015_ndimage_core.json");
+        let oracle = default_test_oracle();
+        let report = run_differential_test(&fixture_path, &oracle)
+            .expect("differential ndimage should succeed");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-015");
+        assert_eq!(report.family, "ndimage_core");
         assert_eq!(
             report.fail_count,
             0,
@@ -19383,8 +19857,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn packet_family_all_has_14_entries() {
-        assert_eq!(PacketFamily::ALL.len(), 14);
+    fn packet_family_all_has_15_entries() {
+        assert_eq!(PacketFamily::ALL.len(), 15);
     }
 
     #[test]
@@ -19434,6 +19908,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(families.contains(&PacketFamily::LinalgCore));
         assert!(families.contains(&PacketFamily::Optimize));
         assert!(families.contains(&PacketFamily::InterpolateCore));
+        assert!(families.contains(&PacketFamily::NdimageCore));
     }
 
     #[test]
@@ -19533,6 +20008,10 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             PacketFamily::RuntimeCasp.fixture_filename(),
             "FSCI-P2C-008_runtime_casp.json"
         );
+        assert_eq!(
+            PacketFamily::NdimageCore.fixture_filename(),
+            "FSCI-P2C-015_ndimage_core.json"
+        );
     }
 
     #[test]
@@ -19546,6 +20025,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(PacketFamily::ArrayApi.has_runner());
         assert!(PacketFamily::RuntimeCasp.has_runner());
         assert!(PacketFamily::InterpolateCore.has_runner());
+        assert!(PacketFamily::NdimageCore.has_runner());
     }
 
     #[test]

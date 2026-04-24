@@ -42,6 +42,7 @@ capture at any time.
 | stats       | P2C-012 | scipy_stats_oracle.py     | 2026-04-22 |
 | integrate   | P2C-013 | scipy_integrate_oracle.py | 2026-04-18 |
 | interpolate | P2C-014 | scipy_interpolate_oracle.py | 2026-04-24 |
+| ndimage     | P2C-015 | (self-check packet; oracle TBD) | 2026-04-24 |
 | constants   | P2C-016 | (property-based)          | 2026-03-31 |
 
 Dates correspond to the last modification of the fixture file on disk
