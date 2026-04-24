@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """SciPy-backed oracle capture for FrankenSciPy cluster fixture.
 
-Closes the cluster slice of frankenscipy-di9p. Covers the 12 functions
-used by FSCI-P2C-009: linkage / fcluster / vq / whiten / cophenet /
-inconsistent / kmeans / silhouette_score / adjusted_rand_score /
-is_valid_linkage / is_monotonic / leaves_list / num_obs_linkage.
+Closes the cluster slice of frankenscipy-di9p. Covers the functions used
+by FSCI-P2C-009: linkage / fcluster / vq / whiten / cophenet /
+inconsistent / kmeans / dbscan / mean_shift / silhouette_score /
+adjusted_rand_score / is_valid_linkage / is_monotonic / leaves_list /
+num_obs_linkage.
 """
 
 from __future__ import annotations
@@ -59,6 +60,35 @@ def _run_case(case: Dict[str, Any], np: Any, hierarchy: Any, vq_mod: Any, metric
             return _ok(case_id, "kmeans_result", {
                 "centroids": [[float(v) for v in row] for row in centroids.tolist()],
                 "labels": [int(v) for v in labels.tolist()],
+            })
+
+        if function == "dbscan":
+            from sklearn.cluster import DBSCAN
+
+            data = np.asarray(args[0], dtype=float)
+            eps = float(args[1])
+            min_samples = int(args[2])
+            labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(data)
+            return _ok(case_id, "signed_labels", {
+                "values": [int(v) for v in labels.tolist()],
+            })
+
+        if function == "mean_shift":
+            from sklearn.cluster import MeanShift
+
+            data = np.asarray(args[0], dtype=float)
+            bandwidth = float(args[1])
+            max_iter = int(args[2]) if len(args) > 2 else 300
+            result = MeanShift(
+                bandwidth=bandwidth,
+                bin_seeding=False,
+                max_iter=max_iter,
+            ).fit(data)
+            return _ok(case_id, "mean_shift_result", {
+                "cluster_centers": [
+                    [float(v) for v in row] for row in result.cluster_centers_.tolist()
+                ],
+                "labels": [int(v) for v in result.labels_.tolist()],
             })
 
         if function == "vq":

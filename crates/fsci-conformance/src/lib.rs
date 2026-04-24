@@ -3667,6 +3667,25 @@ fn canonicalize_labels_first_occurrence(labels: &[usize]) -> Vec<usize> {
     out
 }
 
+fn canonicalize_signed_labels_first_occurrence(labels: &[i64]) -> Vec<i64> {
+    let mut mapping: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut next_id = 0i64;
+    let mut out = Vec::with_capacity(labels.len());
+    for &label in labels {
+        if label < 0 {
+            out.push(label);
+            continue;
+        }
+        let id = *mapping.entry(label).or_insert_with(|| {
+            let v = next_id;
+            next_id += 1;
+            v
+        });
+        out.push(id);
+    }
+    out
+}
+
 #[derive(Debug)]
 enum ClusterObserved {
     Scalar(f64),
@@ -3674,6 +3693,7 @@ enum ClusterObserved {
     Array1D(Vec<f64>),
     Array2D(Vec<Vec<f64>>),
     Labels(Vec<usize>),
+    SignedLabels(Vec<i64>),
     Linkage(Vec<[f64; 4]>),
     VqResult { codes: Vec<usize>, dists: Vec<f64> },
     Error(String),
@@ -3684,6 +3704,8 @@ fn execute_cluster_case(case: &ClusterCase) -> ClusterObserved {
         "linkage" => execute_linkage(case),
         "fcluster" => execute_fcluster(case),
         "kmeans" => execute_kmeans(case),
+        "dbscan" => execute_dbscan(case),
+        "mean_shift" => execute_mean_shift(case),
         "vq" => execute_vq(case),
         "whiten" => execute_whiten(case),
         "cophenet" => execute_cophenet(case),
@@ -3756,6 +3778,49 @@ fn execute_kmeans(case: &ClusterCase) -> ClusterObserved {
     };
     match fsci_cluster::kmeans(&data, k, max_iter, seed) {
         Ok(result) => ClusterObserved::Labels(result.labels),
+        Err(e) => ClusterObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_dbscan(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let data: Vec<Vec<f64>> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse data: {e}")),
+    };
+    let eps: f64 = match serde_json::from_value(args[1].clone()) {
+        Ok(eps) => eps,
+        Err(e) => return ClusterObserved::Error(format!("parse eps: {e}")),
+    };
+    let min_samples: usize = match serde_json::from_value(args[2].clone()) {
+        Ok(min_samples) => min_samples,
+        Err(e) => return ClusterObserved::Error(format!("parse min_samples: {e}")),
+    };
+    match fsci_cluster::dbscan(&data, eps, min_samples) {
+        Ok(result) => ClusterObserved::SignedLabels(result.labels),
+        Err(e) => ClusterObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_mean_shift(case: &ClusterCase) -> ClusterObserved {
+    let args = &case.args;
+    let data: Vec<Vec<f64>> = match serde_json::from_value(args[0].clone()) {
+        Ok(d) => d,
+        Err(e) => return ClusterObserved::Error(format!("parse data: {e}")),
+    };
+    let bandwidth: f64 = match serde_json::from_value(args[1].clone()) {
+        Ok(bandwidth) => bandwidth,
+        Err(e) => return ClusterObserved::Error(format!("parse bandwidth: {e}")),
+    };
+    let max_iter = match args.get(2) {
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(max_iter) => max_iter,
+            Err(e) => return ClusterObserved::Error(format!("parse max_iter: {e}")),
+        },
+        None => 100,
+    };
+    match fsci_cluster::mean_shift(&data, bandwidth, max_iter) {
+        Ok((_, labels)) => ClusterObserved::Labels(labels),
         Err(e) => ClusterObserved::Error(format!("{e:?}")),
     }
 }
@@ -3976,6 +4041,30 @@ fn compare_cluster_outcome(case: &ClusterCase, observed: &ClusterObserved) -> (b
                 (
                     false,
                     format!("labels mismatch: expected {exp:?}, got {got:?}"),
+                )
+            }
+        }
+        (&"signed_labels", ClusterObserved::SignedLabels(got)) => {
+            let exp: Vec<i64> = case
+                .expected
+                .value
+                .as_ref()
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let (exp_cmp, got_cmp) = if case.expected.deterministic_labels {
+                (exp.clone(), got.clone())
+            } else {
+                (
+                    canonicalize_signed_labels_first_occurrence(&exp),
+                    canonicalize_signed_labels_first_occurrence(got),
+                )
+            };
+            if exp_cmp == got_cmp {
+                (true, format!("signed labels matched: {got:?}"))
+            } else {
+                (
+                    false,
+                    format!("signed labels mismatch: expected {exp:?}, got {got:?}"),
                 )
             }
         }
@@ -7083,6 +7172,28 @@ fn compare_cluster_case_differential(
                 (
                     canonicalize_labels_first_occurrence(&expected),
                     canonicalize_labels_first_occurrence(actual),
+                )
+            };
+            let diff = if actual_cmp == expected_cmp {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+            (passed, message, Some(diff), None)
+        }
+        ("signed_labels", ClusterObserved::SignedLabels(actual)) => {
+            let expected: Vec<i64> = case
+                .expected
+                .value
+                .as_ref()
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default();
+            let (expected_cmp, actual_cmp) = if case.expected.deterministic_labels {
+                (expected, actual.clone())
+            } else {
+                (
+                    canonicalize_signed_labels_first_occurrence(&expected),
+                    canonicalize_signed_labels_first_occurrence(actual),
                 )
             };
             let diff = if actual_cmp == expected_cmp {

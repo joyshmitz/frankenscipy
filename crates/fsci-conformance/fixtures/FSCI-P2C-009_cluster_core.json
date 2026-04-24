@@ -134,6 +134,57 @@
       }
     },
     {
+      "case_id": "dbscan_two_blobs_seeded",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "dbscan",
+      "seed": 42,
+      "args": [
+        [[0.0, 0.0], [0.1, 0.0], [0.0, 0.1], [5.0, 5.0], [5.1, 5.0], [5.0, 5.1]],
+        0.5,
+        2
+      ],
+      "expected": {
+        "kind": "signed_labels",
+        "value": [0, 0, 0, 1, 1, 1],
+        "contract_ref": "fsci_cluster::dbscan"
+      }
+    },
+    {
+      "case_id": "dbscan_noise_seeded",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "dbscan",
+      "seed": 42,
+      "args": [
+        [[0.0, 0.0], [0.1, 0.0], [0.0, 0.1], [5.0, 5.0], [5.1, 5.0], [100.0, 100.0]],
+        0.5,
+        2
+      ],
+      "expected": {
+        "kind": "signed_labels",
+        "value": [0, 0, 0, 1, 1, -1],
+        "contract_ref": "fsci_cluster::dbscan"
+      }
+    },
+    {
+      "case_id": "mean_shift_two_blobs_seeded",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "mean_shift",
+      "seed": 42,
+      "args": [
+        [[0.0, 0.0], [0.0, 0.2], [0.2, 0.0], [5.0, 5.0], [5.2, 5.0], [5.0, 5.2]],
+        1.0,
+        100
+      ],
+      "expected": {
+        "kind": "labels",
+        "value": [0, 0, 0, 1, 1, 1],
+        "contract_ref": "fsci_cluster::mean_shift"
+      }
+    },
+    {
       "case_id": "vq_3obs_2centroids",
       "category": "differential",
       "mode": "Strict",
