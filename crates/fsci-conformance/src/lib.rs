@@ -1154,6 +1154,136 @@ pub enum FftExpectedOutcome {
     },
 }
 
+// br-gr99: NaN/Inf string-sentinel support for JSON fixtures.
+//
+// Stock JSON cannot encode NaN / +Inf / -Inf as number literals, but
+// Hardened-mode conformance cases need non-finite inputs to exercise
+// the reject paths (FftError::NonFiniteInput, LinalgError::NonFiniteInput,
+// etc.). The deserializers below accept either a plain JSON number or
+// one of the string markers "NaN" / "Infinity" / "-Infinity" (case-
+// insensitive) and route both into f64. Round-trip is preserved
+// because serialize_f64_with_nan_sentinel emits the same markers on
+// write.
+//
+// Mirror this contract on the oracle side (scipy_*_oracle.py
+// _coerce_maybe_nan_f64) so both sides see the same non-finite
+// value for a given fixture entry.
+mod maybe_nan_f64 {
+    use serde::de::{self, Deserializer};
+    use serde::ser::Serializer;
+
+    pub(super) fn deserialize<'de, D>(de: D) -> Result<f64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct V;
+        impl<'de> de::Visitor<'de> for V {
+            type Value = f64;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("f64 number or string sentinel NaN/Infinity/-Infinity")
+            }
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<f64, E> {
+                Ok(v)
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<f64, E> {
+                Ok(v as f64)
+            }
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<f64, E> {
+                Ok(v as f64)
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<f64, E> {
+                match v.trim().to_ascii_lowercase().as_str() {
+                    "nan" => Ok(f64::NAN),
+                    "infinity" | "inf" | "+infinity" | "+inf" => Ok(f64::INFINITY),
+                    "-infinity" | "-inf" => Ok(f64::NEG_INFINITY),
+                    other => other.parse::<f64>().map_err(|_| {
+                        de::Error::custom(format!("expected f64 or NaN/Inf sentinel, got {v:?}"))
+                    }),
+                }
+            }
+        }
+        de.deserialize_any(V)
+    }
+
+    pub(super) fn serialize<S: Serializer>(value: &f64, s: S) -> Result<S::Ok, S::Error> {
+        if value.is_nan() {
+            s.serialize_str("NaN")
+        } else if *value == f64::INFINITY {
+            s.serialize_str("Infinity")
+        } else if *value == f64::NEG_INFINITY {
+            s.serialize_str("-Infinity")
+        } else {
+            s.serialize_f64(*value)
+        }
+    }
+}
+
+fn deserialize_maybe_nan_vec<'de, D>(de: D) -> Result<Option<Vec<f64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    struct Wrap(#[serde(with = "maybe_nan_f64")] f64);
+    let opt: Option<Vec<Wrap>> = Option::deserialize(de)?;
+    Ok(opt.map(|v| v.into_iter().map(|Wrap(x)| x).collect()))
+}
+
+fn serialize_maybe_nan_vec<S: serde::Serializer>(
+    value: &Option<Vec<f64>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    match value {
+        None => s.serialize_none(),
+        Some(v) => {
+            let mut seq = s.serialize_seq(Some(v.len()))?;
+            for x in v {
+                seq.serialize_element(&MaybeNanF64(*x))?;
+            }
+            seq.end()
+        }
+    }
+}
+
+fn deserialize_maybe_nan_complex_vec<'de, D>(
+    de: D,
+) -> Result<Option<Vec<[f64; 2]>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    struct WrapPair(
+        #[serde(with = "maybe_nan_f64")] f64,
+        #[serde(with = "maybe_nan_f64")] f64,
+    );
+    let opt: Option<Vec<WrapPair>> = Option::deserialize(de)?;
+    Ok(opt.map(|v| v.into_iter().map(|WrapPair(a, b)| [a, b]).collect()))
+}
+
+fn serialize_maybe_nan_complex_vec<S: serde::Serializer>(
+    value: &Option<Vec<[f64; 2]>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    match value {
+        None => s.serialize_none(),
+        Some(v) => {
+            let mut seq = s.serialize_seq(Some(v.len()))?;
+            for pair in v {
+                seq.serialize_element(&[MaybeNanF64(pair[0]), MaybeNanF64(pair[1])])?;
+            }
+            seq.end()
+        }
+    }
+}
+
+struct MaybeNanF64(f64);
+impl serde::Serialize for MaybeNanF64 {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        maybe_nan_f64::serialize(&self.0, s)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FftCase {
@@ -1162,9 +1292,22 @@ pub struct FftCase {
     pub mode: RuntimeMode,
     pub transform: FftTransformKind,
     pub normalization: Option<FftNormalization>,
-    /// Real input (for rfft, irfft output, fftfreq, rfftfreq, fftshift, ifftshift)
+    /// Real input (for rfft, irfft output, fftfreq, rfftfreq, fftshift, ifftshift).
+    /// Accepts NaN/Infinity/-Infinity string sentinels per br-gr99 so
+    /// Hardened fixture cases can exercise non-finite reject paths.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_maybe_nan_vec",
+        serialize_with = "serialize_maybe_nan_vec"
+    )]
     pub real_input: Option<Vec<f64>>,
-    /// Complex input as [[re, im], ...] (for fft, ifft, irfft input)
+    /// Complex input as [[re, im], ...]. Each component accepts the
+    /// same NaN/Infinity/-Infinity string sentinels per br-gr99.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_maybe_nan_complex_vec",
+        serialize_with = "serialize_maybe_nan_complex_vec"
+    )]
     pub complex_input: Option<Vec<[f64; 2]>>,
     /// For irfft: desired output length
     pub output_len: Option<usize>,

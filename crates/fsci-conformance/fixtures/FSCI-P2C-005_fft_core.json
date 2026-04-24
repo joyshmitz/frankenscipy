@@ -1023,6 +1023,54 @@
         "atol": 1e-10,
         "rtol": 1e-8
       }
+    },
+    {
+      "case_id": "fft_hardened_rejects_nan_real",
+      "category": "hardened",
+      "mode": "Hardened",
+      "transform": "fft",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [[1.0, 0.0], ["NaN", 0.0], [0.0, 0.0], [0.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "error",
+        "error": "non-finite input rejected by policy"
+      }
+    },
+    {
+      "case_id": "ifft_hardened_rejects_inf_imag",
+      "category": "hardened",
+      "mode": "Hardened",
+      "transform": "ifft",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [[0.0, 0.0], [0.0, "Infinity"], [0.0, 0.0], [0.0, 0.0]],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "error",
+        "error": "non-finite input rejected by policy"
+      }
+    },
+    {
+      "case_id": "rfft_hardened_rejects_neg_inf",
+      "category": "hardened",
+      "mode": "Hardened",
+      "transform": "rfft",
+      "normalization": "backward",
+      "real_input": [1.0, 2.0, "-Infinity", 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "error",
+        "error": "non-finite input rejected by policy"
+      }
     }
   ]
 }

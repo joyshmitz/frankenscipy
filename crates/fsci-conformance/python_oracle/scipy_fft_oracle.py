@@ -27,9 +27,34 @@ def _to_real_list(arr: Any) -> List[float]:
     return [float(v) for v in arr.flat]
 
 
+def _coerce_maybe_nan_f64(value: Any) -> float:
+    """Accept either a JSON number or a NaN/Inf string sentinel per br-gr99.
+
+    Mirror of the Rust-side maybe_nan_f64 deserializer: fixtures can
+    encode non-finite inputs as "NaN" / "Infinity" / "-Infinity" (case
+    insensitive) since stock JSON has no literal for these.
+    """
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key == "nan":
+            return float("nan")
+        if key in ("infinity", "inf", "+infinity", "+inf"):
+            return float("inf")
+        if key in ("-infinity", "-inf"):
+            return float("-inf")
+        return float(value)  # fall through for exponent-string numerics
+    return float(value)
+
+
 def _complex_input_to_numpy(data: List[List[float]], np: Any) -> Any:
-    """Convert [[real, imag], ...] to numpy complex array."""
-    return np.array([complex(r, i) for r, i in data], dtype=np.complex128)
+    """Convert [[real, imag], ...] to numpy complex array.
+
+    Accepts NaN/Inf string sentinels in either component per br-gr99.
+    """
+    return np.array(
+        [complex(_coerce_maybe_nan_f64(r), _coerce_maybe_nan_f64(i)) for r, i in data],
+        dtype=np.complex128,
+    )
 
 
 def _shape_tuple(case: Dict[str, Any], field: str) -> Any:
@@ -78,11 +103,15 @@ def _run_case(case: Dict[str, Any], fft: Any, np: Any) -> Dict[str, Any]:
     normalization = case.get("normalization", "backward")
 
     try:
-        # Build input array
+        # Build input array. real_input entries may be NaN/Inf string
+        # sentinels per br-gr99 (stock JSON can't encode them as numbers).
         if case.get("complex_input") is not None:
             x = _complex_input_to_numpy(case["complex_input"], np)
         elif case.get("real_input") is not None:
-            x = np.array(case["real_input"], dtype=np.float64)
+            x = np.array(
+                [_coerce_maybe_nan_f64(v) for v in case["real_input"]],
+                dtype=np.float64,
+            )
         else:
             return {
                 "case_id": case_id,
