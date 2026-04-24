@@ -8,20 +8,11 @@
 //!
 //! # Status
 //!
-//! **Currently exercised only by CASP conformance tests** (per
-//! frankenscipy-s5e2). No production solver path (fsci-linalg,
-//! fsci-integrate, fsci-sparse, fsci-ndimage, fsci-signal, etc.)
-//! consults `PolicyController::decide` before dispatch; each crate
-//! re-implements its Hardened-mode validation via local ifs. The
-//! framework is tested (including NaN fail-closed at policy.rs:234) and
-//! benchmarked but not wired into production dispatch.
-//!
-//! Until integrated, the loss matrices and Bayesian posterior are
-//! conformance-only observables. Callers needing fail-closed behaviour
-//! should invoke the per-crate validators directly; see the Hardened
-//! chain in `fsci-integrate::validate_tol` / `fsci-fft::
-//! validate_finite_complex` / `fsci-linalg::solve_with_audit` for the
-//! ad-hoc implementations.
+//! `fsci-linalg::{solve, solve_with_casp, solve_with_audit}` invokes
+//! `PolicyController::decide` for finite solve inputs before CASP solver
+//! action selection and applies `FailClosed` / `FullValidate` decisions
+//! to the production solve path. Other production crates still use local
+//! Hardened-mode validators until they are wired into this controller.
 
 use serde::{Deserialize, Serialize};
 

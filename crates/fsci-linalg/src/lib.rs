@@ -2,8 +2,9 @@
 
 pub use fsci_runtime::SyncSharedAuditLedger;
 use fsci_runtime::{
-    AuditAction, AuditEvent, AuditLedger, RuntimeMode, SolverAction, SolverEvidenceEntry,
-    SolverPortfolio, StructuralEvidence, casp_now_unix_ms,
+    AuditAction, AuditEvent, AuditLedger, DecisionSignals, PolicyAction, PolicyController,
+    PolicyDecision, RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio,
+    StructuralEvidence, casp_now_unix_ms,
 };
 
 type EigenDecomposition = (Vec<f64>, Option<Vec<Vec<f64>>>);
@@ -21,6 +22,9 @@ use serde::Serialize;
 /// Hardened-mode reciprocal condition threshold: matrices with rcond below this
 /// are rejected as too ill-conditioned for reliable computation.
 const HARDENED_RCOND_THRESHOLD: f64 = 1e-14;
+
+/// Backward-error ceiling used when policy asks for full validation.
+const POLICY_FULL_VALIDATION_BACKWARD_ERROR_THRESHOLD: f64 = 1e-8;
 
 /// Hardened-mode maximum matrix dimension. Prevents resource exhaustion.
 const HARDENED_MAX_DIM: usize = 10_000;
@@ -135,6 +139,7 @@ fn fail_closed_reason(error: &LinalgError) -> Option<&'static str> {
         LinalgError::InvalidBandShape { .. } => Some("invalid_band_shape"),
         LinalgError::InvalidPinvThreshold => Some("invalid_pinv_threshold"),
         LinalgError::UnsupportedAssumption => Some("unsupported_assumption"),
+        LinalgError::PolicyRejected { .. } => Some("policy_rejected"),
         LinalgError::ConditionTooHigh { .. } => Some("condition_too_high"),
         LinalgError::ResourceExhausted { .. } => Some("resource_exhausted"),
         LinalgError::InvalidArgument { .. } => Some("invalid_argument"),
@@ -606,6 +611,10 @@ pub enum LinalgError {
     ConvergenceFailure {
         detail: String,
     },
+    /// Runtime policy controller rejected the solve.
+    PolicyRejected {
+        reason: String,
+    },
     /// Hardened mode: condition number exceeds threshold.
     ConditionTooHigh {
         rcond: f64,
@@ -642,6 +651,7 @@ impl std::fmt::Display for LinalgError {
             Self::InvalidPinvThreshold => write!(f, "atol and rtol values must be positive."),
             Self::NotSupported { detail } => write!(f, "{detail}"),
             Self::ConvergenceFailure { detail } => write!(f, "{detail}"),
+            Self::PolicyRejected { reason } => write!(f, "policy rejected solve: {reason}"),
             Self::ConditionTooHigh { rcond, threshold } => {
                 write!(
                     f,
@@ -1136,6 +1146,116 @@ pub fn condition_diagnostics(a: &[Vec<f64>]) -> Result<ConditionReport, LinalgEr
     Ok(condition_diagnostics_with_assumption(a, None)?.report)
 }
 
+fn condition_signal_from_rcond(rcond: f64) -> f64 {
+    if rcond.is_finite() && rcond > 0.0 {
+        (-rcond.log10()).clamp(0.0, 16.0)
+    } else {
+        16.0
+    }
+}
+
+fn anomaly_signal_from_rcond(rcond: f64) -> f64 {
+    if !rcond.is_finite() || rcond == 0.0 {
+        1.0
+    } else if rcond < HARDENED_RCOND_THRESHOLD {
+        0.4
+    } else if rcond < 1e-12 {
+        0.2
+    } else {
+        0.0
+    }
+}
+
+fn assumption_incompatibility_score(
+    a: &[Vec<f64>],
+    assumption: Option<MatrixAssumption>,
+) -> Result<f64, LinalgError> {
+    let Some(assumption) = assumption else {
+        return Ok(0.0);
+    };
+    let tol = structure_tolerance(a);
+    let incompatible = match assumption {
+        MatrixAssumption::General => false,
+        MatrixAssumption::Diagonal => !is_diagonal(a, tol),
+        MatrixAssumption::UpperTriangular => !is_upper_triangular(a, tol),
+        MatrixAssumption::LowerTriangular => !is_lower_triangular(a, tol),
+        MatrixAssumption::Symmetric | MatrixAssumption::Hermitian => !issymmetric(a, tol, tol)?,
+        MatrixAssumption::PositiveDefinite => {
+            !issymmetric(a, tol, tol)? || !is_positive_definite(a)
+        }
+        MatrixAssumption::Banded => {
+            let (rows, cols) = matrix_shape(a)?;
+            let bandwidth = bandwidth_with_tolerance(a, tol);
+            bandwidth.0 + bandwidth.1 + 1 >= rows.max(cols)
+        }
+        MatrixAssumption::TriDiagonal => {
+            let bandwidth = bandwidth_with_tolerance(a, tol);
+            bandwidth.0 > 1 || bandwidth.1 > 1
+        }
+    };
+
+    Ok(if incompatible { 1.0 } else { 0.0 })
+}
+
+fn should_apply_solve_policy(
+    mode: RuntimeMode,
+    check_finite: bool,
+    a: &[Vec<f64>],
+    b: &[f64],
+) -> bool {
+    mode == RuntimeMode::Hardened
+        || check_finite
+        || (a.iter().flatten().all(|value| value.is_finite())
+            && b.iter().all(|value| value.is_finite()))
+}
+
+fn solve_policy_decision(
+    mode: RuntimeMode,
+    report: &ConditionReport,
+    metadata_incompatibility_score: f64,
+) -> Result<PolicyDecision, LinalgError> {
+    let mut controller = PolicyController::new(mode, 8);
+    let signals = DecisionSignals::new(
+        condition_signal_from_rcond(report.rcond_estimate),
+        metadata_incompatibility_score,
+        anomaly_signal_from_rcond(report.rcond_estimate),
+    );
+    let decision = controller.decide(signals);
+    if decision.action == PolicyAction::FailClosed {
+        return Err(LinalgError::PolicyRejected {
+            reason: decision.reason,
+        });
+    }
+    Ok(decision)
+}
+
+fn enforce_policy_full_validation(
+    decision: Option<&PolicyDecision>,
+    result: &SolveResult,
+) -> Result<(), LinalgError> {
+    if !matches!(
+        decision.map(|decision| decision.action),
+        Some(PolicyAction::FullValidate)
+    ) {
+        return Ok(());
+    }
+
+    let Some(backward_error) = result.backward_error else {
+        return Ok(());
+    };
+    if backward_error.is_finite()
+        && backward_error <= POLICY_FULL_VALIDATION_BACKWARD_ERROR_THRESHOLD
+    {
+        return Ok(());
+    }
+
+    Err(LinalgError::ConvergenceFailure {
+        detail: format!(
+            "policy full validation rejected solve: backward_error={backward_error:.2e}"
+        ),
+    })
+}
+
 /// Compute backward error: ||Ax - b|| / (||A|| × ||x|| + ||b||).
 /// Returns 0.0 when the denominator is zero.
 fn compute_backward_error(matrix: &DMatrix<f64>, x: &DVector<f64>, rhs: &DVector<f64>) -> f64 {
@@ -1422,15 +1542,26 @@ fn solve_with_portfolio_internal(
     } else {
         a.to_vec()
     };
-    let diagnostics = condition_diagnostics_with_assumption(
-        &effective_a,
-        normalize_assumption_for_effective_matrix(options.assume_a, options.transposed),
-    )?;
+    let effective_assumption =
+        normalize_assumption_for_effective_matrix(options.assume_a, options.transposed);
+    let metadata_incompatibility_score =
+        assumption_incompatibility_score(&effective_a, effective_assumption)?;
+    let diagnostics = condition_diagnostics_with_assumption(&effective_a, effective_assumption)?;
     let ConditionDiagnosticsWork {
         report,
         mut matrix_cache,
         mut lu_cache,
     } = diagnostics;
+    let policy_decision =
+        if should_apply_solve_policy(options.mode, options.check_finite, &effective_a, b) {
+            Some(solve_policy_decision(
+                options.mode,
+                &report,
+                metadata_incompatibility_score,
+            )?)
+        } else {
+            None
+        };
 
     // Hardened mode: reject ill-conditioned matrices upfront
     if options.mode == RuntimeMode::Hardened
@@ -1485,6 +1616,10 @@ fn solve_with_portfolio_internal(
             }
         })
         .unwrap_or_else(|| Err(last_error.unwrap_or(LinalgError::SingularMatrix)));
+    let result = result.and_then(|solve_result| {
+        enforce_policy_full_validation(policy_decision.as_ref(), &solve_result)?;
+        Ok(solve_result)
+    });
 
     emit_trace(LinalgTrace {
         operation: trace_operation,
@@ -1623,15 +1758,35 @@ pub fn solve_with_audit(
     } else {
         a.to_vec()
     };
-    let diagnostics = condition_diagnostics_with_assumption(
-        &effective_a,
-        normalize_assumption_for_effective_matrix(options.assume_a, options.transposed),
-    )?;
+    let effective_assumption =
+        normalize_assumption_for_effective_matrix(options.assume_a, options.transposed);
+    let metadata_incompatibility_score =
+        assumption_incompatibility_score(&effective_a, effective_assumption)?;
+    let diagnostics = condition_diagnostics_with_assumption(&effective_a, effective_assumption)?;
     let ConditionDiagnosticsWork {
         report,
         mut matrix_cache,
         mut lu_cache,
     } = diagnostics;
+    let policy_decision =
+        if should_apply_solve_policy(options.mode, options.check_finite, &effective_a, b) {
+            Some(
+                match solve_policy_decision(options.mode, &report, metadata_incompatibility_score) {
+                    Ok(decision) => decision,
+                    Err(err) => {
+                        record_fail_closed(
+                            audit_ledger,
+                            &fingerprint,
+                            "policy_rejected",
+                            &format!("rejected: {err}"),
+                        );
+                        return Err(err);
+                    }
+                },
+            )
+        } else {
+            None
+        };
 
     // Hardened mode: reject ill-conditioned matrices with audit
     if options.mode == RuntimeMode::Hardened
@@ -1696,6 +1851,18 @@ pub fn solve_with_audit(
             }
         })
         .unwrap_or_else(|| Err(last_error.unwrap_or(LinalgError::SingularMatrix)));
+    let result = result.and_then(|solve_result| {
+        enforce_policy_full_validation(policy_decision.as_ref(), &solve_result)?;
+        Ok(solve_result)
+    });
+    if matches!(&result, Err(LinalgError::ConvergenceFailure { .. })) {
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "policy_full_validation",
+            "rejected: policy full validation failed",
+        );
+    }
 
     // Record CASP decision to audit ledger
     let fallback_active = actual_action != selected_action;
@@ -9139,6 +9306,66 @@ mod tests {
             entry.outcome.contains("CASP"),
             "outcome should mention CASP"
         );
+    }
+
+    #[test]
+    fn solve_policy_rejects_incompatible_assumption_before_casp() {
+        let a = vec![vec![2.0, 1.0], vec![0.0, 3.0]];
+        let b = vec![3.0, 3.0];
+
+        let result = solve(
+            &a,
+            &b,
+            SolveOptions {
+                assume_a: Some(MatrixAssumption::Diagonal),
+                ..SolveOptions::default()
+            },
+        );
+
+        match result {
+            Err(LinalgError::PolicyRejected { reason }) => {
+                assert!(reason.contains("IncompatibleMetadata"));
+                assert!(reason.contains("metadata=1.000"));
+            }
+            other => assert!(false, "expected policy rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn solve_with_audit_records_policy_rejection() {
+        let a = vec![vec![2.0, 1.0], vec![0.0, 3.0]];
+        let b = vec![3.0, 3.0];
+        let audit_ledger = sync_audit_ledger();
+        let mut portfolio = SolverPortfolio::new(RuntimeMode::Strict, 16);
+
+        let result = solve_with_audit(
+            &a,
+            &b,
+            SolveOptions {
+                assume_a: Some(MatrixAssumption::Diagonal),
+                ..SolveOptions::default()
+            },
+            &mut portfolio,
+            &audit_ledger,
+        );
+
+        match result {
+            Err(LinalgError::PolicyRejected { reason }) => {
+                assert!(reason.contains("IncompatibleMetadata"));
+            }
+            other => assert!(false, "expected policy rejection, got {other:?}"),
+        }
+
+        let ledger = lock_audit_ledger(&audit_ledger);
+        assert_eq!(ledger.len(), 1, "should have exactly one audit entry");
+        let entry = &ledger.entries()[0];
+        match &entry.action {
+            AuditAction::FailClosed { reason } => {
+                assert_eq!(reason, "policy_rejected");
+            }
+            other => assert!(false, "expected FailClosed, got {other:?}"),
+        }
+        assert!(entry.outcome.contains("policy rejected solve"));
     }
 
     #[test]
