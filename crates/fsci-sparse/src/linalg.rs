@@ -3617,6 +3617,23 @@ mod tests {
     }
 
     #[test]
+    fn spsolve_rejects_dense_fallback_above_guard() {
+        let n = SPSOLVE_DENSE_MAX_N + 1;
+        let a = identity_csr(n);
+        let b = vec![1.0; n];
+
+        let err = spsolve(&a, &b, SolveOptions::default()).expect_err("oversized dense fallback");
+
+        assert!(matches!(
+            err,
+            SparseError::Unsupported { feature }
+                if feature.contains("dense-converts")
+                    && feature.contains("frankenscipy-ke96")
+                    && feature.contains(&format!("n={n}"))
+        ));
+    }
+
+    #[test]
     fn splu_rejects_non_square_matrix() {
         let a = non_square_csc();
         let err = splu(&a, LuOptions::default()).expect_err("non-square");
@@ -3643,6 +3660,22 @@ mod tests {
         };
         let err = splu(&a, options).expect_err("invalid threshold");
         assert!(matches!(err, SparseError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn splu_rejects_dense_fallback_above_guard() {
+        let n = SPSOLVE_DENSE_MAX_N + 1;
+        let a = identity_csr(n).to_csc().expect("csc");
+
+        let err = splu(&a, LuOptions::default()).expect_err("oversized dense fallback");
+
+        assert!(matches!(
+            err,
+            SparseError::Unsupported { feature }
+                if feature.contains("dense-converts")
+                    && feature.contains("frankenscipy-ke96")
+                    && feature.contains(&format!("n={n}"))
+        ));
     }
 
     #[test]
