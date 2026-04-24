@@ -144,12 +144,7 @@ pub fn gamma_with_audit(
         && let Err(err) = &result
     {
         let reason = format!("gamma::{:?}", err.kind);
-        crate::audit::record_fail_closed(
-            ledger,
-            err.detail.as_bytes(),
-            &reason,
-            "rejected",
-        );
+        crate::audit::record_fail_closed(ledger, err.detail.as_bytes(), &reason, "rejected");
     }
     result
 }
@@ -2445,7 +2440,11 @@ mod tests {
         let err = gamma_with_audit(&scalar(-2.0), RuntimeMode::Hardened, &ledger)
             .expect_err("hardened rejects pole");
         assert_eq!(err.kind, SpecialErrorKind::PoleInput);
-        assert_eq!(ledger.lock().unwrap().len(), 1, "hardened pole must emit once");
+        assert_eq!(
+            ledger.lock().unwrap().len(),
+            1,
+            "hardened pole must emit once"
+        );
     }
 
     #[test]

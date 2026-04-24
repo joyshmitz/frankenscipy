@@ -11,7 +11,9 @@
 //! Each distribution implements pdf, cdf, sf, ppf (inverse CDF), mean, var, std.
 
 pub mod audit;
-pub use audit::{SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger};
+pub use audit::{
+    SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger,
+};
 
 use std::f64::consts::{FRAC_1_SQRT_2, LN_2, PI};
 
@@ -266,10 +268,7 @@ pub trait ContinuousDistribution {
     /// `AuditAction::FailClosed` event on the provided ledger. Useful
     /// under Hardened-mode deployments where callers need a forensic
     /// trail of which samples were rejected.
-    fn try_fit_with_audit(
-        data: &[f64],
-        ledger: &SyncSharedAuditLedger,
-    ) -> Result<Self, FitError>
+    fn try_fit_with_audit(data: &[f64], ledger: &SyncSharedAuditLedger) -> Result<Self, FitError>
     where
         Self: Sized,
     {
@@ -279,11 +278,7 @@ pub trait ContinuousDistribution {
             // Fingerprint the first few bytes of the sample so
             // repeated identical rejections collide under the same
             // event hash.
-            let head: Vec<u8> = data
-                .iter()
-                .take(8)
-                .flat_map(|v| v.to_le_bytes())
-                .collect();
+            let head: Vec<u8> = data.iter().take(8).flat_map(|v| v.to_le_bytes()).collect();
             record_fail_closed(ledger, &head, &reason, "rejected");
         }
         result
@@ -310,11 +305,7 @@ pub trait ContinuousDistribution {
     /// reused automatically; inherited NaN defaults become a typed
     /// `StatsError::Unsupported` instead of a silent sentinel.
     fn try_entropy(&self) -> Result<f64, StatsError> {
-        unsupported_distribution_moment(
-            self.entropy(),
-            "entropy",
-            std::any::type_name::<Self>(),
-        )
+        unsupported_distribution_moment(self.entropy(), "entropy", std::any::type_name::<Self>())
     }
 
     /// Median of the distribution (50th percentile).
@@ -333,11 +324,7 @@ pub trait ContinuousDistribution {
     /// Fallible skewness accessor for generic callers. Inherited NaN
     /// defaults become `StatsError::Unsupported`.
     fn try_skewness(&self) -> Result<f64, StatsError> {
-        unsupported_distribution_moment(
-            self.skewness(),
-            "skewness",
-            std::any::type_name::<Self>(),
-        )
+        unsupported_distribution_moment(self.skewness(), "skewness", std::any::type_name::<Self>())
     }
 
     /// Excess kurtosis (fourth standardized moment minus 3).
@@ -350,11 +337,7 @@ pub trait ContinuousDistribution {
     /// Fallible excess-kurtosis accessor for generic callers. Inherited
     /// NaN defaults become `StatsError::Unsupported`.
     fn try_kurtosis(&self) -> Result<f64, StatsError> {
-        unsupported_distribution_moment(
-            self.kurtosis(),
-            "kurtosis",
-            std::any::type_name::<Self>(),
-        )
+        unsupported_distribution_moment(self.kurtosis(), "kurtosis", std::any::type_name::<Self>())
     }
 
     /// Mode of the distribution (value where PDF is maximized).
@@ -2973,11 +2956,7 @@ pub trait DiscreteDistribution {
     /// Fallible entropy accessor. Inherited NaN defaults become a typed
     /// unsupported-operation error for generic callers.
     fn try_entropy(&self) -> Result<f64, StatsError> {
-        unsupported_distribution_moment(
-            self.entropy(),
-            "entropy",
-            std::any::type_name::<Self>(),
-        )
+        unsupported_distribution_moment(self.entropy(), "entropy", std::any::type_name::<Self>())
     }
     /// Skewness. Default returns NaN.
     fn skewness(&self) -> f64 {
@@ -2986,11 +2965,7 @@ pub trait DiscreteDistribution {
     /// Fallible skewness accessor. Inherited NaN defaults become a typed
     /// unsupported-operation error for generic callers.
     fn try_skewness(&self) -> Result<f64, StatsError> {
-        unsupported_distribution_moment(
-            self.skewness(),
-            "skewness",
-            std::any::type_name::<Self>(),
-        )
+        unsupported_distribution_moment(self.skewness(), "skewness", std::any::type_name::<Self>())
     }
     /// Excess kurtosis. Default returns NaN.
     fn kurtosis(&self) -> f64 {
@@ -2999,11 +2974,7 @@ pub trait DiscreteDistribution {
     /// Fallible excess-kurtosis accessor. Inherited NaN defaults become
     /// a typed unsupported-operation error for generic callers.
     fn try_kurtosis(&self) -> Result<f64, StatsError> {
-        unsupported_distribution_moment(
-            self.kurtosis(),
-            "kurtosis",
-            std::any::type_name::<Self>(),
-        )
+        unsupported_distribution_moment(self.kurtosis(), "kurtosis", std::any::type_name::<Self>())
     }
     /// Mode (most likely value). Default returns NaN.
     fn mode(&self) -> f64 {
@@ -20197,13 +20168,20 @@ mod tests {
         let ledger = super::sync_audit_ledger();
 
         // Success path — no emission.
-        let _ = Normal::try_fit_with_audit(&[1.0, 2.0, 3.0], &ledger)
-            .expect("clean data must fit");
-        assert_eq!(ledger.lock().unwrap().len(), 0, "successful fit must not emit");
+        let _ = Normal::try_fit_with_audit(&[1.0, 2.0, 3.0], &ledger).expect("clean data must fit");
+        assert_eq!(
+            ledger.lock().unwrap().len(),
+            0,
+            "successful fit must not emit"
+        );
 
         // Empty data — exactly one emission.
         let _ = Normal::try_fit_with_audit(&[], &ledger).expect_err("empty must error");
-        assert_eq!(ledger.lock().unwrap().len(), 1, "InsufficientData must emit once");
+        assert_eq!(
+            ledger.lock().unwrap().len(),
+            1,
+            "InsufficientData must emit once"
+        );
 
         // NaN data — another emission.
         let _ =
@@ -27903,7 +27881,12 @@ mod tests {
         let default_result = hdquantiles_sd(&data, &[0.25, 0.5, 0.75]);
         assert_close(default_result[0], 1.0951965400145034, 1e-9, "default q25");
         assert_close(default_result[1], 1.2465893235211445, 1e-9, "default q50");
-        assert_close(default_result[2], 1.095_196_540_014_504, 1e-9, "default q75");
+        assert_close(
+            default_result[2],
+            1.095_196_540_014_504,
+            1e-9,
+            "default q75",
+        );
     }
 
     #[test]

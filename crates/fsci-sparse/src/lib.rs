@@ -6,7 +6,9 @@ pub mod formats;
 pub mod linalg;
 pub mod ops;
 
-pub use audit::{SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger};
+pub use audit::{
+    SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger,
+};
 
 pub use construct::{
     HstackOutput, block_diag, bmat, diags, eye, hstack, hstack_with_format, kron, random, vstack,

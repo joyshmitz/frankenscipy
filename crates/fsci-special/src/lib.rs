@@ -13,6 +13,9 @@ pub mod orthopoly;
 pub mod types;
 
 pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
+pub use audit::{
+    SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger,
+};
 pub use bessel::{
     BESSEL_DISPATCH_PLAN, h1vp, h2vp, hankel1, hankel2, i0, i0_scalar, i1, i1_scalar, iv, ivp, j0,
     j1, jn, jv, jvp, kv, kvp, spherical_in, spherical_jn, spherical_kn, spherical_yn,
@@ -211,7 +214,6 @@ pub use elliptic::{
 pub use error::{
     ERROR_DISPATCH_PLAN, erf, erf_scalar, erfc, erfc_scalar, erfcinv, erfinv, erfinv_scalar,
 };
-pub use audit::{SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger};
 pub use gamma::{
     GAMMA_DISPATCH_PLAN, chdtr, chdtrc, chdtri, chdtriv, comb, digamma, factorial, factorial2,
     gamma, gamma_with_audit, gammainc, gammainc_scalar, gammaincc, gammaincc_scalar, gammaln,

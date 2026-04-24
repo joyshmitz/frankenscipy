@@ -158,8 +158,7 @@ pub const MAGNETIC_FLUX_QUANTUM: f64 = 2.067_833_848e-15;
 ///
 /// Derived as `2 * ELEMENTARY_CHARGE^2 / PLANCK` so precision tracks the
 /// SI-exact inputs. Per frankenscipy-h0su.
-pub const CONDUCTANCE_QUANTUM: f64 =
-    2.0 * ELEMENTARY_CHARGE * ELEMENTARY_CHARGE / PLANCK;
+pub const CONDUCTANCE_QUANTUM: f64 = 2.0 * ELEMENTARY_CHARGE * ELEMENTARY_CHARGE / PLANCK;
 
 /// Josephson constant K_J = 2e/h [Hz/V]
 pub const JOSEPHSON: f64 = 4.835_978_484e14;

@@ -3129,7 +3129,9 @@ impl Rotation {
     /// Create the identity rotation.
     #[must_use]
     pub fn identity() -> Self {
-        Self { quat: [0.0, 0.0, 0.0, 1.0] }
+        Self {
+            quat: [0.0, 0.0, 0.0, 1.0],
+        }
     }
 
     /// Create a rotation from a unit quaternion `[x, y, z, w]`.
@@ -3219,7 +3221,11 @@ impl Rotation {
         let axes: Vec<char> = seq.to_lowercase().chars().collect();
 
         let mut result = Self::identity();
-        let order: Vec<usize> = if intrinsic { vec![0, 1, 2] } else { vec![2, 1, 0] };
+        let order: Vec<usize> = if intrinsic {
+            vec![0, 1, 2]
+        } else {
+            vec![2, 1, 0]
+        };
 
         for &i in &order {
             let idx = if intrinsic { i } else { 2 - i };
@@ -3285,7 +3291,11 @@ impl Rotation {
         }
 
         let angle = 2.0 * sin_half.atan2(w.abs());
-        let scale = if w < 0.0 { -angle / sin_half } else { angle / sin_half };
+        let scale = if w < 0.0 {
+            -angle / sin_half
+        } else {
+            angle / sin_half
+        };
 
         [x * scale, y * scale, z * scale]
     }
@@ -3329,7 +3339,11 @@ impl Rotation {
 
     fn euler_symmetric(m: &[[f64; 3]; 3], i: usize, j: usize) -> (f64, f64, f64) {
         let k = 3 - i - j;
-        let sign = if (j as i32 - i as i32 + 3) % 3 == 1 { 1.0 } else { -1.0 };
+        let sign = if (j as i32 - i as i32 + 3) % 3 == 1 {
+            1.0
+        } else {
+            -1.0
+        };
 
         let b = m[i][i].clamp(-1.0, 1.0).acos();
         let (a, c) = if b.sin().abs() < 1e-10 {
@@ -3345,7 +3359,11 @@ impl Rotation {
     }
 
     fn euler_asymmetric(m: &[[f64; 3]; 3], i: usize, j: usize, k: usize) -> (f64, f64, f64) {
-        let sign = if (j as i32 - i as i32 + 3) % 3 == 1 { 1.0 } else { -1.0 };
+        let sign = if (j as i32 - i as i32 + 3) % 3 == 1 {
+            1.0
+        } else {
+            -1.0
+        };
 
         let b = (sign * m[i][k]).clamp(-1.0, 1.0).asin();
         let (a, c) = if b.cos().abs() < 1e-10 {
@@ -3376,7 +3394,9 @@ impl Rotation {
     #[must_use]
     pub fn inv(&self) -> Self {
         let [x, y, z, w] = self.quat;
-        Self { quat: [-x, -y, -z, w] }
+        Self {
+            quat: [-x, -y, -z, w],
+        }
     }
 
     /// Compose this rotation with another (self * other).
@@ -3506,7 +3526,9 @@ impl Rotation {
                     new_vec[i] += sum[i][j] * eigenvec[j];
                 }
             }
-            let norm = (new_vec[0].powi(2) + new_vec[1].powi(2) + new_vec[2].powi(2) + new_vec[3].powi(2)).sqrt();
+            let norm =
+                (new_vec[0].powi(2) + new_vec[1].powi(2) + new_vec[2].powi(2) + new_vec[3].powi(2))
+                    .sqrt();
             if norm > 1e-15 {
                 for v in &mut new_vec {
                     *v /= norm;

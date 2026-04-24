@@ -225,7 +225,11 @@ where
             detail: "integration bounds must be finite".to_string(),
         });
     }
-    if options.epsabs.is_nan() || options.epsrel.is_nan() || options.epsabs < 0.0 || options.epsrel < 0.0 {
+    if options.epsabs.is_nan()
+        || options.epsrel.is_nan()
+        || options.epsabs < 0.0
+        || options.epsrel < 0.0
+    {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
             detail: "tolerances must be non-negative".to_string(),
         });
@@ -279,7 +283,11 @@ where
             detail: "integration bounds must be finite".to_string(),
         });
     }
-    if options.epsabs.is_nan() || options.epsrel.is_nan() || options.epsabs < 0.0 || options.epsrel < 0.0 {
+    if options.epsabs.is_nan()
+        || options.epsrel.is_nan()
+        || options.epsabs < 0.0
+        || options.epsrel < 0.0
+    {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
             detail: "tolerances must be non-negative".to_string(),
         });
