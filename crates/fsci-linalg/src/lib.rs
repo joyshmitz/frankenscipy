@@ -9299,7 +9299,7 @@ mod tests {
         match &entry.action {
             AuditAction::ModeDecision { .. } => {}
             other => {
-                assert!(false, "expected ModeDecision, got {other:?}");
+                unreachable!("expected ModeDecision, got {other:?}");
             }
         }
         assert!(
@@ -9327,7 +9327,7 @@ mod tests {
                 assert!(reason.contains("IncompatibleMetadata"));
                 assert!(reason.contains("metadata=1.000"));
             }
-            other => assert!(false, "expected policy rejection, got {other:?}"),
+            other => unreachable!("expected policy rejection, got {other:?}"),
         }
     }
 
@@ -9353,7 +9353,7 @@ mod tests {
             Err(LinalgError::PolicyRejected { reason }) => {
                 assert!(reason.contains("IncompatibleMetadata"));
             }
-            other => assert!(false, "expected policy rejection, got {other:?}"),
+            other => unreachable!("expected policy rejection, got {other:?}"),
         }
 
         let ledger = lock_audit_ledger(&audit_ledger);
@@ -9363,7 +9363,7 @@ mod tests {
             AuditAction::FailClosed { reason } => {
                 assert_eq!(reason, "policy_rejected");
             }
-            other => assert!(false, "expected FailClosed, got {other:?}"),
+            other => unreachable!("expected FailClosed, got {other:?}"),
         }
         assert!(entry.outcome.contains("policy rejected solve"));
     }
@@ -9399,7 +9399,7 @@ mod tests {
                 );
             }
             other => {
-                assert!(false, "expected FailClosed, got {other:?}");
+                unreachable!("expected FailClosed, got {other:?}");
             }
         }
     }
@@ -9465,7 +9465,7 @@ mod tests {
                 assert!(reason.contains("non_square"));
             }
             other => {
-                assert!(false, "expected FailClosed for non_square, got {other:?}");
+                unreachable!("expected FailClosed for non_square, got {other:?}");
             }
         }
     }
@@ -9495,10 +9495,7 @@ mod tests {
                 assert!(reason.contains("incompatible"));
             }
             other => {
-                assert!(
-                    false,
-                    "expected FailClosed for incompatible_shapes, got {other:?}"
-                );
+                unreachable!("expected FailClosed for incompatible_shapes, got {other:?}");
             }
         }
     }
@@ -9508,11 +9505,8 @@ mod tests {
         let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
         let audit_ledger = sync_audit_ledger();
 
-        let result = det_with_audit(&a, RuntimeMode::Strict, true, &audit_ledger);
-        let Ok(det) = result else {
-            assert!(false, "det should succeed");
-            return;
-        };
+        let det = det_with_audit(&a, RuntimeMode::Strict, true, &audit_ledger)
+            .expect("det should succeed");
         assert_eq!(det, -2.0);
 
         let ledger = lock_audit_ledger(&audit_ledger);
@@ -9521,7 +9515,7 @@ mod tests {
         match &entry.action {
             AuditAction::ModeDecision { mode } => assert_eq!(*mode, RuntimeMode::Strict),
             other => {
-                assert!(false, "expected ModeDecision, got {other:?}");
+                unreachable!("expected ModeDecision, got {other:?}");
             }
         }
         assert!(entry.outcome.contains("det"));
@@ -9543,7 +9537,7 @@ mod tests {
                 assert!(reason.contains("non_finite"));
             }
             other => {
-                assert!(false, "expected FailClosed, got {other:?}");
+                unreachable!("expected FailClosed, got {other:?}");
             }
         }
         assert!(entry.outcome.contains("det rejected"));
