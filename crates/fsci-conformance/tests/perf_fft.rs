@@ -3,9 +3,10 @@
 //! Produces structured JSON artifacts at:
 //!   fixtures/artifacts/P2C-005/perf/
 //!
-//! Covers fft, ifft, rfft, irfft, fft2 at sizes [16, 64, 256, 1024].
+//! Covers fft, ifft, rfft, irfft, fft2, and FFT polynomial multiplication at
+//! sizes [16, 64, 256, 1024].
 
-use fsci_fft::{FftOptions, fft, fft2, ifft, irfft, rfft};
+use fsci_fft::{FftOptions, fft, fft2, ifft, irfft, polynomial_multiply_fft, rfft};
 use serde::Serialize;
 use std::time::Instant;
 
@@ -89,6 +90,15 @@ fn make_real_input(n: usize) -> Vec<f64> {
         .collect()
 }
 
+fn make_polynomial_input(n: usize) -> Vec<f64> {
+    (0..n)
+        .map(|i| {
+            let t = i as f64 / n as f64;
+            (3.0 * t).sin() - 0.5 * (5.0 * t).cos()
+        })
+        .collect()
+}
+
 fn default_opts() -> FftOptions {
     FftOptions::default()
 }
@@ -128,6 +138,16 @@ fn chrono_lite_now() -> String {
 
 fn complex_abs(c: Complex64) -> f64 {
     (c.0 * c.0 + c.1 * c.1).sqrt()
+}
+
+fn direct_polynomial_multiply(lhs: &[f64], rhs: &[f64]) -> Vec<f64> {
+    let mut output = vec![0.0; lhs.len() + rhs.len() - 1];
+    for (i, &left) in lhs.iter().enumerate() {
+        for (j, &right) in rhs.iter().enumerate() {
+            output[i + j] += left * right;
+        }
+    }
+    output
 }
 
 // ── Main test ──────────────────────────────────────────────────────────────────
@@ -240,6 +260,27 @@ fn perf_p2c005_full_profile() {
         });
     }
 
+    // polynomial_multiply_fft
+    for &n in SIZES {
+        let lhs = make_polynomial_input(n);
+        let rhs = make_polynomial_input(n);
+        let timings = time_operation(|| {
+            let _ = polynomial_multiply_fft(&lhs, &rhs, &opts).expect("polynomial_multiply_fft");
+        });
+        let (median, p95, min_v, max_v, mean) = compute_stats(&timings);
+        benchmarks.push(OperationBenchmark {
+            operation: "polynomial_multiply_fft".into(),
+            size_desc: format!("degree<{n} x degree<{n}"),
+            n,
+            iterations: BENCH_ITERS,
+            median_ns: median,
+            p95_ns: p95,
+            min_ns: min_v,
+            max_ns: max_v,
+            mean_ns: mean,
+        });
+    }
+
     // ── Hotspot ranking ────────────────────────────────────────────────────────
     // Rank at n=1024
     let mut largest: Vec<_> = benchmarks.iter().filter(|b| b.n == 1024).collect();
@@ -275,6 +316,12 @@ fn perf_p2c005_full_profile() {
             size: "32x32".into(),
             estimated_input_bytes: 32 * 32 * 16,
             notes: "Input: 1024 complex64 (16KB). Row + column transforms, two allocations.".into(),
+        },
+        MemoryNote {
+            operation: "polynomial_multiply_fft".into(),
+            size: "degree<1024 x degree<1024".into(),
+            estimated_input_bytes: 1024 * 8 * 2,
+            notes: "Two real coefficient buffers; FFT path pads to next power-of-two product length and compares against direct O(n^2) oracle.".into(),
         },
     ];
 
@@ -338,6 +385,30 @@ fn perf_p2c005_full_profile() {
             operation: "parseval_energy".into(),
             passes: rel_err < 1e-10,
             note: format!("rel_err={rel_err:.2e}"),
+        });
+    }
+
+    // FFT polynomial multiplication equals direct coefficient convolution.
+    {
+        let lhs = make_polynomial_input(64);
+        let rhs = make_polynomial_input(64);
+        let fast = polynomial_multiply_fft(&lhs, &rhs, &opts).expect("polynomial_multiply_fft");
+        let direct = direct_polynomial_multiply(&lhs, &rhs);
+        let max_err: f64 =
+            fast.iter()
+                .zip(&direct)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f64, |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                });
+        iso_details.push(IsomorphismDetail {
+            operation: "polynomial_multiply_fft_direct_convolution".into(),
+            passes: max_err < 1e-9,
+            note: format!("max_err={max_err:.2e}"),
         });
     }
 
