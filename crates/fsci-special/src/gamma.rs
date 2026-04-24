@@ -130,6 +130,30 @@ pub fn gamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     gamma_dispatch("gamma", z, mode)
 }
 
+/// Audit-emitting variant of [`gamma`]. In Hardened mode, a pole/
+/// non-finite/domain rejection records an `AuditAction::FailClosed`
+/// event on the provided ledger before returning the error. In Strict
+/// mode the ledger is left untouched. See br-egba-2.
+pub fn gamma_with_audit(
+    z: &SpecialTensor,
+    mode: RuntimeMode,
+    ledger: &crate::audit::SyncSharedAuditLedger,
+) -> SpecialResult {
+    let result = gamma_dispatch("gamma", z, mode);
+    if mode == RuntimeMode::Hardened
+        && let Err(err) = &result
+    {
+        let reason = format!("gamma::{:?}", err.kind);
+        crate::audit::record_fail_closed(
+            ledger,
+            err.detail.as_bytes(),
+            &reason,
+            "rejected",
+        );
+    }
+    result
+}
+
 pub fn gammaln(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     gammaln_dispatch("gammaln", x, mode)
 }
@@ -2405,6 +2429,23 @@ mod tests {
             SpecialTensor::RealScalar(value) => Ok(value),
             other => Err(format!("expected real scalar, got {other:?}")),
         }
+    }
+
+    #[test]
+    fn gamma_with_audit_emits_failclosed_on_hardened_pole() {
+        // br-egba-2: gamma_with_audit records AuditAction::FailClosed
+        // when Hardened mode rejects a pole input. Strict mode does
+        // not emit.
+        let ledger = crate::audit::sync_audit_ledger();
+        // Strict path: returns Ok (NaN), no emission.
+        let _ = gamma_with_audit(&scalar(-2.0), RuntimeMode::Strict, &ledger);
+        assert_eq!(ledger.lock().unwrap().len(), 0, "strict must not emit");
+
+        // Hardened pole: must emit exactly one FailClosed event.
+        let err = gamma_with_audit(&scalar(-2.0), RuntimeMode::Hardened, &ledger)
+            .expect_err("hardened rejects pole");
+        assert_eq!(err.kind, SpecialErrorKind::PoleInput);
+        assert_eq!(ledger.lock().unwrap().len(), 1, "hardened pole must emit once");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod airy;
+pub mod audit;
 pub mod bessel;
 pub mod beta;
 pub mod convenience;
@@ -210,11 +211,12 @@ pub use elliptic::{
 pub use error::{
     ERROR_DISPATCH_PLAN, erf, erf_scalar, erfc, erfc_scalar, erfcinv, erfinv, erfinv_scalar,
 };
+pub use audit::{SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger};
 pub use gamma::{
     GAMMA_DISPATCH_PLAN, chdtr, chdtrc, chdtri, chdtriv, comb, digamma, factorial, factorial2,
-    gamma, gammainc, gammainc_scalar, gammaincc, gammaincc_scalar, gammaln, gammaln_scalar, gdtr,
-    gdtrc, gdtria, gdtrib, gdtrix, multigammaln, pdtr, pdtrc, pdtri, pdtrik, perm, polygamma,
-    rgamma, zeta, zetac,
+    gamma, gamma_with_audit, gammainc, gammainc_scalar, gammaincc, gammaincc_scalar, gammaln,
+    gammaln_scalar, gdtr, gdtrc, gdtria, gdtrib, gdtrix, multigammaln, pdtr, pdtrc, pdtri, pdtrik,
+    perm, polygamma, rgamma, zeta, zetac,
 };
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp0f1, hyp0f1_scalar, hyp1f1, hyp2f1};
 pub use orthopoly::{
