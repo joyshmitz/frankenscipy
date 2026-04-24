@@ -83,7 +83,12 @@ pub enum AuditAction {
     ModeDecision { mode: RuntimeMode },
     BoundedRecovery { recovery_action: String },
     FailClosed { reason: String },
-    PolicyOverride { override_action: String },
+    // br-egba-1: `PolicyOverride { override_action: String }` was
+    // defined here but never constructed by any crate in the workspace
+    // (grep confirms zero call sites outside the enum definition).
+    // Removed as dead code. If policy-override semantics are added
+    // back, re-introduce the variant alongside at least one emission
+    // site so it remains non-dead.
 }
 
 /// Single audit event entry with input fingerprint and outcome.
