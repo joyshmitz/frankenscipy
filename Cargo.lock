@@ -781,6 +781,7 @@ dependencies = [
 name = "fsci-spatial"
 version = "0.1.0"
 dependencies = [
+ "fsci-linalg",
  "fsci-runtime",
  "fsci-sparse",
  "proptest",

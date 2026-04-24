@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 
+use fsci_linalg::{DecompOptions, svd};
 use fsci_sparse::{CooMatrix, DokMatrix, Shape2D};
 
 /// Error raised by Qhull-backed spatial operations.
@@ -2455,7 +2456,7 @@ pub fn procrustes(
     }
 
     // Find optimal rotation: minimize ||mtx1 - mtx2 R||²
-    // Solution: R = V U^T where mtx2^T mtx1 = U S V^T (SVD)
+    // Solution: R = U V^T where mtx2^T mtx1 = U S V^T (SVD)
     // Compute M = mtx2^T mtx1 (d × d matrix)
     let mut m = vec![vec![0.0; d]; d];
     for i in 0..d {
@@ -2466,79 +2467,7 @@ pub fn procrustes(
         }
     }
 
-    // Compute R = optimal rotation via M^T M eigendecomposition
-    // For small d (typically 2 or 3), use iterative power method on M^T M
-    // R = V U^T where M = U S V^T
-    // Simpler approach: R = M (M^T M)^{-1/2}
-    // Even simpler for Procrustes: use polar decomposition M = R H where R orthogonal
-    // R = M (M^T M)^{-1/2}
-    let mut mtm = vec![vec![0.0; d]; d];
-    for i in 0..d {
-        for j in 0..d {
-            for row_k in m.iter().take(d) {
-                mtm[i][j] += row_k[i] * row_k[j]; // M^T M
-            }
-        }
-    }
-
-    // R = M * (M^T M)^{-1/2} via Newton-Schulz iteration
-    // (NOT Denman-Beavers despite the prior comment — per frankenscipy-l15l
-    // this implements Y_{k+1} = 0.5 * Y_k * (3I - B Y_k^2) with Y_0 = I,
-    // which converges to B^{-1/2} only when eigenvalues of B = M^T M lie
-    // in (0, 2). For rank-deficient or near-rank-deficient M the
-    // iteration DIVERGES; the magnitude of Y grows unboundedly.
-    let mut y = vec![vec![0.0; d]; d];
-    for (i, row) in y.iter_mut().enumerate().take(d) {
-        row[i] = 1.0;
-    }
-
-    // Divergence detector: track ||Y||_∞ across iterations. If it grows
-    // past a conservative cap, bail out rather than silently returning
-    // garbage. Per frankenscipy-l15l: B=diag(1,1,0) empirically reaches
-    // y_max ≈ 1.9e5 by iter 30; we cap well below that so caller gets
-    // an explicit signal.
-    const NEWTON_SCHULZ_BAIL_MAG: f64 = 1.0e3;
-    let mut converged = false;
-    let mut diverged = false;
-    for _ in 0..30 {
-        let y2 = mat_mul(&y, &y, d);
-        let by2 = mat_mul(&mtm, &y2, d);
-        let mut rhs = vec![vec![0.0; d]; d];
-        for i in 0..d {
-            for j in 0..d {
-                rhs[i][j] = if i == j { 3.0 } else { 0.0 } - by2[i][j];
-            }
-        }
-        let y_new = mat_mul(&y, &rhs, d);
-        let mut max_diff = 0.0_f64;
-        let mut max_magnitude = 0.0_f64;
-        for i in 0..d {
-            for j in 0..d {
-                let new_val = y_new[i][j] * 0.5;
-                max_diff = max_diff.max((new_val - y[i][j]).abs());
-                max_magnitude = max_magnitude.max(new_val.abs());
-                y[i][j] = new_val;
-            }
-        }
-        if max_magnitude > NEWTON_SCHULZ_BAIL_MAG || !max_magnitude.is_finite() {
-            diverged = true;
-            break;
-        }
-        if max_diff < 1e-14 {
-            converged = true;
-            break;
-        }
-    }
-    if diverged {
-        return Err(SpatialError::InvalidArgument(
-            "procrustes: matrix-inverse-sqrt iteration diverged \
-             (input is rank-deficient or near-rank-deficient; scipy uses \
-             SVD which handles this case correctly, see frankenscipy-l15l)"
-                .to_string(),
-        ));
-    }
-    let _ = converged;
-    let rotation = mat_mul(&m, &y, d);
+    let rotation = orthogonal_procrustes_rotation(&m)?;
 
     // Apply rotation: mtx2_aligned = mtx2 * R
     let mut aligned = vec![vec![0.0; d]; n];
@@ -2590,16 +2519,27 @@ fn frobenius_norm(data: &[Vec<f64>]) -> f64 {
         .sqrt()
 }
 
-fn mat_mul(a: &[Vec<f64>], b: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
-    let mut c = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            for k in 0..n {
-                c[i][j] += a[i][k] * b[k][j];
-            }
+fn orthogonal_procrustes_rotation(m: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, SpatialError> {
+    let d = m.len();
+    if d == 0 {
+        return Ok(Vec::new());
+    }
+
+    let svd_result = svd(m, DecompOptions::default())
+        .map_err(|err| SpatialError::InvalidArgument(format!("procrustes SVD failed: {err}")))?;
+
+    // For M = mtx2^T @ mtx1 and M = U S V^T, the minimizer of
+    // ||mtx1 - mtx2 R||_F is the polar factor R = U V^T. This is the
+    // SciPy-compatible path and remains well-defined for rank-deficient M.
+    let mut rotation = vec![vec![0.0; d]; d];
+    for (i, row) in rotation.iter_mut().enumerate() {
+        for (j, value) in row.iter_mut().enumerate() {
+            *value = (0..d)
+                .map(|k| svd_result.u[i][k] * svd_result.vt[k][j])
+                .sum();
         }
     }
-    c
+    Ok(rotation)
 }
 
 fn scale_matrix(data: &mut [Vec<f64>], factor: f64) {
@@ -4765,30 +4705,18 @@ mod tests {
     }
 
     #[test]
-    fn procrustes_rank_deficient_bails_out() {
-        // Per frankenscipy-l15l: procrustes' Newton-Schulz iteration
-        // diverges for rank-deficient M = mtx2^T @ mtx1. Construct
-        // data1 and data2 so that the cross-product is singular
-        // (data2 is orthogonal to data1 after centering + normalizing).
-        // The solver should now return Err instead of silently
-        // returning garbage (y_max ≈ 1.9e5 previously).
+    fn procrustes_rank_deficient_uses_svd_alignment() {
+        // Per frankenscipy-l15l: M = mtx2^T @ mtx1 is rank-deficient here.
+        // The old Newton-Schulz inverse-square-root path diverged or had to
+        // return Err; the SVD path should align the one-dimensional subspaces.
         let data1 = vec![vec![1.0, 0.0], vec![-1.0, 0.0]]; // along x-axis
         let data2 = vec![vec![0.0, 1.0], vec![0.0, -1.0]]; // along y-axis
-        let result = procrustes(&data1, &data2);
-        // Either we converge to a sensible answer OR we bail out with
-        // Err(InvalidArgument). What we must NOT do is silently return
-        // Ok with a nonsensical disparity.
-        match result {
-            Ok(res) => assert!(
-                res.disparity.is_finite() && res.disparity < 1e3,
-                "orthogonal inputs should give finite small disparity or bail"
-            ),
-            Err(SpatialError::InvalidArgument(msg)) => assert!(
-                msg.contains("diverged") || msg.contains("rank-deficient"),
-                "unexpected error text: {msg}"
-            ),
-            Err(other) => panic!("unexpected error kind: {other:?}"),
-        }
+        let result = procrustes(&data1, &data2).expect("rank-deficient procrustes");
+        assert!(
+            result.disparity.is_finite() && result.disparity < 1e-10,
+            "rank-deficient inputs should align via SVD: {}",
+            result.disparity
+        );
     }
 
     // ── Geometric SLERP tests ────────────────────────────────────────
