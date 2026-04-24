@@ -876,21 +876,98 @@ fn sq_dist(a: &[f64], b: &[f64]) -> f64 {
         .sum()
 }
 
+fn dense_labels(labels: &[usize]) -> (Vec<usize>, usize) {
+    let mut mapping = std::collections::HashMap::new();
+    let mut next = 0usize;
+    let mut dense = Vec::with_capacity(labels.len());
+    for &label in labels {
+        let mapped = *mapping.entry(label).or_insert_with(|| {
+            let v = next;
+            next += 1;
+            v
+        });
+        dense.push(mapped);
+    }
+    (dense, next)
+}
+
+fn validate_cluster_metric_data(
+    data: &[Vec<f64>],
+    labels: &[usize],
+    context: &str,
+) -> Result<(Vec<usize>, usize), ClusterError> {
+    let n = data.len();
+    if labels.len() != n {
+        return Err(ClusterError::InvalidArgument(format!(
+            "{context} labels length {} must match sample count {n}",
+            labels.len()
+        )));
+    }
+    if n < 2 {
+        return Err(ClusterError::InvalidArgument(format!(
+            "{context} requires at least 2 samples"
+        )));
+    }
+    validate_feature_dimensions(data, context)?;
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(format!(
+            "{context} input must be finite"
+        )));
+    }
+    let (dense, k) = dense_labels(labels);
+    if k < 2 || k >= n {
+        return Err(ClusterError::InvalidArgument(format!(
+            "{context} requires 2..n_samples-1 labels; got {k} labels for {n} samples"
+        )));
+    }
+    Ok((dense, k))
+}
+
+fn validate_paired_labels(
+    labels_true: &[usize],
+    labels_pred: &[usize],
+    context: &str,
+) -> Result<usize, ClusterError> {
+    let n = labels_true.len();
+    if n != labels_pred.len() {
+        return Err(ClusterError::InvalidArgument(format!(
+            "{context} label lengths differ: true={n}, pred={}",
+            labels_pred.len()
+        )));
+    }
+    Ok(n)
+}
+
+fn contingency_table(
+    labels_true: &[usize],
+    labels_pred: &[usize],
+    context: &str,
+) -> Result<Vec<Vec<usize>>, ClusterError> {
+    let n = validate_paired_labels(labels_true, labels_pred, context)?;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let (true_dense, k1) = dense_labels(labels_true);
+    let (pred_dense, k2) = dense_labels(labels_pred);
+    let mut contingency = vec![vec![0usize; k2]; k1];
+    for i in 0..n {
+        contingency[true_dense[i]][pred_dense[i]] += 1;
+    }
+    Ok(contingency)
+}
+
+fn comb2_usize(x: usize) -> f64 {
+    let xf = x as f64;
+    xf * (xf - 1.0) / 2.0
+}
+
 /// Silhouette score: measure of cluster quality.
 ///
 /// Returns mean silhouette coefficient over all samples.
 /// Matches `sklearn.metrics.silhouette_score`.
-pub fn silhouette_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
+pub fn silhouette_score(data: &[Vec<f64>], labels: &[usize]) -> Result<f64, ClusterError> {
     let n = data.len();
-    if n < 2 || labels.len() != n {
-        return 0.0;
-    }
-
-    let k = labels.iter().cloned().max().unwrap_or(0) + 1;
-    // Silhouette is undefined for single cluster; return 0
-    if k < 2 {
-        return 0.0;
-    }
+    let (labels, k) = validate_cluster_metric_data(data, labels, "silhouette_score")?;
     let mut total = 0.0;
 
     for i in 0..n {
@@ -938,22 +1015,16 @@ pub fn silhouette_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
         total += s;
     }
 
-    total / n as f64
+    Ok(total / n as f64)
 }
 
 /// Calinski-Harabasz index: ratio of between-cluster to within-cluster dispersion.
 ///
 /// Higher is better. Matches `sklearn.metrics.calinski_harabasz_score`.
-pub fn calinski_harabasz_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
+pub fn calinski_harabasz_score(data: &[Vec<f64>], labels: &[usize]) -> Result<f64, ClusterError> {
     let n = data.len();
-    if n < 2 || labels.len() != n {
-        return 0.0;
-    }
+    let (labels, k) = validate_cluster_metric_data(data, labels, "calinski_harabasz_score")?;
     let d = data[0].len();
-    let k = labels.iter().cloned().max().unwrap_or(0) + 1;
-    if k < 2 || n == k {
-        return 0.0;
-    }
 
     // Global centroid
     let mut global_centroid = vec![0.0; d];
@@ -997,25 +1068,18 @@ pub fn calinski_harabasz_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
     }
 
     if wg == 0.0 {
-        return f64::INFINITY;
+        return Ok(f64::INFINITY);
     }
 
-    (bg / (k - 1) as f64) / (wg / (n - k) as f64)
+    Ok((bg / (k - 1) as f64) / (wg / (n - k) as f64))
 }
 
 /// Davies-Bouldin index: average similarity of clusters.
 ///
 /// Lower is better. Matches `sklearn.metrics.davies_bouldin_score`.
-pub fn davies_bouldin_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
-    let n = data.len();
-    if n < 2 || labels.len() != n {
-        return 0.0;
-    }
+pub fn davies_bouldin_score(data: &[Vec<f64>], labels: &[usize]) -> Result<f64, ClusterError> {
+    let (labels, k) = validate_cluster_metric_data(data, labels, "davies_bouldin_score")?;
     let d = data[0].len();
-    let k = labels.iter().cloned().max().unwrap_or(0) + 1;
-    if k < 2 {
-        return 0.0;
-    }
 
     // Cluster centroids
     let mut centroids = vec![vec![0.0; d]; k];
@@ -1061,93 +1125,68 @@ pub fn davies_bouldin_score(data: &[Vec<f64>], labels: &[usize]) -> f64 {
         db += max_r;
     }
 
-    db / k as f64
+    Ok(db / k as f64)
 }
 
 /// Adjusted Rand Index: similarity between two clusterings, adjusted for chance.
 ///
 /// Matches `sklearn.metrics.adjusted_rand_score`.
-pub fn adjusted_rand_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
-    let n = labels_true.len();
-    if n != labels_pred.len() || n < 2 {
-        return 0.0;
+pub fn adjusted_rand_score(
+    labels_true: &[usize],
+    labels_pred: &[usize],
+) -> Result<f64, ClusterError> {
+    let n = validate_paired_labels(labels_true, labels_pred, "adjusted_rand_score")?;
+    if n <= 1 {
+        return Ok(1.0);
     }
 
-    let k1 = labels_true.iter().cloned().max().unwrap_or(0) + 1;
-    let k2 = labels_pred.iter().cloned().max().unwrap_or(0) + 1;
-
-    // Per frankenscipy-n240: sanity bound on label magnitude to prevent
-    // OOM. max(labels) + 1 is used as the contingency-table dimension;
-    // an adversarial input like labels_pred = [0, 1_000_000_000] would
-    // otherwise allocate a 1e9 * k1 * 8 byte table. Cap at 10 * n so
-    // naturally-sparse but legit label sets still work.
-    let max_labels = n.saturating_mul(10).max(16);
-    if k1 > max_labels || k2 > max_labels {
-        return 0.0; // Return 0.0 (as API promises f64) rather than OOM
-    }
-
-    // Contingency table
-    let mut contingency = vec![vec![0i64; k2]; k1];
-    for i in 0..n {
-        contingency[labels_true[i]][labels_pred[i]] += 1;
-    }
+    let contingency = contingency_table(labels_true, labels_pred, "adjusted_rand_score")?;
+    let k2 = contingency.first().map_or(0, Vec::len);
 
     // Row and column sums
-    let row_sums: Vec<i64> = contingency.iter().map(|r| r.iter().sum()).collect();
-    let col_sums: Vec<i64> = (0..k2)
+    let row_sums: Vec<usize> = contingency.iter().map(|r| r.iter().sum()).collect();
+    let col_sums: Vec<usize> = (0..k2)
         .map(|j| contingency.iter().map(|r| r[j]).sum())
         .collect();
 
-    // Compute index using C(n,2) counts
-    let comb2 = |x: i64| -> i64 { x * (x - 1) / 2 };
-
-    let sum_comb_nij: i64 = contingency
+    let sum_comb_nij: f64 = contingency
         .iter()
         .flat_map(|r| r.iter())
-        .map(|&v| comb2(v))
+        .map(|&v| comb2_usize(v))
         .sum();
-    let sum_comb_a: i64 = row_sums.iter().map(|&v| comb2(v)).sum();
-    let sum_comb_b: i64 = col_sums.iter().map(|&v| comb2(v)).sum();
-    let comb_n = comb2(n as i64);
+    let sum_comb_a: f64 = row_sums.iter().map(|&v| comb2_usize(v)).sum();
+    let sum_comb_b: f64 = col_sums.iter().map(|&v| comb2_usize(v)).sum();
+    let comb_n = comb2_usize(n);
 
-    let expected = sum_comb_a as f64 * sum_comb_b as f64 / comb_n as f64;
-    let max_index = (sum_comb_a + sum_comb_b) as f64 / 2.0;
+    let expected = sum_comb_a * sum_comb_b / comb_n;
+    let max_index = (sum_comb_a + sum_comb_b) / 2.0;
 
     if (max_index - expected).abs() < 1e-15 {
-        return if sum_comb_nij as f64 == expected {
+        return Ok(if (sum_comb_nij - expected).abs() < 1e-15 {
             1.0
         } else {
             0.0
-        };
+        });
     }
 
-    (sum_comb_nij as f64 - expected) / (max_index - expected)
+    Ok((sum_comb_nij - expected) / (max_index - expected))
 }
 
 /// Normalized Mutual Information between two clusterings.
 ///
 /// Matches `sklearn.metrics.normalized_mutual_info_score`.
-pub fn normalized_mutual_info(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
-    let n = labels_true.len();
-    if n != labels_pred.len() || n == 0 {
-        return 0.0;
+pub fn normalized_mutual_info(
+    labels_true: &[usize],
+    labels_pred: &[usize],
+) -> Result<f64, ClusterError> {
+    let n = validate_paired_labels(labels_true, labels_pred, "normalized_mutual_info")?;
+    if n <= 1 {
+        return Ok(1.0);
     }
-
-    let k1 = labels_true.iter().cloned().max().unwrap_or(0) + 1;
-    let k2 = labels_pred.iter().cloned().max().unwrap_or(0) + 1;
-    // Per frankenscipy-n240: label-magnitude sanity bound prevents OOM
-    // from adversarial labels like [0, 1_000_000_000].
-    let max_labels = n.saturating_mul(10).max(16);
-    if k1 > max_labels || k2 > max_labels {
-        return 0.0;
-    }
+    let contingency = contingency_table(labels_true, labels_pred, "normalized_mutual_info")?;
+    let k1 = contingency.len();
+    let k2 = contingency.first().map_or(0, Vec::len);
     let nf = n as f64;
-
-    // Contingency table
-    let mut contingency = vec![vec![0usize; k2]; k1];
-    for i in 0..n {
-        contingency[labels_true[i]][labels_pred[i]] += 1;
-    }
 
     let row_sums: Vec<usize> = contingency.iter().map(|r| r.iter().sum()).collect();
     let col_sums: Vec<usize> = (0..k2)
@@ -1186,25 +1225,24 @@ pub fn normalized_mutual_info(labels_true: &[usize], labels_pred: &[usize]) -> f
         .sum();
 
     let denom = ((h1 + h2) / 2.0).max(1e-15);
-    (mi / denom).clamp(0.0, 1.0)
+    Ok((mi / denom).clamp(0.0, 1.0))
 }
 
 /// Homogeneity score: each cluster contains only members of a single class.
 ///
 /// Matches `sklearn.metrics.homogeneity_score`.
-pub fn homogeneity_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
-    let n = labels_true.len();
-    if n != labels_pred.len() || n == 0 {
-        return 0.0;
+pub fn homogeneity_score(
+    labels_true: &[usize],
+    labels_pred: &[usize],
+) -> Result<f64, ClusterError> {
+    let n = validate_paired_labels(labels_true, labels_pred, "homogeneity_score")?;
+    if n <= 1 {
+        return Ok(1.0);
     }
+    let contingency = contingency_table(labels_true, labels_pred, "homogeneity_score")?;
+    let k1 = contingency.len();
+    let k2 = contingency.first().map_or(0, Vec::len);
     let nf = n as f64;
-    let k1 = labels_true.iter().cloned().max().unwrap_or(0) + 1;
-    let k2 = labels_pred.iter().cloned().max().unwrap_or(0) + 1;
-
-    let mut contingency = vec![vec![0usize; k2]; k1];
-    for i in 0..n {
-        contingency[labels_true[i]][labels_pred[i]] += 1;
-    }
 
     let row_sums: Vec<usize> = contingency.iter().map(|r| r.iter().sum()).collect();
     let col_sums: Vec<usize> = (0..k2)
@@ -1237,15 +1275,18 @@ pub fn homogeneity_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
         .sum();
 
     if hc < 1e-15 {
-        return 1.0;
+        return Ok(1.0);
     }
-    1.0 - hck / hc
+    Ok(1.0 - hck / hc)
 }
 
 /// Completeness score: all members of a class are assigned to the same cluster.
 ///
 /// Matches `sklearn.metrics.completeness_score`.
-pub fn completeness_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
+pub fn completeness_score(
+    labels_true: &[usize],
+    labels_pred: &[usize],
+) -> Result<f64, ClusterError> {
     // Completeness = homogeneity with args swapped
     homogeneity_score(labels_pred, labels_true)
 }
@@ -1253,22 +1294,25 @@ pub fn completeness_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
 /// V-measure: harmonic mean of homogeneity and completeness.
 ///
 /// Matches `sklearn.metrics.v_measure_score`.
-pub fn v_measure_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
-    let h = homogeneity_score(labels_true, labels_pred);
-    let c = completeness_score(labels_true, labels_pred);
+pub fn v_measure_score(labels_true: &[usize], labels_pred: &[usize]) -> Result<f64, ClusterError> {
+    let h = homogeneity_score(labels_true, labels_pred)?;
+    let c = completeness_score(labels_true, labels_pred)?;
     if h + c < 1e-15 {
-        return 0.0;
+        return Ok(0.0);
     }
-    2.0 * h * c / (h + c)
+    Ok(2.0 * h * c / (h + c))
 }
 
 /// Fowlkes-Mallows index: geometric mean of precision and recall.
 ///
 /// Matches `sklearn.metrics.fowlkes_mallows_score`.
-pub fn fowlkes_mallows_score(labels_true: &[usize], labels_pred: &[usize]) -> f64 {
-    let n = labels_true.len();
-    if n < 2 {
-        return 0.0;
+pub fn fowlkes_mallows_score(
+    labels_true: &[usize],
+    labels_pred: &[usize],
+) -> Result<f64, ClusterError> {
+    let n = validate_paired_labels(labels_true, labels_pred, "fowlkes_mallows_score")?;
+    if n <= 1 {
+        return Ok(1.0);
     }
 
     // Count pairs
@@ -1290,12 +1334,12 @@ pub fn fowlkes_mallows_score(labels_true: &[usize], labels_pred: &[usize]) -> f6
     }
 
     if tp == 0 {
-        return 0.0;
+        return Ok(0.0);
     }
 
     let precision = tp as f64 / (tp + fp) as f64;
     let recall = tp as f64 / (tp + fn_) as f64;
-    (precision * recall).sqrt()
+    Ok((precision * recall).sqrt())
 }
 
 /// Elbow method helper: compute within-cluster sum of squares for k=1..max_k.
@@ -1611,18 +1655,11 @@ fn bron_kerbosch(
 /// Compute silhouette coefficients for each sample.
 ///
 /// Matches `sklearn.metrics.silhouette_samples`.
-pub fn silhouette_samples(data: &[Vec<f64>], labels: &[usize]) -> Vec<f64> {
+pub fn silhouette_samples(data: &[Vec<f64>], labels: &[usize]) -> Result<Vec<f64>, ClusterError> {
     let n = data.len();
-    if n < 2 || labels.len() != n {
-        return vec![0.0; n];
-    }
-    let k = labels.iter().cloned().max().unwrap_or(0) + 1;
-    // Silhouette is undefined for single cluster; return all zeros
-    if k < 2 {
-        return vec![0.0; n];
-    }
+    let (labels, k) = validate_cluster_metric_data(data, labels, "silhouette_samples")?;
 
-    (0..n)
+    Ok((0..n)
         .map(|i| {
             let li = labels[i];
 
@@ -1666,7 +1703,7 @@ pub fn silhouette_samples(data: &[Vec<f64>], labels: &[usize]) -> Vec<f64> {
                 0.0
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Gap statistic: compare within-cluster dispersion to reference.
@@ -2167,7 +2204,7 @@ mod tests {
             vec![10.1, 10.0],
         ];
         let labels = vec![0, 0, 1, 1];
-        let score = silhouette_score(&data, &labels);
+        let score = silhouette_score(&data, &labels).unwrap();
         assert!(score > 0.9, "silhouette = {score}, expected > 0.9");
     }
 
@@ -2185,32 +2222,33 @@ mod tests {
     fn silhouette_handles_length_mismatch() {
         let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
         let labels = vec![0, 0]; // too short
-        let score = silhouette_score(&data, &labels);
-        assert_eq!(score, 0.0);
+        let err = silhouette_score(&data, &labels).expect_err("length mismatch should error");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 
     #[test]
     fn calinski_harabasz_handles_length_mismatch() {
         let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
         let labels = vec![0, 0]; // too short
-        let score = calinski_harabasz_score(&data, &labels);
-        assert_eq!(score, 0.0);
+        let err =
+            calinski_harabasz_score(&data, &labels).expect_err("length mismatch should error");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 
     #[test]
     fn davies_bouldin_handles_length_mismatch() {
         let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
         let labels = vec![0, 0]; // too short
-        let score = davies_bouldin_score(&data, &labels);
-        assert_eq!(score, 0.0);
+        let err = davies_bouldin_score(&data, &labels).expect_err("length mismatch should error");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 
     #[test]
     fn silhouette_samples_handles_length_mismatch() {
         let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
         let labels = vec![0, 0]; // too short
-        let samples = silhouette_samples(&data, &labels);
-        assert_eq!(samples, vec![0.0, 0.0, 0.0]);
+        let err = silhouette_samples(&data, &labels).expect_err("length mismatch should error");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 
     #[test]
@@ -2235,25 +2273,19 @@ mod tests {
     }
 
     #[test]
-    fn silhouette_score_single_cluster_returns_zero() {
-        // When all points are in one cluster, silhouette is undefined.
-        // We return 0.0 instead of NaN to match sklearn behavior for trivial cases.
+    fn silhouette_score_single_cluster_errors() {
         let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
         let labels = vec![0, 0, 0]; // all in cluster 0
-        let score = silhouette_score(&data, &labels);
-        assert!(
-            score.is_finite(),
-            "silhouette with single cluster should be finite, got {score}"
-        );
-        assert_eq!(score, 0.0);
+        let err = silhouette_score(&data, &labels).expect_err("single cluster is undefined");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 
     #[test]
-    fn silhouette_samples_single_cluster_returns_zeros() {
+    fn silhouette_samples_single_cluster_errors() {
         let data = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
         let labels = vec![0, 0, 0];
-        let samples = silhouette_samples(&data, &labels);
-        assert!(samples.iter().all(|&s| s.is_finite() && s == 0.0));
+        let err = silhouette_samples(&data, &labels).expect_err("single cluster is undefined");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 
     #[test]
@@ -2408,11 +2440,11 @@ mod tests {
     fn adjusted_rand_score_bails_on_adversarial_label_magnitude() {
         // Per frankenscipy-n240: adversarial labels like
         // [0, 1_000_000_000] previously triggered a 1e9*k*8 byte
-        // contingency-table allocation + OOM. Now bails with 0.0.
+        // contingency-table allocation + OOM. Dense label remapping keeps
+        // memory bounded by the number of unique labels.
         let labels_true = vec![0usize; 4];
         let labels_pred = vec![0, 1_000_000_000, 2, 3];
-        // Should not OOM; returns 0.0 per the label-magnitude sanity bound.
-        let score = adjusted_rand_score(&labels_true, &labels_pred);
+        let score = adjusted_rand_score(&labels_true, &labels_pred).unwrap();
         assert_eq!(score, 0.0);
     }
 
@@ -2420,7 +2452,36 @@ mod tests {
     fn normalized_mutual_info_bails_on_adversarial_label_magnitude() {
         let labels_true = vec![0usize; 4];
         let labels_pred = vec![0, 1_000_000_000, 2, 3];
-        let score = normalized_mutual_info(&labels_true, &labels_pred);
+        let score = normalized_mutual_info(&labels_true, &labels_pred).unwrap();
         assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn adjusted_rand_score_rejects_length_mismatch() {
+        let err = adjusted_rand_score(&[0, 1], &[0]).expect_err("length mismatch should error");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn adjusted_rand_score_trivial_single_sample_is_perfect() {
+        assert_eq!(adjusted_rand_score(&[7], &[99]).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn normalized_mutual_info_rejects_length_mismatch() {
+        let err = normalized_mutual_info(&[0, 1], &[0]).expect_err("length mismatch should error");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn homogeneity_rejects_length_mismatch() {
+        let err = homogeneity_score(&[0, 1], &[0]).expect_err("length mismatch should error");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn v_measure_propagates_length_mismatch() {
+        let err = v_measure_score(&[0, 1], &[0]).expect_err("length mismatch should error");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 }

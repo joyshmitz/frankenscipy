@@ -425,7 +425,7 @@ fn scenario_04_clustering_metrics() {
         "measure cluster cohesion",
         "Strict",
         || {
-            let score = silhouette_score(&data, &labels);
+            let score = silhouette_score(&data, &labels).map_err(|e| e.to_string())?;
             // Well-separated clusters should have high silhouette (> 0.5)
             if (-1.0..=1.0).contains(&score) {
                 if score > 0.3 {
@@ -445,7 +445,7 @@ fn scenario_04_clustering_metrics() {
         "variance ratio criterion",
         "Strict",
         || {
-            let score = calinski_harabasz_score(&data, &labels);
+            let score = calinski_harabasz_score(&data, &labels).map_err(|e| e.to_string())?;
             // CH score should be positive for valid clustering
             if score > 0.0 && score.is_finite() {
                 Ok(format!("calinski_harabasz={score:.4}"))
@@ -461,7 +461,7 @@ fn scenario_04_clustering_metrics() {
         "cluster similarity measure",
         "Strict",
         || {
-            let score = davies_bouldin_score(&data, &labels);
+            let score = davies_bouldin_score(&data, &labels).map_err(|e| e.to_string())?;
             // DB score should be non-negative (lower is better)
             if score >= 0.0 && score.is_finite() {
                 Ok(format!("davies_bouldin={score:.4}"))
@@ -498,7 +498,8 @@ fn scenario_05_external_validation() {
         "compare clusterings",
         "Strict",
         || {
-            let score = adjusted_rand_score(&labels_true, &labels_pred);
+            let score =
+                adjusted_rand_score(&labels_true, &labels_pred).map_err(|e| e.to_string())?;
             // ARI ranges from -1 to 1, with 1 being perfect agreement
             if (-1.0..=1.0).contains(&score) {
                 Ok(format!("adjusted_rand={score:.4}"))
@@ -514,7 +515,8 @@ fn scenario_05_external_validation() {
         "information-theoretic metric",
         "Strict",
         || {
-            let score = normalized_mutual_info(&labels_true, &labels_pred);
+            let score =
+                normalized_mutual_info(&labels_true, &labels_pred).map_err(|e| e.to_string())?;
             // NMI ranges from 0 to 1
             if (0.0..=1.0 + 1e-10).contains(&score) {
                 Ok(format!("nmi={score:.4}"))
@@ -530,9 +532,9 @@ fn scenario_05_external_validation() {
         "label assignment quality",
         "Strict",
         || {
-            let h = homogeneity_score(&labels_true, &labels_pred);
-            let c = completeness_score(&labels_true, &labels_pred);
-            let v = v_measure_score(&labels_true, &labels_pred);
+            let h = homogeneity_score(&labels_true, &labels_pred).map_err(|e| e.to_string())?;
+            let c = completeness_score(&labels_true, &labels_pred).map_err(|e| e.to_string())?;
+            let v = v_measure_score(&labels_true, &labels_pred).map_err(|e| e.to_string())?;
             // All should be in [0, 1]
             if (0.0..=1.0).contains(&h) && (0.0..=1.0).contains(&c) && (0.0..=1.0).contains(&v) {
                 // V-measure should be harmonic mean of h and c
@@ -627,7 +629,7 @@ fn scenario_07_perfect_match() {
         "self-comparison should be 1.0",
         "Strict",
         || {
-            let score = adjusted_rand_score(&labels, &labels);
+            let score = adjusted_rand_score(&labels, &labels).map_err(|e| e.to_string())?;
             if (score - 1.0).abs() < 1e-10 {
                 Ok(format!("perfect ARI={score:.4}"))
             } else {
@@ -642,7 +644,7 @@ fn scenario_07_perfect_match() {
         "self-comparison should be 1.0",
         "Strict",
         || {
-            let score = normalized_mutual_info(&labels, &labels);
+            let score = normalized_mutual_info(&labels, &labels).map_err(|e| e.to_string())?;
             if (score - 1.0).abs() < 1e-10 {
                 Ok(format!("perfect NMI={score:.4}"))
             } else {
@@ -657,7 +659,7 @@ fn scenario_07_perfect_match() {
         "self-comparison should be 1.0",
         "Strict",
         || {
-            let score = v_measure_score(&labels, &labels);
+            let score = v_measure_score(&labels, &labels).map_err(|e| e.to_string())?;
             if (score - 1.0).abs() < 1e-10 {
                 Ok(format!("perfect V={score:.4}"))
             } else {
@@ -732,9 +734,9 @@ fn scenario_09_metric_relationships() {
         "V-measure formula",
         "Strict",
         || {
-            let h = homogeneity_score(&labels_true, &labels_pred);
-            let c = completeness_score(&labels_true, &labels_pred);
-            let v = v_measure_score(&labels_true, &labels_pred);
+            let h = homogeneity_score(&labels_true, &labels_pred).map_err(|e| e.to_string())?;
+            let c = completeness_score(&labels_true, &labels_pred).map_err(|e| e.to_string())?;
+            let v = v_measure_score(&labels_true, &labels_pred).map_err(|e| e.to_string())?;
             let expected_v = if h + c > 0.0 {
                 2.0 * h * c / (h + c)
             } else {

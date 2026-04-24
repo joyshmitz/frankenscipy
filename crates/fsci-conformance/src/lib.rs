@@ -3886,7 +3886,10 @@ fn execute_silhouette_score(case: &ClusterCase) -> ClusterObserved {
         Ok(l) => l,
         Err(e) => return ClusterObserved::Error(format!("parse labels: {e}")),
     };
-    ClusterObserved::Scalar(fsci_cluster::silhouette_score(&data, &labels))
+    match fsci_cluster::silhouette_score(&data, &labels) {
+        Ok(score) => ClusterObserved::Scalar(score),
+        Err(e) => ClusterObserved::Error(format!("{e:?}")),
+    }
 }
 
 fn execute_adjusted_rand_score(case: &ClusterCase) -> ClusterObserved {
@@ -3899,10 +3902,10 @@ fn execute_adjusted_rand_score(case: &ClusterCase) -> ClusterObserved {
         Ok(l) => l,
         Err(e) => return ClusterObserved::Error(format!("parse labels_pred: {e}")),
     };
-    ClusterObserved::Scalar(fsci_cluster::adjusted_rand_score(
-        &labels_true,
-        &labels_pred,
-    ))
+    match fsci_cluster::adjusted_rand_score(&labels_true, &labels_pred) {
+        Ok(score) => ClusterObserved::Scalar(score),
+        Err(e) => ClusterObserved::Error(format!("{e:?}")),
+    }
 }
 
 fn execute_is_valid_linkage(case: &ClusterCase) -> ClusterObserved {
