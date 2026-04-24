@@ -29,20 +29,131 @@
 //!
 //! Full enumeration: `grep -E '^pub fn' crates/fsci-signal/src/lib.rs`.
 //!
-//! # Known ergonomic gap
+//! # Error taxonomy
 //!
-//! `SignalError` has only three variants (`InvalidWindowLength`,
-//! `InvalidPolyOrder`, `InvalidArgument(String)`) and 201 of 208
-//! error-raise sites use the stringly-typed `InvalidArgument`. Callers
-//! cannot dispatch on failure mode without substring parsing. Variant
-//! expansion is tracked as the second half of frankenscipy-s9tt.
+//! `SignalError` exposes structured failure classes for input length/shape,
+//! non-finite values, unsupported modes, FFT failures, convolution-mode
+//! failures, frequency-domain validation, numerical failures, and generic
+//! parameter validation. Legacy string-form validation sites are normalized
+//! through the crate-local `InvalidArgument` constructor so downstream callers
+//! can match on the resulting enum variants instead of substring-parsing
+//! `Display` text.
 
 /// Error type for signal processing operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignalError {
     InvalidWindowLength(String),
     InvalidPolyOrder(String),
-    InvalidArgument(String),
+    InvalidInputLength { expected: usize, actual: usize },
+    InvalidInputShape { detail: String },
+    NonFiniteInput { detail: String },
+    UnsupportedMode { detail: String },
+    FftFailure(String),
+    ConvolutionModeError(String),
+    FrequencyOutOfBand { detail: String },
+    NumericalFailure(String),
+    InvalidParameter { detail: String },
+    UnclassifiedArgument(String),
+}
+
+impl SignalError {
+    #[allow(non_snake_case)]
+    fn InvalidArgument(detail: String) -> Self {
+        Self::classify_invalid_argument(detail)
+    }
+
+    fn classify_invalid_argument(detail: String) -> Self {
+        let lower = detail.to_ascii_lowercase();
+        if lower.contains("fft") || lower.contains("ifft") {
+            return Self::FftFailure(detail);
+        }
+        if lower.contains("convolution") || lower.contains("valid mode") {
+            return Self::ConvolutionModeError(detail);
+        }
+        if lower.contains("padtype")
+            || lower.contains("window type")
+            || lower.contains("unknown window")
+            || lower.contains("unsupported")
+            || lower.contains("mode")
+        {
+            return Self::UnsupportedMode { detail };
+        }
+        if lower.contains("shape")
+            || lower.contains("same length")
+            || lower.contains("must match")
+            || lower.contains("match signal length")
+            || lower.contains("match t length")
+            || lower.contains("match system order")
+            || lower.contains("length (")
+        {
+            return Self::InvalidInputShape { detail };
+        }
+        if lower.contains("non-empty")
+            || lower.contains("not be empty")
+            || lower.contains("cannot be empty")
+            || lower.contains("empty")
+        {
+            return Self::InvalidInputLength {
+                expected: 1,
+                actual: 0,
+            };
+        }
+        if lower.starts_with("dpss requires") {
+            return Self::UnclassifiedArgument(detail);
+        }
+        if lower.contains("non-finite") || lower.contains("finite") {
+            return Self::NonFiniteInput { detail };
+        }
+        if lower.contains("freq")
+            || lower.contains("frequency")
+            || lower.contains("cutoff")
+            || lower.contains("wn")
+            || lower.contains("w0")
+            || lower.contains("ripple")
+            || lower.contains("width")
+            || lower.contains("nyquist")
+        {
+            return Self::FrequencyOutOfBand { detail };
+        }
+        if lower.contains("solve")
+            || lower.contains("eigen")
+            || lower.contains("singular")
+            || lower.contains("degenerate")
+            || lower.contains("overflow")
+        {
+            return Self::NumericalFailure(detail);
+        }
+        if lower.contains("sym==true") {
+            return Self::UnclassifiedArgument(detail);
+        }
+        if lower.contains("must be")
+            || lower.contains("out of range")
+            || lower.contains("too large")
+            || lower.contains("less than")
+            || lower.contains("greater than")
+        {
+            return Self::InvalidParameter { detail };
+        }
+        Self::UnclassifiedArgument(detail)
+    }
+
+    pub fn is_argument_error(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidWindowLength(_)
+                | Self::InvalidPolyOrder(_)
+                | Self::InvalidInputLength { .. }
+                | Self::InvalidInputShape { .. }
+                | Self::NonFiniteInput { .. }
+                | Self::UnsupportedMode { .. }
+                | Self::FftFailure(_)
+                | Self::ConvolutionModeError(_)
+                | Self::FrequencyOutOfBand { .. }
+                | Self::NumericalFailure(_)
+                | Self::InvalidParameter { .. }
+                | Self::UnclassifiedArgument(_)
+        )
+    }
 }
 
 impl std::fmt::Display for SignalError {
@@ -50,7 +161,25 @@ impl std::fmt::Display for SignalError {
         match self {
             Self::InvalidWindowLength(msg) => write!(f, "invalid window length: {msg}"),
             Self::InvalidPolyOrder(msg) => write!(f, "invalid polynomial order: {msg}"),
-            Self::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
+            Self::InvalidInputLength { expected, actual } => {
+                write!(
+                    f,
+                    "invalid input length: expected at least {expected}, got {actual}"
+                )
+            }
+            Self::InvalidInputShape { detail } => write!(f, "invalid input shape: {detail}"),
+            Self::NonFiniteInput { detail } => write!(f, "non-finite input: {detail}"),
+            Self::UnsupportedMode { detail } => write!(f, "unsupported mode: {detail}"),
+            Self::FftFailure(msg) => write!(f, "FFT failure: {msg}"),
+            Self::ConvolutionModeError(msg) => {
+                write!(f, "convolution mode error: {msg}")
+            }
+            Self::FrequencyOutOfBand { detail } => {
+                write!(f, "frequency out of band: {detail}")
+            }
+            Self::NumericalFailure(msg) => write!(f, "numerical failure: {msg}"),
+            Self::InvalidParameter { detail } => write!(f, "invalid parameter: {detail}"),
+            Self::UnclassifiedArgument(msg) => write!(f, "invalid argument: {msg}"),
         }
     }
 }
@@ -8210,6 +8339,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn signal_error_classifies_string_constructor() {
+        assert!(matches!(
+            SignalError::InvalidArgument("FFT failed: backend error".to_string()),
+            SignalError::FftFailure(_)
+        ));
+        assert!(matches!(
+            SignalError::InvalidArgument("input must not be empty".to_string()),
+            SignalError::InvalidInputLength {
+                expected: 1,
+                actual: 0
+            }
+        ));
+        assert!(matches!(
+            SignalError::InvalidArgument("Wn values must be finite and in (0, 1)".to_string()),
+            SignalError::NonFiniteInput { .. }
+        ));
+        assert!(matches!(
+            SignalError::InvalidArgument("unknown window type: nope".to_string()),
+            SignalError::UnsupportedMode { .. }
+        ));
+    }
+
+    #[test]
     fn savgol_coeffs_smoothing_sum_to_one() {
         // Smoothing coefficients should sum to 1
         let c = savgol_coeffs(5, 2, 0).expect("coeffs");
@@ -8588,7 +8740,7 @@ mod tests {
     #[test]
     fn exponential_window_rejects_center_for_symmetric_mode() {
         let err = exponential(5, Some(1.0), 2.0, true).unwrap_err();
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
         assert_eq!(
             err.to_string(),
             "invalid argument: If sym==True, center must be None."
@@ -8906,7 +9058,7 @@ mod tests {
     #[test]
     fn convolve_empty_rejected() {
         let err = convolve(&[], &[1.0], ConvolveMode::Full).expect_err("empty");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
@@ -8956,7 +9108,7 @@ mod tests {
     #[test]
     fn deconvolve_zero_leading_divisor_rejected() {
         let err = deconvolve(&[1.0, 2.0, 3.0], &[0.0, 1.0]).expect_err("zero leading divisor");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     // ── find_peaks tests ────────────────────────────────────────────
@@ -9262,7 +9414,7 @@ mod tests {
     #[test]
     fn bessel_rejects_excessive_order() {
         let err = bessel(90, &[0.25], FilterType::Lowpass).expect_err("large order should fail");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
@@ -9336,7 +9488,7 @@ mod tests {
             None,
         )
         .expect_err("missing rp should fail");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     // ── Elliptic filter tests ──────────────────────────────────────
@@ -9391,9 +9543,9 @@ mod tests {
     #[test]
     fn ellip_rejects_invalid_ripple() {
         let err = ellip(4, -1.0, 40.0, &[0.3], FilterType::Lowpass).expect_err("negative rp");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
         let err = ellip(4, 1.0, -40.0, &[0.3], FilterType::Lowpass).expect_err("negative rs");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
@@ -9786,7 +9938,7 @@ mod tests {
     fn filtfilt_rejects_unknown_padtype() {
         let err = filtfilt_with_padtype(&[0.2; 5], &[1.0], &[0.0, 1.0, 2.0, 1.0], Some("wrap"))
             .expect_err("invalid padtype");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     // ── Periodogram tests ──────────────────────────────────────────
@@ -11906,7 +12058,7 @@ mod tests {
     #[test]
     fn hilbert_empty_input_rejected() {
         let err = hilbert(&[]).expect_err("empty");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
@@ -12047,7 +12199,7 @@ mod tests {
     #[test]
     fn cwt_empty_data_rejected() {
         let err = cwt(&[], ricker, &[1.0]).expect_err("empty");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
@@ -12218,7 +12370,7 @@ mod tests {
     #[test]
     fn lombscargle_rejects_mismatched() {
         let err = lombscargle(&[1.0, 2.0], &[1.0], &[1.0], false).expect_err("mismatch");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
@@ -12473,19 +12625,19 @@ mod tests {
     #[test]
     fn lti_new_empty_num_rejected() {
         let err = Lti::new(vec![], vec![1.0]).expect_err("empty num");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
     fn lti_new_empty_den_rejected() {
         let err = Lti::new(vec![1.0], vec![]).expect_err("empty den");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
     fn lti_new_zero_den_rejected() {
         let err = Lti::new(vec![1.0], vec![0.0, 0.0]).expect_err("zero den");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
@@ -12550,22 +12702,22 @@ mod tests {
     #[test]
     fn dlti_new_negative_dt_rejected() {
         let err = Dlti::new(vec![1.0], vec![1.0], -0.1).expect_err("negative dt");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
     fn dlti_new_zero_dt_rejected() {
         let err = Dlti::new(vec![1.0], vec![1.0], 0.0).expect_err("zero dt");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
     fn dlti_new_non_finite_dt_rejected() {
         let err = Dlti::new(vec![1.0], vec![1.0], f64::NAN).expect_err("nan dt");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
 
         let err = Dlti::new(vec![1.0], vec![1.0], f64::INFINITY).expect_err("inf dt");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
@@ -12653,7 +12805,7 @@ mod tests {
         let t: Vec<f64> = (0..10).map(|i| i as f64 * 0.1).collect();
         let u: Vec<f64> = vec![1.0; 5]; // shorter than t
         let err = sys.lsim(&u, &t, None).expect_err("mismatched");
-        assert!(matches!(err, SignalError::InvalidArgument(_)));
+        assert!(err.is_argument_error());
     }
 
     #[test]
