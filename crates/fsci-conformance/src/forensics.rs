@@ -354,10 +354,8 @@ fn contains_token(haystack: &str, needle: &str) -> bool {
     while let Some(off) = hay[start..].find(needle) {
         let pos = start + off;
         let end = pos + n;
-        let prev_ok = pos == 0
-            || !hay.as_bytes()[pos - 1].is_ascii_alphabetic();
-        let next_ok = end == hay.len()
-            || !hay.as_bytes()[end].is_ascii_alphabetic();
+        let prev_ok = pos == 0 || !hay.as_bytes()[pos - 1].is_ascii_alphabetic();
+        let next_ok = end == hay.len() || !hay.as_bytes()[end].is_ascii_alphabetic();
         if prev_ok && next_ok {
             return true;
         }

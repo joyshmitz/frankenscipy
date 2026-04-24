@@ -842,10 +842,7 @@ mod tests {
     #[test]
     fn shell_quote_posix_passes_through_safe_strings() {
         assert_eq!(shell_quote_posix("FSCI-P2C-002"), "FSCI-P2C-002");
-        assert_eq!(
-            shell_quote_posix("/tmp/artifacts"),
-            "/tmp/artifacts"
-        );
+        assert_eq!(shell_quote_posix("/tmp/artifacts"), "/tmp/artifacts");
         assert_eq!(shell_quote_posix("x=1"), "x=1");
     }
 

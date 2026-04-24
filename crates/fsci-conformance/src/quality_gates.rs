@@ -406,8 +406,10 @@ mod tests {
 
     #[test]
     fn check_runtime_for_crate_honors_per_crate_override() {
-        use super::{CrateRuntimeOverride, QualityGatesConfig, RuntimeConfig,
-                    SeverityConfig, ViolationAction, check_runtime_for_crate};
+        use super::{
+            CrateRuntimeOverride, QualityGatesConfig, RuntimeConfig, SeverityConfig,
+            ViolationAction, check_runtime_for_crate,
+        };
         use std::collections::BTreeMap;
 
         let mut per_crate = BTreeMap::new();
@@ -456,8 +458,7 @@ mod tests {
         assert!(chk.pass, "150s should pass under 180s override");
 
         // Without a crate name: the global budget is used.
-        let global =
-            check_runtime_for_crate(&config, None, "unit", Duration::from_secs(150));
+        let global = check_runtime_for_crate(&config, None, "unit", Duration::from_secs(150));
         assert_eq!(
             global.budget_seconds, 120,
             "global budget should be used when no crate override"
