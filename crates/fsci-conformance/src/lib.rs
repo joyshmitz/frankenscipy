@@ -408,6 +408,10 @@ impl From<FixtureTriangularTranspose> for TriangularTranspose {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LinalgExpectedOutcome {
     Vector {
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
         values: Vec<f64>,
         atol: f64,
         rtol: f64,
@@ -415,24 +419,45 @@ pub enum LinalgExpectedOutcome {
         expect_warning_ill_conditioned: Option<bool>,
     },
     Matrix {
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
         values: Vec<Vec<f64>>,
         atol: f64,
         rtol: f64,
     },
     Scalar {
+        #[serde(with = "maybe_nan_f64")]
         value: f64,
         atol: f64,
         rtol: f64,
     },
     Lstsq {
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
         x: Vec<f64>,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
         residuals: Vec<f64>,
         rank: usize,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
         singular_values: Vec<f64>,
         atol: f64,
         rtol: f64,
     },
     Pinv {
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
         values: Vec<Vec<f64>>,
         rank: usize,
         atol: f64,
@@ -449,7 +474,15 @@ pub enum LinalgCase {
     Solve {
         case_id: String,
         mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
         a: Vec<Vec<f64>>,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
         b: Vec<f64>,
         assume_a: Option<FixtureMatrixAssumption>,
         #[serde(default)]
@@ -463,7 +496,15 @@ pub enum LinalgCase {
     SolveTriangular {
         case_id: String,
         mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
         a: Vec<Vec<f64>>,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
         b: Vec<f64>,
         trans: Option<FixtureTriangularTranspose>,
         #[serde(default)]
@@ -478,7 +519,15 @@ pub enum LinalgCase {
         case_id: String,
         mode: RuntimeMode,
         l_and_u: [usize; 2],
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
         ab: Vec<Vec<f64>>,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
         b: Vec<f64>,
         #[serde(default)]
         check_finite: Option<bool>,
@@ -487,6 +536,10 @@ pub enum LinalgCase {
     Inv {
         case_id: String,
         mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
         a: Vec<Vec<f64>>,
         assume_a: Option<FixtureMatrixAssumption>,
         #[serde(default)]
@@ -498,6 +551,10 @@ pub enum LinalgCase {
     Det {
         case_id: String,
         mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
         a: Vec<Vec<f64>>,
         #[serde(default)]
         check_finite: Option<bool>,
@@ -506,9 +563,21 @@ pub enum LinalgCase {
     Lstsq {
         case_id: String,
         mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
         a: Vec<Vec<f64>>,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
         b: Vec<f64>,
         #[serde(default)]
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_option_f64",
+            serialize_with = "serialize_maybe_nan_option_f64"
+        )]
         cond: Option<f64>,
         #[serde(default)]
         check_finite: Option<bool>,
@@ -517,10 +586,22 @@ pub enum LinalgCase {
     Pinv {
         case_id: String,
         mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
         a: Vec<Vec<f64>>,
         #[serde(default)]
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_option_f64",
+            serialize_with = "serialize_maybe_nan_option_f64"
+        )]
         atol: Option<f64>,
         #[serde(default)]
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_option_f64",
+            serialize_with = "serialize_maybe_nan_option_f64"
+        )]
         rtol: Option<f64>,
         #[serde(default)]
         check_finite: Option<bool>,
@@ -1047,6 +1128,10 @@ pub enum SparseInputFormat {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SparseExpectedOutcome {
     Vector {
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
         values: Vec<f64>,
         #[serde(default)]
         atol: Option<f64>,
@@ -1054,6 +1139,7 @@ pub enum SparseExpectedOutcome {
         rtol: Option<f64>,
     },
     Scalar {
+        #[serde(with = "maybe_nan_f64")]
         value: f64,
         #[serde(default)]
         atol: Option<f64>,
@@ -1078,12 +1164,24 @@ pub struct SparseCase {
     pub format: SparseInputFormat,
     pub rows: usize,
     pub cols: usize,
+    #[serde(
+        deserialize_with = "deserialize_maybe_nan_required_vec",
+        serialize_with = "serialize_maybe_nan_required_vec"
+    )]
     pub data: Vec<f64>,
     pub row_indices: Vec<usize>,
     pub col_indices: Vec<usize>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_maybe_nan_vec",
+        serialize_with = "serialize_maybe_nan_vec"
+    )]
     pub rhs: Option<Vec<f64>>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_maybe_nan_option_f64",
+        serialize_with = "serialize_maybe_nan_option_f64"
+    )]
     pub scalar: Option<f64>,
     pub expected: SparseExpectedOutcome,
 }
@@ -1287,6 +1385,90 @@ struct MaybeNanF64(f64);
 impl serde::Serialize for MaybeNanF64 {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         maybe_nan_f64::serialize(&self.0, s)
+    }
+}
+
+struct MaybeNanVec<'a>(&'a [f64]);
+
+impl serde::Serialize for MaybeNanVec<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        serialize_maybe_nan_slice(self.0, s)
+    }
+}
+
+fn serialize_maybe_nan_slice<S: serde::Serializer>(value: &[f64], s: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+
+    let mut seq = s.serialize_seq(Some(value.len()))?;
+    for x in value {
+        seq.serialize_element(&MaybeNanF64(*x))?;
+    }
+    seq.end()
+}
+
+fn deserialize_maybe_nan_required_vec<'de, D>(de: D) -> Result<Vec<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    struct Wrap(#[serde(with = "maybe_nan_f64")] f64);
+
+    let values: Vec<Wrap> = Vec::deserialize(de)?;
+    Ok(values.into_iter().map(|Wrap(x)| x).collect())
+}
+
+fn serialize_maybe_nan_required_vec<S: serde::Serializer>(
+    value: &[f64],
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    serialize_maybe_nan_slice(value, s)
+}
+
+fn deserialize_maybe_nan_matrix<'de, D>(de: D) -> Result<Vec<Vec<f64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    struct Wrap(#[serde(with = "maybe_nan_f64")] f64);
+
+    let rows: Vec<Vec<Wrap>> = Vec::deserialize(de)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.into_iter().map(|Wrap(x)| x).collect())
+        .collect())
+}
+
+fn serialize_maybe_nan_matrix<S: serde::Serializer>(
+    value: &[Vec<f64>],
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+
+    let mut seq = s.serialize_seq(Some(value.len()))?;
+    for row in value {
+        seq.serialize_element(&MaybeNanVec(row))?;
+    }
+    seq.end()
+}
+
+fn deserialize_maybe_nan_option_f64<'de, D>(de: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    struct Wrap(#[serde(with = "maybe_nan_f64")] f64);
+
+    let value: Option<Wrap> = Option::deserialize(de)?;
+    Ok(value.map(|Wrap(x)| x))
+}
+
+fn serialize_maybe_nan_option_f64<S: serde::Serializer>(
+    value: &Option<f64>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        None => s.serialize_none(),
+        Some(value) => maybe_nan_f64::serialize(value, s),
     }
 }
 
@@ -13565,16 +13747,17 @@ mod tests {
         ClusterPacketFixture, ConformanceReport, DifferentialCaseResult, DifferentialOracleConfig,
         FftPacketFixture, HarnessConfig, IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome,
         LinalgPacketFixture, OptimizePacketFixture, OracleCaseOutput, OracleStatus, PacketFamily,
-        PacketReport, PythonOracleConfig, SignalPacketFixture, SpatialPacketFixture,
-        SpecialPacketFixture, StatsCase, StatsExpected, StatsObserved, StatsPacketFixture,
-        ToleranceUsed, aggregate_packet_reports, compare_linalg_case_against_oracle,
-        compare_stats_case_against_oracle, discover_fixtures, ensure_artifact_layout,
-        load_array_api_contract_table, load_oracle_capture, resolve_array_api_contract_tolerance,
-        run_array_api_packet, run_casp_packet, run_cluster_packet, run_differential_test,
-        run_fft_packet, run_integrate_packet, run_linalg_packet,
-        run_linalg_packet_with_oracle_capture, run_optimize_packet, run_signal_packet, run_smoke,
-        run_sparse_packet, run_spatial_packet, run_special_packet, run_stats_packet,
-        run_validate_tol_packet, write_differential_parity_artifacts, write_parity_artifacts,
+        PacketReport, PythonOracleConfig, SignalPacketFixture, SparsePacketFixture,
+        SpatialPacketFixture, SpecialPacketFixture, StatsCase, StatsExpected, StatsObserved,
+        StatsPacketFixture, ToleranceUsed, aggregate_packet_reports,
+        compare_linalg_case_against_oracle, compare_stats_case_against_oracle, discover_fixtures,
+        ensure_artifact_layout, load_array_api_contract_table, load_oracle_capture,
+        resolve_array_api_contract_tolerance, run_array_api_packet, run_casp_packet,
+        run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
+        run_linalg_packet, run_linalg_packet_with_oracle_capture, run_optimize_packet,
+        run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
+        run_stats_packet, run_validate_tol_packet, write_differential_parity_artifacts,
+        write_parity_artifacts,
     };
     use fsci_linalg::LinalgError;
     use fsci_runtime::RuntimeMode;
@@ -13971,6 +14154,84 @@ mod tests {
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn linalg_fixture_accepts_nonfinite_string_sentinels() {
+        let raw = r#"{
+            "packet_id": "FSCI-P2C-002",
+            "family": "linalg_core",
+            "cases": [
+                {
+                    "operation": "solve",
+                    "case_id": "solve_nonfinite_sentinel",
+                    "mode": "Hardened",
+                    "a": [["NaN", 0.0], [0.0, "-Infinity"]],
+                    "b": ["Infinity", 1.0],
+                    "expected": {
+                        "kind": "error",
+                        "error": "array must not contain infs or NaNs"
+                    }
+                }
+            ]
+        }"#;
+
+        let fixture: LinalgPacketFixture =
+            serde_json::from_str(raw).expect("linalg sentinel fixture should parse");
+        assert!(
+            matches!(&fixture.cases[0], LinalgCase::Solve { .. }),
+            "expected solve case"
+        );
+        if let LinalgCase::Solve { a, b, .. } = &fixture.cases[0] {
+            assert!(a[0][0].is_nan());
+            assert_eq!(a[1][1], f64::NEG_INFINITY);
+            assert_eq!(b[0], f64::INFINITY);
+        }
+
+        let encoded = serde_json::to_string(&fixture).expect("fixture should serialize");
+        assert!(encoded.contains("\"NaN\""));
+        assert!(encoded.contains("\"Infinity\""));
+        assert!(encoded.contains("\"-Infinity\""));
+    }
+
+    #[test]
+    fn sparse_fixture_accepts_nonfinite_string_sentinels() {
+        let raw = r#"{
+            "packet_id": "FSCI-P2C-004",
+            "family": "sparse_ops",
+            "cases": [
+                {
+                    "case_id": "sparse_nonfinite_sentinel",
+                    "category": "spsolve",
+                    "mode": "Hardened",
+                    "operation": "spsolve",
+                    "format": "csr",
+                    "rows": 2,
+                    "cols": 2,
+                    "data": ["NaN", 1.0],
+                    "row_indices": [0, 1],
+                    "col_indices": [0, 1],
+                    "rhs": ["Infinity", 2.0],
+                    "scalar": "-Infinity",
+                    "expected": {
+                        "kind": "error",
+                        "error": "matrix/rhs contains NaN or Inf"
+                    }
+                }
+            ]
+        }"#;
+
+        let fixture: SparsePacketFixture =
+            serde_json::from_str(raw).expect("sparse sentinel fixture should parse");
+        let case = &fixture.cases[0];
+        assert!(case.data[0].is_nan());
+        assert_eq!(case.rhs.as_ref().expect("rhs")[0], f64::INFINITY);
+        assert_eq!(case.scalar, Some(f64::NEG_INFINITY));
+
+        let encoded = serde_json::to_string(&fixture).expect("fixture should serialize");
+        assert!(encoded.contains("\"NaN\""));
+        assert!(encoded.contains("\"Infinity\""));
+        assert!(encoded.contains("\"-Infinity\""));
     }
 
     #[test]

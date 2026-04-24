@@ -24,6 +24,40 @@ def _as_float(value: Any) -> float:
     return float(value)
 
 
+def _coerce_maybe_nan_f64(value: Any) -> float:
+    """Accept either a JSON number or a NaN/Inf string sentinel.
+
+    Mirrors the Rust-side maybe_nan_f64 deserializer so fixtures can encode
+    non-finite linalg inputs as "NaN" / "Infinity" / "-Infinity".
+    """
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key == "nan":
+            return float("nan")
+        if key in ("infinity", "inf", "+infinity", "+inf"):
+            return float("inf")
+        if key in ("-infinity", "-inf"):
+            return float("-inf")
+        return float(value)
+    return float(value)
+
+
+def _coerce_float_tree(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_coerce_float_tree(v) for v in value]
+    return _coerce_maybe_nan_f64(value)
+
+
+def _float_array(value: Any, np: Any) -> Any:
+    return np.asarray(_coerce_float_tree(value), dtype=np.float64)
+
+
+def _optional_float(value: Any) -> Any:
+    if value is None:
+        return None
+    return _coerce_maybe_nan_f64(value)
+
+
 def _to_float_list(value: Any) -> List[float]:
     converted = _to_list(value)
     if converted is None:
@@ -39,8 +73,8 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
 
     try:
         if operation == "solve":
-            a = np.asarray(case["a"], dtype=np.float64)
-            b = np.asarray(case["b"], dtype=np.float64)
+            a = _float_array(case["a"], np)
+            b = _float_array(case["b"], np)
             assume_a = case.get("assume_a")
             transposed = bool(case.get("transposed", False))
             check_finite = bool(case.get("check_finite", True))
@@ -89,8 +123,8 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
             }
 
         if operation == "solve_triangular":
-            a = np.asarray(case["a"], dtype=np.float64)
-            b = np.asarray(case["b"], dtype=np.float64)
+            a = _float_array(case["a"], np)
+            b = _float_array(case["b"], np)
             trans_name = case.get("trans", "no_transpose")
             trans = {
                 "no_transpose": 0,
@@ -115,8 +149,8 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
 
         if operation == "solve_banded":
             l_and_u = case["l_and_u"]
-            ab = np.asarray(case["ab"], dtype=np.float64)
-            b = np.asarray(case["b"], dtype=np.float64)
+            ab = _float_array(case["ab"], np)
+            b = _float_array(case["b"], np)
             x = linalg.solve_banded(
                 (int(l_and_u[0]), int(l_and_u[1])),
                 ab,
@@ -132,7 +166,7 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
             }
 
         if operation == "inv":
-            a = np.asarray(case["a"], dtype=np.float64)
+            a = _float_array(case["a"], np)
             x = linalg.inv(a, check_finite=bool(case.get("check_finite", True)))
             return {
                 "case_id": case_id,
@@ -143,7 +177,7 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
             }
 
         if operation == "det":
-            a = np.asarray(case["a"], dtype=np.float64)
+            a = _float_array(case["a"], np)
             value = linalg.det(a, check_finite=bool(case.get("check_finite", True)))
             return {
                 "case_id": case_id,
@@ -154,12 +188,12 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
             }
 
         if operation == "lstsq":
-            a = np.asarray(case["a"], dtype=np.float64)
-            b = np.asarray(case["b"], dtype=np.float64)
+            a = _float_array(case["a"], np)
+            b = _float_array(case["b"], np)
             x, residuals, rank, singular_values = linalg.lstsq(
                 a,
                 b,
-                cond=case.get("cond", None),
+                cond=_optional_float(case.get("cond", None)),
                 check_finite=bool(case.get("check_finite", True)),
             )
             return {
@@ -176,20 +210,20 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
             }
 
         if operation == "pinv":
-            a = np.asarray(case["a"], dtype=np.float64)
+            a = _float_array(case["a"], np)
             x = linalg.pinv(
                 a,
-                atol=case.get("atol", 0.0),
-                rtol=case.get("rtol", None),
+                atol=_optional_float(case.get("atol", 0.0)),
+                rtol=_optional_float(case.get("rtol", None)),
                 check_finite=bool(case.get("check_finite", True)),
             )
             singular_values = np.linalg.svd(a, compute_uv=False)
             max_s = float(np.max(singular_values)) if singular_values.size > 0 else 0.0
-            atol = float(case.get("atol", 0.0))
+            atol = _coerce_maybe_nan_f64(case.get("atol", 0.0))
             if case.get("rtol", None) is None:
                 rtol = float(max(a.shape) * np.finfo(np.float64).eps)
             else:
-                rtol = float(case["rtol"])
+                rtol = _coerce_maybe_nan_f64(case["rtol"])
             threshold = atol + rtol * max_s
             rank = int(np.sum(singular_values > threshold))
             return {

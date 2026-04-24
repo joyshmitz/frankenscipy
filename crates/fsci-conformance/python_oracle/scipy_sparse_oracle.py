@@ -11,11 +11,25 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
+def _coerce_maybe_nan_f64(value: Any) -> float:
+    """Accept either a JSON number or a NaN/Inf string sentinel."""
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key == "nan":
+            return float("nan")
+        if key in ("infinity", "inf", "+infinity", "+inf"):
+            return float("inf")
+        if key in ("-infinity", "-inf"):
+            return float("-inf")
+        return float(value)
+    return float(value)
+
+
 def _matrix_from_spec(spec: Dict[str, Any], sparse: Any, np: Any) -> Any:
     shape = tuple(spec["shape"])
     row = np.asarray(spec["row"], dtype=np.int64)
     col = np.asarray(spec["col"], dtype=np.int64)
-    data = np.asarray(spec["data"], dtype=np.float64)
+    data = np.asarray([_coerce_maybe_nan_f64(v) for v in spec["data"]], dtype=np.float64)
     coo = sparse.coo_array((data, (row, col)), shape=shape)
     fmt = spec.get("format", "coo")
     if fmt == "coo":
@@ -152,7 +166,7 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
         if operation in {"spmv", "spsolve", "add", "scale", "format_roundtrip"}:
             rows = int(case["rows"])
             cols = int(case["cols"])
-            data = [float(v) for v in case.get("data", [])]
+            data = [_coerce_maybe_nan_f64(v) for v in case.get("data", [])]
             row_indices = [int(v) for v in case.get("row_indices", [])]
             col_indices = [int(v) for v in case.get("col_indices", [])]
             fmt = str(case.get("format", "csr")).lower()
@@ -175,7 +189,7 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
                 mat = coo.tocsr()
 
             if operation == "spmv":
-                rhs = np.asarray([float(v) for v in case.get("rhs", [])])
+                rhs = np.asarray([_coerce_maybe_nan_f64(v) for v in case.get("rhs", [])])
                 y = mat @ rhs
                 return {
                     "case_id": case_id,
@@ -186,7 +200,7 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
                 }
 
             if operation == "spsolve":
-                rhs = np.asarray([float(v) for v in case.get("rhs", [])])
+                rhs = np.asarray([_coerce_maybe_nan_f64(v) for v in case.get("rhs", [])])
                 from scipy.sparse import linalg as splinalg
                 x = splinalg.spsolve(mat.tocsr(), rhs)
                 return {
@@ -198,7 +212,7 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
                 }
 
             if operation == "scale":
-                scalar = float(case.get("scalar", 1.0))
+                scalar = _coerce_maybe_nan_f64(case.get("scalar", 1.0))
                 scaled = (mat.tocoo() * scalar).tocoo()
                 return {
                     "case_id": case_id,
@@ -216,7 +230,7 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
                 if rhs_raw is None or (hasattr(rhs_raw, "__len__") and len(rhs_raw) == 0):
                     rhs_mat = mat.tocsr()
                 else:
-                    rhs_data = [float(v) for v in rhs_raw]
+                    rhs_data = [_coerce_maybe_nan_f64(v) for v in rhs_raw]
                     rhs_mat = sparse.coo_matrix(
                         (rhs_data, (row_indices, col_indices)),
                         shape=(rows, cols),

@@ -2227,6 +2227,75 @@
         "oracle_hash": "5d21355d14ba7bd230458d03f55b6ab9ad59d30e72956c8e3012c633865d70d3",
         "scipy_version": "1.17.1"
       }
+    },
+    {
+      "operation": "solve",
+      "case_id": "solve_hardened_nan_matrix_rejected",
+      "mode": "Hardened",
+      "a": [
+        [
+          "NaN",
+          0.0
+        ],
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "b": [
+        1.0,
+        1.0
+      ],
+      "check_finite": false,
+      "expected": {
+        "kind": "error",
+        "error": "array must not contain infs or NaNs"
+      }
+    },
+    {
+      "operation": "solve_triangular",
+      "case_id": "solve_triangular_hardened_inf_rhs_rejected",
+      "mode": "Hardened",
+      "a": [
+        [
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "b": [
+        "Infinity",
+        1.0
+      ],
+      "lower": false,
+      "check_finite": false,
+      "expected": {
+        "kind": "error",
+        "error": "array must not contain infs or NaNs"
+      }
+    },
+    {
+      "operation": "inv",
+      "case_id": "inv_hardened_neg_inf_matrix_rejected",
+      "mode": "Hardened",
+      "a": [
+        [
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          "-Infinity"
+        ]
+      ],
+      "check_finite": false,
+      "expected": {
+        "kind": "error",
+        "error": "array must not contain infs or NaNs"
+      }
     }
   ],
   "oracle_provenance": {

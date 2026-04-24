@@ -267,9 +267,24 @@
       "case_id": "solve_triangular_upper_trans",
       "passed": true,
       "message": "linalg vector output matched expected tolerance policy"
+    },
+    {
+      "case_id": "solve_hardened_nan_matrix_rejected",
+      "passed": true,
+      "message": "linalg error matched expected contract"
+    },
+    {
+      "case_id": "solve_triangular_hardened_inf_rhs_rejected",
+      "passed": true,
+      "message": "linalg error matched expected contract"
+    },
+    {
+      "case_id": "inv_hardened_neg_inf_matrix_rejected",
+      "passed": true,
+      "message": "linalg error matched expected contract"
     }
   ],
-  "passed_cases": 53,
+  "passed_cases": 56,
   "failed_cases": 0,
-  "generated_unix_ms": 1776911821051
+  "generated_unix_ms": 1776992463878
 }

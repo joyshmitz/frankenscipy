@@ -975,6 +975,66 @@
         "atol": 1e-10,
         "rtol": 1e-10
       }
+    },
+    {
+      "case_id": "spsolve_hardened_nan_data_rejected",
+      "category": "spsolve",
+      "mode": "Hardened",
+      "operation": "spsolve",
+      "format": "csr",
+      "rows": 2,
+      "cols": 2,
+      "data": [
+        "NaN",
+        1.0
+      ],
+      "row_indices": [
+        0,
+        1
+      ],
+      "col_indices": [
+        0,
+        1
+      ],
+      "rhs": [
+        1.0,
+        2.0
+      ],
+      "scalar": null,
+      "expected": {
+        "kind": "error",
+        "error": "matrix/rhs contains NaN or Inf"
+      }
+    },
+    {
+      "case_id": "spsolve_hardened_inf_rhs_rejected",
+      "category": "spsolve",
+      "mode": "Hardened",
+      "operation": "spsolve",
+      "format": "csr",
+      "rows": 2,
+      "cols": 2,
+      "data": [
+        1.0,
+        1.0
+      ],
+      "row_indices": [
+        0,
+        1
+      ],
+      "col_indices": [
+        0,
+        1
+      ],
+      "rhs": [
+        "Infinity",
+        2.0
+      ],
+      "scalar": null,
+      "expected": {
+        "kind": "error",
+        "error": "matrix/rhs contains NaN or Inf"
+      }
     }
   ]
 }
