@@ -318,8 +318,108 @@ def _run_case(case: Dict[str, Any], optimize: Any, np: Any) -> Dict[str, Any]:
     operation = case.get("operation")
 
     try:
+        objective_name = case.get("objective")
+
+        if operation == "differential_evolution":
+            obj_func = _get_objective(objective_name)
+            bounds = [tuple(pair) for pair in case["bounds"]]
+            result = optimize.differential_evolution(
+                obj_func,
+                bounds,
+                maxiter=case.get("maxiter", 1000),
+                popsize=case.get("popsize", 15),
+                tol=case.get("tol", 1e-8),
+                mutation=0.8,
+                recombination=0.7,
+                seed=case.get("seed"),
+                polish=False,
+            )
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "minimize",
+                "result": {
+                    "x": [float(v) for v in result.x],
+                    "fun": float(result.fun),
+                    "success": bool(result.success),
+                    "nit": int(result.nit) if hasattr(result, 'nit') else 0,
+                    "nfev": int(result.nfev) if hasattr(result, 'nfev') else 0,
+                },
+                "error": None,
+            }
+
+        if operation == "basinhopping":
+            obj_func = _get_objective(objective_name)
+            result = optimize.basinhopping(
+                obj_func,
+                np.array(case.get("x0", [0.0]), dtype=float),
+                niter=case.get("maxiter", 100),
+                seed=case.get("seed"),
+                minimizer_kwargs={"tol": case["tol"]} if case.get("tol") is not None else None,
+            )
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "minimize",
+                "result": {
+                    "x": [float(v) for v in result.x],
+                    "fun": float(result.fun),
+                    "success": bool(result.lowest_optimization_result.success),
+                    "nit": int(result.nit) if hasattr(result, 'nit') else 0,
+                    "nfev": int(result.nfev) if hasattr(result, 'nfev') else 0,
+                },
+                "error": None,
+            }
+
+        if operation == "dual_annealing":
+            obj_func = _get_objective(objective_name)
+            bounds = [tuple(pair) for pair in case["bounds"]]
+            result = optimize.dual_annealing(
+                obj_func,
+                bounds,
+                maxiter=case.get("maxiter", 1000),
+                seed=case.get("seed", 0),
+                no_local_search=True,
+            )
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "minimize",
+                "result": {
+                    "x": [float(v) for v in result.x],
+                    "fun": float(result.fun),
+                    "success": bool(result.success),
+                    "nit": int(result.nit) if hasattr(result, 'nit') else 0,
+                    "nfev": int(result.nfev) if hasattr(result, 'nfev') else 0,
+                },
+                "error": None,
+            }
+
+        if operation == "brute":
+            obj_func = _get_objective(objective_name)
+            ranges = [tuple(pair) for pair in case["ranges"]]
+            x = optimize.brute(
+                obj_func,
+                ranges,
+                Ns=case.get("ns", 20),
+                finish=None,
+            )
+            fun = obj_func(np.asarray(x, dtype=float))
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "minimize",
+                "result": {
+                    "x": [float(v) for v in np.asarray(x, dtype=float)],
+                    "fun": float(fun),
+                    "success": True,
+                    "nit": int(case.get("ns", 20)) ** len(ranges),
+                    "nfev": int(case.get("ns", 20)) ** len(ranges),
+                },
+                "error": None,
+            }
+
         if operation == "minimize":
-            objective_name = case.get("objective")
             method_map = {
                 "Bfgs": "BFGS",
                 "Lbfgsb": "L-BFGS-B",

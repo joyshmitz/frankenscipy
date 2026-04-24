@@ -84,8 +84,9 @@ use fsci_linalg::{
     sync_audit_ledger as linalg_sync_audit_ledger,
 };
 use fsci_opt::{
-    ConvergenceStatus as OptConvergenceStatus, MinimizeOptions, OptError, OptimizeMethod,
-    RootMethod, RootOptions, minimize, root_scalar,
+    BasinhoppingOptions, ConvergenceStatus as OptConvergenceStatus, DifferentialEvolutionOptions,
+    MinimizeOptions, OptError, OptimizeMethod, RootMethod, RootOptions, basinhopping, brute,
+    differential_evolution, dual_annealing, minimize, root_scalar,
 };
 use fsci_runtime::{AuditLedger, RuntimeMode, SolverPortfolio};
 use fsci_special::{
@@ -728,6 +729,8 @@ pub enum OptimizeCase {
         objective: OptimizeMinObjective,
         x0: Vec<f64>,
         #[serde(default)]
+        seed: Option<u64>,
+        #[serde(default)]
         tol: Option<f64>,
         #[serde(default)]
         maxiter: Option<usize>,
@@ -750,25 +753,94 @@ pub enum OptimizeCase {
         maxiter: Option<usize>,
         expected: OptimizeExpectedOutcome,
     },
+    DifferentialEvolution {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        objective: OptimizeMinObjective,
+        bounds: Vec<[f64; 2]>,
+        #[serde(default)]
+        seed: Option<u64>,
+        #[serde(default)]
+        tol: Option<f64>,
+        #[serde(default)]
+        maxiter: Option<usize>,
+        #[serde(default)]
+        popsize: Option<usize>,
+        expected: OptimizeExpectedOutcome,
+    },
+    Basinhopping {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        objective: OptimizeMinObjective,
+        x0: Vec<f64>,
+        #[serde(default)]
+        seed: Option<u64>,
+        #[serde(default)]
+        maxiter: Option<usize>,
+        #[serde(default)]
+        tol: Option<f64>,
+        expected: OptimizeExpectedOutcome,
+    },
+    DualAnnealing {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        objective: OptimizeMinObjective,
+        bounds: Vec<[f64; 2]>,
+        #[serde(default)]
+        seed: Option<u64>,
+        #[serde(default)]
+        maxiter: Option<usize>,
+        expected: OptimizeExpectedOutcome,
+    },
+    Brute {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        objective: OptimizeMinObjective,
+        ranges: Vec<[f64; 2]>,
+        #[serde(default)]
+        ns: Option<usize>,
+        #[serde(default)]
+        seed: Option<u64>,
+        expected: OptimizeExpectedOutcome,
+    },
 }
 
 impl OptimizeCase {
     fn case_id(&self) -> &str {
         match self {
-            Self::Minimize { case_id, .. } | Self::Root { case_id, .. } => case_id,
+            Self::Minimize { case_id, .. }
+            | Self::Root { case_id, .. }
+            | Self::DifferentialEvolution { case_id, .. }
+            | Self::Basinhopping { case_id, .. }
+            | Self::DualAnnealing { case_id, .. }
+            | Self::Brute { case_id, .. } => case_id,
         }
     }
 
     #[cfg(test)]
     fn category(&self) -> &str {
         match self {
-            Self::Minimize { category, .. } | Self::Root { category, .. } => category,
+            Self::Minimize { category, .. }
+            | Self::Root { category, .. }
+            | Self::DifferentialEvolution { category, .. }
+            | Self::Basinhopping { category, .. }
+            | Self::DualAnnealing { category, .. }
+            | Self::Brute { category, .. } => category,
         }
     }
 
     fn expected(&self) -> &OptimizeExpectedOutcome {
         match self {
-            Self::Minimize { expected, .. } | Self::Root { expected, .. } => expected,
+            Self::Minimize { expected, .. }
+            | Self::Root { expected, .. }
+            | Self::DifferentialEvolution { expected, .. }
+            | Self::Basinhopping { expected, .. }
+            | Self::DualAnnealing { expected, .. }
+            | Self::Brute { expected, .. } => expected,
         }
     }
 }
@@ -8412,6 +8484,7 @@ fn execute_optimize_case(case: &OptimizeCase) -> Result<OptimizeObservedOutcome,
             method,
             objective,
             x0,
+            seed,
             tol,
             maxiter,
             maxfev,
@@ -8426,9 +8499,109 @@ fn execute_optimize_case(case: &OptimizeCase) -> Result<OptimizeObservedOutcome,
                     tol: *tol,
                     maxiter: *maxiter,
                     maxfev: *maxfev,
+                    seed: *seed,
                     mode: *mode,
                     ..MinimizeOptions::default()
                 },
+            )?;
+            Ok(OptimizeObservedOutcome::Minimize {
+                x: result.x,
+                fun: result.fun,
+                success: result.success,
+                status: result.status,
+            })
+        }
+        OptimizeCase::DifferentialEvolution {
+            objective,
+            bounds,
+            seed,
+            tol,
+            maxiter,
+            popsize,
+            ..
+        } => {
+            let objective = objective.clone();
+            let bounds = optimize_bounds(bounds);
+            let defaults = DifferentialEvolutionOptions::default();
+            let result = differential_evolution(
+                |x| evaluate_minimize_objective(&objective, x),
+                &bounds,
+                DifferentialEvolutionOptions {
+                    seed: *seed,
+                    tol: tol.unwrap_or(defaults.tol),
+                    maxiter: maxiter.unwrap_or(defaults.maxiter),
+                    popsize: popsize.unwrap_or(defaults.popsize),
+                    ..defaults
+                },
+            )?;
+            Ok(OptimizeObservedOutcome::Minimize {
+                x: result.x,
+                fun: result.fun,
+                success: result.success,
+                status: result.status,
+            })
+        }
+        OptimizeCase::Basinhopping {
+            objective,
+            x0,
+            seed,
+            maxiter,
+            tol,
+            ..
+        } => {
+            let objective = objective.clone();
+            let defaults = BasinhoppingOptions::default();
+            let result = basinhopping(
+                |x| evaluate_minimize_objective(&objective, x),
+                x0,
+                BasinhoppingOptions {
+                    seed: *seed,
+                    niter: maxiter.unwrap_or(defaults.niter),
+                    minimizer_tol: *tol,
+                    ..defaults
+                },
+            )?;
+            Ok(OptimizeObservedOutcome::Minimize {
+                x: result.x,
+                fun: result.fun,
+                success: result.success,
+                status: result.status,
+            })
+        }
+        OptimizeCase::DualAnnealing {
+            objective,
+            bounds,
+            seed,
+            maxiter,
+            ..
+        } => {
+            let objective = objective.clone();
+            let bounds = optimize_bounds(bounds);
+            let result = dual_annealing(
+                |x| evaluate_minimize_objective(&objective, x),
+                &bounds,
+                maxiter.unwrap_or(1000),
+                seed.unwrap_or(0),
+            )?;
+            Ok(OptimizeObservedOutcome::Minimize {
+                x: result.x,
+                fun: result.fun,
+                success: result.success,
+                status: result.status,
+            })
+        }
+        OptimizeCase::Brute {
+            objective,
+            ranges,
+            ns,
+            ..
+        } => {
+            let objective = objective.clone();
+            let ranges = optimize_bounds(ranges);
+            let result = brute(
+                |x| evaluate_minimize_objective(&objective, x),
+                &ranges,
+                ns.unwrap_or(20),
             )?;
             Ok(OptimizeObservedOutcome::Minimize {
                 x: result.x,
@@ -8470,6 +8643,10 @@ fn execute_optimize_case(case: &OptimizeCase) -> Result<OptimizeObservedOutcome,
             })
         }
     }
+}
+
+fn optimize_bounds(bounds: &[[f64; 2]]) -> Vec<(f64, f64)> {
+    bounds.iter().map(|[lo, hi]| (*lo, *hi)).collect()
 }
 
 fn evaluate_minimize_objective(objective: &OptimizeMinObjective, x: &[f64]) -> f64 {
@@ -15656,6 +15833,34 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             } => format!(
                 "operation=root method={method:?} objective={objective:?} bracket={bracket:?}"
             ),
+            super::OptimizeCase::DifferentialEvolution {
+                objective,
+                bounds,
+                seed,
+                ..
+            } => format!(
+                "operation=differential_evolution objective={objective:?} bounds={bounds:?} seed={seed:?}"
+            ),
+            super::OptimizeCase::Basinhopping {
+                objective,
+                x0,
+                seed,
+                ..
+            } => format!("operation=basinhopping objective={objective:?} x0={x0:?} seed={seed:?}"),
+            super::OptimizeCase::DualAnnealing {
+                objective,
+                bounds,
+                seed,
+                ..
+            } => format!(
+                "operation=dual_annealing objective={objective:?} bounds={bounds:?} seed={seed:?}"
+            ),
+            super::OptimizeCase::Brute {
+                objective,
+                ranges,
+                ns,
+                ..
+            } => format!("operation=brute objective={objective:?} ranges={ranges:?} ns={ns:?}"),
         }
     }
 
