@@ -10895,7 +10895,10 @@ fn recover_sync_audit_ledger<'a>(
 ) -> std::sync::MutexGuard<'a, AuditLedger> {
     match ledger.lock() {
         Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+        Err(poisoned) => {
+            ledger.clear_poison();
+            poisoned.into_inner()
+        }
     }
 }
 
@@ -19926,6 +19929,29 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(!result.passed);
         assert!(result.message.starts_with("PANIC: audit poison"));
         assert!(audit_ledger.lock().is_ok(), "poison should be cleared");
+    }
+
+    #[test]
+    fn differential_audit_ledger_recovery_clears_preexisting_poison() {
+        let audit_ledger = std::sync::Mutex::new(super::AuditLedger::new());
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = audit_ledger.lock().expect("lock");
+            std::panic::panic_any("preexisting audit poison");
+        }));
+
+        assert!(
+            audit_ledger.lock().is_err(),
+            "setup should poison the audit ledger"
+        );
+        {
+            let _guard = super::recover_sync_audit_ledger(&audit_ledger);
+        }
+
+        assert!(
+            audit_ledger.lock().is_ok(),
+            "recovery should clear stale poison state"
+        );
     }
 
     #[test]
