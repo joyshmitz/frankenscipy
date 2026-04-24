@@ -2,12 +2,10 @@
 
 //! Bounded FIFO evidence ledger for policy decision audit trail.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-
-use asupersync::sync::Mutex;
 use blake3::hash;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use crate::mode::RuntimeMode;
 use crate::policy::{PolicyAction, RiskState};
@@ -180,8 +178,11 @@ impl Default for AuditLedger {
     }
 }
 
-/// Thread-safe audit ledger handle (cancel-aware mutex).
+/// Thread-safe audit ledger handle shared by synchronous crate APIs.
 pub type SharedAuditLedger = Arc<Mutex<AuditLedger>>;
+
+/// Canonical synchronous audit ledger handle.
+pub type SyncSharedAuditLedger = SharedAuditLedger;
 
 #[cfg(test)]
 mod tests {
@@ -215,17 +216,13 @@ mod tests {
             "rejected",
         ));
 
-        let json = match ledger.to_json() {
-            Ok(payload) => payload,
-            Err(err) => {
-                panic!("serialize failed: {err}");
-            }
+        let Ok(json) = ledger.to_json() else {
+            assert!(false, "serialize failed");
+            return;
         };
-        let decoded = match AuditLedger::from_json(&json) {
-            Ok(payload) => payload,
-            Err(err) => {
-                panic!("deserialize failed: {err}");
-            }
+        let Ok(decoded) = AuditLedger::from_json(&json) else {
+            assert!(false, "deserialize failed");
+            return;
         };
 
         assert_eq!(decoded.len(), 3);
@@ -242,10 +239,13 @@ mod tests {
             },
             "rejected",
         );
-        if let AuditAction::FailClosed { ref reason } = event.action {
-            assert_eq!(reason, "invalid_metadata");
-        } else {
-            panic!("expected fail closed action");
+        match &event.action {
+            AuditAction::FailClosed { reason } => {
+                assert_eq!(reason, "invalid_metadata");
+            }
+            other => {
+                assert!(false, "expected fail closed action, got {other:?}");
+            }
         }
     }
 
@@ -259,13 +259,13 @@ mod tests {
             },
             "recovered",
         );
-        if let AuditAction::BoundedRecovery {
-            ref recovery_action,
-        } = event.action
-        {
-            assert_eq!(recovery_action, "drop_outliers");
-        } else {
-            panic!("expected bounded recovery action");
+        match &event.action {
+            AuditAction::BoundedRecovery { recovery_action } => {
+                assert_eq!(recovery_action, "drop_outliers");
+            }
+            other => {
+                assert!(false, "expected bounded recovery action, got {other:?}");
+            }
         }
         assert_eq!(event.outcome, "recovered");
     }

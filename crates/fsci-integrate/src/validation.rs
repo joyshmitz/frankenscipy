@@ -1,16 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{Arc, Mutex as StdMutex};
-
+pub use fsci_runtime::SyncSharedAuditLedger;
 use fsci_runtime::{AuditAction, AuditEvent, AuditLedger, RuntimeMode, casp_now_unix_ms};
-
-/// Thread-safe audit ledger handle for synchronous integrate validation paths.
-pub type SyncSharedAuditLedger = Arc<StdMutex<AuditLedger>>;
 
 /// Create a shared audit ledger for integrate validation APIs.
 #[must_use]
 pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
-    Arc::new(StdMutex::new(AuditLedger::new()))
+    AuditLedger::shared()
 }
 
 pub(crate) fn audit_fingerprint(context: &str, detail: impl Into<String>) -> Vec<u8> {

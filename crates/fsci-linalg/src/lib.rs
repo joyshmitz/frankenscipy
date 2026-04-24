@@ -1,21 +1,17 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{Arc, Mutex as StdMutex};
-
+pub use fsci_runtime::SyncSharedAuditLedger;
 use fsci_runtime::{
     AuditAction, AuditEvent, AuditLedger, RuntimeMode, SolverAction, SolverEvidenceEntry,
     SolverPortfolio, StructuralEvidence, casp_now_unix_ms,
 };
-
-/// Thread-safe audit ledger handle for synchronous code (uses std::sync::Mutex).
-pub type SyncSharedAuditLedger = Arc<StdMutex<AuditLedger>>;
 
 type EigenDecomposition = (Vec<f64>, Option<Vec<Vec<f64>>>);
 
 /// Create a new shared audit ledger for synchronous contexts.
 #[must_use]
 pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
-    Arc::new(StdMutex::new(AuditLedger::new()))
+    AuditLedger::shared()
 }
 
 use nalgebra::linalg::Cholesky;
@@ -4500,10 +4496,7 @@ pub fn solve_circulant(c: &[f64], b: &[f64]) -> Result<Vec<f64>, LinalgError> {
             }
             fft_x.push((0.0, 0.0));
         } else {
-            fft_x.push((
-                (br * cr + bi * ci) / denom,
-                (bi * cr - br * ci) / denom,
-            ));
+            fft_x.push(((br * cr + bi * ci) / denom, (bi * cr - br * ci) / denom));
         }
     }
 
@@ -6709,6 +6702,13 @@ mod tests {
                     "row={row_idx} col={col_idx} expected={e} actual={a} tol={tol}"
                 );
             }
+        }
+    }
+
+    fn lock_audit_ledger(ledger: &SyncSharedAuditLedger) -> std::sync::MutexGuard<'_, AuditLedger> {
+        match ledger.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         }
     }
 
@@ -9125,13 +9125,15 @@ mod tests {
         );
         assert!(result.is_ok());
 
-        let ledger = audit_ledger.lock().expect("lock");
+        let ledger = lock_audit_ledger(&audit_ledger);
         assert_eq!(ledger.len(), 1, "should have exactly one audit entry");
 
         let entry = &ledger.entries()[0];
         match &entry.action {
             AuditAction::ModeDecision { .. } => {}
-            other => panic!("expected ModeDecision, got {other:?}"),
+            other => {
+                assert!(false, "expected ModeDecision, got {other:?}");
+            }
         }
         assert!(
             entry.outcome.contains("CASP"),
@@ -9158,7 +9160,7 @@ mod tests {
         );
         assert!(result.is_err());
 
-        let ledger = audit_ledger.lock().expect("lock");
+        let ledger = lock_audit_ledger(&audit_ledger);
         assert_eq!(ledger.len(), 1, "should have exactly one audit entry");
 
         let entry = &ledger.entries()[0];
@@ -9169,7 +9171,9 @@ mod tests {
                     "reason should mention non_finite: {reason}"
                 );
             }
-            other => panic!("expected FailClosed, got {other:?}"),
+            other => {
+                assert!(false, "expected FailClosed, got {other:?}");
+            }
         }
     }
 
@@ -9195,7 +9199,7 @@ mod tests {
         // This should either fail with ConditionTooHigh or succeed
         // Check if we got a fail-closed entry when it fails
         if result.is_err() {
-            let ledger = audit_ledger.lock().expect("lock");
+            let ledger = lock_audit_ledger(&audit_ledger);
             let has_fail_closed = ledger.entries().iter().any(|e| {
                 matches!(
                     &e.action,
@@ -9225,7 +9229,7 @@ mod tests {
         );
         assert!(result.is_err());
 
-        let ledger = audit_ledger.lock().expect("lock");
+        let ledger = lock_audit_ledger(&audit_ledger);
         assert_eq!(ledger.len(), 1);
 
         let entry = &ledger.entries()[0];
@@ -9233,7 +9237,9 @@ mod tests {
             AuditAction::FailClosed { reason } => {
                 assert!(reason.contains("non_square"));
             }
-            other => panic!("expected FailClosed for non_square, got {other:?}"),
+            other => {
+                assert!(false, "expected FailClosed for non_square, got {other:?}");
+            }
         }
     }
 
@@ -9253,7 +9259,7 @@ mod tests {
         );
         assert!(result.is_err());
 
-        let ledger = audit_ledger.lock().expect("lock");
+        let ledger = lock_audit_ledger(&audit_ledger);
         assert_eq!(ledger.len(), 1);
 
         let entry = &ledger.entries()[0];
@@ -9261,7 +9267,12 @@ mod tests {
             AuditAction::FailClosed { reason } => {
                 assert!(reason.contains("incompatible"));
             }
-            other => panic!("expected FailClosed for incompatible_shapes, got {other:?}"),
+            other => {
+                assert!(
+                    false,
+                    "expected FailClosed for incompatible_shapes, got {other:?}"
+                );
+            }
         }
     }
 
@@ -9271,14 +9282,20 @@ mod tests {
         let audit_ledger = sync_audit_ledger();
 
         let result = det_with_audit(&a, RuntimeMode::Strict, true, &audit_ledger);
-        assert_eq!(result.expect("det"), -2.0);
+        let Ok(det) = result else {
+            assert!(false, "det should succeed");
+            return;
+        };
+        assert_eq!(det, -2.0);
 
-        let ledger = audit_ledger.lock().expect("lock");
+        let ledger = lock_audit_ledger(&audit_ledger);
         assert_eq!(ledger.len(), 1);
         let entry = &ledger.entries()[0];
         match &entry.action {
             AuditAction::ModeDecision { mode } => assert_eq!(*mode, RuntimeMode::Strict),
-            other => panic!("expected ModeDecision, got {other:?}"),
+            other => {
+                assert!(false, "expected ModeDecision, got {other:?}");
+            }
         }
         assert!(entry.outcome.contains("det"));
     }
@@ -9291,14 +9308,16 @@ mod tests {
         let result = det_with_audit(&a, RuntimeMode::Hardened, false, &audit_ledger);
         assert!(result.is_err());
 
-        let ledger = audit_ledger.lock().expect("lock");
+        let ledger = lock_audit_ledger(&audit_ledger);
         assert_eq!(ledger.len(), 1);
         let entry = &ledger.entries()[0];
         match &entry.action {
             AuditAction::FailClosed { reason } => {
                 assert!(reason.contains("non_finite"));
             }
-            other => panic!("expected FailClosed, got {other:?}"),
+            other => {
+                assert!(false, "expected FailClosed, got {other:?}");
+            }
         }
         assert!(entry.outcome.contains("det rejected"));
     }

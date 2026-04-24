@@ -1,10 +1,10 @@
 use std::f64::consts::PI;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
+pub use fsci_runtime::SyncSharedAuditLedger;
 use fsci_runtime::{AuditAction, AuditEvent, AuditLedger, RuntimeMode, casp_now_unix_ms};
 
 use crate::plan::{
@@ -101,13 +101,10 @@ impl FftBackend for CooleyTukeyBackend {
 
 static COOLEY_TUKEY_BACKEND: CooleyTukeyBackend = CooleyTukeyBackend;
 
-/// Thread-safe audit ledger handle for synchronous FFT entrypoints.
-pub type SyncSharedAuditLedger = Arc<Mutex<AuditLedger>>;
-
 /// Create a new shared audit ledger for synchronous FFT operations.
 #[must_use]
 pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
-    Arc::new(Mutex::new(AuditLedger::new()))
+    AuditLedger::shared()
 }
 
 /// Radix-2 Cooley-Tukey FFT for power-of-2 lengths.

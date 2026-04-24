@@ -20,7 +20,7 @@ pub mod signals;
 // ── Re-exports: preserve the flat public API ────────────────────────
 pub use evidence::{
     AuditAction, AuditEvent, AuditLedger, DecisionEvidenceEntry, PolicyEvidenceLedger,
-    SharedAuditLedger,
+    SharedAuditLedger, SyncSharedAuditLedger,
 };
 pub use mode::RuntimeMode;
 pub use policy::{PolicyAction, PolicyController, PolicyDecision, RiskState};
@@ -698,11 +698,9 @@ mod tests {
         });
         let jsonl = portfolio.serialize_jsonl();
         assert!(!jsonl.is_empty());
-        let parsed: serde_json::Value = match serde_json::from_str(&jsonl) {
-            Ok(payload) => payload,
-            Err(err) => {
-                panic!("invalid JSON: {err}");
-            }
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&jsonl) else {
+            assert!(false, "invalid JSONL evidence entry");
+            return;
         };
         assert_eq!(parsed["component"], "test");
     }
@@ -828,8 +826,18 @@ mod tests {
         // but sign-preserving; (Inf, -Inf) rejected.
         assert!(within_tolerance(f64::NAN, f64::NAN, 1e-12, 1e-12));
         assert!(within_tolerance(f64::INFINITY, f64::INFINITY, 1e-12, 1e-12));
-        assert!(within_tolerance(f64::NEG_INFINITY, f64::NEG_INFINITY, 1e-12, 1e-12));
-        assert!(!within_tolerance(f64::INFINITY, f64::NEG_INFINITY, 1e-12, 1e-12));
+        assert!(within_tolerance(
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+            1e-12,
+            1e-12
+        ));
+        assert!(!within_tolerance(
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1e-12,
+            1e-12
+        ));
         assert!(!within_tolerance(f64::NAN, 1.0, 1e-12, 1e-12));
     }
 
@@ -840,11 +848,9 @@ mod tests {
             .with_seed(42)
             .with_mode(RuntimeMode::Strict);
         let json = entry.to_json_line();
-        let parsed: serde_json::Value = match serde_json::from_str(&json) {
-            Ok(payload) => payload,
-            Err(err) => {
-                panic!("invalid JSON: {err}");
-            }
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) else {
+            assert!(false, "invalid test log entry JSON");
+            return;
         };
         assert_eq!(parsed["test_id"], "test_foo");
         assert_eq!(parsed["result"], "pass");
@@ -856,11 +862,9 @@ mod tests {
     fn test_helpers_log_entry_omits_none_fields() {
         let entry = TestLogEntry::new("test_bar", "fsci_integrate", "quad converged");
         let json = entry.to_json_line();
-        let parsed: serde_json::Value = match serde_json::from_str(&json) {
-            Ok(payload) => payload,
-            Err(err) => {
-                panic!("invalid JSON: {err}");
-            }
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) else {
+            assert!(false, "invalid test log entry JSON");
+            return;
         };
         assert!(parsed.get("seed").is_none());
         assert!(parsed.get("fixture_id").is_none());
