@@ -8155,6 +8155,8 @@ fn default_differential_oracle_script_path(family: &str) -> PathBuf {
         "scipy_constants_oracle.py"
     } else if family.contains("stats") {
         "scipy_stats_oracle.py"
+    } else if family.contains("interpolate") {
+        "scipy_interpolate_oracle.py"
     } else if family.contains("cluster") {
         "scipy_cluster_oracle.py"
     } else if family.contains("spatial") {
@@ -9321,6 +9323,83 @@ fn compare_interpolate_case_differential(
             None,
             None,
         ),
+    }
+}
+
+fn interpolate_expected_tolerance(
+    expected: &InterpolateExpectedOutcome,
+) -> (Option<f64>, Option<f64>) {
+    match expected {
+        InterpolateExpectedOutcome::Vector { atol, rtol, .. } => (*atol, *rtol),
+        InterpolateExpectedOutcome::Error { .. } => (None, None),
+    }
+}
+
+fn interpolate_oracle_case_to_expected(
+    case: &InterpolateCase,
+    oracle_case: &OracleCaseOutput,
+) -> Result<InterpolateExpectedOutcome, String> {
+    let (atol, rtol) = interpolate_expected_tolerance(case.expected());
+
+    match oracle_case.result_kind.as_str() {
+        "vector" => Ok(InterpolateExpectedOutcome::Vector {
+            values: oracle_result_field(&oracle_case.result, "values", case.case_id())?,
+            atol,
+            rtol,
+        }),
+        "error" => Ok(InterpolateExpectedOutcome::Error {
+            error: oracle_result_field(&oracle_case.result, "error", case.case_id())?,
+        }),
+        other => Err(format!(
+            "oracle result for {} has unsupported result_kind `{other}`",
+            case.case_id()
+        )),
+    }
+}
+
+fn compare_interpolate_case_against_oracle(
+    case: &InterpolateCase,
+    oracle_case: &OracleCaseOutput,
+    observed: &InterpolateObservedOutcome,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    if oracle_case.status != "ok" {
+        return match observed {
+            InterpolateObservedOutcome::Error(actual) => (
+                false,
+                format!(
+                    "oracle errored (`{}`) and rust errored (`{actual}`) too; case is unjudgeable",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+            InterpolateObservedOutcome::Vector(_) => (
+                false,
+                format!(
+                    "oracle errored (`{}`) but rust succeeded",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+        };
+    }
+
+    match interpolate_oracle_case_to_expected(case, oracle_case) {
+        Ok(expected) => {
+            let mut oracle_case_fixture = case.clone();
+            match &mut oracle_case_fixture {
+                InterpolateCase::Interp1d { expected: slot, .. } => *slot = expected,
+            }
+            compare_interpolate_case_differential(&oracle_case_fixture, observed)
+        }
+        Err(message) => (false, message, None, None),
     }
 }
 
@@ -10618,7 +10697,43 @@ fn run_differential_interpolate(
             source,
         })?;
 
-    let oracle_status = probe_oracle_availability(oracle_config);
+    let resolved_oracle_config = resolve_differential_oracle_config(oracle_config, &fixture.family);
+    let probed_oracle_status = probe_oracle_availability(&resolved_oracle_config);
+    let mut capture_failure_status = None;
+    let oracle_capture = if resolved_oracle_config.required
+        || matches!(probed_oracle_status, OracleStatus::Available)
+    {
+        match capture_python_oracle_inner(
+            fixture_path,
+            raw,
+            &fixture.packet_id,
+            &HarnessConfig::default_paths().oracle_root,
+            &resolved_oracle_config,
+        ) {
+            Ok(capture) => Some(capture),
+            Err(error) => {
+                if resolved_oracle_config.required {
+                    return Err(error);
+                }
+                capture_failure_status = Some(oracle_status_from_capture_error(&error));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let oracle_cases = oracle_capture.as_ref().map(|capture| {
+        capture
+            .case_outputs
+            .iter()
+            .map(|case| (case.case_id.as_str(), case))
+            .collect::<std::collections::HashMap<_, _>>()
+    });
+    let oracle_status = match (&oracle_capture, resolved_oracle_config.required) {
+        (Some(_), _) => OracleStatus::Available,
+        (None, true) => probed_oracle_status.clone(),
+        (None, false) => capture_failure_status.unwrap_or(probed_oracle_status),
+    };
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
     let audit_ledger = neutral_audit_ledger();
 
@@ -10629,7 +10744,23 @@ fn run_differential_interpolate(
             Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_interpolate_case(case);
-                compare_interpolate_case_differential(case, &observed)
+                match oracle_cases.as_ref() {
+                    Some(cases) => match cases.get(case.case_id()) {
+                        Some(oracle_case) => {
+                            compare_interpolate_case_against_oracle(case, oracle_case, &observed)
+                        }
+                        None => (
+                            false,
+                            format!(
+                                "oracle capture missing interpolate case `{}`",
+                                case.case_id()
+                            ),
+                            None,
+                            None,
+                        ),
+                    },
+                    None => compare_interpolate_case_differential(case, &observed),
+                }
             },
         ));
     }
@@ -17443,6 +17574,105 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             serde_json::to_string_pretty(&report).unwrap()
         );
         assert!(report.pass_count >= 1);
+    }
+
+    #[test]
+    fn interpolate_default_oracle_routes_to_interpolate_script() {
+        let path = super::default_differential_oracle_script_path("interpolate_core");
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("scipy_interpolate_oracle.py")
+        );
+    }
+
+    #[test]
+    fn differential_test_interpolate_fixture_uses_oracle_capture() {
+        let unique = format!("fsci-interpolate-oracle-{}", super::now_unix_ms());
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let fixture_path = root.join("FSCI-P2C-014_interpolate_oracle.json");
+        let fixture = serde_json::json!({
+            "packet_id": "FSCI-P2C-014-MOCK",
+            "family": "interpolate_core",
+            "cases": [{
+                "operation": "interp1d",
+                "case_id": "interp1d_oracle_overrides_embedded_expected",
+                "category": "differential",
+                "mode": "Strict",
+                "kind": "linear",
+                "x": [0.0, 1.0],
+                "y": [0.0, 10.0],
+                "x_new": [0.5],
+                "expected": {
+                    "kind": "vector",
+                    "values": [999.0],
+                    "atol": 1e-12,
+                    "rtol": 1e-12
+                }
+            }]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize interpolate fixture"),
+        )
+        .expect("write interpolate fixture");
+
+        let script_path = root.join("mock_interpolate_oracle.py");
+        let script = r#"
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--fixture", required=True)
+parser.add_argument("--output", required=True)
+parser.add_argument("--oracle-root", required=True)
+args = parser.parse_args()
+
+fixture = json.loads(Path(args.fixture).read_text())
+result = {
+    "packet_id": fixture["packet_id"],
+    "family": fixture["family"],
+    "generated_unix_ms": 0,
+    "runtime": {
+        "python_version": "3.11.0",
+        "numpy_version": "2.0.0",
+        "scipy_version": "mock-1.0",
+    },
+    "case_outputs": [
+        {
+            "case_id": "interp1d_oracle_overrides_embedded_expected",
+            "status": "ok",
+            "result_kind": "vector",
+            "result": {"values": [5.0]},
+            "error": None,
+        }
+    ],
+}
+Path(args.output).write_text(json.dumps(result, indent=2))
+"#;
+        fs::write(&script_path, script).expect("write mock interpolate oracle");
+
+        let oracle = DifferentialOracleConfig {
+            python_path: PathBuf::from("python3"),
+            script_path,
+            timeout_secs: 30,
+            required: true,
+        };
+
+        let report = run_differential_test(&fixture_path, &oracle)
+            .expect("oracle-backed interpolate fixture runs");
+
+        assert_eq!(report.fail_count, 0);
+        assert_eq!(report.pass_count, 1);
+        assert_eq!(report.oracle_status, OracleStatus::Available);
+        assert!(
+            report.per_case_results[0]
+                .message
+                .contains("interp1d vector matched"),
+            "unexpected message: {}",
+            report.per_case_results[0].message
+        );
     }
 
     #[test]
