@@ -364,6 +364,91 @@
       }
     },
     {
+      "operation": "basinhopping",
+      "case_id": "diff_himmelblau_basinhopping_seeded",
+      "category": "differential",
+      "mode": "Strict",
+      "objective": "himmelblau2",
+      "x0": [
+        -3.0,
+        -3.0
+      ],
+      "seed": 42,
+      "maxiter": 60,
+      "tol": 1e-08,
+      "expected": {
+        "kind": "minimize_point",
+        "x": [
+          -3.779310253377747,
+          -3.283185991286169
+        ],
+        "fun": 0.0,
+        "atol": 0.01,
+        "rtol": 0.01,
+        "require_success": true,
+        "contract_ref": "fsci_opt::basinhopping"
+      }
+    },
+    {
+      "operation": "differential_evolution",
+      "case_id": "diff_ackley_differential_evolution_seeded",
+      "category": "differential",
+      "mode": "Strict",
+      "objective": "ackley2",
+      "bounds": [
+        [
+          -5.0,
+          5.0
+        ],
+        [
+          -5.0,
+          5.0
+        ]
+      ],
+      "seed": 42,
+      "tol": 1e-07,
+      "maxiter": 80,
+      "popsize": 8,
+      "expected": {
+        "kind": "minimize_point",
+        "x": [
+          0.0,
+          0.0
+        ],
+        "fun": 0.0,
+        "atol": 0.2,
+        "rtol": 0.2,
+        "require_success": false,
+        "contract_ref": "fsci_opt::differential_evolution"
+      }
+    },
+    {
+      "operation": "brute",
+      "case_id": "diff_sin1d_brute_seeded",
+      "category": "differential",
+      "mode": "Strict",
+      "objective": "sin1d",
+      "ranges": [
+        [
+          4.0,
+          5.0
+        ]
+      ],
+      "ns": 41,
+      "seed": 42,
+      "expected": {
+        "kind": "minimize_point",
+        "x": [
+          4.7
+        ],
+        "fun": -0.9999232575641008,
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "require_success": true,
+        "contract_ref": "fsci_opt::brute"
+      }
+    },
+    {
       "operation": "root",
       "case_id": "diff_root_brentq_cubic",
       "category": "differential",

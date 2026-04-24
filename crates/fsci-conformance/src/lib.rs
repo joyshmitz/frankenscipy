@@ -658,6 +658,8 @@ pub enum OptimizeMinObjective {
     Rosenbrock2,
     Ackley2,
     Rastrigin2,
+    Himmelblau2,
+    Sin1d,
     Sphere2,
     ShiftedQuadratic,
     TranslatedQuadratic,
@@ -8669,6 +8671,10 @@ fn evaluate_minimize_objective(objective: &OptimizeMinObjective, x: &[f64]) -> f
             20.0 + (x0 * x0 - 10.0 * (2.0 * std::f64::consts::PI * x0).cos())
                 + (x1 * x1 - 10.0 * (2.0 * std::f64::consts::PI * x1).cos())
         }
+        OptimizeMinObjective::Himmelblau2 => {
+            (x0 * x0 + x1 - 11.0).powi(2) + (x0 + x1 * x1 - 7.0).powi(2)
+        }
+        OptimizeMinObjective::Sin1d => x0.sin(),
         OptimizeMinObjective::Sphere2 => x0 * x0 + x1 * x1,
         OptimizeMinObjective::ShiftedQuadratic => {
             let dx = x0 - 1.0;

@@ -64,6 +64,13 @@ def _ackley(x: Any) -> float:
     return -20 * np.exp(-0.2 * np.sqrt(sum(xi**2 for xi in x) / n)) - np.exp(sum(np.cos(2 * np.pi * xi) for xi in x) / n) + 20 + np.e
 
 
+def _sin1d(x: Any) -> float:
+    """One-dimensional sine objective."""
+    import numpy as np
+    x = np.atleast_1d(np.asarray(x, dtype=float))
+    return float(np.sin(x[0]))
+
+
 def _scaled_quadratic(x: Any) -> float:
     """Scaled quadratic with minimum at (1, -2)."""
     import numpy as np
@@ -254,6 +261,8 @@ def _objective_map() -> Dict[str, Callable]:
         "beale": _beale,
         "booth": _booth,
         "himmelblau": _himmelblau,
+        "himmelblau2": _himmelblau,
+        "sin1d": _sin1d,
         "rastrigin": _rastrigin,
         "rastrigin2": _rastrigin,
         "ackley": _ackley,
@@ -404,13 +413,14 @@ def _run_case(case: Dict[str, Any], optimize: Any, np: Any) -> Dict[str, Any]:
                 Ns=case.get("ns", 20),
                 finish=None,
             )
-            fun = obj_func(np.asarray(x, dtype=float))
+            x_values = np.atleast_1d(np.asarray(x, dtype=float))
+            fun = obj_func(x_values)
             return {
                 "case_id": case_id,
                 "status": "ok",
                 "result_kind": "minimize",
                 "result": {
-                    "x": [float(v) for v in np.asarray(x, dtype=float)],
+                    "x": [float(v) for v in x_values],
                     "fun": float(fun),
                     "success": True,
                     "nit": int(case.get("ns", 20)) ** len(ranges),
