@@ -24,8 +24,8 @@ fixture.
 | cluster    | ~25  | ~12 | 20 | 20 |
 | spatial    | ~70  | ~25 | 26 | 26 |
 | signal     | ~200 | ~40 | 12 | 12 |
-| arrayapi   | N/A  | ~60 | 29 | 0 (property-based) |
-| constants  | ~140 | ~50 | 7  | 0 (property-based) |
+| arrayapi   | N/A  | ~60 | 34 | 34 |
+| constants  | ~140 | ~50 | 24 | 24 |
 | interpolate| ~40  | ~15 | 0  | 0 (no fixture yet) |
 | ndimage    | ~100 | ~30 | 0  | 0 (no fixture yet) |
 | io         | ~15  | ~5  | 0  | 0 (no fixture yet) |
@@ -54,9 +54,9 @@ generator: `cargo run -p fsci-conformance --bin coverage_report` (TBD)._
 ### Remaining families
 
 Each of the newer oracles added under br-di9p (cluster / spatial /
-signal / integrate) covers the same functions the fixture case set
-exercises — extending either surface requires adding to both the
-oracle dispatcher and the fixture.
+signal / integrate / arrayapi / constants) covers the same functions
+the fixture case set exercises — extending either surface requires
+adding to both the oracle dispatcher and the fixture.
 
 ## What's NOT tested
 
@@ -66,8 +66,10 @@ oracle dispatcher and the fixture.
 - Stochastic methods (differential_evolution / basinhopping /
   dual_annealing / brute, kmeans / dbscan) have no fixture cases
   (tracked in frankenscipy-9n5j).
-- constants / interpolate / ndimage / io families have no oracle
-  script (tracked in frankenscipy-di9p).
+- interpolate / ndimage / io have crate-level e2e tests but no P2C
+  fixture packet yet, so there is no oracle-backed dashboard lane to
+  count. Add fixture packets before reporting parity percentages for
+  those families (tracked in frankenscipy-di9p).
 
 ## Update procedure
 

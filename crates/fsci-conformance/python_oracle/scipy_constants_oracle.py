@@ -42,6 +42,10 @@ def _err(case_id: str, error: str, result_kind: str = "exception") -> Dict[str, 
     }
 
 
+def _ok_error(case_id: str, error: str) -> Dict[str, Any]:
+    return _ok(case_id, "error", {"error": error})
+
+
 # Mapping from Rust identifier (case-insensitive) → scipy.constants attribute.
 # Keep this tight: the fixture names double as the contract for which
 # constants parity is verified. scipy.constants exposes some of these as
@@ -106,11 +110,7 @@ def _run_case(case: Dict[str, Any], np: Any, sc: Any) -> Dict[str, Any]:
                 return _err(case_id, "constant_value requires string arg")
             name = args[0].upper()
             if name not in _CONSTANT_MAP:
-                return _err(
-                    case_id,
-                    f"unknown constant: {args[0]}",
-                    result_kind="unsupported_function",
-                )
+                return _ok_error(case_id, "unknown constant")
             attr, literal = _CONSTANT_MAP[name]
             if attr is not None:
                 value = float(getattr(sc, attr))
@@ -136,8 +136,8 @@ def _run_case(case: Dict[str, Any], np: Any, sc: Any) -> Dict[str, Any]:
             to_l = _LONG.get(to.upper(), to)
             try:
                 result = float(sc.convert_temperature(val, frm_l, to_l))
-            except NotImplementedError as exc:
-                return _err(case_id, f"{type(exc).__name__}: {exc}")
+            except NotImplementedError:
+                return _ok_error(case_id, "unsupported temperature scale")
             return _ok(case_id, "scalar", {"value": result})
 
         if function == "ev_to_joules":

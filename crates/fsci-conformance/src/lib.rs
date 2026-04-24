@@ -8021,10 +8021,15 @@ fn oracle_status_from_capture_error(error: &HarnessError) -> OracleStatus {
 fn default_differential_oracle_script_path(family: &str) -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // Route by family substring to the corresponding oracle script.
-    // Ordered longest/most-specific first so e.g. "arrayapi" never matches
+    // Ordered longest/most-specific first so e.g. "array_api" never matches
     // a hypothetical shorter token. Families without a dedicated script
-    // fall back to the linalg default (preserves historical behavior).
-    let script_name = if family.contains("stats") {
+    // retain the sentinel default so probes fail closed instead of silently
+    // running the wrong oracle.
+    let script_name = if family.contains("array_api") || family.contains("arrayapi") {
+        "scipy_arrayapi_oracle.py"
+    } else if family.contains("constants") {
+        "scipy_constants_oracle.py"
+    } else if family.contains("stats") {
         "scipy_stats_oracle.py"
     } else if family.contains("cluster") {
         "scipy_cluster_oracle.py"
@@ -8069,7 +8074,7 @@ fn resolve_differential_oracle_config(
     }
 }
 
-fn capture_stats_oracle_inner(
+fn capture_python_oracle_inner(
     fixture_path: &Path,
     fixture_raw: &str,
     packet_id: &str,
@@ -10008,21 +10013,16 @@ fn recover_sync_audit_ledger<'a>(
 /// the report marks oracle_status as `Missing` and still validates
 /// against the fixture's embedded expected values.
 ///
-/// # Oracle wiring state (as of br-ivg5)
+/// # Oracle wiring state
 ///
-/// Step 4 currently covers the **stats** family via
-/// `scipy_stats_oracle.py` (cpgl landed the path wiring). The
-/// family-specific scripts for cluster / spatial / signal / integrate
-/// / optimize / sparse / special / fft / linalg now exist on disk and
-/// are dispatched by `default_differential_oracle_script_path(family)`
-/// (br-ivg5), but only runners that invoke the capture step will
-/// actually shell out. Runners that only probe oracle availability and
-/// then compare Rust output against the fixture's embedded expected
-/// values (validate_tol, most family packets) are **self-checking**,
-/// not differential, even when `oracle_status == Available`. The
-/// `oracle_status` field reports probe result; it does not always
-/// imply that a scipy script was executed. Track frankenscipy-ivg5
-/// for the remaining per-family wiring.
+/// Step 4 currently captures Python oracle output for linalg packet
+/// helpers and for the generic differential lanes that explicitly call
+/// `capture_python_oracle_inner` (stats, array_api, constants). Other
+/// family-specific scripts may exist on disk and be routable through
+/// `default_differential_oracle_script_path(family)`, but a runner that
+/// only probes availability and then compares Rust output against the
+/// fixture's embedded expected values remains **self-checking**, not
+/// oracle-backed.
 pub fn run_differential_test(
     fixture_path: &Path,
     oracle_config: &DifferentialOracleConfig,
@@ -10236,7 +10236,43 @@ fn run_differential_array_api(
             source,
         })?;
 
-    let oracle_status = probe_oracle_availability(oracle_config);
+    let resolved_oracle_config = resolve_differential_oracle_config(oracle_config, &fixture.family);
+    let probed_oracle_status = probe_oracle_availability(&resolved_oracle_config);
+    let mut capture_failure_status = None;
+    let oracle_capture = if resolved_oracle_config.required
+        || matches!(probed_oracle_status, OracleStatus::Available)
+    {
+        match capture_python_oracle_inner(
+            fixture_path,
+            raw,
+            &fixture.packet_id,
+            &HarnessConfig::default_paths().oracle_root,
+            &resolved_oracle_config,
+        ) {
+            Ok(capture) => Some(capture),
+            Err(error) => {
+                if resolved_oracle_config.required {
+                    return Err(error);
+                }
+                capture_failure_status = Some(oracle_status_from_capture_error(&error));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let oracle_cases = oracle_capture.as_ref().map(|capture| {
+        capture
+            .case_outputs
+            .iter()
+            .map(|case| (case.case_id.as_str(), case))
+            .collect::<std::collections::HashMap<_, _>>()
+    });
+    let oracle_status = match (&oracle_capture, resolved_oracle_config.required) {
+        (Some(_), _) => OracleStatus::Available,
+        (None, true) => probed_oracle_status.clone(),
+        (None, false) => capture_failure_status.unwrap_or(probed_oracle_status),
+    };
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
     let audit_ledger = neutral_audit_ledger();
 
@@ -10247,7 +10283,20 @@ fn run_differential_array_api(
             Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_array_api_case(case);
-                compare_array_api_case_differential(case, &observed)
+                match oracle_cases.as_ref() {
+                    Some(cases) => match cases.get(case.case_id()) {
+                        Some(oracle_case) => {
+                            compare_array_api_case_against_oracle(case, oracle_case, &observed)
+                        }
+                        None => (
+                            false,
+                            format!("oracle capture missing array_api case `{}`", case.case_id()),
+                            None,
+                            None,
+                        ),
+                    },
+                    None => compare_array_api_case_differential(case, &observed),
+                }
             },
         ));
     }
@@ -10427,7 +10476,7 @@ fn run_differential_stats(
     let oracle_capture = if resolved_oracle_config.required
         || matches!(probed_oracle_status, OracleStatus::Available)
     {
-        match capture_stats_oracle_inner(
+        match capture_python_oracle_inner(
             fixture_path,
             raw,
             &fixture.packet_id,
@@ -10986,6 +11035,83 @@ fn compare_constants_case_differential(
     }
 }
 
+fn constants_oracle_case_to_expected(
+    case: &ConstantsCase,
+    oracle_case: &OracleCaseOutput,
+) -> Result<ConstantsExpected, String> {
+    let mut expected = ConstantsExpected {
+        kind: oracle_case.result_kind.clone(),
+        value: None,
+        error: None,
+        atol: case.expected.atol,
+        rtol: case.expected.rtol,
+        contract_ref: case.expected.contract_ref.clone(),
+    };
+
+    match oracle_case.result_kind.as_str() {
+        "scalar" => {
+            expected.value =
+                Some(oracle_result_field(&oracle_case.result, "value", case.case_id())?);
+        }
+        "error" => {
+            expected.error =
+                Some(oracle_result_field(&oracle_case.result, "error", case.case_id())?);
+        }
+        other => {
+            return Err(format!(
+                "oracle result for {} has unsupported result_kind `{other}`",
+                case.case_id()
+            ));
+        }
+    }
+
+    Ok(expected)
+}
+
+fn compare_constants_case_against_oracle(
+    case: &ConstantsCase,
+    oracle_case: &OracleCaseOutput,
+    observed: &ConstantsObserved,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    if oracle_case.status != "ok" {
+        return match observed {
+            ConstantsObserved::Error(actual) => (
+                false,
+                format!(
+                    "oracle errored (`{}`) and rust errored (`{actual}`) too; case is unjudgeable",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+            ConstantsObserved::Scalar(_) => (
+                false,
+                format!(
+                    "oracle errored (`{}`) but rust succeeded",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+        };
+    }
+
+    match constants_oracle_case_to_expected(case, oracle_case) {
+        Ok(expected) => {
+            let mut oracle_case_fixture = case.clone();
+            oracle_case_fixture.expected = expected;
+            compare_constants_case_differential(&oracle_case_fixture, observed)
+        }
+        Err(message) => (false, message, None, None),
+    }
+}
+
 fn run_differential_constants(
     fixture_path: &Path,
     raw: &str,
@@ -10997,7 +11123,43 @@ fn run_differential_constants(
             source,
         })?;
 
-    let oracle_status = probe_oracle_availability(oracle_config);
+    let resolved_oracle_config = resolve_differential_oracle_config(oracle_config, &fixture.family);
+    let probed_oracle_status = probe_oracle_availability(&resolved_oracle_config);
+    let mut capture_failure_status = None;
+    let oracle_capture = if resolved_oracle_config.required
+        || matches!(probed_oracle_status, OracleStatus::Available)
+    {
+        match capture_python_oracle_inner(
+            fixture_path,
+            raw,
+            &fixture.packet_id,
+            &HarnessConfig::default_paths().oracle_root,
+            &resolved_oracle_config,
+        ) {
+            Ok(capture) => Some(capture),
+            Err(error) => {
+                if resolved_oracle_config.required {
+                    return Err(error);
+                }
+                capture_failure_status = Some(oracle_status_from_capture_error(&error));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let oracle_cases = oracle_capture.as_ref().map(|capture| {
+        capture
+            .case_outputs
+            .iter()
+            .map(|case| (case.case_id.as_str(), case))
+            .collect::<std::collections::HashMap<_, _>>()
+    });
+    let oracle_status = match (&oracle_capture, resolved_oracle_config.required) {
+        (Some(_), _) => OracleStatus::Available,
+        (None, true) => probed_oracle_status.clone(),
+        (None, false) => capture_failure_status.unwrap_or(probed_oracle_status),
+    };
     let mut per_case_results = Vec::with_capacity(fixture.cases.len());
     let audit_ledger = neutral_audit_ledger();
 
@@ -11008,7 +11170,20 @@ fn run_differential_constants(
             Some(audit_ledger.as_ref()),
             || {
                 let observed = execute_constants_case(case);
-                compare_constants_case_differential(case, &observed)
+                match oracle_cases.as_ref() {
+                    Some(cases) => match cases.get(case.case_id()) {
+                        Some(oracle_case) => {
+                            compare_constants_case_against_oracle(case, oracle_case, &observed)
+                        }
+                        None => (
+                            false,
+                            format!("oracle capture missing constants case `{}`", case.case_id()),
+                            None,
+                            None,
+                        ),
+                    },
+                    None => compare_constants_case_differential(case, &observed),
+                }
             },
         ));
     }
@@ -11326,7 +11501,14 @@ fn compare_array_api_case_differential(
     case: &ArrayApiCase,
     observed: &Result<ArrayApiObservedOutcome, String>,
 ) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
-    match (case.expected(), observed) {
+    compare_array_api_expected_outcome(case.expected(), observed)
+}
+
+fn compare_array_api_expected_outcome(
+    expected: &ArrayApiExpectedOutcome,
+    observed: &Result<ArrayApiObservedOutcome, String>,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    match (expected, observed) {
         (
             ArrayApiExpectedOutcome::Array {
                 shape,
@@ -11433,6 +11615,102 @@ fn compare_array_api_case_differential(
             None,
             None,
         ),
+    }
+}
+
+fn array_api_expected_metadata(
+    expected: &ArrayApiExpectedOutcome,
+) -> (Option<f64>, Option<f64>, Option<String>) {
+    match expected {
+        ArrayApiExpectedOutcome::Array {
+            atol,
+            rtol,
+            contract_ref,
+            ..
+        } => (*atol, *rtol, contract_ref.clone()),
+        ArrayApiExpectedOutcome::Shape { contract_ref, .. }
+        | ArrayApiExpectedOutcome::Dtype { contract_ref, .. }
+        | ArrayApiExpectedOutcome::Bool { contract_ref, .. } => {
+            (None, None, contract_ref.clone())
+        }
+        ArrayApiExpectedOutcome::ErrorKind { .. } => (None, None, None),
+    }
+}
+
+fn array_api_oracle_case_to_expected(
+    case: &ArrayApiCase,
+    oracle_case: &OracleCaseOutput,
+) -> Result<ArrayApiExpectedOutcome, String> {
+    let (atol, rtol, contract_ref) = array_api_expected_metadata(case.expected());
+
+    match oracle_case.result_kind.as_str() {
+        "array" => Ok(ArrayApiExpectedOutcome::Array {
+            shape: oracle_result_field(&oracle_case.result, "shape", case.case_id())?,
+            dtype: oracle_result_field(&oracle_case.result, "dtype", case.case_id())?,
+            values: oracle_result_field(&oracle_case.result, "values", case.case_id())?,
+            atol,
+            rtol,
+            contract_ref,
+        }),
+        "shape" => Ok(ArrayApiExpectedOutcome::Shape {
+            dims: oracle_result_field(&oracle_case.result, "dims", case.case_id())?,
+            contract_ref,
+        }),
+        "dtype" => Ok(ArrayApiExpectedOutcome::Dtype {
+            dtype: oracle_result_field(&oracle_case.result, "dtype", case.case_id())?,
+            contract_ref,
+        }),
+        "bool" => Ok(ArrayApiExpectedOutcome::Bool {
+            value: oracle_result_field(&oracle_case.result, "value", case.case_id())?,
+            contract_ref,
+        }),
+        "error_kind" => Ok(ArrayApiExpectedOutcome::ErrorKind {
+            error: oracle_result_field(&oracle_case.result, "error", case.case_id())?,
+        }),
+        other => Err(format!(
+            "oracle result for {} has unsupported result_kind `{other}`",
+            case.case_id()
+        )),
+    }
+}
+
+fn compare_array_api_case_against_oracle(
+    case: &ArrayApiCase,
+    oracle_case: &OracleCaseOutput,
+    observed: &Result<ArrayApiObservedOutcome, String>,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    if oracle_case.status != "ok" {
+        return match observed {
+            Err(actual) => (
+                false,
+                format!(
+                    "oracle errored (`{}`) and rust errored (`{actual}`) too; case is unjudgeable",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+            Ok(_) => (
+                false,
+                format!(
+                    "oracle errored (`{}`) but rust succeeded",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+        };
+    }
+
+    match array_api_oracle_case_to_expected(case, oracle_case) {
+        Ok(expected) => compare_array_api_expected_outcome(&expected, observed),
+        Err(message) => (false, message, None, None),
     }
 }
 
