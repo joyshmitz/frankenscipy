@@ -2235,6 +2235,18 @@ fn l2_norm(vec: &[f64]) -> f64 {
     dot(vec, vec).sqrt()
 }
 
+fn linf_norm(vec: &[f64]) -> f64 {
+    let mut norm: f64 = 0.0;
+    for value in vec {
+        let abs = value.abs();
+        if !abs.is_finite() {
+            return abs;
+        }
+        norm = norm.max(abs);
+    }
+    norm
+}
+
 fn scale_vector(input: &[f64], scale: f64) -> Vec<f64> {
     input.iter().map(|value| value * scale).collect()
 }
@@ -2896,8 +2908,8 @@ where
     let eta = 0.15;
 
     for iteration in 0..maxiter {
-        let grad_norm = grad.iter().map(|g| g * g).sum::<f64>().sqrt();
-        if grad_norm < tol {
+        let kkt_optimality = unconstrained_kkt_optimality(&grad);
+        if kkt_optimality <= tol {
             log_completion(
                 OptimizeMethod::TrustConstr,
                 options,
@@ -2907,7 +2919,9 @@ where
                     fun: Some(f),
                     success: true,
                     status: ConvergenceStatus::Success,
-                    message: String::from("Convergence: gradient norm below tolerance"),
+                    message: format!(
+                        "Convergence: KKT optimality {kkt_optimality:.3e} <= tolerance"
+                    ),
                     nfev: objective.nfev,
                     njev: iteration,
                     nhev: iteration,
@@ -2922,7 +2936,7 @@ where
                 fun: Some(f),
                 success: true,
                 status: ConvergenceStatus::Success,
-                message: String::from("Convergence: gradient norm below tolerance"),
+                message: format!("Convergence: KKT optimality {kkt_optimality:.3e} <= tolerance"),
                 nfev: objective.nfev,
                 njev: iteration,
                 nhev: iteration,
@@ -3034,6 +3048,10 @@ where
         hess_inv: None,
         maxcv: None,
     })
+}
+
+fn unconstrained_kkt_optimality(grad: &[f64]) -> f64 {
+    linf_norm(grad)
 }
 
 fn cauchy_point(grad: &[f64], trust_radius: f64) -> Vec<f64> {
@@ -4475,7 +4493,7 @@ mod tests {
     }
 
     #[test]
-    fn tnc_respects_maxfev_limit() {
+    fn tnc_respects_maxfev_limit() -> Result<(), OptError> {
         // Pathologically tight budget: one function evaluation is not enough
         // to converge. TNC should hit the budget limit, not hang.
         let options = MinimizeOptions {
@@ -4495,8 +4513,9 @@ mod tests {
                 r.message
             ),
             Err(OptError::EvaluationBudgetExceeded { .. }) => {}
-            Err(e) => panic!("tnc unexpected error: {e}"),
+            Err(e) => return Err(e),
         }
+        Ok(())
     }
 
     #[test]
@@ -4539,12 +4558,53 @@ mod tests {
             ..MinimizeOptions::default()
         };
         let result = trust_constr(&convex_bowl, &[0.0, 0.0], options).expect("trust_constr");
-        assert!(result.success, "trust_constr should converge: {}", result.message);
+        assert!(
+            result.success,
+            "trust_constr should converge: {}",
+            result.message
+        );
         assert!(
             (result.x[0] - 2.0).abs() < 1e-2 && (result.x[1] + 3.0).abs() < 1e-2,
             "trust_constr x={:?}",
             result.x
         );
+    }
+
+    #[test]
+    fn trust_constr_accepts_kkt_infinity_norm_stationarity() -> Result<(), OptError> {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::TrustConstr),
+            tol: Some(1.0e-6),
+            maxiter: Some(1),
+            maxfev: Some(100),
+            ..MinimizeOptions::default()
+        };
+        let x0 = [7.5e-7; 4];
+        let result = trust_constr(
+            &|x: &[f64]| 0.5 * x.iter().map(|value| value * value).sum::<f64>(),
+            &x0,
+            options,
+        )?;
+
+        assert!(
+            result.success,
+            "trust_constr should converge: {}",
+            result.message
+        );
+        assert_eq!(result.status, ConvergenceStatus::Success);
+        assert_eq!(result.nit, 0);
+        assert!(
+            result.message.contains("KKT optimality"),
+            "message={}",
+            result.message
+        );
+        let Some(jac) = result.jac else {
+            return Err(OptError::InvalidArgument {
+                detail: String::from("trust_constr should return final KKT gradient"),
+            });
+        };
+        assert!(jac.iter().all(|value| value.abs() <= 1.0e-6), "jac={jac:?}");
+        Ok(())
     }
 
     #[test]
