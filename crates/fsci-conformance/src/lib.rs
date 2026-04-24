@@ -5977,8 +5977,14 @@ pub struct IntegrateArgs {
     pub b: Option<f64>,
     pub lower: Option<Vec<f64>>,
     pub upper: Option<Vec<f64>>,
+    #[serde(default, deserialize_with = "deserialize_maybe_nan_option_f64")]
     pub atol: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_maybe_nan_option_f64")]
     pub rtol: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_maybe_nan_option_f64")]
+    pub first_step: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_maybe_nan_option_f64")]
+    pub max_step: Option<f64>,
     pub max_subdivisions: Option<usize>,
     pub points: Option<Vec<Vec<f64>>>,
     // br-9cla-2: IVP fields. Mirrors scipy.integrate.solve_ivp kwargs.
@@ -5987,6 +5993,7 @@ pub struct IntegrateArgs {
     pub y0: Option<Vec<f64>>,
     pub method: Option<String>,
     pub t_eval: Option<Vec<f64>>,
+    pub event: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -6024,6 +6031,7 @@ fn execute_integrate_case(case: &IntegrateCase) -> IntegrateObserved {
         "gauss_legendre" => execute_integrate_gauss_legendre(case),
         "cubature" => execute_integrate_cubature(case),
         "solve_ivp" => execute_integrate_solve_ivp(case),
+        "odeint" => execute_integrate_odeint(case),
         "quad" => execute_integrate_quad(case),
         "quad_vec" => execute_integrate_quad_vec(case),
         "dblquad" => execute_integrate_dblquad(case),
@@ -6041,8 +6049,20 @@ type IvpRhs = fn(f64, &[f64]) -> Vec<f64>;
 fn ivp_rhs_by_name(name: &str) -> Option<IvpRhs> {
     match name {
         "exponential_decay" => Some(|_t, y| vec![-y[0]]),
+        "stiff_decay" => Some(|_t, y| vec![-1000.0 * y[0]]),
         "linear_growth" => Some(|_t, _y| vec![1.0]),
         "harmonic_oscillator" => Some(|_t, y| vec![y[1], -y[0]]),
+        _ => None,
+    }
+}
+
+fn event_y0_minus_half(_t: f64, y: &[f64]) -> f64 {
+    y[0] - 0.5
+}
+
+fn ivp_event_by_name(name: &str) -> Option<fsci_integrate::EventFn> {
+    match name {
+        "y0_minus_half_terminal" => Some(event_y0_minus_half),
         _ => None,
     }
 }
@@ -6080,17 +6100,26 @@ fn execute_integrate_solve_ivp(case: &IntegrateCase) -> IntegrateObserved {
     };
     let rtol = args.rtol.unwrap_or(1e-3);
     let atol = args.atol.unwrap_or(1e-6);
+    let events = match args.event.as_deref() {
+        Some(event_name) => {
+            let Some(event_fn) = ivp_event_by_name(event_name) else {
+                return IntegrateObserved::Error(format!("unknown event: {event_name}"));
+            };
+            Some(vec![fsci_integrate::EventSpec::terminal(event_fn)])
+        }
+        None => None,
+    };
     let opts = fsci_integrate::SolveIvpOptions {
         t_span: (t_span[0], t_span[1]),
         y0,
         method,
         t_eval: args.t_eval.as_deref(),
         dense_output: false,
-        events: None,
+        events,
         rtol,
         atol: fsci_integrate::ToleranceValue::Scalar(atol),
-        first_step: None,
-        max_step: f64::INFINITY,
+        first_step: args.first_step,
+        max_step: args.max_step.unwrap_or(f64::INFINITY),
         mode: case.mode,
     };
     let mut rhs_mut = rhs_fn;
@@ -6109,6 +6138,42 @@ fn execute_integrate_solve_ivp(case: &IntegrateCase) -> IntegrateObserved {
                 }
             }
             IntegrateObserved::IvpResult { t: res.t, y: y_t }
+        }
+        Err(e) => IntegrateObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_integrate_odeint(case: &IntegrateCase) -> IntegrateObserved {
+    let args = &case.args;
+    let Some(rhs_name) = &args.rhs else {
+        return IntegrateObserved::Error("missing rhs".to_string());
+    };
+    let Some(rhs_fn) = ivp_rhs_by_name(rhs_name) else {
+        return IntegrateObserved::Error(format!("unknown rhs: {rhs_name}"));
+    };
+    let Some(y0) = args.y0.as_ref() else {
+        return IntegrateObserved::Error("missing y0".to_string());
+    };
+    let Some(t_eval) = args.t_eval.as_ref() else {
+        return IntegrateObserved::Error("missing t_eval".to_string());
+    };
+
+    let mut rhs_mut = |y: &[f64], t: f64| rhs_fn(t, y);
+    match fsci_integrate::odeint(&mut rhs_mut, y0, t_eval) {
+        Ok(y_steps) => {
+            let n_vars = y_steps.first().map_or(0, Vec::len);
+            let mut y_t: Vec<Vec<f64>> = (0..n_vars)
+                .map(|_| Vec::with_capacity(y_steps.len()))
+                .collect();
+            for step in &y_steps {
+                for (i, &v) in step.iter().enumerate() {
+                    y_t[i].push(v);
+                }
+            }
+            IntegrateObserved::IvpResult {
+                t: t_eval.clone(),
+                y: y_t,
+            }
         }
         Err(e) => IntegrateObserved::Error(format!("{e:?}")),
     }

@@ -4,13 +4,14 @@
 Per frankenscipy-di9p: fsci-integrate previously had NO scipy oracle
 script. This closes that gap for the FSCI-P2C-013 quadrature surface
 (trapezoid / simpson / cumulative_* / romb / newton_cotes / fixed_quad /
-gauss_legendre / cubature). IVP/solve_ivp/bvp are the subject of
-frankenscipy-9cla (fixture extension) and remain un-oracled here.
+gauss_legendre / cubature / quad / quad_vec / dblquad / tplquad /
+solve_ivp / odeint). BVP coverage is tracked separately.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import math
 import sys
@@ -19,12 +20,73 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 
+_MATH_NAMESPACE = {
+    name: getattr(math, name)
+    for name in ("sin", "cos", "tan", "exp", "log", "log10", "sqrt", "pi", "e")
+}
+_VARIABLE_ORDER = ("x", "x0", "x1", "x2", "x3", "y")
+
+
 def _translate(expr: str) -> str:
     """Translate fixture expression syntax to valid Python.
 
     `^` is the XOR operator in Python; fixtures use it for powers.
     """
     return expr.replace("^", "**")
+
+
+def _evaluate_math_ast(node: ast.AST, local: Dict[str, float]) -> float:
+    if isinstance(node, ast.Expression):
+        return _evaluate_math_ast(node.body, local)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return float(node.value)
+    if isinstance(node, ast.Name):
+        if node.id in local:
+            return float(local[node.id])
+        value = _MATH_NAMESPACE.get(node.id)
+        if isinstance(value, (int, float)):
+            return float(value)
+        raise ValueError(f"unknown expression name: {node.id!r}")
+    if isinstance(node, ast.UnaryOp):
+        value = _evaluate_math_ast(node.operand, local)
+        if isinstance(node.op, ast.USub):
+            return -value
+        if isinstance(node.op, ast.UAdd):
+            return value
+        raise ValueError(f"unsupported unary operator: {type(node.op).__name__}")
+    if isinstance(node, ast.BinOp):
+        left = _evaluate_math_ast(node.left, local)
+        right = _evaluate_math_ast(node.right, local)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            return left / right
+        if isinstance(node.op, ast.Pow):
+            return left**right
+        raise ValueError(f"unsupported binary operator: {type(node.op).__name__}")
+    if isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name) or node.keywords:
+            raise ValueError("unsupported function call in expression")
+        func = _MATH_NAMESPACE.get(node.func.id)
+        if not callable(func):
+            raise ValueError(f"unsupported function: {node.func.id!r}")
+        args = [_evaluate_math_ast(arg, local) for arg in node.args]
+        return float(func(*args))
+    raise ValueError(f"unsupported expression node: {type(node).__name__}")
+
+
+def _compile_math_expr(expr: str) -> tuple[ast.Expression, List[str]]:
+    tree = ast.parse(_translate(expr), mode="eval")
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    variables = [name for name in _VARIABLE_ORDER if name in names]
+    unknown = names.difference(_MATH_NAMESPACE).difference(variables)
+    if unknown:
+        raise ValueError(f"unknown expression names: {sorted(unknown)!r}")
+    return tree, variables
 
 
 def _build_callable(expr_or_name: str) -> Callable[..., float]:
@@ -48,29 +110,21 @@ def _build_callable(expr_or_name: str) -> Callable[..., float]:
         arity, fn = named_nd[expr_or_name]
         return lambda *xs: fn(*xs[:arity])
 
-    py = _translate(expr_or_name)
-    # Discover variable names present in the expression.
-    candidates = sorted(
-        {tok for tok in ("x", "x0", "x1", "x2", "x3", "y") if tok in py}
-    )
+    tree, candidates = _compile_math_expr(expr_or_name)
     if not candidates:
         # Pure constant expression (e.g. "1.0").
         def const_fn(*_args: float) -> float:
-            return float(eval(py, {"__builtins__": {}}, vars(math)))  # noqa: S307
+            return _evaluate_math_ast(tree, {})
         return const_fn
-    # Use a fresh namespace with math functions available.
-    namespace = {"__builtins__": {}}
-    for name in ("sin", "cos", "tan", "exp", "log", "log10", "sqrt", "pi", "e"):
-        namespace[name] = getattr(math, name)
 
     def dispatched(*args: float) -> float:
-        local = dict(namespace)
+        local: Dict[str, float] = {}
         for i, tok in enumerate(candidates):
             if i < len(args):
                 local[tok] = args[i]
             else:
                 local[tok] = 0.0
-        return float(eval(py, {"__builtins__": {}}, local))  # noqa: S307
+        return _evaluate_math_ast(tree, local)
 
     return dispatched
 
@@ -157,6 +211,9 @@ def _build_ivp_rhs(name: str) -> Callable[..., list]:
     if name == "exponential_decay":
         # dy/dt = -y; y(0) = y0 → y(t) = y0 * exp(-t).
         return lambda t, y: [-y[0]]
+    if name == "stiff_decay":
+        # dy/dt = -1000 y; BDF-oriented stiff scalar fixture.
+        return lambda t, y: [-1000.0 * y[0]]
     if name == "linear_growth":
         # dy/dt = 1; y(0) = y0 → y(t) = y0 + t.
         return lambda t, y: [1.0]
@@ -165,6 +222,16 @@ def _build_ivp_rhs(name: str) -> Callable[..., list]:
         # E = 0.5*(y0² + y1²) is conserved.
         return lambda t, y: [y[1], -y[0]]
     raise ValueError(f"unknown ivp rhs: {name!r}")
+
+
+def _build_ivp_event(name: str):
+    """Named event dispatcher for solve_ivp fixtures."""
+    if name == "y0_minus_half_terminal":
+        event = lambda t, y: y[0] - 0.5  # noqa: E731
+        event.terminal = True
+        event.direction = 0.0
+        return event
+    raise ValueError(f"unknown ivp event: {name!r}")
 
 
 def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
@@ -338,6 +405,16 @@ def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
             method = args.get("method", "RK45")
             rtol = float(args.get("rtol", 1e-3))
             atol = float(args.get("atol", 1e-6))
+            first_step = args.get("first_step")
+            if first_step is not None:
+                first_step = float(first_step)
+            max_step = args.get("max_step")
+            if max_step is not None:
+                max_step = float(max_step)
+            event_name = args.get("event")
+            events = None
+            if event_name is not None:
+                events = _build_ivp_event(event_name)
             t_eval_raw = args.get("t_eval")
             t_eval = None
             if t_eval_raw is not None:
@@ -351,6 +428,9 @@ def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
                 rtol=rtol,
                 atol=atol,
                 t_eval=t_eval,
+                first_step=first_step,
+                max_step=max_step if max_step is not None else math.inf,
+                events=events,
             )
             return _ok(
                 case_id,
@@ -361,6 +441,25 @@ def _run_case(case: Dict[str, Any], integrate: Any, np: Any) -> Dict[str, Any]:
                     "status": int(res.status),
                     "success": bool(res.success),
                     "nfev": int(res.nfev),
+                },
+            )
+
+        if function == "odeint":
+            rhs_name = args["rhs"]
+            y0 = [float(v) for v in args["y0"]]
+            t = [float(v) for v in args["t_eval"]]
+            rhs = _build_ivp_rhs(rhs_name)
+
+            def odeint_rhs(y, t_val):
+                return rhs(float(t_val), y)
+
+            y = integrate.odeint(odeint_rhs, y0, t)
+            return _ok(
+                case_id,
+                "ivp_result",
+                {
+                    "t": t,
+                    "y": [[float(v) for v in row] for row in y.T.tolist()],
                 },
             )
 
