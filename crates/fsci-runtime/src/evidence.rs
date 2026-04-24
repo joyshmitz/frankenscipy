@@ -216,14 +216,8 @@ mod tests {
             "rejected",
         ));
 
-        let Ok(json) = ledger.to_json() else {
-            assert!(false, "serialize failed");
-            return;
-        };
-        let Ok(decoded) = AuditLedger::from_json(&json) else {
-            assert!(false, "deserialize failed");
-            return;
-        };
+        let json = ledger.to_json().expect("serialize failed");
+        let decoded = AuditLedger::from_json(&json).expect("deserialize failed");
 
         assert_eq!(decoded.len(), 3);
         assert_eq!(decoded, ledger);
@@ -244,7 +238,7 @@ mod tests {
                 assert_eq!(reason, "invalid_metadata");
             }
             other => {
-                assert!(false, "expected fail closed action, got {other:?}");
+                unreachable!("expected fail closed action, got {other:?}");
             }
         }
     }
@@ -264,7 +258,7 @@ mod tests {
                 assert_eq!(recovery_action, "drop_outliers");
             }
             other => {
-                assert!(false, "expected bounded recovery action, got {other:?}");
+                unreachable!("expected bounded recovery action, got {other:?}");
             }
         }
         assert_eq!(event.outcome, "recovered");

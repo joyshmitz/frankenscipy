@@ -698,10 +698,8 @@ mod tests {
         });
         let jsonl = portfolio.serialize_jsonl();
         assert!(!jsonl.is_empty());
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&jsonl) else {
-            assert!(false, "invalid JSONL evidence entry");
-            return;
-        };
+        let parsed = serde_json::from_str::<serde_json::Value>(&jsonl)
+            .expect("invalid JSONL evidence entry");
         assert_eq!(parsed["component"], "test");
     }
 
@@ -848,10 +846,8 @@ mod tests {
             .with_seed(42)
             .with_mode(RuntimeMode::Strict);
         let json = entry.to_json_line();
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) else {
-            assert!(false, "invalid test log entry JSON");
-            return;
-        };
+        let parsed =
+            serde_json::from_str::<serde_json::Value>(&json).expect("invalid test log entry JSON");
         assert_eq!(parsed["test_id"], "test_foo");
         assert_eq!(parsed["result"], "pass");
         assert_eq!(parsed["seed"], 42);
@@ -862,10 +858,8 @@ mod tests {
     fn test_helpers_log_entry_omits_none_fields() {
         let entry = TestLogEntry::new("test_bar", "fsci_integrate", "quad converged");
         let json = entry.to_json_line();
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) else {
-            assert!(false, "invalid test log entry JSON");
-            return;
-        };
+        let parsed =
+            serde_json::from_str::<serde_json::Value>(&json).expect("invalid test log entry JSON");
         assert!(parsed.get("seed").is_none());
         assert!(parsed.get("fixture_id").is_none());
         assert!(parsed.get("mode").is_none());
