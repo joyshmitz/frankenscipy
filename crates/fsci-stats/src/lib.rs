@@ -25,12 +25,48 @@ const KS_2SAMP_EXACT_MAX_CELLS: usize = 1_000_000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatsError {
     InvalidArgument(String),
+    ShapeMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    NonFiniteInput {
+        argument: &'static str,
+    },
+    DataTooSmall {
+        required: usize,
+        got: usize,
+    },
+    MissingParameter {
+        name: &'static str,
+    },
+    Unsupported {
+        operation: &'static str,
+        distribution: &'static str,
+    },
+    Arithmetic {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for StatsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
+            Self::ShapeMismatch { expected, actual } => {
+                write!(f, "shape mismatch: expected {expected}, got {actual}")
+            }
+            Self::NonFiniteInput { argument } => {
+                write!(f, "non-finite input in {argument}")
+            }
+            Self::DataTooSmall { required, got } => {
+                write!(f, "data too small: required {required}, got {got}")
+            }
+            Self::MissingParameter { name } => write!(f, "missing parameter: {name}"),
+            Self::Unsupported {
+                operation,
+                distribution,
+            } => write!(f, "{operation} is unsupported for {distribution}"),
+            Self::Arithmetic { detail } => write!(f, "arithmetic failure: {detail}"),
         }
     }
 }
@@ -72,6 +108,38 @@ impl std::fmt::Display for FitError {
 }
 
 impl std::error::Error for FitError {}
+
+impl From<FitError> for StatsError {
+    fn from(value: FitError) -> Self {
+        match value {
+            FitError::NotImplemented { distribution } => Self::Unsupported {
+                operation: "fit",
+                distribution,
+            },
+            FitError::InsufficientData { required, actual } => Self::DataTooSmall {
+                required,
+                got: actual,
+            },
+            FitError::UnsupportedData(detail) => Self::InvalidArgument(detail),
+            FitError::NonConvergent(detail) => Self::Arithmetic { detail },
+        }
+    }
+}
+
+fn unsupported_distribution_moment(
+    value: f64,
+    operation: &'static str,
+    distribution: &'static str,
+) -> Result<f64, StatsError> {
+    if value.is_nan() {
+        Err(StatsError::Unsupported {
+            operation,
+            distribution,
+        })
+    } else {
+        Ok(value)
+    }
+}
 
 /// Trait for continuous probability distributions.
 pub trait ContinuousDistribution {
@@ -236,6 +304,19 @@ pub trait ContinuousDistribution {
         f64::NAN
     }
 
+    /// Fallible entropy accessor for generic callers that need to
+    /// distinguish an inherited unsupported default from a numeric
+    /// result. Existing distribution-specific `entropy()` overrides are
+    /// reused automatically; inherited NaN defaults become a typed
+    /// `StatsError::Unsupported` instead of a silent sentinel.
+    fn try_entropy(&self) -> Result<f64, StatsError> {
+        unsupported_distribution_moment(
+            self.entropy(),
+            "entropy",
+            std::any::type_name::<Self>(),
+        )
+    }
+
     /// Median of the distribution (50th percentile).
     /// Default uses ppf(0.5); override for analytic formulas.
     fn median(&self) -> f64 {
@@ -249,11 +330,31 @@ pub trait ContinuousDistribution {
         f64::NAN
     }
 
+    /// Fallible skewness accessor for generic callers. Inherited NaN
+    /// defaults become `StatsError::Unsupported`.
+    fn try_skewness(&self) -> Result<f64, StatsError> {
+        unsupported_distribution_moment(
+            self.skewness(),
+            "skewness",
+            std::any::type_name::<Self>(),
+        )
+    }
+
     /// Excess kurtosis (fourth standardized moment minus 3).
     /// Normal distribution has excess kurtosis 0.
     /// Matches `scipy.stats.<dist>.stats(moments='k')`.
     fn kurtosis(&self) -> f64 {
         f64::NAN
+    }
+
+    /// Fallible excess-kurtosis accessor for generic callers. Inherited
+    /// NaN defaults become `StatsError::Unsupported`.
+    fn try_kurtosis(&self) -> Result<f64, StatsError> {
+        unsupported_distribution_moment(
+            self.kurtosis(),
+            "kurtosis",
+            std::any::type_name::<Self>(),
+        )
     }
 
     /// Mode of the distribution (value where PDF is maximized).
@@ -2869,13 +2970,40 @@ pub trait DiscreteDistribution {
     fn entropy(&self) -> f64 {
         f64::NAN
     }
+    /// Fallible entropy accessor. Inherited NaN defaults become a typed
+    /// unsupported-operation error for generic callers.
+    fn try_entropy(&self) -> Result<f64, StatsError> {
+        unsupported_distribution_moment(
+            self.entropy(),
+            "entropy",
+            std::any::type_name::<Self>(),
+        )
+    }
     /// Skewness. Default returns NaN.
     fn skewness(&self) -> f64 {
         f64::NAN
     }
+    /// Fallible skewness accessor. Inherited NaN defaults become a typed
+    /// unsupported-operation error for generic callers.
+    fn try_skewness(&self) -> Result<f64, StatsError> {
+        unsupported_distribution_moment(
+            self.skewness(),
+            "skewness",
+            std::any::type_name::<Self>(),
+        )
+    }
     /// Excess kurtosis. Default returns NaN.
     fn kurtosis(&self) -> f64 {
         f64::NAN
+    }
+    /// Fallible excess-kurtosis accessor. Inherited NaN defaults become
+    /// a typed unsupported-operation error for generic callers.
+    fn try_kurtosis(&self) -> Result<f64, StatsError> {
+        unsupported_distribution_moment(
+            self.kurtosis(),
+            "kurtosis",
+            std::any::type_name::<Self>(),
+        )
     }
     /// Mode (most likely value). Default returns NaN.
     fn mode(&self) -> f64 {
@@ -20095,11 +20223,92 @@ mod tests {
         // panic via the legacy fit() default.
         let data = [1.0, 2.0, 3.0];
         let result = <Chi as ContinuousDistribution>::try_fit(&data);
-        match result {
-            Err(FitError::NotImplemented { distribution: _ }) => {}
-            Err(other) => panic!("expected NotImplemented, got err {other:?}"),
-            Ok(_) => panic!("expected NotImplemented, got Ok"),
-        }
+        assert!(
+            matches!(result, Err(FitError::NotImplemented { .. })),
+            "try_fit default should return NotImplemented"
+        );
+    }
+
+    #[test]
+    fn fit_error_maps_to_structured_stats_error() {
+        let fit_error = FitError::NotImplemented {
+            distribution: "fsci_stats::Chi",
+        };
+        assert!(matches!(
+            StatsError::from(fit_error),
+            StatsError::Unsupported {
+                operation: "fit",
+                distribution: "fsci_stats::Chi"
+            }
+        ));
+
+        let fit_error = FitError::InsufficientData {
+            required: 2,
+            actual: 1,
+        };
+        assert!(matches!(
+            StatsError::from(fit_error),
+            StatsError::DataTooSmall {
+                required: 2,
+                got: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn unsupported_distribution_moments_return_typed_errors() {
+        let chi = Chi::new(3.0);
+
+        assert!(chi.entropy().is_nan());
+        assert!(matches!(
+            chi.try_entropy(),
+            Err(StatsError::Unsupported {
+                operation: "entropy",
+                ..
+            })
+        ));
+        assert!(matches!(
+            chi.try_skewness(),
+            Err(StatsError::Unsupported {
+                operation: "skewness",
+                ..
+            })
+        ));
+        assert!(matches!(
+            chi.try_kurtosis(),
+            Err(StatsError::Unsupported {
+                operation: "kurtosis",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn implemented_distribution_moments_return_typed_values() {
+        let normal = Normal::standard();
+
+        assert_close(
+            normal.try_entropy().expect("normal entropy is implemented"),
+            normal.entropy(),
+            1e-12,
+            "normal try_entropy",
+        );
+        assert_close(
+            normal
+                .try_skewness()
+                .expect("normal skewness is implemented"),
+            0.0,
+            1e-12,
+            "normal try_skewness",
+        );
+        assert_close(
+            normal
+                .try_kurtosis()
+                .expect("normal kurtosis is implemented"),
+            0.0,
+            1e-12,
+            "normal try_kurtosis",
+        );
     }
 
     #[test]
