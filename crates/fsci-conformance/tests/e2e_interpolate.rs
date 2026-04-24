@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! E2E scenario tests for FSCI-P2C-009 (Interpolate).
+//! E2E scenario tests for FSCI-P2C-014 (Interpolate).
 //!
 //! Implements conformance tests for scipy.interpolate parity:
 //!   Happy-path:  1-5, 15-16 (basic interpolation scenarios)
@@ -8,7 +8,7 @@
 //!   Performance boundary: 12-14 (large grid, high-dimension)
 //!
 //! Each scenario emits a forensic log bundle to
-//! `fixtures/artifacts/FSCI-P2C-009/e2e/`.
+//! `fixtures/artifacts/FSCI-P2C-014/e2e/runs/standalone/{scenario_id}/summary.json`.
 
 use fsci_interpolate::{
     Akima1DInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpError, InterpKind,
@@ -20,8 +20,11 @@ use fsci_runtime::RuntimeMode;
 use serde::Serialize;
 use std::f64::consts::PI;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+const INTERPOLATE_PACKET_ID: &str = "FSCI-P2C-014";
+const STANDALONE_RUN_ID: &str = "standalone";
 
 // ───────────────────────── Forensic log types ─────────────────────────
 
@@ -81,7 +84,11 @@ struct OverallResult {
 // ───────────────────────── Helpers ─────────────────────────
 
 fn e2e_output_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/artifacts/FSCI-P2C-009/e2e")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/artifacts")
+        .join(INTERPOLATE_PACKET_ID)
+        .join("e2e/runs")
+        .join(STANDALONE_RUN_ID)
 }
 
 fn make_env() -> EnvironmentInfo {
@@ -96,13 +103,15 @@ fn make_env() -> EnvironmentInfo {
 }
 
 fn replay_cmd(scenario_id: &str) -> String {
-    format!("cargo test -p fsci-conformance --test e2e_interpolate -- {scenario_id} --nocapture")
+    format!(
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_fsci_conformance_cod cargo test -p fsci-conformance --test e2e_interpolate -- {scenario_id} --nocapture"
+    )
 }
 
 fn write_bundle(scenario_id: &str, bundle: &ForensicLogBundle) {
-    let dir = e2e_output_dir();
+    let dir = e2e_output_dir().join(scenario_id);
     fs::create_dir_all(&dir).expect("create interpolate e2e artifact directory");
-    let path = dir.join(format!("{scenario_id}.json"));
+    let path = dir.join("summary.json");
     let json = serde_json::to_vec_pretty(bundle).expect("serialize bundle");
     fs::write(&path, &json).expect("write interpolate e2e artifact bundle");
 }
@@ -115,6 +124,19 @@ fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
             0.0_f64,
             |acc, v| if v.is_nan() { f64::NAN } else { acc.max(v) },
         )
+}
+
+#[test]
+fn interpolate_e2e_artifact_paths_use_interpolate_packet_id() {
+    let output_dir = e2e_output_dir();
+    assert!(output_dir.ends_with(Path::new(
+        "fixtures/artifacts/FSCI-P2C-014/e2e/runs/standalone"
+    )));
+    assert!(!output_dir.to_string_lossy().contains("FSCI-P2C-009"));
+
+    let replay = replay_cmd("scenario_01_interp1d_linear_exact");
+    assert!(replay.contains("e2e_interpolate"));
+    assert!(replay.contains("scenario_01_interp1d_linear_exact"));
 }
 
 // ───────────────────── Scenario runner framework ──────────────────────

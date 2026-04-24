@@ -20,6 +20,8 @@ This folder stores normalized oracle-vs-target fixtures for fsci-conformance.
 - `FSCI-P2C-014_interpolate_core.json`: interpolate differential + edge +
   adversarial conformance cases for:
   - `interp1d` (`linear`, `nearest`) vector evaluation, fill-value, and reject paths
+  - `RegularGridInterpolator` (`linear`, `nearest`) grid evaluation and fill-value behavior
+  - `CubicSpline` and `BSpline` spline evaluation packets
 - `FSCI-P2C-016_constants_core.json`: constants/core helper evidence fixture for:
   - exact fundamental values
   - name/alias lookup via `value` and `find`
@@ -49,6 +51,8 @@ Each run writes forensic logs to:
 - `artifacts/FSCI-P2C-*/e2e/runs/{run_id}/{scenario_id}/summary.json`
 - `artifacts/P2C-003/e2e/runs/*.json` (optimize E2E forensic bundles emitted by
   `tests/e2e_optimize.rs`)
+- `artifacts/FSCI-P2C-014/e2e/runs/standalone/{scenario_id}/summary.json`
+  (interpolate forensic bundles emitted by `tests/e2e_interpolate.rs`)
 
 Run the orchestrator:
 
