@@ -6721,11 +6721,11 @@ fn compare_integrate_case_differential(
     case: &IntegrateCase,
     observed: &IntegrateObserved,
 ) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
-    let tolerance = ToleranceUsed {
-        atol: case.expected.atol.unwrap_or(1e-12),
-        rtol: case.expected.rtol.unwrap_or(1e-12),
-        comparison_mode: "allclose".to_owned(),
-    };
+    let tolerance = resolve_integrate_contract_tolerance(
+        Some(case.expected.contract_ref.as_str()),
+        case.expected.atol,
+        case.expected.rtol,
+    );
 
     match (case.expected.kind.as_str(), observed) {
         ("scalar", IntegrateObserved::Scalar(actual)) => {
@@ -6954,10 +6954,12 @@ fn compare_stats_case_differential(
     observed: &StatsObserved,
 ) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
     let (passed, message) = compare_stats_outcome(case, observed);
-    let tolerance = || ToleranceUsed {
-        atol: case.expected.atol.unwrap_or(1e-10),
-        rtol: case.expected.rtol.unwrap_or(1e-10),
-        comparison_mode: "allclose".to_owned(),
+    let tolerance = || {
+        resolve_stats_contract_tolerance(
+            Some(case.expected.contract_ref.as_str()),
+            case.expected.atol,
+            case.expected.rtol,
+        )
     };
 
     match (case.expected.kind.as_str(), observed) {
@@ -7038,10 +7040,12 @@ fn compare_signal_case_differential(
     observed: &SignalObserved,
 ) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
     let (passed, message) = compare_signal_outcome(case, observed);
-    let tolerance = || ToleranceUsed {
-        atol: case.expected.atol.unwrap_or(1e-10),
-        rtol: case.expected.rtol.unwrap_or(1e-10),
-        comparison_mode: "allclose".to_owned(),
+    let tolerance = || {
+        resolve_signal_contract_tolerance(
+            Some(case.expected.contract_ref.as_str()),
+            case.expected.atol,
+            case.expected.rtol,
+        )
     };
 
     match (case.expected.kind.as_str(), observed) {
@@ -7085,10 +7089,12 @@ fn compare_spatial_case_differential(
     observed: &SpatialObserved,
 ) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
     let (passed, message) = compare_spatial_outcome(case, observed);
-    let tolerance = || ToleranceUsed {
-        atol: case.expected.atol.unwrap_or(1e-10),
-        rtol: case.expected.rtol.unwrap_or(1e-10),
-        comparison_mode: "allclose".to_owned(),
+    let tolerance = || {
+        resolve_spatial_contract_tolerance(
+            Some(case.expected.contract_ref.as_str()),
+            case.expected.atol,
+            case.expected.rtol,
+        )
     };
 
     match (case.expected.kind.as_str(), observed) {
@@ -7178,10 +7184,12 @@ fn compare_cluster_case_differential(
     observed: &ClusterObserved,
 ) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
     let (passed, message) = compare_cluster_outcome(case, observed);
-    let tolerance = || ToleranceUsed {
-        atol: case.expected.atol.unwrap_or(1e-10),
-        rtol: case.expected.rtol.unwrap_or(1e-10),
-        comparison_mode: "allclose".to_owned(),
+    let tolerance = || {
+        resolve_cluster_contract_tolerance(
+            case.expected.contract_ref.as_deref(),
+            case.expected.atol,
+            case.expected.rtol,
+        )
     };
 
     match (case.expected.kind.as_str(), observed) {
@@ -9365,11 +9373,6 @@ fn load_array_api_contract_table() -> Option<&'static ContractTable> {
         .as_ref()
 }
 
-/// Contract-table loaders for the 5 families (cluster, spatial, signal,
-/// stats, integrate) whose fixtures already carry contract_ref fields but
-/// previously had no consuming code path. Each loader mirrors the existing
-/// three (optimize/special/array_api) pattern. Per frankenscipy-bcv7.
-#[allow(dead_code)]
 fn load_cluster_contract_table() -> Option<&'static ContractTable> {
     CLUSTER_CONTRACT_TABLE
         .get_or_init(|| {
@@ -9381,7 +9384,6 @@ fn load_cluster_contract_table() -> Option<&'static ContractTable> {
         .as_ref()
 }
 
-#[allow(dead_code)]
 fn load_spatial_contract_table() -> Option<&'static ContractTable> {
     SPATIAL_CONTRACT_TABLE
         .get_or_init(|| {
@@ -9393,7 +9395,6 @@ fn load_spatial_contract_table() -> Option<&'static ContractTable> {
         .as_ref()
 }
 
-#[allow(dead_code)]
 fn load_signal_contract_table() -> Option<&'static ContractTable> {
     SIGNAL_CONTRACT_TABLE
         .get_or_init(|| {
@@ -9405,7 +9406,6 @@ fn load_signal_contract_table() -> Option<&'static ContractTable> {
         .as_ref()
 }
 
-#[allow(dead_code)]
 fn load_stats_contract_table() -> Option<&'static ContractTable> {
     STATS_CONTRACT_TABLE
         .get_or_init(|| {
@@ -9417,7 +9417,6 @@ fn load_stats_contract_table() -> Option<&'static ContractTable> {
         .as_ref()
 }
 
-#[allow(dead_code)]
 fn load_integrate_contract_table() -> Option<&'static ContractTable> {
     INTEGRATE_CONTRACT_TABLE
         .get_or_init(|| {
@@ -9427,6 +9426,52 @@ fn load_integrate_contract_table() -> Option<&'static ContractTable> {
             serde_json::from_str::<ContractTable>(&raw).ok()
         })
         .as_ref()
+}
+
+fn resolve_table_contract_tolerance(
+    table: Option<&ContractTable>,
+    contract_ref: Option<&str>,
+    explicit_atol: Option<f64>,
+    explicit_rtol: Option<f64>,
+    default_atol: f64,
+    default_rtol: f64,
+    default_comparison_mode: &str,
+) -> ToleranceUsed {
+    if let (Some(atol), Some(rtol)) = (explicit_atol, explicit_rtol) {
+        return ToleranceUsed {
+            atol,
+            rtol,
+            comparison_mode: default_comparison_mode.to_owned(),
+        };
+    }
+
+    if let Some(contract_ref) = contract_ref.filter(|reference| !reference.is_empty())
+        && let Some(table) = table
+        && let Some(entry) = table
+            .contracts
+            .iter()
+            .find(|candidate| candidate.function_name == contract_ref)
+    {
+        return ToleranceUsed {
+            atol: explicit_atol
+                .or(entry.tolerance_policy.default_atol)
+                .unwrap_or(default_atol),
+            rtol: explicit_rtol
+                .or(entry.tolerance_policy.default_rtol)
+                .unwrap_or(default_rtol),
+            comparison_mode: entry
+                .tolerance_policy
+                .comparison_mode
+                .clone()
+                .unwrap_or_else(|| default_comparison_mode.to_owned()),
+        };
+    }
+
+    ToleranceUsed {
+        atol: explicit_atol.unwrap_or(default_atol),
+        rtol: explicit_rtol.unwrap_or(default_rtol),
+        comparison_mode: default_comparison_mode.to_owned(),
+    }
 }
 
 fn resolve_contract_tolerance(
@@ -9554,6 +9599,86 @@ fn resolve_array_api_contract_tolerance(
         rtol: explicit_rtol.unwrap_or(0.0),
         comparison_mode: "exact".to_owned(),
     }
+}
+
+fn resolve_integrate_contract_tolerance(
+    contract_ref: Option<&str>,
+    explicit_atol: Option<f64>,
+    explicit_rtol: Option<f64>,
+) -> ToleranceUsed {
+    resolve_table_contract_tolerance(
+        load_integrate_contract_table(),
+        contract_ref,
+        explicit_atol,
+        explicit_rtol,
+        1.0e-12,
+        1.0e-12,
+        "allclose",
+    )
+}
+
+fn resolve_stats_contract_tolerance(
+    contract_ref: Option<&str>,
+    explicit_atol: Option<f64>,
+    explicit_rtol: Option<f64>,
+) -> ToleranceUsed {
+    resolve_table_contract_tolerance(
+        load_stats_contract_table(),
+        contract_ref,
+        explicit_atol,
+        explicit_rtol,
+        1.0e-10,
+        1.0e-10,
+        "allclose",
+    )
+}
+
+fn resolve_signal_contract_tolerance(
+    contract_ref: Option<&str>,
+    explicit_atol: Option<f64>,
+    explicit_rtol: Option<f64>,
+) -> ToleranceUsed {
+    resolve_table_contract_tolerance(
+        load_signal_contract_table(),
+        contract_ref,
+        explicit_atol,
+        explicit_rtol,
+        1.0e-10,
+        1.0e-10,
+        "allclose",
+    )
+}
+
+fn resolve_spatial_contract_tolerance(
+    contract_ref: Option<&str>,
+    explicit_atol: Option<f64>,
+    explicit_rtol: Option<f64>,
+) -> ToleranceUsed {
+    resolve_table_contract_tolerance(
+        load_spatial_contract_table(),
+        contract_ref,
+        explicit_atol,
+        explicit_rtol,
+        1.0e-10,
+        1.0e-10,
+        "allclose",
+    )
+}
+
+fn resolve_cluster_contract_tolerance(
+    contract_ref: Option<&str>,
+    explicit_atol: Option<f64>,
+    explicit_rtol: Option<f64>,
+) -> ToleranceUsed {
+    resolve_table_contract_tolerance(
+        load_cluster_contract_table(),
+        contract_ref,
+        explicit_atol,
+        explicit_rtol,
+        1.0e-10,
+        1.0e-10,
+        "allclose",
+    )
 }
 
 pub fn generate_raptorq_sidecar(payload: &[u8]) -> Result<RaptorQSidecar, HarnessError> {
@@ -14161,6 +14286,7 @@ mod tests {
     use fsci_linalg::LinalgError;
     use fsci_runtime::RuntimeMode;
     use serde::Serialize;
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -16938,6 +17064,110 @@ Path(args.output).write_text(json.dumps(result, indent=2))
 
         assert_eq!(fixture_refs.len(), 9);
         assert_eq!(table_refs, fixture_refs);
+    }
+
+    fn collect_contract_refs(value: &serde_json::Value, refs: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::String(contract_ref)) = map.get("contract_ref")
+                    && !contract_ref.is_empty()
+                {
+                    refs.insert(contract_ref.clone());
+                }
+
+                for child in map.values() {
+                    collect_contract_refs(child, refs);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    collect_contract_refs(child, refs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn contract_table_function_names(packet_id: &str) -> BTreeSet<String> {
+        let table_path = HarnessConfig::default_paths()
+            .artifact_dir_for(packet_id)
+            .join("contracts/contract_table.json");
+        let raw = fs::read_to_string(&table_path).expect("read contract table");
+        let table: serde_json::Value = serde_json::from_str(&raw).expect("parse contract table");
+        table
+            .get("contracts")
+            .and_then(serde_json::Value::as_array)
+            .expect("contract table has contracts array")
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("function_name")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("contract row has function_name")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn artifact_contract_tables_cover_fixture_contract_refs() {
+        let cfg = HarnessConfig::default_paths();
+        for (packet_id, fixture_name) in [
+            ("P2C-003", "FSCI-P2C-003_optimize_core.json"),
+            ("P2C-006", "FSCI-P2C-006_special_core.json"),
+            ("P2C-007", "FSCI-P2C-007_arrayapi_core.json"),
+            ("P2C-009", "FSCI-P2C-009_cluster_core.json"),
+            ("P2C-010", "FSCI-P2C-010_spatial_core.json"),
+            ("P2C-011", "FSCI-P2C-011_signal_core.json"),
+            ("P2C-012", "FSCI-P2C-012_stats_core.json"),
+            ("P2C-013", "FSCI-P2C-013_integrate_core.json"),
+        ] {
+            let fixture_path = cfg.fixture_root.join(fixture_name);
+            let raw = fs::read_to_string(&fixture_path).expect("read fixture");
+            let fixture: serde_json::Value = serde_json::from_str(&raw).expect("parse fixture");
+            let mut fixture_refs = BTreeSet::new();
+            collect_contract_refs(&fixture, &mut fixture_refs);
+
+            let table_refs = contract_table_function_names(packet_id);
+            let missing = fixture_refs
+                .difference(&table_refs)
+                .cloned()
+                .collect::<Vec<_>>();
+            let extra = table_refs
+                .difference(&fixture_refs)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            assert!(
+                missing.is_empty(),
+                "{packet_id} contract table missing fixture refs: {}",
+                missing.join(", ")
+            );
+            assert!(
+                extra.is_empty(),
+                "{packet_id} contract table has rows without fixture refs: {}",
+                extra.join(", ")
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_contract_table_loaders_provide_family_tolerances() {
+        for tolerance in [
+            super::resolve_cluster_contract_tolerance(Some("fsci_cluster::kmeans"), None, None),
+            super::resolve_spatial_contract_tolerance(Some("fsci_spatial::pdist"), None, None),
+            super::resolve_signal_contract_tolerance(Some("fsci_signal::hann"), None, None),
+            super::resolve_stats_contract_tolerance(Some("fsci_stats::describe"), None, None),
+            super::resolve_integrate_contract_tolerance(
+                Some("fsci_integrate::solve_ivp"),
+                None,
+                None,
+            ),
+        ] {
+            assert_eq!(tolerance.comparison_mode, "allclose");
+            assert_eq!(tolerance.atol, 1.0e-10);
+            assert_eq!(tolerance.rtol, 1.0e-8);
+        }
     }
 
     #[test]

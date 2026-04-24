@@ -17,6 +17,14 @@
       }
     },
     {
+      "function_name": "fsci_cluster::dbscan",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
       "function_name": "fsci_cluster::fcluster",
       "tolerance_policy": {
         "comparison_mode": "allclose",
@@ -49,6 +57,14 @@
       }
     },
     {
+      "function_name": "fsci_cluster::kmeans",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
       "function_name": "fsci_cluster::leaves_list",
       "tolerance_policy": {
         "comparison_mode": "allclose",
@@ -58,6 +74,14 @@
     },
     {
       "function_name": "fsci_cluster::linkage",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_cluster::mean_shift",
       "tolerance_policy": {
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
