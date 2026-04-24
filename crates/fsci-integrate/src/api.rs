@@ -994,6 +994,35 @@ mod tests {
     }
 
     #[test]
+    fn solve_ivp_with_audit_rejects_nan_rtol() {
+        let audit_ledger = crate::sync_audit_ledger();
+        let err = solve_ivp_with_audit(
+            &mut |_t, y| vec![-0.5 * y[0]],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[2.0],
+                method: SolverKind::Rk45,
+                rtol: f64::NAN,
+                atol: ToleranceValue::Scalar(1e-8),
+                first_step: Some(1e-3),
+                max_step: 0.1,
+                mode: RuntimeMode::Hardened,
+                ..SolveIvpOptions::default()
+            },
+            &audit_ledger,
+        )
+        .expect_err("NaN rtol should fail closed before stepping");
+        assert_eq!(err, IntegrateValidationError::NonFiniteRtol);
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        assert!(matches!(
+            ledger.entries()[0].action,
+            AuditAction::FailClosed { ref reason } if reason == "rtol_must_not_be_nan"
+        ));
+    }
+
+    #[test]
     fn solve_ivp_bdf_reports_newton_diagnostics() {
         let result = solve_ivp(
             &mut |_t, y| vec![-1000.0 * y[0]],

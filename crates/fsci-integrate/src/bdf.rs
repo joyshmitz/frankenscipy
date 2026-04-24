@@ -6,9 +6,7 @@
 //! Matches `scipy.integrate.solve_ivp(method='BDF')`.
 
 use crate::solver::{OdeSolverState, StepFailure, StepOutcome};
-use crate::validation::{
-    ToleranceValue, validate_first_step, validate_max_step, validate_tol,
-};
+use crate::validation::{ToleranceValue, validate_first_step, validate_max_step, validate_tol};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
@@ -98,10 +96,7 @@ impl BdfSolver {
             n,
             config.mode,
         )?;
-        if config.max_step.is_nan() {
-            return Err(crate::IntegrateValidationError::MaxStepMustBePositive);
-        }
-        if config.max_step.is_finite() {
+        if config.max_step.is_finite() || config.max_step.is_nan() {
             validate_max_step(config.max_step)?;
         }
         if let Some(first) = config.first_step {
@@ -579,6 +574,27 @@ mod tests {
             (y_final - expected).abs() < 0.1,
             "y(1) = {y_final}, expected {expected}"
         );
+    }
+
+    #[test]
+    fn bdf_rejects_nan_max_step() {
+        let mut fun = |_t: f64, y: &[f64]| vec![-y[0]];
+        let config = BdfSolverConfig {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 1.0,
+            rtol: 1e-6,
+            atol: ToleranceValue::Scalar(1e-8),
+            max_step: f64::NAN,
+            first_step: None,
+            mode: RuntimeMode::Strict,
+            max_order: 5,
+        };
+        let result = BdfSolver::new(&mut fun, config);
+        assert!(matches!(
+            result,
+            Err(crate::IntegrateValidationError::NonFiniteMaxStep)
+        ));
     }
 
     #[test]

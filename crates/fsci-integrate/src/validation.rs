@@ -121,6 +121,10 @@ pub enum IntegrateValidationError {
     FirstStepMustBePositive,
     FirstStepExceedsBounds,
     MaxStepMustBePositive,
+    NonFiniteFirstStep,
+    NonFiniteMaxStep,
+    NonFiniteRtol,
+    NonFiniteAtol,
     AtolWrongShape { expected: usize, actual: usize },
     AtolMustBePositive,
     NonFiniteY0,
@@ -140,6 +144,10 @@ impl std::fmt::Display for IntegrateValidationError {
             Self::FirstStepMustBePositive => write!(f, "`first_step` must be positive."),
             Self::FirstStepExceedsBounds => write!(f, "`first_step` exceeds bounds."),
             Self::MaxStepMustBePositive => write!(f, "`max_step` must be positive."),
+            Self::NonFiniteFirstStep => write!(f, "`first_step` must be finite."),
+            Self::NonFiniteMaxStep => write!(f, "`max_step` must not be NaN."),
+            Self::NonFiniteRtol => write!(f, "`rtol` must not be NaN."),
+            Self::NonFiniteAtol => write!(f, "`atol` must not be NaN."),
             Self::AtolWrongShape { .. } => write!(f, "`atol` has wrong shape."),
             Self::AtolMustBePositive => write!(f, "`atol` must be positive."),
             Self::NonFiniteY0 => write!(f, "`y0` must be finite in Hardened mode."),
@@ -172,9 +180,7 @@ pub fn validate_first_step_with_audit(
     t_bound: f64,
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<f64, IntegrateValidationError> {
-    // NaN first_step falls through `<= 0.0` silently (NaN < 0.0 == false);
-    // is_finite-first catches NaN + Inf. Per frankenscipy-i9vw.
-    if !first_step.is_finite() || first_step <= 0.0 {
+    if !first_step.is_finite() {
         let fingerprint = audit_fingerprint(
             "validate_first_step",
             format!("first_step={first_step};t0={t0};t_bound={t_bound}"),
@@ -182,7 +188,20 @@ pub fn validate_first_step_with_audit(
         record_fail_closed(
             audit_ledger,
             &fingerprint,
-            "first_step_must_be_positive_and_finite",
+            "first_step_must_be_finite",
+            "rejected",
+        );
+        return Err(IntegrateValidationError::NonFiniteFirstStep);
+    }
+    if first_step <= 0.0 {
+        let fingerprint = audit_fingerprint(
+            "validate_first_step",
+            format!("first_step={first_step};t0={t0};t_bound={t_bound}"),
+        );
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "first_step_must_be_positive",
             "rejected",
         );
         return Err(IntegrateValidationError::FirstStepMustBePositive);
@@ -211,14 +230,22 @@ pub fn validate_max_step_with_audit(
     max_step: f64,
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<f64, IntegrateValidationError> {
-    // NaN max_step must be rejected; Inf is legitimate (means "no cap").
-    // Per frankenscipy-i9vw.
-    if max_step.is_nan() || max_step <= 0.0 {
+    if max_step.is_nan() {
         let fingerprint = audit_fingerprint("validate_max_step", format!("max_step={max_step}"));
         record_fail_closed(
             audit_ledger,
             &fingerprint,
-            "max_step_must_be_positive_and_not_nan",
+            "max_step_must_not_be_nan",
+            "rejected",
+        );
+        return Err(IntegrateValidationError::NonFiniteMaxStep);
+    }
+    if max_step <= 0.0 {
+        let fingerprint = audit_fingerprint("validate_max_step", format!("max_step={max_step}"));
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "max_step_must_be_positive",
             "rejected",
         );
         return Err(IntegrateValidationError::MaxStepMustBePositive);
@@ -252,12 +279,22 @@ pub fn validate_tol_with_audit(
     // error rather than NaN propagating into the adaptive step controller.
     // Per frankenscipy-i9vw.
     if rtol.clone().any(|x| x.is_nan()) {
-        record_fail_closed(audit_ledger, &fingerprint, "rtol_must_not_be_nan", "rejected");
-        return Err(IntegrateValidationError::AtolMustBePositive);
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "rtol_must_not_be_nan",
+            "rejected",
+        );
+        return Err(IntegrateValidationError::NonFiniteRtol);
     }
     if atol.clone().any(|x| x.is_nan()) {
-        record_fail_closed(audit_ledger, &fingerprint, "atol_must_not_be_nan", "rejected");
-        return Err(IntegrateValidationError::AtolMustBePositive);
+        record_fail_closed(
+            audit_ledger,
+            &fingerprint,
+            "atol_must_not_be_nan",
+            "rejected",
+        );
+        return Err(IntegrateValidationError::NonFiniteAtol);
     }
     let needs_clamp = rtol.clone().any(|x| x < MIN_RTOL);
     let rtol = if needs_clamp {
@@ -441,13 +478,26 @@ mod tests {
     fn test_validation_tol_nan_atol_rejected() {
         // Per frankenscipy-i9vw: NaN atol now fails closed rather than
         // falling through every `<` predicate silently.
-        let report = validate_tol(
+        let err = validate_tol(
             ToleranceValue::Scalar(1e-3),
             ToleranceValue::Scalar(f64::NAN),
             1,
             RuntimeMode::Strict,
-        );
-        assert!(report.is_err(), "NaN atol should fail closed");
+        )
+        .expect_err("NaN atol should fail closed");
+        assert_eq!(err, IntegrateValidationError::NonFiniteAtol);
+    }
+
+    #[test]
+    fn test_validation_tol_nan_rtol_rejected() {
+        let err = validate_tol(
+            ToleranceValue::Scalar(f64::NAN),
+            ToleranceValue::Scalar(1e-6),
+            1,
+            RuntimeMode::Strict,
+        )
+        .expect_err("NaN rtol should fail closed");
+        assert_eq!(err, IntegrateValidationError::NonFiniteRtol);
     }
 
     // 9. Inf input in atol -> accepted (SciPy allows)
@@ -492,6 +542,12 @@ mod tests {
         assert_eq!(err, IntegrateValidationError::FirstStepExceedsBounds);
     }
 
+    #[test]
+    fn test_validation_first_step_nan_rejected() {
+        let err = validate_first_step(f64::NAN, 0.0, 1.0).expect_err("must reject NaN step");
+        assert_eq!(err, IntegrateValidationError::NonFiniteFirstStep);
+    }
+
     // ── validate_max_step tests ──────────────────────────────────
 
     // 14. positive -> accepted
@@ -518,6 +574,12 @@ mod tests {
     #[test]
     fn test_validation_max_step_infinity() {
         assert_eq!(validate_max_step(f64::INFINITY).unwrap(), f64::INFINITY);
+    }
+
+    #[test]
+    fn test_validation_max_step_nan_rejected() {
+        let err = validate_max_step(f64::NAN).expect_err("must reject NaN max step");
+        assert_eq!(err, IntegrateValidationError::NonFiniteMaxStep);
     }
 
     // ── Mode-specific tests ──────────────────────────────────────
@@ -683,7 +745,28 @@ mod tests {
         assert_eq!(ledger.len(), 1);
         assert!(matches!(
             ledger.entries()[0].action,
-            AuditAction::FailClosed { ref reason } if reason == "first_step_must_be_positive_and_finite"
+            AuditAction::FailClosed { ref reason } if reason == "first_step_must_be_positive"
+        ));
+    }
+
+    #[test]
+    fn test_validation_tol_nan_records_fail_closed() {
+        let audit_ledger = sync_audit_ledger();
+        let err = validate_tol_with_audit(
+            ToleranceValue::Scalar(f64::NAN),
+            ToleranceValue::Scalar(1e-6),
+            1,
+            RuntimeMode::Hardened,
+            Some(&audit_ledger),
+        )
+        .expect_err("NaN rtol must fail closed");
+        assert_eq!(err, IntegrateValidationError::NonFiniteRtol);
+
+        let ledger = audit_ledger.lock().expect("lock");
+        assert_eq!(ledger.len(), 1);
+        assert!(matches!(
+            ledger.entries()[0].action,
+            AuditAction::FailClosed { ref reason } if reason == "rtol_must_not_be_nan"
         ));
     }
 }

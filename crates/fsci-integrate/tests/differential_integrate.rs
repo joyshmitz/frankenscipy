@@ -221,13 +221,14 @@ fn diff_vector_rtol_partial_clamp() {
     // Oracle: element 1 (1e-30) < MIN_RTOL, gets clamped to MIN_RTOL
     // Elements 0 and 2 are above MIN_RTOL so pass through
     // Warning is emitted because needs_clamp triggers on any(|x| x < MIN_RTOL)
-    match &result.rtol {
-        ToleranceValue::Vector(v) => {
-            assert_eq!(v[0], 1e-3);
-            assert_eq!(v[1], MIN_RTOL);
-            assert_eq!(v[2], 1e-6);
-        }
-        _ => panic!("expected vector"),
+    assert!(
+        matches!(&result.rtol, ToleranceValue::Vector(_)),
+        "expected vector"
+    );
+    if let ToleranceValue::Vector(v) = &result.rtol {
+        assert_eq!(v[0], 1e-3);
+        assert_eq!(v[1], MIN_RTOL);
+        assert_eq!(v[2], 1e-6);
     }
     assert!(!result.warnings.is_empty());
 }
@@ -262,12 +263,20 @@ fn diff_select_initial_step_hardened_rejects_non_finite_y0() {
         mode: RuntimeMode::Hardened,
     };
 
+    let mut rhs_called = false;
     let err = select_initial_step(
-        &mut |_t, _y| panic!("hardened validation should fail before RHS evaluation"),
+        &mut |_t, _y| {
+            rhs_called = true;
+            vec![0.0]
+        },
         &request,
     )
     .expect_err("non-finite y0 should fail");
 
+    assert!(
+        !rhs_called,
+        "hardened validation should fail before RHS evaluation"
+    );
     assert_eq!(err, IntegrateValidationError::NonFiniteY0);
     assert_eq!(err.to_string(), "`y0` must be finite in Hardened mode.");
 }
@@ -288,12 +297,20 @@ fn diff_select_initial_step_hardened_rejects_non_finite_f0() {
         mode: RuntimeMode::Hardened,
     };
 
+    let mut rhs_called = false;
     let err = select_initial_step(
-        &mut |_t, _y| panic!("hardened validation should fail before RHS evaluation"),
+        &mut |_t, _y| {
+            rhs_called = true;
+            vec![0.0]
+        },
         &request,
     )
     .expect_err("non-finite f0 should fail");
 
+    assert!(
+        !rhs_called,
+        "hardened validation should fail before RHS evaluation"
+    );
     assert_eq!(err, IntegrateValidationError::NonFiniteF0);
     assert_eq!(err.to_string(), "`f0` must be finite in Hardened mode.");
 }
@@ -326,13 +343,17 @@ fn meta_atol_scaling() {
     .expect("scaled should succeed");
 
     // Metamorphic: r2.atol == r1.atol * c
-    match (&r1.atol, &r2.atol) {
-        (ToleranceValue::Vector(v1), ToleranceValue::Vector(v2)) => {
-            for (a, b) in v1.iter().zip(v2.iter()) {
-                assert!((b - a * c).abs() < 1e-20, "scaling not preserved");
-            }
+    assert!(
+        matches!(
+            (&r1.atol, &r2.atol),
+            (ToleranceValue::Vector(_), ToleranceValue::Vector(_))
+        ),
+        "expected vectors"
+    );
+    if let (ToleranceValue::Vector(v1), ToleranceValue::Vector(v2)) = (&r1.atol, &r2.atol) {
+        for (a, b) in v1.iter().zip(v2.iter()) {
+            assert!((b - a * c).abs() < 1e-20, "scaling not preserved");
         }
-        _ => panic!("expected vectors"),
     }
 }
 
@@ -560,15 +581,31 @@ fn adv_rtol_min_positive() {
 // ADV2: atol vector with one NaN element
 #[test]
 fn adv_atol_nan_element() {
-    // NaN is not < 0 (NaN < 0 is false), so it passes the negative check
     let result = validate_tol(
         ToleranceValue::Scalar(1e-3),
         ToleranceValue::Vector(vec![1e-8, f64::NAN, 1e-8]),
         3,
         RuntimeMode::Strict,
     );
-    // NaN passes through — implementation follows SciPy's permissive behavior
-    assert!(result.is_ok(), "NaN atol should not cause panic or error");
+    assert_eq!(
+        result.expect_err("NaN atol should fail closed"),
+        IntegrateValidationError::NonFiniteAtol
+    );
+}
+
+// ADV2b: rtol is NaN
+#[test]
+fn adv_rtol_nan() {
+    let result = validate_tol(
+        ToleranceValue::Scalar(f64::NAN),
+        ToleranceValue::Scalar(1e-8),
+        1,
+        RuntimeMode::Strict,
+    );
+    assert_eq!(
+        result.expect_err("NaN rtol should fail closed"),
+        IntegrateValidationError::NonFiniteRtol
+    );
 }
 
 // ADV3: atol vector with one Inf element
@@ -622,15 +659,11 @@ fn adv_first_step_tight_interval() {
 // ADV7: NaN inputs to validate_first_step
 #[test]
 fn adv_first_step_nan() {
-    // NaN <= 0.0 is false (NaN comparisons always false), so NaN passes
-    // the guard and the bounds check (NaN > 1.0 is also false).
-    // This matches SciPy's permissive NaN handling.
     let result = validate_first_step(f64::NAN, 0.0, 1.0);
-    assert!(
-        result.is_ok(),
-        "NaN step passes guards due to IEEE 754 semantics"
+    assert_eq!(
+        result.expect_err("NaN first_step should fail closed"),
+        IntegrateValidationError::NonFiniteFirstStep
     );
-    assert!(result.unwrap().is_nan());
 }
 
 // ADV8: Inf inputs to validate_max_step
@@ -644,14 +677,11 @@ fn adv_max_step_inf() {
 // ADV9: NaN to validate_max_step
 #[test]
 fn adv_max_step_nan() {
-    // NaN <= 0.0 is false, so NaN passes the guard.
-    // Matches SciPy's permissive NaN handling.
     let result = validate_max_step(f64::NAN);
-    assert!(
-        result.is_ok(),
-        "NaN max_step passes guard due to IEEE 754 semantics"
+    assert_eq!(
+        result.expect_err("NaN max_step should fail closed"),
+        IntegrateValidationError::NonFiniteMaxStep
     );
-    assert!(result.unwrap().is_nan());
 }
 
 // ADV10: negative Inf to validate_max_step

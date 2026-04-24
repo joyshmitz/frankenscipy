@@ -1253,9 +1253,7 @@ fn serialize_maybe_nan_vec<S: serde::Serializer>(
     }
 }
 
-fn deserialize_maybe_nan_complex_vec<'de, D>(
-    de: D,
-) -> Result<Option<Vec<[f64; 2]>>, D::Error>
+fn deserialize_maybe_nan_complex_vec<'de, D>(de: D) -> Result<Option<Vec<[f64; 2]>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -2568,22 +2566,22 @@ pub fn run_fft_packet(
 
     let mut case_results = Vec::with_capacity(fixture.cases.len());
     for case in &fixture.cases {
-        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            execute_fft_case(case)
-        })) {
-            Ok(v) => v,
-            Err(payload) => {
-                case_results.push(CaseResult {
-                    case_id: case.case_id().to_owned(),
-                    passed: false,
-                    message: format!(
-                        "PANIC in execute_fft_case: {}",
-                        panic_payload_message(payload)
-                    ),
-                });
-                continue;
-            }
-        };
+        let observed =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute_fft_case(case)))
+            {
+                Ok(v) => v,
+                Err(payload) => {
+                    case_results.push(CaseResult {
+                        case_id: case.case_id().to_owned(),
+                        passed: false,
+                        message: format!(
+                            "PANIC in execute_fft_case: {}",
+                            panic_payload_message(payload)
+                        ),
+                    });
+                    continue;
+                }
+            };
         let (passed, message) = compare_fft_outcome(&case.expected, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
@@ -3272,8 +3270,7 @@ fn execute_casp_case(case: &CaspCase) -> CaspObserved {
                     );
                 }
             };
-            let mut calibrator =
-                fsci_runtime::ConformalCalibrator::new(alpha, calibrator_capacity);
+            let mut calibrator = fsci_runtime::ConformalCalibrator::new(alpha, calibrator_capacity);
             for obs in &observations {
                 calibrator.observe(*obs);
             }
@@ -5662,7 +5659,9 @@ fn execute_integrate_case(case: &IntegrateCase) -> IntegrateObserved {
 ///
 /// Keys MUST match `_build_ivp_rhs` in scipy_integrate_oracle.py so
 /// both sides integrate the same ODE.
-fn ivp_rhs_by_name(name: &str) -> Option<fn(f64, &[f64]) -> Vec<f64>> {
+type IvpRhs = fn(f64, &[f64]) -> Vec<f64>;
+
+fn ivp_rhs_by_name(name: &str) -> Option<IvpRhs> {
     match name {
         "exponential_decay" => Some(|_t, y| vec![-y[0]]),
         "linear_growth" => Some(|_t, _y| vec![1.0]),
@@ -5724,7 +5723,9 @@ fn execute_integrate_solve_ivp(case: &IntegrateCase) -> IntegrateObserved {
             // y as Vec<Vec<f64>> with outer = timestep, inner = state.
             // Transpose to the (n_vars, n_points) shape the oracle emits.
             let n_vars = res.y.first().map_or(0, Vec::len);
-            let mut y_t: Vec<Vec<f64>> = (0..n_vars).map(|_| Vec::with_capacity(res.y.len())).collect();
+            let mut y_t: Vec<Vec<f64>> = (0..n_vars)
+                .map(|_| Vec::with_capacity(res.y.len()))
+                .collect();
             for step in &res.y {
                 for (i, &v) in step.iter().enumerate() {
                     y_t[i].push(v);
@@ -6195,7 +6196,11 @@ fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved)
             if exp_t.len() != t.len() {
                 return (
                     false,
-                    format!("ivp t length mismatch: got {}, expected {}", t.len(), exp_t.len()),
+                    format!(
+                        "ivp t length mismatch: got {}, expected {}",
+                        t.len(),
+                        exp_t.len()
+                    ),
                 );
             }
             for (i, (g, e)) in t.iter().zip(exp_t.iter()).enumerate() {
@@ -6210,7 +6215,11 @@ fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved)
             if exp_y.len() != y.len() {
                 return (
                     false,
-                    format!("ivp y outer length mismatch: got {}, expected {}", y.len(), exp_y.len()),
+                    format!(
+                        "ivp y outer length mismatch: got {}, expected {}",
+                        y.len(),
+                        exp_y.len()
+                    ),
                 );
             }
             for (var_idx, (got_row, exp_row_v)) in y.iter().zip(exp_y.iter()).enumerate() {
@@ -6233,14 +6242,15 @@ fn compare_integrate_outcome(case: &IntegrateCase, observed: &IntegrateObserved)
                     if !close(*gv, ev, atol, rtol) {
                         return (
                             false,
-                            format!(
-                                "ivp y[{var_idx}][{j}] mismatch: got {gv}, expected {ev}"
-                            ),
+                            format!("ivp y[{var_idx}][{j}] mismatch: got {gv}, expected {ev}"),
                         );
                     }
                 }
             }
-            (true, format!("ivp match ({} steps, {} vars)", t.len(), y.len()))
+            (
+                true,
+                format!("ivp match ({} steps, {} vars)", t.len(), y.len()),
+            )
         }
         ("error", IntegrateObserved::Error(msg))
         | ("error_kind", IntegrateObserved::Error(msg)) => {
@@ -6377,11 +6387,25 @@ fn compare_integrate_case_differential(
             };
             let exp_t = match expected_obj.get("t") {
                 Some(serde_json::Value::Array(a)) => a,
-                _ => return (false, "expected.value.t missing/not array".to_owned(), None, None),
+                _ => {
+                    return (
+                        false,
+                        "expected.value.t missing/not array".to_owned(),
+                        None,
+                        None,
+                    );
+                }
             };
             let exp_y = match expected_obj.get("y") {
                 Some(serde_json::Value::Array(a)) => a,
-                _ => return (false, "expected.value.y missing/not array".to_owned(), None, None),
+                _ => {
+                    return (
+                        false,
+                        "expected.value.y missing/not array".to_owned(),
+                        None,
+                        None,
+                    );
+                }
             };
             let mut max_diff = 0.0_f64;
             if exp_t.len() != t.len() {
@@ -7021,8 +7045,8 @@ pub fn run_linalg_packet_with_oracle_capture(
         Ok(output_path) => {
             let capture = load_oracle_capture(&output_path)?;
             let fixture_path = config.fixture_root.join(fixture_name);
-            let fixture_raw = fs::read_to_string(&fixture_path)
-                .map_err(|source| HarnessError::FixtureIo {
+            let fixture_raw =
+                fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
                     path: fixture_path.clone(),
                     source,
                 })?;
@@ -9322,36 +9346,22 @@ pub fn run_differential_test(
         "validate_tol" | "integrate.validate_tol" => {
             run_differential_validate_tol(fixture_path, &raw, oracle_config)
         }
-        "linalg_core" | "linalg" => {
-            run_differential_linalg(fixture_path, &raw, oracle_config)
-        }
+        "linalg_core" | "linalg" => run_differential_linalg(fixture_path, &raw, oracle_config),
         "array_api" | "array_api_core" => {
             run_differential_array_api(fixture_path, &raw, oracle_config)
         }
-        "special_core" | "special" => {
-            run_differential_special(fixture_path, &raw, oracle_config)
-        }
-        "fft_core" | "fft" => {
-            run_differential_fft(fixture_path, &raw, oracle_config)
-        }
+        "special_core" | "special" => run_differential_special(fixture_path, &raw, oracle_config),
+        "fft_core" | "fft" => run_differential_fft(fixture_path, &raw, oracle_config),
         "optimize_core" | "optimize" => {
             run_differential_optimize(fixture_path, &raw, oracle_config)
         }
         "runtime_casp" | "casp" | "casp_core" => {
             run_differential_casp(fixture_path, &raw, oracle_config)
         }
-        "cluster_core" | "cluster" => {
-            run_differential_cluster(fixture_path, &raw, oracle_config)
-        }
-        "spatial_core" | "spatial" => {
-            run_differential_spatial(fixture_path, &raw, oracle_config)
-        }
-        "signal_core" | "signal" => {
-            run_differential_signal(fixture_path, &raw, oracle_config)
-        }
-        "stats_core" | "stats" => {
-            run_differential_stats(fixture_path, &raw, oracle_config)
-        }
+        "cluster_core" | "cluster" => run_differential_cluster(fixture_path, &raw, oracle_config),
+        "spatial_core" | "spatial" => run_differential_spatial(fixture_path, &raw, oracle_config),
+        "signal_core" | "signal" => run_differential_signal(fixture_path, &raw, oracle_config),
+        "stats_core" | "stats" => run_differential_stats(fixture_path, &raw, oracle_config),
         "integrate_core" | "integrate" => {
             run_differential_integrate(fixture_path, &raw, oracle_config)
         }
@@ -9541,11 +9551,8 @@ fn run_differential_array_api(
 
     {
         let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
-        let _ = emit_differential_audit_ledger_for_fixture(
-            fixture_path,
-            &fixture.packet_id,
-            &ledger,
-        )?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -9592,11 +9599,8 @@ fn run_differential_optimize(
 
     {
         let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
-        let _ = emit_differential_audit_ledger_for_fixture(
-            fixture_path,
-            &fixture.packet_id,
-            &ledger,
-        )?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -9643,11 +9647,8 @@ fn run_differential_special(
 
     {
         let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
-        let _ = emit_differential_audit_ledger_for_fixture(
-            fixture_path,
-            &fixture.packet_id,
-            &ledger,
-        )?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -9784,11 +9785,8 @@ fn run_differential_stats(
 
     {
         let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
-        let _ = emit_differential_audit_ledger_for_fixture(
-            fixture_path,
-            &fixture.packet_id,
-            &ledger,
-        )?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -9835,11 +9833,8 @@ fn run_differential_signal(
 
     {
         let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
-        let _ = emit_differential_audit_ledger_for_fixture(
-            fixture_path,
-            &fixture.packet_id,
-            &ledger,
-        )?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -9889,11 +9884,8 @@ fn run_differential_spatial(
 
     {
         let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
-        let _ = emit_differential_audit_ledger_for_fixture(
-            fixture_path,
-            &fixture.packet_id,
-            &ledger,
-        )?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -9943,11 +9935,8 @@ fn run_differential_cluster(
 
     {
         let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
-        let _ = emit_differential_audit_ledger_for_fixture(
-            fixture_path,
-            &fixture.packet_id,
-            &ledger,
-        )?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -9997,11 +9986,8 @@ fn run_differential_casp(
 
     {
         let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
-        let _ = emit_differential_audit_ledger_for_fixture(
-            fixture_path,
-            &fixture.packet_id,
-            &ledger,
-        )?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -10329,11 +10315,8 @@ fn run_differential_constants(
 
     {
         let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
-        let _ = emit_differential_audit_ledger_for_fixture(
-            fixture_path,
-            &fixture.packet_id,
-            &ledger,
-        )?;
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
     }
 
     Ok(ConformanceReport {
@@ -13644,9 +13627,7 @@ mod tests {
 
     #[test]
     fn verify_oracle_capture_provenance_rejects_stale_fixture() {
-        use super::{
-            OracleCapture, OracleCaptureProvenance, verify_oracle_capture_provenance,
-        };
+        use super::{OracleCapture, OracleCaptureProvenance, verify_oracle_capture_provenance};
         let fixture_raw = b"{\"packet_id\":\"P2C-001\",\"cases\":[]}";
         let current_hash = blake3::hash(fixture_raw).to_hex().to_string();
 
@@ -13663,12 +13644,14 @@ mod tests {
                 capture_blake3: "0".into(),
             }),
         };
-        assert!(super::verify_oracle_capture_provenance(
-            &fresh_capture,
-            fixture_raw,
-            "test_fixture.json"
-        )
-        .is_ok());
+        assert!(
+            super::verify_oracle_capture_provenance(
+                &fresh_capture,
+                fixture_raw,
+                "test_fixture.json"
+            )
+            .is_ok()
+        );
 
         // A capture whose stored hash doesn't match: rejected.
         let stale_capture = OracleCapture {
@@ -13683,12 +13666,9 @@ mod tests {
                 capture_blake3: "0".into(),
             }),
         };
-        let err = verify_oracle_capture_provenance(
-            &stale_capture,
-            fixture_raw,
-            "test_fixture.json",
-        )
-        .expect_err("stale fixture must fail");
+        let err =
+            verify_oracle_capture_provenance(&stale_capture, fixture_raw, "test_fixture.json")
+                .expect_err("stale fixture must fail");
         assert!(err.to_string().contains("stale oracle capture"));
 
         // Legacy capture without provenance: no-op passes.
@@ -13700,12 +13680,14 @@ mod tests {
             case_outputs: Vec::new(),
             provenance: None,
         };
-        assert!(super::verify_oracle_capture_provenance(
-            &legacy_capture,
-            fixture_raw,
-            "test_fixture.json"
-        )
-        .is_ok());
+        assert!(
+            super::verify_oracle_capture_provenance(
+                &legacy_capture,
+                fixture_raw,
+                "test_fixture.json"
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -14097,7 +14079,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 eprintln!("skipping optimize oracle self-check: {stderr}");
                 return;
             }
-            panic!(
+            assert!(
+                output.status.success(),
                 "optimize oracle self-check should pass\nstdout:\n{}\nstderr:\n{}",
                 String::from_utf8_lossy(&output.stdout),
                 stderr
@@ -14129,7 +14112,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 eprintln!("skipping fft oracle self-check: {stderr}");
                 return;
             }
-            panic!(
+            assert!(
+                output.status.success(),
                 "fft oracle self-check should pass\nstdout:\n{}\nstderr:\n{}",
                 String::from_utf8_lossy(&output.stdout),
                 stderr
@@ -14579,7 +14563,8 @@ def __getattr__(name):
                 eprintln!("skipping live special-fixture oracle coverage test: {stderr}");
                 return;
             }
-            panic!(
+            assert!(
+                output.status.success(),
                 "oracle script should exit successfully\nstdout:\n{}\nstderr:\n{}",
                 String::from_utf8_lossy(&output.stdout),
                 stderr
@@ -15140,6 +15125,7 @@ def __getattr__(name):
                     expect_warning_ill_conditioned: None,
                 },
             }],
+            oracle_provenance: None,
         };
         fs::write(
             &fixture_dst,
@@ -17192,7 +17178,9 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             super::run_case_with_panic_capture("case-1", &oracle_status, None, || {
                 (true, "ok".to_owned(), Some(0.0), None)
             }),
-            super::run_case_with_panic_capture("case-2", &oracle_status, None, || panic!("boom")),
+            super::run_case_with_panic_capture("case-2", &oracle_status, None, || {
+                std::panic::panic_any("boom")
+            }),
             super::run_case_with_panic_capture("case-3", &oracle_status, None, || {
                 (true, "still running".to_owned(), None, None)
             }),
@@ -17215,7 +17203,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             Some(&audit_ledger),
             || {
                 let _guard = audit_ledger.lock().expect("lock");
-                panic!("audit poison");
+                std::panic::panic_any("audit poison");
             },
         );
 
@@ -17523,11 +17511,17 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         // Same partition, different IDs → same canonical form.
         let a = canon(&[0, 1, 1, 2, 0]);
         let b = canon(&[1, 2, 2, 0, 1]);
-        assert_eq!(a, b, "br-7eaq: permuted cluster IDs must canonicalize equal");
+        assert_eq!(
+            a, b,
+            "br-7eaq: permuted cluster IDs must canonicalize equal"
+        );
 
         // Different partition → different canonical form.
         let c = canon(&[0, 1, 0, 1, 0]);
-        assert_ne!(a, c, "br-7eaq: different partitions must not canonicalize equal");
+        assert_ne!(
+            a, c,
+            "br-7eaq: different partitions must not canonicalize equal"
+        );
 
         // First-occurrence ordering: first distinct ID seen maps to 0.
         assert_eq!(canon(&[5, 5, 7, 7, 5]), vec![0, 0, 1, 1, 0]);

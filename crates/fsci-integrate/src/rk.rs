@@ -471,10 +471,7 @@ impl RkSolver {
         // Validate max_step (per frankenscipy-ljmg / i9vw): NaN fails
         // closed via validate_max_step; Inf is accepted as "no cap" per
         // scipy convention (default max_step = Inf).
-        if config.max_step.is_nan() {
-            return Err(IntegrateValidationError::MaxStepMustBePositive);
-        }
-        if config.max_step.is_finite() {
+        if config.max_step.is_finite() || config.max_step.is_nan() {
             validate_max_step(config.max_step)?;
         }
 
@@ -571,10 +568,7 @@ impl RkSolver {
         // Validate max_step (per frankenscipy-ljmg / i9vw): NaN fails
         // closed via validate_max_step; Inf is accepted as "no cap" per
         // scipy convention (default max_step = Inf).
-        if config.max_step.is_nan() {
-            return Err(IntegrateValidationError::MaxStepMustBePositive);
-        }
-        if config.max_step.is_finite() {
+        if config.max_step.is_finite() || config.max_step.is_nan() {
             validate_max_step(config.max_step)?;
         }
 
@@ -1089,6 +1083,27 @@ mod tests {
     }
 
     #[test]
+    fn solver_rejects_nan_max_step() {
+        let mut fun = |_t: f64, y: &[f64]| -> Vec<f64> { vec![-y[0]] };
+        let config = RkSolverConfig {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 1.0,
+            rtol: 1e-8,
+            atol: ToleranceValue::Scalar(1e-10),
+            max_step: f64::NAN,
+            first_step: None,
+            mode: RuntimeMode::Strict,
+            tableau: &RK45_TABLEAU,
+        };
+        let result = RkSolver::new(&mut fun, config);
+        assert!(matches!(
+            result,
+            Err(IntegrateValidationError::NonFiniteMaxStep)
+        ));
+    }
+
+    #[test]
     fn solver_two_component_system() {
         // y' = [y[1], -y[0]] (simple harmonic oscillator)
         // y(0) = [1, 0], exact: y(t) = [cos(t), -sin(t)]
@@ -1340,8 +1355,7 @@ mod tests {
             mode: RuntimeMode::Strict,
             tableau: &RK45_TABLEAU,
         };
-        let solver =
-            RkSolver::new_owned(|_t, y| vec![-y[0]], config).expect("solver creation");
+        let solver = RkSolver::new_owned(|_t, y| vec![-y[0]], config).expect("solver creation");
 
         // can_step() should return true for owned solvers
         assert!(solver.can_step());
