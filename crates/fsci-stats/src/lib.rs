@@ -10,6 +10,9 @@
 //!
 //! Each distribution implements pdf, cdf, sf, ppf (inverse CDF), mean, var, std.
 
+pub mod audit;
+pub use audit::{SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger};
+
 use std::f64::consts::{FRAC_1_SQRT_2, LN_2, PI};
 
 use fsci_runtime::RuntimeMode;
@@ -188,6 +191,34 @@ pub trait ContinuousDistribution {
         Err(FitError::NotImplemented {
             distribution: std::any::type_name::<Self>(),
         })
+    }
+
+    /// Audit-emitting counterpart to `try_fit` (br-egba-3). Delegates
+    /// to `try_fit`, and on any `FitError` records an
+    /// `AuditAction::FailClosed` event on the provided ledger. Useful
+    /// under Hardened-mode deployments where callers need a forensic
+    /// trail of which samples were rejected.
+    fn try_fit_with_audit(
+        data: &[f64],
+        ledger: &SyncSharedAuditLedger,
+    ) -> Result<Self, FitError>
+    where
+        Self: Sized,
+    {
+        let result = Self::try_fit(data);
+        if let Err(err) = &result {
+            let reason = format!("fit::{err}");
+            // Fingerprint the first few bytes of the sample so
+            // repeated identical rejections collide under the same
+            // event hash.
+            let head: Vec<u8> = data
+                .iter()
+                .take(8)
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+            record_fail_closed(ledger, &head, &reason, "rejected");
+        }
+        result
     }
 
     /// Differential entropy H(X) = -∫ f(x) log f(x) dx.
@@ -20026,6 +20057,35 @@ mod tests {
         let data = [0.0, 1.0, 2.0, 3.0, 4.0];
         let e = Exponential::fit(&data);
         assert!((e.lambda - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_try_fit_with_audit_emits_on_rejection() {
+        // br-egba-3: try_fit_with_audit delegates to try_fit and
+        // records an AuditAction::FailClosed on the ledger for every
+        // error path. Strict-vs-Hardened distinction does not apply to
+        // try_fit (it's non-panicking by design), so emission happens
+        // whenever the result is Err.
+        let ledger = super::sync_audit_ledger();
+
+        // Success path — no emission.
+        let _ = Normal::try_fit_with_audit(&[1.0, 2.0, 3.0], &ledger)
+            .expect("clean data must fit");
+        assert_eq!(ledger.lock().unwrap().len(), 0, "successful fit must not emit");
+
+        // Empty data — exactly one emission.
+        let _ = Normal::try_fit_with_audit(&[], &ledger).expect_err("empty must error");
+        assert_eq!(ledger.lock().unwrap().len(), 1, "InsufficientData must emit once");
+
+        // NaN data — another emission.
+        let _ =
+            Normal::try_fit_with_audit(&[1.0, f64::NAN, 3.0], &ledger).expect_err("NaN must error");
+        assert_eq!(ledger.lock().unwrap().len(), 2, "UnsupportedData must emit");
+
+        // NotImplemented distribution — emits too.
+        let r = <Chi as ContinuousDistribution>::try_fit_with_audit(&[1.0, 2.0], &ledger);
+        assert!(matches!(r, Err(FitError::NotImplemented { .. })));
+        assert_eq!(ledger.lock().unwrap().len(), 3, "NotImplemented must emit");
     }
 
     #[test]
