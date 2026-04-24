@@ -17,8 +17,8 @@ pub use helpers::{
     magnitude_spectrum, periodogram_simple, phase_spectrum_signal, rfftfreq, zero_pad_pow2,
 };
 pub use plan::{
-    CacheAdmissionPolicy, PlanCacheBackend, PlanCacheConfig, PlanFingerprint, PlanKey,
-    PlanMetadata, PlanningStrategy,
+    BoundedPlanCache, CacheAdmissionPolicy, PlanCacheBackend, PlanCacheConfig, PlanFingerprint,
+    PlanKey, PlanMetadata, PlanningStrategy,
 };
 pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, SyncSharedAuditLedger, TransformTrace,

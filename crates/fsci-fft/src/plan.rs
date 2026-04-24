@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 
 use crate::{Normalization, TransformKind};
@@ -68,22 +68,6 @@ pub struct PlanMetadata {
 }
 
 /// Control-plane configuration for plan caching.
-///
-/// # Status
-///
-/// **Most fields are not consumed in production** (per frankenscipy-9vmw).
-/// The actual plan cache is an unbounded global `HashMap` at
-/// `SHARED_PLAN_CACHE`; `capacity`, `max_working_set_bytes`, and
-/// `admission_policy` are declared here and have `Default` values, but
-/// `store_shared_plan` inserts unconditionally regardless. Only
-/// `planning_strategy` is wired (read by transforms.rs when building a
-/// fingerprint).
-///
-/// The `PlanCacheBackend` trait similarly has zero `impl` blocks; it
-/// exists as a future-facing abstraction, not live infrastructure.
-///
-/// Until the real cache is implemented, treat these fields as
-/// telemetry / roadmap rather than enforced bounds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanCacheConfig {
     pub capacity: usize,
@@ -105,22 +89,216 @@ impl Default for PlanCacheConfig {
 
 /// Storage interface to decouple planning from cache implementation
 /// details.
-///
-/// # Status
-///
-/// **Zero production implementations** (per frankenscipy-9vmw). The
-/// trait is public API but no type implements it; the shared cache
-/// uses a plain `HashMap` directly. Treat as roadmap scaffolding.
 pub trait PlanCacheBackend {
     fn lookup(&self, key: &PlanKey) -> Option<PlanMetadata>;
     fn store(&mut self, metadata: PlanMetadata) -> bool;
     fn config(&self) -> &PlanCacheConfig;
 }
 
-static SHARED_PLAN_CACHE: OnceLock<Mutex<HashMap<PlanKey, PlanMetadata>>> = OnceLock::new();
+#[derive(Debug, Clone)]
+pub struct BoundedPlanCache {
+    config: PlanCacheConfig,
+    entries: HashMap<PlanKey, PlanMetadata>,
+    lru: VecDeque<PlanKey>,
+    working_set_bytes: usize,
+}
 
-fn shared_cache() -> &'static Mutex<HashMap<PlanKey, PlanMetadata>> {
-    SHARED_PLAN_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+impl BoundedPlanCache {
+    #[must_use]
+    pub fn new(config: PlanCacheConfig) -> Self {
+        Self {
+            config,
+            entries: HashMap::new(),
+            lru: VecDeque::new(),
+            working_set_bytes: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[must_use]
+    pub fn working_set_bytes(&self) -> usize {
+        self.working_set_bytes
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.lru.clear();
+        self.working_set_bytes = 0;
+    }
+
+    fn lookup_and_touch(&mut self, key: &PlanKey) -> Option<PlanMetadata> {
+        let metadata = self.entries.get(key).cloned()?;
+        self.touch_key(key);
+        Some(metadata)
+    }
+
+    fn store_with_config(&mut self, metadata: PlanMetadata, config: PlanCacheConfig) -> bool {
+        self.config = config;
+        self.store(metadata)
+    }
+
+    fn touch_key(&mut self, key: &PlanKey) {
+        self.remove_from_lru(key);
+        self.lru.push_back(key.clone());
+    }
+
+    fn remove_from_lru(&mut self, key: &PlanKey) {
+        if let Some(index) = self.lru.iter().position(|candidate| candidate == key) {
+            self.lru.remove(index);
+        }
+    }
+
+    fn metadata_working_set_bytes(metadata: &PlanMetadata) -> usize {
+        metadata.fingerprint.scratch_bytes.saturating_add(
+            metadata
+                .fingerprint
+                .radix_path
+                .len()
+                .saturating_mul(std::mem::size_of::<usize>()),
+        )
+    }
+
+    fn can_consider(&self, metadata: &PlanMetadata) -> bool {
+        if self.config.capacity == 0
+            || self.config.max_working_set_bytes == 0
+            || matches!(self.config.admission_policy, CacheAdmissionPolicy::Disabled)
+        {
+            return false;
+        }
+
+        let entry_bytes = Self::metadata_working_set_bytes(metadata);
+        if entry_bytes > self.config.max_working_set_bytes {
+            return false;
+        }
+
+        if matches!(
+            self.config.admission_policy,
+            CacheAdmissionPolicy::AlwaysInsert
+        ) {
+            return true;
+        }
+
+        if self.entries.len() < self.config.capacity
+            && self.working_set_bytes.saturating_add(entry_bytes)
+                <= self.config.max_working_set_bytes
+        {
+            return true;
+        }
+
+        let Some(min_existing_flops) = self
+            .entries
+            .values()
+            .map(|existing| existing.fingerprint.estimated_flops)
+            .min()
+        else {
+            return true;
+        };
+
+        metadata.fingerprint.estimated_flops >= min_existing_flops
+    }
+
+    fn evict_until_fit(&mut self, incoming_bytes: usize) {
+        while self.entries.len() >= self.config.capacity
+            || self.working_set_bytes.saturating_add(incoming_bytes)
+                > self.config.max_working_set_bytes
+        {
+            if !self.evict_one() {
+                break;
+            }
+        }
+    }
+
+    fn evict_one(&mut self) -> bool {
+        if self.lru.is_empty() {
+            return false;
+        }
+
+        let victim_index = if matches!(
+            self.config.admission_policy,
+            CacheAdmissionPolicy::CostWeightedLru
+        ) {
+            self.lru
+                .iter()
+                .take(8)
+                .enumerate()
+                .min_by_key(|(_, key)| {
+                    self.entries
+                        .get(*key)
+                        .map_or(0, |metadata| metadata.fingerprint.estimated_flops)
+                })
+                .map_or(0, |(index, _)| index)
+        } else {
+            0
+        };
+
+        let Some(victim_key) = self.lru.remove(victim_index) else {
+            return false;
+        };
+        if let Some(victim) = self.entries.remove(&victim_key) {
+            self.working_set_bytes = self
+                .working_set_bytes
+                .saturating_sub(Self::metadata_working_set_bytes(&victim));
+        }
+        true
+    }
+}
+
+impl Default for BoundedPlanCache {
+    fn default() -> Self {
+        Self::new(PlanCacheConfig::default())
+    }
+}
+
+impl PlanCacheBackend for BoundedPlanCache {
+    fn lookup(&self, key: &PlanKey) -> Option<PlanMetadata> {
+        self.entries.get(key).cloned()
+    }
+
+    fn store(&mut self, metadata: PlanMetadata) -> bool {
+        if !self.can_consider(&metadata) {
+            return false;
+        }
+
+        let entry_bytes = Self::metadata_working_set_bytes(&metadata);
+        if let Some(previous) = self.entries.remove(&metadata.key) {
+            self.working_set_bytes = self
+                .working_set_bytes
+                .saturating_sub(Self::metadata_working_set_bytes(&previous));
+            self.remove_from_lru(&metadata.key);
+        }
+
+        self.evict_until_fit(entry_bytes);
+        if self.entries.len() >= self.config.capacity
+            || self.working_set_bytes.saturating_add(entry_bytes)
+                > self.config.max_working_set_bytes
+        {
+            return false;
+        }
+
+        self.working_set_bytes = self.working_set_bytes.saturating_add(entry_bytes);
+        self.lru.push_back(metadata.key.clone());
+        self.entries.insert(metadata.key.clone(), metadata);
+        true
+    }
+
+    fn config(&self) -> &PlanCacheConfig {
+        &self.config
+    }
+}
+
+static SHARED_PLAN_CACHE: OnceLock<Mutex<BoundedPlanCache>> = OnceLock::new();
+
+fn shared_cache() -> &'static Mutex<BoundedPlanCache> {
+    SHARED_PLAN_CACHE.get_or_init(|| Mutex::new(BoundedPlanCache::default()))
 }
 
 #[must_use]
@@ -128,13 +306,23 @@ pub fn lookup_shared_plan(key: &PlanKey) -> Option<PlanMetadata> {
     shared_cache()
         .lock()
         .ok()
-        .and_then(|cache| cache.get(key).cloned())
+        .and_then(|mut cache| cache.lookup_and_touch(key))
 }
 
-pub fn store_shared_plan(metadata: PlanMetadata) {
+#[must_use]
+pub fn store_shared_plan(metadata: PlanMetadata) -> bool {
     if let Ok(mut cache) = shared_cache().lock() {
-        cache.insert(metadata.key.clone(), metadata);
+        return cache.store(metadata);
     }
+    false
+}
+
+#[must_use]
+pub fn store_shared_plan_with_config(metadata: PlanMetadata, config: PlanCacheConfig) -> bool {
+    if let Ok(mut cache) = shared_cache().lock() {
+        return cache.store_with_config(metadata, config);
+    }
+    false
 }
 
 #[must_use]
@@ -142,19 +330,49 @@ pub fn shared_plan_cache_len() -> usize {
     shared_cache().lock().map_or(0, |cache| cache.len())
 }
 
+#[must_use]
+pub fn shared_plan_cache_working_set_bytes() -> usize {
+    shared_cache()
+        .lock()
+        .map_or(0, |cache| cache.working_set_bytes())
+}
+
 pub fn clear_shared_plan_cache() {
     if let Ok(mut cache) = shared_cache().lock() {
-        cache.clear();
+        *cache = BoundedPlanCache::default();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        PlanCacheConfig, PlanFingerprint, PlanKey, PlanMetadata, PlanningStrategy,
-        clear_shared_plan_cache, lookup_shared_plan, shared_plan_cache_len, store_shared_plan,
+        CacheAdmissionPolicy, PlanCacheConfig, PlanFingerprint, PlanKey, PlanMetadata,
+        PlanningStrategy, clear_shared_plan_cache, lookup_shared_plan, shared_plan_cache_len,
+        shared_plan_cache_working_set_bytes, store_shared_plan, store_shared_plan_with_config,
     };
     use crate::{Normalization, TransformKind};
+
+    fn test_key(n: usize) -> PlanKey {
+        PlanKey::new(
+            TransformKind::Fft,
+            vec![n],
+            vec![0],
+            Normalization::Backward,
+            false,
+        )
+    }
+
+    fn test_metadata(n: usize, estimated_flops: u64, scratch_bytes: usize) -> PlanMetadata {
+        PlanMetadata {
+            key: test_key(n),
+            fingerprint: PlanFingerprint {
+                radix_path: vec![2; n.trailing_zeros() as usize],
+                estimated_flops,
+                scratch_bytes,
+            },
+            generated_by: PlanningStrategy::EstimateOnly,
+        }
+    }
 
     #[test]
     fn default_cache_config_is_bounded_and_deterministic() {
@@ -190,13 +408,99 @@ mod tests {
             key: key.clone(),
             fingerprint: PlanFingerprint {
                 radix_path: vec![2, 2, 2, 2, 2, 2],
-                estimated_flops: 64 * 64,
+                estimated_flops: 64 * 6 * 5,
                 scratch_bytes: 64 * 16,
             },
             generated_by: PlanningStrategy::EstimateOnly,
         };
-        store_shared_plan(metadata);
-        assert!(shared_plan_cache_len() >= 1);
+        assert!(store_shared_plan(metadata));
+        assert_eq!(shared_plan_cache_len(), 1);
         assert!(lookup_shared_plan(&key).is_some());
+    }
+
+    #[test]
+    fn shared_cache_respects_disabled_admission_policy() {
+        clear_shared_plan_cache();
+        let config = PlanCacheConfig {
+            admission_policy: CacheAdmissionPolicy::Disabled,
+            ..PlanCacheConfig::default()
+        };
+        let metadata = test_metadata(16, 320, 16 * 16);
+
+        assert!(!store_shared_plan_with_config(metadata, config));
+        assert_eq!(shared_plan_cache_len(), 0);
+    }
+
+    #[test]
+    fn shared_cache_enforces_capacity_limit() {
+        clear_shared_plan_cache();
+        let config = PlanCacheConfig {
+            capacity: 2,
+            admission_policy: CacheAdmissionPolicy::AlwaysInsert,
+            ..PlanCacheConfig::default()
+        };
+
+        assert!(store_shared_plan_with_config(
+            test_metadata(16, 320, 16 * 16),
+            config.clone()
+        ));
+        assert!(store_shared_plan_with_config(
+            test_metadata(32, 800, 32 * 16),
+            config.clone()
+        ));
+        assert!(store_shared_plan_with_config(
+            test_metadata(64, 1_920, 64 * 16),
+            config
+        ));
+
+        assert_eq!(shared_plan_cache_len(), 2);
+        assert!(lookup_shared_plan(&test_key(16)).is_none());
+        assert!(lookup_shared_plan(&test_key(32)).is_some());
+        assert!(lookup_shared_plan(&test_key(64)).is_some());
+    }
+
+    #[test]
+    fn shared_cache_enforces_working_set_limit() {
+        clear_shared_plan_cache();
+        let config = PlanCacheConfig {
+            capacity: 8,
+            max_working_set_bytes: 160,
+            admission_policy: CacheAdmissionPolicy::AlwaysInsert,
+            ..PlanCacheConfig::default()
+        };
+
+        assert!(store_shared_plan_with_config(
+            test_metadata(16, 320, 64),
+            config.clone()
+        ));
+        assert!(store_shared_plan_with_config(
+            test_metadata(32, 800, 64),
+            config
+        ));
+
+        assert!(shared_plan_cache_working_set_bytes() <= 160);
+        assert_eq!(shared_plan_cache_len(), 1);
+    }
+
+    #[test]
+    fn cost_weighted_cache_rejects_cheap_plan_when_full() {
+        clear_shared_plan_cache();
+        let config = PlanCacheConfig {
+            capacity: 1,
+            admission_policy: CacheAdmissionPolicy::CostWeightedLru,
+            ..PlanCacheConfig::default()
+        };
+
+        assert!(store_shared_plan_with_config(
+            test_metadata(128, 4_480, 128 * 16),
+            config.clone()
+        ));
+        assert!(!store_shared_plan_with_config(
+            test_metadata(8, 120, 8 * 16),
+            config
+        ));
+
+        assert!(lookup_shared_plan(&test_key(128)).is_some());
+        assert!(lookup_shared_plan(&test_key(8)).is_none());
     }
 }

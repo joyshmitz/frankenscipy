@@ -2055,16 +2055,24 @@ fn touch_plan_cache(key: &PlanKey, n: usize) -> bool {
         return true;
     }
 
-    store_shared_plan(PlanMetadata {
+    let _ = store_shared_plan(PlanMetadata {
         key: key.clone(),
         fingerprint: PlanFingerprint {
             radix_path: factorize_radix_path(n),
-            estimated_flops: (n as u64).saturating_mul(n as u64),
+            estimated_flops: estimate_fft_flops(n),
             scratch_bytes: n.saturating_mul(std::mem::size_of::<Complex64>()),
         },
         generated_by: PlanningStrategy::EstimateOnly,
     });
     false
+}
+
+fn estimate_fft_flops(n: usize) -> u64 {
+    if n <= 1 {
+        return 0;
+    }
+    let stages = usize::BITS - (n - 1).leading_zeros();
+    (n as u64).saturating_mul(stages as u64).saturating_mul(5)
 }
 
 fn factorize_radix_path(mut n: usize) -> Vec<usize> {
@@ -2679,9 +2687,9 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        FftError, FftOptions, TransformKind, WorkerPolicy, fft, fft_with_audit, fft2, fftn, hfft,
-        ifft, ifft2, irfft, irfft2, irfftn, next_fast_len, rfft, rfft_with_audit, rfft2, rfftn,
-        sync_audit_ledger, take_transform_traces,
+        FftError, FftOptions, TransformKind, WorkerPolicy, estimate_fft_flops, fft, fft_with_audit,
+        fft2, fftn, hfft, ifft, ifft2, irfft, irfft2, irfftn, next_fast_len, rfft, rfft_with_audit,
+        rfft2, rfftn, sync_audit_ledger, take_transform_traces,
     };
     use crate::Normalization;
     use crate::plan::clear_shared_plan_cache;
@@ -3061,6 +3069,14 @@ mod tests {
             "Second call should be a cache hit"
         );
         assert!(last_two[0].to_json_line().contains("\"operation_id\""));
+    }
+
+    #[test]
+    fn plan_cache_flop_estimate_tracks_fft_complexity() {
+        assert_eq!(estimate_fft_flops(0), 0);
+        assert_eq!(estimate_fft_flops(1), 0);
+        assert_eq!(estimate_fft_flops(1024), 1024 * 10 * 5);
+        assert!(estimate_fft_flops(1024) < 1024 * 1024);
     }
 
     // ── rfft2 / irfft2 tests ───────────────────────────────────────
