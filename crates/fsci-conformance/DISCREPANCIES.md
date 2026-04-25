@@ -70,13 +70,15 @@ at the bottom for re-evaluation.
 - **Our impl:** fsci-io previously had crate-level e2e tests but no
   `fixtures/FSCI-P2C-*.json` packet lane in `fsci-conformance`.
   FSCI-P2C-017 now seeds an oracle-backed lane for Matrix Market,
-  numeric text, and WAV metadata/value parity.
+  MAT v4 real-double matrices, numeric text, and WAV metadata/value parity.
 - **Impact:** Users reading parity numbers see fixture-backed families
   only; io now has a narrow fixture-backed score, while any broader
   scipy.io claims remain out of scope until more cases land.
-- **Resolution:** RESOLVED for the seed io lane. Keep broad io parity
-  percentages scoped to the FSCI-P2C-017 functions until new fixture
-  packets expand the surface.
+- **Resolution:** RESOLVED for the seed io lane. MAT parity is currently
+  narrowed to SciPy-compatible `savemat(..., format="4")` / `loadmat` for
+  full real double matrices. MAT v5/v7.3, structs, cells, sparse matrices,
+  chars, and complex arrays remain out of scope until new fixture packets
+  expand the surface.
 - **Tests affected:** `e2e_io.rs`, `FSCI-P2C-017_io_core.json`.
 - **Review date:** 2026-04-25
 - **Related beads:** frankenscipy-3m6f

@@ -85,6 +85,35 @@ def _run_mmwrite(case: Dict[str, Any], scipy_io: Any, np: Any) -> Dict[str, Any]
         return _err(case_id, _fixture_error(case, str(exc)))
 
 
+def _run_loadmat(case: Dict[str, Any], scipy_io: Any, np: Any) -> Dict[str, Any]:
+    case_id = case["case_id"]
+    try:
+        stream = io.BytesIO(bytes.fromhex(str(case["content_hex"])))
+        loaded = scipy_io.loadmat(stream)
+        keys = [key for key in loaded.keys() if not key.startswith("__")]
+        if not keys:
+            return _err(case_id, _fixture_error(case, "MAT file did not contain any arrays"))
+        return _ok(case_id, "matrix", _matrix_payload(loaded[keys[0]], np))
+    except (ArithmeticError, OverflowError, TypeError, ValueError) as exc:
+        return _err(case_id, _fixture_error(case, str(exc)))
+
+
+def _run_savemat(case: Dict[str, Any], scipy_io: Any, np: Any) -> Dict[str, Any]:
+    case_id = case["case_id"]
+    try:
+        rows = int(case["rows"])
+        cols = int(case["cols"])
+        name = str(case["name"])
+        matrix = np.asarray(case["data"], dtype=np.float64).reshape((rows, cols))
+        stream = io.BytesIO()
+        scipy_io.savemat(stream, {name: matrix}, format="4")
+        stream.seek(0)
+        loaded = scipy_io.loadmat(stream)
+        return _ok(case_id, "matrix", _matrix_payload(loaded[name], np))
+    except (ArithmeticError, OverflowError, TypeError, ValueError) as exc:
+        return _err(case_id, _fixture_error(case, str(exc)))
+
+
 def _run_loadtxt(case: Dict[str, Any], np: Any) -> Dict[str, Any]:
     case_id = case["case_id"]
     try:
@@ -143,6 +172,10 @@ def _run_case(case: Dict[str, Any], scipy_io: Any, wavfile: Any, np: Any) -> Dic
         return _run_mmread(case, scipy_io, np)
     if operation == "mmwrite":
         return _run_mmwrite(case, scipy_io, np)
+    if operation == "loadmat":
+        return _run_loadmat(case, scipy_io, np)
+    if operation == "savemat":
+        return _run_savemat(case, scipy_io, np)
     if operation == "loadtxt":
         return _run_loadtxt(case, np)
     if operation == "savetxt":

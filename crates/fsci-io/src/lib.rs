@@ -3,7 +3,7 @@
 //! Input/Output routines for FrankenSciPy.
 //!
 //! Matches `scipy.io` core functions:
-//! - `savemat` / `loadmat` — MATLAB .mat file v5 (Level 5) read/write
+//! - `savemat` / `loadmat` — MATLAB .mat file v4 real double matrix read/write
 //! - `mmread` / `mmwrite` — Matrix Market format read/write
 //! - `wavfile.read` / `wavfile.write` — WAV audio file read/write
 //! - `netcdf_file` — NetCDF (simplified) read/write
@@ -788,6 +788,252 @@ pub struct MatArray {
     pub rows: usize,
     pub cols: usize,
     pub data: Vec<f64>,
+}
+
+const MAT4_MI_DOUBLE: i32 = 0;
+const MAT4_MX_FULL_CLASS: i32 = 0;
+const MAT4_MAX_ELEMENTS: usize = 128 * 1024 * 1024;
+
+fn checked_mat_dense_len(rows: usize, cols: usize) -> Result<usize, IoError> {
+    let len = checked_matrix_len(rows, cols, "MAT v4 matrix")?;
+    if len > MAT4_MAX_ELEMENTS {
+        return Err(IoError::InvalidFormat(format!(
+            "MAT v4 matrix dimensions {rows}x{cols} exceed dense read safety bound of {MAT4_MAX_ELEMENTS} elements"
+        )));
+    }
+    Ok(len)
+}
+
+fn validate_mat_array(arr: &MatArray) -> Result<usize, IoError> {
+    if arr.name.is_empty() {
+        return Err(IoError::InvalidFormat(
+            "MAT v4 variable name cannot be empty".to_string(),
+        ));
+    }
+    if arr.name.contains('\0') {
+        return Err(IoError::InvalidFormat(format!(
+            "array name '{}' contains a NUL byte and cannot be encoded safely",
+            arr.name.escape_debug()
+        )));
+    }
+    if arr.name.chars().any(|ch| u32::from(ch) > 0xff) {
+        return Err(IoError::UnsupportedFeature(format!(
+            "array name '{}' is not Latin-1 encodable for MAT v4",
+            arr.name.escape_debug()
+        )));
+    }
+    i32::try_from(arr.rows).map_err(|_| {
+        IoError::InvalidFormat(format!(
+            "array '{}' row count {} exceeds MAT v4 i32 header range",
+            arr.name, arr.rows
+        ))
+    })?;
+    i32::try_from(arr.cols).map_err(|_| {
+        IoError::InvalidFormat(format!(
+            "array '{}' column count {} exceeds MAT v4 i32 header range",
+            arr.name, arr.cols
+        ))
+    })?;
+    let expected_len = checked_mat_dense_len(arr.rows, arr.cols)?;
+    if arr.data.len() != expected_len {
+        return Err(IoError::InvalidFormat(format!(
+            "array '{}' expected {} values but found {}",
+            arr.name,
+            expected_len,
+            arr.data.len()
+        )));
+    }
+    Ok(expected_len)
+}
+
+fn mat4_name_bytes(name: &str) -> Result<Vec<u8>, IoError> {
+    let mut bytes = Vec::with_capacity(name.len() + 1);
+    for ch in name.chars() {
+        if u32::from(ch) > 0xff {
+            return Err(IoError::UnsupportedFeature(format!(
+                "array name '{}' is not Latin-1 encodable for MAT v4",
+                name.escape_debug()
+            )));
+        }
+        bytes.push(ch as u8);
+    }
+    bytes.push(0);
+    Ok(bytes)
+}
+
+fn read_mat4_i32(bytes: &[u8], offset: &mut usize, field: &str) -> Result<i32, IoError> {
+    let end = offset
+        .checked_add(4)
+        .ok_or_else(|| IoError::InvalidFormat(format!("MAT v4 {field} offset overflowed usize")))?;
+    let slice = bytes.get(*offset..end).ok_or_else(|| {
+        IoError::InvalidFormat(format!("truncated MAT v4 header while reading {field}"))
+    })?;
+    *offset = end;
+    Ok(i32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn read_mat4_f64(bytes: &[u8], offset: &mut usize, name: &str) -> Result<f64, IoError> {
+    let end = offset.checked_add(8).ok_or_else(|| {
+        IoError::InvalidFormat(format!("MAT v4 data offset overflowed for '{name}'"))
+    })?;
+    let slice = bytes.get(*offset..end).ok_or_else(|| {
+        IoError::InvalidFormat(format!("truncated MAT v4 data payload for '{name}'"))
+    })?;
+    *offset = end;
+    Ok(f64::from_le_bytes([
+        slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
+    ]))
+}
+
+fn mat4_nonnegative_usize(value: i32, field: &str) -> Result<usize, IoError> {
+    if value < 0 {
+        return Err(IoError::InvalidFormat(format!(
+            "MAT v4 {field} cannot be negative: {value}"
+        )));
+    }
+    usize::try_from(value).map_err(|_| {
+        IoError::InvalidFormat(format!(
+            "MAT v4 {field} {value} cannot be represented as usize"
+        ))
+    })
+}
+
+/// Save arrays to MATLAB MAT-file Level 4 bytes.
+///
+/// This intentionally supports the SciPy-compatible `format="4"` subset for
+/// full real double matrices. Structs, cells, sparse matrices, complex values,
+/// character arrays, compression, and MAT v5/v7.3 are outside this narrow
+/// contract and fail closed elsewhere.
+pub fn savemat(arrays: &[MatArray]) -> Result<Vec<u8>, IoError> {
+    let mut out = Vec::new();
+    for arr in arrays {
+        validate_mat_array(arr)?;
+        let name = mat4_name_bytes(&arr.name)?;
+        let name_len = i32::try_from(name.len()).map_err(|_| {
+            IoError::InvalidFormat(format!(
+                "array '{}' name length {} exceeds MAT v4 i32 header range",
+                arr.name,
+                name.len()
+            ))
+        })?;
+        let rows = i32::try_from(arr.rows).map_err(|_| {
+            IoError::InvalidFormat(format!(
+                "array '{}' row count {} exceeds MAT v4 i32 header range",
+                arr.name, arr.rows
+            ))
+        })?;
+        let cols = i32::try_from(arr.cols).map_err(|_| {
+            IoError::InvalidFormat(format!(
+                "array '{}' column count {} exceeds MAT v4 i32 header range",
+                arr.name, arr.cols
+            ))
+        })?;
+
+        out.extend_from_slice(&0i32.to_le_bytes());
+        out.extend_from_slice(&rows.to_le_bytes());
+        out.extend_from_slice(&cols.to_le_bytes());
+        out.extend_from_slice(&0i32.to_le_bytes());
+        out.extend_from_slice(&name_len.to_le_bytes());
+        out.extend_from_slice(&name);
+        for col in 0..arr.cols {
+            for row in 0..arr.rows {
+                out.extend_from_slice(&arr.data[row * arr.cols + col].to_le_bytes());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Load arrays from MATLAB MAT-file Level 4 bytes.
+///
+/// The returned `MatArray::data` uses the same row-major layout as the rest of
+/// `fsci-io`; MAT v4 stores full matrices in column-major order on disk.
+pub fn loadmat(bytes: &[u8]) -> Result<Vec<MatArray>, IoError> {
+    let mut arrays = Vec::new();
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let mopt = read_mat4_i32(bytes, &mut offset, "mopt")?;
+        let rows_raw = read_mat4_i32(bytes, &mut offset, "mrows")?;
+        let cols_raw = read_mat4_i32(bytes, &mut offset, "ncols")?;
+        let imagf = read_mat4_i32(bytes, &mut offset, "imagf")?;
+        let name_len_raw = read_mat4_i32(bytes, &mut offset, "namlen")?;
+
+        if !(0..=5000).contains(&mopt) {
+            return Err(IoError::InvalidFormat(format!(
+                "MAT v4 mopt {mopt} is outside the supported header range"
+            )));
+        }
+        let order = mopt / 1000;
+        let after_order = mopt % 1000;
+        let unused = after_order / 100;
+        let after_unused = after_order % 100;
+        let data_type = after_unused / 10;
+        let matrix_class = after_unused % 10;
+        if order != 0 {
+            return Err(IoError::UnsupportedFeature(
+                "MAT v4 big-endian variables are not supported".to_string(),
+            ));
+        }
+        if unused != 0 {
+            return Err(IoError::InvalidFormat(format!(
+                "MAT v4 mopt reserved O field must be 0, got {unused}"
+            )));
+        }
+        if data_type != MAT4_MI_DOUBLE || matrix_class != MAT4_MX_FULL_CLASS {
+            return Err(IoError::UnsupportedFeature(format!(
+                "only MAT v4 full real double matrices are supported (P={data_type}, T={matrix_class})"
+            )));
+        }
+        if imagf != 0 {
+            return Err(IoError::UnsupportedFeature(
+                "MAT v4 complex matrices are not supported".to_string(),
+            ));
+        }
+
+        let rows = mat4_nonnegative_usize(rows_raw, "mrows")?;
+        let cols = mat4_nonnegative_usize(cols_raw, "ncols")?;
+        let name_len = mat4_nonnegative_usize(name_len_raw, "namlen")?;
+        if name_len == 0 {
+            return Err(IoError::InvalidFormat(
+                "MAT v4 variable name length cannot be zero".to_string(),
+            ));
+        }
+        let name_end = offset.checked_add(name_len).ok_or_else(|| {
+            IoError::InvalidFormat("MAT v4 name offset overflowed usize".to_string())
+        })?;
+        let name_bytes = bytes
+            .get(offset..name_end)
+            .ok_or_else(|| IoError::InvalidFormat("truncated MAT v4 variable name".to_string()))?;
+        offset = name_end;
+        let trimmed_name_len = name_bytes
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(name_bytes.len());
+        if trimmed_name_len == 0 {
+            return Err(IoError::InvalidFormat(
+                "MAT v4 variable name cannot be empty".to_string(),
+            ));
+        }
+        let name: String = name_bytes[..trimmed_name_len]
+            .iter()
+            .map(|&byte| char::from(byte))
+            .collect();
+
+        let expected_len = checked_mat_dense_len(rows, cols)?;
+        let mut data = vec![0.0; expected_len];
+        for col in 0..cols {
+            for row in 0..rows {
+                data[row * cols + col] = read_mat4_f64(bytes, &mut offset, &name)?;
+            }
+        }
+        arrays.push(MatArray {
+            name,
+            rows,
+            cols,
+            data,
+        });
+    }
+    Ok(arrays)
 }
 
 /// Save arrays to a simple text-based format (similar to MATLAB ASCII).
@@ -1688,6 +1934,90 @@ mod tests {
         assert_eq!(loaded[0].data, vec![1.0, 2.0, 3.0, 4.0]);
         assert_eq!(loaded[1].name, "b");
         assert_eq!(loaded[1].data, vec![10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn savemat_binary_roundtrip_mat4_real_double() {
+        let arrays = vec![
+            MatArray {
+                name: "A".to_string(),
+                rows: 2,
+                cols: 2,
+                data: vec![1.0, 2.0, 3.0, 4.0],
+            },
+            MatArray {
+                name: "b".to_string(),
+                rows: 1,
+                cols: 3,
+                data: vec![5.0, 6.0, 7.0],
+            },
+        ];
+
+        let bytes = savemat(&arrays).expect("MAT v4 real doubles should serialize");
+        let loaded = loadmat(&bytes).expect("MAT v4 real doubles should parse");
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "A");
+        assert_eq!(loaded[0].rows, 2);
+        assert_eq!(loaded[0].cols, 2);
+        assert_eq!(loaded[0].data, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(loaded[1].name, "b");
+        assert_eq!(loaded[1].rows, 1);
+        assert_eq!(loaded[1].cols, 3);
+        assert_eq!(loaded[1].data, vec![5.0, 6.0, 7.0]);
+    }
+
+    #[test]
+    fn savemat_binary_uses_mat4_column_major_double_layout() {
+        let bytes = savemat(&[MatArray {
+            name: "A".to_string(),
+            rows: 2,
+            cols: 2,
+            data: vec![1.0, 2.0, 3.0, 4.0],
+        }])
+        .expect("MAT v4 real doubles should serialize");
+
+        let expected = [
+            0, 0, 0, 0, // mopt: little-endian double full matrix
+            2, 0, 0, 0, // rows
+            2, 0, 0, 0, // cols
+            0, 0, 0, 0, // imagf
+            2, 0, 0, 0, // namlen, including trailing NUL
+            b'A', 0, // name
+            0, 0, 0, 0, 0, 0, 240, 63, // 1.0
+            0, 0, 0, 0, 0, 0, 8, 64, // 3.0
+            0, 0, 0, 0, 0, 0, 0, 64, // 2.0
+            0, 0, 0, 0, 0, 0, 16, 64, // 4.0
+        ];
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn loadmat_binary_rejects_complex_mat4_payload() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        bytes.extend_from_slice(&2i32.to_le_bytes());
+        bytes.extend_from_slice(b"z\0");
+        bytes.extend_from_slice(&1.0f64.to_le_bytes());
+        bytes.extend_from_slice(&2.0f64.to_le_bytes());
+
+        let err = loadmat(&bytes).expect_err("complex MAT v4 payload should fail closed");
+        assert_eq!(
+            err,
+            IoError::UnsupportedFeature("MAT v4 complex matrices are not supported".to_string())
+        );
+    }
+
+    #[test]
+    fn loadmat_binary_rejects_truncated_header() {
+        let err = loadmat(&[0, 0, 0]).expect_err("short MAT v4 header should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("truncated MAT v4 header while reading mopt".to_string())
+        );
     }
 
     #[test]

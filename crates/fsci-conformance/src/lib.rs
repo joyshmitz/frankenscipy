@@ -84,7 +84,7 @@ use fsci_interpolate::{
     BSpline, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpKind as FsciInterpKind,
     RegularGridInterpolator, RegularGridMethod as FsciRegularGridMethod, SplineBc as FsciSplineBc,
 };
-use fsci_io::{loadtxt, mmread, mmwrite, savetxt, wav_read, wav_write};
+use fsci_io::{MatArray, loadmat, loadtxt, mmread, mmwrite, savemat, savetxt, wav_read, wav_write};
 use fsci_linalg::{
     DecompOptions, InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption,
     PinvOptions, SolveOptions, TriangularSolveOptions, TriangularTranspose, cholesky, det,
@@ -1126,6 +1126,23 @@ pub enum IoCase {
         data: Vec<f64>,
         expected: IoExpectedOutcome,
     },
+    Loadmat {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        content_hex: String,
+        expected: IoExpectedOutcome,
+    },
+    Savemat {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        name: String,
+        rows: usize,
+        cols: usize,
+        data: Vec<f64>,
+        expected: IoExpectedOutcome,
+    },
     Loadtxt {
         case_id: String,
         category: String,
@@ -1159,6 +1176,8 @@ impl IoCase {
         match self {
             Self::Mmread { case_id, .. }
             | Self::Mmwrite { case_id, .. }
+            | Self::Loadmat { case_id, .. }
+            | Self::Savemat { case_id, .. }
             | Self::Loadtxt { case_id, .. }
             | Self::Savetxt { case_id, .. }
             | Self::WavWrite { case_id, .. } => case_id,
@@ -1169,6 +1188,8 @@ impl IoCase {
         match self {
             Self::Mmread { expected, .. }
             | Self::Mmwrite { expected, .. }
+            | Self::Loadmat { expected, .. }
+            | Self::Savemat { expected, .. }
             | Self::Loadtxt { expected, .. }
             | Self::Savetxt { expected, .. }
             | Self::WavWrite { expected, .. } => expected,
@@ -10481,6 +10502,28 @@ fn compare_interpolate_case_against_oracle(
     }
 }
 
+fn decode_io_hex_bytes(content_hex: &str) -> Result<Vec<u8>, String> {
+    let trimmed = content_hex.trim();
+    if !trimmed.len().is_multiple_of(2) {
+        return Err(format!("hex byte payload has odd length {}", trimmed.len()));
+    }
+    let mut bytes = Vec::with_capacity(trimmed.len() / 2);
+    for index in (0..trimmed.len()).step_by(2) {
+        let byte = u8::from_str_radix(&trimmed[index..index + 2], 16)
+            .map_err(|e| format!("parse hex byte at offset {index}: {e}"))?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
+}
+
+fn first_mat_array_as_matrix(arrays: Vec<MatArray>) -> Result<(usize, usize, Vec<f64>), String> {
+    let first = arrays
+        .into_iter()
+        .next()
+        .ok_or_else(|| "MAT file did not contain any arrays".to_owned())?;
+    Ok((first.rows, first.cols, first.data))
+}
+
 fn execute_io_case(case: &IoCase) -> IoObservedOutcome {
     match case {
         IoCase::Mmread { content, .. } => match mmread(content) {
@@ -10501,6 +10544,38 @@ fn execute_io_case(case: &IoCase) -> IoObservedOutcome {
             },
             Err(error) => IoObservedOutcome::Error(error.to_string()),
         },
+        IoCase::Loadmat { content_hex, .. } => {
+            match decode_io_hex_bytes(content_hex)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| loadmat(&bytes).map_err(|error| error.to_string()))
+                .and_then(first_mat_array_as_matrix)
+            {
+                Ok((rows, cols, values)) => IoObservedOutcome::Matrix { rows, cols, values },
+                Err(error) => IoObservedOutcome::Error(error),
+            }
+        }
+        IoCase::Savemat {
+            name,
+            rows,
+            cols,
+            data,
+            ..
+        } => {
+            let array = MatArray {
+                name: name.clone(),
+                rows: *rows,
+                cols: *cols,
+                data: data.clone(),
+            };
+            match savemat(&[array])
+                .and_then(|bytes| loadmat(&bytes))
+                .map_err(|error| error.to_string())
+                .and_then(first_mat_array_as_matrix)
+            {
+                Ok((rows, cols, values)) => IoObservedOutcome::Matrix { rows, cols, values },
+                Err(error) => IoObservedOutcome::Error(error),
+            }
+        }
         IoCase::Loadtxt { content, .. } => match loadtxt(content) {
             Ok((rows, cols, values)) => IoObservedOutcome::Matrix { rows, cols, values },
             Err(error) => IoObservedOutcome::Error(error.to_string()),
@@ -10785,6 +10860,8 @@ fn compare_io_case_against_oracle(
             match &mut oracle_case_fixture {
                 IoCase::Mmread { expected: slot, .. }
                 | IoCase::Mmwrite { expected: slot, .. }
+                | IoCase::Loadmat { expected: slot, .. }
+                | IoCase::Savemat { expected: slot, .. }
                 | IoCase::Loadtxt { expected: slot, .. }
                 | IoCase::Savetxt { expected: slot, .. }
                 | IoCase::WavWrite { expected: slot, .. } => *slot = expected,

@@ -89,8 +89,9 @@ generator: `cargo run -p fsci-conformance --bin coverage_report` (TBD)._
 - **Fixture:** `fixtures/FSCI-P2C-017_io_core.json`
 - **E2E harness:** `tests/e2e_io.rs`
 - Covers: Matrix Market dense and symmetric coordinate reads, Matrix Market
-  dense round-trips, `loadtxt`/`savetxt` numeric text round-trips, WAV
-  16-bit PCM metadata/value round-trip, and ragged-row fail-closed behavior.
+  dense round-trips, MAT v4 real-double `loadmat`/`savemat` round-trips,
+  `loadtxt`/`savetxt` numeric text round-trips, WAV 16-bit PCM metadata/value
+  round-trip, and ragged-row fail-closed behavior.
 
 ### Remaining families
 
