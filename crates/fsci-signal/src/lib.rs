@@ -3080,7 +3080,14 @@ pub fn bessel(order: usize, wn: &[f64], btype: FilterType) -> Result<BaCoeffs, S
     validate_iir_wn(wn, btype)?;
 
     let coeffs = reverse_bessel_polynomial(order)?;
-    let (poles_re, poles_im) = poly_roots(&coeffs)?;
+    let (mut poles_re, mut poles_im) = poly_roots(&coeffs)?;
+    let phase_scale = reverse_bessel_phase_scale(order)?;
+    for pole in &mut poles_re {
+        *pole *= phase_scale;
+    }
+    for pole in &mut poles_im {
+        *pole *= phase_scale;
+    }
     let analog_zpk = ZpkCoeffs {
         zeros_re: Vec::new(),
         zeros_im: Vec::new(),
@@ -3126,43 +3133,14 @@ pub fn ellip(
     }
     validate_iir_wn(wn, btype)?;
 
-    let epsilon_p = (10_f64.powf(rp / 10.0) - 1.0).sqrt();
-    let epsilon_s = (10_f64.powf(rs / 10.0) - 1.0).sqrt();
-    let k1 = epsilon_p / epsilon_s;
-
-    // Selectivity parameter k = ω_p / ω_s ≈ 1 for elliptic
-    // For the analog prototype, we compute poles/zeros via Chebyshev-like approach
-    // Use a simplified approach: compute poles as Chebyshev I poles with epsilon_p,
-    // then add stopband zeros similar to Chebyshev II
-    let mu = (1.0 / epsilon_p).asinh() / order as f64;
-
-    let mut zeros_re = Vec::with_capacity(order);
-    let mut zeros_im = Vec::with_capacity(order);
-    let mut poles_re = Vec::with_capacity(order);
-    let mut poles_im = Vec::with_capacity(order);
-
-    for k in 0..order {
-        let theta = std::f64::consts::PI * (2.0 * k as f64 + 1.0) / (2.0 * order as f64);
-        // Poles from Chebyshev I prototype
-        poles_re.push(-mu.sinh() * theta.sin());
-        poles_im.push(mu.cosh() * theta.cos());
-
-        // Zeros from Chebyshev II-like placement
-        let cos_theta = theta.cos();
-        if cos_theta.abs() > 1.0e-12 {
-            zeros_re.push(0.0);
-            zeros_im.push(1.0 / (k1 * cos_theta));
-        }
-    }
-
-    let analog_zpk = ZpkCoeffs {
-        zeros_re,
-        zeros_im,
-        poles_re,
-        poles_im,
-        gain: 1.0,
-    };
-    design_digital_iir(analog_zpk, wn, btype)
+    let analog_zpk = elliptic_analog_zpk(order, rp, rs)?;
+    let mut coeffs = design_digital_iir(analog_zpk, wn, btype)?;
+    let passband_gain = cheby1_passband_reference_gain(order, rp);
+    coeffs
+        .b
+        .iter_mut()
+        .for_each(|coeff| *coeff *= passband_gain);
+    Ok(coeffs)
 }
 
 /// Design a second-order IIR notch (band-reject) filter.
@@ -3344,6 +3322,235 @@ fn normalize_digital_ba(
     let gain = a_mag / b_mag;
     ba.b.iter_mut().for_each(|coeff| *coeff *= gain);
     Ok(())
+}
+
+fn elliptic_analog_zpk(order: usize, rp: f64, rs: f64) -> Result<ZpkCoeffs, SignalError> {
+    if order == 1 {
+        let pole = -(1.0 / pow10m1(0.1 * rp)).sqrt();
+        return Ok(ZpkCoeffs {
+            zeros_re: Vec::new(),
+            zeros_im: Vec::new(),
+            poles_re: vec![pole],
+            poles_im: vec![0.0],
+            gain: -pole,
+        });
+    }
+
+    let eps_sq = pow10m1(0.1 * rp);
+    let ck1_sq = eps_sq / pow10m1(0.1 * rs);
+    if ck1_sq <= 0.0 || !ck1_sq.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "Cannot design a filter with given rp and rs specifications.".to_string(),
+        ));
+    }
+
+    let eps = eps_sq.sqrt();
+    let m = ellipdeg(order, ck1_sq)?;
+    let capk = complete_ellipk(m)?;
+    let start = if order.is_multiple_of(2) { 1 } else { 0 };
+
+    let mut zeros_re = Vec::new();
+    let mut zeros_im = Vec::new();
+    let mut base_poles = Vec::new();
+    for j in (start..order).step_by(2) {
+        let u = j as f64 * capk / order as f64;
+        let (s, c, d) = jacobi_ellipj_real(u, m)?;
+        if s.abs() > 1.0e-14 {
+            zeros_re.push(0.0);
+            zeros_im.push(1.0 / (m.sqrt() * s));
+        }
+
+        base_poles.push((s, c, d));
+    }
+
+    let r = arc_jac_sc1_real(1.0 / eps, ck1_sq)?;
+    let v0 = capk * r / (order as f64 * complete_ellipk(ck1_sq)?);
+    let (sv, cv, dv) = jacobi_ellipj_real(v0, 1.0 - m)?;
+
+    let mut poles_re = Vec::with_capacity(order);
+    let mut poles_im = Vec::with_capacity(order);
+    for &(s, c, d) in &base_poles {
+        let denom = 1.0 - (d * sv).powi(2);
+        let pole_re = -(c * d * sv * cv) / denom;
+        let pole_im = -(s * dv) / denom;
+        poles_re.push(pole_re);
+        poles_im.push(pole_im);
+    }
+    if order.is_multiple_of(2) {
+        for &(s, c, d) in &base_poles {
+            let denom = 1.0 - (d * sv).powi(2);
+            poles_re.push(-(c * d * sv * cv) / denom);
+            poles_im.push((s * dv) / denom);
+        }
+    } else {
+        for &(s, c, d) in &base_poles {
+            let denom = 1.0 - (d * sv).powi(2);
+            let pole_re = -(c * d * sv * cv) / denom;
+            let pole_im = -(s * dv) / denom;
+            if pole_im.abs() > 1.0e-14 * pole_re.hypot(pole_im) {
+                poles_re.push(pole_re);
+                poles_im.push(-pole_im);
+            }
+        }
+    }
+
+    let zero_count = zeros_re.len();
+    zeros_re.extend_from_within(..);
+    let zero_conjugates: Vec<f64> = zeros_im[..zero_count].iter().map(|&value| -value).collect();
+    zeros_im.extend(zero_conjugates);
+
+    let (pole_prod_re, pole_prod_im) = complex_product_neg_roots(&poles_re, &poles_im);
+    let (zero_prod_re, zero_prod_im) = complex_product_neg_roots(&zeros_re, &zeros_im);
+    let (mut gain, _) = complex_div_complex(pole_prod_re, pole_prod_im, zero_prod_re, zero_prod_im);
+    if order.is_multiple_of(2) {
+        gain /= (1.0 + eps_sq).sqrt();
+    }
+
+    Ok(ZpkCoeffs {
+        zeros_re,
+        zeros_im,
+        poles_re,
+        poles_im,
+        gain,
+    })
+}
+
+fn pow10m1(x: f64) -> f64 {
+    (std::f64::consts::LN_10 * x).exp_m1()
+}
+
+fn ellipdeg(order: usize, m1: f64) -> Result<f64, SignalError> {
+    let k1 = complete_ellipk(m1)?;
+    let k1p = complete_ellipkm1(m1)?;
+    let q1 = (-std::f64::consts::PI * k1p / k1).exp();
+    let q = q1.powf(1.0 / order as f64);
+
+    let num = (0..=7).map(|m| q.powi(m * (m + 1))).sum::<f64>();
+    let den = 1.0 + 2.0 * (1..=8).map(|m| q.powi(m * m)).sum::<f64>();
+    Ok(16.0 * q * (num / den).powi(4))
+}
+
+fn complete_ellipk(m: f64) -> Result<f64, SignalError> {
+    if !(0.0..=1.0).contains(&m) || !m.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "elliptic modulus must be finite and in [0, 1]".to_string(),
+        ));
+    }
+    if m == 1.0 {
+        return Ok(f64::INFINITY);
+    }
+    let mut a = 1.0;
+    let mut b = (1.0 - m).sqrt();
+    for _ in 0..64 {
+        let next_a = (a + b) / 2.0;
+        let next_b = (a * b).sqrt();
+        if (next_a - next_b).abs() <= 1.0e-15 * next_a.abs().max(1.0) {
+            return Ok(std::f64::consts::PI / (2.0 * next_a));
+        }
+        a = next_a;
+        b = next_b;
+    }
+    Ok(std::f64::consts::PI / (2.0 * a))
+}
+
+fn complete_ellipkm1(m: f64) -> Result<f64, SignalError> {
+    if !(0.0..=1.0).contains(&m) || !m.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "elliptic complementary modulus must be finite and in [0, 1]".to_string(),
+        ));
+    }
+    let mut a = 1.0;
+    let mut b = m.sqrt();
+    for _ in 0..64 {
+        let next_a = (a + b) / 2.0;
+        let next_b = (a * b).sqrt();
+        if (next_a - next_b).abs() <= 1.0e-15 * next_a.abs().max(1.0) {
+            return Ok(std::f64::consts::PI / (2.0 * next_a));
+        }
+        a = next_a;
+        b = next_b;
+    }
+    Ok(std::f64::consts::PI / (2.0 * a))
+}
+
+fn arc_jac_sc1_real(w: f64, m: f64) -> Result<f64, SignalError> {
+    let mut low = 0.0;
+    let mut high = complete_ellipkm1(m)? * (1.0 - 1.0e-14);
+    for _ in 0..96 {
+        let mid = (low + high) / 2.0;
+        let (sn, cn, _) = jacobi_ellipj_real(mid, 1.0 - m)?;
+        let sc = sn / cn;
+        if sc < w {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    Ok((low + high) / 2.0)
+}
+
+fn jacobi_ellipj_real(u: f64, m: f64) -> Result<(f64, f64, f64), SignalError> {
+    if !(0.0..=1.0).contains(&m) || !m.is_finite() || !u.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "Jacobi elliptic arguments must be finite with m in [0, 1]".to_string(),
+        ));
+    }
+    if m <= 1.0e-15 {
+        return Ok((u.sin(), u.cos(), 1.0));
+    }
+    if (1.0 - m).abs() <= 1.0e-15 {
+        let cn = 1.0 / u.cosh();
+        return Ok((u.tanh(), cn, cn));
+    }
+
+    let mut a_values = vec![1.0];
+    let mut c_values = Vec::new();
+    let mut b = (1.0 - m).sqrt();
+    let mut twon = 1.0;
+    for _ in 0..32 {
+        let a = a_values.last().copied().unwrap_or(1.0);
+        let c = (a - b) / 2.0;
+        let next_a = (a + b) / 2.0;
+        c_values.push(c);
+        a_values.push(next_a);
+        b = (a * b).sqrt();
+        twon *= 2.0;
+        if c.abs() <= 1.0e-15 * next_a.abs().max(1.0) {
+            break;
+        }
+    }
+
+    let mut phi = twon * a_values.last().copied().unwrap_or(1.0) * u;
+    for index in (0..c_values.len()).rev() {
+        let ratio = c_values[index] * phi.sin() / a_values[index + 1];
+        phi = (ratio.clamp(-1.0, 1.0).asin() + phi) / 2.0;
+    }
+    let sn = phi.sin();
+    let cn = phi.cos();
+    let dn = (1.0 - m * sn * sn).max(0.0).sqrt();
+    Ok((sn, cn, dn))
+}
+
+fn complex_product_neg_roots(roots_re: &[f64], roots_im: &[f64]) -> (f64, f64) {
+    let mut prod_re = 1.0;
+    let mut prod_im = 0.0;
+    for (&root_re, &root_im) in roots_re.iter().zip(roots_im.iter()) {
+        let (next_re, next_im) = complex_mul(prod_re, prod_im, -root_re, -root_im);
+        prod_re = next_re;
+        prod_im = next_im;
+    }
+    (prod_re, prod_im)
+}
+
+fn reverse_bessel_phase_scale(order: usize) -> Result<f64, SignalError> {
+    let Some(double_order) = order.checked_mul(2) else {
+        return Err(SignalError::InvalidArgument(
+            "order is too large for Bessel polynomial construction".to_string(),
+        ));
+    };
+    let a_last = factorial_f64_checked(double_order)?
+        / (factorial_f64_checked(order)? * 2.0_f64.powi(order as i32));
+    Ok(a_last.powf(-1.0 / order as f64))
 }
 
 fn reverse_bessel_polynomial(order: usize) -> Result<Vec<f64>, SignalError> {
@@ -9451,6 +9658,64 @@ mod tests {
                 *expected,
                 1e-10,
                 &format!("cheby1 bandpass a[{idx}]"),
+            );
+        }
+    }
+
+    #[test]
+    fn bessel_phase_normalized_lowpass_matches_scipy_coefficients() {
+        let coeffs = bessel(2, &[0.25], FilterType::Lowpass).expect("bessel lp");
+        let expected_b = [
+            0.09082678800790182,
+            0.18165357601580365,
+            0.09082678800790182,
+        ];
+        let expected_a = [1.0, -0.8771010537418505, 0.24040820577345767];
+        assert_eq!(coeffs.b.len(), expected_b.len());
+        assert_eq!(coeffs.a.len(), expected_a.len());
+        for (idx, (actual, expected)) in coeffs.b.iter().zip(expected_b.iter()).enumerate() {
+            assert_close(
+                *actual,
+                *expected,
+                1e-10,
+                &format!("bessel lowpass b[{idx}]"),
+            );
+        }
+        for (idx, (actual, expected)) in coeffs.a.iter().zip(expected_a.iter()).enumerate() {
+            assert_close(
+                *actual,
+                *expected,
+                1e-10,
+                &format!("bessel lowpass a[{idx}]"),
+            );
+        }
+    }
+
+    #[test]
+    fn ellip_lowpass_matches_scipy_cauer_prototype() {
+        let coeffs = ellip(2, 1.0, 40.0, &[0.25], FilterType::Lowpass).expect("ellip lp");
+        let expected_b = [
+            0.10926548486600407,
+            0.19417386968773206,
+            0.10926548486600406,
+        ];
+        let expected_a = [1.0, -0.9863237792094665, 0.4493862252181434];
+        assert_eq!(coeffs.b.len(), expected_b.len());
+        assert_eq!(coeffs.a.len(), expected_a.len());
+        for (idx, (actual, expected)) in coeffs.b.iter().zip(expected_b.iter()).enumerate() {
+            assert_close(
+                *actual,
+                *expected,
+                1e-10,
+                &format!("ellip lowpass b[{idx}]"),
+            );
+        }
+        for (idx, (actual, expected)) in coeffs.a.iter().zip(expected_a.iter()).enumerate() {
+            assert_close(
+                *actual,
+                *expected,
+                1e-10,
+                &format!("ellip lowpass a[{idx}]"),
             );
         }
     }
