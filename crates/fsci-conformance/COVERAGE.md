@@ -90,9 +90,10 @@ adding to both the oracle dispatcher and the fixture.
 
 ## What's NOT tested
 
-- Hardened-mode coverage is 2.9% across all fixtures (tracked in
-  frankenscipy-xo4o). 6 families have ZERO Hardened cases: stats,
-  linalg, arrayapi, cluster, signal, fft.
+- Hardened-mode coverage is 7.3% across all fixtures (53/729 cases).
+  The former zero-coverage families tracked by frankenscipy-xo4o and
+  frankenscipy-ncst now each have at least 5 Hardened cases; remaining
+  work is raising per-family Hardened floors beyond the seed coverage.
 - Stochastic methods (differential_evolution / basinhopping /
   dual_annealing / brute, kmeans / dbscan) have no fixture cases
   (tracked in frankenscipy-9n5j).
