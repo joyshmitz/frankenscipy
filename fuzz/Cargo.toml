@@ -135,6 +135,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c006_special_scaled_bessel_airy"
+path = "fuzz_targets/p2c006_special_scaled_bessel_airy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c006_special_hyper_complex"
 path = "fuzz_targets/p2c006_special_hyper_complex.rs"
 test = false
