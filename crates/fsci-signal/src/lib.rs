@@ -501,6 +501,51 @@ pub fn kaiser(n: usize, beta: f64) -> Vec<f64> {
         .collect()
 }
 
+/// Kaiser-Bessel derived window.
+///
+/// Matches `scipy.signal.windows.kaiser_bessel_derived(M, beta, sym=True)`.
+/// The KBD construction is only defined for symmetric, even-length windows.
+pub fn kaiser_bessel_derived(n: usize, beta: f64, sym: bool) -> Result<Vec<f64>, SignalError> {
+    if !sym {
+        return Err(SignalError::InvalidArgument(
+            "Kaiser-Bessel Derived windows are only defined for symmetric shapes".to_string(),
+        ));
+    }
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if !n.is_multiple_of(2) {
+        return Err(SignalError::InvalidArgument(
+            "Kaiser-Bessel Derived windows are only defined for even number of points".to_string(),
+        ));
+    }
+    if !beta.is_finite() {
+        return Err(SignalError::InvalidArgument(format!(
+            "invalid kaiser_bessel_derived beta: {beta}"
+        )));
+    }
+
+    let kaiser_window = kaiser(n / 2 + 1, beta);
+    let total: f64 = kaiser_window.iter().sum();
+    if !total.is_finite() || total <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "kaiser_bessel_derived normalization became singular".to_string(),
+        ));
+    }
+
+    let mut cumulative = 0.0;
+    let mut half = Vec::with_capacity(n / 2);
+    for value in kaiser_window.iter().take(n / 2) {
+        cumulative += *value;
+        half.push((cumulative / total).sqrt());
+    }
+
+    let mut window = Vec::with_capacity(n);
+    window.extend_from_slice(&half);
+    window.extend(half.iter().rev().copied());
+    Ok(window)
+}
+
 /// Modified Bessel function I0(x) via polynomial approximation.
 fn bessel_i0(x: f64) -> f64 {
     let ax = x.abs();
@@ -6967,6 +7012,20 @@ fn parse_window_bool(value: &str, label: &str) -> Result<bool, SignalError> {
     }
 }
 
+fn parse_finite_window_param(value: &str, label: &str) -> Result<f64, SignalError> {
+    let parsed = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| SignalError::InvalidArgument(format!("invalid {label}: {value}")))?;
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        Err(SignalError::InvalidArgument(format!(
+            "invalid {label}: {value}"
+        )))
+    }
+}
+
 /// Dispatch a window function by name string with explicit SciPy `fftbins` control.
 ///
 /// `fftbins=true` returns the periodic form used for FFT analysis. `fftbins=false`
@@ -7012,28 +7071,24 @@ pub fn get_window_with_fftbins(
     if let Some(rest) = raw_params.filter(|rest| !rest.is_empty()) {
         match win_name {
             "kaiser" => {
-                let beta: f64 = rest.trim().parse().map_err(|_| {
-                    SignalError::InvalidArgument(format!("invalid kaiser beta: {rest}"))
-                })?;
+                let beta = parse_finite_window_param(rest, "kaiser beta")?;
                 return symmetric_or_periodic_window(nx, sym, |n| kaiser(n, beta));
             }
+            "kaiser_bessel_derived" | "kbd" => {
+                let beta = parse_finite_window_param(rest, "kaiser_bessel_derived beta")?;
+                return kaiser_bessel_derived(nx, beta, sym);
+            }
             "dpss" => {
-                let nw: f64 = rest.trim().parse().map_err(|_| {
-                    SignalError::InvalidArgument(format!("invalid dpss NW: {rest}"))
-                })?;
+                let nw = parse_finite_window_param(rest, "dpss NW")?;
                 return dpss(nx, nw, None, sym, None, false)
                     .map(|result| result.windows.into_iter().next().unwrap_or_default());
             }
             "chebwin" => {
-                let attenuation: f64 = rest.trim().parse().map_err(|_| {
-                    SignalError::InvalidArgument(format!("invalid chebwin attenuation: {rest}"))
-                })?;
+                let attenuation = parse_finite_window_param(rest, "chebwin attenuation")?;
                 return symmetric_or_periodic_window(nx, sym, |n| chebwin(n, attenuation));
             }
             "general_hamming" => {
-                let alpha: f64 = rest.trim().parse().map_err(|_| {
-                    SignalError::InvalidArgument(format!("invalid general_hamming alpha: {rest}"))
-                })?;
+                let alpha = parse_finite_window_param(rest, "general_hamming alpha")?;
                 return symmetric_or_periodic_window(nx, sym, |n| general_hamming(n, alpha));
             }
             "general_cosine" => {
@@ -7041,20 +7096,12 @@ pub fn get_window_with_fftbins(
                     .split(',')
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .map(|value| {
-                        value.parse::<f64>().map_err(|_| {
-                            SignalError::InvalidArgument(format!(
-                                "invalid general_cosine coefficient: {value}"
-                            ))
-                        })
-                    })
+                    .map(|value| parse_finite_window_param(value, "general_cosine coefficient"))
                     .collect::<Result<_, _>>()?;
                 return Ok(general_cosine(nx, &coeffs, sym));
             }
             "gaussian" => {
-                let std: f64 = rest.trim().parse().map_err(|_| {
-                    SignalError::InvalidArgument(format!("invalid gaussian std: {rest}"))
-                })?;
+                let std = parse_finite_window_param(rest, "gaussian std")?;
                 return Ok(gaussian(nx, std, sym));
             }
             "general_gaussian" => {
@@ -7068,24 +7115,12 @@ pub fn get_window_with_fftbins(
                         "general_gaussian expects p,sig parameters: {rest}"
                     )));
                 }
-                let p = params[0].parse::<f64>().map_err(|_| {
-                    SignalError::InvalidArgument(format!(
-                        "invalid general_gaussian shape parameter: {}",
-                        params[0]
-                    ))
-                })?;
-                let sig = params[1].parse::<f64>().map_err(|_| {
-                    SignalError::InvalidArgument(format!(
-                        "invalid general_gaussian sigma parameter: {}",
-                        params[1]
-                    ))
-                })?;
+                let p = parse_finite_window_param(params[0], "general_gaussian shape parameter")?;
+                let sig = parse_finite_window_param(params[1], "general_gaussian sigma parameter")?;
                 return Ok(general_gaussian(nx, p, sig, sym));
             }
             "exponential" => {
-                let tau: f64 = rest.trim().parse().map_err(|_| {
-                    SignalError::InvalidArgument(format!("invalid exponential tau: {rest}"))
-                })?;
+                let tau = parse_finite_window_param(rest, "exponential tau")?;
                 return exponential(nx, None, tau, sym);
             }
             "taylor" | "taylorwin" => {
@@ -7102,9 +7137,7 @@ pub fn get_window_with_fftbins(
                     SignalError::InvalidArgument(format!("invalid taylor nbar: {}", params[0]))
                 })?;
                 let sll = params.get(1).map_or(Ok(30.0), |value| {
-                    value.parse::<f64>().map_err(|_| {
-                        SignalError::InvalidArgument(format!("invalid taylor sll: {value}"))
-                    })
+                    parse_finite_window_param(value, "taylor sll")
                 })?;
                 let norm = params
                     .get(2)
@@ -7134,6 +7167,7 @@ pub fn get_window_with_fftbins(
         "bohman" => symmetric_or_periodic_window(nx, sym, bohman_window),
         "exponential" => exponential(nx, None, 1.0, sym),
         "taylor" | "taylorwin" => Ok(taylor(nx, 4, 30.0, true, sym)),
+        "kaiser_bessel_derived" | "kbd" => kaiser_bessel_derived(nx, 14.0, sym),
         "dpss" => Err(SignalError::InvalidArgument(
             "dpss requires a normalized half-bandwidth parameter".to_string(),
         )),
@@ -9164,6 +9198,7 @@ mod tests {
         assert!(barthann(0).is_empty());
         assert!(chebwin(0, 100.0).is_empty());
         assert!(kaiser(0, 5.0).is_empty());
+        assert!(kaiser_bessel_derived(0, 5.0, true).unwrap().is_empty());
         assert!(lanczos(0).is_empty());
         assert!(taylor(0, 4, -30.0, true, true).is_empty());
     }
@@ -9183,6 +9218,37 @@ mod tests {
         assert_eq!(chebwin(1, 100.0), [1.0]);
         assert_eq!(kaiser(1, 5.0), [1.0]);
         assert_eq!(lanczos(1), [1.0]);
+    }
+
+    #[test]
+    fn kaiser_bessel_derived_matches_scipy_reference() {
+        let w = kaiser_bessel_derived(8, 5.0, true).unwrap();
+        let expected = [
+            0.1297945228712448,
+            0.5201443455712672,
+            0.8540783686350089,
+            0.9915409128385101,
+            0.9915409128385101,
+            0.8540783686350089,
+            0.5201443455712672,
+            0.1297945228712448,
+        ];
+        assert_slice_close(&w, &expected, 1.0e-8, "kaiser_bessel_derived");
+    }
+
+    #[test]
+    fn kaiser_bessel_derived_rejects_non_symmetric_and_odd_lengths() {
+        let periodic = kaiser_bessel_derived(8, 5.0, false).expect_err("periodic KBD");
+        assert_eq!(
+            periodic.to_string(),
+            "invalid input shape: Kaiser-Bessel Derived windows are only defined for symmetric shapes"
+        );
+
+        let odd = kaiser_bessel_derived(7, 5.0, true).expect_err("odd KBD");
+        assert_eq!(
+            odd.to_string(),
+            "invalid argument: Kaiser-Bessel Derived windows are only defined for even number of points"
+        );
     }
 
     #[test]
@@ -11544,6 +11610,15 @@ mod tests {
     }
 
     #[test]
+    fn get_window_dispatches_kaiser_bessel_derived() {
+        let w = get_window_with_fftbins("kaiser_bessel_derived,5.0", 8, false).unwrap();
+        let alias = get_window_with_fftbins("kbd,5.0", 8, false).unwrap();
+        let expected = kaiser_bessel_derived(8, 5.0, true).unwrap();
+        assert_eq!(w, expected);
+        assert_eq!(alias, expected);
+    }
+
+    #[test]
     fn get_window_dispatches_dpss() {
         let symmetric = get_window_with_fftbins("dpss,2.5", 8, false).unwrap();
         let periodic = get_window("dpss,2.5", 8).unwrap();
@@ -11613,6 +11688,27 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "invalid argument: dpss requires a normalized half-bandwidth parameter"
+        );
+    }
+
+    #[test]
+    fn get_window_rejects_non_finite_window_parameters() {
+        let kaiser_err = get_window("kaiser,nan", 8).expect_err("NaN kaiser beta");
+        assert_eq!(
+            kaiser_err.to_string(),
+            "invalid argument: invalid kaiser beta: nan"
+        );
+
+        let gaussian_err = get_window("gaussian,nan", 8).expect_err("NaN gaussian std");
+        assert_eq!(
+            gaussian_err.to_string(),
+            "invalid argument: invalid gaussian std: nan"
+        );
+
+        let exponential_err = get_window("exponential,nan", 8).expect_err("NaN exponential tau");
+        assert_eq!(
+            exponential_err.to_string(),
+            "invalid argument: invalid exponential tau: nan"
         );
     }
 
