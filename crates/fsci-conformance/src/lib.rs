@@ -7134,6 +7134,48 @@ fn evaluate_distribution_method(
                 _ => return Err(format!("unsupported method: {method}")),
             })
         }
+        "ChiSquared" => {
+            if params.len() != 1 {
+                return Err(format!("ChiSquared requires (df,), got {params:?}"));
+            }
+            let d = fsci_stats::ChiSquared { df: params[0] };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
+        "Lognormal" => {
+            if params.len() != 2 {
+                return Err(format!("Lognormal requires (s, scale), got {params:?}"));
+            }
+            let d = fsci_stats::Lognormal {
+                s: params[0],
+                scale: params[1],
+            };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
+        "GammaDist" => {
+            if params.len() != 2 {
+                return Err(format!("GammaDist requires (a, scale), got {params:?}"));
+            }
+            let d = fsci_stats::GammaDist {
+                a: params[0],
+                scale: params[1],
+            };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
         other => Err(format!("unsupported distribution: {other}")),
     }
 }

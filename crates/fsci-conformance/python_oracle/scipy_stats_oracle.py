@@ -189,6 +189,9 @@ def _run_case(case: dict[str, Any], stats: Any) -> dict[str, Any]:
             x = float(args[2])
             scipy_name_map = {
                 "Cauchy": ("cauchy", lambda p: {"loc": p[0], "scale": p[1]}),
+                "ChiSquared": ("chi2", lambda p: {"df": p[0]}),
+                "Lognormal": ("lognorm", lambda p: {"s": p[0], "scale": p[1]}),
+                "GammaDist": ("gamma", lambda p: {"a": p[0], "scale": p[1]}),
             }
             if dist_name not in scipy_name_map:
                 return {
