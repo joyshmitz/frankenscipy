@@ -86,10 +86,11 @@ use fsci_interpolate::{
     RegularGridInterpolator, RegularGridMethod as FsciRegularGridMethod, SplineBc as FsciSplineBc,
 };
 use fsci_linalg::{
-    InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption, PinvOptions,
-    SolveOptions, TriangularSolveOptions, TriangularTranspose, det, det_with_audit, inv,
-    inv_with_audit, lstsq, lstsq_with_audit, pinv, pinv_with_audit, solve, solve_banded,
-    solve_banded_with_audit, solve_triangular, solve_triangular_with_audit, solve_with_audit,
+    DecompOptions, InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption,
+    PinvOptions, SolveOptions, TriangularSolveOptions, TriangularTranspose, cholesky, det,
+    det_with_audit, eig, eigh, inv, inv_with_audit, lstsq, lstsq_with_audit, pinv, pinv_with_audit,
+    qr, solve, solve_banded, solve_banded_with_audit, solve_triangular,
+    solve_triangular_with_audit, solve_with_audit, svd,
     sync_audit_ledger as linalg_sync_audit_ledger,
 };
 use fsci_ndimage::{
@@ -421,6 +422,14 @@ impl From<FixtureTriangularTranspose> for TriangularTranspose {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FixtureQrMode {
+    Full,
+    Economic,
+    R,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LinalgExpectedOutcome {
@@ -624,6 +633,74 @@ pub enum LinalgCase {
         check_finite: Option<bool>,
         expected: LinalgExpectedOutcome,
     },
+    Qr {
+        case_id: String,
+        mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
+        a: Vec<Vec<f64>>,
+        #[serde(default)]
+        qr_mode: Option<FixtureQrMode>,
+        #[serde(default)]
+        check_finite: Option<bool>,
+        expected: LinalgExpectedOutcome,
+    },
+    Svd {
+        case_id: String,
+        mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
+        a: Vec<Vec<f64>>,
+        #[serde(default)]
+        compute_uv: Option<bool>,
+        #[serde(default)]
+        check_finite: Option<bool>,
+        expected: LinalgExpectedOutcome,
+    },
+    Cholesky {
+        case_id: String,
+        mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
+        a: Vec<Vec<f64>>,
+        #[serde(default)]
+        lower: Option<bool>,
+        #[serde(default)]
+        check_finite: Option<bool>,
+        expected: LinalgExpectedOutcome,
+    },
+    Eig {
+        case_id: String,
+        mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
+        a: Vec<Vec<f64>>,
+        #[serde(default)]
+        check_finite: Option<bool>,
+        expected: LinalgExpectedOutcome,
+    },
+    Eigh {
+        case_id: String,
+        mode: RuntimeMode,
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_matrix",
+            serialize_with = "serialize_maybe_nan_matrix"
+        )]
+        a: Vec<Vec<f64>>,
+        #[serde(default)]
+        lower: Option<bool>,
+        #[serde(default)]
+        check_finite: Option<bool>,
+        expected: LinalgExpectedOutcome,
+    },
 }
 
 impl LinalgCase {
@@ -635,7 +712,12 @@ impl LinalgCase {
             | Self::Inv { case_id, .. }
             | Self::Det { case_id, .. }
             | Self::Lstsq { case_id, .. }
-            | Self::Pinv { case_id, .. } => case_id,
+            | Self::Pinv { case_id, .. }
+            | Self::Qr { case_id, .. }
+            | Self::Svd { case_id, .. }
+            | Self::Cholesky { case_id, .. }
+            | Self::Eig { case_id, .. }
+            | Self::Eigh { case_id, .. } => case_id,
         }
     }
 
@@ -647,7 +729,12 @@ impl LinalgCase {
             | Self::Inv { expected, .. }
             | Self::Det { expected, .. }
             | Self::Lstsq { expected, .. }
-            | Self::Pinv { expected, .. } => expected,
+            | Self::Pinv { expected, .. }
+            | Self::Qr { expected, .. }
+            | Self::Svd { expected, .. }
+            | Self::Cholesky { expected, .. }
+            | Self::Eig { expected, .. }
+            | Self::Eigh { expected, .. } => expected,
         }
     }
 }
@@ -8150,6 +8237,10 @@ fn compare_linalg_case_against_oracle(
     oracle_case: &OracleCaseOutput,
     observed: &Result<LinalgObservedOutcome, LinalgError>,
 ) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    if matches!(case.expected(), LinalgExpectedOutcome::Error { .. }) {
+        return compare_linalg_case_differential(case.expected(), observed);
+    }
+
     if oracle_case.status != "ok" {
         return match observed {
             Err(actual) => (
@@ -8907,6 +8998,104 @@ fn execute_linalg_case(case: &LinalgCase) -> Result<LinalgObservedOutcome, Linal
                 rank: result.rank,
             })
         }
+        LinalgCase::Qr {
+            mode,
+            a,
+            check_finite,
+            ..
+        } => {
+            let result = qr(
+                a,
+                DecompOptions {
+                    mode: *mode,
+                    check_finite: check_finite.unwrap_or(true),
+                },
+            )?;
+            Ok(LinalgObservedOutcome::Matrix { values: result.r })
+        }
+        LinalgCase::Svd {
+            mode,
+            a,
+            check_finite,
+            ..
+        } => {
+            let result = svd(
+                a,
+                DecompOptions {
+                    mode: *mode,
+                    check_finite: check_finite.unwrap_or(true),
+                },
+            )?;
+            Ok(LinalgObservedOutcome::Vector {
+                values: result.s,
+                warning_ill_conditioned: false,
+            })
+        }
+        LinalgCase::Cholesky {
+            mode,
+            a,
+            lower,
+            check_finite,
+            ..
+        } => {
+            let result = cholesky(
+                a,
+                lower.unwrap_or(false),
+                DecompOptions {
+                    mode: *mode,
+                    check_finite: check_finite.unwrap_or(true),
+                },
+            )?;
+            Ok(LinalgObservedOutcome::Matrix {
+                values: result.factor,
+            })
+        }
+        LinalgCase::Eig {
+            mode,
+            a,
+            check_finite,
+            ..
+        } => {
+            let result = eig(
+                a,
+                DecompOptions {
+                    mode: *mode,
+                    check_finite: check_finite.unwrap_or(true),
+                },
+            )?;
+            let mut values = Vec::with_capacity(result.eigenvalues_re.len());
+            for (re, im) in result.eigenvalues_re.into_iter().zip(result.eigenvalues_im) {
+                if im.abs() > 1e-12 {
+                    return Err(LinalgError::InvalidArgument {
+                        detail: "fixture eig comparison expects real eigenvalues".to_owned(),
+                    });
+                }
+                values.push(re);
+            }
+            values.sort_by(f64::total_cmp);
+            Ok(LinalgObservedOutcome::Vector {
+                values,
+                warning_ill_conditioned: false,
+            })
+        }
+        LinalgCase::Eigh {
+            mode,
+            a,
+            check_finite,
+            ..
+        } => {
+            let result = eigh(
+                a,
+                DecompOptions {
+                    mode: *mode,
+                    check_finite: check_finite.unwrap_or(true),
+                },
+            )?;
+            Ok(LinalgObservedOutcome::Vector {
+                values: result.eigenvalues,
+                warning_ill_conditioned: false,
+            })
+        }
     }
 }
 
@@ -9078,6 +9267,11 @@ fn execute_linalg_case_with_differential_audit(
                 rank: result.rank,
             })
         }
+        LinalgCase::Qr { .. }
+        | LinalgCase::Svd { .. }
+        | LinalgCase::Cholesky { .. }
+        | LinalgCase::Eig { .. }
+        | LinalgCase::Eigh { .. } => execute_linalg_case(case),
     }
 }
 

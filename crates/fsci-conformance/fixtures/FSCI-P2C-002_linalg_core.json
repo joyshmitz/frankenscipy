@@ -2340,6 +2340,143 @@
         "kind": "error",
         "error": "array must not contain infs or NaNs"
       }
+    },
+    {
+      "operation": "qr",
+      "case_id": "qr_r_diagonal_2x2",
+      "mode": "Strict",
+      "a": [
+        [
+          3.0,
+          0.0
+        ],
+        [
+          0.0,
+          2.0
+        ]
+      ],
+      "qr_mode": "r",
+      "expected": {
+        "kind": "matrix",
+        "values": [
+          [
+            3.0,
+            0.0
+          ],
+          [
+            0.0,
+            2.0
+          ]
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "svd",
+      "case_id": "svd_singular_values_diagonal_2x2",
+      "mode": "Strict",
+      "a": [
+        [
+          3.0,
+          0.0
+        ],
+        [
+          0.0,
+          2.0
+        ]
+      ],
+      "compute_uv": false,
+      "expected": {
+        "kind": "vector",
+        "values": [
+          3.0,
+          2.0
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "cholesky",
+      "case_id": "cholesky_lower_spd_2x2",
+      "mode": "Strict",
+      "a": [
+        [
+          4.0,
+          2.0
+        ],
+        [
+          2.0,
+          3.0
+        ]
+      ],
+      "lower": true,
+      "expected": {
+        "kind": "matrix",
+        "values": [
+          [
+            2.0,
+            0.0
+          ],
+          [
+            1.0,
+            1.4142135623730951
+          ]
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "eig",
+      "case_id": "eig_real_diagonal_values_2x2",
+      "mode": "Strict",
+      "a": [
+        [
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "values_only": true,
+      "expected": {
+        "kind": "vector",
+        "values": [
+          1.0,
+          3.0
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "eigh",
+      "case_id": "eigh_symmetric_values_2x2",
+      "mode": "Strict",
+      "a": [
+        [
+          2.0,
+          1.0
+        ],
+        [
+          1.0,
+          2.0
+        ]
+      ],
+      "values_only": true,
+      "expected": {
+        "kind": "vector",
+        "values": [
+          1.0,
+          3.0
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
     }
   ],
   "oracle_provenance": {

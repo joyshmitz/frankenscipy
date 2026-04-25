@@ -21,7 +21,7 @@ use fsci_linalg::{
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // ── Fixture data structures ────────────────────────────────────────────────────
@@ -677,6 +677,8 @@ fn oracle_capture_p2c002_linalg() {
     let cfg = HarnessConfig::default();
     let oracle = PythonOracleConfig {
         required: true,
+        script_path: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("python_oracle/scipy_linalg_oracle.py"),
         ..PythonOracleConfig::default()
     };
 

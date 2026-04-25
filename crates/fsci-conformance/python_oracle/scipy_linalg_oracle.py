@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -17,6 +18,20 @@ from typing import Any, Dict, List
 def _to_list(value: Any) -> Any:
     if hasattr(value, "tolist"):
         return value.tolist()
+    return value
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NaN"
+        if math.isinf(value):
+            return "Infinity" if value > 0.0 else "-Infinity"
+        return value
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
     return value
 
 
@@ -256,14 +271,14 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
                     },
                     "error": None,
                 }
-            p, l, u = linalg.lu(a)
+            p, lower_factor, u = linalg.lu(a)
             return {
                 "case_id": case_id,
                 "status": "ok",
                 "result_kind": "lu",
                 "result": {
                     "p": _to_list(p),
-                    "l": _to_list(l),
+                    "l": _to_list(lower_factor),
                     "u": _to_list(u),
                 },
                 "error": None,
@@ -271,14 +286,20 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
 
         if operation == "qr":
             a = np.asarray(case["a"])
-            mode = case.get("mode", "full")
+            runtime_or_qr_mode = case.get("mode", "full")
+            mode = case.get("qr_mode")
+            if mode is None:
+                if str(runtime_or_qr_mode).lower() in {"strict", "hardened"}:
+                    mode = "full"
+                else:
+                    mode = runtime_or_qr_mode
             if mode == "r":
                 r, = linalg.qr(a, mode="r")
                 return {
                     "case_id": case_id,
                     "status": "ok",
-                    "result_kind": "qr_r_only",
-                    "result": {"r": _to_list(r)},
+                    "result_kind": "matrix",
+                    "result": {"values": _to_list(r)},
                     "error": None,
                 }
             q, r = linalg.qr(a, mode="full" if mode != "economic" else "economic")
@@ -302,8 +323,8 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
                 return {
                     "case_id": case_id,
                     "status": "ok",
-                    "result_kind": "svdvals",
-                    "result": {"singular_values": [float(v) for v in _to_list(s)]},
+                    "result_kind": "vector",
+                    "result": {"values": [float(v) for v in _to_list(s)]},
                     "error": None,
                 }
             u, s, vh = linalg.svd(a, full_matrices=full_matrices)
@@ -326,14 +347,26 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
             return {
                 "case_id": case_id,
                 "status": "ok",
-                "result_kind": "cholesky",
-                "result": {"factor": _to_list(result), "lower": lower},
+                "result_kind": "matrix",
+                "result": {"values": _to_list(result)},
                 "error": None,
             }
 
         if operation == "eig":
             a = np.asarray(case["a"])
             w, v = linalg.eig(a)
+            if bool(case.get("values_only", False)):
+                real_values = [float(x.real) for x in _to_list(w) if abs(float(x.imag)) <= 1e-12]
+                if len(real_values) != len(w):
+                    raise ValueError("values_only eig fixture produced complex eigenvalues")
+                real_values.sort()
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "vector",
+                    "result": {"values": real_values},
+                    "error": None,
+                }
             # eigenvalues may be complex; encode re+im pairs
             w_list = [[float(x.real), float(x.imag)] for x in _to_list(w)]
             return {
@@ -351,6 +384,14 @@ def _run_case(case: Dict[str, Any], linalg: Any, np: Any) -> Dict[str, Any]:
             a = np.asarray(case["a"])
             lower = bool(case.get("lower", True))
             w, v = linalg.eigh(a, lower=lower)
+            if bool(case.get("values_only", False)):
+                return {
+                    "case_id": case_id,
+                    "status": "ok",
+                    "result_kind": "vector",
+                    "result": {"values": [float(x) for x in _to_list(w)]},
+                    "error": None,
+                }
             return {
                 "case_id": case_id,
                 "status": "ok",
@@ -443,7 +484,10 @@ def main() -> int:
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(_json_safe(payload), allow_nan=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     return 0
 
 

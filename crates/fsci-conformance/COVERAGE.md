@@ -39,9 +39,12 @@ generator: `cargo run -p fsci-conformance --bin coverage_report` (TBD)._
 
 - **Oracle script:** `python_oracle/scipy_linalg_oracle.py`
 - **Fixture:** `fixtures/FSCI-P2C-002_linalg_core.json`
-- Covers: solve / inv / det / lstsq / pinv / solve_triangular / solve_banded
-- **Gaps:** eig / eigh / svd / qr / cholesky currently have no fixture
-  cases despite being implemented.
+- Covers: solve / inv / det / lstsq / pinv / solve_triangular /
+  solve_banded / qr / svd / cholesky / eig / eigh
+- **Remaining gaps:** decomposition fixture cases currently compare stable
+  scalar/matrix surfaces only (QR R, SVD singular values, Cholesky factor,
+  eig/eigh eigenvalues). Sign-normalized full eigenvector and singular-vector
+  comparisons are still unmapped.
 
 ### special (P2C-006)
 

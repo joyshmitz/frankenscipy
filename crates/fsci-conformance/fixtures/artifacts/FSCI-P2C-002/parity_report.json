@@ -292,9 +292,34 @@
       "case_id": "lstsq_hardened_inf_rhs_rejected",
       "passed": true,
       "message": "linalg error matched expected contract"
+    },
+    {
+      "case_id": "qr_r_diagonal_2x2",
+      "passed": true,
+      "message": "linalg matrix output matched expected tolerance policy"
+    },
+    {
+      "case_id": "svd_singular_values_diagonal_2x2",
+      "passed": true,
+      "message": "linalg vector output matched expected tolerance policy"
+    },
+    {
+      "case_id": "cholesky_lower_spd_2x2",
+      "passed": true,
+      "message": "linalg matrix output matched expected tolerance policy"
+    },
+    {
+      "case_id": "eig_real_diagonal_values_2x2",
+      "passed": true,
+      "message": "linalg vector output matched expected tolerance policy"
+    },
+    {
+      "case_id": "eigh_symmetric_values_2x2",
+      "passed": true,
+      "message": "linalg vector output matched expected tolerance policy"
     }
   ],
-  "passed_cases": 58,
+  "passed_cases": 63,
   "failed_cases": 0,
-  "generated_unix_ms": 1777020060243
+  "generated_unix_ms": 1777076279581
 }
