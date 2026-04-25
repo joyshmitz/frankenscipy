@@ -387,6 +387,16 @@ pub enum LinkageMethod {
     Complete,
     Average,
     Ward,
+    /// br-7kxr: weighted-average linkage. Lance-Williams parameters
+    /// α_i = α_j = 0.5, β = γ = 0 → unweighted-pair update.
+    Weighted,
+    /// br-7kxr: centroid linkage. Distance between cluster centroids.
+    /// Lance-Williams α_i = nᵢ/(nᵢ+nⱼ), α_j = nⱼ/(nᵢ+nⱼ),
+    /// β = -nᵢ·nⱼ/(nᵢ+nⱼ)², γ = 0.
+    Centroid,
+    /// br-7kxr: median linkage. Lance-Williams α_i = α_j = 0.5,
+    /// β = -0.25, γ = 0.
+    Median,
 }
 
 /// Hierarchical clustering linkage matrix.
@@ -488,6 +498,23 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
                         .max(0.0)
                         .sqrt()
                 }
+                // br-7kxr: Lance-Williams update for the additional methods.
+                LinkageMethod::Weighted => 0.5 * (d_ki + d_kj),
+                LinkageMethod::Centroid => {
+                    let ni = cluster_size[mi] as f64;
+                    let nj = cluster_size[mj] as f64;
+                    let nt = ni + nj;
+                    let alpha_i = ni / nt;
+                    let alpha_j = nj / nt;
+                    let beta = -(ni * nj) / (nt * nt);
+                    (alpha_i * d_ki * d_ki + alpha_j * d_kj * d_kj + beta * min_d * min_d)
+                        .max(0.0)
+                        .sqrt()
+                }
+                LinkageMethod::Median => (0.5 * d_ki * d_ki + 0.5 * d_kj * d_kj
+                    - 0.25 * min_d * min_d)
+                    .max(0.0)
+                    .sqrt(),
             };
             inter_dist[k][new_id] = new_dist;
             inter_dist[new_id][k] = new_dist;
@@ -1573,6 +1600,23 @@ pub fn linkage_from_distances(
                         .max(0.0)
                         .sqrt()
                 }
+                // br-7kxr: Lance-Williams update for the additional methods.
+                LinkageMethod::Weighted => 0.5 * (d_ki + d_kj),
+                LinkageMethod::Centroid => {
+                    let ni = cluster_size[mi] as f64;
+                    let nj = cluster_size[mj] as f64;
+                    let nt = ni + nj;
+                    let alpha_i = ni / nt;
+                    let alpha_j = nj / nt;
+                    let beta = -(ni * nj) / (nt * nt);
+                    (alpha_i * d_ki * d_ki + alpha_j * d_kj * d_kj + beta * min_d * min_d)
+                        .max(0.0)
+                        .sqrt()
+                }
+                LinkageMethod::Median => (0.5 * d_ki * d_ki + 0.5 * d_kj * d_kj
+                    - 0.25 * min_d * min_d)
+                    .max(0.0)
+                    .sqrt(),
             };
             inter_dist[k][new_id] = new_dist;
             inter_dist[new_id][k] = new_dist;

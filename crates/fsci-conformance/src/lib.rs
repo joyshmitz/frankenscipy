@@ -4504,6 +4504,9 @@ fn execute_linkage(case: &ClusterCase) -> ClusterObserved {
         "complete" => fsci_cluster::LinkageMethod::Complete,
         "average" => fsci_cluster::LinkageMethod::Average,
         "ward" => fsci_cluster::LinkageMethod::Ward,
+        "weighted" => fsci_cluster::LinkageMethod::Weighted,
+        "centroid" => fsci_cluster::LinkageMethod::Centroid,
+        "median" => fsci_cluster::LinkageMethod::Median,
         _ => return ClusterObserved::Error(format!("unknown linkage method: {method_str}")),
     };
     match fsci_cluster::linkage(&data, method) {
