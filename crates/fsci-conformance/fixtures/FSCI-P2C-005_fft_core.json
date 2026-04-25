@@ -1103,6 +1103,170 @@
         "kind": "error",
         "error": "non-finite input rejected by policy"
       }
+    },
+    {
+      "case_id": "rfft2_4x4_ramp",
+      "category": "rfft2",
+      "mode": "Strict",
+      "transform": "rfft2",
+      "normalization": "backward",
+      "real_input": [
+        1.0, 2.0, 3.0, 4.0,
+        5.0, 6.0, 7.0, 8.0,
+        9.0, 10.0, 11.0, 12.0,
+        13.0, 14.0, 15.0, 16.0
+      ],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [4, 4],
+      "expected": {
+        "kind": "complex_vector",
+        "values": [
+          [136.0, 0.0], [-8.0, 8.0], [-8.0, 0.0],
+          [-32.0, 32.0], [0.0, 0.0], [0.0, 0.0],
+          [-32.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+          [-32.0, -32.0], [0.0, 0.0], [0.0, 0.0]
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "irfft2_4x4_roundtrip",
+      "category": "irfft2",
+      "mode": "Strict",
+      "transform": "irfft2",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [
+        [136.0, 0.0], [-8.0, 8.0], [-8.0, 0.0],
+        [-32.0, 32.0], [0.0, 0.0], [0.0, 0.0],
+        [-32.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+        [-32.0, -32.0], [0.0, 0.0], [0.0, 0.0]
+      ],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [4, 4],
+      "expected": {
+        "kind": "real_vector",
+        "values": [
+          1.0, 2.0, 3.0, 4.0,
+          5.0, 6.0, 7.0, 8.0,
+          9.0, 10.0, 11.0, 12.0,
+          13.0, 14.0, 15.0, 16.0
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "rfftn_2x3x4_ramp",
+      "category": "rfftn",
+      "mode": "Strict",
+      "transform": "rfftn",
+      "normalization": "backward",
+      "real_input": [
+        0.0, 1.0, 2.0, 3.0,
+        4.0, 5.0, 6.0, 7.0,
+        8.0, 9.0, 10.0, 11.0,
+        12.0, 13.0, 14.0, 15.0,
+        16.0, 17.0, 18.0, 19.0,
+        20.0, 21.0, 22.0, 23.0
+      ],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 3, 4],
+      "expected": {
+        "kind": "complex_vector",
+        "values": [
+          [276.0, 0.0], [-12.0, 12.0], [-12.0, 0.0],
+          [-48.0, 27.712812921102035], [0.0, 0.0], [0.0, 0.0],
+          [-48.0, -27.712812921102035], [0.0, 0.0], [0.0, 0.0],
+          [-144.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+          [0.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+          [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "irfftn_2x3x4_roundtrip",
+      "category": "irfftn",
+      "mode": "Strict",
+      "transform": "irfftn",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [
+        [276.0, 0.0], [-12.0, 12.0], [-12.0, 0.0],
+        [-48.0, 27.712812921102035], [0.0, 0.0], [0.0, 0.0],
+        [-48.0, -27.712812921102035], [0.0, 0.0], [0.0, 0.0],
+        [-144.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+        [0.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+        [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]
+      ],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 3, 4],
+      "expected": {
+        "kind": "real_vector",
+        "values": [
+          0.0, 1.0, 2.0, 3.0,
+          4.0, 5.0, 6.0, 7.0,
+          8.0, 9.0, 10.0, 11.0,
+          12.0, 13.0, 14.0, 15.0,
+          16.0, 17.0, 18.0, 19.0,
+          20.0, 21.0, 22.0, 23.0
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "case_id": "rfft2_hardened_rejects_nan_real",
+      "category": "hardened",
+      "mode": "Hardened",
+      "transform": "rfft2",
+      "normalization": "backward",
+      "real_input": [
+        1.0, 2.0, 3.0, 4.0,
+        5.0, "NaN", 7.0, 8.0,
+        9.0, 10.0, 11.0, 12.0,
+        13.0, 14.0, 15.0, 16.0
+      ],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [4, 4],
+      "expected": {
+        "kind": "error",
+        "error": "non-finite input rejected by policy"
+      }
+    },
+    {
+      "case_id": "irfftn_hardened_rejects_inf_imag",
+      "category": "hardened",
+      "mode": "Hardened",
+      "transform": "irfftn",
+      "normalization": "backward",
+      "real_input": null,
+      "complex_input": [
+        [276.0, 0.0], [0.0, "Infinity"], [-12.0, 0.0],
+        [-48.0, 27.712812921102035], [0.0, 0.0], [0.0, 0.0],
+        [-48.0, -27.712812921102035], [0.0, 0.0], [0.0, 0.0],
+        [-144.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+        [0.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+        [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]
+      ],
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": [2, 3, 4],
+      "expected": {
+        "kind": "error",
+        "error": "non-finite input rejected by policy"
+      }
     }
   ]
 }

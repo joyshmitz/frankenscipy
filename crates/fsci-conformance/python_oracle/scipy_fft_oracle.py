@@ -84,6 +84,20 @@ def _resolve_fft_shapes(case: Dict[str, Any]) -> tuple[Any, Any]:
     return input_shape, output_shape
 
 
+def _irfft_input_shape(output_shape: Any) -> Any:
+    """Compute the (complex) input shape for irfft2/irfftn from the
+    real output shape. scipy convention: irfft along the last axis maps
+    n//2 + 1 complex samples back to n real samples; other axes are
+    full-length. Returns None when output_shape is None.
+
+    Per br-ocsl.
+    """
+    if output_shape is None:
+        return None
+    last = output_shape[-1] // 2 + 1
+    return (*output_shape[:-1], last)
+
+
 def _reshape_input(case: Dict[str, Any], x: Any, np: Any) -> Any:
     """Reshape flat inputs for multi-dimensional transforms when possible."""
     input_shape, _ = _resolve_fft_shapes(case)
@@ -156,6 +170,30 @@ def _run_case(case: Dict[str, Any], fft: Any, np: Any) -> Dict[str, Any]:
         elif transform == "ifftn":
             _, output_shape = _resolve_fft_shapes(case)
             result = fft.ifftn(_reshape_input(case, x, np), s=output_shape, norm=normalization)
+        elif transform == "rfft2":
+            # br-ocsl: real 2D FFT. Input is real, reshape via shape/input_shape.
+            _, output_shape = _resolve_fft_shapes(case)
+            result = fft.rfft2(_reshape_input(case, x, np), s=output_shape, norm=normalization)
+        elif transform == "irfft2":
+            # br-ocsl: inverse real 2D FFT. The fixture's `shape` is the
+            # *output* (real) shape; the complex input shape is derived as
+            # (s[0], s[-1]//2 + 1). Cannot reuse _reshape_input because it
+            # would reshape to the output shape and fail size-match.
+            _, output_shape = _resolve_fft_shapes(case)
+            input_shape = _irfft_input_shape(output_shape)
+            x_nd = x.reshape(input_shape) if input_shape is not None else x
+            result = fft.irfft2(x_nd, s=output_shape, norm=normalization)
+        elif transform == "rfftn":
+            # br-ocsl: real ND FFT. axes default to all; output is complex with
+            # last axis truncated to s[-1]//2+1.
+            _, output_shape = _resolve_fft_shapes(case)
+            result = fft.rfftn(_reshape_input(case, x, np), s=output_shape, norm=normalization)
+        elif transform == "irfftn":
+            # br-ocsl: inverse real ND FFT. Same reshape rule as irfft2.
+            _, output_shape = _resolve_fft_shapes(case)
+            input_shape = _irfft_input_shape(output_shape)
+            x_nd = x.reshape(input_shape) if input_shape is not None else x
+            result = fft.irfftn(x_nd, s=output_shape, norm=normalization)
         elif transform == "fftfreq":
             n_pts = int(case.get("n_points", len(x)))
             d = case.get("sample_spacing", 1.0)
