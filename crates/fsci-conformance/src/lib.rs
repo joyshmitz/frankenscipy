@@ -6094,7 +6094,8 @@ enum SignalObserved {
 fn execute_signal_case(case: &SignalCase) -> SignalObserved {
     match case.function.as_str() {
         "savgol_filter" => execute_savgol_filter(case),
-        "hann" | "hamming" | "blackman" => execute_window(case),
+        "hann" | "hamming" | "blackman" | "boxcar" | "bartlett" | "flattop"
+        | "cosine" | "blackmanharris" | "barthann" => execute_window(case),
         "kaiser" => execute_kaiser(case),
         "convolve" => execute_convolve(case),
         "correlate" => execute_correlate(case),
@@ -6138,6 +6139,13 @@ fn execute_window(case: &SignalCase) -> SignalObserved {
         "hann" => fsci_signal::hann(n),
         "hamming" => fsci_signal::hamming(n),
         "blackman" => fsci_signal::blackman(n),
+        // br-yz6i follow-up: extend window family.
+        "boxcar" => fsci_signal::boxcar(n, true),
+        "bartlett" => fsci_signal::bartlett(n),
+        "flattop" => fsci_signal::flattop(n),
+        "cosine" => fsci_signal::cosine(n),
+        "blackmanharris" => fsci_signal::blackmanharris(n),
+        "barthann" => fsci_signal::barthann(n),
         _ => return SignalObserved::Error(format!("unknown window: {}", case.function)),
     };
     SignalObserved::Array(result)
