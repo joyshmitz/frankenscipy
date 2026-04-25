@@ -3011,7 +3011,13 @@ pub fn cheby1(
         poles_im,
         gain: 1.0,
     };
-    design_digital_iir(analog_zpk, wn, btype)
+    let mut coeffs = design_digital_iir(analog_zpk, wn, btype)?;
+    let passband_gain = cheby1_passband_reference_gain(order, rp);
+    coeffs
+        .b
+        .iter_mut()
+        .for_each(|coeff| *coeff *= passband_gain);
+    Ok(coeffs)
 }
 
 /// Design a Chebyshev Type II IIR filter.
@@ -3285,6 +3291,14 @@ pub fn iirfilter(
             })?;
             ellip(order, rp_val, rs_val, wn, btype)
         }
+    }
+}
+
+fn cheby1_passband_reference_gain(order: usize, rp: f64) -> f64 {
+    if order.is_multiple_of(2) {
+        10_f64.powf(-rp / 20.0)
+    } else {
+        1.0
     }
 }
 
@@ -9365,6 +9379,80 @@ mod tests {
             result.h_mag[mid_idx] > result.h_mag[hi_idx],
             "Chebyshev-I bandpass should pass midband better than high stopband"
         );
+    }
+
+    #[test]
+    fn cheby1_even_order_lowpass_matches_scipy_gain() {
+        let coeffs = cheby1(2, 1.0, &[0.25], FilterType::Lowpass).expect("cheby1 lp");
+        let expected_b = [
+            0.10255744141814213,
+            0.20511488283628426,
+            0.10255744141814213,
+        ];
+        let expected_a = [1.0, -0.9865079240565594, 0.44679329164515147];
+        assert_eq!(coeffs.b.len(), expected_b.len());
+        assert_eq!(coeffs.a.len(), expected_a.len());
+        for (idx, (actual, expected)) in coeffs.b.iter().zip(expected_b.iter()).enumerate() {
+            assert_close(
+                *actual,
+                *expected,
+                1e-10,
+                &format!("cheby1 lowpass b[{idx}]"),
+            );
+        }
+        for (idx, (actual, expected)) in coeffs.a.iter().zip(expected_a.iter()).enumerate() {
+            assert_close(
+                *actual,
+                *expected,
+                1e-10,
+                &format!("cheby1 lowpass a[{idx}]"),
+            );
+        }
+    }
+
+    #[test]
+    fn cheby1_even_order_bandpass_matches_scipy_gain() {
+        let coeffs = cheby1(4, 1.0, &[0.2, 0.45], FilterType::Bandpass).expect("cheby1 bp");
+        let expected_b = [
+            0.0042412377794045445,
+            0.0,
+            -0.016964951117618178,
+            0.0,
+            0.025447426676427267,
+            0.0,
+            -0.016964951117618178,
+            0.0,
+            0.0042412377794045445,
+        ];
+        let expected_a = [
+            1.0,
+            -3.805027975445876,
+            8.305833307350976,
+            -12.0401045837622,
+            12.844987905921329,
+            -10.009315088065474,
+            5.72688219445523,
+            -2.1640816756583447,
+            0.4751428601925499,
+        ];
+        assert_eq!(coeffs.b.len(), expected_b.len());
+        assert_eq!(coeffs.a.len(), expected_a.len());
+        for (idx, (actual, expected)) in coeffs.b.iter().zip(expected_b.iter()).enumerate() {
+            assert_close(
+                *actual,
+                *expected,
+                1e-10,
+                &format!("cheby1 bandpass b[{idx}]"),
+            );
+        }
+        for (idx, (actual, expected)) in coeffs.a.iter().zip(expected_a.iter()).enumerate() {
+            assert_close(
+                *actual,
+                *expected,
+                1e-10,
+                &format!("cheby1 bandpass a[{idx}]"),
+            );
+        }
     }
 
     #[test]
