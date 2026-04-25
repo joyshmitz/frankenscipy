@@ -20667,6 +20667,78 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn differential_signal_iir_matrix_covers_all_design_families() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-011_signal_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read signal fixture");
+        let fixture: SignalPacketFixture =
+            serde_json::from_str(&raw).expect("parse signal fixture");
+
+        let expected_btypes: BTreeSet<String> = ["low", "high", "bandpass", "bandstop"]
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect();
+        let mut by_family = std::collections::BTreeMap::<String, BTreeSet<String>>::new();
+        let mut hardened_error_families = BTreeSet::new();
+        let mut coefficient_case_count = 0usize;
+
+        for case in &fixture.cases {
+            if !matches!(
+                case.function.as_str(),
+                "butter" | "cheby1" | "cheby2" | "ellip" | "bessel"
+            ) {
+                continue;
+            }
+
+            match case.expected.kind.as_str() {
+                "iir_coeffs" => {
+                    coefficient_case_count += 1;
+                    let btype = case
+                        .args
+                        .last()
+                        .and_then(serde_json::Value::as_str)
+                        .expect("IIR coefficient case has btype as last argument");
+                    by_family
+                        .entry(case.function.clone())
+                        .or_default()
+                        .insert(btype.to_owned());
+                    assert!(
+                        case.expected.b.as_ref().is_some_and(|b| !b.is_empty()),
+                        "{} should freeze numerator coefficients",
+                        case.case_id
+                    );
+                    assert!(
+                        case.expected.a.as_ref().is_some_and(|a| !a.is_empty()),
+                        "{} should freeze denominator coefficients",
+                        case.case_id
+                    );
+                }
+                "error" if case.case_id.starts_with("hardened_iir_") => {
+                    hardened_error_families.insert(case.function.clone());
+                }
+                _ => {}
+            }
+        }
+
+        assert!(
+            coefficient_case_count >= 20,
+            "expected >=20 IIR coefficient cases, got {coefficient_case_count}"
+        );
+        for family in ["butter", "cheby1", "cheby2", "ellip", "bessel"] {
+            assert_eq!(
+                by_family.get(family),
+                Some(&expected_btypes),
+                "{family} should cover low/high/bandpass/bandstop coefficient parity"
+            );
+            assert!(
+                hardened_error_families.contains(family),
+                "{family} should have a hardened invalid-Wn case"
+            );
+        }
+    }
+
+    #[test]
     fn differential_signal_quota_and_structured_logs() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root
