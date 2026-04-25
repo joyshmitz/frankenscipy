@@ -107,12 +107,12 @@ Legend: ✅ full match · ↪️ aliased · ❌ missing · ⚠️ partial
 | `eigvalsh` | `eigvalsh` | ✅ |
 | `eigvalsh_tridiagonal` | — | ❌ |
 
-### matrix functions (6 of 14 — 43%)
+### matrix functions (12 of 14 — 86%)
 
 | scipy | fsci | status |
 |-------|------|--------|
-| `coshm` | — | ❌ |
-| `cosm` | — | ❌ |
+| `coshm` | `coshm` | ✅ |
+| `cosm` | `cosm` | ✅ |
 | `expm` | `expm` | ✅ |
 | `expm_cond` | — | ❌ |
 | `expm_frechet` | — | ❌ |
@@ -120,11 +120,11 @@ Legend: ✅ full match · ↪️ aliased · ❌ missing · ⚠️ partial
 | `funm` | `funm` | ✅ |
 | `logm` | `logm` | ✅ |
 | `signm` | `signm` | ✅ |
-| `sinhm` | — | ❌ |
-| `sinm` | — | ❌ |
+| `sinhm` | `sinhm` | ✅ |
+| `sinm` | `sinm` | ✅ |
 | `sqrtm` | `sqrtm` | ✅ |
-| `tanhm` | — | ❌ |
-| `tanm` | — | ❌ |
+| `tanhm` | `tanhm` | ✅ |
+| `tanm` | `tanm` | ✅ |
 
 ### special matrices (15 of 16 — 94% incl. alias)
 
@@ -209,9 +209,8 @@ The gap-analysis bead set spawned by this audit (file as needed):
    qr_update are completely missing. Each is its own task; consider a
    single br-fgxx-qr-updates bead with 4 sub-deliverables.
 2. **matrix_funcs trig (sinm/cosm/tanm + their hyperbolic siblings)** —
-   8 missing of 14. All can be derived via `funm` with the appropriate
-   scalar transform; ship as a single bead routing through the existing
-   funm machinery.
+   complete. These entry points now route through `funm` with the
+   corresponding scalar transform.
 3. **expm_cond / expm_frechet** — sensitivity / derivative analyses of
    matrix exponential. Useful for control theory but lower priority
    than the trig set.

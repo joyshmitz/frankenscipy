@@ -4485,6 +4485,48 @@ pub fn signm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
     funm(a, |x| if x >= 0.0 { 1.0 } else { -1.0 }, options)
 }
 
+/// Matrix sine.
+///
+/// Matches `scipy.linalg.sinm(A)`.
+pub fn sinm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    funm(a, f64::sin, options)
+}
+
+/// Matrix cosine.
+///
+/// Matches `scipy.linalg.cosm(A)`.
+pub fn cosm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    funm(a, f64::cos, options)
+}
+
+/// Matrix tangent.
+///
+/// Matches `scipy.linalg.tanm(A)`.
+pub fn tanm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    funm(a, f64::tan, options)
+}
+
+/// Matrix hyperbolic sine.
+///
+/// Matches `scipy.linalg.sinhm(A)`.
+pub fn sinhm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    funm(a, f64::sinh, options)
+}
+
+/// Matrix hyperbolic cosine.
+///
+/// Matches `scipy.linalg.coshm(A)`.
+pub fn coshm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    funm(a, f64::cosh, options)
+}
+
+/// Matrix hyperbolic tangent.
+///
+/// Matches `scipy.linalg.tanhm(A)`.
+pub fn tanhm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    funm(a, f64::tanh, options)
+}
+
 /// General matrix function via eigendecomposition.
 ///
 /// Computes f(A) = V * diag(f(λ_i)) * V^{-1} where A = V * diag(λ) * V^{-1}.
@@ -4496,12 +4538,15 @@ pub fn signm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
 pub fn funm(
     a: &[Vec<f64>],
     func: impl Fn(f64) -> f64,
-    _options: DecompOptions,
+    options: DecompOptions,
 ) -> Result<Vec<Vec<f64>>, LinalgError> {
     let (rows, cols) = matrix_shape(a)?;
     if rows != cols {
         return Err(LinalgError::ExpectedSquareMatrix);
     }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
     if rows == 0 {
         return Ok(Vec::new());
     }
@@ -9564,6 +9609,8 @@ mod proptest_tests {
     use super::*;
     use proptest::prelude::*;
 
+    type MatrixFunction = fn(&[Vec<f64>], DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError>;
+
     fn arb_invertible_2x2() -> impl Strategy<Value = Vec<Vec<f64>>> {
         (
             -10.0..10.0_f64,
@@ -9577,6 +9624,26 @@ mod proptest_tests {
 
     fn arb_vec2() -> impl Strategy<Value = Vec<f64>> {
         prop::collection::vec(-10.0..10.0_f64, 2..=2)
+    }
+
+    fn assert_close_matrix(actual: &[Vec<f64>], expected: &[Vec<f64>], atol: f64, rtol: f64) {
+        assert_eq!(actual.len(), expected.len());
+        for (row_idx, (a_row, e_row)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(a_row.len(), e_row.len());
+            for (col_idx, (a, e)) in a_row.iter().zip(e_row.iter()).enumerate() {
+                let tol = atol + rtol * e.abs();
+                assert!(
+                    (a - e).abs() <= tol,
+                    "row={row_idx} col={col_idx} expected={e} actual={a} tol={tol}"
+                );
+            }
+        }
+    }
+
+    fn rotated_diagonal(lambda1: f64, lambda2: f64) -> Vec<Vec<f64>> {
+        let diag = 0.5 * (lambda1 + lambda2);
+        let off_diag = 0.5 * (lambda1 - lambda2);
+        vec![vec![diag, off_diag], vec![off_diag, diag]]
     }
 
     proptest! {
@@ -10068,6 +10135,88 @@ mod proptest_tests {
         let result = signm(&a, DecompOptions::default()).expect("signm");
         assert!((result[0][0] - (-1.0)).abs() < 1e-10);
         assert!((result[1][1] - (-1.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn trig_matrix_functions_match_scalar_diagonal() {
+        let a = diagm(&[0.25, -0.75]);
+
+        assert_close_matrix(
+            &sinm(&a, DecompOptions::default()).expect("sinm"),
+            &diagm(&[0.25_f64.sin(), (-0.75_f64).sin()]),
+            1e-12,
+            1e-12,
+        );
+        assert_close_matrix(
+            &cosm(&a, DecompOptions::default()).expect("cosm"),
+            &diagm(&[0.25_f64.cos(), (-0.75_f64).cos()]),
+            1e-12,
+            1e-12,
+        );
+        assert_close_matrix(
+            &tanm(&a, DecompOptions::default()).expect("tanm"),
+            &diagm(&[0.25_f64.tan(), (-0.75_f64).tan()]),
+            1e-12,
+            1e-12,
+        );
+    }
+
+    #[test]
+    fn hyperbolic_matrix_functions_match_scalar_diagonal() {
+        let a = diagm(&[0.25, -0.75]);
+
+        assert_close_matrix(
+            &sinhm(&a, DecompOptions::default()).expect("sinhm"),
+            &diagm(&[0.25_f64.sinh(), (-0.75_f64).sinh()]),
+            1e-12,
+            1e-12,
+        );
+        assert_close_matrix(
+            &coshm(&a, DecompOptions::default()).expect("coshm"),
+            &diagm(&[0.25_f64.cosh(), (-0.75_f64).cosh()]),
+            1e-12,
+            1e-12,
+        );
+        assert_close_matrix(
+            &tanhm(&a, DecompOptions::default()).expect("tanhm"),
+            &diagm(&[0.25_f64.tanh(), (-0.75_f64).tanh()]),
+            1e-12,
+            1e-12,
+        );
+    }
+
+    #[test]
+    fn trig_matrix_functions_satisfy_commuting_identity() {
+        let a = rotated_diagonal(0.2, -0.4);
+        let sin_a = sinm(&a, DecompOptions::default()).expect("sinm");
+        let cos_a = cosm(&a, DecompOptions::default()).expect("cosm");
+
+        let sin_squared = matmul(&sin_a, &sin_a).expect("sinm squared");
+        let cos_squared = matmul(&cos_a, &cos_a).expect("cosm squared");
+        let mut identity_candidate = vec![vec![0.0; 2]; 2];
+        for i in 0..2 {
+            for j in 0..2 {
+                identity_candidate[i][j] = sin_squared[i][j] + cos_squared[i][j];
+            }
+        }
+
+        assert_close_matrix(
+            &identity_candidate,
+            &[vec![1.0, 0.0], vec![0.0, 1.0]],
+            1e-10,
+            1e-10,
+        );
+    }
+
+    #[test]
+    fn trig_matrix_functions_reject_non_square() {
+        let a = vec![vec![1.0, 2.0]];
+        let functions: [MatrixFunction; 6] = [sinm, cosm, tanm, sinhm, coshm, tanhm];
+
+        for matrix_fn in functions {
+            let err = matrix_fn(&a, DecompOptions::default()).expect_err("non-square");
+            assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+        }
     }
 
     #[test]
