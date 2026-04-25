@@ -51,6 +51,15 @@ generator: `cargo run -p fsci-conformance --bin coverage_report` (TBD)._
 - **Notes:** 7 Hardened-mode cases exercise pole / domain / overflow
   rejection. See DISCREPANCIES for error-kind mapping.
 
+### constants (P2C-016)
+
+- **Oracle script:** `python_oracle/scipy_constants_oracle.py`
+- **Fixture:** `fixtures/FSCI-P2C-016_constants_core.json`
+- **E2E harness:** `tests/e2e_constants.rs`
+- Covers: SI-exact constants, derived constants, temperature conversion,
+  energy conversion, wavelength/frequency conversion, angle conversion,
+  mass conversion, and fail-closed unknown-name/unknown-scale paths.
+
 ### Remaining families
 
 Each of the newer oracles added under br-di9p (cluster / spatial /
