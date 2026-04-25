@@ -179,6 +179,37 @@ def _run_case(case: dict[str, Any], stats: Any) -> dict[str, Any]:
         #     method: "pdf" | "cdf" | "ppf" | "sf" | "mean" | "var" | "fit"
         #     params: {loc: 0.0, scale: 1.0}   # frozen distribution kwargs
         #     args: [...]                       # positional args to method
+        # br-4nkk: shorthand distribution_{pdf,cdf,ppf} dispatch.
+        # args = [distribution_name: str, params: list[float], x: float].
+        # Maps via fsci's name -> scipy.stats name table.
+        if function_name in ("distribution_pdf", "distribution_cdf", "distribution_ppf"):
+            method_name = function_name.split("_", 1)[1]  # "pdf"/"cdf"/"ppf"
+            dist_name = args[0]
+            params = list(args[1])
+            x = float(args[2])
+            scipy_name_map = {
+                "Cauchy": ("cauchy", lambda p: {"loc": p[0], "scale": p[1]}),
+            }
+            if dist_name not in scipy_name_map:
+                return {
+                    "case_id": case_id,
+                    "status": "error",
+                    "result_kind": "unsupported_distribution",
+                    "result": {},
+                    "error": f"distribution {dist_name!r} not in oracle map",
+                }
+            scipy_name, kwargs_fn = scipy_name_map[dist_name]
+            scipy_kwargs = kwargs_fn(params)
+            scipy_dist = getattr(stats, scipy_name)
+            method = getattr(scipy_dist, method_name)
+            value = float(method(x, **scipy_kwargs))
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "scalar",
+                "result": {"value": value},
+                "error": None,
+            }
         if function_name == "distribution_method":
             dist_name = case["distribution"]
             method_name = case["method"]

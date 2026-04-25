@@ -6859,6 +6859,9 @@ fn execute_stats_case(case: &StatsCase) -> StatsObserved {
         "variation" => execute_stats_variation(case),
         "entropy" => execute_stats_entropy(case),
         "shapiro" => execute_stats_shapiro(case),
+        "distribution_pdf" => execute_stats_distribution_pdf(case),
+        "distribution_cdf" => execute_stats_distribution_cdf(case),
+        "distribution_ppf" => execute_stats_distribution_ppf(case),
         _ => StatsObserved::Error(format!("unknown function: {}", case.function)),
     }
 }
@@ -7090,6 +7093,81 @@ fn execute_stats_shapiro(case: &StatsCase) -> StatsObserved {
     StatsObserved::Goodness {
         statistic: result.statistic,
         pvalue: result.pvalue,
+    }
+}
+
+// br-4nkk: continuous-distribution pdf/cdf/ppf parity dispatch.
+//
+// Schema: args = [distribution_name: str, params: [f64...], x: f64].
+// Inline dispatch (no Box<dyn>) since ContinuousDistribution has a
+// generic `rvs<R: Rng>` method making it not dyn-compatible.
+fn parse_distribution_args(case: &StatsCase) -> Result<(String, Vec<f64>, f64), String> {
+    let name: String = serde_json::from_value(case.args[0].clone())
+        .map_err(|e| format!("parse distribution name: {e}"))?;
+    let params: Vec<f64> = serde_json::from_value(case.args[1].clone())
+        .map_err(|e| format!("parse params: {e}"))?;
+    let x: f64 = serde_json::from_value(case.args[2].clone())
+        .map_err(|e| format!("parse x: {e}"))?;
+    Ok((name, params, x))
+}
+
+fn evaluate_distribution_method(
+    name: &str,
+    params: &[f64],
+    x: f64,
+    method: &str,
+) -> Result<f64, String> {
+    use fsci_stats::ContinuousDistribution;
+    match name {
+        "Cauchy" => {
+            if params.len() != 2 {
+                return Err(format!("Cauchy requires (loc, scale), got {params:?}"));
+            }
+            let d = fsci_stats::Cauchy {
+                loc: params[0],
+                scale: params[1],
+            };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
+        other => Err(format!("unsupported distribution: {other}")),
+    }
+}
+
+fn execute_stats_distribution_pdf(case: &StatsCase) -> StatsObserved {
+    let (name, params, x) = match parse_distribution_args(case) {
+        Ok(t) => t,
+        Err(e) => return StatsObserved::Error(e),
+    };
+    match evaluate_distribution_method(&name, &params, x, "pdf") {
+        Ok(v) => StatsObserved::Scalar(v),
+        Err(e) => StatsObserved::Error(e),
+    }
+}
+
+fn execute_stats_distribution_cdf(case: &StatsCase) -> StatsObserved {
+    let (name, params, x) = match parse_distribution_args(case) {
+        Ok(t) => t,
+        Err(e) => return StatsObserved::Error(e),
+    };
+    match evaluate_distribution_method(&name, &params, x, "cdf") {
+        Ok(v) => StatsObserved::Scalar(v),
+        Err(e) => StatsObserved::Error(e),
+    }
+}
+
+fn execute_stats_distribution_ppf(case: &StatsCase) -> StatsObserved {
+    let (name, params, x) = match parse_distribution_args(case) {
+        Ok(t) => t,
+        Err(e) => return StatsObserved::Error(e),
+    };
+    match evaluate_distribution_method(&name, &params, x, "ppf") {
+        Ok(v) => StatsObserved::Scalar(v),
+        Err(e) => StatsObserved::Error(e),
     }
 }
 
