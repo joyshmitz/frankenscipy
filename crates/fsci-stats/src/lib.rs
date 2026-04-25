@@ -9587,9 +9587,38 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
     let u2 = n1f * n2f - u1;
     let u = u1.min(u2); // two-sided: use smaller U
 
-    // Normal approximation
+    // Normal approximation. Per br-nknp: include tie correction in
+    // sigma and continuity correction (|U - mu| - 0.5) on the z-score
+    // to match scipy.stats.mannwhitneyu defaults
+    // (use_continuity=True, method='asymptotic').
     let mu = n1f * n2f / 2.0;
-    let sigma = (n1f * n2f * (n1f + n2f + 1.0) / 12.0).sqrt();
+    let n = n1f + n2f;
+
+    // Tie correction: sum_t (t^3 - t) over each tied rank group.
+    // Implemented by counting equal-rank groups in the sorted ranks.
+    let mut sorted_ranks = ranks.clone();
+    sorted_ranks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut tie_correction = 0.0_f64;
+    let mut i = 0;
+    while i < sorted_ranks.len() {
+        let mut j = i + 1;
+        while j < sorted_ranks.len() && (sorted_ranks[j] - sorted_ranks[i]).abs() < 1e-12 {
+            j += 1;
+        }
+        let t = (j - i) as f64;
+        if t > 1.0 {
+            tie_correction += t * t * t - t;
+        }
+        i = j;
+    }
+
+    let variance_no_ties = n1f * n2f * (n + 1.0) / 12.0;
+    let variance = if n > 1.0 {
+        variance_no_ties - n1f * n2f * tie_correction / (12.0 * n * (n - 1.0))
+    } else {
+        variance_no_ties
+    };
+    let sigma = variance.max(0.0).sqrt();
 
     if sigma == 0.0 {
         return TtestResult {
@@ -9599,9 +9628,14 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
         };
     }
 
-    let z = (u - mu) / sigma;
+    // Continuity correction: subtract 0.5 from |U - mu| to compensate
+    // for the discrete-to-continuous approximation. Equivalent to
+    // scipy's `z = (U - mu - 0.5*sign(U - mu)) / sigma` for two-sided.
+    let abs_diff = (u - mu).abs();
+    let z = (abs_diff - 0.5).max(0.0) / sigma;
     let normal = Normal::standard();
-    let pvalue = 2.0 * normal.cdf(z.min(0.0)); // two-sided
+    // pvalue = 2 * sf(|z|) for two-sided
+    let pvalue = (2.0 * (1.0 - normal.cdf(z))).clamp(0.0, 1.0);
 
     TtestResult {
         statistic: u,
@@ -9653,7 +9687,31 @@ pub fn mannwhitneyu_alternative(x: &[f64], y: &[f64], alternative: &str) -> Ttes
     let u2 = n1f * n2f - u1;
 
     let mu = n1f * n2f / 2.0;
-    let sigma = (n1f * n2f * (n1f + n2f + 1.0) / 12.0).sqrt();
+    let n = n1f + n2f;
+
+    // br-nknp: tie correction for sigma (matches scipy default).
+    let mut sorted_ranks = ranks.clone();
+    sorted_ranks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut tie_correction = 0.0_f64;
+    let mut i = 0;
+    while i < sorted_ranks.len() {
+        let mut j = i + 1;
+        while j < sorted_ranks.len() && (sorted_ranks[j] - sorted_ranks[i]).abs() < 1e-12 {
+            j += 1;
+        }
+        let t = (j - i) as f64;
+        if t > 1.0 {
+            tie_correction += t * t * t - t;
+        }
+        i = j;
+    }
+    let variance_no_ties = n1f * n2f * (n + 1.0) / 12.0;
+    let variance = if n > 1.0 {
+        variance_no_ties - n1f * n2f * tie_correction / (12.0 * n * (n - 1.0))
+    } else {
+        variance_no_ties
+    };
+    let sigma = variance.max(0.0).sqrt();
 
     if sigma == 0.0 {
         return TtestResult {
@@ -9674,9 +9732,11 @@ pub fn mannwhitneyu_alternative(x: &[f64], y: &[f64], alternative: &str) -> Ttes
             (u1, normal.sf(z))
         }
         _ => {
+            // br-nknp: two-sided with continuity correction.
             let u = u1.min(u2);
-            let z = (u - mu) / sigma;
-            (u, 2.0 * normal.cdf(z.min(0.0)))
+            let abs_diff = (u - mu).abs();
+            let z = (abs_diff - 0.5).max(0.0) / sigma;
+            (u, (2.0 * (1.0 - normal.cdf(z))).clamp(0.0, 1.0))
         }
     };
 

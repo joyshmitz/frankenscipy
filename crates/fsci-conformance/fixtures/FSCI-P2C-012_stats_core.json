@@ -667,6 +667,24 @@
         "rtol": 1e-10,
         "contract_ref": "scipy.stats.ttest_ind (identical -> 0/1)"
       }
+    },
+    {
+      "case_id": "mannwhitneyu_shifted_groups",
+      "category": "hypothesis_test",
+      "mode": "Strict",
+      "function": "mannwhitneyu",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [3.0, 4.0, 5.0, 6.0, 7.0]
+      ],
+      "expected": {
+        "kind": "ttest_result",
+        "statistic": 4.5,
+        "pvalue": 0.11384629800665805,
+        "atol": 1e-9,
+        "rtol": 1e-7,
+        "contract_ref": "scipy.stats.mannwhitneyu (two-sided, default use_continuity=True with tie correction). br-nknp shipped fsci_stats fix."
+      }
     }
   ]
 }
