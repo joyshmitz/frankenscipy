@@ -13,8 +13,7 @@
 //!    reproducibility check of the Rust side. Families:
 //!    `validate_tol`, `linalg`, `optimize`, `special`, `array_api`,
 //!    `sparse`, `fft`, `casp`, `cluster`, `spatial`, `signal`, `stats`,
-//!    `integrate`, `interpolate`, `ndimage`. (`io` does not yet have a
-//!    packet runner.)
+//!    `integrate`, `interpolate`, `ndimage`, `io`.
 //!
 //! 2. **`run_<family>_packet_with_oracle_capture(config, fixture_name, oracle)`**
 //!    — oracle-backed lane. Invokes the scipy Python oracle to capture
@@ -85,6 +84,7 @@ use fsci_interpolate::{
     BSpline, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpKind as FsciInterpKind,
     RegularGridInterpolator, RegularGridMethod as FsciRegularGridMethod, SplineBc as FsciSplineBc,
 };
+use fsci_io::{loadtxt, mmread, mmwrite, savetxt, wav_read, wav_write};
 use fsci_linalg::{
     DecompOptions, InvOptions, LinalgError, LstsqDriver, LstsqOptions, MatrixAssumption,
     PinvOptions, SolveOptions, TriangularSolveOptions, TriangularTranspose, cholesky, det,
@@ -1078,6 +1078,110 @@ pub struct InterpolatePacketFixture {
     pub packet_id: String,
     pub family: String,
     pub cases: Vec<InterpolateCase>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IoExpectedOutcome {
+    Matrix {
+        rows: usize,
+        cols: usize,
+        values: Vec<f64>,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+    },
+    Wav {
+        sample_rate: u32,
+        channels: u16,
+        bits_per_sample: u16,
+        values: Vec<f64>,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+    },
+    Error {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum IoCase {
+    Mmread {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        content: String,
+        expected: IoExpectedOutcome,
+    },
+    Mmwrite {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        rows: usize,
+        cols: usize,
+        data: Vec<f64>,
+        expected: IoExpectedOutcome,
+    },
+    Loadtxt {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        content: String,
+        expected: IoExpectedOutcome,
+    },
+    Savetxt {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        rows: usize,
+        cols: usize,
+        data: Vec<f64>,
+        delimiter: String,
+        expected: IoExpectedOutcome,
+    },
+    WavWrite {
+        case_id: String,
+        category: String,
+        mode: RuntimeMode,
+        sample_rate: u32,
+        channels: u16,
+        data: Vec<f64>,
+        expected: IoExpectedOutcome,
+    },
+}
+
+impl IoCase {
+    fn case_id(&self) -> &str {
+        match self {
+            Self::Mmread { case_id, .. }
+            | Self::Mmwrite { case_id, .. }
+            | Self::Loadtxt { case_id, .. }
+            | Self::Savetxt { case_id, .. }
+            | Self::WavWrite { case_id, .. } => case_id,
+        }
+    }
+
+    fn expected(&self) -> &IoExpectedOutcome {
+        match self {
+            Self::Mmread { expected, .. }
+            | Self::Mmwrite { expected, .. }
+            | Self::Loadtxt { expected, .. }
+            | Self::Savetxt { expected, .. }
+            | Self::WavWrite { expected, .. } => expected,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IoPacketFixture {
+    pub packet_id: String,
+    pub family: String,
+    pub cases: Vec<IoCase>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2514,6 +2618,22 @@ enum InterpolateObservedOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+enum IoObservedOutcome {
+    Matrix {
+        rows: usize,
+        cols: usize,
+        values: Vec<f64>,
+    },
+    Wav {
+        sample_rate: u32,
+        channels: u16,
+        bits_per_sample: u16,
+        values: Vec<f64>,
+    },
+    Error(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum NdimageObservedOutcome {
     Array {
         values: Vec<f64>,
@@ -2819,6 +2939,54 @@ pub fn run_interpolate_packet(
             }
         };
         let (passed, message, _, _) = compare_interpolate_case_differential(case, &observed);
+        case_results.push(CaseResult {
+            case_id: case.case_id().to_owned(),
+            passed,
+            message,
+        });
+    }
+
+    Ok(build_packet_report(
+        fixture.packet_id,
+        fixture.family,
+        case_results,
+    ))
+}
+
+pub fn run_io_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let raw = fs::read_to_string(&fixture_path).map_err(|source| HarnessError::FixtureIo {
+        path: fixture_path.clone(),
+        source,
+    })?;
+    let fixture: IoPacketFixture =
+        serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path,
+            source,
+        })?;
+
+    let mut case_results = Vec::with_capacity(fixture.cases.len());
+    for case in &fixture.cases {
+        let observed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_io_case(case)
+        })) {
+            Ok(v) => v,
+            Err(payload) => {
+                case_results.push(CaseResult {
+                    case_id: case.case_id().to_owned(),
+                    passed: false,
+                    message: format!(
+                        "PANIC in execute_io_case: {}",
+                        panic_payload_message(payload)
+                    ),
+                });
+                continue;
+            }
+        };
+        let (passed, message, _, _) = compare_io_case_differential(case, &observed);
         case_results.push(CaseResult {
             case_id: case.case_id().to_owned(),
             passed,
@@ -8489,6 +8657,8 @@ fn default_differential_oracle_script_path(family: &str) -> PathBuf {
         "scipy_arrayapi_oracle.py"
     } else if family.contains("constants") {
         "scipy_constants_oracle.py"
+    } else if family.contains("io") {
+        "scipy_io_oracle.py"
     } else if family.contains("stats") {
         "scipy_stats_oracle.py"
     } else if family.contains("interpolate") {
@@ -10183,6 +10353,323 @@ fn compare_interpolate_case_against_oracle(
     }
 }
 
+fn execute_io_case(case: &IoCase) -> IoObservedOutcome {
+    match case {
+        IoCase::Mmread { content, .. } => match mmread(content) {
+            Ok(matrix) => IoObservedOutcome::Matrix {
+                rows: matrix.rows,
+                cols: matrix.cols,
+                values: matrix.data,
+            },
+            Err(error) => IoObservedOutcome::Error(error.to_string()),
+        },
+        IoCase::Mmwrite {
+            rows, cols, data, ..
+        } => match mmwrite(*rows, *cols, data).and_then(|content| mmread(&content)) {
+            Ok(matrix) => IoObservedOutcome::Matrix {
+                rows: matrix.rows,
+                cols: matrix.cols,
+                values: matrix.data,
+            },
+            Err(error) => IoObservedOutcome::Error(error.to_string()),
+        },
+        IoCase::Loadtxt { content, .. } => match loadtxt(content) {
+            Ok((rows, cols, values)) => IoObservedOutcome::Matrix { rows, cols, values },
+            Err(error) => IoObservedOutcome::Error(error.to_string()),
+        },
+        IoCase::Savetxt {
+            rows,
+            cols,
+            data,
+            delimiter,
+            ..
+        } => match savetxt(*rows, *cols, data, delimiter).and_then(|content| loadtxt(&content)) {
+            Ok((rows, cols, values)) => IoObservedOutcome::Matrix { rows, cols, values },
+            Err(error) => IoObservedOutcome::Error(error.to_string()),
+        },
+        IoCase::WavWrite {
+            sample_rate,
+            channels,
+            data,
+            ..
+        } => match wav_write(*sample_rate, *channels, data).and_then(|bytes| wav_read(&bytes)) {
+            Ok(wav) => IoObservedOutcome::Wav {
+                sample_rate: wav.sample_rate,
+                channels: wav.channels,
+                bits_per_sample: wav.bits_per_sample,
+                values: wav.data,
+            },
+            Err(error) => IoObservedOutcome::Error(error.to_string()),
+        },
+    }
+}
+
+fn compare_io_matrix(
+    expected_rows: usize,
+    expected_cols: usize,
+    expected_values: &[f64],
+    atol: Option<f64>,
+    rtol: Option<f64>,
+    observed: &IoObservedOutcome,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    let tolerance = ToleranceUsed {
+        atol: atol.unwrap_or(1.0e-12),
+        rtol: rtol.unwrap_or(1.0e-12),
+        comparison_mode: "allclose".to_owned(),
+    };
+    match observed {
+        IoObservedOutcome::Matrix { rows, cols, values } => {
+            if *rows != expected_rows || *cols != expected_cols {
+                return (
+                    false,
+                    format!("io matrix shape mismatch: expected={expected_rows}x{expected_cols}, got={rows}x{cols}"),
+                    Some(f64::INFINITY),
+                    Some(tolerance),
+                );
+            }
+            let max_diff = if values.len() == expected_values.len() {
+                max_diff_vec(values, expected_values)
+            } else {
+                f64::INFINITY
+            };
+            let pass = allclose_vec(values, expected_values, tolerance.atol, tolerance.rtol);
+            let msg = if pass {
+                format!("io matrix matched (max_diff={max_diff:.2e})")
+            } else {
+                format!(
+                    "io matrix mismatch: expected={expected_values:?}, got={values:?}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(max_diff), Some(tolerance))
+        }
+        IoObservedOutcome::Error(error) => (
+            false,
+            format!("unexpected io error for matrix expected output: {error}"),
+            None,
+            None,
+        ),
+        other => (
+            false,
+            format!("io outcome kind mismatch for matrix expected output: got {other:?}"),
+            None,
+            None,
+        ),
+    }
+}
+
+fn compare_io_wav(
+    expected_sample_rate: u32,
+    expected_channels: u16,
+    expected_bits_per_sample: u16,
+    expected_values: &[f64],
+    atol: Option<f64>,
+    rtol: Option<f64>,
+    observed: &IoObservedOutcome,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    let tolerance = ToleranceUsed {
+        atol: atol.unwrap_or(1.0e-4),
+        rtol: rtol.unwrap_or(1.0e-4),
+        comparison_mode: "allclose".to_owned(),
+    };
+    match observed {
+        IoObservedOutcome::Wav {
+            sample_rate,
+            channels,
+            bits_per_sample,
+            values,
+        } => {
+            if *sample_rate != expected_sample_rate
+                || *channels != expected_channels
+                || *bits_per_sample != expected_bits_per_sample
+            {
+                return (
+                    false,
+                    format!(
+                        "io wav metadata mismatch: expected rate={expected_sample_rate}, channels={expected_channels}, bits={expected_bits_per_sample}; got rate={sample_rate}, channels={channels}, bits={bits_per_sample}"
+                    ),
+                    Some(f64::INFINITY),
+                    Some(tolerance),
+                );
+            }
+            let max_diff = if values.len() == expected_values.len() {
+                max_diff_vec(values, expected_values)
+            } else {
+                f64::INFINITY
+            };
+            let pass = allclose_vec(values, expected_values, tolerance.atol, tolerance.rtol);
+            let msg = if pass {
+                format!("io wav matched (max_diff={max_diff:.2e})")
+            } else {
+                format!(
+                    "io wav mismatch: expected={expected_values:?}, got={values:?}, atol={:.2e}, rtol={:.2e}",
+                    tolerance.atol, tolerance.rtol
+                )
+            };
+            (pass, msg, Some(max_diff), Some(tolerance))
+        }
+        IoObservedOutcome::Error(error) => (
+            false,
+            format!("unexpected io error for wav expected output: {error}"),
+            None,
+            None,
+        ),
+        other => (
+            false,
+            format!("io outcome kind mismatch for wav expected output: got {other:?}"),
+            None,
+            None,
+        ),
+    }
+}
+
+fn compare_io_case_differential(
+    case: &IoCase,
+    observed: &IoObservedOutcome,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    match case.expected() {
+        IoExpectedOutcome::Matrix {
+            rows,
+            cols,
+            values,
+            atol,
+            rtol,
+        } => compare_io_matrix(*rows, *cols, values, *atol, *rtol, observed),
+        IoExpectedOutcome::Wav {
+            sample_rate,
+            channels,
+            bits_per_sample,
+            values,
+            atol,
+            rtol,
+        } => compare_io_wav(
+            *sample_rate,
+            *channels,
+            *bits_per_sample,
+            values,
+            *atol,
+            *rtol,
+            observed,
+        ),
+        IoExpectedOutcome::Error { error } => match observed {
+            IoObservedOutcome::Error(got) => {
+                let pass = matches_error_contract(got, error);
+                let msg = if pass {
+                    "error matched".to_owned()
+                } else {
+                    format!("error mismatch: expected=`{error}`, got=`{got}`")
+                };
+                (pass, msg, None, None)
+            }
+            other => (
+                false,
+                format!("expected io error `{error}` but got {other:?}"),
+                None,
+                None,
+            ),
+        },
+    }
+}
+
+fn io_expected_tolerance(expected: &IoExpectedOutcome) -> (Option<f64>, Option<f64>) {
+    match expected {
+        IoExpectedOutcome::Matrix { atol, rtol, .. } | IoExpectedOutcome::Wav { atol, rtol, .. } => {
+            (*atol, *rtol)
+        }
+        IoExpectedOutcome::Error { .. } => (None, None),
+    }
+}
+
+fn io_oracle_case_to_expected(
+    case: &IoCase,
+    oracle_case: &OracleCaseOutput,
+) -> Result<IoExpectedOutcome, String> {
+    let (atol, rtol) = io_expected_tolerance(case.expected());
+
+    match oracle_case.result_kind.as_str() {
+        "matrix" => Ok(IoExpectedOutcome::Matrix {
+            rows: oracle_result_field(&oracle_case.result, "rows", case.case_id())?,
+            cols: oracle_result_field(&oracle_case.result, "cols", case.case_id())?,
+            values: oracle_result_field(&oracle_case.result, "values", case.case_id())?,
+            atol,
+            rtol,
+        }),
+        "wav" => Ok(IoExpectedOutcome::Wav {
+            sample_rate: oracle_result_field(
+                &oracle_case.result,
+                "sample_rate",
+                case.case_id(),
+            )?,
+            channels: oracle_result_field(&oracle_case.result, "channels", case.case_id())?,
+            bits_per_sample: oracle_result_field(
+                &oracle_case.result,
+                "bits_per_sample",
+                case.case_id(),
+            )?,
+            values: oracle_result_field(&oracle_case.result, "values", case.case_id())?,
+            atol,
+            rtol,
+        }),
+        "error" => Ok(IoExpectedOutcome::Error {
+            error: oracle_result_field(&oracle_case.result, "error", case.case_id())?,
+        }),
+        other => Err(format!(
+            "oracle result for {} has unsupported result_kind `{other}`",
+            case.case_id()
+        )),
+    }
+}
+
+fn compare_io_case_against_oracle(
+    case: &IoCase,
+    oracle_case: &OracleCaseOutput,
+    observed: &IoObservedOutcome,
+) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
+    if oracle_case.status != "ok" {
+        return match observed {
+            IoObservedOutcome::Error(actual) => (
+                false,
+                format!(
+                    "oracle errored (`{}`) and rust errored (`{actual}`) too; case is unjudgeable",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+            IoObservedOutcome::Matrix { .. } | IoObservedOutcome::Wav { .. } => (
+                false,
+                format!(
+                    "oracle errored (`{}`) but rust succeeded",
+                    oracle_case
+                        .error
+                        .as_deref()
+                        .unwrap_or("unknown oracle error"),
+                ),
+                None,
+                None,
+            ),
+        };
+    }
+
+    match io_oracle_case_to_expected(case, oracle_case) {
+        Ok(expected) => {
+            let mut oracle_case_fixture = case.clone();
+            match &mut oracle_case_fixture {
+                IoCase::Mmread { expected: slot, .. }
+                | IoCase::Mmwrite { expected: slot, .. }
+                | IoCase::Loadtxt { expected: slot, .. }
+                | IoCase::Savetxt { expected: slot, .. }
+                | IoCase::WavWrite { expected: slot, .. } => *slot = expected,
+            }
+            compare_io_case_differential(&oracle_case_fixture, observed)
+        }
+        Err(message) => (false, message, None, None),
+    }
+}
+
 fn compare_linalg_case(
     expected: &LinalgExpectedOutcome,
     observed: &Result<LinalgObservedOutcome, LinalgError>,
@@ -11160,6 +11647,7 @@ pub fn run_differential_test(
         "interpolate_core" | "interpolate" => {
             run_differential_interpolate(fixture_path, &raw, oracle_config)
         }
+        "io_core" | "io" => run_differential_io(fixture_path, &raw, oracle_config),
         "ndimage_core" | "ndimage" => run_differential_ndimage(fixture_path, &raw, oracle_config),
         "runtime_casp" | "casp" | "casp_core" => {
             run_differential_casp(fixture_path, &raw, oracle_config)
@@ -11544,6 +12032,103 @@ fn run_differential_interpolate(
                         ),
                     },
                     None => compare_interpolate_case_differential(case, &observed),
+                }
+            },
+        ));
+    }
+
+    let pass_count = per_case_results.iter().filter(|r| r.passed).count();
+    let fail_count = per_case_results.len().saturating_sub(pass_count);
+
+    {
+        let ledger = recover_sync_audit_ledger(audit_ledger.as_ref());
+        let _ =
+            emit_differential_audit_ledger_for_fixture(fixture_path, &fixture.packet_id, &ledger)?;
+    }
+
+    Ok(ConformanceReport {
+        fixture_path: fixture_path.display().to_string(),
+        packet_id: fixture.packet_id,
+        family: fixture.family,
+        pass_count,
+        fail_count,
+        oracle_status,
+        per_case_results,
+        generated_unix_ms: now_unix_ms(),
+    })
+}
+
+fn run_differential_io(
+    fixture_path: &Path,
+    raw: &str,
+    oracle_config: &DifferentialOracleConfig,
+) -> Result<ConformanceReport, HarnessError> {
+    let fixture: IoPacketFixture =
+        serde_json::from_str(raw).map_err(|source| HarnessError::FixtureParse {
+            path: fixture_path.to_path_buf(),
+            source,
+        })?;
+
+    let resolved_oracle_config = resolve_differential_oracle_config(oracle_config, &fixture.family);
+    let probed_oracle_status = probe_oracle_availability(&resolved_oracle_config);
+    let mut capture_failure_status = None;
+    let oracle_capture = if resolved_oracle_config.required
+        || matches!(probed_oracle_status, OracleStatus::Available)
+    {
+        match capture_python_oracle_inner(
+            fixture_path,
+            raw,
+            &fixture.packet_id,
+            &HarnessConfig::default_paths().oracle_root,
+            &resolved_oracle_config,
+        ) {
+            Ok(capture) => Some(capture),
+            Err(error) => {
+                if resolved_oracle_config.required {
+                    return Err(error);
+                }
+                capture_failure_status = Some(oracle_status_from_capture_error(&error));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let oracle_cases = oracle_capture.as_ref().map(|capture| {
+        capture
+            .case_outputs
+            .iter()
+            .map(|case| (case.case_id.as_str(), case))
+            .collect::<std::collections::HashMap<_, _>>()
+    });
+    let oracle_status = match (&oracle_capture, resolved_oracle_config.required) {
+        (Some(_), _) => OracleStatus::Available,
+        (None, true) => probed_oracle_status.clone(),
+        (None, false) => capture_failure_status.unwrap_or(probed_oracle_status),
+    };
+    let mut per_case_results = Vec::with_capacity(fixture.cases.len());
+    let audit_ledger = neutral_audit_ledger();
+
+    for case in &fixture.cases {
+        per_case_results.push(run_case_with_panic_capture(
+            case.case_id(),
+            &oracle_status,
+            Some(audit_ledger.as_ref()),
+            || {
+                let observed = execute_io_case(case);
+                match oracle_cases.as_ref() {
+                    Some(cases) => match cases.get(case.case_id()) {
+                        Some(oracle_case) => {
+                            compare_io_case_against_oracle(case, oracle_case, &observed)
+                        }
+                        None => (
+                            false,
+                            format!("oracle capture missing io case `{}`", case.case_id()),
+                            None,
+                            None,
+                        ),
+                    },
+                    None => compare_io_case_differential(case, &observed),
                 }
             },
         ));
@@ -15638,11 +16223,13 @@ pub enum PacketFamily {
     InterpolateCore,
     /// P2C-015: ndimage filtering, morphology, measurements, and transforms
     NdimageCore,
+    /// P2C-017: Input/output formats and helper routines
+    IoCore,
 }
 
 impl PacketFamily {
     /// All known packet families for enumeration.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::ValidateTol,
         Self::LinalgCore,
         Self::Optimize,
@@ -15658,6 +16245,7 @@ impl PacketFamily {
         Self::IntegrateCore,
         Self::InterpolateCore,
         Self::NdimageCore,
+        Self::IoCore,
     ];
 
     /// Canonical packet ID for this family (e.g., "FSCI-P2C-001").
@@ -15679,6 +16267,7 @@ impl PacketFamily {
             Self::IntegrateCore => "FSCI-P2C-013",
             Self::InterpolateCore => "FSCI-P2C-014",
             Self::NdimageCore => "FSCI-P2C-015",
+            Self::IoCore => "FSCI-P2C-017",
         }
     }
 
@@ -15701,6 +16290,7 @@ impl PacketFamily {
             Self::IntegrateCore => "integrate_core",
             Self::InterpolateCore => "interpolate_core",
             Self::NdimageCore => "ndimage_core",
+            Self::IoCore => "io_core",
         }
     }
 
@@ -15737,6 +16327,8 @@ impl PacketFamily {
             Some(Self::InterpolateCore)
         } else if s.contains("ndimage") {
             Some(Self::NdimageCore)
+        } else if s.contains("io") {
+            Some(Self::IoCore)
         } else {
             None
         }
@@ -15762,6 +16354,7 @@ impl PacketFamily {
                 | Self::IntegrateCore
                 | Self::InterpolateCore
                 | Self::NdimageCore
+                | Self::IoCore
         )
     }
 
@@ -15884,6 +16477,7 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
             PacketFamily::IntegrateCore => run_integrate_packet(config, fixture_name)?,
             PacketFamily::InterpolateCore => run_interpolate_packet(config, fixture_name)?,
             PacketFamily::NdimageCore => run_ndimage_packet(config, fixture_name)?,
+            PacketFamily::IoCore => run_io_packet(config, fixture_name)?,
         };
         reports.push(report);
     }
@@ -15898,19 +16492,21 @@ mod tests {
     use super::{
         AggregateParityReport, ArrayApiExpectedOutcome, ArrayApiPacketFixture, CaspPacketFixture,
         ClusterPacketFixture, ConformanceReport, DifferentialCaseResult, DifferentialOracleConfig,
-        FftPacketFixture, HarnessConfig, IntegratePacketFixture, LinalgCase, LinalgExpectedOutcome,
-        LinalgPacketFixture, OptimizePacketFixture, OracleCaseOutput, OracleStatus, PacketFamily,
-        PacketReport, PythonOracleConfig, SignalPacketFixture, SparsePacketFixture,
+        FftPacketFixture, HarnessConfig, IntegratePacketFixture, IoPacketFixture, LinalgCase,
+        LinalgExpectedOutcome, LinalgPacketFixture, OptimizePacketFixture, OracleCaseOutput,
+        OracleStatus, PacketFamily, PacketReport, PythonOracleConfig, SignalPacketFixture,
+        SparsePacketFixture,
         SpatialPacketFixture, SpecialPacketFixture, StatsCase, StatsExpected, StatsObserved,
         StatsPacketFixture, ToleranceUsed, aggregate_packet_reports,
         compare_linalg_case_against_oracle, compare_stats_case_against_oracle, discover_fixtures,
         ensure_artifact_layout, load_array_api_contract_table, load_oracle_capture,
         resolve_array_api_contract_tolerance, run_array_api_packet, run_casp_packet,
         run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
-        run_interpolate_packet, run_linalg_packet, run_linalg_packet_with_oracle_capture,
-        run_ndimage_packet, run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet,
-        run_spatial_packet, run_special_packet, run_stats_packet, run_validate_tol_packet,
-        write_differential_parity_artifacts, write_parity_artifacts,
+        run_interpolate_packet, run_io_packet, run_linalg_packet,
+        run_linalg_packet_with_oracle_capture, run_ndimage_packet, run_optimize_packet,
+        run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
+        run_stats_packet, run_validate_tol_packet, write_differential_parity_artifacts,
+        write_parity_artifacts,
     };
     use fsci_linalg::LinalgError;
     use fsci_runtime::RuntimeMode;
@@ -18452,6 +19048,29 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn io_packet_runner_passes() {
+        let cfg = HarnessConfig::default_paths();
+        let report =
+            run_io_packet(&cfg, "FSCI-P2C-017_io_core.json").expect("io packet fixture should run");
+        assert_eq!(
+            report.failed_cases,
+            0,
+            "{}",
+            serde_json::to_string(&report).unwrap()
+        );
+        assert!(
+            report.passed_cases >= 5,
+            "expected io fixture coverage across Matrix Market, text, and WAV"
+        );
+
+        let artifacts =
+            write_parity_artifacts(&cfg, &report).expect("io parity artifacts must be written");
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.sidecar_path.exists());
+        assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
     fn differential_test_optimize_fixture() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root
@@ -18512,11 +19131,40 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn differential_test_io_fixture() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-017_io_core.json");
+        let oracle = default_test_oracle();
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("differential io should succeed");
+
+        assert_eq!(report.packet_id, "FSCI-P2C-017");
+        assert_eq!(report.family, "io_core");
+        assert_eq!(
+            report.fail_count,
+            0,
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+        assert!(report.pass_count >= 5);
+    }
+
+    #[test]
     fn interpolate_default_oracle_routes_to_interpolate_script() {
         let path = super::default_differential_oracle_script_path("interpolate_core");
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
             Some("scipy_interpolate_oracle.py")
+        );
+    }
+
+    #[test]
+    fn io_default_oracle_routes_to_io_script() {
+        let path = super::default_differential_oracle_script_path("io_core");
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("scipy_io_oracle.py")
         );
     }
 
@@ -18614,6 +19262,91 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             report.per_case_results[0]
                 .message
                 .contains("interpolate vector matched"),
+            "unexpected message: {}",
+            report.per_case_results[0].message
+        );
+    }
+
+    #[test]
+    fn differential_test_io_fixture_uses_oracle_capture() {
+        let unique = format!("fsci-io-oracle-{}", super::now_unix_ms());
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).expect("create temp root");
+        let fixture_path = root.join("FSCI-P2C-017_io_oracle.json");
+        let fixture = IoPacketFixture {
+            packet_id: "FSCI-P2C-017-MOCK".to_owned(),
+            family: "io_core".to_owned(),
+            cases: vec![super::IoCase::Mmread {
+                case_id: "mmread_oracle_overrides_embedded_expected".to_owned(),
+                category: "differential".to_owned(),
+                mode: RuntimeMode::Strict,
+                content: "%%MatrixMarket matrix array real general\n1 2\n1\n2\n".to_owned(),
+                expected: super::IoExpectedOutcome::Matrix {
+                    rows: 1,
+                    cols: 2,
+                    values: vec![999.0, 999.0],
+                    atol: Some(1.0e-12),
+                    rtol: Some(1.0e-12),
+                },
+            }],
+        };
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize io fixture"),
+        )
+        .expect("write io fixture");
+
+        let script_path = root.join("mock_io_oracle.py");
+        let script = r#"
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--fixture", required=True)
+parser.add_argument("--output", required=True)
+parser.add_argument("--oracle-root", required=True)
+args = parser.parse_args()
+
+fixture = json.loads(Path(args.fixture).read_text())
+result = {
+    "packet_id": fixture["packet_id"],
+    "family": fixture["family"],
+    "generated_unix_ms": 0,
+    "runtime": {
+        "python_version": "3.11.0",
+        "numpy_version": "2.0.0",
+        "scipy_version": "mock-1.0",
+    },
+    "case_outputs": [
+        {
+            "case_id": "mmread_oracle_overrides_embedded_expected",
+            "status": "ok",
+            "result_kind": "matrix",
+            "result": {"rows": 1, "cols": 2, "values": [1.0, 2.0]},
+            "error": None,
+        }
+    ],
+}
+Path(args.output).write_text(json.dumps(result, indent=2))
+"#;
+        fs::write(&script_path, script).expect("write mock io oracle");
+
+        let oracle = DifferentialOracleConfig {
+            python_path: PathBuf::from("python3"),
+            script_path,
+            timeout_secs: 30,
+            required: true,
+        };
+
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("oracle-backed io fixture runs");
+
+        assert_eq!(report.fail_count, 0);
+        assert_eq!(report.pass_count, 1);
+        assert_eq!(report.oracle_status, OracleStatus::Available);
+        assert!(
+            report.per_case_results[0].message.contains("io matrix matched"),
             "unexpected message: {}",
             report.per_case_results[0].message
         );
@@ -20224,8 +20957,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn packet_family_all_has_15_entries() {
-        assert_eq!(PacketFamily::ALL.len(), 15);
+    fn packet_family_all_has_16_entries() {
+        assert_eq!(PacketFamily::ALL.len(), 16);
     }
 
     #[test]
@@ -20276,6 +21009,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(families.contains(&PacketFamily::Optimize));
         assert!(families.contains(&PacketFamily::InterpolateCore));
         assert!(families.contains(&PacketFamily::NdimageCore));
+        assert!(families.contains(&PacketFamily::IoCore));
     }
 
     #[test]
@@ -20379,6 +21113,10 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             PacketFamily::NdimageCore.fixture_filename(),
             "FSCI-P2C-015_ndimage_core.json"
         );
+        assert_eq!(
+            PacketFamily::IoCore.fixture_filename(),
+            "FSCI-P2C-017_io_core.json"
+        );
     }
 
     #[test]
@@ -20393,6 +21131,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(PacketFamily::RuntimeCasp.has_runner());
         assert!(PacketFamily::InterpolateCore.has_runner());
         assert!(PacketFamily::NdimageCore.has_runner());
+        assert!(PacketFamily::IoCore.has_runner());
     }
 
     #[test]
