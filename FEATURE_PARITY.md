@@ -14,7 +14,7 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 | Module | SciPy Symbols | FSCI Functions | Coverage | Status |
 |---|---|---|---|---|
-| linalg | 108 | 119 | 110% | parity_green |
+| linalg | 108 | 123 | 114% | parity_green |
 | sparse | 112 (incl. linalg) | 50+ | 45% | parity_gap |
 | optimize | 82 | 45+ | 55% | parity_gap |
 | integrate | 38 | 30+ | 80% | parity_green |
@@ -27,9 +27,9 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ## Detailed Gap Analysis
 
-### fsci-linalg (110% coverage - exceeds SciPy core)
+### fsci-linalg (114% coverage - exceeds SciPy core)
 
-**Implemented:** solve, solve_triangular, solve_banded, inv, det, lstsq, pinv, lu, lu_factor, lu_solve, qr, svd, svdvals, cholesky, cho_factor, cho_solve, ldl, eig, eigvals, eigh, eigvalsh, schur, hessenberg, expm, norm, matrix_rank, solve_with_casp, logm, sqrtm, sinm, cosm, tanm, sinhm, coshm, tanhm, matrix_power, solve_sylvester, solve_continuous_lyapunov, solve_discrete_lyapunov, solve_circulant, solve_toeplitz, khatri_rao, hadamard, block_diag, companion, issymmetric, ishermitian, is_positive_definite, is_diagonal, is_upper_triangular, is_lower_triangular, is_orthogonal, mat_norm_1, mat_norm_inf, bandwidth, orth, null_space, subspace_angles, polar, and 60+ more
+**Implemented:** solve, solve_triangular, solve_banded, inv, det, lstsq, pinv, lu, lu_factor, lu_solve, qr, qr_delete, qr_insert, qr_multiply, qr_update, svd, svdvals, cholesky, cho_factor, cho_solve, ldl, eig, eigvals, eigh, eigvalsh, schur, hessenberg, expm, norm, matrix_rank, solve_with_casp, logm, sqrtm, sinm, cosm, tanm, sinhm, coshm, tanhm, matrix_power, solve_sylvester, solve_continuous_lyapunov, solve_discrete_lyapunov, solve_circulant, solve_toeplitz, khatri_rao, hadamard, block_diag, companion, issymmetric, ishermitian, is_positive_definite, is_diagonal, is_upper_triangular, is_lower_triangular, is_orthogonal, mat_norm_1, mat_norm_inf, bandwidth, orth, null_space, subspace_angles, polar, and 60+ more
 
 **Missing (LOW priority):**
 - Matrix functions: ~~`fractional_matrix_power`~~ ✓ DONE, ~~`funm`~~ ✓ DONE, ~~`signm`~~ ✓ DONE, ~~`sinm`~~ ✓ DONE, ~~`cosm`~~ ✓ DONE, ~~`tanm`~~ ✓ DONE, ~~`sinhm`~~ ✓ DONE, ~~`coshm`~~ ✓ DONE, ~~`tanhm`~~ ✓ DONE; `expm_cond` / `expm_frechet` remain deferred

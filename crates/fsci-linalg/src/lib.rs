@@ -2714,6 +2714,159 @@ pub fn qr(a: &[Vec<f64>], options: DecompOptions) -> Result<QrResult, LinalgErro
     })
 }
 
+fn reconstruct_qr_matrix(
+    q: &[Vec<f64>],
+    r: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (q_rows, q_cols) = matrix_shape(q)?;
+    let (r_rows, r_cols) = matrix_shape(r)?;
+    hardened_dimension_check(options.mode, q_rows, q_cols)?;
+    hardened_dimension_check(options.mode, r_rows, r_cols)?;
+    validate_finite_matrix(q, options.mode, options.check_finite)?;
+    validate_finite_matrix(r, options.mode, options.check_finite)?;
+
+    if q_cols != r_rows {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (q_rows, q_cols),
+            b_len: r_rows,
+        });
+    }
+    matmul(q, r).map(|matrix| {
+        if r_cols == 0 {
+            vec![Vec::new(); q_rows]
+        } else {
+            matrix
+        }
+    })
+}
+
+/// Delete row `k` from a QR factorization and return updated QR factors.
+///
+/// This matches the observable contract of `scipy.linalg.qr_delete` for
+/// row deletes by reconstructing `A = Q R`, deleting the requested row, and
+/// recomputing the factorization through `qr`.
+pub fn qr_delete(
+    q: &[Vec<f64>],
+    r: &[Vec<f64>],
+    k: usize,
+    options: DecompOptions,
+) -> Result<QrResult, LinalgError> {
+    let mut matrix = reconstruct_qr_matrix(q, r, options)?;
+    if k >= matrix.len() {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!("row index {k} out of bounds for {} rows", matrix.len()),
+        });
+    }
+    matrix.remove(k);
+    qr(&matrix, options)
+}
+
+/// Insert row `u` at position `k` in a QR factorization.
+///
+/// Matches `scipy.linalg.qr_insert` for row inserts in the scoped real dense
+/// path by reconstructing `A = Q R`, inserting the row, and recomputing QR.
+pub fn qr_insert(
+    q: &[Vec<f64>],
+    r: &[Vec<f64>],
+    u: &[f64],
+    k: usize,
+    options: DecompOptions,
+) -> Result<QrResult, LinalgError> {
+    let mut matrix = reconstruct_qr_matrix(q, r, options)?;
+    let cols = matrix
+        .first()
+        .map_or_else(|| r.first().map_or(0, Vec::len), Vec::len);
+    if u.len() != cols {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (matrix.len(), cols),
+            b_len: u.len(),
+        });
+    }
+    if k > matrix.len() {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!(
+                "row index {k} out of bounds for insertion into {} rows",
+                matrix.len()
+            ),
+        });
+    }
+    if (options.check_finite || options.mode == RuntimeMode::Hardened)
+        && u.iter().any(|value| !value.is_finite())
+    {
+        return Err(LinalgError::NonFiniteInput);
+    }
+
+    matrix.insert(k, u.to_vec());
+    qr(&matrix, options)
+}
+
+/// Multiply `Q` from a QR factorization by vector or matrix `c`.
+///
+/// Matches the scoped `scipy.linalg.qr_multiply` behavior for applying an
+/// already-materialized `Q` factor. `R` is validated to ensure it is compatible
+/// with `Q`, but does not participate in the product.
+pub fn qr_multiply(
+    q: &[Vec<f64>],
+    r: &[Vec<f64>],
+    c: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (q_rows, q_cols) = matrix_shape(q)?;
+    let (r_rows, _r_cols) = matrix_shape(r)?;
+    if q_cols != r_rows {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (q_rows, q_cols),
+            b_len: r_rows,
+        });
+    }
+    let (c_rows, c_cols) = matrix_shape(c)?;
+    hardened_dimension_check(options.mode, c_rows, c_cols)?;
+    validate_finite_matrix(c, options.mode, options.check_finite)?;
+    reconstruct_qr_matrix(q, r, options)?;
+    matmul(q, c)
+}
+
+/// Apply a rank-1 update `A + u v^T` to a QR factorization.
+///
+/// Matches `scipy.linalg.qr_update` for dense real inputs by reconstructing
+/// `A = Q R`, applying the update, and recomputing QR.
+pub fn qr_update(
+    q: &[Vec<f64>],
+    r: &[Vec<f64>],
+    u: &[f64],
+    v: &[f64],
+    options: DecompOptions,
+) -> Result<QrResult, LinalgError> {
+    let mut matrix = reconstruct_qr_matrix(q, r, options)?;
+    let rows = matrix.len();
+    let cols = matrix.first().map_or(0, Vec::len);
+    if u.len() != rows {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (rows, cols),
+            b_len: u.len(),
+        });
+    }
+    if v.len() != cols {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (rows, cols),
+            b_len: v.len(),
+        });
+    }
+    if (options.check_finite || options.mode == RuntimeMode::Hardened)
+        && (u.iter().any(|value| !value.is_finite()) || v.iter().any(|value| !value.is_finite()))
+    {
+        return Err(LinalgError::NonFiniteInput);
+    }
+
+    for (i, row) in matrix.iter_mut().enumerate() {
+        for (j, value) in row.iter_mut().enumerate() {
+            *value += u[i] * v[j];
+        }
+    }
+    qr(&matrix, options)
+}
+
 /// Singular Value Decomposition: A = U Σ Vᵀ.
 ///
 /// Returns left singular vectors U, singular values σ, and right singular vectors Vᵀ.
@@ -6930,6 +7083,10 @@ mod tests {
         vec![vec![diag, off_diag], vec![off_diag, diag]]
     }
 
+    fn reconstruct_qr_result(result: &QrResult) -> Vec<Vec<f64>> {
+        matmul(&result.q, &result.r).expect("QR factors should multiply")
+    }
+
     fn assert_certificate_populated(certificate: &SolveCertificate) {
         assert_eq!(certificate.posterior.len(), 4);
         assert_eq!(certificate.expected_losses.len(), 5);
@@ -8043,6 +8200,120 @@ mod tests {
         let result = qr(&a, DecompOptions::default()).expect("qr of empty");
         assert!(result.q.is_empty());
         assert!(result.r.is_empty());
+    }
+
+    #[test]
+    fn qr_delete_removes_requested_row() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 7.0]];
+        let factors = qr(&a, DecompOptions::default()).expect("qr");
+        let updated =
+            qr_delete(&factors.q, &factors.r, 1, DecompOptions::default()).expect("qr_delete");
+
+        assert_close_matrix(
+            &reconstruct_qr_result(&updated),
+            &[vec![1.0, 2.0], vec![5.0, 7.0]],
+            1e-9,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn qr_delete_rejects_out_of_bounds_row() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let factors = qr(&a, DecompOptions::default()).expect("qr");
+        let err =
+            qr_delete(&factors.q, &factors.r, 2, DecompOptions::default()).expect_err("bad row");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn qr_insert_inserts_requested_row() {
+        let a = vec![vec![1.0, 2.0], vec![5.0, 7.0]];
+        let factors = qr(&a, DecompOptions::default()).expect("qr");
+        let updated = qr_insert(
+            &factors.q,
+            &factors.r,
+            &[3.0, 4.0],
+            1,
+            DecompOptions::default(),
+        )
+        .expect("qr_insert");
+
+        assert_close_matrix(
+            &reconstruct_qr_result(&updated),
+            &[vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 7.0]],
+            1e-9,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn qr_insert_rejects_wrong_row_width() {
+        let a = vec![vec![1.0, 2.0], vec![5.0, 7.0]];
+        let factors = qr(&a, DecompOptions::default()).expect("qr");
+        let err = qr_insert(
+            &factors.q,
+            &factors.r,
+            &[3.0, 4.0, 5.0],
+            1,
+            DecompOptions::default(),
+        )
+        .expect_err("bad row width");
+        assert!(matches!(err, LinalgError::IncompatibleShapes { .. }));
+    }
+
+    #[test]
+    fn qr_multiply_applies_q_factor() {
+        let q = eye(2, 2);
+        let r = eye(2, 2);
+        let c = vec![vec![2.0, 3.0], vec![5.0, 7.0]];
+        let result = qr_multiply(&q, &r, &c, DecompOptions::default()).expect("qr_multiply");
+        assert_close_matrix(&result, &c, 1e-14, 1e-14);
+    }
+
+    #[test]
+    fn qr_multiply_rejects_shape_mismatch() {
+        let q = eye(2, 2);
+        let r = eye(2, 2);
+        let c = vec![vec![2.0, 3.0]];
+        let err = qr_multiply(&q, &r, &c, DecompOptions::default()).expect_err("shape mismatch");
+        assert!(matches!(err, LinalgError::IncompatibleShapes { .. }));
+    }
+
+    #[test]
+    fn qr_update_applies_rank_one_update() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let factors = qr(&a, DecompOptions::default()).expect("qr");
+        let updated = qr_update(
+            &factors.q,
+            &factors.r,
+            &[0.5, -1.0],
+            &[2.0, 0.25],
+            DecompOptions::default(),
+        )
+        .expect("qr_update");
+
+        assert_close_matrix(
+            &reconstruct_qr_result(&updated),
+            &[vec![2.0, 2.125], vec![1.0, 3.75]],
+            1e-9,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn qr_update_rejects_wrong_update_vector_width() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let factors = qr(&a, DecompOptions::default()).expect("qr");
+        let err = qr_update(
+            &factors.q,
+            &factors.r,
+            &[0.5, -1.0],
+            &[2.0, 0.25, 0.5],
+            DecompOptions::default(),
+        )
+        .expect_err("bad v");
+        assert!(matches!(err, LinalgError::IncompatibleShapes { .. }));
     }
 
     // ── SVD tests ───────────────────────────────────────────────────

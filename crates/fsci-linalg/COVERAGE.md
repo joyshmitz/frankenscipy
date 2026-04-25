@@ -85,14 +85,14 @@ Legend: ✅ full match · ↪️ aliased · ❌ missing · ⚠️ partial
 | `svd` | `svd` | ✅ |
 | `svdvals` | `svdvals` | ✅ |
 
-### qr_updates (0 of 4 — 0%)
+### qr_updates (4 of 4 — 100%)
 
 | scipy | fsci | status |
 |-------|------|--------|
-| `qr_delete` | — | ❌ |
-| `qr_insert` | — | ❌ |
-| `qr_multiply` | — | ❌ |
-| `qr_update` | — | ❌ |
+| `qr_delete` | `qr_delete` | ✅ |
+| `qr_insert` | `qr_insert` | ✅ |
+| `qr_multiply` | `qr_multiply` | ✅ |
+| `qr_update` | `qr_update` | ✅ |
 
 ### eigen (6 of 8 — 75%)
 
@@ -205,9 +205,9 @@ variants, or rolled-in functionality from numpy.
 
 The gap-analysis bead set spawned by this audit (file as needed):
 
-1. **qr_updates family (0/4)** — qr_delete / qr_insert / qr_multiply /
-   qr_update are completely missing. Each is its own task; consider a
-   single br-fgxx-qr-updates bead with 4 sub-deliverables.
+1. **qr_updates family (4/4)** — qr_delete / qr_insert / qr_multiply /
+   qr_update now ship as recompute-backed dense real helpers over the
+   existing `qr` implementation.
 2. **matrix_funcs trig (sinm/cosm/tanm + their hyperbolic siblings)** —
    complete. These entry points now route through `funm` with the
    corresponding scalar transform.
