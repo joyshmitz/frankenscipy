@@ -55,6 +55,29 @@ def _run_case(case: Dict[str, Any], np: Any, spatial: Any, distance: Any) -> Dic
                 "index": int(idx) if np.isscalar(idx) else [int(v) for v in np.atleast_1d(idx).tolist()],
             })
 
+        if function == "kdtree_query_k":
+            # br-nmh2: k-nearest with k > 1.
+            points = np.asarray(args[0], dtype=float)
+            query = np.asarray(args[1], dtype=float)
+            k = int(args[2])
+            tree = spatial.cKDTree(points)
+            dist, idx = tree.query(query, k=k)
+            return _ok(case_id, "kdtree_query_k_result", {
+                "indices": [int(v) for v in np.atleast_1d(idx).tolist()],
+                "distances": [float(v) for v in np.atleast_1d(dist).tolist()],
+            })
+
+        if function == "kdtree_query_ball_point":
+            # br-nmh2: all indices within radius r.
+            points = np.asarray(args[0], dtype=float)
+            query = np.asarray(args[1], dtype=float)
+            r = float(args[2])
+            tree = spatial.cKDTree(points)
+            indices = sorted(int(v) for v in tree.query_ball_point(query, r))
+            return _ok(case_id, "kdtree_ball_point_result", {
+                "indices": indices,
+            })
+
         if function == "directed_hausdorff":
             a = np.asarray(args[0], dtype=float)
             b = np.asarray(args[1], dtype=float)

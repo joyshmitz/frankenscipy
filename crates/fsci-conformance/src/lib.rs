@@ -4896,6 +4896,14 @@ pub struct SpatialExpected {
     pub rtol: Option<f64>,
     #[serde(default)]
     pub contract_ref: String,
+    /// br-nmh2: k-NN parallel arrays. `indices` is the (sorted-by-
+    /// distance) list of point indices and `distances` the matching
+    /// distances. Used by the `kdtree_query_k_result` and
+    /// `kdtree_ball_point_result` expected.kind variants.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    #[serde(default)]
+    pub distances: Option<Vec<f64>>,
 }
 
 #[derive(Debug)]
@@ -4906,6 +4914,16 @@ enum SpatialObserved {
     KdTreeQuery {
         index: usize,
         distance: f64,
+    },
+    /// k-nearest result: parallel index/distance vectors of length k.
+    /// br-nmh2.
+    KdTreeQueryK {
+        indices: Vec<usize>,
+        distances: Vec<f64>,
+    },
+    /// query_ball_point: indices of points within radius r. br-nmh2.
+    KdTreeBallPoint {
+        indices: Vec<usize>,
     },
     ConvexHull {
         vertices: Vec<usize>,
@@ -4937,6 +4955,8 @@ fn execute_spatial_case(case: &SpatialCase) -> SpatialObserved {
         "cdist" => execute_cdist(case),
         "squareform_to_matrix" => execute_squareform_to_matrix(case),
         "kdtree_query" => execute_kdtree_query(case),
+        "kdtree_query_k" => execute_kdtree_query_k(case),
+        "kdtree_query_ball_point" => execute_kdtree_query_ball_point(case),
         "directed_hausdorff" => execute_directed_hausdorff(case),
         "convex_hull" => execute_convex_hull(case),
         "halfspace_intersection" => execute_halfspace_intersection(case),
@@ -5129,6 +5149,61 @@ fn execute_kdtree_query(case: &SpatialCase) -> SpatialObserved {
     };
     match tree.query(&query) {
         Ok((index, distance)) => SpatialObserved::KdTreeQuery { index, distance },
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+/// br-nmh2: k-nearest-neighbor query (k > 1).
+fn execute_kdtree_query_k(case: &SpatialCase) -> SpatialObserved {
+    let data: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data: {e}")),
+    };
+    let query: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse query: {e}")),
+    };
+    let k: usize = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse k: {e}")),
+    };
+    let tree = match fsci_spatial::KDTree::new(&data) {
+        Ok(t) => t,
+        Err(e) => return SpatialObserved::Error(format!("build tree: {e:?}")),
+    };
+    match tree.query_k(&query, k) {
+        Ok(pairs) => {
+            let indices = pairs.iter().map(|p| p.0).collect();
+            let distances = pairs.iter().map(|p| p.1).collect();
+            SpatialObserved::KdTreeQueryK { indices, distances }
+        }
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+/// br-nmh2: query_ball_point — all indices within radius r.
+fn execute_kdtree_query_ball_point(case: &SpatialCase) -> SpatialObserved {
+    let data: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data: {e}")),
+    };
+    let query: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse query: {e}")),
+    };
+    let r: f64 = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse r: {e}")),
+    };
+    let tree = match fsci_spatial::KDTree::new(&data) {
+        Ok(t) => t,
+        Err(e) => return SpatialObserved::Error(format!("build tree: {e:?}")),
+    };
+    match tree.query_ball_point(&query, r) {
+        Ok(mut indices) => {
+            indices.sort_unstable();
+            SpatialObserved::KdTreeBallPoint { indices }
+        }
         Err(e) => SpatialObserved::Error(format!("{e:?}")),
     }
 }
@@ -5329,6 +5404,60 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
             (
                 true,
                 format!("kdtree query match: idx={index}, dist={distance}"),
+            )
+        }
+        ("kdtree_query_k_result", SpatialObserved::KdTreeQueryK { indices, distances }) => {
+            // br-nmh2: parallel arrays. Indices must match exactly
+            // (sorted by distance); distances must match within tol.
+            let exp_idx = case.expected.indices.as_ref().cloned().unwrap_or_default();
+            let exp_dist = case
+                .expected
+                .distances
+                .as_ref()
+                .cloned()
+                .unwrap_or_default();
+            if indices.len() != exp_idx.len() {
+                return (
+                    false,
+                    format!(
+                        "k length mismatch: got {} indices, expected {}",
+                        indices.len(),
+                        exp_idx.len()
+                    ),
+                );
+            }
+            for (i, (g, e)) in indices.iter().zip(exp_idx.iter()).enumerate() {
+                if g != e {
+                    return (
+                        false,
+                        format!("kdtree_query_k indices[{i}] mismatch: got {g}, expected {e}"),
+                    );
+                }
+            }
+            for (i, (g, e)) in distances.iter().zip(exp_dist.iter()).enumerate() {
+                if !allclose_scalar(*g, *e, atol, rtol) {
+                    return (
+                        false,
+                        format!("kdtree_query_k distances[{i}] mismatch: got {g}, expected {e}"),
+                    );
+                }
+            }
+            (true, format!("kdtree query_k match: k={}", indices.len()))
+        }
+        ("kdtree_ball_point_result", SpatialObserved::KdTreeBallPoint { indices }) => {
+            let mut exp_idx = case.expected.indices.as_ref().cloned().unwrap_or_default();
+            exp_idx.sort_unstable();
+            if indices != &exp_idx {
+                return (
+                    false,
+                    format!(
+                        "kdtree ball_point indices mismatch: got {indices:?}, expected {exp_idx:?}"
+                    ),
+                );
+            }
+            (
+                true,
+                format!("kdtree ball_point match: {} hits", indices.len()),
             )
         }
         ("convex_hull", SpatialObserved::ConvexHull { vertices, area }) => {
