@@ -93,6 +93,22 @@ def _run_case(case: Dict[str, Any], np: Any, spatial: Any, distance: Any) -> Dic
                 "area": float(hull.area),
             })
 
+        if function == "voronoi":
+            # br-d1jx: scipy.spatial.Voronoi parity. Emit only
+            # permutation-invariant scalars + lex-sorted vertex
+            # multiset since region / ridge orderings have no
+            # canonical sort. Cospherical degenerate inputs can
+            # collapse to fewer vertices in scipy's Qhull-backed
+            # impl than fsci's Delaunay-dual triangulation reports.
+            points = np.asarray(args[0], dtype=float)
+            v = spatial.Voronoi(points)
+            sorted_v = sorted(v.vertices.tolist(), key=lambda p: (p[0], p[1]))
+            return _ok(case_id, "voronoi_result", {
+                "vertex_count": int(len(v.vertices)),
+                "ridge_count": int(len(v.ridge_points)),
+                "sorted_vertices": [[float(p[0]), float(p[1])] for p in sorted_v],
+            })
+
         if function == "halfspace_intersection":
             halfspaces = np.asarray(args[0], dtype=float)
             interior_point = np.asarray(args[1], dtype=float)
