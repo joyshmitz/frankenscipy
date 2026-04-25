@@ -422,6 +422,7 @@ dependencies = [
 name = "fsci-arrayapi"
 version = "0.1.0"
 dependencies = [
+ "fsci-runtime",
  "nalgebra",
 ]
 
@@ -528,7 +529,6 @@ dependencies = [
 name = "fsci-runtime"
 version = "0.1.0"
 dependencies = [
- "asupersync",
  "blake3",
  "serde",
  "serde_json",
@@ -557,6 +557,7 @@ dependencies = [
 name = "fsci-spatial"
 version = "0.1.0"
 dependencies = [
+ "fsci-linalg",
  "fsci-runtime",
  "fsci-sparse",
 ]
