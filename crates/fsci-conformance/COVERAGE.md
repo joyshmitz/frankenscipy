@@ -28,7 +28,7 @@ fixture.
 | constants  | ~140 | ~50 | 24 | 24 |
 | interpolate| ~40  | ~15 | 13 | 13 |
 | ndimage    | ~100 | ~30 | 6  | 6 |
-| io         | ~15  | ~5  | 0  | 0 (no fixture yet) |
+| io         | ~15  | ~5  | 7  | 7 |
 
 _Numbers are best-effort rough counts. Refine by running the coverage
 generator: `cargo run -p fsci-conformance --bin coverage_report` (TBD)._
@@ -72,6 +72,15 @@ generator: `cargo run -p fsci-conformance --bin coverage_report` (TBD)._
   reject paths, `RegularGridInterpolator` linear/nearest evaluation,
   `CubicSpline`, and `BSpline`.
 
+### io (P2C-017)
+
+- **Oracle script:** `python_oracle/scipy_io_oracle.py`
+- **Fixture:** `fixtures/FSCI-P2C-017_io_core.json`
+- **E2E harness:** `tests/e2e_io.rs`
+- Covers: Matrix Market dense and symmetric coordinate reads, Matrix Market
+  dense round-trips, `loadtxt`/`savetxt` numeric text round-trips, WAV
+  16-bit PCM metadata/value round-trip, and ragged-row fail-closed behavior.
+
 ### Remaining families
 
 Each of the newer oracles added under br-di9p (cluster / spatial /
@@ -87,10 +96,8 @@ adding to both the oracle dispatcher and the fixture.
 - Stochastic methods (differential_evolution / basinhopping /
   dual_annealing / brute, kmeans / dbscan) have no fixture cases
   (tracked in frankenscipy-9n5j).
-- io has crate-level e2e tests but no P2C fixture packet yet, so
-  there is no oracle-backed dashboard lane to count. Add a fixture
-  packet before reporting parity percentages for that family (tracked
-  in frankenscipy-3m6f).
+- io now has a seed P2C fixture packet, but the surface remains narrow.
+  Extend it before reporting broad parity percentages for that family.
 - ndimage has a P2C packet and SciPy oracle capture lane for core
   filtering, morphology, labeling, and distance-transform smoke
   coverage.

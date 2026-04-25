@@ -44,6 +44,7 @@ capture at any time.
 | interpolate | P2C-014 | scipy_interpolate_oracle.py | 2026-04-24 |
 | ndimage     | P2C-015 | scipy_ndimage_oracle.py | 2026-04-24 |
 | constants   | P2C-016 | (property-based)          | 2026-03-31 |
+| io          | P2C-017 | scipy_io_oracle.py        | 2026-04-25 |
 
 Dates correspond to the last modification of the fixture file on disk
 and do *not* guarantee every case was regenerated at that date — only

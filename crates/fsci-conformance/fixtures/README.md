@@ -32,6 +32,10 @@ This folder stores normalized oracle-vs-target fixtures for fsci-conformance.
   - exact fundamental values
   - name/alias lookup via `value` and `find`
   - temperature, energy, wavelength/frequency, angle, and mass conversion invariants
+- `FSCI-P2C-017_io_core.json`: I/O fixture packet for:
+  - Matrix Market dense and coordinate reads plus dense write/read round-trips
+  - `loadtxt` / `savetxt` numeric text handling
+  - WAV 16-bit PCM write/read metadata and sample-value parity
 - `artifacts/`: generated parity reports, RaptorQ sidecars, and decode-proof logs.
 
 Expected per-packet durable artifacts:
