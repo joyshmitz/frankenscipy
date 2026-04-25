@@ -18768,6 +18768,146 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn p2c003_optimize_global_local_parity() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-003_optimize_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read optimize fixture");
+        let fixture: OptimizePacketFixture =
+            serde_json::from_str(&raw).expect("parse optimize fixture");
+
+        let mut local_pairs = std::collections::BTreeSet::new();
+        let mut global_ops = std::collections::BTreeSet::new();
+        let mut global_objectives = std::collections::BTreeSet::new();
+        let mut benchmark_differential_cases = 0usize;
+
+        for case in &fixture.cases {
+            match case {
+                super::OptimizeCase::Minimize {
+                    category,
+                    method,
+                    objective,
+                    expected,
+                    ..
+                } if category == "differential" => {
+                    let pair = format!("{method:?}:{objective:?}");
+                    match method {
+                        fsci_opt::OptimizeMethod::Bfgs
+                        | fsci_opt::OptimizeMethod::ConjugateGradient
+                        | fsci_opt::OptimizeMethod::Powell => {
+                            local_pairs.insert(pair);
+                            benchmark_differential_cases += 1;
+                            assert!(
+                                matches!(
+                                    expected,
+                                    super::OptimizeExpectedOutcome::MinimizePoint { .. }
+                                ),
+                                "local benchmark case {} must compare a minimizer point",
+                                case.case_id()
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                super::OptimizeCase::DifferentialEvolution {
+                    category,
+                    objective,
+                    expected,
+                    ..
+                }
+                | super::OptimizeCase::Basinhopping {
+                    category,
+                    objective,
+                    expected,
+                    ..
+                }
+                | super::OptimizeCase::DualAnnealing {
+                    category,
+                    objective,
+                    expected,
+                    ..
+                }
+                | super::OptimizeCase::Brute {
+                    category,
+                    objective,
+                    expected,
+                    ..
+                } if category == "differential" => {
+                    let operation = match case {
+                        super::OptimizeCase::DifferentialEvolution { .. } => {
+                            "differential_evolution"
+                        }
+                        super::OptimizeCase::Basinhopping { .. } => "basinhopping",
+                        super::OptimizeCase::DualAnnealing { .. } => "dual_annealing",
+                        super::OptimizeCase::Brute { .. } => "brute",
+                        _ => unreachable!("matched global optimize case"),
+                    };
+                    global_ops.insert(operation);
+                    global_objectives.insert(format!("{objective:?}"));
+                    benchmark_differential_cases += 1;
+                    assert!(
+                        matches!(
+                            expected,
+                            super::OptimizeExpectedOutcome::MinimizePoint { .. }
+                        ),
+                        "global benchmark case {} must compare a minimizer point",
+                        case.case_id()
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        for pair in [
+            "Bfgs:Rosenbrock2",
+            "Bfgs:Ackley2",
+            "Bfgs:Rastrigin2",
+            "ConjugateGradient:Rosenbrock2",
+            "ConjugateGradient:Ackley2",
+            "ConjugateGradient:Rastrigin2",
+            "Powell:Rosenbrock2",
+            "Powell:Ackley2",
+            "Powell:Rastrigin2",
+        ] {
+            assert!(local_pairs.contains(pair), "missing local pair {pair}");
+        }
+
+        for operation in [
+            "differential_evolution",
+            "basinhopping",
+            "dual_annealing",
+            "brute",
+        ] {
+            assert!(
+                global_ops.contains(operation),
+                "missing global operation {operation}"
+            );
+        }
+
+        for objective in [
+            "Rosenbrock2",
+            "Ackley2",
+            "Rastrigin2",
+            "Himmelblau2",
+            "Sphere2",
+        ] {
+            assert!(
+                global_objectives.contains(objective),
+                "missing global benchmark objective {objective}"
+            );
+        }
+        assert!(
+            benchmark_differential_cases >= 12,
+            "expected at least 12 local/global benchmark differential cases"
+        );
+
+        let oracle = default_test_oracle();
+        let report =
+            run_differential_test(&fixture_path, &oracle).expect("optimize differential runs");
+        assert_eq!(report.fail_count, 0);
+    }
+
+    #[test]
     fn special_packet_runner_passes() {
         let cfg = HarnessConfig::default_paths();
         let report = run_special_packet(&cfg, "FSCI-P2C-006_special_core.json")

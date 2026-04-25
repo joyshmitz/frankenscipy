@@ -18,7 +18,7 @@ fixture.
 | stats      | ~400 | ~80 | 30 | 30 |
 | special    | ~120 | ~45 | 257 | 257 |
 | fft        | ~40  | ~25 | 56 | 56 |
-| optimize   | ~60  | ~25 | 39 | 39 |
+| optimize   | ~60  | ~25 | 49 | 49 |
 | sparse     | ~200 | ~40 | 27 | 27 |
 | integrate  | ~30  | ~15 | 28 | 28 |
 | cluster    | ~25  | ~12 | 20 | 20 |
@@ -45,6 +45,17 @@ generator: `cargo run -p fsci-conformance --bin coverage_report` (TBD)._
   scalar/matrix surfaces only (QR R, SVD singular values, Cholesky factor,
   eig/eigh eigenvalues). Sign-normalized full eigenvector and singular-vector
   comparisons are still unmapped.
+
+### optimize (P2C-003)
+
+- **Oracle script:** `python_oracle/scipy_optimize_oracle.py`
+- **Fixture:** `fixtures/FSCI-P2C-003_optimize_core.json`
+- Covers: local minimizers over Rosenbrock/Ackley/Rastrigin benchmark
+  objectives, root scalar methods, seeded global optimizers
+  (`differential_evolution`, `basinhopping`, `dual_annealing`, `brute`),
+  metamorphic invariants, and adversarial fail-closed cases.
+- **E2E harness:** `tests/e2e_optimize.rs`
+- **Named parity gate:** `p2c003_optimize_global_local_parity`
 
 ### special (P2C-006)
 
@@ -94,9 +105,9 @@ adding to both the oracle dispatcher and the fixture.
   The former zero-coverage families tracked by frankenscipy-xo4o and
   frankenscipy-ncst now each have at least 5 Hardened cases; remaining
   work is raising per-family Hardened floors beyond the seed coverage.
-- Stochastic methods (differential_evolution / basinhopping /
-  dual_annealing / brute, kmeans / dbscan) have no fixture cases
-  (tracked in frankenscipy-9n5j).
+- Stochastic optimize methods (`differential_evolution`, `basinhopping`,
+  `dual_annealing`, `brute`) have seeded fixture coverage in P2C-003.
+  Stochastic clustering methods (kmeans / dbscan) remain tracked separately.
 - io now has a seed P2C fixture packet, but the surface remains narrow.
   Extend it before reporting broad parity percentages for that family.
 - ndimage has a P2C packet and SciPy oracle capture lane for core
