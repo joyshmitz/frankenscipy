@@ -27,6 +27,26 @@ Decision: do NOT port these. If a downstream consumer asks for them,
 file a bead and reconsider; until then, a `LinalgError::Unsupported`
 on attempt is the right policy.
 
+## Declined: full scipy.linalg.lapack / scipy.linalg.blas surface
+
+scipy.linalg.lapack exposes 480 Fortran routines (147 distinct
+kernels × {s, d, c, z} dtype prefixes), and scipy.linalg.blas
+exposes 128 routines (46 kernels). For the same reasons as the
+introspection trio (no Fortran shim, monomorphization removes
+per-dtype routing), fsci-linalg does NOT expose the LAPACK / BLAS
+namespace.
+
+Per frankenscipy-uzht, a curated migration table is maintained in
+[LAPACK_MAPPING.md](./LAPACK_MAPPING.md). 24 of the 147 LAPACK
+kernels and 14 of the 46 BLAS kernels — the most-used in scipy
+porting — have a documented fsci-linalg counterpart there. The
+audit script `audit/audit_lapack.py` enumerates the full surface
+so the table can be kept in sync as scipy releases.
+
+Users porting code that imports from `scipy.linalg.lapack` or
+`scipy.linalg.blas` should consult LAPACK_MAPPING.md to find the
+high-level fsci-linalg fn that supplants their direct Fortran call.
+
 ## Declined: `orthogonal_procrustes`
 
 scipy.linalg.orthogonal_procrustes is mathematically the same problem
