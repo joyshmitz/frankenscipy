@@ -26,7 +26,7 @@ fixture.
 | signal     | ~200 | ~40 | 12 | 12 |
 | arrayapi   | N/A  | ~60 | 34 | 34 |
 | constants  | ~140 | ~50 | 24 | 24 |
-| interpolate| ~40  | ~15 | 0  | 0 (no fixture yet) |
+| interpolate| ~40  | ~15 | 13 | 13 |
 | ndimage    | ~100 | ~30 | 6  | 6 |
 | io         | ~15  | ~5  | 0  | 0 (no fixture yet) |
 
@@ -63,6 +63,15 @@ generator: `cargo run -p fsci-conformance --bin coverage_report` (TBD)._
   energy conversion, wavelength/frequency conversion, angle conversion,
   mass conversion, and fail-closed unknown-name/unknown-scale paths.
 
+### interpolate (P2C-014)
+
+- **Oracle script:** `python_oracle/scipy_interpolate_oracle.py`
+- **Fixture:** `fixtures/FSCI-P2C-014_interpolate_core.json`
+- **E2E harness:** `tests/e2e_interpolate.rs`
+- Covers: `interp1d` linear/nearest evaluation, fill-value behavior,
+  reject paths, `RegularGridInterpolator` linear/nearest evaluation,
+  `CubicSpline`, and `BSpline`.
+
 ### Remaining families
 
 Each of the newer oracles added under br-di9p (cluster / spatial /
@@ -78,10 +87,10 @@ adding to both the oracle dispatcher and the fixture.
 - Stochastic methods (differential_evolution / basinhopping /
   dual_annealing / brute, kmeans / dbscan) have no fixture cases
   (tracked in frankenscipy-9n5j).
-- interpolate / io have crate-level e2e tests but no P2C
-  fixture packet yet, so there is no oracle-backed dashboard lane to
-  count. Add fixture packets before reporting parity percentages for
-  those families (tracked in frankenscipy-di9p).
+- io has crate-level e2e tests but no P2C fixture packet yet, so
+  there is no oracle-backed dashboard lane to count. Add a fixture
+  packet before reporting parity percentages for that family (tracked
+  in frankenscipy-3m6f).
 - ndimage has a P2C packet and SciPy oracle capture lane for core
   filtering, morphology, labeling, and distance-transform smoke
   coverage.

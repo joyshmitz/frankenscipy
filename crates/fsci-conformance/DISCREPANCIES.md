@@ -62,25 +62,25 @@ at the bottom for re-evaluation.
 - **Review date:** 2026-04-23
 - **Related beads:** frankenscipy-7eaq
 
-## DISC-005 — e2e-only families are excluded from oracle parity counts
+## DISC-005 — e2e-only io is excluded from oracle parity counts
 
-- **Reference:** scipy.interpolate / scipy.ndimage / scipy.io expose
-  observable behavior that should eventually be compared by P2C fixture
-  packets and Python oracle captures.
-- **Our impl:** fsci-interpolate, fsci-ndimage, and fsci-io currently
-  have crate-level e2e tests but no `fixtures/FSCI-P2C-*.json` packet
-  lane in `fsci-conformance`, so the dashboard must not report
-  oracle-backed parity percentages for those families yet.
+- **Reference:** scipy.io exposes observable behavior that should
+  eventually be compared by P2C fixture packets and Python oracle
+  captures.
+- **Our impl:** fsci-io currently has crate-level e2e tests but no
+  `fixtures/FSCI-P2C-*.json` packet lane in `fsci-conformance`, so the
+  dashboard must not report oracle-backed parity percentages for that
+  family yet. fsci-interpolate and fsci-ndimage have since been
+  promoted into P2C fixture lanes.
 - **Impact:** Users reading parity numbers see fixture-backed families
   only; e2e-only coverage remains real test coverage but not a SciPy
   oracle-backed parity score.
 - **Resolution:** ACCEPTED for the current dashboard. Promote each
   family into a P2C fixture + oracle lane before adding it to the
   oracle-backed score.
-- **Tests affected:** `e2e_interpolate.rs`, `e2e_ndimage.rs`,
-  `e2e_io.rs`.
+- **Tests affected:** `e2e_io.rs`.
 - **Review date:** 2026-04-24
-- **Related beads:** frankenscipy-di9p
+- **Related beads:** frankenscipy-4i2r, frankenscipy-3m6f
 
 ## Stale / needs re-review
 

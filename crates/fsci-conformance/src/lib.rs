@@ -15920,6 +15920,8 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
+    const INTERPOLATE_CORE_CASE_COUNT: usize = 13;
+
     #[test]
     fn smoke_harness_finds_oracle_and_fixtures() {
         let cfg = HarnessConfig::default_paths();
@@ -18414,9 +18416,9 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             "{}",
             serde_json::to_string(&report).unwrap()
         );
-        assert!(
-            report.passed_cases >= 1,
-            "expected at least one interpolate test case"
+        assert_eq!(
+            report.passed_cases, INTERPOLATE_CORE_CASE_COUNT,
+            "interpolate packet should keep its full fixture surface"
         );
 
         let artifacts = write_parity_artifacts(&cfg, &report)
@@ -18486,7 +18488,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             "{}",
             serde_json::to_string_pretty(&report).unwrap()
         );
-        assert!(report.pass_count >= 1);
+        assert_eq!(report.pass_count, INTERPOLATE_CORE_CASE_COUNT);
     }
 
     #[test]
