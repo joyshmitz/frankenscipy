@@ -5890,6 +5890,9 @@ fn execute_signal_case(case: &SignalCase) -> SignalObserved {
         "correlate" => execute_correlate(case),
         "find_peaks" => execute_find_peaks(case),
         "butter" | "cheby1" | "cheby2" | "ellip" | "bessel" => execute_signal_iir_design(case),
+        "firwin" | "firwin2" | "firls" | "remez" | "minimum_phase" => {
+            execute_signal_fir_design(case)
+        }
         "freqz" => execute_freqz(case),
         "hilbert" => execute_hilbert(case),
         "detrend" => execute_detrend(case),
@@ -6138,6 +6141,135 @@ fn execute_signal_iir_design(case: &SignalCase) -> SignalObserved {
         )),
         "bessel" => signal_iir_coeffs(fsci_signal::bessel(order, &wn, filter_type)),
         _ => SignalObserved::Error(format!("unknown IIR design: {}", case.function)),
+    }
+}
+
+/// br-7jrx: dispatch FIR design functions (firwin / firwin2 / firls /
+/// remez / minimum_phase). Each case's args layout:
+///
+///   firwin:        [numtaps, cutoff (scalar or array), window, pass_zero]
+///   firwin2:       [numtaps, freq[], gain[], window]
+///   firls:         [numtaps, bands[], desired[]]   (weight optional via 4th arg)
+///   remez:         [numtaps, bands[], desired[]]   (weight optional via 4th arg)
+///   minimum_phase: [h[]]  (FIR taps of a linear-phase prototype)
+fn execute_signal_fir_design(case: &SignalCase) -> SignalObserved {
+    fn parse_window(value: Option<&serde_json::Value>) -> fsci_signal::FirWindow {
+        match value
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("hamming")
+        {
+            "hann" => fsci_signal::FirWindow::Hann,
+            "blackman" => fsci_signal::FirWindow::Blackman,
+            "rectangular" | "boxcar" | "rect" => fsci_signal::FirWindow::Rectangular,
+            other => {
+                if let Some(beta_str) = other.strip_prefix("kaiser:")
+                    && let Ok(beta) = beta_str.parse::<f64>()
+                {
+                    return fsci_signal::FirWindow::Kaiser(beta);
+                }
+                fsci_signal::FirWindow::Hamming
+            }
+        }
+    }
+    fn vec_f64(value: &serde_json::Value) -> Result<Vec<f64>, String> {
+        serde_json::from_value(value.clone()).map_err(|e| format!("parse vec: {e}"))
+    }
+    fn scalar_or_vec_f64(value: &serde_json::Value) -> Result<Vec<f64>, String> {
+        if let Some(x) = value.as_f64() {
+            return Ok(vec![x]);
+        }
+        vec_f64(value)
+    }
+
+    match case.function.as_str() {
+        "firwin" => {
+            let numtaps: usize = match serde_json::from_value(case.args[0].clone()) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(format!("parse numtaps: {e}")),
+            };
+            let cutoff = match scalar_or_vec_f64(&case.args[1]) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(format!("parse cutoff: {e}")),
+            };
+            let window = parse_window(case.args.get(2));
+            let pass_zero = case
+                .args
+                .get(3)
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            match fsci_signal::firwin(numtaps, &cutoff, window, pass_zero) {
+                Ok(h) => SignalObserved::Array(h),
+                Err(e) => SignalObserved::Error(format!("{e:?}")),
+            }
+        }
+        "firwin2" => {
+            let numtaps: usize = match serde_json::from_value(case.args[0].clone()) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(format!("parse numtaps: {e}")),
+            };
+            let freq = match vec_f64(&case.args[1]) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(e),
+            };
+            let gain = match vec_f64(&case.args[2]) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(e),
+            };
+            let window = parse_window(case.args.get(3));
+            match fsci_signal::firwin2(numtaps, &freq, &gain, window) {
+                Ok(h) => SignalObserved::Array(h),
+                Err(e) => SignalObserved::Error(format!("{e:?}")),
+            }
+        }
+        "firls" => {
+            let numtaps: usize = match serde_json::from_value(case.args[0].clone()) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(format!("parse numtaps: {e}")),
+            };
+            let bands = match vec_f64(&case.args[1]) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(e),
+            };
+            let desired = match vec_f64(&case.args[2]) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(e),
+            };
+            let weight = case.args.get(3).and_then(|v| vec_f64(v).ok());
+            match fsci_signal::firls(numtaps, &bands, &desired, weight.as_deref()) {
+                Ok(h) => SignalObserved::Array(h),
+                Err(e) => SignalObserved::Error(format!("{e:?}")),
+            }
+        }
+        "remez" => {
+            let numtaps: usize = match serde_json::from_value(case.args[0].clone()) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(format!("parse numtaps: {e}")),
+            };
+            let bands = match vec_f64(&case.args[1]) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(e),
+            };
+            let desired = match vec_f64(&case.args[2]) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(e),
+            };
+            let weight = case.args.get(3).and_then(|v| vec_f64(v).ok());
+            match fsci_signal::remez(numtaps, &bands, &desired, weight.as_deref()) {
+                Ok(h) => SignalObserved::Array(h),
+                Err(e) => SignalObserved::Error(format!("{e:?}")),
+            }
+        }
+        "minimum_phase" => {
+            let h = match vec_f64(&case.args[0]) {
+                Ok(v) => v,
+                Err(e) => return SignalObserved::Error(e),
+            };
+            match fsci_signal::minimum_phase(&h) {
+                Ok(h) => SignalObserved::Array(h),
+                Err(e) => SignalObserved::Error(format!("{e:?}")),
+            }
+        }
+        _ => SignalObserved::Error(format!("unknown FIR design: {}", case.function)),
     }
 }
 

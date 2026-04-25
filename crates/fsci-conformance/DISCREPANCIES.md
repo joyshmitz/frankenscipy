@@ -83,6 +83,29 @@ at the bottom for re-evaluation.
 - **Review date:** 2026-04-25
 - **Related beads:** frankenscipy-3m6f
 
+## DISC-NN — fsci-signal firwin2 / remez coefficient divergence
+
+- **Reference:** scipy.signal.firwin2 (frequency-sampling +
+  inverse-FFT + windowing) and scipy.signal.remez (Parks-McClellan
+  exchange).
+- **Our impl:** fsci_signal::firwin2 / remez follow the same
+  algorithm families but reach slightly different numerical results —
+  observed max coefficient diff ~0.05 on canonical lowpass / bandpass
+  designs.
+- **Impact:** P2C-011 fixture cases for firwin2 and remez use
+  `atol = 0.06, rtol = 0.05` per br-7jrx rather than the tight
+  1e-10/1e-9 used for firwin and firls. The qualitative response
+  shape (passband/stopband transitions, ripple) is preserved within
+  usable filter-design margins.
+- **Resolution:** ACCEPTED — tightening requires matching scipy's
+  windowing-application order in firwin2 and Remez exchange
+  numerical refinement details; out of scope for the parity slice.
+- **Tests affected:** P2C-011 firwin2_lp_11_freqsamp,
+  firwin2_bp_15_3band, remez_lp_11_passband_0p2_stopband_0p3,
+  remez_bp_15_3band.
+- **Review date:** 2026-04-25
+- **Related beads:** frankenscipy-7jrx
+
 ## Stale / needs re-review
 
 _None yet — first revision._

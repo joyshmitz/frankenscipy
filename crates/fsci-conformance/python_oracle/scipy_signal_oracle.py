@@ -93,6 +93,58 @@ def _run_case(case: Dict[str, Any], np: Any, signal: Any, windows: Any) -> Dict[
                 "a": [float(v) for v in np.asarray(a).tolist()],
             })
 
+        if function in {"firwin", "firwin2", "firls", "remez", "minimum_phase"}:
+            # br-7jrx: FIR design family. All emit a coefficient vector
+            # (impulse response) of length `numtaps`. Window names mirror
+            # the Rust dispatcher (kaiser:beta encodes the shape param).
+            def _resolve_window(value: Any) -> Any:
+                if isinstance(value, str):
+                    if value.startswith("kaiser:"):
+                        return ("kaiser", float(value.split(":", 1)[1]))
+                    return value
+                return "hamming"
+            if function == "firwin":
+                numtaps = int(args[0])
+                cutoff_arg = args[1]
+                cutoff = (
+                    [float(c) for c in cutoff_arg]
+                    if isinstance(cutoff_arg, list)
+                    else float(cutoff_arg)
+                )
+                window = _resolve_window(args[2] if len(args) > 2 else "hamming")
+                pass_zero = bool(args[3]) if len(args) > 3 else True
+                h = signal.firwin(numtaps, cutoff, window=window, pass_zero=pass_zero)
+                return _ok(case_id, "array", {"values": [float(v) for v in h.tolist()]})
+            if function == "firwin2":
+                numtaps = int(args[0])
+                freq = [float(v) for v in args[1]]
+                gain = [float(v) for v in args[2]]
+                window = _resolve_window(args[3] if len(args) > 3 else "hamming")
+                h = signal.firwin2(numtaps, freq, gain, window=window)
+                return _ok(case_id, "array", {"values": [float(v) for v in h.tolist()]})
+            if function == "firls":
+                numtaps = int(args[0])
+                bands = [float(v) for v in args[1]]
+                desired = [float(v) for v in args[2]]
+                # scipy.signal.firls default fs=2.0 → bands in [0, 1]
+                # match fsci's [0, 1] convention.
+                weight = [float(v) for v in args[3]] if len(args) > 3 else None
+                h = signal.firls(numtaps, bands, desired, weight=weight, fs=2.0)
+                return _ok(case_id, "array", {"values": [float(v) for v in h.tolist()]})
+            if function == "remez":
+                numtaps = int(args[0])
+                bands = [float(v) for v in args[1]]
+                desired = [float(v) for v in args[2]]
+                weight = [float(v) for v in args[3]] if len(args) > 3 else None
+                # scipy.signal.remez default fs=1.0 → bands in [0, 0.5];
+                # fsci docs same. Pass fs=1.0 explicitly for parity.
+                h = signal.remez(numtaps, bands, desired, weight=weight, fs=1.0)
+                return _ok(case_id, "array", {"values": [float(v) for v in h.tolist()]})
+            # minimum_phase
+            taps = np.asarray(args[0], dtype=float)
+            h = signal.minimum_phase(taps)
+            return _ok(case_id, "array", {"values": [float(v) for v in h.tolist()]})
+
         if function == "freqz":
             b = np.asarray(args[0], dtype=float)
             a = np.asarray(args[1], dtype=float) if len(args) > 1 else np.array([1.0])
