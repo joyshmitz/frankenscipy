@@ -631,6 +631,42 @@
         "rtol": 1e-10,
         "contract_ref": "fsci_stats::pearsonr"
       }
+    },
+    {
+      "case_id": "ttest_ind_shifted_groups",
+      "category": "hypothesis_test",
+      "mode": "Strict",
+      "function": "ttest_ind",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [3.0, 4.0, 5.0, 6.0, 7.0]
+      ],
+      "expected": {
+        "kind": "ttest_result",
+        "statistic": -2.0,
+        "pvalue": 0.08051623795726262,
+        "atol": 1e-9,
+        "rtol": 1e-7,
+        "contract_ref": "scipy.stats.ttest_ind (two-sided)"
+      }
+    },
+    {
+      "case_id": "ttest_ind_identical_groups",
+      "category": "hypothesis_test",
+      "mode": "Strict",
+      "function": "ttest_ind",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0],
+        [1.0, 2.0, 3.0, 4.0, 5.0]
+      ],
+      "expected": {
+        "kind": "ttest_result",
+        "statistic": 0.0,
+        "pvalue": 1.0,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.ttest_ind (identical -> 0/1)"
+      }
     }
   ]
 }

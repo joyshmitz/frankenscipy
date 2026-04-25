@@ -111,6 +111,21 @@ def _run_case(case: dict[str, Any], stats: Any) -> dict[str, Any]:
                 },
                 "error": None,
             }
+        if function_name in ("ttest_ind", "mannwhitneyu", "wilcoxon"):
+            # br-7k5n: 2-sample location tests share the (statistic,
+            # pvalue) shape with ttest_1samp.
+            fn = getattr(stats, function_name)
+            result = fn(*args)
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "ttest_result",
+                "result": {
+                    "statistic": _as_float(result.statistic),
+                    "pvalue": _as_float(result.pvalue),
+                },
+                "error": None,
+            }
         if function_name == "ks_2samp":
             result = stats.ks_2samp(*args)
             return {
