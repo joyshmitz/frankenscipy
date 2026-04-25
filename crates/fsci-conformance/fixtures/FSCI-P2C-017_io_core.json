@@ -97,6 +97,25 @@
       }
     },
     {
+      "operation": "loadmat",
+      "case_id": "loadmat_v4_row_vector_scipy_bytes",
+      "category": "differential",
+      "mode": "Strict",
+      "content_hex": "0000000001000000030000000000000004000000726f7700000000000000144000000000000018400000000000001c40",
+      "expected": {
+        "kind": "matrix",
+        "rows": 1,
+        "cols": 3,
+        "values": [
+          5.0,
+          6.0,
+          7.0
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
+    },
+    {
       "operation": "savemat",
       "case_id": "savemat_v4_real_double_roundtrip",
       "category": "roundtrip",
@@ -119,6 +138,38 @@
           2.5,
           3.5,
           4.5
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "savemat",
+      "case_id": "savemat_v4_rectangular_roundtrip",
+      "category": "roundtrip",
+      "mode": "Strict",
+      "name": "rect",
+      "rows": 2,
+      "cols": 3,
+      "data": [
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        6.0
+      ],
+      "expected": {
+        "kind": "matrix",
+        "rows": 2,
+        "cols": 3,
+        "values": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0
         ],
         "atol": 1e-12,
         "rtol": 1e-12
@@ -202,6 +253,45 @@
         ],
         "atol": 1e-12,
         "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "wav_write",
+      "case_id": "wav_write_stereo_int16_quantization",
+      "category": "differential",
+      "mode": "Strict",
+      "sample_rate": 48000,
+      "channels": 2,
+      "data": [
+        0.25,
+        -0.25,
+        0.75,
+        -0.75
+      ],
+      "expected": {
+        "kind": "wav",
+        "sample_rate": 48000,
+        "channels": 2,
+        "bits_per_sample": 16,
+        "values": [
+          0.249969482421875,
+          -0.249969482421875,
+          0.749969482421875,
+          -0.749969482421875
+        ],
+        "atol": 1e-12,
+        "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "loadmat",
+      "case_id": "loadmat_v4_truncated_header_reject",
+      "category": "adversarial",
+      "mode": "Strict",
+      "content_hex": "000000",
+      "expected": {
+        "kind": "error",
+        "error": "truncated MAT v4 header"
       }
     },
     {
