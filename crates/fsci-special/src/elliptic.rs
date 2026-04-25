@@ -262,6 +262,9 @@ fn ellipk_scalar(m: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         return domain_error("ellipk", mode, "m must be in [0, 1)");
     }
     if m >= 1.0 {
+        if mode == RuntimeMode::Hardened {
+            return domain_error("ellipk", mode, "m must be in [0, 1)");
+        }
         return Ok(f64::INFINITY);
     }
     if m == 0.0 {
@@ -366,6 +369,9 @@ fn ellipkinc_scalar(phi: f64, m: f64, mode: RuntimeMode) -> Result<f64, SpecialE
     }
     if !(0.0..=1.0).contains(&m) {
         return domain_error("ellipkinc", mode, "m must be in [0, 1]");
+    }
+    if m >= 1.0 && mode == RuntimeMode::Hardened {
+        return domain_error("ellipkinc", mode, "m must be in [0, 1)");
     }
     if phi == 0.0 {
         return Ok(0.0);
@@ -1388,6 +1394,13 @@ mod tests {
     }
 
     #[test]
+    fn hardened_ellipk_rejects_singular_endpoint() {
+        let m = SpecialTensor::RealScalar(1.0);
+        let err = ellipk(&m, RuntimeMode::Hardened).expect_err("hardened rejects K(1)");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
+    }
+
+    #[test]
     fn ellipe_at_zero() {
         let m = SpecialTensor::RealScalar(0.0);
         let result = eval_scalar(ellipe(&m, RuntimeMode::Strict));
@@ -1448,6 +1461,15 @@ mod tests {
         let m = SpecialTensor::RealScalar(0.5);
         let result = eval_scalar(ellipkinc(&phi, &m, RuntimeMode::Strict));
         assert_close(result, 0.0, 1e-12, "F(0, m) = 0");
+    }
+
+    #[test]
+    fn hardened_ellipkinc_rejects_unit_parameter() {
+        let phi = SpecialTensor::RealScalar(PI / 4.0);
+        let m = SpecialTensor::RealScalar(1.0);
+        let err = ellipkinc(&phi, &m, RuntimeMode::Hardened)
+            .expect_err("hardened rejects singular incomplete K parameter");
+        assert_eq!(err.kind, SpecialErrorKind::DomainError);
     }
 
     #[test]

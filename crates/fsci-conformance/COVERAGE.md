@@ -16,7 +16,7 @@ fixture.
 |--------|-------------:|----------:|-------------:|-------------:|
 | linalg     | ~180 | ~60 | 53 | 53 (stats pattern) |
 | stats      | ~400 | ~80 | 30 | 30 |
-| special    | ~120 | ~45 | 257 | 257 |
+| special    | ~120 | ~45 | 350 | 350 |
 | fft        | ~40  | ~25 | 56 | 56 |
 | optimize   | ~60  | ~25 | 49 | 49 |
 | sparse     | ~200 | ~40 | 27 | 27 |
@@ -61,8 +61,9 @@ generator: `cargo run -p fsci-conformance --bin coverage_report` (TBD)._
 
 - **Oracle script:** `python_oracle/scipy_special_oracle.py`
 - **Fixture:** `fixtures/FSCI-P2C-006_special_core.json`
-- Covers: gamma / beta / erf family / hyp family / Bessel family.
-- **Notes:** 7 Hardened-mode cases exercise pole / domain / overflow
+- Covers: gamma / beta / erf family / hyp family / Bessel family /
+  elliptic integrals and Jacobi elliptic functions.
+- **Notes:** 9 Hardened-mode cases exercise pole / domain / overflow
   rejection. See DISCREPANCIES for error-kind mapping.
 
 ### constants (P2C-016)

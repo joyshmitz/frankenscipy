@@ -20084,6 +20084,69 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn differential_special_elliptic_jacobi_cases_present() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-006_special_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read special fixture");
+        let fixture: SpecialPacketFixture =
+            serde_json::from_str(&raw).expect("parse special fixture");
+        let elliptic_cases: Vec<&SpecialCase> = fixture
+            .cases
+            .iter()
+            .filter(|case| {
+                matches!(
+                    case.function,
+                    SpecialCaseFunction::Ellipk
+                        | SpecialCaseFunction::Ellipkm1
+                        | SpecialCaseFunction::Ellipe
+                        | SpecialCaseFunction::Ellipkinc
+                        | SpecialCaseFunction::Ellipeinc
+                        | SpecialCaseFunction::EllipjSn
+                        | SpecialCaseFunction::EllipjCn
+                        | SpecialCaseFunction::EllipjDn
+                        | SpecialCaseFunction::EllipjPh
+                )
+            })
+            .collect();
+        assert!(
+            elliptic_cases.len() >= 16,
+            "expected at least 16 elliptic/Jacobi cases, got {}",
+            elliptic_cases.len()
+        );
+        for function in [
+            SpecialCaseFunction::Ellipk,
+            SpecialCaseFunction::Ellipkm1,
+            SpecialCaseFunction::Ellipe,
+            SpecialCaseFunction::Ellipkinc,
+            SpecialCaseFunction::Ellipeinc,
+            SpecialCaseFunction::EllipjSn,
+            SpecialCaseFunction::EllipjCn,
+            SpecialCaseFunction::EllipjDn,
+            SpecialCaseFunction::EllipjPh,
+        ] {
+            assert!(
+                elliptic_cases.iter().any(|case| case.function == function),
+                "missing elliptic/Jacobi fixture coverage for {function:?}"
+            );
+        }
+        assert!(
+            elliptic_cases
+                .iter()
+                .filter(|case| case.mode == RuntimeMode::Hardened)
+                .count()
+                >= 2,
+            "expected hardened elliptic singular-parameter cases"
+        );
+        assert!(
+            elliptic_cases
+                .iter()
+                .any(|case| matches!(case.expected, SpecialExpectedOutcome::ErrorKind { .. })),
+            "expected typed-error coverage for elliptic singular parameters"
+        );
+    }
+
+    #[test]
     fn differential_special_bessel_gamma_corner_cases_present() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root
