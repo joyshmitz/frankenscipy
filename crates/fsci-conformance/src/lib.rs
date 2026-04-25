@@ -5016,6 +5016,10 @@ pub struct SpatialExpected {
     pub indices: Option<Vec<usize>>,
     #[serde(default)]
     pub distances: Option<Vec<f64>>,
+    /// br-uufs: query_ball_tree expected neighbor lists (per-source-
+    /// point index list, each sorted ascending).
+    #[serde(default)]
+    pub neighbors: Option<Vec<Vec<usize>>>,
     /// br-d1jx: permutation-invariant Voronoi summary scalars.
     #[serde(default)]
     pub vertex_count: Option<usize>,
@@ -5049,6 +5053,12 @@ enum SpatialObserved {
     ConvexHull {
         vertices: Vec<usize>,
         area: f64,
+    },
+    /// br-uufs: KDTree.query_ball_tree result — list of neighbor
+    /// index lists (one per point in tree A; each list contains the
+    /// indices in tree B within radius r, sorted ascending).
+    KdTreeBallTree {
+        neighbors: Vec<Vec<usize>>,
     },
     /// br-d1jx: Voronoi diagram summary. Region/ridge ordering is
     /// permutation-sensitive between scipy and fsci, so the comparator
@@ -5088,6 +5098,7 @@ fn execute_spatial_case(case: &SpatialCase) -> SpatialObserved {
         "kdtree_query_k" => execute_kdtree_query_k(case),
         "kdtree_query_ball_point" => execute_kdtree_query_ball_point(case),
         "kdtree_query_pairs" => execute_kdtree_query_pairs(case),
+        "kdtree_query_ball_tree" => execute_kdtree_query_ball_tree(case),
         "kdtree_count_neighbors" => execute_kdtree_count_neighbors(case),
         "directed_hausdorff" => execute_directed_hausdorff(case),
         "convex_hull" => execute_convex_hull(case),
@@ -5336,6 +5347,49 @@ fn execute_kdtree_query_ball_point(case: &SpatialCase) -> SpatialObserved {
         Ok(mut indices) => {
             indices.sort_unstable();
             SpatialObserved::KdTreeBallPoint { indices }
+        }
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+// br-uufs: KDTree.query_ball_tree — cross-tree intersection.
+// Schema: args = [tree_a_points, tree_b_points, r].
+fn execute_kdtree_query_ball_tree(case: &SpatialCase) -> SpatialObserved {
+    let data_a: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data_a: {e}")),
+    };
+    let data_b: Vec<Vec<f64>> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data_b: {e}")),
+    };
+    let r: f64 = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse r: {e}")),
+    };
+    let tree_a = match fsci_spatial::KDTree::new(&data_a) {
+        Ok(t) => t,
+        Err(e) => return SpatialObserved::Error(format!("build tree_a: {e:?}")),
+    };
+    let tree_b = match fsci_spatial::KDTree::new(&data_b) {
+        Ok(t) => t,
+        Err(e) => return SpatialObserved::Error(format!("build tree_b: {e:?}")),
+    };
+    match tree_a.query_ball_tree(&tree_b, r) {
+        Ok(nbrs) => {
+            let mut sorted: Vec<Vec<usize>> = nbrs
+                .into_iter()
+                .map(|mut v| {
+                    v.sort_unstable();
+                    v
+                })
+                .collect();
+            // Outer-list order is fixed (tree_a iteration order); inner
+            // is sort_unstable for canonical comparison.
+            for v in sorted.iter_mut() {
+                v.sort_unstable();
+            }
+            SpatialObserved::KdTreeBallTree { neighbors: sorted }
         }
         Err(e) => SpatialObserved::Error(format!("{e:?}")),
     }
@@ -5707,6 +5761,33 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                 true,
                 format!("convex hull match: vertices={vertices:?}, area={area}"),
             )
+        }
+        (
+            "kdtree_ball_tree_result",
+            SpatialObserved::KdTreeBallTree { neighbors },
+        ) => {
+            let exp = case.expected.neighbors.as_ref().cloned().unwrap_or_default();
+            if exp.len() != neighbors.len() {
+                return (
+                    false,
+                    format!(
+                        "ball_tree neighbors len mismatch: got {} expected {}",
+                        neighbors.len(),
+                        exp.len()
+                    ),
+                );
+            }
+            for (i, (got, expected)) in neighbors.iter().zip(exp.iter()).enumerate() {
+                if got != expected {
+                    return (
+                        false,
+                        format!(
+                            "ball_tree row {i} mismatch: got {got:?} expected {expected:?}"
+                        ),
+                    );
+                }
+            }
+            (true, format!("kdtree ball_tree match ({} rows)", neighbors.len()))
         }
         (
             "voronoi_result",

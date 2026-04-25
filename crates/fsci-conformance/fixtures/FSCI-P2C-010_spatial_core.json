@@ -1997,6 +1997,60 @@
         "rtol": 0.0,
         "contract_ref": "scipy.spatial.cKDTree.count_neighbors(other, r=2.0)"
       }
+    },
+    {
+      "case_id": "br_uufs_query_ball_tree_r1",
+      "category": "kdtree",
+      "mode": "Strict",
+      "function": "kdtree_query_ball_tree",
+      "args": [
+        [[0.0], [1.0], [2.0], [3.0]],
+        [[0.5], [1.5], [4.0]],
+        1.0
+      ],
+      "expected": {
+        "kind": "kdtree_ball_tree_result",
+        "neighbors": [[0], [0, 1], [1], [2]],
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "scipy.spatial.cKDTree.query_ball_tree(other, r=1.0)"
+      }
+    },
+    {
+      "case_id": "br_uufs_query_ball_tree_r2",
+      "category": "kdtree",
+      "mode": "Strict",
+      "function": "kdtree_query_ball_tree",
+      "args": [
+        [[0.0], [1.0], [2.0], [3.0]],
+        [[0.5], [1.5], [4.0]],
+        2.0
+      ],
+      "expected": {
+        "kind": "kdtree_ball_tree_result",
+        "neighbors": [[0, 1], [0, 1], [0, 1, 2], [1, 2]],
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "scipy.spatial.cKDTree.query_ball_tree(other, r=2.0)"
+      }
+    },
+    {
+      "case_id": "br_uufs_query_ball_tree_empty",
+      "category": "kdtree",
+      "mode": "Strict",
+      "function": "kdtree_query_ball_tree",
+      "args": [
+        [[0.0], [1.0], [2.0], [3.0]],
+        [[0.5], [1.5], [4.0]],
+        0.1
+      ],
+      "expected": {
+        "kind": "kdtree_ball_tree_result",
+        "neighbors": [[], [], [], []],
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "scipy.spatial.cKDTree.query_ball_tree(other, r=0.1) — all empty"
+      }
     }
   ]
 }
