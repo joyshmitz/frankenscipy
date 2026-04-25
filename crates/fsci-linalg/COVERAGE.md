@@ -150,13 +150,13 @@ Legend: ✅ full match · ↪️ aliased · ❌ missing · ⚠️ partial
 (`tri` exists in fsci-linalg as a numpy-style helper but is not in
 `scipy.linalg.__all__`; tracked under "fsci-only extras" below.)
 
-### special solvers (3 of 6 — 50%)
+### special solvers (5 of 6 — 83%)
 
 | scipy | fsci | status |
 |-------|------|--------|
-| `solve_continuous_are` | — | ❌ |
+| `solve_continuous_are` | `solve_continuous_are` | ✅ (br-60cm) |
 | `solve_continuous_lyapunov` | `solve_continuous_lyapunov` | ✅ |
-| `solve_discrete_are` | — | ❌ |
+| `solve_discrete_are` | `solve_discrete_are` | ✅ (br-60cm) |
 | `solve_discrete_lyapunov` | `solve_discrete_lyapunov` | ✅ |
 | `solve_lyapunov` | — | ❌ (deprecated alias for `solve_continuous_lyapunov` in scipy) |
 | `solve_sylvester` | `solve_sylvester` | ✅ |

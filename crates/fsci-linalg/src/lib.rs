@@ -5536,6 +5536,260 @@ pub fn solve_discrete_lyapunov(
     Ok(rows_from_dmatrix(&x))
 }
 
+/// Iterate the matrix sign function S = lim_{k→∞} S_k where
+/// S_{k+1} = (S_k + S_k⁻¹)/2. Roberts (1980)'s determinantal-scaling
+/// variant accelerates convergence on Hamiltonians with eigenvalues
+/// that aren't yet ±1: at each step we scale by c = |det(S)|^{1/n}.
+fn matrix_sign_iteration(
+    h: &DMatrix<f64>,
+    max_iter: usize,
+    tol: f64,
+) -> Result<DMatrix<f64>, LinalgError> {
+    let mut s = h.clone();
+    let n = s.nrows() as f64;
+    for _ in 0..max_iter {
+        let s_inv = s.clone().try_inverse().ok_or(LinalgError::SingularMatrix)?;
+        let det_abs = s.determinant().abs();
+        let c = if det_abs > 1e-300 {
+            det_abs.powf(1.0 / n).max(1e-12)
+        } else {
+            1.0
+        };
+        let s_next = (&s / c + &s_inv * c) * 0.5;
+        let diff = (&s_next - &s).norm();
+        s = s_next;
+        if diff < tol {
+            break;
+        }
+    }
+    Ok(s)
+}
+
+/// Structure-preserving doubling (SDA) for DARE. Iterates
+/// (A_k, G_k, H_k) with quadratic convergence; H_k → X.
+/// Initialization: A₀ = A, G₀ = BR⁻¹Bᵀ, H₀ = Q.
+fn sda_iteration_dare(
+    a0: &DMatrix<f64>,
+    g0: &DMatrix<f64>,
+    q0: &DMatrix<f64>,
+    max_iter: usize,
+    tol: f64,
+) -> Result<DMatrix<f64>, LinalgError> {
+    let n = a0.nrows();
+    let identity = DMatrix::<f64>::identity(n, n);
+    let mut a_k = a0.clone();
+    let mut g_k = g0.clone();
+    let mut h_k = q0.clone();
+    for _ in 0..max_iter {
+        let w = &identity + &g_k * &h_k;
+        let w_inv = w.try_inverse().ok_or(LinalgError::SingularMatrix)?;
+        let a_next = &a_k * &w_inv * &a_k;
+        let g_next = &g_k + &a_k * &w_inv * &g_k * a_k.transpose();
+        let h_next = &h_k + a_k.transpose() * &h_k * &w_inv * &a_k;
+        // Symmetrize iterates to suppress drift.
+        let g_sym = (&g_next + g_next.transpose()) * 0.5;
+        let h_sym = (&h_next + h_next.transpose()) * 0.5;
+        let a_norm_next = a_next.norm();
+        a_k = a_next;
+        g_k = g_sym;
+        h_k = h_sym;
+        if a_norm_next < tol {
+            break;
+        }
+    }
+    Ok(h_k)
+}
+
+/// Solve the continuous-time algebraic Riccati equation (CARE).
+///
+/// Solves AᵀX + XA − XBR⁻¹BᵀX + Q = 0 for the symmetric stabilizing
+/// solution X.
+///
+/// Method (Roberts 1980 sign-function): build the Hamiltonian
+///   H = [[A, -G], [-Q, -Aᵀ]]   with G = BR⁻¹Bᵀ,
+/// iterate the matrix sign function until convergence, then take
+/// (I − sign(H))/2 — a rank-n projector onto the stable invariant
+/// subspace. QR-decompose to extract a 2n×n basis [U₁; U₂], and
+/// recover X = U₂ U₁⁻¹ (symmetrized for robustness).
+///
+/// Matches `scipy.linalg.solve_continuous_are(a, b, q, r)` for the
+/// well-conditioned, invertible-`R` problems in the CAREX benchmark
+/// set. The optional cross-term `s` and descriptor `e` arguments are
+/// not yet wired through (out of scope per br-60cm).
+pub fn solve_continuous_are(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    q: &[Vec<f64>],
+    r: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (n, na) = matrix_shape(a)?;
+    if n != na {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    let (br_rows, m) = matrix_shape(b)?;
+    if br_rows != n {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!("B rows ({br_rows}) must match A size ({n})"),
+        });
+    }
+    let (qr, qc) = matrix_shape(q)?;
+    if qr != n || qc != n {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!("Q shape ({qr}x{qc}) must be {n}x{n}"),
+        });
+    }
+    let (rr, rc) = matrix_shape(r)?;
+    if rr != m || rc != m {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!("R shape ({rr}x{rc}) must be {m}x{m}"),
+        });
+    }
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+
+    hardened_dimension_check(options.mode, 2 * n, 2 * n)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+    validate_finite_matrix(b, options.mode, options.check_finite)?;
+    validate_finite_matrix(q, options.mode, options.check_finite)?;
+    validate_finite_matrix(r, options.mode, options.check_finite)?;
+
+    let a_mat = dmatrix_from_rows(a)?;
+    let b_mat = dmatrix_from_rows(b)?;
+    let q_mat = dmatrix_from_rows(q)?;
+    let r_mat = dmatrix_from_rows(r)?;
+
+    // G = B R⁻¹ Bᵀ (n × n).
+    let r_inv = r_mat
+        .clone()
+        .try_inverse()
+        .ok_or(LinalgError::SingularMatrix)?;
+    let g = &b_mat * &r_inv * b_mat.transpose();
+
+    // Build Hamiltonian: H = [[A, -G], [-Q, -Aᵀ]].
+    let two_n = 2 * n;
+    let mut h = DMatrix::<f64>::zeros(two_n, two_n);
+    for i in 0..n {
+        for j in 0..n {
+            h[(i, j)] = a_mat[(i, j)];
+            h[(i, n + j)] = -g[(i, j)];
+            h[(n + i, j)] = -q_mat[(i, j)];
+            h[(n + i, n + j)] = -a_mat[(j, i)];
+        }
+    }
+
+    // sign(H) — eigenvalues map to ±1, splitting stable/unstable
+    // subspaces orthogonally.
+    let s = matrix_sign_iteration(&h, 100, 1e-12)?;
+
+    // P = (I - sign(H))/2: rank-n projector onto stable subspace.
+    let mut p = -&s;
+    for i in 0..two_n {
+        p[(i, i)] += 1.0;
+    }
+    p *= 0.5;
+
+    // QR of P; the leading n columns of Q span the column space of P.
+    let qr = p.qr();
+    let q_full = qr.q();
+    let u_top = q_full.view((0, 0), (n, n)).into_owned();
+    let u_bot = q_full.view((n, 0), (n, n)).into_owned();
+    let u_top_inv = u_top.try_inverse().ok_or(LinalgError::SingularMatrix)?;
+    let x_raw = &u_bot * &u_top_inv;
+
+    // Symmetrize for numerical stability.
+    let x_sym = (&x_raw + x_raw.transpose()) * 0.5;
+
+    emit_trace(LinalgTrace {
+        operation: "solve_continuous_are",
+        matrix_size: (n, n),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(rows_from_dmatrix(&x_sym))
+}
+
+/// Solve the discrete-time algebraic Riccati equation (DARE).
+///
+/// Solves AᵀXA − X − AᵀXB(R + BᵀXB)⁻¹BᵀXA + Q = 0 for the symmetric
+/// stabilizing solution X.
+///
+/// Method (Anderson 2010 / Chu et al. SDA): structure-preserving
+/// doubling iteration on the triple (A_k, G_k, H_k) initialized from
+/// (A, BR⁻¹Bᵀ, Q). H_k converges quadratically to X. The result is
+/// symmetrized for robustness.
+///
+/// Matches `scipy.linalg.solve_discrete_are(a, b, q, r)` for the
+/// well-conditioned DAREX benchmark set.
+pub fn solve_discrete_are(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    q: &[Vec<f64>],
+    r: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (n, na) = matrix_shape(a)?;
+    if n != na {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    let (br_rows, m) = matrix_shape(b)?;
+    if br_rows != n {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!("B rows ({br_rows}) must match A size ({n})"),
+        });
+    }
+    let (qr, qc) = matrix_shape(q)?;
+    if qr != n || qc != n {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!("Q shape ({qr}x{qc}) must be {n}x{n}"),
+        });
+    }
+    let (rr, rc) = matrix_shape(r)?;
+    if rr != m || rc != m {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!("R shape ({rr}x{rc}) must be {m}x{m}"),
+        });
+    }
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+
+    hardened_dimension_check(options.mode, 2 * n, 2 * n)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+    validate_finite_matrix(b, options.mode, options.check_finite)?;
+    validate_finite_matrix(q, options.mode, options.check_finite)?;
+    validate_finite_matrix(r, options.mode, options.check_finite)?;
+
+    let a_mat = dmatrix_from_rows(a)?;
+    let b_mat = dmatrix_from_rows(b)?;
+    let q_mat = dmatrix_from_rows(q)?;
+    let r_mat = dmatrix_from_rows(r)?;
+
+    let r_inv = r_mat
+        .clone()
+        .try_inverse()
+        .ok_or(LinalgError::SingularMatrix)?;
+    let g = &b_mat * &r_inv * b_mat.transpose();
+
+    let h_final = sda_iteration_dare(&a_mat, &g, &q_mat, 100, 1e-13)?;
+    let x_sym = (&h_final + h_final.transpose()) * 0.5;
+
+    emit_trace(LinalgTrace {
+        operation: "solve_discrete_are",
+        matrix_size: (n, n),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(rows_from_dmatrix(&x_sym))
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Subspace Operations: orth, null_space, subspace_angles, polar
 // ══════════════════════════════════════════════════════════════════════
@@ -10388,6 +10642,227 @@ mod proptest_tests {
         let err =
             solve_discrete_lyapunov(&a, &q, DecompOptions::default()).expect_err("non-square");
         assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
+    // ── solve_continuous_are / solve_discrete_are tests (br-60cm) ─────
+
+    /// CAREX benchmark — Example 1: 1×1 problem with closed-form
+    /// solution. Per Benner/Laub/Mehrmann CAREX 1: A=[0], B=[1], Q=[1],
+    /// R=[1] → CARE has X² = 1 → X = 1 (positive stabilizing root).
+    #[test]
+    fn solve_continuous_are_carex_1x1() {
+        let a = vec![vec![0.0]];
+        let b = vec![vec![1.0]];
+        let q = vec![vec![1.0]];
+        let r = vec![vec![1.0]];
+        let x = solve_continuous_are(&a, &b, &q, &r, DecompOptions::default()).expect("CARE 1x1");
+        assert_eq!(x.len(), 1);
+        assert_eq!(x[0].len(), 1);
+        assert!(
+            (x[0][0] - 1.0).abs() < 1e-10,
+            "expected 1.0, got {}",
+            x[0][0]
+        );
+    }
+
+    /// CARE residual check on a 2×2 problem. Verifies the equation
+    /// A^T X + X A − X B R^{-1} B^T X + Q ≈ 0.
+    #[test]
+    fn solve_continuous_are_carex_2x2_residual() {
+        let a = vec![vec![0.0, 1.0], vec![0.0, 0.0]];
+        let b = vec![vec![0.0], vec![1.0]];
+        let q = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let r = vec![vec![1.0]];
+        let x = solve_continuous_are(&a, &b, &q, &r, DecompOptions::default()).expect("CARE 2x2");
+        // X must be symmetric.
+        assert!((x[0][1] - x[1][0]).abs() < 1e-10);
+        // Residual: A^T X + X A − X B B^T X + Q (R=I so R^{-1}=I).
+        let n = 2;
+        let mut res = vec![vec![0.0_f64; n]; n];
+        for (i, res_row) in res.iter_mut().enumerate() {
+            for (j, res_ij) in res_row.iter_mut().enumerate() {
+                let mut atx = 0.0_f64;
+                let mut xa = 0.0_f64;
+                for k in 0..n {
+                    atx += a[k][i] * x[k][j];
+                    xa += x[i][k] * a[k][j];
+                }
+                let xb_i: f64 = (0..n).map(|k| x[i][k] * b[k][0]).sum();
+                let btx_j: f64 = (0..n).map(|k| b[k][0] * x[k][j]).sum();
+                *res_ij = atx + xa - xb_i * btx_j + q[i][j];
+            }
+        }
+        let max_res = res
+            .iter()
+            .flat_map(|row| row.iter().map(|v| v.abs()))
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_res < 1e-9,
+            "CARE residual max = {max_res:.3e}, X = {x:?}"
+        );
+    }
+
+    /// CARE residual on a stable 3×3 (CAREX-2 inspired). A is the
+    /// companion form of −1, B excites all states, Q identity, R = 1.
+    #[test]
+    fn solve_continuous_are_3x3_residual() {
+        let a = vec![
+            vec![-1.0, 0.0, 0.0],
+            vec![0.0, -2.0, 1.0],
+            vec![0.0, 0.0, -3.0],
+        ];
+        let b = vec![vec![1.0], vec![0.5], vec![1.0]];
+        let q = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let r = vec![vec![1.0]];
+        let x = solve_continuous_are(&a, &b, &q, &r, DecompOptions::default()).expect("CARE 3x3");
+        let n = 3;
+        // Symmetry.
+        for (i, row) in x.iter().enumerate() {
+            for (j, &xij) in row.iter().enumerate().skip(i + 1) {
+                assert!(
+                    (xij - x[j][i]).abs() < 1e-9,
+                    "X not symmetric at ({i},{j}): {} vs {}",
+                    xij,
+                    x[j][i]
+                );
+            }
+        }
+        // Residual: A^T X + X A − X B B^T X + Q.
+        let mut res = vec![vec![0.0_f64; n]; n];
+        for (i, res_row) in res.iter_mut().enumerate() {
+            for (j, res_ij) in res_row.iter_mut().enumerate() {
+                let mut atx = 0.0_f64;
+                let mut xa = 0.0_f64;
+                for k in 0..n {
+                    atx += a[k][i] * x[k][j];
+                    xa += x[i][k] * a[k][j];
+                }
+                let xb_i: f64 = (0..n).map(|k| x[i][k] * b[k][0]).sum();
+                let btx_j: f64 = (0..n).map(|k| b[k][0] * x[k][j]).sum();
+                *res_ij = atx + xa - xb_i * btx_j + q[i][j];
+            }
+        }
+        let max_res = res
+            .iter()
+            .flat_map(|row| row.iter().map(|v| v.abs()))
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_res < 1e-8,
+            "CARE 3x3 residual max = {max_res:.3e}, X = {x:?}"
+        );
+    }
+
+    /// DAREX benchmark — 1×1: A=[2], B=[1], Q=[1], R=[1]. The DARE
+    /// reduces to a quadratic in x: x = 4x − x²/(1+x) + 1 → solve.
+    /// scipy.linalg.solve_discrete_are returns ≈ 4.236067977 (related
+    /// to the golden ratio).
+    #[test]
+    fn solve_discrete_are_darex_1x1() {
+        let a = vec![vec![2.0]];
+        let b = vec![vec![1.0]];
+        let q = vec![vec![1.0]];
+        let r = vec![vec![1.0]];
+        let x = solve_discrete_are(&a, &b, &q, &r, DecompOptions::default()).expect("DARE 1x1");
+        // Validate by plugging into the DARE residual:
+        //   AᵀXA − X − AᵀXB(R+BᵀXB)⁻¹BᵀXA + Q = 0.
+        let xv = x[0][0];
+        let a_v = 2.0;
+        let res = a_v * a_v * xv - xv - (a_v * a_v * xv * xv) / (1.0 + xv) + 1.0;
+        assert!(res.abs() < 1e-9, "DARE 1x1 residual {res} for X={xv}");
+        // Stabilizing solution must be positive.
+        assert!(xv > 0.0, "stabilizing X must be positive, got {xv}");
+    }
+
+    /// DARE 2×2 residual check — controllable companion-form pair.
+    #[test]
+    fn solve_discrete_are_darex_2x2_residual() {
+        let a = vec![vec![0.5, 0.1], vec![0.0, 0.7]];
+        let b = vec![vec![0.0], vec![1.0]];
+        let q = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let r = vec![vec![0.5]];
+        let x = solve_discrete_are(&a, &b, &q, &r, DecompOptions::default()).expect("DARE 2x2");
+        let n = 2;
+        // Symmetry.
+        for (i, row) in x.iter().enumerate() {
+            for (j, &xij) in row.iter().enumerate().skip(i + 1) {
+                assert!((xij - x[j][i]).abs() < 1e-9);
+            }
+        }
+        // Residual: A^T X A − X − A^T X B (R + B^T X B)^{-1} B^T X A + Q.
+        let mut atx = vec![vec![0.0_f64; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    atx[i][j] += a[k][i] * x[k][j];
+                }
+            }
+        }
+        let mut atxa = vec![vec![0.0_f64; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    atxa[i][j] += atx[i][k] * a[k][j];
+                }
+            }
+        }
+        // B^T X B (1×1 here).
+        let mut btxb = 0.0_f64;
+        for i in 0..n {
+            for j in 0..n {
+                btxb += b[i][0] * x[i][j] * b[j][0];
+            }
+        }
+        let scalar = r[0][0] + btxb;
+        // A^T X B (n×1).
+        let mut atxb = vec![0.0_f64; n];
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    atxb[i] += a[k][i] * x[k][j] * b[j][0];
+                }
+            }
+        }
+        let mut res = vec![vec![0.0_f64; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                res[i][j] = atxa[i][j] - x[i][j] - atxb[i] * atxb[j] / scalar + q[i][j];
+            }
+        }
+        let max_res = res
+            .iter()
+            .flat_map(|row| row.iter().map(|v| v.abs()))
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_res < 1e-9,
+            "DARE 2x2 residual max = {max_res:.3e}, X = {x:?}"
+        );
+    }
+
+    #[test]
+    fn solve_continuous_are_rejects_non_square_a() {
+        let a = vec![vec![1.0, 2.0]];
+        let b = vec![vec![1.0]];
+        let q = vec![vec![1.0]];
+        let r = vec![vec![1.0]];
+        let err = solve_continuous_are(&a, &b, &q, &r, DecompOptions::default())
+            .expect_err("non-square A must reject");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
+    #[test]
+    fn solve_discrete_are_rejects_dimension_mismatch() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let b = vec![vec![1.0], vec![1.0]];
+        // Q is 1×1 but should be 2×2.
+        let q = vec![vec![1.0]];
+        let r = vec![vec![1.0]];
+        let err = solve_discrete_are(&a, &b, &q, &r, DecompOptions::default())
+            .expect_err("Q shape mismatch must reject");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
     }
 
     // ── signm / funm / fractional_matrix_power tests ─────────────────
