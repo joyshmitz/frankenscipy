@@ -163,6 +163,41 @@ def _run_case(case: Dict[str, Any], sparse: Any, np: Any) -> Dict[str, Any]:
         # run the requested operation, returning the result in the shape
         # the Rust runner already expects (vector/scalar/matrix_triplets/
         # csr_components per compare_sparse_outcome).
+        if operation in {"eigsh", "eigs", "svds"}:
+            # br-gorz: top-k iterative eigenvalue / SVD parity. Construct
+            # the sparse matrix from flat schema, run scipy.sparse.linalg
+            # routine, return only the eigenvalues / singular values
+            # (ordering normalized via abs-desc sort on the Rust side).
+            from scipy.sparse import coo_matrix
+            from scipy.sparse.linalg import eigs, eigsh, svds
+
+            rows = int(case["rows"])
+            cols = int(case["cols"])
+            data = [_coerce_maybe_nan_f64(v) for v in case.get("data", [])]
+            row_indices = [int(v) for v in case.get("row_indices", [])]
+            col_indices = [int(v) for v in case.get("col_indices", [])]
+            mat = coo_matrix(
+                (data, (row_indices, col_indices)), shape=(rows, cols)
+            ).tocsr()
+            k = int(case.get("k", 1))
+            if operation == "eigsh":
+                values = eigsh(mat, k=k, return_eigenvectors=False)
+                values = sorted([float(v) for v in values], key=lambda v: abs(v), reverse=True)
+            elif operation == "eigs":
+                ev = eigs(mat, k=k, return_eigenvectors=False)
+                values = sorted([float(v.real) for v in ev], key=lambda v: abs(v), reverse=True)
+            else:  # svds
+                # scipy.sparse.linalg.svds requires k < min(rows, cols)
+                u, s, vt = svds(mat, k=k)
+                values = sorted([float(v) for v in s], key=lambda v: abs(v), reverse=True)
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "eigenvalues_abs_sorted",
+                "result": {"values": values},
+                "error": None,
+            }
+
         if operation in {"spmv", "spsolve", "add", "scale", "format_roundtrip"}:
             rows = int(case["rows"])
             cols = int(case["cols"])

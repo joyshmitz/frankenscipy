@@ -1668,6 +1668,14 @@ pub enum SparseOperation {
     FormatRoundtrip,
     Add,
     Scale,
+    /// br-gorz: scipy.sparse.linalg.eigsh — symmetric/Hermitian
+    /// largest-k eigenpairs.
+    Eigsh,
+    /// br-gorz: scipy.sparse.linalg.eigs — non-symmetric largest-k
+    /// eigenpairs (real part of complex eigenvalues exposed).
+    Eigs,
+    /// br-gorz: scipy.sparse.linalg.svds — top-k singular values.
+    Svds,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1706,6 +1714,20 @@ pub enum SparseExpectedOutcome {
     Error {
         error: String,
     },
+    /// br-gorz: top-k eigenvalues / singular values. Comparison is
+    /// invariant to ordering: both observed and expected vectors are
+    /// sorted by abs descending before allclose check.
+    EigenvaluesAbsSorted {
+        #[serde(
+            deserialize_with = "deserialize_maybe_nan_required_vec",
+            serialize_with = "serialize_maybe_nan_required_vec"
+        )]
+        values: Vec<f64>,
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        rtol: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1737,6 +1759,10 @@ pub struct SparseCase {
         serialize_with = "serialize_maybe_nan_option_f64"
     )]
     pub scalar: Option<f64>,
+    /// br-gorz: number of eigenvalues / singular values to compute
+    /// for eigsh/eigs/svds. Ignored by other operations.
+    #[serde(default)]
+    pub k: Option<usize>,
     pub expected: SparseExpectedOutcome,
 }
 
@@ -3237,6 +3263,9 @@ enum SparseObserved {
         cols: usize,
         nnz: usize,
     },
+    /// br-gorz: top-k eigenvalues or singular values. Sorted by abs
+    /// descending in the comparator.
+    EigenvaluesAbsSorted(Vec<f64>),
     Error(String),
 }
 
@@ -3379,7 +3408,48 @@ fn execute_sparse_case(case: &SparseCase) -> SparseObserved {
                 Err(e) => SparseObserved::Error(format!("{e}")),
             }
         }
+        SparseOperation::Eigsh => {
+            // br-gorz: symmetric/Hermitian top-k eigenvalues.
+            let csr = match coo.to_csr() {
+                Ok(c) => c,
+                Err(e) => return SparseObserved::Error(format!("{e}")),
+            };
+            let k = case.k.unwrap_or(1);
+            match fsci_sparse::eigsh(&csr, k, fsci_sparse::EigsOptions::default()) {
+                Ok(res) => SparseObserved::EigenvaluesAbsSorted(res.eigenvalues),
+                Err(e) => SparseObserved::Error(format!("{e}")),
+            }
+        }
+        SparseOperation::Eigs => {
+            let csr = match coo.to_csr() {
+                Ok(c) => c,
+                Err(e) => return SparseObserved::Error(format!("{e}")),
+            };
+            let k = case.k.unwrap_or(1);
+            match fsci_sparse::eigs(&csr, k, fsci_sparse::EigsOptions::default()) {
+                Ok(res) => SparseObserved::EigenvaluesAbsSorted(res.eigenvalues),
+                Err(e) => SparseObserved::Error(format!("{e}")),
+            }
+        }
+        SparseOperation::Svds => {
+            let csr = match coo.to_csr() {
+                Ok(c) => c,
+                Err(e) => return SparseObserved::Error(format!("{e}")),
+            };
+            let k = case.k.unwrap_or(1);
+            match fsci_sparse::svds(&csr, k, fsci_sparse::EigsOptions::default()) {
+                Ok(res) => SparseObserved::EigenvaluesAbsSorted(res.singular_values),
+                Err(e) => SparseObserved::Error(format!("{e}")),
+            }
+        }
     }
+}
+
+/// br-gorz: sort by |x| descending so eigenvalue/singular-value order
+/// is normalized between scipy and fsci before allclose comparison.
+fn sort_abs_desc(mut v: Vec<f64>) -> Vec<f64> {
+    v.sort_by(|a, b| b.abs().total_cmp(&a.abs()));
+    v
 }
 
 fn compare_sparse_outcome(
@@ -3457,6 +3527,45 @@ fn compare_sparse_outcome(
         }
         (SparseExpectedOutcome::Error { error }, _) => {
             (false, format!("expected error '{error}' but got success"))
+        }
+        (
+            SparseExpectedOutcome::EigenvaluesAbsSorted {
+                values: expected_values,
+                atol,
+                rtol,
+            },
+            SparseObserved::EigenvaluesAbsSorted(got),
+        ) => {
+            // br-gorz: order-invariant compare. Sort both by |x| desc.
+            if expected_values.len() != got.len() {
+                return (
+                    false,
+                    format!(
+                        "eigenvalue count mismatch: expected {}, got {}",
+                        expected_values.len(),
+                        got.len()
+                    ),
+                );
+            }
+            let exp_sorted = sort_abs_desc(expected_values.clone());
+            let got_sorted = sort_abs_desc(got.clone());
+            let atol = atol.unwrap_or(1e-7);
+            let rtol = rtol.unwrap_or(1e-7);
+            for (i, (e, g)) in exp_sorted.iter().zip(got_sorted.iter()).enumerate() {
+                if !allclose_scalar(*g, *e, atol, rtol) {
+                    return (
+                        false,
+                        format!(
+                            "eigenvalue[{i}] mismatch: expected {e}, got {g}, |diff|={:.3e}",
+                            (e - g).abs()
+                        ),
+                    );
+                }
+            }
+            (
+                true,
+                format!("eigenvalues matched ({} values, abs-sorted)", got.len()),
+            )
         }
         (_, SparseObserved::Error(e)) => (false, format!("unexpected error: {e}")),
         _ => (false, "outcome type mismatch".to_owned()),
@@ -6728,6 +6837,9 @@ fn execute_stats_case(case: &StatsCase) -> StatsObserved {
         "spearmanr" => execute_stats_spearmanr(case),
         "linregress" => execute_stats_linregress(case),
         "ttest_1samp" => execute_stats_ttest_1samp(case),
+        "ttest_ind" => execute_stats_ttest_ind(case),
+        "mannwhitneyu" => execute_stats_mannwhitneyu(case),
+        "wilcoxon" => execute_stats_wilcoxon(case),
         "ks_2samp" => execute_stats_ks_2samp(case),
         "zscore" => execute_stats_zscore(case),
         "sem" => execute_stats_sem(case),
@@ -6833,6 +6945,57 @@ fn execute_stats_ttest_1samp(case: &StatsCase) -> StatsObserved {
         Err(e) => return StatsObserved::Error(format!("parse popmean: {e}")),
     };
     let result = fsci_stats::ttest_1samp(&data, popmean);
+    StatsObserved::Ttest {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+    }
+}
+
+// br-7k5n: 2-sample location tests routing through fsci_stats. All
+// three return TtestResult { statistic, pvalue }; the conformance
+// comparator already handles "ttest_result" expected.kind.
+fn execute_stats_ttest_ind(case: &StatsCase) -> StatsObserved {
+    let a: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse a: {e}")),
+    };
+    let b: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse b: {e}")),
+    };
+    let result = fsci_stats::ttest_ind(&a, &b);
+    StatsObserved::Ttest {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+    }
+}
+
+fn execute_stats_mannwhitneyu(case: &StatsCase) -> StatsObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse x: {e}")),
+    };
+    let y: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse y: {e}")),
+    };
+    let result = fsci_stats::mannwhitneyu(&x, &y);
+    StatsObserved::Ttest {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+    }
+}
+
+fn execute_stats_wilcoxon(case: &StatsCase) -> StatsObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse x: {e}")),
+    };
+    let y: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse y: {e}")),
+    };
+    let result = fsci_stats::wilcoxon(&x, &y);
     StatsObserved::Ttest {
         statistic: result.statistic,
         pvalue: result.pvalue,

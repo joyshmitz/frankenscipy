@@ -1035,6 +1035,249 @@
         "kind": "error",
         "error": "matrix/rhs contains NaN or Inf"
       }
+    },
+    {
+      "case_id": "eigsh_diag_4x4_top2",
+      "category": "differential",
+      "mode": "Strict",
+      "operation": "eigsh",
+      "format": "csr",
+      "rows": 4,
+      "cols": 4,
+      "data": [
+        4.0,
+        3.0,
+        2.0,
+        1.0
+      ],
+      "row_indices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "col_indices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "k": 2,
+      "expected": {
+        "kind": "eigenvalues_abs_sorted",
+        "values": [
+          3.9999999999999996,
+          3.0000000000000004
+        ],
+        "atol": 1e-05,
+        "rtol": 1e-05
+      }
+    },
+    {
+      "case_id": "svds_5x4_top2",
+      "category": "differential",
+      "mode": "Strict",
+      "operation": "svds",
+      "format": "csr",
+      "rows": 5,
+      "cols": 4,
+      "data": [
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0
+      ],
+      "row_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "col_indices": [
+        0,
+        1,
+        2,
+        3,
+        0
+      ],
+      "k": 2,
+      "expected": {
+        "kind": "eigenvalues_abs_sorted",
+        "values": [
+          5.099019513592785,
+          4.0
+        ],
+        "atol": 1e-05,
+        "rtol": 1e-05
+      }
+    },
+    {
+      "case_id": "eigsh_diag_5x5_top3",
+      "category": "differential",
+      "mode": "Strict",
+      "operation": "eigsh",
+      "format": "csr",
+      "rows": 5,
+      "cols": 5,
+      "data": [
+        5.0,
+        4.0,
+        3.0,
+        2.0,
+        1.0
+      ],
+      "row_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "col_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "k": 3,
+      "expected": {
+        "kind": "eigenvalues_abs_sorted",
+        "values": [
+          5.0,
+          4.000000000000001,
+          2.9999999999999996
+        ],
+        "atol": 1e-05,
+        "rtol": 1e-05
+      }
+    },
+    {
+      "case_id": "svds_3x3_top1",
+      "category": "differential",
+      "mode": "Strict",
+      "operation": "svds",
+      "format": "csr",
+      "rows": 3,
+      "cols": 3,
+      "data": [
+        2.0,
+        1.0,
+        1.0,
+        3.0
+      ],
+      "row_indices": [
+        0,
+        0,
+        1,
+        2
+      ],
+      "col_indices": [
+        0,
+        1,
+        0,
+        2
+      ],
+      "k": 1,
+      "expected": {
+        "kind": "eigenvalues_abs_sorted",
+        "values": [
+          3.0
+        ],
+        "atol": 1e-05,
+        "rtol": 1e-05
+      }
+    },
+    {
+      "case_id": "eigs_uppertri_4x4_top2",
+      "category": "differential",
+      "mode": "Strict",
+      "operation": "eigs",
+      "format": "csr",
+      "rows": 4,
+      "cols": 4,
+      "data": [
+        5.0,
+        1.0,
+        4.0,
+        2.0,
+        3.0,
+        1.0,
+        2.0
+      ],
+      "row_indices": [
+        0,
+        0,
+        1,
+        1,
+        2,
+        2,
+        3
+      ],
+      "col_indices": [
+        0,
+        1,
+        1,
+        2,
+        2,
+        3,
+        3
+      ],
+      "k": 2,
+      "expected": {
+        "kind": "eigenvalues_abs_sorted",
+        "values": [
+          4.999999999999998,
+          3.9999999999999987
+        ],
+        "atol": 0.3,
+        "rtol": 0.1
+      }
+    },
+    {
+      "case_id": "eigsh_diag_6x6_top2",
+      "category": "differential",
+      "mode": "Strict",
+      "operation": "eigsh",
+      "format": "csr",
+      "rows": 6,
+      "cols": 6,
+      "data": [
+        10.0,
+        8.0,
+        6.0,
+        4.0,
+        2.0,
+        1.0
+      ],
+      "row_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "col_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "k": 2,
+      "expected": {
+        "kind": "eigenvalues_abs_sorted",
+        "values": [
+          10.0,
+          7.999999999999999
+        ],
+        "atol": 1e-05,
+        "rtol": 1e-05
+      }
     }
   ]
 }
