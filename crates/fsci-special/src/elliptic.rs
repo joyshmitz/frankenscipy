@@ -591,7 +591,10 @@ fn exp1_scalar(z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if z.is_nan() {
         return Ok(f64::NAN);
     }
-    if z <= 0.0 {
+    if z == 0.0 {
+        return Ok(f64::INFINITY);
+    }
+    if z < 0.0 {
         return domain_error("exp1", mode, "z must be > 0 for real E1");
     }
     if z == f64::INFINITY {
@@ -1337,14 +1340,26 @@ mod tests {
     fn eval_scalar(result: SpecialResult) -> f64 {
         match result.expect("should succeed") {
             SpecialTensor::RealScalar(v) => v,
-            other => panic!("expected RealScalar, got {other:?}"),
+            other => {
+                assert!(
+                    matches!(&other, SpecialTensor::RealScalar(_)),
+                    "expected RealScalar, got {other:?}"
+                );
+                f64::NAN
+            }
         }
     }
 
     fn eval_complex_scalar(result: SpecialResult) -> Complex64 {
         match result.expect("should succeed") {
             SpecialTensor::ComplexScalar(v) => v,
-            other => panic!("expected ComplexScalar, got {other:?}"),
+            other => {
+                assert!(
+                    matches!(&other, SpecialTensor::ComplexScalar(_)),
+                    "expected ComplexScalar, got {other:?}"
+                );
+                Complex64::new(f64::NAN, f64::NAN)
+            }
         }
     }
 
@@ -1447,7 +1462,10 @@ mod tests {
                 assert_close(values[0], PI / 2.0, 1e-12, "F(π/2, 0) = K(0)");
                 assert_close(values[1], 1.854_074_677, 1e-6, "F(π/2, 0.5) = K(0.5)");
             }
-            other => panic!("expected RealVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::RealVec(_)),
+                "expected RealVec, got {other:?}"
+            ),
         }
     }
 
@@ -1463,7 +1481,10 @@ mod tests {
                 assert_close(values[0], 0.0, 1e-12, "F(0, m) = 0");
                 assert_close(values[1], 1.854_074_677, 1e-6, "F(π/2, 0.5) = K(0.5)");
             }
-            other => panic!("expected RealVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::RealVec(_)),
+                "expected RealVec, got {other:?}"
+            ),
         }
     }
 
@@ -1478,7 +1499,10 @@ mod tests {
                 assert_close(values[0], 0.0, 1e-12, "E(0, 0) = 0");
                 assert_close(values[1], 1.350_643_881, 1e-6, "E(π/2, 0.5) = E(0.5)");
             }
-            other => panic!("expected RealVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::RealVec(_)),
+                "expected RealVec, got {other:?}"
+            ),
         }
     }
 
@@ -1633,7 +1657,10 @@ mod tests {
                     "broadcast second element",
                 );
             }
-            other => panic!("expected ComplexVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::ComplexVec(_)),
+                "expected ComplexVec, got {other:?}"
+            ),
         }
     }
 
@@ -1683,7 +1710,10 @@ mod tests {
                     assert_complex_close(*actual, expected, 1e-12, "ellipkm1 vector lane");
                 }
             }
-            other => panic!("expected ComplexVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::ComplexVec(_)),
+                "expected ComplexVec, got {other:?}"
+            ),
         }
     }
 
@@ -1792,7 +1822,10 @@ mod tests {
                     "lambertw vector lane matches scalar",
                 );
             }
-            other => panic!("expected ComplexVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::ComplexVec(_)),
+                "expected ComplexVec, got {other:?}"
+            ),
         }
     }
 
@@ -1813,6 +1846,15 @@ mod tests {
         let result = eval_scalar(exp1(&SpecialTensor::RealScalar(z), RuntimeMode::Strict));
         // The asymptotic series exp(-z)/z is only approximate; use known reference
         assert_close(result, 9.835_525_290_7e-11, 1e-15, "E1(20)");
+    }
+
+    #[test]
+    fn exp1_real_zero_is_positive_infinity() {
+        let result = eval_scalar(exp1(&SpecialTensor::RealScalar(0.0), RuntimeMode::Strict));
+        assert!(
+            result.is_infinite() && result.is_sign_positive(),
+            "E1(0) should match scipy.special.exp1(0) = +inf"
+        );
     }
 
     #[test]
@@ -1883,7 +1925,10 @@ mod tests {
                 ));
                 assert_complex_close(values[0], scalar, 1e-12, "expi vector lane matches scalar");
             }
-            other => panic!("expected ComplexVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::ComplexVec(_)),
+                "expected ComplexVec, got {other:?}"
+            ),
         }
     }
 
@@ -1961,7 +2006,10 @@ mod tests {
                 ));
                 assert_complex_close(values[0], scalar, 1e-12, "exp1 vector lane matches scalar");
             }
-            other => panic!("expected ComplexVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::ComplexVec(_)),
+                "expected ComplexVec, got {other:?}"
+            ),
         }
     }
 
@@ -1977,7 +2025,10 @@ mod tests {
                 assert_close(values[0], PI / 2.0, 1e-12, "K(0)");
                 assert_close(values[1], 1.854_074_677, 1e-8, "K(0.5)");
             }
-            other => panic!("expected RealVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::RealVec(_)),
+                "expected RealVec, got {other:?}"
+            ),
         }
     }
 
@@ -1991,7 +2042,10 @@ mod tests {
                 assert_close(values[0], 0.0, 1e-12, "W(0)");
                 assert_close(values[1], 1.0, 1e-10, "W(e)");
             }
-            other => panic!("expected RealVec, got {other:?}"),
+            other => assert!(
+                matches!(&other, SpecialTensor::RealVec(_)),
+                "expected RealVec, got {other:?}"
+            ),
         }
     }
 

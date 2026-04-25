@@ -230,6 +230,22 @@
       }
     },
     {
+      "case_id": "edge_gamma_170_large_finite",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [
+        170.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 4.269068009004706e304,
+        "atol": 1e292,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::gamma"
+      }
+    },
+    {
       "case_id": "edge_gammaln_zero_pole_class",
       "category": "differential",
       "mode": "Strict",
@@ -387,6 +403,19 @@
       "expected": {
         "kind": "class",
         "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "edge_exp1_zero_singularity_class",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "exp1",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
       }
     },
     {

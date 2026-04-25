@@ -1213,7 +1213,14 @@ fn gamma_lanczos(x: f64) -> f64 {
     }
 
     let t = x_minus_1 + 7.5;
-    SQRT_2PI * t.powf(x_minus_1 + 0.5) * (-t).exp() * coeff_sum
+    if coeff_sum == 0.0 {
+        return 0.0;
+    }
+    let log_abs_value = SQRT_2PI.ln() + (x_minus_1 + 0.5) * t.ln() - t + coeff_sum.abs().ln();
+    if log_abs_value > f64::MAX.ln() {
+        return f64::INFINITY.copysign(coeff_sum);
+    }
+    log_abs_value.exp().copysign(coeff_sum)
 }
 
 fn digamma_core(x: f64) -> f64 {
@@ -2453,6 +2460,18 @@ mod tests {
             let actual = get_scalar(rgamma(&scalar(x), RuntimeMode::Strict))?;
             assert_eq!(actual, 0.0);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn gamma_large_finite_boundary_matches_scipy() -> Result<(), String> {
+        let actual = get_scalar(gamma(&scalar(170.0), RuntimeMode::Strict))?;
+        let expected = 4.269_068_009_004_706e304;
+        let rel = ((actual - expected) / expected).abs();
+        assert!(
+            actual.is_finite() && rel <= 1.0e-12,
+            "gamma(170) should be finite SciPy boundary value, got {actual:e}"
+        );
         Ok(())
     }
 

@@ -19047,7 +19047,19 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                         super::OptimizeCase::Basinhopping { .. } => "basinhopping",
                         super::OptimizeCase::DualAnnealing { .. } => "dual_annealing",
                         super::OptimizeCase::Brute { .. } => "brute",
-                        _ => unreachable!("matched global optimize case"),
+                        _ => {
+                            assert!(
+                                matches!(
+                                    case,
+                                    super::OptimizeCase::DifferentialEvolution { .. }
+                                        | super::OptimizeCase::Basinhopping { .. }
+                                        | super::OptimizeCase::DualAnnealing { .. }
+                                        | super::OptimizeCase::Brute { .. }
+                                ),
+                                "matched global optimize case"
+                            );
+                            "unknown_global_optimizer"
+                        }
                     };
                     global_ops.insert(operation);
                     global_objectives.insert(format!("{objective:?}"));
@@ -19891,6 +19903,11 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             edge_cases
                 .iter()
                 .any(|case| case.function == SpecialCaseFunction::Gamma)
+        );
+        assert!(
+            edge_cases
+                .iter()
+                .any(|case| case.function == SpecialCaseFunction::Exp1)
         );
         assert!(
             edge_cases
