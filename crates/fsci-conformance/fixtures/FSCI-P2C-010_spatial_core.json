@@ -1933,6 +1933,70 @@
         "rtol": 1e-10,
         "contract_ref": "fsci_spatial::Voronoi (3 points: single circumcenter + 3 unbounded rays)"
       }
+    },
+    {
+      "case_id": "br_q3ut_query_pairs_r_1_5",
+      "category": "kdtree",
+      "mode": "Strict",
+      "function": "kdtree_query_pairs",
+      "args": [[[0.0], [1.0], [2.0], [4.0], [5.0]], 1.5],
+      "expected": {
+        "kind": "kdtree_ball_point_result",
+        "indices": [0, 1, 1, 2, 3, 4],
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "scipy.spatial.cKDTree.query_pairs(1.5) = {(0,1), (1,2), (3,4)}"
+      }
+    },
+    {
+      "case_id": "br_q3ut_query_pairs_empty",
+      "category": "kdtree",
+      "mode": "Strict",
+      "function": "kdtree_query_pairs",
+      "args": [[[0.0], [1.0], [2.0], [4.0], [5.0]], 0.5],
+      "expected": {
+        "kind": "kdtree_ball_point_result",
+        "indices": [],
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "scipy.spatial.cKDTree.query_pairs(0.5) = {} (no pairs within 0.5)"
+      }
+    },
+    {
+      "case_id": "br_q3ut_count_neighbors_r1",
+      "category": "kdtree",
+      "mode": "Strict",
+      "function": "kdtree_count_neighbors",
+      "args": [
+        [[0.0], [1.0], [2.0], [3.0]],
+        [[0.5], [1.5], [4.0]],
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 5.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "scipy.spatial.cKDTree.count_neighbors(other, r=1.0)"
+      }
+    },
+    {
+      "case_id": "br_q3ut_count_neighbors_r2",
+      "category": "kdtree",
+      "mode": "Strict",
+      "function": "kdtree_count_neighbors",
+      "args": [
+        [[0.0], [1.0], [2.0], [3.0]],
+        [[0.5], [1.5], [4.0]],
+        2.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 9.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "scipy.spatial.cKDTree.count_neighbors(other, r=2.0)"
+      }
     }
   ]
 }

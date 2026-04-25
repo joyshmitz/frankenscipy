@@ -5087,6 +5087,8 @@ fn execute_spatial_case(case: &SpatialCase) -> SpatialObserved {
         "kdtree_query" => execute_kdtree_query(case),
         "kdtree_query_k" => execute_kdtree_query_k(case),
         "kdtree_query_ball_point" => execute_kdtree_query_ball_point(case),
+        "kdtree_query_pairs" => execute_kdtree_query_pairs(case),
+        "kdtree_count_neighbors" => execute_kdtree_count_neighbors(case),
         "directed_hausdorff" => execute_directed_hausdorff(case),
         "convex_hull" => execute_convex_hull(case),
         "voronoi" => execute_voronoi(case),
@@ -5335,6 +5337,71 @@ fn execute_kdtree_query_ball_point(case: &SpatialCase) -> SpatialObserved {
             indices.sort_unstable();
             SpatialObserved::KdTreeBallPoint { indices }
         }
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+// br-q3ut: KDTree.query_pairs — within-tree close pairs.
+// Schema: args = [points: Vec<Vec<f64>>, r: f64].
+// Returns Array1D of flat (i, j, i, j, ...) indices — caller sorts before
+// equality compare since pair order is not canonical between scipy and fsci.
+fn execute_kdtree_query_pairs(case: &SpatialCase) -> SpatialObserved {
+    let data: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data: {e}")),
+    };
+    let r: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse r: {e}")),
+    };
+    let tree = match fsci_spatial::KDTree::new(&data) {
+        Ok(t) => t,
+        Err(e) => return SpatialObserved::Error(format!("build tree: {e:?}")),
+    };
+    match tree.query_pairs(r) {
+        Ok(pairs) => {
+            // Canonicalize each pair as (min, max), sort the multiset.
+            let mut canon: Vec<(usize, usize)> = pairs
+                .into_iter()
+                .map(|(a, b)| if a <= b { (a, b) } else { (b, a) })
+                .collect();
+            canon.sort_unstable();
+            let mut indices = Vec::with_capacity(canon.len());
+            for (a, b) in canon {
+                indices.push(a);
+                indices.push(b);
+            }
+            SpatialObserved::KdTreeBallPoint { indices }
+        }
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
+// br-q3ut: KDTree.count_neighbors — cross-tree count within radius.
+// Schema: args = [tree_a_points, tree_b_points, r].
+fn execute_kdtree_count_neighbors(case: &SpatialCase) -> SpatialObserved {
+    let data_a: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data_a: {e}")),
+    };
+    let data_b: Vec<Vec<f64>> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse data_b: {e}")),
+    };
+    let r: f64 = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse r: {e}")),
+    };
+    let tree_a = match fsci_spatial::KDTree::new(&data_a) {
+        Ok(t) => t,
+        Err(e) => return SpatialObserved::Error(format!("build tree_a: {e:?}")),
+    };
+    let tree_b = match fsci_spatial::KDTree::new(&data_b) {
+        Ok(t) => t,
+        Err(e) => return SpatialObserved::Error(format!("build tree_b: {e:?}")),
+    };
+    match tree_a.count_neighbors(&tree_b, r) {
+        Ok(c) => SpatialObserved::Scalar(c as f64),
         Err(e) => SpatialObserved::Error(format!("{e:?}")),
     }
 }
