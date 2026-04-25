@@ -259,6 +259,86 @@
       }
     },
     {
+      "case_id": "iir_butter_lowpass_order2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "butter",
+      "args": [2, 0.25, "low"],
+      "expected": {"kind": "iir_coeffs", "b": [0.09763107293781749, 0.19526214587563498, 0.09763107293781749], "a": [1.0, -0.9428090415820632, 0.3333333333333332], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::butter"}
+    },
+    {
+      "case_id": "iir_butter_highpass_order3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "butter",
+      "args": [3, 0.35, "high"],
+      "expected": {"kind": "iir_coeffs", "b": [0.3118399629238979, -0.9355198887716936, 0.9355198887716936, -0.3118399629238979], "a": [1.0, -0.8682205442211952, 0.5344046670707189, -0.0920944920992692], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::butter"}
+    },
+    {
+      "case_id": "iir_butter_bandpass_order4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "butter",
+      "args": [4, [0.2, 0.45], "bandpass"],
+      "expected": {"kind": "iir_coeffs", "b": [0.01020948079120314, 0.0, -0.04083792316481256, 0.0, 0.06125688474721884, 0.0, -0.04083792316481256, 0.0, 0.01020948079120314], "a": [1.0, -3.375434613005744, 6.33147896729756, -7.853934624490487, 7.108298423397533, -4.65690471926052, 2.2058681999591103, -0.6820678660272536, 0.12038959989624443], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::butter"}
+    },
+    {
+      "case_id": "iir_butter_bandstop_order5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "butter",
+      "args": [5, [0.2, 0.45], "bandstop"],
+      "expected": {"kind": "iir_coeffs", "b": [0.268935721618647, -1.5209615929539424, 4.78538801377242, -9.975621571522508, 15.212472558154245, -17.40722583047468, 15.212472558154241, -9.9756215715225, 4.785388013772419, -1.5209615929539422, 0.2689357216186469], "a": [1.0, -4.227143892775926, 9.73767014795283, -15.105178140880986, 17.379967656353518, -15.242184574849817, 10.326429217241522, -5.313492482810803, 2.017209896439801, -0.512393068110055, 0.0723156691029585], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::butter"}
+    },
+    {
+      "case_id": "iir_cheby1_highpass_order3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cheby1",
+      "args": [3, 1.0, 0.35, "high"],
+      "expected": {"kind": "iir_coeffs", "b": [0.26535984724179185, -0.7960795417253755, 0.7960795417253755, -0.26535984724179185], "a": [1.0, -0.6326344580665557, 0.5586043059039767, 0.06835998603619747], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::cheby1"}
+    },
+    {
+      "case_id": "iir_cheby1_bandstop_order5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cheby1",
+      "args": [5, 1.0, [0.2, 0.45], "bandstop"],
+      "expected": {"kind": "iir_coeffs", "b": [0.17794186892772917, -1.0063473412479365, 3.1662617431033637, -6.600390366399762, 10.065363506630838, -11.517526487291825, 10.065363506630835, -6.600390366399758, 3.166261743103363, -1.0063473412479362, 0.17794186892772912], "a": [1.0, -3.842874561372844, 7.897712738326859, -11.152223721758531, 11.83393011570581, -9.444002418787658, 5.628639675678619, -2.388009146180082, 0.5386689304854602, 0.09610794551187789, -0.07981722287286609], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::cheby1"}
+    },
+    {
+      "case_id": "iir_cheby2_lowpass_order2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cheby2",
+      "args": [2, 20.0, 0.25, "low"],
+      "expected": {"kind": "iir_coeffs", "b": [0.10470073512883547, -0.10240604605771196, 0.10470073512883547], "a": [1.0, -1.5055398694769357, 0.6125352936768947], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::cheby2"}
+    },
+    {
+      "case_id": "iir_cheby2_highpass_order3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cheby2",
+      "args": [3, 20.0, 0.35, "high"],
+      "expected": {"kind": "iir_coeffs", "b": [0.2965903760964375, -0.6290659454102078, 0.6290659454102077, -0.29659037609643746], "a": [1.0, -0.3253726756710932, 0.45552143077544893, -0.07041853656674872], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::cheby2"}
+    },
+    {
+      "case_id": "iir_cheby2_bandpass_order4",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cheby2",
+      "args": [4, 20.0, [0.2, 0.45], "bandpass"],
+      "expected": {"kind": "iir_coeffs", "b": [0.10289966461893407, -0.3010130163131724, 0.49279604325720583, -0.641387540782969, 0.7158991354530791, -0.6413875407829689, 0.4927960432572056, -0.3010130163131724, 0.1028996646189341], "a": [1.0, -3.4973605804693237, 6.859516646701522, -8.860901835945652, 8.31220899186799, -5.609322810942281, 2.7364850322322254, -0.8804259145655552, 0.16469484125183728], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::cheby2"}
+    },
+    {
+      "case_id": "iir_cheby2_bandstop_order5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "cheby2",
+      "args": [5, 20.0, [0.2, 0.45], "bandstop"],
+      "expected": {"kind": "iir_coeffs", "b": [0.4494765346456527, -2.3485088977078066, 6.907015619273296, -13.723691391688785, 20.32445925035164, -23.0355733983844, 20.324459250351637, -13.72369139168878, 6.907015619273294, -2.3485088977078057, 0.4494765346456527], "a": [1.0, -4.42458027771406, 10.843117719823953, -18.094062680948586, 22.66194397545423, -21.87250661790747, 16.50692286044123, -9.571485010255278, 4.147896855221077, -1.2173393903521768, 0.202021397600679], "atol": 0.0001, "rtol": 0.0001, "contract_ref": "fsci_signal::cheby2"}
+    },
+    {
       "case_id": "freqz_simple_8pt",
       "category": "differential",
       "mode": "Strict",
@@ -514,6 +594,46 @@
         ],
         "contract_ref": "fsci_signal::find_peaks"
       }
+    },
+    {
+      "case_id": "hardened_iir_butter_invalid_wn",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "butter",
+      "args": [2, 1.2, "low"],
+      "expected": {"kind": "error", "error": "Wn values must be finite and in (0, 1)", "contract_ref": "fsci_signal::butter"}
+    },
+    {
+      "case_id": "hardened_iir_cheby1_invalid_wn",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "cheby1",
+      "args": [2, 1.0, 1.2, "low"],
+      "expected": {"kind": "error", "error": "Wn values must be finite and in (0, 1)", "contract_ref": "fsci_signal::cheby1"}
+    },
+    {
+      "case_id": "hardened_iir_cheby2_invalid_wn",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "cheby2",
+      "args": [2, 20.0, 1.2, "low"],
+      "expected": {"kind": "error", "error": "Wn values must be finite and in (0, 1)", "contract_ref": "fsci_signal::cheby2"}
+    },
+    {
+      "case_id": "hardened_iir_ellip_invalid_wn",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "ellip",
+      "args": [2, 1.0, 40.0, 1.2, "low"],
+      "expected": {"kind": "error", "error": "Wn values must be finite and in (0, 1)", "contract_ref": "fsci_signal::ellip"}
+    },
+    {
+      "case_id": "hardened_iir_bessel_invalid_wn",
+      "category": "hardened",
+      "mode": "Hardened",
+      "function": "bessel",
+      "args": [2, 1.2, "low"],
+      "expected": {"kind": "error", "error": "Wn values must be finite and in (0, 1)", "contract_ref": "fsci_signal::bessel"}
     }
   ]
 }

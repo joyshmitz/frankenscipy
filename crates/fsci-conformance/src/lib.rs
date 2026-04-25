@@ -5602,6 +5602,8 @@ pub struct SignalExpected {
     pub rtol: Option<f64>,
     #[serde(default)]
     pub contract_ref: String,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -5632,7 +5634,7 @@ fn execute_signal_case(case: &SignalCase) -> SignalObserved {
         "convolve" => execute_convolve(case),
         "correlate" => execute_correlate(case),
         "find_peaks" => execute_find_peaks(case),
-        "butter" => execute_butter(case),
+        "butter" | "cheby1" | "cheby2" | "ellip" | "bessel" => execute_signal_iir_design(case),
         "freqz" => execute_freqz(case),
         "hilbert" => execute_hilbert(case),
         "detrend" => execute_detrend(case),
@@ -5751,32 +5753,136 @@ fn execute_find_peaks(case: &SignalCase) -> SignalObserved {
     SignalObserved::Indices(result.peaks)
 }
 
-fn execute_butter(case: &SignalCase) -> SignalObserved {
-    let order: usize = match serde_json::from_value(case.args[0].clone()) {
-        Ok(v) => v,
-        Err(e) => return SignalObserved::Error(format!("parse order: {e}")),
-    };
-    let wn: f64 = match serde_json::from_value(case.args[1].clone()) {
-        Ok(v) => v,
-        Err(e) => return SignalObserved::Error(format!("parse wn: {e}")),
-    };
-    let btype: String = match serde_json::from_value(case.args[2].clone()) {
-        Ok(v) => v,
-        Err(e) => return SignalObserved::Error(format!("parse btype: {e}")),
-    };
-    let filter_type = match btype.as_str() {
-        "low" | "lowpass" => fsci_signal::FilterType::Lowpass,
-        "high" | "highpass" => fsci_signal::FilterType::Highpass,
-        "band" | "bandpass" => fsci_signal::FilterType::Bandpass,
-        "stop" | "bandstop" => fsci_signal::FilterType::Bandstop,
-        _ => return SignalObserved::Error(format!("unknown filter type: {btype}")),
-    };
-    match fsci_signal::butter(order, &[wn], filter_type) {
+fn parse_signal_f64(value: &serde_json::Value) -> Result<f64, String> {
+    match value {
+        serde_json::Value::Number(number) => number
+            .as_f64()
+            .ok_or_else(|| format!("number is not representable as f64: {number}")),
+        serde_json::Value::String(value) => match value.to_ascii_lowercase().as_str() {
+            "nan" => Ok(f64::NAN),
+            "infinity" | "+infinity" | "inf" | "+inf" => Ok(f64::INFINITY),
+            "-infinity" | "-inf" => Ok(f64::NEG_INFINITY),
+            _ => value
+                .parse::<f64>()
+                .map_err(|e| format!("parse f64 string {value:?}: {e}")),
+        },
+        other => Err(format!("expected f64, got {other:?}")),
+    }
+}
+
+fn parse_signal_wn(value: &serde_json::Value) -> Result<Vec<f64>, String> {
+    match value {
+        serde_json::Value::Array(values) => values.iter().map(parse_signal_f64).collect(),
+        _ => parse_signal_f64(value).map(|single| vec![single]),
+    }
+}
+
+fn parse_signal_filter_type(value: &serde_json::Value) -> Result<fsci_signal::FilterType, String> {
+    let btype: String =
+        serde_json::from_value(value.clone()).map_err(|e| format!("parse btype: {e}"))?;
+    match btype.as_str() {
+        "low" | "lowpass" => Ok(fsci_signal::FilterType::Lowpass),
+        "high" | "highpass" => Ok(fsci_signal::FilterType::Highpass),
+        "band" | "bandpass" => Ok(fsci_signal::FilterType::Bandpass),
+        "stop" | "bandstop" => Ok(fsci_signal::FilterType::Bandstop),
+        _ => Err(format!("unknown filter type: {btype}")),
+    }
+}
+
+fn signal_iir_coeffs(
+    result: Result<fsci_signal::BaCoeffs, fsci_signal::SignalError>,
+) -> SignalObserved {
+    match result {
         Ok(coeffs) => SignalObserved::IirCoeffs {
             b: coeffs.b,
             a: coeffs.a,
         },
         Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
+}
+
+fn execute_signal_iir_design(case: &SignalCase) -> SignalObserved {
+    let order: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse order: {e}")),
+    };
+    let parsed = match case.function.as_str() {
+        "butter" | "bessel" => {
+            let wn = parse_signal_wn(&case.args[1]);
+            let filter_type = case.args.get(2).map_or_else(
+                || Ok(fsci_signal::FilterType::Lowpass),
+                parse_signal_filter_type,
+            );
+            wn.and_then(|wn| filter_type.map(|filter_type| (wn, None, None, filter_type)))
+        }
+        "cheby1" => {
+            let rp = parse_signal_f64(&case.args[1]);
+            let wn = parse_signal_wn(&case.args[2]);
+            let filter_type = case.args.get(3).map_or_else(
+                || Ok(fsci_signal::FilterType::Lowpass),
+                parse_signal_filter_type,
+            );
+            rp.and_then(|rp| {
+                wn.and_then(|wn| filter_type.map(|filter_type| (wn, Some(rp), None, filter_type)))
+            })
+        }
+        "cheby2" => {
+            let rs = parse_signal_f64(&case.args[1]);
+            let wn = parse_signal_wn(&case.args[2]);
+            let filter_type = case.args.get(3).map_or_else(
+                || Ok(fsci_signal::FilterType::Lowpass),
+                parse_signal_filter_type,
+            );
+            rs.and_then(|rs| {
+                wn.and_then(|wn| filter_type.map(|filter_type| (wn, None, Some(rs), filter_type)))
+            })
+        }
+        "ellip" => {
+            let rp = parse_signal_f64(&case.args[1]);
+            let rs = parse_signal_f64(&case.args[2]);
+            let wn = parse_signal_wn(&case.args[3]);
+            let filter_type = case.args.get(4).map_or_else(
+                || Ok(fsci_signal::FilterType::Lowpass),
+                parse_signal_filter_type,
+            );
+            rp.and_then(|rp| {
+                rs.and_then(|rs| {
+                    wn.and_then(|wn| {
+                        filter_type.map(|filter_type| (wn, Some(rp), Some(rs), filter_type))
+                    })
+                })
+            })
+        }
+        _ => return SignalObserved::Error(format!("unknown IIR design: {}", case.function)),
+    };
+    let (wn, rp, rs, filter_type) = match parsed {
+        Ok(parsed) => parsed,
+        Err(e) => return SignalObserved::Error(e),
+    };
+
+    match case.function.as_str() {
+        "butter" => signal_iir_coeffs(fsci_signal::butter(order, &wn, filter_type)),
+        "cheby1" => signal_iir_coeffs(fsci_signal::cheby1(
+            order,
+            rp.unwrap_or(1.0),
+            &wn,
+            filter_type,
+        )),
+        "cheby2" => signal_iir_coeffs(fsci_signal::cheby2(
+            order,
+            rs.unwrap_or(20.0),
+            &wn,
+            filter_type,
+        )),
+        "ellip" => signal_iir_coeffs(fsci_signal::ellip(
+            order,
+            rp.unwrap_or(1.0),
+            rs.unwrap_or(40.0),
+            &wn,
+            filter_type,
+        )),
+        "bessel" => signal_iir_coeffs(fsci_signal::bessel(order, &wn, filter_type)),
+        _ => SignalObserved::Error(format!("unknown IIR design: {}", case.function)),
     }
 }
 
@@ -5837,6 +5943,40 @@ fn execute_detrend(case: &SignalCase) -> SignalObserved {
     }
 }
 
+fn compare_signal_iir_coefficients(
+    case: &SignalCase,
+    b: &[f64],
+    a: &[f64],
+    atol: f64,
+    rtol: f64,
+) -> (bool, String) {
+    let exp_b = case.expected.b.as_ref().cloned().unwrap_or_default();
+    let exp_a = case.expected.a.as_ref().cloned().unwrap_or_default();
+    if b.len() != exp_b.len() || a.len() != exp_a.len() {
+        return (
+            false,
+            format!(
+                "length mismatch: b({}/{}), a({}/{})",
+                b.len(),
+                exp_b.len(),
+                a.len(),
+                exp_a.len()
+            ),
+        );
+    }
+    for (i, (&g, &e)) in b.iter().zip(exp_b.iter()).enumerate() {
+        if !allclose_scalar(g, e, atol, rtol) {
+            return (false, format!("b[{i}] mismatch: got {g}, expected {e}"));
+        }
+    }
+    for (i, (&g, &e)) in a.iter().zip(exp_a.iter()).enumerate() {
+        if !allclose_scalar(g, e, atol, rtol) {
+            return (false, format!("a[{i}] mismatch: got {g}, expected {e}"));
+        }
+    }
+    (true, "iir coeffs match".to_string())
+}
+
 fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool, String) {
     let atol = case.expected.atol.unwrap_or(1e-10);
     let rtol = case.expected.rtol.unwrap_or(1e-10);
@@ -5878,31 +6018,7 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
             }
         }
         ("iir_coeffs", SignalObserved::IirCoeffs { b, a }) => {
-            let exp_b = case.expected.b.as_ref().cloned().unwrap_or_default();
-            let exp_a = case.expected.a.as_ref().cloned().unwrap_or_default();
-            if b.len() != exp_b.len() || a.len() != exp_a.len() {
-                return (
-                    false,
-                    format!(
-                        "length mismatch: b({}/{}), a({}/{})",
-                        b.len(),
-                        exp_b.len(),
-                        a.len(),
-                        exp_a.len()
-                    ),
-                );
-            }
-            for (i, (&g, &e)) in b.iter().zip(exp_b.iter()).enumerate() {
-                if !allclose_scalar(g, e, atol, rtol) {
-                    return (false, format!("b[{i}] mismatch: got {g}, expected {e}"));
-                }
-            }
-            for (i, (&g, &e)) in a.iter().zip(exp_a.iter()).enumerate() {
-                if !allclose_scalar(g, e, atol, rtol) {
-                    return (false, format!("a[{i}] mismatch: got {g}, expected {e}"));
-                }
-            }
-            (true, "iir coeffs match".to_string())
+            compare_signal_iir_coefficients(case, b, a, atol, rtol)
         }
         ("freqz_result", SignalObserved::Freqz { w, h_mag, h_phase }) => {
             let exp_w = case.expected.w.as_ref().cloned().unwrap_or_default();
@@ -5957,6 +6073,18 @@ fn compare_signal_outcome(case: &SignalCase, observed: &SignalObserved) -> (bool
                 true,
                 format!("complex array match ({} elements)", real.len()),
             )
+        }
+        ("error", SignalObserved::Error(actual))
+        | ("error_kind", SignalObserved::Error(actual)) => {
+            let expected = case.expected.error.as_deref().unwrap_or_default();
+            if matches_error_contract(actual, expected) {
+                (true, format!("error matched: {actual}"))
+            } else {
+                (
+                    false,
+                    format!("error mismatch: got {actual}, expected {expected}"),
+                )
+            }
         }
         (_, SignalObserved::Error(e)) => (false, format!("execution error: {e}")),
         (kind, obs) => (
@@ -16707,6 +16835,7 @@ mod tests {
                 atol: Some(1.0e-12),
                 rtol: Some(1.0e-12),
                 contract_ref: String::new(),
+                error: None,
             },
         };
 

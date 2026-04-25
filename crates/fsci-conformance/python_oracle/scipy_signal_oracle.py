@@ -62,11 +62,32 @@ def _run_case(case: Dict[str, Any], np: Any, signal: Any, windows: Any) -> Dict[
                 "values": [int(v) for v in peaks.tolist()],
             })
 
-        if function == "butter":
+        if function in {"butter", "cheby1", "cheby2", "ellip", "bessel"}:
             n = int(args[0])
-            wn = args[1]
-            btype = args[2] if len(args) > 2 else "low"
-            b, a = signal.butter(n, wn, btype=btype)
+            if function == "butter":
+                wn = args[1]
+                btype = args[2] if len(args) > 2 else "low"
+                b, a = signal.butter(n, wn, btype=btype)
+            elif function == "cheby1":
+                rp = float(args[1])
+                wn = args[2]
+                btype = args[3] if len(args) > 3 else "low"
+                b, a = signal.cheby1(n, rp, wn, btype=btype)
+            elif function == "cheby2":
+                rs = float(args[1])
+                wn = args[2]
+                btype = args[3] if len(args) > 3 else "low"
+                b, a = signal.cheby2(n, rs, wn, btype=btype)
+            elif function == "ellip":
+                rp = float(args[1])
+                rs = float(args[2])
+                wn = args[3]
+                btype = args[4] if len(args) > 4 else "low"
+                b, a = signal.ellip(n, rp, rs, wn, btype=btype)
+            else:
+                wn = args[1]
+                btype = args[2] if len(args) > 2 else "low"
+                b, a = signal.bessel(n, wn, btype=btype)
             return _ok(case_id, "ba_filter", {
                 "b": [float(v) for v in np.asarray(b).tolist()],
                 "a": [float(v) for v in np.asarray(a).tolist()],
