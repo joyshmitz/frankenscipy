@@ -192,6 +192,12 @@ def _run_case(case: dict[str, Any], stats: Any) -> dict[str, Any]:
                 "ChiSquared": ("chi2", lambda p: {"df": p[0]}),
                 "Lognormal": ("lognorm", lambda p: {"s": p[0], "scale": p[1]}),
                 "GammaDist": ("gamma", lambda p: {"a": p[0], "scale": p[1]}),
+                # br-5sra (slice 3)
+                "BetaDist": ("beta", lambda p: {"a": p[0], "b": p[1]}),
+                "Pareto": ("pareto", lambda p: {"b": p[0], "scale": p[1]}),
+                "Rayleigh": ("rayleigh", lambda p: {"scale": p[0]}),
+                "Logistic": ("logistic", lambda p: {"loc": p[0], "scale": p[1]}),
+                "Laplace": ("laplace", lambda p: {"loc": p[0], "scale": p[1]}),
             }
             if dist_name not in scipy_name_map:
                 return {

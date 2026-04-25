@@ -881,6 +881,146 @@
         "rtol": 1e-6,
         "contract_ref": "scipy.stats.gamma.ppf(0.5, a=2, scale=1)"
       }
+    },
+    {
+      "case_id": "br_5sra_beta_pdf",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_pdf",
+      "args": ["BetaDist", [2.0, 3.0], 0.5],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.5000000000000004,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.beta.pdf(0.5, a=2, b=3) = 12*0.5*(1-0.5)^2 = 1.5"
+      }
+    },
+    {
+      "case_id": "br_5sra_beta_cdf",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_cdf",
+      "args": ["BetaDist", [2.0, 3.0], 0.5],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.6875,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.beta.cdf(0.5, a=2, b=3) = 11/16"
+      }
+    },
+    {
+      "case_id": "br_5sra_pareto_pdf",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_pdf",
+      "args": ["Pareto", [3.0, 1.0], 2.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.1875,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.pareto.pdf(2, b=3, scale=1) = 3/16"
+      }
+    },
+    {
+      "case_id": "br_5sra_pareto_cdf",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_cdf",
+      "args": ["Pareto", [3.0, 1.0], 2.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.875,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.pareto.cdf(2, b=3, scale=1) = 7/8"
+      }
+    },
+    {
+      "case_id": "br_5sra_rayleigh_pdf",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_pdf",
+      "args": ["Rayleigh", [1.0], 1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.6065306597126334,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.rayleigh.pdf(1, scale=1) = exp(-0.5)"
+      }
+    },
+    {
+      "case_id": "br_5sra_rayleigh_cdf",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_cdf",
+      "args": ["Rayleigh", [1.0], 1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.3934693402873666,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.rayleigh.cdf(1, scale=1) = 1 - exp(-0.5)"
+      }
+    },
+    {
+      "case_id": "br_5sra_logistic_pdf_origin",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_pdf",
+      "args": ["Logistic", [0.0, 1.0], 0.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.25,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.logistic.pdf(0, 0, 1) = 1/4"
+      }
+    },
+    {
+      "case_id": "br_5sra_logistic_cdf_origin",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_cdf",
+      "args": ["Logistic", [0.0, 1.0], 0.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.logistic.cdf(0, 0, 1) = 1/2"
+      }
+    },
+    {
+      "case_id": "br_5sra_laplace_pdf_origin",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_pdf",
+      "args": ["Laplace", [0.0, 1.0], 0.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.laplace.pdf(0, 0, 1) = 1/2"
+      }
+    },
+    {
+      "case_id": "br_5sra_laplace_cdf_origin",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_cdf",
+      "args": ["Laplace", [0.0, 1.0], 0.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5,
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.stats.laplace.cdf(0, 0, 1) = 1/2"
+      }
     }
   ]
 }

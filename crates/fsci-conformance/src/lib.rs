@@ -7243,6 +7243,79 @@ fn evaluate_distribution_method(
                 _ => return Err(format!("unsupported method: {method}")),
             })
         }
+        // br-5sra (4nkk slice 3): 5 more distributions.
+        "BetaDist" => {
+            if params.len() != 2 {
+                return Err(format!("BetaDist requires (a, b), got {params:?}"));
+            }
+            let d = fsci_stats::BetaDist {
+                a: params[0],
+                b: params[1],
+            };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
+        "Pareto" => {
+            if params.len() != 2 {
+                return Err(format!("Pareto requires (b, scale), got {params:?}"));
+            }
+            let d = fsci_stats::Pareto {
+                b: params[0],
+                scale: params[1],
+            };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
+        "Rayleigh" => {
+            if params.len() != 1 {
+                return Err(format!("Rayleigh requires (scale,), got {params:?}"));
+            }
+            let d = fsci_stats::Rayleigh { scale: params[0] };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
+        "Logistic" => {
+            if params.len() != 2 {
+                return Err(format!("Logistic requires (loc, scale), got {params:?}"));
+            }
+            let d = fsci_stats::Logistic {
+                loc: params[0],
+                scale: params[1],
+            };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
+        "Laplace" => {
+            if params.len() != 2 {
+                return Err(format!("Laplace requires (loc, scale), got {params:?}"));
+            }
+            let d = fsci_stats::Laplace {
+                loc: params[0],
+                scale: params[1],
+            };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
         other => Err(format!("unsupported distribution: {other}")),
     }
 }
