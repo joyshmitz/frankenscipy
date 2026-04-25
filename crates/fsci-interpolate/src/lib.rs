@@ -484,14 +484,14 @@ fn solve_cyclic_tridiagonal(sub: &[f64], diag: &[f64], sup: &[f64], rhs: &[f64])
     c[n - 1] = 0.0;
 
     let mut x = rhs.to_vec();
-    thomas_solve(&a, &mut bb, &c, &mut x);
+    let mut x_diag = bb.clone();
+    thomas_solve(&a, &mut x_diag, &c, &mut x);
 
     let mut u = vec![0.0; n];
     u[0] = gamma;
     u[n - 1] = a0;
     let mut z = u.clone();
-    let mut bb2 = bb.clone();
-    thomas_solve(&a, &mut bb2, &c, &mut z);
+    thomas_solve(&a, &mut bb, &c, &mut z);
 
     let numerator = x[0] + c_last * x[n - 1] / gamma;
     let denominator = 1.0 + z[0] + c_last * z[n - 1] / gamma;

@@ -322,7 +322,9 @@
       "case_id": "cubic_spline_natural_linear_data",
       "category": "differential",
       "mode": "Strict",
-      "bc": "natural",
+      "bc": {
+        "kind": "natural"
+      },
       "x": [
         0.0,
         1.0,
@@ -356,7 +358,9 @@
       "case_id": "cubic_spline_natural_quadratic_data",
       "category": "differential",
       "mode": "Strict",
-      "bc": "natural",
+      "bc": {
+        "kind": "natural"
+      },
       "x": [
         0.0,
         1.0,
@@ -383,6 +387,459 @@
         ],
         "atol": 1e-12,
         "rtol": 1e-12
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_natural_nonuniform_grid",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "natural"
+      },
+      "x": [
+        0.0,
+        0.5,
+        1.7,
+        3.0,
+        4.0
+      ],
+      "y": [
+        0.0,
+        0.25,
+        2.89,
+        9.0,
+        16.0
+      ],
+      "x_new": [
+        0.25,
+        1.0,
+        2.2,
+        3.5
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          0.08795144690870421,
+          0.9837507595321283,
+          4.817667418408722,
+          12.343973112562663
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_not_a_knot_quadratic_grid",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "not_a_knot"
+      },
+      "x": [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ],
+      "y": [
+        0.0,
+        1.0,
+        4.0,
+        9.0,
+        16.0
+      ],
+      "x_new": [
+        0.5,
+        1.5,
+        2.5,
+        3.5
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          0.25,
+          2.25,
+          6.25,
+          12.25
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_not_a_knot_wavy_grid",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "not_a_knot"
+      },
+      "x": [
+        0.0,
+        0.7,
+        1.5,
+        2.8,
+        4.0
+      ],
+      "y": [
+        0.0,
+        0.8,
+        0.2,
+        1.1,
+        -0.3
+      ],
+      "x_new": [
+        0.35,
+        1.0,
+        2.0,
+        3.4
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          0.726358557572465,
+          0.5813839670923177,
+          0.3622890196633446,
+          1.0792044266493794
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_clamped_zero_slope",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "clamped",
+        "left_derivative": 0.0,
+        "right_derivative": 0.0
+      },
+      "x": [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ],
+      "y": [
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "x_new": [
+        0.5,
+        1.5,
+        2.5,
+        3.5
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "atol": 1e-9,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_clamped_unit_slopes",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "clamped",
+        "left_derivative": 1.0,
+        "right_derivative": -1.0
+      },
+      "x": [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ],
+      "y": [
+        0.0,
+        0.5,
+        2.0,
+        1.5,
+        1.0
+      ],
+      "x_new": [
+        0.25,
+        1.25,
+        2.75,
+        3.75
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          0.16768973214285715,
+          0.857421875,
+          1.701171875,
+          1.1877790178571428
+        ],
+        "atol": 1e-9,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_clamped_nan_derivative_hardened_error",
+      "category": "adversarial",
+      "mode": "Hardened",
+      "bc": {
+        "kind": "clamped",
+        "left_derivative": "NaN",
+        "right_derivative": 0.0
+      },
+      "x": [
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ],
+      "y": [
+        0.0,
+        1.0,
+        4.0,
+        9.0
+      ],
+      "x_new": [
+        0.5,
+        1.5
+      ],
+      "expected": {
+        "kind": "error",
+        "error": "left boundary condition derivative must be finite"
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_periodic_sine_full_cycle",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "periodic"
+      },
+      "x": [
+        0.0,
+        1.5707963267948966,
+        3.141592653589793,
+        4.71238898038469,
+        6.283185307179586
+      ],
+      "y": [
+        0.0,
+        1.0,
+        1.2246467991473532e-16,
+        -1.0,
+        -2.4492935982947064e-16
+      ],
+      "x_new": [
+        0.0,
+        0.7853981633974483,
+        3.141592653589793,
+        5.497787143782138,
+        6.283185307179586
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          0.0,
+          0.6875,
+          1.2246467991473532e-16,
+          -0.6875,
+          0.0
+        ],
+        "atol": 1e-9,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_periodic_symmetric_wave",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "periodic"
+      },
+      "x": [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ],
+      "y": [
+        2.0,
+        0.5,
+        -1.0,
+        0.5,
+        2.0
+      ],
+      "x_new": [
+        0.0,
+        0.5,
+        1.5,
+        2.5,
+        3.5,
+        4.0
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          2.0,
+          1.53125,
+          -0.53125,
+          -0.53125,
+          1.53125,
+          2.0
+        ],
+        "atol": 1e-9,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_tuple_first_derivative_asymmetric",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "tuple",
+        "left_order": 1,
+        "left_value": 0.5,
+        "right_order": 1,
+        "right_value": -0.25
+      },
+      "x": [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ],
+      "y": [
+        0.0,
+        0.4,
+        1.8,
+        2.0,
+        2.2
+      ],
+      "x_new": [
+        0.5,
+        1.5,
+        2.5,
+        3.5
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          0.13805803571428574,
+          1.1097098214285714,
+          1.9981026785714286,
+          2.1478794642857144
+        ],
+        "atol": 1e-9,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_tuple_zero_derivative_matches_clamped",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "tuple",
+        "left_order": 1,
+        "left_value": 0.0,
+        "right_order": 1,
+        "right_value": 0.0
+      },
+      "x": [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ],
+      "y": [
+        1.0,
+        0.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "x_new": [
+        0.25,
+        1.25,
+        2.25,
+        3.25
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          0.84375,
+          0.15625,
+          0.84375,
+          0.15625
+        ],
+        "atol": 1e-9,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "operation": "cubic_spline",
+      "case_id": "cubic_spline_tuple_second_derivative_natural_zero",
+      "category": "differential",
+      "mode": "Strict",
+      "bc": {
+        "kind": "tuple",
+        "left_order": 2,
+        "left_value": 0.0,
+        "right_order": 2,
+        "right_value": 0.0
+      },
+      "x": [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ],
+      "y": [
+        0.0,
+        2.0,
+        1.0,
+        3.0,
+        2.0
+      ],
+      "x_new": [
+        0.5,
+        1.5,
+        2.5,
+        3.5
+      ],
+      "expected": {
+        "kind": "vector",
+        "values": [
+          1.4017857142857142,
+          1.4196428571428572,
+          1.9196428571428572,
+          2.901785714285715
+        ],
+        "atol": 1e-10,
+        "rtol": 1e-10
       }
     },
     {

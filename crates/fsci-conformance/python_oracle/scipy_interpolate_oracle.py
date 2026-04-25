@@ -38,6 +38,39 @@ def _fixture_error(case: Dict[str, Any], fallback: str) -> str:
     return fallback
 
 
+def _coerce_maybe_nan_f64(value: Any) -> float:
+    if isinstance(value, str):
+        marker = value.strip().lower()
+        if marker == "nan":
+            return float("nan")
+        if marker in {"inf", "+inf", "infinity", "+infinity"}:
+            return float("inf")
+        if marker in {"-inf", "-infinity"}:
+            return float("-inf")
+    return float(value)
+
+
+def _cubic_spline_bc_type(case: Dict[str, Any]) -> Any:
+    bc = case.get("bc", {"kind": "natural"})
+    if isinstance(bc, str):
+        return bc.replace("_", "-")
+
+    kind = str(bc.get("kind", "natural"))
+    if kind in {"natural", "not_a_knot", "periodic"}:
+        return kind.replace("_", "-")
+    if kind == "clamped":
+        return (
+            (1, _coerce_maybe_nan_f64(bc["left_derivative"])),
+            (1, _coerce_maybe_nan_f64(bc["right_derivative"])),
+        )
+    if kind == "tuple":
+        return (
+            (int(bc["left_order"]), _coerce_maybe_nan_f64(bc["left_value"])),
+            (int(bc["right_order"]), _coerce_maybe_nan_f64(bc["right_value"])),
+        )
+    raise ValueError(f"unsupported CubicSpline bc kind: {kind}")
+
+
 def _run_interp1d(case: Dict[str, Any], interpolate: Any, np: Any) -> Dict[str, Any]:
     case_id = case["case_id"]
     expected = case.get("expected", {})
@@ -91,7 +124,7 @@ def _run_regular_grid_interpolator(
 def _run_cubic_spline(case: Dict[str, Any], interpolate: Any, np: Any) -> Dict[str, Any]:
     case_id = case["case_id"]
     try:
-        bc = case.get("bc", "natural").replace("_", "-")
+        bc = _cubic_spline_bc_type(case)
         spline = interpolate.CubicSpline(
             np.array(case["x"], dtype=np.float64),
             np.array(case["y"], dtype=np.float64),

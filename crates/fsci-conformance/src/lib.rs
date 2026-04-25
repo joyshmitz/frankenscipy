@@ -975,11 +975,26 @@ pub enum InterpolateRegularGridMethod {
     Quintic,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InterpolateSplineBc {
     Natural,
     NotAKnot,
+    Clamped {
+        #[serde(with = "maybe_nan_f64")]
+        left_derivative: f64,
+        #[serde(with = "maybe_nan_f64")]
+        right_derivative: f64,
+    },
+    Periodic,
+    Tuple {
+        left_order: usize,
+        #[serde(with = "maybe_nan_f64")]
+        left_value: f64,
+        right_order: usize,
+        #[serde(with = "maybe_nan_f64")]
+        right_value: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -10014,10 +10029,46 @@ fn fixture_regular_grid_method_to_runtime(
     }
 }
 
-fn fixture_spline_bc_to_runtime(bc: InterpolateSplineBc) -> FsciSplineBc {
+fn finite_spline_bc_value(name: &str, value: f64) -> Result<f64, String> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(format!(
+            "{name} boundary condition derivative must be finite"
+        ))
+    }
+}
+
+fn fixture_spline_bc_to_runtime(bc: InterpolateSplineBc) -> Result<FsciSplineBc, String> {
     match bc {
-        InterpolateSplineBc::Natural => FsciSplineBc::Natural,
-        InterpolateSplineBc::NotAKnot => FsciSplineBc::NotAKnot,
+        InterpolateSplineBc::Natural => Ok(FsciSplineBc::Natural),
+        InterpolateSplineBc::NotAKnot => Ok(FsciSplineBc::NotAKnot),
+        InterpolateSplineBc::Clamped {
+            left_derivative,
+            right_derivative,
+        } => Ok(FsciSplineBc::Clamped(
+            finite_spline_bc_value("left", left_derivative)?,
+            finite_spline_bc_value("right", right_derivative)?,
+        )),
+        InterpolateSplineBc::Periodic => Ok(FsciSplineBc::Periodic),
+        InterpolateSplineBc::Tuple {
+            left_order,
+            left_value,
+            right_order,
+            right_value,
+        } => {
+            if left_order == 1 && right_order == 1 {
+                Ok(FsciSplineBc::Clamped(
+                    finite_spline_bc_value("left", left_value)?,
+                    finite_spline_bc_value("right", right_value)?,
+                ))
+            } else if left_order == 2 && right_order == 2 && left_value == 0.0 && right_value == 0.0
+            {
+                Ok(FsciSplineBc::Natural)
+            } else {
+                Err("only first-derivative tuple BCs and zero second-derivative natural tuple BCs are supported".to_owned())
+            }
+        }
     }
 }
 
@@ -10071,14 +10122,17 @@ fn execute_interpolate_case(case: &InterpolateCase) -> InterpolateObservedOutcom
         },
         InterpolateCase::CubicSpline {
             x, y, x_new, bc, ..
-        } => match CubicSplineStandalone::new(
-            x,
-            y,
-            fixture_spline_bc_to_runtime(bc.unwrap_or(InterpolateSplineBc::Natural)),
-        ) {
-            Ok(spline) => InterpolateObservedOutcome::Vector(spline.eval_many(x_new)),
-            Err(error) => InterpolateObservedOutcome::Error(error.to_string()),
-        },
+        } => {
+            let runtime_bc =
+                match fixture_spline_bc_to_runtime(bc.unwrap_or(InterpolateSplineBc::Natural)) {
+                    Ok(runtime_bc) => runtime_bc,
+                    Err(error) => return InterpolateObservedOutcome::Error(error),
+                };
+            match CubicSplineStandalone::new(x, y, runtime_bc) {
+                Ok(spline) => InterpolateObservedOutcome::Vector(spline.eval_many(x_new)),
+                Err(error) => InterpolateObservedOutcome::Error(error.to_string()),
+            }
+        }
         InterpolateCase::BSpline {
             knots,
             coefficients,
@@ -16746,7 +16800,7 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
-    const INTERPOLATE_CORE_CASE_COUNT: usize = 13;
+    const INTERPOLATE_CORE_CASE_COUNT: usize = 24;
 
     #[test]
     fn smoke_harness_finds_oracle_and_fixtures() {
@@ -19491,6 +19545,41 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             serde_json::to_string_pretty(&report).unwrap()
         );
         assert_eq!(report.pass_count, INTERPOLATE_CORE_CASE_COUNT);
+    }
+
+    #[test]
+    fn interpolate_cubic_spline_boundary_conditions_present() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-014_interpolate_core.json");
+        let fixture: super::InterpolatePacketFixture =
+            serde_json::from_slice(&fs::read(&fixture_path).expect("read interpolate fixture"))
+                .expect("interpolate fixture should parse");
+
+        let case_ids = fixture
+            .cases
+            .iter()
+            .filter_map(|case| match case {
+                super::InterpolateCase::CubicSpline { case_id, .. } => Some(case_id.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+
+        for required in [
+            "cubic_spline_natural_nonuniform_grid",
+            "cubic_spline_not_a_knot_quadratic_grid",
+            "cubic_spline_not_a_knot_wavy_grid",
+            "cubic_spline_clamped_zero_slope",
+            "cubic_spline_clamped_unit_slopes",
+            "cubic_spline_clamped_nan_derivative_hardened_error",
+            "cubic_spline_periodic_sine_full_cycle",
+            "cubic_spline_periodic_symmetric_wave",
+            "cubic_spline_tuple_first_derivative_asymmetric",
+            "cubic_spline_tuple_zero_derivative_matches_clamped",
+            "cubic_spline_tuple_second_derivative_natural_zero",
+        ] {
+            assert!(case_ids.contains(required), "missing {required}");
+        }
     }
 
     #[test]
