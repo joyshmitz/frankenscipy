@@ -4904,6 +4904,15 @@ pub struct SpatialExpected {
     pub indices: Option<Vec<usize>>,
     #[serde(default)]
     pub distances: Option<Vec<f64>>,
+    /// br-d1jx: permutation-invariant Voronoi summary scalars.
+    #[serde(default)]
+    pub vertex_count: Option<usize>,
+    #[serde(default)]
+    pub ridge_count: Option<usize>,
+    /// br-d1jx: sorted multiset of Voronoi vertex coordinates,
+    /// each as [x, y]. Sort key is lexicographic.
+    #[serde(default)]
+    pub sorted_vertices: Option<Vec<[f64; 2]>>,
 }
 
 #[derive(Debug)]
@@ -4928,6 +4937,15 @@ enum SpatialObserved {
     ConvexHull {
         vertices: Vec<usize>,
         area: f64,
+    },
+    /// br-d1jx: Voronoi diagram summary. Region/ridge ordering is
+    /// permutation-sensitive between scipy and fsci, so the comparator
+    /// uses permutation-invariant scalars (vertex_count, ridge_count)
+    /// plus the sorted multiset of vertex coordinates.
+    Voronoi {
+        vertex_count: usize,
+        ridge_count: usize,
+        sorted_vertices: Vec<[f64; 2]>,
     },
     HalfspaceIntersection {
         intersections: Vec<Vec<f64>>,
@@ -4959,6 +4977,7 @@ fn execute_spatial_case(case: &SpatialCase) -> SpatialObserved {
         "kdtree_query_ball_point" => execute_kdtree_query_ball_point(case),
         "directed_hausdorff" => execute_directed_hausdorff(case),
         "convex_hull" => execute_convex_hull(case),
+        "voronoi" => execute_voronoi(case),
         "halfspace_intersection" => execute_halfspace_intersection(case),
         "procrustes" => execute_procrustes(case),
         "geometric_slerp" => execute_geometric_slerp(case),
@@ -5242,6 +5261,36 @@ fn execute_convex_hull(case: &SpatialCase) -> SpatialObserved {
     }
 }
 
+/// br-d1jx: 2D Voronoi diagram. Reduces the (vertices, ridges,
+/// regions, point_region) tuple to permutation-invariant counts plus
+/// a lexicographically-sorted vertex coordinate multiset, since the
+/// per-point region indices and per-ridge orderings carry no
+/// canonical sort.
+fn execute_voronoi(case: &SpatialCase) -> SpatialObserved {
+    let points: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse points: {e}")),
+    };
+    let points_2d: Vec<(f64, f64)> = points.iter().map(|p| (p[0], p[1])).collect();
+    match fsci_spatial::Voronoi::new(&points_2d) {
+        Ok(v) => {
+            let mut sorted_vertices: Vec<[f64; 2]> =
+                v.vertices.iter().map(|(x, y)| [*x, *y]).collect();
+            sorted_vertices.sort_by(|a, b| {
+                a[0].partial_cmp(&b[0])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a[1].partial_cmp(&b[1]).unwrap_or(std::cmp::Ordering::Equal))
+            });
+            SpatialObserved::Voronoi {
+                vertex_count: v.vertices.len(),
+                ridge_count: v.ridge_points.len(),
+                sorted_vertices,
+            }
+        }
+        Err(e) => SpatialObserved::Error(format!("{e:?}")),
+    }
+}
+
 fn execute_halfspace_intersection(case: &SpatialCase) -> SpatialObserved {
     let halfspaces: Vec<Vec<f64>> = match serde_json::from_value(case.args[0].clone()) {
         Ok(v) => v,
@@ -5478,6 +5527,55 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
             (
                 true,
                 format!("convex hull match: vertices={vertices:?}, area={area}"),
+            )
+        }
+        (
+            "voronoi_result",
+            SpatialObserved::Voronoi {
+                vertex_count,
+                ridge_count,
+                sorted_vertices,
+            },
+        ) => {
+            let exp_vc = case.expected.vertex_count.unwrap_or(0);
+            let exp_rc = case.expected.ridge_count.unwrap_or(0);
+            if *vertex_count != exp_vc {
+                return (
+                    false,
+                    format!("vertex_count mismatch: got {vertex_count}, expected {exp_vc}"),
+                );
+            }
+            if *ridge_count != exp_rc {
+                return (
+                    false,
+                    format!("ridge_count mismatch: got {ridge_count}, expected {exp_rc}"),
+                );
+            }
+            if let Some(exp_vs) = case.expected.sorted_vertices.as_ref() {
+                if exp_vs.len() != sorted_vertices.len() {
+                    return (
+                        false,
+                        format!(
+                            "sorted_vertices len mismatch: got {} expected {}",
+                            sorted_vertices.len(),
+                            exp_vs.len()
+                        ),
+                    );
+                }
+                for (got, exp) in sorted_vertices.iter().zip(exp_vs.iter()) {
+                    if !allclose_scalar(got[0], exp[0], atol, rtol)
+                        || !allclose_scalar(got[1], exp[1], atol, rtol)
+                    {
+                        return (
+                            false,
+                            format!("sorted_vertices coord mismatch: got {got:?} expected {exp:?}"),
+                        );
+                    }
+                }
+            }
+            (
+                true,
+                format!("voronoi match: vc={vertex_count}, rc={ridge_count}"),
             )
         }
         ("halfspace_intersection", obs @ SpatialObserved::HalfspaceIntersection { .. }) => {
@@ -7133,6 +7231,10 @@ pub struct IntegrateArgs {
     pub method: Option<String>,
     pub t_eval: Option<Vec<f64>>,
     pub event: Option<String>,
+    /// br-r8ug: when present, request dense_output=true and sample
+    /// the OdeSolution at these post-solve points. The runner emits
+    /// the sampled (t, y) instead of the solver-step grid.
+    pub dense_t_eval: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -7191,6 +7293,23 @@ fn ivp_rhs_by_name(name: &str) -> Option<IvpRhs> {
         "stiff_decay" => Some(|_t, y| vec![-1000.0 * y[0]]),
         "linear_growth" => Some(|_t, _y| vec![1.0]),
         "harmonic_oscillator" => Some(|_t, y| vec![y[1], -y[0]]),
+        // br-r8ug: classic stiff three-species Robertson chemistry.
+        // y0' = -0.04*y0 + 1e4*y1*y2
+        // y1' =  0.04*y0 - 1e4*y1*y2 - 3e7*y1^2
+        // y2' =                       3e7*y1^2
+        "robertson_chemistry" => Some(|_t, y| {
+            let r1 = -0.04 * y[0] + 1.0e4 * y[1] * y[2];
+            let r3 = 3.0e7 * y[1] * y[1];
+            let r2 = -r1 - r3;
+            vec![r1, r2, r3]
+        }),
+        // br-r8ug: Van der Pol oscillator with mu=10 (mildly stiff).
+        // y0' = y1
+        // y1' = mu*(1 - y0^2)*y1 - y0
+        "van_der_pol_mu10" => Some(|_t, y| {
+            let mu = 10.0;
+            vec![y[1], mu * (1.0 - y[0] * y[0]) * y[1] - y[0]]
+        }),
         _ => None,
     }
 }
@@ -7248,12 +7367,21 @@ fn execute_integrate_solve_ivp(case: &IntegrateCase) -> IntegrateObserved {
         }
         None => None,
     };
+    // br-r8ug: when dense_t_eval is supplied, request dense output and
+    // sample the OdeSolution at those exact points. fsci's OdeSolution
+    // is currently piecewise-constant on solver knots, so we interpolate
+    // linearly here to approximate scipy's Hermite-spline dense output;
+    // fixture tolerances should be loosened accordingly when comparing
+    // against scipy.
+    let dense_request = args.dense_t_eval.as_deref();
+    let want_dense = dense_request.is_some();
+    let effective_t_eval = dense_request.or(args.t_eval.as_deref());
     let opts = fsci_integrate::SolveIvpOptions {
         t_span: (t_span[0], t_span[1]),
         y0,
         method,
-        t_eval: args.t_eval.as_deref(),
-        dense_output: false,
+        t_eval: effective_t_eval,
+        dense_output: want_dense,
         events,
         rtol,
         atol: fsci_integrate::ToleranceValue::Scalar(atol),
@@ -7264,9 +7392,6 @@ fn execute_integrate_solve_ivp(case: &IntegrateCase) -> IntegrateObserved {
     let mut rhs_mut = rhs_fn;
     match fsci_integrate::solve_ivp(&mut rhs_mut, &opts) {
         Ok(res) => {
-            // scipy stores y as shape (n_vars, n_points); fsci returns
-            // y as Vec<Vec<f64>> with outer = timestep, inner = state.
-            // Transpose to the (n_vars, n_points) shape the oracle emits.
             let n_vars = res.y.first().map_or(0, Vec::len);
             let mut y_t: Vec<Vec<f64>> = (0..n_vars)
                 .map(|_| Vec::with_capacity(res.y.len()))

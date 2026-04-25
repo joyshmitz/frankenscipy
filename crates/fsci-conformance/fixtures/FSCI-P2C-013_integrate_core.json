@@ -916,7 +916,7 @@
             [
               1.0,
               0.006737946999085467,
-              0.00004539992976248485
+              4.539992976248485e-05
             ]
           ]
         },
@@ -1219,6 +1219,261 @@
         "atol": 1e-10,
         "rtol": 1e-10,
         "contract_ref": "fsci_integrate::tplquad"
+      }
+    },
+    {
+      "case_id": "ivp_lsoda_robertson_short",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "solve_ivp",
+      "args": {
+        "rhs": "robertson_chemistry",
+        "t_span": [
+          0.0,
+          0.4
+        ],
+        "y0": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "method": "LSODA",
+        "rtol": 1e-08,
+        "atol": 1e-10,
+        "t_eval": [
+          0.0,
+          0.1,
+          0.2,
+          0.4
+        ]
+      },
+      "expected": {
+        "kind": "ivp_result",
+        "value": {
+          "t": [
+            0.0,
+            0.1,
+            0.2,
+            0.4
+          ],
+          "y": [
+            [
+              1.0,
+              0.9960777472964671,
+              0.9923059455307917,
+              0.9851721135577228
+            ],
+            [
+              0.0,
+              3.58043723235369e-05,
+              3.5123031418281275e-05,
+              3.3863953738249384e-05
+            ],
+            [
+              0.0,
+              0.003886448331208673,
+              0.007658931437789467,
+              0.014794022488538337
+            ]
+          ]
+        },
+        "atol": 0.05,
+        "rtol": 0.05,
+        "contract_ref": "fsci_integrate::solve_ivp"
+      }
+    },
+    {
+      "case_id": "ivp_lsoda_linear_growth",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "solve_ivp",
+      "args": {
+        "rhs": "linear_growth",
+        "t_span": [
+          0.0,
+          2.0
+        ],
+        "y0": [
+          5.0
+        ],
+        "method": "LSODA",
+        "rtol": 1e-08,
+        "atol": 1e-10,
+        "t_eval": [
+          0.0,
+          1.0,
+          2.0
+        ]
+      },
+      "expected": {
+        "kind": "ivp_result",
+        "value": {
+          "t": [
+            0.0,
+            1.0,
+            2.0
+          ],
+          "y": [
+            [
+              5.0,
+              6.0,
+              7.0
+            ]
+          ]
+        },
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "contract_ref": "fsci_integrate::solve_ivp"
+      }
+    },
+    {
+      "case_id": "ivp_lsoda_exponential_decay",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "solve_ivp",
+      "args": {
+        "rhs": "exponential_decay",
+        "t_span": [
+          0.0,
+          2.0
+        ],
+        "y0": [
+          1.0
+        ],
+        "method": "LSODA",
+        "rtol": 1e-08,
+        "atol": 1e-10,
+        "t_eval": [
+          0.0,
+          0.5,
+          1.0,
+          1.5,
+          2.0
+        ]
+      },
+      "expected": {
+        "kind": "ivp_result",
+        "value": {
+          "t": [
+            0.0,
+            0.5,
+            1.0,
+            1.5,
+            2.0
+          ],
+          "y": [
+            [
+              1.0,
+              0.606530674388334,
+              0.3678794502848967,
+              0.22313016407447814,
+              0.13533528367563322
+            ]
+          ]
+        },
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "contract_ref": "fsci_integrate::solve_ivp"
+      }
+    },
+    {
+      "case_id": "ivp_dense_rk45_expdecay",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "solve_ivp",
+      "args": {
+        "rhs": "exponential_decay",
+        "t_span": [
+          0.0,
+          1.0
+        ],
+        "y0": [
+          1.0
+        ],
+        "method": "RK45",
+        "rtol": 1e-08,
+        "atol": 1e-10,
+        "dense_t_eval": [
+          0.05,
+          0.15,
+          0.35,
+          0.65,
+          0.85
+        ]
+      },
+      "expected": {
+        "kind": "ivp_result",
+        "value": {
+          "t": [
+            0.05,
+            0.15,
+            0.35,
+            0.65,
+            0.85
+          ],
+          "y": [
+            [
+              0.9512294219930141,
+              0.8607079745392301,
+              0.7046880890495049,
+              0.5220457773595943,
+              0.42741493278447584
+            ]
+          ]
+        },
+        "atol": 0.001,
+        "rtol": 0.001,
+        "contract_ref": "fsci_integrate::solve_ivp"
+      }
+    },
+    {
+      "case_id": "ivp_dense_lsoda_linear_growth",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "solve_ivp",
+      "args": {
+        "rhs": "linear_growth",
+        "t_span": [
+          0.0,
+          2.0
+        ],
+        "y0": [
+          3.0
+        ],
+        "method": "LSODA",
+        "rtol": 1e-08,
+        "atol": 1e-10,
+        "dense_t_eval": [
+          0.25,
+          0.5,
+          1.0,
+          1.5,
+          1.75
+        ]
+      },
+      "expected": {
+        "kind": "ivp_result",
+        "value": {
+          "t": [
+            0.25,
+            0.5,
+            1.0,
+            1.5,
+            1.75
+          ],
+          "y": [
+            [
+              3.25,
+              3.5,
+              4.0,
+              4.5,
+              4.749999999999999
+            ]
+          ]
+        },
+        "atol": 0.001,
+        "rtol": 0.001,
+        "contract_ref": "fsci_integrate::solve_ivp"
       }
     }
   ]

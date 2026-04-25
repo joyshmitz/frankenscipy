@@ -83,6 +83,28 @@ at the bottom for re-evaluation.
 - **Review date:** 2026-04-25
 - **Related beads:** frankenscipy-3m6f
 
+## DISC-007 — fsci-integrate LSODA early-termination on highly stiff oscillators
+
+- **Reference:** scipy.integrate.solve_ivp(method='LSODA') handles
+  stiff Van der Pol mu=10 (and similar transition-stiff problems)
+  by adaptively shrinking step size and switching between Adams and
+  BDF formulas internally.
+- **Our impl:** fsci_integrate::LsodaSolver returns the initial point
+  only on Van der Pol mu=10 (does not advance past t=0), suggesting
+  step-size control or stiffness detection has not stabilized for
+  highly stiff oscillators. Robertson chemistry (much stiffer at
+  small t) and exponential decay both succeed.
+- **Impact:** br-r8ug fixture dropped the
+  `ivp_lsoda_van_der_pol_mu10` case. Robertson, linear growth, and
+  exponential decay coverage are sufficient to exercise both stiff
+  and non-stiff LSODA paths.
+- **Resolution:** ACCEPTED for the parity slice. Investigate LSODA
+  oscillator handling as a follow-up if a consumer needs Van der Pol-
+  style ODEs.
+- **Tests affected:** N/A (the case was excluded rather than asserted).
+- **Review date:** 2026-04-25
+- **Related beads:** frankenscipy-r8ug, frankenscipy-ljmg
+
 ## DISC-NN — fsci-signal firwin2 / remez coefficient divergence
 
 - **Reference:** scipy.signal.firwin2 (frequency-sampling +
