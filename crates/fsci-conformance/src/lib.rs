@@ -6913,6 +6913,7 @@ fn execute_stats_case(case: &StatsCase) -> StatsObserved {
         "kurtosis" => execute_stats_kurtosis(case),
         "pearsonr" => execute_stats_pearsonr(case),
         "spearmanr" => execute_stats_spearmanr(case),
+        "kendalltau" => execute_stats_kendalltau(case),
         "linregress" => execute_stats_linregress(case),
         "ttest_1samp" => execute_stats_ttest_1samp(case),
         "ttest_ind" => execute_stats_ttest_ind(case),
@@ -6991,6 +6992,23 @@ fn execute_stats_spearmanr(case: &StatsCase) -> StatsObserved {
         Err(e) => return StatsObserved::Error(format!("parse y: {e}")),
     };
     let result = fsci_stats::spearmanr(&x, &y);
+    StatsObserved::Correlation {
+        statistic: result.statistic,
+        pvalue: result.pvalue,
+    }
+}
+
+// br-q00y: Kendall tau correlation parity dispatch.
+fn execute_stats_kendalltau(case: &StatsCase) -> StatsObserved {
+    let x: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse x: {e}")),
+    };
+    let y: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse y: {e}")),
+    };
+    let result = fsci_stats::kendalltau(&x, &y);
     StatsObserved::Correlation {
         statistic: result.statistic,
         pvalue: result.pvalue,

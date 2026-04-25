@@ -84,6 +84,19 @@ def _run_case(case: dict[str, Any], stats: Any) -> dict[str, Any]:
                 },
                 "error": None,
             }
+        if function_name == "kendalltau":
+            # br-q00y
+            result = stats.kendalltau(*args)
+            return {
+                "case_id": case_id,
+                "status": "ok",
+                "result_kind": "correlation_result",
+                "result": {
+                    "statistic": _as_float(result.statistic),
+                    "pvalue": _as_float(result.pvalue),
+                },
+                "error": None,
+            }
         if function_name == "linregress":
             result = stats.linregress(*args)
             return {
