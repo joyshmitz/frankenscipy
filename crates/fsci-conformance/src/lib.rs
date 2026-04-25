@@ -10422,7 +10422,9 @@ fn compare_io_matrix(
             if *rows != expected_rows || *cols != expected_cols {
                 return (
                     false,
-                    format!("io matrix shape mismatch: expected={expected_rows}x{expected_cols}, got={rows}x{cols}"),
+                    format!(
+                        "io matrix shape mismatch: expected={expected_rows}x{expected_cols}, got={rows}x{cols}"
+                    ),
                     Some(f64::INFINITY),
                     Some(tolerance),
                 );
@@ -10573,9 +10575,8 @@ fn compare_io_case_differential(
 
 fn io_expected_tolerance(expected: &IoExpectedOutcome) -> (Option<f64>, Option<f64>) {
     match expected {
-        IoExpectedOutcome::Matrix { atol, rtol, .. } | IoExpectedOutcome::Wav { atol, rtol, .. } => {
-            (*atol, *rtol)
-        }
+        IoExpectedOutcome::Matrix { atol, rtol, .. }
+        | IoExpectedOutcome::Wav { atol, rtol, .. } => (*atol, *rtol),
         IoExpectedOutcome::Error { .. } => (None, None),
     }
 }
@@ -10595,11 +10596,7 @@ fn io_oracle_case_to_expected(
             rtol,
         }),
         "wav" => Ok(IoExpectedOutcome::Wav {
-            sample_rate: oracle_result_field(
-                &oracle_case.result,
-                "sample_rate",
-                case.case_id(),
-            )?,
+            sample_rate: oracle_result_field(&oracle_case.result, "sample_rate", case.case_id())?,
             channels: oracle_result_field(&oracle_case.result, "channels", case.case_id())?,
             bits_per_sample: oracle_result_field(
                 &oracle_case.result,
@@ -16495,9 +16492,8 @@ mod tests {
         FftPacketFixture, HarnessConfig, IntegratePacketFixture, IoPacketFixture, LinalgCase,
         LinalgExpectedOutcome, LinalgPacketFixture, OptimizePacketFixture, OracleCaseOutput,
         OracleStatus, PacketFamily, PacketReport, PythonOracleConfig, SignalPacketFixture,
-        SparsePacketFixture,
-        SpatialPacketFixture, SpecialPacketFixture, StatsCase, StatsExpected, StatsObserved,
-        StatsPacketFixture, ToleranceUsed, aggregate_packet_reports,
+        SparsePacketFixture, SpatialPacketFixture, SpecialPacketFixture, StatsCase, StatsExpected,
+        StatsObserved, StatsPacketFixture, ToleranceUsed, aggregate_packet_reports,
         compare_linalg_case_against_oracle, compare_stats_case_against_oracle, discover_fixtures,
         ensure_artifact_layout, load_array_api_contract_table, load_oracle_capture,
         resolve_array_api_contract_tolerance, run_array_api_packet, run_casp_packet,
@@ -19346,7 +19342,9 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert_eq!(report.pass_count, 1);
         assert_eq!(report.oracle_status, OracleStatus::Available);
         assert!(
-            report.per_case_results[0].message.contains("io matrix matched"),
+            report.per_case_results[0]
+                .message
+                .contains("io matrix matched"),
             "unexpected message: {}",
             report.per_case_results[0].message
         );
