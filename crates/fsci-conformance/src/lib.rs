@@ -13067,6 +13067,36 @@ fn constant_value_by_name(name: &str) -> Option<f64> {
         "ELECTRON_PROTON_MASS_RATIO" => Some(fsci_constants::ELECTRON_PROTON_MASS_RATIO),
         "PROTON_ELECTRON_MASS_RATIO" => Some(fsci_constants::PROTON_ELECTRON_MASS_RATIO),
         "BOHR_MAGNETON_EV_T" => Some(fsci_constants::BOHR_MAGNETON_EV_T),
+        "COMPTON_WAVELENGTH" | "ELECTRON_COMPTON_WAVELENGTH" => {
+            Some(fsci_constants::COMPTON_WAVELENGTH)
+        }
+        "ELECTRON_MASS_MEV" => Some(fsci_constants::ELECTRON_MASS_MEV),
+        "PROTON_MASS_MEV" => Some(fsci_constants::PROTON_MASS_MEV),
+        "NEUTRON_MASS_MEV" => Some(fsci_constants::NEUTRON_MASS_MEV),
+        "MUON_MASS_MEV" => Some(fsci_constants::MUON_MASS_MEV),
+        "TAU_MASS_MEV" => Some(fsci_constants::TAU_MASS_MEV),
+        "DEUTERON_MASS_MEV" => Some(fsci_constants::DEUTERON_MASS_MEV),
+        "ALPHA_PARTICLE_MASS_MEV" => Some(fsci_constants::ALPHA_PARTICLE_MASS_MEV),
+        "HELION_MASS_MEV" => Some(fsci_constants::HELION_MASS_MEV),
+        "TRITON_MASS_MEV" => Some(fsci_constants::TRITON_MASS_MEV),
+        "PROTON_COMPTON_WAVELENGTH" => Some(fsci_constants::PROTON_COMPTON_WAVELENGTH),
+        "NEUTRON_COMPTON_WAVELENGTH" => Some(fsci_constants::NEUTRON_COMPTON_WAVELENGTH),
+        "MUON_COMPTON_WAVELENGTH" => Some(fsci_constants::MUON_COMPTON_WAVELENGTH),
+        "TAU_COMPTON_WAVELENGTH" => Some(fsci_constants::TAU_COMPTON_WAVELENGTH),
+        "NEUTRON_ELECTRON_MASS_RATIO" => Some(fsci_constants::NEUTRON_ELECTRON_MASS_RATIO),
+        "ELECTRON_NEUTRON_MASS_RATIO" => Some(fsci_constants::ELECTRON_NEUTRON_MASS_RATIO),
+        "MUON_ELECTRON_MASS_RATIO" => Some(fsci_constants::MUON_ELECTRON_MASS_RATIO),
+        "ELECTRON_MUON_MASS_RATIO" => Some(fsci_constants::ELECTRON_MUON_MASS_RATIO),
+        "PROTON_NEUTRON_MASS_RATIO" => Some(fsci_constants::PROTON_NEUTRON_MASS_RATIO),
+        "NEUTRON_PROTON_MASS_RATIO" => Some(fsci_constants::NEUTRON_PROTON_MASS_RATIO),
+        "DEUTERON_ELECTRON_MASS_RATIO" => Some(fsci_constants::DEUTERON_ELECTRON_MASS_RATIO),
+        "ALPHA_PARTICLE_ELECTRON_MASS_RATIO" => {
+            Some(fsci_constants::ALPHA_PARTICLE_ELECTRON_MASS_RATIO)
+        }
+        "HELION_ELECTRON_MASS_RATIO" => Some(fsci_constants::HELION_ELECTRON_MASS_RATIO),
+        "TRITON_ELECTRON_MASS_RATIO" => Some(fsci_constants::TRITON_ELECTRON_MASS_RATIO),
+        "TAU_ELECTRON_MASS_RATIO" => Some(fsci_constants::TAU_ELECTRON_MASS_RATIO),
+        "ELECTRON_TAU_MASS_RATIO" => Some(fsci_constants::ELECTRON_TAU_MASS_RATIO),
         _ => None,
     }
 }

@@ -641,6 +641,370 @@
         "rtol": 1e-15,
         "contract_ref": "scipy.constants.value('Bohr magneton in eV/T')"
       }
+    },
+    {
+      "case_id": "compton_wavelength",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["COMPTON_WAVELENGTH"],
+      "expected": {
+        "kind": "scalar",
+        "value": 2.42631023538e-12,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('Compton wavelength')"
+      }
+    },
+    {
+      "case_id": "electron_mass_energy_mev",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["ELECTRON_MASS_MEV"],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.51099895069,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('electron mass energy equivalent in MeV')"
+      }
+    },
+    {
+      "case_id": "proton_mass_energy_mev",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["PROTON_MASS_MEV"],
+      "expected": {
+        "kind": "scalar",
+        "value": 938.27208943,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('proton mass energy equivalent in MeV')"
+      }
+    },
+    {
+      "case_id": "neutron_mass_energy_mev",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["NEUTRON_MASS_MEV"],
+      "expected": {
+        "kind": "scalar",
+        "value": 939.56542194,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('neutron mass energy equivalent in MeV')"
+      }
+    },
+    {
+      "case_id": "muon_mass_energy_mev",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["MUON_MASS_MEV"],
+      "expected": {
+        "kind": "scalar",
+        "value": 105.6583755,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('muon mass energy equivalent in MeV')"
+      }
+    },
+    {
+      "case_id": "tau_mass_energy_mev",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["TAU_MASS_MEV"],
+      "expected": {
+        "kind": "scalar",
+        "value": 1776.82,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('tau mass energy equivalent in MeV')"
+      }
+    },
+    {
+      "case_id": "deuteron_mass_energy_mev",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["DEUTERON_MASS_MEV"],
+      "expected": {
+        "kind": "scalar",
+        "value": 1875.612945,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('deuteron mass energy equivalent in MeV')"
+      }
+    },
+    {
+      "case_id": "alpha_particle_mass_energy_mev",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["ALPHA_PARTICLE_MASS_MEV"],
+      "expected": {
+        "kind": "scalar",
+        "value": 3727.3794118,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('alpha particle mass energy equivalent in MeV')"
+      }
+    },
+    {
+      "case_id": "helion_mass_energy_mev",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["HELION_MASS_MEV"],
+      "expected": {
+        "kind": "scalar",
+        "value": 2808.39161112,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('helion mass energy equivalent in MeV')"
+      }
+    },
+    {
+      "case_id": "triton_mass_energy_mev",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["TRITON_MASS_MEV"],
+      "expected": {
+        "kind": "scalar",
+        "value": 2808.92113668,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('triton mass energy equivalent in MeV')"
+      }
+    },
+    {
+      "case_id": "proton_compton_wavelength",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["PROTON_COMPTON_WAVELENGTH"],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.3214098536e-15,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('proton Compton wavelength')"
+      }
+    },
+    {
+      "case_id": "neutron_compton_wavelength",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["NEUTRON_COMPTON_WAVELENGTH"],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.31959090382e-15,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('neutron Compton wavelength')"
+      }
+    },
+    {
+      "case_id": "muon_compton_wavelength",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["MUON_COMPTON_WAVELENGTH"],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.17344411e-14,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('muon Compton wavelength')"
+      }
+    },
+    {
+      "case_id": "tau_compton_wavelength",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["TAU_COMPTON_WAVELENGTH"],
+      "expected": {
+        "kind": "scalar",
+        "value": 6.97771e-16,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('tau Compton wavelength')"
+      }
+    },
+    {
+      "case_id": "neutron_electron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["NEUTRON_ELECTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 1838.683662,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('neutron-electron mass ratio')"
+      }
+    },
+    {
+      "case_id": "electron_neutron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["ELECTRON_NEUTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.00054386734416,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('electron-neutron mass ratio')"
+      }
+    },
+    {
+      "case_id": "muon_electron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["MUON_ELECTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 206.7682827,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('muon-electron mass ratio')"
+      }
+    },
+    {
+      "case_id": "electron_muon_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["ELECTRON_MUON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0048363317,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('electron-muon mass ratio')"
+      }
+    },
+    {
+      "case_id": "proton_neutron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["PROTON_NEUTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.99862347797,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('proton-neutron mass ratio')"
+      }
+    },
+    {
+      "case_id": "neutron_proton_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["NEUTRON_PROTON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.00137841946,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('neutron-proton mass ratio')"
+      }
+    },
+    {
+      "case_id": "deuteron_electron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["DEUTERON_ELECTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 3670.482967655,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('deuteron-electron mass ratio')"
+      }
+    },
+    {
+      "case_id": "alpha_particle_electron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["ALPHA_PARTICLE_ELECTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 7294.29954171,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('alpha particle-electron mass ratio')"
+      }
+    },
+    {
+      "case_id": "helion_electron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["HELION_ELECTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 5495.88527984,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('helion-electron mass ratio')"
+      }
+    },
+    {
+      "case_id": "triton_electron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["TRITON_ELECTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 5496.92153551,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('triton-electron mass ratio')"
+      }
+    },
+    {
+      "case_id": "tau_electron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["TAU_ELECTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 3477.23,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('tau-electron mass ratio')"
+      }
+    },
+    {
+      "case_id": "electron_tau_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["ELECTRON_TAU_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.000287585,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('electron-tau mass ratio')"
+      }
     }
   ]
 }

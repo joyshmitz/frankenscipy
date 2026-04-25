@@ -185,7 +185,9 @@ pub const HARTREE: f64 = 4.359_744_722_207_1e-18;
 pub const CLASSICAL_ELECTRON_RADIUS: f64 = 2.817_940_326_2e-15;
 
 /// Compton wavelength of electron [m]
-pub const COMPTON_WAVELENGTH: f64 = 2.426_310_238_67e-12;
+pub const COMPTON_WAVELENGTH: f64 = 2.426_310_235_38e-12;
+/// Explicit electron alias for the physical_constants table key.
+pub const ELECTRON_COMPTON_WAVELENGTH: f64 = COMPTON_WAVELENGTH;
 
 // ══════════════════════════════════════════════════════════════════════
 // Additional Physical Constants — br-wada
@@ -259,6 +261,85 @@ pub const PROTON_ELECTRON_MASS_RATIO: f64 = 1_836.152_673_426;
 
 /// Bohr magneton in eV/T [eV·T⁻¹]
 pub const BOHR_MAGNETON_EV_T: f64 = 5.788_381_798_2e-5;
+
+// ══════════════════════════════════════════════════════════════════════
+// Additional Physical Constants — br-sl60
+// ══════════════════════════════════════════════════════════════════════
+
+/// Electron mass energy equivalent [MeV]
+pub const ELECTRON_MASS_MEV: f64 = 0.510_998_950_69;
+
+/// Proton mass energy equivalent [MeV]
+pub const PROTON_MASS_MEV: f64 = 938.272_089_43;
+
+/// Neutron mass energy equivalent [MeV]
+pub const NEUTRON_MASS_MEV: f64 = 939.565_421_94;
+
+/// Muon mass energy equivalent [MeV]
+pub const MUON_MASS_MEV: f64 = 105.658_375_5;
+
+/// Tau mass energy equivalent [MeV]
+pub const TAU_MASS_MEV: f64 = 1_776.82;
+
+/// Deuteron mass energy equivalent [MeV]
+pub const DEUTERON_MASS_MEV: f64 = 1_875.612_945;
+
+/// Alpha particle mass energy equivalent [MeV]
+pub const ALPHA_PARTICLE_MASS_MEV: f64 = 3_727.379_411_8;
+
+/// Helion mass energy equivalent [MeV]
+pub const HELION_MASS_MEV: f64 = 2_808.391_611_12;
+
+/// Triton mass energy equivalent [MeV]
+pub const TRITON_MASS_MEV: f64 = 2_808.921_136_68;
+
+/// Proton Compton wavelength [m]
+pub const PROTON_COMPTON_WAVELENGTH: f64 = 1.321_409_853_6e-15;
+
+/// Neutron Compton wavelength [m]
+pub const NEUTRON_COMPTON_WAVELENGTH: f64 = 1.319_590_903_82e-15;
+
+/// Muon Compton wavelength [m]
+pub const MUON_COMPTON_WAVELENGTH: f64 = 1.173_444_11e-14;
+
+/// Tau Compton wavelength [m]
+pub const TAU_COMPTON_WAVELENGTH: f64 = 6.977_71e-16;
+
+/// Neutron-electron mass ratio (dimensionless)
+pub const NEUTRON_ELECTRON_MASS_RATIO: f64 = 1_838.683_662;
+
+/// Electron-neutron mass ratio (dimensionless)
+pub const ELECTRON_NEUTRON_MASS_RATIO: f64 = 0.000_543_867_344_16;
+
+/// Muon-electron mass ratio (dimensionless)
+pub const MUON_ELECTRON_MASS_RATIO: f64 = 206.768_282_7;
+
+/// Electron-muon mass ratio (dimensionless)
+pub const ELECTRON_MUON_MASS_RATIO: f64 = 0.004_836_331_7;
+
+/// Proton-neutron mass ratio (dimensionless)
+pub const PROTON_NEUTRON_MASS_RATIO: f64 = 0.998_623_477_97;
+
+/// Neutron-proton mass ratio (dimensionless)
+pub const NEUTRON_PROTON_MASS_RATIO: f64 = 1.001_378_419_46;
+
+/// Deuteron-electron mass ratio (dimensionless)
+pub const DEUTERON_ELECTRON_MASS_RATIO: f64 = 3_670.482_967_655;
+
+/// Alpha particle-electron mass ratio (dimensionless)
+pub const ALPHA_PARTICLE_ELECTRON_MASS_RATIO: f64 = 7_294.299_541_71;
+
+/// Helion-electron mass ratio (dimensionless)
+pub const HELION_ELECTRON_MASS_RATIO: f64 = 5_495.885_279_84;
+
+/// Triton-electron mass ratio (dimensionless)
+pub const TRITON_ELECTRON_MASS_RATIO: f64 = 5_496.921_535_51;
+
+/// Tau-electron mass ratio (dimensionless)
+pub const TAU_ELECTRON_MASS_RATIO: f64 = 3_477.23;
+
+/// Electron-tau mass ratio (dimensionless)
+pub const ELECTRON_TAU_MASS_RATIO: f64 = 0.000_287_585;
 
 // ══════════════════════════════════════════════════════════════════════
 // Conversion Factors
@@ -459,6 +540,32 @@ pub fn value(name: &str) -> Option<f64> {
         "electron-proton mass ratio" => Some(ELECTRON_PROTON_MASS_RATIO),
         "proton-electron mass ratio" => Some(PROTON_ELECTRON_MASS_RATIO),
         "bohr magneton in ev/t" => Some(BOHR_MAGNETON_EV_T),
+        "compton wavelength" => Some(COMPTON_WAVELENGTH),
+        "electron mass energy equivalent in mev" => Some(ELECTRON_MASS_MEV),
+        "proton mass energy equivalent in mev" => Some(PROTON_MASS_MEV),
+        "neutron mass energy equivalent in mev" => Some(NEUTRON_MASS_MEV),
+        "muon mass energy equivalent in mev" => Some(MUON_MASS_MEV),
+        "tau mass energy equivalent in mev" => Some(TAU_MASS_MEV),
+        "deuteron mass energy equivalent in mev" => Some(DEUTERON_MASS_MEV),
+        "alpha particle mass energy equivalent in mev" => Some(ALPHA_PARTICLE_MASS_MEV),
+        "helion mass energy equivalent in mev" => Some(HELION_MASS_MEV),
+        "triton mass energy equivalent in mev" => Some(TRITON_MASS_MEV),
+        "proton compton wavelength" => Some(PROTON_COMPTON_WAVELENGTH),
+        "neutron compton wavelength" => Some(NEUTRON_COMPTON_WAVELENGTH),
+        "muon compton wavelength" => Some(MUON_COMPTON_WAVELENGTH),
+        "tau compton wavelength" => Some(TAU_COMPTON_WAVELENGTH),
+        "neutron-electron mass ratio" => Some(NEUTRON_ELECTRON_MASS_RATIO),
+        "electron-neutron mass ratio" => Some(ELECTRON_NEUTRON_MASS_RATIO),
+        "muon-electron mass ratio" => Some(MUON_ELECTRON_MASS_RATIO),
+        "electron-muon mass ratio" => Some(ELECTRON_MUON_MASS_RATIO),
+        "proton-neutron mass ratio" => Some(PROTON_NEUTRON_MASS_RATIO),
+        "neutron-proton mass ratio" => Some(NEUTRON_PROTON_MASS_RATIO),
+        "deuteron-electron mass ratio" => Some(DEUTERON_ELECTRON_MASS_RATIO),
+        "alpha particle-electron mass ratio" => Some(ALPHA_PARTICLE_ELECTRON_MASS_RATIO),
+        "helion-electron mass ratio" => Some(HELION_ELECTRON_MASS_RATIO),
+        "triton-electron mass ratio" => Some(TRITON_ELECTRON_MASS_RATIO),
+        "tau-electron mass ratio" => Some(TAU_ELECTRON_MASS_RATIO),
+        "electron-tau mass ratio" => Some(ELECTRON_TAU_MASS_RATIO),
         _ => None,
     }
 }
