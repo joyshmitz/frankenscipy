@@ -188,6 +188,79 @@ pub const CLASSICAL_ELECTRON_RADIUS: f64 = 2.817_940_326_2e-15;
 pub const COMPTON_WAVELENGTH: f64 = 2.426_310_238_67e-12;
 
 // ══════════════════════════════════════════════════════════════════════
+// Additional Physical Constants — br-wada
+// ══════════════════════════════════════════════════════════════════════
+//
+// CODATA 2022 / scipy.constants.physical_constants. Bit-exact parity
+// against scipy is locked in via FSCI-P2C-016 fixture cases.
+
+/// Faraday constant F = N_A · e [C·mol⁻¹]
+pub const FARADAY: f64 = 96_485.332_123_310_01;
+
+/// Electron g-factor (dimensionless, negative)
+pub const ELECTRON_G_FACTOR: f64 = -2.002_319_304_360_92;
+
+/// Proton g-factor (dimensionless)
+pub const PROTON_G_FACTOR: f64 = 5.585_694_689_3;
+
+/// Neutron g-factor (dimensionless, negative)
+pub const NEUTRON_G_FACTOR: f64 = -3.826_085_52;
+
+/// Muon g-factor (dimensionless, negative)
+pub const MUON_G_FACTOR: f64 = -2.002_331_841_23;
+
+/// Thomson cross section [m²]
+pub const THOMSON_CROSS_SECTION: f64 = 6.652_458_705_1e-29;
+
+/// Characteristic impedance of vacuum [Ω]
+pub const CHARACTERISTIC_IMPEDANCE_OF_VACUUM: f64 = 376.730_313_412;
+
+/// Deuteron mass [kg]
+pub const DEUTERON_MASS: f64 = 3.343_583_776_8e-27;
+
+/// Alpha particle mass [kg]
+pub const ALPHA_PARTICLE_MASS: f64 = 6.644_657_345e-27;
+
+/// Muon mass [kg]
+pub const MUON_MASS: f64 = 1.883_531_627e-28;
+
+/// Tau mass [kg]
+pub const TAU_MASS: f64 = 3.167_54e-27;
+
+/// Helion mass [kg]
+pub const HELION_MASS: f64 = 5.006_412_786_2e-27;
+
+/// Triton mass [kg]
+pub const TRITON_MASS: f64 = 5.007_356_751_2e-27;
+
+/// Molar volume of ideal gas (273.15 K, 101.325 kPa) [m³·mol⁻¹]
+pub const MOLAR_VOLUME_IDEAL_GAS: f64 = 0.022_413_969_545_014_137;
+
+/// Molar Planck constant [J·Hz⁻¹·mol⁻¹]
+pub const MOLAR_PLANCK: f64 = 3.990_312_712_893_431e-10;
+
+/// Rydberg constant times c in Hz [Hz]
+pub const RYDBERG_HZ: f64 = 3_289_841_960_250_000.0;
+
+/// Inverse fine-structure constant α⁻¹ (dimensionless)
+pub const INVERSE_FINE_STRUCTURE: f64 = 137.035_999_177;
+
+/// First radiation constant c₁ = 2π·h·c² [W·m²]
+pub const FIRST_RADIATION_CONSTANT: f64 = 3.741_771_852_192_757_3e-16;
+
+/// Second radiation constant c₂ = h·c/k [m·K]
+pub const SECOND_RADIATION_CONSTANT: f64 = 0.014_387_768_775_039_337;
+
+/// Electron-proton mass ratio (dimensionless)
+pub const ELECTRON_PROTON_MASS_RATIO: f64 = 0.000_544_617_021_488_9;
+
+/// Proton-electron mass ratio (dimensionless)
+pub const PROTON_ELECTRON_MASS_RATIO: f64 = 1_836.152_673_426;
+
+/// Bohr magneton in eV/T [eV·T⁻¹]
+pub const BOHR_MAGNETON_EV_T: f64 = 5.788_381_798_2e-5;
+
+// ══════════════════════════════════════════════════════════════════════
 // Conversion Factors
 // ══════════════════════════════════════════════════════════════════════
 
@@ -362,6 +435,30 @@ pub fn value(name: &str) -> Option<f64> {
         "atomic mass" | "u" => Some(ATOMIC_MASS),
         "mu_0" | "magnetic constant" => Some(MU_0),
         "epsilon_0" | "electric constant" => Some(EPSILON_0),
+        // br-wada additions — keys mirror scipy.constants.physical_constants
+        // exactly (case-insensitive) so value() is a drop-in for scipy's.
+        "faraday constant" | "faraday" => Some(FARADAY),
+        "electron g factor" => Some(ELECTRON_G_FACTOR),
+        "proton g factor" => Some(PROTON_G_FACTOR),
+        "neutron g factor" => Some(NEUTRON_G_FACTOR),
+        "muon g factor" => Some(MUON_G_FACTOR),
+        "thomson cross section" => Some(THOMSON_CROSS_SECTION),
+        "characteristic impedance of vacuum" => Some(CHARACTERISTIC_IMPEDANCE_OF_VACUUM),
+        "deuteron mass" => Some(DEUTERON_MASS),
+        "alpha particle mass" => Some(ALPHA_PARTICLE_MASS),
+        "muon mass" => Some(MUON_MASS),
+        "tau mass" => Some(TAU_MASS),
+        "helion mass" => Some(HELION_MASS),
+        "triton mass" => Some(TRITON_MASS),
+        "molar volume of ideal gas (273.15 k, 101.325 kpa)" => Some(MOLAR_VOLUME_IDEAL_GAS),
+        "molar planck constant" => Some(MOLAR_PLANCK),
+        "rydberg constant times c in hz" => Some(RYDBERG_HZ),
+        "inverse fine-structure constant" => Some(INVERSE_FINE_STRUCTURE),
+        "first radiation constant" => Some(FIRST_RADIATION_CONSTANT),
+        "second radiation constant" => Some(SECOND_RADIATION_CONSTANT),
+        "electron-proton mass ratio" => Some(ELECTRON_PROTON_MASS_RATIO),
+        "proton-electron mass ratio" => Some(PROTON_ELECTRON_MASS_RATIO),
+        "bohr magneton in ev/t" => Some(BOHR_MAGNETON_EV_T),
         _ => None,
     }
 }

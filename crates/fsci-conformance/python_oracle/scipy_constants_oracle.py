@@ -96,6 +96,31 @@ _CONSTANT_MAP = {
     "INCH": ("inch", None),
     "FOOT": ("foot", None),
     "DEGREE": ("degree", None),
+    # br-wada additions — scipy.constants.physical_constants keys are
+    # multi-word strings, looked up via scipy.constants.value(key).
+    # The (None, key) tuple form routes through the value() lookup.
+    "FARADAY": (None, "Faraday constant"),
+    "ELECTRON_G_FACTOR": (None, "electron g factor"),
+    "PROTON_G_FACTOR": (None, "proton g factor"),
+    "NEUTRON_G_FACTOR": (None, "neutron g factor"),
+    "MUON_G_FACTOR": (None, "muon g factor"),
+    "THOMSON_CROSS_SECTION": (None, "Thomson cross section"),
+    "CHARACTERISTIC_IMPEDANCE_OF_VACUUM": (None, "characteristic impedance of vacuum"),
+    "DEUTERON_MASS": (None, "deuteron mass"),
+    "ALPHA_PARTICLE_MASS": (None, "alpha particle mass"),
+    "MUON_MASS": (None, "muon mass"),
+    "TAU_MASS": (None, "tau mass"),
+    "HELION_MASS": (None, "helion mass"),
+    "TRITON_MASS": (None, "triton mass"),
+    "MOLAR_VOLUME_IDEAL_GAS": (None, "molar volume of ideal gas (273.15 K, 101.325 kPa)"),
+    "MOLAR_PLANCK": (None, "molar Planck constant"),
+    "RYDBERG_HZ": (None, "Rydberg constant times c in Hz"),
+    "INVERSE_FINE_STRUCTURE": (None, "inverse fine-structure constant"),
+    "FIRST_RADIATION_CONSTANT": (None, "first radiation constant"),
+    "SECOND_RADIATION_CONSTANT": (None, "second radiation constant"),
+    "ELECTRON_PROTON_MASS_RATIO": (None, "electron-proton mass ratio"),
+    "PROTON_ELECTRON_MASS_RATIO": (None, "proton-electron mass ratio"),
+    "BOHR_MAGNETON_EV_T": (None, "Bohr magneton in eV/T"),
 }
 
 
@@ -114,6 +139,10 @@ def _run_case(case: Dict[str, Any], np: Any, sc: Any) -> Dict[str, Any]:
             attr, literal = _CONSTANT_MAP[name]
             if attr is not None:
                 value = float(getattr(sc, attr))
+            elif isinstance(literal, str):
+                # br-wada: string literal means a scipy.constants.value(key)
+                # lookup by physical_constants dict key.
+                value = float(sc.value(literal))
             else:
                 value = float(literal)
             return _ok(case_id, "scalar", {"value": value})

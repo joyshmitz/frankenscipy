@@ -333,6 +333,314 @@
         "error": "unknown constant",
         "contract_ref": "fail-closed on unknown name"
       }
+    },
+    {
+      "case_id": "faraday_constant",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["FARADAY"],
+      "expected": {
+        "kind": "scalar",
+        "value": 96485.33212331001,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('Faraday constant')"
+      }
+    },
+    {
+      "case_id": "electron_g_factor",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["ELECTRON_G_FACTOR"],
+      "expected": {
+        "kind": "scalar",
+        "value": -2.00231930436092,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('electron g factor')"
+      }
+    },
+    {
+      "case_id": "proton_g_factor",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["PROTON_G_FACTOR"],
+      "expected": {
+        "kind": "scalar",
+        "value": 5.5856946893,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('proton g factor')"
+      }
+    },
+    {
+      "case_id": "neutron_g_factor",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["NEUTRON_G_FACTOR"],
+      "expected": {
+        "kind": "scalar",
+        "value": -3.82608552,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('neutron g factor')"
+      }
+    },
+    {
+      "case_id": "muon_g_factor",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["MUON_G_FACTOR"],
+      "expected": {
+        "kind": "scalar",
+        "value": -2.00233184123,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('muon g factor')"
+      }
+    },
+    {
+      "case_id": "thomson_cross_section",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["THOMSON_CROSS_SECTION"],
+      "expected": {
+        "kind": "scalar",
+        "value": 6.6524587051e-29,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('Thomson cross section')"
+      }
+    },
+    {
+      "case_id": "characteristic_impedance_of_vacuum",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["CHARACTERISTIC_IMPEDANCE_OF_VACUUM"],
+      "expected": {
+        "kind": "scalar",
+        "value": 376.730313412,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('characteristic impedance of vacuum')"
+      }
+    },
+    {
+      "case_id": "deuteron_mass",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["DEUTERON_MASS"],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.3435837768e-27,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('deuteron mass')"
+      }
+    },
+    {
+      "case_id": "alpha_particle_mass",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["ALPHA_PARTICLE_MASS"],
+      "expected": {
+        "kind": "scalar",
+        "value": 6.644657345e-27,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('alpha particle mass')"
+      }
+    },
+    {
+      "case_id": "muon_mass",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["MUON_MASS"],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.883531627e-28,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('muon mass')"
+      }
+    },
+    {
+      "case_id": "tau_mass",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["TAU_MASS"],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.16754e-27,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('tau mass')"
+      }
+    },
+    {
+      "case_id": "helion_mass",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["HELION_MASS"],
+      "expected": {
+        "kind": "scalar",
+        "value": 5.0064127862e-27,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('helion mass')"
+      }
+    },
+    {
+      "case_id": "triton_mass",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["TRITON_MASS"],
+      "expected": {
+        "kind": "scalar",
+        "value": 5.0073567512e-27,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('triton mass')"
+      }
+    },
+    {
+      "case_id": "molar_volume_ideal_gas",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["MOLAR_VOLUME_IDEAL_GAS"],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.022413969545014137,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('molar volume of ideal gas (273.15 K, 101.325 kPa)')"
+      }
+    },
+    {
+      "case_id": "molar_planck_constant",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["MOLAR_PLANCK"],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.990312712893431e-10,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('molar Planck constant')"
+      }
+    },
+    {
+      "case_id": "rydberg_constant_times_c_in_hz",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["RYDBERG_HZ"],
+      "expected": {
+        "kind": "scalar",
+        "value": 3289841960250000.0,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('Rydberg constant times c in Hz')"
+      }
+    },
+    {
+      "case_id": "inverse_fine_structure_constant",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["INVERSE_FINE_STRUCTURE"],
+      "expected": {
+        "kind": "scalar",
+        "value": 137.035999177,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('inverse fine-structure constant')"
+      }
+    },
+    {
+      "case_id": "first_radiation_constant",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["FIRST_RADIATION_CONSTANT"],
+      "expected": {
+        "kind": "scalar",
+        "value": 3.7417718521927573e-16,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('first radiation constant')"
+      }
+    },
+    {
+      "case_id": "second_radiation_constant",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["SECOND_RADIATION_CONSTANT"],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.014387768775039337,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('second radiation constant')"
+      }
+    },
+    {
+      "case_id": "electron_proton_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["ELECTRON_PROTON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0005446170214889,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('electron-proton mass ratio')"
+      }
+    },
+    {
+      "case_id": "proton_electron_mass_ratio",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["PROTON_ELECTRON_MASS_RATIO"],
+      "expected": {
+        "kind": "scalar",
+        "value": 1836.152673426,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('proton-electron mass ratio')"
+      }
+    },
+    {
+      "case_id": "bohr_magneton_in_ev_per_t",
+      "category": "fundamental_values",
+      "mode": "Strict",
+      "function": "constant_value",
+      "args": ["BOHR_MAGNETON_EV_T"],
+      "expected": {
+        "kind": "scalar",
+        "value": 5.7883817982e-05,
+        "atol": 0.0,
+        "rtol": 1e-15,
+        "contract_ref": "scipy.constants.value('Bohr magneton in eV/T')"
+      }
     }
   ]
 }

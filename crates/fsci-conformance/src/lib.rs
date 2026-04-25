@@ -12985,6 +12985,34 @@ fn constant_value_by_name(name: &str) -> Option<f64> {
         "INCH" => Some(fsci_constants::INCH),
         "FOOT" => Some(fsci_constants::FOOT),
         "DEGREE" => Some(fsci_constants::DEGREE),
+        // br-wada: 22 additional CODATA physical constants (Faraday,
+        // particle g-factors, Thomson cross section, characteristic
+        // vacuum impedance, particle masses, molar / radiation /
+        // ratio constants, Bohr magneton in eV/T).
+        "FARADAY" => Some(fsci_constants::FARADAY),
+        "ELECTRON_G_FACTOR" => Some(fsci_constants::ELECTRON_G_FACTOR),
+        "PROTON_G_FACTOR" => Some(fsci_constants::PROTON_G_FACTOR),
+        "NEUTRON_G_FACTOR" => Some(fsci_constants::NEUTRON_G_FACTOR),
+        "MUON_G_FACTOR" => Some(fsci_constants::MUON_G_FACTOR),
+        "THOMSON_CROSS_SECTION" => Some(fsci_constants::THOMSON_CROSS_SECTION),
+        "CHARACTERISTIC_IMPEDANCE_OF_VACUUM" => {
+            Some(fsci_constants::CHARACTERISTIC_IMPEDANCE_OF_VACUUM)
+        }
+        "DEUTERON_MASS" => Some(fsci_constants::DEUTERON_MASS),
+        "ALPHA_PARTICLE_MASS" => Some(fsci_constants::ALPHA_PARTICLE_MASS),
+        "MUON_MASS" => Some(fsci_constants::MUON_MASS),
+        "TAU_MASS" => Some(fsci_constants::TAU_MASS),
+        "HELION_MASS" => Some(fsci_constants::HELION_MASS),
+        "TRITON_MASS" => Some(fsci_constants::TRITON_MASS),
+        "MOLAR_VOLUME_IDEAL_GAS" => Some(fsci_constants::MOLAR_VOLUME_IDEAL_GAS),
+        "MOLAR_PLANCK" => Some(fsci_constants::MOLAR_PLANCK),
+        "RYDBERG_HZ" => Some(fsci_constants::RYDBERG_HZ),
+        "INVERSE_FINE_STRUCTURE" => Some(fsci_constants::INVERSE_FINE_STRUCTURE),
+        "FIRST_RADIATION_CONSTANT" => Some(fsci_constants::FIRST_RADIATION_CONSTANT),
+        "SECOND_RADIATION_CONSTANT" => Some(fsci_constants::SECOND_RADIATION_CONSTANT),
+        "ELECTRON_PROTON_MASS_RATIO" => Some(fsci_constants::ELECTRON_PROTON_MASS_RATIO),
+        "PROTON_ELECTRON_MASS_RATIO" => Some(fsci_constants::PROTON_ELECTRON_MASS_RATIO),
+        "BOHR_MAGNETON_EV_T" => Some(fsci_constants::BOHR_MAGNETON_EV_T),
         _ => None,
     }
 }
