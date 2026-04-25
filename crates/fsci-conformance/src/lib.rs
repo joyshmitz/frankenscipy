@@ -19937,6 +19937,45 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     }
 
     #[test]
+    fn differential_special_bessel_gamma_corner_cases_present() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-006_special_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read special fixture");
+        let fixture: SpecialPacketFixture =
+            serde_json::from_str(&raw).expect("parse special fixture");
+        let corner_cases: Vec<&SpecialCase> = fixture
+            .cases
+            .iter()
+            .filter(|case| case.case_id().starts_with("corner_"))
+            .collect();
+        assert!(
+            corner_cases.len() >= 40,
+            "expected at least 40 bessel/gamma corner cases, got {}",
+            corner_cases.len()
+        );
+        for function in [
+            SpecialCaseFunction::Gamma,
+            SpecialCaseFunction::Gammaln,
+            SpecialCaseFunction::Digamma,
+            SpecialCaseFunction::Rgamma,
+            SpecialCaseFunction::Jn,
+            SpecialCaseFunction::Yn,
+            SpecialCaseFunction::Iv,
+            SpecialCaseFunction::Kv,
+            SpecialCaseFunction::SphericalJn,
+            SpecialCaseFunction::SphericalYn,
+            SpecialCaseFunction::SphericalIn,
+            SpecialCaseFunction::SphericalKn,
+        ] {
+            assert!(
+                corner_cases.iter().any(|case| case.function == function),
+                "missing corner coverage for {function:?}"
+            );
+        }
+    }
+
+    #[test]
     fn differential_special_quota_and_structured_logs() {
         let fixture_path = HarnessConfig::default_paths()
             .fixture_root

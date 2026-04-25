@@ -477,6 +477,611 @@
       }
     },
     {
+      "case_id": "corner_gamma_neg1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [
+        -1.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "corner_gamma_neg2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [
+        -2.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "corner_gamma_neg3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [
+        -3.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "corner_gamma_neg0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [
+        -0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "corner_gamma_zero",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "corner_gammaln_neg1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gammaln",
+      "args": [
+        -1.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "corner_gammaln_neg2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gammaln",
+      "args": [
+        -2.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "corner_gammaln_neg3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gammaln",
+      "args": [
+        -3.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "corner_gammaln_zero",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gammaln",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "corner_digamma_neg1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "digamma",
+      "args": [
+        -1.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "corner_digamma_neg2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "digamma",
+      "args": [
+        -2.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "corner_digamma_neg3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "digamma",
+      "args": [
+        -3.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "nan"
+      }
+    },
+    {
+      "case_id": "corner_digamma_neg0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "digamma",
+      "args": [
+        -0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "corner_digamma_zero",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "digamma",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "corner_rgamma_neg1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "rgamma",
+      "args": [
+        -1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::rgamma"
+      }
+    },
+    {
+      "case_id": "corner_rgamma_neg3",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "rgamma",
+      "args": [
+        -3.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::rgamma"
+      }
+    },
+    {
+      "case_id": "corner_rgamma_neg0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "rgamma",
+      "args": [
+        -0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::rgamma"
+      }
+    },
+    {
+      "case_id": "corner_rgamma_zero",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "rgamma",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::rgamma"
+      }
+    },
+    {
+      "case_id": "corner_jn_n0_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "jn",
+      "args": [
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "contract_ref": "fsci_special::jn"
+      }
+    },
+    {
+      "case_id": "corner_jn_n1_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "jn",
+      "args": [
+        1.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "contract_ref": "fsci_special::jn"
+      }
+    },
+    {
+      "case_id": "corner_jn_n2_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "jn",
+      "args": [
+        2.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "contract_ref": "fsci_special::jn"
+      }
+    },
+    {
+      "case_id": "corner_jn_n0_x50",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "jn",
+      "args": [
+        0.0,
+        50.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0558123276692518,
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "contract_ref": "fsci_special::jn"
+      }
+    },
+    {
+      "case_id": "corner_jn_n1_x50",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "jn",
+      "args": [
+        1.0,
+        50.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.09751182812517514,
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "contract_ref": "fsci_special::jn"
+      }
+    },
+    {
+      "case_id": "corner_yn_n0_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "yn",
+      "args": [
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "corner_yn_n1_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "yn",
+      "args": [
+        1.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "corner_yn_n0_x50",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "yn",
+      "args": [
+        0.0,
+        50.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.09806499547007692,
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "contract_ref": "fsci_special::yn"
+      }
+    },
+    {
+      "case_id": "corner_yn_n1_x50",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "yn",
+      "args": [
+        1.0,
+        50.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.05679566856201487,
+        "atol": 0.0001,
+        "rtol": 0.0001,
+        "contract_ref": "fsci_special::yn"
+      }
+    },
+    {
+      "case_id": "corner_iv_v0p5_x1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "iv",
+      "args": [
+        0.5,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.9376748882454876,
+        "atol": 0.000001,
+        "rtol": 0.000001,
+        "contract_ref": "fsci_special::iv"
+      }
+    },
+    {
+      "case_id": "corner_iv_v0p5_x5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "iv",
+      "args": [
+        0.5,
+        5.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 26.477547497559065,
+        "atol": 0.000001,
+        "rtol": 0.000001,
+        "contract_ref": "fsci_special::iv"
+      }
+    },
+    {
+      "case_id": "corner_kv_v0p5_x1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kv",
+      "args": [
+        0.5,
+        1.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.4610685044478946,
+        "atol": 0.000001,
+        "rtol": 0.000001,
+        "contract_ref": "fsci_special::kv"
+      }
+    },
+    {
+      "case_id": "corner_kv_v0p5_x5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kv",
+      "args": [
+        0.5,
+        5.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0037766133746428825,
+        "atol": 0.000001,
+        "rtol": 0.000001,
+        "contract_ref": "fsci_special::kv"
+      }
+    },
+    {
+      "case_id": "corner_spherical_jn_n0_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_jn",
+      "args": [
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 0.000001,
+        "rtol": 0.000001,
+        "contract_ref": "fsci_special::spherical_jn"
+      }
+    },
+    {
+      "case_id": "corner_spherical_jn_n1_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_jn",
+      "args": [
+        1.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.000001,
+        "rtol": 0.000001,
+        "contract_ref": "fsci_special::spherical_jn"
+      }
+    },
+    {
+      "case_id": "corner_spherical_jn_n0_x50",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_jn",
+      "args": [
+        0.0,
+        50.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.005247497074078575,
+        "atol": 0.000001,
+        "rtol": 0.000001,
+        "contract_ref": "fsci_special::spherical_jn"
+      }
+    },
+    {
+      "case_id": "corner_spherical_yn_n0_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_yn",
+      "args": [
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "corner_spherical_yn_n1_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_yn",
+      "args": [
+        1.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "corner_spherical_yn_n0_x50",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_yn",
+      "args": [
+        0.0,
+        50.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -0.019299320569842265,
+        "atol": 0.000001,
+        "rtol": 0.000001,
+        "contract_ref": "fsci_special::spherical_yn"
+      }
+    },
+    {
+      "case_id": "corner_spherical_in_n0_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_in",
+      "args": [
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 0.00000001,
+        "rtol": 0.00000001,
+        "contract_ref": "fsci_special::spherical_in"
+      }
+    },
+    {
+      "case_id": "corner_spherical_in_n1_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_in",
+      "args": [
+        1.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.00000001,
+        "rtol": 0.00000001,
+        "contract_ref": "fsci_special::spherical_in"
+      }
+    },
+    {
+      "case_id": "corner_spherical_kn_n0_x0",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "spherical_kn",
+      "args": [
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
       "case_id": "diff_gammainc_a2_x1",
       "category": "differential",
       "mode": "Strict",
