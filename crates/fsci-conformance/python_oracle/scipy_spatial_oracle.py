@@ -97,18 +97,45 @@ def _run_case(case: Dict[str, Any], np: Any, spatial: Any, distance: Any) -> Dic
                 "values": [[float(v) for v in row] for row in result.tolist()],
             })
 
-        # Scalar pairwise-distance functions
+        # Scalar pairwise-distance functions (br-nmh2 expanded set).
         if function in {"euclidean", "cityblock", "chebyshev", "cosine", "correlation",
-                        "hamming", "jaccard", "canberra", "braycurtis", "mahalanobis"}:
+                        "hamming", "jaccard", "canberra", "braycurtis", "sqeuclidean"}:
             a = np.asarray(args[0], dtype=float)
             b = np.asarray(args[1], dtype=float)
             fn = getattr(distance, function)
-            if function == "mahalanobis" and len(args) > 2:
-                vi = np.asarray(args[2], dtype=float)
-                result = float(fn(a, b, vi))
-            else:
-                result = float(fn(a, b))
-            return _ok(case_id, "scalar", {"value": result})
+            return _ok(case_id, "scalar", {"value": float(fn(a, b))})
+
+        if function == "minkowski":
+            a = np.asarray(args[0], dtype=float)
+            b = np.asarray(args[1], dtype=float)
+            p = float(args[2])
+            return _ok(case_id, "scalar", {"value": float(distance.minkowski(a, b, p))})
+
+        if function == "seuclidean":
+            a = np.asarray(args[0], dtype=float)
+            b = np.asarray(args[1], dtype=float)
+            v = np.asarray(args[2], dtype=float)
+            return _ok(case_id, "scalar", {"value": float(distance.seuclidean(a, b, v))})
+
+        if function == "mahalanobis":
+            a = np.asarray(args[0], dtype=float)
+            b = np.asarray(args[1], dtype=float)
+            vi = np.asarray(args[2], dtype=float)
+            return _ok(case_id, "scalar", {"value": float(distance.mahalanobis(a, b, vi))})
+
+        if function == "wminkowski":
+            # scipy 1.10+ removed wminkowski in favor of minkowski(w=...).
+            # The fsci impl follows the legacy convention
+            #   ( Σᵢ (wᵢ · |aᵢ-bᵢ|)^p )^(1/p)
+            # which differs from the modern minkowski(w=…) that applies
+            # weights AFTER raising to p. Match the legacy form so both
+            # sides agree.
+            a = np.asarray(args[0], dtype=float)
+            b = np.asarray(args[1], dtype=float)
+            p = float(args[2])
+            w = np.asarray(args[3], dtype=float)
+            value = float((np.sum((w * np.abs(a - b)) ** p)) ** (1.0 / p))
+            return _ok(case_id, "scalar", {"value": value})
 
         return {
             "case_id": case_id,

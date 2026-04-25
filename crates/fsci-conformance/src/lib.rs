@@ -4927,9 +4927,12 @@ enum SpatialObserved {
 
 fn execute_spatial_case(case: &SpatialCase) -> SpatialObserved {
     match case.function.as_str() {
-        "euclidean" | "cityblock" | "chebyshev" | "cosine" | "correlation" => {
-            execute_distance_metric(case)
-        }
+        "euclidean" | "cityblock" | "chebyshev" | "cosine" | "correlation" | "hamming"
+        | "jaccard" | "canberra" | "braycurtis" | "sqeuclidean" => execute_distance_metric(case),
+        "minkowski" => execute_minkowski(case),
+        "seuclidean" => execute_seuclidean(case),
+        "mahalanobis" => execute_mahalanobis(case),
+        "wminkowski" => execute_wminkowski(case),
         "pdist" => execute_pdist(case),
         "cdist" => execute_cdist(case),
         "squareform_to_matrix" => execute_squareform_to_matrix(case),
@@ -4958,9 +4961,86 @@ fn execute_distance_metric(case: &SpatialCase) -> SpatialObserved {
         "chebyshev" => fsci_spatial::chebyshev(&a, &b),
         "cosine" => fsci_spatial::cosine(&a, &b),
         "correlation" => fsci_spatial::correlation(&a, &b),
+        "hamming" => fsci_spatial::hamming(&a, &b),
+        "jaccard" => fsci_spatial::jaccard(&a, &b),
+        "canberra" => fsci_spatial::canberra(&a, &b),
+        "braycurtis" => fsci_spatial::braycurtis(&a, &b),
+        "sqeuclidean" => fsci_spatial::sqeuclidean(&a, &b),
         _ => return SpatialObserved::Error(format!("unknown metric: {}", case.function)),
     };
     SpatialObserved::Scalar(result)
+}
+
+/// br-nmh2: scipy.spatial.distance.minkowski(a, b, p).
+fn execute_minkowski(case: &SpatialCase) -> SpatialObserved {
+    let a: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse a: {e}")),
+    };
+    let b: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse b: {e}")),
+    };
+    let p: f64 = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse p: {e}")),
+    };
+    SpatialObserved::Scalar(fsci_spatial::minkowski(&a, &b, p))
+}
+
+/// br-nmh2: scipy.spatial.distance.seuclidean(u, v, V).
+fn execute_seuclidean(case: &SpatialCase) -> SpatialObserved {
+    let a: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse a: {e}")),
+    };
+    let b: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse b: {e}")),
+    };
+    let v: Vec<f64> = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse v: {e}")),
+    };
+    SpatialObserved::Scalar(fsci_spatial::seuclidean(&a, &b, &v))
+}
+
+/// br-nmh2: scipy.spatial.distance.mahalanobis(u, v, VI).
+fn execute_mahalanobis(case: &SpatialCase) -> SpatialObserved {
+    let a: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse a: {e}")),
+    };
+    let b: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse b: {e}")),
+    };
+    let vi: Vec<Vec<f64>> = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse vi: {e}")),
+    };
+    SpatialObserved::Scalar(fsci_spatial::mahalanobis(&a, &b, &vi))
+}
+
+/// br-nmh2: scipy.spatial.distance.wminkowski(u, v, p, w).
+fn execute_wminkowski(case: &SpatialCase) -> SpatialObserved {
+    let a: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse a: {e}")),
+    };
+    let b: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse b: {e}")),
+    };
+    let p: f64 = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse p: {e}")),
+    };
+    let w: Vec<f64> = match serde_json::from_value(case.args[3].clone()) {
+        Ok(v) => v,
+        Err(e) => return SpatialObserved::Error(format!("parse w: {e}")),
+    };
+    SpatialObserved::Scalar(fsci_spatial::wminkowski(&a, &b, p, &w))
 }
 
 fn execute_pdist(case: &SpatialCase) -> SpatialObserved {
@@ -4974,10 +5054,15 @@ fn execute_pdist(case: &SpatialCase) -> SpatialObserved {
     };
     let metric = match metric_str.as_str() {
         "euclidean" => fsci_spatial::DistanceMetric::Euclidean,
+        "sqeuclidean" => fsci_spatial::DistanceMetric::SqEuclidean,
         "cityblock" => fsci_spatial::DistanceMetric::Cityblock,
         "chebyshev" => fsci_spatial::DistanceMetric::Chebyshev,
         "cosine" => fsci_spatial::DistanceMetric::Cosine,
         "correlation" => fsci_spatial::DistanceMetric::Correlation,
+        "hamming" => fsci_spatial::DistanceMetric::Hamming,
+        "jaccard" => fsci_spatial::DistanceMetric::Jaccard,
+        "canberra" => fsci_spatial::DistanceMetric::Canberra,
+        "braycurtis" => fsci_spatial::DistanceMetric::Braycurtis,
         _ => return SpatialObserved::Error(format!("unknown metric: {metric_str}")),
     };
     match fsci_spatial::pdist(&data, metric) {
@@ -5001,10 +5086,15 @@ fn execute_cdist(case: &SpatialCase) -> SpatialObserved {
     };
     let metric = match metric_str.as_str() {
         "euclidean" => fsci_spatial::DistanceMetric::Euclidean,
+        "sqeuclidean" => fsci_spatial::DistanceMetric::SqEuclidean,
         "cityblock" => fsci_spatial::DistanceMetric::Cityblock,
         "chebyshev" => fsci_spatial::DistanceMetric::Chebyshev,
         "cosine" => fsci_spatial::DistanceMetric::Cosine,
         "correlation" => fsci_spatial::DistanceMetric::Correlation,
+        "hamming" => fsci_spatial::DistanceMetric::Hamming,
+        "jaccard" => fsci_spatial::DistanceMetric::Jaccard,
+        "canberra" => fsci_spatial::DistanceMetric::Canberra,
+        "braycurtis" => fsci_spatial::DistanceMetric::Braycurtis,
         _ => return SpatialObserved::Error(format!("unknown metric: {metric_str}")),
     };
     match fsci_spatial::cdist_metric(&xa, &xb, metric) {
