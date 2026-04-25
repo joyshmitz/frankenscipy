@@ -214,6 +214,240 @@
       }
     },
     {
+      "case_id": "edge_gamma_100_large_finite",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gamma",
+      "args": [
+        100.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 9.332621544394417e155,
+        "atol": 1e144,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::gamma"
+      }
+    },
+    {
+      "case_id": "edge_gammaln_zero_pole_class",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gammaln",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "edge_digamma_zero_pole_class",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "digamma",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "edge_rgamma_zero_pole_reciprocal",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "rgamma",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::rgamma"
+      }
+    },
+    {
+      "case_id": "edge_j0_zero_endpoint",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "j0",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 1e-8,
+        "rtol": 1e-8,
+        "contract_ref": "fsci_special::j0"
+      }
+    },
+    {
+      "case_id": "edge_j1_zero_endpoint",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "j1",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::j1"
+      }
+    },
+    {
+      "case_id": "edge_y0_zero_singularity_class",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "y0",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "edge_y1_zero_singularity_class",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "y1",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "edge_iv_zero_zero_endpoint",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "iv",
+      "args": [
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::iv"
+      }
+    },
+    {
+      "case_id": "edge_kv_zero_zero_singularity_class",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kv",
+      "args": [
+        0.0,
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "edge_erfcx_zero_endpoint",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "erfcx",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 1.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::erfcx"
+      }
+    },
+    {
+      "case_id": "edge_expi_zero_singularity_class",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "expi",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "edge_expm1_underflow_boundary",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "expm1",
+      "args": [
+        -745.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": -1.0,
+        "atol": 0.0,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::expm1"
+      }
+    },
+    {
+      "case_id": "edge_ndtri_zero_boundary",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ndtri",
+      "args": [
+        0.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "neg_inf"
+      }
+    },
+    {
+      "case_id": "edge_ndtri_one_boundary",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ndtri",
+      "args": [
+        1.0
+      ],
+      "expected": {
+        "kind": "class",
+        "class": "pos_inf"
+      }
+    },
+    {
+      "case_id": "edge_ndtr_large_negative_underflow",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "ndtr",
+      "args": [
+        -40.0
+      ],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.0,
+        "atol": 1e-300,
+        "rtol": 0.0,
+        "contract_ref": "fsci_special::ndtr"
+      }
+    },
+    {
       "case_id": "diff_gammainc_a2_x1",
       "category": "differential",
       "mode": "Strict",

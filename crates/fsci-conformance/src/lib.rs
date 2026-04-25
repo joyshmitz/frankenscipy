@@ -16697,8 +16697,9 @@ mod tests {
         FftPacketFixture, HarnessConfig, IntegratePacketFixture, IoPacketFixture, LinalgCase,
         LinalgExpectedOutcome, LinalgPacketFixture, OptimizePacketFixture, OracleCaseOutput,
         OracleStatus, PacketFamily, PacketReport, PythonOracleConfig, SignalPacketFixture,
-        SparsePacketFixture, SpatialPacketFixture, SpecialPacketFixture, StatsCase, StatsExpected,
-        StatsObserved, StatsPacketFixture, ToleranceUsed, aggregate_packet_reports,
+        SparsePacketFixture, SpatialPacketFixture, SpecialCase, SpecialCaseFunction,
+        SpecialExpectedOutcome, SpecialPacketFixture, StatsCase, StatsExpected, StatsObserved,
+        StatsPacketFixture, ToleranceUsed, aggregate_packet_reports,
         compare_linalg_case_against_oracle, compare_stats_case_against_oracle, discover_fixtures,
         ensure_artifact_layout, load_array_api_contract_table, load_oracle_capture,
         resolve_array_api_contract_tolerance, run_array_api_packet, run_casp_packet,
@@ -19858,6 +19859,64 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             serde_json::to_string_pretty(&report).unwrap()
         );
         assert!(report.pass_count >= 29);
+    }
+
+    #[test]
+    fn differential_special_edge_sweep_cases_present() {
+        let fixture_path = HarnessConfig::default_paths()
+            .fixture_root
+            .join("FSCI-P2C-006_special_core.json");
+        let raw = fs::read_to_string(&fixture_path).expect("read special fixture");
+        let fixture: SpecialPacketFixture =
+            serde_json::from_str(&raw).expect("parse special fixture");
+        let edge_cases: Vec<&SpecialCase> = fixture
+            .cases
+            .iter()
+            .filter(|case| case.case_id().starts_with("edge_"))
+            .collect();
+        assert!(
+            edge_cases.len() >= 16,
+            "expected at least 16 edge sweep cases, got {}",
+            edge_cases.len()
+        );
+        assert!(
+            edge_cases
+                .iter()
+                .filter(|case| matches!(case.expected, SpecialExpectedOutcome::Class { .. }))
+                .count()
+                >= 8,
+            "edge sweep should include singularity/class checks"
+        );
+        assert!(
+            edge_cases
+                .iter()
+                .any(|case| case.function == SpecialCaseFunction::Gamma)
+        );
+        assert!(
+            edge_cases
+                .iter()
+                .any(|case| case.function == SpecialCaseFunction::Gammaln)
+        );
+        assert!(
+            edge_cases
+                .iter()
+                .any(|case| case.function == SpecialCaseFunction::Digamma)
+        );
+        assert!(
+            edge_cases
+                .iter()
+                .any(|case| case.function == SpecialCaseFunction::Y0)
+        );
+        assert!(
+            edge_cases
+                .iter()
+                .any(|case| case.function == SpecialCaseFunction::Kv)
+        );
+        assert!(
+            edge_cases
+                .iter()
+                .any(|case| case.function == SpecialCaseFunction::Ndtri)
+        );
     }
 
     #[test]
