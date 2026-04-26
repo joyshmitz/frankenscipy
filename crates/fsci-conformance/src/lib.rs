@@ -6243,7 +6243,8 @@ fn execute_signal_case(case: &SignalCase) -> SignalObserved {
     match case.function.as_str() {
         "savgol_filter" => execute_savgol_filter(case),
         "hann" | "hamming" | "blackman" | "boxcar" | "bartlett" | "flattop"
-        | "cosine" | "blackmanharris" | "barthann" => execute_window(case),
+        | "cosine" | "blackmanharris" | "barthann" | "parzen" | "bohman"
+        | "nuttall" | "lanczos" => execute_window(case),
         "kaiser" => execute_kaiser(case),
         "convolve" => execute_convolve(case),
         "correlate" => execute_correlate(case),
@@ -6294,6 +6295,13 @@ fn execute_window(case: &SignalCase) -> SignalObserved {
         "cosine" => fsci_signal::cosine(n),
         "blackmanharris" => fsci_signal::blackmanharris(n),
         "barthann" => fsci_signal::barthann(n),
+        // br-drss: q6to slice 2 — 1-arg windows. nuttall is wired but
+        // its fsci coefficients diverge from scipy's minimum-4-term
+        // Blackman-Harris convention; not exercised in fixture today.
+        "parzen" => fsci_signal::parzen(n),
+        "bohman" => fsci_signal::bohman_window(n),
+        "nuttall" => fsci_signal::nuttall_window(n),
+        "lanczos" => fsci_signal::lanczos(n),
         _ => return SignalObserved::Error(format!("unknown window: {}", case.function)),
     };
     SignalObserved::Array(result)
