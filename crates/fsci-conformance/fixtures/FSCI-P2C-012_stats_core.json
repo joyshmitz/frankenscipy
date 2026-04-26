@@ -353,11 +353,11 @@
       ],
       "expected": {
         "kind": "goodness_result",
-        "statistic": 0.991567124662354,
-        "pvalue": 0.9999918434496657,
+        "statistic": 0.9780016294384769,
+        "pvalue": 0.9492885624975852,
         "atol": 1e-6,
         "rtol": 1e-6,
-        "contract_ref": "fsci_stats::shapiro"
+        "contract_ref": "scipy.stats.shapiro([-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5])"
       }
     },
     {
