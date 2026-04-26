@@ -19546,7 +19546,7 @@ def __getattr__(name):
 
     #[test]
     fn scipy_special_oracle_rel_jn_recurrence_accepts_complex_args() {
-        let unique = format!("fsci-conformance-test-{}", super::now_unix_ms());
+        let unique = format!("fsci-conformance-test-rel-jn-cplx-{}", super::now_unix_ms());
         let root = PathBuf::from("/tmp").join(unique);
         fs::create_dir_all(&root).expect("create temp root");
         let pythonpath = root.join("pythonpath");
@@ -19689,7 +19689,7 @@ def __getattr__(name):
 
     #[test]
     fn scipy_special_oracle_unexpected_runtime_error_propagates() {
-        let unique = format!("fsci-conformance-test-{}", super::now_unix_ms());
+        let unique = format!("fsci-conformance-test-runtime-err-{}", super::now_unix_ms());
         let root = PathBuf::from("/tmp").join(unique);
         fs::create_dir_all(&root).expect("create temp root");
         let pythonpath = root.join("pythonpath");
