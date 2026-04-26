@@ -2045,6 +2045,20 @@
         "rtol": 1e-7,
         "contract_ref": "scipy.signal.windows.kaiser_bessel_derived(8, beta=8) sym=True — fsci uses i0 from a slightly different power-series truncation; ~2e-10 absolute drift on edge samples (smaller than 1 ULP of the reciprocal sqrt)."
       }
+    },
+    {
+      "case_id": "general_cosine_window_7_hann_coeffs",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "general_cosine",
+      "args": [7, [0.5, 0.5]],
+      "expected": {
+        "kind": "array",
+        "value": [0.0, 0.2499999999999999, 0.75, 1.0, 0.7500000000000002, 0.25000000000000033, 0.0],
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.signal.windows.general_cosine(7, [0.5, 0.5]) — equivalent to hann"
+      }
     }
   ]
 }

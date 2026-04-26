@@ -6252,6 +6252,8 @@ fn execute_signal_case(case: &SignalCase) -> SignalObserved {
         "exponential" => execute_exponential_window(case),
         "chebwin" => execute_chebwin(case),
         "kaiser_bessel_derived" => execute_kaiser_bessel_derived(case),
+        "taylor" => execute_taylor(case),
+        "general_cosine" => execute_general_cosine(case),
         "convolve" => execute_convolve(case),
         "correlate" => execute_correlate(case),
         "find_peaks" => execute_find_peaks(case),
@@ -6407,6 +6409,40 @@ fn execute_kaiser_bessel_derived(case: &SignalCase) -> SignalObserved {
         Ok(w) => SignalObserved::Array(w),
         Err(e) => SignalObserved::Error(format!("{e:?}")),
     }
+}
+
+// br-z3ni: taylor dispatch (n, nbar, sll, norm). sym defaults to true.
+fn execute_taylor(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let nbar: usize = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse nbar: {e}")),
+    };
+    let sll: f64 = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse sll: {e}")),
+    };
+    let norm: bool = match serde_json::from_value(case.args[3].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse norm: {e}")),
+    };
+    SignalObserved::Array(fsci_signal::taylor(n, nbar, sll, norm, true))
+}
+
+// br-z3ni: general_cosine dispatch (n, coeffs). sym=true.
+fn execute_general_cosine(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let coeffs: Vec<f64> = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse coeffs: {e}")),
+    };
+    SignalObserved::Array(fsci_signal::general_cosine(n, &coeffs, true))
 }
 
 fn execute_convolve(case: &SignalCase) -> SignalObserved {
