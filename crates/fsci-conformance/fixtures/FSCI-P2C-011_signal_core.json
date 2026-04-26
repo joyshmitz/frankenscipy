@@ -1961,6 +1961,34 @@
         "rtol": 1e-10,
         "contract_ref": "scipy.signal.windows.lanczos(7)"
       }
+    },
+    {
+      "case_id": "tukey_window_7_alpha_0_5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "tukey",
+      "args": [7, 0.5],
+      "expected": {
+        "kind": "array",
+        "value": [0.0, 0.75, 1.0, 1.0, 1.0, 0.7499999999999999, 0.0],
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.signal.windows.tukey(7, alpha=0.5)"
+      }
+    },
+    {
+      "case_id": "gaussian_window_7_std_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "gaussian",
+      "args": [7, 2.0],
+      "expected": {
+        "kind": "array",
+        "value": [0.32465246735834974, 0.6065306597126334, 0.8824969025845955, 1.0, 0.8824969025845955, 0.6065306597126334, 0.32465246735834974],
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.signal.windows.gaussian(7, std=2.0)"
+      }
     }
   ]
 }

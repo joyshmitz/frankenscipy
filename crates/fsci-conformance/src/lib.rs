@@ -6246,6 +6246,8 @@ fn execute_signal_case(case: &SignalCase) -> SignalObserved {
         | "cosine" | "blackmanharris" | "barthann" | "parzen" | "bohman"
         | "nuttall" | "lanczos" => execute_window(case),
         "kaiser" => execute_kaiser(case),
+        "tukey" => execute_tukey(case),
+        "gaussian" => execute_gaussian(case),
         "convolve" => execute_convolve(case),
         "correlate" => execute_correlate(case),
         "find_peaks" => execute_find_peaks(case),
@@ -6317,6 +6319,32 @@ fn execute_kaiser(case: &SignalCase) -> SignalObserved {
         Err(e) => return SignalObserved::Error(format!("parse beta: {e}")),
     };
     SignalObserved::Array(fsci_signal::kaiser(n, beta))
+}
+
+// br-z3ni: tukey window dispatch (m, alpha).
+fn execute_tukey(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let alpha: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse alpha: {e}")),
+    };
+    SignalObserved::Array(fsci_signal::tukey_window(n, alpha))
+}
+
+// br-z3ni: gaussian window dispatch (n, std). sym defaults to true.
+fn execute_gaussian(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let std: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse std: {e}")),
+    };
+    SignalObserved::Array(fsci_signal::gaussian(n, std, true))
 }
 
 fn execute_convolve(case: &SignalCase) -> SignalObserved {
