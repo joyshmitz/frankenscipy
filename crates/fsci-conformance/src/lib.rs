@@ -77,8 +77,8 @@ use fsci_fft::sync_audit_ledger as fft_sync_audit_ledger;
 use fsci_integrate::{
     CubatureOptions, DblquadOptions, QuadOptions, ToleranceValue, cubature, cubature_scalar,
     cumulative_simpson, cumulative_trapezoid, dblquad, fixed_quad, gauss_legendre, newton_cotes,
-    quad, quad_vec, romb, simpson, sync_audit_ledger as integrate_sync_audit_ledger, tplquad,
-    trapezoid, validate_tol, validate_tol_with_audit,
+    qmc_quad, quad, quad_vec, romb, simpson, sync_audit_ledger as integrate_sync_audit_ledger,
+    tplquad, trapezoid, validate_tol, validate_tol_with_audit,
 };
 use fsci_interpolate::{
     BSpline, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpKind as FsciInterpKind,
@@ -7986,6 +7986,7 @@ fn execute_integrate_case(case: &IntegrateCase) -> IntegrateObserved {
         "quad_vec" => execute_integrate_quad_vec(case),
         "dblquad" => execute_integrate_dblquad(case),
         "tplquad" => execute_integrate_tplquad(case),
+        "qmc_quad" => execute_integrate_qmc_quad(case),
         _ => IntegrateObserved::Error(format!("unknown function: {}", case.function)),
     }
 }
@@ -8368,6 +8369,18 @@ fn make_integrate_tplquad_func(
     }
 }
 
+// br-gm7n: vector-input integrand registry for qmc_quad. Keys are
+// shared with fixture cases — point[j] is the j-th coordinate.
+fn make_integrate_qmc_func(name: &str) -> Option<Box<dyn Fn(&[f64]) -> f64>> {
+    match name {
+        "x_squared_1d" => Some(Box::new(|p| p[0] * p[0])),
+        "sin_x_1d" => Some(Box::new(|p| p[0].sin())),
+        "x_plus_y_2d" => Some(Box::new(|p| p[0] + p[1])),
+        "exp_neg_xy_2d" => Some(Box::new(|p| (-p[0] * p[1]).exp())),
+        _ => None,
+    }
+}
+
 fn execute_integrate_quad(case: &IntegrateCase) -> IntegrateObserved {
     let Some(func_str) = case.args.func.as_deref() else {
         return IntegrateObserved::Error("quad: missing func".to_string());
@@ -8468,6 +8481,32 @@ fn execute_integrate_tplquad(case: &IntegrateCase) -> IntegrateObserved {
         |_, _| z_hi,
         options,
     ) {
+        Ok(result) => IntegrateObserved::Scalar(result.integral),
+        Err(e) => IntegrateObserved::Error(format!("{e}")),
+    }
+}
+
+// br-gm7n: qmc_quad executor. Reuses IntegrateArgs.lower/upper for the
+// hyper-rectangle, args.func for the named integrand, args.n for
+// n_points (default 1024), and a fixed n_estimates=8 to mirror scipy's
+// default. Halton is deterministic and unscrambled, so estimates are
+// disjoint segments of the same sequence rather than independent draws.
+fn execute_integrate_qmc_quad(case: &IntegrateCase) -> IntegrateObserved {
+    let Some(func_str) = case.args.func.as_deref() else {
+        return IntegrateObserved::Error("qmc_quad: missing func".to_string());
+    };
+    let Some(lb) = case.args.lower.as_ref() else {
+        return IntegrateObserved::Error("qmc_quad: missing lower".to_string());
+    };
+    let Some(ub) = case.args.upper.as_ref() else {
+        return IntegrateObserved::Error("qmc_quad: missing upper".to_string());
+    };
+    let Some(f) = make_integrate_qmc_func(func_str) else {
+        return IntegrateObserved::Error(format!("qmc_quad: unknown func: {func_str}"));
+    };
+    let n_points = case.args.n.unwrap_or(1024);
+    let n_estimates = 8usize;
+    match qmc_quad(&*f, lb, ub, n_estimates, n_points) {
         Ok(result) => IntegrateObserved::Scalar(result.integral),
         Err(e) => IntegrateObserved::Error(format!("{e}")),
     }

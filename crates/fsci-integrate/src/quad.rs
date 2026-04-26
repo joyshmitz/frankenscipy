@@ -2750,9 +2750,172 @@ where
     (mean * volume, std_err)
 }
 
+/// Result of a quasi-Monte Carlo quadrature call.
+///
+/// Mirrors `scipy.integrate.qmc_quad` return: the integral estimate
+/// (mean across `n_estimates` independent Halton blocks) and the
+/// standard error of that mean.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QmcQuadResult {
+    pub integral: f64,
+    pub standard_error: f64,
+}
+
+/// br-gm7n: van der Corput radical inverse for prime base.
+///
+/// Computes φ_b(i) = digit-reverse of i in base b ∈ (0, 1). This is the
+/// 1D building block of the Halton sequence — the d-th coordinate of
+/// Halton point i uses base = the d-th prime.
+fn van_der_corput(mut idx: usize, base: usize) -> f64 {
+    let mut q = 0.0;
+    let mut bk = 1.0 / base as f64;
+    while idx > 0 {
+        q += (idx % base) as f64 * bk;
+        idx /= base;
+        bk /= base as f64;
+    }
+    q
+}
+
+/// br-gm7n: first 32 primes, sufficient for QMC up to 32 dimensions.
+const QMC_PRIMES: [usize; 32] = [
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
+    101, 103, 107, 109, 113, 127, 131,
+];
+
+/// Quasi-Monte Carlo integration over a hyper-rectangle using a Halton
+/// sequence.
+///
+/// Mirrors `scipy.integrate.qmc_quad(f, a, b, n_estimates, n_points,
+/// qrng=Halton(scramble=False))` — runs `n_estimates` independent
+/// Halton blocks (each `n_points` long, offset along the sequence) and
+/// reports the mean across blocks plus the standard error of that mean.
+///
+/// `lb` and `ub` give the lower / upper bounds; their length sets the
+/// dimension. `f` takes a point of that dimension and returns a scalar.
+pub fn qmc_quad<F>(
+    f: F,
+    lb: &[f64],
+    ub: &[f64],
+    n_estimates: usize,
+    n_points: usize,
+) -> Result<QmcQuadResult, IntegrateValidationError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    if lb.len() != ub.len() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "qmc_quad: lb and ub must have the same length".to_string(),
+        });
+    }
+    let d = lb.len();
+    if d == 0 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "qmc_quad: at least one dimension required".to_string(),
+        });
+    }
+    if d > QMC_PRIMES.len() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "qmc_quad: dimensionality exceeds built-in prime table (max 32)".to_string(),
+        });
+    }
+    if n_estimates == 0 || n_points == 0 {
+        return Err(IntegrateValidationError::QuadInvalidTolerance {
+            detail: "qmc_quad: n_estimates and n_points must be positive".to_string(),
+        });
+    }
+
+    let mut volume = 1.0;
+    for j in 0..d {
+        if !lb[j].is_finite() || !ub[j].is_finite() {
+            return Err(IntegrateValidationError::QuadInvalidBounds {
+                detail: "qmc_quad: bounds must be finite".to_string(),
+            });
+        }
+        volume *= ub[j] - lb[j];
+    }
+
+    let mut estimates = Vec::with_capacity(n_estimates);
+    let mut point = vec![0.0; d];
+    for est in 0..n_estimates {
+        // Use a fresh contiguous Halton block for each estimate. Skip
+        // the first sample (idx=0 = origin) and offset by est*n_points
+        // so blocks are disjoint segments of the deterministic sequence.
+        let start = 1 + est * n_points;
+        let mut sum = 0.0;
+        for i in 0..n_points {
+            let idx = start + i;
+            for j in 0..d {
+                let u = van_der_corput(idx, QMC_PRIMES[j]);
+                point[j] = lb[j] + u * (ub[j] - lb[j]);
+            }
+            sum += f(&point);
+        }
+        estimates.push(sum / n_points as f64 * volume);
+    }
+
+    let n_est_f = n_estimates as f64;
+    let mean = estimates.iter().sum::<f64>() / n_est_f;
+    let standard_error = if n_estimates > 1 {
+        let var = estimates
+            .iter()
+            .map(|v| (v - mean) * (v - mean))
+            .sum::<f64>()
+            / (n_est_f - 1.0);
+        (var / n_est_f).sqrt()
+    } else {
+        0.0
+    };
+
+    Ok(QmcQuadResult {
+        integral: mean,
+        standard_error,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qmc_quad_1d_smooth_x_squared() {
+        // ∫_0^1 x^2 dx = 1/3
+        let r = qmc_quad(|x| x[0] * x[0], &[0.0], &[1.0], 8, 1024).expect("qmc_quad");
+        assert!(
+            (r.integral - 1.0 / 3.0).abs() < 1e-3,
+            "expected 1/3 ± 1e-3, got {}",
+            r.integral
+        );
+    }
+
+    #[test]
+    fn qmc_quad_2d_smooth_x_plus_y() {
+        // ∫_[0,1]^2 (x + y) dx dy = 1
+        let r = qmc_quad(|p| p[0] + p[1], &[0.0, 0.0], &[1.0, 1.0], 8, 1024).expect("qmc_quad 2d");
+        assert!(
+            (r.integral - 1.0).abs() < 1e-3,
+            "expected 1.0 ± 1e-3, got {}",
+            r.integral
+        );
+    }
+
+    #[test]
+    fn qmc_quad_1d_oscillatory_sin() {
+        // ∫_0^π sin(x) dx = 2
+        let r = qmc_quad(
+            |x| x[0].sin(),
+            &[0.0],
+            &[std::f64::consts::PI],
+            8,
+            1024,
+        )
+        .expect("qmc_quad oscillatory");
+        assert!(
+            (r.integral - 2.0).abs() < 1e-3,
+            "expected 2.0 ± 1e-3, got {}",
+            r.integral
+        );
+    }
 
     #[test]
     fn quad_constant_function() {

@@ -17,13 +17,14 @@ pub use bdf::{BdfSolver, BdfSolverConfig};
 pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
 pub use quad::{
     CompositeQuadResult, CubatureOptions, CubatureRegion, CubatureResult, CubatureRule,
-    CubatureScalarResult, CubatureStatus, DblquadOptions, DblquadResult, QuadOptions, QuadResult,
-    QuadVecResult, cubature, cubature_scalar, cumulative_simpson, cumulative_trapezoid,
-    cumulative_trapezoid_initial, cumulative_trapezoid_uniform, dblquad, dblquad_rect, fixed_quad,
-    gauss_kronrod_quad, gauss_legendre, line_integral, monte_carlo_integrate, newton_cotes,
-    newton_cotes_quad, nquad, quad, quad_cauchy_pv, quad_explain, quad_full_inf, quad_inf,
-    quad_neg_inf, quad_vec, romb, romb_func, romberg, simpson, simpson_irregular, simpson_uniform,
-    tplquad, tplquad_rect, trapezoid, trapezoid_irregular, trapezoid_richardson, trapezoid_uniform,
+    CubatureScalarResult, CubatureStatus, DblquadOptions, DblquadResult, QmcQuadResult,
+    QuadOptions, QuadResult, QuadVecResult, cubature, cubature_scalar, cumulative_simpson,
+    cumulative_trapezoid, cumulative_trapezoid_initial, cumulative_trapezoid_uniform, dblquad,
+    dblquad_rect, fixed_quad, gauss_kronrod_quad, gauss_legendre, line_integral,
+    monte_carlo_integrate, newton_cotes, newton_cotes_quad, nquad, qmc_quad, quad, quad_cauchy_pv,
+    quad_explain, quad_full_inf, quad_inf, quad_neg_inf, quad_vec, romb, romb_func, romberg,
+    simpson, simpson_irregular, simpson_uniform, tplquad, tplquad_rect, trapezoid,
+    trapezoid_irregular, trapezoid_richardson, trapezoid_uniform,
 };
 pub use rk::{
     ButcherTableau, DOP853_TABLEAU, RK23_TABLEAU, RK45_TABLEAU, RkSolver, RkSolverConfig,
