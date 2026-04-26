@@ -1411,6 +1411,78 @@
         "atol": 1e-10,
         "rtol": 1e-9
       }
+    },
+    {
+      "case_id": "br_0wg1_dct_4pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [5.000000000000001, -2.2304424973876635, 0.0, -0.15851266778110706],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_0wg1_dct_4pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [2.5, -0.7885805074747374, 0.0, -0.05604269114599564],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_0wg1_dst_ii_4pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_ii",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [4.619397662556434, -2.0, 1.913417161825449, -1.0000000000000002],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_0wg1_dst_ii_4pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_ii",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [1.6332037060954707, -0.7071067811865475, 0.6764951251827462, -0.5],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
     }
   ]
 }

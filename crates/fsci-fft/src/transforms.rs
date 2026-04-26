@@ -810,7 +810,28 @@ pub fn dct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
         let val = complex_mul(sk, twiddle);
         result.push(val.0); // take real part
     }
-
+    // br-yjas slice 2 (DCT-II): scipy normalization. Ortho scales all
+    // entries by 1/sqrt(2N) plus an extra 1/sqrt(2) on the FIRST entry.
+    // Forward applies a uniform 1/(2N).
+    let nf = n as f64;
+    match options.normalization {
+        Normalization::Backward => {}
+        Normalization::Ortho => {
+            let s = 1.0 / (2.0 * nf).sqrt();
+            for v in result.iter_mut() {
+                *v *= s;
+            }
+            if let Some(first) = result.first_mut() {
+                *first *= 1.0 / 2.0_f64.sqrt();
+            }
+        }
+        Normalization::Forward => {
+            let s = 1.0 / (2.0 * nf);
+            for v in result.iter_mut() {
+                *v *= s;
+            }
+        }
+    }
     Ok(result)
 }
 
@@ -994,6 +1015,29 @@ pub fn dst_ii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
         // Imaginary part of bin k+1 corresponds to -2 * sum_{n=0}^{N-1} x[n] * sin(...)
         // Scale by -1.0 to get 2 * sum.
         result.push(-spectrum[k + 1].1);
+    }
+    // br-yjas slice 2 (DST-II): scipy normalization. Ortho scales all
+    // entries by 1/sqrt(2N) plus an extra 1/sqrt(2) on the LAST entry
+    // (scipy DST-II convention; mirror of DCT-II's first-entry adj).
+    // Forward applies a uniform 1/(2N).
+    let nf = n as f64;
+    match options.normalization {
+        Normalization::Backward => {}
+        Normalization::Ortho => {
+            let s = 1.0 / (2.0 * nf).sqrt();
+            for v in result.iter_mut() {
+                *v *= s;
+            }
+            if let Some(last) = result.last_mut() {
+                *last *= 1.0 / 2.0_f64.sqrt();
+            }
+        }
+        Normalization::Forward => {
+            let s = 1.0 / (2.0 * nf);
+            for v in result.iter_mut() {
+                *v *= s;
+            }
+        }
     }
     Ok(result)
 }
