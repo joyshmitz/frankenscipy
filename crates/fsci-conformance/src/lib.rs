@@ -7171,6 +7171,7 @@ fn execute_stats_case(case: &StatsCase) -> StatsObserved {
         "distribution_pdf" => execute_stats_distribution_pdf(case),
         "distribution_cdf" => execute_stats_distribution_cdf(case),
         "distribution_ppf" => execute_stats_distribution_ppf(case),
+        "bootstrap_mean" => execute_stats_bootstrap_mean(case),
         _ => StatsObserved::Error(format!("unknown function: {}", case.function)),
     }
 }
@@ -7626,6 +7627,31 @@ fn execute_stats_distribution_ppf(case: &StatsCase) -> StatsObserved {
         Ok(v) => StatsObserved::Scalar(v),
         Err(e) => StatsObserved::Error(e),
     }
+}
+
+// br-7vhu: bootstrap_mean dispatch. Args: (data, n_bootstrap, confidence,
+// seed). Returns the BCa CI bounds as [lo, hi]. Expected fixtures lock
+// fsci's deterministic LCG output at fixed seed; scipy parity is
+// blocked on PRNG mismatch (scipy uses PCG64) and tracked separately.
+fn execute_stats_bootstrap_mean(case: &StatsCase) -> StatsObserved {
+    let data: Vec<f64> = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse data: {e}")),
+    };
+    let n_bootstrap: usize = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse n_bootstrap: {e}")),
+    };
+    let confidence: f64 = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse confidence: {e}")),
+    };
+    let seed: u64 = match serde_json::from_value(case.args[3].clone()) {
+        Ok(v) => v,
+        Err(e) => return StatsObserved::Error(format!("parse seed: {e}")),
+    };
+    let (lo, hi) = fsci_stats::bootstrap_mean(&data, n_bootstrap, confidence, seed);
+    StatsObserved::Array(vec![lo, hi])
 }
 
 fn compare_stats_outcome(case: &StatsCase, observed: &StatsObserved) -> (bool, String) {
