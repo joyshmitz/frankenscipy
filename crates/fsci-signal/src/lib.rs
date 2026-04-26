@@ -6659,23 +6659,21 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
     let nbar = nbar.max(1);
     let n_use = if sym { n } else { n + 1 };
 
-    // Calculate B from sidelobe level: B = 10^(-sll/20)
-    // A = arccosh(B) / pi
+    // br-y6wj: match scipy.signal.windows.taylor exactly. Two prior
+    // bugs: (a) Fm denominator was missing the factor of 2, (b) sample
+    // positions used i/(N-1) instead of scipy's centered (i - (N-1)/2)/N.
     let b = 10.0_f64.powf(sll.abs() / 20.0);
     let a = (b + (b * b - 1.0).max(0.0).sqrt()).ln() / std::f64::consts::PI;
     let a_sq = a * a;
 
-    // sigma^2 = nbar^2 / (A^2 + (nbar - 0.5)^2)
     let nbar_f = nbar as f64;
     let sigma_sq = nbar_f * nbar_f / (a_sq + (nbar_f - 0.5) * (nbar_f - 0.5));
 
-    // Calculate F_m coefficients for m = 1, ..., nbar-1
     let mut fm = vec![0.0; nbar];
     for (m, fm_m) in fm.iter_mut().enumerate().take(nbar).skip(1) {
         let mf = m as f64;
         let m_sq = mf * mf;
 
-        // Numerator: product over n=1..nbar-1 of (1 - m^2 / (sigma^2 * (A^2 + (n-0.5)^2)))
         let mut num = 1.0;
         for nn in 1..nbar {
             let nf = nn as f64;
@@ -6683,7 +6681,6 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
             num *= 1.0 - m_sq / (sigma_sq * term);
         }
 
-        // Denominator: product over n=1..nbar-1, n!=m of (1 - m^2/n^2)
         let mut den = 1.0;
         for nn in 1..nbar {
             if nn != m {
@@ -6691,8 +6688,9 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
                 den *= 1.0 - m_sq / (nf * nf);
             }
         }
+        // br-y6wj fix (a): scipy multiplies the denominator by 2.
+        den *= 2.0;
 
-        // Sign alternates: (-1)^(m+1)
         let sign = if m % 2 == 1 { 1.0 } else { -1.0 };
         *fm_m = if den.abs() > 1e-15 {
             sign * num / den
@@ -6701,11 +6699,13 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
         };
     }
 
-    // Generate window samples
+    // br-y6wj fix (b): scipy's sample positions are (i - (N-1)/2) / N.
     let nf = n_use as f64;
+    let center = (nf - 1.0) / 2.0;
     let mut w: Vec<f64> = (0..n_use)
         .map(|i| {
-            let x = (i as f64) / (nf - 1.0) - 0.5; // x in [-0.5, 0.5]
+            let pos = (i as f64) - center;
+            let x = pos / nf;
             let mut val = 1.0;
             for (m, &fm_m) in fm.iter().enumerate().take(nbar).skip(1) {
                 val += 2.0 * fm_m * (2.0 * std::f64::consts::PI * m as f64 * x).cos();
@@ -6719,12 +6719,19 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
         w.truncate(n);
     }
 
-    // Normalize if requested
+    // br-y6wj fix (c): scipy normalizes by W((M-1)/2), the value at the
+    // exact center (fractional sample for even M), not the max of sampled
+    // values. For even M the center falls between samples, so max(w) <
+    // W(center) and using max would underscale the window.
     if norm {
-        let max_val = w.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        if max_val > 1e-15 {
+        let center_x = ((nf - 1.0) / 2.0 - center) / nf;
+        let mut center_val = 1.0;
+        for (m, &fm_m) in fm.iter().enumerate().take(nbar).skip(1) {
+            center_val += 2.0 * fm_m * (2.0 * std::f64::consts::PI * m as f64 * center_x).cos();
+        }
+        if center_val.abs() > 1e-15 {
             for v in &mut w {
-                *v /= max_val;
+                *v /= center_val;
             }
         }
     }
