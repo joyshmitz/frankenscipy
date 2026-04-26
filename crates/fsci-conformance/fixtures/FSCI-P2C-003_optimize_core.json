@@ -1219,6 +1219,115 @@
         "require_converged": true,
         "contract_ref": "fsci_opt::brenth"
       }
+    },
+    {
+      "operation": "differential_evolution",
+      "case_id": "br_7470_de_rosenbrock_linear_x0_plus_x1_eq_1",
+      "category": "differential",
+      "mode": "Strict",
+      "objective": "rosenbrock2",
+      "bounds": [[-2.0, 2.0], [-1.0, 3.0]],
+      "seed": 42,
+      "tol": 1e-07,
+      "maxiter": 200,
+      "popsize": 15,
+      "constraints": [
+        {
+          "kind": "linear",
+          "A": [[1.0, 1.0]],
+          "lb": [2.0],
+          "ub": [2.0]
+        }
+      ],
+      "expected": {
+        "kind": "minimize_point",
+        "x": [1.0, 1.0],
+        "fun": 0.0,
+        "atol": 0.1,
+        "rtol": 0.1,
+        "require_success": false,
+        "contract_ref": "fsci_opt::differential_evolution_constrained — Rosenbrock + linear x[0]+x[1]=2; constrained minimum still at (1,1) with f=0 since the unconstrained minimum already lies on the constraint."
+      }
+    },
+    {
+      "operation": "differential_evolution",
+      "case_id": "br_7470_de_rastrigin_nonlinear_unit_disk",
+      "category": "differential",
+      "mode": "Strict",
+      "objective": "rastrigin2",
+      "bounds": [[-5.12, 5.12], [-5.12, 5.12]],
+      "seed": 42,
+      "tol": 1e-08,
+      "maxiter": 300,
+      "popsize": 20,
+      "constraints": [
+        {
+          "kind": "nonlinear",
+          "fn_name": "unit_disk",
+          "lb": [0.0],
+          "ub": [1.0]
+        }
+      ],
+      "expected": {
+        "kind": "minimize_point",
+        "x": [0.0, 0.0],
+        "fun": 0.0,
+        "atol": 0.1,
+        "rtol": 0.5,
+        "require_success": false,
+        "contract_ref": "fsci_opt::differential_evolution_constrained — Rastrigin + nonlinear x0^2+x1^2 ≤ 1; global minimum (0,0) is feasible."
+      }
+    },
+    {
+      "operation": "differential_evolution",
+      "case_id": "br_7470_de_sphere_box_only",
+      "category": "differential",
+      "mode": "Strict",
+      "objective": "sphere2",
+      "bounds": [[-3.0, 3.0], [-3.0, 3.0]],
+      "seed": 42,
+      "tol": 1e-08,
+      "maxiter": 100,
+      "popsize": 10,
+      "constraints": [],
+      "expected": {
+        "kind": "minimize_point",
+        "x": [0.0, 0.0],
+        "fun": 0.0,
+        "atol": 0.05,
+        "rtol": 0.05,
+        "require_success": false,
+        "contract_ref": "fsci_opt::differential_evolution — control case: empty constraints array routes to the unconstrained path."
+      }
+    },
+    {
+      "operation": "differential_evolution",
+      "case_id": "br_7470_de_sphere_linear_sum_ge_2",
+      "category": "differential",
+      "mode": "Strict",
+      "objective": "sphere2",
+      "bounds": [[-3.0, 3.0], [-3.0, 3.0]],
+      "seed": 42,
+      "tol": 1e-08,
+      "maxiter": 300,
+      "popsize": 20,
+      "constraints": [
+        {
+          "kind": "linear",
+          "A": [[1.0, 1.0]],
+          "lb": [2.0],
+          "ub": [10.0]
+        }
+      ],
+      "expected": {
+        "kind": "minimize_point",
+        "x": [1.0, 1.0],
+        "fun": 2.0,
+        "atol": 0.2,
+        "rtol": 0.2,
+        "require_success": false,
+        "contract_ref": "fsci_opt::differential_evolution_constrained — Sphere + linear x[0]+x[1] ≥ 2; constrained minimum at (1,1) with f=2 (Lagrangian KKT: gradient of x^2+y^2 ∝ constraint normal at (1,1))."
+      }
     }
   ]
 }

@@ -1417,6 +1417,45 @@ where
     })
 }
 
+/// br-7470: Penalty-based constraint handling for differential evolution.
+///
+/// Wraps the user objective with a quadratic exterior penalty: for each
+/// candidate x, the effective cost is
+///
+///     func(x) + penalty * Σ violation_j(x)^2
+///
+/// where `violation` returns the sum of squared boundary excess across
+/// all linear and nonlinear constraints. A feasible point has zero
+/// penalty; an infeasible point pays a large cost that pushes selection
+/// away. Mirrors the spirit of scipy.optimize.differential_evolution's
+/// constrained mode, which uses a feasibility-tournament with similar
+/// boundary-excess penalty (the underlying numerics differ — scipy
+/// uses a Lampinen tournament — but for unimodal global minima both
+/// converge to the same constrained optimum).
+///
+/// `constraint_violation` should return ≥ 0; zero means feasible.
+pub fn differential_evolution_constrained<F, G>(
+    func: F,
+    bounds: &[(f64, f64)],
+    constraint_violation: G,
+    opts: DifferentialEvolutionOptions,
+) -> Result<OptimizeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+    G: Fn(&[f64]) -> f64,
+{
+    const PENALTY: f64 = 1.0e6;
+    let penalized = |x: &[f64]| {
+        let v = constraint_violation(x);
+        if v <= 0.0 {
+            func(x)
+        } else {
+            func(x) + PENALTY * v * v
+        }
+    };
+    differential_evolution(penalized, bounds, opts)
+}
+
 /// Select three distinct random indices from [0, n), all different from `exclude`.
 ///
 /// Requires `n >= 4` (3 picks + 1 excluded). If n < 4, picks are allowed to

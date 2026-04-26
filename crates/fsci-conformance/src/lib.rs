@@ -823,6 +823,27 @@ pub enum OptimizeExpectedOutcome {
     },
 }
 
+// br-7470: constraint specification for differential_evolution. Tagged
+// by `kind`. `linear`: A*x ∈ [lb, ub], where A is a 2D matrix. `nonlinear`:
+// f(x) ∈ [lb, ub], where f is a named integrand from the registry. Both
+// flavors are translated into a single violation closure that returns
+// the sum of squared boundary excess across all constraints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeConstraintSpec {
+    Linear {
+        #[serde(rename = "A")]
+        a: Vec<Vec<f64>>,
+        lb: Vec<f64>,
+        ub: Vec<f64>,
+    },
+    Nonlinear {
+        fn_name: String,
+        lb: Vec<f64>,
+        ub: Vec<f64>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum OptimizeCase {
@@ -872,6 +893,11 @@ pub enum OptimizeCase {
         maxiter: Option<usize>,
         #[serde(default)]
         popsize: Option<usize>,
+        // br-7470: optional constraint set. Empty -> unconstrained DE
+        // (preserves existing case behavior). Non-empty -> penalty-based
+        // constrained DE via fsci_opt::differential_evolution_constrained.
+        #[serde(default)]
+        constraints: Vec<DeConstraintSpec>,
         expected: OptimizeExpectedOutcome,
     },
     Basinhopping {
@@ -10919,22 +10945,35 @@ fn execute_optimize_case_inner(
             tol,
             maxiter,
             popsize,
+            constraints,
             ..
         } => {
             let objective = objective.clone();
             let bounds = optimize_bounds(bounds);
             let defaults = DifferentialEvolutionOptions::default();
-            let result = differential_evolution(
-                |x| evaluate_minimize_objective(&objective, x),
-                &bounds,
-                DifferentialEvolutionOptions {
-                    seed: *seed,
-                    tol: tol.unwrap_or(defaults.tol),
-                    maxiter: maxiter.unwrap_or(defaults.maxiter),
-                    popsize: popsize.unwrap_or(defaults.popsize),
-                    ..defaults
-                },
-            )?;
+            let opts = DifferentialEvolutionOptions {
+                seed: *seed,
+                tol: tol.unwrap_or(defaults.tol),
+                maxiter: maxiter.unwrap_or(defaults.maxiter),
+                popsize: popsize.unwrap_or(defaults.popsize),
+                ..defaults
+            };
+            let result = if constraints.is_empty() {
+                differential_evolution(
+                    |x| evaluate_minimize_objective(&objective, x),
+                    &bounds,
+                    opts,
+                )?
+            } else {
+                let constraints_owned = constraints.clone();
+                let violation = move |x: &[f64]| de_constraint_violation(&constraints_owned, x);
+                fsci_opt::differential_evolution_constrained(
+                    |x| evaluate_minimize_objective(&objective, x),
+                    &bounds,
+                    violation,
+                    opts,
+                )?
+            };
             Ok(OptimizeObservedOutcome::Minimize {
                 x: result.x,
                 fun: result.fun,
@@ -11048,6 +11087,57 @@ fn execute_optimize_case_inner(
 
 fn optimize_bounds(bounds: &[[f64; 2]]) -> Vec<(f64, f64)> {
     bounds.iter().map(|[lo, hi]| (*lo, *hi)).collect()
+}
+
+// br-7470: nonlinear constraint registry. Names map to scalar-valued
+// constraint functions g(x); the spec then tests g(x) ∈ [lb[0], ub[0]].
+// Multi-output constraints can be added by extending the closure to
+// return Vec<f64>; for now we support scalar.
+fn nonlinear_constraint_eval(name: &str, x: &[f64]) -> Option<f64> {
+    let x0 = x.first().copied().unwrap_or(0.0);
+    let x1 = x.get(1).copied().unwrap_or(0.0);
+    match name {
+        // Unit-disk constraint: x0^2 + x1^2 (typically tested ≤ 1).
+        "unit_disk" => Some(x0 * x0 + x1 * x1),
+        // Sum of components — allows e.g. sum(x) >= k.
+        "sum_components" => Some(x.iter().sum()),
+        _ => None,
+    }
+}
+
+// br-7470: convert a list of DeConstraintSpec into a single scalar
+// violation summing squared boundary excess across all constraints.
+// Returns 0 for fully feasible points; positive otherwise.
+fn de_constraint_violation(constraints: &[DeConstraintSpec], x: &[f64]) -> f64 {
+    let mut total = 0.0;
+    for c in constraints {
+        match c {
+            DeConstraintSpec::Linear { a, lb, ub } => {
+                for ((row, &lo), &hi) in a.iter().zip(lb.iter()).zip(ub.iter()) {
+                    let dot: f64 = row
+                        .iter()
+                        .zip(x.iter())
+                        .map(|(&aij, &xj)| aij * xj)
+                        .sum();
+                    let below = (lo - dot).max(0.0);
+                    let above = (dot - hi).max(0.0);
+                    total += below * below + above * above;
+                }
+            }
+            DeConstraintSpec::Nonlinear { fn_name, lb, ub } => {
+                let Some(g) = nonlinear_constraint_eval(fn_name, x) else {
+                    // Unknown constraint name → treat as violated to fail loudly.
+                    return f64::INFINITY;
+                };
+                let lo = lb.first().copied().unwrap_or(f64::NEG_INFINITY);
+                let hi = ub.first().copied().unwrap_or(f64::INFINITY);
+                let below = (lo - g).max(0.0);
+                let above = (g - hi).max(0.0);
+                total += below * below + above * above;
+            }
+        }
+    }
+    total
 }
 
 fn evaluate_minimize_objective(objective: &OptimizeMinObjective, x: &[f64]) -> f64 {
