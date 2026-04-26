@@ -1989,6 +1989,34 @@
         "rtol": 1e-10,
         "contract_ref": "scipy.signal.windows.gaussian(7, std=2.0)"
       }
+    },
+    {
+      "case_id": "general_hamming_window_7_alpha_0_5",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "general_hamming",
+      "args": [7, 0.5],
+      "expected": {
+        "kind": "array",
+        "value": [0.0, 0.2499999999999999, 0.75, 1.0, 0.7500000000000002, 0.25000000000000033, 0.0],
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.signal.windows.general_hamming(7, alpha=0.5) — equivalent to hann"
+      }
+    },
+    {
+      "case_id": "exponential_window_7_tau_2",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "exponential",
+      "args": [7, 2.0],
+      "expected": {
+        "kind": "array",
+        "value": [0.22313016014842982, 0.36787944117144233, 0.6065306597126334, 1.0, 0.6065306597126334, 0.36787944117144233, 0.22313016014842982],
+        "atol": 1e-12,
+        "rtol": 1e-10,
+        "contract_ref": "scipy.signal.windows.exponential(7, tau=2.0) sym=True"
+      }
     }
   ]
 }

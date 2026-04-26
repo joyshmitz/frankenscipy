@@ -6248,6 +6248,8 @@ fn execute_signal_case(case: &SignalCase) -> SignalObserved {
         "kaiser" => execute_kaiser(case),
         "tukey" => execute_tukey(case),
         "gaussian" => execute_gaussian(case),
+        "general_hamming" => execute_general_hamming(case),
+        "exponential" => execute_exponential_window(case),
         "convolve" => execute_convolve(case),
         "correlate" => execute_correlate(case),
         "find_peaks" => execute_find_peaks(case),
@@ -6345,6 +6347,35 @@ fn execute_gaussian(case: &SignalCase) -> SignalObserved {
         Err(e) => return SignalObserved::Error(format!("parse std: {e}")),
     };
     SignalObserved::Array(fsci_signal::gaussian(n, std, true))
+}
+
+// br-z3ni: general_hamming dispatch (n, alpha).
+fn execute_general_hamming(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let alpha: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse alpha: {e}")),
+    };
+    SignalObserved::Array(fsci_signal::general_hamming(n, alpha))
+}
+
+// br-z3ni: exponential window dispatch (n, tau). sym=true, center=None.
+fn execute_exponential_window(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let tau: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse tau: {e}")),
+    };
+    match fsci_signal::exponential(n, None, tau, true) {
+        Ok(w) => SignalObserved::Array(w),
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
 }
 
 fn execute_convolve(case: &SignalCase) -> SignalObserved {
