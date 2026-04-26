@@ -1483,6 +1483,60 @@
         "atol": 1e-10,
         "rtol": 1e-9
       }
+    },
+    {
+      "case_id": "br_0wg1_dct_i_4pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_i",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [2.5, -0.6666666666666666, 0.0, -0.16666666666666666],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_0wg1_dst_i_4pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_i",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [4.866244947338651, -2.1762508994828216, 1.1487646027368057, -0.5137431483730079],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_0wg1_dst_i_4pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_i",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [1.5388417685876268, -0.6881909602355868, 0.3632712640026804, -0.1624598481164532],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
     }
   ]
 }

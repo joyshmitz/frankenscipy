@@ -896,7 +896,19 @@ pub fn dct_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> 
     let backend = resolve_backend(options.backend);
     let spectrum = backend.transform_1d_unscaled(&extended, false);
 
-    Ok(spectrum.into_iter().take(n).map(|v| v.0).collect())
+    let mut result: Vec<f64> = spectrum.into_iter().take(n).map(|v| v.0).collect();
+    // br-0wg1: forward normalization for DCT-I is uniform 1/(2*(N-1)).
+    // Ortho normalization requires input-side x[0]/x[N-1] sqrt(2)
+    // adjustment plus a result-side 1/sqrt(N-1) factor; deferred to a
+    // separate slice (the input-modify path doesn't compose with the
+    // post-loop scaler).
+    if let Normalization::Forward = options.normalization {
+        let s = 1.0 / (2.0 * (n - 1) as f64);
+        for v in result.iter_mut() {
+            *v *= s;
+        }
+    }
+    Ok(result)
 }
 
 /// Discrete Cosine Transform Type III.
@@ -984,6 +996,19 @@ pub fn dst_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> 
     let mut result = Vec::with_capacity(n);
     for val in spectrum.iter().take(n + 1).skip(1) {
         result.push(-val.1); // -Im part corresponds to 2 * sum
+    }
+    // br-0wg1: DST-I normalization is uniform — ortho divides by
+    // sqrt(2*(N+1)), forward by 2*(N+1).
+    let nf = (n + 1) as f64;
+    let scale = match options.normalization {
+        Normalization::Backward => 1.0,
+        Normalization::Ortho => 1.0 / (2.0 * nf).sqrt(),
+        Normalization::Forward => 1.0 / (2.0 * nf),
+    };
+    if (scale - 1.0).abs() > f64::EPSILON {
+        for v in result.iter_mut() {
+            *v *= scale;
+        }
     }
     Ok(result)
 }
