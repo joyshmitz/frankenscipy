@@ -1525,13 +1525,13 @@
       "mode": "Strict",
       "function": "btdtria",
       "args": [
-        0.9999999999999999,
+        0.9999999999999998,
         13.584377534422599,
         0.9654253202433963
       ],
       "expected": {
         "kind": "scalar",
-        "value": 5.915066688085389,
+        "value": 6.500293340049934,
         "atol": 2e-10,
         "rtol": 2e-10,
         "contract_ref": "fsci_special::btdtria"
@@ -1562,12 +1562,12 @@
       "function": "btdtrib",
       "args": [
         0.04395757565162919,
-        0.9999999999999999,
+        0.9999999999999998,
         0.7611845908830768
       ],
       "expected": {
         "kind": "scalar",
-        "value": 21.60864146301538,
+        "value": 21.139084078921783,
         "atol": 2e-10,
         "rtol": 2e-10,
         "contract_ref": "fsci_special::btdtrib"
