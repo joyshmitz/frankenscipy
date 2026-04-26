@@ -211,6 +211,7 @@ def _run_case(case: dict[str, Any], stats: Any) -> dict[str, Any]:
                 "Rayleigh": ("rayleigh", lambda p: {"scale": p[0]}),
                 "Logistic": ("logistic", lambda p: {"loc": p[0], "scale": p[1]}),
                 "Laplace": ("laplace", lambda p: {"loc": p[0], "scale": p[1]}),
+                "FDistribution": ("f", lambda p: {"dfn": p[0], "dfd": p[1]}),
             }
             if dist_name not in scipy_name_map:
                 return {

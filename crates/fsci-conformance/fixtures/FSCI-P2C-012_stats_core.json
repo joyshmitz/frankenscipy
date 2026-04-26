@@ -1021,6 +1021,34 @@
         "rtol": 1e-10,
         "contract_ref": "scipy.stats.laplace.cdf(0, 0, 1) = 1/2"
       }
+    },
+    {
+      "case_id": "br_a6qx_fdist_pdf",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_pdf",
+      "args": ["FDistribution", [5.0, 10.0], 1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.4954797834866395,
+        "atol": 1e-9,
+        "rtol": 1e-7,
+        "contract_ref": "scipy.stats.f.pdf(1, dfn=5, dfd=10)"
+      }
+    },
+    {
+      "case_id": "br_a6qx_fdist_cdf",
+      "category": "distribution",
+      "mode": "Strict",
+      "function": "distribution_cdf",
+      "args": ["FDistribution", [5.0, 10.0], 1.0],
+      "expected": {
+        "kind": "scalar",
+        "value": 0.5348805734621996,
+        "atol": 1e-9,
+        "rtol": 1e-7,
+        "contract_ref": "scipy.stats.f.cdf(1, dfn=5, dfd=10)"
+      }
     }
   ]
 }

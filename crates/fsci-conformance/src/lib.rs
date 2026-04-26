@@ -7423,6 +7423,22 @@ fn evaluate_distribution_method(
                 _ => return Err(format!("unsupported method: {method}")),
             })
         }
+        // br-a6qx slice 2 deferral closure: F-distribution
+        "FDistribution" => {
+            if params.len() != 2 {
+                return Err(format!("FDistribution requires (dfn, dfd), got {params:?}"));
+            }
+            let d = fsci_stats::FDistribution {
+                dfn: params[0],
+                dfd: params[1],
+            };
+            Ok(match method {
+                "pdf" => d.pdf(x),
+                "cdf" => d.cdf(x),
+                "ppf" => d.ppf(x),
+                _ => return Err(format!("unsupported method: {method}")),
+            })
+        }
         other => Err(format!("unsupported distribution: {other}")),
     }
 }
