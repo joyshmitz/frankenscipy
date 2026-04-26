@@ -5406,9 +5406,23 @@ pub fn eigsh(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<Eigs
     let mut total_matvec = 0;
 
     for _eig_idx in 0..k {
-        // Power iteration for the largest eigenvalue of A - sum(λ_i v_i v_i^T)
-        let mut v = vec![1.0 / (n as f64).sqrt(); n];
-        // Normalize initial vector
+        // br-oyy7: Power iteration is mathematically guaranteed to find
+        // the dominant eigenvalue only when the initial vector has a
+        // nonzero projection onto its eigenvector. The constant vector
+        // [1/√n, …, 1/√n] is orthogonal to every alternating-sign mode
+        // (e.g. the dominant eigenvector of a path Laplacian), so on
+        // structured matrices the iteration silently converges to the
+        // wrong eigenvalue. Seed instead with a deterministic LCG-based
+        // pseudo-random vector — orthogonal to no eigenmode in general.
+        let mut v = vec![0.0f64; n];
+        let mut rng_state: u64 = 0x9e3779b97f4a7c15;
+        for vi in v.iter_mut() {
+            rng_state = rng_state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let u = ((rng_state >> 11) as f64) / (1u64 << 53) as f64;
+            *vi = u - 0.5;
+        }
         let v_norm = vec_norm(&v);
         if v_norm > 0.0 {
             for vi in &mut v {

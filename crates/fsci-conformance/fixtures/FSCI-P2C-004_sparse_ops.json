@@ -1278,6 +1278,33 @@
         "atol": 1e-05,
         "rtol": 1e-05
       }
+    },
+    {
+      "case_id": "eigsh_tridiag_4x4_top2",
+      "category": "differential",
+      "mode": "Strict",
+      "operation": "eigsh",
+      "format": "csr",
+      "rows": 4,
+      "cols": 4,
+      "data": [
+        2.0, -1.0,
+        -1.0, 2.0, -1.0,
+        -1.0, 2.0, -1.0,
+        -1.0, 2.0
+      ],
+      "row_indices": [0, 0, 1, 1, 1, 2, 2, 2, 3, 3],
+      "col_indices": [0, 1, 0, 1, 2, 1, 2, 3, 2, 3],
+      "k": 2,
+      "expected": {
+        "kind": "eigenvalues_abs_sorted",
+        "values": [
+          3.6180339887498949,
+          2.6180339887498949
+        ],
+        "atol": 1e-06,
+        "rtol": 1e-06
+      }
     }
   ]
 }
