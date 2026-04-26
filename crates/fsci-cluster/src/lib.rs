@@ -399,6 +399,252 @@ pub enum LinkageMethod {
     Median,
 }
 
+// br-6m7l: indexed min-heap mirroring scipy's _structures.pxi Heap.
+// Stores values keyed by 0..n. sift_down/sift_up use strict `>` so
+// ties don't swap, preserving the order set by build_heap. Used by
+// linkage_fast for Centroid/Median tie-break parity with scipy.
+struct IndexedMinHeap {
+    values: Vec<f64>,
+    key_by_index: Vec<usize>,
+    index_by_key: Vec<usize>,
+    size: usize,
+}
+
+impl IndexedMinHeap {
+    fn new(values: Vec<f64>) -> Self {
+        let n = values.len();
+        let mut h = IndexedMinHeap {
+            values,
+            key_by_index: (0..n).collect(),
+            index_by_key: (0..n).collect(),
+            size: n,
+        };
+        for i in (0..n / 2).rev() {
+            h.sift_down(i);
+        }
+        h
+    }
+
+    fn get_min(&self) -> (usize, f64) {
+        (self.key_by_index[0], self.values[0])
+    }
+
+    fn remove_min(&mut self) {
+        if self.size == 0 {
+            return;
+        }
+        self.swap(0, self.size - 1);
+        self.size -= 1;
+        if self.size > 0 {
+            self.sift_down(0);
+        }
+    }
+
+    fn change_value(&mut self, key: usize, value: f64) {
+        let index = self.index_by_key[key];
+        let old = self.values[index];
+        self.values[index] = value;
+        if value < old {
+            self.sift_up(index);
+        } else {
+            self.sift_down(index);
+        }
+    }
+
+    fn swap(&mut self, i: usize, j: usize) {
+        if i == j {
+            return;
+        }
+        self.values.swap(i, j);
+        let ki = self.key_by_index[i];
+        let kj = self.key_by_index[j];
+        self.key_by_index.swap(i, j);
+        self.index_by_key[ki] = j;
+        self.index_by_key[kj] = i;
+    }
+
+    fn sift_up(&mut self, mut index: usize) {
+        while index > 0 {
+            let parent = (index - 1) / 2;
+            if self.values[parent] > self.values[index] {
+                self.swap(index, parent);
+                index = parent;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn sift_down(&mut self, mut index: usize) {
+        loop {
+            let left = 2 * index + 1;
+            if left >= self.size {
+                return;
+            }
+            let mut child = left;
+            let right = left + 1;
+            if right < self.size && self.values[right] < self.values[left] {
+                child = right;
+            }
+            if self.values[index] > self.values[child] {
+                self.swap(index, child);
+                index = child;
+            } else {
+                return;
+            }
+        }
+    }
+}
+
+// br-6m7l: scan upper-triangular row x for the lowest-index active
+// neighbor with smallest distance. Mirrors scipy's find_min_dist.
+fn find_min_dist_row(d: &[Vec<f64>], size: &[usize], x: usize, n: usize) -> (Option<usize>, f64) {
+    let mut current_min = f64::INFINITY;
+    let mut y_out: Option<usize> = None;
+    for i in (x + 1)..n {
+        if size[i] == 0 {
+            continue;
+        }
+        let dist = d[x][i];
+        if dist < current_min {
+            current_min = dist;
+            y_out = Some(i);
+        }
+    }
+    (y_out, current_min)
+}
+
+// br-6m7l: scipy's fast_linkage algorithm ported to Rust. Used for
+// Centroid and Median methods to match scipy's heap-based tie-break
+// when multiple inter-cluster distances coincide. Lance-Williams
+// updates are inlined per method.
+fn linkage_fast(
+    n: usize,
+    initial_d: &[Vec<f64>],
+    method: LinkageMethod,
+) -> Vec<[f64; 4]> {
+    let mut d = initial_d.to_vec();
+    let mut size = vec![1usize; n];
+    let mut cluster_id: Vec<usize> = (0..n).collect();
+    let mut neighbor = vec![0usize; n.saturating_sub(1)];
+    let mut min_dist_arr = vec![f64::INFINITY; n.saturating_sub(1)];
+
+    for x in 0..n.saturating_sub(1) {
+        let (y_opt, dist) = find_min_dist_row(&d, &size, x, n);
+        neighbor[x] = y_opt.unwrap_or(x);
+        min_dist_arr[x] = dist;
+    }
+    let mut heap = IndexedMinHeap::new(min_dist_arr.clone());
+
+    let mut z: Vec<[f64; 4]> = Vec::with_capacity(n.saturating_sub(1));
+    for k in 0..n.saturating_sub(1) {
+        // Pop from heap until cached neighbor matches current D.
+        let mut x = 0usize;
+        let mut y = 0usize;
+        let mut dist = 0.0f64;
+        for _ in 0..(n - k) {
+            let (xk, dk) = heap.get_min();
+            x = xk;
+            dist = dk;
+            y = neighbor[x];
+            if dist == d[x][y] {
+                break;
+            }
+            // Stale; recompute from scratch.
+            let (y_new_opt, dist_new) = find_min_dist_row(&d, &size, x, n);
+            if let Some(y_new) = y_new_opt {
+                y = y_new;
+                dist = dist_new;
+                neighbor[x] = y_new;
+                heap.change_value(x, dist_new);
+            } else {
+                heap.change_value(x, f64::INFINITY);
+            }
+        }
+        heap.remove_min();
+
+        let nx = size[x];
+        let ny = size[y];
+        let mut id_x = cluster_id[x];
+        let mut id_y = cluster_id[y];
+        if id_x > id_y {
+            std::mem::swap(&mut id_x, &mut id_y);
+        }
+        z.push([id_x as f64, id_y as f64, dist, (nx + ny) as f64]);
+
+        size[x] = 0;
+        size[y] = nx + ny;
+        cluster_id[y] = n + k;
+
+        // Lance-Williams update of D for column y.
+        for zi in 0..n {
+            if size[zi] == 0 || zi == y {
+                continue;
+            }
+            let d_zx = d[zi.min(x)][zi.max(x)];
+            let d_zy = d[zi.min(y)][zi.max(y)];
+            let new_d = match method {
+                LinkageMethod::Centroid => {
+                    let nif = nx as f64;
+                    let njf = ny as f64;
+                    let nt = nif + njf;
+                    let alpha_i = nif / nt;
+                    let alpha_j = njf / nt;
+                    let beta = -(nif * njf) / (nt * nt);
+                    (alpha_i * d_zx * d_zx + alpha_j * d_zy * d_zy + beta * dist * dist)
+                        .max(0.0)
+                        .sqrt()
+                }
+                LinkageMethod::Median => {
+                    (0.5 * d_zx * d_zx + 0.5 * d_zy * d_zy - 0.25 * dist * dist)
+                        .max(0.0)
+                        .sqrt()
+                }
+                _ => unreachable!("linkage_fast only for Centroid/Median"),
+            };
+            // Store symmetrically.
+            let lo = zi.min(y);
+            let hi = zi.max(y);
+            d[lo][hi] = new_d;
+            d[hi][lo] = new_d;
+        }
+
+        // Reassign neighbor pointers that referenced the just-killed x.
+        for zi in 0..x {
+            if size[zi] > 0 && neighbor[zi] == x {
+                neighbor[zi] = y;
+            }
+        }
+
+        // Update lower bounds: any zi < y whose neighbor distance to y
+        // tightened gets updated.
+        for zi in 0..y {
+            if size[zi] == 0 {
+                continue;
+            }
+            let dz = d[zi][y];
+            if dz < min_dist_arr[zi] {
+                neighbor[zi] = y;
+                min_dist_arr[zi] = dz;
+                heap.change_value(zi, dz);
+            }
+        }
+
+        // Rescan neighbor for y.
+        if y < n - 1 {
+            let (z_opt, dist_y) = find_min_dist_row(&d, &size, y, n);
+            if let Some(z_new) = z_opt {
+                neighbor[y] = z_new;
+                min_dist_arr[y] = dist_y;
+                heap.change_value(y, dist_y);
+            } else {
+                heap.change_value(y, f64::INFINITY);
+            }
+        }
+    }
+    z
+}
+
 /// Hierarchical clustering linkage matrix.
 ///
 /// Each row [i, j, dist, count] represents a merge: clusters i and j
@@ -427,6 +673,15 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
             dist_mat[i][j] = d;
             dist_mat[j][i] = d;
         }
+    }
+
+    // br-6m7l: scipy uses fast_linkage (heap-based "Generic Clustering
+    // Algorithm" from Mullner 2011) for Centroid/Median; fsci's simpler
+    // O(n^3) scan diverges from scipy on tie-break of the column-0/1
+    // cluster IDs. Route those two methods through the heap path so the
+    // resulting linkage matrix matches scipy element-for-element.
+    if matches!(method, LinkageMethod::Centroid | LinkageMethod::Median) {
+        return Ok(linkage_fast(n, &dist_mat, method));
     }
 
     // Active cluster tracking
