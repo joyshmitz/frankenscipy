@@ -1456,6 +1456,14 @@ pub fn barthann(m: usize) -> Vec<f64> {
 /// Nuttall window (minimum 4-term Blackman-Harris).
 ///
 /// Matches `scipy.signal.windows.nuttall(M)`.
+///
+/// br-z3ni: scipy's "nuttall" is the "minimum 4-term Blackman-Harris"
+/// variant (Nuttall 1981, table II, "Min 4-term"). fsci previously
+/// used the standard continuous-flattop Nuttall coefficients
+/// [0.355768, 0.487396, 0.144232, 0.012604] which are a different
+/// point on the same coefficient table. The scipy-compatible
+/// coefficients [0.3635819, 0.4891775, 0.1365995, 0.0106411] are now
+/// used so parity fixtures pass.
 pub fn nuttall_window(m: usize) -> Vec<f64> {
     if m == 0 {
         return Vec::new();
@@ -1467,8 +1475,8 @@ pub fn nuttall_window(m: usize) -> Vec<f64> {
     (0..m)
         .map(|i| {
             let x = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
-            0.355_768 - 0.487_396 * x.cos() + 0.144_232 * (2.0 * x).cos()
-                - 0.012_604 * (3.0 * x).cos()
+            0.363_581_9 - 0.489_177_5 * x.cos() + 0.136_599_5 * (2.0 * x).cos()
+                - 0.010_641_1 * (3.0 * x).cos()
         })
         .collect()
 }

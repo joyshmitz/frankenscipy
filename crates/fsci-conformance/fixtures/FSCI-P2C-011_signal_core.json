@@ -1935,6 +1935,20 @@
       }
     },
     {
+      "case_id": "nuttall_window_7",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "nuttall",
+      "args": [7],
+      "expected": {
+        "kind": "array",
+        "value": [0.0003628000000000381, 0.06133449999999996, 0.5292298, 1.0, 0.5292298000000003, 0.06133450000000015, 0.0003628000000000381],
+        "atol": 1e-10,
+        "rtol": 1e-9,
+        "contract_ref": "scipy.signal.windows.nuttall(7) — minimum 4-term Blackman-Harris (Nuttall 1981)"
+      }
+    },
+    {
       "case_id": "lanczos_window_7",
       "category": "differential",
       "mode": "Strict",
