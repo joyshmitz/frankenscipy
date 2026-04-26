@@ -883,32 +883,49 @@ pub fn dct_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> 
         return Ok(vec![input[0]]);
     }
 
-    // DCT-I via FFT of length 2N-2
-    let m = 2 * n - 2;
-    let mut extended = vec![(0.0, 0.0); m];
-    for i in 0..n {
-        extended[i] = (input[i], 0.0);
-    }
-    for i in 1..n - 1 {
-        extended[m - i] = (input[i], 0.0);
-    }
+    let compute_backward = |src: &[f64]| -> Vec<f64> {
+        let m = 2 * n - 2;
+        let mut extended = vec![(0.0, 0.0); m];
+        for i in 0..n {
+            extended[i] = (src[i], 0.0);
+        }
+        for i in 1..n - 1 {
+            extended[m - i] = (src[i], 0.0);
+        }
+        let backend = resolve_backend(options.backend);
+        let spectrum = backend.transform_1d_unscaled(&extended, false);
+        spectrum.into_iter().take(n).map(|v| v.0).collect()
+    };
 
-    let backend = resolve_backend(options.backend);
-    let spectrum = backend.transform_1d_unscaled(&extended, false);
-
-    let mut result: Vec<f64> = spectrum.into_iter().take(n).map(|v| v.0).collect();
-    // br-0wg1: forward normalization for DCT-I is uniform 1/(2*(N-1)).
-    // Ortho normalization requires input-side x[0]/x[N-1] sqrt(2)
-    // adjustment plus a result-side 1/sqrt(N-1) factor; deferred to a
-    // separate slice (the input-modify path doesn't compose with the
-    // post-loop scaler).
-    if let Normalization::Forward = options.normalization {
-        let s = 1.0 / (2.0 * (n - 1) as f64);
-        for v in result.iter_mut() {
-            *v *= s;
+    let nm1 = (n - 1) as f64;
+    match options.normalization {
+        Normalization::Backward => Ok(compute_backward(input)),
+        Normalization::Forward => {
+            let mut result = compute_backward(input);
+            let s = 1.0 / (2.0 * nm1);
+            for v in result.iter_mut() {
+                *v *= s;
+            }
+            Ok(result)
+        }
+        Normalization::Ortho => {
+            // br-mhnr: scipy DCT-I ortho. Pre-scale x[0] and x[N-1] by
+            // sqrt(2), compute backward DCT-I, post-scale result[0] and
+            // result[N-1] by 1/sqrt(2), then scale all by 1/sqrt(2*(N-1)).
+            let sqrt2 = 2.0_f64.sqrt();
+            let mut adjusted = input.to_vec();
+            adjusted[0] *= sqrt2;
+            adjusted[n - 1] *= sqrt2;
+            let mut result = compute_backward(&adjusted);
+            result[0] /= sqrt2;
+            result[n - 1] /= sqrt2;
+            let s = 1.0 / (2.0 * nm1).sqrt();
+            for v in result.iter_mut() {
+                *v *= s;
+            }
+            Ok(result)
         }
     }
-    Ok(result)
 }
 
 /// Discrete Cosine Transform Type III.
@@ -922,12 +939,31 @@ pub fn dct_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    // DCT-III is scaled IDCT-II
-    let idct_result = idct(input, options)?;
-    Ok(idct_result
-        .into_iter()
-        .map(|v| v * 2.0 * n as f64)
-        .collect())
+    let nf = n as f64;
+
+    // br-mhnr: DCT-III normalization. fsci's `idct` always returns the
+    // 1/(2N)-scaled inverse, so dct_iii_backward = 2N * idct(x). For
+    // forward we want dct_iii_backward / (2N) = idct(x). For ortho we
+    // pre-scale input[0] by sqrt(2), compute backward DCT-III, then scale
+    // all entries by 1/sqrt(2N) — this matches scipy's
+    //   y[k] = sqrt(1/N)*x[0] + sqrt(2/N)*sum_{n>=1} x[n]*cos(...)
+    let backward_opts = options.clone().with_normalization(Normalization::Backward);
+    match options.normalization {
+        Normalization::Backward => {
+            let idct_result = idct(input, &backward_opts)?;
+            Ok(idct_result.into_iter().map(|v| v * 2.0 * nf).collect())
+        }
+        Normalization::Forward => idct(input, &backward_opts),
+        Normalization::Ortho => {
+            let mut adjusted = input.to_vec();
+            adjusted[0] *= 2.0_f64.sqrt();
+            let idct_result = idct(&adjusted, &backward_opts)?;
+            // dct_iii_backward(adjusted) * (1/sqrt(2N)) = (2N * idct) / sqrt(2N)
+            //                                          = idct * sqrt(2N)
+            let scale = (2.0 * nf).sqrt();
+            Ok(idct_result.into_iter().map(|v| v * scale).collect())
+        }
+    }
 }
 
 /// Discrete Cosine Transform Type IV.
@@ -1078,29 +1114,49 @@ pub fn dst_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    // DST-III via FFT of length 4N (inverse of DST-II)
-    let m = 4 * n;
-    let mut extended = vec![(0.0, 0.0); m];
-    for k in 0..n - 1 {
-        extended[k + 1] = (0.0, -input[k]);
-        extended[m - k - 1] = (0.0, input[k]);
-    }
-    // The last term X[N-1] has a 1/2 factor in the standard DST-III formula
-    let last_val = input[n - 1] * 0.5;
-    extended[n] = (0.0, -last_val);
-    extended[m - n] = (0.0, last_val);
+    let nf = n as f64;
 
-    let backend = resolve_backend(options.backend);
-    let time_domain = backend.transform_1d_unscaled(&extended, true);
+    // br-mhnr: DST-III normalization. Backward is the raw 2*sum result;
+    // forward divides by 2N; ortho pre-scales x[N-1] by sqrt(2) (the lone
+    // unpaired term in scipy's ortho formula) then applies 1/sqrt(2N).
+    let compute_backward = |src: &[f64]| -> Vec<f64> {
+        let m = 4 * n;
+        let mut extended = vec![(0.0, 0.0); m];
+        for k in 0..n - 1 {
+            extended[k + 1] = (0.0, -src[k]);
+            extended[m - k - 1] = (0.0, src[k]);
+        }
+        let last_val = src[n - 1] * 0.5;
+        extended[n] = (0.0, -last_val);
+        extended[m - n] = (0.0, last_val);
 
-    let mut result = Vec::with_capacity(n);
-    for i in 0..n {
-        // The raw sum from IFFT of the 4N-length extended signal produces 2 * sum
-        // of the terms in the standard DST-III definition.
-        // matches SciPy's unnormalized dst(type=3) result.
-        result.push(time_domain[2 * i + 1].0);
+        let backend = resolve_backend(options.backend);
+        let time_domain = backend.transform_1d_unscaled(&extended, true);
+
+        (0..n).map(|i| time_domain[2 * i + 1].0).collect()
+    };
+
+    match options.normalization {
+        Normalization::Backward => Ok(compute_backward(input)),
+        Normalization::Forward => {
+            let mut result = compute_backward(input);
+            let s = 1.0 / (2.0 * nf);
+            for v in result.iter_mut() {
+                *v *= s;
+            }
+            Ok(result)
+        }
+        Normalization::Ortho => {
+            let mut adjusted = input.to_vec();
+            adjusted[n - 1] *= 2.0_f64.sqrt();
+            let mut result = compute_backward(&adjusted);
+            let s = 1.0 / (2.0 * nf).sqrt();
+            for v in result.iter_mut() {
+                *v *= s;
+            }
+            Ok(result)
+        }
     }
-    Ok(result)
 }
 
 /// Discrete Sine Transform Type IV.

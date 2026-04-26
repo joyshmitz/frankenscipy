@@ -1537,6 +1537,204 @@
         "atol": 1e-10,
         "rtol": 1e-9
       }
+    },
+    {
+      "case_id": "br_mhnr_dct_i_4pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_i",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [4.927992798267445, -2.1402990980327403, 0.8455098936288139, -0.6473946022019632],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dct_iii_8pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_iii",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [9.937328147736029, -8.797114582632775, 3.7504887403404807, -2.9486733972134647, 1.7408914602432604, -1.2598094346029334, 0.649581027402848, -0.24426483652725306],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dct_iii_8pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_iii",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [2.4584436892856885, -2.2251669933065124, 0.9117338374368018, -0.7630566969516845, 0.4093345174124967, -0.3408407062990518, 0.13650690920239356, -0.08695455678013175],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dst_iii_8pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_iii",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [13.839285739723373, -2.3118391278610186, 1.3909457015251094, -1.139020979979982, 1.0376163344606901, -0.9891398940531161, 0.9649295260531373, -0.9546396943130979],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dst_iii_8pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_iii",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [3.2527146537442952, -0.3708530007787071, 0.1406296441947298, -0.07764846380844781, 0.05229730242862485, -0.04017819232673147, 0.03412560032673676, -0.031553142391726796],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dct_5pt_backward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct",
+      "normalization": "backward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [30.0, -9.959593139531123, 1.1102230246251565e-16, -0.8980559531591706, 8.881784197001252e-16],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dct_5pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [6.708203932499369, -3.149499888950552, 5.551115123125783e-17, -0.28399022782564654, 2.220446049250313e-16],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dct_5pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [3.0, -0.9959593139531122, 6.938893903907228e-18, -0.08980559531591706, 0.0],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dst_i_5pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_i",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [6.464101615137754, -3.0, 1.7320508075688772, -0.9999999999999999, 0.4641016151377545],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dst_iv_5pt_backward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_iv",
+      "normalization": "backward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [23.376407215616254, -1.060165913226596, 1.4142135623730951, 0.2752362284621616, 0.5864119240420234],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dct_iv_5pt_backward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_iv",
+      "normalization": "backward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [14.978312113381715, -14.276301500738196, 7.0710678118654755, -6.458721197344005, 5.4883788306859955],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
     }
   ]
 }
