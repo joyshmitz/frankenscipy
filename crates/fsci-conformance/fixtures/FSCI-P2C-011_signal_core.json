@@ -2101,6 +2101,34 @@
         "rtol": 1e-10,
         "contract_ref": "scipy.signal.windows.general_cosine(7, [0.5, 0.5]) — equivalent to hann"
       }
+    },
+    {
+      "case_id": "dpss_window_8_nw_2_5_symmetric",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "dpss",
+      "args": [8, 2.5, true],
+      "expected": {
+        "kind": "array",
+        "value": [0.052404360853994365, 0.2631860434811115, 0.639750596958442, 0.9624060150375939, 0.9624060150375939, 0.639750596958442, 0.2631860434811115, 0.052404360853994365],
+        "atol": 1e-10,
+        "rtol": 1e-9,
+        "contract_ref": "scipy.signal.windows.dpss(8, 2.5, Kmax=None, sym=True) — Approximate normalization"
+      }
+    },
+    {
+      "case_id": "dpss_window_8_nw_2_5_periodic",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "dpss",
+      "args": [8, 2.5, false],
+      "expected": {
+        "kind": "array",
+        "value": [0.04080887106381651, 0.2018541771042083, 0.5121647719505525, 0.8503476239828903, 1.0, 0.8503476239828905, 0.5121647719505525, 0.20185417710420828],
+        "atol": 1e-10,
+        "rtol": 1e-9,
+        "contract_ref": "scipy.signal.windows.dpss(8, 2.5, Kmax=None, sym=False) — Approximate normalization"
+      }
     }
   ]
 }

@@ -6254,6 +6254,7 @@ fn execute_signal_case(case: &SignalCase) -> SignalObserved {
         "kaiser_bessel_derived" => execute_kaiser_bessel_derived(case),
         "taylor" => execute_taylor(case),
         "general_cosine" => execute_general_cosine(case),
+        "dpss" => execute_dpss(case),
         "convolve" => execute_convolve(case),
         "correlate" => execute_correlate(case),
         "find_peaks" => execute_find_peaks(case),
@@ -6443,6 +6444,31 @@ fn execute_general_cosine(case: &SignalCase) -> SignalObserved {
         Err(e) => return SignalObserved::Error(format!("parse coeffs: {e}")),
     };
     SignalObserved::Array(fsci_signal::general_cosine(n, &coeffs, true))
+}
+
+// br-z3ni: dpss dispatch (n, nw, sym). kmax=None returns single taper at
+// windows[0] with default Approximate normalization, matching scipy's
+// scipy.signal.windows.dpss(M, NW, Kmax=None) symmetric default.
+fn execute_dpss(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let nw: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse nw: {e}")),
+    };
+    let sym: bool = match serde_json::from_value(case.args[2].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse sym: {e}")),
+    };
+    match fsci_signal::dpss(n, nw, None, sym, None, false) {
+        Ok(result) => match result.windows.into_iter().next() {
+            Some(window) => SignalObserved::Array(window),
+            None => SignalObserved::Error("dpss returned no windows".to_string()),
+        },
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
 }
 
 fn execute_convolve(case: &SignalCase) -> SignalObserved {
