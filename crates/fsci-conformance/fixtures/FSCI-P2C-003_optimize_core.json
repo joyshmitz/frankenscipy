@@ -1246,7 +1246,7 @@
         "atol": 0.1,
         "rtol": 0.1,
         "require_success": false,
-        "contract_ref": "fsci_opt::differential_evolution_constrained — Rosenbrock + linear x[0]+x[1]=2; constrained minimum still at (1,1) with f=0 since the unconstrained minimum already lies on the constraint."
+        "contract_ref": "fsci_opt::differential_evolution_constrained"
       }
     },
     {
@@ -1275,7 +1275,7 @@
         "atol": 0.1,
         "rtol": 0.5,
         "require_success": false,
-        "contract_ref": "fsci_opt::differential_evolution_constrained — Rastrigin + nonlinear x0^2+x1^2 ≤ 1; global minimum (0,0) is feasible."
+        "contract_ref": "fsci_opt::differential_evolution_constrained"
       }
     },
     {
@@ -1297,7 +1297,7 @@
         "atol": 0.05,
         "rtol": 0.05,
         "require_success": false,
-        "contract_ref": "fsci_opt::differential_evolution — control case: empty constraints array routes to the unconstrained path."
+        "contract_ref": "fsci_opt::differential_evolution"
       }
     },
     {
@@ -1326,7 +1326,7 @@
         "atol": 0.2,
         "rtol": 0.2,
         "require_success": false,
-        "contract_ref": "fsci_opt::differential_evolution_constrained — Sphere + linear x[0]+x[1] ≥ 2; constrained minimum at (1,1) with f=2 (Lagrangian KKT: gradient of x^2+y^2 ∝ constraint normal at (1,1))."
+        "contract_ref": "fsci_opt::differential_evolution_constrained"
       }
     }
   ]
