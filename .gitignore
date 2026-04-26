@@ -165,3 +165,4 @@ crates/fsci-fft/src/bin/test_*.rs
 crates/fsci-integrate/src/bin/test_*.rs
 crates/fsci-spatial/src/bin/test_*.rs
 crates/fsci-special/src/bin/
+.claude/
