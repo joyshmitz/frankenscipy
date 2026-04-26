@@ -1339,6 +1339,78 @@
         "atol": 1e-10,
         "rtol": 1e-9
       }
+    },
+    {
+      "case_id": "br_mhnr_dct_iv_8pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_iv",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [8.73167385491228, -8.739936947802812, 4.0117830710066755, -3.589749446513766, 2.616284349517581, -2.4852716229870744, 2.1809945579858327, -2.1476529614422555],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dct_iv_8pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_iv",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [2.18291846372807, -2.184984236950703, 1.0029457677516689, -0.8974373616284415, 0.6540710873793952, -0.6213179057467686, 0.5452486394964582, -0.5369132403605639],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dst_iv_8pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_iv",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [14.223494929188956, -0.9889250057303081, 0.7612665159498884, -0.04305364098314152, 0.29441367560237697, 0.0659765336865355, 0.17024920924276854, 0.11323382640444424],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_mhnr_dst_iv_8pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_iv",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [3.555873732297239, -0.24723125143257701, 0.1903166289874721, -0.01076341024578538, 0.07360341890059424, 0.016494133421633875, 0.042562302310692135, 0.02830845660111106],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
     }
   ]
 }
