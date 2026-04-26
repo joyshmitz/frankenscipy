@@ -923,6 +923,19 @@ pub fn dct_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
         // Real part of bin 2k+1
         result.push(spectrum[2 * k + 1].0);
     }
+    // br-yjas: scipy normalization. DCT-IV is orthonormal up to a
+    // 1/sqrt(2N) factor; "ortho" applies that factor and "forward"
+    // applies 1/(2N).
+    let scale = match options.normalization {
+        Normalization::Backward => 1.0,
+        Normalization::Ortho => 1.0 / (2.0 * n as f64).sqrt(),
+        Normalization::Forward => 1.0 / (2.0 * n as f64),
+    };
+    if (scale - 1.0).abs() > f64::EPSILON {
+        for v in result.iter_mut() {
+            *v *= scale;
+        }
+    }
     Ok(result)
 }
 
@@ -1046,6 +1059,17 @@ pub fn dst_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
     for k in 0..n {
         // -Imaginary part of bin 2k+1
         result.push(-spectrum[2 * k + 1].1);
+    }
+    // br-yjas: scipy normalization for DST-IV (mirror of DCT-IV).
+    let scale = match options.normalization {
+        Normalization::Backward => 1.0,
+        Normalization::Ortho => 1.0 / (2.0 * n as f64).sqrt(),
+        Normalization::Forward => 1.0 / (2.0 * n as f64),
+    };
+    if (scale - 1.0).abs() > f64::EPSILON {
+        for v in result.iter_mut() {
+            *v *= scale;
+        }
     }
     Ok(result)
 }

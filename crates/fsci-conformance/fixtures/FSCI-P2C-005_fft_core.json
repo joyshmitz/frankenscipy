@@ -1267,6 +1267,78 @@
         "kind": "error",
         "error": "non-finite input rejected by policy"
       }
+    },
+    {
+      "case_id": "br_yjas_dct_iv_4pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_iv",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [3.5997367212269724, -3.33991126283069, 1.771407907634536, -1.6580115557608877],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_yjas_dct_iv_4pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dct_iv",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [1.2726991230329103, -1.1808369512544532, 0.626287271867927, -0.5861956071820906],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_yjas_dst_iv_4pt_ortho",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_iv",
+      "normalization": "ortho",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [5.461537742301908, -0.15801481139860446, 0.3546673292836058, 0.14438799925648216],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
+    },
+    {
+      "case_id": "br_yjas_dst_iv_4pt_forward",
+      "category": "dct_dst",
+      "mode": "Strict",
+      "transform": "dst_iv",
+      "normalization": "forward",
+      "real_input": [1.0, 2.0, 3.0, 4.0],
+      "complex_input": null,
+      "output_len": null,
+      "sample_spacing": null,
+      "shape": null,
+      "expected": {
+        "kind": "real_vector",
+        "values": [1.9309451866439729, -0.05586667233393329, 0.1253938368008799, 0.05104886669810835],
+        "atol": 1e-10,
+        "rtol": 1e-9
+      }
     }
   ]
 }
