@@ -1891,15 +1891,43 @@
       "category": "voronoi",
       "mode": "Strict",
       "function": "voronoi",
-      "args": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1.0,
+            0.0
+          ],
+          [
+            1.0,
+            1.0
+          ],
+          [
+            0.0,
+            1.0
+          ]
+        ]
+      ],
       "expected": {
         "kind": "voronoi_result",
         "vertex_count": 2,
         "ridge_count": 5,
-        "sorted_vertices": [[0.5, 0.5], [0.5, 0.5]],
+        "sorted_vertices": [
+          [
+            0.5,
+            0.5
+          ],
+          [
+            0.5,
+            0.5
+          ]
+        ],
         "atol": 1e-12,
         "rtol": 1e-10,
-        "contract_ref": "fsci_spatial::Voronoi (unit square is a degenerate cospherical case: scipy.spatial.Voronoi collapses to 1 vertex, fsci's Delaunay-dual splits into 2 coincident circumcenters at (0.5, 0.5). Documented divergence — both are valid representations of the same Voronoi geometry.)"
+        "contract_ref": "fsci_spatial::Voronoi"
       }
     },
     {
@@ -1907,15 +1935,55 @@
       "category": "voronoi",
       "mode": "Strict",
       "function": "voronoi",
-      "args": [[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0], [1.0, 1.0]]],
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            2.0,
+            0.0
+          ],
+          [
+            2.0,
+            2.0
+          ],
+          [
+            0.0,
+            2.0
+          ],
+          [
+            1.0,
+            1.0
+          ]
+        ]
+      ],
       "expected": {
         "kind": "voronoi_result",
         "vertex_count": 4,
         "ridge_count": 8,
-        "sorted_vertices": [[0.0, 1.0], [1.0, 0.0], [1.0, 2.0], [2.0, 1.0]],
+        "sorted_vertices": [
+          [
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            0.0
+          ],
+          [
+            1.0,
+            2.0
+          ],
+          [
+            2.0,
+            1.0
+          ]
+        ],
         "atol": 1e-12,
         "rtol": 1e-10,
-        "contract_ref": "fsci_spatial::Voronoi (4 corners + interior centroid)"
+        "contract_ref": "fsci_spatial::Voronoi"
       }
     },
     {
@@ -1923,15 +1991,35 @@
       "category": "voronoi",
       "mode": "Strict",
       "function": "voronoi",
-      "args": [[[0.0, 0.0], [4.0, 0.0], [2.0, 3.0]]],
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            4.0,
+            0.0
+          ],
+          [
+            2.0,
+            3.0
+          ]
+        ]
+      ],
       "expected": {
         "kind": "voronoi_result",
         "vertex_count": 1,
         "ridge_count": 3,
-        "sorted_vertices": [[2.0, 0.8333333333333335]],
+        "sorted_vertices": [
+          [
+            2.0,
+            0.8333333333333335
+          ]
+        ],
         "atol": 1e-12,
         "rtol": 1e-10,
-        "contract_ref": "fsci_spatial::Voronoi (3 points: single circumcenter + 3 unbounded rays)"
+        "contract_ref": "fsci_spatial::Voronoi"
       }
     },
     {
@@ -1939,13 +2027,39 @@
       "category": "kdtree",
       "mode": "Strict",
       "function": "kdtree_query_pairs",
-      "args": [[[0.0], [1.0], [2.0], [4.0], [5.0]], 1.5],
+      "args": [
+        [
+          [
+            0.0
+          ],
+          [
+            1.0
+          ],
+          [
+            2.0
+          ],
+          [
+            4.0
+          ],
+          [
+            5.0
+          ]
+        ],
+        1.5
+      ],
       "expected": {
         "kind": "kdtree_ball_point_result",
-        "indices": [0, 1, 1, 2, 3, 4],
+        "indices": [
+          0,
+          1,
+          1,
+          2,
+          3,
+          4
+        ],
         "atol": 0.0,
         "rtol": 0.0,
-        "contract_ref": "scipy.spatial.cKDTree.query_pairs(1.5) = {(0,1), (1,2), (3,4)}"
+        "contract_ref": "fsci_spatial::cKDTree::query_pairs"
       }
     },
     {
@@ -1953,13 +2067,32 @@
       "category": "kdtree",
       "mode": "Strict",
       "function": "kdtree_query_pairs",
-      "args": [[[0.0], [1.0], [2.0], [4.0], [5.0]], 0.5],
+      "args": [
+        [
+          [
+            0.0
+          ],
+          [
+            1.0
+          ],
+          [
+            2.0
+          ],
+          [
+            4.0
+          ],
+          [
+            5.0
+          ]
+        ],
+        0.5
+      ],
       "expected": {
         "kind": "kdtree_ball_point_result",
         "indices": [],
         "atol": 0.0,
         "rtol": 0.0,
-        "contract_ref": "scipy.spatial.cKDTree.query_pairs(0.5) = {} (no pairs within 0.5)"
+        "contract_ref": "fsci_spatial::cKDTree::query_pairs"
       }
     },
     {
@@ -1968,8 +2101,31 @@
       "mode": "Strict",
       "function": "kdtree_count_neighbors",
       "args": [
-        [[0.0], [1.0], [2.0], [3.0]],
-        [[0.5], [1.5], [4.0]],
+        [
+          [
+            0.0
+          ],
+          [
+            1.0
+          ],
+          [
+            2.0
+          ],
+          [
+            3.0
+          ]
+        ],
+        [
+          [
+            0.5
+          ],
+          [
+            1.5
+          ],
+          [
+            4.0
+          ]
+        ],
         1.0
       ],
       "expected": {
@@ -1977,7 +2133,7 @@
         "value": 5.0,
         "atol": 0.0,
         "rtol": 0.0,
-        "contract_ref": "scipy.spatial.cKDTree.count_neighbors(other, r=1.0)"
+        "contract_ref": "fsci_spatial::cKDTree::count_neighbors"
       }
     },
     {
@@ -1986,8 +2142,31 @@
       "mode": "Strict",
       "function": "kdtree_count_neighbors",
       "args": [
-        [[0.0], [1.0], [2.0], [3.0]],
-        [[0.5], [1.5], [4.0]],
+        [
+          [
+            0.0
+          ],
+          [
+            1.0
+          ],
+          [
+            2.0
+          ],
+          [
+            3.0
+          ]
+        ],
+        [
+          [
+            0.5
+          ],
+          [
+            1.5
+          ],
+          [
+            4.0
+          ]
+        ],
         2.0
       ],
       "expected": {
@@ -1995,7 +2174,7 @@
         "value": 9.0,
         "atol": 0.0,
         "rtol": 0.0,
-        "contract_ref": "scipy.spatial.cKDTree.count_neighbors(other, r=2.0)"
+        "contract_ref": "fsci_spatial::cKDTree::count_neighbors"
       }
     },
     {
@@ -2004,16 +2183,53 @@
       "mode": "Strict",
       "function": "kdtree_query_ball_tree",
       "args": [
-        [[0.0], [1.0], [2.0], [3.0]],
-        [[0.5], [1.5], [4.0]],
+        [
+          [
+            0.0
+          ],
+          [
+            1.0
+          ],
+          [
+            2.0
+          ],
+          [
+            3.0
+          ]
+        ],
+        [
+          [
+            0.5
+          ],
+          [
+            1.5
+          ],
+          [
+            4.0
+          ]
+        ],
         1.0
       ],
       "expected": {
         "kind": "kdtree_ball_tree_result",
-        "neighbors": [[0], [0, 1], [1], [2]],
+        "neighbors": [
+          [
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            1
+          ],
+          [
+            2
+          ]
+        ],
         "atol": 0.0,
         "rtol": 0.0,
-        "contract_ref": "scipy.spatial.cKDTree.query_ball_tree(other, r=1.0)"
+        "contract_ref": "fsci_spatial::cKDTree::query_ball_tree"
       }
     },
     {
@@ -2022,16 +2238,57 @@
       "mode": "Strict",
       "function": "kdtree_query_ball_tree",
       "args": [
-        [[0.0], [1.0], [2.0], [3.0]],
-        [[0.5], [1.5], [4.0]],
+        [
+          [
+            0.0
+          ],
+          [
+            1.0
+          ],
+          [
+            2.0
+          ],
+          [
+            3.0
+          ]
+        ],
+        [
+          [
+            0.5
+          ],
+          [
+            1.5
+          ],
+          [
+            4.0
+          ]
+        ],
         2.0
       ],
       "expected": {
         "kind": "kdtree_ball_tree_result",
-        "neighbors": [[0, 1], [0, 1], [0, 1, 2], [1, 2]],
+        "neighbors": [
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            1,
+            2
+          ],
+          [
+            1,
+            2
+          ]
+        ],
         "atol": 0.0,
         "rtol": 0.0,
-        "contract_ref": "scipy.spatial.cKDTree.query_ball_tree(other, r=2.0)"
+        "contract_ref": "fsci_spatial::cKDTree::query_ball_tree"
       }
     },
     {
@@ -2040,16 +2297,44 @@
       "mode": "Strict",
       "function": "kdtree_query_ball_tree",
       "args": [
-        [[0.0], [1.0], [2.0], [3.0]],
-        [[0.5], [1.5], [4.0]],
+        [
+          [
+            0.0
+          ],
+          [
+            1.0
+          ],
+          [
+            2.0
+          ],
+          [
+            3.0
+          ]
+        ],
+        [
+          [
+            0.5
+          ],
+          [
+            1.5
+          ],
+          [
+            4.0
+          ]
+        ],
         0.1
       ],
       "expected": {
         "kind": "kdtree_ball_tree_result",
-        "neighbors": [[], [], [], []],
+        "neighbors": [
+          [],
+          [],
+          [],
+          []
+        ],
         "atol": 0.0,
         "rtol": 0.0,
-        "contract_ref": "scipy.spatial.cKDTree.query_ball_tree(other, r=0.1) — all empty"
+        "contract_ref": "fsci_spatial::cKDTree::query_ball_tree"
       }
     }
   ]

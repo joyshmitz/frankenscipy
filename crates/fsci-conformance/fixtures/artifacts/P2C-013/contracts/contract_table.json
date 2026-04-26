@@ -33,6 +33,14 @@
       }
     },
     {
+      "function_name": "fsci_integrate::dblquad",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
       "function_name": "fsci_integrate::fixed_quad",
       "tolerance_policy": {
         "comparison_mode": "allclose",
@@ -62,6 +70,15 @@
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
         "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_integrate::qmc_quad",
+      "scipy_equivalent": "scipy.integrate.qmc_quad",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 0.001,
+        "default_rtol": 0.001
       }
     },
     {
@@ -105,7 +122,7 @@
       }
     },
     {
-      "function_name": "fsci_integrate::dblquad",
+      "function_name": "fsci_integrate::tplquad",
       "tolerance_policy": {
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
@@ -113,7 +130,15 @@
       }
     },
     {
-      "function_name": "fsci_integrate::tplquad",
+      "function_name": "fsci_integrate::trapezoid",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "scipy.integrate.dblquad / fsci_integrate::dblquad",
       "tolerance_policy": {
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
@@ -137,23 +162,7 @@
       }
     },
     {
-      "function_name": "scipy.integrate.dblquad / fsci_integrate::dblquad",
-      "tolerance_policy": {
-        "comparison_mode": "allclose",
-        "default_atol": 1e-10,
-        "default_rtol": 1e-08
-      }
-    },
-    {
       "function_name": "scipy.integrate.tplquad / fsci_integrate::tplquad",
-      "tolerance_policy": {
-        "comparison_mode": "allclose",
-        "default_atol": 1e-10,
-        "default_rtol": 1e-08
-      }
-    },
-    {
-      "function_name": "fsci_integrate::trapezoid",
       "tolerance_policy": {
         "comparison_mode": "allclose",
         "default_atol": 1e-10,

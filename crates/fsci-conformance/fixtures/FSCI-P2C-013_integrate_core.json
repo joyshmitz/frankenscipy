@@ -1483,16 +1483,20 @@
       "function": "qmc_quad",
       "args": {
         "func": "x_squared_1d",
-        "lower": [0.0],
-        "upper": [1.0],
+        "lower": [
+          0.0
+        ],
+        "upper": [
+          1.0
+        ],
         "n": 1024
       },
       "expected": {
         "kind": "scalar",
         "value": 0.3333333333333333,
-        "atol": 1e-3,
-        "rtol": 1e-3,
-        "contract_ref": "scipy.integrate.qmc_quad with Halton(scramble=False); ∫_0^1 x^2 dx = 1/3"
+        "atol": 0.001,
+        "rtol": 0.001,
+        "contract_ref": "fsci_integrate::qmc_quad"
       }
     },
     {
@@ -1502,16 +1506,20 @@
       "function": "qmc_quad",
       "args": {
         "func": "sin_x_1d",
-        "lower": [0.0],
-        "upper": [3.141592653589793],
+        "lower": [
+          0.0
+        ],
+        "upper": [
+          3.141592653589793
+        ],
         "n": 1024
       },
       "expected": {
         "kind": "scalar",
         "value": 2.0,
-        "atol": 1e-3,
-        "rtol": 1e-3,
-        "contract_ref": "scipy.integrate.qmc_quad; ∫_0^π sin(x) dx = 2"
+        "atol": 0.001,
+        "rtol": 0.001,
+        "contract_ref": "fsci_integrate::qmc_quad"
       }
     },
     {
@@ -1521,16 +1529,22 @@
       "function": "qmc_quad",
       "args": {
         "func": "x_plus_y_2d",
-        "lower": [0.0, 0.0],
-        "upper": [1.0, 1.0],
+        "lower": [
+          0.0,
+          0.0
+        ],
+        "upper": [
+          1.0,
+          1.0
+        ],
         "n": 1024
       },
       "expected": {
         "kind": "scalar",
         "value": 1.0,
-        "atol": 1e-3,
-        "rtol": 1e-3,
-        "contract_ref": "scipy.integrate.qmc_quad 2D; ∫_[0,1]^2 (x+y) dx dy = 1"
+        "atol": 0.001,
+        "rtol": 0.001,
+        "contract_ref": "fsci_integrate::qmc_quad"
       }
     },
     {
@@ -1540,16 +1554,22 @@
       "function": "qmc_quad",
       "args": {
         "func": "exp_neg_xy_2d",
-        "lower": [0.0, 0.0],
-        "upper": [1.0, 1.0],
+        "lower": [
+          0.0,
+          0.0
+        ],
+        "upper": [
+          1.0,
+          1.0
+        ],
         "n": 1024
       },
       "expected": {
         "kind": "scalar",
         "value": 0.7965995992970532,
-        "atol": 1e-3,
-        "rtol": 1e-3,
-        "contract_ref": "scipy.integrate.qmc_quad 2D; ∫_[0,1]^2 exp(-xy) dx dy ≈ 0.79660"
+        "atol": 0.001,
+        "rtol": 0.001,
+        "contract_ref": "fsci_integrate::qmc_quad"
       }
     }
   ]

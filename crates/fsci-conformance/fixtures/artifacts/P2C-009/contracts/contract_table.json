@@ -81,6 +81,69 @@
       }
     },
     {
+      "function_name": "fsci_cluster::linkage::average",
+      "scipy_equivalent": "scipy.cluster.hierarchy.linkage(method=average)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_cluster::linkage::centroid",
+      "scipy_equivalent": "scipy.cluster.hierarchy.linkage(method=centroid)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_cluster::linkage::complete",
+      "scipy_equivalent": "scipy.cluster.hierarchy.linkage(method=complete)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_cluster::linkage::median",
+      "scipy_equivalent": "scipy.cluster.hierarchy.linkage(method=median)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_cluster::linkage::single",
+      "scipy_equivalent": "scipy.cluster.hierarchy.linkage(method=single)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_cluster::linkage::ward",
+      "scipy_equivalent": "scipy.cluster.hierarchy.linkage(method=ward)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_cluster::linkage::weighted",
+      "scipy_equivalent": "scipy.cluster.hierarchy.linkage(method=weighted)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
       "function_name": "fsci_cluster::mean_shift",
       "tolerance_policy": {
         "comparison_mode": "allclose",

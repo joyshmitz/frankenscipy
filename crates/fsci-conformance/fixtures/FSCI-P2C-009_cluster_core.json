@@ -1647,7 +1647,7 @@
         ],
         "atol": 1e-09,
         "rtol": 1e-09,
-        "contract_ref": "scipy.cluster.hierarchy.linkage(method='ward')"
+        "contract_ref": "fsci_cluster::linkage::ward"
       }
     },
     {
@@ -1720,7 +1720,7 @@
         ],
         "atol": 1e-09,
         "rtol": 1e-09,
-        "contract_ref": "scipy.cluster.hierarchy.linkage(method='ward') 2D points"
+        "contract_ref": "fsci_cluster::linkage::ward"
       }
     },
     {
@@ -1793,7 +1793,7 @@
         ],
         "atol": 1e-09,
         "rtol": 1e-09,
-        "contract_ref": "scipy.cluster.hierarchy.linkage(method='single') 2D points"
+        "contract_ref": "fsci_cluster::linkage::single"
       }
     },
     {
@@ -1866,7 +1866,7 @@
         ],
         "atol": 1e-09,
         "rtol": 1e-09,
-        "contract_ref": "scipy.cluster.hierarchy.linkage(method='complete') 2D points"
+        "contract_ref": "fsci_cluster::linkage::complete"
       }
     },
     {
@@ -1875,21 +1875,71 @@
       "mode": "Strict",
       "function": "linkage",
       "args": [
-        [[1.0, 2.0], [1.5, 1.8], [5.0, 8.0], [8.0, 8.0], [1.0, 0.6], [9.0, 11.0]],
+        [
+          [
+            1.0,
+            2.0
+          ],
+          [
+            1.5,
+            1.8
+          ],
+          [
+            5.0,
+            8.0
+          ],
+          [
+            8.0,
+            8.0
+          ],
+          [
+            1.0,
+            0.6
+          ],
+          [
+            9.0,
+            11.0
+          ]
+        ],
         "weighted"
       ],
       "expected": {
         "kind": "linkage",
         "value": [
-          [0.0, 1.0, 0.5385164807134504, 2.0],
-          [4.0, 6.0, 1.35, 3.0],
-          [2.0, 3.0, 3.0, 2.0],
-          [5.0, 8.0, 4.08113883008419, 3.0],
-          [7.0, 9.0, 10.6272457893085, 6.0]
+          [
+            0.0,
+            1.0,
+            0.5385164807134504,
+            2.0
+          ],
+          [
+            4.0,
+            6.0,
+            1.35,
+            3.0
+          ],
+          [
+            2.0,
+            3.0,
+            3.0,
+            2.0
+          ],
+          [
+            5.0,
+            8.0,
+            4.08113883008419,
+            3.0
+          ],
+          [
+            7.0,
+            9.0,
+            10.6272457893085,
+            6.0
+          ]
         ],
         "atol": 1e-09,
         "rtol": 1e-09,
-        "contract_ref": "scipy.cluster.hierarchy.linkage(method='weighted') 2D points"
+        "contract_ref": "fsci_cluster::linkage::weighted"
       }
     },
     {
@@ -1898,21 +1948,71 @@
       "mode": "Strict",
       "function": "linkage",
       "args": [
-        [[1.0, 2.0], [1.5, 1.8], [5.0, 8.0], [8.0, 8.0], [1.0, 0.6], [9.0, 11.0]],
+        [
+          [
+            1.0,
+            2.0
+          ],
+          [
+            1.5,
+            1.8
+          ],
+          [
+            5.0,
+            8.0
+          ],
+          [
+            8.0,
+            8.0
+          ],
+          [
+            1.0,
+            0.6
+          ],
+          [
+            9.0,
+            11.0
+          ]
+        ],
         "centroid"
       ],
       "expected": {
         "kind": "linkage",
         "value": [
-          [0.0, 1.0, 0.5385164807134504, 2.0],
-          [4.0, 6.0, 1.3238202294873727, 3.0],
-          [2.0, 3.0, 3.0, 2.0],
-          [5.0, 8.0, 3.905124837953327, 3.0],
-          [7.0, 9.0, 9.735444976419357, 6.0]
+          [
+            0.0,
+            1.0,
+            0.5385164807134504,
+            2.0
+          ],
+          [
+            4.0,
+            6.0,
+            1.3238202294873727,
+            3.0
+          ],
+          [
+            2.0,
+            3.0,
+            3.0,
+            2.0
+          ],
+          [
+            5.0,
+            8.0,
+            3.905124837953327,
+            3.0
+          ],
+          [
+            7.0,
+            9.0,
+            9.735444976419357,
+            6.0
+          ]
         ],
         "atol": 1e-09,
         "rtol": 1e-09,
-        "contract_ref": "scipy.cluster.hierarchy.linkage(method='centroid') 2D points"
+        "contract_ref": "fsci_cluster::linkage::centroid"
       }
     },
     {
@@ -1921,21 +2021,71 @@
       "mode": "Strict",
       "function": "linkage",
       "args": [
-        [[1.0, 2.0], [1.5, 1.8], [5.0, 8.0], [8.0, 8.0], [1.0, 0.6], [9.0, 11.0]],
+        [
+          [
+            1.0,
+            2.0
+          ],
+          [
+            1.5,
+            1.8
+          ],
+          [
+            5.0,
+            8.0
+          ],
+          [
+            8.0,
+            8.0
+          ],
+          [
+            1.0,
+            0.6
+          ],
+          [
+            9.0,
+            11.0
+          ]
+        ],
         "median"
       ],
       "expected": {
         "kind": "linkage",
         "value": [
-          [0.0, 1.0, 0.5385164807134504, 2.0],
-          [4.0, 6.0, 1.3238202294873727, 3.0],
-          [2.0, 3.0, 3.0, 2.0],
-          [5.0, 8.0, 3.905124837953327, 3.0],
-          [7.0, 9.0, 10.580790376904742, 6.0]
+          [
+            0.0,
+            1.0,
+            0.5385164807134504,
+            2.0
+          ],
+          [
+            4.0,
+            6.0,
+            1.3238202294873727,
+            3.0
+          ],
+          [
+            2.0,
+            3.0,
+            3.0,
+            2.0
+          ],
+          [
+            5.0,
+            8.0,
+            3.905124837953327,
+            3.0
+          ],
+          [
+            7.0,
+            9.0,
+            10.580790376904742,
+            6.0
+          ]
         ],
         "atol": 1e-09,
         "rtol": 1e-09,
-        "contract_ref": "scipy.cluster.hierarchy.linkage(method='median') 2D points"
+        "contract_ref": "fsci_cluster::linkage::median"
       }
     }
   ]

@@ -1,11 +1,47 @@
 {
   "contracts": [
     {
+      "function_name": "fsci_stats::bootstrap_mean",
+      "scipy_equivalent": "scipy.stats.bootstrap_mean",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
       "function_name": "fsci_stats::describe",
       "tolerance_policy": {
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
         "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_stats::distribution_cdf",
+      "scipy_equivalent": "scipy.stats.distribution_cdf",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_stats::distribution_pdf",
+      "scipy_equivalent": "scipy.stats.distribution_pdf",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_stats::distribution_ppf",
+      "scipy_equivalent": "scipy.stats.distribution_ppf",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
       }
     },
     {
@@ -22,6 +58,15 @@
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
         "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_stats::kendalltau",
+      "scipy_equivalent": "scipy.stats.kendalltau",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
       }
     },
     {
@@ -46,6 +91,15 @@
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
         "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_stats::mannwhitneyu",
+      "scipy_equivalent": "scipy.stats.mannwhitneyu",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
       }
     },
     {
@@ -102,6 +156,15 @@
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
         "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_stats::ttest_ind",
+      "scipy_equivalent": "scipy.stats.ttest_ind",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
       }
     },
     {

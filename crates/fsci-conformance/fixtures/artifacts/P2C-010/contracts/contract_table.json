@@ -33,6 +33,24 @@
       }
     },
     {
+      "function_name": "fsci_spatial::KDTree::query_ball_point",
+      "scipy_equivalent": "scipy.spatial.KDTree::query_ball_point",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::KDTree::query_k",
+      "scipy_equivalent": "scipy.spatial.KDTree::query_k",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
       "function_name": "fsci_spatial::QhullError",
       "tolerance_policy": {
         "comparison_mode": "allclose",
@@ -41,11 +59,74 @@
       }
     },
     {
+      "function_name": "fsci_spatial::Voronoi",
+      "scipy_equivalent": "scipy.spatial.Voronoi",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::braycurtis",
+      "scipy_equivalent": "scipy.spatial.braycurtis",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::cKDTree::count_neighbors",
+      "scipy_equivalent": "scipy.spatial.cKDTree::count_neighbors",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::cKDTree::query_ball_tree",
+      "scipy_equivalent": "scipy.spatial.cKDTree::query_ball_tree",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::cKDTree::query_pairs",
+      "scipy_equivalent": "scipy.spatial.cKDTree::query_pairs",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::canberra",
+      "scipy_equivalent": "scipy.spatial.canberra",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
       "function_name": "fsci_spatial::cdist",
       "tolerance_policy": {
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
         "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::cdist::braycurtis",
+      "scipy_equivalent": "scipy.spatial.cdist::braycurtis",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
       }
     },
     {
@@ -105,11 +186,74 @@
       }
     },
     {
+      "function_name": "fsci_spatial::hamming",
+      "scipy_equivalent": "scipy.spatial.hamming",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::jaccard",
+      "scipy_equivalent": "scipy.spatial.jaccard",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::mahalanobis",
+      "scipy_equivalent": "scipy.spatial.mahalanobis",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::minkowski",
+      "scipy_equivalent": "scipy.spatial.minkowski",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
       "function_name": "fsci_spatial::pdist",
       "tolerance_policy": {
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
         "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::pdist::canberra",
+      "scipy_equivalent": "scipy.spatial.pdist::canberra",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::pdist::hamming",
+      "scipy_equivalent": "scipy.spatial.pdist::hamming",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::pdist::sqeuclidean",
+      "scipy_equivalent": "scipy.spatial.pdist::sqeuclidean",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
       }
     },
     {
@@ -121,11 +265,38 @@
       }
     },
     {
+      "function_name": "fsci_spatial::seuclidean",
+      "scipy_equivalent": "scipy.spatial.seuclidean",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
+      "function_name": "fsci_spatial::sqeuclidean",
+      "scipy_equivalent": "scipy.spatial.sqeuclidean",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
+      }
+    },
+    {
       "function_name": "fsci_spatial::squareform_to_matrix",
       "tolerance_policy": {
         "comparison_mode": "allclose",
         "default_atol": 1e-10,
         "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_spatial::wminkowski",
+      "scipy_equivalent": "scipy.spatial.wminkowski",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-09
       }
     }
   ],
