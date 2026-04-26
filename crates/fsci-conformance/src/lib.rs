@@ -19452,6 +19452,13 @@ def sinc(value):
 
 def errstate(**_kwargs):
     return _ErrState()
+
+def logaddexp(a, b):
+    import math as _m
+    return _m.log(_m.exp(a) + _m.exp(b))
+
+def logaddexp2(a, b):
+    return logaddexp(a, b) / 0.6931471805599453
 "#,
         )
         .expect("write fake numpy module");
@@ -19585,6 +19592,13 @@ def sinc(value):
 
 def errstate(**_kwargs):
     return _ErrState()
+
+def logaddexp(a, b):
+    import math as _m
+    return _m.log(_m.exp(a) + _m.exp(b))
+
+def logaddexp2(a, b):
+    return logaddexp(a, b) / 0.6931471805599453
 "#,
         )
         .expect("write fake numpy module");
