@@ -1049,6 +1049,78 @@
         "rtol": 1e-7,
         "contract_ref": "scipy.stats.f.cdf(1, dfn=5, dfd=10)"
       }
+    },
+    {
+      "case_id": "br_hx5t_kendalltau_perfect_concordance_n8",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kendalltau",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": 0.9999999999999998,
+        "pvalue": 4.96031746031746e-05,
+        "atol": 1e-10,
+        "rtol": 1e-7,
+        "contract_ref": "scipy.stats.kendalltau — exact path, perfect concordance: p = 2/8! = 4.9603e-5"
+      }
+    },
+    {
+      "case_id": "br_hx5t_kendalltau_perfect_discordance_n8",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kendalltau",
+      "args": [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        [8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": -0.9999999999999998,
+        "pvalue": 4.96031746031746e-05,
+        "atol": 1e-10,
+        "rtol": 1e-7,
+        "contract_ref": "scipy.stats.kendalltau — exact path, perfect discordance"
+      }
+    },
+    {
+      "case_id": "br_hx5t_kendalltau_n12_alternating_swaps",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kendalltau",
+      "args": [
+        [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+        [0.0, 2.0, 1.0, 3.0, 5.0, 4.0, 6.0, 8.0, 7.0, 9.0, 11.0, 10.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": 0.8787878787878787,
+        "pvalue": 5.319397680508792e-06,
+        "atol": 1e-9,
+        "rtol": 1e-6,
+        "contract_ref": "scipy.stats.kendalltau — exact path n=12, partial concordance with adjacent transpositions"
+      }
+    },
+    {
+      "case_id": "br_hx5t_kendalltau_shuffled_n15_exact",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kendalltau",
+      "args": [
+        [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        [8.0, 13.0, 7.0, 6.0, 14.0, 12.0, 5.0, 2.0, 9.0, 3.0, 4.0, 11.0, 0.0, 1.0, 10.0]
+      ],
+      "expected": {
+        "kind": "correlation_result",
+        "statistic": -0.33333333333333337,
+        "pvalue": 0.09264256691158146,
+        "atol": 1e-9,
+        "rtol": 1e-6,
+        "contract_ref": "scipy.stats.kendalltau — exact path n=15 untied, partial discordance"
+      }
     }
   ]
 }

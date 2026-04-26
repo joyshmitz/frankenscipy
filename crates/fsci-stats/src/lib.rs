@@ -14812,17 +14812,63 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
 
     let tau = (concordant - discordant) as f64 / denom;
 
-    // Approximate p-value using normal approximation for large n.
-    let n_f = n as f64;
-    let var = (2.0 * (2.0 * n_f + 5.0)) / (9.0 * n_f * (n_f - 1.0));
-    let z = tau / var.sqrt();
-    // Two-tailed p-value from standard normal.
-    let p = 2.0 * (1.0 - standard_normal_cdf(z.abs()));
+    // br-hx5t: scipy uses exact-distribution pvalue when n is small and
+    // the data is untied. For tied data or large n, fall back to the
+    // normal approximation.
+    let pvalue = if x_ties == 0 && y_ties == 0 && n <= 25 {
+        kendalltau_exact_two_sided_pvalue(n, discordant)
+    } else {
+        let n_f = n as f64;
+        let var = (2.0 * (2.0 * n_f + 5.0)) / (9.0 * n_f * (n_f - 1.0));
+        let z = tau / var.sqrt();
+        2.0 * (1.0 - standard_normal_cdf(z.abs()))
+    };
 
     CorrelationResult {
         statistic: tau,
-        pvalue: p,
+        pvalue,
     }
+}
+
+/// br-hx5t: exact two-sided pvalue for Kendall's tau under the null
+/// hypothesis of independent untied ranks. Builds the Mahonian
+/// distribution of inversion counts (= discordant pairs under the
+/// independence hypothesis with x ranked 1..N) and sums the tail mass
+/// where |C-D| >= |observed C - observed D|.
+fn kendalltau_exact_two_sided_pvalue(n: usize, observed_discordant: i64) -> f64 {
+    let total = (n * (n - 1) / 2) as i64;
+    if total == 0 {
+        return f64::NAN;
+    }
+    let observed_s = total - 2 * observed_discordant;
+    if observed_s == 0 {
+        return 1.0;
+    }
+    let max_inv = total as usize;
+    let mut f: Vec<u128> = vec![0; max_inv + 1];
+    f[0] = 1;
+    for m in 2..=n {
+        let mut new_f = vec![0u128; max_inv + 1];
+        // f_m(k) = sum_{j=0..m-1} f_{m-1}(k-j)  — Mahonian recurrence.
+        // Compute via prefix sums for an O(N*total) algorithm.
+        let mut prefix: Vec<u128> = vec![0; max_inv + 2];
+        for k in 0..=max_inv {
+            prefix[k + 1] = prefix[k] + f[k];
+        }
+        for k in 0..=max_inv {
+            let lo = if k + 1 > m { k + 1 - m } else { 0 };
+            let hi = k + 1;
+            new_f[k] = prefix[hi] - prefix[lo];
+        }
+        f = new_f;
+    }
+    let total_perms: u128 = f.iter().sum();
+    let abs_s = observed_s.unsigned_abs() as i64;
+    let low_threshold = ((total - abs_s) / 2) as usize;
+    let high_threshold = ((total + abs_s) / 2) as usize;
+    let count_low: u128 = f.iter().take(low_threshold + 1).sum();
+    let count_high: u128 = f.iter().skip(high_threshold).sum();
+    (count_low + count_high) as f64 / total_perms as f64
 }
 
 /// Kendall's tau correlation with alternative hypothesis.
@@ -14879,15 +14925,78 @@ pub fn kendalltau_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correl
 
     let tau = (concordant - discordant) as f64 / denom;
 
-    let n_f = n as f64;
-    let var = (2.0 * (2.0 * n_f + 5.0)) / (9.0 * n_f * (n_f - 1.0));
-    let z = tau / var.sqrt();
-
-    let pvalue = normal_alternative_pvalue(z, alternative);
+    // br-hx5t: exact path for untied small n; otherwise asymptotic.
+    let pvalue = if x_ties == 0 && y_ties == 0 && n <= 25 {
+        kendalltau_exact_alternative_pvalue(n, discordant, alternative)
+    } else {
+        let n_f = n as f64;
+        let var = (2.0 * (2.0 * n_f + 5.0)) / (9.0 * n_f * (n_f - 1.0));
+        let z = tau / var.sqrt();
+        normal_alternative_pvalue(z, alternative)
+    };
 
     CorrelationResult {
         statistic: tau,
         pvalue,
+    }
+}
+
+/// br-hx5t: exact one-sided / two-sided pvalue for Kendall's tau under
+/// independent untied ranks. The "greater" alternative tests whether the
+/// statistic S=C-D exceeds the observed value, equivalent to
+/// P(D' <= observed_d). "less" is the mirror; "two-sided" matches the
+/// two-tailed exact path.
+fn kendalltau_exact_alternative_pvalue(
+    n: usize,
+    observed_discordant: i64,
+    alternative: &str,
+) -> f64 {
+    let total = (n * (n - 1) / 2) as i64;
+    if total == 0 {
+        return f64::NAN;
+    }
+    let max_inv = total as usize;
+    let mut f: Vec<u128> = vec![0; max_inv + 1];
+    f[0] = 1;
+    for m in 2..=n {
+        let mut new_f = vec![0u128; max_inv + 1];
+        let mut prefix: Vec<u128> = vec![0; max_inv + 2];
+        for k in 0..=max_inv {
+            prefix[k + 1] = prefix[k] + f[k];
+        }
+        for k in 0..=max_inv {
+            let lo = if k + 1 > m { k + 1 - m } else { 0 };
+            let hi = k + 1;
+            new_f[k] = prefix[hi] - prefix[lo];
+        }
+        f = new_f;
+    }
+    let total_perms: u128 = f.iter().sum();
+    let d = observed_discordant as usize;
+    match alternative {
+        "greater" => {
+            // S' >= s_obs => D' <= d_obs
+            let count: u128 = f.iter().take(d + 1).sum();
+            count as f64 / total_perms as f64
+        }
+        "less" => {
+            // S' <= s_obs => D' >= d_obs
+            let count: u128 = f.iter().skip(d).sum();
+            count as f64 / total_perms as f64
+        }
+        "two-sided" => {
+            let observed_s = total - 2 * observed_discordant;
+            if observed_s == 0 {
+                return 1.0;
+            }
+            let abs_s = observed_s.unsigned_abs() as i64;
+            let low_threshold = ((total - abs_s) / 2) as usize;
+            let high_threshold = ((total + abs_s) / 2) as usize;
+            let count_low: u128 = f.iter().take(low_threshold + 1).sum();
+            let count_high: u128 = f.iter().skip(high_threshold).sum();
+            (count_low + count_high) as f64 / total_perms as f64
+        }
+        _ => f64::NAN,
     }
 }
 
@@ -27496,11 +27605,14 @@ mod tests {
         );
 
         let less = kendalltau_alternative(&x, &y, "less");
+        // br-hx5t: under the exact discrete distribution, less + greater
+        // = 1 + P(D' = d_obs). For n=10 with 0 discordant pairs this is
+        // 1 + 1/10! ≈ 1 + 2.76e-7. Accept that small overshoot.
         assert_close(
             less.pvalue + greater.pvalue,
             1.0,
-            1e-10,
-            "less + greater = 1",
+            1e-6,
+            "less + greater ≈ 1 (exact discrete adds P(D'=d_obs))",
         );
     }
 
