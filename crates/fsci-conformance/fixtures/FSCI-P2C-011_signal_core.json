@@ -2017,6 +2017,34 @@
         "rtol": 1e-10,
         "contract_ref": "scipy.signal.windows.exponential(7, tau=2.0) sym=True"
       }
+    },
+    {
+      "case_id": "chebwin_window_7_at_100",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "chebwin",
+      "args": [7, 100.0],
+      "expected": {
+        "kind": "array",
+        "value": [0.05650405062850299, 0.3166085306484744, 0.7601208123539079, 1.0, 0.7601208123539079, 0.3166085306484744, 0.05650405062850299],
+        "atol": 1e-8,
+        "rtol": 1e-7,
+        "contract_ref": "scipy.signal.windows.chebwin(7, at=100) — Dolph-Chebyshev"
+      }
+    },
+    {
+      "case_id": "kaiser_bessel_derived_8_beta_8",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "kaiser_bessel_derived",
+      "args": [8, 8.0],
+      "expected": {
+        "kind": "array",
+        "value": [0.03663512193871246, 0.46160180353679126, 0.8870872420295433, 0.9993287086041988, 0.9993287086041988, 0.8870872420295433, 0.46160180353679126, 0.03663512193871246],
+        "atol": 1e-9,
+        "rtol": 1e-7,
+        "contract_ref": "scipy.signal.windows.kaiser_bessel_derived(8, beta=8) sym=True — fsci uses i0 from a slightly different power-series truncation; ~2e-10 absolute drift on edge samples (smaller than 1 ULP of the reciprocal sqrt)."
+      }
     }
   ]
 }

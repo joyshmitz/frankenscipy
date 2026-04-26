@@ -6250,6 +6250,8 @@ fn execute_signal_case(case: &SignalCase) -> SignalObserved {
         "gaussian" => execute_gaussian(case),
         "general_hamming" => execute_general_hamming(case),
         "exponential" => execute_exponential_window(case),
+        "chebwin" => execute_chebwin(case),
+        "kaiser_bessel_derived" => execute_kaiser_bessel_derived(case),
         "convolve" => execute_convolve(case),
         "correlate" => execute_correlate(case),
         "find_peaks" => execute_find_peaks(case),
@@ -6373,6 +6375,35 @@ fn execute_exponential_window(case: &SignalCase) -> SignalObserved {
         Err(e) => return SignalObserved::Error(format!("parse tau: {e}")),
     };
     match fsci_signal::exponential(n, None, tau, true) {
+        Ok(w) => SignalObserved::Array(w),
+        Err(e) => SignalObserved::Error(format!("{e:?}")),
+    }
+}
+
+// br-z3ni: chebwin (Dolph-Chebyshev) dispatch (n, at_dB).
+fn execute_chebwin(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let at: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse at: {e}")),
+    };
+    SignalObserved::Array(fsci_signal::chebwin(n, at))
+}
+
+// br-z3ni: kaiser_bessel_derived dispatch (n, beta). sym=true.
+fn execute_kaiser_bessel_derived(case: &SignalCase) -> SignalObserved {
+    let n: usize = match serde_json::from_value(case.args[0].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse n: {e}")),
+    };
+    let beta: f64 = match serde_json::from_value(case.args[1].clone()) {
+        Ok(v) => v,
+        Err(e) => return SignalObserved::Error(format!("parse beta: {e}")),
+    };
+    match fsci_signal::kaiser_bessel_derived(n, beta, true) {
         Ok(w) => SignalObserved::Array(w),
         Err(e) => SignalObserved::Error(format!("{e:?}")),
     }
