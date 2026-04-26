@@ -5532,6 +5532,7 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
     }
     v.push(v0);
 
+    let mut actual_m = 0usize;
     for j in 0..m {
         // w = A * v_j
         let mut w = csr_matvec(a, &v[j]);
@@ -5546,9 +5547,16 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
         }
 
         h[j + 1][j] = vec_norm(&w);
+        // br-iq1e: count this column as completed BEFORE the breakdown
+        // check. Without this, a lucky-breakdown at j=0 (e.g. when the
+        // initial vector is already an eigenvector — common for
+        // structured matrices like the 4-cycle shift) leaves actual_m
+        // = v.len() - 1 = 0 and the caller sees zero eigenvalues even
+        // though h[0][0] holds the correct dominant eigenvalue.
+        actual_m = j + 1;
 
         if h[j + 1][j] < f64::EPSILON * 1e6 {
-            // Lucky breakdown: Krylov subspace is invariant
+            // Lucky breakdown: Krylov subspace is invariant.
             break;
         }
 
@@ -5558,8 +5566,6 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
         }
         v.push(w);
     }
-
-    let actual_m = v.len() - 1; // Number of Arnoldi steps completed
 
     // Extract eigenvalues from the Hessenberg matrix H[0..actual_m, 0..actual_m]
     // Use QR algorithm on the small dense Hessenberg matrix
