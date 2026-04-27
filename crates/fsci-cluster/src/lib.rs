@@ -518,11 +518,7 @@ fn find_min_dist_row(d: &[Vec<f64>], size: &[usize], x: usize, n: usize) -> (Opt
 // Centroid and Median methods to match scipy's heap-based tie-break
 // when multiple inter-cluster distances coincide. Lance-Williams
 // updates are inlined per method.
-fn linkage_fast(
-    n: usize,
-    initial_d: &[Vec<f64>],
-    method: LinkageMethod,
-) -> Vec<[f64; 4]> {
+fn linkage_fast(n: usize, initial_d: &[Vec<f64>], method: LinkageMethod) -> Vec<[f64; 4]> {
     let mut d = initial_d.to_vec();
     let mut size = vec![1usize; n];
     let mut cluster_id: Vec<usize> = (0..n).collect();
@@ -595,11 +591,10 @@ fn linkage_fast(
                         .max(0.0)
                         .sqrt()
                 }
-                LinkageMethod::Median => {
-                    (0.5 * d_zx * d_zx + 0.5 * d_zy * d_zy - 0.25 * dist * dist)
-                        .max(0.0)
-                        .sqrt()
-                }
+                LinkageMethod::Median => (0.5 * d_zx * d_zx + 0.5 * d_zy * d_zy
+                    - 0.25 * dist * dist)
+                    .max(0.0)
+                    .sqrt(),
                 _ => unreachable!("linkage_fast only for Centroid/Median"),
             };
             // Store symmetrically.

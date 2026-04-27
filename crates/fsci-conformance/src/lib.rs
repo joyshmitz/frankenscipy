@@ -156,13 +156,14 @@ use fsci_special::{
     roots_hermitenorm as special_roots_hermitenorm, roots_jacobi as special_roots_jacobi,
     roots_laguerre as special_roots_laguerre, roots_legendre as special_roots_legendre,
     shichi as special_shichi, sici as special_sici, sinc as special_sinc, sindg as special_sindg,
-    softplus as special_softplus, spence as special_spence, spherical_in as special_spherical_in,
-    spherical_jn as special_spherical_jn, spherical_kn as special_spherical_kn,
-    spherical_yn as special_spherical_yn, stdtr as special_stdtr, stdtrc as special_stdtrc,
-    stdtridf as special_stdtridf, stdtrit as special_stdtrit, struve as special_struve,
-    tandg as special_tandg, wright_bessel as special_wright_bessel, xlog1py as special_xlog1py,
-    xlogx as special_xlogx, xlogy as special_xlogy, y0 as special_y0, y1 as special_y1,
-    yn as special_yn, yvp as special_yvp, zeta as special_zeta, zetac as special_zetac,
+    softplus as special_softplus, spence as special_spence, sph_harm_y as special_sph_harm_y,
+    spherical_in as special_spherical_in, spherical_jn as special_spherical_jn,
+    spherical_kn as special_spherical_kn, spherical_yn as special_spherical_yn,
+    stdtr as special_stdtr, stdtrc as special_stdtrc, stdtridf as special_stdtridf,
+    stdtrit as special_stdtrit, struve as special_struve, tandg as special_tandg,
+    wright_bessel as special_wright_bessel, xlog1py as special_xlog1py, xlogx as special_xlogx,
+    xlogy as special_xlogy, y0 as special_y0, y1 as special_y1, yn as special_yn,
+    yvp as special_yvp, zeta as special_zeta, zetac as special_zetac,
 };
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};
@@ -1504,6 +1505,7 @@ pub enum SpecialCaseFunction {
     Zetac,
     HurwitzZeta,
     Lpmv,
+    SphHarmY,
     EvalLegendre,
     EvalChebyt,
     EvalChebyu,
@@ -5788,11 +5790,13 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                 format!("convex hull match: vertices={vertices:?}, area={area}"),
             )
         }
-        (
-            "kdtree_ball_tree_result",
-            SpatialObserved::KdTreeBallTree { neighbors },
-        ) => {
-            let exp = case.expected.neighbors.as_ref().cloned().unwrap_or_default();
+        ("kdtree_ball_tree_result", SpatialObserved::KdTreeBallTree { neighbors }) => {
+            let exp = case
+                .expected
+                .neighbors
+                .as_ref()
+                .cloned()
+                .unwrap_or_default();
             if exp.len() != neighbors.len() {
                 return (
                     false,
@@ -5807,13 +5811,14 @@ fn compare_spatial_outcome(case: &SpatialCase, observed: &SpatialObserved) -> (b
                 if got != expected {
                     return (
                         false,
-                        format!(
-                            "ball_tree row {i} mismatch: got {got:?} expected {expected:?}"
-                        ),
+                        format!("ball_tree row {i} mismatch: got {got:?} expected {expected:?}"),
                     );
                 }
             }
-            (true, format!("kdtree ball_tree match ({} rows)", neighbors.len()))
+            (
+                true,
+                format!("kdtree ball_tree match ({} rows)", neighbors.len()),
+            )
         }
         (
             "voronoi_result",
@@ -6268,9 +6273,10 @@ enum SignalObserved {
 fn execute_signal_case(case: &SignalCase) -> SignalObserved {
     match case.function.as_str() {
         "savgol_filter" => execute_savgol_filter(case),
-        "hann" | "hamming" | "blackman" | "boxcar" | "bartlett" | "flattop"
-        | "cosine" | "blackmanharris" | "barthann" | "parzen" | "bohman"
-        | "nuttall" | "lanczos" => execute_window(case),
+        "hann" | "hamming" | "blackman" | "boxcar" | "bartlett" | "flattop" | "cosine"
+        | "blackmanharris" | "barthann" | "parzen" | "bohman" | "nuttall" | "lanczos" => {
+            execute_window(case)
+        }
         "kaiser" => execute_kaiser(case),
         "tukey" => execute_tukey(case),
         "gaussian" => execute_gaussian(case),
@@ -7457,10 +7463,10 @@ fn execute_stats_shapiro(case: &StatsCase) -> StatsObserved {
 fn parse_distribution_args(case: &StatsCase) -> Result<(String, Vec<f64>, f64), String> {
     let name: String = serde_json::from_value(case.args[0].clone())
         .map_err(|e| format!("parse distribution name: {e}"))?;
-    let params: Vec<f64> = serde_json::from_value(case.args[1].clone())
-        .map_err(|e| format!("parse params: {e}"))?;
-    let x: f64 = serde_json::from_value(case.args[2].clone())
-        .map_err(|e| format!("parse x: {e}"))?;
+    let params: Vec<f64> =
+        serde_json::from_value(case.args[1].clone()).map_err(|e| format!("parse params: {e}"))?;
+    let x: f64 =
+        serde_json::from_value(case.args[2].clone()).map_err(|e| format!("parse x: {e}"))?;
     Ok((name, params, x))
 }
 
@@ -8423,6 +8429,7 @@ fn make_integrate_tplquad_func(
 
 // br-gm7n: vector-input integrand registry for qmc_quad. Keys are
 // shared with fixture cases — point[j] is the j-th coordinate.
+#[allow(clippy::type_complexity)]
 fn make_integrate_qmc_func(name: &str) -> Option<Box<dyn Fn(&[f64]) -> f64>> {
     match name {
         "x_squared_1d" => Some(Box::new(|p| p[0] * p[0])),
@@ -11114,11 +11121,7 @@ fn de_constraint_violation(constraints: &[DeConstraintSpec], x: &[f64]) -> f64 {
         match c {
             DeConstraintSpec::Linear { a, lb, ub } => {
                 for ((row, &lo), &hi) in a.iter().zip(lb.iter()).zip(ub.iter()) {
-                    let dot: f64 = row
-                        .iter()
-                        .zip(x.iter())
-                        .map(|(&aij, &xj)| aij * xj)
-                        .sum();
+                    let dot: f64 = row.iter().zip(x.iter()).map(|(&aij, &xj)| aij * xj).sum();
                     let below = (lo - dot).max(0.0);
                     let above = (dot - hi).max(0.0);
                     total += below * below + above * above;
@@ -16613,6 +16616,7 @@ fn execute_special_case_scalar(case: &SpecialCase) -> Result<f64, FsciSpecialErr
             let degree = special_u32_from_fixture("lpmv", mode, args[1])?;
             Ok(special_lpmv(order, degree, args[2]))
         }
+        SpecialCaseFunction::SphHarmY => Err(special_invalid_fixture_error("sph_harm_y", mode)),
         SpecialCaseFunction::EvalLegendre => {
             if args.len() != 2 {
                 return Err(special_invalid_fixture_error("eval_legendre", mode));
@@ -17133,6 +17137,18 @@ fn execute_special_case(case: &SpecialCase) -> Result<SpecialObservedOutcome, Fs
         }
         SpecialCaseFunction::Kvp => {
             execute_special_bessel_derivative_case("kvp", args, mode, special_kvp)
+        }
+        SpecialCaseFunction::SphHarmY => {
+            let values = case
+                .real_scalar_args()
+                .ok_or_else(|| special_invalid_fixture_error("sph_harm_y", mode))?;
+            if values.len() != 4 {
+                return Err(special_invalid_fixture_error("sph_harm_y", mode));
+            }
+            let degree = special_u32_from_fixture("sph_harm_y", mode, values[0])?;
+            let order = special_i32_from_fixture("sph_harm_y", mode, values[1])?;
+            let value = special_sph_harm_y(degree, order, values[2], values[3]);
+            Ok(SpecialObservedOutcome::ComplexScalar([value.re, value.im]))
         }
         _ => execute_special_case_scalar(case).map(SpecialObservedOutcome::Scalar),
     }

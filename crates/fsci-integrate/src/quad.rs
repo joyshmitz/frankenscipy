@@ -2902,14 +2902,8 @@ mod tests {
     #[test]
     fn qmc_quad_1d_oscillatory_sin() {
         // ∫_0^π sin(x) dx = 2
-        let r = qmc_quad(
-            |x| x[0].sin(),
-            &[0.0],
-            &[std::f64::consts::PI],
-            8,
-            1024,
-        )
-        .expect("qmc_quad oscillatory");
+        let r = qmc_quad(|x| x[0].sin(), &[0.0], &[std::f64::consts::PI], 8, 1024)
+            .expect("qmc_quad oscillatory");
         assert!(
             (r.integral - 2.0).abs() < 1e-3,
             "expected 2.0 ± 1e-3, got {}",

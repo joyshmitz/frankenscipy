@@ -4633,6 +4633,50 @@
       }
     },
     {
+      "case_id": "diff_sph_harm_y_0_0_theta0p5_phi1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "sph_harm_y",
+      "args": [
+        0.0,
+        0.0,
+        0.5,
+        1.0
+      ],
+      "expected": {
+        "kind": "complex_scalar",
+        "value": {
+          "re": 0.28209479177387814,
+          "im": 0.0
+        },
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::sph_harm_y"
+      }
+    },
+    {
+      "case_id": "diff_sph_harm_y_1_1_theta0p5_phi1",
+      "category": "differential",
+      "mode": "Strict",
+      "function": "sph_harm_y",
+      "args": [
+        1.0,
+        1.0,
+        0.5,
+        1.0
+      ],
+      "expected": {
+        "kind": "complex_scalar",
+        "value": {
+          "re": -0.08949498165189648,
+          "im": -0.13938017574251232
+        },
+        "atol": 1e-12,
+        "rtol": 1e-12,
+        "contract_ref": "fsci_special::sph_harm_y"
+      }
+    },
+    {
       "case_id": "diff_eval_legendre_4_0p25",
       "category": "differential",
       "mode": "Strict",

@@ -689,29 +689,13 @@ pub fn sph_harm(m: i32, l: u32, theta: f64, phi: f64) -> Complex64 {
     }
 }
 
-/// Real spherical harmonic Y_l^m(θ, φ).
+/// Complex spherical harmonic `Y_n^m(theta, phi)`.
 ///
-/// The real form is defined as:
-///   m > 0: Y_l^m = √2 * (-1)^m * Re(Y_l^{|m|})
-///   m = 0: Y_l^0 (already real)
-///   m < 0: Y_l^m = √2 * (-1)^m * Im(Y_l^{|m|})
-pub fn sph_harm_y(l: u32, m: i32, theta: f64, phi: f64) -> f64 {
-    let am = m.unsigned_abs();
-    if am > l {
-        return 0.0;
-    }
-
-    let ylm = sph_harm(am as i32, l, theta, phi);
-
-    if m > 0 {
-        let sign = if am.is_multiple_of(2) { 1.0 } else { -1.0 };
-        std::f64::consts::SQRT_2 * sign * ylm.re
-    } else if m < 0 {
-        let sign = if am.is_multiple_of(2) { 1.0 } else { -1.0 };
-        std::f64::consts::SQRT_2 * sign * ylm.im
-    } else {
-        ylm.re
-    }
+/// Matches `scipy.special.sph_harm_y(n, m, theta, phi)`, where `theta` is the
+/// polar angle and `phi` is the azimuthal angle. This differs from the older
+/// `sph_harm` helper above, which follows SciPy's deprecated argument order.
+pub fn sph_harm_y(n: u32, m: i32, theta: f64, phi: f64) -> Complex64 {
+    sph_harm(m, n, phi, theta)
 }
 
 #[cfg(test)]
@@ -1344,31 +1328,22 @@ mod tests {
     }
 
     #[test]
-    fn sph_harm_y_real_y00_constant() {
+    fn sph_harm_y_y00_matches_scipy_constant() {
         let expected = 1.0 / (4.0 * PI).sqrt();
-        assert_close(sph_harm_y(0, 0, 1.0, 0.5), expected, 1e-12, "real Y_0^0");
+        let y = sph_harm_y(0, 0, 1.0, 0.5);
+        assert_close(y.re, expected, 1e-12, "sph_harm_y Y_0^0 re");
+        assert_close(y.im, 0.0, 1e-12, "sph_harm_y Y_0^0 im");
     }
 
     #[test]
-    fn sph_harm_y_real_orthogonality() {
-        // Real spherical harmonics are also orthonormal
-        let n_theta = 80;
-        let n_phi = 40;
-        let d_theta = 2.0 * PI / n_theta as f64;
-        let d_phi = PI / n_phi as f64;
+    fn sph_harm_y_uses_scipy_complex_angle_convention() {
+        let y10 = sph_harm_y(1, 0, 0.5, 1.0);
+        assert_close(y10.re, 0.42878904414183583, 1e-12, "Y_1^0 re");
+        assert_close(y10.im, 0.0, 1e-12, "Y_1^0 im");
 
-        // Compute <Y_1^0 | Y_1^1> — should be ~0
-        let mut cross = 0.0;
-        for i in 0..n_theta {
-            let theta = (i as f64 + 0.5) * d_theta;
-            for j in 0..n_phi {
-                let phi = (j as f64 + 0.5) * d_phi;
-                let y10 = sph_harm_y(1, 0, theta, phi);
-                let y11 = sph_harm_y(1, 1, theta, phi);
-                cross += y10 * y11 * phi.sin() * d_theta * d_phi;
-            }
-        }
-        assert!(cross.abs() < 0.02, "Y_1^0 · Y_1^1 orthogonality: {cross}");
+        let y11 = sph_harm_y(1, 1, 0.5, 1.0);
+        assert_close(y11.re, -0.08949498165189648, 1e-12, "Y_1^1 re");
+        assert_close(y11.im, -0.13938017574251232, 1e-12, "Y_1^1 im");
     }
 
     // ── Shifted polynomial tests ─────────────────────────────────────

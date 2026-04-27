@@ -14855,10 +14855,10 @@ fn kendalltau_exact_two_sided_pvalue(n: usize, observed_discordant: i64) -> f64 
         for k in 0..=max_inv {
             prefix[k + 1] = prefix[k] + f[k];
         }
-        for k in 0..=max_inv {
-            let lo = if k + 1 > m { k + 1 - m } else { 0 };
+        for (k, new_f_k) in new_f.iter_mut().enumerate() {
+            let lo = (k + 1).saturating_sub(m);
             let hi = k + 1;
-            new_f[k] = prefix[hi] - prefix[lo];
+            *new_f_k = prefix[hi] - prefix[lo];
         }
         f = new_f;
     }
@@ -14964,10 +14964,10 @@ fn kendalltau_exact_alternative_pvalue(
         for k in 0..=max_inv {
             prefix[k + 1] = prefix[k] + f[k];
         }
-        for k in 0..=max_inv {
-            let lo = if k + 1 > m { k + 1 - m } else { 0 };
+        for (k, new_f_k) in new_f.iter_mut().enumerate() {
+            let lo = (k + 1).saturating_sub(m);
             let hi = k + 1;
-            new_f[k] = prefix[hi] - prefix[lo];
+            *new_f_k = prefix[hi] - prefix[lo];
         }
         f = new_f;
     }
