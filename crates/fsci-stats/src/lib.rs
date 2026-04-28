@@ -12337,18 +12337,17 @@ pub struct ChatterjeeXiResult {
 
 /// Result for multiscale graph correlation.
 ///
-/// This is currently a distance-correlation-backed stub of SciPy's MGC API.
-/// It exposes only the global scale, so `mgc_map` is a 1x1 matrix containing
-/// `statistic` and `opt_scale` is always `(1, 1)`.
+/// Stores the selected MGC statistic, permutation p-value, full local
+/// correlation map, and the one-based optimal local scale.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultiscaleGraphcorrResult {
-    /// Global distance-correlation statistic in `[0, 1]`.
+    /// Selected multiscale graph correlation statistic in `[0, 1]`.
     pub statistic: f64,
     /// Permutation p-value, or `NaN` when `reps == 0`.
     pub pvalue: f64,
-    /// Local correlation map. Stub implementation exposes the global scale only.
+    /// Local correlation map across all tested scale pairs.
     pub mgc_map: Vec<Vec<f64>>,
-    /// Optimal scale in the local correlation map. Stub always returns `(1, 1)`.
+    /// One-based optimal scale in the local correlation map.
     pub opt_scale: (usize, usize),
 }
 
@@ -12497,13 +12496,16 @@ fn compute_row_ranks(distances: &[Vec<f64>]) -> Vec<Vec<usize>> {
         let mut indexed: Vec<(usize, f64)> = distances[i]
             .iter()
             .enumerate()
+            .filter(|(j, _)| *j != i)
             .map(|(j, &d)| (j, d))
             .collect();
-        indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        indexed.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
 
-        // Assign ranks (0-based, so rank 1 = index 0 after sorting)
+        // Self-distance is always rank 0, even when duplicate observations
+        // create additional zero distances in the same row.
+        ranks[i][i] = 0;
         for (rank, (j, _)) in indexed.iter().enumerate() {
-            ranks[i][*j] = rank;
+            ranks[i][*j] = rank + 1;
         }
     }
     ranks
@@ -12551,6 +12553,9 @@ fn local_correlation(
 
     for i in 0..n {
         for j in 0..n {
+            if i == j {
+                continue;
+            }
             // Include (i,j) if within k-NN for X and l-NN for Y
             if rank_x[i][j] < k && rank_y[i][j] < l {
                 sum_xy += centered_x[i][j] * centered_y[i][j];
@@ -24692,6 +24697,25 @@ mod tests {
     }
 
     #[test]
+    fn multiscale_graphcorr_row_ranks_keep_duplicate_diagonal_zero() {
+        let distances = vec![
+            vec![0.0, 0.0, 2.0],
+            vec![0.0, 0.0, 1.0],
+            vec![2.0, 1.0, 0.0],
+        ];
+        let ranks = compute_row_ranks(&distances);
+
+        assert_eq!(ranks[0][0], 0, "row 0 diagonal must be self rank");
+        assert_eq!(ranks[1][1], 0, "row 1 diagonal must be self rank");
+        assert_eq!(ranks[2][2], 0, "row 2 diagonal must be self rank");
+        assert_eq!(
+            ranks[1][0], 1,
+            "duplicate observation should be nearest neighbor after self"
+        );
+        assert_eq!(ranks[1][2], 2);
+    }
+
+    #[test]
     fn multiscale_graphcorr_mgc_map_is_full_scale() {
         // Verify mgc_map has proper dimensions and structure
         let x: Vec<Vec<f64>> = (0..5).map(|i| vec![i as f64, (i * 2) as f64]).collect();
@@ -24702,6 +24726,24 @@ mod tests {
         // Global scale (n, n) should match distance correlation
         let global_corr = result.mgc_map[4][4];
         assert!((0.0..=1.0).contains(&global_corr));
+    }
+
+    #[test]
+    fn multiscale_graphcorr_min_scale_excludes_self_pairs() {
+        let x: Vec<Vec<f64>> = (0..8).map(|i| vec![i as f64]).collect();
+        let y: Vec<Vec<f64>> = (0..8).map(|i| vec![2.0 * i as f64 + 1.0]).collect();
+        let result = multiscale_graphcorr(&x, &y, 0, Some(0)).expect("multiscale_graphcorr");
+
+        assert!(
+            result.mgc_map[0].iter().all(|value| *value == 0.0),
+            "minimum X scale should not be inflated by diagonal self-pairs: {:?}",
+            result.mgc_map[0]
+        );
+        assert!(
+            result.mgc_map.iter().all(|row| row[0] == 0.0),
+            "minimum Y scale should not be inflated by diagonal self-pairs: {:?}",
+            result.mgc_map.iter().map(|row| row[0]).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -24725,7 +24767,10 @@ mod tests {
         ]; // Pi digits, unrelated to x
         let result = multiscale_graphcorr(&x, &y, 50, Some(42)).expect("mgc independent");
         // For truly independent data, p-value should be high (not significant)
-        assert!(result.pvalue > 0.05, "independent data should not be significant");
+        assert!(
+            result.pvalue > 0.05,
+            "independent data should not be significant"
+        );
     }
 
     // ── siegelslopes tests ───────────────────────────────────────────

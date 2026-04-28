@@ -54,12 +54,17 @@ jobs:
       - run: cargo test -p fsci-conformance --lib tests::differential -- --nocapture
         timeout-minutes: 10
 
-  # ── G4: Adversarial/Fuzz Regression ───────────────────────────────
-  # Runs the smoke test plus a 60-second replay of every fuzz corpus target.
-  # Per /testing-fuzzing hard rule 10: crash artifacts must become regression
-  # tests. This step replays the committed fuzz/seeds/ as a regression gate.
+  # ── G4: Adversarial/Smoke Test ─────────────────────────────────────
+  # Runs the conformance smoke test to catch obvious regressions.
+  # NOTE: This does NOT replay fuzz/seeds/ — full fuzz corpus replay requires
+  # cargo-fuzz with libFuzzer and is too expensive for push CI.
+  # Per /testing-fuzzing rule 10, crash artifacts should be converted to
+  # deterministic regression tests; this gate runs whatever adversarial
+  # regression tests exist in the test suite.
+  # TODO(bead:ff7t): Add nightly workflow for full fuzz corpus replay, or
+  # create a seed-replay test harness that reads fuzz/seeds/* deterministically.
   g4-adversarial:
-    name: "G4: adversarial regression"
+    name: "G4: adversarial smoke"
     needs: g2-unit-tests
     runs-on: ubuntu-latest
     steps:
