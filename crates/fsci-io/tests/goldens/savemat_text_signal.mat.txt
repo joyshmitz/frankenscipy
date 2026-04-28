@@ -1,0 +1,7 @@
+# name: signal
+# type: matrix
+# rows: 2
+# columns: 2
+1 2
+3.5 4
+
