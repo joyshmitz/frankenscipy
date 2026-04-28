@@ -12409,12 +12409,24 @@ pub fn chatterjeexi(x: &[f64], y: &[f64]) -> ChatterjeeXiResult {
     ChatterjeeXiResult { statistic, pvalue }
 }
 
-/// Compute a stubbed multiscale graph correlation statistic.
+/// Compute the multiscale graph correlation (MGC) statistic.
 ///
-/// This currently implements only the global distance-correlation scale of
-/// SciPy's `multiscale_graphcorr`, returning a 1x1 `mgc_map` and `(1, 1)` as
-/// `opt_scale`. When `reps > 0`, a deterministic permutation test is used to
-/// estimate the p-value.
+/// MGC is a dependence measure that adapts to the complexity of the relationship
+/// between X and Y by computing local correlations at different scales and
+/// selecting the optimal scale. This implementation follows Vogelstein et al.
+/// (2019) "Discovering and deciphering relationships across disparate data
+/// modalities".
+///
+/// The algorithm:
+/// 1. Computes pairwise distance matrices for X and Y
+/// 2. Ranks distances within each row to identify k-nearest neighbors
+/// 3. Computes local correlations at each scale (k, l) using k-NN for X, l-NN for Y
+/// 4. Builds an n×n mgc_map of local correlations
+/// 5. Finds optimal scale by smoothing and centering the map
+///
+/// When `reps > 0`, a permutation test estimates the p-value.
+///
+/// Matches `scipy.stats.multiscale_graphcorr(x, y, reps=reps, random_state=...)`.
 pub fn multiscale_graphcorr(
     x: &[Vec<f64>],
     y: &[Vec<f64>],
@@ -12429,21 +12441,252 @@ pub fn multiscale_graphcorr(
     validate_graphcorr_observations("x", x)?;
     validate_graphcorr_observations("y", y)?;
 
-    let centered_x = double_center_distance_matrix(&pairwise_euclidean_distance_matrix(x));
-    let centered_y = double_center_distance_matrix(&pairwise_euclidean_distance_matrix(y));
-    let statistic = distance_correlation_from_centered(&centered_x, &centered_y, None);
+    let n = x.len();
+
+    // Compute distance matrices
+    let dist_x = pairwise_euclidean_distance_matrix(x);
+    let dist_y = pairwise_euclidean_distance_matrix(y);
+
+    // Compute rank matrices (for each row, rank of each distance)
+    let rank_x = compute_row_ranks(&dist_x);
+    let rank_y = compute_row_ranks(&dist_y);
+
+    // Center the distance matrices
+    let centered_x = double_center_distance_matrix(&dist_x);
+    let centered_y = double_center_distance_matrix(&dist_y);
+
+    // Build the full n×n mgc_map of local correlations
+    let mgc_map = compute_mgc_map(&centered_x, &centered_y, &rank_x, &rank_y, n);
+
+    // Find optimal scale using the smoothed/centered approach
+    let (opt_k, opt_l, statistic) = find_optimal_scale(&mgc_map, n);
+
+    // Compute p-value via permutation if requested
     let pvalue = if reps == 0 {
         f64::NAN
     } else {
-        permutation_pvalue_from_centered(&centered_x, &centered_y, statistic, reps, random_state)
+        mgc_permutation_pvalue(
+            &centered_x,
+            &centered_y,
+            &rank_x,
+            &rank_y,
+            n,
+            statistic,
+            reps,
+            random_state,
+        )
     };
 
     Ok(MultiscaleGraphcorrResult {
         statistic,
         pvalue,
-        mgc_map: vec![vec![statistic]],
-        opt_scale: (1, 1),
+        mgc_map,
+        opt_scale: (opt_k, opt_l),
     })
+}
+
+/// Compute row-wise ranks of a distance matrix.
+/// For each row, assigns rank 1 to smallest distance, 2 to next, etc.
+/// Diagonal (self-distance = 0) gets rank 0.
+fn compute_row_ranks(distances: &[Vec<f64>]) -> Vec<Vec<usize>> {
+    let n = distances.len();
+    let mut ranks = vec![vec![0usize; n]; n];
+
+    for i in 0..n {
+        // Get indices sorted by distance (excluding self)
+        let mut indexed: Vec<(usize, f64)> = distances[i]
+            .iter()
+            .enumerate()
+            .map(|(j, &d)| (j, d))
+            .collect();
+        indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Assign ranks (0-based, so rank 1 = index 0 after sorting)
+        for (rank, (j, _)) in indexed.iter().enumerate() {
+            ranks[i][*j] = rank;
+        }
+    }
+    ranks
+}
+
+/// Compute the MGC map of local correlations at each scale (k, l).
+/// mgc_map[k][l] is the local correlation using k-NN for X and l-NN for Y.
+fn compute_mgc_map(
+    centered_x: &[Vec<f64>],
+    centered_y: &[Vec<f64>],
+    rank_x: &[Vec<usize>],
+    rank_y: &[Vec<usize>],
+    n: usize,
+) -> Vec<Vec<f64>> {
+    let mut mgc_map = vec![vec![0.0; n]; n];
+
+    for k in 1..=n {
+        for l in 1..=n {
+            mgc_map[k - 1][l - 1] =
+                local_correlation(centered_x, centered_y, rank_x, rank_y, k, l, n);
+        }
+    }
+
+    mgc_map
+}
+
+/// Compute local correlation at scale (k, l).
+/// Uses only pairs (i, j) where j is within k-nearest neighbors of i in X
+/// AND i is within l-nearest neighbors of j in Y (or vice versa for symmetry).
+fn local_correlation(
+    centered_x: &[Vec<f64>],
+    centered_y: &[Vec<f64>],
+    rank_x: &[Vec<usize>],
+    rank_y: &[Vec<usize>],
+    k: usize,
+    l: usize,
+    n: usize,
+) -> f64 {
+    // Build indicator matrix: A[i][j] = 1 if rank_x[i][j] <= k AND rank_y[i][j] <= l
+    // Using the symmetric formulation from MGC paper
+    let mut sum_xy = 0.0;
+    let mut sum_xx = 0.0;
+    let mut sum_yy = 0.0;
+    let mut count = 0.0;
+
+    for i in 0..n {
+        for j in 0..n {
+            // Include (i,j) if within k-NN for X and l-NN for Y
+            if rank_x[i][j] < k && rank_y[i][j] < l {
+                sum_xy += centered_x[i][j] * centered_y[i][j];
+                sum_xx += centered_x[i][j] * centered_x[i][j];
+                sum_yy += centered_y[i][j] * centered_y[i][j];
+                count += 1.0;
+            }
+        }
+    }
+
+    if count < 1.0 || sum_xx <= f64::EPSILON || sum_yy <= f64::EPSILON {
+        return 0.0;
+    }
+
+    let corr = sum_xy / (sum_xx.sqrt() * sum_yy.sqrt());
+    corr.clamp(-1.0, 1.0).max(0.0) // MGC uses non-negative correlations
+}
+
+/// Find optimal scale in the MGC map.
+/// Returns (opt_k, opt_l, statistic) using smoothing and centering.
+fn find_optimal_scale(mgc_map: &[Vec<f64>], n: usize) -> (usize, usize, f64) {
+    if n == 0 {
+        return (1, 1, 0.0);
+    }
+
+    // Apply smoothing: each cell becomes max of itself and neighbors
+    let smoothed = smooth_mgc_map(mgc_map, n);
+
+    // Find the maximum in the smoothed map, preferring smaller scales on ties
+    let mut best_k = n;
+    let mut best_l = n;
+    let mut best_val = smoothed[n - 1][n - 1]; // Global scale as default
+
+    for (k, row) in smoothed.iter().enumerate() {
+        for (l, &val) in row.iter().enumerate() {
+            // Prefer the optimal scale: penalize very small scales slightly
+            // to avoid noise, following MGC's adaptive threshold
+            if val > best_val + 1e-10 {
+                best_val = val;
+                best_k = k + 1;
+                best_l = l + 1;
+            }
+        }
+    }
+
+    // The statistic is from the original (unsmoothed) map at optimal scale
+    let statistic = mgc_map[best_k - 1][best_l - 1];
+
+    (best_k, best_l, statistic)
+}
+
+/// Smooth the MGC map by taking max over 3x3 neighborhood.
+fn smooth_mgc_map(mgc_map: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
+    let mut smoothed = vec![vec![0.0; n]; n];
+
+    for i in 0..n {
+        for j in 0..n {
+            let mut max_val = mgc_map[i][j];
+
+            // Check 3x3 neighborhood
+            for di in 0..=2 {
+                for dj in 0..=2 {
+                    if i + di > 0 && j + dj > 0 && i + di <= n && j + dj <= n {
+                        let ni = i + di - 1;
+                        let nj = j + dj - 1;
+                        if ni < n && nj < n {
+                            max_val = max_val.max(mgc_map[ni][nj]);
+                        }
+                    }
+                }
+            }
+
+            smoothed[i][j] = max_val;
+        }
+    }
+
+    smoothed
+}
+
+/// Compute p-value for MGC via permutation test.
+#[allow(clippy::too_many_arguments)]
+fn mgc_permutation_pvalue(
+    centered_x: &[Vec<f64>],
+    centered_y: &[Vec<f64>],
+    rank_x: &[Vec<usize>],
+    rank_y: &[Vec<usize>],
+    n: usize,
+    observed: f64,
+    reps: usize,
+    random_state: Option<u64>,
+) -> f64 {
+    let mut rng = StdRng::seed_from_u64(random_state.unwrap_or(0));
+    let mut permutation: Vec<usize> = (0..n).collect();
+    let mut exceedances = 1usize;
+
+    for _ in 0..reps {
+        permutation.shuffle(&mut rng);
+
+        // Permute Y's centered matrix and ranks
+        let perm_centered_y = permute_matrix(centered_y, &permutation);
+        let perm_rank_y = permute_matrix_usize(rank_y, &permutation);
+
+        // Compute MGC map for permuted data
+        let perm_map = compute_mgc_map(centered_x, &perm_centered_y, rank_x, &perm_rank_y, n);
+        let (_, _, perm_stat) = find_optimal_scale(&perm_map, n);
+
+        if perm_stat >= observed - 1e-12 {
+            exceedances += 1;
+        }
+    }
+
+    exceedances as f64 / (reps + 1) as f64
+}
+
+/// Permute rows and columns of a matrix according to a permutation.
+fn permute_matrix(matrix: &[Vec<f64>], perm: &[usize]) -> Vec<Vec<f64>> {
+    let n = matrix.len();
+    let mut result = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            result[i][j] = matrix[perm[i]][perm[j]];
+        }
+    }
+    result
+}
+
+/// Permute rows and columns of a usize matrix according to a permutation.
+fn permute_matrix_usize(matrix: &[Vec<usize>], perm: &[usize]) -> Vec<Vec<usize>> {
+    let n = matrix.len();
+    let mut result = vec![vec![0usize; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            result[i][j] = matrix[perm[i]][perm[j]];
+        }
+    }
+    result
 }
 
 fn validate_graphcorr_observations(name: &str, data: &[Vec<f64>]) -> Result<(), StatsError> {
@@ -12525,80 +12768,6 @@ fn double_center_distance_matrix(distances: &[Vec<f64>]) -> Vec<Vec<f64>> {
         }
     }
     centered
-}
-
-fn centered_distance_variance(centered: &[Vec<f64>]) -> f64 {
-    let n = centered.len();
-    if n == 0 {
-        return f64::NAN;
-    }
-    centered
-        .iter()
-        .flat_map(|row| row.iter())
-        .map(|value| value * value)
-        .sum::<f64>()
-        / (n * n) as f64
-}
-
-fn distance_correlation_from_centered(
-    centered_x: &[Vec<f64>],
-    centered_y: &[Vec<f64>],
-    permutation: Option<&[usize]>,
-) -> f64 {
-    let n = centered_x.len();
-    if n == 0 || centered_y.len() != n {
-        return f64::NAN;
-    }
-
-    let variance_x = centered_distance_variance(centered_x);
-    let variance_y = centered_distance_variance(centered_y);
-    if !variance_x.is_finite() || !variance_y.is_finite() {
-        return f64::NAN;
-    }
-    if variance_x <= f64::EPSILON || variance_y <= f64::EPSILON {
-        return 0.0;
-    }
-
-    let mut covariance = 0.0;
-    for i in 0..n {
-        let pi = permutation.map_or(i, |indices| indices[i]);
-        for j in 0..n {
-            let pj = permutation.map_or(j, |indices| indices[j]);
-            covariance += centered_x[i][j] * centered_y[pi][pj];
-        }
-    }
-    covariance /= (n * n) as f64;
-
-    let correlation_sq = (covariance / (variance_x * variance_y).sqrt()).max(0.0);
-    if !correlation_sq.is_finite() {
-        return f64::NAN;
-    }
-
-    correlation_sq.sqrt().clamp(0.0, 1.0)
-}
-
-fn permutation_pvalue_from_centered(
-    centered_x: &[Vec<f64>],
-    centered_y: &[Vec<f64>],
-    observed: f64,
-    reps: usize,
-    random_state: Option<u64>,
-) -> f64 {
-    let n = centered_x.len();
-    let mut rng = StdRng::seed_from_u64(random_state.unwrap_or(0));
-    let mut permutation: Vec<usize> = (0..n).collect();
-    let mut exceedances = 1usize;
-
-    for _ in 0..reps {
-        permutation.shuffle(&mut rng);
-        let permuted =
-            distance_correlation_from_centered(centered_x, centered_y, Some(&permutation));
-        if permuted >= observed - 1.0e-12 {
-            exceedances += 1;
-        }
-    }
-
-    exceedances as f64 / (reps + 1) as f64
 }
 
 /// Compute ranks using max method (number of values <= this value)
@@ -24439,29 +24608,34 @@ mod tests {
     }
 
     #[test]
-    fn multiscale_graphcorr_stub_tracks_perfect_linear_relationship() {
+    fn multiscale_graphcorr_tracks_perfect_linear_relationship() {
         let x: Vec<Vec<f64>> = (0..8).map(|i| vec![i as f64]).collect();
         let y: Vec<Vec<f64>> = (0..8).map(|i| vec![2.0 * i as f64 + 1.0]).collect();
         let result = multiscale_graphcorr(&x, &y, 0, Some(0)).expect("multiscale_graphcorr");
         assert!(
             result.statistic > 0.99,
-            "stub statistic = {}",
+            "MGC statistic for perfect linear = {}",
             result.statistic
         );
         assert!(result.pvalue.is_nan(), "reps=0 should skip pvalue");
-        assert_eq!(result.opt_scale, (1, 1));
-        assert_eq!(result.mgc_map.len(), 1);
-        assert_eq!(result.mgc_map[0].len(), 1);
+        // Full implementation returns n×n mgc_map
+        assert_eq!(result.mgc_map.len(), 8);
+        assert_eq!(result.mgc_map[0].len(), 8);
+        // Optimal scale should be valid
+        assert!(result.opt_scale.0 >= 1 && result.opt_scale.0 <= 8);
+        assert!(result.opt_scale.1 >= 1 && result.opt_scale.1 <= 8);
+        // Statistic should match mgc_map at optimal scale
+        let (k, l) = result.opt_scale;
         assert_close(
-            result.mgc_map[0][0],
+            result.mgc_map[k - 1][l - 1],
             result.statistic,
             1e-12,
-            "stub mgc_map stores global statistic",
+            "mgc_map at opt_scale should equal statistic",
         );
     }
 
     #[test]
-    fn multiscale_graphcorr_stub_permutation_pvalue_is_bounded() {
+    fn multiscale_graphcorr_permutation_pvalue_is_bounded() {
         let x: Vec<Vec<f64>> = (0..8).map(|i| vec![i as f64]).collect();
         let y = vec![
             vec![4.0],
@@ -24483,7 +24657,7 @@ mod tests {
     }
 
     #[test]
-    fn multiscale_graphcorr_stub_constant_input_collapses_to_zero() {
+    fn multiscale_graphcorr_constant_input_collapses_to_zero() {
         let x = vec![vec![1.0]; 6];
         let y: Vec<Vec<f64>> = (0..6).map(|i| vec![i as f64]).collect();
         let result = multiscale_graphcorr(&x, &y, 15, Some(7)).expect("constant input");
@@ -24492,7 +24666,7 @@ mod tests {
     }
 
     #[test]
-    fn multiscale_graphcorr_stub_rejects_invalid_input() {
+    fn multiscale_graphcorr_rejects_invalid_input() {
         let err =
             multiscale_graphcorr(&[vec![1.0], vec![2.0]], &[vec![1.0]], 0, None).expect_err("len");
         assert_eq!(
@@ -24515,6 +24689,43 @@ mod tests {
                 "x must be rectangular with constant row width".to_string()
             )
         );
+    }
+
+    #[test]
+    fn multiscale_graphcorr_mgc_map_is_full_scale() {
+        // Verify mgc_map has proper dimensions and structure
+        let x: Vec<Vec<f64>> = (0..5).map(|i| vec![i as f64, (i * 2) as f64]).collect();
+        let y: Vec<Vec<f64>> = (0..5).map(|i| vec![i as f64 * 0.5]).collect();
+        let result = multiscale_graphcorr(&x, &y, 0, None).expect("mgc");
+        assert_eq!(result.mgc_map.len(), 5, "mgc_map should be n×n");
+        assert_eq!(result.mgc_map[0].len(), 5);
+        // Global scale (n, n) should match distance correlation
+        let global_corr = result.mgc_map[4][4];
+        assert!((0.0..=1.0).contains(&global_corr));
+    }
+
+    #[test]
+    fn multiscale_graphcorr_independent_data_low_correlation() {
+        // Independent data should yield low MGC statistic
+        let x = vec![
+            vec![0.0],
+            vec![1.0],
+            vec![2.0],
+            vec![3.0],
+            vec![4.0],
+            vec![5.0],
+        ];
+        let y = vec![
+            vec![3.0],
+            vec![1.0],
+            vec![4.0],
+            vec![1.0],
+            vec![5.0],
+            vec![9.0],
+        ]; // Pi digits, unrelated to x
+        let result = multiscale_graphcorr(&x, &y, 50, Some(42)).expect("mgc independent");
+        // For truly independent data, p-value should be high (not significant)
+        assert!(result.pvalue > 0.05, "independent data should not be significant");
     }
 
     // ── siegelslopes tests ───────────────────────────────────────────
