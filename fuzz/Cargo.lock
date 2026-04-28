@@ -404,6 +404,7 @@ name = "frankenscipy-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
+ "fsci-cluster",
  "fsci-conformance",
  "fsci-fft",
  "fsci-integrate",
