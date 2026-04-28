@@ -8,7 +8,7 @@
   "duration_ns": 0,
   "snapshot": {
     "n": 100,
-    "nnz": 512,
+    "nnz": 500,
     "identity_err": 0.0
   }
 }

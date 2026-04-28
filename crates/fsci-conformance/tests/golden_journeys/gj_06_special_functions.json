@@ -7,7 +7,7 @@
   "all_pass": true,
   "duration_ns": 0,
   "snapshot": {
-    "gamma5": 24.000000000000004,
+    "gamma5": 23.99999999999996,
     "erf_erfc_sum": 1.0
   }
 }
