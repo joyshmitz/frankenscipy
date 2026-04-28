@@ -18,6 +18,7 @@ fsci-signal = { path = "../crates/fsci-signal" }
 fsci-spatial = { path = "../crates/fsci-spatial" }
 fsci-io = { path = "../crates/fsci-io" }
 fsci-linalg = { path = "../crates/fsci-linalg" }
+fsci-ndimage = { path = "../crates/fsci-ndimage" }
 fsci-opt = { path = "../crates/fsci-opt" }
 fsci-runtime = { path = "../crates/fsci-runtime" }
 fsci-special = { path = "../crates/fsci-special" }
@@ -227,6 +228,13 @@ bench = false
 [[bin]]
 name = "p2c012_cluster_fcluster_bounds"
 path = "fuzz_targets/p2c012_cluster_fcluster_bounds.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c013_ndimage_uniform_filter_idempotent"
+path = "fuzz_targets/p2c013_ndimage_uniform_filter_idempotent.rs"
 test = false
 doc = false
 bench = false

@@ -411,6 +411,7 @@ dependencies = [
  "fsci-interpolate",
  "fsci-io",
  "fsci-linalg",
+ "fsci-ndimage",
  "fsci-opt",
  "fsci-runtime",
  "fsci-signal",
