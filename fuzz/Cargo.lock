@@ -407,6 +407,7 @@ dependencies = [
  "fsci-conformance",
  "fsci-fft",
  "fsci-integrate",
+ "fsci-interpolate",
  "fsci-io",
  "fsci-linalg",
  "fsci-opt",
