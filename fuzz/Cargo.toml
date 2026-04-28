@@ -238,3 +238,10 @@ path = "fuzz_targets/p2c013_ndimage_uniform_filter_idempotent.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c014_optimize_linear_sum_assignment"
+path = "fuzz_targets/p2c014_optimize_linear_sum_assignment.rs"
+test = false
+doc = false
+bench = false
