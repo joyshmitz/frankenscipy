@@ -97,7 +97,8 @@ jobs:
         timeout-minutes: 25
 
   # ── G6: Performance Regression (parallel) ─────────────────────────
-  # Runs perf_* targets with real failure propagation (no '|| true').
+  # Runs ALL perf_* targets with real failure propagation (no '|| true').
+  # Per bead frankenscipy-rvox: previously only ran 3 of 8 perf tests.
   g6-perf:
     name: "G6: perf regression"
     needs: g2-unit-tests
@@ -107,11 +108,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - run: |
           set -e
-          for test in perf_linalg perf_ivp perf_arrayapi; do
+          for test in perf_arrayapi perf_casp perf_fft perf_ivp \
+                      perf_linalg perf_optimize perf_sparse perf_special; do
             echo "=== Running $test ==="
             cargo test -p fsci-conformance --test "$test" -- --nocapture
           done
-        timeout-minutes: 10
+        timeout-minutes: 20
 
   # ── G7: Artifact Schema Validation + Evidence Packs (parallel) ────
   # Previously duplicated G3's schema_validation invocation. Now the
