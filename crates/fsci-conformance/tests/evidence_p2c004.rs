@@ -365,15 +365,15 @@ fn evidence_p2c004_final_pack() {
         notes: vec![
             RiskNote {
                 category: "structural_singularity",
-                description: "Zero-pivot in sparse LU can produce inf/NaN. spsolve kernel is not yet implemented; currently returns Unsupported error.".into(),
+                description: "Zero-pivot in LU can produce inf/NaN. spsolve/splu use dense LU fallback for N <= 32768.".into(),
                 affected_operations: vec!["spsolve", "splu"],
-                mitigation: "All spsolve-dependent tests adapted to use spmv. spsolve implementation deferred to future packet.".into(),
+                mitigation: "Dense LU fallback with SPSOLVE_DENSE_MAX_N guard. Singular matrices return SparseError. Native sparse-direct path deferred.".into(),
             },
             RiskNote {
                 category: "fill_in_explosion",
-                description: "LU factorization of sparse matrices can produce dense factors. Ordering strategies (AMD, RCM) not yet implemented.".into(),
+                description: "LU of sparse matrices can fill in. Current impl converts to dense for N <= 32768; larger matrices rejected.".into(),
                 affected_operations: vec!["splu", "spilu"],
-                mitigation: "Factorization kernels return Unsupported. Fill-in budget checks will be added with kernel implementation.".into(),
+                mitigation: "SPSOLVE_DENSE_MAX_N guard rejects large matrices. Native sparse-direct with AMD/RCM ordering deferred to bead u7bd.".into(),
             },
             RiskNote {
                 category: "csr_csc_conversion_fidelity",
@@ -441,6 +441,20 @@ fn evidence_p2c004_final_pack() {
         }
     }
     assert!(all_pass, "All parity gates must pass");
+
+    // Bead frankenscipy-xai2: prevent stale risk notes for implemented operations
+    for note in &evidence.risk_notes.notes {
+        let desc = note.description.to_lowercase();
+        let mitig = note.mitigation.to_lowercase();
+        assert!(
+            !desc.contains("not yet implemented")
+                && !desc.contains("returns unsupported error")
+                && !mitig.contains("returns unsupported"),
+            "Risk note contains stale 'not implemented' text for {:?}: {}",
+            note.affected_operations,
+            note.description
+        );
+    }
 
     eprintln!("\n── P2C-004 Evidence Pack ──");
     for s in &evidence.parity_report.operation_summaries {
