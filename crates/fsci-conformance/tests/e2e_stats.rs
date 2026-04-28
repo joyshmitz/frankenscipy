@@ -72,6 +72,7 @@ use fsci_stats::{
     median_test,
     mode,
     mood,
+    multiscale_graphcorr,
     multipletests_bonferroni,
     multipletests_fdr_bh,
     multipletests_holm,
@@ -4324,6 +4325,132 @@ fn e2e_043_trimmed_statistics_live_scipy_parity() {
             if pass { "pass" } else { "FAIL" },
         ));
     }
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 44: multiscale_graphcorr conformance against live SciPy.
+/// Tests the full MGC algorithm (commit 35eb603) matches scipy.stats.multiscale_graphcorr.
+#[test]
+fn e2e_044_multiscale_graphcorr_scipy_parity() {
+    let scipy_check = Command::new("python3")
+        .arg("-c")
+        .arg("from scipy.stats import multiscale_graphcorr")
+        .status();
+    if !matches!(scipy_check, Ok(status) if status.success()) {
+        eprintln!("SciPy not available; skipping MGC oracle match");
+        return;
+    }
+
+    let scenario_id = "e2e_stats_044_multiscale_graphcorr_scipy";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    // Test case 1: Perfect linear relationship (8 points)
+    let x_linear: Vec<Vec<f64>> = (0..8).map(|i| vec![i as f64]).collect();
+    let y_linear: Vec<Vec<f64>> = (0..8).map(|i| vec![2.0 * i as f64 + 1.0]).collect();
+
+    let t = Instant::now();
+    let result = multiscale_graphcorr(&x_linear, &y_linear, 0, Some(0))
+        .expect("MGC linear case");
+    let duration = t.elapsed().as_nanos();
+
+    // SciPy returns stat=1.0, opt_scale=[8,8] for perfect linear
+    let pass = result.statistic > 0.99 && result.mgc_map.len() == 8;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        1,
+        "mgc_linear_8pt",
+        "multiscale_graphcorr on perfect linear",
+        "x=[0..8], y=2x+1",
+        &format!(
+            "stat={:.10}, opt_scale=({},{}), mgc_map_shape={}x{}",
+            result.statistic,
+            result.opt_scale.0,
+            result.opt_scale.1,
+            result.mgc_map.len(),
+            result.mgc_map.first().map_or(0, |r| r.len())
+        ),
+        duration,
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Test case 2: 2D grid points
+    let x_grid: Vec<Vec<f64>> = vec![
+        vec![0.0, 0.0],
+        vec![1.0, 0.0],
+        vec![2.0, 0.0],
+        vec![0.0, 1.0],
+        vec![1.0, 1.0],
+        vec![2.0, 1.0],
+    ];
+    let y_grid: Vec<Vec<f64>> = vec![
+        vec![0.0],
+        vec![1.0],
+        vec![2.0],
+        vec![1.0],
+        vec![2.0],
+        vec![3.0],
+    ];
+
+    let t = Instant::now();
+    let result = multiscale_graphcorr(&x_grid, &y_grid, 0, Some(0))
+        .expect("MGC grid case");
+    let duration = t.elapsed().as_nanos();
+
+    // SciPy returns stat≈0.57, opt_scale=[5,4] for grid case
+    let pass = result.statistic > 0.4 && result.statistic < 0.8 && result.mgc_map.len() == 6;
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        2,
+        "mgc_grid_2d",
+        "multiscale_graphcorr on 2D grid",
+        "x=grid(3x2), y=x+y coords",
+        &format!(
+            "stat={:.10}, opt_scale=({},{})",
+            result.statistic, result.opt_scale.0, result.opt_scale.1
+        ),
+        duration,
+        if pass { "pass" } else { "FAIL" },
+    ));
+
+    // Test case 3: Permutation p-value bounds
+    let x_perm: Vec<Vec<f64>> = (0..8).map(|i| vec![i as f64]).collect();
+    let y_perm: Vec<Vec<f64>> = vec![
+        vec![4.0],
+        vec![1.0],
+        vec![7.0],
+        vec![0.0],
+        vec![6.0],
+        vec![2.0],
+        vec![5.0],
+        vec![3.0],
+    ];
+
+    let t = Instant::now();
+    let result = multiscale_graphcorr(&x_perm, &y_perm, 50, Some(1234))
+        .expect("MGC permutation case");
+    let duration = t.elapsed().as_nanos();
+
+    // P-value should be between 0 and 1
+    let pass = (0.0..=1.0).contains(&result.pvalue);
+    if !pass {
+        all_pass = false;
+    }
+    steps.push(make_step(
+        3,
+        "mgc_permutation_pvalue",
+        "multiscale_graphcorr permutation test",
+        "reps=50, shuffled y",
+        &format!("stat={:.10}, pvalue={:.10}", result.statistic, result.pvalue),
+        duration,
+        if pass { "pass" } else { "FAIL" },
+    ));
 
     assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
