@@ -5045,6 +5045,44 @@ impl ContinuousDistribution for PowerLaw {
     fn var(&self) -> f64 {
         self.a / ((self.a + 1.0).powi(2) * (self.a + 2.0))
     }
+
+    fn fit(data: &[f64]) -> Self {
+        if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x <= 0.0 || x > 1.0) {
+            return Self { a: f64::NAN };
+        }
+
+        let log_sum = data.iter().map(|&x| x.ln()).sum::<f64>();
+        if !log_sum.is_finite() || log_sum > 0.0 {
+            return Self { a: f64::NAN };
+        }
+        if log_sum == 0.0 {
+            return Self { a: f64::INFINITY };
+        }
+
+        Self {
+            a: -(data.len() as f64) / log_sum,
+        }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "PowerLaw::fit: non-finite samples".to_owned(),
+            ));
+        }
+        if data.iter().any(|&x| x <= 0.0 || x > 1.0) {
+            return Err(FitError::UnsupportedData(
+                "PowerLaw::fit: samples must be in (0, 1] for fixed-support MLE".to_owned(),
+            ));
+        }
+        Ok(Self::fit(data))
+    }
 }
 
 /// Half-normal distribution (folded normal).
@@ -20817,6 +20855,33 @@ mod tests {
     }
 
     #[test]
+    fn test_fit_power_law_closed_form() {
+        let data = [0.25, 0.5, 0.75, 1.0];
+        let fitted = PowerLaw::fit(&data);
+        let expected_shape = -(data.len() as f64) / data.iter().map(|&x| x.ln()).sum::<f64>();
+
+        assert_close(fitted.a, expected_shape, 1e-12, "powerlaw fit shape");
+        assert_close(
+            PowerLaw::try_fit(&data).expect("clean powerlaw samples").a,
+            expected_shape,
+            1e-12,
+            "powerlaw try_fit shape",
+        );
+    }
+
+    #[test]
+    fn test_try_fit_power_law_rejects_out_of_support_samples() {
+        assert!(matches!(
+            PowerLaw::try_fit(&[0.0, 0.5]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        assert!(matches!(
+            PowerLaw::try_fit(&[0.5, 1.25]),
+            Err(FitError::UnsupportedData(_))
+        ));
+    }
+
+    #[test]
     fn test_fit_gumbel_recovers_quantile_grid() {
         let reference = Gumbel::new(1.25, 0.8);
         let data: Vec<f64> = (1..100).map(|i| reference.ppf(i as f64 / 100.0)).collect();
@@ -20855,6 +20920,7 @@ mod tests {
         assert!(Laplace::fit(empty).loc.is_nan());
         assert!(GammaDist::fit(empty).a.is_nan());
         assert!(Pareto::fit(empty).b.is_nan());
+        assert!(PowerLaw::fit(empty).a.is_nan());
         assert!(Gumbel::fit(empty).loc.is_nan());
         assert!(GumbelLeft::fit(empty).loc.is_nan());
         assert!(Maxwell::fit(empty).scale.is_nan());
@@ -20866,6 +20932,7 @@ mod tests {
         assert!(ChiSquared::fit(&[-1.0, 2.0, 3.0]).df.is_nan());
         assert!(FDistribution::fit(&[-1.0, 2.0, 3.0]).dfn.is_nan());
         assert!(BetaDist::fit(&[0.2, 1.2, 0.4]).a.is_nan());
+        assert!(PowerLaw::fit(&[0.0, 0.5, 1.0]).a.is_nan());
         assert!(Cauchy::fit(&[1.0, f64::NAN, 3.0]).loc.is_nan());
     }
 
