@@ -12,6 +12,7 @@ arbitrary = { version = "1.4.2", features = ["derive"] }
 fsci-conformance = { path = "../crates/fsci-conformance", default-features = false }
 fsci-fft = { path = "../crates/fsci-fft" }
 fsci-integrate = { path = "../crates/fsci-integrate" }
+fsci-signal = { path = "../crates/fsci-signal" }
 fsci-io = { path = "../crates/fsci-io" }
 fsci-linalg = { path = "../crates/fsci-linalg" }
 fsci-opt = { path = "../crates/fsci-opt" }
@@ -195,6 +196,13 @@ bench = false
 [[bin]]
 name = "p2c017_io_wav_read"
 path = "fuzz_targets/p2c017_io_wav_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c009_signal_convolve_equiv"
+path = "fuzz_targets/p2c009_signal_convolve_equiv.rs"
 test = false
 doc = false
 bench = false

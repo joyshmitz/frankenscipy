@@ -411,6 +411,7 @@ dependencies = [
  "fsci-linalg",
  "fsci-opt",
  "fsci-runtime",
+ "fsci-signal",
  "fsci-sparse",
  "fsci-special",
  "fsci-stats",
