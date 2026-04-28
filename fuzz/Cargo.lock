@@ -405,7 +405,9 @@ version = "0.0.0"
 dependencies = [
  "arbitrary",
  "fsci-conformance",
+ "fsci-fft",
  "fsci-integrate",
+ "fsci-io",
  "fsci-linalg",
  "fsci-opt",
  "fsci-runtime",
