@@ -18,6 +18,7 @@ use fsci_sparse::{
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 // ───────────────────── Structured log types ─────────────────────
@@ -139,6 +140,36 @@ fn make_test_coo(rows: usize, cols: usize, triplets: &[(usize, usize, f64)]) -> 
         },
     );
     CooMatrix::from_triplets(Shape2D::new(rows, cols), d, r, c, false).expect("valid test coo")
+}
+
+fn scipy_spsolve_tridiagonal_4x4() -> Option<Vec<f64>> {
+    let script = r#"
+import json
+import numpy as np
+from scipy import sparse
+from scipy.sparse import linalg as splinalg
+
+row = np.array([0, 0, 1, 1, 1, 2, 2, 2, 3, 3], dtype=np.int64)
+col = np.array([0, 1, 0, 1, 2, 1, 2, 3, 2, 3], dtype=np.int64)
+data = np.array([4.0, -1.0, -1.0, 4.0, -1.0, -1.0, 4.0, -1.0, -1.0, 3.0], dtype=np.float64)
+rhs = np.array([15.0, 10.0, 10.0, 10.0], dtype=np.float64)
+matrix = sparse.coo_matrix((data, (row, col)), shape=(4, 4)).tocsr()
+solution = splinalg.spsolve(matrix, rhs)
+print(json.dumps([float(value) for value in np.atleast_1d(solution).tolist()]))
+"#;
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        eprintln!(
+            "SciPy sparse spsolve oracle unavailable: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -652,6 +683,53 @@ fn diff_016_spmv_wide_matrix_6x2() {
         duration_ns: start.elapsed().as_nanos(),
     });
     assert!(pass, "wide spmv diff={diff}");
+}
+
+#[test]
+fn diff_017_spsolve_vs_scipy_superlu_4x4() {
+    let start = Instant::now();
+    let Some(scipy_result) = scipy_spsolve_tridiagonal_4x4() else {
+        eprintln!("SciPy sparse spsolve oracle unavailable; skipping diff_017");
+        return;
+    };
+
+    let coo = make_test_coo(
+        4,
+        4,
+        &[
+            (0, 0, 4.0),
+            (0, 1, -1.0),
+            (1, 0, -1.0),
+            (1, 1, 4.0),
+            (1, 2, -1.0),
+            (2, 1, -1.0),
+            (2, 2, 4.0),
+            (2, 3, -1.0),
+            (3, 2, -1.0),
+            (3, 3, 3.0),
+        ],
+    );
+    let csr = coo.to_csr().expect("csr");
+    let rhs = vec![15.0, 10.0, 10.0, 10.0];
+    let rust_result = spsolve(&csr, &rhs, SolveOptions::default())
+        .expect("rust spsolve")
+        .solution;
+    let diff = max_abs_diff_vec(&rust_result, &scipy_result);
+    let tolerance = 1e-10;
+    let pass = diff <= tolerance;
+    emit_log(&DiffTestLog {
+        test_id: "diff_017_spsolve_vs_scipy_superlu_4x4".into(),
+        category: "scipy_differential".into(),
+        input_summary: "4x4 SPD tridiagonal CSR solve vs scipy.sparse.linalg.spsolve".into(),
+        expected: format!("scipy={scipy_result:?}"),
+        actual: format!("rust={rust_result:?}"),
+        diff,
+        tolerance,
+        pass,
+        timestamp_ms: timestamp_ms(),
+        duration_ns: start.elapsed().as_nanos(),
+    });
+    assert!(pass, "spsolve SciPy oracle diff={diff} > tol={tolerance}");
 }
 
 // ═══════════════════════════════════════════════════════════════
