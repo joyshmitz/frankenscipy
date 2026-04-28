@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::{Normalization, TransformKind};
 
@@ -301,54 +301,53 @@ fn shared_cache() -> &'static Mutex<BoundedPlanCache> {
     SHARED_PLAN_CACHE.get_or_init(|| Mutex::new(BoundedPlanCache::default()))
 }
 
+fn lock_shared_cache() -> MutexGuard<'static, BoundedPlanCache> {
+    let cache = shared_cache();
+    match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            cache.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 #[must_use]
 pub fn lookup_shared_plan(key: &PlanKey) -> Option<PlanMetadata> {
-    shared_cache()
-        .lock()
-        .ok()
-        .and_then(|mut cache| cache.lookup_and_touch(key))
+    lock_shared_cache().lookup_and_touch(key)
 }
 
 #[must_use]
 pub fn store_shared_plan(metadata: PlanMetadata) -> bool {
-    if let Ok(mut cache) = shared_cache().lock() {
-        return cache.store(metadata);
-    }
-    false
+    lock_shared_cache().store(metadata)
 }
 
 #[must_use]
 pub fn store_shared_plan_with_config(metadata: PlanMetadata, config: PlanCacheConfig) -> bool {
-    if let Ok(mut cache) = shared_cache().lock() {
-        return cache.store_with_config(metadata, config);
-    }
-    false
+    lock_shared_cache().store_with_config(metadata, config)
 }
 
 #[must_use]
 pub fn shared_plan_cache_len() -> usize {
-    shared_cache().lock().map_or(0, |cache| cache.len())
+    lock_shared_cache().len()
 }
 
 #[must_use]
 pub fn shared_plan_cache_working_set_bytes() -> usize {
-    shared_cache()
-        .lock()
-        .map_or(0, |cache| cache.working_set_bytes())
+    lock_shared_cache().working_set_bytes()
 }
 
 pub fn clear_shared_plan_cache() {
-    if let Ok(mut cache) = shared_cache().lock() {
-        *cache = BoundedPlanCache::default();
-    }
+    *lock_shared_cache() = BoundedPlanCache::default();
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         CacheAdmissionPolicy, PlanCacheConfig, PlanFingerprint, PlanKey, PlanMetadata,
-        PlanningStrategy, clear_shared_plan_cache, lookup_shared_plan, shared_plan_cache_len,
-        shared_plan_cache_working_set_bytes, store_shared_plan, store_shared_plan_with_config,
+        PlanningStrategy, clear_shared_plan_cache, lookup_shared_plan, shared_cache,
+        shared_plan_cache_len, shared_plan_cache_working_set_bytes, store_shared_plan,
+        store_shared_plan_with_config,
     };
     use crate::{Normalization, TransformKind};
 
@@ -416,6 +415,32 @@ mod tests {
         assert!(store_shared_plan(metadata));
         assert_eq!(shared_plan_cache_len(), 1);
         assert!(lookup_shared_plan(&key).is_some());
+    }
+
+    #[test]
+    fn shared_cache_recovers_after_poisoned_lock() {
+        clear_shared_plan_cache();
+        let poison_result = std::panic::catch_unwind(|| {
+            let _guard = match shared_cache().lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            std::panic::resume_unwind(Box::new("poison shared FFT plan cache"));
+        });
+        assert!(poison_result.is_err());
+        assert!(shared_cache().lock().is_err(), "test should poison cache");
+
+        let metadata = test_metadata(256, 10_240, 256 * 16);
+        let key = metadata.key.clone();
+        assert!(store_shared_plan(metadata));
+        assert_eq!(shared_plan_cache_len(), 1);
+        assert!(lookup_shared_plan(&key).is_some());
+        assert!(
+            shared_cache().lock().is_ok(),
+            "shared cache operations should clear poison"
+        );
+
+        clear_shared_plan_cache();
     }
 
     #[test]
