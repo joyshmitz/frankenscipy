@@ -88,15 +88,19 @@ use fsci_stats::{
     skew,
     skewtest,
     spearmanr,
+    tmean,
+    tsem,
+    tstd,
     ttest_1samp,
     ttest_ind,
     ttest_ind_from_stats,
     ttest_rel,
+    tvar,
     wilcoxon,
     winsorize,
     zmap,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // ---- Topology-compliant log types ----
 
@@ -261,6 +265,94 @@ fn write_topology_artifacts(
 }
 
 const TOL: f64 = 1e-8;
+const TRIMMED_STATS_SCIPY_SCRIPT: &str = r#"
+import json
+from scipy import stats
+
+CASES = [
+    {
+        "case_id": "left_closed_right_open",
+        "data": [1.0, 2.0, 2.0, 3.5, 4.0, 7.0, 9.0],
+        "limits": (2.0, 7.0),
+        "inclusive": (True, False),
+        "ddof": 1,
+    },
+    {
+        "case_id": "left_open_right_closed",
+        "data": [1.0, 2.0, 2.0, 3.5, 4.0, 7.0, 9.0],
+        "limits": (2.0, 7.0),
+        "inclusive": (False, True),
+        "ddof": 1,
+    },
+    {
+        "case_id": "population_ddof_zero",
+        "data": [-3.0, -1.0, 0.0, 2.0, 5.0, 8.0],
+        "limits": (-1.0, 8.0),
+        "inclusive": (True, True),
+        "ddof": 0,
+    },
+]
+
+outputs = []
+for case in CASES:
+    data = case["data"]
+    limits = case["limits"]
+    inclusive = case["inclusive"]
+    ddof = case["ddof"]
+    outputs.append({
+        "case_id": case["case_id"],
+        "tmean": float(stats.tmean(data, limits=limits, inclusive=inclusive)),
+        "tvar": float(stats.tvar(data, limits=limits, inclusive=inclusive, ddof=ddof)),
+        "tstd": float(stats.tstd(data, limits=limits, inclusive=inclusive, ddof=ddof)),
+        "tsem": float(stats.tsem(data, limits=limits, inclusive=inclusive, ddof=ddof)),
+    })
+
+print(json.dumps(outputs, allow_nan=False))
+"#;
+
+#[derive(Debug, Clone, Copy)]
+struct TrimmedStatsCase {
+    case_id: &'static str,
+    data: &'static [f64],
+    limits: (f64, f64),
+    inclusive: (bool, bool),
+    ddof: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TrimmedStatsOracle {
+    case_id: String,
+    tmean: f64,
+    tvar: f64,
+    tstd: f64,
+    tsem: f64,
+}
+
+fn trimmed_stats_cases() -> Vec<TrimmedStatsCase> {
+    vec![
+        TrimmedStatsCase {
+            case_id: "left_closed_right_open",
+            data: &[1.0, 2.0, 2.0, 3.5, 4.0, 7.0, 9.0],
+            limits: (2.0, 7.0),
+            inclusive: (true, false),
+            ddof: 1,
+        },
+        TrimmedStatsCase {
+            case_id: "left_open_right_closed",
+            data: &[1.0, 2.0, 2.0, 3.5, 4.0, 7.0, 9.0],
+            limits: (2.0, 7.0),
+            inclusive: (false, true),
+            ddof: 1,
+        },
+        TrimmedStatsCase {
+            case_id: "population_ddof_zero",
+            data: &[-3.0, -1.0, 0.0, 2.0, 5.0, 8.0],
+            limits: (-1.0, 8.0),
+            inclusive: (true, true),
+            ddof: 0,
+        },
+    ]
+}
 
 fn make_step(
     step_id: usize,
@@ -4134,6 +4226,104 @@ fn e2e_042_continuous_distribution_fit_parity() {
         t.elapsed().as_nanos(),
         if degenerate_pass { "pass" } else { "FAIL" },
     ));
+
+    assert_artifacts_written(scenario_id, &steps, all_pass);
+    assert!(all_pass, "scenario {scenario_id} had failures");
+}
+
+/// Scenario 43: trimmed descriptive-statistic parity against live SciPy.
+#[test]
+fn e2e_043_trimmed_statistics_live_scipy_parity() {
+    let scipy_check = Command::new("python3")
+        .arg("-c")
+        .arg("import scipy; import numpy")
+        .status();
+    if !matches!(scipy_check, Ok(status) if status.success()) {
+        eprintln!("SciPy/NumPy not available; skipping trimmed stats oracle match");
+        return;
+    }
+
+    let scenario_id = "e2e_stats_043_trimmed_statistics_live_scipy";
+    let mut steps = Vec::new();
+    let mut all_pass = true;
+
+    let t = Instant::now();
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(TRIMMED_STATS_SCIPY_SCRIPT)
+        .output()
+        .expect("run trimmed-stats SciPy oracle");
+    let oracle_duration = t.elapsed().as_nanos();
+    assert!(
+        output.status.success(),
+        "trimmed-stats SciPy oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let expected: Vec<TrimmedStatsOracle> =
+        serde_json::from_slice(&output.stdout).expect("parse trimmed-stats SciPy oracle output");
+    let cases = trimmed_stats_cases();
+    assert_eq!(
+        expected.len(),
+        cases.len(),
+        "trimmed-stats oracle case count mismatch"
+    );
+    steps.push(make_step(
+        1,
+        "run_scipy_trimmed_stats_oracle",
+        "python3 -c TRIMMED_STATS_SCIPY_SCRIPT",
+        &format!("cases={}", cases.len()),
+        &format!("oracle_cases={}", expected.len()),
+        oracle_duration,
+        "pass",
+    ));
+
+    for (idx, (case, oracle)) in cases.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(
+            case.case_id, oracle.case_id,
+            "trimmed-stats oracle case id mismatch"
+        );
+
+        let t = Instant::now();
+        let actual_tmean = tmean(case.data, case.limits, case.inclusive);
+        let actual_tvar = tvar(case.data, case.limits, case.inclusive, case.ddof);
+        let actual_tstd = tstd(case.data, case.limits, case.inclusive, case.ddof);
+        let actual_tsem = tsem(case.data, case.limits, case.inclusive, case.ddof);
+        let tolerance = 1.0e-12;
+        let diffs = [
+            (actual_tmean - oracle.tmean).abs(),
+            (actual_tvar - oracle.tvar).abs(),
+            (actual_tstd - oracle.tstd).abs(),
+            (actual_tsem - oracle.tsem).abs(),
+        ];
+        let pass = diffs.iter().all(|diff| *diff <= tolerance);
+        if !pass {
+            all_pass = false;
+        }
+        steps.push(make_step(
+            idx + 2,
+            &format!("compare_trimmed_stats_{}", case.case_id),
+            "tmean/tvar/tstd/tsem vs scipy.stats",
+            &format!(
+                "limits=({:.6},{:.6}), inclusive=({},{}) ddof={}",
+                case.limits.0, case.limits.1, case.inclusive.0, case.inclusive.1, case.ddof
+            ),
+            &format!(
+                "actual=({:.16},{:.16},{:.16},{:.16}) expected=({:.16},{:.16},{:.16},{:.16}) max_diff={:.3e}",
+                actual_tmean,
+                actual_tvar,
+                actual_tstd,
+                actual_tsem,
+                oracle.tmean,
+                oracle.tvar,
+                oracle.tstd,
+                oracle.tsem,
+                diffs.iter().copied().fold(0.0, f64::max)
+            ),
+            t.elapsed().as_nanos(),
+            if pass { "pass" } else { "FAIL" },
+        ));
+    }
 
     assert_artifacts_written(scenario_id, &steps, all_pass);
     assert!(all_pass, "scenario {scenario_id} had failures");
