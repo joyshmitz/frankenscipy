@@ -414,6 +414,7 @@ dependencies = [
  "fsci-runtime",
  "fsci-signal",
  "fsci-sparse",
+ "fsci-spatial",
  "fsci-special",
  "fsci-stats",
  "libfuzzer-sys",

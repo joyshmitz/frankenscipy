@@ -14,6 +14,7 @@ fsci-fft = { path = "../crates/fsci-fft" }
 fsci-integrate = { path = "../crates/fsci-integrate" }
 fsci-interpolate = { path = "../crates/fsci-interpolate" }
 fsci-signal = { path = "../crates/fsci-signal" }
+fsci-spatial = { path = "../crates/fsci-spatial" }
 fsci-io = { path = "../crates/fsci-io" }
 fsci-linalg = { path = "../crates/fsci-linalg" }
 fsci-opt = { path = "../crates/fsci-opt" }
@@ -211,6 +212,13 @@ bench = false
 [[bin]]
 name = "p2c010_interpolate_passthrough"
 path = "fuzz_targets/p2c010_interpolate_passthrough.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c011_spatial_squareform"
+path = "fuzz_targets/p2c011_spatial_squareform.rs"
 test = false
 doc = false
 bench = false
