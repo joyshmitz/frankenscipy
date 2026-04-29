@@ -212,3 +212,51 @@ fn mr_convolve_linear_in_first_arg() {
         assert_close(*cv, expected, &format!("MR9 linearity at i={i}"));
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — Hilbert envelope identity: |x_a|² = x² + H[x]², the
+// definition of analytic-signal magnitude squared.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hilbert_envelope_squared_identity() {
+    for &n in &[16_usize, 32, 64, 100] {
+        let x: Vec<f64> = (0..n)
+            .map(|i| (i as f64 / n as f64 * std::f64::consts::TAU).sin())
+            .collect();
+        let analytic = hilbert(&x).unwrap();
+        for (i, ((re, im), &xi)) in analytic.iter().zip(&x).enumerate() {
+            // Real part should equal input (already covered by MR7).
+            // Envelope: |x_a|² = re² + im² should equal xi² + im².
+            let env_sq = re * re + im * im;
+            let expected = xi * xi + im * im;
+            assert!(
+                (env_sq - expected).abs() < 1e-9 * env_sq.max(1.0),
+                "MR10 hilbert envelope at n={n} i={i}: got {env_sq}, expected {expected}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — Hilbert applied to a constant signal returns x_a.real = const
+// and x_a.imag ≈ 0 (since the Hilbert transform of a constant is 0).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hilbert_of_constant() {
+    let n = 64_usize;
+    let value = 3.5_f64;
+    let x = vec![value; n];
+    let analytic = hilbert(&x).unwrap();
+    for (i, (re, im)) in analytic.iter().enumerate() {
+        assert!(
+            (re - value).abs() < 1e-9,
+            "MR11 hilbert const real part at i={i}: {re} vs {value}"
+        );
+        assert!(
+            im.abs() < 1e-9,
+            "MR11 hilbert const imag part at i={i}: {im}"
+        );
+    }
+}
