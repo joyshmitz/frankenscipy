@@ -321,3 +321,42 @@ fn mr_fft2_parseval() {
         assert_close(lhs, rhs, &format!("MR10 fft2 Parseval rows={rows} cols={cols}"));
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — rfft output length is N/2 + 1 and matches fft Hermitian half.
+//
+// For a real input of length N:
+//   rfft(x).len() == N/2 + 1
+// and the rfft output equals the first N/2+1 entries of fft of the
+// complex-promoted input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rfft_matches_fft_hermitian_half() {
+    let opts = FftOptions::default();
+    for &n in &[2_usize, 4, 8, 16, 17, 32, 33, 64, 100] {
+        let x_real = random_real(n, 0xCAFE_DEAD + n as u64);
+        let r = rfft(&x_real, &opts).unwrap();
+        let expected_len = n / 2 + 1;
+        assert_eq!(
+            r.len(),
+            expected_len,
+            "MR11 rfft length n={n}: got {}, expected {expected_len}",
+            r.len()
+        );
+
+        // Compare to fft(complex(x))[..N/2+1].
+        let x_complex: Vec<Complex64> = x_real.iter().map(|&v| (v, 0.0)).collect();
+        let f = fft(&x_complex, &opts).unwrap();
+        for k in 0..expected_len {
+            assert!(
+                close_complex(r[k], f[k]),
+                "MR11 rfft[{k}] vs fft[{k}] at n={n}: ({}, {}) vs ({}, {})",
+                r[k].0,
+                r[k].1,
+                f[k].0,
+                f[k].1
+            );
+        }
+    }
+}
