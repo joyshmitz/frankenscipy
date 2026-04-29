@@ -219,6 +219,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c009_signal_find_peaks"
+path = "fuzz_targets/p2c009_signal_find_peaks.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c010_interpolate_passthrough"
 path = "fuzz_targets/p2c010_interpolate_passthrough.rs"
 test = false
