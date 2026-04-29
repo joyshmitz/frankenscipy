@@ -402,7 +402,9 @@ pub fn roots_laguerre(n: usize) -> (Vec<f64>, Vec<f64>) {
 /// Tuple of (nodes, weights) for the quadrature rule
 #[must_use]
 pub fn roots_genlaguerre(n: usize, alpha: f64) -> (Vec<f64>, Vec<f64>) {
-    assert!(alpha > -1.0, "alpha must be greater than -1");
+    if !alpha.is_finite() || alpha <= -1.0 {
+        return invalid_quadrature(n);
+    }
 
     // mu0 = integral of x^alpha * exp(-x) from 0 to infinity = Gamma(alpha + 1)
     let mu0 = gamma_half_integer_or_lanczos(alpha + 1.0);
@@ -435,7 +437,9 @@ pub fn roots_genlaguerre(n: usize, alpha: f64) -> (Vec<f64>, Vec<f64>) {
 /// Tuple of (nodes, weights) for the quadrature rule
 #[must_use]
 pub fn roots_gegenbauer(n: usize, alpha: f64) -> (Vec<f64>, Vec<f64>) {
-    assert!(alpha > -0.5, "alpha must be greater than -1/2");
+    if !alpha.is_finite() || alpha <= -0.5 {
+        return invalid_quadrature(n);
+    }
     // Gegenbauer with parameter alpha corresponds to Jacobi with alpha = beta = alpha - 1/2
     roots_jacobi(n, alpha - 0.5, alpha - 0.5)
 }
@@ -445,8 +449,9 @@ pub fn roots_gegenbauer(n: usize, alpha: f64) -> (Vec<f64>, Vec<f64>) {
 /// The weight function is `(1 - x)^alpha (1 + x)^beta`.
 #[must_use]
 pub fn roots_jacobi(n: usize, alpha: f64, beta: f64) -> (Vec<f64>, Vec<f64>) {
-    assert!(alpha > -1.0, "alpha must be greater than -1");
-    assert!(beta > -1.0, "beta must be greater than -1");
+    if !alpha.is_finite() || !beta.is_finite() || alpha <= -1.0 || beta <= -1.0 {
+        return invalid_quadrature(n);
+    }
 
     let mu0 = 2.0_f64.powf(alpha + beta + 1.0) * beta_fn(alpha + 1.0, beta + 1.0);
     let symmetric = (alpha - beta).abs() <= 1e-14;
@@ -482,6 +487,10 @@ pub fn roots_jacobi(n: usize, alpha: f64, beta: f64) -> (Vec<f64>, Vec<f64>) {
         },
         symmetric,
     )
+}
+
+fn invalid_quadrature(n: usize) -> (Vec<f64>, Vec<f64>) {
+    (vec![f64::NAN; n], vec![f64::NAN; n])
 }
 
 fn golub_welsch<FDiag, FOff>(
@@ -1249,6 +1258,17 @@ mod tests {
     }
 
     #[test]
+    fn roots_genlaguerre_invalid_alpha_returns_nan_rule() {
+        for alpha in [-1.0, -2.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let (x, w) = roots_genlaguerre(3, alpha);
+            assert_eq!(x.len(), 3);
+            assert_eq!(w.len(), 3);
+            assert!(x.iter().all(|v| v.is_nan()));
+            assert!(w.iter().all(|v| v.is_nan()));
+        }
+    }
+
+    #[test]
     fn roots_gegenbauer_alpha_half_matches_legendre() {
         // Gegenbauer with alpha=0.5 corresponds to Legendre
         // (weight function (1-x²)^0 = 1)
@@ -1286,6 +1306,35 @@ mod tests {
             1e-10,
             "gegenbauer weight sum",
         );
+    }
+
+    #[test]
+    fn roots_gegenbauer_invalid_alpha_returns_nan_rule() {
+        for alpha in [-0.5, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let (x, w) = roots_gegenbauer(3, alpha);
+            assert_eq!(x.len(), 3);
+            assert_eq!(w.len(), 3);
+            assert!(x.iter().all(|v| v.is_nan()));
+            assert!(w.iter().all(|v| v.is_nan()));
+        }
+    }
+
+    #[test]
+    fn roots_jacobi_invalid_parameters_return_nan_rule() {
+        for (alpha, beta) in [
+            (-1.0, 0.0),
+            (0.0, -1.0),
+            (f64::NAN, 0.0),
+            (0.0, f64::NAN),
+            (f64::INFINITY, 0.0),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            let (x, w) = roots_jacobi(3, alpha, beta);
+            assert_eq!(x.len(), 3);
+            assert_eq!(w.len(), 3);
+            assert!(x.iter().all(|v| v.is_nan()));
+            assert!(w.iter().all(|v| v.is_nan()));
+        }
     }
 
     // ── Associated Legendre tests ────────────────────────────────────

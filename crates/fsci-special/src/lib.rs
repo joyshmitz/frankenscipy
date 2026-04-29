@@ -1790,11 +1790,12 @@ mod tests {
         // 21! should use gamma path
         let f21 = factorial(21);
         assert!((f21 - 51_090_942_171_709_440_000.0).abs() / f21 < 1e-10);
-        // Large factorials overflow to infinity in f64
-        // f64 max is ~1.8e308, and 171! ≈ 1.24e309, so 171+ overflows
+        // Large factorials overflow to infinity in f64.
+        // 170! is finite, while 171! ≈ 1.24e309 exceeds f64::MAX.
         let f170 = factorial(170);
-        // 170! ≈ 7.26e370, also overflows
-        assert!(f170.is_infinite());
+        assert!(f170.is_finite());
+        let f171 = factorial(171);
+        assert!(f171.is_infinite());
     }
 
     #[test]
