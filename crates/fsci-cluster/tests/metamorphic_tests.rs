@@ -7,7 +7,7 @@
 //! Run with: `cargo test -p fsci-cluster --test metamorphic_tests`
 
 use fsci_cluster::{
-    LinkageMethod, fcluster, is_valid_linkage, kmeans, linkage, silhouette_score, vq,
+    LinkageMethod, dbscan, fcluster, is_valid_linkage, kmeans, linkage, silhouette_score, vq,
 };
 
 fn small_dataset() -> Vec<Vec<f64>> {
@@ -204,4 +204,52 @@ fn mr_kmeans_inertia_matches_definition() {
         res.inertia,
         expected
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR8 — DBSCAN with very small eps marks every point as noise.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dbscan_tiny_eps_marks_all_noise() {
+    let data = small_dataset();
+    let res = dbscan(&data, 1e-12, 3).unwrap();
+    assert_eq!(res.labels.len(), data.len());
+    for &lab in &res.labels {
+        assert_eq!(lab, -1, "MR8 DBSCAN(eps=tiny): expected all noise");
+    }
+    assert_eq!(res.n_clusters, 0, "MR8 expected 0 clusters");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR9 — DBSCAN finds the three obvious clusters in the small dataset
+// at a sensible eps. The number of clusters must equal 3 and no point
+// should be labelled noise.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dbscan_separable_clusters() {
+    let data = small_dataset(); // 3 well-separated clusters of 4 each
+    let res = dbscan(&data, 1.5, 2).unwrap();
+    assert_eq!(res.n_clusters, 3, "MR9 expected 3 clusters, got {}", res.n_clusters);
+    for (i, &lab) in res.labels.iter().enumerate() {
+        assert!(lab >= 0, "MR9 point {i} should not be noise: lab={lab}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — DBSCAN labels are in {-1, 0, 1, ..., n_clusters-1}.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dbscan_label_range() {
+    let data = small_dataset();
+    let res = dbscan(&data, 1.5, 2).unwrap();
+    for &lab in &res.labels {
+        assert!(
+            lab == -1 || (lab >= 0 && (lab as usize) < res.n_clusters),
+            "MR10 label {lab} out of range for n_clusters={}",
+            res.n_clusters
+        );
+    }
 }
