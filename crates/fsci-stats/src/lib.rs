@@ -12613,64 +12613,103 @@ fn local_correlation(
 }
 
 /// Find optimal scale in the MGC map.
-/// Returns (opt_k, opt_l, statistic) using smoothing and centering.
+/// Returns (opt_k, opt_l, statistic) using SciPy's thresholded connected region.
 fn find_optimal_scale(mgc_map: &[Vec<f64>], n: usize) -> (usize, usize, f64) {
     if n == 0 {
         return (1, 1, 0.0);
     }
 
-    // Apply smoothing: each cell becomes max of itself and neighbors
-    let smoothed = smooth_mgc_map(mgc_map, n);
-
-    // Find the maximum in the smoothed map, preferring smaller scales on ties
+    let mut statistic = mgc_map[n - 1][n - 1];
     let mut best_k = n;
     let mut best_l = n;
-    let mut best_val = smoothed[n - 1][n - 1]; // Global scale as default
+    let significant_region = threshold_mgc_map(mgc_map, n);
+    let significant_area = significant_region
+        .iter()
+        .flatten()
+        .filter(|&&is_significant| is_significant)
+        .count();
+    let required_area = (0.02 * n as f64).ceil() as usize * n;
 
-    for (k, row) in smoothed.iter().enumerate() {
-        for (l, &val) in row.iter().enumerate() {
-            // Prefer the optimal scale: penalize very small scales slightly
-            // to avoid noise, following MGC's adaptive threshold
-            if val > best_val + 1e-10 {
-                best_val = val;
-                best_k = k + 1;
-                best_l = l + 1;
+    if significant_area >= required_area {
+        for k in 0..n {
+            for l in 0..n {
+                if significant_region[k][l] && mgc_map[k][l] > statistic + 1.0e-12 {
+                    statistic = mgc_map[k][l];
+                    best_k = k + 1;
+                    best_l = l + 1;
+                }
             }
         }
     }
-
-    // The statistic is from the original (unsmoothed) map at optimal scale
-    let statistic = mgc_map[best_k - 1][best_l - 1];
 
     (best_k, best_l, statistic)
 }
 
-/// Smooth the MGC map by taking max over 3x3 neighborhood.
-fn smooth_mgc_map(mgc_map: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
-    let mut smoothed = vec![vec![0.0; n]; n];
+fn threshold_mgc_map(mgc_map: &[Vec<f64>], n: usize) -> Vec<Vec<bool>> {
+    if n <= 1 {
+        return vec![vec![false; n]; n];
+    }
 
-    for i in 0..n {
-        for j in 0..n {
-            let mut max_val = mgc_map[i][j];
+    let sample_size = (n - 1) as f64;
+    let percentile = 1.0 - (0.02 / sample_size);
+    let beta_shape = sample_size * (sample_size - 3.0) / 4.0 - 0.5;
+    let beta_quantile = fsci_special::betaincinv_scalar(beta_shape, beta_shape, percentile);
+    let mut threshold = beta_quantile.mul_add(2.0, -1.0);
+    threshold = threshold.max(mgc_map[n - 1][n - 1]);
 
-            // Check 3x3 neighborhood
-            for di in 0..=2 {
-                for dj in 0..=2 {
-                    if i + di > 0 && j + dj > 0 && i + di <= n && j + dj <= n {
-                        let ni = i + di - 1;
-                        let nj = j + dj - 1;
-                        if ni < n && nj < n {
-                            max_val = max_val.max(mgc_map[ni][nj]);
-                        }
+    let significant: Vec<Vec<bool>> = mgc_map
+        .iter()
+        .map(|row| row.iter().map(|&value| value > threshold).collect())
+        .collect();
+    largest_connected_component(&significant, n)
+}
+
+fn largest_connected_component(significant: &[Vec<bool>], n: usize) -> Vec<Vec<bool>> {
+    let mut seen = vec![vec![false; n]; n];
+    let mut best_component = Vec::new();
+
+    for row in 0..n {
+        for col in 0..n {
+            if !significant[row][col] || seen[row][col] {
+                continue;
+            }
+
+            let mut component = Vec::new();
+            let mut stack = vec![(row, col)];
+            seen[row][col] = true;
+            while let Some((cur_row, cur_col)) = stack.pop() {
+                component.push((cur_row, cur_col));
+
+                for (next_row, next_col) in mgc_neighbors(cur_row, cur_col, n) {
+                    if significant[next_row][next_col] && !seen[next_row][next_col] {
+                        seen[next_row][next_col] = true;
+                        stack.push((next_row, next_col));
                     }
                 }
             }
 
-            smoothed[i][j] = max_val;
+            if component.len() > best_component.len() {
+                best_component = component;
+            }
         }
     }
 
-    smoothed
+    let mut largest = vec![vec![false; n]; n];
+    for (row, col) in best_component {
+        largest[row][col] = true;
+    }
+    largest
+}
+
+fn mgc_neighbors(row: usize, col: usize, n: usize) -> impl Iterator<Item = (usize, usize)> {
+    [
+        row.checked_sub(1).map(|next| (next, col)),
+        col.checked_sub(1).map(|next| (row, next)),
+        (row + 1 < n).then_some((row + 1, col)),
+        (col + 1 < n).then_some((row, col + 1)),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 /// Compute p-value for MGC via permutation test.

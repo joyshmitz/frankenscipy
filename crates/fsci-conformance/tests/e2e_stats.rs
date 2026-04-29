@@ -72,10 +72,10 @@ use fsci_stats::{
     median_test,
     mode,
     mood,
-    multiscale_graphcorr,
     multipletests_bonferroni,
     multipletests_fdr_bh,
     multipletests_holm,
+    multiscale_graphcorr,
     normaltest,
     pearsonr,
     poisson_means_test,
@@ -311,6 +311,25 @@ for case in CASES:
 print(json.dumps(outputs, allow_nan=False))
 "#;
 
+const MGC_SCIPY_SCRIPT: &str = r#"
+import json
+import numpy as np
+from scipy.stats import multiscale_graphcorr
+
+x_linear = np.arange(8.0)[:, None]
+y_linear = (2.0 * np.arange(8.0) + 1.0)[:, None]
+linear = multiscale_graphcorr(x_linear, y_linear, reps=0, random_state=0)
+
+print(json.dumps({
+    "linear": {
+        "statistic": float(linear.statistic),
+        "pvalue": float(linear.pvalue),
+        "opt_scale": [int(v) for v in linear.mgc_dict["opt_scale"]],
+        "map_shape": [int(v) for v in linear.mgc_dict["mgc_map"].shape],
+    },
+}, allow_nan=False))
+"#;
+
 #[derive(Debug, Clone, Copy)]
 struct TrimmedStatsCase {
     case_id: &'static str,
@@ -327,6 +346,19 @@ struct TrimmedStatsOracle {
     tvar: f64,
     tstd: f64,
     tsem: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MgcOracleOutput {
+    linear: MgcOracleCase,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MgcOracleCase {
+    statistic: f64,
+    pvalue: f64,
+    opt_scale: [usize; 2],
+    map_shape: [usize; 2],
 }
 
 fn trimmed_stats_cases() -> Vec<TrimmedStatsCase> {
@@ -4347,32 +4379,73 @@ fn e2e_044_multiscale_graphcorr_scipy_parity() {
     let mut steps = Vec::new();
     let mut all_pass = true;
 
+    let t = Instant::now();
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(MGC_SCIPY_SCRIPT)
+        .output()
+        .expect("run MGC SciPy oracle");
+    let oracle_duration = t.elapsed().as_nanos();
+    assert!(
+        output.status.success(),
+        "MGC SciPy oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let oracle: MgcOracleOutput =
+        serde_json::from_slice(&output.stdout).expect("parse MGC SciPy oracle output");
+    steps.push(make_step(
+        1,
+        "run_scipy_mgc_oracle",
+        "python3 -c MGC_SCIPY_SCRIPT",
+        "linear reps=0 case",
+        &format!(
+            "stat={:.10}, pvalue={:.10}, opt_scale=({},{}), map_shape={}x{}",
+            oracle.linear.statistic,
+            oracle.linear.pvalue,
+            oracle.linear.opt_scale[0],
+            oracle.linear.opt_scale[1],
+            oracle.linear.map_shape[0],
+            oracle.linear.map_shape[1]
+        ),
+        oracle_duration,
+        "pass",
+    ));
+
     // Test case 1: Perfect linear relationship (8 points)
     let x_linear: Vec<Vec<f64>> = (0..8).map(|i| vec![i as f64]).collect();
     let y_linear: Vec<Vec<f64>> = (0..8).map(|i| vec![2.0 * i as f64 + 1.0]).collect();
 
     let t = Instant::now();
-    let result = multiscale_graphcorr(&x_linear, &y_linear, 0, Some(0))
-        .expect("MGC linear case");
+    let result = multiscale_graphcorr(&x_linear, &y_linear, 0, Some(0)).expect("MGC linear case");
     let duration = t.elapsed().as_nanos();
 
-    // SciPy returns stat=1.0, opt_scale=[8,8] for perfect linear
-    let pass = result.statistic > 0.99 && result.mgc_map.len() == 8;
+    let pass = (result.statistic - oracle.linear.statistic).abs() < 1.0e-12
+        && (result.pvalue - oracle.linear.pvalue).abs() < 1.0e-12
+        && result.opt_scale == (oracle.linear.opt_scale[0], oracle.linear.opt_scale[1])
+        && result.mgc_map.len() == oracle.linear.map_shape[0]
+        && result.mgc_map.first().map_or(0, |r| r.len()) == oracle.linear.map_shape[1];
     if !pass {
         all_pass = false;
     }
     steps.push(make_step(
-        1,
+        2,
         "mgc_linear_8pt",
-        "multiscale_graphcorr on perfect linear",
+        "multiscale_graphcorr on perfect linear vs scipy",
         "x=[0..8], y=2x+1",
         &format!(
-            "stat={:.10}, opt_scale=({},{}), mgc_map_shape={}x{}",
+            "actual=(stat={:.10}, p={:.10}, opt=({},{}), shape={}x{}) expected=(stat={:.10}, p={:.10}, opt=({},{}), shape={}x{})",
             result.statistic,
+            result.pvalue,
             result.opt_scale.0,
             result.opt_scale.1,
             result.mgc_map.len(),
-            result.mgc_map.first().map_or(0, |r| r.len())
+            result.mgc_map.first().map_or(0, |r| r.len()),
+            oracle.linear.statistic,
+            oracle.linear.pvalue,
+            oracle.linear.opt_scale[0],
+            oracle.linear.opt_scale[1],
+            oracle.linear.map_shape[0],
+            oracle.linear.map_shape[1]
         ),
         duration,
         if pass { "pass" } else { "FAIL" },
@@ -4397,8 +4470,7 @@ fn e2e_044_multiscale_graphcorr_scipy_parity() {
     ];
 
     let t = Instant::now();
-    let result = multiscale_graphcorr(&x_grid, &y_grid, 0, Some(0))
-        .expect("MGC grid case");
+    let result = multiscale_graphcorr(&x_grid, &y_grid, 0, Some(0)).expect("MGC grid case");
     let duration = t.elapsed().as_nanos();
 
     // SciPy returns stat≈0.57, opt_scale=[5,4] for grid case
@@ -4407,7 +4479,7 @@ fn e2e_044_multiscale_graphcorr_scipy_parity() {
         all_pass = false;
     }
     steps.push(make_step(
-        2,
+        3,
         "mgc_grid_2d",
         "multiscale_graphcorr on 2D grid",
         "x=grid(3x2), y=x+y coords",
@@ -4433,8 +4505,8 @@ fn e2e_044_multiscale_graphcorr_scipy_parity() {
     ];
 
     let t = Instant::now();
-    let result = multiscale_graphcorr(&x_perm, &y_perm, 50, Some(1234))
-        .expect("MGC permutation case");
+    let result =
+        multiscale_graphcorr(&x_perm, &y_perm, 50, Some(1234)).expect("MGC permutation case");
     let duration = t.elapsed().as_nanos();
 
     // P-value should be between 0 and 1
@@ -4443,11 +4515,14 @@ fn e2e_044_multiscale_graphcorr_scipy_parity() {
         all_pass = false;
     }
     steps.push(make_step(
-        3,
+        4,
         "mgc_permutation_pvalue",
         "multiscale_graphcorr permutation test",
         "reps=50, shuffled y",
-        &format!("stat={:.10}, pvalue={:.10}", result.statistic, result.pvalue),
+        &format!(
+            "stat={:.10}, pvalue={:.10}",
+            result.statistic, result.pvalue
+        ),
         duration,
         if pass { "pass" } else { "FAIL" },
     ));
