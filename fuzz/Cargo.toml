@@ -79,6 +79,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c004_sparse_direct_solve"
+path = "fuzz_targets/p2c004_sparse_direct_solve.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c005_fft_roundtrip"
 path = "fuzz_targets/p2c005_fft_roundtrip.rs"
 test = false
