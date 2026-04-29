@@ -896,8 +896,12 @@ pub fn is_monotonic(z: &[[f64; 4]]) -> bool {
 
 /// Get the number of original observations from a linkage matrix.
 ///
+/// Returns 0 if the linkage matrix is invalid.
 /// Matches `scipy.cluster.hierarchy.num_obs_linkage`.
 pub fn num_obs_linkage(z: &[[f64; 4]]) -> usize {
+    if !is_valid_linkage(z) && !z.is_empty() {
+        return 0;
+    }
     z.len() + 1
 }
 
@@ -905,12 +909,16 @@ pub fn num_obs_linkage(z: &[[f64; 4]]) -> usize {
 ///
 /// Performs a depth-first traversal of the dendrogram tree
 /// and returns indices of the original observations in order.
+/// Returns empty vec if linkage is invalid.
 ///
 /// Matches `scipy.cluster.hierarchy.leaves_list`.
 pub fn leaves_list(z: &[[f64; 4]]) -> Vec<usize> {
     let n = z.len() + 1;
     if n <= 1 {
         return (0..n).collect();
+    }
+    if !is_valid_linkage(z) {
+        return vec![];
     }
 
     let mut result = Vec::with_capacity(n);
@@ -950,13 +958,16 @@ pub fn fclusterdata(
 /// Compute cophenetic distances from a linkage matrix.
 ///
 /// Returns the cophenetic distance matrix (condensed form).
+/// Returns empty vec for empty linkage (0 or 1 observations).
+/// Returns vec of NaN if linkage is invalid.
 /// Matches `scipy.cluster.hierarchy.cophenet`.
 pub fn cophenet(z: &[[f64; 4]]) -> Vec<f64> {
     if z.is_empty() {
         return vec![];
     }
     if !is_valid_linkage(z) {
-        return vec![];
+        let n = z.len() + 1;
+        return vec![f64::NAN; n * (n - 1) / 2];
     }
     let n = z.len() + 1;
     let mut membership = vec![vec![]; 2 * n - 1];
@@ -996,6 +1007,9 @@ pub fn cophenet(z: &[[f64; 4]]) -> Vec<f64> {
 pub fn inconsistent(z: &[[f64; 4]], depth: usize) -> Vec<[f64; 4]> {
     if z.is_empty() {
         return vec![];
+    }
+    if depth == 0 {
+        return z.iter().map(|row| [row[2], 0.0, 1.0, 0.0]).collect();
     }
     let n = z.len() + 1;
     let mut result = Vec::with_capacity(z.len());
@@ -1231,6 +1245,11 @@ fn validate_paired_labels(
     context: &str,
 ) -> Result<usize, ClusterError> {
     let n = labels_true.len();
+    if n == 0 {
+        return Err(ClusterError::InvalidArgument(format!(
+            "{context} requires non-empty labels"
+        )));
+    }
     if n != labels_pred.len() {
         return Err(ClusterError::InvalidArgument(format!(
             "{context} label lengths differ: true={n}, pred={}",
@@ -1438,7 +1457,7 @@ pub fn adjusted_rand_score(
     labels_pred: &[usize],
 ) -> Result<f64, ClusterError> {
     let n = validate_paired_labels(labels_true, labels_pred, "adjusted_rand_score")?;
-    if n <= 1 {
+    if n == 1 {
         return Ok(1.0);
     }
 
@@ -1482,7 +1501,7 @@ pub fn normalized_mutual_info(
     labels_pred: &[usize],
 ) -> Result<f64, ClusterError> {
     let n = validate_paired_labels(labels_true, labels_pred, "normalized_mutual_info")?;
-    if n <= 1 {
+    if n == 1 {
         return Ok(1.0);
     }
     let contingency = contingency_table(labels_true, labels_pred, "normalized_mutual_info")?;
@@ -1538,7 +1557,7 @@ pub fn homogeneity_score(
     labels_pred: &[usize],
 ) -> Result<f64, ClusterError> {
     let n = validate_paired_labels(labels_true, labels_pred, "homogeneity_score")?;
-    if n <= 1 {
+    if n == 1 {
         return Ok(1.0);
     }
     let contingency = contingency_table(labels_true, labels_pred, "homogeneity_score")?;
@@ -1613,7 +1632,7 @@ pub fn fowlkes_mallows_score(
     labels_pred: &[usize],
 ) -> Result<f64, ClusterError> {
     let n = validate_paired_labels(labels_true, labels_pred, "fowlkes_mallows_score")?;
-    if n <= 1 {
+    if n == 1 {
         return Ok(1.0);
     }
 
@@ -1639,15 +1658,30 @@ pub fn fowlkes_mallows_score(
         return Ok(0.0);
     }
 
-    let precision = tp as f64 / (tp + fp) as f64;
-    let recall = tp as f64 / (tp + fn_) as f64;
+    let precision = if tp + fp > 0 {
+        tp as f64 / (tp + fp) as f64
+    } else {
+        0.0
+    };
+    let recall = if tp + fn_ > 0 {
+        tp as f64 / (tp + fn_) as f64
+    } else {
+        0.0
+    };
     Ok((precision * recall).sqrt())
 }
 
 /// Elbow method helper: compute within-cluster sum of squares for k=1..max_k.
 ///
 /// Returns a vector of inertia values useful for the elbow method.
+/// Returns empty vec if data is empty, has non-finite values, or max_k is 0.
 pub fn elbow_inertias(data: &[Vec<f64>], max_k: usize, seed: u64) -> Vec<f64> {
+    if data.is_empty() || max_k == 0 {
+        return vec![];
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return vec![];
+    }
     (1..=max_k.min(data.len()))
         .map(|k| {
             kmeans(data, k, 50, seed.wrapping_add(k as u64))
