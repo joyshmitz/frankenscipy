@@ -1300,6 +1300,21 @@ pub fn make_lsq_spline(x: &[f64], y: &[f64], t: &[f64], k: usize) -> Result<BSpl
             y_len: y.len(),
         });
     }
+    let min_knots = k
+        .checked_add(2)
+        .ok_or_else(|| InterpError::InvalidArgument {
+            detail: "spline degree is too large".to_string(),
+        })?;
+    if t.len() < min_knots {
+        return Err(InterpError::InvalidArgument {
+            detail: format!(
+                "need at least {} knots for degree {}, got {}",
+                min_knots,
+                k,
+                t.len()
+            ),
+        });
+    }
     let n = t.len() - k - 1;
     if n == 0 || n > m {
         return Err(InterpError::InvalidArgument {
@@ -4639,6 +4654,15 @@ mod tests {
         assert_eq!(anti.degree(), 2);
         assert_eq!(anti.eval(0.0), 0.0);
         assert_eq!(anti.eval(1.0), 1.0);
+    }
+
+    #[test]
+    fn make_lsq_spline_rejects_too_short_knots_without_panic() {
+        let x = vec![0.0, 1.0];
+        let y = vec![0.0, 1.0];
+        let knots = vec![0.0, 1.0];
+        let err = make_lsq_spline(&x, &y, &knots, 3).expect_err("too few knots");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
     }
 
     #[test]
