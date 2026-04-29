@@ -252,3 +252,10 @@ path = "fuzz_targets/p2c014_optimize_linear_sum_assignment.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c007_stats_hypothesis_tests"
+path = "fuzz_targets/p2c007_stats_hypothesis_tests.rs"
+test = false
+doc = false
+bench = false
