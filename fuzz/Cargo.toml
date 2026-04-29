@@ -240,6 +240,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c010_interpolate_polynomial"
+path = "fuzz_targets/p2c010_interpolate_polynomial.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c011_spatial_squareform"
 path = "fuzz_targets/p2c011_spatial_squareform.rs"
 test = false
