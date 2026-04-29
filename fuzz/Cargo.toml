@@ -247,6 +247,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c012_cluster_dbscan"
+path = "fuzz_targets/p2c012_cluster_dbscan.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c013_ndimage_uniform_filter_idempotent"
 path = "fuzz_targets/p2c013_ndimage_uniform_filter_idempotent.rs"
 test = false
