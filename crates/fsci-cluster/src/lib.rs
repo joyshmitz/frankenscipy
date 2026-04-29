@@ -852,10 +852,16 @@ pub fn is_valid_linkage(z: &[[f64; 4]]) -> bool {
     let mut used_as_child = vec![false; 2 * n - 1];
 
     for (step, row) in z.iter().enumerate() {
-        let ci = row[0] as usize;
-        let cj = row[1] as usize;
+        let Some(ci) = finite_usize_index(row[0]) else {
+            return false;
+        };
+        let Some(cj) = finite_usize_index(row[1]) else {
+            return false;
+        };
         let dist = row[2];
-        let count = row[3] as usize;
+        let Some(count) = finite_usize_index(row[3]) else {
+            return false;
+        };
 
         // Check cluster indices are valid
         let max_valid_idx = n + step; // can reference clusters 0..n+step
@@ -883,6 +889,14 @@ pub fn is_valid_linkage(z: &[[f64; 4]]) -> bool {
     }
 
     true
+}
+
+fn finite_usize_index(value: f64) -> Option<usize> {
+    if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= usize::MAX as f64 {
+        Some(value as usize)
+    } else {
+        None
+    }
 }
 
 /// Check if linkage distances are monotonically non-decreasing.
@@ -2751,6 +2765,24 @@ mod tests {
     }
 
     #[test]
+    fn is_valid_linkage_rejects_negative_child_index() {
+        let bad = [[-1.0, 1.0, 1.0, 2.0]];
+        assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
+    fn is_valid_linkage_rejects_nonfinite_child_index() {
+        let bad = [[f64::NAN, 1.0, 1.0, 2.0]];
+        assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
+    fn is_valid_linkage_rejects_fractional_child_index() {
+        let bad = [[0.5, 1.0, 1.0, 2.0]];
+        assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
     fn is_valid_linkage_rejects_negative_distance() {
         let bad = [[0.0, 1.0, -1.0, 2.0]];
         assert!(!is_valid_linkage(&bad));
@@ -2860,6 +2892,12 @@ mod tests {
     #[test]
     fn is_valid_linkage_rejects_zero_count() {
         let bad = [[0.0, 1.0, 1.0, 0.0]];
+        assert!(!is_valid_linkage(&bad));
+    }
+
+    #[test]
+    fn is_valid_linkage_rejects_fractional_count() {
+        let bad = [[0.0, 1.0, 1.0, 2.5]];
         assert!(!is_valid_linkage(&bad));
     }
 
