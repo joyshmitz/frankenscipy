@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use fsci_linalg::{DecompOptions, LinalgError, expm as dense_expm};
+use fsci_linalg::{expm as dense_expm, DecompOptions, LinalgError};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
@@ -202,7 +202,10 @@ impl SparseIluFactorization {
 /// identity, diagonal, banded, and moderate-fill systems scale with
 /// stored nonzeros and generated fill-in instead of n² dense storage.
 const SPSOLVE_DENSE_MAX_N: usize = 32_768;
-const SPARSE_DIRECT_PIVOT_TOL: f64 = f64::EPSILON * 100.0;
+
+fn is_sparse_zero_pivot(value: f64) -> bool {
+    value == 0.0
+}
 
 impl NativeSparseLu {
     fn factorize_csr(a: &CsrMatrix, diag_pivot_thresh: f64) -> SparseResult<Self> {
@@ -233,7 +236,7 @@ impl NativeSparseLu {
             }
 
             let pivot = rows[k].get(&k).copied().unwrap_or(0.0);
-            if pivot.abs() <= SPARSE_DIRECT_PIVOT_TOL {
+            if is_sparse_zero_pivot(pivot) {
                 return Err(SparseError::SingularMatrix {
                     message: format!("zero pivot in sparse LU at column {k}"),
                 });
@@ -312,7 +315,7 @@ impl NativeSparseLu {
                 }
             }
             let pivot = diagonal.unwrap_or(0.0);
-            if pivot.abs() <= SPARSE_DIRECT_PIVOT_TOL {
+            if is_sparse_zero_pivot(pivot) {
                 return Err(SparseError::SingularMatrix {
                     message: format!("zero pivot in sparse LU solve at row {row}"),
                 });
@@ -377,14 +380,14 @@ fn select_sparse_pivot_row(
         }
     }
 
-    if best_abs <= SPARSE_DIRECT_PIVOT_TOL {
+    if is_sparse_zero_pivot(best_abs) {
         return Err(SparseError::SingularMatrix {
             message: format!("zero pivot in sparse LU at column {col}"),
         });
     }
 
     let diagonal_abs = rows[col].get(&col).copied().unwrap_or(0.0).abs();
-    if diagonal_abs > SPARSE_DIRECT_PIVOT_TOL
+    if !is_sparse_zero_pivot(diagonal_abs)
         && diagonal_abs >= best_abs * diag_pivot_thresh.clamp(0.0, 1.0)
     {
         return Ok(col);
@@ -3898,12 +3901,31 @@ mod tests {
         assert_eq!(result.solution.len(), n);
         assert_eq!(result.solution[0], 1.0);
         assert_eq!(result.solution[n - 1], 1.0);
-        assert!(
-            result
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("native sparse direct"))
-        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("native sparse direct")));
+    }
+
+    #[test]
+    fn spsolve_native_sparse_direct_preserves_tiny_nonzero_diagonal() {
+        let n = SPSOLVE_DENSE_MAX_N + 1;
+        let scale = 1.0e-300;
+        let data = vec![scale; n];
+        let indices = (0..n).collect::<Vec<_>>();
+        let indptr = (0..=n).collect::<Vec<_>>();
+        let a = CsrMatrix::from_components(Shape2D::new(n, n), data, indices, indptr, false)
+            .expect("scaled identity csr");
+        let b = vec![scale; n];
+
+        let result = spsolve(&a, &b, SolveOptions::default())
+            .expect("nonzero tiny pivots should remain solvable");
+
+        assert_eq!(result.backend_used, SparseBackend::NativeSparseLu);
+        assert!(result
+            .solution
+            .iter()
+            .all(|value| value.is_finite() && (value - 1.0).abs() < 1.0e-12));
     }
 
     #[test]
@@ -4917,8 +4939,8 @@ mod tests {
         let g = triangle_graph_csr();
         let result = dijkstra(&g, 0).expect("dijkstra");
         assert_eq!(result.distances[0], 0.0);
-        assert_eq!(result.distances[1], 1.0); // direct edge weight 1
-        // Node 2: either direct (weight 3) or via node 1 (1+2=3) — both are 3
+        // Node 1 takes the direct edge. Node 2 can use the direct edge or node 1 with equal cost.
+        assert_eq!(result.distances[1], 1.0);
         assert!(
             (result.distances[2] - 3.0).abs() < 1e-10,
             "dist to node 2: {}",
