@@ -12,8 +12,8 @@ use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_ndimage::{
-    BoundaryMode, NdArray, gaussian_filter, maximum_filter, median_filter, minimum_filter,
-    uniform_filter,
+    BoundaryMode, NdArray, binary_dilation, binary_erosion, gaussian_filter, laplace,
+    maximum_filter, median_filter, minimum_filter, prewitt, sobel, uniform_filter,
 };
 use serde::{Deserialize, Serialize};
 
@@ -443,5 +443,414 @@ fn diff_002_ndimage_rank_filters_live_scipy() {
     assert!(
         pass,
         "ndimage live SciPy rank-filter diff max_abs_diff={max_diff:.3e} exceeds tolerance {TOL:.3e}"
+    );
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EdgeCase {
+    case_id: String,
+    op: String,
+    shape: [usize; 2],
+    data: Vec<f64>,
+    axis: Option<usize>,
+    mode: String,
+    cval: f64,
+}
+
+fn edge_detection_cases() -> Vec<EdgeCase> {
+    let shapes = [[3, 3], [4, 5], [5, 4], [6, 6], [2, 8]];
+    let modes = ["constant", "nearest"];
+    let mut cases = Vec::new();
+
+    for (shape_idx, shape) in shapes.iter().copied().enumerate() {
+        for mode in modes {
+            let cval = if mode == "constant" { 0.0 } else { 0.0 };
+            for axis in 0..2 {
+                let seed = 1000 + cases.len() + shape_idx;
+                cases.push(EdgeCase {
+                    case_id: format!("sobel_shape{}x{}_mode_{mode}_axis_{axis}", shape[0], shape[1]),
+                    op: String::from("sobel"),
+                    shape,
+                    data: deterministic_data(shape, seed),
+                    axis: Some(axis),
+                    mode: mode.to_string(),
+                    cval,
+                });
+                cases.push(EdgeCase {
+                    case_id: format!("prewitt_shape{}x{}_mode_{mode}_axis_{axis}", shape[0], shape[1]),
+                    op: String::from("prewitt"),
+                    shape,
+                    data: deterministic_data(shape, seed + 50),
+                    axis: Some(axis),
+                    mode: mode.to_string(),
+                    cval,
+                });
+            }
+            let seed = 2000 + cases.len() + shape_idx;
+            cases.push(EdgeCase {
+                case_id: format!("laplace_shape{}x{}_mode_{mode}", shape[0], shape[1]),
+                op: String::from("laplace"),
+                shape,
+                data: deterministic_data(shape, seed),
+                axis: None,
+                mode: mode.to_string(),
+                cval,
+            });
+        }
+    }
+
+    cases
+}
+
+fn rust_edge_output(case: &EdgeCase) -> Option<Vec<f64>> {
+    let array = NdArray::new(case.data.clone(), case.shape.to_vec()).ok()?;
+    let mode = boundary_mode(&case.mode)?;
+    let output = match case.op.as_str() {
+        "sobel" => sobel(&array, case.axis?, mode, case.cval),
+        "prewitt" => prewitt(&array, case.axis?, mode, case.cval),
+        "laplace" => laplace(&array, mode, case.cval),
+        _ => return None,
+    }
+    .ok()?;
+    Some(output.data)
+}
+
+fn run_scipy_edge_oracle(cases: &[EdgeCase]) -> Option<Vec<OracleCase>> {
+    let script = r#"
+import json
+import sys
+
+import numpy as np
+from scipy import ndimage
+
+cases = json.load(sys.stdin)
+output = []
+for case in cases:
+    arr = np.array(case["data"], dtype=np.float64).reshape(case["shape"])
+    if case["op"] == "sobel":
+        values = ndimage.sobel(
+            arr,
+            axis=int(case["axis"]),
+            mode=case["mode"],
+            cval=float(case["cval"]),
+        )
+    elif case["op"] == "prewitt":
+        values = ndimage.prewitt(
+            arr,
+            axis=int(case["axis"]),
+            mode=case["mode"],
+            cval=float(case["cval"]),
+        )
+    elif case["op"] == "laplace":
+        values = ndimage.laplace(
+            arr,
+            mode=case["mode"],
+            cval=float(case["cval"]),
+        )
+    else:
+        raise ValueError(f"unsupported op: {case['op']}")
+    output.append({
+        "case_id": case["case_id"],
+        "values": [float(value) for value in values.ravel(order="C")],
+    })
+print(json.dumps(output))
+"#;
+
+    let mut child = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    {
+        let stdin = child.stdin.as_mut()?;
+        let input = serde_json::to_vec(cases).expect("serialize edge oracle input");
+        stdin.write_all(&input).expect("write edge oracle input");
+    }
+
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        eprintln!(
+            "SciPy edge oracle unavailable: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+fn scipy_edge_oracle_or_skip(test_id: &str, cases: &[EdgeCase]) -> Option<Vec<OracleCase>> {
+    let oracle = run_scipy_edge_oracle(cases);
+    if oracle.is_none() {
+        assert!(
+            std::env::var_os(REQUIRE_SCIPY_ENV).is_none(),
+            "{REQUIRE_SCIPY_ENV}=1 but SciPy ndimage edge detection is unavailable for {test_id}"
+        );
+        eprintln!(
+            "SciPy ndimage not available; skipping {test_id}. Set {REQUIRE_SCIPY_ENV}=1 to fail closed"
+        );
+    }
+    oracle
+}
+
+#[test]
+fn diff_003_ndimage_edge_detection_live_scipy() {
+    let cases = edge_detection_cases();
+    assert_eq!(cases.len(), 50, "edge detection diff case inventory changed");
+
+    let start = Instant::now();
+    let Some(oracle_cases) =
+        scipy_edge_oracle_or_skip("diff_003_ndimage_edge_detection_live_scipy", &cases)
+    else {
+        return;
+    };
+    assert_eq!(
+        oracle_cases.len(),
+        cases.len(),
+        "SciPy edge detection oracle case count mismatch"
+    );
+
+    let mut case_diffs = Vec::with_capacity(cases.len());
+    for (case, oracle) in cases.iter().zip(oracle_cases.iter()) {
+        assert_eq!(case.case_id, oracle.case_id, "edge oracle case id mismatch");
+        let actual = rust_edge_output(case).unwrap_or_default();
+        let diff = max_abs_diff(&actual, &oracle.values);
+        let parameter = match case.op.as_str() {
+            "sobel" | "prewitt" => format!("axis={}", case.axis.unwrap_or(0)),
+            "laplace" => String::from("n/a"),
+            _ => String::from("unknown"),
+        };
+        case_diffs.push(CaseDiff {
+            case_id: case.case_id.clone(),
+            op: case.op.clone(),
+            shape: case.shape,
+            mode: case.mode.clone(),
+            parameter,
+            max_abs_diff: diff,
+            tolerance: TOL,
+            pass: diff <= TOL,
+        });
+    }
+
+    let max_diff = case_diffs
+        .iter()
+        .map(|case| case.max_abs_diff)
+        .fold(0.0_f64, f64::max);
+    let pass = case_diffs.iter().all(|case| case.pass);
+    let log = DiffLog {
+        test_id: String::from("diff_003_ndimage_edge_detection_live_scipy"),
+        category: String::from("live_scipy_differential"),
+        case_count: cases.len(),
+        max_abs_diff: max_diff,
+        tolerance: TOL,
+        pass,
+        timestamp_ms: timestamp_ms(),
+        duration_ns: start.elapsed().as_nanos(),
+        cases: case_diffs,
+    };
+    emit_log(&log);
+
+    assert!(
+        pass,
+        "ndimage edge detection diff max_abs_diff={max_diff:.3e} exceeds tolerance {TOL:.3e}"
+    );
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BinaryMorphCase {
+    case_id: String,
+    op: String,
+    shape: [usize; 2],
+    data: Vec<f64>,
+    structure_size: usize,
+    iterations: usize,
+}
+
+fn binary_morph_cases() -> Vec<BinaryMorphCase> {
+    let shapes = [[3, 3], [4, 5], [5, 5], [6, 4], [8, 8]];
+    let mut cases = Vec::new();
+
+    for (shape_idx, shape) in shapes.iter().copied().enumerate() {
+        for structure_size in [3, 5] {
+            for iterations in [1, 2] {
+                let seed = 3000 + cases.len() + shape_idx;
+                let binary_data: Vec<f64> = deterministic_data(shape, seed)
+                    .iter()
+                    .map(|&x| if x > 0.0 { 1.0 } else { 0.0 })
+                    .collect();
+
+                cases.push(BinaryMorphCase {
+                    case_id: format!(
+                        "binary_erosion_shape{}x{}_size_{structure_size}_iter_{iterations}",
+                        shape[0], shape[1]
+                    ),
+                    op: String::from("binary_erosion"),
+                    shape,
+                    data: binary_data.clone(),
+                    structure_size,
+                    iterations,
+                });
+                cases.push(BinaryMorphCase {
+                    case_id: format!(
+                        "binary_dilation_shape{}x{}_size_{structure_size}_iter_{iterations}",
+                        shape[0], shape[1]
+                    ),
+                    op: String::from("binary_dilation"),
+                    shape,
+                    data: binary_data,
+                    structure_size,
+                    iterations,
+                });
+            }
+        }
+    }
+
+    cases
+}
+
+fn rust_binary_morph_output(case: &BinaryMorphCase) -> Option<Vec<f64>> {
+    let array = NdArray::new(case.data.clone(), case.shape.to_vec()).ok()?;
+    let output = match case.op.as_str() {
+        "binary_erosion" => binary_erosion(&array, case.structure_size, case.iterations),
+        "binary_dilation" => binary_dilation(&array, case.structure_size, case.iterations),
+        _ => return None,
+    }
+    .ok()?;
+    Some(output.data)
+}
+
+fn run_scipy_binary_morph_oracle(cases: &[BinaryMorphCase]) -> Option<Vec<OracleCase>> {
+    let script = r#"
+import json
+import sys
+
+import numpy as np
+from scipy import ndimage
+
+cases = json.load(sys.stdin)
+output = []
+for case in cases:
+    arr = np.array(case["data"], dtype=np.float64).reshape(case["shape"])
+    arr_bool = arr.astype(bool)
+    size = int(case["structure_size"])
+    structure = np.ones((size, size), dtype=bool)
+    iterations = int(case["iterations"])
+
+    if case["op"] == "binary_erosion":
+        values = ndimage.binary_erosion(arr_bool, structure=structure, iterations=iterations)
+    elif case["op"] == "binary_dilation":
+        values = ndimage.binary_dilation(arr_bool, structure=structure, iterations=iterations)
+    else:
+        raise ValueError(f"unsupported op: {case['op']}")
+    output.append({
+        "case_id": case["case_id"],
+        "values": [float(value) for value in values.ravel(order="C")],
+    })
+print(json.dumps(output))
+"#;
+
+    let mut child = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    {
+        let stdin = child.stdin.as_mut()?;
+        let input = serde_json::to_vec(cases).expect("serialize binary morph oracle input");
+        stdin.write_all(&input).expect("write binary morph oracle input");
+    }
+
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        eprintln!(
+            "SciPy binary morph oracle unavailable: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+fn scipy_binary_morph_oracle_or_skip(
+    test_id: &str,
+    cases: &[BinaryMorphCase],
+) -> Option<Vec<OracleCase>> {
+    let oracle = run_scipy_binary_morph_oracle(cases);
+    if oracle.is_none() {
+        assert!(
+            std::env::var_os(REQUIRE_SCIPY_ENV).is_none(),
+            "{REQUIRE_SCIPY_ENV}=1 but SciPy binary morph is unavailable for {test_id}"
+        );
+        eprintln!(
+            "SciPy ndimage not available; skipping {test_id}. Set {REQUIRE_SCIPY_ENV}=1 to fail closed"
+        );
+    }
+    oracle
+}
+
+#[test]
+fn diff_004_ndimage_binary_morphology_live_scipy() {
+    let cases = binary_morph_cases();
+    assert_eq!(cases.len(), 40, "binary morph diff case inventory changed");
+
+    let start = Instant::now();
+    let Some(oracle_cases) =
+        scipy_binary_morph_oracle_or_skip("diff_004_ndimage_binary_morphology_live_scipy", &cases)
+    else {
+        return;
+    };
+    assert_eq!(
+        oracle_cases.len(),
+        cases.len(),
+        "SciPy binary morph oracle case count mismatch"
+    );
+
+    let mut case_diffs = Vec::with_capacity(cases.len());
+    for (case, oracle) in cases.iter().zip(oracle_cases.iter()) {
+        assert_eq!(case.case_id, oracle.case_id, "binary morph oracle case id mismatch");
+        let actual = rust_binary_morph_output(case).unwrap_or_default();
+        let diff = max_abs_diff(&actual, &oracle.values);
+        case_diffs.push(CaseDiff {
+            case_id: case.case_id.clone(),
+            op: case.op.clone(),
+            shape: case.shape,
+            mode: String::from("n/a"),
+            parameter: format!("size={},iter={}", case.structure_size, case.iterations),
+            max_abs_diff: diff,
+            tolerance: TOL,
+            pass: diff <= TOL,
+        });
+    }
+
+    let max_diff = case_diffs
+        .iter()
+        .map(|case| case.max_abs_diff)
+        .fold(0.0_f64, f64::max);
+    let pass = case_diffs.iter().all(|case| case.pass);
+    let log = DiffLog {
+        test_id: String::from("diff_004_ndimage_binary_morphology_live_scipy"),
+        category: String::from("live_scipy_differential"),
+        case_count: cases.len(),
+        max_abs_diff: max_diff,
+        tolerance: TOL,
+        pass,
+        timestamp_ms: timestamp_ms(),
+        duration_ns: start.elapsed().as_nanos(),
+        cases: case_diffs,
+    };
+    emit_log(&log);
+
+    assert!(
+        pass,
+        "ndimage binary morph diff max_abs_diff={max_diff:.3e} exceeds tolerance {TOL:.3e}"
     );
 }
