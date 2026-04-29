@@ -12381,7 +12381,7 @@ pub struct ChatterjeeXiResult {
 pub struct MultiscaleGraphcorrResult {
     /// Selected multiscale graph correlation statistic in `[0, 1]`.
     pub statistic: f64,
-    /// Permutation p-value, or `NaN` when `reps == 0`.
+    /// Permutation p-value. Matches SciPy's `1.0` sentinel when `reps == 0`.
     pub pvalue: f64,
     /// Local correlation map across all tested scale pairs.
     pub mgc_map: Vec<Vec<f64>>,
@@ -12500,7 +12500,7 @@ pub fn multiscale_graphcorr(
 
     // Compute p-value via permutation if requested
     let pvalue = if reps == 0 {
-        f64::NAN
+        1.0
     } else {
         mgc_permutation_pvalue(
             &centered_x,
@@ -24689,7 +24689,7 @@ mod tests {
             "MGC statistic for perfect linear = {}",
             result.statistic
         );
-        assert!(result.pvalue.is_nan(), "reps=0 should skip pvalue");
+        assert_eq!(result.pvalue, 1.0, "reps=0 should match SciPy");
         // Full implementation returns n×n mgc_map
         assert_eq!(result.mgc_map.len(), 8);
         assert_eq!(result.mgc_map[0].len(), 8);
