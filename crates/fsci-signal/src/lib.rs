@@ -1702,7 +1702,7 @@ fn filter_by_distance(peaks: &[usize], heights: &[f64], min_dist: usize) -> Vec<
         // Exclude all peaks within min_dist of pk.
         // Since 'peaks' is sorted by position, use binary search to find the range.
         let start_val = pk.saturating_sub(min_dist.saturating_sub(1));
-        let end_val = pk + min_dist;
+        let end_val = pk.saturating_add(min_dist);
 
         let left = peaks.binary_search(&start_val).unwrap_or_else(|x| x);
         let right = peaks.binary_search(&end_val).unwrap_or_else(|x| x);
@@ -9494,6 +9494,19 @@ mod tests {
             &x,
             FindPeaksOptions {
                 distance: Some(3),
+                ..FindPeaksOptions::default()
+            },
+        );
+        assert_eq!(result.peaks, vec![3]);
+    }
+
+    #[test]
+    fn find_peaks_distance_saturates_large_window() {
+        let x = [0.0, 1.0, 0.0, 2.0, 0.0, 1.5, 0.0];
+        let result = find_peaks(
+            &x,
+            FindPeaksOptions {
+                distance: Some(usize::MAX),
                 ..FindPeaksOptions::default()
             },
         );
