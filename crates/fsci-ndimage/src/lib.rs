@@ -1524,16 +1524,17 @@ pub fn label(input: &NdArray) -> Result<(NdArray, usize), NdimageError> {
 /// Sum of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.sum_labels`.
-///
-/// # Panics
-/// Panics if `input` and `labels` have different shapes.
-pub fn sum_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f64> {
-    assert!(
-        input.shape == labels.shape,
-        "input shape {:?} != labels shape {:?}",
-        input.shape,
-        labels.shape
-    );
+pub fn sum_labels(
+    input: &NdArray,
+    labels: &NdArray,
+    num_labels: usize,
+) -> Result<Vec<f64>, NdimageError> {
+    if input.shape != labels.shape {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "input shape {:?} != labels shape {:?}",
+            input.shape, labels.shape
+        )));
+    }
     let mut sums = vec![0.0; num_labels + 1];
     for i in 0..input.size() {
         let lbl = labels.data[i] as usize;
@@ -1541,22 +1542,23 @@ pub fn sum_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f
             sums[lbl] += input.data[i];
         }
     }
-    sums[1..].to_vec()
+    Ok(sums[1..].to_vec())
 }
 
 /// Mean of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.mean`.
-///
-/// # Panics
-/// Panics if `input` and `labels` have different shapes.
-pub fn mean_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f64> {
-    assert!(
-        input.shape == labels.shape,
-        "input shape {:?} != labels shape {:?}",
-        input.shape,
-        labels.shape
-    );
+pub fn mean_labels(
+    input: &NdArray,
+    labels: &NdArray,
+    num_labels: usize,
+) -> Result<Vec<f64>, NdimageError> {
+    if input.shape != labels.shape {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "input shape {:?} != labels shape {:?}",
+            input.shape, labels.shape
+        )));
+    }
     let mut sums = vec![0.0; num_labels + 1];
     let mut counts = vec![0usize; num_labels + 1];
     for i in 0..input.size() {
@@ -1566,7 +1568,7 @@ pub fn mean_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<
             counts[lbl] += 1;
         }
     }
-    (1..=num_labels)
+    Ok((1..=num_labels)
         .map(|l| {
             if counts[l] > 0 {
                 sums[l] / counts[l] as f64
@@ -1575,23 +1577,24 @@ pub fn mean_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<
                 f64::NAN
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Variance of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.variance`.
-///
-/// # Panics
-/// Panics if `input` and `labels` have different shapes.
-pub fn variance_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f64> {
-    assert!(
-        input.shape == labels.shape,
-        "input shape {:?} != labels shape {:?}",
-        input.shape,
-        labels.shape
-    );
-    let means = mean_labels(input, labels, num_labels);
+pub fn variance_labels(
+    input: &NdArray,
+    labels: &NdArray,
+    num_labels: usize,
+) -> Result<Vec<f64>, NdimageError> {
+    if input.shape != labels.shape {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "input shape {:?} != labels shape {:?}",
+            input.shape, labels.shape
+        )));
+    }
+    let means = mean_labels(input, labels, num_labels)?;
     let mut var_sums = vec![0.0; num_labels + 1];
     let mut counts = vec![0usize; num_labels + 1];
     for i in 0..input.size() {
@@ -1602,7 +1605,7 @@ pub fn variance_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> 
             counts[lbl] += 1;
         }
     }
-    (1..=num_labels)
+    Ok((1..=num_labels)
         .map(|l| {
             if counts[l] > 0 {
                 var_sums[l] / counts[l] as f64
@@ -1610,20 +1613,21 @@ pub fn variance_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> 
                 f64::NAN
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Standard deviation of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.standard_deviation`.
-///
-/// # Panics
-/// Panics if `input` and `labels` have different shapes.
-pub fn standard_deviation_labels(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<f64> {
-    variance_labels(input, labels, num_labels)
+pub fn standard_deviation_labels(
+    input: &NdArray,
+    labels: &NdArray,
+    num_labels: usize,
+) -> Result<Vec<f64>, NdimageError> {
+    Ok(variance_labels(input, labels, num_labels)?
         .into_iter()
         .map(|v| v.sqrt())
-        .collect()
+        .collect())
 }
 
 /// Find bounding box slices for each labeled region.
@@ -1662,16 +1666,17 @@ pub fn find_objects(labels: &NdArray, num_labels: usize) -> Vec<Option<(Vec<usiz
 /// Center of mass for each labeled region.
 ///
 /// Matches `scipy.ndimage.center_of_mass`.
-///
-/// # Panics
-/// Panics if `input` and `labels` have different shapes.
-pub fn center_of_mass(input: &NdArray, labels: &NdArray, num_labels: usize) -> Vec<Vec<f64>> {
-    assert!(
-        input.shape == labels.shape,
-        "input shape {:?} != labels shape {:?}",
-        input.shape,
-        labels.shape
-    );
+pub fn center_of_mass(
+    input: &NdArray,
+    labels: &NdArray,
+    num_labels: usize,
+) -> Result<Vec<Vec<f64>>, NdimageError> {
+    if input.shape != labels.shape {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "input shape {:?} != labels shape {:?}",
+            input.shape, labels.shape
+        )));
+    }
     let ndim = input.ndim();
     let mut weighted_sums = vec![vec![0.0; ndim]; num_labels + 1];
     let mut total_weights = vec![0.0; num_labels + 1];
@@ -1688,7 +1693,7 @@ pub fn center_of_mass(input: &NdArray, labels: &NdArray, num_labels: usize) -> V
         }
     }
 
-    (1..=num_labels)
+    Ok((1..=num_labels)
         .map(|l| {
             if total_weights[l] != 0.0 {
                 weighted_sums[l]
@@ -1700,7 +1705,7 @@ pub fn center_of_mass(input: &NdArray, labels: &NdArray, num_labels: usize) -> V
                 vec![f64::NAN; ndim]
             }
         })
-        .collect()
+        .collect())
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3290,7 +3295,7 @@ mod tests {
     fn sum_labels_correct() {
         let data = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]).unwrap();
         let labels = NdArray::new(vec![1.0, 1.0, 2.0, 2.0], vec![4]).unwrap();
-        let sums = sum_labels(&data, &labels, 2);
+        let sums = sum_labels(&data, &labels, 2).unwrap();
         assert_eq!(sums, vec![3.0, 7.0]);
     }
 
@@ -3563,7 +3568,7 @@ mod tests {
     fn center_of_mass_single_region() {
         let data = NdArray::new(vec![1.0, 1.0, 1.0, 1.0], vec![2, 2]).unwrap();
         let labels = NdArray::new(vec![1.0, 1.0, 1.0, 1.0], vec![2, 2]).unwrap();
-        let com = center_of_mass(&data, &labels, 1);
+        let com = center_of_mass(&data, &labels, 1).unwrap();
         assert_eq!(com.len(), 1);
         assert!((com[0][0] - 0.5).abs() < 1e-10);
         assert!((com[0][1] - 0.5).abs() < 1e-10);
