@@ -350,3 +350,90 @@ fn mr_roots_chebyt_evaluate_to_zero() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — Gauss-Legendre n-point quadrature integrates polynomials of
+// degree ≤ 2n − 1 exactly on [−1, 1].
+//
+// We test against ∫_{-1}^{1} x^k dx, which equals 2/(k+1) for even k
+// and 0 for odd k. Required tolerance is fairly tight because the
+// Gauss-Legendre weights and nodes can be evaluated to machine
+// precision.
+// ─────────────────────────────────────────────────────────────────────
+
+fn analytic_x_k(k: usize) -> f64 {
+    if k % 2 == 1 {
+        0.0
+    } else {
+        2.0 / (k as f64 + 1.0)
+    }
+}
+
+#[test]
+fn mr_gauss_legendre_exactness_on_polynomials() {
+    for n in 2..=8_usize {
+        let (xs, weights) = roots_legendre(n);
+        let max_degree = 2 * n - 1;
+        for k in 0..=max_degree {
+            let approx: f64 = xs
+                .iter()
+                .zip(&weights)
+                .map(|(x, w)| w * x.powi(k as i32))
+                .sum();
+            let exact = analytic_x_k(k);
+            let bound = 1e-10 + 1e-9 * exact.abs().max(1.0);
+            assert!(
+                (approx - exact).abs() <= bound,
+                "MR18 GL-{n} on x^{k}: got {approx:.16e}, exact {exact:.16e}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — Gauss-Chebyshev T n-point quadrature integrates
+//   ∫_{-1}^{1} f(x) / sqrt(1 − x²) dx
+// exactly for f a polynomial of degree ≤ 2n − 1. The simplest closed
+// form: ∫_{-1}^{1} x^{2k} / sqrt(1 − x²) dx = π · (2k)! / (4^k (k!)²)
+// (and zero for odd powers).
+// ─────────────────────────────────────────────────────────────────────
+
+fn central_binomial_coefficient(k: usize) -> f64 {
+    // C(2k, k) = (2k)! / (k!)²
+    let mut c = 1.0_f64;
+    for i in 0..k {
+        c *= (k + i + 1) as f64;
+        c /= (i + 1) as f64;
+    }
+    c
+}
+
+fn analytic_gc_x_k(k: usize) -> f64 {
+    if k % 2 == 1 {
+        0.0
+    } else {
+        let half = k / 2;
+        PI * central_binomial_coefficient(half) / (4.0_f64.powi(half as i32))
+    }
+}
+
+#[test]
+fn mr_gauss_chebyt_exactness_on_polynomials() {
+    for n in 2..=8_usize {
+        let (xs, weights) = roots_chebyt(n);
+        let max_degree = 2 * n - 1;
+        for k in 0..=max_degree {
+            let approx: f64 = xs
+                .iter()
+                .zip(&weights)
+                .map(|(x, w)| w * x.powi(k as i32))
+                .sum();
+            let exact = analytic_gc_x_k(k);
+            let bound = 1e-10 + 1e-9 * exact.abs().max(1.0);
+            assert!(
+                (approx - exact).abs() <= bound,
+                "MR19 GCT-{n} on x^{k}: got {approx:.16e}, exact {exact:.16e}"
+            );
+        }
+    }
+}
