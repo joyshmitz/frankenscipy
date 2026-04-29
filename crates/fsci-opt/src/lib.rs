@@ -2837,6 +2837,22 @@ where
     for iter in 0..maxiter {
         let g = grad(&x);
         njev += 1;
+        if g.len() != x.len() || g.iter().any(|v| !v.is_finite()) {
+            return OptimizeResult {
+                x,
+                fun: None,
+                success: false,
+                status: ConvergenceStatus::InvalidInput,
+                message: "gradient returned invalid values".to_string(),
+                nfev,
+                njev,
+                nhev: 0,
+                nit: iter,
+                jac: None,
+                hess_inv: None,
+                maxcv: None,
+            };
+        }
 
         let g_norm: f64 = g.iter().map(|&v| v * v).sum::<f64>().sqrt();
         if g_norm < tol {
@@ -2934,7 +2950,10 @@ where
         || !learning_rate.is_finite()
         || learning_rate <= 0.0
         || x0.iter().any(|v| !v.is_finite())
-        || lb.iter().zip(ub.iter()).any(|(l, u)| !l.is_finite() || !u.is_finite() || l > u)
+        || lb
+            .iter()
+            .zip(ub.iter())
+            .any(|(l, u)| !l.is_finite() || !u.is_finite() || l > u)
     {
         return OptimizeResult {
             x: x0.to_vec(),
@@ -2962,6 +2981,22 @@ where
     for iter in 0..maxiter {
         let g = grad(&x);
         njev += 1;
+        if g.len() != n || g.iter().any(|v| !v.is_finite()) {
+            return OptimizeResult {
+                x,
+                fun: None,
+                success: false,
+                status: ConvergenceStatus::InvalidInput,
+                message: "gradient returned invalid values".to_string(),
+                nfev,
+                njev,
+                nhev: 0,
+                nit: iter,
+                jac: None,
+                hess_inv: None,
+                maxcv: None,
+            };
+        }
 
         // Projected gradient step
         let x_new: Vec<f64> = x
@@ -3036,7 +3071,11 @@ where
         let mut xp = x.to_vec();
         xp[i] += eps;
         let fp = f(&xp);
-        grad.push(if fp.is_finite() { (fp - f0) / eps } else { f64::NAN });
+        grad.push(if fp.is_finite() {
+            (fp - f0) / eps
+        } else {
+            f64::NAN
+        });
     }
     grad
 }
@@ -3105,7 +3144,11 @@ where
         let fp = f(&xp);
         for i in 0..m {
             let fpi = fp.get(i).copied().unwrap_or(f64::NAN);
-            jac[i][j] = if fpi.is_finite() { (fpi - f0[i]) / eps } else { f64::NAN };
+            jac[i][j] = if fpi.is_finite() {
+                (fpi - f0[i]) / eps
+            } else {
+                f64::NAN
+            };
         }
     }
     jac
@@ -3128,7 +3171,11 @@ where
     F: Fn(&S) -> f64,
     N: Fn(&S, u64) -> S,
 {
-    if !temp_initial.is_finite() || !temp_final.is_finite() || temp_initial <= 0.0 || temp_final <= 0.0 {
+    if !temp_initial.is_finite()
+        || !temp_final.is_finite()
+        || temp_initial <= 0.0
+        || temp_final <= 0.0
+    {
         let c = cost(&initial);
         return (initial, c);
     }
@@ -3192,7 +3239,10 @@ where
     let d = lb.len();
     if d == 0
         || ub.len() != d
-        || lb.iter().zip(ub.iter()).any(|(l, u)| !l.is_finite() || !u.is_finite() || l > u)
+        || lb
+            .iter()
+            .zip(ub.iter())
+            .any(|(l, u)| !l.is_finite() || !u.is_finite() || l > u)
     {
         return (vec![f64::NAN; d.max(1)], f64::NAN);
     }
@@ -3275,8 +3325,9 @@ mod tests {
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions, Integrality,
         LinearConstraint, MilpOptions, MilpProblem, MinimizeOptions, NonlinearConstraint,
         OptimizeMethod, RootOptions, approx_fprime, basinhopping, check_grad, cobyla,
-        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, nnls, pso,
-        rosen, rosen_der, rosen_hess, rosen_hess_prod, shgo,
+        differential_evolution, dual_annealing, gradient_descent, linear_sum_assignment, linprog,
+        milp, nnls, projected_gradient_descent, pso, rosen, rosen_der, rosen_hess, rosen_hess_prod,
+        shgo,
     };
 
     #[test]
@@ -3443,6 +3494,51 @@ mod tests {
         let wrong = |_x: &[f64]| vec![0.0, 0.0];
         let error = check_grad(f, wrong, &[2.0, -3.0]).expect("gradient check should succeed");
         assert!(error > 1.0, "expected large error, got {error}");
+    }
+
+    #[test]
+    fn gradient_descent_rejects_invalid_callback_gradient() {
+        let f = |x: &[f64]| x.iter().map(|value| value * value).sum::<f64>();
+
+        let wrong_len = gradient_descent(f, |_x| vec![1.0], &[1.0, 2.0], 1.0e-6, 10, 0.1);
+        assert!(!wrong_len.success);
+        assert_eq!(wrong_len.status, ConvergenceStatus::InvalidInput);
+
+        let non_finite =
+            gradient_descent(f, |x| vec![f64::NAN; x.len()], &[1.0, 2.0], 1.0e-6, 10, 0.1);
+        assert!(!non_finite.success);
+        assert_eq!(non_finite.status, ConvergenceStatus::InvalidInput);
+    }
+
+    #[test]
+    fn projected_gradient_descent_rejects_invalid_callback_gradient() {
+        let f = |x: &[f64]| x.iter().map(|value| value * value).sum::<f64>();
+
+        let wrong_len = projected_gradient_descent(
+            f,
+            |_x| vec![1.0],
+            &[1.0, 2.0],
+            &[0.0, 0.0],
+            &[2.0, 2.0],
+            1.0e-6,
+            10,
+            0.1,
+        );
+        assert!(!wrong_len.success);
+        assert_eq!(wrong_len.status, ConvergenceStatus::InvalidInput);
+
+        let non_finite = projected_gradient_descent(
+            f,
+            |x| vec![f64::INFINITY; x.len()],
+            &[1.0, 2.0],
+            &[0.0, 0.0],
+            &[2.0, 2.0],
+            1.0e-6,
+            10,
+            0.1,
+        );
+        assert!(!non_finite.success);
+        assert_eq!(non_finite.status, ConvergenceStatus::InvalidInput);
     }
 
     #[test]
