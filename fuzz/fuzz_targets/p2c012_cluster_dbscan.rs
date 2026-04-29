@@ -3,6 +3,7 @@
 use arbitrary::Arbitrary;
 use fsci_cluster::dbscan;
 use libfuzzer_sys::fuzz_target;
+use std::collections::HashSet;
 
 // DBSCAN clustering oracle:
 // Tests dbscan(data, eps, min_samples) for correctness properties:
@@ -31,6 +32,16 @@ fn sanitize(x: f64) -> f64 {
     }
 }
 
+fn squared_distance(a: &[f64], b: &[f64]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(&ai, &bi)| {
+            let delta = ai - bi;
+            delta * delta
+        })
+        .sum()
+}
+
 fuzz_target!(|input: DbscanInput| {
     let n = input.points.len().min(MAX_POINTS);
     if n < 2 {
@@ -56,8 +67,9 @@ fuzz_target!(|input: DbscanInput| {
         })
         .collect();
 
-    let eps = sanitize(input.eps_raw).abs().max(1e-10).min(1e6);
-    let min_samples = ((input.min_samples_raw as usize) % n).max(1);
+    let eps = sanitize(input.eps_raw).abs().clamp(1e-10, 1e6);
+    let eps2 = eps * eps;
+    let min_samples = (input.min_samples_raw as usize) % (n + 2);
 
     let result = match dbscan(&data, eps, min_samples) {
         Ok(r) => r,
@@ -103,6 +115,14 @@ fuzz_target!(|input: DbscanInput| {
         );
     }
 
+    let core_indices: HashSet<usize> = result.core_sample_indices.iter().copied().collect();
+    if core_indices.len() != result.core_sample_indices.len() {
+        panic!(
+            "DBSCAN core_sample_indices contains duplicates: {:?}",
+            result.core_sample_indices
+        );
+    }
+
     for &core_idx in &result.core_sample_indices {
         if core_idx >= n {
             panic!(
@@ -114,6 +134,16 @@ fuzz_target!(|input: DbscanInput| {
             panic!(
                 "DBSCAN core point at index {} is labeled as noise",
                 core_idx
+            );
+        }
+        let neighbor_count = data
+            .iter()
+            .filter(|point| squared_distance(&data[core_idx], point) <= eps2)
+            .count();
+        if neighbor_count < min_samples {
+            panic!(
+                "DBSCAN core point {} has {} eps-neighbors but min_samples={}",
+                core_idx, neighbor_count, min_samples
             );
         }
     }
@@ -130,25 +160,38 @@ fuzz_target!(|input: DbscanInput| {
             continue;
         }
 
-        let has_core_point = members
+        let cluster_core_indices: Vec<usize> = members
             .iter()
-            .any(|&idx| result.core_sample_indices.contains(&idx));
+            .copied()
+            .filter(|idx| core_indices.contains(idx))
+            .collect();
 
-        if !has_core_point {
+        if cluster_core_indices.is_empty() {
             panic!(
                 "DBSCAN cluster {} with {} members has no core point",
                 cluster_id,
                 members.len()
             );
         }
+
+        for &idx in &members {
+            if core_indices.contains(&idx) {
+                continue;
+            }
+            let touches_core = cluster_core_indices
+                .iter()
+                .any(|&core_idx| squared_distance(&data[idx], &data[core_idx]) <= eps2);
+            if !touches_core {
+                panic!(
+                    "DBSCAN cluster {} member {} is not within eps of any core point",
+                    cluster_id, idx
+                );
+            }
+        }
     }
 
     if max_cluster >= 0 {
-        let cluster_ids: std::collections::HashSet<i64> = labels
-            .iter()
-            .copied()
-            .filter(|&l| l >= 0)
-            .collect();
+        let cluster_ids: HashSet<i64> = labels.iter().copied().filter(|&l| l >= 0).collect();
         for expected in 0..=max_cluster {
             if !cluster_ids.contains(&expected) {
                 panic!(
