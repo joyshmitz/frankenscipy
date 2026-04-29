@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-015";
 const TOL: f64 = 1.0e-10;
+const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
 #[derive(Debug, Clone, Serialize)]
 struct NdimageCase {
@@ -298,14 +299,28 @@ print(json.dumps(output))
     serde_json::from_slice(&output.stdout).ok()
 }
 
+fn scipy_oracle_or_skip(test_id: &str, cases: &[NdimageCase]) -> Option<Vec<OracleCase>> {
+    let oracle = run_scipy_oracle(cases);
+    if oracle.is_none() {
+        assert!(
+            std::env::var_os(REQUIRE_SCIPY_ENV).is_none(),
+            "{REQUIRE_SCIPY_ENV}=1 but SciPy ndimage is unavailable for {test_id}"
+        );
+        eprintln!(
+            "SciPy ndimage not available; skipping {test_id}. Set {REQUIRE_SCIPY_ENV}=1 to fail closed when the oracle is missing"
+        );
+    }
+    oracle
+}
+
 #[test]
 fn diff_001_ndimage_filters_live_scipy() {
     let cases = ndimage_cases();
     assert_eq!(cases.len(), 60, "ndimage diff case inventory changed");
 
     let start = Instant::now();
-    let Some(oracle_cases) = run_scipy_oracle(&cases) else {
-        eprintln!("SciPy ndimage not available; skipping live ndimage differential harness");
+    let Some(oracle_cases) = scipy_oracle_or_skip("diff_001_ndimage_filters_live_scipy", &cases)
+    else {
         return;
     };
     assert_eq!(
@@ -376,8 +391,9 @@ fn diff_002_ndimage_rank_filters_live_scipy() {
     );
 
     let start = Instant::now();
-    let Some(oracle_cases) = run_scipy_oracle(&cases) else {
-        eprintln!("SciPy ndimage not available; skipping live ndimage rank-filter harness");
+    let Some(oracle_cases) =
+        scipy_oracle_or_skip("diff_002_ndimage_rank_filters_live_scipy", &cases)
+    else {
         return;
     };
     assert_eq!(
