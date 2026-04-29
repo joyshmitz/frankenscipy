@@ -258,8 +258,14 @@ fn relative_entropy(x: f64, y: f64) -> f64 {
 /// Matches `scipy.spatial.distance.jensenshannon(p, q, base=None)` for
 /// one-dimensional inputs. The input vectors are normalized to sum to 1.
 pub fn jensenshannon(p: &[f64], q: &[f64], base: Option<f64>) -> f64 {
+    if p.is_empty() || q.is_empty() || p.len() != q.len() {
+        return f64::NAN;
+    }
     let sum_p: f64 = p.iter().sum();
     let sum_q: f64 = q.iter().sum();
+    if sum_p <= 0.0 || sum_q <= 0.0 || !sum_p.is_finite() || !sum_q.is_finite() {
+        return f64::NAN;
+    }
 
     let normalized_p: Vec<f64> = p.iter().map(|value| value / sum_p).collect();
     let normalized_q: Vec<f64> = q.iter().map(|value| value / sum_q).collect();
@@ -385,6 +391,15 @@ pub fn squareform_to_condensed(matrix: &[Vec<f64>]) -> Result<Vec<f64>, SpatialE
         return Err(SpatialError::InvalidArgument(
             "matrix must be at least 2×2".to_string(),
         ));
+    }
+    for row in matrix {
+        if row.len() != n {
+            return Err(SpatialError::InvalidArgument(format!(
+                "matrix must be square: expected {} columns, got {}",
+                n,
+                row.len()
+            )));
+        }
     }
 
     let mut condensed = Vec::with_capacity(n * (n - 1) / 2);
@@ -2434,11 +2449,30 @@ pub fn procrustes(
         ));
     }
     let d = data1[0].len();
-    if data2[0].len() != d {
-        return Err(SpatialError::DimensionMismatch {
-            expected: d,
-            actual: data2[0].len(),
-        });
+    if d == 0 {
+        return Err(SpatialError::InvalidArgument(
+            "inputs must have at least one dimension".to_string(),
+        ));
+    }
+    for (i, row) in data1.iter().enumerate() {
+        if row.len() != d {
+            return Err(SpatialError::InvalidArgument(format!(
+                "data1 row {} has {} columns, expected {}",
+                i,
+                row.len(),
+                d
+            )));
+        }
+    }
+    for (i, row) in data2.iter().enumerate() {
+        if row.len() != d {
+            return Err(SpatialError::InvalidArgument(format!(
+                "data2 row {} has {} columns, expected {}",
+                i,
+                row.len(),
+                d
+            )));
+        }
     }
 
     // Center both datasets
@@ -2718,11 +2752,30 @@ pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<f64, Spati
         return Err(SpatialError::EmptyData);
     }
     let dim = xa[0].len();
+    if dim == 0 {
+        return Err(SpatialError::InvalidArgument(
+            "points must have at least one dimension".to_string(),
+        ));
+    }
     if xb[0].len() != dim {
         return Err(SpatialError::DimensionMismatch {
             expected: dim,
             actual: xb[0].len(),
         });
+    }
+    for row in xa.iter().skip(1) {
+        if row.len() != dim {
+            return Err(SpatialError::InvalidArgument(
+                "all points in xa must have the same dimension".to_string(),
+            ));
+        }
+    }
+    for row in xb.iter().skip(1) {
+        if row.len() != dim {
+            return Err(SpatialError::InvalidArgument(
+                "all points in xb must have the same dimension".to_string(),
+            ));
+        }
     }
     if xa.iter().flatten().any(|v| !v.is_finite()) || xb.iter().flatten().any(|v| !v.is_finite()) {
         return Err(SpatialError::InvalidArgument(
@@ -2755,6 +2808,15 @@ pub fn hausdorff_distance(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<f64, Spati
 /// Matches `scipy.spatial.distance.mahalanobis`.
 pub fn mahalanobis(x: &[f64], y: &[f64], vi: &[Vec<f64>]) -> f64 {
     let n = x.len();
+    if n == 0 || y.len() != n || vi.len() != n {
+        return f64::NAN;
+    }
+    for row in vi {
+        if row.len() != n {
+            return f64::NAN;
+        }
+    }
+
     let diff: Vec<f64> = x.iter().zip(y.iter()).map(|(&a, &b)| a - b).collect();
 
     let mut vi_diff = vec![0.0; n];
@@ -2777,10 +2839,19 @@ pub fn mahalanobis(x: &[f64], y: &[f64], vi: &[Vec<f64>]) -> f64 {
 /// d = sqrt(sum((x-y)² / v)) where v is the per-component variance.
 /// Matches `scipy.spatial.distance.seuclidean`.
 pub fn seuclidean(x: &[f64], y: &[f64], v: &[f64]) -> f64 {
+    if x.is_empty() || x.len() != y.len() || x.len() != v.len() {
+        return f64::NAN;
+    }
     x.iter()
         .zip(y.iter())
         .zip(v.iter())
-        .map(|((&xi, &yi), &vi)| (xi - yi).powi(2) / vi)
+        .map(|((&xi, &yi), &vi)| {
+            if vi <= 0.0 {
+                f64::NAN
+            } else {
+                (xi - yi).powi(2) / vi
+            }
+        })
         .sum::<f64>()
         .sqrt()
 }
@@ -2789,6 +2860,9 @@ pub fn seuclidean(x: &[f64], y: &[f64], v: &[f64]) -> f64 {
 ///
 /// Matches `scipy.spatial.distance.wminkowski`.
 pub fn wminkowski(x: &[f64], y: &[f64], p: f64, w: &[f64]) -> f64 {
+    if x.is_empty() || x.len() != y.len() || x.len() != w.len() || p <= 0.0 {
+        return f64::NAN;
+    }
     x.iter()
         .zip(y.iter())
         .zip(w.iter())
@@ -3045,6 +3119,11 @@ pub fn centroid(points: &[Vec<f64>]) -> Vec<f64> {
         return vec![];
     }
     let d = points[0].len();
+    for p in points {
+        if p.len() != d {
+            return vec![f64::NAN; d];
+        }
+    }
     let n = points.len() as f64;
     let mut center = vec![0.0; d];
     for p in points {
