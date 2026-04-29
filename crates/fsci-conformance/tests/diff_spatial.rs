@@ -102,7 +102,13 @@ fn deterministic_positive_vector(dim: usize, seed: usize) -> Vec<f64> {
 
 fn deterministic_binary_vector(dim: usize, seed: usize) -> Vec<f64> {
     (0..dim)
-        .map(|idx| if (idx + seed) % 3 == 0 { 1.0 } else { 0.0 })
+        .map(|idx| {
+            if (idx + seed).is_multiple_of(3) {
+                1.0
+            } else {
+                0.0
+            }
+        })
         .collect()
 }
 
