@@ -8601,7 +8601,10 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
 /// Tests H0: all group means are equal.
 /// Assumes normality and equal variances within groups.
 pub fn f_oneway(groups: &[&[f64]]) -> TtestResult {
-    if groups.len() < 2 || groups.iter().any(|g| g.iter().any(|v| v.is_nan())) {
+    if groups.len() < 2
+        || groups.iter().any(|g| g.is_empty())
+        || groups.iter().any(|g| g.iter().any(|v| v.is_nan()))
+    {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -8939,7 +8942,10 @@ pub fn levene_with_nan_policy(
 ///
 /// Matches `scipy.stats.bartlett(*groups)`.
 pub fn bartlett(groups: &[&[f64]]) -> VarianceTestResult {
-    if groups.len() < 2 || groups.iter().any(|group| group.len() < 2) {
+    if groups.len() < 2
+        || groups.iter().any(|group| group.len() < 2)
+        || groups.iter().any(|g| g.iter().any(|v| v.is_nan()))
+    {
         return invalid_variance_test_result();
     }
 
@@ -9110,7 +9116,10 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
 ///
 /// Matches `scipy.stats.fligner(*groups)`.
 pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
-    if groups.len() < 2 || groups.iter().any(|g| g.len() < 2) {
+    if groups.len() < 2
+        || groups.iter().any(|g| g.len() < 2)
+        || groups.iter().any(|g| g.iter().any(|v| v.is_nan()))
+    {
         return invalid_variance_test_result();
     }
 
@@ -9588,7 +9597,11 @@ pub fn ansari_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResul
 /// Non-parametric test: H0: distributions of x and y are equal.
 /// Uses normal approximation for p-value (valid for n > 20).
 pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
-    if x.len() < 2 || y.len() < 2 {
+    if x.len() < 2
+        || y.len() < 2
+        || x.iter().any(|v| v.is_nan())
+        || y.iter().any(|v| v.is_nan())
+    {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -9953,7 +9966,10 @@ pub fn wilcoxon_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestRes
 /// Non-parametric alternative to one-way ANOVA.
 /// Tests H0: all groups come from the same distribution.
 pub fn kruskal(groups: &[&[f64]]) -> TtestResult {
-    if groups.len() < 2 {
+    if groups.len() < 2
+        || groups.iter().any(|g| g.is_empty())
+        || groups.iter().any(|g| g.iter().any(|v| v.is_nan()))
+    {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -15974,6 +15990,14 @@ pub fn permutation_test<F>(
 where
     F: Fn(&[f64], &[f64]) -> f64,
 {
+    if x.is_empty()
+        || y.is_empty()
+        || n_permutations == 0
+        || x.iter().any(|v| v.is_nan())
+        || y.iter().any(|v| v.is_nan())
+    {
+        return (f64::NAN, f64::NAN);
+    }
     let observed = stat_fn(x, y);
     let n = x.len() + y.len();
     let mut combined: Vec<f64> = x.iter().chain(y.iter()).cloned().collect();
