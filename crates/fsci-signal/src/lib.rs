@@ -941,9 +941,22 @@ pub fn lombscargle(
     let signal_energy = y.iter().map(|value| value * value).sum::<f64>();
 
     for &omega in freqs {
-        // Handle omega == 0 separately to avoid division by zero
+        if !omega.is_finite() {
+            power.push(f64::NAN);
+            continue;
+        }
         if omega == 0.0 {
-            power.push(0.0);
+            let y_sum = y.iter().sum::<f64>();
+            let p = 0.5 * y_sum.powi(2) / x.len() as f64;
+            power.push(if normalize {
+                if signal_energy == 0.0 {
+                    f64::NAN
+                } else {
+                    p * (2.0 / signal_energy)
+                }
+            } else {
+                p
+            });
             continue;
         }
         // Compute tau: phase offset for orthogonality
@@ -12961,6 +12974,29 @@ mod tests {
         for (actual, want) in normalized.iter().zip(expected_normalized.iter()) {
             assert!((actual - want).abs() < tol, "{actual} vs {want}");
         }
+    }
+
+    #[test]
+    fn lombscargle_zero_frequency_matches_scipy_reference() {
+        let x = [0.0, 1.0, 2.0, 3.0];
+        let y = [1.0, 2.0, 1.0, 0.0];
+        let freqs = [0.0, 1.0];
+        let power = lombscargle(&x, &y, &freqs, false).expect("lombscargle power");
+        let normalized = lombscargle(&x, &y, &freqs, true).expect("lombscargle normalized");
+
+        assert!((power[0] - 2.0).abs() < 1e-12);
+        assert!((normalized[0] - (2.0 / 3.0)).abs() < 1e-12);
+        assert!(power[1].is_finite());
+        assert!(normalized[1].is_finite());
+    }
+
+    #[test]
+    fn lombscargle_non_finite_frequency_returns_nan() {
+        let x = [0.0, 1.0, 2.0, 3.0];
+        let y = [1.0, 2.0, 1.0, 0.0];
+        let freqs = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+        let power = lombscargle(&x, &y, &freqs, false).expect("lombscargle power");
+        assert!(power.iter().all(|value| value.is_nan()));
     }
 
     #[test]
