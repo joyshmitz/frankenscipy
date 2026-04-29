@@ -7937,6 +7937,9 @@ pub fn quantile(data: &[f64], q: &[f64]) -> Vec<f64> {
 
 /// Compute weighted mean.
 pub fn weighted_mean(values: &[f64], weights: &[f64]) -> f64 {
+    if values.len() != weights.len() {
+        return f64::NAN;
+    }
     let total_w: f64 = weights.iter().sum();
     if total_w == 0.0 {
         return f64::NAN;
@@ -7951,6 +7954,9 @@ pub fn weighted_mean(values: &[f64], weights: &[f64]) -> f64 {
 
 /// Compute weighted variance.
 pub fn weighted_var(values: &[f64], weights: &[f64]) -> f64 {
+    if values.len() != weights.len() {
+        return f64::NAN;
+    }
     let mean = weighted_mean(values, weights);
     let total_w: f64 = weights.iter().sum();
     if total_w == 0.0 {
@@ -19155,6 +19161,14 @@ mod tests {
         assert_eq!(pmean(&[0.0, 2.0], -1.0), 0.0);
         assert!(pmean(&[0.0, -2.0], -1.0).is_nan());
         assert!(pmean(&[-1.0, 2.0], 0.5).is_nan());
+    }
+
+    #[test]
+    fn weighted_helpers_reject_shape_mismatch() {
+        assert!(weighted_mean(&[10.0, 20.0, 30.0], &[1.0, 2.0]).is_nan());
+        assert!(weighted_mean(&[10.0, 20.0], &[1.0, 2.0, 3.0]).is_nan());
+        assert!(weighted_var(&[10.0, 20.0, 30.0], &[1.0, 2.0]).is_nan());
+        assert!(weighted_var(&[10.0, 20.0], &[1.0, 2.0, 3.0]).is_nan());
     }
 
     // ── Normal distribution ─────────────────────────────────────────
