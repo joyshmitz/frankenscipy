@@ -2094,9 +2094,9 @@ pub fn simpson_irregular(y: &[f64], x: &[f64]) -> f64 {
         let h1 = x[i + 2] - x[i + 1];
         let hsum = h0 + h1;
 
-        // Fall back to trapezoid if spacing is degenerate
+        // Fall back to the two local trapezoids if spacing is degenerate.
         if h0.abs() < 1e-15 || h1.abs() < 1e-15 {
-            sum += 0.5 * (y[i] + y[i + 2]) * hsum;
+            sum += 0.5 * (y[i] + y[i + 1]) * h0 + 0.5 * (y[i + 1] + y[i + 2]) * h1;
             i += 2;
             continue;
         }
@@ -2514,7 +2514,7 @@ pub fn trapezoid_richardson(y: &[f64], x: &[f64]) -> f64 {
 pub fn cumulative_trapezoid_initial(y: &[f64], x: &[f64], initial: f64) -> Vec<f64> {
     let n = y.len();
     if n < 2 || x.len() != n || !initial.is_finite() {
-        return vec![initial; n.max(1)];
+        return vec![initial; n];
     }
 
     let mut result = Vec::with_capacity(n);
@@ -3665,6 +3665,12 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn cumulative_trapezoid_initial_empty_input_stays_empty() {
+        let result = cumulative_trapezoid_initial(&[], &[], f64::NAN);
+        assert!(result.is_empty());
+    }
+
     // ── tplquad tests ──────────────────────────────────────────────
 
     #[test]
@@ -3936,6 +3942,15 @@ mod tests {
             result,
             exact
         );
+    }
+
+    #[test]
+    fn simpson_irregular_duplicate_spacing_uses_local_trapezoids() {
+        let x = [0.0, 0.0, 1.0];
+        let y = [100.0, 2.0, 4.0];
+        let result = simpson_irregular(&y, &x);
+
+        assert!((result - 3.0).abs() < 1e-12, "got {result}");
     }
 
     #[test]
