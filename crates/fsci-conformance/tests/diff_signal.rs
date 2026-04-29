@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_signal::{
-    blackman, convolve, correlate, hamming, hann, kaiser, ricker, savgol_coeffs, ConvolveMode,
+    ConvolveMode, blackman, convolve, correlate, hamming, hann, kaiser, ricker, savgol_coeffs,
 };
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +100,61 @@ fn emit_log(log: &DiffLog) {
     let path = output_dir().join(format!("{}.json", log.test_id));
     let json = serde_json::to_string_pretty(log).expect("serialize signal diff log");
     fs::write(path, json).expect("write signal diff log");
+}
+
+fn assert_complete_oracle_results<T>(
+    test_id: &str,
+    expected_case_ids: impl IntoIterator<Item = String>,
+    oracle_results: &HashMap<String, T>,
+) {
+    let expected_case_ids: Vec<String> = expected_case_ids.into_iter().collect();
+    assert_eq!(
+        oracle_results.len(),
+        expected_case_ids.len(),
+        "{test_id} SciPy oracle returned partial or duplicate coverage"
+    );
+
+    let missing_oracle_cases: Vec<&str> = expected_case_ids
+        .iter()
+        .filter(|case_id| !oracle_results.contains_key(case_id.as_str()))
+        .map(String::as_str)
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "{test_id} missing SciPy signal oracle results: {:?}",
+        missing_oracle_cases
+    );
+
+    let unexpected_oracle_cases: Vec<&str> = oracle_results
+        .keys()
+        .map(String::as_str)
+        .filter(|case_id| !expected_case_ids.iter().any(|expected| expected == case_id))
+        .collect();
+    assert!(
+        unexpected_oracle_cases.is_empty(),
+        "{test_id} unexpected SciPy signal oracle results: {:?}",
+        unexpected_oracle_cases
+    );
+}
+
+fn assert_all_cases_compared(test_id: &str, compared: usize, expected: usize) {
+    assert_eq!(
+        compared, expected,
+        "{test_id} compared {compared}/{expected} expected signal cases"
+    );
+}
+
+fn scipy_oracle_unavailable(test_id: &str, oracle_count: usize) -> bool {
+    if oracle_count != 0 {
+        return false;
+    }
+
+    assert!(
+        std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+        "{REQUIRE_SCIPY_ENV}=1 but SciPy signal oracle unavailable for {test_id}"
+    );
+    eprintln!("skipping {test_id} diff: scipy oracle not available");
+    true
 }
 
 fn window_cases() -> Vec<WindowCase> {
@@ -274,7 +329,10 @@ print(json.dumps(results))
 
     let output = child.wait_with_output().expect("wait python3");
     if !output.status.success() {
-        eprintln!("scipy window oracle stderr: {}", String::from_utf8_lossy(&output.stderr));
+        eprintln!(
+            "scipy window oracle stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         return HashMap::new();
     }
 
@@ -328,7 +386,10 @@ print(json.dumps(results))
 
     let output = child.wait_with_output().expect("wait python3");
     if !output.status.success() {
-        eprintln!("scipy convolve oracle stderr: {}", String::from_utf8_lossy(&output.stderr));
+        eprintln!(
+            "scipy convolve oracle stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         return HashMap::new();
     }
 
@@ -377,7 +438,10 @@ print(json.dumps(results))
 
     let output = child.wait_with_output().expect("wait python3");
     if !output.status.success() {
-        eprintln!("scipy savgol oracle stderr: {}", String::from_utf8_lossy(&output.stderr));
+        eprintln!(
+            "scipy savgol oracle stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         return HashMap::new();
     }
 
@@ -425,7 +489,10 @@ print(json.dumps(results))
 
     let output = child.wait_with_output().expect("wait python3");
     if !output.status.success() {
-        eprintln!("scipy ricker oracle stderr: {}", String::from_utf8_lossy(&output.stderr));
+        eprintln!(
+            "scipy ricker oracle stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         return HashMap::new();
     }
 
@@ -447,10 +514,16 @@ fn run_rust_window(case: &WindowCase) -> Vec<f64> {
 }
 
 fn max_diff(a: &[f64], b: &[f64]) -> f64 {
+    if a.len() != b.len() {
+        return f64::INFINITY;
+    }
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| (x - y).abs())
-        .fold(0.0, f64::max)
+        .fold(
+            0.0_f64,
+            |acc, d| if d.is_nan() { f64::NAN } else { acc.max(d) },
+        )
 }
 
 #[test]
@@ -459,13 +532,14 @@ fn diff_windows() {
     let cases = window_cases();
     let scipy = run_scipy_window_oracle(&cases);
 
-    if scipy.is_empty() && std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-        panic!("scipy oracle required but unavailable");
-    }
-    if scipy.is_empty() {
-        eprintln!("skipping window diff: scipy oracle not available");
+    if scipy_oracle_unavailable("window", scipy.len()) {
         return;
     }
+    assert_complete_oracle_results(
+        "windows",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy,
+    );
 
     let mut diffs = Vec::new();
     let mut max_global = 0.0f64;
@@ -489,6 +563,7 @@ fn diff_windows() {
             });
         }
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "windows".into(),
@@ -503,6 +578,7 @@ fn diff_windows() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("windows", log.case_count, cases.len());
     assert!(all_pass, "window diff failed: max_diff={max_global}");
 }
 
@@ -512,13 +588,14 @@ fn diff_convolve() {
     let cases = convolve_cases();
     let scipy = run_scipy_convolve_oracle(&cases);
 
-    if scipy.is_empty() && std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-        panic!("scipy oracle required but unavailable");
-    }
-    if scipy.is_empty() {
-        eprintln!("skipping convolve diff: scipy oracle not available");
+    if scipy_oracle_unavailable("convolve", scipy.len()) {
         return;
     }
+    assert_complete_oracle_results(
+        "convolve",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy,
+    );
 
     let mut diffs = Vec::new();
     let mut max_global = 0.0f64;
@@ -558,6 +635,7 @@ fn diff_convolve() {
             });
         }
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "convolve".into(),
@@ -572,6 +650,7 @@ fn diff_convolve() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("convolve", log.case_count, cases.len());
     assert!(all_pass, "convolve diff failed: max_diff={max_global}");
 }
 
@@ -581,37 +660,39 @@ fn diff_savgol_coeffs() {
     let cases = savgol_cases();
     let scipy = run_scipy_savgol_oracle(&cases);
 
-    if scipy.is_empty() && std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-        panic!("scipy oracle required but unavailable");
-    }
-    if scipy.is_empty() {
-        eprintln!("skipping savgol diff: scipy oracle not available");
+    if scipy_oracle_unavailable("savgol", scipy.len()) {
         return;
     }
+    assert_complete_oracle_results(
+        "savgol_coeffs",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy,
+    );
 
     let mut diffs = Vec::new();
     let mut max_global = 0.0f64;
     let mut all_pass = true;
 
     for case in &cases {
-        if let Ok(rust_vals) = savgol_coeffs(case.window_length, case.polyorder, case.deriv) {
-            if let Some(scipy_vals) = scipy.get(&case.case_id) {
-                let md = max_diff(&rust_vals, scipy_vals);
-                let pass = md <= CONV_TOL;
-                max_global = max_global.max(md);
-                all_pass = all_pass && pass;
-                diffs.push(CaseDiff {
-                    case_id: case.case_id.clone(),
-                    method: "savgol_coeffs".into(),
-                    rust_values: rust_vals,
-                    scipy_values: scipy_vals.clone(),
-                    max_diff: md,
-                    tolerance: CONV_TOL,
-                    pass,
-                });
-            }
+        if let Ok(rust_vals) = savgol_coeffs(case.window_length, case.polyorder, case.deriv)
+            && let Some(scipy_vals) = scipy.get(&case.case_id)
+        {
+            let md = max_diff(&rust_vals, scipy_vals);
+            let pass = md <= CONV_TOL;
+            max_global = max_global.max(md);
+            all_pass = all_pass && pass;
+            diffs.push(CaseDiff {
+                case_id: case.case_id.clone(),
+                method: "savgol_coeffs".into(),
+                rust_values: rust_vals,
+                scipy_values: scipy_vals.clone(),
+                max_diff: md,
+                tolerance: CONV_TOL,
+                pass,
+            });
         }
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "savgol_coeffs".into(),
@@ -626,6 +707,7 @@ fn diff_savgol_coeffs() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("savgol_coeffs", log.case_count, cases.len());
     assert!(all_pass, "savgol_coeffs diff failed: max_diff={max_global}");
 }
 
@@ -635,13 +717,14 @@ fn diff_ricker() {
     let cases = ricker_cases();
     let scipy = run_scipy_ricker_oracle(&cases);
 
-    if scipy.is_empty() && std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-        panic!("scipy oracle required but unavailable");
-    }
-    if scipy.is_empty() {
-        eprintln!("skipping ricker diff: scipy oracle not available");
+    if scipy_oracle_unavailable("ricker", scipy.len()) {
         return;
     }
+    assert_complete_oracle_results(
+        "ricker",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy,
+    );
 
     let mut diffs = Vec::new();
     let mut max_global = 0.0f64;
@@ -665,6 +748,7 @@ fn diff_ricker() {
             });
         }
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "ricker".into(),
@@ -679,5 +763,6 @@ fn diff_ricker() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("ricker", log.case_count, cases.len());
     assert!(all_pass, "ricker diff failed: max_diff={max_global}");
 }
