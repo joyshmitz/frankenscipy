@@ -3553,6 +3553,9 @@ pub fn polyroots(coeffs: &[f64]) -> Vec<f64> {
 ///
 /// These are optimal interpolation nodes that minimize Runge's phenomenon.
 pub fn chebyshev_nodes(n: usize, a: f64, b: f64) -> Vec<f64> {
+    if n == 0 || !a.is_finite() || !b.is_finite() {
+        return vec![];
+    }
     let pi = std::f64::consts::PI;
     (0..n)
         .map(|k| {
@@ -3564,7 +3567,10 @@ pub fn chebyshev_nodes(n: usize, a: f64, b: f64) -> Vec<f64> {
 
 /// Generate Chebyshev nodes of the second kind on [a, b].
 pub fn chebyshev_nodes2(n: usize, a: f64, b: f64) -> Vec<f64> {
-    if n <= 1 {
+    if n == 0 || !a.is_finite() || !b.is_finite() {
+        return vec![];
+    }
+    if n == 1 {
         return vec![(a + b) / 2.0];
     }
     let pi = std::f64::consts::PI;
@@ -3579,13 +3585,21 @@ pub fn chebyshev_nodes2(n: usize, a: f64, b: f64) -> Vec<f64> {
 /// Compute barycentric interpolation weights.
 ///
 /// Given nodes x_i, returns weights w_i for barycentric interpolation.
+/// Returns empty vector if nodes are empty or contain duplicates.
 pub fn barycentric_weights(nodes: &[f64]) -> Vec<f64> {
     let n = nodes.len();
+    if n == 0 {
+        return vec![];
+    }
     let mut weights = vec![1.0; n];
     for i in 0..n {
         for j in 0..n {
             if i != j {
-                weights[i] /= nodes[i] - nodes[j];
+                let diff = nodes[i] - nodes[j];
+                if diff.abs() < 1e-15 {
+                    return vec![];
+                }
+                weights[i] /= diff;
             }
         }
     }
@@ -3596,7 +3610,8 @@ pub fn barycentric_weights(nodes: &[f64]) -> Vec<f64> {
 ///
 /// Given nodes, values, weights, evaluates the interpolant at x.
 pub fn barycentric_eval(nodes: &[f64], values: &[f64], weights: &[f64], x: f64) -> f64 {
-    if !x.is_finite() {
+    let n = nodes.len();
+    if n == 0 || values.len() != n || weights.len() != n || !x.is_finite() {
         return f64::NAN;
     }
     // Check if x is exactly a node
@@ -3624,7 +3639,7 @@ pub fn barycentric_eval(nodes: &[f64], values: &[f64], weights: &[f64], x: f64) 
 /// Returns the interpolated value at x using the full Neville tableau.
 pub fn neville(nodes: &[f64], values: &[f64], x: f64) -> f64 {
     let n = nodes.len();
-    if n == 0 {
+    if n == 0 || values.len() != n {
         return f64::NAN;
     }
     let mut p = values.to_vec();
@@ -3646,7 +3661,7 @@ pub fn neville(nodes: &[f64], values: &[f64], x: f64) -> f64 {
 /// interpolated value at x.
 pub fn hermite_interp(nodes: &[f64], values: &[f64], derivatives: &[f64], x: f64) -> f64 {
     let n = nodes.len();
-    if n == 0 {
+    if n == 0 || values.len() != n || derivatives.len() != n {
         return f64::NAN;
     }
 
