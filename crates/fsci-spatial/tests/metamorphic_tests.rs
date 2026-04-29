@@ -1,0 +1,278 @@
+//! Metamorphic tests for `fsci-spatial`.
+//!
+//! Each relation is oracle-free: distance symmetry, identity of
+//! indiscernibles, triangle inequality, pdist/squareform round-trip,
+//! cdist symmetry, and KDTree nearest-distance correctness.
+//!
+//! Run with: `cargo test -p fsci-spatial --test metamorphic_tests`
+
+use fsci_spatial::{
+    DistanceMetric, KDTree, cdist_metric, euclidean, metric_distance, pdist, squareform_to_condensed,
+    squareform_to_matrix,
+};
+
+const ATOL: f64 = 1e-12;
+const RTOL: f64 = 1e-10;
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() <= ATOL + RTOL * a.abs().max(b.abs()).max(1.0)
+}
+
+const ALL_METRICS: &[DistanceMetric] = &[
+    DistanceMetric::Euclidean,
+    DistanceMetric::SqEuclidean,
+    DistanceMetric::Cityblock,
+    DistanceMetric::Chebyshev,
+    DistanceMetric::Cosine,
+    DistanceMetric::Correlation,
+    DistanceMetric::Hamming,
+    DistanceMetric::Jaccard,
+    DistanceMetric::Canberra,
+    DistanceMetric::Braycurtis,
+];
+
+fn sample_points() -> Vec<Vec<f64>> {
+    vec![
+        vec![1.0, 2.0, 3.0, 4.0],
+        vec![4.0, 1.0, 2.0, 5.0],
+        vec![-1.0, 0.0, 5.0, 2.0],
+        vec![3.0, 3.0, 3.0, 3.0],
+        vec![0.0, -2.0, 4.0, 1.0],
+        vec![2.5, 1.5, 0.5, 3.5],
+        vec![-3.0, 4.0, -2.0, 0.0],
+    ]
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR1 — distance symmetry: d(a, b) = d(b, a) for every metric
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_distance_symmetric() {
+    let pts = sample_points();
+    for &metric in ALL_METRICS {
+        for i in 0..pts.len() {
+            for j in 0..pts.len() {
+                let dab = metric_distance(&pts[i], &pts[j], metric);
+                let dba = metric_distance(&pts[j], &pts[i], metric);
+                assert!(
+                    close(dab, dba),
+                    "MR1 {metric:?} d({i},{j})={dab} d({j},{i})={dba}"
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR2 — identity of indiscernibles: d(a, a) = 0 for every metric
+//        (Hamming/Jaccard return 0 for identical points)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_distance_self_zero() {
+    let pts = sample_points();
+    for &metric in ALL_METRICS {
+        for (i, p) in pts.iter().enumerate() {
+            let d = metric_distance(p, p, metric);
+            assert!(
+                close(d, 0.0),
+                "MR2 {metric:?} d({i},{i}) = {d}, expected 0"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR3 — triangle inequality for true metrics: d(a,c) ≤ d(a,b) + d(b,c)
+//        Holds for Euclidean, Cityblock, Chebyshev (and Minkowski-p≥1)
+//        but NOT for Correlation/Cosine/Bray-Curtis in general — those
+//        are excluded from this relation.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_triangle_inequality_metric_distances() {
+    let pts = sample_points();
+    let metrics = [
+        DistanceMetric::Euclidean,
+        DistanceMetric::Cityblock,
+        DistanceMetric::Chebyshev,
+    ];
+    let n = pts.len();
+    for &metric in &metrics {
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    let dab = metric_distance(&pts[i], &pts[j], metric);
+                    let dbc = metric_distance(&pts[j], &pts[k], metric);
+                    let dac = metric_distance(&pts[i], &pts[k], metric);
+                    // Allow a small relative slack for f64 round-off when
+                    // dac is close to the sum.
+                    let bound = (dab + dbc) * (1.0 + 1e-12) + 1e-15;
+                    assert!(
+                        dac <= bound,
+                        "MR3 {metric:?} triangle violated for ({i},{j},{k}): d_ac={dac} > d_ab+d_bc={}, bound={bound}",
+                        dab + dbc
+                    );
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR4 — pdist ↔ squareform round-trip: condensed → square → condensed
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_pdist_squareform_roundtrip() {
+    let pts = sample_points();
+    let condensed = pdist(&pts, DistanceMetric::Euclidean).unwrap();
+    let square = squareform_to_matrix(&condensed).unwrap();
+    let back = squareform_to_condensed(&square).unwrap();
+
+    assert_eq!(back.len(), condensed.len(), "MR4 round-trip length");
+    for (i, (got, want)) in back.iter().zip(&condensed).enumerate() {
+        assert!(
+            close(*got, *want),
+            "MR4 round-trip element {i}: got={got} expected={want}"
+        );
+    }
+    // Square matrix must be symmetric with zero diagonal.
+    let n = pts.len();
+    assert_eq!(square.len(), n);
+    for i in 0..n {
+        assert!((square[i][i]).abs() < 1e-15, "diagonal not zero at {i}");
+        for j in (i + 1)..n {
+            assert!(
+                close(square[i][j], square[j][i]),
+                "square not symmetric at ({i},{j})"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR5 — cdist(X, X) is symmetric and diagonal == 0 for true metrics.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cdist_self_symmetric_zero_diagonal() {
+    let pts = sample_points();
+    let m = cdist_metric(&pts, &pts, DistanceMetric::Euclidean).unwrap();
+    let n = pts.len();
+    assert_eq!(m.len(), n);
+    for i in 0..n {
+        assert_eq!(m[i].len(), n);
+        assert!(
+            m[i][i].abs() < 1e-12,
+            "MR5 cdist diagonal not zero at {i}: {}",
+            m[i][i]
+        );
+        for j in (i + 1)..n {
+            assert!(
+                close(m[i][j], m[j][i]),
+                "MR5 cdist not symmetric at ({i},{j}): {} vs {}",
+                m[i][j],
+                m[j][i]
+            );
+            assert!(
+                m[i][j] >= 0.0,
+                "MR5 cdist negative at ({i},{j}): {}",
+                m[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR6 — KDTree.query returns the true Euclidean nearest neighbor.
+//
+// Build a tree, query each input point — the nearest must be the
+// point itself (distance 0). Then query a perturbed point and check
+// its returned distance equals the brute-force minimum.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kdtree_query_matches_brute_force() {
+    let pts = sample_points();
+    let tree = KDTree::new(&pts).unwrap();
+
+    // 1. Self-query: each input must find itself with distance 0.
+    for (i, p) in pts.iter().enumerate() {
+        let (idx, d) = tree.query(p).unwrap();
+        assert_eq!(idx, i, "MR6 self-query: expected {i}, got {idx}");
+        assert!(d.abs() < 1e-12, "MR6 self-query distance: {d}");
+    }
+
+    // 2. Perturbed-query: distance must equal the true nearest.
+    let q = vec![1.5, 2.5, 2.5, 3.5];
+    let (kd_idx, kd_dist) = tree.query(&q).unwrap();
+    let mut best_idx = 0;
+    let mut best_dist = f64::INFINITY;
+    for (i, p) in pts.iter().enumerate() {
+        let d = euclidean(&q, p);
+        if d < best_dist {
+            best_dist = d;
+            best_idx = i;
+        }
+    }
+    assert_eq!(
+        kd_idx, best_idx,
+        "MR6 KDTree returned wrong index: {kd_idx} vs brute {best_idx}"
+    );
+    assert!(
+        close(kd_dist, best_dist),
+        "MR6 KDTree distance: {kd_dist} vs brute {best_dist}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR7 — KDTree.query_ball_point returns *all* points within radius r.
+//
+// Brute-force the ball and verify both returned-vs-true sets agree
+// after sorting.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kdtree_query_ball_point_matches_brute_force() {
+    let pts = sample_points();
+    let tree = KDTree::new(&pts).unwrap();
+    let q = vec![1.5, 2.5, 2.5, 3.5];
+    let r = 4.0;
+
+    let mut from_tree = tree.query_ball_point(&q, r).unwrap();
+    let mut from_brute: Vec<usize> = pts
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| euclidean(&q, p) <= r)
+        .map(|(i, _)| i)
+        .collect();
+
+    from_tree.sort();
+    from_brute.sort();
+    assert_eq!(
+        from_tree, from_brute,
+        "MR7 KDTree ball: tree={from_tree:?} brute={from_brute:?}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR8 — squared Euclidean equals Euclidean squared (per element).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sqeuclidean_equals_euclidean_squared() {
+    let pts = sample_points();
+    for i in 0..pts.len() {
+        for j in 0..pts.len() {
+            let e = metric_distance(&pts[i], &pts[j], DistanceMetric::Euclidean);
+            let sq = metric_distance(&pts[i], &pts[j], DistanceMetric::SqEuclidean);
+            assert!(
+                close(sq, e * e),
+                "MR8 sqeuclidean({i},{j})={sq} vs euclidean²={}",
+                e * e
+            );
+        }
+    }
+}
