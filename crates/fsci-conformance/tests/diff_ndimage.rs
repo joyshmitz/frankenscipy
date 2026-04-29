@@ -211,8 +211,24 @@ fn max_abs_diff(left: &[f64], right: &[f64]) -> f64 {
     assert_eq!(left.len(), right.len(), "oracle output length mismatch");
     left.iter()
         .zip(right.iter())
-        .map(|(lhs, rhs)| (lhs - rhs).abs())
+        .map(|(lhs, rhs)| {
+            if lhs == rhs || (lhs.is_nan() && rhs.is_nan()) {
+                0.0
+            } else if !lhs.is_finite() || !rhs.is_finite() {
+                f64::INFINITY
+            } else {
+                (lhs - rhs).abs()
+            }
+        })
         .fold(0.0_f64, f64::max)
+}
+
+#[test]
+fn max_abs_diff_flags_nonfinite_mismatches() {
+    assert_eq!(max_abs_diff(&[f64::NAN], &[f64::NAN]), 0.0);
+    assert_eq!(max_abs_diff(&[f64::INFINITY], &[f64::INFINITY]), 0.0);
+    assert!(max_abs_diff(&[f64::NAN], &[1.0]).is_infinite());
+    assert!(max_abs_diff(&[f64::INFINITY], &[1.0]).is_infinite());
 }
 
 fn run_scipy_oracle(cases: &[NdimageCase]) -> Option<Vec<OracleCase>> {
@@ -464,11 +480,14 @@ fn edge_detection_cases() -> Vec<EdgeCase> {
 
     for (shape_idx, shape) in shapes.iter().copied().enumerate() {
         for mode in modes {
-            let cval = if mode == "constant" { 0.0 } else { 0.0 };
+            let cval = 0.0;
             for axis in 0..2 {
                 let seed = 1000 + cases.len() + shape_idx;
                 cases.push(EdgeCase {
-                    case_id: format!("sobel_shape{}x{}_mode_{mode}_axis_{axis}", shape[0], shape[1]),
+                    case_id: format!(
+                        "sobel_shape{}x{}_mode_{mode}_axis_{axis}",
+                        shape[0], shape[1]
+                    ),
                     op: String::from("sobel"),
                     shape,
                     data: deterministic_data(shape, seed),
@@ -477,7 +496,10 @@ fn edge_detection_cases() -> Vec<EdgeCase> {
                     cval,
                 });
                 cases.push(EdgeCase {
-                    case_id: format!("prewitt_shape{}x{}_mode_{mode}_axis_{axis}", shape[0], shape[1]),
+                    case_id: format!(
+                        "prewitt_shape{}x{}_mode_{mode}_axis_{axis}",
+                        shape[0], shape[1]
+                    ),
                     op: String::from("prewitt"),
                     shape,
                     data: deterministic_data(shape, seed + 50),
@@ -600,7 +622,11 @@ fn scipy_edge_oracle_or_skip(test_id: &str, cases: &[EdgeCase]) -> Option<Vec<Or
 #[test]
 fn diff_003_ndimage_edge_detection_live_scipy() {
     let cases = edge_detection_cases();
-    assert_eq!(cases.len(), 50, "edge detection diff case inventory changed");
+    assert_eq!(
+        cases.len(),
+        50,
+        "edge detection diff case inventory changed"
+    );
 
     let start = Instant::now();
     let Some(oracle_cases) =
@@ -765,7 +791,9 @@ print(json.dumps(output))
     {
         let stdin = child.stdin.as_mut()?;
         let input = serde_json::to_vec(cases).expect("serialize binary morph oracle input");
-        stdin.write_all(&input).expect("write binary morph oracle input");
+        stdin
+            .write_all(&input)
+            .expect("write binary morph oracle input");
     }
 
     let output = child.wait_with_output().ok()?;
@@ -816,7 +844,10 @@ fn diff_004_ndimage_binary_morphology_live_scipy() {
 
     let mut case_diffs = Vec::with_capacity(cases.len());
     for (case, oracle) in cases.iter().zip(oracle_cases.iter()) {
-        assert_eq!(case.case_id, oracle.case_id, "binary morph oracle case id mismatch");
+        assert_eq!(
+            case.case_id, oracle.case_id,
+            "binary morph oracle case id mismatch"
+        );
         let actual = rust_binary_morph_output(case).unwrap_or_default();
         let diff = max_abs_diff(&actual, &oracle.values);
         case_diffs.push(CaseDiff {
