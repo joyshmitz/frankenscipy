@@ -993,6 +993,9 @@ pub fn lombscargle(
 ///
 /// Matches `scipy.signal.gausspulse(t, fc, bw)`.
 pub fn gausspulse(t: &[f64], fc: f64, bw: f64) -> Vec<f64> {
+    if fc <= 0.0 || !fc.is_finite() || bw <= 0.0 || !bw.is_finite() {
+        return vec![0.0; t.len()];
+    }
     let bwr = -6.0; // reference level in dB
     let ref_level = 10.0_f64.powf(bwr / 20.0);
     let a = -(std::f64::consts::PI * fc * bw).powi(2) / (2.0 * ref_level.ln());
@@ -1292,6 +1295,9 @@ pub fn matched_filter(template: &[f64], signal: &[f64]) -> Result<Vec<f64>, Sign
 /// * `points` — Number of points in the output vector.
 /// * `a` — Width parameter (standard deviation of the Gaussian).
 pub fn ricker(points: usize, a: f64) -> Vec<f64> {
+    if points == 0 || a <= 0.0 || !a.is_finite() {
+        return vec![];
+    }
     let mut output = Vec::with_capacity(points);
     let center = (points as f64 - 1.0) / 2.0;
     let a2 = a * a;
@@ -1318,6 +1324,9 @@ pub fn ricker(points: usize, a: f64) -> Vec<f64> {
 /// * `s` — Scaling factor, default 1.0.
 /// * `complete` — If true, apply correction term for non-zero mean.
 pub fn morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
+    if m == 0 || s <= 0.0 || !s.is_finite() || !w.is_finite() {
+        return vec![];
+    }
     let mut output = Vec::with_capacity(m);
     let center = (m as f64 - 1.0) / 2.0;
 
@@ -1372,6 +1381,11 @@ where
     let mut result = Vec::with_capacity(widths.len());
 
     for &width in widths {
+        if width <= 0.0 || !width.is_finite() {
+            return Err(SignalError::InvalidArgument(
+                "all widths must be positive and finite".to_string(),
+            ));
+        }
         // Generate wavelet at this scale
         let wavelet_len = (10.0 * width).ceil() as usize;
         let wavelet_len = wavelet_len.max(1);
@@ -1818,6 +1832,11 @@ pub fn peak_widths(
 ///
 /// Matches `scipy.signal.instantaneous_frequency` (via Hilbert transform).
 pub fn instantaneous_frequency(x: &[f64], fs: f64) -> Result<Vec<f64>, SignalError> {
+    if fs <= 0.0 || !fs.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "sampling frequency fs must be positive and finite".to_string(),
+        ));
+    }
     let analytic = hilbert(x)?;
 
     // Instantaneous phase
@@ -1894,7 +1913,7 @@ pub fn argrelextrema(x: &[f64], order: usize, greater: bool) -> Vec<usize> {
 /// Returns (strength, pvalue).
 /// Matches `scipy.signal.vectorstrength`.
 pub fn vectorstrength(events: &[f64], period: f64) -> (f64, f64) {
-    if events.is_empty() || period <= 0.0 {
+    if events.is_empty() || period <= 0.0 || !period.is_finite() {
         return (0.0, 1.0);
     }
 
@@ -2027,6 +2046,9 @@ pub fn autocorrelation(x: &[f64], max_lag: usize) -> Vec<f64> {
 ///
 /// Returns the weighted mean frequency.
 pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
+    if magnitudes.is_empty() || freqs.is_empty() {
+        return 0.0;
+    }
     let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
     if total == 0.0 {
         return 0.0;
@@ -2043,6 +2065,9 @@ pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
 ///
 /// Returns the frequency below which `rolloff_percent` of the total energy is contained.
 pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64) -> f64 {
+    if magnitudes.is_empty() || freqs.is_empty() {
+        return 0.0;
+    }
     let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
     let threshold = total * rolloff_percent / 100.0;
     let mut cumsum = 0.0;
@@ -2057,6 +2082,9 @@ pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64)
 
 /// Spectral bandwidth: weighted standard deviation of frequencies.
 pub fn spectral_bandwidth(magnitudes: &[f64], freqs: &[f64]) -> f64 {
+    if magnitudes.is_empty() || freqs.is_empty() {
+        return 0.0;
+    }
     let centroid = spectral_centroid(magnitudes, freqs);
     let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
     if total == 0.0 {
