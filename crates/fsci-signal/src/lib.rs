@@ -993,7 +993,7 @@ pub fn lombscargle(
 ///
 /// Matches `scipy.signal.gausspulse(t, fc, bw)`.
 pub fn gausspulse(t: &[f64], fc: f64, bw: f64) -> Vec<f64> {
-    if fc <= 0.0 || !fc.is_finite() || bw <= 0.0 || !bw.is_finite() {
+    if fc < 0.0 || bw <= 0.0 {
         return vec![0.0; t.len()];
     }
     let bwr = -6.0; // reference level in dB
@@ -12928,6 +12928,13 @@ mod tests {
             y[50] > y[0].abs() && y[50] > y[100].abs(),
             "gausspulse should peak at t=0"
         );
+    }
+
+    #[test]
+    fn gausspulse_zero_center_frequency_matches_scipy_constant_pulse() {
+        let t = [-1.0, 0.0, 1.0];
+        let y = gausspulse(&t, 0.0, 0.5);
+        assert_eq!(y, vec![1.0, 1.0, 1.0]);
     }
 
     #[test]
