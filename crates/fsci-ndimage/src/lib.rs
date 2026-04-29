@@ -1753,6 +1753,10 @@ pub fn distance_transform_edt(
         for c in 0..cols {
             if input.get(&[r, c]) == 0.0 {
                 output.set(&[r, c], 0.0);
+            } else if bg_pixels.is_empty() {
+                let dr = (r as f64 + 1.0) * sampling[0];
+                let dc = c as f64 * sampling[1];
+                output.set(&[r, c], (dr * dr + dc * dc).sqrt());
             } else {
                 let mut min_dist = f64::INFINITY;
                 for &(br, bc) in &bg_pixels {
@@ -3341,6 +3345,24 @@ mod tests {
         let input = NdArray::new(vec![0.0; 9], vec![3, 3]).unwrap();
         let result = distance_transform_edt(&input, None).unwrap();
         assert!(result.data.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn distance_transform_edt_all_foreground_matches_scipy_reference() {
+        let input = NdArray::new(vec![1.0; 6], vec![2, 3]).unwrap();
+        let result = distance_transform_edt(&input, Some(&[2.0, 3.0])).unwrap();
+        let expected = [
+            2.0,
+            13.0f64.sqrt(),
+            40.0f64.sqrt(),
+            4.0,
+            5.0,
+            52.0f64.sqrt(),
+        ];
+
+        for (actual, expected) in result.data.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-10);
+        }
     }
 
     #[test]
