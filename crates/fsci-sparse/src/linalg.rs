@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use fsci_linalg::{expm as dense_expm, DecompOptions, LinalgError};
+use fsci_linalg::{DecompOptions, LinalgError, expm as dense_expm};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
@@ -13,6 +13,7 @@ pub enum SparseBackend {
     Auto,
     Umfpack,
     Superlu,
+    NativeSparseLu,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -487,7 +488,7 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
         let solution = lu.solve(b)?;
         return Ok(SolveResult {
             solution,
-            backend_used: SparseBackend::Superlu,
+            backend_used: SparseBackend::NativeSparseLu,
             ordering_used: options.ordering,
             warnings: vec![format!(
                 "native sparse direct solve used for n={n}; dense fallback guard is {SPSOLVE_DENSE_MAX_N}"
@@ -527,7 +528,7 @@ pub fn splu(a: &CscMatrix, options: LuOptions) -> SparseResult<SparseLuFactoriza
     let (backend_used, lu_internal) = if n > SPSOLVE_DENSE_MAX_N {
         let csr = a.to_csr()?;
         (
-            SparseBackend::Superlu,
+            SparseBackend::NativeSparseLu,
             SparseLuInternal::Native(NativeSparseLu::factorize_csr(
                 &csr,
                 options.diag_pivot_thresh,
@@ -3893,14 +3894,16 @@ mod tests {
         let result = spsolve(&a, &b, SolveOptions::default())
             .expect("native sparse direct solve should avoid dense fallback guard");
 
-        assert_eq!(result.backend_used, SparseBackend::Superlu);
+        assert_eq!(result.backend_used, SparseBackend::NativeSparseLu);
         assert_eq!(result.solution.len(), n);
         assert_eq!(result.solution[0], 1.0);
         assert_eq!(result.solution[n - 1], 1.0);
-        assert!(result
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("native sparse direct")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("native sparse direct"))
+        );
     }
 
     #[test]
@@ -3943,7 +3946,7 @@ mod tests {
         let solution =
             splu_solve(&factorization, &rhs).expect("native sparse direct solve should succeed");
 
-        assert_eq!(factorization.backend_used, SparseBackend::Superlu);
+        assert_eq!(factorization.backend_used, SparseBackend::NativeSparseLu);
         assert_eq!(solution.len(), n);
         assert_eq!(solution[0], 2.0);
         assert_eq!(solution[n - 1], 2.0);
@@ -4915,7 +4918,7 @@ mod tests {
         let result = dijkstra(&g, 0).expect("dijkstra");
         assert_eq!(result.distances[0], 0.0);
         assert_eq!(result.distances[1], 1.0); // direct edge weight 1
-                                              // Node 2: either direct (weight 3) or via node 1 (1+2=3) — both are 3
+        // Node 2: either direct (weight 3) or via node 1 (1+2=3) — both are 3
         assert!(
             (result.distances[2] - 3.0).abs() < 1e-10,
             "dist to node 2: {}",
