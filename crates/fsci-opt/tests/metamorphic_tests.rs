@@ -7,8 +7,9 @@
 //! Run with: `cargo test -p fsci-opt --test metamorphic_tests`
 
 use fsci_opt::{
-    CurveFitOptions, MinimizeOptions, RootOptions, bisect, brenth, brentq, curve_fit, minimize,
-    ridder, toms748,
+    CurveFitOptions, LeastSquaresOptions, MinimizeOptions, MinimizeScalarOptions, RootOptions,
+    bisect, brenth, brentq, curve_fit, fsolve, least_squares, minimize, minimize_scalar, ridder,
+    toms748,
 };
 
 const ATOL: f64 = 1e-6;
@@ -192,4 +193,86 @@ fn mr_minimize_strict_descent_on_convex() {
         fmin <= f0 + 1e-9,
         "MR7 minimize did not descend: f0={f0} fmin={fmin}"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR8 — minimize_scalar finds the analytic minimum of a parabola.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimize_scalar_finds_parabola_vertex() {
+    let f = |x: f64| (x - 3.7).powi(2) + 1.5;
+    let res = minimize_scalar(f, (0.0, 10.0), MinimizeScalarOptions::default()).unwrap();
+    assert!(res.success, "MR8 minimize_scalar did not converge: {res:?}");
+    assert!(
+        (res.x - 3.7).abs() < 1e-5,
+        "MR8 vertex: got x={}, expected 3.7",
+        res.x
+    );
+    assert!(
+        (res.fun - 1.5).abs() < 1e-9,
+        "MR8 fun at vertex: got {}, expected 1.5",
+        res.fun
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR9 — least_squares recovers the synthetic linear-residual minimizer.
+//
+// Residuals r_i(p) = y_i - (p[0] · x_i + p[1]) — known global minimum
+// at α=2.0, β=-1.0 with cost 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_least_squares_recovers_linear_params() {
+    let alpha_true = 2.0_f64;
+    let beta_true = -1.0_f64;
+    let xs: Vec<f64> = (0..20).map(|i| i as f64 * 0.1).collect();
+    let ys: Vec<f64> = xs.iter().map(|&x| alpha_true * x + beta_true).collect();
+    let resid = move |p: &[f64]| -> Vec<f64> {
+        xs.iter()
+            .zip(&ys)
+            .map(|(&x, &y)| y - (p[0] * x + p[1]))
+            .collect()
+    };
+    let res = least_squares(resid, &[0.0, 0.0], LeastSquaresOptions::default()).unwrap();
+    assert!(
+        (res.x[0] - alpha_true).abs() < 1e-6,
+        "MR9 alpha: {} vs {alpha_true}",
+        res.x[0]
+    );
+    assert!(
+        (res.x[1] - beta_true).abs() < 1e-6,
+        "MR9 beta: {} vs {beta_true}",
+        res.x[1]
+    );
+    assert!(
+        res.cost < 1e-12,
+        "MR9 cost not zero on noise-free data: {}",
+        res.cost
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — fsolve solves a 2x2 linear system: f(x) = A x − b.
+// Solution must satisfy A x ≈ b.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fsolve_2x2_linear_system() {
+    // A = [[3, 1], [1, 2]],  b = [9, 8] → exact solution x = [2, 3]
+    let func = |x: &[f64]| -> Vec<f64> {
+        vec![3.0 * x[0] + x[1] - 9.0, x[0] + 2.0 * x[1] - 8.0]
+    };
+    let res = fsolve(func, &[0.0, 0.0]).unwrap();
+    let r = func(&res.x);
+    let resid: f64 = r.iter().map(|v| v * v).sum::<f64>().sqrt();
+    assert!(
+        resid < 1e-9,
+        "MR10 fsolve residual too large: {resid:e} (x={:?})",
+        res.x
+    );
+    // Sanity-check exact answer for the well-conditioned system.
+    assert!((res.x[0] - 2.0).abs() < 1e-6);
+    assert!((res.x[1] - 3.0).abs() < 1e-6);
 }
