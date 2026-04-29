@@ -280,3 +280,10 @@ path = "fuzz_targets/p2c007_stats_hypothesis_tests.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c015_opt_nnls"
+path = "fuzz_targets/p2c015_opt_nnls.rs"
+test = false
+doc = false
+bench = false
