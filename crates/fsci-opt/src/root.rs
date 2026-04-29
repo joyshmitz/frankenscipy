@@ -856,6 +856,11 @@ fn validate_multivariate_root_params(x0: &[f64], tol: f64, maxiter: usize) -> Re
             detail: "x0 must not be empty".to_string(),
         });
     }
+    if x0.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: "x0 must contain only finite values".to_string(),
+        });
+    }
     if !tol.is_finite() || tol <= 0.0 {
         return Err(OptError::InvalidArgument {
             detail: "tol must be finite and > 0".to_string(),
@@ -867,6 +872,32 @@ fn validate_multivariate_root_params(x0: &[f64], tol: f64, maxiter: usize) -> Re
         });
     }
     Ok(())
+}
+
+fn evaluate_multivariate_root<F>(
+    func: &F,
+    x: &[f64],
+    expected_len: usize,
+    method: &str,
+) -> Result<Vec<f64>, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let values = func(x);
+    if values.len() != expected_len {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "{method}: function output length must match x0 length (got {}, expected {expected_len})",
+                values.len()
+            ),
+        });
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: format!("{method}: function output must contain only finite values"),
+        });
+    }
+    Ok(values)
 }
 
 fn same_sign(lhs: f64, rhs: f64) -> bool {
@@ -983,15 +1014,21 @@ pub fn fsolve<F>(func: F, x0: &[f64]) -> Result<MultivariateRootResult, OptError
 where
     F: Fn(&[f64]) -> Vec<f64>,
 {
-    let n = x0.len();
-    if n == 0 {
-        return Err(OptError::InvalidArgument {
-            detail: "x0 must not be empty".to_string(),
-        });
-    }
+    fsolve_with_options(func, x0, 1e-10, 200)
+}
 
-    let tol = 1e-10;
-    let maxiter = 200;
+fn fsolve_with_options<F>(
+    func: F,
+    x0: &[f64],
+    tol: f64,
+    maxiter: usize,
+) -> Result<MultivariateRootResult, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    validate_multivariate_root_params(x0, tol, maxiter)?;
+    let n = x0.len();
+
     let eps = 1e-8; // finite difference step
 
     let mut x: Vec<f64> = x0.to_vec();
@@ -999,7 +1036,7 @@ where
     let mut jac = vec![vec![0.0; n]; n];
 
     for iteration in 0..maxiter {
-        let fx = func(&x);
+        let fx = evaluate_multivariate_root(&func, &x, n, "fsolve")?;
         nfev += 1;
 
         // Check convergence: ||F(x)|| < tol.
@@ -1020,7 +1057,7 @@ where
             let h = eps * (1.0 + x[j].abs());
             let original = x[j];
             x[j] += h;
-            let fx_plus = func(&x);
+            let fx_plus = evaluate_multivariate_root(&func, &x, n, "fsolve")?;
             x[j] = original; // restore
             nfev += 1;
             for i in 0..n {
@@ -1058,7 +1095,7 @@ where
                 .zip(&dx)
                 .map(|(&xi, &di)| xi + alpha * di)
                 .collect();
-            let ftrial = func(&trial);
+            let ftrial = evaluate_multivariate_root(&func, &trial, n, "fsolve")?;
             nfev += 1;
             let trial_norm: f64 = ftrial.iter().map(|v| v * v).sum::<f64>().sqrt();
             if trial_norm < best_norm {
@@ -1082,7 +1119,7 @@ where
         x = best_x;
     }
 
-    let fx = func(&x);
+    let fx = evaluate_multivariate_root(&func, &x, n, "fsolve")?;
     nfev += 1;
     Ok(MultivariateRootResult {
         x,
@@ -1201,7 +1238,9 @@ where
     F: Fn(&[f64]) -> Vec<f64>,
 {
     match options.method {
-        MultivariateRootMethod::Hybr => fsolve(func, x0),
+        MultivariateRootMethod::Hybr => {
+            fsolve_with_options(func, x0, options.tol, options.max_iter)
+        }
         MultivariateRootMethod::Broyden1 => broyden1(func, x0, options.tol, options.max_iter),
         MultivariateRootMethod::Broyden2 => broyden2(func, x0, options.tol, options.max_iter),
         MultivariateRootMethod::Anderson => {
@@ -1230,7 +1269,7 @@ where
     let n = x0.len();
 
     let mut x = x0.to_vec();
-    let mut fx = func(&x);
+    let mut fx = evaluate_multivariate_root(&func, &x, n, "broyden1")?;
     let mut nfev = 1usize;
 
     // Initialize approximate Jacobian as identity
@@ -1268,7 +1307,7 @@ where
 
         // Update x
         let x_new: Vec<f64> = x.iter().zip(dx.iter()).map(|(xi, di)| xi + di).collect();
-        let fx_new = func(&x_new);
+        let fx_new = evaluate_multivariate_root(&func, &x_new, n, "broyden1")?;
         nfev += 1;
 
         // Broyden update: B^{-1}_{k+1} = B^{-1}_k + (Δx - B^{-1}_k Δf) Δx^T B^{-1}_k / (Δx^T B^{-1}_k Δf)
@@ -1354,7 +1393,7 @@ where
     let n = x0.len();
 
     let mut x = x0.to_vec();
-    let mut fx = func(&x);
+    let mut fx = evaluate_multivariate_root(&func, &x, n, "broyden2")?;
     let mut nfev = 1usize;
 
     // Initialize approximate inverse Jacobian as identity
@@ -1392,7 +1431,7 @@ where
 
         // Update x
         let x_new: Vec<f64> = x.iter().zip(dx.iter()).map(|(xi, di)| xi + di).collect();
-        let fx_new = func(&x_new);
+        let fx_new = evaluate_multivariate_root(&func, &x_new, n, "broyden2")?;
         nfev += 1;
 
         // Broyden's "bad" update: H_{k+1} = H_k + (Δx - H_k Δf) Δf^T / ||Δf||²
@@ -1479,7 +1518,7 @@ where
     let m = m.max(1); // At least 1 history element
 
     let mut x = x0.to_vec();
-    let mut fx = func(&x);
+    let mut fx = evaluate_multivariate_root(&func, &x, n, "anderson")?;
     let mut nfev = 1usize;
 
     // History storage: stores (x_k, f_k) pairs
@@ -1567,7 +1606,7 @@ where
             x = x_new;
         }
 
-        fx = func(&x);
+        fx = evaluate_multivariate_root(&func, &x, n, "anderson")?;
         nfev += 1;
     }
 
@@ -1616,7 +1655,7 @@ where
     let lambda_down = 0.1; // Factor to decrease lambda on good step
 
     let mut x = x0.to_vec();
-    let mut fx = func(&x);
+    let mut fx = evaluate_multivariate_root(&func, &x, n, "lm_root")?;
     let mut nfev = 1usize;
 
     for iteration in 0..maxiter {
@@ -1638,7 +1677,7 @@ where
             let h = eps * (1.0 + x[j].abs());
             let original = x[j];
             x[j] += h;
-            let fx_plus = func(&x);
+            let fx_plus = evaluate_multivariate_root(&func, &x, n, "lm_root")?;
             x[j] = original;
             nfev += 1;
             for i in 0..n {
@@ -1681,7 +1720,7 @@ where
 
             // Trial step
             let x_trial: Vec<f64> = x.iter().zip(&dx).map(|(&xi, &di)| xi + di).collect();
-            let fx_trial = func(&x_trial);
+            let fx_trial = evaluate_multivariate_root(&func, &x_trial, n, "lm_root")?;
             nfev += 1;
 
             let trial_norm: f64 = fx_trial.iter().map(|v| v * v).sum::<f64>().sqrt();
@@ -2528,6 +2567,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fsolve_rejects_nonfinite_x0() {
+        let f = |x: &[f64]| vec![x[0]];
+        let err = fsolve(f, &[f64::NAN]).expect_err("non-finite x0 must fail closed");
+        assert!(matches!(err, crate::OptError::NonFiniteInput { .. }));
+    }
+
+    #[test]
+    fn multivariate_roots_reject_wrong_residual_length() {
+        let wrong_len = |_x: &[f64]| vec![1.0];
+
+        let err = fsolve(wrong_len, &[0.0, 0.0]).expect_err("fsolve shape mismatch");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+
+        let err = broyden1(wrong_len, &[0.0, 0.0], 1e-10, 10).expect_err("broyden1 shape mismatch");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+
+        let err = broyden2(wrong_len, &[0.0, 0.0], 1e-10, 10).expect_err("broyden2 shape mismatch");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+
+        let err = anderson(wrong_len, &[0.0, 0.0], 1e-10, 10, 2, 1.0)
+            .expect_err("anderson shape mismatch");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+
+        let err = lm_root(wrong_len, &[0.0, 0.0], 1e-10, 10).expect_err("lm shape mismatch");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
     // ── root dispatcher tests ──────────────────────────────────────
 
     #[test]
@@ -2538,6 +2605,31 @@ mod tests {
         assert!(dispatched.converged);
         assert!((direct.x[0] - dispatched.x[0]).abs() < 1e-10);
         assert!((direct.x[1] - dispatched.x[1]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn root_hybr_rejects_invalid_options() {
+        let f = |x: &[f64]| vec![x[0]];
+        let options = MultivariateRootOptions {
+            method: MultivariateRootMethod::Hybr,
+            tol: 0.0,
+            max_iter: 200,
+        };
+        let err = root(f, &[1.0], options).expect_err("invalid hybr tolerance");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn root_hybr_respects_iteration_budget() {
+        let f = |x: &[f64]| vec![x[0] * x[0] - 2.0];
+        let options = MultivariateRootOptions {
+            method: MultivariateRootMethod::Hybr,
+            tol: 1e-30,
+            max_iter: 1,
+        };
+        let result = root(f, &[1.0], options).expect("hybr executes");
+        assert!(!result.converged);
+        assert_eq!(result.iterations, 1);
     }
 
     #[test]
