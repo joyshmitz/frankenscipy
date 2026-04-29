@@ -941,6 +941,11 @@ pub fn lombscargle(
     let signal_energy = y.iter().map(|value| value * value).sum::<f64>();
 
     for &omega in freqs {
+        // Handle omega == 0 separately to avoid division by zero
+        if omega == 0.0 {
+            power.push(0.0);
+            continue;
+        }
         // Compute tau: phase offset for orthogonality
         let mut s2 = 0.0;
         let mut c2 = 0.0;
@@ -2186,10 +2191,15 @@ pub fn power_db(x: &[f64], ref_power: f64) -> f64 {
 /// Apply pre-emphasis filter: y[n] = x[n] - coeff * x[n-1].
 ///
 /// Common in speech processing with coeff ≈ 0.97.
+///
+/// # Arguments
+/// * `x` — Input signal.
+/// * `coeff` — Pre-emphasis coefficient. Non-finite values treated as 0.
 pub fn preemphasis(x: &[f64], coeff: f64) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
+    let coeff = if coeff.is_finite() { coeff } else { 0.0 };
     let mut y = Vec::with_capacity(x.len());
     y.push(x[0]);
     for i in 1..x.len() {
@@ -2199,10 +2209,15 @@ pub fn preemphasis(x: &[f64], coeff: f64) -> Vec<f64> {
 }
 
 /// Apply de-emphasis filter (inverse of pre-emphasis).
+///
+/// # Arguments
+/// * `x` — Input signal.
+/// * `coeff` — De-emphasis coefficient. Non-finite values treated as 0.
 pub fn deemphasis(x: &[f64], coeff: f64) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
+    let coeff = if coeff.is_finite() { coeff } else { 0.0 };
     let mut y = Vec::with_capacity(x.len());
     y.push(x[0]);
     for i in 1..x.len() {
@@ -2693,10 +2708,19 @@ pub fn medfilt1(x: &[f64], kernel_size: usize) -> Vec<f64> {
 }
 
 /// Apply exponential smoothing to a signal.
+///
+/// # Arguments
+/// * `x` — Input signal.
+/// * `alpha` — Smoothing factor in [0, 1]. Values near 0 give more smoothing.
 pub fn exponential_smooth(x: &[f64], alpha: f64) -> Vec<f64> {
     if x.is_empty() {
         return vec![];
     }
+    let alpha = if !alpha.is_finite() {
+        0.5
+    } else {
+        alpha.clamp(0.0, 1.0)
+    };
     let mut result = Vec::with_capacity(x.len());
     result.push(x[0]);
     for i in 1..x.len() {
@@ -5525,9 +5549,9 @@ pub fn firwin(
         ));
     }
     for &c in cutoff {
-        if !(0.0..=1.0).contains(&c) {
+        if !c.is_finite() || !(0.0..=1.0).contains(&c) {
             return Err(SignalError::InvalidArgument(format!(
-                "cutoff {c} out of range [0, 1]"
+                "cutoff {c} out of range [0, 1] or non-finite"
             )));
         }
     }
@@ -6144,9 +6168,9 @@ pub fn chirp(
 ///   `width=1` gives a rising sawtooth, `width=0` a falling sawtooth,
 ///   `width=0.5` a triangle wave.
 pub fn sawtooth(t: &[f64], width: f64) -> Result<Vec<f64>, SignalError> {
-    if !(0.0..=1.0).contains(&width) {
+    if !width.is_finite() || !(0.0..=1.0).contains(&width) {
         return Err(SignalError::InvalidArgument(
-            "width must be in [0, 1]".to_string(),
+            "width must be finite and in [0, 1]".to_string(),
         ));
     }
     let two_pi = 2.0 * std::f64::consts::PI;
@@ -6176,9 +6200,9 @@ pub fn sawtooth(t: &[f64], width: f64) -> Result<Vec<f64>, SignalError> {
 /// * `t` — Time array (phase in radians; period is 2π).
 /// * `duty` — Duty cycle (fraction of period at +1). Default 0.5.
 pub fn square(t: &[f64], duty: f64) -> Result<Vec<f64>, SignalError> {
-    if !(0.0..=1.0).contains(&duty) {
+    if !duty.is_finite() || !(0.0..=1.0).contains(&duty) {
         return Err(SignalError::InvalidArgument(
-            "duty must be in [0, 1]".to_string(),
+            "duty must be finite and in [0, 1]".to_string(),
         ));
     }
     let two_pi = 2.0 * std::f64::consts::PI;
