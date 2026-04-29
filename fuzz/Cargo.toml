@@ -364,3 +364,10 @@ path = "fuzz_targets/p2c008_integrate_solve_ivp_robustness.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c013_ndimage_gaussian_sobel"
+path = "fuzz_targets/p2c013_ndimage_gaussian_sobel.rs"
+test = false
+doc = false
+bench = false
