@@ -11,7 +11,10 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_opt::{bisect, brentq, brenth, golden, minimize_scalar, ridder, toms748, MinimizeScalarOptions, RootOptions};
+use fsci_opt::{
+    MinimizeScalarOptions, RootOptions, bisect, brenth, brentq, golden, minimize_scalar, ridder,
+    toms748,
+};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-015";
@@ -91,6 +94,48 @@ fn emit_log(log: &DiffLog) {
     fs::write(path, json).expect("write opt diff log");
 }
 
+fn assert_complete_oracle_results<T>(
+    test_id: &str,
+    expected_case_ids: impl IntoIterator<Item = String>,
+    oracle_results: &HashMap<String, T>,
+) {
+    let expected_case_ids: Vec<String> = expected_case_ids.into_iter().collect();
+    assert_eq!(
+        oracle_results.len(),
+        expected_case_ids.len(),
+        "{test_id} SciPy oracle returned partial or duplicate coverage"
+    );
+
+    let missing_oracle_cases: Vec<&str> = expected_case_ids
+        .iter()
+        .filter(|case_id| !oracle_results.contains_key(case_id.as_str()))
+        .map(String::as_str)
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "{test_id} missing SciPy optimize oracle results: {:?}",
+        missing_oracle_cases
+    );
+
+    let unexpected_oracle_cases: Vec<&str> = oracle_results
+        .keys()
+        .map(String::as_str)
+        .filter(|case_id| !expected_case_ids.iter().any(|expected| expected == case_id))
+        .collect();
+    assert!(
+        unexpected_oracle_cases.is_empty(),
+        "{test_id} unexpected SciPy optimize oracle results: {:?}",
+        unexpected_oracle_cases
+    );
+}
+
+fn assert_all_cases_compared(test_id: &str, compared: usize, expected: usize) {
+    assert_eq!(
+        compared, expected,
+        "{test_id} compared {compared} of {expected} cases"
+    );
+}
+
 fn eval_func(func_id: &str, x: f64) -> f64 {
     match func_id {
         "poly_cubic" => x * x * x - x - 2.0,
@@ -130,10 +175,7 @@ fn root_cases() -> Vec<RootCase> {
 
 fn minimize_cases() -> Vec<MinimizeCase> {
     let methods = ["brent", "golden"];
-    let functions = [
-        ("parabola", 0.0, 4.0),
-        ("quartic", 0.0, 5.0),
-    ];
+    let functions = [("parabola", 0.0, 4.0), ("quartic", 0.0, 5.0)];
 
     let mut cases = Vec::new();
     for method in methods {
@@ -213,7 +255,10 @@ print(json.dumps(results))
 
     let output = child.wait_with_output().expect("wait for python3");
     if !output.status.success() {
-        eprintln!("scipy oracle stderr: {}", String::from_utf8_lossy(&output.stderr));
+        eprintln!(
+            "scipy oracle stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         return HashMap::new();
     }
 
@@ -274,7 +319,10 @@ print(json.dumps(results))
 
     let output = child.wait_with_output().expect("wait for python3");
     if !output.status.success() {
-        eprintln!("scipy oracle stderr: {}", String::from_utf8_lossy(&output.stderr));
+        eprintln!(
+            "scipy oracle stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         return HashMap::new();
     }
 
@@ -293,9 +341,9 @@ fn run_rust_root(case: &RootCase) -> f64 {
     let opts = RootOptions::default();
     match case.method.as_str() {
         "bisect" => bisect(f, bracket, opts).map_or(f64::NAN, |r| r.root),
-        "brentq" => brentq(f, bracket, opts.clone()).map_or(f64::NAN, |r| r.root),
-        "brenth" => brenth(f, bracket, opts.clone()).map_or(f64::NAN, |r| r.root),
-        "ridder" => ridder(f, bracket, opts.clone()).map_or(f64::NAN, |r| r.root),
+        "brentq" => brentq(f, bracket, opts).map_or(f64::NAN, |r| r.root),
+        "brenth" => brenth(f, bracket, opts).map_or(f64::NAN, |r| r.root),
+        "ridder" => ridder(f, bracket, opts).map_or(f64::NAN, |r| r.root),
         "toms748" => toms748(f, bracket, opts).map_or(f64::NAN, |r| r.root),
         _ => f64::NAN,
     }
@@ -306,8 +354,7 @@ fn run_rust_minimize(case: &MinimizeCase) -> f64 {
     match case.method.as_str() {
         "brent" => {
             let opts = MinimizeScalarOptions::default();
-            minimize_scalar(f, (case.bracket_a, case.bracket_b), opts)
-                .map_or(f64::NAN, |r| r.x)
+            minimize_scalar(f, (case.bracket_a, case.bracket_b), opts).map_or(f64::NAN, |r| r.x)
         }
         "golden" => {
             let (x, _fval) = golden(f, case.bracket_a, case.bracket_b, 1e-6, 500);
@@ -330,6 +377,11 @@ fn diff_root_finding() {
         eprintln!("skipping root diff: scipy oracle not available");
         return;
     }
+    assert_complete_oracle_results(
+        "root_finding",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy_results,
+    );
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0f64;
@@ -353,6 +405,7 @@ fn diff_root_finding() {
             });
         }
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "root_finding".into(),
@@ -367,6 +420,7 @@ fn diff_root_finding() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("root_finding", log.case_count, cases.len());
     assert!(all_pass, "root finding diff failed: max_diff={max_diff}");
 }
 
@@ -383,6 +437,11 @@ fn diff_minimize_scalar() {
         eprintln!("skipping minimize diff: scipy oracle not available");
         return;
     }
+    assert_complete_oracle_results(
+        "minimize_scalar",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy_results,
+    );
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0f64;
@@ -406,6 +465,7 @@ fn diff_minimize_scalar() {
             });
         }
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "minimize_scalar".into(),
@@ -420,5 +480,6 @@ fn diff_minimize_scalar() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("minimize_scalar", log.case_count, cases.len());
     assert!(all_pass, "minimize_scalar diff failed: max_diff={max_diff}");
 }

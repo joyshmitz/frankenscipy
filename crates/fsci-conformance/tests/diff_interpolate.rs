@@ -105,6 +105,48 @@ fn emit_log(log: &DiffLog) {
     fs::write(path, json).expect("write interpolate diff log");
 }
 
+fn assert_complete_oracle_results<T>(
+    test_id: &str,
+    expected_case_ids: impl IntoIterator<Item = String>,
+    oracle_results: &HashMap<String, T>,
+) {
+    let expected_case_ids: Vec<String> = expected_case_ids.into_iter().collect();
+    assert_eq!(
+        oracle_results.len(),
+        expected_case_ids.len(),
+        "{test_id} SciPy oracle returned partial or duplicate coverage"
+    );
+
+    let missing_oracle_cases: Vec<&str> = expected_case_ids
+        .iter()
+        .filter(|case_id| !oracle_results.contains_key(case_id.as_str()))
+        .map(String::as_str)
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "{test_id} missing SciPy interpolate oracle results: {:?}",
+        missing_oracle_cases
+    );
+
+    let unexpected_oracle_cases: Vec<&str> = oracle_results
+        .keys()
+        .map(String::as_str)
+        .filter(|case_id| !expected_case_ids.iter().any(|expected| expected == case_id))
+        .collect();
+    assert!(
+        unexpected_oracle_cases.is_empty(),
+        "{test_id} unexpected SciPy interpolate oracle results: {:?}",
+        unexpected_oracle_cases
+    );
+}
+
+fn assert_all_cases_compared(test_id: &str, compared: usize, expected: usize) {
+    assert_eq!(
+        compared, expected,
+        "{test_id} compared {compared} of {expected} cases"
+    );
+}
+
 fn interp1d_cases() -> Vec<Interp1dCase> {
     vec![
         Interp1dCase {
@@ -122,7 +164,7 @@ fn interp1d_cases() -> Vec<Interp1dCase> {
         Interp1dCase {
             case_id: "linear_exp".into(),
             x: vec![0.0, 0.5, 1.0, 1.5, 2.0],
-            y: vec![1.0, 1.6487, 2.7183, 4.4817, 7.3891],
+            y: vec![1.0, 1.6487, std::f64::consts::E, 4.4817, 7.3891],
             x_new: vec![0.25, 0.75, 1.25, 1.75],
         },
     ]
@@ -434,34 +476,43 @@ fn diff_interp1d_linear() {
         eprintln!("skipping interp1d diff: scipy oracle not available");
         return;
     }
+    assert_complete_oracle_results(
+        "interp1d_linear",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy_results,
+    );
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0f64;
     let mut all_pass = true;
 
     for case in &cases {
-        if let Ok(rust_vals) = interp1d_linear(&case.x, &case.y, &case.x_new) {
-            if let Some(scipy_vals) = scipy_results.get(&case.case_id) {
-                let case_max_diff = rust_vals
-                    .iter()
-                    .zip(scipy_vals.iter())
-                    .map(|(r, s)| (r - s).abs())
-                    .fold(0.0, f64::max);
-                let pass = case_max_diff <= INTERP_TOL;
-                max_diff = max_diff.max(case_max_diff);
-                all_pass = all_pass && pass;
-                diffs.push(CaseDiff {
-                    case_id: case.case_id.clone(),
-                    method: "interp1d_linear".into(),
-                    rust_values: rust_vals,
-                    scipy_values: scipy_vals.clone(),
-                    max_diff: case_max_diff,
-                    tolerance: INTERP_TOL,
-                    pass,
-                });
-            }
-        }
+        let Ok(rust_vals) = interp1d_linear(&case.x, &case.y, &case.x_new) else {
+            continue;
+        };
+        let Some(scipy_vals) = scipy_results.get(&case.case_id) else {
+            continue;
+        };
+
+        let case_max_diff = rust_vals
+            .iter()
+            .zip(scipy_vals.iter())
+            .map(|(r, s)| (r - s).abs())
+            .fold(0.0, f64::max);
+        let pass = rust_vals.len() == scipy_vals.len() && case_max_diff <= INTERP_TOL;
+        max_diff = max_diff.max(case_max_diff);
+        all_pass = all_pass && pass;
+        diffs.push(CaseDiff {
+            case_id: case.case_id.clone(),
+            method: "interp1d_linear".into(),
+            rust_values: rust_vals,
+            scipy_values: scipy_vals.clone(),
+            max_diff: case_max_diff,
+            tolerance: INTERP_TOL,
+            pass,
+        });
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "interp1d_linear".into(),
@@ -476,6 +527,7 @@ fn diff_interp1d_linear() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("interp1d_linear", log.case_count, cases.len());
     assert!(all_pass, "interp1d_linear diff failed: max_diff={max_diff}");
 }
 
@@ -492,6 +544,11 @@ fn diff_lagrange() {
         eprintln!("skipping lagrange diff: scipy oracle not available");
         return;
     }
+    assert_complete_oracle_results(
+        "lagrange",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy_results,
+    );
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0f64;
@@ -517,6 +574,7 @@ fn diff_lagrange() {
             }
         }
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "lagrange".into(),
@@ -531,6 +589,7 @@ fn diff_lagrange() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("lagrange", log.case_count, cases.len());
     assert!(all_pass, "lagrange diff failed: max_diff={max_diff}");
 }
 
@@ -547,6 +606,11 @@ fn diff_polyfit() {
         eprintln!("skipping polyfit diff: scipy oracle not available");
         return;
     }
+    assert_complete_oracle_results(
+        "polyfit",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy_results,
+    );
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0f64;
@@ -572,6 +636,7 @@ fn diff_polyfit() {
             }
         }
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "polyfit".into(),
@@ -586,6 +651,7 @@ fn diff_polyfit() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("polyfit", log.case_count, cases.len());
     assert!(all_pass, "polyfit diff failed: max_diff={max_diff}");
 }
 
@@ -602,36 +668,46 @@ fn diff_spline() {
         eprintln!("skipping spline diff: scipy oracle not available");
         return;
     }
+    assert_complete_oracle_results(
+        "spline",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy_results,
+    );
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0f64;
     let mut all_pass = true;
 
     for case in &cases {
-        if let Ok(tck) = splrep(&case.x, &case.y, case.k, 0.0) {
-            if let Ok(rust_vals) = splev(&case.x_eval, &tck) {
-                if let Some(scipy_vals) = scipy_results.get(&case.case_id) {
-                    let case_max_diff = rust_vals
-                        .iter()
-                        .zip(scipy_vals.iter())
-                        .map(|(r, s)| (r - s).abs())
-                        .fold(0.0, f64::max);
-                    let pass = case_max_diff <= POLY_TOL;
-                    max_diff = max_diff.max(case_max_diff);
-                    all_pass = all_pass && pass;
-                    diffs.push(CaseDiff {
-                        case_id: case.case_id.clone(),
-                        method: "splrep+splev".into(),
-                        rust_values: rust_vals,
-                        scipy_values: scipy_vals.clone(),
-                        max_diff: case_max_diff,
-                        tolerance: POLY_TOL,
-                        pass,
-                    });
-                }
-            }
-        }
+        let Ok(tck) = splrep(&case.x, &case.y, case.k, 0.0) else {
+            continue;
+        };
+        let Ok(rust_vals) = splev(&case.x_eval, &tck) else {
+            continue;
+        };
+        let Some(scipy_vals) = scipy_results.get(&case.case_id) else {
+            continue;
+        };
+
+        let case_max_diff = rust_vals
+            .iter()
+            .zip(scipy_vals.iter())
+            .map(|(r, s)| (r - s).abs())
+            .fold(0.0, f64::max);
+        let pass = rust_vals.len() == scipy_vals.len() && case_max_diff <= POLY_TOL;
+        max_diff = max_diff.max(case_max_diff);
+        all_pass = all_pass && pass;
+        diffs.push(CaseDiff {
+            case_id: case.case_id.clone(),
+            method: "splrep+splev".into(),
+            rust_values: rust_vals,
+            scipy_values: scipy_vals.clone(),
+            max_diff: case_max_diff,
+            tolerance: POLY_TOL,
+            pass,
+        });
     }
+    all_pass = all_pass && diffs.len() == cases.len();
 
     let log = DiffLog {
         test_id: "spline".into(),
@@ -646,5 +722,6 @@ fn diff_spline() {
     };
 
     emit_log(&log);
+    assert_all_cases_compared("spline", log.case_count, cases.len());
     assert!(all_pass, "spline diff failed: max_diff={max_diff}");
 }
