@@ -401,6 +401,20 @@ pub fn squareform_to_condensed(matrix: &[Vec<f64>]) -> Result<Vec<f64>, SpatialE
             )));
         }
     }
+    for (i, row) in matrix.iter().enumerate() {
+        if row[i] != 0.0 {
+            return Err(SpatialError::InvalidArgument(
+                "distance matrix diagonal must be zero".to_string(),
+            ));
+        }
+        for j in (i + 1)..n {
+            if row[j] != matrix[j][i] {
+                return Err(SpatialError::InvalidArgument(
+                    "distance matrix must be symmetric".to_string(),
+                ));
+            }
+        }
+    }
 
     let mut condensed = Vec::with_capacity(n * (n - 1) / 2);
     for (i, row) in matrix.iter().enumerate() {
@@ -3910,6 +3924,18 @@ mod tests {
     #[test]
     fn squareform_invalid_length() {
         assert!(squareform_to_matrix(&[1.0, 2.0]).is_err());
+    }
+
+    #[test]
+    fn squareform_to_condensed_rejects_asymmetric_matrix() {
+        let matrix = vec![vec![0.0, 1.0], vec![2.0, 0.0]];
+        assert!(squareform_to_condensed(&matrix).is_err());
+    }
+
+    #[test]
+    fn squareform_to_condensed_rejects_nonzero_diagonal() {
+        let matrix = vec![vec![1.0, 2.0], vec![2.0, 0.0]];
+        assert!(squareform_to_condensed(&matrix).is_err());
     }
 
     #[test]
