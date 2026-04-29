@@ -4,6 +4,7 @@
 //! Tests FrankenSciPy distance metrics against SciPy subprocess oracle
 //! across deterministic input families.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -440,13 +441,60 @@ fn scipy_oracle_or_skip(cases: &[DistanceCase]) -> Vec<OracleCase> {
     match run_scipy_oracle(cases) {
         Some(results) => results,
         None => {
-            if std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-                panic!("SciPy oracle required but not available");
-            }
+            assert!(
+                std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+                "SciPy oracle required but not available"
+            );
             eprintln!("SciPy oracle not available, skipping diff test");
             Vec::new()
         }
     }
+}
+
+fn complete_oracle_map(
+    test_id: &str,
+    cases: &[DistanceCase],
+    oracle_results: &[OracleCase],
+) -> HashMap<String, f64> {
+    assert_eq!(
+        oracle_results.len(),
+        cases.len(),
+        "{test_id} SciPy oracle returned partial coverage"
+    );
+
+    let oracle_map: HashMap<_, _> = oracle_results
+        .iter()
+        .map(|o| (o.case_id.clone(), o.value))
+        .collect();
+    assert_eq!(
+        oracle_map.len(),
+        cases.len(),
+        "{test_id} SciPy oracle returned duplicate or missing case ids"
+    );
+
+    let missing_rust_outputs: Vec<&str> = cases
+        .iter()
+        .filter(|case| rust_output(case).is_none())
+        .map(|case| case.case_id.as_str())
+        .collect();
+    assert!(
+        missing_rust_outputs.is_empty(),
+        "{test_id} missing Rust distance outputs: {:?}",
+        missing_rust_outputs
+    );
+
+    let missing_oracle_cases: Vec<&str> = cases
+        .iter()
+        .filter(|case| !oracle_map.contains_key(&case.case_id))
+        .map(|case| case.case_id.as_str())
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "{test_id} missing SciPy distance oracle results: {:?}",
+        missing_oracle_cases
+    );
+
+    oracle_map
 }
 
 #[test]
@@ -476,10 +524,7 @@ fn diff_001_basic_distances() {
         return;
     }
 
-    let oracle_map: std::collections::HashMap<_, _> = oracle_results
-        .iter()
-        .map(|o| (o.case_id.clone(), o.value))
-        .collect();
+    let oracle_map = complete_oracle_map("diff_001_basic_distances", &basic_cases, &oracle_results);
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0_f64;
@@ -549,10 +594,11 @@ fn diff_002_minkowski_variants() {
         return;
     }
 
-    let oracle_map: std::collections::HashMap<_, _> = oracle_results
-        .iter()
-        .map(|o| (o.case_id.clone(), o.value))
-        .collect();
+    let oracle_map = complete_oracle_map(
+        "diff_002_minkowski_variants",
+        &minkowski_cases,
+        &oracle_results,
+    );
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0_f64;
@@ -622,10 +668,8 @@ fn diff_003_binary_distances() {
         return;
     }
 
-    let oracle_map: std::collections::HashMap<_, _> = oracle_results
-        .iter()
-        .map(|o| (o.case_id.clone(), o.value))
-        .collect();
+    let oracle_map =
+        complete_oracle_map("diff_003_binary_distances", &binary_cases, &oracle_results);
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0_f64;
@@ -697,10 +741,11 @@ fn diff_004_weighted_distances() {
         return;
     }
 
-    let oracle_map: std::collections::HashMap<_, _> = oracle_results
-        .iter()
-        .map(|o| (o.case_id.clone(), o.value))
-        .collect();
+    let oracle_map = complete_oracle_map(
+        "diff_004_weighted_distances",
+        &weighted_cases,
+        &oracle_results,
+    );
 
     let mut diffs = Vec::new();
     let mut max_diff = 0.0_f64;
