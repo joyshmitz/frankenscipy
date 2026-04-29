@@ -1674,7 +1674,7 @@ fn filter_by_distance(peaks: &[usize], heights: &[f64], min_dist: usize) -> Vec<
         .enumerate()
         .map(|(i, (&p, &h))| (i, p, h))
         .collect();
-    indexed.sort_by(|a, b| b.2.total_cmp(&a.2));
+    indexed.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| b.1.cmp(&a.1)));
 
     let mut selected = Vec::new();
     let mut excluded = vec![false; peaks.len()];
@@ -9448,6 +9448,19 @@ mod tests {
         // Distance=3: peaks at 1 and 3 are too close (dist=2), keep highest (1.0 at idx 1)
         // Peak at 5 (2.0) is far enough from both
         assert!(result.peaks.contains(&5));
+    }
+
+    #[test]
+    fn find_peaks_distance_equal_height_tie_prefers_rightmost() {
+        let x = [0.0, 1.0, 0.0, 1.0, 0.0];
+        let result = find_peaks(
+            &x,
+            FindPeaksOptions {
+                distance: Some(3),
+                ..FindPeaksOptions::default()
+            },
+        );
+        assert_eq!(result.peaks, vec![3]);
     }
 
     #[test]
