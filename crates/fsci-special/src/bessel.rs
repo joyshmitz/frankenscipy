@@ -2372,6 +2372,12 @@ fn j0_core(x: f64) -> f64 {
     }
 
     let ax = x.abs();
+    if ax == 0.0 {
+        // J_0(0) = 1 exactly. The rational approximation below evaluates
+        // to 57568490574/57568490411 ≈ 1.000000003 at x=0, so this
+        // special case keeps the analytic value at the origin.
+        return 1.0;
+    }
     if ax < 8.0 {
         let y = ax * ax;
         let numer = 57_568_490_574.0
