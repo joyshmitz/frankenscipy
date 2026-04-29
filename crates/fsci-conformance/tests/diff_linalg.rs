@@ -54,6 +54,8 @@ fn emit_log(log: &DiffTestLog) {
 }
 
 const TOL: f64 = 1e-10;
+const DEFINED_DIFF_CASES: usize = 36;
+const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
 fn scipy_available() -> bool {
     let output = Command::new("python3")
@@ -66,6 +68,20 @@ fn scipy_available() -> bool {
     }
 }
 
+fn scipy_available_or_skip(test_id: &str) -> bool {
+    if scipy_available() {
+        return true;
+    }
+
+    assert!(
+        std::env::var_os(REQUIRE_SCIPY_ENV).is_none(),
+        "{REQUIRE_SCIPY_ENV}=1 but SciPy is unavailable for {test_id}"
+    );
+
+    eprintln!("  SKIP: {test_id} - scipy unavailable");
+    false
+}
+
 fn max_abs_diff_vec(a: &[f64], b: &[f64]) -> f64 {
     if a.len() != b.len() {
         return f64::INFINITY;
@@ -73,17 +89,10 @@ fn max_abs_diff_vec(a: &[f64], b: &[f64]) -> f64 {
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| (x - y).abs())
-        .fold(0.0_f64, |acc, d| if d.is_nan() { f64::NAN } else { acc.max(d) })
-}
-
-fn max_abs_diff_matrix(a: &[Vec<f64>], b: &[Vec<f64>]) -> f64 {
-    if a.len() != b.len() {
-        return f64::INFINITY;
-    }
-    a.iter()
-        .zip(b.iter())
-        .map(|(ra, rb)| max_abs_diff_vec(ra, rb))
-        .fold(0.0_f64, |acc, d| if d.is_nan() { f64::NAN } else { acc.max(d) })
+        .fold(
+            0.0_f64,
+            |acc, d| if d.is_nan() { f64::NAN } else { acc.max(d) },
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,23 +106,8 @@ struct ScipyDetResult {
 }
 
 #[derive(Debug, Deserialize)]
-struct ScipyLuResult {
-    p: Vec<Vec<f64>>,
-    l: Vec<Vec<f64>>,
-    u: Vec<Vec<f64>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ScipyQrResult {
-    q: Vec<Vec<f64>>,
-    r: Vec<Vec<f64>>,
-}
-
-#[derive(Debug, Deserialize)]
 struct ScipySvdResult {
-    u: Vec<Vec<f64>>,
     s: Vec<f64>,
-    vh: Vec<Vec<f64>>,
 }
 
 fn scipy_solve(a: &[Vec<f64>], b: &[f64]) -> Option<ScipySolveResult> {
@@ -131,9 +125,16 @@ print(json.dumps({{"x": x.tolist()}}))
 "#,
         a_json, b_json
     );
-    let output = Command::new("python3").arg("-c").arg(&script).output().ok()?;
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .ok()?;
     if !output.status.success() {
-        eprintln!("scipy solve failed: {}", String::from_utf8_lossy(&output.stderr));
+        eprintln!(
+            "scipy solve failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         return None;
     }
     serde_json::from_slice(&output.stdout).ok()
@@ -152,47 +153,11 @@ print(json.dumps({{"det": float(d)}}))
 "#,
         a_json
     );
-    let output = Command::new("python3").arg("-c").arg(&script).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    serde_json::from_slice(&output.stdout).ok()
-}
-
-fn scipy_lu(a: &[Vec<f64>]) -> Option<ScipyLuResult> {
-    let a_json = serde_json::to_string(a).ok()?;
-    let script = format!(
-        r#"
-import json
-import numpy as np
-from scipy import linalg
-a = np.array({}, dtype=np.float64)
-p, l, u = linalg.lu(a)
-print(json.dumps({{"p": p.tolist(), "l": l.tolist(), "u": u.tolist()}}))
-"#,
-        a_json
-    );
-    let output = Command::new("python3").arg("-c").arg(&script).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    serde_json::from_slice(&output.stdout).ok()
-}
-
-fn scipy_qr(a: &[Vec<f64>]) -> Option<ScipyQrResult> {
-    let a_json = serde_json::to_string(a).ok()?;
-    let script = format!(
-        r#"
-import json
-import numpy as np
-from scipy import linalg
-a = np.array({}, dtype=np.float64)
-q, r = linalg.qr(a)
-print(json.dumps({{"q": q.tolist(), "r": r.tolist()}}))
-"#,
-        a_json
-    );
-    let output = Command::new("python3").arg("-c").arg(&script).output().ok()?;
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -207,12 +172,16 @@ import json
 import numpy as np
 from scipy import linalg
 a = np.array({}, dtype=np.float64)
-u, s, vh = linalg.svd(a, full_matrices=True)
-print(json.dumps({{"u": u.tolist(), "s": s.tolist(), "vh": vh.tolist()}}))
+s = linalg.svd(a, compute_uv=False)
+print(json.dumps({{"s": s.tolist()}}))
 "#,
         a_json
     );
-    let output = Command::new("python3").arg("-c").arg(&script).output().ok()?;
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -245,16 +214,15 @@ fn make_test_vector(n: usize, seed: u64) -> Vec<f64> {
 
 fn make_diag_dominant(n: usize, seed: u64) -> Vec<Vec<f64>> {
     let mut m = make_test_matrix(n, seed);
-    for i in 0..n {
-        let row_sum: f64 = m[i].iter().map(|x| x.abs()).sum();
-        m[i][i] = row_sum + 1.0;
+    for (i, row) in m.iter_mut().enumerate().take(n) {
+        let row_sum: f64 = row.iter().map(|x| x.abs()).sum();
+        row[i] = row_sum + 1.0;
     }
     m
 }
 
 fn run_solve_diff(test_id: &str, a: &[Vec<f64>], b: &[f64]) {
-    if !scipy_available() {
-        eprintln!("  SKIP: {} — scipy unavailable", test_id);
+    if !scipy_available_or_skip(test_id) {
         return;
     }
 
@@ -270,17 +238,32 @@ fn run_solve_diff(test_id: &str, a: &[Vec<f64>], b: &[f64]) {
     let (diff, pass, expected_str, actual_str) = match (&rust_result, &scipy_result) {
         (Ok(rust), Some(scipy)) => {
             let d = max_abs_diff_vec(&rust.x, &scipy.x);
-            (d, d < TOL, format!("{:?}", scipy.x), format!("{:?}", rust.x))
+            (
+                d,
+                d < TOL,
+                format!("{:?}", scipy.x),
+                format!("{:?}", rust.x),
+            )
         }
         (Err(e), None) => (0.0, true, "error".into(), format!("{:?}", e)),
-        (Ok(rust), None) => (f64::NAN, false, "scipy unavailable".into(), format!("{:?}", rust.x)),
-        (Err(e), Some(scipy)) => (f64::INFINITY, false, format!("{:?}", scipy.x), format!("{:?}", e)),
+        (Ok(rust), None) => (
+            f64::NAN,
+            false,
+            "scipy unavailable".into(),
+            format!("{:?}", rust.x),
+        ),
+        (Err(e), Some(scipy)) => (
+            f64::INFINITY,
+            false,
+            format!("{:?}", scipy.x),
+            format!("{:?}", e),
+        ),
     };
 
     let log = DiffTestLog {
         test_id: test_id.to_string(),
         category: "differential_solve".to_string(),
-        input_summary: format!("{}x{} matrix", a.len(), a.get(0).map_or(0, |r| r.len())),
+        input_summary: format!("{}x{} matrix", a.len(), a.first().map_or(0, |r| r.len())),
         expected: expected_str,
         actual: actual_str,
         diff,
@@ -299,8 +282,7 @@ fn run_solve_diff(test_id: &str, a: &[Vec<f64>], b: &[f64]) {
 }
 
 fn run_det_diff(test_id: &str, a: &[Vec<f64>]) {
-    if !scipy_available() {
-        eprintln!("  SKIP: {} — scipy unavailable", test_id);
+    if !scipy_available_or_skip(test_id) {
         return;
     }
 
@@ -312,17 +294,32 @@ fn run_det_diff(test_id: &str, a: &[Vec<f64>]) {
         (Ok(rust_det), Some(scipy)) => {
             let d = (rust_det - scipy.det).abs();
             let rel_tol = TOL * rust_det.abs().max(scipy.det.abs()).max(1.0);
-            (d, d < rel_tol, format!("{}", scipy.det), format!("{}", rust_det))
+            (
+                d,
+                d < rel_tol,
+                format!("{}", scipy.det),
+                format!("{}", rust_det),
+            )
         }
         (Err(e), None) => (0.0, true, "error".into(), format!("{:?}", e)),
-        (Ok(rust_det), None) => (f64::NAN, false, "scipy unavailable".into(), format!("{}", rust_det)),
-        (Err(e), Some(scipy)) => (f64::INFINITY, false, format!("{}", scipy.det), format!("{:?}", e)),
+        (Ok(rust_det), None) => (
+            f64::NAN,
+            false,
+            "scipy unavailable".into(),
+            format!("{}", rust_det),
+        ),
+        (Err(e), Some(scipy)) => (
+            f64::INFINITY,
+            false,
+            format!("{}", scipy.det),
+            format!("{:?}", e),
+        ),
     };
 
     let log = DiffTestLog {
         test_id: test_id.to_string(),
         category: "differential_det".to_string(),
-        input_summary: format!("{}x{} matrix", a.len(), a.get(0).map_or(0, |r| r.len())),
+        input_summary: format!("{}x{} matrix", a.len(), a.first().map_or(0, |r| r.len())),
         expected: expected_str,
         actual: actual_str,
         diff,
@@ -341,8 +338,7 @@ fn run_det_diff(test_id: &str, a: &[Vec<f64>]) {
 }
 
 fn run_svd_singular_values_diff(test_id: &str, a: &[Vec<f64>]) {
-    if !scipy_available() {
-        eprintln!("  SKIP: {} — scipy unavailable", test_id);
+    if !scipy_available_or_skip(test_id) {
         return;
     }
 
@@ -357,17 +353,32 @@ fn run_svd_singular_values_diff(test_id: &str, a: &[Vec<f64>]) {
     let (diff, pass, expected_str, actual_str) = match (&rust_result, &scipy_result) {
         (Ok(rust), Some(scipy)) => {
             let d = max_abs_diff_vec(&rust.s, &scipy.s);
-            (d, d < TOL, format!("{:?}", scipy.s), format!("{:?}", rust.s))
+            (
+                d,
+                d < TOL,
+                format!("{:?}", scipy.s),
+                format!("{:?}", rust.s),
+            )
         }
         (Err(e), None) => (0.0, true, "error".into(), format!("{:?}", e)),
-        (Ok(rust), None) => (f64::NAN, false, "scipy unavailable".into(), format!("{:?}", rust.s)),
-        (Err(e), Some(scipy)) => (f64::INFINITY, false, format!("{:?}", scipy.s), format!("{:?}", e)),
+        (Ok(rust), None) => (
+            f64::NAN,
+            false,
+            "scipy unavailable".into(),
+            format!("{:?}", rust.s),
+        ),
+        (Err(e), Some(scipy)) => (
+            f64::INFINITY,
+            false,
+            format!("{:?}", scipy.s),
+            format!("{:?}", e),
+        ),
     };
 
     let log = DiffTestLog {
         test_id: test_id.to_string(),
         category: "differential_svd".to_string(),
-        input_summary: format!("{}x{} matrix", a.len(), a.get(0).map_or(0, |r| r.len())),
+        input_summary: format!("{}x{} matrix", a.len(), a.first().map_or(0, |r| r.len())),
         expected: expected_str,
         actual: actual_str,
         diff,
@@ -659,9 +670,14 @@ fn diff_svd_6x4_rect() {
 #[test]
 fn diff_linalg_summary() {
     eprintln!("\n── diff_linalg Summary ──");
-    eprintln!("  solve differential tests: 12 cases");
-    eprintln!("  det differential tests: 10 cases");
-    eprintln!("  svd differential tests: 14 cases");
-    eprintln!("  Total: 36 subprocess-based differential tests");
-    eprintln!("  Logs: fixtures/artifacts/FSCI-P2C-002/diff/");
+    if scipy_available() {
+        eprintln!("  solve differential tests: 12 cases");
+        eprintln!("  det differential tests: 10 cases");
+        eprintln!("  svd differential tests: 14 cases");
+        eprintln!("  Total: {DEFINED_DIFF_CASES} subprocess-based differential tests");
+        eprintln!("  Logs: fixtures/artifacts/FSCI-P2C-002/diff/");
+    } else {
+        eprintln!("  SciPy unavailable: {DEFINED_DIFF_CASES} oracle comparisons skipped");
+        eprintln!("  Set {REQUIRE_SCIPY_ENV}=1 to fail closed when the oracle is missing");
+    }
 }
