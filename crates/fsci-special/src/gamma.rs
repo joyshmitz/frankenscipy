@@ -1424,10 +1424,13 @@ pub fn factorial2(n: i64) -> f64 {
                     let half_n = nf / 2.0;
                     2.0_f64.powf(half_n) * gamma_core(half_n + 1.0)
                 } else {
-                    // Odd: n!! = n! / (n/2)! / 2^(n/2)
-                    // Or equivalently: n!! = sqrt(2/pi) * 2^((n+1)/2) * Gamma((n+1)/2 + 1/2)
-                    let half_n_plus_1 = (nf + 1.0) / 2.0;
-                    2.0_f64.powf(half_n_plus_1) * gamma_core(half_n_plus_1) / PI.sqrt()
+                    // Odd m: m!! = 2^((m+1)/2) * Gamma((m+2)/2) / sqrt(pi),
+                    // derived from (2k-1)!! = Gamma(k+1/2) * 2^k / sqrt(pi)
+                    // with m = 2k - 1, so k = (m+1)/2 and Gamma argument is
+                    // k + 1/2 = (m+2)/2.
+                    let exp_pow = (nf + 1.0) / 2.0;
+                    let gamma_arg = (nf + 2.0) / 2.0;
+                    2.0_f64.powf(exp_pow) * gamma_core(gamma_arg) / PI.sqrt()
                 }
             }
         }
@@ -2801,6 +2804,32 @@ mod tests {
         let computed = factorial2(20);
         let expected = 3_715_891_200.0_f64;
         assert!((computed - expected).abs() / expected < 1e-10);
+    }
+
+    #[test]
+    fn factorial2_large_odd_gamma_path() {
+        // n > 33 takes the gamma-based fallback. The previous formula
+        // used Gamma((n+1)/2) instead of Gamma((n+2)/2) and overshot
+        // the true value by roughly 8x at n=35. Reference values are
+        // computed exactly via the recurrence m!! = m * (m-2)!!.
+        fn double_fact_exact(n: i64) -> f64 {
+            let mut result = 1.0f64;
+            let mut k = n;
+            while k > 1 {
+                result *= k as f64;
+                k -= 2;
+            }
+            result
+        }
+        for n in [35_i64, 51, 99, 151] {
+            let computed = factorial2(n);
+            let expected = double_fact_exact(n);
+            let rel_err = ((computed - expected) / expected).abs();
+            assert!(
+                rel_err < 1e-12,
+                "factorial2({n}) gamma-path: got {computed:e}, expected {expected:e}, rel_err={rel_err:e}"
+            );
+        }
     }
 
     // ── zetac tests ──────────────────────────────────────────────────────

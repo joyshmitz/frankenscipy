@@ -350,3 +350,10 @@ path = "fuzz_targets/p2c007_stats_correlation.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c006_special_erf_identities"
+path = "fuzz_targets/p2c006_special_erf_identities.rs"
+test = false
+doc = false
+bench = false
