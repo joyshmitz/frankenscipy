@@ -35,7 +35,6 @@ struct StatsCase {
 struct OracleResult {
     case_id: String,
     value: f64,
-    value2: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -333,9 +332,10 @@ fn scipy_oracle_or_skip(cases: &[StatsCase]) -> Vec<OracleResult> {
     match run_scipy_oracle(cases) {
         Some(results) => results,
         None => {
-            if std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-                panic!("SciPy oracle required but not available");
-            }
+            assert!(
+                std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+                "SciPy oracle required but not available"
+            );
             eprintln!("SciPy oracle not available, skipping diff test");
             Vec::new()
         }
@@ -391,25 +391,52 @@ fn diff_stats_basic() {
     if oracle_results.is_empty() {
         return;
     }
+    assert_eq!(
+        oracle_results.len(),
+        cases.len(),
+        "SciPy stats oracle returned partial coverage"
+    );
 
     let oracle_map: HashMap<String, OracleResult> = oracle_results
         .into_iter()
         .map(|r| (r.case_id.clone(), r))
         .collect();
+    assert_eq!(
+        oracle_map.len(),
+        cases.len(),
+        "SciPy stats oracle returned duplicate or missing case ids"
+    );
+    let missing_rust_evaluators: Vec<&str> = cases
+        .iter()
+        .filter(|case| compute_rust_value(case).is_none())
+        .map(|case| case.func.as_str())
+        .collect();
+    assert!(
+        missing_rust_evaluators.is_empty(),
+        "missing Rust stats evaluators: {:?}",
+        missing_rust_evaluators
+    );
+    let missing_oracle_cases: Vec<&str> = cases
+        .iter()
+        .filter(|case| !oracle_map.contains_key(&case.case_id))
+        .map(|case| case.case_id.as_str())
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "missing SciPy stats oracle results: {:?}",
+        missing_oracle_cases
+    );
 
     let start = Instant::now();
     let mut diffs = Vec::new();
     let mut max_diff = 0.0_f64;
 
     for case in &cases {
-        let (rust_val, _rust_val2) = match compute_rust_value(case) {
-            Some(v) => v,
-            None => continue,
+        let Some((rust_val, _rust_val2)) = compute_rust_value(case) else {
+            continue;
         };
-
-        let scipy_result = match oracle_map.get(&case.case_id) {
-            Some(r) => r,
-            None => continue,
+        let Some(scipy_result) = oracle_map.get(&case.case_id) else {
+            continue;
         };
 
         let scipy_val = scipy_result.value;
@@ -517,9 +544,10 @@ json.dump(results, sys.stdout)
     {
         Ok(c) => c,
         Err(_) => {
-            if std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-                panic!("SciPy oracle required but not available");
-            }
+            assert!(
+                std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+                "SciPy oracle required but not available"
+            );
             eprintln!("SciPy oracle not available, skipping wilcoxon diff test");
             return;
         }
@@ -533,9 +561,10 @@ json.dump(results, sys.stdout)
 
     let output = child.wait_with_output().unwrap();
     if !output.status.success() {
-        if std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-            panic!("SciPy oracle failed");
-        }
+        assert!(
+            std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+            "SciPy oracle failed"
+        );
         return;
     }
 
@@ -547,11 +576,31 @@ json.dump(results, sys.stdout)
     if oracle_results.is_empty() {
         return;
     }
+    assert_eq!(
+        oracle_results.len(),
+        cases.len(),
+        "SciPy wilcoxon oracle returned partial coverage"
+    );
 
     let oracle_map: HashMap<String, OracleResult> = oracle_results
         .into_iter()
         .map(|r| (r.case_id.clone(), r))
         .collect();
+    assert_eq!(
+        oracle_map.len(),
+        cases.len(),
+        "SciPy wilcoxon oracle returned duplicate or missing case ids"
+    );
+    let missing_oracle_cases: Vec<&str> = cases
+        .iter()
+        .filter(|case| !oracle_map.contains_key(&case.case_id))
+        .map(|case| case.case_id.as_str())
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "missing SciPy wilcoxon oracle results: {:?}",
+        missing_oracle_cases
+    );
 
     let start = Instant::now();
     let mut diffs = Vec::new();
@@ -562,9 +611,8 @@ json.dump(results, sys.stdout)
         let res = wilcoxon(&case.data, data2);
         let rust_val = res.statistic;
 
-        let scipy_result = match oracle_map.get(&case.case_id) {
-            Some(r) => r,
-            None => continue,
+        let Some(scipy_result) = oracle_map.get(&case.case_id) else {
+            continue;
         };
 
         let scipy_val = scipy_result.value;
