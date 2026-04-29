@@ -336,3 +336,10 @@ path = "fuzz_targets/p2c007_stats_descriptive.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c007_stats_correlation"
+path = "fuzz_targets/p2c007_stats_correlation.rs"
+test = false
+doc = false
+bench = false
