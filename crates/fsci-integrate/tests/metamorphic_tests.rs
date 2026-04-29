@@ -12,8 +12,8 @@
 //! Run with: `cargo test -p fsci-integrate --test metamorphic_tests`
 
 use fsci_integrate::{
-    QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue, cumulative_trapezoid, quad, simpson,
-    solve_ivp, trapezoid,
+    DblquadOptions, QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue, cumulative_simpson,
+    cumulative_trapezoid, dblquad, quad, romb, simpson, solve_ivp, trapezoid,
 };
 
 /// Tolerance for metamorphic relation comparisons.
@@ -353,4 +353,81 @@ fn mr_solve_ivp_autonomous_time_shift_invariance() {
             );
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — cumulative_simpson final element matches simpson over the
+// full grid (the running cumulative sum reaches the same total).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cumulative_simpson_final_equals_simpson_total() {
+    // Use an odd number of points so cumulative_simpson covers the
+    // full grid with no trapezoid-tail correction.
+    let n = 21;
+    let xs: Vec<f64> = (0..n).map(|i| 0.1 * i as f64).collect();
+    let ys: Vec<f64> = xs.iter().map(|&x| smooth_exp(x)).collect();
+    let cum = cumulative_simpson(&ys, &xs).unwrap();
+    let total = simpson(&ys, &xs).unwrap();
+    assert_close(
+        *cum.last().unwrap(),
+        total.integral,
+        "MR13 cumulative_simpson final value matches simpson total",
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — dblquad on a separable integrand factorizes:
+// ∫_a^b ∫_c^d f(x) g(y) dy dx = (∫f) · (∫g).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dblquad_separable_factorizes() {
+    let f_x = |x: f64| (-x * x).exp();
+    let g_y = |y: f64| 1.0 + y * y;
+    // f(x) g(y) — note dblquad signature is (y, x).
+    let integrand = move |y: f64, x: f64| f_x(x) * g_y(y);
+    let res = dblquad(
+        integrand,
+        0.0,
+        1.5, // x range
+        |_x| 0.0,
+        |_x| 1.0, // y range
+        DblquadOptions::default(),
+    )
+    .unwrap();
+
+    let qopts = QuadOptions::default();
+    let int_f = quad(f_x, 0.0, 1.5, qopts).unwrap().integral;
+    let int_g = quad(g_y, 0.0, 1.0, qopts).unwrap().integral;
+    let expected = int_f * int_g;
+    assert!(
+        (res.integral - expected).abs() < 1e-7 * expected.abs().max(1.0),
+        "MR14 dblquad factorization: got {}, expected {expected}",
+        res.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — romb on uniformly-spaced samples of a polynomial reproduces
+// the exact integral. Romberg integration is exact for polynomials of
+// degree ≤ 2k where k is the number of refinement levels (here k=4
+// gives exact results for degree ≤ 8).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_romb_exact_on_polynomial() {
+    // n = 2^k + 1 = 17 for k = 4 → exact for polynomials of degree ≤ 8.
+    let k = 4;
+    let n: usize = (1 << k) + 1;
+    let dx = 1.0 / (n as f64 - 1.0); // x in [0, 1]
+    let xs: Vec<f64> = (0..n).map(|i| i as f64 * dx).collect();
+    // f(x) = 3 x^2 + 2 x + 1, exact integral on [0, 1] = 1 + 1 + 1 = 3.
+    let ys: Vec<f64> = xs.iter().map(|&x| 3.0 * x * x + 2.0 * x + 1.0).collect();
+    let result = romb(&ys, dx).unwrap();
+    let expected = 3.0;
+    assert!(
+        (result - expected).abs() < 1e-12,
+        "MR15 romb exact on quadratic: got {result}, expected {expected}"
+    );
 }
