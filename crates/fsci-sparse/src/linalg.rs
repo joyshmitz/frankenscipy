@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use fsci_linalg::{expm as dense_expm, DecompOptions, LinalgError};
+use fsci_linalg::{DecompOptions, LinalgError, expm as dense_expm};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
@@ -3923,10 +3923,12 @@ mod tests {
         assert_eq!(result.solution.len(), n);
         assert_eq!(result.solution[0], 1.0);
         assert_eq!(result.solution[n - 1], 1.0);
-        assert!(result
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("native sparse direct")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("native sparse direct"))
+        );
     }
 
     #[test]
@@ -3944,10 +3946,12 @@ mod tests {
             .expect("nonzero tiny pivots should remain solvable");
 
         assert_eq!(result.backend_used, SparseBackend::NativeSparseLu);
-        assert!(result
-            .solution
-            .iter()
-            .all(|value| value.is_finite() && (value - 1.0).abs() < 1.0e-12));
+        assert!(
+            result
+                .solution
+                .iter()
+                .all(|value| value.is_finite() && (value - 1.0).abs() < 1.0e-12)
+        );
     }
 
     #[test]
@@ -4859,6 +4863,30 @@ mod tests {
     }
 
     #[test]
+    fn svds_zero_max_iter_uses_default_iteration_budget() {
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(3, 3),
+            vec![5.0, -3.0, 1.0],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let options = EigsOptions {
+            max_iter: 0,
+            ..EigsOptions::default()
+        };
+        let result = svds(&a, 1, options).expect("svds works");
+        assert!(
+            (result.singular_values[0] - 5.0).abs() < 0.5,
+            "largest sv with sanitized max_iter: {}",
+            result.singular_values[0]
+        );
+    }
+
+    #[test]
     fn svds_rectangular() {
         // 3x2 matrix
         let a = CooMatrix::from_triplets(
@@ -5656,6 +5684,22 @@ impl Default for EigsOptions {
     }
 }
 
+fn normalize_eigs_options(options: EigsOptions) -> EigsOptions {
+    let defaults = EigsOptions::default();
+    EigsOptions {
+        tol: if options.tol > 0.0 && options.tol.is_finite() {
+            options.tol
+        } else {
+            defaults.tol
+        },
+        max_iter: if options.max_iter == 0 {
+            defaults.max_iter
+        } else {
+            options.max_iter
+        },
+    }
+}
+
 /// Solve a sparse triangular system Ax = b.
 ///
 /// Matches `scipy.sparse.linalg.spsolve_triangular(A, b, lower)`.
@@ -5739,6 +5783,7 @@ pub fn eigsh(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<Eigs
             message: format!("k={k} must be in [1, {n}]"),
         });
     }
+    let options = normalize_eigs_options(options);
 
     let mut eigenvalues = Vec::with_capacity(k);
     let mut eigenvectors: Vec<Vec<f64>> = Vec::with_capacity(k);
@@ -5853,6 +5898,7 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
             message: format!("k={k} must be in [1, {n}]"),
         });
     }
+    let options = normalize_eigs_options(options);
 
     // Krylov subspace dimension (larger than k for better convergence)
     let m = (2 * k + 1).min(n);
@@ -6060,6 +6106,7 @@ pub fn svds(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<SvdsR
             message: format!("k={k} must be in [1, {}]", m.min(n)),
         });
     }
+    let options = normalize_eigs_options(options);
 
     // Compute eigenvalues of A^T A via power iteration
     // A^T A is n×n symmetric positive semidefinite
