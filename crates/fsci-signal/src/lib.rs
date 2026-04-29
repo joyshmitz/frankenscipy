@@ -5562,10 +5562,17 @@ pub fn firwin(
         ));
     }
     for &c in cutoff {
-        if !c.is_finite() || !(0.0..=1.0).contains(&c) {
+        if !c.is_finite() || c <= 0.0 || c >= 1.0 {
             return Err(SignalError::InvalidArgument(format!(
-                "cutoff {c} out of range [0, 1] or non-finite"
+                "cutoff {c} out of range (0, 1) or non-finite"
             )));
+        }
+    }
+    for pair in cutoff.windows(2) {
+        if pair[0] >= pair[1] {
+            return Err(SignalError::InvalidArgument(
+                "cutoff frequencies must be strictly increasing".to_string(),
+            ));
         }
     }
 
@@ -11371,7 +11378,11 @@ mod tests {
     fn firwin_invalid_args() {
         assert!(firwin(0, &[0.3], FirWindow::Hamming, true).is_err());
         assert!(firwin(21, &[], FirWindow::Hamming, true).is_err());
+        assert!(firwin(21, &[0.0], FirWindow::Hamming, true).is_err());
+        assert!(firwin(21, &[1.0], FirWindow::Hamming, true).is_err());
         assert!(firwin(21, &[1.5], FirWindow::Hamming, true).is_err());
+        assert!(firwin(21, &[0.4, 0.2], FirWindow::Hamming, false).is_err());
+        assert!(firwin(21, &[0.2, 0.2], FirWindow::Hamming, false).is_err());
     }
 
     #[test]
