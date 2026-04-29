@@ -108,10 +108,6 @@ fn deterministic_x(n: usize, seed: usize) -> Vec<f64> {
         .collect()
 }
 
-fn uniform_x(n: usize, dx: f64) -> Vec<f64> {
-    (0..n).map(|i| i as f64 * dx).collect()
-}
-
 fn scalar_cases() -> Vec<IntegrateCase> {
     let sizes = [5, 9, 17, 33];
     let mut cases = Vec::new();
@@ -236,9 +232,10 @@ fn scipy_oracle_or_skip(cases: &[IntegrateCase]) -> Vec<OracleResult> {
     match run_scipy_oracle(cases) {
         Some(results) => results,
         None => {
-            if std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-                panic!("SciPy oracle required but not available");
-            }
+            assert!(
+                std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+                "SciPy oracle required but not available"
+            );
             eprintln!("SciPy oracle not available, skipping diff test");
             Vec::new()
         }
@@ -271,6 +268,52 @@ fn compute_rust_value(case: &IntegrateCase) -> Option<f64> {
     }
 }
 
+fn complete_scalar_oracle_map(
+    test_id: &str,
+    cases: &[IntegrateCase],
+    oracle_results: Vec<OracleResult>,
+) -> HashMap<String, OracleResult> {
+    assert_eq!(
+        oracle_results.len(),
+        cases.len(),
+        "{test_id} SciPy oracle returned partial coverage"
+    );
+
+    let oracle_map: HashMap<String, OracleResult> = oracle_results
+        .into_iter()
+        .map(|r| (r.case_id.clone(), r))
+        .collect();
+    assert_eq!(
+        oracle_map.len(),
+        cases.len(),
+        "{test_id} SciPy oracle returned duplicate or missing case ids"
+    );
+
+    let missing_rust_evaluators: Vec<&str> = cases
+        .iter()
+        .filter(|case| compute_rust_value(case).is_none())
+        .map(|case| case.case_id.as_str())
+        .collect();
+    assert!(
+        missing_rust_evaluators.is_empty(),
+        "{test_id} missing Rust integrate evaluators: {:?}",
+        missing_rust_evaluators
+    );
+
+    let missing_oracle_cases: Vec<&str> = cases
+        .iter()
+        .filter(|case| !oracle_map.contains_key(&case.case_id))
+        .map(|case| case.case_id.as_str())
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "{test_id} missing SciPy integrate oracle results: {:?}",
+        missing_oracle_cases
+    );
+
+    oracle_map
+}
+
 #[test]
 fn diff_integrate_scalar() {
     let cases = scalar_cases();
@@ -280,25 +323,18 @@ fn diff_integrate_scalar() {
         return;
     }
 
-    let oracle_map: HashMap<String, OracleResult> = oracle_results
-        .into_iter()
-        .map(|r| (r.case_id.clone(), r))
-        .collect();
+    let oracle_map = complete_scalar_oracle_map("diff_integrate_scalar", &cases, oracle_results);
 
     let start = Instant::now();
     let mut diffs = Vec::new();
     let mut max_diff = 0.0_f64;
 
     for case in &cases {
-        let rust_val = match compute_rust_value(case) {
-            Some(v) => v,
-            None => continue,
-        };
-
-        let scipy_result = match oracle_map.get(&case.case_id) {
-            Some(r) => r,
-            None => continue,
-        };
+        let rust_val = compute_rust_value(case)
+            .expect("complete scalar oracle map validates Rust evaluator coverage");
+        let scipy_result = oracle_map
+            .get(&case.case_id)
+            .expect("complete scalar oracle map validates SciPy case coverage");
 
         let scipy_val = scipy_result.value;
         let abs_diff = (rust_val - scipy_val).abs();
@@ -421,9 +457,10 @@ json.dump(results, sys.stdout)
     {
         Ok(c) => c,
         Err(_) => {
-            if std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-                panic!("SciPy oracle required but not available");
-            }
+            assert!(
+                std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+                "SciPy oracle required but not available"
+            );
             eprintln!("SciPy oracle not available, skipping cumulative diff test");
             return;
         }
@@ -437,25 +474,52 @@ json.dump(results, sys.stdout)
 
     let output = child.wait_with_output().unwrap();
     if !output.status.success() {
-        if std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-            panic!("SciPy oracle failed");
-        }
+        assert!(
+            std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+            "SciPy oracle failed"
+        );
         return;
     }
 
     let oracle_results: Vec<OracleArrayResult> = match serde_json::from_slice(&output.stdout) {
         Ok(r) => r,
-        Err(_) => return,
+        Err(error) => {
+            assert!(
+                std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+                "SciPy oracle returned invalid JSON: {error}"
+            );
+            return;
+        }
     };
 
     if oracle_results.is_empty() {
         return;
     }
+    assert_eq!(
+        oracle_results.len(),
+        cases.len(),
+        "SciPy integrate cumulative oracle returned partial coverage"
+    );
 
     let oracle_map: HashMap<String, OracleArrayResult> = oracle_results
         .into_iter()
         .map(|r| (r.case_id.clone(), r))
         .collect();
+    assert_eq!(
+        oracle_map.len(),
+        cases.len(),
+        "SciPy integrate cumulative oracle returned duplicate or missing case ids"
+    );
+    let missing_oracle_cases: Vec<&str> = cases
+        .iter()
+        .filter(|case| !oracle_map.contains_key(&case.case_id))
+        .map(|case| case.case_id.as_str())
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "missing SciPy integrate cumulative oracle results: {:?}",
+        missing_oracle_cases
+    );
 
     let mut all_pass = true;
     let mut max_diff = 0.0_f64;
@@ -463,20 +527,33 @@ json.dump(results, sys.stdout)
     for case in &cases {
         let rust_vals: Vec<f64> = match case.func.as_str() {
             "cumtrapz" => {
-                let x = case.x.as_ref().unwrap();
-                cumulative_trapezoid(&case.y, x).unwrap_or_default()
+                let x = case.x.as_ref().expect("cumtrapz cases include explicit x");
+                cumulative_trapezoid(&case.y, x)
+                    .expect("Rust cumulative_trapezoid should evaluate conformance case")
             }
             "cumtrapz_uniform" => {
-                let dx = case.dx.unwrap();
-                cumulative_trapezoid_uniform(&case.y, dx).unwrap_or_default()
+                let dx = case.dx.expect("uniform cumulative cases include dx");
+                cumulative_trapezoid_uniform(&case.y, dx)
+                    .expect("Rust cumulative_trapezoid_uniform should evaluate conformance case")
             }
-            _ => continue,
+            other => {
+                eprintln!("unsupported cumulative integrate function {other}");
+                all_pass = false;
+                continue;
+            }
         };
 
-        let scipy_result = match oracle_map.get(&case.case_id) {
-            Some(r) => r,
-            None => continue,
-        };
+        let scipy_result = oracle_map
+            .get(&case.case_id)
+            .expect("complete cumulative oracle map validates SciPy case coverage");
+        assert_eq!(
+            rust_vals.len(),
+            scipy_result.values.len(),
+            "{} cumulative output length mismatch: rust={} scipy={}",
+            case.case_id,
+            rust_vals.len(),
+            scipy_result.values.len()
+        );
 
         for (i, (&rv, &sv)) in rust_vals.iter().zip(scipy_result.values.iter()).enumerate() {
             let diff = (rv - sv).abs();
