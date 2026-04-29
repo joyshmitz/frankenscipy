@@ -9,8 +9,8 @@
 //! Run with: `cargo test -p fsci-linalg --test metamorphic_tests`
 
 use fsci_linalg::{
-    DecompOptions, InvOptions, NormKind, SolveOptions, cholesky, det, expm, inv, logm, lu, norm,
-    qr, solve, sqrtm, svd,
+    DecompOptions, InvOptions, NormKind, SolveOptions, cholesky, det, expm, hessenberg, inv, logm,
+    lu, norm, qr, schur, solve, sqrtm, svd,
 };
 
 const RTOL: f64 = 1e-9;
@@ -468,4 +468,100 @@ fn mr_logm_inverts_expm_symmetric() {
         diff <= 1e-9 * scale,
         "MR12 logm(expm(A)) != A (symmetric): ||logm(expm(A)) - A||_F = {diff:e}"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — Schur decomposition: A = Z·T·Z^T with Z orthogonal,
+//        T upper quasi-triangular (real Schur form).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_schur_reconstructs_matrix() {
+    let a = vec![
+        vec![4.0, 1.0, 2.0, 0.5],
+        vec![0.0, 3.0, 1.0, 0.7],
+        vec![1.0, -1.0, 5.0, 0.2],
+        vec![0.5, 0.0, 2.0, 6.0],
+    ];
+    let result = schur(&a, DecompOptions::default()).unwrap();
+
+    // Reconstruction: Z · T · Z^T = A.
+    let zt = matmul(&result.z, &result.t);
+    let z_t_t = transpose(&result.z);
+    let recon = matmul(&zt, &z_t_t);
+    let scale = frobenius(&a).max(1.0);
+    assert!(
+        frobenius_diff(&recon, &a) <= 1e-10 * scale,
+        "MR13 Schur reconstruct: ||Z T Z^T - A||_F too large"
+    );
+
+    // Z orthogonality: Z^T Z = I.
+    let zt_z = matmul(&z_t_t, &result.z);
+    let id = identity(zt_z.len());
+    assert!(
+        frobenius_diff(&zt_z, &id) <= 1e-10,
+        "MR13 Schur Z not orthogonal"
+    );
+
+    // T is upper quasi-triangular: only the immediate sub-diagonal can
+    // be non-zero (for 2x2 complex-eigenvalue blocks).
+    let n = result.t.len();
+    for i in 2..n {
+        for j in 0..(i - 1) {
+            assert!(
+                result.t[i][j].abs() < 1e-10,
+                "MR13 Schur T not quasi-triangular at ({i},{j}): {}",
+                result.t[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — Hessenberg decomposition: A = Q·H·Q^T with Q orthogonal and
+//        H upper-Hessenberg (only the first sub-diagonal is non-zero).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hessenberg_reconstructs_matrix() {
+    let a = vec![
+        vec![4.0, 1.0, 2.0, 0.5, 1.1],
+        vec![0.0, 3.0, 1.0, 0.7, -0.3],
+        vec![1.0, -1.0, 5.0, 0.2, 0.6],
+        vec![0.5, 0.0, 2.0, 6.0, 1.0],
+        vec![0.7, 0.4, -0.2, 1.5, 2.0],
+    ];
+    let result = hessenberg(&a, DecompOptions::default()).unwrap();
+
+    // Reconstruction: Q · H · Q^T = A.
+    let qh = matmul(&result.q, &result.h);
+    let q_t = transpose(&result.q);
+    let recon = matmul(&qh, &q_t);
+    let scale = frobenius(&a).max(1.0);
+    assert!(
+        frobenius_diff(&recon, &a) <= 1e-10 * scale,
+        "MR14 Hessenberg reconstruct: ||Q H Q^T - A||_F too large"
+    );
+
+    // Q orthogonality: Q^T Q = I.
+    let qt_q = matmul(&q_t, &result.q);
+    let id = identity(qt_q.len());
+    assert!(
+        frobenius_diff(&qt_q, &id) <= 1e-10,
+        "MR14 Hessenberg Q not orthogonal"
+    );
+
+    // H is upper-Hessenberg: H[i][j] = 0 for i > j + 1.
+    let n = result.h.len();
+    for i in 0..n {
+        for j in 0..n {
+            if i > j + 1 {
+                assert!(
+                    result.h[i][j].abs() < 1e-10,
+                    "MR14 H not upper-Hessenberg at ({i},{j}): {}",
+                    result.h[i][j]
+                );
+            }
+        }
+    }
 }
