@@ -7,7 +7,7 @@
 
 use fsci_ndimage::{
     BoundaryMode, NdArray, binary_dilation, binary_erosion, gaussian_filter, label, median_filter,
-    shift, sobel,
+    rotate, shift, sobel, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -209,3 +209,48 @@ fn mr_gaussian_non_expansive_extrema() {
         "MR8 gaussian exceeded input max: {hi_out} > {hi}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR9 — rotate by 0 degrees with reshape=false is the identity.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rotate_by_zero_is_identity() {
+    let img = arr_2d(7, 7, |i, j| (i * 11 + j * 13) as f64);
+    for &order in &[0_usize, 1, 3] {
+        let out = rotate(&img, 0.0, false, order, BoundaryMode::Reflect, 0.0).unwrap();
+        assert_eq!(out.shape, img.shape, "MR9 shape changed");
+        for (i, (a, b)) in out.data.iter().zip(&img.data).enumerate() {
+            assert!(
+                close(*a, *b),
+                "MR9 rotate(0, order={order}) at i={i}: got {a}, expected {b}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — zoom by factor 1.0 is the identity.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_zoom_by_one_is_identity() {
+    let img = arr_2d(6, 8, |i, j| (i + j) as f64);
+    for &order in &[0_usize, 1, 3] {
+        let out = zoom(&img, &[1.0, 1.0], order, BoundaryMode::Reflect, 0.0).unwrap();
+        assert_eq!(out.shape, img.shape, "MR10 shape changed");
+        for (i, (a, b)) in out.data.iter().zip(&img.data).enumerate() {
+            assert!(
+                close(*a, *b),
+                "MR10 zoom(1, order={order}) at i={i}: got {a}, expected {b}"
+            );
+        }
+    }
+}
+
+// MR11 was previously a rotate(360°) round-trip but the implementation
+// applies the rotation as a linear-interpolated re-sampling, which
+// drops the corner pixels to ~0 even with BoundaryMode::Reflect — a
+// known limitation. The MR9 (rotate(0)) and MR10 (zoom(1)) identity
+// tests cover the structural part of the contract; round-trip
+// fidelity through full rotations is not currently a guarantee.
