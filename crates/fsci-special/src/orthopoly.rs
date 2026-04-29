@@ -33,6 +33,9 @@ use fsci_linalg::{DecompOptions, eigh};
 ///
 /// Domain: x in [-1, 1] for orthogonality, but evaluates for any real x.
 pub fn eval_legendre(n: u32, x: f64) -> f64 {
+    if !x.is_finite() {
+        return f64::NAN;
+    }
     if n == 0 {
         return 1.0;
     }
@@ -163,6 +166,9 @@ pub fn eval_laguerre(n: u32, x: f64) -> f64 {
 ///
 /// Weight function: x^α exp(-x) on [0, ∞).
 pub fn eval_genlaguerre(n: u32, alpha: f64, x: f64) -> f64 {
+    if !alpha.is_finite() || !x.is_finite() {
+        return f64::NAN;
+    }
     if n == 0 {
         return 1.0;
     }
@@ -192,6 +198,9 @@ pub fn eval_genlaguerre(n: u32, alpha: f64, x: f64) -> f64 {
 ///
 /// Uses the three-term recurrence (DLMF 18.9.2).
 pub fn eval_jacobi(n: u32, alpha: f64, beta: f64, x: f64) -> f64 {
+    if !alpha.is_finite() || !beta.is_finite() || !x.is_finite() {
+        return f64::NAN;
+    }
     if n == 0 {
         return 1.0;
     }
@@ -232,6 +241,9 @@ pub fn eval_jacobi(n: u32, alpha: f64, beta: f64, x: f64) -> f64 {
 /// Weight function: (1-x²)^{α-1/2} on [-1, 1].
 /// Requires α > -1/2, α ≠ 0.
 pub fn eval_gegenbauer(n: u32, alpha: f64, x: f64) -> f64 {
+    if !alpha.is_finite() || !x.is_finite() {
+        return f64::NAN;
+    }
     if n == 0 {
         return 1.0;
     }
@@ -583,6 +595,10 @@ fn lanczos_gamma(z: f64) -> f64 {
 ///
 /// For negative m: P_l^{-m}(x) = (-1)^m (l-m)!/(l+m)! P_l^m(x)
 pub fn lpmv(m: i32, l: u32, x: f64) -> f64 {
+    if !x.is_finite() {
+        return f64::NAN;
+    }
+
     let li = l as i32;
     let am = m.unsigned_abs();
 
@@ -660,6 +676,13 @@ use crate::types::Complex64;
 ///
 /// Note: Follows SciPy convention where theta=azimuthal and phi=polar.
 pub fn sph_harm(m: i32, l: u32, theta: f64, phi: f64) -> Complex64 {
+    if !theta.is_finite() || !phi.is_finite() {
+        return Complex64 {
+            re: f64::NAN,
+            im: f64::NAN,
+        };
+    }
+
     let am = m.unsigned_abs();
 
     if am > l {
