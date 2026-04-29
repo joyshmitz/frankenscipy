@@ -2716,8 +2716,18 @@ pub fn isotonic_regression(y: &[f64], weights: Option<&[f64]>) -> Vec<f64> {
     if n == 0 {
         return vec![];
     }
+    if y.iter().any(|v| !v.is_finite()) {
+        return vec![f64::NAN; n];
+    }
 
-    let w: Vec<f64> = weights.map_or(vec![1.0; n], |w| w.to_vec());
+    let w: Vec<f64> = if let Some(wts) = weights {
+        if wts.len() != n || wts.iter().any(|v| !v.is_finite() || *v < 0.0) {
+            return vec![f64::NAN; n];
+        }
+        wts.to_vec()
+    } else {
+        vec![1.0; n]
+    };
 
     // Pool Adjacent Violators Algorithm (PAVA)
     let mut result = y.to_vec();
@@ -2760,6 +2770,9 @@ pub fn minimize_trisection<F>(f: F, a: f64, b: f64, tol: f64, maxiter: usize) ->
 where
     F: Fn(f64) -> f64,
 {
+    if !a.is_finite() || !b.is_finite() || !tol.is_finite() || tol <= 0.0 || a >= b {
+        return (f64::NAN, f64::NAN);
+    }
     let mut lo = a;
     let mut hi = b;
 
@@ -2795,6 +2808,28 @@ where
     F: Fn(&[f64]) -> f64,
     G: Fn(&[f64]) -> Vec<f64>,
 {
+    if x0.is_empty()
+        || !tol.is_finite()
+        || tol <= 0.0
+        || !learning_rate.is_finite()
+        || learning_rate <= 0.0
+        || x0.iter().any(|v| !v.is_finite())
+    {
+        return OptimizeResult {
+            x: x0.to_vec(),
+            fun: None,
+            success: false,
+            status: ConvergenceStatus::InvalidInput,
+            message: "invalid input parameters".to_string(),
+            nfev: 0,
+            njev: 0,
+            nhev: 0,
+            nit: 0,
+            jac: None,
+            hess_inv: None,
+            maxcv: None,
+        };
+    }
     let mut x = x0.to_vec();
     let mut nfev = 0;
     let mut njev = 0;
@@ -2890,6 +2925,32 @@ where
     F: Fn(&[f64]) -> f64,
     G: Fn(&[f64]) -> Vec<f64>,
 {
+    let n = x0.len();
+    if n == 0
+        || lb.len() != n
+        || ub.len() != n
+        || !tol.is_finite()
+        || tol <= 0.0
+        || !learning_rate.is_finite()
+        || learning_rate <= 0.0
+        || x0.iter().any(|v| !v.is_finite())
+        || lb.iter().zip(ub.iter()).any(|(l, u)| !l.is_finite() || !u.is_finite() || l > u)
+    {
+        return OptimizeResult {
+            x: x0.to_vec(),
+            fun: None,
+            success: false,
+            status: ConvergenceStatus::InvalidInput,
+            message: "invalid input parameters".to_string(),
+            nfev: 0,
+            njev: 0,
+            nhev: 0,
+            nit: 0,
+            jac: None,
+            hess_inv: None,
+            maxcv: None,
+        };
+    }
     let mut x: Vec<f64> = x0
         .iter()
         .zip(lb.iter().zip(ub.iter()))
@@ -2963,12 +3024,19 @@ where
     F: Fn(&[f64]) -> f64,
 {
     let n = x.len();
+    if n == 0 || !eps.is_finite() || eps <= 0.0 || x.iter().any(|v| !v.is_finite()) {
+        return vec![f64::NAN; n];
+    }
     let f0 = f(x);
+    if !f0.is_finite() {
+        return vec![f64::NAN; n];
+    }
     let mut grad = Vec::with_capacity(n);
     for i in 0..n {
         let mut xp = x.to_vec();
         xp[i] += eps;
-        grad.push((f(&xp) - f0) / eps);
+        let fp = f(&xp);
+        grad.push(if fp.is_finite() { (fp - f0) / eps } else { f64::NAN });
     }
     grad
 }
@@ -2979,6 +3047,9 @@ where
     F: Fn(&[f64]) -> f64,
 {
     let n = x.len();
+    if n == 0 || !eps.is_finite() || eps <= 0.0 || x.iter().any(|v| !v.is_finite()) {
+        return vec![vec![f64::NAN; n]; n];
+    }
     let mut hess = vec![vec![0.0; n]; n];
     let mut scratch = x.to_vec();
 
@@ -3019,15 +3090,22 @@ where
     F: Fn(&[f64]) -> Vec<f64>,
 {
     let n = x.len();
+    if n == 0 || !eps.is_finite() || eps <= 0.0 || x.iter().any(|v| !v.is_finite()) {
+        return vec![];
+    }
     let f0 = f(x);
     let m = f0.len();
+    if m == 0 || f0.iter().any(|v| !v.is_finite()) {
+        return vec![vec![f64::NAN; n]; m.max(1)];
+    }
     let mut jac = vec![vec![0.0; n]; m];
     for j in 0..n {
         let mut xp = x.to_vec();
         xp[j] += eps;
         let fp = f(&xp);
         for i in 0..m {
-            jac[i][j] = (fp[i] - f0[i]) / eps;
+            let fpi = fp.get(i).copied().unwrap_or(f64::NAN);
+            jac[i][j] = if fpi.is_finite() { (fpi - f0[i]) / eps } else { f64::NAN };
         }
     }
     jac
@@ -3050,6 +3128,10 @@ where
     F: Fn(&S) -> f64,
     N: Fn(&S, u64) -> S,
 {
+    if !temp_initial.is_finite() || !temp_final.is_finite() || temp_initial <= 0.0 || temp_final <= 0.0 {
+        let c = cost(&initial);
+        return (initial, c);
+    }
     let mut current = initial;
     let mut current_cost = cost(&current);
     let mut best = current.clone();
@@ -3108,6 +3190,12 @@ where
 {
     n_particles = n_particles.max(1);
     let d = lb.len();
+    if d == 0
+        || ub.len() != d
+        || lb.iter().zip(ub.iter()).any(|(l, u)| !l.is_finite() || !u.is_finite() || l > u)
+    {
+        return (vec![f64::NAN; d.max(1)], f64::NAN);
+    }
     let w = 0.7298; // inertia
     let c1 = 1.4962; // cognitive
     let c2 = 1.4962; // social
