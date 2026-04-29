@@ -128,6 +128,9 @@ pub fn cosine(a: &[f64], b: &[f64]) -> f64 {
 
 /// Minkowski distance of order `p`.
 pub fn minkowski(a: &[f64], b: &[f64], p: f64) -> f64 {
+    if p <= 0.0 || p.is_nan() {
+        return f64::NAN;
+    }
     if p == f64::INFINITY {
         return chebyshev(a, b);
     }
@@ -3860,6 +3863,14 @@ mod tests {
         let a = [1.0, 2.0, 3.0];
         let b = [4.0, 0.0, 1.0];
         assert!((minkowski(&a, &b, f64::INFINITY) - chebyshev(&a, &b)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn minkowski_rejects_nonpositive_p_like_weighted_variant() {
+        let a = [1.0, 2.0, 3.0];
+        let b = [4.0, 0.0, 1.0];
+        assert!(minkowski(&a, &b, 0.0).is_nan());
+        assert!(minkowski(&a, &b, -1.0).is_nan());
     }
 
     #[test]
