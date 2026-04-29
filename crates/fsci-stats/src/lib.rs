@@ -8003,8 +8003,11 @@ pub fn hmean(data: &[f64]) -> f64 {
     if data.is_empty() {
         return f64::NAN;
     }
-    if data.iter().any(|&x| !x.is_finite() || x <= 0.0) {
+    if data.iter().any(|&x| x.is_nan() || x < 0.0) {
         return f64::NAN;
+    }
+    if data.contains(&0.0) {
+        return 0.0;
     }
     let n = data.len() as f64;
     let inv_sum: f64 = data.iter().map(|&x| 1.0 / x).sum();
@@ -8024,10 +8027,13 @@ pub fn pmean(data: &[f64], p: f64) -> f64 {
     if data.iter().any(|&x| !x.is_finite()) {
         return f64::NAN;
     }
+    if data.iter().any(|&x| x < 0.0) {
+        return f64::NAN;
+    }
     if p == 0.0 {
         return gmean(data);
     }
-    if p < 0.0 && data.iter().any(|&x| x == 0.0) {
+    if p < 0.0 && data.contains(&0.0) {
         return 0.0;
     }
     let n = data.len() as f64;
@@ -18187,11 +18193,7 @@ pub fn binned_statistic(
     bins: usize,
     statistic: &str,
 ) -> (Vec<f64>, Vec<f64>) {
-    if x.len() != values.len()
-        || x.is_empty()
-        || bins == 0
-        || x.iter().any(|v| !v.is_finite())
-    {
+    if x.len() != values.len() || x.is_empty() || bins == 0 || x.iter().any(|v| !v.is_finite()) {
         return (vec![], vec![]);
     }
 
@@ -19136,6 +19138,23 @@ mod tests {
             "{msg}: got {actual}, expected {expected} (diff={})",
             (actual - expected).abs()
         );
+    }
+
+    // ── Generalized means ───────────────────────────────────────────
+
+    #[test]
+    fn hmean_zero_and_infinity_match_scipy() {
+        assert_eq!(hmean(&[0.0, 2.0]), 0.0);
+        assert_close(hmean(&[1.0, f64::INFINITY]), 2.0, 1e-12, "hmean +inf");
+        assert!(hmean(&[-1.0, 2.0]).is_nan());
+        assert!(hmean(&[1.0, f64::NAN]).is_nan());
+    }
+
+    #[test]
+    fn pmean_rejects_negative_samples_before_zero_shortcut() {
+        assert_eq!(pmean(&[0.0, 2.0], -1.0), 0.0);
+        assert!(pmean(&[0.0, -2.0], -1.0).is_nan());
+        assert!(pmean(&[-1.0, 2.0], 0.5).is_nan());
     }
 
     // ── Normal distribution ─────────────────────────────────────────
