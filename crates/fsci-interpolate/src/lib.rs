@@ -574,7 +574,7 @@ impl PchipInterpolator {
     }
 
     pub fn eval(&self, x_new: f64) -> f64 {
-        if x_new.is_nan() {
+        if !x_new.is_finite() {
             return f64::NAN;
         }
         let n = self.x.len();
@@ -819,7 +819,7 @@ impl Akima1DInterpolator {
     }
 
     pub fn eval(&self, x_new: f64) -> f64 {
-        if x_new.is_nan() {
+        if !x_new.is_finite() {
             return f64::NAN;
         }
         let i = find_interval_helper(&self.x, x_new);
@@ -2761,7 +2761,7 @@ impl KroghInterpolator {
 
     /// Evaluate the interpolating polynomial at x.
     pub fn evaluate(&self, x: f64) -> f64 {
-        if x.is_nan() {
+        if !x.is_finite() {
             return f64::NAN;
         }
         let n = self.coeffs.len();
@@ -5429,11 +5429,41 @@ mod tests {
     }
 
     #[test]
+    fn pchip_eval_non_finite_query_returns_nan() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 4.0, 9.0];
+        let interp = PchipInterpolator::new(&x, &y).expect("pchip");
+        assert!(interp.eval(f64::NAN).is_nan());
+        assert!(interp.eval(f64::INFINITY).is_nan());
+        assert!(interp.eval(f64::NEG_INFINITY).is_nan());
+    }
+
+    #[test]
     fn akima_rejects_nan_in_x_coordinates() {
         let x = vec![1.0, f64::NAN, 3.0];
         let y = vec![0.0, 1.0, 2.0];
         let err = Akima1DInterpolator::new(&x, &y).expect_err("nan in x");
         assert!(matches!(err, InterpError::NonFiniteX));
+    }
+
+    #[test]
+    fn akima_eval_non_finite_query_returns_nan() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 4.0, 9.0];
+        let interp = Akima1DInterpolator::new(&x, &y).expect("akima");
+        assert!(interp.eval(f64::NAN).is_nan());
+        assert!(interp.eval(f64::INFINITY).is_nan());
+        assert!(interp.eval(f64::NEG_INFINITY).is_nan());
+    }
+
+    #[test]
+    fn krogh_eval_non_finite_query_returns_nan() {
+        let x = vec![0.0, 1.0, 2.0, 3.0];
+        let y = vec![0.0, 1.0, 4.0, 9.0];
+        let interp = KroghInterpolator::new(&x, &y).expect("krogh");
+        assert!(interp.evaluate(f64::NAN).is_nan());
+        assert!(interp.evaluate(f64::INFINITY).is_nan());
+        assert!(interp.evaluate(f64::NEG_INFINITY).is_nan());
     }
 
     // ── RectBivariateSpline tests ────────────────────────────────────
