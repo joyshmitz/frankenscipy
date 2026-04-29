@@ -9597,11 +9597,7 @@ pub fn ansari_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResul
 /// Non-parametric test: H0: distributions of x and y are equal.
 /// Uses normal approximation for p-value (valid for n > 20).
 pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
-    if x.len() < 2
-        || y.len() < 2
-        || x.iter().any(|v| v.is_nan())
-        || y.iter().any(|v| v.is_nan())
-    {
+    if x.len() < 2 || y.len() < 2 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
@@ -9994,6 +9990,13 @@ pub fn kruskal(groups: &[&[f64]]) -> TtestResult {
     for &g in groups {
         all_values.extend_from_slice(g);
         group_sizes.push(g.len());
+    }
+    if all_values.iter().all(|&v| v == all_values[0]) {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
     }
     let ranks = rankdata_average(&all_values);
 
@@ -22410,6 +22413,17 @@ mod tests {
             "similar groups p={}, should not reject",
             result.pvalue
         );
+    }
+
+    #[test]
+    fn kruskal_all_identical_returns_nan_like_scipy() {
+        let a = [1.0, 1.0];
+        let b = [1.0, 1.0];
+        let result = kruskal(&[&a, &b]);
+
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+        assert!(result.df.is_nan());
     }
 
     #[test]
