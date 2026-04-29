@@ -248,9 +248,28 @@ fn mr_zoom_by_one_is_identity() {
     }
 }
 
-// MR11 was previously a rotate(360°) round-trip but the implementation
-// applies the rotation as a linear-interpolated re-sampling, which
-// drops the corner pixels to ~0 even with BoundaryMode::Reflect — a
-// known limitation. The MR9 (rotate(0)) and MR10 (zoom(1)) identity
-// tests cover the structural part of the contract; round-trip
-// fidelity through full rotations is not currently a guarantee.
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — rotate by 360° (with reshape=false) returns the original image
+// to f64-eps tolerance. Previously failed because sub-ULP boundary
+// excursions in the half-pixel reflect-coordinate map were leaking
+// into the B-spline sampler as out-of-domain (frankenscipy-c7ud);
+// fixed by clamping near-boundary excursions back into the spline
+// support before evaluating the basis.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rotate_by_360_returns_to_original() {
+    let img = arr_2d(11, 11, |i, j| {
+        let di = i as f64 - 5.0;
+        let dj = j as f64 - 5.0;
+        (-(di * di + dj * dj) * 0.05).exp()
+    });
+    let out = rotate(&img, 360.0, false, 1, BoundaryMode::Reflect, 0.0).unwrap();
+    assert_eq!(out.shape, img.shape, "MR11 shape changed");
+    for (i, (a, b)) in out.data.iter().zip(&img.data).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-9,
+            "MR11 rotate(360) drift at i={i}: got {a}, expected {b}"
+        );
+    }
+}

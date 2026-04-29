@@ -520,6 +520,26 @@ fn sample_interpolated(
         } else {
             mapped
         };
+        // Snap sub-ULP boundary excursions back into the valid spline
+        // domain. `map_reflect_coordinate` uses a half-pixel offset and
+        // can return values like -1.22e-15 for an input of essentially
+        // 0.0; without this clamp the B-spline basis at that coord is
+        // identically zero and sample_interpolated falls through to
+        // cval, dropping corner pixels under e.g. rotate(360°).
+        let spline_coord = match mode {
+            BoundaryMode::Wrap => spline_coord,
+            _ => {
+                let max = (coeff_len - 1) as f64;
+                let bound = 1.0e-9 * max.max(1.0);
+                if spline_coord < 0.0 && spline_coord > -bound {
+                    0.0
+                } else if spline_coord > max && spline_coord < max + bound {
+                    max
+                } else {
+                    spline_coord
+                }
+            }
+        };
         let effective_order = order.min(coeff_len.saturating_sub(1));
         if mode == BoundaryMode::Wrap && effective_order == 3 {
             let base = spline_coord.floor() as isize - 1;
