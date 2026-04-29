@@ -2522,6 +2522,11 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
         });
     }
     let n = a[0].len();
+    if a.iter().any(|row| row.len() != n) {
+        return Err(OptError::InvalidArgument {
+            detail: "A must be rectangular".to_string(),
+        });
+    }
     if b.len() != m {
         return Err(OptError::InvalidArgument {
             detail: format!("b length {} != A rows {m}", b.len()),
@@ -3170,8 +3175,8 @@ mod tests {
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions, Integrality,
         LinearConstraint, MilpOptions, MilpProblem, MinimizeOptions, NonlinearConstraint,
         OptimizeMethod, RootOptions, approx_fprime, basinhopping, check_grad, cobyla,
-        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, pso, rosen,
-        rosen_der, rosen_hess, rosen_hess_prod, shgo,
+        differential_evolution, dual_annealing, linear_sum_assignment, linprog, milp, nnls, pso,
+        rosen, rosen_der, rosen_hess, rosen_hess_prod, shgo,
     };
 
     #[test]
@@ -3383,6 +3388,14 @@ mod tests {
         let (row_ind, col_ind) = linear_sum_assignment(&[]).expect("empty problem should succeed");
         assert!(row_ind.is_empty());
         assert!(col_ind.is_empty());
+    }
+
+    #[test]
+    fn nnls_rejects_non_rectangular_input() {
+        let a = vec![vec![1.0, 2.0], vec![3.0]];
+        let b = vec![1.0, 2.0];
+        let error = nnls(&a, &b).expect_err("ragged matrix should be rejected");
+        assert!(matches!(error, crate::OptError::InvalidArgument { .. }));
     }
 
     // ── linprog tests ──────────────────────────────────────────────
