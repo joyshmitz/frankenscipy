@@ -7,8 +7,8 @@
 //! Run with: `cargo test -p fsci-spatial --test metamorphic_tests`
 
 use fsci_spatial::{
-    DistanceMetric, KDTree, cdist_metric, euclidean, metric_distance, pdist, squareform_to_condensed,
-    squareform_to_matrix,
+    ConvexHull, DistanceMetric, KDTree, cdist_metric, euclidean, metric_distance, pdist,
+    squareform_to_condensed, squareform_to_matrix,
 };
 
 const ATOL: f64 = 1e-12;
@@ -275,4 +275,104 @@ fn mr_sqeuclidean_equals_euclidean_squared() {
             );
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR9 — ConvexHull encloses every input point: each point must be on
+// or inside the hull (signed distance from each hull edge ≥ −ε).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convex_hull_encloses_all_inputs() {
+    // 7 points forming a square plus interior points.
+    let pts: Vec<(f64, f64)> = vec![
+        (0.0, 0.0),
+        (4.0, 0.0),
+        (4.0, 3.0),
+        (0.0, 3.0),
+        (1.0, 1.0),
+        (2.0, 2.0),
+        (3.0, 1.5),
+    ];
+    let hull = ConvexHull::new(&pts).unwrap();
+
+    // Get hull vertices in CCW order.
+    let hull_pts: Vec<(f64, f64)> = hull.vertices.iter().map(|&i| pts[i]).collect();
+    let m = hull_pts.len();
+    assert!(m >= 3, "convex hull must have at least 3 vertices");
+
+    // For every input point, signed distance from each hull edge must be
+    // ≥ 0 (point is on the same side as the interior, or on the edge).
+    // For a CCW-oriented polygon, interior points yield positive cross
+    // products for every edge.
+    for (idx, &p) in pts.iter().enumerate() {
+        for k in 0..m {
+            let a = hull_pts[k];
+            let b = hull_pts[(k + 1) % m];
+            let cross = (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
+            assert!(
+                cross >= -1e-12,
+                "MR9 point {idx} ({p:?}) outside hull edge ({a:?} → {b:?}): cross={cross}"
+            );
+        }
+    }
+
+    // Hull area for the 4x3 rectangle must be 12.
+    let expected_area = 12.0_f64;
+    assert!(
+        (hull.area - expected_area).abs() < 1e-10,
+        "MR9 hull area: {} vs {expected_area}",
+        hull.area
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — ConvexHull of a triangle returns the triangle (3 vertices)
+// and the area of the triangle.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convex_hull_triangle() {
+    let pts = vec![(0.0_f64, 0.0), (4.0, 0.0), (0.0, 3.0)];
+    let hull = ConvexHull::new(&pts).unwrap();
+    assert_eq!(hull.vertices.len(), 3, "triangle should have 3 hull vertices");
+    let expected_area = 6.0_f64; // 1/2 · base · height = 1/2 · 4 · 3
+    assert!(
+        (hull.area - expected_area).abs() < 1e-10,
+        "MR10 triangle area: {} vs {expected_area}",
+        hull.area
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — ConvexHull is invariant under translation: shifting every
+// point by (Δx, Δy) leaves area and the set of hull vertices unchanged.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convex_hull_translation_invariance() {
+    let base: Vec<(f64, f64)> = vec![
+        (0.0, 0.0),
+        (5.0, 0.0),
+        (5.0, 4.0),
+        (0.0, 4.0),
+        (2.0, 2.0),
+        (3.5, 1.0),
+    ];
+    let hull_a = ConvexHull::new(&base).unwrap();
+    let dx = 7.5_f64;
+    let dy = -3.2_f64;
+    let shifted: Vec<(f64, f64)> = base.iter().map(|&(x, y)| (x + dx, y + dy)).collect();
+    let hull_b = ConvexHull::new(&shifted).unwrap();
+    assert!(
+        (hull_a.area - hull_b.area).abs() < 1e-10,
+        "MR11 area changed under translation: {} vs {}",
+        hull_a.area,
+        hull_b.area
+    );
+    assert_eq!(
+        hull_a.vertices.len(),
+        hull_b.vertices.len(),
+        "MR11 vertex count differs"
+    );
 }
