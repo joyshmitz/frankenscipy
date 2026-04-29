@@ -95,26 +95,33 @@ fuzz_target!(|input: FilterInput| {
     };
 
     let result_data = &result.data;
-    if result_data.len() != data.len() {
-        panic!(
-            "Filter output size mismatch: got {} expected {} ({}x{}, size={})",
-            result_data.len(),
-            data.len(),
-            w,
-            h,
-            size
-        );
-    }
+    assert_eq!(
+        result_data.len(),
+        data.len(),
+        "Filter output size mismatch for {filter}: got {} expected {} ({}x{}, size={})",
+        result_data.len(),
+        data.len(),
+        w,
+        h,
+        size
+    );
 
     let expected = value;
 
     for (i, &v) in result_data.iter().enumerate() {
-        if !close_enough(v, expected) {
-            panic!(
-                "Ndimage filter non-idempotent at index {}: \
-                 got {} expected {} (filter={}, value={}, {}x{}, size={}, mode={:?})",
-                i, v, expected, filter, value, w, h, size, mode
-            );
-        }
+        assert!(
+            close_enough(v, expected),
+            "Ndimage filter non-idempotent at index {}: \
+             got {} expected {} (filter={}, value={}, {}x{}, size={}, mode={:?})",
+            i,
+            v,
+            expected,
+            filter,
+            value,
+            w,
+            h,
+            size,
+            mode
+        );
     }
 });
