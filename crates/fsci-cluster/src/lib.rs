@@ -344,13 +344,13 @@ pub fn whiten(data: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, ClusterError> {
     if data.is_empty() {
         return Ok(vec![]);
     }
+    let d = validate_feature_dimensions(data, "whiten")?;
     if data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "whiten input must be finite".to_string(),
         ));
     }
     let n = data.len();
-    let d = data[0].len();
 
     // Compute per-feature std
     let mut means = vec![0.0; d];
@@ -661,6 +661,7 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
             "need at least 2 observations".to_string(),
         ));
     }
+    validate_feature_dimensions(data, "linkage")?;
     if data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "linkage input must be finite".to_string(),
@@ -954,6 +955,9 @@ pub fn cophenet(z: &[[f64; 4]]) -> Vec<f64> {
     if z.is_empty() {
         return vec![];
     }
+    if !is_valid_linkage(z) {
+        return vec![];
+    }
     let n = z.len() + 1;
     let mut membership = vec![vec![]; 2 * n - 1];
     for (i, mem) in membership.iter_mut().enumerate().take(n) {
@@ -1064,6 +1068,7 @@ pub fn dbscan(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
+    validate_feature_dimensions(data, "dbscan")?;
     if !eps.is_finite() || eps <= 0.0 {
         return Err(ClusterError::InvalidArgument(
             "eps must be finite and positive".to_string(),
@@ -1664,6 +1669,7 @@ pub fn mean_shift(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
+    let d = validate_feature_dimensions(data, "mean_shift")?;
     if !bandwidth.is_finite() || bandwidth <= 0.0 {
         return Err(ClusterError::InvalidArgument(
             "bandwidth must be finite and positive".to_string(),
@@ -1674,7 +1680,6 @@ pub fn mean_shift(
             "mean_shift input must be finite".to_string(),
         ));
     }
-    let d = data[0].len();
     let bw2 = bandwidth * bandwidth;
 
     // Start each point as its own center candidate
@@ -1913,6 +1918,12 @@ pub fn proximity_cliques(data: &[Vec<f64>], eps: f64) -> Vec<Vec<usize>> {
     if n == 0 || !eps.is_finite() || eps < 0.0 {
         return vec![];
     }
+    let Ok(_d) = validate_feature_dimensions(data, "proximity_cliques") else {
+        return vec![];
+    };
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return vec![];
+    }
     let eps2 = eps * eps;
 
     // Build adjacency
@@ -2110,6 +2121,7 @@ pub fn kmedoids(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
+    validate_feature_dimensions(data, "kmedoids")?;
     if data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "kmedoids input must be finite".to_string(),
