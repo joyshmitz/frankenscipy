@@ -6,8 +6,9 @@
 //! Run with: `cargo test -p fsci-stats --test metamorphic_tests`
 
 use fsci_stats::{
-    BetaDist, ChiSquared, ContinuousDistribution, Exponential, GammaDist, Normal, StudentT,
-    Uniform, ks_2samp, pearsonr, spearmanr, ttest_1samp, ttest_ind,
+    Bernoulli, BetaDist, Binomial, ChiSquared, ContinuousDistribution, DiscreteDistribution,
+    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, ks_2samp, pearsonr,
+    spearmanr, ttest_1samp, ttest_ind,
 };
 
 const ATOL: f64 = 1e-8;
@@ -276,4 +277,75 @@ fn mr_pdf_nonneg_cdf_in_unit_interval() {
     check_pdf_cdf(&Exponential::new(1.0), "Exponential(1)");
     check_pdf_cdf(&ChiSquared::new(3.0), "ChiSquared(3)");
     check_pdf_cdf(&StudentT::new(5.0), "StudentT(5)");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — Bernoulli pmf normalisation: pmf(0) + pmf(1) = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bernoulli_pmf_sums_to_one() {
+    for &p in &[0.0_f64, 0.1, 0.25, 0.5, 0.75, 0.99, 1.0] {
+        let d = Bernoulli::new(p);
+        let sum = d.pmf(0) + d.pmf(1);
+        assert_close(sum, 1.0, &format!("MR10 Bernoulli p={p}"));
+        assert!(d.pmf(0) >= 0.0 && d.pmf(1) >= 0.0);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — Binomial pmf sums to ~1 over [0, n].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_binomial_pmf_sums_to_one() {
+    for &n in &[1_u64, 5, 10, 25, 50] {
+        for &p in &[0.1_f64, 0.5, 0.9] {
+            let d = Binomial::new(n, p);
+            let sum: f64 = (0..=n).map(|k| d.pmf(k)).sum();
+            assert_close(sum, 1.0, &format!("MR11 Binomial n={n}, p={p}"));
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — Poisson pmf sums to ~1 over a sufficiently wide range, and
+// mean ≈ μ.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_poisson_pmf_sums_and_mean() {
+    for &mu in &[0.5_f64, 1.0, 5.0, 12.0] {
+        let d = Poisson::new(mu);
+        // Sum over [0, μ + 30·√μ] should capture > 1 - 1e-10 of mass.
+        let upper = (mu + 30.0 * mu.sqrt()).ceil() as u64 + 1;
+        let sum: f64 = (0..=upper).map(|k| d.pmf(k)).sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-9,
+            "MR12 Poisson μ={mu} sum={sum}, expected 1"
+        );
+        // Mean test: Σ k · pmf(k) ≈ μ.
+        let mean: f64 = (0..=upper).map(|k| (k as f64) * d.pmf(k)).sum();
+        assert!(
+            (mean - mu).abs() < 1e-7 * mu.max(1.0),
+            "MR12 Poisson mean: got {mean}, expected {mu}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — Geometric mean = 1/p (success probability p).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_geometric_mean_inverse_p() {
+    for &p in &[0.1_f64, 0.25, 0.5, 0.75, 0.9] {
+        let d = Geometric::new(p);
+        let expected = 1.0 / p;
+        let mean = d.mean();
+        assert!(
+            (mean - expected).abs() < 1e-9 * expected.abs().max(1.0),
+            "MR13 Geometric mean: p={p} got {mean}, expected {expected}"
+        );
+    }
 }
