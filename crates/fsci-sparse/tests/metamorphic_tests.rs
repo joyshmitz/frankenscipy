@@ -7,8 +7,8 @@
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, IterativeSolveOptions, Shape2D, SolveOptions, cg, coo_to_csr_with_mode,
-    csr_to_csc_with_mode, sparse_transpose, spmv, spsolve,
+    CooMatrix, CsrMatrix, IterativeSolveOptions, Shape2D, SolveOptions, bicg, bicgstab, cg,
+    coo_to_csr_with_mode, csr_to_csc_with_mode, gmres, sparse_transpose, spmv, spsolve,
 };
 
 const ATOL: f64 = 1e-9;
@@ -229,5 +229,134 @@ fn mr_spsolve_cg_agree_on_spd() {
             direct[i],
             iterative[i]
         );
+    }
+}
+
+/// Build a 5x5 non-symmetric diagonally-dominant CSR for iterative
+/// solver tests.
+fn build_dd_nonsym_csr() -> CsrMatrix {
+    let n = 5;
+    let mut data = Vec::new();
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    for i in 0..n {
+        // Asymmetric off-diagonals so the matrix is not symmetric but
+        // remains strictly diagonally dominant (CG would fail; bicgstab
+        // and gmres still converge).
+        if i > 0 {
+            data.push(-0.4);
+            rows.push(i);
+            cols.push(i - 1);
+        }
+        data.push(3.0);
+        rows.push(i);
+        cols.push(i);
+        if i + 1 < n {
+            data.push(-0.7);
+            rows.push(i);
+            cols.push(i + 1);
+        }
+    }
+    let coo =
+        CooMatrix::from_triplets(Shape2D { rows: n, cols: n }, data, rows, cols, true).unwrap();
+    coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "build_dd_nonsym")
+        .unwrap()
+        .0
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR8 — bicgstab on a non-symmetric DD matrix produces small residual.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bicgstab_residual_small_nonsym() {
+    let a = build_dd_nonsym_csr();
+    let n = a.shape().cols;
+    let b: Vec<f64> = (0..n).map(|i| (i + 1) as f64).collect();
+    let opts = IterativeSolveOptions {
+        mode: RuntimeMode::Strict,
+        check_finite: false,
+        tol: 1e-12,
+        max_iter: Some(500),
+    };
+    let res = bicgstab(&a, &b, None, opts).unwrap();
+    let ax = spmv(&a, &res.solution);
+    for i in 0..n {
+        let r = ax[i] - b[i];
+        assert!(r.abs() < 1e-8, "MR8 bicgstab residual at i={i}: {r}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR9 — gmres on a non-symmetric DD matrix produces small residual.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gmres_residual_small_nonsym() {
+    let a = build_dd_nonsym_csr();
+    let n = a.shape().cols;
+    let b: Vec<f64> = (0..n).map(|i| (i + 1) as f64).collect();
+    let opts = IterativeSolveOptions {
+        mode: RuntimeMode::Strict,
+        check_finite: false,
+        tol: 1e-12,
+        max_iter: Some(500),
+    };
+    let res = gmres(&a, &b, None, opts).unwrap();
+    let ax = spmv(&a, &res.solution);
+    for i in 0..n {
+        let r = ax[i] - b[i];
+        assert!(r.abs() < 1e-8, "MR9 gmres residual at i={i}: {r}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — bicgstab and gmres agree element-wise on the non-symmetric
+// DD problem (different methods but same converged solution).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bicgstab_gmres_agree_nonsym() {
+    let a = build_dd_nonsym_csr();
+    let n = a.shape().cols;
+    let b: Vec<f64> = (0..n).map(|i| (i + 1) as f64).collect();
+    let opts = IterativeSolveOptions {
+        mode: RuntimeMode::Strict,
+        check_finite: false,
+        tol: 1e-12,
+        max_iter: Some(500),
+    };
+    let r1 = bicgstab(&a, &b, None, opts).unwrap().solution;
+    let r2 = gmres(&a, &b, None, opts).unwrap().solution;
+    for i in 0..n {
+        assert!(
+            close(r1[i], r2[i]),
+            "MR10 bicgstab vs gmres at i={i}: {} vs {}",
+            r1[i],
+            r2[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — bicg on the non-symmetric DD matrix produces small residual.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bicg_residual_small_nonsym() {
+    let a = build_dd_nonsym_csr();
+    let n = a.shape().cols;
+    let b: Vec<f64> = (0..n).map(|i| (i + 1) as f64).collect();
+    let opts = IterativeSolveOptions {
+        mode: RuntimeMode::Strict,
+        check_finite: false,
+        tol: 1e-12,
+        max_iter: Some(500),
+    };
+    let res = bicg(&a, &b, None, opts).unwrap();
+    let ax = spmv(&a, &res.solution);
+    for i in 0..n {
+        let r = ax[i] - b[i];
+        assert!(r.abs() < 1e-8, "MR11 bicg residual at i={i}: {r}");
     }
 }
