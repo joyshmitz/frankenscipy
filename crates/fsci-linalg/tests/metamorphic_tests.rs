@@ -9,8 +9,8 @@
 //! Run with: `cargo test -p fsci-linalg --test metamorphic_tests`
 
 use fsci_linalg::{
-    DecompOptions, InvOptions, NormKind, SolveOptions, cholesky, det, inv, lu, norm, qr, solve,
-    svd,
+    DecompOptions, InvOptions, NormKind, SolveOptions, cholesky, det, expm, inv, logm, lu, norm,
+    qr, solve, sqrtm, svd,
 };
 
 const RTOL: f64 = 1e-9;
@@ -398,4 +398,74 @@ fn mr_frobenius_norm_matches_singular_values() {
 
     assert_close(from_norm, direct, "MR9 norm Frobenius matches direct");
     assert_close(from_svd, direct, "MR9 ||A||_F = sqrt(sum sigma_i^2)");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — expm(0) = I (matrix exponential of the zero matrix is identity)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_expm_of_zero_is_identity() {
+    let n = 4;
+    let zero = vec![vec![0.0; n]; n];
+    let e = expm(&zero, DecompOptions::default()).unwrap();
+    let id = identity(n);
+    let diff = frobenius_diff(&e, &id);
+    assert!(diff <= 1e-10, "MR10 expm(0) != I: ||expm(0) - I||_F = {diff:e}");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — sqrtm(A)² = A for SPD A.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sqrtm_squared_equals_input_spd() {
+    // SPD: A = M^T M + I.
+    let m = vec![
+        vec![1.0, 2.0, 0.0],
+        vec![3.0, 1.0, 1.0],
+        vec![0.0, 1.0, 2.0],
+    ];
+    let mt = transpose(&m);
+    let mtm = matmul(&mt, &m);
+    let n = mtm.len();
+    let mut a = mtm;
+    for i in 0..n {
+        a[i][i] += 1.0;
+    }
+
+    let s = sqrtm(&a, DecompOptions::default()).unwrap();
+    let s2 = matmul(&s, &s);
+    let scale = frobenius(&a).max(1.0);
+    assert!(
+        frobenius_diff(&s2, &a) <= 1e-8 * scale,
+        "MR11 sqrtm(A)² = A: ||S² - A||_F too large"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — logm(expm(A)) = A for symmetric A.
+//
+// The symmetric path uses spectral decomposition for both expm and
+// logm (V·diag(f(λ))·V^T), so the round-trip is well-conditioned and
+// accurate to spectral-decomposition round-off. For non-symmetric A,
+// the Schur-based general path has substantially weaker precision —
+// see project bead `frankenscipy-cgzb`.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_logm_inverts_expm_symmetric() {
+    let a = vec![
+        vec![0.30, 0.05, -0.02],
+        vec![0.05, 0.20, 0.07],
+        vec![-0.02, 0.07, 0.40],
+    ];
+    let exp_a = expm(&a, DecompOptions::default()).unwrap();
+    let log_exp_a = logm(&exp_a, DecompOptions::default()).unwrap();
+    let diff = frobenius_diff(&log_exp_a, &a);
+    let scale = frobenius(&a).max(1.0);
+    assert!(
+        diff <= 1e-9 * scale,
+        "MR12 logm(expm(A)) != A (symmetric): ||logm(expm(A)) - A||_F = {diff:e}"
+    );
 }
