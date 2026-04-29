@@ -1117,6 +1117,14 @@
       }
     },
     {
+      "function_name": "fsci_special::sph_harm_y",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-12,
+        "default_rtol": 1e-12
+      }
+    },
+    {
       "function_name": "fsci_special::stdtr",
       "tolerance_policy": {
         "comparison_mode": "allclose",

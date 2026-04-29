@@ -44,6 +44,10 @@ const ORACLE_EXEMPT: &[(&str, &str)] = &[
         "P2C-013",
         "Ndimage uses idempotence property for constant arrays, not oracle capture",
     ),
+    (
+        "P2C-018",
+        "Signal live-SciPy diff emits per-case diff artifacts and skips when SciPy is unavailable, not consolidated oracle_capture.json",
+    ),
 ];
 
 #[test]

@@ -912,7 +912,9 @@ fn e2e_ndimage_labeling() {
     let t = Instant::now();
     if let Ok((labels, num_labels)) = &label_result {
         let sums = sum_labels(&image, labels, *num_labels);
-        let pass = sums.len() == *num_labels && sums.iter().all(|&s| s > 0.0);
+        let pass = sums
+            .as_ref()
+            .is_ok_and(|sums| sums.len() == *num_labels && sums.iter().all(|&s| s > 0.0));
         if !pass {
             all_pass = false;
         }
@@ -929,7 +931,7 @@ fn e2e_ndimage_labeling() {
         // Mean labels
         let t = Instant::now();
         let means = mean_labels(&image, labels, *num_labels);
-        let pass = means.len() == *num_labels;
+        let pass = means.as_ref().is_ok_and(|means| means.len() == *num_labels);
         if !pass {
             all_pass = false;
         }
@@ -966,7 +968,9 @@ fn e2e_ndimage_labeling() {
         // Center of mass
         let t = Instant::now();
         let centers = center_of_mass(&image, labels, *num_labels);
-        let pass = centers.len() == *num_labels && centers.iter().all(|c| c.len() == 2);
+        let pass = centers.as_ref().is_ok_and(|centers| {
+            centers.len() == *num_labels && centers.iter().all(|c| c.len() == 2)
+        });
         if !pass {
             all_pass = false;
         }
