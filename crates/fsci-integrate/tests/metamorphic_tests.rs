@@ -11,7 +11,10 @@
 //!
 //! Run with: `cargo test -p fsci-integrate --test metamorphic_tests`
 
-use fsci_integrate::{QuadOptions, cumulative_trapezoid, quad, simpson, trapezoid};
+use fsci_integrate::{
+    QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue, cumulative_trapezoid, quad, simpson,
+    solve_ivp, trapezoid,
+};
 
 /// Tolerance for metamorphic relation comparisons.
 ///
@@ -248,4 +251,106 @@ fn mr_quad_composed_split_and_linearity() {
     let rhs = alpha * (f_left + f_right) + beta * (g_left + g_right);
 
     assert_close(lhs, rhs, "MR9 composed");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — solve_ivp on y' = −y matches the analytic solution y₀ · e⁻ᵗ.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_ivp_exponential_decay() {
+    let mut rhs = |_t: f64, y: &[f64]| y.iter().map(|v| -v).collect::<Vec<f64>>();
+    let y0 = [1.0_f64];
+    let t_eval: Vec<f64> = (0..=10).map(|i| i as f64 * 0.5).collect();
+    let opts = SolveIvpOptions {
+        t_span: (0.0, 5.0),
+        y0: &y0,
+        method: SolverKind::Rk45,
+        t_eval: Some(&t_eval),
+        rtol: 1e-9,
+        atol: ToleranceValue::Scalar(1e-12),
+        ..SolveIvpOptions::default()
+    };
+    let res = solve_ivp(&mut rhs, &opts).unwrap();
+    assert_eq!(res.t.len(), t_eval.len(), "MR10 t length");
+    for (i, (&t, row)) in res.t.iter().zip(&res.y).enumerate() {
+        let expected = (-t).exp();
+        let got = row[0];
+        assert!(
+            (got - expected).abs() <= 1e-7 * expected.abs().max(1e-12),
+            "MR10 decay at i={i} t={t}: got {got}, expected {expected}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — solve_ivp on y' = 0 keeps state constant.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_ivp_zero_rhs_keeps_state_constant() {
+    let mut rhs = |_t: f64, y: &[f64]| vec![0.0; y.len()];
+    let y0 = [3.7_f64, -2.4, 0.0, 11.5];
+    let opts = SolveIvpOptions {
+        t_span: (0.0, 100.0),
+        y0: &y0,
+        method: SolverKind::Rk45,
+        rtol: 1e-9,
+        atol: ToleranceValue::Scalar(1e-12),
+        ..SolveIvpOptions::default()
+    };
+    let res = solve_ivp(&mut rhs, &opts).unwrap();
+    for (i, row) in res.y.iter().enumerate() {
+        for (j, (&got, &want)) in row.iter().zip(y0.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-9,
+                "MR11 zero-rhs drift at i={i} j={j}: got {got}, expected {want}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — solve_ivp time-shift invariance for autonomous ODE: shifting
+// t_span by Δt produces solutions that agree on the shared time
+// segment after re-aligning t.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_ivp_autonomous_time_shift_invariance() {
+    let mut rhs = |_t: f64, y: &[f64]| y.iter().map(|v| -0.5 * v).collect::<Vec<f64>>();
+    let y0 = [2.0_f64];
+    let dt = 7.0;
+    let t_eval_base: Vec<f64> = (0..=20).map(|i| i as f64 * 0.25).collect();
+    let t_eval_shifted: Vec<f64> = t_eval_base.iter().map(|t| t + dt).collect();
+
+    let opts_base = SolveIvpOptions {
+        t_span: (0.0, 5.0),
+        y0: &y0,
+        method: SolverKind::Rk45,
+        t_eval: Some(&t_eval_base),
+        rtol: 1e-9,
+        atol: ToleranceValue::Scalar(1e-12),
+        ..SolveIvpOptions::default()
+    };
+    let opts_shifted = SolveIvpOptions {
+        t_span: (dt, 5.0 + dt),
+        y0: &y0,
+        method: SolverKind::Rk45,
+        t_eval: Some(&t_eval_shifted),
+        rtol: 1e-9,
+        atol: ToleranceValue::Scalar(1e-12),
+        ..SolveIvpOptions::default()
+    };
+    let r_base = solve_ivp(&mut rhs, &opts_base).unwrap();
+    let r_shift = solve_ivp(&mut rhs, &opts_shifted).unwrap();
+    assert_eq!(r_base.y.len(), r_shift.y.len(), "MR12 length");
+    for (i, (a, b)) in r_base.y.iter().zip(&r_shift.y).enumerate() {
+        for (j, (&av, &bv)) in a.iter().zip(b).enumerate() {
+            assert!(
+                (av - bv).abs() <= 1e-6 * av.abs().max(1.0),
+                "MR12 shift mismatch at i={i} j={j}: base={av}, shifted={bv}"
+            );
+        }
+    }
 }
