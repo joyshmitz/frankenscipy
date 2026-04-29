@@ -6,7 +6,10 @@
 //!
 //! Run with: `cargo test -p fsci-fft --test metamorphic_tests`
 
-use fsci_fft::{Complex64, FftOptions, Normalization, dct, dst_ii, fft, idct, ifft, irfft, rfft};
+use fsci_fft::{
+    Complex64, FftOptions, Normalization, dct, dst_ii, fft, fft2, idct, ifft, ifft2, irfft, irfft2,
+    rfft, rfft2,
+};
 
 const RTOL: f64 = 1e-9;
 const ATOL: f64 = 1e-10;
@@ -250,5 +253,71 @@ fn mr_fft_conjugate_symmetry_real_input() {
                 mirror.1
             );
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR8 — fft2 / ifft2 round-trip on 2D inputs.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fft2_ifft2_roundtrip() {
+    let opts = FftOptions::default();
+    for &(rows, cols) in &[(4_usize, 4), (8, 4), (16, 16), (12, 7), (3, 5)] {
+        let n = rows * cols;
+        let x = random_complex(n, 0xF00D_1234 + (rows * 1000 + cols) as u64);
+        let xf = fft2(&x, (rows, cols), &opts).unwrap();
+        let xb = ifft2(&xf, (rows, cols), &opts).unwrap();
+        assert_eq!(xb.len(), n, "MR8 fft2 round-trip length");
+        for (i, (got, want)) in xb.iter().zip(&x).enumerate() {
+            assert!(
+                close_complex(*got, *want),
+                "MR8 fft2 round-trip rows={rows} cols={cols} i={i}: ({}, {}) vs ({}, {})",
+                got.0,
+                got.1,
+                want.0,
+                want.1
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR9 — rfft2 / irfft2 round-trip on real 2D inputs.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rfft2_irfft2_roundtrip() {
+    let opts = FftOptions::default();
+    for &(rows, cols) in &[(4_usize, 4), (8, 4), (16, 16), (4, 8), (12, 16)] {
+        let n = rows * cols;
+        let x = random_real(n, 0xBEEF_3456 + (rows * 1000 + cols) as u64);
+        let xf = rfft2(&x, (rows, cols), &opts).unwrap();
+        let xb = irfft2(&xf, (rows, cols), &opts).unwrap();
+        assert_eq!(xb.len(), n, "MR9 rfft2 round-trip length");
+        for (i, (got, want)) in xb.iter().zip(&x).enumerate() {
+            assert!(
+                close(*got, *want),
+                "MR9 rfft2 round-trip rows={rows} cols={cols} i={i}: {got} vs {want}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — Parseval's theorem in 2D for fft2 with Backward normalization:
+// Σ|x|² = Σ|X|² / (rows * cols).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fft2_parseval() {
+    let opts = FftOptions::default().with_normalization(Normalization::Backward);
+    for &(rows, cols) in &[(8_usize, 8), (4, 16), (12, 6)] {
+        let n = rows * cols;
+        let x = random_complex(n, 0xDADA_FACE + (rows * 1000 + cols) as u64);
+        let xf = fft2(&x, (rows, cols), &opts).unwrap();
+        let lhs: f64 = x.iter().map(|(re, im)| re * re + im * im).sum();
+        let rhs: f64 = xf.iter().map(|(re, im)| re * re + im * im).sum::<f64>() / n as f64;
+        assert_close(lhs, rhs, &format!("MR10 fft2 Parseval rows={rows} cols={cols}"));
     }
 }
