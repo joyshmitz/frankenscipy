@@ -849,6 +849,7 @@ pub fn is_valid_linkage(z: &[[f64; 4]]) -> bool {
     }
 
     let n = z.len() + 1; // number of original observations
+    let mut used_as_child = vec![false; 2 * n - 1];
 
     for (step, row) in z.iter().enumerate() {
         let ci = row[0] as usize;
@@ -864,6 +865,11 @@ pub fn is_valid_linkage(z: &[[f64; 4]]) -> bool {
         if ci == cj {
             return false; // can't merge cluster with itself
         }
+        if used_as_child[ci] || used_as_child[cj] {
+            return false; // each cluster can participate in only one later merge
+        }
+        used_as_child[ci] = true;
+        used_as_child[cj] = true;
 
         // Distance must be non-negative and finite
         if !dist.is_finite() || dist < 0.0 {
@@ -2757,6 +2763,13 @@ mod tests {
     }
 
     #[test]
+    fn is_valid_linkage_rejects_reused_child_cluster() {
+        let bad = [[0.0, 1.0, 1.0, 2.0], [0.0, 2.0, 2.0, 2.0]];
+        assert!(!is_valid_linkage(&bad));
+        assert_eq!(num_obs_linkage(&bad), 0);
+    }
+
+    #[test]
     fn is_monotonic_detects_non_monotonic() {
         // distances: 5.0, 1.0 - not monotonic
         let z = [[0.0, 1.0, 5.0, 2.0], [2.0, 3.0, 1.0, 3.0]];
@@ -2780,6 +2793,12 @@ mod tests {
         let mut sorted = leaves.clone();
         sorted.sort();
         assert_eq!(sorted, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn leaves_list_rejects_reused_child_cluster() {
+        let bad = [[0.0, 1.0, 1.0, 2.0], [0.0, 2.0, 2.0, 2.0]];
+        assert!(leaves_list(&bad).is_empty());
     }
 
     #[test]
