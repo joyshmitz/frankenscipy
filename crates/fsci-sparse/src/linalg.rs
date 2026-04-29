@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use fsci_linalg::{DecompOptions, LinalgError, expm as dense_expm};
+use fsci_linalg::{expm as dense_expm, DecompOptions, LinalgError};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
@@ -106,7 +106,21 @@ pub struct SparseLuFactorization {
     pub shape: (usize, usize),
     pub backend_used: SparseBackend,
     pub ordering_used: PermutationOrdering,
-    lu_internal: LU<f64, Dyn, Dyn>,
+    lu_internal: SparseLuInternal,
+}
+
+#[derive(Debug, Clone)]
+enum SparseLuInternal {
+    Dense(LU<f64, Dyn, Dyn>),
+    Native(NativeSparseLu),
+}
+
+#[derive(Debug, Clone)]
+struct NativeSparseLu {
+    n: usize,
+    row_perm: Vec<usize>,
+    l_rows: Vec<Vec<(usize, f64)>>,
+    u_rows: Vec<Vec<(usize, f64)>>,
 }
 
 /// ILU(0) factorization result.
@@ -182,13 +196,264 @@ impl SparseIluFactorization {
     }
 }
 
-/// Dense-conversion sanity bound for the V1 spsolve / splu
-/// implementations. Per frankenscipy-ke96: both functions convert their
-/// sparse input to dense before invoking nalgebra's LU, so n=100_000
-/// triggers an 80 GB allocation. Cap the dense-convert path at this
-/// limit (≈ 8 GB matrix) and return a typed error directing callers to
-/// the iterative solvers (cg / gmres / bicgstab) for larger systems.
+/// Dense-conversion sanity bound for the small-system spsolve / splu
+/// fallback. Larger systems use the native sparse-direct path below so
+/// identity, diagonal, banded, and moderate-fill systems scale with
+/// stored nonzeros and generated fill-in instead of n² dense storage.
 const SPSOLVE_DENSE_MAX_N: usize = 32_768;
+const SPARSE_DIRECT_PIVOT_TOL: f64 = f64::EPSILON * 100.0;
+
+impl NativeSparseLu {
+    fn factorize_csr(a: &CsrMatrix, diag_pivot_thresh: f64) -> SparseResult<Self> {
+        let shape = a.shape();
+        if !shape.is_square() {
+            return Err(SparseError::InvalidShape {
+                message: "native sparse LU requires a square matrix".to_string(),
+            });
+        }
+
+        let n = shape.rows;
+        let mut rows = csr_rows_as_maps(a);
+        let mut column_rows = sparse_column_membership(n, &rows);
+        let mut row_perm: Vec<usize> = (0..n).collect();
+        let mut l_rows = vec![Vec::new(); n];
+
+        for k in 0..n {
+            let pivot_row = select_sparse_pivot_row(&rows, &column_rows, k, diag_pivot_thresh)?;
+            if pivot_row != k {
+                swap_sparse_factor_rows(
+                    &mut rows,
+                    &mut column_rows,
+                    &mut row_perm,
+                    &mut l_rows,
+                    k,
+                    pivot_row,
+                );
+            }
+
+            let pivot = rows[k].get(&k).copied().unwrap_or(0.0);
+            if pivot.abs() <= SPARSE_DIRECT_PIVOT_TOL {
+                return Err(SparseError::SingularMatrix {
+                    message: format!("zero pivot in sparse LU at column {k}"),
+                });
+            }
+
+            let pivot_tail: Vec<(usize, f64)> = rows[k]
+                .range((k + 1)..)
+                .map(|(&col, &value)| (col, value))
+                .collect();
+            let rows_to_eliminate: Vec<usize> = column_rows[k].range((k + 1)..).copied().collect();
+
+            for row in rows_to_eliminate {
+                let Some(value) = remove_sparse_entry(&mut rows, &mut column_rows, row, k) else {
+                    continue;
+                };
+                let multiplier = value / pivot;
+                if multiplier != 0.0 {
+                    l_rows[row].push((k, multiplier));
+                }
+                for &(col, pivot_value) in &pivot_tail {
+                    add_sparse_entry(
+                        &mut rows,
+                        &mut column_rows,
+                        row,
+                        col,
+                        -multiplier * pivot_value,
+                    );
+                }
+            }
+        }
+
+        let u_rows = rows
+            .into_iter()
+            .enumerate()
+            .map(|(row, entries)| {
+                entries
+                    .into_iter()
+                    .filter(|(col, value)| *col >= row && *value != 0.0)
+                    .collect()
+            })
+            .collect();
+
+        Ok(Self {
+            n,
+            row_perm,
+            l_rows,
+            u_rows,
+        })
+    }
+
+    fn solve(&self, b: &[f64]) -> SparseResult<Vec<f64>> {
+        if b.len() != self.n {
+            return Err(SparseError::IncompatibleShape {
+                message: format!("rhs length {} must match matrix size {}", b.len(), self.n),
+            });
+        }
+
+        let mut y = vec![0.0; self.n];
+        for row in 0..self.n {
+            let mut value = b[self.row_perm[row]];
+            for &(col, multiplier) in &self.l_rows[row] {
+                value -= multiplier * y[col];
+            }
+            y[row] = value;
+        }
+
+        let mut x = vec![0.0; self.n];
+        for row in (0..self.n).rev() {
+            let mut value = y[row];
+            let mut diagonal = None;
+            for &(col, entry) in &self.u_rows[row] {
+                if col == row {
+                    diagonal = Some(entry);
+                } else if col > row {
+                    value -= entry * x[col];
+                }
+            }
+            let pivot = diagonal.unwrap_or(0.0);
+            if pivot.abs() <= SPARSE_DIRECT_PIVOT_TOL {
+                return Err(SparseError::SingularMatrix {
+                    message: format!("zero pivot in sparse LU solve at row {row}"),
+                });
+            }
+            x[row] = value / pivot;
+        }
+
+        Ok(x)
+    }
+
+    #[cfg(test)]
+    fn stored_nnz(&self) -> usize {
+        self.l_rows.iter().map(Vec::len).sum::<usize>()
+            + self.u_rows.iter().map(Vec::len).sum::<usize>()
+    }
+}
+
+fn csr_rows_as_maps(a: &CsrMatrix) -> Vec<BTreeMap<usize, f64>> {
+    let shape = a.shape();
+    let mut rows = vec![BTreeMap::new(); shape.rows];
+    for row in 0..shape.rows {
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            let col = a.indices()[idx];
+            let value = a.data()[idx];
+            if value != 0.0 {
+                let entry = rows[row].entry(col).or_insert(0.0);
+                *entry += value;
+                if *entry == 0.0 {
+                    rows[row].remove(&col);
+                }
+            }
+        }
+    }
+    rows
+}
+
+fn sparse_column_membership(n: usize, rows: &[BTreeMap<usize, f64>]) -> Vec<BTreeSet<usize>> {
+    let mut column_rows = vec![BTreeSet::new(); n];
+    for (row, entries) in rows.iter().enumerate() {
+        for &col in entries.keys() {
+            if col < n {
+                column_rows[col].insert(row);
+            }
+        }
+    }
+    column_rows
+}
+
+fn select_sparse_pivot_row(
+    rows: &[BTreeMap<usize, f64>],
+    column_rows: &[BTreeSet<usize>],
+    col: usize,
+    diag_pivot_thresh: f64,
+) -> SparseResult<usize> {
+    let mut best_row = None;
+    let mut best_abs = 0.0;
+    for &row in column_rows[col].range(col..) {
+        let value = rows[row].get(&col).copied().unwrap_or(0.0).abs();
+        if value > best_abs {
+            best_abs = value;
+            best_row = Some(row);
+        }
+    }
+
+    if best_abs <= SPARSE_DIRECT_PIVOT_TOL {
+        return Err(SparseError::SingularMatrix {
+            message: format!("zero pivot in sparse LU at column {col}"),
+        });
+    }
+
+    let diagonal_abs = rows[col].get(&col).copied().unwrap_or(0.0).abs();
+    if diagonal_abs > SPARSE_DIRECT_PIVOT_TOL
+        && diagonal_abs >= best_abs * diag_pivot_thresh.clamp(0.0, 1.0)
+    {
+        return Ok(col);
+    }
+
+    best_row.ok_or_else(|| SparseError::SingularMatrix {
+        message: format!("zero pivot in sparse LU at column {col}"),
+    })
+}
+
+fn swap_sparse_factor_rows(
+    rows: &mut [BTreeMap<usize, f64>],
+    column_rows: &mut [BTreeSet<usize>],
+    row_perm: &mut [usize],
+    l_rows: &mut [Vec<(usize, f64)>],
+    lhs: usize,
+    rhs: usize,
+) {
+    for &col in rows[lhs].keys() {
+        column_rows[col].remove(&lhs);
+    }
+    for &col in rows[rhs].keys() {
+        column_rows[col].remove(&rhs);
+    }
+
+    rows.swap(lhs, rhs);
+    row_perm.swap(lhs, rhs);
+    l_rows.swap(lhs, rhs);
+
+    for &col in rows[lhs].keys() {
+        column_rows[col].insert(lhs);
+    }
+    for &col in rows[rhs].keys() {
+        column_rows[col].insert(rhs);
+    }
+}
+
+fn remove_sparse_entry(
+    rows: &mut [BTreeMap<usize, f64>],
+    column_rows: &mut [BTreeSet<usize>],
+    row: usize,
+    col: usize,
+) -> Option<f64> {
+    let value = rows[row].remove(&col)?;
+    column_rows[col].remove(&row);
+    Some(value)
+}
+
+fn add_sparse_entry(
+    rows: &mut [BTreeMap<usize, f64>],
+    column_rows: &mut [BTreeSet<usize>],
+    row: usize,
+    col: usize,
+    delta: f64,
+) {
+    if delta == 0.0 {
+        return;
+    }
+
+    let previous = rows[row].get(&col).copied().unwrap_or(0.0);
+    let updated = previous + delta;
+    if updated == 0.0 {
+        if rows[row].remove(&col).is_some() {
+            column_rows[col].remove(&row);
+        }
+    } else {
+        rows[row].insert(col, updated);
+        column_rows[col].insert(row);
+    }
+}
 
 pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<SolveResult> {
     let shape = a.shape();
@@ -200,19 +465,6 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
     if b.len() != shape.rows {
         return Err(SparseError::IncompatibleShape {
             message: "rhs length must match matrix rows".to_string(),
-        });
-    }
-    if shape.rows > SPSOLVE_DENSE_MAX_N {
-        return Err(SparseError::Unsupported {
-            feature: format!(
-                "spsolve currently dense-converts before LU (V1 limitation); \
-                 n={} > {} would allocate {} GiB. Use fsci_sparse::linalg::cg \
-                 or gmres for iterative solve, or wait for a native sparse \
-                 direct solver. See frankenscipy-ke96.",
-                shape.rows,
-                SPSOLVE_DENSE_MAX_N,
-                (shape.rows as f64 * shape.rows as f64 * 8.0 / 1024.0 / 1024.0 / 1024.0) as u64,
-            ),
         });
     }
     if options.check_finite
@@ -229,9 +481,20 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
         });
     }
 
-    // Convert sparse CSR to dense matrix for LU solve.
-    // This is correct for V1; a native sparse direct solver can replace this later.
     let n = shape.rows;
+    if n > SPSOLVE_DENSE_MAX_N {
+        let lu = NativeSparseLu::factorize_csr(a, 1.0)?;
+        let solution = lu.solve(b)?;
+        return Ok(SolveResult {
+            solution,
+            backend_used: SparseBackend::Superlu,
+            ordering_used: options.ordering,
+            warnings: vec![format!(
+                "native sparse direct solve used for n={n}; dense fallback guard is {SPSOLVE_DENSE_MAX_N}"
+            )],
+        });
+    }
+
     let dense = csr_to_dense(a);
     let matrix = DMatrix::from_row_slice(n, n, &dense);
     let rhs = DVector::from_column_slice(b);
@@ -260,27 +523,27 @@ pub fn splu(a: &CscMatrix, options: LuOptions) -> SparseResult<SparseLuFactoriza
             message: "diag_pivot_thresh must be in [0, 1]".to_string(),
         });
     }
-    if shape.rows > SPSOLVE_DENSE_MAX_N {
-        return Err(SparseError::Unsupported {
-            feature: format!(
-                "splu currently dense-converts (V1 limitation); n={} > {} \
-                 would allocate a prohibitively large dense matrix. See \
-                 frankenscipy-ke96.",
-                shape.rows, SPSOLVE_DENSE_MAX_N
-            ),
-        });
-    }
-
     let n = shape.rows;
-    let dense = csc_to_dense(a);
-    let matrix = DMatrix::from_row_slice(n, n, &dense);
-    let lu: LU<f64, Dyn, Dyn> = matrix.lu();
+    let (backend_used, lu_internal) = if n > SPSOLVE_DENSE_MAX_N {
+        let csr = a.to_csr()?;
+        (
+            SparseBackend::Superlu,
+            SparseLuInternal::Native(NativeSparseLu::factorize_csr(
+                &csr,
+                options.diag_pivot_thresh,
+            )?),
+        )
+    } else {
+        let dense = csc_to_dense(a);
+        let matrix = DMatrix::from_row_slice(n, n, &dense);
+        (SparseBackend::Auto, SparseLuInternal::Dense(matrix.lu()))
+    };
 
     Ok(SparseLuFactorization {
         shape: (n, n),
-        backend_used: SparseBackend::Auto,
+        backend_used,
         ordering_used: options.ordering,
-        lu_internal: lu,
+        lu_internal,
     })
 }
 
@@ -292,14 +555,16 @@ pub fn splu_solve(factorization: &SparseLuFactorization, b: &[f64]) -> SparseRes
             message: format!("rhs length {} must match matrix size {}", b.len(), n),
         });
     }
-    let rhs = DVector::from_column_slice(b);
-    let x = factorization
-        .lu_internal
-        .solve(&rhs)
-        .ok_or(SparseError::SingularMatrix {
-            message: "LU factorization detected singular matrix".to_string(),
-        })?;
-    Ok(x.iter().copied().collect())
+    match &factorization.lu_internal {
+        SparseLuInternal::Dense(lu) => {
+            let rhs = DVector::from_column_slice(b);
+            let x = lu.solve(&rhs).ok_or(SparseError::SingularMatrix {
+                message: "LU factorization detected singular matrix".to_string(),
+            })?;
+            Ok(x.iter().copied().collect())
+        }
+        SparseLuInternal::Native(lu) => lu.solve(b),
+    }
 }
 
 /// ILU(0) incomplete LU factorization.
@@ -3620,20 +3885,22 @@ mod tests {
     }
 
     #[test]
-    fn spsolve_rejects_dense_fallback_above_guard() {
+    fn spsolve_uses_native_sparse_direct_above_dense_guard() {
         let n = SPSOLVE_DENSE_MAX_N + 1;
         let a = identity_csr(n);
         let b = vec![1.0; n];
 
-        let err = spsolve(&a, &b, SolveOptions::default()).expect_err("oversized dense fallback");
+        let result = spsolve(&a, &b, SolveOptions::default())
+            .expect("native sparse direct solve should avoid dense fallback guard");
 
-        assert!(matches!(
-            err,
-            SparseError::Unsupported { feature }
-                if feature.contains("dense-converts")
-                    && feature.contains("frankenscipy-ke96")
-                    && feature.contains(&format!("n={n}"))
-        ));
+        assert_eq!(result.backend_used, SparseBackend::Superlu);
+        assert_eq!(result.solution.len(), n);
+        assert_eq!(result.solution[0], 1.0);
+        assert_eq!(result.solution[n - 1], 1.0);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("native sparse direct")));
     }
 
     #[test]
@@ -3666,19 +3933,25 @@ mod tests {
     }
 
     #[test]
-    fn splu_rejects_dense_fallback_above_guard() {
+    fn splu_uses_native_sparse_direct_above_dense_guard() {
         let n = SPSOLVE_DENSE_MAX_N + 1;
         let a = identity_csr(n).to_csc().expect("csc");
 
-        let err = splu(&a, LuOptions::default()).expect_err("oversized dense fallback");
+        let factorization = splu(&a, LuOptions::default())
+            .expect("native sparse direct factorization should avoid dense fallback guard");
+        let rhs = vec![2.0; n];
+        let solution =
+            splu_solve(&factorization, &rhs).expect("native sparse direct solve should succeed");
 
-        assert!(matches!(
-            err,
-            SparseError::Unsupported { feature }
-                if feature.contains("dense-converts")
-                    && feature.contains("frankenscipy-ke96")
-                    && feature.contains(&format!("n={n}"))
-        ));
+        assert_eq!(factorization.backend_used, SparseBackend::Superlu);
+        assert_eq!(solution.len(), n);
+        assert_eq!(solution[0], 2.0);
+        assert_eq!(solution[n - 1], 2.0);
+        let stored_nnz = match &factorization.lu_internal {
+            SparseLuInternal::Native(lu) => lu.stored_nnz(),
+            SparseLuInternal::Dense(_) => 0,
+        };
+        assert_eq!(stored_nnz, n);
     }
 
     #[test]
@@ -3795,6 +4068,25 @@ mod tests {
         let b = vec![1.0, 2.0];
         let err = spsolve(&a, &b, SolveOptions::default()).expect_err("singular");
         assert!(matches!(err, SparseError::SingularMatrix { .. }));
+    }
+
+    #[test]
+    fn native_sparse_lu_pivots_without_dense_matrix() {
+        // [[0, 2], [1, 3]] requires a row pivot and solves x = [1, 2].
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![2.0, 1.0, 3.0],
+            vec![0, 1, 1],
+            vec![1, 0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let lu = NativeSparseLu::factorize_csr(&a, 1.0).expect("native sparse LU");
+        let x = lu.solve(&[4.0, 7.0]).expect("native sparse solve");
+
+        assert_close_slice(&x, &[1.0, 2.0], 1e-12);
     }
 
     #[test]
@@ -4623,7 +4915,7 @@ mod tests {
         let result = dijkstra(&g, 0).expect("dijkstra");
         assert_eq!(result.distances[0], 0.0);
         assert_eq!(result.distances[1], 1.0); // direct edge weight 1
-        // Node 2: either direct (weight 3) or via node 1 (1+2=3) — both are 3
+                                              // Node 2: either direct (weight 3) or via node 1 (1+2=3) — both are 3
         assert!(
             (result.distances[2] - 3.0).abs() < 1e-10,
             "dist to node 2: {}",

@@ -11,9 +11,9 @@
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, FormatConvertible, Shape2D, SolveOptions, SparseError, add_csr,
-    coo_to_csr_with_mode, csr_to_csc_with_mode, diags, eye, random, scale_coo, scale_csc,
-    scale_csr, spmv_coo, spmv_csc, spmv_csr, spsolve, sub_csr,
+    add_csr, coo_to_csr_with_mode, csr_to_csc_with_mode, diags, eye, random, scale_coo, scale_csc,
+    scale_csr, spmv_coo, spmv_csc, spmv_csr, spsolve, sub_csr, CooMatrix, CsrMatrix,
+    FormatConvertible, Shape2D, SolveOptions, SparseError,
 };
 use serde::Serialize;
 use std::fs;
@@ -165,6 +165,38 @@ print(json.dumps([float(value) for value in np.atleast_1d(solution).tolist()]))
     if !output.status.success() {
         eprintln!(
             "SciPy sparse spsolve oracle unavailable: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+fn scipy_spsolve_large_diagonal_samples() -> Option<Vec<f64>> {
+    let script = r#"
+import json
+import numpy as np
+from scipy import sparse
+from scipy.sparse import linalg as splinalg
+
+n = 32769
+idx = np.arange(n, dtype=np.float64)
+diag = 2.0 + (idx % 7.0) * 0.25
+expected = 1.0 + (idx % 11.0) * 0.5
+rhs = diag * expected
+matrix = sparse.diags(diag, offsets=0, format="csr")
+solution = splinalg.spsolve(matrix, rhs)
+sample_indices = [0, 1, 17, n // 2, n - 1]
+print(json.dumps([float(solution[i]) for i in sample_indices]))
+"#;
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        eprintln!(
+            "SciPy large sparse spsolve oracle unavailable: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         return None;
@@ -730,6 +762,59 @@ fn diff_017_spsolve_vs_scipy_superlu_4x4() {
         duration_ns: start.elapsed().as_nanos(),
     });
     assert!(pass, "spsolve SciPy oracle diff={diff} > tol={tolerance}");
+}
+
+#[test]
+fn diff_018_large_spsolve_native_sparse_direct_vs_scipy() {
+    let start = Instant::now();
+    let Some(scipy_samples) = scipy_spsolve_large_diagonal_samples() else {
+        eprintln!("SciPy sparse spsolve oracle unavailable; skipping diff_018");
+        return;
+    };
+
+    let n = 32_769;
+    let sample_indices = [0, 1, 17, n / 2, n - 1];
+    let mut data = Vec::with_capacity(n);
+    let mut rhs = Vec::with_capacity(n);
+    for idx in 0..n {
+        let diag = 2.0 + (idx % 7) as f64 * 0.25;
+        let expected = 1.0 + (idx % 11) as f64 * 0.5;
+        data.push(diag);
+        rhs.push(diag * expected);
+    }
+    let csr = CsrMatrix::from_components(
+        Shape2D::new(n, n),
+        data,
+        (0..n).collect(),
+        (0..=n).collect(),
+        false,
+    )
+    .expect("large diagonal CSR");
+    let rust_result = spsolve(&csr, &rhs, SolveOptions::default())
+        .expect("native sparse direct spsolve above dense fallback threshold")
+        .solution;
+    let rust_samples: Vec<f64> = sample_indices.iter().map(|&idx| rust_result[idx]).collect();
+    let diff = max_abs_diff_vec(&rust_samples, &scipy_samples);
+    let tolerance = 1e-10;
+    let pass = diff <= tolerance;
+    emit_log(&DiffTestLog {
+        test_id: "diff_018_large_spsolve_native_sparse_direct_vs_scipy".into(),
+        category: "scipy_differential".into(),
+        input_summary:
+            "32769x32769 diagonal CSR solve above dense fallback guard vs scipy.sparse.linalg.spsolve"
+                .into(),
+        expected: format!("scipy_samples={scipy_samples:?}"),
+        actual: format!("rust_samples={rust_samples:?}"),
+        diff,
+        tolerance,
+        pass,
+        timestamp_ms: timestamp_ms(),
+        duration_ns: start.elapsed().as_nanos(),
+    });
+    assert!(
+        pass,
+        "large spsolve SciPy oracle diff={diff} > tol={tolerance}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════
