@@ -639,12 +639,12 @@ where
             detail: String::from("secant: x0 must be finite"),
         });
     }
-    if let Some(x1_val) = x1 {
-        if !x1_val.is_finite() {
-            return Err(OptError::NonFiniteInput {
-                detail: String::from("secant: x1 must be finite"),
-            });
-        }
+    if let Some(x1_val) = x1
+        && !x1_val.is_finite()
+    {
+        return Err(OptError::NonFiniteInput {
+            detail: String::from("secant: x1 must be finite"),
+        });
     }
     let mut nfev = 0usize;
     let mut xprev = x0;
