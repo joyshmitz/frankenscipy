@@ -298,6 +298,14 @@ pub fn vq(
             "vq requires at least one centroid".to_string(),
         ));
     }
+    let d = validate_feature_dimensions(data, "vq")?;
+    let cd = validate_feature_dimensions(centroids, "vq centroids")?;
+    if d != cd {
+        return Err(ClusterError::InvalidArgument(format!(
+            "vq data dimension {} must match centroid dimension {}",
+            d, cd
+        )));
+    }
     if data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "vq data must be finite".to_string(),
@@ -943,6 +951,9 @@ pub fn fclusterdata(
 /// Returns the cophenetic distance matrix (condensed form).
 /// Matches `scipy.cluster.hierarchy.cophenet`.
 pub fn cophenet(z: &[[f64; 4]]) -> Vec<f64> {
+    if z.is_empty() {
+        return vec![];
+    }
     let n = z.len() + 1;
     let mut membership = vec![vec![]; 2 * n - 1];
     for (i, mem) in membership.iter_mut().enumerate().take(n) {
@@ -979,6 +990,9 @@ pub fn cophenet(z: &[[f64; 4]]) -> Vec<f64> {
 ///
 /// Matches `scipy.cluster.hierarchy.inconsistent`.
 pub fn inconsistent(z: &[[f64; 4]], depth: usize) -> Vec<[f64; 4]> {
+    if z.is_empty() {
+        return vec![];
+    }
     let n = z.len() + 1;
     let mut result = Vec::with_capacity(z.len());
 
@@ -1770,6 +1784,15 @@ pub fn linkage_from_distances(
             "need at least 2 observations".to_string(),
         ));
     }
+    let expected_len = n * (n - 1) / 2;
+    if condensed_dist.len() != expected_len {
+        return Err(ClusterError::InvalidArgument(format!(
+            "condensed_dist length {} does not match expected {} for n={}",
+            condensed_dist.len(),
+            expected_len,
+            n
+        )));
+    }
     if condensed_dist.iter().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "linkage_from_distances input must be finite".to_string(),
@@ -1887,6 +1910,9 @@ pub fn linkage_from_distances(
 /// Given data and an epsilon threshold, find all maximal cliques.
 pub fn proximity_cliques(data: &[Vec<f64>], eps: f64) -> Vec<Vec<usize>> {
     let n = data.len();
+    if n == 0 || !eps.is_finite() || eps < 0.0 {
+        return vec![];
+    }
     let eps2 = eps * eps;
 
     // Build adjacency
@@ -2011,7 +2037,7 @@ pub fn silhouette_samples(data: &[Vec<f64>], labels: &[usize]) -> Result<Vec<f64
 /// Returns gap values for k=1..max_k.
 pub fn gap_statistic(data: &[Vec<f64>], max_k: usize, n_ref: usize, seed: u64) -> Vec<f64> {
     let n = data.len();
-    if n == 0 {
+    if n == 0 || n_ref == 0 || max_k == 0 {
         return vec![];
     }
     let d = data[0].len();
