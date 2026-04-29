@@ -357,3 +357,10 @@ path = "fuzz_targets/p2c006_special_erf_identities.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c008_integrate_solve_ivp_robustness"
+path = "fuzz_targets/p2c008_integrate_solve_ivp_robustness.rs"
+test = false
+doc = false
+bench = false
