@@ -819,6 +819,9 @@ impl Akima1DInterpolator {
     }
 
     pub fn eval(&self, x_new: f64) -> f64 {
+        if x_new.is_nan() {
+            return f64::NAN;
+        }
         let i = find_interval_helper(&self.x, x_new);
         let dx = x_new - self.x[i];
         let [a, b, c, d] = self.coeffs[i];
@@ -2758,6 +2761,9 @@ impl KroghInterpolator {
 
     /// Evaluate the interpolating polynomial at x.
     pub fn evaluate(&self, x: f64) -> f64 {
+        if x.is_nan() {
+            return f64::NAN;
+        }
         let n = self.coeffs.len();
         // Horner's method for Newton form
         let mut result = self.coeffs[n - 1];
@@ -2857,6 +2863,12 @@ pub struct PPoly {
 impl PPoly {
     /// Create a piecewise polynomial from coefficients and breakpoints.
     pub fn new(c: Vec<Vec<f64>>, x: Vec<f64>) -> Result<Self, InterpError> {
+        if c.is_empty() {
+            return Err(InterpError::TooFewPoints {
+                minimum: 1,
+                actual: 0,
+            });
+        }
         if c.len() + 1 != x.len() {
             return Err(InterpError::InvalidArgument {
                 detail: format!(
@@ -2872,6 +2884,9 @@ impl PPoly {
 
     /// Evaluate the piecewise polynomial at a point.
     pub fn evaluate(&self, xval: f64) -> f64 {
+        if xval.is_nan() {
+            return f64::NAN;
+        }
         // Find interval
         let n = self.x.len() - 1;
         let mut seg = 0;
@@ -3642,12 +3657,15 @@ pub fn neville(nodes: &[f64], values: &[f64], x: f64) -> f64 {
     if n == 0 || values.len() != n {
         return f64::NAN;
     }
+    if !x.is_finite() {
+        return f64::NAN;
+    }
     let mut p = values.to_vec();
     for j in 1..n {
         for i in (j..n).rev() {
             let dx = nodes[i] - nodes[i - j];
             if dx.abs() < 1e-15 {
-                continue;
+                return f64::NAN;
             }
             p[i] = ((x - nodes[i - j]) * p[i] - (x - nodes[i]) * p[i - 1]) / dx;
         }
@@ -3658,10 +3676,14 @@ pub fn neville(nodes: &[f64], values: &[f64], x: f64) -> f64 {
 /// Compute Hermite interpolation (values and derivatives at each node).
 ///
 /// Given nodes x_i, values y_i, and derivatives dy_i, returns the
-/// interpolated value at x.
+/// interpolated value at x. Returns NaN if nodes contain duplicates or
+/// if input is invalid.
 pub fn hermite_interp(nodes: &[f64], values: &[f64], derivatives: &[f64], x: f64) -> f64 {
     let n = nodes.len();
     if n == 0 || values.len() != n || derivatives.len() != n {
+        return f64::NAN;
+    }
+    if !x.is_finite() {
         return f64::NAN;
     }
 
@@ -3673,8 +3695,12 @@ pub fn hermite_interp(nodes: &[f64], values: &[f64], derivatives: &[f64], x: f64
         let mut li_deriv_sum = 0.0;
         for j in 0..n {
             if j != i {
-                li *= (x - nodes[j]) / (nodes[i] - nodes[j]);
-                li_deriv_sum += 1.0 / (nodes[i] - nodes[j]);
+                let diff = nodes[i] - nodes[j];
+                if diff.abs() < 1e-15 {
+                    return f64::NAN;
+                }
+                li *= (x - nodes[j]) / diff;
+                li_deriv_sum += 1.0 / diff;
             }
         }
 
