@@ -10,6 +10,10 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialResult, SpecialTensor, beta, ellipk, factorial, gamma, gammaln, i0, i0_scalar, j0, jn,
+    orthopoly::{
+        eval_chebyt, eval_chebyu, eval_hermite, eval_hermitenorm, eval_laguerre, eval_legendre,
+        roots_chebyt, roots_legendre,
+    },
 };
 
 const ATOL: f64 = 1e-10;
@@ -189,6 +193,160 @@ fn mr_gamma_reflection_formula() {
         assert!(
             close(product, PI),
             "MR9 reflection at x={x}: Γ(x)·Γ(1-x)·sin(πx) = {product}, expected π"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Orthogonal polynomial relations
+// ─────────────────────────────────────────────────────────────────────
+
+// MR10 — Legendre P_n(1) = 1 and P_n(-1) = (-1)^n.
+#[test]
+fn mr_legendre_endpoints() {
+    for n in 0..=10_u32 {
+        let p_at_1 = eval_legendre(n, 1.0);
+        assert!(close(p_at_1, 1.0), "MR10 P_{n}(1) = {p_at_1}, expected 1");
+        let p_at_neg1 = eval_legendre(n, -1.0);
+        let expected = if n % 2 == 0 { 1.0 } else { -1.0 };
+        assert!(
+            close(p_at_neg1, expected),
+            "MR10 P_{n}(-1) = {p_at_neg1}, expected {expected}"
+        );
+    }
+}
+
+// MR11 — Chebyshev T_n(cos θ) = cos(n θ).
+#[test]
+fn mr_chebyt_cos_relation() {
+    for n in 0..=8_u32 {
+        for k in 0..=20 {
+            let theta = k as f64 * PI / 20.0;
+            let x = theta.cos();
+            let t = eval_chebyt(n, x);
+            let expected = (n as f64 * theta).cos();
+            assert!(
+                close(t, expected),
+                "MR11 T_{n}(cos {theta}) = {t}, expected cos({n}θ) = {expected}"
+            );
+        }
+    }
+}
+
+// MR12 — Chebyshev U_n(cos θ) sin θ = sin((n+1) θ).
+#[test]
+fn mr_chebyu_sin_relation() {
+    for n in 0..=8_u32 {
+        for k in 1..=19 {
+            let theta = k as f64 * PI / 20.0;
+            let x = theta.cos();
+            let u = eval_chebyu(n, x);
+            let lhs = u * theta.sin();
+            let expected = ((n + 1) as f64 * theta).sin();
+            assert!(
+                close(lhs, expected),
+                "MR12 U_{n}(cos θ) sin θ = {lhs}, expected sin({}θ) = {expected}",
+                n + 1
+            );
+        }
+    }
+}
+
+// MR13 — Hermite recurrence H_{n+1}(x) = 2x H_n(x) - 2n H_{n-1}(x).
+#[test]
+fn mr_hermite_three_term_recurrence() {
+    for x in [-2.0_f64, -0.5, 0.0, 0.7, 1.5, 3.0] {
+        let mut prev = eval_hermite(0, x);
+        let mut curr = eval_hermite(1, x);
+        for n in 1..=10_u32 {
+            let next_expected = 2.0 * x * curr - 2.0 * (n as f64) * prev;
+            let next = eval_hermite(n + 1, x);
+            assert!(
+                close(next, next_expected),
+                "MR13 Hermite recurrence at n={n}, x={x}: H_{}(x) = {next}, recurrence = {next_expected}",
+                n + 1
+            );
+            prev = curr;
+            curr = next;
+        }
+    }
+}
+
+// MR14 — Probabilist's Hermite recurrence: He_{n+1}(x) = x He_n(x) - n He_{n-1}(x).
+#[test]
+fn mr_hermitenorm_three_term_recurrence() {
+    for x in [-2.0_f64, -0.5, 0.0, 0.7, 1.5, 3.0] {
+        let mut prev = eval_hermitenorm(0, x);
+        let mut curr = eval_hermitenorm(1, x);
+        for n in 1..=10_u32 {
+            let next_expected = x * curr - (n as f64) * prev;
+            let next = eval_hermitenorm(n + 1, x);
+            assert!(
+                close(next, next_expected),
+                "MR14 He recurrence at n={n}, x={x}: He_{}(x) = {next}, recurrence = {next_expected}",
+                n + 1
+            );
+            prev = curr;
+            curr = next;
+        }
+    }
+}
+
+// MR15 — Laguerre L_n(0) = 1 for all n.
+#[test]
+fn mr_laguerre_at_zero_is_one() {
+    for n in 0..=12_u32 {
+        let l = eval_laguerre(n, 0.0);
+        assert!(close(l, 1.0), "MR15 L_{n}(0) = {l}, expected 1");
+    }
+}
+
+// MR16 — roots of Legendre P_n give P_n(root_i) ≈ 0.
+#[test]
+fn mr_roots_legendre_evaluate_to_zero() {
+    for n in 2..=10_usize {
+        let (xs, weights) = roots_legendre(n);
+        assert_eq!(xs.len(), n);
+        assert_eq!(weights.len(), n);
+        for &x in &xs {
+            let v = eval_legendre(n as u32, x);
+            assert!(
+                v.abs() < 1e-10,
+                "MR16 P_{n}(root={x}) = {v}, expected 0"
+            );
+            // Roots must be in (-1, 1).
+            assert!(x.abs() < 1.0, "MR16 root {x} outside open interval");
+        }
+        // Weights must be positive and sum to 2 (Gauss-Legendre).
+        let sum: f64 = weights.iter().sum();
+        assert!(
+            (sum - 2.0).abs() < 1e-10,
+            "MR16 Legendre weights sum to {sum}, expected 2"
+        );
+        for &w in &weights {
+            assert!(w > 0.0, "MR16 negative Legendre weight: {w}");
+        }
+    }
+}
+
+// MR17 — roots of Chebyshev T_n give T_n(root_i) ≈ 0; weights sum to π.
+#[test]
+fn mr_roots_chebyt_evaluate_to_zero() {
+    for n in 2..=10_usize {
+        let (xs, weights) = roots_chebyt(n);
+        assert_eq!(xs.len(), n);
+        for &x in &xs {
+            let v = eval_chebyt(n as u32, x);
+            assert!(
+                v.abs() < 1e-10,
+                "MR17 T_{n}(root={x}) = {v}, expected 0"
+            );
+            assert!(x.abs() < 1.0, "MR17 root {x} outside (-1, 1)");
+        }
+        let sum: f64 = weights.iter().sum();
+        assert!(
+            (sum - PI).abs() < 1e-10,
+            "MR17 Chebyshev T weights sum to {sum}, expected π"
         );
     }
 }
