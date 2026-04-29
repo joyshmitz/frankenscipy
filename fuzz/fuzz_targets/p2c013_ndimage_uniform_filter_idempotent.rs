@@ -1,19 +1,24 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use fsci_ndimage::{BoundaryMode, NdArray, uniform_filter};
+use fsci_ndimage::{
+    BoundaryMode, NdArray, gaussian_filter, maximum_filter, median_filter, minimum_filter,
+    uniform_filter,
+};
 use libfuzzer_sys::fuzz_target;
 
-// Ndimage uniform filter idempotence oracle:
-// For a constant array (all same value), uniform_filter should return
-// the same constant array (within floating-point tolerance).
+// Ndimage constant-field filter invariant:
+// For a constant array with cval set to the same constant, smoothing and rank
+// filters should return the same constant array within floating-point tolerance.
 //
 // This catches:
 // - Boundary handling errors that shift values
-// - Normalization bugs in the averaging kernel
+// - Normalization bugs in smoothing kernels
+// - Rank-window ordering mistakes for constant neighborhoods
 // - Off-by-one in filter size computation
 
-const MAX_SIZE: usize = 64;
+const MAX_DIM: usize = 16;
+const MAX_FILTER_SIZE: usize = 7;
 const REL_TOL: f64 = 1e-12;
 const ABS_TOL: f64 = 1e-14;
 
@@ -42,10 +47,20 @@ fn close_enough(a: f64, b: f64) -> bool {
     diff <= ABS_TOL + REL_TOL * a.abs().max(b.abs())
 }
 
+fn filter_name(mode_variant: u8) -> &'static str {
+    match (mode_variant / 4) % 5 {
+        0 => "uniform_filter",
+        1 => "gaussian_filter",
+        2 => "median_filter",
+        3 => "minimum_filter",
+        _ => "maximum_filter",
+    }
+}
+
 fuzz_target!(|input: FilterInput| {
-    let w = (input.width as usize).clamp(1, MAX_SIZE);
-    let h = (input.height as usize).clamp(1, MAX_SIZE);
-    let size = (input.filter_size as usize).clamp(1, w.min(h).min(15));
+    let w = (input.width as usize).clamp(1, MAX_DIM);
+    let h = (input.height as usize).clamp(1, MAX_DIM);
+    let size = (input.filter_size as usize).clamp(1, MAX_FILTER_SIZE);
     let value = sanitize(input.value);
 
     let data: Vec<f64> = vec![value; w * h];
@@ -62,7 +77,19 @@ fuzz_target!(|input: FilterInput| {
     };
 
     let cval = value;
-    let result = match uniform_filter(&array, size, mode, cval) {
+    let filter = filter_name(input.mode_variant);
+    let result = match filter {
+        "uniform_filter" => uniform_filter(&array, size, mode, cval),
+        "gaussian_filter" => {
+            let sigma = (size as f64).mul_add(0.25, 0.25);
+            gaussian_filter(&array, sigma, mode, cval)
+        }
+        "median_filter" => median_filter(&array, size, mode, cval),
+        "minimum_filter" => minimum_filter(&array, size, mode, cval),
+        "maximum_filter" => maximum_filter(&array, size, mode, cval),
+        _ => return,
+    };
+    let result = match result {
         Ok(r) => r,
         Err(_) => return,
     };
@@ -84,9 +111,9 @@ fuzz_target!(|input: FilterInput| {
     for (i, &v) in result_data.iter().enumerate() {
         if !close_enough(v, expected) {
             panic!(
-                "Uniform filter non-idempotent at index {}: \
-                 got {} expected {} (value={}, {}x{}, size={}, mode={:?})",
-                i, v, expected, value, w, h, size, mode
+                "Ndimage filter non-idempotent at index {}: \
+                 got {} expected {} (filter={}, value={}, {}x{}, size={}, mode={:?})",
+                i, v, expected, filter, value, w, h, size, mode
             );
         }
     }
