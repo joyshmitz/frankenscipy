@@ -11,7 +11,10 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_ndimage::{BoundaryMode, NdArray, gaussian_filter, uniform_filter};
+use fsci_ndimage::{
+    BoundaryMode, NdArray, gaussian_filter, maximum_filter, median_filter, minimum_filter,
+    uniform_filter,
+};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-015";
@@ -147,6 +150,39 @@ fn ndimage_cases() -> Vec<NdimageCase> {
     cases
 }
 
+fn ndimage_rank_cases() -> Vec<NdimageCase> {
+    let shapes = [[1, 1], [1, 8], [3, 4], [4, 4], [6, 2]];
+    let modes = ["constant", "nearest"];
+    let ops = ["median_filter", "minimum_filter", "maximum_filter"];
+    let mut cases = Vec::new();
+
+    for (shape_idx, shape) in shapes.iter().copied().enumerate() {
+        for mode in modes {
+            for op in ops {
+                for size in [1, 3, 5] {
+                    let cval = if mode == "constant" { -2.75 } else { 0.0 };
+                    let seed = 500 + cases.len() + shape_idx;
+                    cases.push(NdimageCase {
+                        case_id: format!(
+                            "{op}_shape{}x{}_mode_{mode}_size_{size}",
+                            shape[0], shape[1]
+                        ),
+                        op: op.to_string(),
+                        shape,
+                        data: deterministic_data(shape, seed),
+                        size: Some(size),
+                        sigma: None,
+                        mode: mode.to_string(),
+                        cval,
+                    });
+                }
+            }
+        }
+    }
+
+    cases
+}
+
 fn boundary_mode(mode: &str) -> Option<BoundaryMode> {
     match mode {
         "constant" => Some(BoundaryMode::Constant),
@@ -161,6 +197,9 @@ fn rust_output(case: &NdimageCase) -> Option<Vec<f64>> {
     let output = match case.op.as_str() {
         "uniform_filter" => uniform_filter(&array, case.size?, mode, case.cval),
         "gaussian_filter" => gaussian_filter(&array, case.sigma?, mode, case.cval),
+        "median_filter" => median_filter(&array, case.size?, mode, case.cval),
+        "minimum_filter" => minimum_filter(&array, case.size?, mode, case.cval),
+        "maximum_filter" => maximum_filter(&array, case.size?, mode, case.cval),
         _ => return None,
     }
     .ok()?;
@@ -189,6 +228,27 @@ for case in cases:
     arr = np.array(case["data"], dtype=np.float64).reshape(case["shape"])
     if case["op"] == "uniform_filter":
         values = ndimage.uniform_filter(
+            arr,
+            size=int(case["size"]),
+            mode=case["mode"],
+            cval=float(case["cval"]),
+        )
+    elif case["op"] == "median_filter":
+        values = ndimage.median_filter(
+            arr,
+            size=int(case["size"]),
+            mode=case["mode"],
+            cval=float(case["cval"]),
+        )
+    elif case["op"] == "minimum_filter":
+        values = ndimage.minimum_filter(
+            arr,
+            size=int(case["size"]),
+            mode=case["mode"],
+            cval=float(case["cval"]),
+        )
+    elif case["op"] == "maximum_filter":
+        values = ndimage.maximum_filter(
             arr,
             size=int(case["size"]),
             mode=case["mode"],
@@ -265,6 +325,9 @@ fn diff_001_ndimage_filters_live_scipy() {
         let parameter = match case.op.as_str() {
             "uniform_filter" => format!("size={}", case.size.expect("uniform size")),
             "gaussian_filter" => format!("sigma={:.2}", case.sigma.expect("gaussian sigma")),
+            "median_filter" | "minimum_filter" | "maximum_filter" => {
+                format!("size={}", case.size.expect("rank filter size"))
+            }
             _ => String::from("unknown"),
         };
         case_diffs.push(CaseDiff {
@@ -300,5 +363,69 @@ fn diff_001_ndimage_filters_live_scipy() {
     assert!(
         pass,
         "ndimage live SciPy diff max_abs_diff={max_diff:.3e} exceeds tolerance {TOL:.3e}"
+    );
+}
+
+#[test]
+fn diff_002_ndimage_rank_filters_live_scipy() {
+    let cases = ndimage_rank_cases();
+    assert_eq!(
+        cases.len(),
+        90,
+        "ndimage rank-filter diff case inventory changed"
+    );
+
+    let start = Instant::now();
+    let Some(oracle_cases) = run_scipy_oracle(&cases) else {
+        eprintln!("SciPy ndimage not available; skipping live ndimage rank-filter harness");
+        return;
+    };
+    assert_eq!(
+        oracle_cases.len(),
+        cases.len(),
+        "SciPy ndimage rank-filter oracle case count mismatch"
+    );
+
+    let mut case_diffs = Vec::with_capacity(cases.len());
+    for (case, oracle) in cases.iter().zip(oracle_cases.iter()) {
+        assert_eq!(
+            case.case_id, oracle.case_id,
+            "ndimage rank-filter oracle case id mismatch"
+        );
+        let actual = rust_output(case).unwrap_or_default();
+        let diff = max_abs_diff(&actual, &oracle.values);
+        case_diffs.push(CaseDiff {
+            case_id: case.case_id.clone(),
+            op: case.op.clone(),
+            shape: case.shape,
+            mode: case.mode.clone(),
+            parameter: format!("size={}", case.size.expect("rank filter size")),
+            max_abs_diff: diff,
+            tolerance: TOL,
+            pass: diff <= TOL,
+        });
+    }
+
+    let max_diff = case_diffs
+        .iter()
+        .map(|case| case.max_abs_diff)
+        .fold(0.0_f64, f64::max);
+    let pass = case_diffs.iter().all(|case| case.pass);
+    let log = DiffLog {
+        test_id: String::from("diff_002_ndimage_rank_filters_live_scipy"),
+        category: String::from("live_scipy_differential"),
+        case_count: cases.len(),
+        max_abs_diff: max_diff,
+        tolerance: TOL,
+        pass,
+        timestamp_ms: timestamp_ms(),
+        duration_ns: start.elapsed().as_nanos(),
+        cases: case_diffs,
+    };
+    emit_log(&log);
+
+    assert!(
+        pass,
+        "ndimage live SciPy rank-filter diff max_abs_diff={max_diff:.3e} exceeds tolerance {TOL:.3e}"
     );
 }
