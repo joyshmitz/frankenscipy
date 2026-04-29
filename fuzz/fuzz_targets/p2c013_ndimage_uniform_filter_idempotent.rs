@@ -2,8 +2,8 @@
 
 use arbitrary::Arbitrary;
 use fsci_ndimage::{
-    BoundaryMode, NdArray, gaussian_filter, maximum_filter, median_filter, minimum_filter,
-    uniform_filter,
+    gaussian_filter, maximum_filter, median_filter, minimum_filter, uniform_filter, BoundaryMode,
+    NdArray,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -41,7 +41,7 @@ fn sanitize(x: f64) -> f64 {
 
 fn close_enough(a: f64, b: f64) -> bool {
     if !a.is_finite() || !b.is_finite() {
-        return true;
+        return false;
     }
     let diff = (a - b).abs();
     diff <= ABS_TOL + REL_TOL * a.abs().max(b.abs())
