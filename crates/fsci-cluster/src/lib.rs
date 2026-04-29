@@ -2040,7 +2040,12 @@ pub fn gap_statistic(data: &[Vec<f64>], max_k: usize, n_ref: usize, seed: u64) -
     if n == 0 || n_ref == 0 || max_k == 0 {
         return vec![];
     }
-    let d = data[0].len();
+    let Ok(d) = validate_feature_dimensions(data, "gap_statistic") else {
+        return vec![];
+    };
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return vec![];
+    }
 
     // Find data bounds
     let mut mins = vec![f64::INFINITY; d];
@@ -2551,6 +2556,18 @@ mod tests {
         let labels = vec![0, 0, 1, 1];
         let score = silhouette_score(&data, &labels).unwrap();
         assert!(score > 0.9, "silhouette = {score}, expected > 0.9");
+    }
+
+    #[test]
+    fn gap_statistic_rejects_ragged_input_without_panic() {
+        let data = vec![vec![0.0], vec![1.0, 2.0]];
+        assert!(gap_statistic(&data, 2, 3, 42).is_empty());
+    }
+
+    #[test]
+    fn gap_statistic_rejects_non_finite_input_without_panic() {
+        let data = vec![vec![0.0, f64::NAN], vec![1.0, 2.0]];
+        assert!(gap_statistic(&data, 2, 3, 42).is_empty());
     }
 
     #[test]
