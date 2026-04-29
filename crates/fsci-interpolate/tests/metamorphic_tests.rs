@@ -7,7 +7,7 @@
 
 use fsci_interpolate::{
     Akima1DInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpKind,
-    PchipInterpolator, SplineBc, make_interp_spline,
+    NearestNDInterpolator, PchipInterpolator, RegularGridInterpolator, SplineBc, make_interp_spline,
 };
 
 const ATOL: f64 = 1e-10;
@@ -210,4 +210,75 @@ fn mr_linear_interp_no_overshoot() {
             );
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR9 — RegularGridInterpolator passes through grid points exactly.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_regular_grid_interpolator_passes_through_grid() {
+    use fsci_interpolate::RegularGridMethod;
+    // 2D grid: 3x4
+    let xs: Vec<f64> = vec![0.0, 1.0, 2.0];
+    let ys: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0];
+    let mut values = Vec::with_capacity(xs.len() * ys.len());
+    for &x in &xs {
+        for &y in &ys {
+            values.push(x * 10.0 + y); // unique values per (x, y)
+        }
+    }
+    let interp = RegularGridInterpolator::new(
+        vec![xs.clone(), ys.clone()],
+        values.clone(),
+        RegularGridMethod::Linear,
+        true,
+        None,
+    )
+    .unwrap();
+    for (i, &x) in xs.iter().enumerate() {
+        for (j, &y) in ys.iter().enumerate() {
+            let v = interp.eval(&[x, y]).unwrap();
+            let expected = values[i * ys.len() + j];
+            assert!(
+                close(v, expected),
+                "MR9 grid interp at ({x}, {y}): got {v}, expected {expected}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR10 — NearestNDInterpolator returns the value associated with the
+// closest data point.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_nearest_nd_interpolator_returns_closest_value() {
+    let points = vec![
+        vec![0.0_f64, 0.0],
+        vec![1.0, 0.0],
+        vec![0.0, 1.0],
+        vec![5.0, 5.0],
+    ];
+    let values = vec![10.0_f64, 20.0, 30.0, 40.0];
+    let interp = NearestNDInterpolator::new(&points, &values).unwrap();
+
+    // Each input data point queries exactly: returns its own value.
+    for (i, p) in points.iter().enumerate() {
+        let v = interp.eval(p).unwrap();
+        assert!(
+            close(v, values[i]),
+            "MR10 nearest at data point {i}: got {v}, expected {}",
+            values[i]
+        );
+    }
+
+    // Query a point clearly closest to (5, 5) → returns 40.
+    let v = interp.eval(&[4.5, 4.5]).unwrap();
+    assert!(close(v, 40.0), "MR10 nearest at (4.5, 4.5): got {v}");
+
+    // Query a point clearly closest to (1, 0) → returns 20.
+    let v = interp.eval(&[0.95, 0.1]).unwrap();
+    assert!(close(v, 20.0), "MR10 nearest at (0.95, 0.1): got {v}");
 }
