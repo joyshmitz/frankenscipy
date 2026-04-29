@@ -435,6 +435,8 @@ pub fn toms748<F>(f: F, bracket: (f64, f64), options: RootOptions) -> Result<Roo
 where
     F: Fn(f64) -> f64,
 {
+    validate_root_options(options)?;
+    validate_bracket_finite(bracket)?;
     let (mut a, mut b) = bracket;
     let mut nfev = 0usize;
     let mut fa = {
@@ -556,6 +558,12 @@ where
     F: Fn(f64) -> f64,
     G: Fn(f64) -> f64,
 {
+    validate_root_options(options)?;
+    if !x0.is_finite() {
+        return Err(OptError::NonFiniteInput {
+            detail: String::from("newton_scalar: x0 must be finite"),
+        });
+    }
     let mut x = x0;
     let mut nfev = 0usize;
 
@@ -625,6 +633,19 @@ pub fn secant<F>(
 where
     F: Fn(f64) -> f64,
 {
+    validate_root_options(options)?;
+    if !x0.is_finite() {
+        return Err(OptError::NonFiniteInput {
+            detail: String::from("secant: x0 must be finite"),
+        });
+    }
+    if let Some(x1_val) = x1 {
+        if !x1_val.is_finite() {
+            return Err(OptError::NonFiniteInput {
+                detail: String::from("secant: x1 must be finite"),
+            });
+        }
+    }
     let mut nfev = 0usize;
     let mut xprev = x0;
     nfev += 1;
@@ -707,6 +728,12 @@ where
     G: Fn(f64) -> f64,
     H: Fn(f64) -> f64,
 {
+    validate_root_options(options)?;
+    if !x0.is_finite() {
+        return Err(OptError::NonFiniteInput {
+            detail: String::from("halley: x0 must be finite"),
+        });
+    }
     let mut x = x0;
     let mut nfev = 0usize;
 
@@ -818,6 +845,25 @@ fn validate_bracket_finite(bracket: (f64, f64)) -> Result<(), OptError> {
     if bracket.0 >= bracket.1 {
         return Err(OptError::InvalidBounds {
             detail: String::from("bracket must satisfy a < b"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_multivariate_root_params(x0: &[f64], tol: f64, maxiter: usize) -> Result<(), OptError> {
+    if x0.is_empty() {
+        return Err(OptError::InvalidArgument {
+            detail: "x0 must not be empty".to_string(),
+        });
+    }
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: "tol must be finite and > 0".to_string(),
+        });
+    }
+    if maxiter == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "maxiter must be >= 1".to_string(),
         });
     }
     Ok(())
@@ -1180,12 +1226,8 @@ pub fn broyden1<F>(
 where
     F: Fn(&[f64]) -> Vec<f64>,
 {
+    validate_multivariate_root_params(x0, tol, maxiter)?;
     let n = x0.len();
-    if n == 0 {
-        return Err(OptError::InvalidArgument {
-            detail: "x0 must not be empty".to_string(),
-        });
-    }
 
     let mut x = x0.to_vec();
     let mut fx = func(&x);
@@ -1308,12 +1350,8 @@ pub fn broyden2<F>(
 where
     F: Fn(&[f64]) -> Vec<f64>,
 {
+    validate_multivariate_root_params(x0, tol, maxiter)?;
     let n = x0.len();
-    if n == 0 {
-        return Err(OptError::InvalidArgument {
-            detail: "x0 must not be empty".to_string(),
-        });
-    }
 
     let mut x = x0.to_vec();
     let mut fx = func(&x);
@@ -1436,12 +1474,8 @@ pub fn anderson<F>(
 where
     F: Fn(&[f64]) -> Vec<f64>,
 {
+    validate_multivariate_root_params(x0, tol, maxiter)?;
     let n = x0.len();
-    if n == 0 {
-        return Err(OptError::InvalidArgument {
-            detail: "x0 must not be empty".to_string(),
-        });
-    }
     let m = m.max(1); // At least 1 history element
 
     let mut x = x0.to_vec();
@@ -1573,12 +1607,8 @@ pub fn lm_root<F>(
 where
     F: Fn(&[f64]) -> Vec<f64>,
 {
+    validate_multivariate_root_params(x0, tol, maxiter)?;
     let n = x0.len();
-    if n == 0 {
-        return Err(OptError::InvalidArgument {
-            detail: "x0 must not be empty".to_string(),
-        });
-    }
 
     let eps = 1e-8; // Finite difference step
     let mut lambda = 1e-3; // Initial damping parameter
