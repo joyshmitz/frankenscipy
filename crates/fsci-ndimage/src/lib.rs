@@ -799,6 +799,11 @@ pub fn maximum_filter(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
+    if size == 0 {
+        return Err(NdimageError::InvalidArgument(
+            "filter size must be positive".to_string(),
+        ));
+    }
     let kernel_total: usize = vec![size; input.ndim()].iter().product();
     rank_filter_impl(input, size, mode, cval, kernel_total - 1)
 }
@@ -3196,6 +3201,14 @@ mod tests {
         let result = median_filter(&input, 3, BoundaryMode::Constant, 0.0).unwrap();
         // Median of 9 values where only 1 is 100 should be 0
         assert_eq!(result.data[4], 0.0);
+    }
+
+    #[test]
+    fn maximum_filter_rejects_zero_size_without_underflow() {
+        let input = NdArray::new(vec![1.0; 9], vec![3, 3]).unwrap();
+        let error = maximum_filter(&input, 0, BoundaryMode::Constant, 0.0)
+            .expect_err("zero-sized maximum filter should be rejected");
+        assert!(matches!(error, NdimageError::InvalidArgument(_)));
     }
 
     #[test]
