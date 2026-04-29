@@ -1790,6 +1790,15 @@ pub fn peak_widths(
     let mut right_ips = Vec::with_capacity(peaks.len());
 
     for (idx, &pk) in peaks.iter().enumerate() {
+        if pk >= x.len() {
+            let ip = pk as f64;
+            widths.push(0.0);
+            width_heights.push(0.0);
+            left_ips.push(ip);
+            right_ips.push(ip);
+            continue;
+        }
+
         let height = x[pk] - prominences[idx] * rel_height;
         width_heights.push(height);
 
@@ -9536,6 +9545,15 @@ mod tests {
                 .peaks
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn peak_widths_handles_out_of_range_peaks_without_panicking() {
+        let (widths, width_heights, left_ips, right_ips) = peak_widths(&[0.0, 1.0, 0.0], &[9], 0.5);
+        assert_eq!(widths, vec![0.0]);
+        assert_eq!(width_heights, vec![0.0]);
+        assert_eq!(left_ips, vec![9.0]);
+        assert_eq!(right_ips, vec![9.0]);
     }
 
     #[test]
