@@ -44,7 +44,10 @@ fuzz_target!(|input: AssignmentInput| {
         let result = linear_sum_assignment(&[]);
         match result {
             Ok((r, c)) => {
-                assert!(r.is_empty() && c.is_empty(), "Empty matrix should return empty assignment");
+                assert!(
+                    r.is_empty() && c.is_empty(),
+                    "Empty matrix should return empty assignment"
+                );
             }
             Err(_) => {}
         }
@@ -52,10 +55,12 @@ fuzz_target!(|input: AssignmentInput| {
     }
 
     let mut cost_matrix: Vec<Vec<f64>> = Vec::with_capacity(rows);
-    let mut data_iter = input.data.iter().cycle();
+    let mut data_iter = input.data.iter().copied().cycle();
 
     for _ in 0..rows {
-        let row: Vec<f64> = (0..cols).map(|_| sanitize(*data_iter.next().unwrap())).collect();
+        let row: Vec<f64> = (0..cols)
+            .map(|_| sanitize(data_iter.next().unwrap_or(0.0)))
+            .collect();
         cost_matrix.push(row);
     }
 
@@ -64,49 +69,43 @@ fuzz_target!(|input: AssignmentInput| {
     match result {
         Ok((row_ind, col_ind)) => {
             let expected_len = rows.min(cols);
-            if row_ind.len() != expected_len || col_ind.len() != expected_len {
-                panic!(
-                    "Assignment length mismatch: got ({}, {}) expected {} ({}x{} matrix)",
-                    row_ind.len(),
-                    col_ind.len(),
-                    expected_len,
-                    rows,
-                    cols
-                );
-            }
+            assert_eq!(
+                row_ind.len(),
+                expected_len,
+                "row assignment length mismatch for {rows}x{cols} matrix"
+            );
+            assert_eq!(
+                col_ind.len(),
+                expected_len,
+                "col assignment length mismatch for {rows}x{cols} matrix"
+            );
 
             let row_set: HashSet<usize> = row_ind.iter().copied().collect();
-            if row_set.len() != row_ind.len() {
-                panic!(
-                    "Duplicate row indices in assignment: {:?} ({}x{} matrix)",
-                    row_ind, rows, cols
-                );
-            }
+            assert_eq!(
+                row_set.len(),
+                row_ind.len(),
+                "duplicate row indices in assignment {row_ind:?} for {rows}x{cols} matrix"
+            );
 
             let col_set: HashSet<usize> = col_ind.iter().copied().collect();
-            if col_set.len() != col_ind.len() {
-                panic!(
-                    "Duplicate col indices in assignment: {:?} ({}x{} matrix)",
-                    col_ind, rows, cols
-                );
-            }
+            assert_eq!(
+                col_set.len(),
+                col_ind.len(),
+                "duplicate col indices in assignment {col_ind:?} for {rows}x{cols} matrix"
+            );
 
             for &r in &row_ind {
-                if r >= rows {
-                    panic!(
-                        "Row index {} out of bounds for {}x{} matrix",
-                        r, rows, cols
-                    );
-                }
+                assert!(
+                    r < rows,
+                    "row index {r} out of bounds for {rows}x{cols} matrix"
+                );
             }
 
             for &c in &col_ind {
-                if c >= cols {
-                    panic!(
-                        "Col index {} out of bounds for {}x{} matrix",
-                        c, rows, cols
-                    );
-                }
+                assert!(
+                    c < cols,
+                    "col index {c} out of bounds for {rows}x{cols} matrix"
+                );
             }
 
             let computed_cost: f64 = row_ind
@@ -115,12 +114,10 @@ fuzz_target!(|input: AssignmentInput| {
                 .map(|(&r, &c)| cost_matrix[r][c])
                 .sum();
 
-            if !computed_cost.is_finite() {
-                panic!(
-                    "Assignment cost is non-finite: {} ({}x{} matrix)",
-                    computed_cost, rows, cols
-                );
-            }
+            assert!(
+                computed_cost.is_finite(),
+                "assignment cost is non-finite: {computed_cost} ({rows}x{cols} matrix)"
+            );
         }
         Err(_) => {}
     }

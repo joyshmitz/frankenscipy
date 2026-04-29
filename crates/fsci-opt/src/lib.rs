@@ -1422,7 +1422,9 @@ where
 /// Wraps the user objective with a quadratic exterior penalty: for each
 /// candidate x, the effective cost is
 ///
-///     func(x) + penalty * Σ violation_j(x)^2
+/// ```text
+/// func(x) + penalty * sum_j violation_j(x)^2
+/// ```
 ///
 /// where `violation` returns the sum of squared boundary excess across
 /// all linear and nonlinear constraints. A feasible point has zero
@@ -1433,7 +1435,7 @@ where
 /// uses a Lampinen tournament — but for unimodal global minima both
 /// converge to the same constrained optimum).
 ///
-/// `constraint_violation` should return ≥ 0; zero means feasible.
+/// `constraint_violation` should return >= 0; zero means feasible.
 pub fn differential_evolution_constrained<F, G>(
     func: F,
     bounds: &[(f64, f64)],
