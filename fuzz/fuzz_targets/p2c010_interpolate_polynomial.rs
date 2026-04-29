@@ -42,11 +42,7 @@ fn close_enough(a: f64, b: f64) -> bool {
 }
 
 fn make_unique_sorted(vals: &[f64], max_n: usize) -> Vec<f64> {
-    let mut result: Vec<f64> = vals
-        .iter()
-        .take(max_n)
-        .map(|&v| sanitize(v))
-        .collect();
+    let mut result: Vec<f64> = vals.iter().take(max_n).map(|&v| sanitize(v)).collect();
     result.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     result.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
     result
@@ -72,27 +68,37 @@ fuzz_target!(|input: PolyInput| {
     if let Ok(coeffs) = lagrange(&x_data, &y_data) {
         for (i, (&xi, &yi)) in x_data.iter().zip(y_data.iter()).enumerate() {
             let interp_yi = polyval(&coeffs, xi);
-            if !close_enough(interp_yi, yi) {
-                panic!(
-                    "Lagrange passthrough fail at point {}: x={}, expected y={}, got {}",
-                    i, xi, yi, interp_yi
-                );
-            }
+            assert!(
+                close_enough(interp_yi, yi),
+                "Lagrange passthrough fail at point {}: x={}, expected y={}, got {}",
+                i,
+                xi,
+                yi,
+                interp_yi
+            );
         }
     }
 
-    // Test 2: polyfit + polyval reproduces data for exact fit (n-1 degree)
-    let deg = (n - 1).min(MAX_DEGREE);
+    // Test 2: polyfit + polyval reproduces data for an exact interpolation fit.
+    // More than degree+1 points make polyfit a least-squares fit, not an
+    // exact passthrough oracle.
+    let fit_points = n.min(MAX_DEGREE + 1);
+    let deg = fit_points - 1;
     if deg >= 1 {
-        if let Ok(fit_coeffs) = polyfit(&x_data, &y_data, deg) {
-            for (i, (&xi, &yi)) in x_data.iter().zip(y_data.iter()).enumerate() {
+        let fit_x = &x_data[..fit_points];
+        let fit_y = &y_data[..fit_points];
+        if let Ok(fit_coeffs) = polyfit(fit_x, fit_y, deg) {
+            for (i, (&xi, &yi)) in fit_x.iter().zip(fit_y.iter()).enumerate() {
                 let fit_yi = polyval(&fit_coeffs, xi);
-                if !close_enough(fit_yi, yi) {
-                    panic!(
-                        "polyfit passthrough fail at point {}: x={}, expected y={}, got {} (deg={})",
-                        i, xi, yi, fit_yi, deg
-                    );
-                }
+                assert!(
+                    close_enough(fit_yi, yi),
+                    "polyfit passthrough fail at point {}: x={}, expected y={}, got {} (deg={})",
+                    i,
+                    xi,
+                    yi,
+                    fit_yi,
+                    deg
+                );
             }
         }
     }
@@ -115,12 +121,13 @@ fuzz_target!(|input: PolyInput| {
             for i in 0..min_len - 1 {
                 let orig = coeffs_a.get(i).copied().unwrap_or(0.0);
                 let roundtrip = antideriv.get(i).copied().unwrap_or(0.0);
-                if !close_enough(orig, roundtrip) && orig.abs() > 1e-10 {
-                    panic!(
-                        "polyder/polyint roundtrip fail at coeff {}: orig={}, roundtrip={}",
-                        i, orig, roundtrip
-                    );
-                }
+                assert!(
+                    close_enough(orig, roundtrip) || orig.abs() <= 1e-10,
+                    "polyder/polyint roundtrip fail at coeff {}: orig={}, roundtrip={}",
+                    i,
+                    orig,
+                    roundtrip
+                );
             }
         }
     }
@@ -144,15 +151,24 @@ fuzz_target!(|input: PolyInput| {
             let a_offset = max_len.saturating_sub(coeffs_a.len());
             let d_offset = max_len.saturating_sub(diff.len());
 
-            let a_i = if i >= a_offset { coeffs_a.get(i - a_offset).copied().unwrap_or(0.0) } else { 0.0 };
-            let d_i = if i >= d_offset { diff.get(i - d_offset).copied().unwrap_or(0.0) } else { 0.0 };
+            let a_i = if i >= a_offset {
+                coeffs_a.get(i - a_offset).copied().unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            let d_i = if i >= d_offset {
+                diff.get(i - d_offset).copied().unwrap_or(0.0)
+            } else {
+                0.0
+            };
 
-            if !close_enough(a_i, d_i) {
-                panic!(
-                    "polyadd/polysub inverse fail at {}: a={}, (a+b)-b={}",
-                    i, a_i, d_i
-                );
-            }
+            assert!(
+                close_enough(a_i, d_i),
+                "polyadd/polysub inverse fail at {}: a={}, (a+b)-b={}",
+                i,
+                a_i,
+                d_i
+            );
         }
     }
 
@@ -160,14 +176,14 @@ fuzz_target!(|input: PolyInput| {
     if coeffs_a.len() >= 2 && coeffs_b.len() >= 2 {
         let product = polymul(&coeffs_a, &coeffs_b);
         let expected_len = coeffs_a.len() + coeffs_b.len() - 1;
-        if product.len() != expected_len {
-            panic!(
-                "polymul degree wrong: len(a)={}, len(b)={}, expected product len={}, got {}",
-                coeffs_a.len(),
-                coeffs_b.len(),
-                expected_len,
-                product.len()
-            );
-        }
+        assert_eq!(
+            product.len(),
+            expected_len,
+            "polymul degree wrong: len(a)={}, len(b)={}, expected product len={}, got {}",
+            coeffs_a.len(),
+            coeffs_b.len(),
+            expected_len,
+            product.len()
+        );
     }
 });
