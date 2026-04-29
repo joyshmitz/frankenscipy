@@ -301,3 +301,17 @@ path = "fuzz_targets/p2c015_opt_nnls.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c015_opt_root_finding"
+path = "fuzz_targets/p2c015_opt_root_finding.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c015_opt_minimize_scalar"
+path = "fuzz_targets/p2c015_opt_minimize_scalar.rs"
+test = false
+doc = false
+bench = false
