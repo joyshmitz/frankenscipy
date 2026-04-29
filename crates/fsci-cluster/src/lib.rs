@@ -777,10 +777,16 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
 /// Cut a linkage tree to form flat clusters.
 ///
 /// Matches `scipy.cluster.hierarchy.fcluster` with criterion='maxclust'.
-pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
+pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Result<Vec<usize>, ClusterError> {
+    if !is_valid_linkage(z) {
+        return Err(ClusterError::InvalidArgument(
+            "invalid linkage matrix".to_string(),
+        ));
+    }
+
     let n = z.len() + 1;
     if max_clusters >= n || max_clusters == 0 {
-        return (1..=n).collect();
+        return Ok((1..=n).collect());
     }
 
     // Each leaf is its own cluster initially
@@ -813,10 +819,10 @@ pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
     let mut unique: Vec<usize> = leaf_labels.clone();
     unique.sort_unstable();
     unique.dedup();
-    leaf_labels
+    Ok(leaf_labels
         .iter()
         .map(|&l| unique.binary_search(&l).unwrap_or(0) + 1)
-        .collect()
+        .collect())
 }
 
 /// Validate a linkage matrix.
@@ -929,7 +935,7 @@ pub fn fclusterdata(
     method: LinkageMethod,
 ) -> Result<Vec<usize>, ClusterError> {
     let z = linkage(data, method)?;
-    Ok(fcluster(&z, max_clusters))
+    fcluster(&z, max_clusters)
 }
 
 /// Compute cophenetic distances from a linkage matrix.
@@ -2388,7 +2394,7 @@ mod tests {
     fn fcluster_two_groups() {
         let data = vec![vec![0.0], vec![1.0], vec![10.0], vec![11.0]];
         let z = linkage(&data, LinkageMethod::Complete).unwrap();
-        let labels = fcluster(&z, 2);
+        let labels = fcluster(&z, 2).unwrap();
         assert_eq!(labels[0], labels[1]);
         assert_eq!(labels[2], labels[3]);
         assert_ne!(labels[0], labels[2]);
@@ -2399,9 +2405,18 @@ mod tests {
         let data = vec![vec![0.0], vec![1.0], vec![10.0], vec![11.0]];
         let z = linkage(&data, LinkageMethod::Complete).unwrap();
 
-        assert_eq!(fcluster(&z, 0), vec![1, 2, 3, 4]);
-        assert_eq!(fcluster(&z, 4), vec![1, 2, 3, 4]);
-        assert_eq!(fcluster(&z, 5), vec![1, 2, 3, 4]);
+        assert_eq!(fcluster(&z, 0).unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(fcluster(&z, 4).unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(fcluster(&z, 5).unwrap(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn fcluster_rejects_invalid_linkage_indices() {
+        let invalid = [[0.0, 99.0, 1.0, 2.0]];
+        assert!(matches!(
+            fcluster(&invalid, 1),
+            Err(ClusterError::InvalidArgument(msg)) if msg == "invalid linkage matrix"
+        ));
     }
 
     #[test]

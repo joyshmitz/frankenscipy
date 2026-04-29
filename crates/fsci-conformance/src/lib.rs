@@ -4553,7 +4553,10 @@ fn execute_fcluster(case: &ClusterCase) -> ClusterObserved {
         Ok(k) => k,
         Err(e) => return ClusterObserved::Error(format!("parse max_clusters: {e}")),
     };
-    ClusterObserved::Labels(fsci_cluster::fcluster(&z, max_clusters))
+    match fsci_cluster::fcluster(&z, max_clusters) {
+        Ok(labels) => ClusterObserved::Labels(labels),
+        Err(e) => ClusterObserved::Error(format!("{e:?}")),
+    }
 }
 
 fn execute_kmeans(case: &ClusterCase) -> ClusterObserved {

@@ -346,7 +346,7 @@ fn scenario_02_hierarchical() {
         "Strict",
         || {
             let z = linkage(&data, LinkageMethod::Ward).map_err(|e| format!("{e}"))?;
-            let labels = fcluster(&z, 3);
+            let labels = fcluster(&z, 3).map_err(|e| format!("{e}"))?;
             if labels.len() != data.len() {
                 return Err(format!("expected {} labels", data.len()));
             }
