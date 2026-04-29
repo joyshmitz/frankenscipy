@@ -5,13 +5,27 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 
-fn project_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("should find project root from conformance crate")
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn project_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(root) = manifest_dir.parent().and_then(|p| p.parent()) {
+        root.to_path_buf()
+    } else {
+        manifest_dir
+    }
+}
+
+fn g6_job_block(workflow: &str) -> Option<&str> {
+    let start = workflow.find("  g6-perf:")?;
+    let tail = &workflow[start..];
+    let end = tail
+        .find("\n  # ── G7")
+        .or_else(|| tail.find("\n  g7-"))
+        .unwrap_or(tail.len());
+    Some(&tail[..end])
 }
 
 const G6_PERF_TESTS: &[&str] = &[
@@ -25,25 +39,23 @@ const G6_PERF_TESTS: &[&str] = &[
     "perf_special",
 ];
 
-const EXCLUDED_PERF_TESTS: &[&str] = &[
-    "perf_topology",
-];
+const EXCLUDED_PERF_TESTS: &[&str] = &["perf_topology"];
 
 #[test]
-fn every_perf_test_in_g6_or_excluded() {
+fn every_perf_test_in_g6_or_excluded() -> TestResult {
     let tests_dir = project_root().join("crates/fsci-conformance/tests");
 
     if !tests_dir.exists() {
         eprintln!("tests/ directory not found, skipping topology check");
-        return;
+        return Ok(());
     }
 
     let g6_set: HashSet<&str> = G6_PERF_TESTS.iter().copied().collect();
     let excluded_set: HashSet<&str> = EXCLUDED_PERF_TESTS.iter().copied().collect();
 
     let mut perf_files: Vec<String> = Vec::new();
-    for entry in fs::read_dir(&tests_dir).expect("read tests dir") {
-        let entry = entry.expect("read entry");
+    for entry in fs::read_dir(&tests_dir)? {
+        let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with("perf_") && name.ends_with(".rs") {
             let test_name = name.trim_end_matches(".rs").to_string();
@@ -60,24 +72,27 @@ fn every_perf_test_in_g6_or_excluded() {
 
     if !missing.is_empty() {
         missing.sort();
-        panic!(
+        return Err(format!(
             "Perf tests not in CI G6 gate or EXCLUDED_PERF_TESTS:\n  {}\n\n\
              Per bead frankenscipy-rvox, every perf_*.rs file must either be:\n\
              - Listed in G6_PERF_TESTS (runs in CI), or\n\
              - Listed in EXCLUDED_PERF_TESTS with rationale\n\
              Update this file or .github/workflows/ci.yml G6 section.",
             missing.join("\n  ")
-        );
+        )
+        .into());
     }
+
+    Ok(())
 }
 
 #[test]
-fn g6_tests_all_exist() {
+fn g6_tests_all_exist() -> TestResult {
     let tests_dir = project_root().join("crates/fsci-conformance/tests");
 
     if !tests_dir.exists() {
         eprintln!("tests/ directory not found, skipping existence check");
-        return;
+        return Ok(());
     }
 
     let mut missing: Vec<&str> = Vec::new();
@@ -90,10 +105,45 @@ fn g6_tests_all_exist() {
 
     if !missing.is_empty() {
         missing.sort();
-        panic!(
+        return Err(format!(
             "G6_PERF_TESTS references non-existent test files:\n  {}\n\n\
              Either create the test file or remove it from G6_PERF_TESTS.",
             missing.join("\n  ")
-        );
+        )
+        .into());
     }
+
+    Ok(())
+}
+
+#[test]
+fn g6_workflow_invokes_all_listed_perf_tests() -> TestResult {
+    let workflow_path = project_root().join(".github/workflows/ci.yml");
+    let workflow = fs::read_to_string(&workflow_path)?;
+    let g6_block = g6_job_block(&workflow).ok_or_else(|| {
+        format!(
+            "CI workflow {} does not contain a g6-perf job",
+            workflow_path.display()
+        )
+    })?;
+
+    let mut missing: Vec<&str> = Vec::new();
+    for test_name in G6_PERF_TESTS {
+        if !g6_block.contains(test_name) {
+            missing.push(test_name);
+        }
+    }
+
+    if !missing.is_empty() {
+        missing.sort();
+        return Err(format!(
+            "G6_PERF_TESTS entries not invoked by the CI g6-perf job:\n  {}\n\n\
+             Update .github/workflows/ci.yml or G6_PERF_TESTS so the topology \
+             test verifies the actual workflow contract.",
+            missing.join("\n  ")
+        )
+        .into());
+    }
+
+    Ok(())
 }
