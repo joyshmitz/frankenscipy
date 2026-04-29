@@ -1151,6 +1151,11 @@ pub fn romb(y: &[f64], dx: f64) -> Result<f64, IntegrateValidationError> {
             detail: "need at least 2 points".to_string(),
         });
     }
+    if dx <= 0.0 || !dx.is_finite() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "dx must be positive and finite".to_string(),
+        });
+    }
     // Check n = 2^k + 1
     let intervals = n - 1;
     if intervals & (intervals - 1) != 0 {
@@ -2002,6 +2007,14 @@ pub fn romberg<F>(f: F, a: f64, b: f64, tol: f64, max_order: usize) -> QuadResul
 where
     F: Fn(f64) -> f64,
 {
+    if !a.is_finite() || !b.is_finite() || !tol.is_finite() || tol <= 0.0 {
+        return QuadResult {
+            integral: f64::NAN,
+            error: f64::INFINITY,
+            neval: 0,
+            converged: false,
+        };
+    }
     let max_order = max_order.clamp(2, 20);
     let mut r = vec![vec![0.0; max_order]; max_order];
     let mut neval = 0usize;
@@ -2080,6 +2093,13 @@ pub fn simpson_irregular(y: &[f64], x: &[f64]) -> f64 {
         let h0 = x[i + 1] - x[i];
         let h1 = x[i + 2] - x[i + 1];
         let hsum = h0 + h1;
+
+        // Fall back to trapezoid if spacing is degenerate
+        if h0.abs() < 1e-15 || h1.abs() < 1e-15 {
+            sum += 0.5 * (y[i] + y[i + 2]) * hsum;
+            i += 2;
+            continue;
+        }
 
         // Simpson's 3/8 for unequal spacing
         sum += hsum / 6.0
@@ -2296,6 +2316,16 @@ pub fn newton_cotes_quad<F>(
 where
     F: Fn(f64) -> f64,
 {
+    if n_panels == 0 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "n_panels must be positive".to_string(),
+        });
+    }
+    if order == 0 {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "order must be positive".to_string(),
+        });
+    }
     let weights = newton_cotes(order)?;
     let panel_width = (b - a) / n_panels as f64;
     let mut total = 0.0;
@@ -2483,8 +2513,8 @@ pub fn trapezoid_richardson(y: &[f64], x: &[f64]) -> f64 {
 /// Matches `scipy.integrate.cumulative_trapezoid` with initial=0.
 pub fn cumulative_trapezoid_initial(y: &[f64], x: &[f64], initial: f64) -> Vec<f64> {
     let n = y.len();
-    if n < 2 || x.len() != n {
-        return vec![initial; n];
+    if n < 2 || x.len() != n || !initial.is_finite() {
+        return vec![initial; n.max(1)];
     }
 
     let mut result = Vec::with_capacity(n);
@@ -2506,6 +2536,9 @@ pub fn gauss_legendre<F>(f: F, a: f64, b: f64, n: usize) -> f64
 where
     F: Fn(f64) -> f64,
 {
+    if n == 0 {
+        return 0.0;
+    }
     let (nodes, weights) = match n {
         2 => (
             vec![-0.577_350_269_189_625_7, 0.577_350_269_189_625_7],
