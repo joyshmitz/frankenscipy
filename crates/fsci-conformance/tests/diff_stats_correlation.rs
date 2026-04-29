@@ -116,7 +116,9 @@ fn deterministic_uncorrelated(n: usize, seed: usize) -> (Vec<f64>, Vec<f64>) {
 }
 
 fn deterministic_monotonic(n: usize, seed: usize, increasing: bool) -> (Vec<f64>, Vec<f64>) {
-    let x: Vec<f64> = (0..n).map(|idx| idx as f64 + (seed % 5) as f64 * 0.1).collect();
+    let x: Vec<f64> = (0..n)
+        .map(|idx| idx as f64 + (seed % 5) as f64 * 0.1)
+        .collect();
     let y: Vec<f64> = if increasing {
         (0..n)
             .map(|idx| idx as f64 * 2.0 + ((idx + seed) % 3) as f64 * 0.05)
@@ -269,9 +271,10 @@ print(json.dumps(results))
     {
         Ok(child) => child,
         Err(e) => {
-            if std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-                panic!("failed to spawn python3 for correlation oracle: {e}");
-            }
+            assert!(
+                std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+                "failed to spawn python3 for correlation oracle: {e}"
+            );
             eprintln!("skipping correlation oracle: python3 not available ({e})");
             return Vec::new();
         }
@@ -279,9 +282,18 @@ print(json.dumps(results))
 
     {
         let stdin = child.stdin.as_mut().expect("open correlation oracle stdin");
-        stdin
-            .write_all(cases_json.as_bytes())
-            .expect("write to correlation oracle stdin");
+        if let Err(err) = stdin.write_all(cases_json.as_bytes()) {
+            let output = child
+                .wait_with_output()
+                .expect("wait for failed correlation oracle");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+                "correlation oracle stdin write failed: {err}; stderr: {stderr}"
+            );
+            eprintln!("skipping correlation oracle: stdin write failed ({err})\n{stderr}");
+            return Vec::new();
+        }
     }
 
     let output = child
@@ -290,9 +302,10 @@ print(json.dumps(results))
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if std::env::var(REQUIRE_SCIPY_ENV).is_ok() {
-            panic!("correlation oracle failed: {stderr}");
-        }
+        assert!(
+            std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+            "correlation oracle failed: {stderr}"
+        );
         eprintln!("skipping correlation oracle: scipy not available\n{stderr}");
         return Vec::new();
     }
@@ -301,7 +314,9 @@ print(json.dumps(results))
     serde_json::from_str(&stdout).expect("parse correlation oracle JSON")
 }
 
-fn compute_rust_correlation(case: &CorrelationCase) -> Option<(f64, f64, Option<f64>, Option<f64>)> {
+fn compute_rust_correlation(
+    case: &CorrelationCase,
+) -> Option<(f64, f64, Option<f64>, Option<f64>)> {
     match case.func.as_str() {
         "pearsonr" => {
             let res = pearsonr(&case.x, &case.y);
@@ -342,6 +357,33 @@ fn diff_stats_correlation() {
         .into_iter()
         .map(|r| (r.case_id.clone(), r))
         .collect();
+    assert_eq!(
+        oracle_map.len(),
+        cases.len(),
+        "SciPy correlation oracle returned duplicate case IDs"
+    );
+
+    let missing_oracle_cases: Vec<&str> = cases
+        .iter()
+        .filter(|case| !oracle_map.contains_key(&case.case_id))
+        .map(|case| case.case_id.as_str())
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "SciPy correlation oracle missing cases: {:?}",
+        missing_oracle_cases
+    );
+
+    let unexpected_oracle_cases: Vec<&str> = oracle_map
+        .keys()
+        .map(String::as_str)
+        .filter(|case_id| !cases.iter().any(|case| case.case_id == *case_id))
+        .collect();
+    assert!(
+        unexpected_oracle_cases.is_empty(),
+        "SciPy correlation oracle returned unexpected cases: {:?}",
+        unexpected_oracle_cases
+    );
 
     let start = Instant::now();
     let mut diffs = Vec::new();
@@ -349,14 +391,18 @@ fn diff_stats_correlation() {
     let mut max_pval_diff = 0.0_f64;
 
     for case in &cases {
-        let Some((rust_stat, rust_pval, rust_slope, rust_intercept)) =
-            compute_rust_correlation(case)
-        else {
+        let rust_result = compute_rust_correlation(case);
+        assert!(
+            rust_result.is_some(),
+            "unsupported correlation function {}",
+            case.func
+        );
+        let Some((rust_stat, rust_pval, rust_slope, rust_intercept)) = rust_result else {
             continue;
         };
-        let Some(scipy_result) = oracle_map.get(&case.case_id) else {
-            continue;
-        };
+        let scipy_result = oracle_map
+            .get(&case.case_id)
+            .expect("validated complete correlation oracle map");
 
         let scipy_stat = scipy_result.statistic;
         let scipy_pval = scipy_result.pvalue;
@@ -376,19 +422,18 @@ fn diff_stats_correlation() {
 
         let mut pass = stat_diff <= stat_tol && pval_diff <= pval_tol;
 
-        if case.func == "linregress" {
-            if let (Some(rs), Some(ri), Some(ss), Some(si)) = (
-                rust_slope,
-                rust_intercept,
-                scipy_result.slope,
-                scipy_result.intercept,
-            ) {
-                let slope_diff = (rs - ss).abs();
-                let intercept_diff = (ri - si).abs();
-                let slope_tol = TOL * rs.abs().max(ss.abs()).max(1.0);
-                let intercept_tol = TOL * ri.abs().max(si.abs()).max(1.0);
-                pass = pass && slope_diff <= slope_tol && intercept_diff <= intercept_tol;
-            }
+        if let ("linregress", Some(rs), Some(ri), Some(ss), Some(si)) = (
+            case.func.as_str(),
+            rust_slope,
+            rust_intercept,
+            scipy_result.slope,
+            scipy_result.intercept,
+        ) {
+            let slope_diff = (rs - ss).abs();
+            let intercept_diff = (ri - si).abs();
+            let slope_tol = TOL * rs.abs().max(ss.abs()).max(1.0);
+            let intercept_tol = TOL * ri.abs().max(si.abs()).max(1.0);
+            pass = pass && slope_diff <= slope_tol && intercept_diff <= intercept_tol;
         }
 
         max_stat_diff = max_stat_diff.max(stat_diff);
@@ -406,6 +451,13 @@ fn diff_stats_correlation() {
             pass,
         });
     }
+    assert_eq!(
+        diffs.len(),
+        cases.len(),
+        "compared {}/{} expected correlation cases",
+        diffs.len(),
+        cases.len()
+    );
 
     let all_pass = diffs.iter().all(|d| d.pass);
 
