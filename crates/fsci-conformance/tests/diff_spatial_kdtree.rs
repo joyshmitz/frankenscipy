@@ -207,12 +207,7 @@ fn query_cases() -> Vec<QueryCase> {
 }
 
 fn query_k_cases() -> Vec<QueryKCase> {
-    let configs = [
-        (2, 20, 100),
-        (3, 30, 200),
-        (3, 50, 300),
-        (5, 40, 400),
-    ];
+    let configs = [(2, 20, 100), (3, 30, 200), (3, 50, 300), (5, 40, 400)];
 
     let k_values = [1, 3, 5, 10];
 
@@ -242,12 +237,7 @@ fn query_k_cases() -> Vec<QueryKCase> {
 }
 
 fn query_ball_point_cases() -> Vec<QueryBallPointCase> {
-    let configs = [
-        (2, 30, 100),
-        (3, 25, 200),
-        (3, 50, 300),
-        (5, 20, 400),
-    ];
+    let configs = [(2, 30, 100), (3, 25, 200), (3, 50, 300), (5, 20, 400)];
 
     let radii = [0.5, 1.0, 2.0, 5.0];
 
@@ -437,6 +427,71 @@ fn scipy_oracle_or_skip<T, R>(run_fn: impl FnOnce(&[T]) -> Option<Vec<R>>, cases
     }
 }
 
+fn assert_complete_oracle_results<T>(
+    test_id: &str,
+    expected_case_ids: impl IntoIterator<Item = String>,
+    oracle_count: usize,
+    oracle_results: &HashMap<String, T>,
+) {
+    let expected_case_ids: Vec<String> = expected_case_ids.into_iter().collect();
+    assert_eq!(
+        oracle_count,
+        expected_case_ids.len(),
+        "{test_id} SciPy KDTree oracle returned partial or duplicate coverage"
+    );
+    assert_eq!(
+        oracle_results.len(),
+        expected_case_ids.len(),
+        "{test_id} SciPy KDTree oracle case ids were incomplete or duplicated"
+    );
+
+    let missing_oracle_cases: Vec<&str> = expected_case_ids
+        .iter()
+        .filter(|case_id| !oracle_results.contains_key(case_id.as_str()))
+        .map(String::as_str)
+        .collect();
+    assert!(
+        missing_oracle_cases.is_empty(),
+        "{test_id} missing SciPy KDTree oracle results: {:?}",
+        missing_oracle_cases
+    );
+
+    let unexpected_oracle_cases: Vec<&str> = oracle_results
+        .keys()
+        .map(String::as_str)
+        .filter(|case_id| !expected_case_ids.iter().any(|expected| expected == case_id))
+        .collect();
+    assert!(
+        unexpected_oracle_cases.is_empty(),
+        "{test_id} unexpected SciPy KDTree oracle results: {:?}",
+        unexpected_oracle_cases
+    );
+}
+
+fn assert_all_cases_compared(test_id: &str, compared: usize, expected: usize) {
+    assert_eq!(
+        compared, expected,
+        "{test_id} compared {compared}/{expected} expected KDTree cases"
+    );
+}
+
+fn max_distance_diff(a: &[f64], b: &[f64]) -> f64 {
+    if a.len() != b.len() {
+        return f64::INFINITY;
+    }
+
+    a.iter()
+        .zip(b.iter())
+        .map(|(left, right)| (left - right).abs())
+        .fold(0.0_f64, |acc, diff| {
+            if diff.is_nan() {
+                f64::NAN
+            } else {
+                acc.max(diff)
+            }
+        })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -455,18 +510,34 @@ fn diff_001_kdtree_query() {
         .iter()
         .map(|r| (r.case_id.clone(), r))
         .collect();
+    assert_complete_oracle_results(
+        "diff_001_kdtree_query",
+        cases.iter().map(|case| case.case_id.clone()),
+        oracle_results.len(),
+        &oracle_map,
+    );
 
     let mut diffs = Vec::new();
     let mut pass_count = 0;
 
     for case in &cases {
-        let rust_result = match rust_query(case) {
-            Some(r) => r,
-            None => continue,
+        let rust_result = rust_query(case);
+        assert!(
+            rust_result.is_some(),
+            "diff_001_kdtree_query missing Rust result for {}",
+            case.case_id
+        );
+        let Some(rust_result) = rust_result else {
+            continue;
         };
-        let scipy_result = match oracle_map.get(&case.case_id) {
-            Some(r) => r,
-            None => continue,
+        let scipy_result = oracle_map.get(&case.case_id);
+        assert!(
+            scipy_result.is_some(),
+            "diff_001_kdtree_query missing SciPy result for {}",
+            case.case_id
+        );
+        let Some(scipy_result) = scipy_result else {
+            continue;
         };
 
         let index_match = rust_result.0 == scipy_result.index;
@@ -492,7 +563,7 @@ fn diff_001_kdtree_query() {
         });
     }
 
-    let all_pass = diffs.iter().all(|d| d.pass);
+    let all_pass = diffs.len() == cases.len() && diffs.iter().all(|d| d.pass);
 
     let log = DiffLog {
         test_id: "diff_001_kdtree_query".into(),
@@ -505,6 +576,7 @@ fn diff_001_kdtree_query() {
         duration_ns: start.elapsed().as_nanos(),
     };
     emit_log(&log, "summary");
+    assert_all_cases_compared("diff_001_kdtree_query", log.case_count, cases.len());
 
     for diff in &diffs {
         assert!(
@@ -535,29 +607,41 @@ fn diff_002_kdtree_query_k() {
         .iter()
         .map(|r| (r.case_id.clone(), r))
         .collect();
+    assert_complete_oracle_results(
+        "diff_002_kdtree_query_k",
+        cases.iter().map(|case| case.case_id.clone()),
+        oracle_results.len(),
+        &oracle_map,
+    );
 
     let mut diffs = Vec::new();
     let mut pass_count = 0;
 
     for case in &cases {
-        let rust_result = match rust_query_k(case) {
-            Some(r) => r,
-            None => continue,
+        let rust_result = rust_query_k(case);
+        assert!(
+            rust_result.is_some(),
+            "diff_002_kdtree_query_k missing Rust result for {}",
+            case.case_id
+        );
+        let Some(rust_result) = rust_result else {
+            continue;
         };
-        let scipy_result = match oracle_map.get(&case.case_id) {
-            Some(r) => r,
-            None => continue,
+        let scipy_result = oracle_map.get(&case.case_id);
+        assert!(
+            scipy_result.is_some(),
+            "diff_002_kdtree_query_k missing SciPy result for {}",
+            case.case_id
+        );
+        let Some(scipy_result) = scipy_result else {
+            continue;
         };
 
         let rust_indices: Vec<usize> = rust_result.iter().map(|(idx, _)| *idx).collect();
         let rust_distances: Vec<f64> = rust_result.iter().map(|(_, d)| *d).collect();
 
         let indices_match = rust_indices == scipy_result.indices;
-        let max_dist_diff = rust_distances
-            .iter()
-            .zip(&scipy_result.distances)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
+        let max_dist_diff = max_distance_diff(&rust_distances, &scipy_result.distances);
 
         let pass = indices_match && max_dist_diff <= DIST_TOL;
 
@@ -581,7 +665,7 @@ fn diff_002_kdtree_query_k() {
         });
     }
 
-    let all_pass = diffs.iter().all(|d| d.pass);
+    let all_pass = diffs.len() == cases.len() && diffs.iter().all(|d| d.pass);
 
     let log = DiffLog {
         test_id: "diff_002_kdtree_query_k".into(),
@@ -594,12 +678,17 @@ fn diff_002_kdtree_query_k() {
         duration_ns: start.elapsed().as_nanos(),
     };
     emit_log(&log, "summary");
+    assert_all_cases_compared("diff_002_kdtree_query_k", log.case_count, cases.len());
 
     for diff in &diffs {
         assert!(
             diff.pass,
             "{} mismatch: rust_indices={:?} scipy_indices={:?} indices_match={} max_dist_diff={}",
-            diff.case_id, diff.rust_indices, diff.scipy_indices, diff.indices_match, diff.max_dist_diff
+            diff.case_id,
+            diff.rust_indices,
+            diff.scipy_indices,
+            diff.indices_match,
+            diff.max_dist_diff
         );
     }
 }
@@ -618,21 +707,35 @@ fn diff_003_kdtree_query_ball_point() {
         .iter()
         .map(|r| (r.case_id.clone(), r))
         .collect();
+    assert_complete_oracle_results(
+        "diff_003_kdtree_query_ball_point",
+        cases.iter().map(|case| case.case_id.clone()),
+        oracle_results.len(),
+        &oracle_map,
+    );
 
     let mut diffs = Vec::new();
     let mut pass_count = 0;
 
     for case in &cases {
-        let rust_result = match rust_query_ball_point(case) {
-            Some(mut r) => {
-                r.sort();
-                r
-            }
-            None => continue,
+        let rust_result = rust_query_ball_point(case);
+        assert!(
+            rust_result.is_some(),
+            "diff_003_kdtree_query_ball_point missing Rust result for {}",
+            case.case_id
+        );
+        let Some(mut rust_result) = rust_result else {
+            continue;
         };
-        let scipy_result = match oracle_map.get(&case.case_id) {
-            Some(r) => r,
-            None => continue,
+        rust_result.sort();
+        let scipy_result = oracle_map.get(&case.case_id);
+        assert!(
+            scipy_result.is_some(),
+            "diff_003_kdtree_query_ball_point missing SciPy result for {}",
+            case.case_id
+        );
+        let Some(scipy_result) = scipy_result else {
+            continue;
         };
 
         let indices_match = rust_result == scipy_result.indices;
@@ -654,7 +757,7 @@ fn diff_003_kdtree_query_ball_point() {
         });
     }
 
-    let all_pass = diffs.iter().all(|d| d.pass);
+    let all_pass = diffs.len() == cases.len() && diffs.iter().all(|d| d.pass);
 
     let log = DiffLog {
         test_id: "diff_003_kdtree_query_ball_point".into(),
@@ -667,6 +770,11 @@ fn diff_003_kdtree_query_ball_point() {
         duration_ns: start.elapsed().as_nanos(),
     };
     emit_log(&log, "summary");
+    assert_all_cases_compared(
+        "diff_003_kdtree_query_ball_point",
+        log.case_count,
+        cases.len(),
+    );
 
     for diff in &diffs {
         assert!(
@@ -681,58 +789,49 @@ fn diff_003_kdtree_query_ball_point() {
 fn diff_004_kdtree_edge_cases() {
     let start = Instant::now();
 
-    let mut cases = Vec::new();
-
-    cases.push(QueryCase {
-        case_id: "single_point_2d".into(),
-        points: vec![vec![1.0, 2.0]],
-        query: vec![0.0, 0.0],
-    });
-
-    cases.push(QueryCase {
-        case_id: "single_point_3d".into(),
-        points: vec![vec![1.0, 2.0, 3.0]],
-        query: vec![0.0, 0.0, 0.0],
-    });
-
-    cases.push(QueryCase {
-        case_id: "two_points_equidistant".into(),
-        points: vec![vec![1.0, 0.0], vec![-1.0, 0.0]],
-        query: vec![0.0, 0.0],
-    });
-
-    cases.push(QueryCase {
-        case_id: "collinear_points".into(),
-        points: vec![
-            vec![0.0, 0.0],
-            vec![1.0, 0.0],
-            vec![2.0, 0.0],
-            vec![3.0, 0.0],
-        ],
-        query: vec![1.5, 0.1],
-    });
-
-    cases.push(QueryCase {
-        case_id: "duplicate_points".into(),
-        points: vec![
-            vec![1.0, 1.0],
-            vec![1.0, 1.0],
-            vec![2.0, 2.0],
-        ],
-        query: vec![1.0, 1.0],
-    });
-
-    cases.push(QueryCase {
-        case_id: "high_dim_5d".into(),
-        points: vec![
-            vec![1.0, 0.0, 0.0, 0.0, 0.0],
-            vec![0.0, 1.0, 0.0, 0.0, 0.0],
-            vec![0.0, 0.0, 1.0, 0.0, 0.0],
-            vec![0.0, 0.0, 0.0, 1.0, 0.0],
-            vec![0.0, 0.0, 0.0, 0.0, 1.0],
-        ],
-        query: vec![0.2, 0.2, 0.2, 0.2, 0.2],
-    });
+    let cases = vec![
+        QueryCase {
+            case_id: "single_point_2d".into(),
+            points: vec![vec![1.0, 2.0]],
+            query: vec![0.0, 0.0],
+        },
+        QueryCase {
+            case_id: "single_point_3d".into(),
+            points: vec![vec![1.0, 2.0, 3.0]],
+            query: vec![0.0, 0.0, 0.0],
+        },
+        QueryCase {
+            case_id: "two_points_equidistant".into(),
+            points: vec![vec![1.0, 0.0], vec![-1.0, 0.0]],
+            query: vec![0.0, 0.0],
+        },
+        QueryCase {
+            case_id: "collinear_points".into(),
+            points: vec![
+                vec![0.0, 0.0],
+                vec![1.0, 0.0],
+                vec![2.0, 0.0],
+                vec![3.0, 0.0],
+            ],
+            query: vec![1.5, 0.1],
+        },
+        QueryCase {
+            case_id: "duplicate_points".into(),
+            points: vec![vec![1.0, 1.0], vec![1.0, 1.0], vec![2.0, 2.0]],
+            query: vec![1.0, 1.0],
+        },
+        QueryCase {
+            case_id: "high_dim_5d".into(),
+            points: vec![
+                vec![1.0, 0.0, 0.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 0.0, 1.0, 0.0, 0.0],
+                vec![0.0, 0.0, 0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 0.0, 0.0, 1.0],
+            ],
+            query: vec![0.2, 0.2, 0.2, 0.2, 0.2],
+        },
+    ];
 
     let oracle_results = scipy_oracle_or_skip(run_scipy_query_oracle, &cases);
     if oracle_results.is_empty() {
@@ -743,18 +842,34 @@ fn diff_004_kdtree_edge_cases() {
         .iter()
         .map(|r| (r.case_id.clone(), r))
         .collect();
+    assert_complete_oracle_results(
+        "diff_004_kdtree_edge_cases",
+        cases.iter().map(|case| case.case_id.clone()),
+        oracle_results.len(),
+        &oracle_map,
+    );
 
     let mut diffs = Vec::new();
     let mut pass_count = 0;
 
     for case in &cases {
-        let rust_result = match rust_query(case) {
-            Some(r) => r,
-            None => continue,
+        let rust_result = rust_query(case);
+        assert!(
+            rust_result.is_some(),
+            "diff_004_kdtree_edge_cases missing Rust result for {}",
+            case.case_id
+        );
+        let Some(rust_result) = rust_result else {
+            continue;
         };
-        let scipy_result = match oracle_map.get(&case.case_id) {
-            Some(r) => r,
-            None => continue,
+        let scipy_result = oracle_map.get(&case.case_id);
+        assert!(
+            scipy_result.is_some(),
+            "diff_004_kdtree_edge_cases missing SciPy result for {}",
+            case.case_id
+        );
+        let Some(scipy_result) = scipy_result else {
+            continue;
         };
 
         let dist_diff = (rust_result.1 - scipy_result.distance).abs();
@@ -781,7 +896,7 @@ fn diff_004_kdtree_edge_cases() {
         });
     }
 
-    let all_pass = diffs.iter().all(|d| d.pass);
+    let all_pass = diffs.len() == cases.len() && diffs.iter().all(|d| d.pass);
 
     let log = DiffLog {
         test_id: "diff_004_kdtree_edge_cases".into(),
@@ -794,6 +909,7 @@ fn diff_004_kdtree_edge_cases() {
         duration_ns: start.elapsed().as_nanos(),
     };
     emit_log(&log, "summary");
+    assert_all_cases_compared("diff_004_kdtree_edge_cases", log.case_count, cases.len());
 
     for diff in &diffs {
         assert!(
