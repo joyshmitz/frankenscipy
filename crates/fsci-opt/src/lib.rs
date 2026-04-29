@@ -2522,14 +2522,26 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
         });
     }
     let n = a[0].len();
-    if a.iter().any(|row| row.len() != n) {
-        return Err(OptError::InvalidArgument {
-            detail: "A must be rectangular".to_string(),
-        });
+    for (row_index, row) in a.iter().enumerate() {
+        if row.len() != n {
+            return Err(OptError::InvalidArgument {
+                detail: "A must be rectangular".to_string(),
+            });
+        }
+        if row.iter().any(|value| !value.is_finite()) {
+            return Err(OptError::NonFiniteInput {
+                detail: format!("A contains non-finite values in row {row_index}"),
+            });
+        }
     }
     if b.len() != m {
         return Err(OptError::InvalidArgument {
             detail: format!("b length {} != A rows {m}", b.len()),
+        });
+    }
+    if b.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: "b must not contain NaN or Inf".to_string(),
         });
     }
 
@@ -3396,6 +3408,19 @@ mod tests {
         let b = vec![1.0, 2.0];
         let error = nnls(&a, &b).expect_err("ragged matrix should be rejected");
         assert!(matches!(error, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn nnls_rejects_non_finite_inputs() {
+        let a = vec![vec![1.0, f64::NAN], vec![0.0, 1.0]];
+        let b = vec![1.0, 2.0];
+        let error = nnls(&a, &b).expect_err("NaN in A should be rejected");
+        assert!(matches!(error, crate::OptError::NonFiniteInput { .. }));
+
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let b = vec![1.0, f64::INFINITY];
+        let error = nnls(&a, &b).expect_err("Inf in b should be rejected");
+        assert!(matches!(error, crate::OptError::NonFiniteInput { .. }));
     }
 
     // ── linprog tests ──────────────────────────────────────────────
