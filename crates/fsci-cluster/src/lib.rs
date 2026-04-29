@@ -780,7 +780,7 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
 pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
     let n = z.len() + 1;
     if max_clusters >= n || max_clusters == 0 {
-        return (0..n).collect();
+        return (1..=n).collect();
     }
 
     // Each leaf is its own cluster initially
@@ -2392,6 +2392,16 @@ mod tests {
         assert_eq!(labels[0], labels[1]);
         assert_eq!(labels[2], labels[3]);
         assert_ne!(labels[0], labels[2]);
+    }
+
+    #[test]
+    fn fcluster_singleton_fast_path_is_one_based() {
+        let data = vec![vec![0.0], vec![1.0], vec![10.0], vec![11.0]];
+        let z = linkage(&data, LinkageMethod::Complete).unwrap();
+
+        assert_eq!(fcluster(&z, 0), vec![1, 2, 3, 4]);
+        assert_eq!(fcluster(&z, 4), vec![1, 2, 3, 4]);
+        assert_eq!(fcluster(&z, 5), vec![1, 2, 3, 4]);
     }
 
     #[test]
