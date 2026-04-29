@@ -2614,7 +2614,11 @@ fn has_empty_structural_row(a: &CsrMatrix) -> bool {
 ///
 /// Matches `scipy.sparse.csgraph.floyd_warshall`.
 pub fn floyd_warshall(graph: &CsrMatrix) -> Vec<Vec<f64>> {
-    let n = graph.shape().rows;
+    let shape = graph.shape();
+    if shape.rows != shape.cols {
+        return vec![];
+    }
+    let n = shape.rows;
     let mut dist = vec![vec![f64::INFINITY; n]; n];
 
     // Initialize from graph edges
@@ -3387,6 +3391,14 @@ pub fn pagerank(graph: &CsrMatrix, damping: f64, max_iter: usize, tol: f64) -> V
         return vec![];
     }
 
+    let damping = damping.clamp(0.0, 1.0);
+    let tol = if tol <= 0.0 || !tol.is_finite() {
+        1e-8
+    } else {
+        tol
+    };
+    let max_iter = if max_iter == 0 { 100 } else { max_iter };
+
     let out_degree: Vec<usize> = (0..n)
         .map(|i| graph.indptr()[i + 1] - graph.indptr()[i])
         .collect();
@@ -3434,9 +3446,12 @@ pub fn pagerank(graph: &CsrMatrix, damping: f64, max_iter: usize, tol: f64) -> V
 
 /// Compute the graph diameter (longest shortest path between any two nodes).
 ///
-/// Uses Floyd-Warshall internally.
+/// Uses Floyd-Warshall internally. Returns 0.0 for non-square matrices.
 pub fn graph_diameter(graph: &CsrMatrix) -> f64 {
     let dist = floyd_warshall(graph);
+    if dist.is_empty() {
+        return 0.0;
+    }
     let mut max_d = 0.0f64;
     for row in &dist {
         for &d in row {
@@ -3449,8 +3464,12 @@ pub fn graph_diameter(graph: &CsrMatrix) -> f64 {
 }
 
 /// Compute the eccentricity of each node (max shortest path distance).
+/// Returns empty vec for non-square matrices.
 pub fn eccentricity(graph: &CsrMatrix) -> Vec<f64> {
     let dist = floyd_warshall(graph);
+    if dist.is_empty() {
+        return vec![];
+    }
     dist.iter()
         .map(|row| {
             row.iter()
@@ -3582,6 +3601,9 @@ pub fn betweenness_centrality(graph: &CsrMatrix) -> Vec<f64> {
 pub fn closeness_centrality(graph: &CsrMatrix) -> Vec<f64> {
     let n = graph.shape().rows;
     let dist = floyd_warshall(graph);
+    if dist.is_empty() {
+        return vec![0.0; n];
+    }
 
     (0..n)
         .map(|i| {
@@ -6047,10 +6069,23 @@ pub fn svds(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<SvdsR
 
     for _eig_idx in 0..k {
         // Power iteration for largest eigenvalue of A^T A
-        let mut v = vec![1.0 / (n as f64).sqrt(); n];
+        // Use LCG-seeded random initialization (same rationale as eigsh br-oyy7:
+        // uniform initial vectors can be orthogonal to dominant eigenvectors
+        // on structured matrices).
+        let mut v = vec![0.0f64; n];
+        let mut rng_state: u64 = 0x9e3779b97f4a7c15;
+        for vi in v.iter_mut() {
+            rng_state = rng_state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let u = ((rng_state >> 11) as f64) / (1u64 << 53) as f64;
+            *vi = u - 0.5;
+        }
         let v_norm = vec_norm(&v);
-        for vi in &mut v {
-            *vi /= v_norm;
+        if v_norm > 0.0 {
+            for vi in &mut v {
+                *vi /= v_norm;
+            }
         }
 
         let mut sigma_sq = 0.0;
