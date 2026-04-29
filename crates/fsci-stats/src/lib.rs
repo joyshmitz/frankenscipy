@@ -8003,6 +8003,9 @@ pub fn hmean(data: &[f64]) -> f64 {
     if data.is_empty() {
         return f64::NAN;
     }
+    if data.iter().any(|&x| !x.is_finite() || x <= 0.0) {
+        return f64::NAN;
+    }
     let n = data.len() as f64;
     let inv_sum: f64 = data.iter().map(|&x| 1.0 / x).sum();
     if inv_sum == 0.0 {
@@ -8015,11 +8018,17 @@ pub fn hmean(data: &[f64]) -> f64 {
 ///
 /// Matches `scipy.stats.pmean`.
 pub fn pmean(data: &[f64], p: f64) -> f64 {
-    if data.is_empty() {
+    if data.is_empty() || !p.is_finite() {
+        return f64::NAN;
+    }
+    if data.iter().any(|&x| !x.is_finite()) {
         return f64::NAN;
     }
     if p == 0.0 {
         return gmean(data);
+    }
+    if p < 0.0 && data.iter().any(|&x| x == 0.0) {
+        return 0.0;
     }
     let n = data.len() as f64;
     let power_sum: f64 = data.iter().map(|&x| x.powf(p)).sum();
@@ -17999,7 +18008,7 @@ pub fn phi_coefficient(table: &[[usize; 2]; 2]) -> f64 {
 ///
 /// Matches `pandas.DataFrame.ewm(span=span).mean()`.
 pub fn ewma(data: &[f64], span: f64) -> Vec<f64> {
-    if data.is_empty() || span <= 0.0 {
+    if data.is_empty() || span < 1.0 || !span.is_finite() {
         return data.to_vec();
     }
     let alpha = 2.0 / (span + 1.0);
@@ -18067,7 +18076,7 @@ pub fn diff(data: &[f64]) -> Vec<f64> {
 /// Returns (counts, bin_edges).
 /// Matches `numpy.histogram`.
 pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
-    if data.is_empty() || bins == 0 {
+    if data.is_empty() || bins == 0 || data.iter().any(|v| !v.is_finite()) {
         return (vec![], vec![]);
     }
 
@@ -18178,7 +18187,11 @@ pub fn binned_statistic(
     bins: usize,
     statistic: &str,
 ) -> (Vec<f64>, Vec<f64>) {
-    if x.len() != values.len() || x.is_empty() || bins == 0 {
+    if x.len() != values.len()
+        || x.is_empty()
+        || bins == 0
+        || x.iter().any(|v| !v.is_finite())
+    {
         return (vec![], vec![]);
     }
 
@@ -18287,7 +18300,7 @@ pub fn cumfreq(data: &[f64], bins: usize) -> (Vec<f64>, Vec<f64>) {
 ///
 /// Simple wrapper around periodogram concepts.
 pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> Vec<f64> {
-    if data.is_empty() || window_size == 0 {
+    if data.is_empty() || window_size == 0 || fs <= 0.0 || !fs.is_finite() {
         return vec![];
     }
 

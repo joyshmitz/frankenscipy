@@ -33,11 +33,11 @@ use fsci_linalg::{DecompOptions, eigh};
 ///
 /// Domain: x in [-1, 1] for orthogonality, but evaluates for any real x.
 pub fn eval_legendre(n: u32, x: f64) -> f64 {
-    if !x.is_finite() {
-        return f64::NAN;
-    }
     if n == 0 {
         return 1.0;
+    }
+    if !x.is_finite() {
+        return f64::NAN;
     }
     if n == 1 {
         return x;
@@ -166,11 +166,14 @@ pub fn eval_laguerre(n: u32, x: f64) -> f64 {
 ///
 /// Weight function: x^α exp(-x) on [0, ∞).
 pub fn eval_genlaguerre(n: u32, alpha: f64, x: f64) -> f64 {
+    if n == 0 {
+        if alpha.is_nan() || alpha == f64::NEG_INFINITY || x.is_nan() {
+            return f64::NAN;
+        }
+        return 1.0;
+    }
     if !alpha.is_finite() || !x.is_finite() {
         return f64::NAN;
-    }
-    if n == 0 {
-        return 1.0;
     }
     if n == 1 {
         return 1.0 + alpha - x;
@@ -198,11 +201,11 @@ pub fn eval_genlaguerre(n: u32, alpha: f64, x: f64) -> f64 {
 ///
 /// Uses the three-term recurrence (DLMF 18.9.2).
 pub fn eval_jacobi(n: u32, alpha: f64, beta: f64, x: f64) -> f64 {
-    if !alpha.is_finite() || !beta.is_finite() || !x.is_finite() {
-        return f64::NAN;
-    }
     if n == 0 {
         return 1.0;
+    }
+    if !alpha.is_finite() || !beta.is_finite() || !x.is_finite() {
+        return f64::NAN;
     }
     if n == 1 {
         return 0.5 * ((alpha - beta) + (alpha + beta + 2.0) * x);
@@ -241,11 +244,14 @@ pub fn eval_jacobi(n: u32, alpha: f64, beta: f64, x: f64) -> f64 {
 /// Weight function: (1-x²)^{α-1/2} on [-1, 1].
 /// Requires α > -1/2, α ≠ 0.
 pub fn eval_gegenbauer(n: u32, alpha: f64, x: f64) -> f64 {
+    if n == 0 {
+        if alpha.is_nan() || x.is_nan() {
+            return f64::NAN;
+        }
+        return 1.0;
+    }
     if !alpha.is_finite() || !x.is_finite() {
         return f64::NAN;
-    }
-    if n == 0 {
-        return 1.0;
     }
     if n == 1 {
         return 2.0 * alpha * x;
@@ -595,6 +601,9 @@ fn lanczos_gamma(z: f64) -> f64 {
 ///
 /// For negative m: P_l^{-m}(x) = (-1)^m (l-m)!/(l+m)! P_l^m(x)
 pub fn lpmv(m: i32, l: u32, x: f64) -> f64 {
+    if m == 0 && l == 0 {
+        return 1.0;
+    }
     if !x.is_finite() {
         return f64::NAN;
     }
@@ -676,17 +685,24 @@ use crate::types::Complex64;
 ///
 /// Note: Follows SciPy convention where theta=azimuthal and phi=polar.
 pub fn sph_harm(m: i32, l: u32, theta: f64, phi: f64) -> Complex64 {
+    let am = m.unsigned_abs();
+
+    if am > l {
+        return Complex64 { re: 0.0, im: 0.0 };
+    }
+
+    if l == 0 {
+        return Complex64 {
+            re: 1.0 / (4.0 * PI).sqrt(),
+            im: 0.0,
+        };
+    }
+
     if !theta.is_finite() || !phi.is_finite() {
         return Complex64 {
             re: f64::NAN,
             im: f64::NAN,
         };
-    }
-
-    let am = m.unsigned_abs();
-
-    if am > l {
-        return Complex64 { re: 0.0, im: 0.0 };
     }
 
     // Normalization: sqrt((2l+1)/(4π) * (l-|m|)!/(l+|m|)!)
@@ -738,6 +754,13 @@ mod tests {
     #[test]
     fn legendre_p0_is_one() {
         assert_close(eval_legendre(0, 0.5), 1.0, 1e-15, "P_0");
+    }
+
+    #[test]
+    fn legendre_p0_ignores_nonfinite_input_like_scipy() {
+        assert_eq!(eval_legendre(0, f64::NAN), 1.0);
+        assert_eq!(eval_legendre(0, f64::INFINITY), 1.0);
+        assert_eq!(eval_legendre(0, f64::NEG_INFINITY), 1.0);
     }
 
     #[test]
@@ -932,6 +955,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn laguerre_degree_zero_nonfinite_inputs_match_scipy() {
+        assert_eq!(eval_laguerre(0, f64::INFINITY), 1.0);
+        assert_eq!(eval_laguerre(0, f64::NEG_INFINITY), 1.0);
+        assert!(eval_laguerre(0, f64::NAN).is_nan());
+        assert_eq!(eval_genlaguerre(0, f64::INFINITY, f64::INFINITY), 1.0);
+        assert!(eval_genlaguerre(0, f64::NEG_INFINITY, 0.0).is_nan());
+    }
+
     // ── Jacobi ────────────────────────────────────────────────────
 
     #[test]
@@ -954,6 +986,15 @@ mod tests {
     }
 
     #[test]
+    fn jacobi_p0_ignores_nonfinite_parameters_like_scipy() {
+        assert_eq!(eval_jacobi(0, f64::NAN, f64::INFINITY, f64::NAN), 1.0);
+        assert_eq!(
+            eval_jacobi(0, f64::NEG_INFINITY, f64::NAN, f64::INFINITY),
+            1.0
+        );
+    }
+
+    #[test]
     fn jacobi_p1() {
         // P_1^{α,β}(x) = (α-β)/2 + (α+β+2)x/2
         let (a, b, x) = (1.0, 2.0, 0.5);
@@ -966,6 +1007,17 @@ mod tests {
     #[test]
     fn gegenbauer_c0_is_one() {
         assert_close(eval_gegenbauer(0, 1.5, 0.5), 1.0, 1e-15, "C_0^α");
+    }
+
+    #[test]
+    fn gegenbauer_c0_nonfinite_inputs_match_scipy() {
+        assert_eq!(eval_gegenbauer(0, f64::INFINITY, f64::INFINITY), 1.0);
+        assert_eq!(
+            eval_gegenbauer(0, f64::NEG_INFINITY, f64::NEG_INFINITY),
+            1.0
+        );
+        assert!(eval_gegenbauer(0, f64::NAN, 0.0).is_nan());
+        assert!(eval_gegenbauer(0, 0.5, f64::NAN).is_nan());
     }
 
     #[test]
@@ -1291,6 +1343,13 @@ mod tests {
     }
 
     #[test]
+    fn lpmv_p00_ignores_nonfinite_input_like_scipy() {
+        assert_eq!(lpmv(0, 0, f64::NAN), 1.0);
+        assert_eq!(lpmv(0, 0, f64::INFINITY), 1.0);
+        assert_eq!(lpmv(0, 0, f64::NEG_INFINITY), 1.0);
+    }
+
+    #[test]
     fn lpmv_at_endpoints() {
         // P_l^0(1) = 1, P_l^m(1) = 0 for m > 0
         for l in 0..=5 {
@@ -1356,6 +1415,18 @@ mod tests {
         let y = sph_harm_y(0, 0, 1.0, 0.5);
         assert_close(y.re, expected, 1e-12, "sph_harm_y Y_0^0 re");
         assert_close(y.im, 0.0, 1e-12, "sph_harm_y Y_0^0 im");
+    }
+
+    #[test]
+    fn sph_harm_y_input_independent_cases_allow_nonfinite_angles() {
+        let expected = 1.0 / (4.0 * PI).sqrt();
+        let y = sph_harm_y(0, 0, f64::INFINITY, f64::NAN);
+        assert_close(y.re, expected, 1e-12, "Y_0^0 re");
+        assert_close(y.im, 0.0, 1e-12, "Y_0^0 im");
+
+        let outside_order = sph_harm_y(0, 1, f64::NAN, f64::INFINITY);
+        assert_close(outside_order.re, 0.0, 1e-12, "|m| > l re");
+        assert_close(outside_order.im, 0.0, 1e-12, "|m| > l im");
     }
 
     #[test]
