@@ -3013,6 +3013,17 @@ pub fn interp2d(
             actual: nx.min(ny),
         });
     }
+    if !xi.is_finite() || !yi.is_finite() {
+        return Ok(f64::NAN);
+    }
+    if x.windows(2).any(|w| w[1] <= w[0]) {
+        return Err(InterpError::UnsortedX);
+    }
+    if y.windows(2).any(|w| w[1] <= w[0]) {
+        return Err(InterpError::InvalidArgument {
+            detail: "y must be strictly increasing".to_string(),
+        });
+    }
 
     // Find x interval
     let mut ix = 0;
@@ -3600,10 +3611,13 @@ pub fn chebyshev_nodes2(n: usize, a: f64, b: f64) -> Vec<f64> {
 /// Compute barycentric interpolation weights.
 ///
 /// Given nodes x_i, returns weights w_i for barycentric interpolation.
-/// Returns empty vector if nodes are empty or contain duplicates.
+/// Returns empty vector if nodes are empty, contain non-finite values, or contain duplicates.
 pub fn barycentric_weights(nodes: &[f64]) -> Vec<f64> {
     let n = nodes.len();
     if n == 0 {
+        return vec![];
+    }
+    if nodes.iter().any(|&v| !v.is_finite()) {
         return vec![];
     }
     let mut weights = vec![1.0; n];
@@ -3616,6 +3630,9 @@ pub fn barycentric_weights(nodes: &[f64]) -> Vec<f64> {
                 }
                 weights[i] /= diff;
             }
+        }
+        if !weights[i].is_finite() {
+            return vec![];
         }
     }
     weights
@@ -3927,6 +3944,9 @@ impl RectBivariateSpline {
 
     /// Evaluate the spline at a single point.
     pub fn eval(&self, xi: f64, yi: f64) -> f64 {
+        if !xi.is_finite() || !yi.is_finite() {
+            return f64::NAN;
+        }
         self.eval_impl(xi, yi, 0, 0)
     }
 
@@ -3955,6 +3975,9 @@ impl RectBivariateSpline {
 
     /// Evaluate the partial derivative d^(dx+dy)f / dx^dx dy^dy.
     pub fn eval_derivative(&self, xi: f64, yi: f64, dx: usize, dy: usize) -> f64 {
+        if !xi.is_finite() || !yi.is_finite() {
+            return f64::NAN;
+        }
         self.eval_impl(xi, yi, dx, dy)
     }
 
@@ -3973,24 +3996,32 @@ impl RectBivariateSpline {
 
         for row in &self.coeffs {
             // Create x-direction spline for this row of coefficients
-            let mut x_spline =
-                BSpline::new(self.tx.clone(), row.clone(), self.kx).expect("x spline construction");
+            let Ok(mut x_spline) = BSpline::new(self.tx.clone(), row.clone(), self.kx) else {
+                return f64::NAN;
+            };
 
             // Apply x derivative if needed
             for _ in 0..dx {
-                x_spline = x_spline.derivative(1).expect("x derivative");
+                let Ok(deriv) = x_spline.derivative(1) else {
+                    return f64::NAN;
+                };
+                x_spline = deriv;
             }
 
             intermediate.push(x_spline.eval(xi_clamped));
         }
 
         // Create y-direction spline from intermediate values
-        let mut y_spline =
-            BSpline::new(self.ty.clone(), intermediate, self.ky).expect("y spline construction");
+        let Ok(mut y_spline) = BSpline::new(self.ty.clone(), intermediate, self.ky) else {
+            return f64::NAN;
+        };
 
         // Apply y derivative if needed
         for _ in 0..dy {
-            y_spline = y_spline.derivative(1).expect("y derivative");
+            let Ok(deriv) = y_spline.derivative(1) else {
+                return f64::NAN;
+            };
+            y_spline = deriv;
         }
 
         y_spline.eval(yi_clamped)
@@ -4209,6 +4240,9 @@ impl SmoothBivariateSpline {
     }
 
     pub fn eval(&self, x: f64, y: f64) -> f64 {
+        if !x.is_finite() || !y.is_finite() {
+            return f64::NAN;
+        }
         self.eval_derivative(x, y, 0, 0)
     }
 
@@ -4235,6 +4269,9 @@ impl SmoothBivariateSpline {
     }
 
     pub fn eval_derivative(&self, x: f64, y: f64, dx: usize, dy: usize) -> f64 {
+        if !x.is_finite() || !y.is_finite() {
+            return f64::NAN;
+        }
         self.eval_impl(x, y, dx, dy)
     }
 
@@ -4307,18 +4344,26 @@ impl SmoothBivariateSpline {
 
         let mut intermediate = Vec::with_capacity(self.ny_coeffs);
         for row in self.coeffs.chunks(self.nx_coeffs) {
-            let mut x_spline = BSpline::new(self.tx.clone(), row.to_vec(), self.kx)
-                .expect("x spline construction");
+            let Ok(mut x_spline) = BSpline::new(self.tx.clone(), row.to_vec(), self.kx) else {
+                return f64::NAN;
+            };
             for _ in 0..dx {
-                x_spline = x_spline.derivative(1).expect("x derivative");
+                let Ok(deriv) = x_spline.derivative(1) else {
+                    return f64::NAN;
+                };
+                x_spline = deriv;
             }
             intermediate.push(x_spline.eval(xi));
         }
 
-        let mut y_spline =
-            BSpline::new(self.ty.clone(), intermediate, self.ky).expect("y spline construction");
+        let Ok(mut y_spline) = BSpline::new(self.ty.clone(), intermediate, self.ky) else {
+            return f64::NAN;
+        };
         for _ in 0..dy {
-            y_spline = y_spline.derivative(1).expect("y derivative");
+            let Ok(deriv) = y_spline.derivative(1) else {
+                return f64::NAN;
+            };
+            y_spline = deriv;
         }
         y_spline.eval(yi)
     }
