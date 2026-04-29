@@ -371,3 +371,10 @@ path = "fuzz_targets/p2c013_ndimage_gaussian_sobel.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c009_signal_filtfilt_robustness"
+path = "fuzz_targets/p2c009_signal_filtfilt_robustness.rs"
+test = false
+doc = false
+bench = false
