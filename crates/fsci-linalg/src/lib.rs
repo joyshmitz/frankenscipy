@@ -2588,12 +2588,16 @@ pub fn lu(a: &[Vec<f64>], options: DecompOptions) -> Result<LuResult, LinalgErro
     let matrix = dmatrix_from_rows(a)?;
     let lu_decomp: LU<f64, Dyn, Dyn> = matrix.lu();
 
-    // Extract L, U directly; build P from the permutation sequence
+    // Extract L, U directly; build P from the permutation sequence.
     let l_mat = lu_decomp.l();
     let u_mat = lu_decomp.u();
-    // Build permutation matrix by applying the permutation to identity
-    let mut p_mat = DMatrix::<f64>::identity(rows, rows);
-    lu_decomp.p().permute_rows(&mut p_mat);
+    // nalgebra returns a row-permutation P_n satisfying P_n · A = L · U.
+    // SciPy's `scipy.linalg.lu(a)` instead returns P with A = P · L · U,
+    // i.e. P = P_n^T = P_n^{-1}. Apply the permutation to an identity
+    // and transpose so the returned `p` matches SciPy's convention.
+    let mut p_n = DMatrix::<f64>::identity(rows, rows);
+    lu_decomp.p().permute_rows(&mut p_n);
+    let p_mat = p_n.transpose();
 
     emit_trace(LinalgTrace {
         operation: "lu",
@@ -8340,22 +8344,29 @@ mod tests {
 
     #[test]
     #[allow(clippy::needless_range_loop)]
-    fn lu_decomposition_pa_equals_lu() {
+    fn lu_decomposition_a_equals_plu() {
+        // SciPy's `scipy.linalg.lu(a)` returns P, L, U with A = P · L · U.
         let a = vec![
             vec![2.0, 1.0, 1.0],
             vec![4.0, 3.0, 3.0],
             vec![8.0, 7.0, 9.0],
         ];
         let result = lu(&a, DecompOptions::default()).expect("lu works");
-        // Verify P*A = L*U
         let n = a.len();
-        for (i, (p_row, l_row)) in result.p.iter().zip(result.l.iter()).enumerate() {
+        // Compute LU first, then P · (LU).
+        let mut lu_prod = vec![vec![0.0_f64; n]; n];
+        for i in 0..n {
             for j in 0..n {
-                let pa: f64 = (0..n).map(|k| p_row[k] * a[k][j]).sum();
-                let lu_val: f64 = (0..n).map(|k| l_row[k] * result.u[k][j]).sum();
+                lu_prod[i][j] = (0..n).map(|k| result.l[i][k] * result.u[k][j]).sum();
+            }
+        }
+        for i in 0..n {
+            for j in 0..n {
+                let plu: f64 = (0..n).map(|k| result.p[i][k] * lu_prod[k][j]).sum();
                 assert!(
-                    (pa - lu_val).abs() < 1e-10,
-                    "PA != LU at [{i}][{j}]: {pa} vs {lu_val}"
+                    (plu - a[i][j]).abs() < 1e-10,
+                    "A != P·L·U at [{i}][{j}]: {plu} vs {}",
+                    a[i][j]
                 );
             }
         }
