@@ -1473,11 +1473,22 @@ fn apply_dst_along_axis(
         }
 
         // Apply DST or IDST (DST-II forward, DST-III inverse)
-        let transformed = if inverse {
+        let mut transformed = if inverse {
             dst_iii(&temp, options)?
         } else {
             dst_ii(&temp, options)?
         };
+        // dst_iii in Backward mode returns the unnormalized DST-III
+        // (matching scipy.fft.dst(type=3)); idstn must apply the
+        // 1/(2N) per-axis factor that scipy.fft.idst injects so that
+        // idstn(dstn(x)) = x. The Forward and Ortho variants already
+        // include the correct scaling inside dst_ii/dst_iii.
+        if inverse && options.normalization == Normalization::Backward {
+            let scale = 1.0 / (2.0 * axis_len as f64);
+            for v in transformed.iter_mut() {
+                *v *= scale;
+            }
+        }
         temp_out.copy_from_slice(&transformed);
 
         // Store back

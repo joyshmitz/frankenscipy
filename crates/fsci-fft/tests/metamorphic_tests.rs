@@ -7,8 +7,8 @@
 //! Run with: `cargo test -p fsci-fft --test metamorphic_tests`
 
 use fsci_fft::{
-    Complex64, FftOptions, Normalization, dct, dst_ii, fft, fft2, idct, ifft, ifft2, irfft, irfft2,
-    rfft, rfft2,
+    Complex64, FftOptions, Normalization, dct, dctn, dst_ii, dstn, fft, fft2, idct, idctn, idstn,
+    ifft, ifft2, irfft, irfft2, rfft, rfft2,
 };
 
 const RTOL: f64 = 1e-9;
@@ -356,6 +356,52 @@ fn mr_rfft_matches_fft_hermitian_half() {
                 r[k].1,
                 f[k].0,
                 f[k].1
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — dctn / idctn 2D round-trip preserves the input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dctn_idctn_roundtrip() {
+    let opts = FftOptions::default();
+    for &(rows, cols) in &[(4_usize, 4), (8, 4), (16, 16), (12, 8)] {
+        let n = rows * cols;
+        let x = random_real(n, 0xC1F2_3344 + (rows * 1000 + cols) as u64);
+        let xf = dctn(&x, &[rows, cols], &opts).unwrap();
+        let xb = idctn(&xf, &[rows, cols], &opts).unwrap();
+        assert_eq!(xb.len(), n, "MR12 dctn round-trip length");
+        for (i, (got, want)) in xb.iter().zip(&x).enumerate() {
+            assert!(
+                close(*got, *want),
+                "MR12 dctn round-trip rows={rows} cols={cols} i={i}: {got} vs {want}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — dstn / idstn 2D round-trip preserves the input.
+// (Was previously failing: frankenscipy-oxl2 fixed the missing
+// per-axis 1/(2N) factor in apply_dst_along_axis for Backward mode.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dstn_idstn_roundtrip() {
+    let opts = FftOptions::default();
+    for &(rows, cols) in &[(4_usize, 4), (8, 4), (16, 16), (12, 8)] {
+        let n = rows * cols;
+        let x = random_real(n, 0xD571_4567 + (rows * 1000 + cols) as u64);
+        let xf = dstn(&x, &[rows, cols], &opts).unwrap();
+        let xb = idstn(&xf, &[rows, cols], &opts).unwrap();
+        assert_eq!(xb.len(), n, "MR13 dstn round-trip length");
+        for (i, (got, want)) in xb.iter().zip(&x).enumerate() {
+            assert!(
+                close(*got, *want),
+                "MR13 dstn round-trip rows={rows} cols={cols} i={i}: {got} vs {want}"
             );
         }
     }
