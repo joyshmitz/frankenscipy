@@ -7,7 +7,8 @@
 //! Run with: `cargo test -p fsci-cluster --test metamorphic_tests`
 
 use fsci_cluster::{
-    LinkageMethod, dbscan, fcluster, is_valid_linkage, kmeans, linkage, silhouette_score, vq,
+    LinkageMethod, dbscan, fcluster, is_valid_linkage, kmeans, leaves_list, linkage,
+    num_obs_linkage, silhouette_score, vq,
 };
 
 fn small_dataset() -> Vec<Vec<f64>> {
@@ -252,4 +253,50 @@ fn mr_dbscan_label_range() {
             res.n_clusters
         );
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — linkage matrix has shape (n - 1, 4) where n is the number of
+// input observations. Each row encodes a single agglomerative merge.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_linkage_shape() {
+    let data = small_dataset();
+    let n = data.len();
+    let z = linkage(&data, LinkageMethod::Ward).unwrap();
+    assert_eq!(z.len(), n - 1, "MR11 linkage rows: got {}, expected {}", z.len(), n - 1);
+    // Each row already has fixed length 4 (the [f64; 4] type), so
+    // structural shape is enforced by the type system.
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — leaves_list returns every original observation index exactly
+// once across [0, n).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_leaves_list_is_permutation() {
+    let data = small_dataset();
+    let n = data.len();
+    let z = linkage(&data, LinkageMethod::Ward).unwrap();
+    let leaves = leaves_list(&z);
+    assert_eq!(leaves.len(), n, "MR12 leaves count: got {}, expected {n}", leaves.len());
+    let mut sorted = leaves.clone();
+    sorted.sort_unstable();
+    for (i, &v) in sorted.iter().enumerate() {
+        assert_eq!(v, i, "MR12 missing index {i} in leaves_list: got {sorted:?}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — num_obs_linkage matches the input dataset size.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_num_obs_matches_input() {
+    let data = small_dataset();
+    let n = data.len();
+    let z = linkage(&data, LinkageMethod::Ward).unwrap();
+    assert_eq!(num_obs_linkage(&z), n, "MR13 num_obs_linkage mismatch");
 }
