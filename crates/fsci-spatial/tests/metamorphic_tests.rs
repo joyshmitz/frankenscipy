@@ -376,3 +376,57 @@ fn mr_convex_hull_translation_invariance() {
         "MR11 vertex count differs"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — KDTree.query_k returns k results sorted by ascending distance
+// and contains the brute-force k-nearest set.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kdtree_query_k_sorted_and_correct() {
+    let pts = sample_points();
+    let tree = KDTree::new(&pts).unwrap();
+    let q = vec![1.5_f64, 2.5, 2.5, 3.5];
+    let k = 3;
+    let result = tree.query_k(&q, k).unwrap();
+    assert_eq!(result.len(), k, "MR12 query_k length");
+
+    // Distances are non-decreasing.
+    for w in result.windows(2) {
+        assert!(
+            w[0].1 <= w[1].1 + 1e-12,
+            "MR12 distances not sorted ascending: {} > {}",
+            w[0].1,
+            w[1].1
+        );
+    }
+
+    // Cross-check: sort all brute-force distances and compare top-k.
+    let mut brute: Vec<(usize, f64)> =
+        pts.iter().enumerate().map(|(i, p)| (i, euclidean(&q, p))).collect();
+    brute.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    for i in 0..k {
+        assert!(
+            close(result[i].1, brute[i].1),
+            "MR12 distance #{i}: tree={} brute={}",
+            result[i].1,
+            brute[i].1
+        );
+        assert_eq!(
+            result[i].0, brute[i].0,
+            "MR12 index #{i}: tree={} brute={}",
+            result[i].0, brute[i].0
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — KDTree.size matches input length.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kdtree_size_matches_input() {
+    let pts = sample_points();
+    let tree = KDTree::new(&pts).unwrap();
+    assert_eq!(tree.size(), pts.len(), "MR13 KDTree.size mismatch");
+}
