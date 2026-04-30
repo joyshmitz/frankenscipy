@@ -9,7 +9,8 @@ use std::f64::consts::PI;
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialResult, SpecialTensor, beta, ellipk, factorial, gamma, gammaln, i0, i0_scalar, j0, jn,
+    SpecialResult, SpecialTensor, beta, ellipk, erf_scalar, factorial, gamma, gammainc, gammaincc,
+    gammaln, i0, i0_scalar, j0, jn,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_hermite, eval_hermitenorm, eval_laguerre, eval_legendre,
         roots_chebyt, roots_legendre,
@@ -435,5 +436,65 @@ fn mr_gauss_chebyt_exactness_on_polynomials() {
                 "MR19 GCT-{n} on x^{k}: got {approx:.16e}, exact {exact:.16e}"
             );
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — Boundary values of gammainc:
+//   gammainc(a, 0) = 0 and gammainc(a, ∞) = 1.
+// gammaincc is the complement, so gammaincc(a, 0) = 1, gammaincc(a, ∞) = 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gammainc_endpoints() {
+    for a in [0.5_f64, 1.0, 2.0, 5.0, 10.0] {
+        let p_at_0 = unwrap_real(gammainc(&real(a), &real(0.0), RuntimeMode::Strict));
+        assert!(
+            p_at_0.abs() < 1e-12,
+            "MR20 gammainc({a}, 0) = {p_at_0}, expected 0"
+        );
+        // For x = 100 we should be very close to 1 for all a ≤ 10.
+        let p_at_inf = unwrap_real(gammainc(&real(a), &real(100.0), RuntimeMode::Strict));
+        assert!(
+            (p_at_inf - 1.0).abs() < 1e-9,
+            "MR20 gammainc({a}, large) = {p_at_inf}, expected 1"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — gammainc(a, x) + gammaincc(a, x) = 1 for any (a > 0, x ≥ 0).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gammainc_complement() {
+    for a in [0.7_f64, 1.5, 3.0, 7.5] {
+        for x in [0.1_f64, 0.5, 1.0, 3.0, 7.0, 15.0] {
+            let p = unwrap_real(gammainc(&real(a), &real(x), RuntimeMode::Strict));
+            let q = unwrap_real(gammaincc(&real(a), &real(x), RuntimeMode::Strict));
+            let sum = p + q;
+            assert!(
+                (sum - 1.0).abs() < 1e-10,
+                "MR21 gammainc({a}, {x}) + gammaincc({a}, {x}) = {sum}, expected 1"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — erf and gammainc relationship: for x ≥ 0,
+//   erf(x) = gammainc(1/2, x²).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_erf_equals_gammainc_half() {
+    for x in [0.1_f64, 0.5, 1.0, 1.5, 2.5, 4.0] {
+        let lhs = erf_scalar(x);
+        let rhs = unwrap_real(gammainc(&real(0.5), &real(x * x), RuntimeMode::Strict));
+        assert!(
+            (lhs - rhs).abs() < 1e-9,
+            "MR22 erf({x}) = {lhs}, gammainc(1/2, {}²) = {rhs}",
+            x
+        );
     }
 }
