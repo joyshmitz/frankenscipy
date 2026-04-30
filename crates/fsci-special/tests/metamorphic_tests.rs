@@ -10,7 +10,7 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialResult, SpecialTensor, beta, ellipk, erf_scalar, factorial, gamma, gammainc, gammaincc,
-    gammaln, i0, i0_scalar, j0, jn,
+    gammaln, i0, i0_scalar, j0, jn, jv,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_hermite, eval_hermitenorm, eval_laguerre, eval_legendre,
         roots_chebyt, roots_legendre,
@@ -496,5 +496,48 @@ fn mr_erf_equals_gammainc_half() {
             "MR22 erf({x}) = {lhs}, gammainc(1/2, {}²) = {rhs}",
             x
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — Integer-order Bessel J via jv(n, x) agrees with j0/j1/jn
+// for n=0 and n=1. Tests cross-routine consistency between the
+// integer-special-case implementations and the general-order jv path.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_jv_matches_jn_for_integer_orders() {
+    for x in [0.5_f64, 1.5, 3.0, 7.5] {
+        for n in 0..=4_i64 {
+            let from_jn = unwrap_real(jn(&real(n as f64), &real(x), RuntimeMode::Strict));
+            let from_jv = unwrap_real(jv(&real(n as f64), &real(x), RuntimeMode::Strict));
+            assert!(
+                (from_jn - from_jv).abs() < 1e-10,
+                "MR23 jn({n}, {x}) = {from_jn}, jv({n}, {x}) = {from_jv}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — Bessel J recurrence: J_{n+1}(x) = (2n/x) J_n(x) − J_{n-1}(x).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bessel_jn_recurrence() {
+    for x in [0.5_f64, 1.5, 3.0, 7.5, 12.0] {
+        let mut prev = unwrap_real(jn(&real(0.0), &real(x), RuntimeMode::Strict));
+        let mut curr = unwrap_real(jn(&real(1.0), &real(x), RuntimeMode::Strict));
+        for n in 1..=8_i64 {
+            let next_expected = (2.0 * n as f64 / x) * curr - prev;
+            let next = unwrap_real(jn(&real((n + 1) as f64), &real(x), RuntimeMode::Strict));
+            assert!(
+                (next - next_expected).abs() < 1e-7 * next.abs().max(1.0),
+                "MR24 J recurrence at n={n}, x={x}: J_{}={next}, recurrence={next_expected}",
+                n + 1
+            );
+            prev = curr;
+            curr = next;
+        }
     }
 }
