@@ -349,3 +349,96 @@ fn mr_geometric_mean_inverse_p() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — Normal mean and variance match analytic values:
+// Normal(loc=μ, scale=σ).mean() = μ, .var() = σ².
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_normal_mean_and_variance() {
+    for &(loc, scale) in &[(0.0_f64, 1.0_f64), (1.5, 2.5), (-3.7, 0.7)] {
+        let d = Normal { loc, scale };
+        assert!(
+            (d.mean() - loc).abs() < 1e-12,
+            "MR14 Normal mean: got {}, expected {loc}",
+            d.mean()
+        );
+        let expected_var = scale * scale;
+        assert!(
+            (d.var() - expected_var).abs() < 1e-12,
+            "MR14 Normal var: got {}, expected {expected_var}",
+            d.var()
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — Exponential mean = 1/λ.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_exponential_mean() {
+    for &lambda in &[0.5_f64, 1.0, 2.0, 5.0] {
+        let d = Exponential::new(lambda);
+        let expected = 1.0 / lambda;
+        let mean = d.mean();
+        assert!(
+            (mean - expected).abs() < 1e-12,
+            "MR15 Exponential mean: λ={lambda} got {mean}, expected {expected}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — Beta mean = a / (a + b).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_beta_mean() {
+    for &(a, b) in &[(2.0_f64, 5.0_f64), (1.0, 1.0), (3.5, 2.5), (0.5, 0.5)] {
+        let d = BetaDist { a, b };
+        let expected = a / (a + b);
+        let mean = d.mean();
+        assert!(
+            (mean - expected).abs() < 1e-12,
+            "MR16 Beta mean: a={a}, b={b} got {mean}, expected {expected}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — cdf(ppf(0.5)) = 0.5: the median is consistent with the cdf
+// at the median value.
+// ─────────────────────────────────────────────────────────────────────
+
+fn check_median<D: ContinuousDistribution>(d: &D, label: &str) {
+    let med = d.ppf(0.5);
+    let v = d.cdf(med);
+    assert!(
+        (v - 0.5).abs() < 1e-8,
+        "MR17 {label} cdf(ppf(0.5)) = {v}, expected 0.5"
+    );
+}
+
+#[test]
+fn mr_cdf_at_median_is_half() {
+    check_median(
+        &Normal {
+            loc: 0.5,
+            scale: 1.5,
+        },
+        "Normal",
+    );
+    check_median(
+        &Uniform {
+            loc: -2.0,
+            scale: 5.0,
+        },
+        "Uniform",
+    );
+    check_median(&Exponential::new(2.0), "Exponential");
+    check_median(&ChiSquared::new(5.0), "ChiSquared");
+    check_median(&StudentT::new(3.0), "StudentT");
+    check_median(&BetaDist { a: 2.0, b: 5.0 }, "Beta");
+}
