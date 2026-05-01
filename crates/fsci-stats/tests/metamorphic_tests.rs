@@ -8,7 +8,7 @@
 use fsci_stats::{
     Bernoulli, BetaDist, Binomial, ChiSquared, ContinuousDistribution, DiscreteDistribution,
     Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, ks_2samp, kurtosis,
-    pearsonr, skew, spearmanr, ttest_1samp, ttest_ind,
+    mannwhitneyu, pearsonr, skew, spearmanr, ttest_1samp, ttest_ind, ttest_rel, wilcoxon,
 };
 
 const ATOL: f64 = 1e-8;
@@ -497,4 +497,51 @@ fn mr_kurtosis_constant_is_nan_or_zero() {
         k.is_nan() || k.abs() < 1e-9,
         "MR20 kurtosis on constant: {k} — should be NaN or 0"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — mannwhitneyu pvalue is invariant under sample swap (the test
+// is two-sided by default).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_mannwhitneyu_swap_invariant_pvalue() {
+    let a = vec![1.0_f64, 3.0, 5.0, 7.0, 9.0];
+    let b = vec![2.0_f64, 4.0, 6.0, 8.0, 10.0];
+    let ab = mannwhitneyu(&a, &b);
+    let ba = mannwhitneyu(&b, &a);
+    assert_close(ab.pvalue, ba.pvalue, "MR21 mannwhitneyu pvalue swap");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — wilcoxon paired-sign-rank with x = y returns p-value of 1.0
+// (no signed-rank evidence of difference).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_wilcoxon_identical_samples() {
+    let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let result = wilcoxon(&x, &x);
+    // p-value should be 1.0 (or NaN for the all-zero case if implementation
+    // chooses to flag degeneracy). Either is acceptable.
+    assert!(
+        result.pvalue.is_nan() || (result.pvalue - 1.0).abs() < 1e-9,
+        "MR22 wilcoxon(x, x): pvalue = {}, expected 1 or NaN",
+        result.pvalue
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — ttest_rel statistic flips sign when (a, b) is replaced with
+// (b, a): the t statistic of paired differences negates.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ttest_rel_sign_symmetry() {
+    let a = vec![1.0_f64, 3.0, 5.0, 6.0, 8.0];
+    let b = vec![2.0_f64, 4.0, 4.5, 7.0, 9.0];
+    let ab = ttest_rel(&a, &b, None).unwrap();
+    let ba = ttest_rel(&b, &a, None).unwrap();
+    assert_close(ab.statistic, -ba.statistic, "MR23 ttest_rel sign");
+    assert_close(ab.pvalue, ba.pvalue, "MR23 ttest_rel pvalue swap");
 }
