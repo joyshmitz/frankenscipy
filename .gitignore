@@ -166,3 +166,15 @@ crates/fsci-integrate/src/bin/test_*.rs
 crates/fsci-spatial/src/bin/test_*.rs
 crates/fsci-special/src/bin/
 .claude/
+
+# Beads recovery / rebuild / corrupt snapshots (machine-local salvage state)
+.beads/.recovery_*/
+.beads/recovery_*/
+.beads/*.bad_*
+.beads/*.backup_*
+.beads/*.rebuild_*
+.beads/*.corrupt_*
+.beads/*.pre_repair_*
+.beads/*.repair_candidate_*
+.beads/*.bak-corrupt
+.beads_recovery/
