@@ -431,3 +431,58 @@ fn mr_romb_exact_on_polynomial() {
         "MR15 romb exact on quadratic: got {result}, expected {expected}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — quad ∫₀^π sin(x) dx = 2 (textbook closed form).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quad_sin_over_pi_is_two() {
+    let opts = QuadOptions::default();
+    let result = quad(|x: f64| x.sin(), 0.0, std::f64::consts::PI, opts).unwrap();
+    assert!(
+        (result.integral - 2.0).abs() < 1e-9,
+        "MR16 ∫₀^π sin(x) dx = {}, expected 2",
+        result.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — quad ∫₀^π cos²(x) dx = π/2.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quad_cos_squared_over_pi() {
+    let opts = QuadOptions::default();
+    let result = quad(
+        |x: f64| x.cos().powi(2),
+        0.0,
+        std::f64::consts::PI,
+        opts,
+    )
+    .unwrap();
+    let expected = std::f64::consts::PI / 2.0;
+    assert!(
+        (result.integral - expected).abs() < 1e-9,
+        "MR17 ∫₀^π cos²(x) dx = {}, expected π/2 = {expected}",
+        result.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — quad ∫₀^B e^(-x) dx ≈ 1 - e^(-B). For B = 30, this is
+// essentially 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quad_exp_decay_truncated() {
+    let opts = QuadOptions::default();
+    let b = 30.0_f64;
+    let result = quad(|x: f64| (-x).exp(), 0.0, b, opts).unwrap();
+    let expected = 1.0 - (-b).exp();
+    assert!(
+        (result.integral - expected).abs() < 1e-9,
+        "MR18 ∫₀^30 e^(-x) dx = {}, expected {expected}",
+        result.integral
+    );
+}
