@@ -6,8 +6,8 @@
 //! Run with: `cargo test -p fsci-signal --test metamorphic_tests`
 
 use fsci_signal::{
-    ConvolveMode, blackman, convolve, correlate, fftconvolve, filtfilt, hamming, hann, hilbert,
-    kaiser, lfilter,
+    ConvolveMode, FindPeaksOptions, blackman, convolve, correlate, fftconvolve, filtfilt,
+    find_peaks, hamming, hann, hilbert, kaiser, lfilter, sosfilt, tf2sos,
 };
 
 const ATOL: f64 = 1e-9;
@@ -257,6 +257,65 @@ fn mr_hilbert_of_constant() {
         assert!(
             im.abs() < 1e-9,
             "MR11 hilbert const imag part at i={i}: {im}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — find_peaks on a strictly monotone signal returns no peaks.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_find_peaks_monotone_has_no_peaks() {
+    // Strictly increasing: no peak at any interior position.
+    let x: Vec<f64> = (0..50).map(|i| i as f64 * 0.1).collect();
+    let result = find_peaks(&x, FindPeaksOptions::default());
+    assert!(
+        result.peaks.is_empty(),
+        "MR12 monotone signal should have no peaks, got {:?}",
+        result.peaks
+    );
+    // Strictly decreasing: also no peaks.
+    let y: Vec<f64> = (0..50).rev().map(|i| i as f64 * 0.1).collect();
+    let result = find_peaks(&y, FindPeaksOptions::default());
+    assert!(
+        result.peaks.is_empty(),
+        "MR12 monotone-decreasing signal should have no peaks, got {:?}",
+        result.peaks
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — find_peaks on a discrete tent [0, 1, 0] returns index 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_find_peaks_tent() {
+    let x = vec![0.0, 1.0, 0.0];
+    let result = find_peaks(&x, FindPeaksOptions::default());
+    assert_eq!(result.peaks, vec![1], "MR13 expected single peak at idx 1");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — sosfilt and lfilter produce the same output for the same
+// transfer function (when the SOS is constructed via tf2sos).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sosfilt_matches_lfilter() {
+    // Simple low-pass: y[n] = (x[n] + 0.5 x[n-1]) / 1.5
+    let b = vec![1.0_f64, 0.5];
+    let a = vec![1.0_f64, 0.0];
+    let x: Vec<f64> = (0..32).map(|i| (i as f64 / 4.0).sin()).collect();
+
+    let y_lf = lfilter(&b, &a, &x, None).unwrap();
+    let sos = tf2sos(&b, &a).unwrap();
+    let y_sos = sosfilt(&sos, &x).unwrap();
+    assert_eq!(y_lf.len(), y_sos.len(), "MR14 length mismatch");
+    for (i, (l, s)) in y_lf.iter().zip(&y_sos).enumerate() {
+        assert!(
+            close(*l, *s),
+            "MR14 lfilter vs sosfilt at i={i}: {l} vs {s}"
         );
     }
 }
