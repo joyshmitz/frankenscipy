@@ -6,8 +6,8 @@
 //! Run with: `cargo test -p fsci-ndimage --test metamorphic_tests`
 
 use fsci_ndimage::{
-    BoundaryMode, NdArray, binary_dilation, binary_erosion, convolve, correlate, gaussian_filter,
-    label, median_filter, rotate, shift, sobel, zoom,
+    BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_opening,
+    convolve, correlate, gaussian_filter, label, median_filter, rotate, shift, sobel, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -312,6 +312,70 @@ fn mr_convolve_with_identity_kernel_is_input() {
         assert!(
             close(*a, *b),
             "MR13 convolve(image, [1]) at i={i}: got {a}, expected {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — binary_opening = binary_erosion then binary_dilation.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_binary_opening_equals_erode_then_dilate() {
+    // Disk-ish blob in a 9x9 grid.
+    let img = arr_2d(9, 9, |i, j| {
+        let di = i as i32 - 4;
+        let dj = j as i32 - 4;
+        if di * di + dj * dj <= 6 { 1.0 } else { 0.0 }
+    });
+    let opened = binary_opening(&img, 3, 1).unwrap();
+    let manual = binary_dilation(&binary_erosion(&img, 3, 1).unwrap(), 3, 1).unwrap();
+    for (i, (a, b)) in opened.data.iter().zip(&manual.data).enumerate() {
+        assert!(
+            close(*a, *b),
+            "MR14 opening != erode∘dilate at i={i}: {a} vs {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — binary_closing = binary_dilation then binary_erosion.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_binary_closing_equals_dilate_then_erode() {
+    let img = arr_2d(9, 9, |i, j| {
+        let di = i as i32 - 4;
+        let dj = j as i32 - 4;
+        if di * di + dj * dj <= 6 { 1.0 } else { 0.0 }
+    });
+    let closed = binary_closing(&img, 3, 1).unwrap();
+    let manual = binary_erosion(&binary_dilation(&img, 3, 1).unwrap(), 3, 1).unwrap();
+    for (i, (a, b)) in closed.data.iter().zip(&manual.data).enumerate() {
+        assert!(
+            close(*a, *b),
+            "MR15 closing != dilate∘erode at i={i}: {a} vs {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — binary_opening is idempotent: opening(opening(X)) = opening(X).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_binary_opening_idempotent() {
+    let img = arr_2d(9, 9, |i, j| {
+        let di = i as i32 - 4;
+        let dj = j as i32 - 4;
+        if di * di + dj * dj <= 6 { 1.0 } else { 0.0 }
+    });
+    let once = binary_opening(&img, 3, 1).unwrap();
+    let twice = binary_opening(&once, 3, 1).unwrap();
+    for (i, (a, b)) in once.data.iter().zip(&twice.data).enumerate() {
+        assert!(
+            close(*a, *b),
+            "MR16 opening not idempotent at i={i}: {a} vs {b}"
         );
     }
 }
