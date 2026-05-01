@@ -9,8 +9,8 @@
 //! Run with: `cargo test -p fsci-linalg --test metamorphic_tests`
 
 use fsci_linalg::{
-    DecompOptions, InvOptions, NormKind, SolveOptions, cholesky, det, expm, hessenberg, inv, logm,
-    lu, norm, qr, schur, solve, sqrtm, svd,
+    DecompOptions, InvOptions, NormKind, SolveOptions, cholesky, det, eigh, eigvalsh, expm,
+    hessenberg, inv, logm, lu, norm, qr, schur, solve, sqrtm, svd,
 };
 
 const RTOL: f64 = 1e-9;
@@ -564,4 +564,74 @@ fn mr_hessenberg_reconstructs_matrix() {
             }
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — eigh on a symmetric matrix returns (λ_i, v_i) with the
+// eigenequation A v = λ v satisfied to f64-eps tolerance.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_eigh_satisfies_eigenequation() {
+    let a = vec![
+        vec![4.0_f64, 1.0, 0.5, 0.0],
+        vec![1.0, 3.0, 0.7, 0.2],
+        vec![0.5, 0.7, 5.0, 0.1],
+        vec![0.0, 0.2, 0.1, 6.0],
+    ];
+    let result = eigh(&a, DecompOptions::default()).unwrap();
+    let n = result.eigenvalues.len();
+    assert_eq!(n, a.len());
+    for (k, lambda) in result.eigenvalues.iter().enumerate() {
+        // eigenvectors are stored as columns: v_k = result.eigenvectors[i][k] for i in 0..n
+        let v: Vec<f64> = (0..n).map(|i| result.eigenvectors[i][k]).collect();
+        let mut av = vec![0.0_f64; n];
+        for i in 0..n {
+            for j in 0..n {
+                av[i] += a[i][j] * v[j];
+            }
+        }
+        let mut residual_sq = 0.0_f64;
+        for i in 0..n {
+            let r = av[i] - lambda * v[i];
+            residual_sq += r * r;
+        }
+        assert!(
+            residual_sq.sqrt() < 1e-10,
+            "MR15 eigh eigenequation k={k}: ||A v - λ v|| = {}",
+            residual_sq.sqrt()
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — eigvalsh returns eigenvalues in ascending order.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_eigvalsh_ascending() {
+    let a = vec![
+        vec![4.0_f64, 1.0, 0.5, 0.0],
+        vec![1.0, 3.0, 0.7, 0.2],
+        vec![0.5, 0.7, 5.0, 0.1],
+        vec![0.0, 0.2, 0.1, 6.0],
+    ];
+    let evals = eigvalsh(&a, DecompOptions::default()).unwrap();
+    for w in evals.windows(2) {
+        assert!(
+            w[0] <= w[1] + 1e-12,
+            "MR16 eigvalsh not ascending: {} > {}",
+            w[0],
+            w[1]
+        );
+    }
+    // Sum of eigenvalues equals trace.
+    let trace: f64 = (0..a.len()).map(|i| a[i][i]).sum();
+    let sum: f64 = evals.iter().sum();
+    assert!(
+        (sum - trace).abs() < 1e-10,
+        "MR16 sum of eigenvalues {} != trace {}",
+        sum,
+        trace
+    );
 }
