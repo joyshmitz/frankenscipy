@@ -330,3 +330,66 @@ fn mr_basinhopping_far_start_converges() {
         res.x[1]
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — curve_fit recovers quadratic params (a, b, c) from noisy data.
+// y_i = a x_i² + b x_i + c with deterministic small noise.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_curve_fit_recovers_quadratic() {
+    let a_true = 1.5_f64;
+    let b_true = -2.0_f64;
+    let c_true = 0.5_f64;
+    let xs: Vec<f64> = (0..30).map(|i| -3.0 + 0.2 * i as f64).collect();
+    // Deterministic small periodic noise so the test is reproducible.
+    let ys: Vec<f64> = xs
+        .iter()
+        .enumerate()
+        .map(|(k, &x)| {
+            let noise = 1e-6 * ((k as f64) * 0.7).sin();
+            a_true * x * x + b_true * x + c_true + noise
+        })
+        .collect();
+    let model = |x: f64, p: &[f64]| p[0] * x * x + p[1] * x + p[2];
+    let opts = CurveFitOptions {
+        p0: Some(vec![1.0, 1.0, 1.0]),
+        ..Default::default()
+    };
+    let res = curve_fit(model, &xs, &ys, opts).unwrap();
+    assert!(
+        (res.popt[0] - a_true).abs() < 1e-3,
+        "MR13 curve_fit a: {} vs {a_true}",
+        res.popt[0]
+    );
+    assert!(
+        (res.popt[1] - b_true).abs() < 1e-3,
+        "MR13 curve_fit b: {} vs {b_true}",
+        res.popt[1]
+    );
+    assert!(
+        (res.popt[2] - c_true).abs() < 1e-3,
+        "MR13 curve_fit c: {} vs {c_true}",
+        res.popt[2]
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — minimize from a far initial guess on a strictly convex 1D
+// objective still finds the global minimum.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimize_far_initial_guess_strictly_convex() {
+    // f(x) = (x - 7)^2 has minimum at x = 7. Start from x0 = -100.
+    let f = |x: &[f64]| (x[0] - 7.0).powi(2);
+    let opts = MinimizeOptions::default();
+    let res = minimize(f, &[-100.0], opts).unwrap();
+    assert!(
+        (res.x[0] - 7.0).abs() < 1e-3,
+        "MR14 minimize from far x0: got {}, expected 7",
+        res.x[0]
+    );
+    let fmin = res.fun.unwrap();
+    assert!(fmin < 1e-6, "MR14 fmin not zero: {fmin}");
+}
