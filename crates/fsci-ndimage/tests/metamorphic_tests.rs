@@ -6,8 +6,8 @@
 //! Run with: `cargo test -p fsci-ndimage --test metamorphic_tests`
 
 use fsci_ndimage::{
-    BoundaryMode, NdArray, binary_dilation, binary_erosion, gaussian_filter, label, median_filter,
-    rotate, shift, sobel, zoom,
+    BoundaryMode, NdArray, binary_dilation, binary_erosion, convolve, correlate, gaussian_filter,
+    label, median_filter, rotate, shift, sobel, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -270,6 +270,48 @@ fn mr_rotate_by_360_returns_to_original() {
         assert!(
             (a - b).abs() < 1e-9,
             "MR11 rotate(360) drift at i={i}: got {a}, expected {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — convolve and correlate agree when the kernel is symmetric
+// (kernel[i, j] = kernel[K-1-i, K-1-j] under flip in every axis).
+// Because convolution flips the kernel and correlation does not,
+// using a symmetric kernel makes the two operators identical.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convolve_correlate_agree_on_symmetric_kernel() {
+    let img = arr_2d(8, 8, |i, j| ((i + j) as f64).sin());
+    // 3x3 symmetric averaging kernel.
+    let weights = NdArray::new(vec![1.0_f64 / 9.0; 9], vec![3, 3]).unwrap();
+    let conv = convolve(&img, &weights, BoundaryMode::Reflect, 0.0).unwrap();
+    let corr = correlate(&img, &weights, BoundaryMode::Reflect, 0.0).unwrap();
+    assert_eq!(conv.shape, corr.shape, "MR12 shape mismatch");
+    for (i, (c, k)) in conv.data.iter().zip(&corr.data).enumerate() {
+        assert!(
+            close(*c, *k),
+            "MR12 conv vs corr at i={i}: {c} vs {k}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — convolve with the 1-element identity kernel returns the
+// original image unchanged.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convolve_with_identity_kernel_is_input() {
+    let img = arr_2d(7, 9, |i, j| (i * 13 + j * 7) as f64);
+    let identity = NdArray::new(vec![1.0_f64], vec![1, 1]).unwrap();
+    let out = convolve(&img, &identity, BoundaryMode::Reflect, 0.0).unwrap();
+    assert_eq!(out.shape, img.shape, "MR13 shape changed");
+    for (i, (a, b)) in out.data.iter().zip(&img.data).enumerate() {
+        assert!(
+            close(*a, *b),
+            "MR13 convolve(image, [1]) at i={i}: got {a}, expected {b}"
         );
     }
 }
