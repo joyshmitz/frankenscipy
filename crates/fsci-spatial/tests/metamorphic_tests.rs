@@ -430,3 +430,77 @@ fn mr_kdtree_size_matches_input() {
     let tree = KDTree::new(&pts).unwrap();
     assert_eq!(tree.size(), pts.len(), "MR13 KDTree.size mismatch");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — cdist row count matches xa.len() and column count matches
+// xb.len(); all entries are non-negative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cdist_dimensions_and_nonneg() {
+    let xa = vec![
+        vec![0.0_f64, 0.0],
+        vec![1.0, 0.0],
+        vec![0.0, 1.0],
+    ];
+    let xb = vec![
+        vec![5.0_f64, 5.0],
+        vec![5.0, 6.0],
+    ];
+    let m = cdist_metric(&xa, &xb, DistanceMetric::Euclidean).unwrap();
+    assert_eq!(m.len(), xa.len(), "MR14 cdist row count");
+    for (i, row) in m.iter().enumerate() {
+        assert_eq!(row.len(), xb.len(), "MR14 cdist row {i} col count");
+        for &v in row {
+            assert!(v >= 0.0, "MR14 cdist negative entry: {v}");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — cdist is translation-invariant: shifting both xa and xb by
+// the same (Δ, Δ) leaves the distance matrix unchanged.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cdist_translation_invariance() {
+    let xa = vec![vec![0.0_f64, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+    let xb = vec![vec![5.0_f64, 5.0], vec![5.0, 6.0]];
+    let m_base = cdist_metric(&xa, &xb, DistanceMetric::Euclidean).unwrap();
+
+    let dx = 7.5_f64;
+    let dy = -3.2_f64;
+    let xa_t: Vec<Vec<f64>> = xa.iter().map(|p| vec![p[0] + dx, p[1] + dy]).collect();
+    let xb_t: Vec<Vec<f64>> = xb.iter().map(|p| vec![p[0] + dx, p[1] + dy]).collect();
+    let m_shift = cdist_metric(&xa_t, &xb_t, DistanceMetric::Euclidean).unwrap();
+    for (r1, r2) in m_base.iter().zip(&m_shift) {
+        for (a, b) in r1.iter().zip(r2) {
+            assert!(close(*a, *b), "MR15 cdist translation: {a} vs {b}");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — cdist between points and themselves equals pdist as a square
+// matrix on the off-diagonal entries.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cdist_self_matches_pdist() {
+    let pts = sample_points();
+    let cd = cdist_metric(&pts, &pts, DistanceMetric::Euclidean).unwrap();
+    let condensed = pdist(&pts, DistanceMetric::Euclidean).unwrap();
+    let n = pts.len();
+    let mut idx = 0;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let from_cdist = cd[i][j];
+            let from_pdist = condensed[idx];
+            assert!(
+                close(from_cdist, from_pdist),
+                "MR16 cdist[{i},{j}]={from_cdist} pdist[{idx}]={from_pdist}"
+            );
+            idx += 1;
+        }
+    }
+}
