@@ -7,8 +7,9 @@
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, IterativeSolveOptions, Shape2D, SolveOptions, bicg, bicgstab, cg,
-    coo_to_csr_with_mode, csr_to_csc_with_mode, gmres, sparse_transpose, spmv, spsolve,
+    CooMatrix, CsrMatrix, EigsOptions, IterativeSolveOptions, Shape2D, SolveOptions, add_csr, bicg,
+    bicgstab, cg, coo_to_csr_with_mode, csr_to_csc_with_mode, eigsh, gmres, sparse_transpose,
+    spmv, spsolve, svds,
 };
 
 const ATOL: f64 = 1e-9;
@@ -358,5 +359,83 @@ fn mr_bicg_residual_small_nonsym() {
     for i in 0..n {
         let r = ax[i] - b[i];
         assert!(r.abs() < 1e-8, "MR11 bicg residual at i={i}: {r}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — eigsh on a SPD matrix returns real eigenvalues with small
+// residual ||A v − λ v|| / ||v||.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_eigsh_residual_small_on_spd() {
+    let a = build_spd_csr();
+    let n = a.shape().rows;
+    let k = 2.min(n);
+    let res = eigsh(&a, k, EigsOptions::default()).unwrap();
+    assert_eq!(res.eigenvalues.len(), k);
+    assert_eq!(res.eigenvectors.len(), k);
+    for (idx, lambda) in res.eigenvalues.iter().enumerate() {
+        let v = &res.eigenvectors[idx];
+        let av = spmv(&a, v);
+        let mut residual = 0.0_f64;
+        let mut norm = 0.0_f64;
+        for (i, av_i) in av.iter().enumerate() {
+            let r = av_i - lambda * v[i];
+            residual += r * r;
+            norm += v[i] * v[i];
+        }
+        let rel = residual.sqrt() / norm.sqrt().max(1e-12);
+        // Default eigsh tol ≈ 1e-6 on the residual — allow a small
+        // multiplier for the test bound.
+        assert!(
+            rel < 1e-4,
+            "MR12 eigsh residual at idx={idx}: λ={lambda}, ||Av-λv||/||v||={rel}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — svds singular values are non-negative and sorted descending.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_svds_singular_values_sorted_nonneg() {
+    let a = build_spd_csr();
+    let n = a.shape().rows;
+    let k = 3.min(n - 1);
+    let res = svds(&a, k, EigsOptions::default()).unwrap();
+    let s = &res.singular_values;
+    assert_eq!(s.len(), k);
+    for (i, &v) in s.iter().enumerate() {
+        assert!(v >= 0.0, "MR13 negative singular value at i={i}: {v}");
+    }
+    for w in s.windows(2) {
+        assert!(
+            w[0] >= w[1] - 1e-10,
+            "MR13 singular values not descending: {} < {}",
+            w[0],
+            w[1]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — add_csr is commutative: A + B = B + A as a dense matrix.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_add_csr_commutative() {
+    let a = build_spd_csr();
+    let b = build_spd_csr(); // same structure but a and b are independently constructed
+    let ab = add_csr(&a, &b).unwrap();
+    let ba = add_csr(&b, &a).unwrap();
+    let dense_ab = csr_to_dense(&ab);
+    let dense_ba = csr_to_dense(&ba);
+    assert_eq!(dense_ab.len(), dense_ba.len(), "MR14 row count");
+    for (r1, r2) in dense_ab.iter().zip(&dense_ba) {
+        for (a, b) in r1.iter().zip(r2) {
+            assert!(close(*a, *b), "MR14 add_csr commutative element diff");
+        }
     }
 }
