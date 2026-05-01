@@ -7,8 +7,8 @@
 
 use fsci_stats::{
     Bernoulli, BetaDist, Binomial, ChiSquared, ContinuousDistribution, DiscreteDistribution,
-    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, ks_2samp, pearsonr,
-    spearmanr, ttest_1samp, ttest_ind,
+    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, ks_2samp, kurtosis,
+    pearsonr, skew, spearmanr, ttest_1samp, ttest_ind,
 };
 
 const ATOL: f64 = 1e-8;
@@ -441,4 +441,60 @@ fn mr_cdf_at_median_is_half() {
     check_median(&ChiSquared::new(5.0), "ChiSquared");
     check_median(&StudentT::new(3.0), "StudentT");
     check_median(&BetaDist { a: 2.0, b: 5.0 }, "Beta");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — sample skew of a symmetric distribution is ≈ 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_skew_of_symmetric_data_is_zero() {
+    // Symmetric data around 0: [-3, -2, -1, 0, 1, 2, 3] mirrored.
+    let data: Vec<f64> = vec![-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0];
+    let s = skew(&data);
+    assert!(
+        s.abs() < 1e-12,
+        "MR18 symmetric skew = {s}, expected 0"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — sample skew of a left-skewed distribution is negative,
+// right-skewed is positive.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_skew_sign_for_skewed_data() {
+    // Left-skewed: long lower tail, mass concentrated on the right.
+    let left = vec![-10.0, -5.0, 0.0, 1.0, 2.0, 2.0, 2.0, 2.0];
+    let s_left = skew(&left);
+    assert!(s_left < 0.0, "MR19 left-skew should be negative: {s_left}");
+    // Right-skewed: long upper tail.
+    let right: Vec<f64> = left.iter().map(|v| -v).collect();
+    let s_right = skew(&right);
+    assert!(s_right > 0.0, "MR19 right-skew should be positive: {s_right}");
+    // Mirror symmetry: skew(-x) = -skew(x).
+    assert!(
+        (s_left + s_right).abs() < 1e-9,
+        "MR19 mirror symmetry: {s_left} + {s_right} != 0"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — kurtosis of a constant array is well-defined: degenerate
+// data (zero variance) returns NaN, matching scipy's policy on
+// pathological inputs.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kurtosis_constant_is_nan_or_zero() {
+    let data = vec![3.7_f64; 10];
+    let k = kurtosis(&data);
+    // Either NaN (well-defined "no shape") or 0 (constant ⇒ k=−3 or 0
+    // with scipy's "fisher" convention) — both are acceptable; the
+    // important thing is we don't return a finite garbage value.
+    assert!(
+        k.is_nan() || k.abs() < 1e-9,
+        "MR20 kurtosis on constant: {k} — should be NaN or 0"
+    );
 }
