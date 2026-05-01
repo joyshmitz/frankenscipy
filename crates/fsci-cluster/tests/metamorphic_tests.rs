@@ -8,8 +8,8 @@
 
 use fsci_cluster::{
     LinkageMethod, adjusted_rand_score, calinski_harabasz_score, davies_bouldin_score, dbscan,
-    fcluster, is_valid_linkage, kmeans, leaves_list, linkage, normalized_mutual_info,
-    num_obs_linkage, silhouette_score, vq,
+    fcluster, fclusterdata, is_valid_linkage, kmeans, leaves_list, linkage, mini_batch_kmeans,
+    normalized_mutual_info, num_obs_linkage, silhouette_score, vq,
 };
 
 fn small_dataset() -> Vec<Vec<f64>> {
@@ -366,5 +366,66 @@ fn mr_ari_symmetric() {
     assert!(
         (ab - ba).abs() < 1e-12,
         "MR17 ARI not symmetric: {ab} vs {ba}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — kmeans inertia is non-increasing as k grows (more clusters
+// fit data better in sum-of-squares).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kmeans_inertia_nonincreasing_in_k() {
+    let data = small_dataset(); // 12 points, 3 well-separated clusters
+    let mut prev = f64::INFINITY;
+    for k in 1..=4 {
+        let res = kmeans(&data, k, 200, 42).unwrap();
+        assert!(
+            res.inertia.is_finite() && res.inertia >= 0.0,
+            "MR18 inertia must be finite + non-negative at k={k}: {}",
+            res.inertia
+        );
+        assert!(
+            res.inertia <= prev + 1e-9,
+            "MR18 inertia not monotone: k={k}, prev={prev}, curr={}",
+            res.inertia
+        );
+        prev = res.inertia;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — mini_batch_kmeans returns k centroids of the right shape.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_mini_batch_kmeans_returns_k_centroids() {
+    let data = small_dataset();
+    for k in [2_usize, 3, 4] {
+        let res = mini_batch_kmeans(&data, k, 100, 6, 42).unwrap();
+        assert_eq!(res.centroids.len(), k, "MR19 centroid count");
+        for c in &res.centroids {
+            assert_eq!(c.len(), data[0].len(), "MR19 centroid dim");
+        }
+        assert_eq!(res.labels.len(), data.len(), "MR19 label count");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — fclusterdata(X, k, m) equals fcluster(linkage(X, m), k):
+// the convenience function should be definitionally equivalent to
+// the two-step composition.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fclusterdata_matches_fcluster_pipeline() {
+    let data = small_dataset();
+    let max_k = 3;
+    let from_func = fclusterdata(&data, max_k, LinkageMethod::Ward).unwrap();
+    let z = linkage(&data, LinkageMethod::Ward).unwrap();
+    let from_pipeline = fcluster(&z, max_k).unwrap();
+    assert_eq!(
+        from_func, from_pipeline,
+        "MR20 fclusterdata should equal fcluster(linkage(X))"
     );
 }
