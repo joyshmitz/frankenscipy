@@ -7,8 +7,8 @@
 //! Run with: `cargo test -p fsci-fft --test metamorphic_tests`
 
 use fsci_fft::{
-    Complex64, FftOptions, Normalization, dct, dctn, dst_ii, dstn, fft, fft2, idct, idctn, idstn,
-    ifft, ifft2, irfft, irfft2, rfft, rfft2,
+    Complex64, FftOptions, Normalization, dct, dctn, dst_ii, dstn, fft, fft2, hfft, hilbert, idct,
+    idctn, idstn, ifft, ifft2, ihfft, irfft, irfft2, rfft, rfft2,
 };
 
 const RTOL: f64 = 1e-9;
@@ -402,6 +402,45 @@ fn mr_dstn_idstn_roundtrip() {
             assert!(
                 close(*got, *want),
                 "MR13 dstn round-trip rows={rows} cols={cols} i={i}: {got} vs {want}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — hilbert preserves the input mean: Re(x_a).mean() == x.mean()
+// since the real part of the analytic signal is x itself.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hilbert_preserves_mean() {
+    let opts = FftOptions::default();
+    for &n in &[16_usize, 32, 64, 100] {
+        let x = random_real(n, 0xAB12_CD34 + n as u64);
+        let analytic = hilbert(&x, &opts).unwrap();
+        let x_mean: f64 = x.iter().sum::<f64>() / n as f64;
+        let re_mean: f64 = analytic.iter().map(|(re, _)| re).sum::<f64>() / n as f64;
+        assert_close(re_mean, x_mean, &format!("MR14 hilbert mean n={n}"));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — ihfft / hfft round-trip on a real input (Hermitian-symmetric
+// path).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hfft_ihfft_roundtrip() {
+    let opts = FftOptions::default();
+    for &n in &[8_usize, 16, 32, 64] {
+        let x_real = random_real(n, 0xDEAD_C0DE + n as u64);
+        let xf = ihfft(&x_real, None, &opts).unwrap();
+        let xb = hfft(&xf, Some(n), &opts).unwrap();
+        assert_eq!(xb.len(), n, "MR15 hfft round-trip length");
+        for (i, (got, want)) in xb.iter().zip(&x_real).enumerate() {
+            assert!(
+                close(*got, *want),
+                "MR15 hfft round-trip n={n} i={i}: {got} vs {want}"
             );
         }
     }
