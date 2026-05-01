@@ -282,3 +282,61 @@ fn mr_nearest_nd_interpolator_returns_closest_value() {
     let v = interp.eval(&[0.95, 0.1]).unwrap();
     assert!(close(v, 20.0), "MR10 nearest at (0.95, 0.1): got {v}");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — CubicSpline derivative of a constant function is 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cubic_spline_derivative_of_constant() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64).collect();
+    let y = vec![3.7_f64; 10];
+    let cs = CubicSplineStandalone::new(&x, &y, SplineBc::Natural).unwrap();
+    let dcs = cs.derivative(1);
+    for k in 1..=18 {
+        let xi = 0.5 * k as f64;
+        let v = dcs.eval(xi);
+        assert!(
+            v.abs() < 1e-10,
+            "MR11 derivative of constant at xi={xi}: {v}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — BSpline integration over a zero-width interval is zero.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bspline_integrate_zero_width() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
+    let spline = make_interp_spline(&x, &y, 3).unwrap();
+    for &a in &[0.5_f64, 2.7, 5.0, 8.3] {
+        let i = spline.integrate(a, a).unwrap();
+        assert!(
+            i.abs() < 1e-12,
+            "MR12 BSpline integrate({a}, {a}) = {i}, expected 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR13 — BSpline integration is anti-symmetric:
+//   integrate(b, a) = -integrate(a, b).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bspline_integrate_antisymmetric() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi * xi).collect();
+    let spline = make_interp_spline(&x, &y, 3).unwrap();
+    for &(a, b) in &[(0.5_f64, 5.0_f64), (1.0, 2.0), (2.5, 8.5)] {
+        let i_ab = spline.integrate(a, b).unwrap();
+        let i_ba = spline.integrate(b, a).unwrap();
+        assert!(
+            (i_ab + i_ba).abs() < 1e-9 * i_ab.abs().max(1.0),
+            "MR13 antisymmetric integrate: ({a}, {b})={i_ab} + ({b}, {a})={i_ba} != 0"
+        );
+    }
+}
