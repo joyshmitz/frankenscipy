@@ -7,8 +7,9 @@
 //! Run with: `cargo test -p fsci-opt --test metamorphic_tests`
 
 use fsci_opt::{
-    CurveFitOptions, LeastSquaresOptions, MinimizeOptions, MinimizeScalarOptions, RootOptions,
-    bisect, brenth, brentq, curve_fit, fsolve, least_squares, minimize, minimize_scalar, ridder,
+    BasinhoppingOptions, CurveFitOptions, DifferentialEvolutionOptions, LeastSquaresOptions,
+    MinimizeOptions, MinimizeScalarOptions, RootOptions, basinhopping, bisect, brenth, brentq,
+    curve_fit, differential_evolution, fsolve, least_squares, minimize, minimize_scalar, ridder,
     toms748,
 };
 
@@ -275,4 +276,57 @@ fn mr_fsolve_2x2_linear_system() {
     // Sanity-check exact answer for the well-conditioned system.
     assert!((res.x[0] - 2.0).abs() < 1e-6);
     assert!((res.x[1] - 3.0).abs() < 1e-6);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR11 — differential_evolution finds the global minimum on a sphere
+// across rectangular bounds. f(x) = Σ x_i² has minimum 0 at the origin.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_de_finds_sphere_minimum() {
+    let f = |x: &[f64]| x.iter().map(|v| v * v).sum::<f64>();
+    let bounds = vec![(-5.0_f64, 5.0); 4];
+    let opts = DifferentialEvolutionOptions {
+        seed: Some(42),
+        ..DifferentialEvolutionOptions::default()
+    };
+    let res = differential_evolution(f, &bounds, opts).unwrap();
+    let fmin = res.fun.unwrap();
+    assert!(
+        fmin < 1e-6,
+        "MR11 differential_evolution did not converge: fmin={fmin}"
+    );
+    for &xi in &res.x {
+        assert!(
+            xi.abs() < 1e-3,
+            "MR11 not at origin: {res:?} (component {xi})"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR12 — basinhopping starting far from the minimum still finds it.
+// f(x) = (x[0] − 1)² + (x[1] + 2)² has min at (1, −2).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_basinhopping_far_start_converges() {
+    let f = |x: &[f64]| (x[0] - 1.0).powi(2) + (x[1] + 2.0).powi(2);
+    let opts = BasinhoppingOptions {
+        niter: 50,
+        seed: Some(7),
+        ..BasinhoppingOptions::default()
+    };
+    let res = basinhopping(f, &[10.0, 10.0], opts).unwrap();
+    assert!(
+        (res.x[0] - 1.0).abs() < 1e-3,
+        "MR12 basinhopping x[0] = {}, expected ~1",
+        res.x[0]
+    );
+    assert!(
+        (res.x[1] - (-2.0)).abs() < 1e-3,
+        "MR12 basinhopping x[1] = {}, expected ~-2",
+        res.x[1]
+    );
 }
