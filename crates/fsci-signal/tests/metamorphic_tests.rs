@@ -319,3 +319,70 @@ fn mr_sosfilt_matches_lfilter() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — hann window of length n peaks at value 1 at the midpoint
+// (sym=True, scipy convention: hann[(n-1)/2] = 1 for odd n).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hann_peak_at_midpoint() {
+    for &n in &[7_usize, 11, 21, 51] {
+        let w = hann(n);
+        let mid = (n - 1) / 2;
+        // For odd n, the maximum is exactly 1 at index (n-1)/2.
+        assert!(
+            (w[mid] - 1.0).abs() < 1e-12,
+            "MR15 hann peak n={n} mid={mid} value={}",
+            w[mid]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — Sum of a hamming window of length n ≈ 0.54 · n + ε:
+// the average sample value is ~0.54 (the center coefficient).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hamming_sum_matches_central_coeff() {
+    for &n in &[64_usize, 128, 256] {
+        let w = hamming(n);
+        let sum: f64 = w.iter().sum();
+        let avg = sum / n as f64;
+        // hamming = 0.54 - 0.46 cos(2πk/(N-1)) → mean over k is ~0.54.
+        // Allow generous slack since the cos term doesn't integrate
+        // to exactly zero at finite N.
+        assert!(
+            (avg - 0.54).abs() < 0.02,
+            "MR16 hamming average n={n}: {avg}, expected ~0.54"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — A first-difference filter on a linear ramp produces a constant
+// after the first sample. y[n] = x[n] - x[n-1] for the linear input
+// x[n] = 2n + 1 yields y[n] = 2 for n ≥ 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lfilter_first_difference_on_ramp() {
+    let x: Vec<f64> = (0..20).map(|i| 2.0 * i as f64 + 1.0).collect();
+    // y[n] = x[n] - x[n-1]
+    let b = vec![1.0_f64, -1.0];
+    let a = vec![1.0_f64];
+    let y = lfilter(&b, &a, &x, None).unwrap();
+    // y[0] = x[0] - 0 = 1 (assuming zi = 0); y[k] = 2 for k >= 1.
+    assert!(
+        (y[0] - 1.0).abs() < 1e-12,
+        "MR17 first-diff y[0] = {}, expected 1",
+        y[0]
+    );
+    for (k, &yk) in y.iter().enumerate().skip(1) {
+        assert!(
+            (yk - 2.0).abs() < 1e-12,
+            "MR17 first-diff y[{k}] = {yk}, expected 2"
+        );
+    }
+}
