@@ -7,7 +7,8 @@
 //! Run with: `cargo test -p fsci-cluster --test metamorphic_tests`
 
 use fsci_cluster::{
-    LinkageMethod, dbscan, fcluster, is_valid_linkage, kmeans, leaves_list, linkage,
+    LinkageMethod, adjusted_rand_score, calinski_harabasz_score, davies_bouldin_score, dbscan,
+    fcluster, is_valid_linkage, kmeans, leaves_list, linkage, normalized_mutual_info,
     num_obs_linkage, silhouette_score, vq,
 };
 
@@ -299,4 +300,71 @@ fn mr_num_obs_matches_input() {
     let n = data.len();
     let z = linkage(&data, LinkageMethod::Ward).unwrap();
     assert_eq!(num_obs_linkage(&z), n, "MR13 num_obs_linkage mismatch");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — Calinski-Harabasz score is positive and finite for a valid
+// k-clustering with k ≥ 2 of well-separated data.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_calinski_harabasz_positive() {
+    let data = small_dataset();
+    let res = kmeans(&data, 3, 200, 42).unwrap();
+    let score = calinski_harabasz_score(&data, &res.labels).unwrap();
+    assert!(
+        score.is_finite() && score > 0.0,
+        "MR14 CH score not positive: {score}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — Davies-Bouldin score is non-negative and finite.
+// (Lower is better; well-separated clusters give a small DB index.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_davies_bouldin_nonneg() {
+    let data = small_dataset();
+    let res = kmeans(&data, 3, 200, 42).unwrap();
+    let score = davies_bouldin_score(&data, &res.labels).unwrap();
+    assert!(
+        score.is_finite() && score >= 0.0,
+        "MR15 DB score not non-negative: {score}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — Identical clusterings give ARI = 1 and NMI = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_identical_labelings_give_perfect_agreement() {
+    let labels: Vec<usize> = vec![0, 0, 0, 1, 1, 2, 2, 2, 0, 1];
+    let ari = adjusted_rand_score(&labels, &labels).unwrap();
+    assert!(
+        (ari - 1.0).abs() < 1e-12,
+        "MR16 ARI(L, L) = {ari}, expected 1"
+    );
+    let nmi = normalized_mutual_info(&labels, &labels).unwrap();
+    assert!(
+        (nmi - 1.0).abs() < 1e-9,
+        "MR16 NMI(L, L) = {nmi}, expected 1"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — ARI is symmetric: ARI(a, b) = ARI(b, a).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ari_symmetric() {
+    let a = vec![0_usize, 0, 1, 1, 2, 2, 0, 1, 2, 0];
+    let b = vec![0_usize, 1, 0, 1, 2, 2, 1, 1, 2, 0];
+    let ab = adjusted_rand_score(&a, &b).unwrap();
+    let ba = adjusted_rand_score(&b, &a).unwrap();
+    assert!(
+        (ab - ba).abs() < 1e-12,
+        "MR17 ARI not symmetric: {ab} vs {ba}"
+    );
 }
