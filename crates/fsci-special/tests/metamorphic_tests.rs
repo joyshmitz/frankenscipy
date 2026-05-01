@@ -9,8 +9,8 @@ use std::f64::consts::PI;
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialResult, SpecialTensor, beta, ellipk, erf_scalar, factorial, gamma, gammainc, gammaincc,
-    gammaln, i0, i0_scalar, j0, jn, jv,
+    SpecialResult, SpecialTensor, beta, ellipe, ellipk, erf_scalar, factorial, gamma, gammainc,
+    gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar, j0, jn, jv,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_hermite, eval_hermitenorm, eval_laguerre, eval_legendre,
         roots_chebyt, roots_legendre,
@@ -539,5 +539,76 @@ fn mr_bessel_jn_recurrence() {
             prev = curr;
             curr = next;
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — ellipe boundary and monotonicity:
+//   ellipe(0) = π/2, ellipe(1) = 1, monotone decreasing on [0, 1].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ellipe_endpoint_and_monotonicity() {
+    let e0 = unwrap_real(ellipe(&real(0.0), RuntimeMode::Strict));
+    assert!((e0 - PI / 2.0).abs() < 1e-12, "MR25 ellipe(0) = {e0}, expected π/2");
+    let e1 = unwrap_real(ellipe(&real(1.0), RuntimeMode::Strict));
+    assert!((e1 - 1.0).abs() < 1e-12, "MR25 ellipe(1) = {e1}, expected 1");
+    let mut prev = e0;
+    for k in 1..50 {
+        let m = k as f64 / 50.0;
+        let v = unwrap_real(ellipe(&real(m), RuntimeMode::Strict));
+        assert!(
+            v <= prev + 1e-12,
+            "MR25 ellipe not monotone-decreasing at m={m}: {v} > prev={prev}"
+        );
+        prev = v;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — hyp1f1(a, a, z) = exp(z): the confluent hypergeometric with
+// numerator parameter equal to denominator parameter degenerates to
+// the exponential.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hyp1f1_degenerate_exp() {
+    for a in [0.5_f64, 1.0, 2.5, 5.0] {
+        for z in [-2.0_f64, -0.5, 0.5, 1.0, 2.0] {
+            let lhs = unwrap_real(hyp1f1(&real(a), &real(a), &real(z), RuntimeMode::Strict));
+            let rhs = z.exp();
+            let rel_err = (lhs - rhs).abs() / rhs.abs().max(1.0);
+            assert!(
+                rel_err < 1e-9,
+                "MR26 hyp1f1({a}, {a}, {z}) = {lhs}, expected e^{z} = {rhs}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — hyp2f1(a, b; c; 0) = 1: every Gauss hypergeometric reduces
+// to 1 at z = 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hyp2f1_at_zero_is_one() {
+    for &(a, b, c) in &[
+        (1.0_f64, 1.0_f64, 1.0_f64),
+        (0.5, 1.5, 2.5),
+        (2.0, 3.0, 4.0),
+        (-1.5, 0.7, 3.2),
+    ] {
+        let v = unwrap_real(hyp2f1(
+            &real(a),
+            &real(b),
+            &real(c),
+            &real(0.0),
+            RuntimeMode::Strict,
+        ));
+        assert!(
+            (v - 1.0).abs() < 1e-12,
+            "MR27 hyp2f1({a}, {b}; {c}; 0) = {v}, expected 1"
+        );
     }
 }
