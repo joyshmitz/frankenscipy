@@ -12,11 +12,12 @@
 //! Run with: `cargo test -p fsci-integrate --test metamorphic_tests`
 
 use fsci_integrate::{
-    DblquadOptions, QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue, cumulative_simpson,
-    cumulative_trapezoid, cumulative_trapezoid_initial, dblquad, fixed_quad, gauss_kronrod_quad,
-    gauss_legendre, monte_carlo_integrate, newton_cotes, quad, quad_full_inf, quad_inf, romb,
+    DblquadOptions, QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue,
+    cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_initial,
+    cumulative_trapezoid_uniform, dblquad, fixed_quad, gauss_kronrod_quad, gauss_legendre,
+    monte_carlo_integrate, newton_cotes, nquad, quad, quad_full_inf, quad_inf, quad_vec, romb,
     romb_func, romberg, simpson, simpson_irregular, simpson_uniform, solve_ivp, trapezoid,
-    trapezoid_irregular, tplquad, trapezoid_richardson,
+    trapezoid_irregular, trapezoid_uniform, tplquad, trapezoid_richardson,
 };
 
 /// Tolerance for metamorphic relation comparisons.
@@ -837,6 +838,147 @@ fn mr_romb_func_sin_over_pi() {
         r.integral
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — trapezoid_uniform on a constant input over a regular grid
+// returns area = c · (n - 1) · dx.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_trapezoid_uniform_constant_input() {
+    for &n in &[5usize, 10, 20] {
+        let dx = 0.5_f64;
+        let c = 3.0_f64;
+        let y = vec![c; n];
+        let r = trapezoid_uniform(&y, dx).unwrap();
+        let expected = c * (n - 1) as f64 * dx;
+        assert!(
+            (r.integral - expected).abs() < 1e-12,
+            "MR37 trapezoid_uniform n={n} = {} vs {expected}",
+            r.integral
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — cumulative_trapezoid_uniform last entry equals total via
+// trapezoid rule.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cumulative_trapezoid_uniform_final_equals_total() {
+    let dx = 0.25_f64;
+    let n = 11;
+    let y: Vec<f64> = (0..n).map(|i| (i as f64 * dx).sin()).collect();
+    let cum = cumulative_trapezoid_uniform(&y, dx).unwrap();
+    let total = trapezoid_uniform(&y, dx).unwrap().integral;
+    assert!(
+        (cum[cum.len() - 1] - total).abs() < 1e-12,
+        "MR38 cumulative_trapezoid_uniform last = {} vs total = {total}",
+        cum[cum.len() - 1]
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — quad_vec component i equals the scalar quad on the i-th
+// component for a vector-valued integrand.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quad_vec_components_match_scalar_quad() {
+    let opts = QuadOptions::default();
+    // Vector integrand: [sin(x), cos(x), x²].
+    let f_vec = |x: f64| vec![x.sin(), x.cos(), x * x];
+    let r_vec = quad_vec(f_vec, 0.0, 1.0, opts).unwrap();
+    let r_sin = quad(|x: f64| x.sin(), 0.0, 1.0, opts).unwrap().integral;
+    let r_cos = quad(|x: f64| x.cos(), 0.0, 1.0, opts).unwrap().integral;
+    let r_xsq = quad(|x: f64| x * x, 0.0, 1.0, opts).unwrap().integral;
+    assert_eq!(r_vec.integral.len(), 3, "MR39 quad_vec output length");
+    assert!(
+        (r_vec.integral[0] - r_sin).abs() < 1e-7,
+        "MR39 quad_vec[0] = {} vs sin = {r_sin}",
+        r_vec.integral[0]
+    );
+    assert!(
+        (r_vec.integral[1] - r_cos).abs() < 1e-7,
+        "MR39 quad_vec[1] = {} vs cos = {r_cos}",
+        r_vec.integral[1]
+    );
+    assert!(
+        (r_vec.integral[2] - r_xsq).abs() < 1e-7,
+        "MR39 quad_vec[2] = {} vs x² = {r_xsq}",
+        r_vec.integral[2]
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — nquad with a single 1D range reduces to scalar quad on the
+// same integrand.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_nquad_one_dim_reduces_to_quad() {
+    let opts = QuadOptions::default();
+    let f = |x: &[f64]| (x[0] * 2.0).cos();
+    let g = |x: f64| (x * 2.0).cos();
+    let nq = nquad(f, &[(0.0, 1.0)], opts).unwrap();
+    let q = quad(g, 0.0, 1.0, opts).unwrap();
+    assert!(
+        (nq.integral - q.integral).abs() < 1e-7,
+        "MR40 nquad = {} vs quad = {}",
+        nq.integral,
+        q.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — Triple integral of x·y·z over [0, 1]³ equals 1/8 (= 0.125):
+// ∫₀^1 ∫₀^1 ∫₀^1 xyz dx dy dz = 1/2 · 1/2 · 1/2.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_tplquad_xyz_unit_cube() {
+    let opts = DblquadOptions::default();
+    let res = tplquad(
+        |x, y, z| x * y * z,
+        0.0,
+        1.0,
+        |_| 0.0,
+        |_| 1.0,
+        |_, _| 0.0,
+        |_, _| 1.0,
+        opts,
+    )
+    .unwrap();
+    assert!(
+        (res.integral - 0.125).abs() < 1e-7,
+        "MR41 tplquad(xyz, unit cube) = {}, expected 0.125",
+        res.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — Cumulative simpson last entry agrees with simpson_uniform.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cumulative_simpson_final_close_to_simpson_uniform() {
+    // Cumulative Simpson differs from Simpson at the boundary by ~1e-3
+    // due to differing boundary-handling strategies; this MR checks
+    // they remain in the same neighbourhood for a smooth cosine.
+    let n = 17;
+    let dx = 0.25_f64;
+    let y: Vec<f64> = (0..n).map(|i| (i as f64 * dx).cos()).collect();
+    let x: Vec<f64> = (0..n).map(|i| i as f64 * dx).collect();
+    let cum = cumulative_simpson(&y, &x).unwrap();
+    let total = simpson_uniform(&y, dx).unwrap().integral;
+    assert!(
+        (cum[cum.len() - 1] - total).abs() < 5e-3,
+        "MR42 cumulative_simpson last = {} vs simpson_uniform = {total}",
+        cum[cum.len() - 1]
+    );
+}
+
 
 
 
