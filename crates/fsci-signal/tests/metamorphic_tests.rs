@@ -8,8 +8,9 @@
 use fsci_signal::{
     ConvolveMode, FilterType, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, bartlett,
     blackman, boxcar, butter, convolve, correlate, cwt, deconvolve, deemphasis, downsample,
-    fftconvolve, filtfilt, find_peaks, freqz, gaussian, hamming, hann, hilbert, hilbert_envelope,
-    iirnotch, iirpeak, kaiser, lanczos, lfilter, morlet, normalize_signal, parzen, peak_to_peak,
+    exponential_smooth, fftconvolve, filtfilt, find_peaks, freqz, gaussian, hamming, hann,
+    hilbert, hilbert_envelope, iirnotch, iirpeak, impulse_response, kaiser, lanczos, lfilter,
+    matched_filter, max_len_seq, medfilt1, morlet, normalize_signal, parzen, peak_to_peak,
     preemphasis, resample, ricker, rms, savgol_filter, signal_energy, sos2tf, sosfilt, sosfiltfilt,
     spectral_centroid, sweep_poly, tf2sos, tf2zpk, triang, unwrap_phase, upsample,
     xcorr_coefficient, zero_crossing_rate, zpk2tf,
@@ -1043,6 +1044,144 @@ fn mr_cwt_rows_match_widths() {
         assert_eq!(row.len(), data.len(), "MR47 cwt row {i} length");
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — medfilt1 preserves length and is idempotent on a uniform input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_medfilt1_preserves_length_and_constant() {
+    let x: Vec<f64> = (0..32).map(|i| (i as f64 * 0.4).sin()).collect();
+    let y = medfilt1(&x, 3);
+    assert_eq!(y.len(), x.len(), "MR48 medfilt1 length");
+    let c = vec![5.5_f64; 16];
+    let yc = medfilt1(&c, 3);
+    for &v in &yc {
+        assert!(
+            (v - 5.5).abs() < 1e-12,
+            "MR48 medfilt1(const)[{v}] != 5.5"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — exponential_smooth preserves length and reduces high-frequency
+// noise (smoothed values lie within input min/max bounds).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_exponential_smooth_length_and_bounds() {
+    let x: Vec<f64> = (0..32).map(|i| (i as f64 * 0.4).sin() + 0.5).collect();
+    let alpha = 0.3_f64;
+    let y = exponential_smooth(&x, alpha);
+    assert_eq!(y.len(), x.len(), "MR49 exponential_smooth length");
+    let mn = x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+    let mx = x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    for &v in &y {
+        assert!(
+            v >= mn - 1e-9 && v <= mx + 1e-9,
+            "MR49 smoothed value {v} outside [{mn}, {mx}]"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — max_len_seq(nbits) returns a sequence of length 2^nbits - 1
+// with each entry in {-1, +1} (or 0/1 — verify they're bipolar/binary).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_max_len_seq_length_and_values() {
+    for nbits in [3usize, 4, 5, 6] {
+        let seq = max_len_seq(nbits).unwrap();
+        let expected = (1usize << nbits) - 1;
+        assert_eq!(
+            seq.len(),
+            expected,
+            "MR50 MLS({nbits}) length = {} expected {expected}",
+            seq.len()
+        );
+        for (i, &v) in seq.iter().enumerate() {
+            assert!(
+                v == 1.0 || v == -1.0 || v == 0.0,
+                "MR50 MLS[{i}] = {v}, expected ±1 or 0"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — matched_filter output peaks at the position where the
+// template matches the signal.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_matched_filter_peak_position() {
+    // template = [1.0, 0.5, -0.5, 1.0]; signal embeds template at offset 5.
+    let template = vec![1.0_f64, 0.5, -0.5, 1.0];
+    let mut signal = vec![0.0_f64; 16];
+    for (i, &t) in template.iter().enumerate() {
+        signal[5 + i] = t;
+    }
+    let mf = matched_filter(&template, &signal).unwrap();
+    let (peak_idx, &peak_val) = mf
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .unwrap();
+    assert!(
+        peak_val > 0.0,
+        "MR51 matched_filter peak = {peak_val} ≤ 0"
+    );
+    // Peak should land near the embedding (offset 5..8 in 16-sample signal,
+    // depending on filter convention — start of match or end of match).
+    assert!(
+        (5..=8).contains(&peak_idx),
+        "MR51 matched_filter peak idx = {peak_idx}, expected in [5, 8]"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — impulse_response returns exactly n_samples elements.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_impulse_response_length() {
+    let r = butter(2, &[0.3], FilterType::Lowpass).unwrap();
+    for &n in &[16usize, 32, 64] {
+        let h = impulse_response(&r.b, &r.a, n).unwrap();
+        assert_eq!(
+            h.len(),
+            n,
+            "MR52 impulse_response length = {} vs requested {}",
+            h.len(),
+            n
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — find_peaks on a single peak (sin wave centered at midpoint)
+// returns at least one peak.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_find_peaks_finds_single_peak() {
+    // Build a Gaussian-like bump.
+    let x: Vec<f64> = (0..32)
+        .map(|i| {
+            let d = i as f64 - 16.0;
+            (-d * d / 50.0).exp()
+        })
+        .collect();
+    let opts = FindPeaksOptions::default();
+    let res = find_peaks(&x, opts);
+    assert!(
+        !res.peaks.is_empty(),
+        "MR53 find_peaks on Gaussian bump returned 0 peaks"
+    );
+}
+
 
 
 
