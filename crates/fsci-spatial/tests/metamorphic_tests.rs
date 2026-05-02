@@ -7,8 +7,9 @@
 //! Run with: `cargo test -p fsci-spatial --test metamorphic_tests`
 
 use fsci_spatial::{
-    ConvexHull, DistanceMetric, KDTree, cdist_metric, euclidean, metric_distance, pdist,
-    squareform_to_condensed, squareform_to_matrix,
+    ConvexHull, DistanceMetric, KDTree, cdist_metric, chebyshev, cityblock, cosine, euclidean,
+    jensenshannon, metric_distance, minkowski, pdist, procrustes, squareform_to_condensed,
+    squareform_to_matrix,
 };
 
 const ATOL: f64 = 1e-12;
@@ -504,3 +505,161 @@ fn mr_cdist_self_matches_pdist() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — Minkowski with p = 2 equals Euclidean; with p = 1 equals
+// Cityblock; with p → ∞ approaches Chebyshev.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minkowski_specializes_to_classic_metrics() {
+    let pts = sample_points();
+    for a in &pts {
+        for b in &pts {
+            let mp2 = minkowski(a, b, 2.0);
+            let euc = euclidean(a, b);
+            assert!(
+                close(mp2, euc),
+                "MR17 minkowski(p=2) = {mp2} != euclidean = {euc}"
+            );
+            let mp1 = minkowski(a, b, 1.0);
+            let cb = cityblock(a, b);
+            assert!(
+                close(mp1, cb),
+                "MR17 minkowski(p=1) = {mp1} != cityblock = {cb}"
+            );
+            // p = 50 should be very close to Chebyshev (within 5% relative on
+            // non-zero distances).
+            let mp_hi = minkowski(a, b, 50.0);
+            let cheb = chebyshev(a, b);
+            if cheb > 1e-6 {
+                let rel = (mp_hi - cheb).abs() / cheb;
+                assert!(
+                    rel < 0.05,
+                    "MR17 minkowski(p=50) = {mp_hi} vs chebyshev = {cheb} (rel diff {rel})"
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — chebyshev ≤ euclidean ≤ cityblock for any pair (in Rᵈ).
+// (Standard p-norm inequality between p=∞, p=2, p=1.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_metric_norm_ordering() {
+    let pts = sample_points();
+    for a in &pts {
+        for b in &pts {
+            let cheb = chebyshev(a, b);
+            let euc = euclidean(a, b);
+            let cb = cityblock(a, b);
+            assert!(
+                cheb <= euc + 1e-10,
+                "MR18 chebyshev = {cheb} > euclidean = {euc}"
+            );
+            assert!(
+                euc <= cb + 1e-10,
+                "MR18 euclidean = {euc} > cityblock = {cb}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — Cosine distance is non-negative and bounded above by 2 for
+// any pair of non-zero vectors, and is 0 for v vs c·v with c > 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cosine_distance_bounds_and_scale_invariance() {
+    let pts = sample_points();
+    for a in &pts {
+        for b in &pts {
+            let d = cosine(a, b);
+            assert!(
+                d >= -1e-12 && d <= 2.0 + 1e-12,
+                "MR19 cosine = {d}, expected in [0, 2]"
+            );
+        }
+        // a vs 3·a should be ≈ 0 (parallel).
+        let scaled: Vec<f64> = a.iter().map(|&x| 3.0 * x).collect();
+        if a.iter().any(|&x| x.abs() > 1e-9) {
+            let d_par = cosine(a, &scaled);
+            assert!(
+                d_par.abs() < 1e-9,
+                "MR19 cosine(a, 3a) = {d_par}, expected ≈ 0"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — Jensen-Shannon distance is symmetric and non-negative on two
+// probability distributions.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_jensenshannon_symmetric_nonneg() {
+    let dists = [
+        vec![0.5_f64, 0.3, 0.2],
+        vec![0.1_f64, 0.6, 0.3],
+        vec![0.25_f64, 0.25, 0.5],
+        vec![1.0_f64 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+    ];
+    for p in &dists {
+        for q in &dists {
+            let pq = jensenshannon(p, q, None);
+            let qp = jensenshannon(q, p, None);
+            assert!(pq >= -1e-12, "MR20 JS = {pq} negative");
+            assert!(
+                close(pq, qp),
+                "MR20 JS not symmetric: pq = {pq}, qp = {qp}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — procrustes(A, A) yields disparity ≈ 0 (Procrustes distance
+// of a configuration to itself is zero).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_procrustes_self_disparity_zero() {
+    let a: Vec<Vec<f64>> = vec![
+        vec![0.0, 0.0],
+        vec![1.0, 0.0],
+        vec![1.0, 1.0],
+        vec![0.0, 1.0],
+        vec![0.5, 0.5],
+    ];
+    let res = procrustes(&a, &a).expect("procrustes self");
+    assert!(
+        res.disparity < 1e-9,
+        "MR21 procrustes(A, A) disparity = {}, expected ≈ 0",
+        res.disparity
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — KDTree.query returns a self-match with distance 0 when
+// querying a point already in the tree.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kdtree_query_self_match_distance_zero() {
+    let pts = sample_points();
+    let tree = KDTree::new(&pts).expect("kdtree");
+    for (i, p) in pts.iter().enumerate() {
+        let (idx, dist) = tree.query(p).expect("query");
+        assert_eq!(idx, i, "MR22 self-match index for point {i}: got {idx}");
+        assert!(
+            dist < 1e-12,
+            "MR22 self-match distance for point {i}: {dist}"
+        );
+    }
+}
+
