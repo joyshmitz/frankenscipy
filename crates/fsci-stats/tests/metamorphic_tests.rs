@@ -10,9 +10,9 @@ use fsci_stats::{
     Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, acf,
     bartlett as bartlett_var, cumfreq, diff, durbin_watson, ecdf, energy_distance, f_oneway, gmean,
     histogram, hmean, kruskal, ks_2samp, kurtosis, levene, linregress, mannkendall, mannwhitneyu,
-    pacf, pearsonr, pmean, quantile, ranksums, relfreq, ridge_regression, runs_test, skew,
-    spearmanr, theil_sen, tukey_hsd, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance,
-    wilcoxon,
+    pacf, pearsonr, percentile, pmean, quantile, ranksums, relfreq, ridge_regression, runs_test,
+    sigmaclip, skew, spearmanr, theil_sen, tmean, trim_mean, trimboth, tstd, ttest_1samp,
+    ttest_ind, ttest_rel, tukey_hsd, tvar, variation, wasserstein_distance, wilcoxon, zscore,
 };
 
 const ATOL: f64 = 1e-8;
@@ -1048,6 +1048,113 @@ fn mr_runs_test_at_least_one_run() {
         "MR47 runs_test n_runs = {n_runs}, expected ≥ 1"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — zscore output has mean ≈ 0 and std ≈ 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_zscore_normalises_to_zero_mean_unit_std() {
+    let x: Vec<f64> = (0..30).map(|i| (i as f64) * 1.5 + 7.0).collect();
+    let z = zscore(&x);
+    let n = z.len() as f64;
+    let mean: f64 = z.iter().sum::<f64>() / n;
+    let var: f64 = z.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+    let std = var.sqrt();
+    assert!(mean.abs() < 1e-9, "MR48 zscore mean = {mean}");
+    assert!(
+        (std - 1.0).abs() < 1e-9,
+        "MR48 zscore std = {std}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — percentile is in [min(data), max(data)] for any q ∈ [0, 100].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_percentile_in_data_range() {
+    let data: Vec<f64> = vec![1.0, 5.0, 3.0, 8.0, 2.0, 7.0, 4.0, 6.0, 9.0, 10.0];
+    let mn = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+    let mx = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    for q in [0.0_f64, 10.0, 25.0, 50.0, 75.0, 90.0, 100.0] {
+        let p = percentile(&data, q);
+        assert!(
+            p >= mn - 1e-9 && p <= mx + 1e-9,
+            "MR49 percentile(q={q}) = {p} outside [{mn}, {mx}]"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — trim_mean is in [min(data), max(data)].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_trim_mean_in_data_range() {
+    let data: Vec<f64> = vec![1.0, 5.0, 3.0, 8.0, 2.0, 7.0, 4.0, 6.0, 9.0, 100.0];
+    let mn = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+    let mx = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    for &p in &[0.0_f64, 0.1, 0.25, 0.4] {
+        let m = trim_mean(&data, p);
+        assert!(
+            m >= mn - 1e-9 && m <= mx + 1e-9,
+            "MR50 trim_mean(p={p}) = {m} outside [{mn}, {mx}]"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — tmean over the full range matches arithmetic mean.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_tmean_full_range_matches_mean() {
+    let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+    let mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
+    let tm = tmean(&data, (-1e9, 1e9), (true, true));
+    assert!(
+        (tm - mean).abs() < 1e-9,
+        "MR51 tmean(full) = {tm} vs mean = {mean}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — sigmaclip with very wide bounds preserves all input data.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sigmaclip_wide_bounds_preserves_data() {
+    let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+    let r = sigmaclip(&data, 100.0, 100.0);
+    assert_eq!(
+        r.clipped.len(),
+        data.len(),
+        "MR52 sigmaclip wide bounds: clipped len = {} vs data = {}",
+        r.clipped.len(),
+        data.len()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — variation equals std/mean for positive data with non-zero mean.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_variation_equals_std_over_mean() {
+    let x: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+    let n = x.len() as f64;
+    let mean: f64 = x.iter().sum::<f64>() / n;
+    let var: f64 = x.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+    let std = var.sqrt();
+    let v = variation(&x);
+    let expected = std / mean;
+    assert!(
+        (v - expected).abs() < 1e-9,
+        "MR53 variation = {v} vs std/mean = {expected}"
+    );
+}
+
 
 
 
