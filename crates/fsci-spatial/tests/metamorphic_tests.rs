@@ -8,10 +8,11 @@
 
 use fsci_spatial::{
     ConvexHull, DistanceMetric, KDTree, angle_between, cartesian_to_cylindrical,
-    cartesian_to_spherical, cdist_metric, chebyshev, cityblock, cosine, cross_3d,
-    cylindrical_to_cartesian, dot, euclidean, jensenshannon, metric_distance, minkowski, pdist,
-    procrustes, rotate_point, rotation_matrix, spherical_to_cartesian, squareform_to_condensed,
-    squareform_to_matrix,
+    cartesian_to_spherical, cdist_metric, centroid, chebyshev, cityblock, cosine, cross_3d,
+    cylindrical_to_cartesian, diameter, dice, dot, euclidean, hausdorff_distance,
+    jensenshannon, k_nearest_neighbors, metric_distance, minkowski, normalize, pdist, procrustes,
+    rotate_point, rotation_matrix, spherical_to_cartesian, squareform_to_condensed,
+    squareform_to_matrix, yule,
 };
 
 const ATOL: f64 = 1e-12;
@@ -840,5 +841,146 @@ fn mr_angle_between_in_zero_pi() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — normalize produces a unit-length vector for any non-zero
+// input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_normalize_unit_length() {
+    let vectors = sample_points();
+    for v in &vectors {
+        let nv = normalize(v);
+        let len: f64 = nv.iter().map(|&x| x * x).sum::<f64>().sqrt();
+        if v.iter().any(|&x| x.abs() > 1e-9) {
+            assert!(
+                (len - 1.0).abs() < 1e-9,
+                "MR29 normalize length = {len}, expected 1"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — hausdorff_distance is symmetric: H(A, B) = H(B, A).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hausdorff_distance_symmetric() {
+    let a: Vec<Vec<f64>> = vec![
+        vec![0.0, 0.0],
+        vec![1.0, 0.0],
+        vec![0.0, 1.0],
+    ];
+    let b: Vec<Vec<f64>> = vec![
+        vec![3.0, 3.0],
+        vec![3.5, 4.0],
+        vec![4.0, 3.5],
+    ];
+    let hab = hausdorff_distance(&a, &b).unwrap();
+    let hba = hausdorff_distance(&b, &a).unwrap();
+    assert!(
+        (hab - hba).abs() < 1e-12,
+        "MR30 hausdorff not symmetric: {hab} vs {hba}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — Yule and Dice boolean distances on identical inputs are 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_boolean_metric_self_zero() {
+    let bs: &[Vec<bool>] = &[
+        vec![true, false, true, false, true],
+        vec![false, true, true, true, false],
+        vec![true, true, true, true, true],
+    ];
+    for b in bs {
+        // Yule of x with itself; dice of x with itself.
+        let y = yule(b, b);
+        let d = dice(b, b);
+        assert!(
+            y.abs() < 1e-12,
+            "MR31 yule(x, x) = {y}, expected 0 on {b:?}"
+        );
+        assert!(
+            d.abs() < 1e-12,
+            "MR31 dice(x, x) = {d}, expected 0 on {b:?}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — centroid of n copies of a single point equals that point.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_centroid_of_constant_points() {
+    let p = vec![1.5_f64, -2.5, 3.0];
+    let pts: Vec<Vec<f64>> = (0..7).map(|_| p.clone()).collect();
+    let c = centroid(&pts);
+    assert_eq!(c.len(), p.len(), "MR32 centroid dim");
+    for (i, (&a, &b)) in c.iter().zip(&p).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-12,
+            "MR32 centroid[{i}] = {a} vs {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — k_nearest_neighbors returns lists of length k for each point.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_k_nearest_neighbors_lengths() {
+    let pts = sample_points();
+    for k in 1..=3 {
+        let (idx, dist) = k_nearest_neighbors(&pts, k);
+        assert_eq!(idx.len(), pts.len(), "MR33 idx length");
+        assert_eq!(dist.len(), pts.len(), "MR33 dist length");
+        for (i, lst) in idx.iter().enumerate() {
+            assert_eq!(lst.len(), k, "MR33 idx[{i}].len = {} vs k = {k}", lst.len());
+        }
+        for (i, lst) in dist.iter().enumerate() {
+            assert_eq!(
+                lst.len(),
+                k,
+                "MR33 dist[{i}].len = {} vs k = {k}",
+                lst.len()
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — diameter (max pairwise distance) is non-negative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_diameter_nonneg() {
+    let pts = sample_points();
+    let d = diameter(&pts);
+    assert!(d >= -1e-12, "MR34 diameter = {d} < 0");
+    // Spread (min pairwise distance) ≤ diameter.
+    if pts.len() >= 2 {
+        let mut mn = f64::INFINITY;
+        for i in 0..pts.len() {
+            for j in (i + 1)..pts.len() {
+                let dij = euclidean(&pts[i], &pts[j]);
+                if dij < mn {
+                    mn = dij;
+                }
+            }
+        }
+        assert!(
+            mn <= d + 1e-9,
+            "MR34 min pairwise = {mn} > diameter = {d}"
+        );
+    }
+}
+
 
 
