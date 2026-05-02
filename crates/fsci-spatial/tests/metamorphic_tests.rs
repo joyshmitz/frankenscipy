@@ -10,8 +10,9 @@ use fsci_spatial::{
     ConvexHull, DistanceMetric, KDTree, angle_between, cartesian_to_cylindrical,
     cartesian_to_spherical, cdist_metric, centroid, chebyshev, cityblock, cosine, cross_3d,
     cylindrical_to_cartesian, diameter, dice, dot, euclidean, hausdorff_distance,
-    jensenshannon, k_nearest_neighbors, metric_distance, minkowski, normalize, pdist, procrustes,
-    rotate_point, rotation_matrix, spherical_to_cartesian, squareform_to_condensed,
+    jensenshannon, k_nearest_neighbors, matching, medoid, metric_distance, minkowski,
+    nearest_neighbors, normalize, pdist, procrustes, rogerstanimoto, rotate_point,
+    rotation_matrix, russellrao, spherical_to_cartesian, spread, squareform_to_condensed,
     squareform_to_matrix, yule,
 };
 
@@ -981,6 +982,120 @@ fn mr_diameter_nonneg() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — matching(x, x) = 0 and rogerstanimoto(x, x) = 0 for any
+// boolean vector.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_matching_rogers_self_zero() {
+    let bs: &[Vec<bool>] = &[
+        vec![true, false, true, false, true],
+        vec![false, true, true, true, false],
+        vec![true, true, true, true, true],
+    ];
+    for b in bs {
+        let m = matching(b, b);
+        let r = rogerstanimoto(b, b);
+        assert!(m.abs() < 1e-12, "MR35 matching(x, x) = {m} on {b:?}");
+        assert!(
+            r.abs() < 1e-12,
+            "MR35 rogerstanimoto(x, x) = {r} on {b:?}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — russellrao distance lies in [0, 1] for any pair of boolean
+// vectors.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_russellrao_in_unit_interval() {
+    let pairs: &[(Vec<bool>, Vec<bool>)] = &[
+        (vec![true, false, true, false], vec![true, true, false, false]),
+        (vec![false; 8], vec![false; 8]),
+        (vec![true; 8], vec![true; 8]),
+        (vec![true, false, true, true, false, true, false], vec![false, true, false, true, true, false, true]),
+    ];
+    for (u, v) in pairs {
+        let r = russellrao(u, v);
+        assert!(
+            r >= -1e-12 && r <= 1.0 + 1e-12,
+            "MR36 russellrao = {r} outside [0, 1]"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — medoid returns Some(idx) with idx < n on a non-empty point
+// set.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_medoid_index_in_range() {
+    let pts = sample_points();
+    let m = medoid(&pts);
+    assert!(m.is_some(), "MR37 medoid returned None on non-empty input");
+    let idx = m.unwrap();
+    assert!(
+        idx < pts.len(),
+        "MR37 medoid index = {idx} ≥ {}",
+        pts.len()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — spread (minimum pairwise distance) ≤ diameter.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_spread_dominated_by_diameter() {
+    let pts = sample_points();
+    let s = spread(&pts);
+    let d = diameter(&pts);
+    assert!(
+        s <= d + 1e-9,
+        "MR38 spread = {s} > diameter = {d}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — nearest_neighbors returns vectors of length n; every assigned
+// neighbour index is in 0..n and != self.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_nearest_neighbors_length_and_validity() {
+    let pts = sample_points();
+    let n = pts.len();
+    let (nn, dists) = nearest_neighbors(&pts);
+    assert_eq!(nn.len(), n, "MR39 nearest_neighbors length");
+    assert_eq!(dists.len(), n, "MR39 nearest_neighbors dist length");
+    for (i, &maybe_j) in nn.iter().enumerate() {
+        if let Some(j) = maybe_j {
+            assert!(
+                j < n,
+                "MR39 nearest_neighbors[{i}] = {j} ≥ {n}"
+            );
+            assert_ne!(j, i, "MR39 nearest_neighbors[{i}] = self");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — Hausdorff distance is non-negative for any non-empty point sets.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hausdorff_nonneg() {
+    let a: Vec<Vec<f64>> = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![0.0, 0.0]];
+    let b: Vec<Vec<f64>> = vec![vec![5.0, 6.0], vec![7.0, 8.0]];
+    let d = hausdorff_distance(&a, &b).unwrap();
+    assert!(d >= -1e-12, "MR40 hausdorff = {d} < 0");
+}
+
 
 
 
