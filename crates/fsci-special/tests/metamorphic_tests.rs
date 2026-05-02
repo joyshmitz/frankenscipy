@@ -10,10 +10,11 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialResult, SpecialTensor, agm, ai, arctanh, bei, ber, bernoulli, beta, betaln, bi,
-    boxcox_transform_scalar, chdtr, chdtrc, comb, digamma_scalar, ellipe, ellipeinc, ellipk,
-    ellipkinc, entr, erf_scalar, expit, factorial, factorial2, fresnel, gamma, gammainc, gammaincc,
-    gammaln, hyp1f1, hyp2f1, i0, i0_scalar, inv_boxcox_scalar, j0, jn, jv, kei, ker,
-    lambertw_scalar, logit, perm, rgamma, shichi, sici, struve, xlog1py, xlogy, zeta_scalar,
+    boxcox_transform_scalar, chdtr, chdtrc, comb, digamma_scalar, ellipe, ellipeinc, ellipj,
+    ellipk, ellipkinc, ellipkm1, entr, erf_scalar, exp1, expi, expit, expn_scalar, factorial,
+    factorial2, fresnel, gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar,
+    inv_boxcox_scalar, j0, jn, jv, kei, ker, lambertw_scalar, logit, perm, rgamma, shichi, sici,
+    struve, xlog1py, xlogy, zeta_scalar,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite,
         eval_hermitenorm, eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt,
@@ -1266,6 +1267,112 @@ fn mr_bernoulli_known_values() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR61 — ellipj(0, m) = (sn=0, cn=1, dn=1, am=0).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ellipj_at_u_zero() {
+    for &m in &[0.0_f64, 0.25, 0.5, 0.75, 0.9] {
+        let (sn, cn, dn, am) = ellipj(0.0, m);
+        assert!(sn.abs() < 1e-12, "MR61 sn(0, {m}) = {sn}");
+        assert!((cn - 1.0).abs() < 1e-12, "MR61 cn(0, {m}) = {cn}");
+        assert!((dn - 1.0).abs() < 1e-12, "MR61 dn(0, {m}) = {dn}");
+        assert!(am.abs() < 1e-12, "MR61 am(0, {m}) = {am}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR62 — ellipkm1(p) = ellipk(1 - p) for small p > 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ellipkm1_matches_ellipk_complement() {
+    for &p in &[0.01_f64, 0.1, 0.3, 0.5] {
+        let lhs = unwrap_real(ellipkm1(&real(p), RuntimeMode::Strict));
+        let rhs = unwrap_real(ellipk(&real(1.0 - p), RuntimeMode::Strict));
+        assert!(
+            (lhs - rhs).abs() < 1e-9 * lhs.abs().max(1.0),
+            "MR62 ellipkm1({p}) = {lhs} vs ellipk({}) = {rhs}",
+            1.0 - p
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR63 — exp1(x) = E_1(x) = ∫_x^∞ exp(-t)/t dt is positive for x > 0
+// and decreasing in x.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_exp1_positive_decreasing() {
+    let xs = [0.5_f64, 1.0, 2.0, 3.0, 5.0, 10.0];
+    let mut prev = f64::INFINITY;
+    for &x in &xs {
+        let v = unwrap_real(exp1(&real(x), RuntimeMode::Strict));
+        assert!(v > 0.0, "MR63 exp1({x}) = {v} ≤ 0");
+        assert!(
+            v <= prev + 1e-12,
+            "MR63 exp1({x}) = {v} > previous = {prev}"
+        );
+        prev = v;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR64 — expi(x) is increasing in x for x > 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_expi_increasing_positive() {
+    let xs = [0.1_f64, 0.5, 1.0, 2.0, 5.0, 10.0];
+    let mut prev = f64::NEG_INFINITY;
+    for &x in &xs {
+        let v = unwrap_real(expi(&real(x), RuntimeMode::Strict));
+        assert!(
+            v >= prev - 1e-9,
+            "MR64 expi({x}) = {v} < previous = {prev}"
+        );
+        prev = v;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR65 — expn_scalar(1, x) equals exp1(x) for positive x.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_expn_n1_matches_exp1() {
+    for &x in &[0.5_f64, 1.0, 2.0, 3.0, 5.0] {
+        let v_n1 = expn_scalar(1, x);
+        let v_e1 = unwrap_real(exp1(&real(x), RuntimeMode::Strict));
+        assert!(
+            (v_n1 - v_e1).abs() < 1e-9 * v_e1.abs().max(1.0),
+            "MR65 expn_scalar(1, {x}) = {v_n1} vs exp1({x}) = {v_e1}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR66 — Pythagorean identity for Jacobi elliptic functions:
+//   sn² + cn² = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ellipj_pythagorean_identity() {
+    for &u in &[0.0_f64, 0.5, 1.0, 1.5, 2.0] {
+        for &m in &[0.0_f64, 0.25, 0.5, 0.75, 0.9] {
+            let (sn, cn, _dn, _am) = ellipj(u, m);
+            let s = sn * sn + cn * cn;
+            assert!(
+                (s - 1.0).abs() < 1e-9,
+                "MR66 sn² + cn² = {s} for u = {u}, m = {m}"
+            );
+        }
+    }
+}
+
 
 
 
