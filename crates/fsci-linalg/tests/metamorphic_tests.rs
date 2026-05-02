@@ -10,11 +10,12 @@
 
 use fsci_linalg::{
     DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, bandwidth,
-    block_diag as linalg_block_diag, cholesky, circulant, companion, cosm, det, diag, diagm,
-    dft_matrix, eigh, eigvalsh, expm, hadamard, hadamard_product, hessenberg,
-    hilbert as linalg_hilbert, inv, ishermitian, issymmetric, logm, lstsq, lu, matrix_power,
-    matrix_rank, norm, null_space, orth, outer, pascal, pinv, polar, qr, schur, sinm, solve,
-    sqrtm, svd, toeplitz, trace, tri, vdot, vnorm,
+    block_diag as linalg_block_diag, cholesky, circulant, companion, convolution_matrix, cosm,
+    coshm, det, diag, diagm, dft_matrix, eigh, eigvalsh, expm, fiedler, hadamard,
+    hadamard_product, hessenberg, hilbert as linalg_hilbert, inv, ishermitian, issymmetric,
+    leslie, logm, lstsq, lu, matrix_power, matrix_rank, norm, null_space, orth, outer, pascal,
+    pinv, polar, qr, schur, signm, sinhm, sinm, solve, sqrtm, svd, tanhm, tanm, toeplitz, trace,
+    tri, vdot, vnorm,
 };
 
 const RTOL: f64 = 1e-9;
@@ -1361,6 +1362,129 @@ fn mr_bandwidth_of_diagonal() {
             "MR46 bandwidth(diag, n={n}) = {:?} expected (0, 0)",
             bw
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — sinhm(0) = 0 and coshm(0) = I.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sinhm_coshm_at_zero() {
+    let n = 4;
+    let zero = vec![vec![0.0; n]; n];
+    let s = sinhm(&zero, DecompOptions::default()).unwrap();
+    for row in &s {
+        for &v in row {
+            assert!(v.abs() < 1e-12, "MR47 sinhm(0) = {v}");
+        }
+    }
+    let c = coshm(&zero, DecompOptions::default()).unwrap();
+    for i in 0..n {
+        for j in 0..n {
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (c[i][j] - expected).abs() < 1e-9,
+                "MR47 coshm(0)[{i}, {j}] = {} vs {expected}",
+                c[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — tanm(0) = 0 (matrix tangent at zero is zero).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_tanm_at_zero() {
+    let n = 4;
+    let zero = vec![vec![0.0; n]; n];
+    let t = tanm(&zero, DecompOptions::default()).unwrap();
+    for row in &t {
+        for &v in row {
+            assert!(v.abs() < 1e-9, "MR48 tanm(0) entry = {v}");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — signm of an SPD matrix is the identity (eigenvalues all
+// positive ⇒ sign = +1).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_signm_of_spd_is_identity() {
+    let a = vec![
+        vec![4.0_f64, 1.0, 0.5],
+        vec![1.0, 3.0, 0.7],
+        vec![0.5, 0.7, 5.0],
+    ];
+    let n = a.len();
+    let s = signm(&a, DecompOptions::default()).unwrap();
+    for i in 0..n {
+        for j in 0..n {
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (s[i][j] - expected).abs() < 1e-7,
+                "MR49 signm(SPD)[{i}, {j}] = {} vs {expected}",
+                s[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — fiedler matrix from a vector a is symmetric.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fiedler_matrix_symmetric() {
+    let a = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+    let f = fiedler(&a);
+    let n = f.len();
+    for i in 0..n {
+        for j in 0..n {
+            assert!(
+                (f[i][j] - f[j][i]).abs() < 1e-12,
+                "MR50 fiedler symmetry: [{i}, {j}] = {} vs [{j}, {i}] = {}",
+                f[i][j],
+                f[j][i]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — Leslie matrix is square with size = len(f) = len(s) + 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_leslie_matrix_shape() {
+    let f_vals = vec![0.5_f64, 0.3, 0.2, 0.1];
+    let s_vals = vec![0.8_f64, 0.7, 0.6];
+    let l = leslie(&f_vals, &s_vals).unwrap();
+    let expected = f_vals.len();
+    assert_eq!(l.len(), expected, "MR51 leslie rows");
+    for row in &l {
+        assert_eq!(row.len(), expected, "MR51 leslie cols");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — convolution_matrix mode "full" of an h of length k for input
+// of length n produces output of size (n + k - 1) × n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convolution_matrix_full_shape() {
+    let h = vec![1.0_f64, 0.5, -0.25];
+    let n = 5;
+    let m = convolution_matrix(&h, n, "full");
+    let expected_rows = n + h.len() - 1;
+    assert_eq!(m.len(), expected_rows, "MR52 conv matrix rows");
+    for row in &m {
+        assert_eq!(row.len(), n, "MR52 conv matrix cols");
     }
 }
 
