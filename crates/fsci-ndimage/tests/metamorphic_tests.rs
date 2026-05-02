@@ -7,10 +7,11 @@
 
 use fsci_ndimage::{
     BoundaryMode, NdArray, argmax, argmin, binary_closing, binary_dilation, binary_erosion,
-    binary_fill_holes, binary_opening, convolve, correlate, cumsum_array, distance_transform_edt,
-    equal_within, flatten, gaussian_filter, grey_dilation, grey_erosion, label, laplace,
-    maximum_filter, mean_labels, median_filter, minimum_filter, ones, prewitt, reshape, rotate,
-    shift, sobel, sum_labels, uniform_filter, variance_labels, where_cond, zoom,
+    binary_fill_holes, binary_opening, black_tophat, convolve, correlate, cumsum_array,
+    distance_transform_edt, equal_within, flatten, full, gaussian_filter, grey_dilation,
+    grey_erosion, label, laplace, masked_select, maximum_filter, mean_labels, median_filter,
+    minimum_filter, morphological_gradient, ones, percentile_filter, prewitt, reshape, rotate,
+    shift, sobel, sum_labels, uniform_filter, variance_labels, where_cond, white_tophat, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -723,6 +724,112 @@ fn mr_where_cond_all_false_returns_b() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — morphological_gradient is non-negative everywhere (= max − min
+// over the structuring element).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_morphological_gradient_nonneg() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
+    let g = morphological_gradient(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, &v) in g.data.iter().enumerate() {
+        assert!(
+            v >= -1e-12,
+            "MR35 morphological_gradient[{i}] = {v} < 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — white_tophat is non-negative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_white_tophat_nonneg() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
+    let w = white_tophat(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, &v) in w.data.iter().enumerate() {
+        assert!(
+            v >= -1e-9,
+            "MR36 white_tophat[{i}] = {v} < 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — black_tophat is non-negative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_black_tophat_nonneg() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
+    let b = black_tophat(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, &v) in b.data.iter().enumerate() {
+        assert!(
+            v >= -1e-9,
+            "MR37 black_tophat[{i}] = {v} < 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — percentile_filter at p=50 equals median_filter.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_percentile_filter_p50_equals_median() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
+    let p = percentile_filter(&img, 50.0, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    let m = median_filter(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, (a, b)) in p.data.iter().zip(&m.data).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-9,
+            "MR38 percentile_filter(p=50) vs median at i={i}: {a} vs {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — full(shape, c) returns an array of constant value c with the
+// requested shape.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_full_constant_array() {
+    for &c in &[0.0_f64, 1.5, -3.0, 100.0] {
+        let arr = full(vec![3, 5], c);
+        assert_eq!(arr.shape, vec![3, 5], "MR39 full shape");
+        for (i, &v) in arr.data.iter().enumerate() {
+            assert!(
+                (v - c).abs() < 1e-15,
+                "MR39 full({c})[{i}] = {v}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — masked_select returns a vector of length sum(mask).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_masked_select_length_equals_mask_sum() {
+    let img = arr_2d(4, 5, |i, j| (i * 5 + j) as f64);
+    // Mask the diagonal (4 entries).
+    let mask = arr_2d(4, 5, |i, j| if i == j && i < 4 { 1.0 } else { 0.0 });
+    let v = masked_select(&img, &mask);
+    let mask_sum: f64 = mask.data.iter().sum();
+    assert_eq!(
+        v.len(),
+        mask_sum as usize,
+        "MR40 masked_select length = {} vs mask_sum = {}",
+        v.len(),
+        mask_sum as usize
+    );
+}
+
 
 
 
