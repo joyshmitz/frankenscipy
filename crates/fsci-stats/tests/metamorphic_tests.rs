@@ -7,10 +7,11 @@
 
 use fsci_stats::{
     Bernoulli, BetaDist, Binomial, ChiSquared, ContinuousDistribution, DiscreteDistribution,
-    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, diff, ecdf,
-    energy_distance, f_oneway, gmean, histogram, hmean, ks_2samp, kurtosis, mannwhitneyu, pacf,
-    pearsonr, pmean, quantile, ridge_regression, skew, spearmanr, theil_sen, ttest_1samp,
-    ttest_ind, ttest_rel, wasserstein_distance, wilcoxon,
+    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, bartlett as bartlett_var,
+    diff, ecdf, energy_distance, f_oneway, gmean, histogram, hmean, kruskal, ks_2samp, kurtosis,
+    levene, linregress, mannwhitneyu, pacf, pearsonr, pmean, quantile, ranksums, ridge_regression,
+    skew, spearmanr, theil_sen, tukey_hsd, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance,
+    wilcoxon,
 };
 
 const ATOL: f64 = 1e-8;
@@ -820,5 +821,126 @@ fn mr_pacf_at_lag_zero_is_one() {
         p[0]
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — linregress on y = a·x + b reproduces (a, b) exactly.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_linregress_recovers_exact_line() {
+    let a = 2.0_f64;
+    let b = -1.5_f64;
+    let x: Vec<f64> = (0..30).map(|i| 0.2 * i as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| a * xi + b).collect();
+    let r = linregress(&x, &y);
+    assert!(
+        (r.slope - a).abs() < 1e-10,
+        "MR36 linregress slope = {} vs {a}",
+        r.slope
+    );
+    assert!(
+        (r.intercept - b).abs() < 1e-10,
+        "MR36 linregress intercept = {} vs {b}",
+        r.intercept
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — Kruskal-Wallis on identical groups returns near-zero statistic
+// (all ranks equal in expectation; p-value ≈ 1).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kruskal_identical_groups_small_stat() {
+    let g1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+    let g2 = g1;
+    let g3 = g1;
+    let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
+    let r = kruskal(&groups);
+    assert!(
+        r.statistic.abs() < 1e-3,
+        "MR37 kruskal identical statistic = {}",
+        r.statistic
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — ranksums of (x, y) and (y, x) yield negated statistics.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ranksums_swap_negates_statistic() {
+    let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+    let y = vec![6.0_f64, 7.0, 8.0, 9.0, 10.0];
+    let xy = ranksums(&x, &y);
+    let yx = ranksums(&y, &x);
+    assert!(
+        (xy.statistic + yx.statistic).abs() < 1e-9,
+        "MR38 ranksums(x,y) + ranksums(y,x) = {}",
+        xy.statistic + yx.statistic
+    );
+    assert!(
+        (xy.pvalue - yx.pvalue).abs() < 1e-9,
+        "MR38 ranksums pvalue mismatch: {} vs {}",
+        xy.pvalue,
+        yx.pvalue
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — Levene on identical groups yields near-zero statistic.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_levene_identical_groups_small_stat() {
+    let g1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let g2 = g1;
+    let groups: Vec<&[f64]> = vec![&g1, &g2];
+    let r = levene(&groups);
+    assert!(
+        r.statistic.abs() < 1e-9,
+        "MR39 levene identical = {}",
+        r.statistic
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — Bartlett on identical groups yields near-zero statistic.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bartlett_identical_groups_small_stat() {
+    let g1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let g2 = g1;
+    let groups: Vec<&[f64]> = vec![&g1, &g2];
+    let r = bartlett_var(&groups);
+    assert!(
+        r.statistic.abs() < 1e-9,
+        "MR40 bartlett identical = {}",
+        r.statistic
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — Tukey HSD diagonal of pairwise statistic and p-value matrices
+// indicates a group compared with itself: statistic = 0, p-value ≈ 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_tukey_hsd_self_comparison() {
+    let g1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+    let g2 = [4.0_f64, 5.0, 6.0, 7.0, 8.0];
+    let g3 = [10.0_f64, 11.0, 12.0, 13.0, 14.0];
+    let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
+    let r = tukey_hsd(&groups);
+    for i in 0..groups.len() {
+        let s = r.statistic[i][i];
+        assert!(
+            s.abs() < 1e-12,
+            "MR41 tukey diagonal statistic[{i}, {i}] = {s}"
+        );
+    }
+}
+
 
 
