@@ -6,10 +6,11 @@
 //! Run with: `cargo test -p fsci-ndimage --test metamorphic_tests`
 
 use fsci_ndimage::{
-    BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_fill_holes,
-    binary_opening, convolve, correlate, distance_transform_edt, gaussian_filter, grey_dilation,
-    grey_erosion, label, laplace, maximum_filter, mean_labels, median_filter, minimum_filter,
-    prewitt, rotate, shift, sobel, sum_labels, uniform_filter, variance_labels, zoom,
+    BoundaryMode, NdArray, argmax, argmin, binary_closing, binary_dilation, binary_erosion,
+    binary_fill_holes, binary_opening, convolve, correlate, cumsum_array, distance_transform_edt,
+    equal_within, flatten, gaussian_filter, grey_dilation, grey_erosion, label, laplace,
+    maximum_filter, mean_labels, median_filter, minimum_filter, ones, prewitt, reshape, rotate,
+    shift, sobel, sum_labels, uniform_filter, variance_labels, where_cond, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -622,5 +623,106 @@ fn mr_grey_erosion_dominated_by_input() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — reshape then flatten preserves the data.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_reshape_flatten_roundtrip() {
+    let img = arr_2d(4, 5, |i, j| (i * 5 + j) as f64);
+    let reshaped = reshape(&img, vec![20]).unwrap();
+    assert_eq!(reshaped.shape, vec![20], "MR29 reshape shape");
+    let flat = flatten(&img);
+    assert_eq!(flat.size(), 20, "MR29 flatten size");
+    for (i, (a, b)) in flat.data.iter().zip(&reshaped.data).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-15,
+            "MR29 flatten/reshape data mismatch at {i}: {a} vs {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — argmax of a strictly increasing array points at the last
+// element; argmin points at the first.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_argmax_argmin_increasing() {
+    let img = arr_2d(3, 4, |i, j| (i * 4 + j) as f64);
+    let n = img.size();
+    assert_eq!(argmax(&img), n - 1, "MR30 argmax");
+    assert_eq!(argmin(&img), 0, "MR30 argmin");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — cumsum_array last entry equals the sum of all entries.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cumsum_array_final_equals_total() {
+    let img = arr_2d(3, 5, |i, j| 0.5 * ((i * 5 + j) as f64));
+    let cum = cumsum_array(&img);
+    let total: f64 = img.data.iter().sum();
+    assert!(
+        (cum.data[img.size() - 1] - total).abs() < 1e-12,
+        "MR31 cumsum last = {} vs total = {total}",
+        cum.data[img.size() - 1]
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — where_cond with all-true mask returns `a`.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_where_cond_all_true_returns_a() {
+    let a = arr_2d(3, 4, |i, j| (i + j) as f64);
+    let b = arr_2d(3, 4, |i, j| (i * j) as f64 - 5.0);
+    let cond = ones(vec![3, 4]);
+    let r = where_cond(&cond, &a, &b).unwrap();
+    for (i, (x, y)) in r.data.iter().zip(&a.data).enumerate() {
+        assert!(
+            (x - y).abs() < 1e-12,
+            "MR32 where_cond all-true at i={i}: {x} vs {y}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — equal_within(a, a, 0) returns all 1s (reflexivity).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_equal_within_reflexive() {
+    let a = arr_2d(4, 4, |i, j| 0.1 * ((i * 4 + j) as f64));
+    let r = equal_within(&a, &a, 0.0).unwrap();
+    for (i, &v) in r.data.iter().enumerate() {
+        assert!(
+            (v - 1.0).abs() < 1e-12,
+            "MR33 equal_within(a, a)[{i}] = {v}, expected 1"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — where_cond with all-false mask (zeros) returns `b`.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_where_cond_all_false_returns_b() {
+    let a = arr_2d(3, 4, |i, j| (i + j) as f64);
+    let b = arr_2d(3, 4, |i, j| (i * j) as f64 - 5.0);
+    let cond = arr_2d(3, 4, |_, _| 0.0);
+    let r = where_cond(&cond, &a, &b).unwrap();
+    for (i, (x, y)) in r.data.iter().zip(&b.data).enumerate() {
+        assert!(
+            (x - y).abs() < 1e-12,
+            "MR34 where_cond all-false at i={i}: {x} vs {y}"
+        );
+    }
+}
+
 
 
