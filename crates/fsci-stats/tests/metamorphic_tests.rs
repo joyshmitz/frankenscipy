@@ -7,10 +7,11 @@
 
 use fsci_stats::{
     Bernoulli, BetaDist, Binomial, ChiSquared, ContinuousDistribution, DiscreteDistribution,
-    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, bartlett as bartlett_var,
-    diff, ecdf, energy_distance, f_oneway, gmean, histogram, hmean, kruskal, ks_2samp, kurtosis,
-    levene, linregress, mannwhitneyu, pacf, pearsonr, pmean, quantile, ranksums, ridge_regression,
-    skew, spearmanr, theil_sen, tukey_hsd, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance,
+    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, acf,
+    bartlett as bartlett_var, cumfreq, diff, durbin_watson, ecdf, energy_distance, f_oneway, gmean,
+    histogram, hmean, kruskal, ks_2samp, kurtosis, levene, linregress, mannkendall, mannwhitneyu,
+    pacf, pearsonr, pmean, quantile, ranksums, relfreq, ridge_regression, runs_test, skew,
+    spearmanr, theil_sen, tukey_hsd, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance,
     wilcoxon,
 };
 
@@ -941,6 +942,113 @@ fn mr_tukey_hsd_self_comparison() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — Relative frequencies sum to 1.0 across all bins.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_relfreq_sums_to_one() {
+    let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+    for bins in [3usize, 5, 8, 10] {
+        let (freqs, _edges) = relfreq(&data, bins);
+        let sum: f64 = freqs.iter().sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-9,
+            "MR42 relfreq(bins={bins}) Σ = {sum}, expected 1"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — Cumulative frequencies are non-decreasing and end at n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cumfreq_monotone_total_n() {
+    let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    for bins in [3usize, 5, 8] {
+        let (cum, _edges) = cumfreq(&data, bins);
+        for w in cum.windows(2) {
+            assert!(
+                w[0] <= w[1] + 1e-12,
+                "MR43 cumfreq not monotone: {} > {}",
+                w[0],
+                w[1]
+            );
+        }
+        let last = *cum.last().unwrap();
+        assert!(
+            (last - data.len() as f64).abs() < 1e-9,
+            "MR43 cumfreq last = {last}, expected {}",
+            data.len()
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — Durbin-Watson statistic lies in [0, 4].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_durbin_watson_in_zero_four() {
+    let residuals: Vec<f64> = (0..30)
+        .map(|i| (i as f64 * 0.4).sin() + 0.3 * ((i as f64) * 0.13).cos())
+        .collect();
+    let dw = durbin_watson(&residuals);
+    assert!(
+        dw >= -1e-12 && dw <= 4.0 + 1e-12,
+        "MR44 durbin_watson = {dw} outside [0, 4]"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — acf[0] = 1 (autocorrelation at lag 0 is 1 by normalisation).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_acf_at_lag_zero_is_one() {
+    let x: Vec<f64> = (0..40).map(|i| (i as f64 * 0.4).cos()).collect();
+    let a = acf(&x, 6);
+    assert!(!a.is_empty(), "MR45 acf empty");
+    assert!(
+        (a[0] - 1.0).abs() < 1e-9,
+        "MR45 acf[0] = {}, expected 1",
+        a[0]
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — Mann-Kendall on a strictly monotone increasing sequence
+// returns trend=+1 (positive trend).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_mannkendall_monotone_trend() {
+    let x: Vec<f64> = (0..30).map(|i| i as f64).collect();
+    let (_stat, _p, trend) = mannkendall(&x);
+    assert_eq!(
+        trend, 1,
+        "MR46 mannkendall trend = {trend}, expected +1 for strictly increasing"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — Runs test on a non-empty input returns at least 1 run.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_runs_test_at_least_one_run() {
+    let x: Vec<f64> = (0..30)
+        .map(|i| (i as f64 * 0.4).sin())
+        .collect();
+    let (n_runs, _stat, _p) = runs_test(&x);
+    assert!(
+        n_runs >= 1,
+        "MR47 runs_test n_runs = {n_runs}, expected ≥ 1"
+    );
+}
+
 
 
 
