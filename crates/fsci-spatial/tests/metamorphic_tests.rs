@@ -7,7 +7,7 @@
 //! Run with: `cargo test -p fsci-spatial --test metamorphic_tests`
 
 use fsci_spatial::{
-    ConvexHull, DistanceMetric, KDTree, angle_between, cartesian_to_cylindrical,
+    ConvexHull, Delaunay, DistanceMetric, KDTree, Voronoi, angle_between, cartesian_to_cylindrical,
     cartesian_to_spherical, cdist_metric, centroid, chebyshev, cityblock, cosine, cross_3d,
     cylindrical_to_cartesian, diameter, dice, distance_matrix, dot, euclidean, geometric_slerp,
     hausdorff_distance, jensenshannon, k_nearest_neighbors, kulsinski, mahalanobis, matching,
@@ -1220,6 +1220,141 @@ fn mr_sokalsneath_self_zero() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — ConvexHull area is positive on a triangle with non-collinear
+// vertices.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convex_hull_area_positive() {
+    let points = vec![(0.0, 0.0), (4.0, 0.0), (0.0, 3.0), (1.0, 1.0)];
+    let hull = ConvexHull::new(&points).unwrap();
+    assert!(
+        hull.area > 0.0,
+        "MR47 ConvexHull area = {} ≤ 0",
+        hull.area
+    );
+    // Triangle area is 6 (base 4, height 3, area = 6).
+    assert!(
+        (hull.area - 6.0).abs() < 1e-9,
+        "MR47 ConvexHull area = {} expected 6",
+        hull.area
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — ConvexHull vertex indices are unique.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convex_hull_unique_vertices() {
+    let points = vec![
+        (0.0, 0.0),
+        (4.0, 0.0),
+        (4.0, 3.0),
+        (0.0, 3.0),
+        (2.0, 1.5),
+    ];
+    let hull = ConvexHull::new(&points).unwrap();
+    let mut seen = vec![false; points.len()];
+    for &v in &hull.vertices {
+        assert!(v < points.len(), "MR48 vertex idx {v} out of range");
+        assert!(!seen[v], "MR48 duplicate vertex {v}");
+        seen[v] = true;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — ConvexHull perimeter is positive for any non-degenerate input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convex_hull_perimeter_positive() {
+    let points = vec![(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)];
+    let hull = ConvexHull::new(&points).unwrap();
+    assert!(
+        hull.perimeter > 0.0,
+        "MR49 ConvexHull perimeter = {}",
+        hull.perimeter
+    );
+    // 4-3-4-3 rectangle perimeter = 14.
+    assert!(
+        (hull.perimeter - 14.0).abs() < 1e-9,
+        "MR49 perimeter = {} expected 14",
+        hull.perimeter
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — Delaunay triangulation simplex indices are all in [0, n).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_delaunay_simplices_in_range() {
+    let points = vec![
+        (0.0_f64, 0.0_f64),
+        (4.0, 0.0),
+        (4.0, 3.0),
+        (0.0, 3.0),
+        (2.0, 1.5),
+    ];
+    let d = Delaunay::new(&points).unwrap();
+    let n = points.len();
+    for &(a, b, c) in &d.simplices {
+        assert!(a < n, "MR50 simplex idx {a} ≥ {n}");
+        assert!(b < n, "MR50 simplex idx {b} ≥ {n}");
+        assert!(c < n, "MR50 simplex idx {c} ≥ {n}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — Voronoi regions cover all input points (each point belongs to
+// some region).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_voronoi_regions_exist() {
+    let points = vec![
+        (0.0, 0.0),
+        (4.0, 0.0),
+        (4.0, 3.0),
+        (0.0, 3.0),
+        (2.0, 1.5),
+    ];
+    let v = Voronoi::new(&points).unwrap();
+    assert_eq!(
+        v.point_region.len(),
+        points.len(),
+        "MR51 voronoi point_region length"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — ConvexHull on a subset of points has area ≤ that of the full
+// hull (monotonicity in inclusion).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_convex_hull_subset_area_dominated() {
+    let outer = vec![
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 10.0),
+        (0.0, 10.0),
+        (5.0, 5.0),
+    ];
+    let subset = vec![(0.0, 0.0), (5.0, 0.0), (0.0, 5.0)];
+    let hull_outer = ConvexHull::new(&outer).unwrap();
+    let hull_subset = ConvexHull::new(&subset).unwrap();
+    assert!(
+        hull_subset.area <= hull_outer.area + 1e-9,
+        "MR52 subset area = {} > outer area = {}",
+        hull_subset.area,
+        hull_outer.area
+    );
+}
+
 
 
 
