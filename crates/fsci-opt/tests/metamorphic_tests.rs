@@ -9,8 +9,9 @@
 use fsci_opt::{
     BasinhoppingOptions, CurveFitOptions, DifferentialEvolutionOptions, LeastSquaresOptions,
     MinimizeOptions, MinimizeScalarOptions, RootOptions, approx_fprime, basinhopping, bisect,
-    brenth, brentq, curve_fit, differential_evolution, fsolve, halley, least_squares, minimize,
-    minimize_scalar, newton_scalar, ridder, rosen, rosen_der, secant, toms748,
+    brent_minimize, brenth, brentq, brute, curve_fit, differential_evolution, fixed_point, fsolve,
+    golden, halley, isotonic_regression, least_squares, minimize, minimize_scalar, newton_scalar,
+    nnls, ridder, rosen, rosen_der, secant, toms748,
 };
 
 const ATOL: f64 = 1e-6;
@@ -644,5 +645,109 @@ fn mr_approx_fprime_zero_at_critical_point() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — golden section search finds the minimum of f(x) = (x - 3)²
+// at x = 3 within the bracket (0, 6).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_golden_finds_parabola_minimum() {
+    let f = |x: f64| (x - 3.0).powi(2);
+    let (xmin, _fmin) = golden(f, 0.0, 6.0, 1e-9, 200);
+    assert!(
+        (xmin - 3.0).abs() < 1e-5,
+        "MR27 golden xmin = {xmin}, expected 3"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — brent_minimize agrees with golden on a smooth unimodal
+// objective.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_brent_minimize_matches_golden() {
+    let f = |x: f64| (x + 1.5).powi(2) + 2.0;
+    let (xg, _) = golden(f, -5.0, 3.0, 1e-9, 200);
+    let (xb, _) = brent_minimize(f, -5.0, 3.0, 1e-9, 200);
+    assert!(
+        (xg - xb).abs() < 1e-4,
+        "MR28 golden = {xg} vs brent = {xb}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — fixed_point of f(x) = cos(x) starting from x0 = 1 converges
+// to the Dottie number ≈ 0.7390851332...
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fixed_point_dottie_number() {
+    let f = |x: f64| x.cos();
+    let r = fixed_point(f, 1.0, 1e-10, 1000).unwrap();
+    let dottie = 0.739_085_133_215_160_6_f64;
+    assert!(
+        (r - dottie).abs() < 1e-5,
+        "MR29 fixed_point of cos = {r}, expected {dottie}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — Non-Negative Least Squares: nnls returns non-negative
+// coefficients for any A, b.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_nnls_coefficients_nonneg() {
+    let a = vec![
+        vec![1.0_f64, 0.5],
+        vec![2.0, -1.0],
+        vec![3.0, 1.5],
+        vec![-1.0, 2.0],
+    ];
+    let b = vec![1.0_f64, 2.0, 4.0, 0.5];
+    let (x, _residual) = nnls(&a, &b).unwrap();
+    for (i, &xi) in x.iter().enumerate() {
+        assert!(
+            xi >= -1e-9,
+            "MR30 nnls x[{i}] = {xi} < 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — Isotonic regression returns a monotone non-decreasing fit.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_isotonic_regression_monotone() {
+    let y = vec![1.0_f64, 3.0, 2.5, 4.0, 3.5, 5.0, 4.5, 6.0];
+    let yhat = isotonic_regression(&y, None);
+    for w in yhat.windows(2) {
+        assert!(
+            w[0] <= w[1] + 1e-12,
+            "MR31 isotonic not monotone: {} > {}",
+            w[0],
+            w[1]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — brute on a 1D parabola finds a minimum near x = 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_brute_finds_parabola_minimum() {
+    let f = |x: &[f64]| x[0].powi(2);
+    let res = brute(f, &[(-5.0, 5.0)], 21).unwrap();
+    assert!(
+        res.x[0].abs() < 0.6,
+        "MR32 brute x = {}, expected ≈ 0",
+        res.x[0]
+    );
+}
+
 
 
