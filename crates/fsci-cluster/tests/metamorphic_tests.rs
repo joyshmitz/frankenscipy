@@ -10,9 +10,9 @@ use fsci_cluster::{
     LinkageMethod, adjusted_rand_score, calinski_harabasz_score, completeness_score, cophenet,
     davies_bouldin_score, dbscan, elbow_inertias, fcluster, fclusterdata, fowlkes_mallows_score,
     gap_statistic, homogeneity_score, inconsistent, is_monotonic, is_valid_linkage, kmeans,
-    kmedoids, leaves_list, linkage, mean_shift, mini_batch_kmeans, normalized_mutual_info,
-    num_obs_linkage, proximity_cliques, silhouette_samples, silhouette_score, v_measure_score, vq,
-    whiten,
+    kmedoids, leaves_list, linkage, linkage_from_distances, mean_shift, mini_batch_kmeans,
+    normalized_mutual_info, num_obs_linkage, proximity_cliques, silhouette_samples,
+    silhouette_score, v_measure_score, vq, whiten,
 };
 
 fn small_dataset() -> Vec<Vec<f64>> {
@@ -790,6 +790,110 @@ fn mr_proximity_cliques_large_eps_one_clique() {
         assert!(*ok, "MR36 proximity_cliques missed index {i}");
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — linkage_from_distances(condensed, n, method) returns a
+// linkage matrix with exactly n - 1 merges.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_linkage_from_distances_n_minus_1_merges() {
+    let n = 5;
+    // Condensed distance vector for n=5 has length n*(n-1)/2 = 10.
+    let condensed: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 1.5, 2.5, 3.5, 1.2, 2.2, 1.8];
+    for &method in &[
+        LinkageMethod::Single,
+        LinkageMethod::Complete,
+        LinkageMethod::Average,
+    ] {
+        let z = linkage_from_distances(&condensed, n, method).unwrap();
+        assert_eq!(
+            z.len(),
+            n - 1,
+            "MR37 linkage_from_distances merges = {} expected {}",
+            z.len(),
+            n - 1
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — Calinski-Harabasz score is non-negative on a valid clustering.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_calinski_harabasz_nonneg() {
+    let data = small_dataset();
+    let labels = vec![0_usize, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2];
+    let s = calinski_harabasz_score(&data, &labels).unwrap();
+    assert!(s >= -1e-9, "MR38 calinski_harabasz = {s} < 0");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — Davies-Bouldin score is non-negative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_davies_bouldin_nonneg_explicit() {
+    let data = small_dataset();
+    let labels = vec![0_usize, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2];
+    let s = davies_bouldin_score(&data, &labels).unwrap();
+    assert!(s >= -1e-9, "MR39 davies_bouldin = {s} < 0");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — vq returns label vector of length n with all values < k
+// (the number of centroids).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_vq_labels_bounded_by_k() {
+    let data = small_dataset();
+    let centroids = vec![
+        vec![0.0_f64, 0.0],
+        vec![5.0, 5.0],
+        vec![10.0, 0.0],
+    ];
+    let (labels, _dists) = vq(&data, &centroids).unwrap();
+    assert_eq!(labels.len(), data.len(), "MR40 vq labels length");
+    for (i, &lbl) in labels.iter().enumerate() {
+        assert!(
+            lbl < centroids.len(),
+            "MR40 vq labels[{i}] = {lbl} ≥ k = {}",
+            centroids.len()
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — whiten preserves the number of rows in the input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_whiten_preserves_row_count() {
+    let data = small_dataset();
+    let w = whiten(&data).unwrap();
+    assert_eq!(w.len(), data.len(), "MR41 whiten row count");
+    for (i, (a, b)) in data.iter().zip(&w).enumerate() {
+        assert_eq!(a.len(), b.len(), "MR41 row {i} feature count");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — mean_shift on a non-empty dataset returns at least 1 cluster
+// centre.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_mean_shift_at_least_one_center() {
+    let data = small_dataset();
+    let (centers, _labels) = mean_shift(&data, 2.0, 100).unwrap();
+    assert!(
+        !centers.is_empty(),
+        "MR42 mean_shift returned 0 centers for non-empty data"
+    );
+}
+
 
 
 
