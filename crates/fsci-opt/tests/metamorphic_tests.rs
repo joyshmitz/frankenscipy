@@ -393,3 +393,138 @@ fn mr_minimize_far_initial_guess_strictly_convex() {
     let fmin = res.fun.unwrap();
     assert!(fmin < 1e-6, "MR14 fmin not zero: {fmin}");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — bisect, brentq, brenth, ridder, toms748 all agree on the root
+// of a smooth strictly-monotone function on [0, 3].
+// f(x) = x³ - 2x - 5 has a unique root near 2.0945514815...
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_root_methods_agree_on_cubic_root() {
+    let f = |x: f64| x.powi(3) - 2.0 * x - 5.0;
+    let opts = RootOptions::default();
+    let r_bisect = bisect(&f, (0.0, 3.0), opts).unwrap().root;
+    let r_brentq = brentq(&f, (0.0, 3.0), opts).unwrap().root;
+    let r_brenth = brenth(&f, (0.0, 3.0), opts).unwrap().root;
+    let r_ridder = ridder(&f, (0.0, 3.0), opts).unwrap().root;
+    let r_toms = toms748(&f, (0.0, 3.0), opts).unwrap().root;
+    let expected = 2.094_551_481_542_326_5;
+    for (name, r) in [
+        ("bisect", r_bisect),
+        ("brentq", r_brentq),
+        ("brenth", r_brenth),
+        ("ridder", r_ridder),
+        ("toms748", r_toms),
+    ] {
+        assert!(
+            (r - expected).abs() < 1e-6,
+            "MR15 {name} returned {r}, expected ≈ {expected}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — minimize on f(x) = Σ x_i² (sphere) finds the origin.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimize_sphere_finds_origin() {
+    let f = |x: &[f64]| x.iter().map(|&xi| xi * xi).sum::<f64>();
+    let res = minimize(f, &[3.0, -4.0, 1.5, -0.5], MinimizeOptions::default()).unwrap();
+    for (i, &xi) in res.x.iter().enumerate() {
+        assert!(
+            xi.abs() < 1e-3,
+            "MR16 sphere x[{i}] = {xi}, expected ≈ 0"
+        );
+    }
+    assert!(
+        res.fun.unwrap() < 1e-6,
+        "MR16 sphere fmin = {}, expected ≈ 0",
+        res.fun.unwrap()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — minimize_scalar on (x − a)² with a ∈ {−5, 0, 5} returns a.
+// (Sign symmetry of the quadratic vertex location.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimize_scalar_sign_symmetry() {
+    for &a in &[-5.0_f64, 0.0, 5.0] {
+        let f = move |x: f64| (x - a).powi(2);
+        // Bracket that contains the minimum at a.
+        let bracket = (a - 10.0, a + 10.0);
+        let res = minimize_scalar(f, bracket, MinimizeScalarOptions::default()).unwrap();
+        assert!(
+            (res.x - a).abs() < 1e-3,
+            "MR17 minimize_scalar with a = {a}: got x = {}",
+            res.x
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — fsolve solves the nonlinear scalar system x² - 4 = 0 with
+// x0 = 1, recovering x = 2 (the positive root).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fsolve_nonlinear_x_squared_minus_four() {
+    let f = |x: &[f64]| vec![x[0] * x[0] - 4.0];
+    let res = fsolve(f, &[1.0]).unwrap();
+    assert!(
+        (res.x[0] - 2.0).abs() < 1e-5,
+        "MR18 fsolve x²=4: got x = {}, expected 2.0",
+        res.x[0]
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — Scaling the objective by a positive constant does not move
+// the minimum: argmin f = argmin (c·f) for c > 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimize_positive_scale_invariance() {
+    let base = |x: &[f64]| (x[0] - 1.5).powi(2) + (x[1] + 2.5).powi(2);
+    let scaled = |x: &[f64]| 100.0 * base(x);
+    let r1 = minimize(base, &[0.0, 0.0], MinimizeOptions::default()).unwrap();
+    let r2 = minimize(scaled, &[0.0, 0.0], MinimizeOptions::default()).unwrap();
+    for i in 0..2 {
+        assert!(
+            (r1.x[i] - r2.x[i]).abs() < 5e-3,
+            "MR19 argmin shift at i={i}: base = {}, scaled = {}",
+            r1.x[i],
+            r2.x[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — DE on a 1D bimodal function returns a value within tolerance
+// of one of the two known minima (oracle = minimum value, location
+// is one of {-2, +2}).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_de_bimodal_finds_a_minimum() {
+    // f(x) = (x² - 4)² has minima at x = ±2 with f = 0.
+    let f = |x: &[f64]| (x[0] * x[0] - 4.0).powi(2);
+    let bounds = vec![(-5.0_f64, 5.0_f64)];
+    let mut opts = DifferentialEvolutionOptions::default();
+    opts.seed = Some(42);
+    let res = differential_evolution(f, &bounds, opts).unwrap();
+    let fmin = res.fun.unwrap();
+    assert!(
+        fmin < 1e-3,
+        "MR20 DE bimodal fmin = {fmin}, expected ≈ 0"
+    );
+    let x = res.x[0];
+    assert!(
+        (x - 2.0).abs() < 0.05 || (x + 2.0).abs() < 0.05,
+        "MR20 DE bimodal x = {x}, expected ±2"
+    );
+}
+
