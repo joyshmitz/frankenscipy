@@ -9,11 +9,11 @@
 use fsci_spatial::{
     ConvexHull, DistanceMetric, KDTree, angle_between, cartesian_to_cylindrical,
     cartesian_to_spherical, cdist_metric, centroid, chebyshev, cityblock, cosine, cross_3d,
-    cylindrical_to_cartesian, diameter, dice, dot, euclidean, hausdorff_distance,
-    jensenshannon, k_nearest_neighbors, matching, medoid, metric_distance, minkowski,
-    nearest_neighbors, normalize, pdist, procrustes, rogerstanimoto, rotate_point,
-    rotation_matrix, russellrao, spherical_to_cartesian, spread, squareform_to_condensed,
-    squareform_to_matrix, yule,
+    cylindrical_to_cartesian, diameter, dice, distance_matrix, dot, euclidean, geometric_slerp,
+    hausdorff_distance, jensenshannon, k_nearest_neighbors, kulsinski, mahalanobis, matching,
+    medoid, metric_distance, minkowski, nearest_neighbors, normalize, pdist, procrustes,
+    rogerstanimoto, rotate_point, rotation_matrix, russellrao, sokalmichener, sokalsneath,
+    spherical_to_cartesian, spread, squareform_to_condensed, squareform_to_matrix, yule,
 };
 
 const ATOL: f64 = 1e-12;
@@ -1095,6 +1095,132 @@ fn mr_hausdorff_nonneg() {
     let d = hausdorff_distance(&a, &b).unwrap();
     assert!(d >= -1e-12, "MR40 hausdorff = {d} < 0");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — distance_matrix(x, y) has shape (len(x), len(y)).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_distance_matrix_shape() {
+    let x: Vec<Vec<f64>> = (0..5).map(|i| vec![i as f64, (i * 2) as f64]).collect();
+    let y: Vec<Vec<f64>> = (0..3).map(|j| vec![j as f64 + 0.5, (j * 3) as f64 - 1.0]).collect();
+    let d = distance_matrix(&x, &y).unwrap();
+    assert_eq!(d.len(), x.len(), "MR41 distance_matrix rows");
+    for row in &d {
+        assert_eq!(row.len(), y.len(), "MR41 distance_matrix cols");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — geometric_slerp at t = 0 returns start; at t = 1 returns end.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_geometric_slerp_endpoints() {
+    let start = vec![1.0_f64, 0.0, 0.0];
+    let end = vec![0.0_f64, 1.0, 0.0];
+    let res = geometric_slerp(&start, &end, &[0.0_f64, 1.0_f64]).unwrap();
+    assert_eq!(res.len(), 2, "MR42 slerp output length");
+    for (k, &expected) in start.iter().enumerate() {
+        assert!(
+            (res[0][k] - expected).abs() < 1e-12,
+            "MR42 slerp(t=0)[{k}] = {} vs {expected}",
+            res[0][k]
+        );
+    }
+    for (k, &expected) in end.iter().enumerate() {
+        assert!(
+            (res[1][k] - expected).abs() < 1e-12,
+            "MR42 slerp(t=1)[{k}] = {} vs {expected}",
+            res[1][k]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — Mahalanobis distance with the identity inverse covariance
+// equals Euclidean distance.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_mahalanobis_identity_inv_cov_equals_euclidean() {
+    let pts = sample_points();
+    let d = pts[0].len();
+    let mut id = vec![vec![0.0; d]; d];
+    for i in 0..d {
+        id[i][i] = 1.0;
+    }
+    for a in &pts {
+        for b in &pts {
+            let m = mahalanobis(a, b, &id);
+            let e = euclidean(a, b);
+            assert!(
+                (m - e).abs() < 1e-9,
+                "MR43 mahalanobis(I) = {m} vs euclidean = {e}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — kulsinski distance is finite (well-defined) for any
+// non-degenerate pair of boolean vectors.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kulsinski_finite() {
+    let pairs: &[(Vec<bool>, Vec<bool>)] = &[
+        (vec![true, false, true, false], vec![true, true, false, false]),
+        (vec![true, false, false, true], vec![false, true, true, false]),
+    ];
+    for (u, v) in pairs {
+        let k = kulsinski(u, v);
+        assert!(
+            k.is_finite(),
+            "MR44 kulsinski non-finite: {k} on {u:?} vs {v:?}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — sokalmichener(x, x) = 0 for any boolean vector.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sokalmichener_self_zero() {
+    let bs: &[Vec<bool>] = &[
+        vec![true, false, true, false, true],
+        vec![false, true, true, true, false],
+    ];
+    for b in bs {
+        let s = sokalmichener(b, b);
+        assert!(
+            s.abs() < 1e-12,
+            "MR45 sokalmichener(x, x) = {s} on {b:?}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — sokalsneath(x, x) = 0 for any boolean vector with at least
+// one true.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sokalsneath_self_zero() {
+    let bs: &[Vec<bool>] = &[
+        vec![true, false, true, false, true],
+        vec![false, true, true, true, false],
+    ];
+    for b in bs {
+        let s = sokalsneath(b, b);
+        assert!(
+            s.abs() < 1e-12,
+            "MR46 sokalsneath(x, x) = {s} on {b:?}"
+        );
+    }
+}
+
 
 
 
