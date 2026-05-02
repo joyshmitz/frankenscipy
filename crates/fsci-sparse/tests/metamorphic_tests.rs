@@ -7,13 +7,15 @@
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, EigsOptions, IterativeSolveOptions, LuOptions, Shape2D, SolveOptions,
-    add_csr, bicg, bicgstab, block_diag, breadth_first_order, cg, cgs, connected_components,
-    coo_to_csr_with_mode, csr_to_csc_with_mode, diags, dijkstra, eigsh, eye, floyd_warshall,
-    gmres, kron, lsmr, lsqr, matrix_power as sparse_matrix_power, minres, qmr,
+    CooMatrix, CsrMatrix, EigsOptions, ExpmOptions, IterativeSolveOptions, LuOptions, Shape2D,
+    SolveOptions, add_csr, bicg, bicgstab, block_diag, breadth_first_order, cg, cgs,
+    connected_components, coo_to_csr_with_mode, csr_to_csc_with_mode, diags, dijkstra, eigsh,
+    expm as sparse_expm, eye, floyd_warshall, gmres, kron, laplacian, lsmr, lsqr,
+    matrix_power as sparse_matrix_power, minimum_spanning_tree, minres, qmr,
     reverse_cuthill_mckee, scale_csr, sparse_diagonal, sparse_eliminate_zeros,
-    sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_trace, sparse_transpose, spmv,
-    spmv_csc, spmv_csr, splu, splu_solve, spsolve, sub_csr, svds, tril, triu,
+    sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_row_min, sparse_trace,
+    sparse_transpose, spmv, spmv_csc, spmv_csr, splu, splu_solve, spsolve, structural_rank,
+    sub_csr, svds, tril, triu,
 };
 
 const ATOL: f64 = 1e-9;
@@ -1037,6 +1039,139 @@ fn mr_reverse_cuthill_mckee_is_permutation() {
     for (i, ok) in seen.iter().enumerate() {
         assert!(*ok, "MR42 RCM missing index {i}");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — sparse expm of the zero matrix is the identity matrix.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_expm_of_zero_is_identity() {
+    let n = 4;
+    let zero = vec![0.0_f64; n];
+    let z = diags(&[zero], &[0_isize], Some(Shape2D::new(n, n))).unwrap();
+    let result = sparse_expm(&z, ExpmOptions::default()).unwrap();
+    for i in 0..n {
+        for j in 0..n {
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (result[i][j] - expected).abs() < 1e-9,
+                "MR43 expm(0)[{i}, {j}] = {} vs {expected}",
+                result[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — sparse_row_min returns a vector of length matching the number
+// of rows.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_row_min_length() {
+    let a = build_spd_csr();
+    let mins = sparse_row_min(&a);
+    assert_eq!(
+        mins.len(),
+        a.shape().rows,
+        "MR44 sparse_row_min length"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — Graph Laplacian rows sum to zero (on a connected graph).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_laplacian_rows_sum_to_zero() {
+    let n = 4;
+    // Path graph 0-1-2-3 (undirected) with unit weights.
+    let coo = CooMatrix::from_triplets(
+        Shape2D { rows: n, cols: n },
+        vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        vec![0, 1, 1, 2, 2, 3],
+        vec![1, 0, 2, 1, 3, 2],
+        true,
+    )
+    .unwrap();
+    let g = coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "test_lap")
+        .unwrap()
+        .0;
+    let l = laplacian(&g, false).unwrap();
+    for (i, row) in l.iter().enumerate() {
+        let s: f64 = row.iter().sum();
+        assert!(
+            s.abs() < 1e-9,
+            "MR45 laplacian row {i} sum = {s} ≠ 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — minimum_spanning_tree on a connected graph of n nodes returns
+// at most n-1 edges.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimum_spanning_tree_edge_count() {
+    let n = 5;
+    // Build a complete-ish graph.
+    let mut data = Vec::new();
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                data.push(((i + j) as f64) + 1.0);
+                rows.push(i);
+                cols.push(j);
+            }
+        }
+    }
+    let coo =
+        CooMatrix::from_triplets(Shape2D { rows: n, cols: n }, data, rows, cols, true).unwrap();
+    let g = coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "test_mst")
+        .unwrap()
+        .0;
+    let mst = minimum_spanning_tree(&g).unwrap();
+    assert!(
+        mst.edges.len() <= n - 1,
+        "MR46 MST edge count = {} > n-1 = {}",
+        mst.edges.len(),
+        n - 1
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — structural_rank ≤ min(rows, cols) for any sparse matrix.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_structural_rank_bounded() {
+    let a = build_spd_csr();
+    let r = structural_rank(&a);
+    let bound = a.shape().rows.min(a.shape().cols);
+    assert!(
+        r <= bound,
+        "MR47 structural_rank = {r} > min(rows, cols) = {bound}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — sparse_norm("fro") matches the Frobenius norm computed
+// directly from CSR data values.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_norm_frobenius_matches_definition() {
+    let a = build_spd_csr();
+    let direct: f64 = a.data().iter().map(|v| v * v).sum::<f64>().sqrt();
+    let n = sparse_norm(&a, "fro");
+    assert!(
+        (n - direct).abs() < 1e-9 * direct.abs().max(1.0),
+        "MR48 sparse_norm(fro) = {n} vs direct = {direct}"
+    );
 }
 
 #[test]
