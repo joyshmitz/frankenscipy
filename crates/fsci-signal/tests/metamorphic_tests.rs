@@ -6,11 +6,12 @@
 //! Run with: `cargo test -p fsci-signal --test metamorphic_tests`
 
 use fsci_signal::{
-    ConvolveMode, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, bartlett, blackman,
-    boxcar, convolve, correlate, deconvolve, deemphasis, downsample, fftconvolve, filtfilt,
-    find_peaks, gaussian, hamming, hann, hilbert, hilbert_envelope, kaiser, lanczos, lfilter,
-    normalize_signal, parzen, peak_to_peak, preemphasis, resample, rms, signal_energy, sosfilt,
-    spectral_centroid, tf2sos, triang, upsample, xcorr_coefficient, zero_crossing_rate,
+    ConvolveMode, FilterType, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, bartlett,
+    blackman, boxcar, butter, convolve, correlate, deconvolve, deemphasis, downsample, fftconvolve,
+    filtfilt, find_peaks, freqz, gaussian, hamming, hann, hilbert, hilbert_envelope, iirnotch,
+    iirpeak, kaiser, lanczos, lfilter, normalize_signal, parzen, peak_to_peak, preemphasis,
+    resample, rms, signal_energy, sos2tf, sosfilt, sosfiltfilt, spectral_centroid, tf2sos, tf2zpk,
+    triang, upsample, xcorr_coefficient, zero_crossing_rate, zpk2tf,
 };
 
 const ATOL: f64 = 1e-9;
@@ -798,6 +799,141 @@ fn mr_xcorr_coefficient_self_is_one() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — Butterworth low-pass design returns finite (b, a) coefficients
+// with a[0] = 1.0 (normalised).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_butter_lowpass_finite_normalised() {
+    for order in [2usize, 4, 6, 8] {
+        let r = butter(order, &[0.3], FilterType::Lowpass).unwrap();
+        for (i, &v) in r.b.iter().enumerate() {
+            assert!(v.is_finite(), "MR36 butter b[{i}] non-finite");
+        }
+        for (i, &v) in r.a.iter().enumerate() {
+            assert!(v.is_finite(), "MR36 butter a[{i}] non-finite");
+        }
+        assert!(
+            (r.a[0] - 1.0).abs() < 1e-12,
+            "MR36 butter a[0] = {} != 1.0",
+            r.a[0]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — tf2zpk then zpk2tf is approximately the identity on the
+// (b, a) transfer function.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_tf2zpk_zpk2tf_roundtrip() {
+    let r = butter(4, &[0.4], FilterType::Lowpass).unwrap();
+    let zpk = tf2zpk(&r.b, &r.a).unwrap();
+    let back = zpk2tf(&zpk);
+    assert_eq!(back.b.len(), r.b.len(), "MR37 tf roundtrip b length");
+    assert_eq!(back.a.len(), r.a.len(), "MR37 tf roundtrip a length");
+    for (i, (x, y)) in r.b.iter().zip(&back.b).enumerate() {
+        assert!(
+            (x - y).abs() < 1e-7 * x.abs().max(1.0),
+            "MR37 tf2zpk/zpk2tf b[{i}]: {x} vs {y}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — tf2sos and sos2tf round-trip preserves the (b, a) form
+// (modulo gain factoring) — verify by re-applying tf2sos to the result.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sos_roundtrip_consistent() {
+    let r = butter(4, &[0.4], FilterType::Lowpass).unwrap();
+    let sos = tf2sos(&r.b, &r.a).unwrap();
+    let back = sos2tf(&sos);
+    let sos2 = tf2sos(&back.b, &back.a).unwrap();
+    assert_eq!(
+        sos.len(),
+        sos2.len(),
+        "MR38 SOS round-trip section count: {} vs {}",
+        sos.len(),
+        sos2.len()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — sosfiltfilt preserves input length (same-length output as x).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sosfiltfilt_preserves_length() {
+    let r = butter(2, &[0.3], FilterType::Lowpass).unwrap();
+    let sos = tf2sos(&r.b, &r.a).unwrap();
+    let x: Vec<f64> = (0..32).map(|i| (i as f64 * 0.4).sin()).collect();
+    let y = sosfiltfilt(&sos, &x).unwrap();
+    assert_eq!(
+        y.len(),
+        x.len(),
+        "MR39 sosfiltfilt length: got {} expected {}",
+        y.len(),
+        x.len()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — freqz returns finite frequency response across the default
+// number of samples.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_freqz_finite_response() {
+    let r = butter(3, &[0.4], FilterType::Lowpass).unwrap();
+    let resp = freqz(&r.b, &r.a, Some(64)).unwrap();
+    assert_eq!(resp.h_mag.len(), 64, "MR40 freqz length");
+    for (k, &m) in resp.h_mag.iter().enumerate() {
+        assert!(
+            m.is_finite() && m >= -1e-12,
+            "MR40 freqz h_mag[{k}] = {m}"
+        );
+    }
+    for (k, &p) in resp.h_phase.iter().enumerate() {
+        assert!(
+            p.is_finite(),
+            "MR40 freqz h_phase[{k}] = {p}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — iirnotch and iirpeak return finite coefficients with a[0] = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_iirnotch_iirpeak_finite() {
+    for &(w0, q) in &[(0.3_f64, 30.0), (0.5, 10.0), (0.7, 25.0)] {
+        let n = iirnotch(w0, q).unwrap();
+        let p = iirpeak(w0, q).unwrap();
+        for (i, &v) in n.b.iter().enumerate() {
+            assert!(v.is_finite(), "MR41 iirnotch b[{i}] non-finite");
+        }
+        for (i, &v) in p.b.iter().enumerate() {
+            assert!(v.is_finite(), "MR41 iirpeak b[{i}] non-finite");
+        }
+        assert!(
+            (n.a[0] - 1.0).abs() < 1e-12,
+            "MR41 iirnotch a[0] = {} != 1",
+            n.a[0]
+        );
+        assert!(
+            (p.a[0] - 1.0).abs() < 1e-12,
+            "MR41 iirpeak a[0] = {} != 1",
+            p.a[0]
+        );
+    }
+}
+
 
 
 
