@@ -11,7 +11,7 @@ use fsci_interpolate::{
     RegularGridInterpolator, SplineBc, barycentric_eval, barycentric_weights, chebyshev_nodes,
     chebyshev_nodes2, hermite_interp, lagrange, make_interp_spline, neville, polyadd, polyder,
     polyfit, polyint, polyint_definite, polymul, polyroots, polysub, polyval, polyval_with_error,
-    ratval, splev, splint, splrep,
+    ratval, splantider, splder, splev, splev_with_derivative, splint, splrep, sproot,
 };
 
 const ATOL: f64 = 1e-10;
@@ -856,6 +856,113 @@ fn mr_splrep_splev_smooth_recovery() {
         "MR38 splrep/splev max error = {max_err}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — splder reduces spline degree by 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_splder_reduces_degree() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64 * 0.5).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
+    let tck = splrep(&x, &y, 3, 0.0).unwrap();
+    let dtck = splder(&tck).unwrap();
+    assert_eq!(dtck.2, tck.2 - 1, "MR39 splder degree {} vs {}", dtck.2, tck.2 - 1);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — splantider increases spline degree by 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_splantider_increases_degree() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64 * 0.5).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
+    let tck = splrep(&x, &y, 3, 0.0).unwrap();
+    let itck = splantider(&tck).unwrap();
+    assert_eq!(itck.2, tck.2 + 1, "MR40 splantider degree {} vs {}", itck.2, tck.2 + 1);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — splev_with_derivative(der=0) equals plain splev.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_splev_with_derivative_zero_matches_splev() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64 * 0.5).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.cos()).collect();
+    let tck = splrep(&x, &y, 3, 0.0).unwrap();
+    let v0 = splev(&x, &tck).unwrap();
+    let v_der0 = splev_with_derivative(&x, &tck, 0).unwrap();
+    for (i, (a, b)) in v0.iter().zip(&v_der0).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-12,
+            "MR41 splev_with_derivative(der=0)[{i}] = {b} vs splev = {a}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — sproot on a strictly positive smooth function returns no
+// roots within the data range.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sproot_no_roots_for_positive_data() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64 * 0.5).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.cos() + 5.0).collect(); // ≥ 4
+    let tck = splrep(&x, &y, 3, 0.0).unwrap();
+    let roots = sproot(&tck).unwrap_or_default();
+    assert!(
+        roots.is_empty(),
+        "MR42 sproot returned {} roots for strictly positive data",
+        roots.len()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — Akima1DInterpolator passes through the data points.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_akima_passes_through_data_extra() {
+    let x: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+    let y: Vec<f64> = vec![1.0, 2.5, 3.0, 1.5, -0.5, 2.0];
+    let interp = Akima1DInterpolator::new(&x, &y).unwrap();
+    for (i, &xi) in x.iter().enumerate() {
+        let v = interp.eval(xi);
+        assert!(
+            (v - y[i]).abs() < 1e-9,
+            "MR43 akima at x[{i}]={xi}: got {v} vs {}",
+            y[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — KroghInterpolator on a polynomial of degree n-1 reproduces it
+// exactly: lagrange interpolation through the given nodes is the
+// unique polynomial of degree ≤ n-1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_krogh_reproduces_polynomial() {
+    // p(x) = 2x³ - x² + 3x + 5 sampled at 4 points (deg 3 = n-1 with n = 4).
+    let xi: Vec<f64> = vec![-1.0, 0.0, 1.0, 2.0];
+    let yi: Vec<f64> = xi.iter()
+        .map(|&xi| 2.0 * xi.powi(3) - xi.powi(2) + 3.0 * xi + 5.0)
+        .collect();
+    let interp = KroghInterpolator::new(&xi, &yi).unwrap();
+    for &x in &[-0.5_f64, 0.5, 1.5, 3.0, -2.0] {
+        let expected = 2.0 * x.powi(3) - x.powi(2) + 3.0 * x + 5.0;
+        let got = interp.evaluate(x);
+        assert!(
+            (got - expected).abs() < 1e-9 * expected.abs().max(1.0),
+            "MR44 krogh at {x}: got {got} vs {expected}"
+        );
+    }
+}
+
 
 
 
