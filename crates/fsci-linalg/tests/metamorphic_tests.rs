@@ -9,10 +9,11 @@
 //! Run with: `cargo test -p fsci-linalg --test metamorphic_tests`
 
 use fsci_linalg::{
-    DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, cholesky, cosm,
-    det, diag, diagm, eigh, eigvalsh, expm, hadamard_product, hessenberg, inv, ishermitian,
-    issymmetric, logm, lstsq, lu, matrix_power, matrix_rank, norm, outer, pinv, qr, schur, sinm,
-    solve, sqrtm, svd, trace, vdot, vnorm,
+    DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, cholesky,
+    circulant, cosm, det, diag, diagm, eigh, eigvalsh, expm, hadamard, hadamard_product,
+    hessenberg, hilbert as linalg_hilbert, inv, ishermitian, issymmetric, logm, lstsq, lu,
+    matrix_power, matrix_rank, norm, outer, pascal, pinv, polar, qr, schur, sinm, solve, sqrtm,
+    svd, toeplitz, trace, vdot, vnorm,
 };
 
 const RTOL: f64 = 1e-9;
@@ -1074,6 +1075,152 @@ fn mr_matrix_power_zero_is_identity() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — toeplitz(c) main diagonal entries equal c[0].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_toeplitz_diagonal_matches_c0() {
+    let c = vec![3.5_f64, 1.0, -2.0, 0.5];
+    let t = toeplitz(&c, None);
+    let n = t.len();
+    for i in 0..n {
+        assert!(
+            (t[i][i] - c[0]).abs() < 1e-12,
+            "MR35 toeplitz diag[{i}] = {} vs c[0] = {}",
+            t[i][i],
+            c[0]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — circulant first row matches c (positive-shift convention used
+// by this implementation: m[i][j] = c[(j + n - i) % n], so row 0 is c).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_circulant_first_row_matches_c() {
+    let c = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+    let m = circulant(&c);
+    for (j, &cv) in c.iter().enumerate() {
+        assert!(
+            (m[0][j] - cv).abs() < 1e-12,
+            "MR36 circulant[0, {j}] = {} vs c[{j}] = {cv}",
+            m[0][j]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — Hilbert matrix is symmetric: H[i, j] = H[j, i] = 1/(i+j+1).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hilbert_matrix_symmetric() {
+    for n in [3usize, 5, 8] {
+        let h = linalg_hilbert(n);
+        for i in 0..n {
+            for j in 0..n {
+                let expected = 1.0 / (i + j + 1) as f64;
+                assert!(
+                    (h[i][j] - expected).abs() < 1e-12,
+                    "MR37 hilbert({n})[{i}, {j}] = {} vs {expected}",
+                    h[i][j]
+                );
+                assert!(
+                    (h[i][j] - h[j][i]).abs() < 1e-12,
+                    "MR37 hilbert symmetry: [{i}, {j}] = {} vs [{j}, {i}] = {}",
+                    h[i][j],
+                    h[j][i]
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — Hadamard matrix of size 2^k has shape n × n with entries ±1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hadamard_size_and_entries() {
+    for n in [2usize, 4, 8, 16] {
+        let h = hadamard(n).unwrap();
+        assert_eq!(h.len(), n, "MR38 hadamard rows = {} expected {n}", h.len());
+        for row in &h {
+            assert_eq!(row.len(), n, "MR38 hadamard cols");
+            for &v in row {
+                assert!(
+                    (v - 1.0).abs() < 1e-12 || (v + 1.0).abs() < 1e-12,
+                    "MR38 hadamard entry = {v}, expected ±1"
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — Pascal lower-triangular matrix has all 1s on the diagonal
+// and 1s in the first column.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_pascal_lower_diagonal_and_first_column() {
+    for n in [3usize, 5, 7] {
+        let p = pascal(n, false); // lower-triangular form
+        for i in 0..n {
+            assert!(
+                (p[i][i] - 1.0).abs() < 1e-12,
+                "MR39 pascal diag[{i}] = {}",
+                p[i][i]
+            );
+            assert!(
+                (p[i][0] - 1.0).abs() < 1e-12,
+                "MR39 pascal[{i}, 0] = {}",
+                p[i][0]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — Polar decomposition: U · P ≈ A (with U semi-unitary and P SPD).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polar_decomposition_reconstructs_a() {
+    let a = vec![
+        vec![3.0_f64, 1.0, 0.5],
+        vec![1.0, 4.0, 0.7],
+        vec![0.5, 0.7, 5.0],
+    ];
+    let res = polar(&a, DecompOptions::default()).unwrap();
+    let n = a.len();
+    // Compute U · P.
+    let mut up = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut s = 0.0;
+            for k in 0..n {
+                s += res.u[i][k] * res.p[k][j];
+            }
+            up[i][j] = s;
+        }
+    }
+    for i in 0..n {
+        for j in 0..n {
+            assert!(
+                (up[i][j] - a[i][j]).abs() < 1e-7,
+                "MR40 polar U·P[{i}, {j}] = {} vs A = {}",
+                up[i][j],
+                a[i][j]
+            );
+        }
+    }
+}
+
 
 
 
