@@ -8,8 +8,9 @@
 
 use fsci_fft::{
     Complex64, FftOptions, Normalization, dct, dct_i, dct_iv, dctn, dst_ii, dst_iii, dstn, fft,
-    fft2, fftfreq, fftshift_1d, fht, fhtoffset, hfft, hilbert, idct, idctn, idstn, ifft, ifft2,
-    ifftshift_1d, ifht, ihfft, irfft, irfft2, next_fast_len, rfft, rfft2,
+    fft2, fftcorrelate, fftfreq, fftn, fftshift_1d, fht, fhtoffset, hamming_window, hann_window,
+    hfft, hilbert, idct, idctn, idstn, ifft, ifft2, ifftn, ifftshift_1d, ifht, ihfft, irfft, irfft2,
+    next_fast_len, rfft, rfft2,
 };
 
 const RTOL: f64 = 1e-9;
@@ -732,5 +733,173 @@ fn mr_fft_ifft_inverse_complex_input() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — fftn with shape [N] reduces to fft on the same input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fftn_1d_matches_fft() {
+    let opts = FftOptions::default();
+    let n = 16;
+    let mut rng = prng(0x6789);
+    let x: Vec<Complex64> = (0..n).map(|_| (rng(), rng())).collect();
+    let one_d = fft(&x, &opts).unwrap();
+    let nd = fftn(&x, &[n], &opts).unwrap();
+    assert_eq!(one_d.len(), nd.len(), "MR28 length");
+    for (i, (a, b)) in one_d.iter().zip(&nd).enumerate() {
+        assert!(
+            close_complex(*a, *b),
+            "MR28 fft vs fftn[1D] at {i}: ({}, {}) vs ({}, {})",
+            a.0,
+            a.1,
+            b.0,
+            b.1
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — ifftn(fftn(x)) = x for any complex N-D input shape.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fftn_ifftn_inverse() {
+    let opts = FftOptions::default();
+    let shapes: &[&[usize]] = &[&[8], &[4, 4], &[2, 2, 4]];
+    for &shape in shapes {
+        let total: usize = shape.iter().product();
+        let mut rng = prng(total as u64 * 31);
+        let x: Vec<Complex64> = (0..total).map(|_| (rng(), rng())).collect();
+        let xf = fftn(&x, shape, &opts).unwrap();
+        let xb = ifftn(&xf, shape, &opts).unwrap();
+        for (i, (a, b)) in x.iter().zip(&xb).enumerate() {
+            assert!(
+                close_complex(*a, *b),
+                "MR29 ifftn∘fftn shape={shape:?} at {i}: ({}, {}) vs ({}, {})",
+                a.0,
+                a.1,
+                b.0,
+                b.1
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — hilbert returns a complex output of the same length as input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hilbert_preserves_length() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16, 32, 64] {
+        let mut rng = prng(n as u64 * 7);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let h = hilbert(&x, &opts).unwrap();
+        assert_eq!(h.len(), n, "MR30 hilbert length");
+        for (i, &(re, im)) in h.iter().enumerate() {
+            assert!(
+                re.is_finite() && im.is_finite(),
+                "MR30 hilbert non-finite at {i}: ({re}, {im})"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — fftcorrelate(x, x, "full") peaks at the centre lag (zero-lag
+// = energy of x).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fftcorrelate_peak_at_zero_lag() {
+    let x: Vec<f64> = (0..16).map(|i| (i as f64 * 0.4).cos()).collect();
+    let c = fftcorrelate(&x, &x, "full").unwrap();
+    // For "full" mode of correlate(x, x), output length is 2N - 1 with
+    // peak at index N - 1.
+    let mid = x.len() - 1;
+    let energy: f64 = x.iter().map(|v| v * v).sum();
+    assert_eq!(c.len(), 2 * x.len() - 1, "MR31 fftcorrelate length");
+    assert!(
+        (c[mid] - energy).abs() < 1e-7 * energy.abs().max(1.0),
+        "MR31 fftcorrelate centre = {} vs energy = {energy}",
+        c[mid]
+    );
+    // Peak is the maximum.
+    for (k, &v) in c.iter().enumerate() {
+        if k != mid {
+            assert!(
+                v.abs() <= c[mid].abs() + 1e-7,
+                "MR31 fftcorrelate[{k}] = {v} > peak = {}",
+                c[mid]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — hamming_window and hann_window are symmetric on odd length
+// and produce values in [0, 1.0001] (small headroom for hamming).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hamming_hann_windows_symmetric() {
+    for n in [5usize, 7, 13, 31, 65] {
+        let h = hamming_window(n);
+        let hn = hann_window(n);
+        for i in 0..n / 2 {
+            assert!(
+                (h[i] - h[n - 1 - i]).abs() < 1e-12,
+                "MR32 hamming not symmetric at i={i}: {} vs {}",
+                h[i],
+                h[n - 1 - i]
+            );
+            assert!(
+                (hn[i] - hn[n - 1 - i]).abs() < 1e-12,
+                "MR32 hann not symmetric at i={i}: {} vs {}",
+                hn[i],
+                hn[n - 1 - i]
+            );
+        }
+        for &v in &h {
+            assert!(v >= -1e-12 && v <= 1.001, "MR32 hamming val = {v}");
+        }
+        for &v in &hn {
+            assert!(v >= -1e-12 && v <= 1.0 + 1e-12, "MR32 hann val = {v}");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — fftshift_1d on an even-length vector swaps the two halves.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fftshift_swaps_even_halves() {
+    let n = 8;
+    let mut rng = prng(0x9999);
+    let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+    let s = fftshift_1d(&x);
+    assert_eq!(s.len(), n, "MR33 fftshift length");
+    let half = n / 2;
+    for i in 0..half {
+        // After shift: s[i] = x[i + half]; s[i + half] = x[i].
+        assert!(
+            (s[i] - x[i + half]).abs() < 1e-12,
+            "MR33 fftshift first half at {i}: {} vs {}",
+            s[i],
+            x[i + half]
+        );
+        assert!(
+            (s[i + half] - x[i]).abs() < 1e-12,
+            "MR33 fftshift second half at {}: {} vs {}",
+            i + half,
+            s[i + half],
+            x[i]
+        );
+    }
+}
+
 
 
