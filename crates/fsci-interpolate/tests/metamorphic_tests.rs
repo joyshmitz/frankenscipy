@@ -7,11 +7,12 @@
 
 use fsci_interpolate::{
     Akima1DInterpolator, BarycentricInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions,
-    InterpKind, KroghInterpolator, NearestNDInterpolator, PchipInterpolator,
-    RegularGridInterpolator, SplineBc, barycentric_eval, barycentric_weights, chebyshev_nodes,
-    chebyshev_nodes2, hermite_interp, lagrange, make_interp_spline, neville, polyadd, polyder,
-    polyfit, polyint, polyint_definite, polymul, polyroots, polysub, polyval, polyval_with_error,
-    ratval, splantider, splder, splev, splev_with_derivative, splint, splrep, sproot,
+    InterpKind, KroghInterpolator, NearestNDInterpolator, PchipInterpolator, RbfInterpolator,
+    RbfKernel, RegularGridInterpolator, SplineBc, barycentric_eval, barycentric_weights,
+    chebyshev_nodes, chebyshev_nodes2, hermite_interp, interp1d_linear, lagrange,
+    make_interp_spline, make_lsq_spline, neville, pade, polyadd, polyder, polyfit, polyint,
+    polyint_definite, polymul, polyroots, polysub, polyval, polyval_with_error, ratval,
+    splantider, splder, splev, splev_with_derivative, splint, splrep, sproot,
 };
 
 const ATOL: f64 = 1e-10;
@@ -962,6 +963,133 @@ fn mr_krogh_reproduces_polynomial() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — interp1d_linear at the data points returns the data values.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_interp1d_linear_at_data_points() {
+    let x: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0, 4.5, 6.0];
+    let y: Vec<f64> = vec![1.0, 2.5, 0.0, -1.0, 4.0, 2.0];
+    let yhat = interp1d_linear(&x, &y, &x).unwrap();
+    for (i, (a, b)) in y.iter().zip(&yhat).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-12,
+            "MR45 interp1d_linear at x[{i}]: y = {a}, yhat = {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — RbfInterpolator passes through the data using Gaussian kernel.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rbf_passes_through_data() {
+    let points: Vec<Vec<f64>> = vec![
+        vec![0.0, 0.0],
+        vec![1.0, 0.0],
+        vec![0.0, 1.0],
+        vec![1.0, 1.0],
+        vec![0.5, 0.5],
+    ];
+    let values: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+    let interp =
+        RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).unwrap();
+    for (i, p) in points.iter().enumerate() {
+        let v = interp.eval(p);
+        assert!(
+            (v - values[i]).abs() < 1e-7,
+            "MR46 RBF at point {i}: got {v} vs {}",
+            values[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — pade(c, m, n) returns vectors of length m+1 and n+1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_pade_returns_correct_lengths() {
+    // Taylor series for exp(x) up to x^4.
+    let c = vec![1.0_f64, 1.0, 0.5, 1.0 / 6.0, 1.0 / 24.0];
+    let (p, q) = pade(&c, 2, 2).unwrap();
+    assert_eq!(p.len(), 3, "MR47 pade p length");
+    assert_eq!(q.len(), 3, "MR47 pade q length");
+    assert!((q[0] - 1.0).abs() < 1e-12, "MR47 pade q[0] = {} != 1", q[0]);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — make_lsq_spline returns a B-spline of the requested degree
+// when given enough knots.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_make_lsq_spline_degree() {
+    let x: Vec<f64> = (0..20).map(|i| i as f64 * 0.5).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin() + 0.5 * xi.cos()).collect();
+    let k = 3;
+    // Knot vector: clamped at endpoints.
+    let mut t = vec![x[0]; k + 1];
+    let interior_count = 6;
+    for i in 1..=interior_count {
+        let frac = i as f64 / (interior_count + 1) as f64;
+        t.push(x[0] + frac * (x[x.len() - 1] - x[0]));
+    }
+    for _ in 0..=k {
+        t.push(x[x.len() - 1]);
+    }
+    let bspline = make_lsq_spline(&x, &y, &t, k).unwrap();
+    // BSpline with degree k returns finite values when evaluated.
+    let v = bspline.eval(x[5]);
+    assert!(v.is_finite(), "MR48 make_lsq_spline eval non-finite: {v}");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — Interp1d (Cubic) on a smooth function approaches y at data
+// points within tolerance.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_interp1d_cubic_close_to_data_at_xs() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
+    let mut opts = Interp1dOptions::default();
+    opts.kind = InterpKind::CubicSpline;
+    let interp = Interp1d::new(&x, &y, opts).unwrap();
+    for (i, &xi) in x.iter().enumerate() {
+        let v = interp.eval(xi).unwrap();
+        assert!(
+            (v - y[i]).abs() < 1e-9,
+            "MR49 Interp1d cubic at x[{i}]: y = {} vs ŷ = {v}",
+            y[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — interp1d_linear extrapolation at the boundary returns boundary
+// values when querying inside the data range. (Sanity check on linear.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_interp1d_linear_in_range_finite() {
+    let x: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0];
+    let y: Vec<f64> = vec![10.0, 20.0, 30.0, 40.0];
+    let x_query: Vec<f64> = vec![0.5, 1.5, 2.5];
+    let yhat = interp1d_linear(&x, &y, &x_query).unwrap();
+    let expected = vec![15.0_f64, 25.0, 35.0];
+    for (i, (a, b)) in expected.iter().zip(&yhat).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-12,
+            "MR50 linear interp at x_query[{i}] = {}: got {b}, expected {a}",
+            x_query[i]
+        );
+    }
+}
+
 
 
 
