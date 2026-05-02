@@ -7,8 +7,9 @@
 //! Run with: `cargo test -p fsci-fft --test metamorphic_tests`
 
 use fsci_fft::{
-    Complex64, FftOptions, Normalization, dct, dctn, dst_ii, dstn, fft, fft2, hfft, hilbert, idct,
-    idctn, idstn, ifft, ifft2, ihfft, irfft, irfft2, rfft, rfft2,
+    Complex64, FftOptions, Normalization, dct, dctn, dst_ii, dst_iii, dstn, fft, fft2, fftfreq,
+    fftshift_1d, hfft, hilbert, idct, idctn, idstn, ifft, ifft2, ifftshift_1d, ihfft, irfft, irfft2,
+    rfft, rfft2,
 };
 
 const RTOL: f64 = 1e-9;
@@ -445,3 +446,151 @@ fn mr_hfft_ihfft_roundtrip() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — ifftshift_1d ∘ fftshift_1d = identity for any length.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fftshift_ifftshift_identity() {
+    for n in [4usize, 5, 8, 9, 16, 17, 32] {
+        let mut rng = prng(n as u64 * 7);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let shifted = fftshift_1d(&x);
+        let recovered = ifftshift_1d(&shifted);
+        for (i, (a, b)) in recovered.iter().zip(&x).enumerate() {
+            assert!(
+                close(*a, *b),
+                "MR16 ifftshift∘fftshift n={n} i={i}: {a} vs {b}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — For odd n, Σ fftfreq(n, d=1) = 0: positive and negative
+// frequency bins pair up symmetrically (no Nyquist bin for odd n).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fftfreq_odd_sum_is_zero() {
+    for n in [3usize, 5, 7, 9, 17, 33, 65] {
+        let f = fftfreq(n, 1.0).expect("fftfreq");
+        let s: f64 = f.iter().sum();
+        assert!(
+            s.abs() < 1e-12,
+            "MR17 Σfftfreq(n={n}) = {s}, expected 0"
+        );
+        assert_eq!(f.len(), n, "MR17 fftfreq length n={n}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — dst_iii inverts dst_ii up to a 1/(2N) factor with Backward
+// normalisation: ½N · idst_iii(dst_ii(x)) = x at every interior sample.
+// (DST-II and DST-III are mutual inverses up to scaling under SciPy's
+// default `Backward` convention.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dst_ii_dst_iii_roundtrip_backward() {
+    let mut rng = prng(0x4444);
+    let n = 16;
+    let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+    let opts = FftOptions {
+        normalization: Normalization::Backward,
+        ..Default::default()
+    };
+    let y = dst_ii(&x, &opts).unwrap();
+    let z = dst_iii(&y, &opts).unwrap();
+    let scale = 1.0 / (2.0 * n as f64);
+    for (i, (zi, xi)) in z.iter().zip(&x).enumerate() {
+        let recovered = scale * zi;
+        assert!(
+            close(recovered, *xi),
+            "MR18 dst_ii→dst_iii at i={i}: {recovered} vs {xi}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — fft of a real, even-symmetric input has zero imaginary part
+// (a known DFT symmetry: real-even input ⇒ real-even spectrum).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fft_real_even_input_has_real_spectrum() {
+    // Construct a real, even-symmetric vector x[k] = cos(2π·k/N) sampled
+    // for N=16 — even by construction.
+    let n = 16;
+    let x_real: Vec<f64> = (0..n)
+        .map(|k| (2.0 * std::f64::consts::PI * k as f64 / n as f64).cos())
+        .collect();
+    let x_complex: Vec<Complex64> = x_real.iter().map(|&v| (v, 0.0)).collect();
+    let opts = FftOptions::default();
+    let xf = fft(&x_complex, &opts).unwrap();
+    for (k, &(re, im)) in xf.iter().enumerate() {
+        assert!(
+            im.abs() < 1e-9,
+            "MR19 imag(fft[{k}]) = {im} for real-even input (re = {re})"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — Linearity of dct: dct(αx + βy) = α·dct(x) + β·dct(y).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dct_linearity() {
+    let mut rng = prng(0x5555);
+    let n = 32;
+    let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+    let y: Vec<f64> = (0..n).map(|_| rng()).collect();
+    let alpha = 1.7_f64;
+    let beta = -0.4_f64;
+    let mixed: Vec<f64> = x
+        .iter()
+        .zip(&y)
+        .map(|(&xi, &yi)| alpha * xi + beta * yi)
+        .collect();
+    let opts = FftOptions::default();
+    let dct_mixed = dct(&mixed, &opts).unwrap();
+    let dct_x = dct(&x, &opts).unwrap();
+    let dct_y = dct(&y, &opts).unwrap();
+    for k in 0..n {
+        let combined = alpha * dct_x[k] + beta * dct_y[k];
+        assert!(
+            close(dct_mixed[k], combined),
+            "MR20 dct linearity at k={k}: {} vs {}",
+            dct_mixed[k],
+            combined
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — fft of an all-zero input is all zero; ifft recovers zero.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fft_zero_input_zero_spectrum() {
+    let n = 16;
+    let zeros = vec![(0.0_f64, 0.0_f64); n];
+    let opts = FftOptions::default();
+    let xf = fft(&zeros, &opts).unwrap();
+    for (k, &(re, im)) in xf.iter().enumerate() {
+        assert!(
+            re.abs() < 1e-12 && im.abs() < 1e-12,
+            "MR21 fft(0)[{k}] = ({re}, {im}), expected (0, 0)"
+        );
+    }
+    let xb = ifft(&xf, &opts).unwrap();
+    for (k, &(re, im)) in xb.iter().enumerate() {
+        assert!(
+            re.abs() < 1e-12 && im.abs() < 1e-12,
+            "MR21 ifft(0)[{k}] = ({re}, {im}), expected (0, 0)"
+        );
+    }
+}
+
