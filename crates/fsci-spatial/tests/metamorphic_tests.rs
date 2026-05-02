@@ -7,13 +7,14 @@
 //! Run with: `cargo test -p fsci-spatial --test metamorphic_tests`
 
 use fsci_spatial::{
-    ConvexHull, Delaunay, DistanceMetric, KDTree, Voronoi, angle_between, cartesian_to_cylindrical,
-    cartesian_to_spherical, cdist_metric, centroid, chebyshev, cityblock, cosine, cross_3d,
-    cylindrical_to_cartesian, diameter, dice, distance_matrix, dot, euclidean, geometric_slerp,
-    hausdorff_distance, jensenshannon, k_nearest_neighbors, kulsinski, mahalanobis, matching,
-    medoid, metric_distance, minkowski, nearest_neighbors, normalize, pdist, procrustes,
-    rogerstanimoto, rotate_point, rotation_matrix, russellrao, sokalmichener, sokalsneath,
-    spherical_to_cartesian, spread, squareform_to_condensed, squareform_to_matrix, yule,
+    ConvexHull, Delaunay, DistanceMetric, KDTree, Rotation, Voronoi, angle_between,
+    cartesian_to_cylindrical, cartesian_to_spherical, cdist_metric, centroid, chebyshev, cityblock,
+    cosine, cross_3d, cylindrical_to_cartesian, diameter, dice, distance_matrix, dot, euclidean,
+    geometric_slerp, hausdorff_distance, jensenshannon, k_nearest_neighbors, kulsinski,
+    mahalanobis, matching, medoid, metric_distance, minkowski, nearest_neighbors, normalize, pdist,
+    procrustes, rogerstanimoto, rotate_point, rotation_matrix, russellrao, sokalmichener,
+    sokalsneath, spherical_to_cartesian, spread, squareform_to_condensed, squareform_to_matrix,
+    yule,
 };
 
 const ATOL: f64 = 1e-12;
@@ -1352,6 +1353,138 @@ fn mr_convex_hull_subset_area_dominated() {
         "MR52 subset area = {} > outer area = {}",
         hull_subset.area,
         hull_outer.area
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — Rotation::identity().apply(v) = v.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rotation_identity_apply_returns_input() {
+    let id = Rotation::identity();
+    let vs: &[[f64; 3]] = &[
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 2.0, 3.0],
+        [-1.5, 0.5, -2.0],
+    ];
+    for v in vs {
+        let r = id.apply(*v);
+        for k in 0..3 {
+            assert!(
+                (r[k] - v[k]).abs() < 1e-12,
+                "MR53 identity rotation changed v[{k}]: {} vs {}",
+                r[k],
+                v[k]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — Rotation.inv().apply(R.apply(v)) = v for any unit quaternion.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rotation_inverse_undoes_apply() {
+    let r = Rotation::from_quat([0.5, 0.5, 0.5, 0.5]);
+    let r_inv = r.inv();
+    let v = [1.0_f64, 2.0, 3.0];
+    let rotated = r.apply(v);
+    let recovered = r_inv.apply(rotated);
+    for k in 0..3 {
+        assert!(
+            (recovered[k] - v[k]).abs() < 1e-9,
+            "MR54 R.inv()(R(v))[{k}] = {} vs {}",
+            recovered[k],
+            v[k]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR55 — from_quat then as_quat round-trip preserves the (normalized)
+// quaternion (modulo sign).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rotation_quat_roundtrip() {
+    let q_in = [0.7071067811865475, 0.0, 0.0, 0.7071067811865475]; // 90° about x.
+    let r = Rotation::from_quat(q_in);
+    let q_out = r.as_quat();
+    let same = (q_in[0] - q_out[0]).abs() < 1e-9
+        && (q_in[1] - q_out[1]).abs() < 1e-9
+        && (q_in[2] - q_out[2]).abs() < 1e-9
+        && (q_in[3] - q_out[3]).abs() < 1e-9;
+    let neg = (q_in[0] + q_out[0]).abs() < 1e-9
+        && (q_in[1] + q_out[1]).abs() < 1e-9
+        && (q_in[2] + q_out[2]).abs() < 1e-9
+        && (q_in[3] + q_out[3]).abs() < 1e-9;
+    assert!(
+        same || neg,
+        "MR55 quat roundtrip: in = {q_in:?}, out = {q_out:?}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR56 — Rotation preserves vector magnitude (isometry).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rotation_preserves_magnitude() {
+    let r = Rotation::from_quat([0.5, 0.5, 0.5, 0.5]);
+    let vs: &[[f64; 3]] = &[[1.0, 2.0, 3.0], [-2.0, 0.5, 1.5], [0.0, 0.0, 1.0]];
+    for v in vs {
+        let nv: f64 = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        let rv = r.apply(*v);
+        let nrv: f64 = (rv[0] * rv[0] + rv[1] * rv[1] + rv[2] * rv[2]).sqrt();
+        assert!(
+            (nv - nrv).abs() < 1e-9,
+            "MR56 rotation broke magnitude: {nv} vs {nrv}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR57 — as_rotvec then from_rotvec round-trip preserves the rotation
+// (verified via apply on a probe vector).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rotation_rotvec_roundtrip() {
+    let r1 = Rotation::from_quat([0.3, 0.4, 0.5, 0.7071067811865476]);
+    let rv = r1.as_rotvec();
+    let r2 = Rotation::from_rotvec(rv);
+    let probe = [1.0_f64, 2.0, -1.5];
+    let v1 = r1.apply(probe);
+    let v2 = r2.apply(probe);
+    for k in 0..3 {
+        assert!(
+            (v1[k] - v2[k]).abs() < 1e-7,
+            "MR57 rotvec roundtrip differs at {k}: {} vs {}",
+            v1[k],
+            v2[k]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR58 — Rotation preserves dot products: u·v = (R·u)·(R·v).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rotation_preserves_dot_product() {
+    let r = Rotation::from_quat([0.2, 0.3, 0.4, 0.5]);
+    let u = [1.0_f64, 2.0, 3.0];
+    let v = [0.5_f64, -1.0, 2.0];
+    let original = u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    let ru = r.apply(u);
+    let rv = r.apply(v);
+    let rotated = ru[0] * rv[0] + ru[1] * rv[1] + ru[2] * rv[2];
+    assert!(
+        (original - rotated).abs() < 1e-9,
+        "MR58 rotation changed dot product: {original} vs {rotated}"
     );
 }
 
