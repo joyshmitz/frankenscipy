@@ -9,9 +9,10 @@
 use fsci_opt::{
     BasinhoppingOptions, CurveFitOptions, DifferentialEvolutionOptions, LeastSquaresOptions,
     MinimizeOptions, MinimizeScalarOptions, RootOptions, approx_fprime, basinhopping, bisect,
-    brent_minimize, brenth, brentq, brute, curve_fit, differential_evolution, fixed_point, fsolve,
-    golden, halley, isotonic_regression, least_squares, minimize, minimize_scalar, newton_scalar,
-    nnls, ridder, rosen, rosen_der, secant, toms748,
+    bracket, brent_minimize, brenth, brentq, brute, curve_fit, differential_evolution, fixed_point,
+    fsolve, golden, gradient_descent, halley, isotonic_regression, least_squares, minimize,
+    minimize_scalar, minimize_scalar_bounded, minimize_trisection, newton_scalar, nnls,
+    numerical_gradient, numerical_hessian, ridder, rosen, rosen_der, secant, toms748,
 };
 
 const ATOL: f64 = 1e-6;
@@ -748,6 +749,132 @@ fn mr_brute_finds_parabola_minimum() {
         res.x[0]
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — numerical_gradient on quadratic f(x, y) = x² + y² matches the
+// analytical gradient (2x, 2y).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_numerical_gradient_matches_analytical() {
+    let f = |x: &[f64]| x[0].powi(2) + x[1].powi(2);
+    for &(x, y) in &[(1.0_f64, 2.0), (-3.0, 0.5), (0.5, -1.0)] {
+        let g = numerical_gradient(f, &[x, y], 1e-5);
+        let expected = [2.0 * x, 2.0 * y];
+        for k in 0..2 {
+            assert!(
+                (g[k] - expected[k]).abs() < 1e-3,
+                "MR33 numerical_gradient[{k}] = {} vs {}",
+                g[k],
+                expected[k]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — numerical_hessian of f(x, y) = x² + y² is approximately 2·I.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_numerical_hessian_quadratic() {
+    let f = |x: &[f64]| x[0].powi(2) + x[1].powi(2);
+    let h = numerical_hessian(f, &[1.0_f64, -1.5], 1e-3);
+    for i in 0..2 {
+        for j in 0..2 {
+            let expected = if i == j { 2.0 } else { 0.0 };
+            assert!(
+                (h[i][j] - expected).abs() < 0.05,
+                "MR34 hessian[{i}, {j}] = {} vs {expected}",
+                h[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — bracket returns finite a, b, c such that f(b) ≤ min(f(a), f(c))
+// for a unimodal function.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bracket_finite_for_unimodal() {
+    let f = |x: f64| (x - 2.0).powi(2);
+    let (a, b, c, fa, fb, fc) = bracket(f, 0.0, 1.0);
+    for v in [a, b, c, fa, fb, fc] {
+        assert!(v.is_finite(), "MR35 bracket returned non-finite {v}");
+    }
+    assert!(fb <= fa + 1e-9, "MR35 fb = {fb} > fa = {fa}");
+    assert!(fb <= fc + 1e-9, "MR35 fb = {fb} > fc = {fc}");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — minimize_scalar_bounded returns x within the supplied bounds.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimize_scalar_bounded_in_range() {
+    let f = |x: f64| (x - 7.5).powi(2);
+    let bounds = (-1.0_f64, 5.0_f64);
+    let (xmin, _fmin) = minimize_scalar_bounded(f, bounds, 1e-9, 200);
+    assert!(
+        xmin >= bounds.0 - 1e-9 && xmin <= bounds.1 + 1e-9,
+        "MR36 minimize_scalar_bounded x = {xmin} outside [{}, {}]",
+        bounds.0,
+        bounds.1
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — gradient_descent on a strictly convex f(x) = ||x − target||²
+// converges to the target.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gradient_descent_finds_target() {
+    let target = vec![1.0_f64, -2.0, 0.5];
+    let f = {
+        let target = target.clone();
+        move |x: &[f64]| {
+            x.iter()
+                .zip(&target)
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f64>()
+        }
+    };
+    let grad = {
+        let target = target.clone();
+        move |x: &[f64]| {
+            x.iter()
+                .zip(&target)
+                .map(|(a, b)| 2.0 * (a - b))
+                .collect::<Vec<f64>>()
+        }
+    };
+    let x0 = vec![0.0_f64; 3];
+    let res = gradient_descent(f, grad, &x0, 1e-9, 5000, 0.05);
+    for (i, (xi, ti)) in res.x.iter().zip(&target).enumerate() {
+        assert!(
+            (xi - ti).abs() < 1e-3,
+            "MR37 gradient_descent x[{i}] = {xi} vs target {ti}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — minimize_trisection finds the minimum of (x - 4)² near x = 4.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimize_trisection_parabola() {
+    let f = |x: f64| (x - 4.0).powi(2);
+    let (xmin, _fmin) = minimize_trisection(f, 0.0, 8.0, 1e-9, 500);
+    assert!(
+        (xmin - 4.0).abs() < 1e-4,
+        "MR38 minimize_trisection x = {xmin}, expected 4"
+    );
+}
+
 
 
 
