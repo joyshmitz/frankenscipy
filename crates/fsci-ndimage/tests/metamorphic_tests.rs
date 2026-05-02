@@ -6,12 +6,14 @@
 //! Run with: `cargo test -p fsci-ndimage --test metamorphic_tests`
 
 use fsci_ndimage::{
-    BoundaryMode, NdArray, argmax, argmin, binary_closing, binary_dilation, binary_erosion,
-    binary_fill_holes, binary_opening, black_tophat, convolve, correlate, cumsum_array,
-    distance_transform_edt, equal_within, flatten, full, gaussian_filter, grey_dilation,
-    grey_erosion, label, laplace, masked_select, maximum_filter, mean_labels, median_filter,
-    minimum_filter, morphological_gradient, ones, percentile_filter, prewitt, reshape, rotate,
-    shift, sobel, sum_labels, uniform_filter, variance_labels, where_cond, white_tophat, zoom,
+    BoundaryMode, NdArray, argmax, argmin, array_max, array_min, binary_closing, binary_dilation,
+    binary_erosion, binary_fill_holes, binary_opening, black_tophat, convolve, correlate,
+    cumsum_array, distance_transform_edt, equal_within, flatten, full, gaussian_filter,
+    gradient_magnitude, grey_dilation, grey_erosion, label, laplace, masked_select, maximum_filter,
+    mean_labels, median_filter, minimum_filter, morphological_gradient, ones, otsu_threshold,
+    percentile_filter, prewitt, range_filter, reshape, rotate, shift, sobel, std_filter,
+    sum_labels, threshold, uniform_filter, variance_filter, variance_labels, where_cond,
+    white_tophat, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -829,6 +831,105 @@ fn mr_masked_select_length_equals_mask_sum() {
         mask_sum as usize
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — array_max ≥ array_min for any non-empty input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_array_max_geq_min() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
+    let mx = array_max(&img);
+    let mn = array_min(&img);
+    assert!(
+        mx >= mn - 1e-12,
+        "MR41 array_max = {mx} < array_min = {mn}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — gradient_magnitude of a constant image is 0 (no gradient).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gradient_magnitude_constant_is_zero() {
+    let img = arr_2d(8, 10, |_, _| 7.5);
+    let g = gradient_magnitude(&img).unwrap();
+    for (i, &v) in g.data.iter().enumerate() {
+        assert!(
+            v.abs() < 1e-9,
+            "MR42 gradient_magnitude(const)[{i}] = {v}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — threshold produces a binary image (only 0.0 or 1.0 entries).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_threshold_produces_binary() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
+    let t = threshold(&img, 8.0);
+    for (i, &v) in t.data.iter().enumerate() {
+        assert!(
+            v == 0.0 || v == 1.0,
+            "MR43 threshold[{i}] = {v}, expected 0 or 1"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — otsu_threshold returns a value in [array_min, array_max].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_otsu_threshold_in_range() {
+    let img = arr_2d(8, 8, |i, j| ((i * 7 + j * 3) % 13) as f64);
+    let t = otsu_threshold(&img);
+    let mn = array_min(&img);
+    let mx = array_max(&img);
+    assert!(
+        t >= mn - 1e-9 && t <= mx + 1e-9,
+        "MR44 otsu = {t} outside [{mn}, {mx}]"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — range_filter ≥ 0: window range (max - min) is non-negative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_range_filter_nonneg() {
+    let img = arr_2d(7, 9, |i, j| ((i * 11 + j * 5) % 19) as f64);
+    let r = range_filter(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, &v) in r.data.iter().enumerate() {
+        assert!(
+            v >= -1e-12,
+            "MR45 range_filter[{i}] = {v} < 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — std_filter ≈ sqrt(variance_filter) pointwise (within numerical
+// noise).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_std_filter_matches_sqrt_variance() {
+    let img = arr_2d(7, 9, |i, j| ((i * 11 + j * 5) % 19) as f64);
+    let v = variance_filter(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    let s = std_filter(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, (vi, si)) in v.data.iter().zip(&s.data).enumerate() {
+        assert!(
+            (si - vi.sqrt()).abs() < 1e-9,
+            "MR46 std_filter[{i}] = {si} vs sqrt(variance) = {}",
+            vi.sqrt()
+        );
+    }
+}
+
 
 
 
