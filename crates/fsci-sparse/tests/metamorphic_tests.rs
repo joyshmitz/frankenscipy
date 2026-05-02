@@ -7,9 +7,11 @@
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, EigsOptions, IterativeSolveOptions, Shape2D, SolveOptions, add_csr, bicg,
-    bicgstab, block_diag, cg, coo_to_csr_with_mode, csr_to_csc_with_mode, diags, eigsh, eye, gmres,
-    kron, scale_csr, sparse_transpose, spmv, spmv_csc, spmv_csr, spsolve, sub_csr, svds, tril, triu,
+    CooMatrix, CsrMatrix, EigsOptions, IterativeSolveOptions, LuOptions, Shape2D, SolveOptions,
+    add_csr, bicg, bicgstab, block_diag, cg, coo_to_csr_with_mode, csr_to_csc_with_mode, diags,
+    eigsh, eye, floyd_warshall, gmres, kron, scale_csr, sparse_diagonal, sparse_nnz, sparse_norm,
+    sparse_trace, sparse_transpose, spmv, spmv_csc, spmv_csr, splu, splu_solve, spsolve, sub_csr,
+    svds, tril, triu,
 };
 
 const ATOL: f64 = 1e-9;
@@ -639,6 +641,137 @@ fn mr_diags_main_diag_ones_is_eye() {
 // ─────────────────────────────────────────────────────────────────────
 // MR24 — block_diag of [A, B] has shape (rows_A + rows_B, cols_A + cols_B).
 // ─────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — sparse_trace(eye(n)) = n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_trace_of_eye() {
+    for n in [1usize, 3, 5, 8, 16] {
+        let i = eye(n).unwrap();
+        let t = sparse_trace(&i);
+        assert!(
+            (t - n as f64).abs() < 1e-12,
+            "MR25 sparse_trace(eye({n})) = {t}, expected {n}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — sparse_diagonal(eye(n)) is the all-ones vector of length n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_diagonal_of_eye() {
+    for n in [1usize, 3, 5, 8] {
+        let i = eye(n).unwrap();
+        let d = sparse_diagonal(&i);
+        assert_eq!(d.len(), n, "MR26 diag length");
+        for (k, &v) in d.iter().enumerate() {
+            assert!(
+                (v - 1.0).abs() < 1e-12,
+                "MR26 sparse_diagonal(eye({n}))[{k}] = {v}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — sparse_nnz of an all-zero matrix (constructed via diags with
+// zero diagonals) is 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_nnz_zero_matrix() {
+    // Build a 5×5 zero matrix using diags with a zero main diagonal,
+    // then compute its nnz. It should be 0 since all entries are zero;
+    // diags conventionally records explicit zeros, but sparse_nnz only
+    // counts non-zero values.
+    let n = 5;
+    let zero = vec![0.0_f64; n];
+    let m = diags(&[zero], &[0_isize], Some(Shape2D::new(n, n))).unwrap();
+    let nnz = sparse_nnz(&m);
+    assert_eq!(
+        nnz, 0,
+        "MR27 sparse_nnz of zero diagonal = {nnz}, expected 0"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — splu / splu_solve correctly solves Ax = b for an SPD CSR via
+// CSC factorization (residual is small).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_splu_roundtrip() {
+    let a = build_spd_csr();
+    let (csc, _) =
+        csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_splu").unwrap();
+    let b = vec![1.0_f64, 0.5, -1.0, 0.25, -0.5];
+    let lu = splu(&csc, LuOptions::default()).unwrap();
+    let x = splu_solve(&lu, &b).unwrap();
+    // Verify residual ‖A·x − b‖ is small via spmv.
+    let ax = spmv_csr(&a, &x).unwrap();
+    let mut residual_sq = 0.0;
+    for (axi, bi) in ax.iter().zip(&b) {
+        let d = axi - bi;
+        residual_sq += d * d;
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-7,
+        "MR28 splu residual = {} (expected small)",
+        residual_sq.sqrt()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — floyd_warshall on a graph with positive edges yields a
+// distance matrix with zero diagonal.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_floyd_warshall_zero_diagonal() {
+    // Build a small connected graph: 0–1 weight 2, 1–2 weight 3.
+    let n = 3;
+    let coo = CooMatrix::from_triplets(
+        Shape2D { rows: n, cols: n },
+        vec![2.0, 2.0, 3.0, 3.0],
+        vec![0, 1, 1, 2],
+        vec![1, 0, 2, 1],
+        true,
+    )
+    .unwrap();
+    let g = coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "test_floyd")
+        .unwrap()
+        .0;
+    let dist = floyd_warshall(&g);
+    for i in 0..n {
+        assert!(
+            dist[i][i].abs() < 1e-12,
+            "MR29 floyd_warshall dist[{i}, {i}] = {}",
+            dist[i][i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — sparse_norm("fro") of the zero matrix is 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_norm_zero_matrix() {
+    let n = 4;
+    let zero = vec![0.0_f64; n];
+    let m = diags(&[zero], &[0_isize], Some(Shape2D::new(n, n))).unwrap();
+    for kind in &["fro", "1", "inf"] {
+        let v = sparse_norm(&m, kind);
+        assert!(
+            v.abs() < 1e-12,
+            "MR30 sparse_norm({kind}) of zero = {v}"
+        );
+    }
+}
 
 #[test]
 fn mr_block_diag_shape() {
