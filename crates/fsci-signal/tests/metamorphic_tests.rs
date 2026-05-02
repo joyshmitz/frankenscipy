@@ -7,9 +7,10 @@
 
 use fsci_signal::{
     ConvolveMode, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, bartlett, blackman,
-    boxcar, convolve, correlate, deconvolve, fftconvolve, filtfilt, find_peaks, gaussian, hamming,
-    hann, hilbert, hilbert_envelope, kaiser, lanczos, lfilter, parzen, resample, rms, sosfilt,
-    spectral_centroid, tf2sos, triang, zero_crossing_rate,
+    boxcar, convolve, correlate, deconvolve, deemphasis, downsample, fftconvolve, filtfilt,
+    find_peaks, gaussian, hamming, hann, hilbert, hilbert_envelope, kaiser, lanczos, lfilter,
+    normalize_signal, parzen, peak_to_peak, preemphasis, resample, rms, signal_energy, sosfilt,
+    spectral_centroid, tf2sos, triang, upsample, xcorr_coefficient, zero_crossing_rate,
 };
 
 const ATOL: f64 = 1e-9;
@@ -669,5 +670,134 @@ fn mr_hilbert_real_part_equals_input() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — peak_to_peak(x) = max(x) - min(x).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_peak_to_peak_definition() {
+    let xs: &[Vec<f64>] = &[
+        vec![1.0, -2.0, 3.0, 0.5, -1.5, 4.0],
+        vec![0.0; 8],
+        vec![5.0; 5],
+        (0..16).map(|i| (i as f64 * 0.5).sin()).collect(),
+    ];
+    for x in xs {
+        let p2p = peak_to_peak(x);
+        let mx = x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let mn = x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let expected = mx - mn;
+        assert!(
+            (p2p - expected).abs() < 1e-12,
+            "MR30 peak_to_peak = {p2p} vs (max - min) = {expected}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — Preemphasis followed by deemphasis approximately recovers
+// the input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_preemphasis_deemphasis_roundtrip() {
+    let x: Vec<f64> = (0..32).map(|i| (i as f64 * 0.4).cos()).collect();
+    let coeff = 0.95_f64;
+    let y = preemphasis(&x, coeff);
+    let z = deemphasis(&y, coeff);
+    assert_eq!(z.len(), x.len(), "MR31 length mismatch");
+    for (i, (xi, zi)) in x.iter().zip(&z).enumerate() {
+        assert!(
+            (xi - zi).abs() < 1e-9,
+            "MR31 preemphasis∘deemphasis at i={i}: {xi} vs {zi}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — normalize_signal performs z-score normalization: output has
+// mean 0 and std 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_normalize_signal_zscore() {
+    let x: Vec<f64> = (0..32).map(|i| (i as f64 * 0.4).sin() * 100.0).collect();
+    let n = normalize_signal(&x);
+    let len = n.len() as f64;
+    let mean: f64 = n.iter().sum::<f64>() / len;
+    let var: f64 = n.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / len;
+    let std = var.sqrt();
+    assert!(
+        mean.abs() < 1e-9,
+        "MR32 normalize_signal mean = {mean}, expected 0"
+    );
+    assert!(
+        (std - 1.0).abs() < 1e-9,
+        "MR32 normalize_signal std = {std}, expected 1"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — downsample(x, k) returns ⌈n/k⌉ samples; upsample(x, k)
+// returns n*k samples.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_downsample_upsample_lengths() {
+    let x: Vec<f64> = (0..16).map(|i| i as f64).collect();
+    for &k in &[2usize, 4, 8] {
+        let d = downsample(&x, k);
+        assert_eq!(
+            d.len(),
+            x.len().div_ceil(k),
+            "MR33 downsample length k={k}"
+        );
+        let u = upsample(&x, k);
+        assert_eq!(u.len(), x.len() * k, "MR33 upsample length k={k}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — signal_energy(x) = Σ x_i².
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_signal_energy_definition() {
+    let xs: &[Vec<f64>] = &[
+        vec![1.0, 2.0, 3.0, 4.0],
+        (0..32).map(|i| (i as f64 * 0.4).cos()).collect(),
+        vec![0.0; 8],
+    ];
+    for x in xs {
+        let e = signal_energy(x);
+        let manual: f64 = x.iter().map(|v| v * v).sum();
+        assert!(
+            (e - manual).abs() < 1e-12,
+            "MR34 signal_energy = {e} vs Σx² = {manual}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — xcorr_coefficient(x, x) = 1 for any non-zero x.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_xcorr_coefficient_self_is_one() {
+    let xs: &[Vec<f64>] = &[
+        vec![1.0, 2.0, 3.0, 4.0, 5.0],
+        (0..16).map(|i| (i as f64 * 0.5).sin()).collect(),
+        (0..32).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect(),
+    ];
+    for x in xs {
+        let c = xcorr_coefficient(x, x);
+        assert!(
+            (c - 1.0).abs() < 1e-9,
+            "MR35 xcorr_coefficient(x, x) = {c}, expected 1"
+        );
+    }
+}
+
 
 
