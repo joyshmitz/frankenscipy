@@ -7,8 +7,9 @@
 
 use fsci_stats::{
     Bernoulli, BetaDist, Binomial, ChiSquared, ContinuousDistribution, DiscreteDistribution,
-    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, ks_2samp, kurtosis,
-    mannwhitneyu, pearsonr, skew, spearmanr, ttest_1samp, ttest_ind, ttest_rel, wilcoxon,
+    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, energy_distance,
+    f_oneway, gmean, hmean, ks_2samp, kurtosis, mannwhitneyu, pearsonr, pmean, quantile, skew,
+    spearmanr, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance, wilcoxon,
 };
 
 const ATOL: f64 = 1e-8;
@@ -545,3 +546,139 @@ fn mr_ttest_rel_sign_symmetry() {
     assert_close(ab.statistic, -ba.statistic, "MR23 ttest_rel sign");
     assert_close(ab.pvalue, ba.pvalue, "MR23 ttest_rel pvalue swap");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — Power-mean ordering on positive data:
+//     hmean ≤ gmean ≤ amean (= pmean(p=1)) ≤ pmean(p=2).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_power_mean_ordering() {
+    let xs = [
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0],
+        vec![0.5_f64, 1.5, 4.0, 7.0, 10.0],
+        vec![1.0_f64, 1.0, 1.0, 1.0],
+        vec![0.1_f64, 0.5, 1.0, 5.0, 10.0],
+    ];
+    for x in &xs {
+        let h = hmean(x);
+        let g = gmean(x);
+        let a = pmean(x, 1.0);
+        let q = pmean(x, 2.0);
+        assert!(
+            h <= g + 1e-12,
+            "MR24 hmean = {h} > gmean = {g} on {x:?}"
+        );
+        assert!(
+            g <= a + 1e-12,
+            "MR24 gmean = {g} > amean = {a} on {x:?}"
+        );
+        assert!(
+            a <= q + 1e-12,
+            "MR24 amean = {a} > pmean(p=2) = {q} on {x:?}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — Quantile is monotonic in q: q1 ≤ q2 ⇒ quantile(x, q1) ≤
+// quantile(x, q2).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quantile_monotonic_in_q() {
+    let x = vec![3.0_f64, 1.0, 4.0, 1.5, 5.0, 9.0, 2.0, 6.0, 5.5, 3.5];
+    let qs = vec![0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0];
+    let res = quantile(&x, &qs);
+    for w in res.windows(2) {
+        assert!(
+            w[0] <= w[1] + 1e-12,
+            "MR25 quantile not monotonic: {} > {}",
+            w[0],
+            w[1]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — wasserstein_distance(u, u) = 0 (identity of indiscernibles).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_wasserstein_self_distance_zero() {
+    for x in &[
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0],
+        vec![0.5_f64; 8],
+        vec![-3.0, -1.0, 0.5, 2.0, 4.0, 7.0],
+    ] {
+        let d = wasserstein_distance(x, x);
+        assert!(
+            d.abs() < 1e-12,
+            "MR26 wasserstein(u, u) = {d}, expected 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — energy_distance is symmetric: ed(u, v) = ed(v, u).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_energy_distance_symmetric() {
+    let u = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+    let v = vec![2.0_f64, 3.0, 4.0, 5.0, 6.0, 7.0];
+    let uv = energy_distance(&u, &v);
+    let vu = energy_distance(&v, &u);
+    assert!(
+        (uv - vu).abs() < 1e-12,
+        "MR27 ed(u, v) = {uv} vs ed(v, u) = {vu}"
+    );
+    assert!(uv >= -1e-12, "MR27 ed = {uv} < 0");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — One-way ANOVA F statistic is non-negative on any input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_f_oneway_statistic_nonneg() {
+    let g1 = [1.0_f64, 2.0, 3.0, 4.0];
+    let g2 = [1.5_f64, 2.5, 3.5];
+    let g3 = [1.2_f64, 2.1, 3.3, 4.4, 5.5];
+    let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
+    let res = f_oneway(&groups);
+    assert!(
+        res.statistic >= -1e-12,
+        "MR28 f_oneway statistic = {} < 0",
+        res.statistic
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — gmean of a constant array equals the constant; hmean too.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gmean_hmean_pmean_constant() {
+    for &c in &[1.0_f64, 2.5, 7.0, 100.0] {
+        let x = vec![c; 12];
+        assert!(
+            (gmean(&x) - c).abs() < 1e-10,
+            "MR29 gmean(const {c}) = {}",
+            gmean(&x)
+        );
+        assert!(
+            (hmean(&x) - c).abs() < 1e-10,
+            "MR29 hmean(const {c}) = {}",
+            hmean(&x)
+        );
+        for &p in &[-2.0_f64, 0.5, 1.0, 2.0, 3.0] {
+            let pm = pmean(&x, p);
+            assert!(
+                (pm - c).abs() < 1e-10,
+                "MR29 pmean(const {c}, p = {p}) = {pm}"
+            );
+        }
+    }
+}
+
