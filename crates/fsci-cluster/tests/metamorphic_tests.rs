@@ -9,8 +9,9 @@
 use fsci_cluster::{
     LinkageMethod, adjusted_rand_score, calinski_harabasz_score, completeness_score, cophenet,
     davies_bouldin_score, dbscan, fcluster, fclusterdata, fowlkes_mallows_score, homogeneity_score,
-    is_monotonic, is_valid_linkage, kmeans, leaves_list, linkage, mini_batch_kmeans,
-    normalized_mutual_info, num_obs_linkage, silhouette_score, vq,
+    inconsistent, is_monotonic, is_valid_linkage, kmeans, kmedoids, leaves_list, linkage,
+    mini_batch_kmeans, normalized_mutual_info, num_obs_linkage, silhouette_samples,
+    silhouette_score, v_measure_score, vq, whiten,
 };
 
 fn small_dataset() -> Vec<Vec<f64>> {
@@ -563,4 +564,147 @@ fn mr_completeness_in_unit_interval() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — whiten produces approximately unit-variance columns when input
+// rows have non-degenerate column variance. (Mean is not necessarily 0
+// in scipy's whiten — it only divides by stddev.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_whiten_columns_have_unit_variance() {
+    let data = vec![
+        vec![1.0_f64, 5.0, 100.0],
+        vec![2.0, 6.0, 200.0],
+        vec![3.0, 7.0, 300.0],
+        vec![4.0, 8.0, 400.0],
+        vec![5.0, 9.0, 500.0],
+    ];
+    let w = whiten(&data).unwrap();
+    let n = w.len();
+    let d = w[0].len();
+    for j in 0..d {
+        let mean: f64 = w.iter().map(|row| row[j]).sum::<f64>() / n as f64;
+        let var: f64 =
+            w.iter().map(|row| (row[j] - mean).powi(2)).sum::<f64>() / n as f64;
+        assert!(
+            (var - 1.0).abs() < 1e-9,
+            "MR27 whiten column {j} variance = {var}, expected 1"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — v_measure_score is symmetric in (true, predicted) and lies
+// in [0, 1].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_v_measure_symmetric_and_bounded() {
+    let cases: &[(Vec<usize>, Vec<usize>)] = &[
+        (
+            vec![0, 0, 0, 1, 1, 1, 2, 2, 2],
+            vec![0, 0, 0, 1, 1, 1, 2, 2, 2],
+        ),
+        (
+            vec![0, 0, 1, 1, 2, 2, 0, 1, 2],
+            vec![1, 1, 0, 0, 2, 2, 1, 0, 2],
+        ),
+    ];
+    for (i, (t, p)) in cases.iter().enumerate() {
+        let v_tp = v_measure_score(t, p).unwrap();
+        let v_pt = v_measure_score(p, t).unwrap();
+        assert!(
+            (v_tp - v_pt).abs() < 1e-10,
+            "MR28 v_measure[{i}] not symmetric: {v_tp} vs {v_pt}"
+        );
+        assert!(
+            v_tp >= -1e-10 && v_tp <= 1.0 + 1e-10,
+            "MR28 v_measure[{i}] = {v_tp} outside [0, 1]"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — silhouette_samples are each in [-1, 1] and their mean equals
+// silhouette_score.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_silhouette_samples_bounded_and_mean_matches_score() {
+    let data = small_dataset();
+    let labels = vec![0_usize, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2];
+    let s_each = silhouette_samples(&data, &labels).unwrap();
+    let s_avg = silhouette_score(&data, &labels).unwrap();
+    let mean: f64 = s_each.iter().sum::<f64>() / s_each.len() as f64;
+    for (i, &v) in s_each.iter().enumerate() {
+        assert!(
+            v >= -1.0 - 1e-9 && v <= 1.0 + 1e-9,
+            "MR29 silhouette[{i}] = {v} outside [-1, 1]"
+        );
+    }
+    assert!(
+        (mean - s_avg).abs() < 1e-9,
+        "MR29 mean(silhouette_samples) = {mean} vs silhouette_score = {s_avg}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — kmedoids returns labels in [0, k).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kmedoids_labels_in_range() {
+    let data = small_dataset();
+    for k in 1..=4 {
+        let res = kmedoids(&data, k, 100, 7).unwrap();
+        for (i, &lbl) in res.labels.iter().enumerate() {
+            assert!(
+                lbl < k,
+                "MR30 kmedoids k={k} label[{i}] = {lbl} ≥ k"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — inconsistent(z, depth) returns a vector of the same length as
+// z (one row per merge).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_inconsistent_length_matches_linkage() {
+    let data = small_dataset();
+    let z = linkage(&data, LinkageMethod::Average).unwrap();
+    let inc = inconsistent(&z, 2);
+    assert_eq!(
+        inc.len(),
+        z.len(),
+        "MR31 inconsistent length = {} vs linkage rows = {}",
+        inc.len(),
+        z.len()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — ARI of a perfect labeling is 1; ARI is symmetric.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ari_perfect_label_is_one_and_symmetric() {
+    let labels = vec![0_usize, 0, 1, 1, 2, 2, 0, 1, 2, 0, 1, 2];
+    let ari_self = adjusted_rand_score(&labels, &labels).unwrap();
+    assert!(
+        (ari_self - 1.0).abs() < 1e-10,
+        "MR32 ARI(self, self) = {ari_self}, expected 1"
+    );
+    let other = vec![1_usize, 1, 0, 0, 2, 2, 1, 0, 2, 1, 0, 2];
+    let ari_lo = adjusted_rand_score(&labels, &other).unwrap();
+    let ari_ol = adjusted_rand_score(&other, &labels).unwrap();
+    assert!(
+        (ari_lo - ari_ol).abs() < 1e-10,
+        "MR32 ARI not symmetric: {ari_lo} vs {ari_ol}"
+    );
+}
+
 
