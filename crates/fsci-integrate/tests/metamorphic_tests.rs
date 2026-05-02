@@ -15,8 +15,8 @@ use fsci_integrate::{
     DblquadOptions, QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue,
     cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_initial,
     cumulative_trapezoid_uniform, dblquad, fixed_quad, gauss_kronrod_quad, gauss_legendre,
-    monte_carlo_integrate, newton_cotes, nquad, quad, quad_full_inf, quad_inf, quad_vec, romb,
-    romb_func, romberg, simpson, simpson_irregular, simpson_uniform, solve_ivp, trapezoid,
+    monte_carlo_integrate, newton_cotes, nquad, odeint, quad, quad_full_inf, quad_inf, quad_vec,
+    romb, romb_func, romberg, simpson, simpson_irregular, simpson_uniform, solve_ivp, trapezoid,
     trapezoid_irregular, trapezoid_uniform, tplquad, trapezoid_richardson,
 };
 
@@ -960,6 +960,167 @@ fn mr_tplquad_xyz_unit_cube() {
 // ─────────────────────────────────────────────────────────────────────
 // MR42 — Cumulative simpson last entry agrees with simpson_uniform.
 // ─────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — odeint solves dy/dt = -y starting from y(0) = 1, recovering
+// y(t) = exp(-t) at the requested grid.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_odeint_exponential_decay() {
+    let mut f = |y: &[f64], _t: f64| vec![-y[0]];
+    let t: Vec<f64> = (0..=20).map(|i| i as f64 * 0.1).collect();
+    let result = odeint(&mut f, &[1.0_f64], &t).unwrap();
+    assert_eq!(result.len(), t.len(), "MR43 odeint length");
+    for (i, &ti) in t.iter().enumerate() {
+        let expected = (-ti).exp();
+        assert!(
+            (result[i][0] - expected).abs() < 1e-3,
+            "MR43 odeint(y'=-y) at t={ti}: got {} vs e^(-t) = {expected}",
+            result[i][0]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — solve_ivp on harmonic oscillator y'' = -y conserves the energy
+// E = (y² + y'²)/2 within tolerance over a short interval.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_ivp_harmonic_oscillator_energy_conservation() {
+    // Convert to first-order: y[0] = position, y[1] = velocity.
+    // y'[0] = y[1]; y'[1] = -y[0].
+    let mut f = |_t: f64, y: &[f64]| vec![y[1], -y[0]];
+    let y0 = vec![1.0_f64, 0.0]; // initial energy = 0.5.
+    let opts = SolveIvpOptions {
+        t_span: (0.0, 5.0),
+        y0: &y0,
+        rtol: 1e-7,
+        atol: ToleranceValue::Scalar(1e-9),
+        ..Default::default()
+    };
+    let res = solve_ivp(&mut f, &opts).unwrap();
+    let initial_energy = (y0[0].powi(2) + y0[1].powi(2)) / 2.0;
+    for (i, y) in res.y.iter().enumerate() {
+        let energy = (y[0].powi(2) + y[1].powi(2)) / 2.0;
+        assert!(
+            (energy - initial_energy).abs() < 1e-3,
+            "MR44 energy at step {i}: {energy} vs initial = {initial_energy}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — solve_ivp linearity: scaling initial condition by α scales the
+// solution by α (for linear ODEs y' = A·y).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_ivp_linear_scaling() {
+    let mut f = |_t: f64, y: &[f64]| vec![-2.0 * y[0]];
+    let alpha = 3.5_f64;
+    let y0_a = vec![1.0_f64];
+    let y0_b = vec![alpha];
+    let opts_a = SolveIvpOptions {
+        t_span: (0.0, 1.0),
+        y0: &y0_a,
+        rtol: 1e-7,
+        atol: ToleranceValue::Scalar(1e-9),
+        ..Default::default()
+    };
+    let res_a = solve_ivp(&mut f, &opts_a).unwrap();
+    let opts_b = SolveIvpOptions {
+        t_span: (0.0, 1.0),
+        y0: &y0_b,
+        rtol: 1e-7,
+        atol: ToleranceValue::Scalar(1e-9),
+        ..Default::default()
+    };
+    let res_b = solve_ivp(&mut f, &opts_b).unwrap();
+    let final_a = res_a.y.last().unwrap()[0];
+    let final_b = res_b.y.last().unwrap()[0];
+    assert!(
+        (final_b - alpha * final_a).abs() < 1e-3 * alpha * final_a.abs().max(1.0),
+        "MR45 scaling: y_b(T) = {final_b} vs α·y_a(T) = {}",
+        alpha * final_a
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — solve_ivp final value matches exp(-2T) for y' = -2y, y(0) = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_ivp_exponential_decay_terminal_value() {
+    let mut f = |_t: f64, y: &[f64]| vec![-2.0 * y[0]];
+    let t_final = 1.5;
+    let y0 = vec![1.0_f64];
+    let opts = SolveIvpOptions {
+        t_span: (0.0, t_final),
+        y0: &y0,
+        rtol: 1e-7,
+        atol: ToleranceValue::Scalar(1e-9),
+        ..Default::default()
+    };
+    let res = solve_ivp(&mut f, &opts).unwrap();
+    let final_y = res.y.last().unwrap()[0];
+    let expected = (-2.0_f64 * t_final).exp();
+    assert!(
+        (final_y - expected).abs() < 1e-3,
+        "MR46 solve_ivp final = {final_y} vs e^(-2·{t_final}) = {expected}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — solve_ivp with t_eval returns y of length len(t_eval).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_ivp_t_eval_length() {
+    let mut f = |_t: f64, y: &[f64]| vec![-y[0]];
+    let y0 = vec![1.0_f64];
+    let t_eval: Vec<f64> = (0..=10).map(|i| i as f64 * 0.1).collect();
+    let opts = SolveIvpOptions {
+        t_span: (0.0, 1.0),
+        y0: &y0,
+        t_eval: Some(&t_eval),
+        ..Default::default()
+    };
+    let res = solve_ivp(&mut f, &opts).unwrap();
+    assert_eq!(
+        res.y.len(),
+        t_eval.len(),
+        "MR47 solve_ivp y length = {} vs t_eval = {}",
+        res.y.len(),
+        t_eval.len()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — solve_ivp on y'(t) = 0 keeps y(t) = y0 constant for any t.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_ivp_zero_rhs_preserves_state() {
+    let mut f = |_t: f64, _y: &[f64]| vec![0.0];
+    let y0 = vec![5.5_f64];
+    let opts = SolveIvpOptions {
+        t_span: (0.0, 10.0),
+        y0: &y0,
+        rtol: 1e-9,
+        atol: ToleranceValue::Scalar(1e-12),
+        ..Default::default()
+    };
+    let res = solve_ivp(&mut f, &opts).unwrap();
+    for (i, y) in res.y.iter().enumerate() {
+        assert!(
+            (y[0] - 5.5).abs() < 1e-9,
+            "MR48 y'(t)=0 at step {i}: y = {} vs 5.5",
+            y[0]
+        );
+    }
+}
 
 #[test]
 fn mr_cumulative_simpson_final_close_to_simpson_uniform() {
