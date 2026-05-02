@@ -7,10 +7,10 @@
 //! Run with: `cargo test -p fsci-fft --test metamorphic_tests`
 
 use fsci_fft::{
-    Complex64, FftOptions, Normalization, dct, dct_i, dct_iv, dctn, dst_ii, dst_iii, dstn, fft,
-    fft2, fftcorrelate, fftfreq, fftn, fftshift_1d, fht, fhtoffset, hamming_window, hann_window,
-    hfft, hilbert, idct, idctn, idstn, ifft, ifft2, ifftn, ifftshift_1d, ifht, ihfft, irfft, irfft2,
-    next_fast_len, rfft, rfft2,
+    Complex64, FftOptions, Normalization, dct, dct_i, dct_iii, dct_iv, dctn, dst_i, dst_ii,
+    dst_iii, dst_iv, dstn, fft, fft2, fftcorrelate, fftfreq, fftn, fftshift_1d, fht, fhtoffset,
+    hamming_window, hann_window, hfft, hilbert, idct, idctn, idstn, ifft, ifft2, ifftn,
+    ifftshift_1d, ifht, ihfft, irfft, irfft2, next_fast_len, rfft, rfft2,
 };
 
 const RTOL: f64 = 1e-9;
@@ -900,6 +900,145 @@ fn mr_fftshift_swaps_even_halves() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — DST-I is its own inverse up to scale 2(N+1):
+// dst_i(dst_i(x)) ≈ 2(N+1) · x.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dst_i_self_inverse_with_scale() {
+    let opts = FftOptions::default();
+    for n in [4usize, 7, 12, 16] {
+        let mut rng = prng((n * 41) as u64);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let y = dst_i(&x, &opts).unwrap();
+        let z = dst_i(&y, &opts).unwrap();
+        let scale = 2.0 * (n + 1) as f64;
+        for (i, (zi, xi)) in z.iter().zip(&x).enumerate() {
+            let recovered = zi / scale;
+            assert!(
+                close(recovered, *xi),
+                "MR34 dst_i self-inverse n={n} i={i}: {recovered} vs {xi}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — DST-IV is its own inverse up to scale 2N:
+// dst_iv(dst_iv(x)) ≈ 2N · x.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dst_iv_self_inverse_with_scale() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16] {
+        let mut rng = prng((n * 23) as u64);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let y = dst_iv(&x, &opts).unwrap();
+        let z = dst_iv(&y, &opts).unwrap();
+        let scale = 2.0 * n as f64;
+        for (i, (zi, xi)) in z.iter().zip(&x).enumerate() {
+            let recovered = zi / scale;
+            assert!(
+                close(recovered, *xi),
+                "MR35 dst_iv self-inverse n={n} i={i}: {recovered} vs {xi}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — DCT-II and DCT-III are mutual inverses up to scale 2N
+// (Backward normalisation): dct_iii(dct_ii(x)) ≈ 2N · x.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dct_ii_dct_iii_mutual_inverse() {
+    let opts = FftOptions {
+        normalization: Normalization::Backward,
+        ..Default::default()
+    };
+    for n in [4usize, 8, 16] {
+        let mut rng = prng((n * 19) as u64);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let y = dct(&x, &opts).unwrap();
+        let z = dct_iii(&y, &opts).unwrap();
+        let scale = 2.0 * n as f64;
+        for (i, (zi, xi)) in z.iter().zip(&x).enumerate() {
+            let recovered = zi / scale;
+            assert!(
+                close(recovered, *xi),
+                "MR36 dct_ii→dct_iii at n={n} i={i}: {recovered} vs {xi}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — idctn ∘ dctn = id on a smooth N-D signal under default options.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dctn_idctn_inverse_default() {
+    let opts = FftOptions::default();
+    let shape = [4usize, 4];
+    let total: usize = shape.iter().product();
+    let mut rng = prng(0xabcd);
+    let x: Vec<f64> = (0..total).map(|_| rng()).collect();
+    let y = dctn(&x, &shape, &opts).unwrap();
+    let z = idctn(&y, &shape, &opts).unwrap();
+    for (i, (a, b)) in x.iter().zip(&z).enumerate() {
+        assert!(
+            close(*a, *b),
+            "MR37 dctn∘idctn at {i}: {a} vs {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — idstn ∘ dstn = id on a smooth N-D signal under default options.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dstn_idstn_inverse_default() {
+    let opts = FftOptions::default();
+    let shape = [4usize, 4];
+    let total: usize = shape.iter().product();
+    let mut rng = prng(0xfeed);
+    let x: Vec<f64> = (0..total).map(|_| rng()).collect();
+    let y = dstn(&x, &shape, &opts).unwrap();
+    let z = idstn(&y, &shape, &opts).unwrap();
+    for (i, (a, b)) in x.iter().zip(&z).enumerate() {
+        assert!(
+            close(*a, *b),
+            "MR38 dstn∘idstn at {i}: {a} vs {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — ifftshift_1d ∘ fftshift_1d = id on odd-length input (the
+// non-trivial parity case).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fftshift_odd_length_identity() {
+    for n in [3usize, 5, 7, 9, 17] {
+        let mut rng = prng((n * 11) as u64);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let s = fftshift_1d(&x);
+        let r = ifftshift_1d(&s);
+        for (i, (a, b)) in r.iter().zip(&x).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-12,
+                "MR39 fftshift∘ifftshift n={n} at {i}: {a} vs {b}"
+            );
+        }
+    }
+}
+
 
 
 
