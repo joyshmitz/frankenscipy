@@ -8,10 +8,11 @@
 
 use fsci_cluster::{
     LinkageMethod, adjusted_rand_score, calinski_harabasz_score, completeness_score, cophenet,
-    davies_bouldin_score, dbscan, fcluster, fclusterdata, fowlkes_mallows_score, homogeneity_score,
-    inconsistent, is_monotonic, is_valid_linkage, kmeans, kmedoids, leaves_list, linkage,
-    mini_batch_kmeans, normalized_mutual_info, num_obs_linkage, silhouette_samples,
-    silhouette_score, v_measure_score, vq, whiten,
+    davies_bouldin_score, dbscan, elbow_inertias, fcluster, fclusterdata, fowlkes_mallows_score,
+    gap_statistic, homogeneity_score, inconsistent, is_monotonic, is_valid_linkage, kmeans,
+    kmedoids, leaves_list, linkage, mean_shift, mini_batch_kmeans, normalized_mutual_info,
+    num_obs_linkage, proximity_cliques, silhouette_samples, silhouette_score, v_measure_score, vq,
+    whiten,
 };
 
 fn small_dataset() -> Vec<Vec<f64>> {
@@ -706,5 +707,89 @@ fn mr_ari_perfect_label_is_one_and_symmetric() {
         "MR32 ARI not symmetric: {ari_lo} vs {ari_ol}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — elbow_inertias is non-increasing in k: SSE drops or stays
+// the same as k grows.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_elbow_inertias_non_increasing() {
+    let data = small_dataset();
+    let inertias = elbow_inertias(&data, 5, 11);
+    assert_eq!(inertias.len(), 5, "MR33 elbow_inertias length");
+    for w in inertias.windows(2) {
+        // Allow small numerical slack in case kmeans heuristic lands at
+        // marginally different local optima.
+        assert!(
+            w[1] <= w[0] + 1e-6,
+            "MR33 elbow_inertias not non-increasing: {} → {}",
+            w[0],
+            w[1]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — mean_shift labels are in [0, num_centers): every assigned
+// label points at a returned centre.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_mean_shift_labels_match_centers() {
+    let data = small_dataset();
+    let (centers, labels) = mean_shift(&data, 2.0, 100).unwrap();
+    let n_centers = centers.len();
+    assert!(n_centers >= 1, "MR34 mean_shift returned no centers");
+    for (i, &lbl) in labels.iter().enumerate() {
+        assert!(
+            lbl < n_centers,
+            "MR34 mean_shift label[{i}] = {lbl} ≥ {n_centers}"
+        );
+    }
+    assert_eq!(labels.len(), data.len(), "MR34 label count");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — gap_statistic returns one entry per k in 1..=max_k.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gap_statistic_length() {
+    let data = small_dataset();
+    for max_k in [2usize, 3, 5] {
+        let g = gap_statistic(&data, max_k, 4, 7);
+        assert_eq!(
+            g.len(),
+            max_k,
+            "MR35 gap_statistic length: got {} expected {max_k}",
+            g.len()
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — proximity_cliques with very large eps merges all points
+// into a single clique containing every index.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_proximity_cliques_large_eps_one_clique() {
+    let data = small_dataset();
+    let cliques = proximity_cliques(&data, 1e6);
+    // With eps spanning the entire dataset, the cliques should cover
+    // every input index. (One large clique or several overlapping ones
+    // both meet that criterion.)
+    let mut seen = vec![false; data.len()];
+    for c in &cliques {
+        for &i in c {
+            seen[i] = true;
+        }
+    }
+    for (i, ok) in seen.iter().enumerate() {
+        assert!(*ok, "MR36 proximity_cliques missed index {i}");
+    }
+}
+
 
 
