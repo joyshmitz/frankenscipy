@@ -7,12 +7,13 @@
 
 use fsci_ndimage::{
     BoundaryMode, NdArray, argmax, argmin, array_max, array_min, binary_closing, binary_dilation,
-    binary_erosion, binary_fill_holes, binary_opening, black_tophat, convolve, correlate,
-    cumsum_array, distance_transform_edt, equal_within, flatten, full, gaussian_filter,
-    gaussian_filter_multi_sigma, gaussian_laplace, generate_binary_structure, gradient_magnitude,
-    grey_dilation, grey_erosion, label, laplace, masked_select, maximum_filter, maximum_filter1d,
-    mean_labels, median_filter, minimum_filter, minimum_filter1d, morphological_gradient, ones,
-    otsu_threshold, percentile_filter, prewitt, range_filter, reshape, rotate, shift, sobel,
+    binary_erosion, binary_fill_holes, binary_opening, black_tophat, center_of_mass, convolve,
+    correlate, cumprod_array, cumsum_array, diff_array, distance_transform_edt, equal_within,
+    extrema_labels, find_objects, flatten, full, gaussian_filter, gaussian_filter_multi_sigma,
+    gaussian_laplace, generate_binary_structure, gradient_magnitude, grey_dilation, grey_erosion,
+    histogram_labels, label, laplace, masked_select, maximum_filter, maximum_filter1d, mean_labels,
+    median_filter, minimum_filter, minimum_filter1d, morphological_gradient, ones, otsu_threshold,
+    percentile_filter, prewitt, range_filter, reshape, rotate, shift, sobel, standard_deviation_labels,
     std_filter, sum_labels, threshold, uniform_filter, uniform_filter1d, variance_filter,
     variance_labels, where_cond, white_tophat, zoom,
 };
@@ -1032,6 +1033,136 @@ fn mr_gaussian_filter_multi_sigma_preserves_shape() {
     let img = arr_2d(6, 8, |i, j| (i * j) as f64);
     let f = gaussian_filter_multi_sigma(&img, &[1.0, 0.5], BoundaryMode::Reflect, 0.0).unwrap();
     assert_eq!(f.shape, img.shape, "MR52 multi-sigma shape");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — extrema_labels: min ≤ max for each region.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_extrema_labels_min_leq_max() {
+    let img = arr_2d(5, 5, |i, j| (i * 5 + j) as f64);
+    let labels = arr_2d(5, 5, |i, j| if i + j < 4 { 1.0 } else { 2.0 });
+    let (mins, maxs) = extrema_labels(&img, &labels, 2);
+    assert_eq!(mins.len(), 2, "MR53 extrema mins length");
+    for (k, (mn, mx)) in mins.iter().zip(&maxs).enumerate() {
+        assert!(
+            mn <= mx,
+            "MR53 region {k}: min = {mn} > max = {mx}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — histogram_labels: returns vector with non-negative counts that
+// sum to the number of input pixels in each region.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_histogram_labels_counts_nonneg_sum_correct() {
+    let img = arr_2d(5, 5, |i, j| (i * 5 + j) as f64);
+    let labels = arr_2d(5, 5, |i, j| if i + j < 4 { 1.0 } else { 2.0 });
+    let hists = histogram_labels(&img, &labels, 2, 0.0, 25.0, 5);
+    assert_eq!(hists.len(), 2, "MR54 histogram_labels per-region count");
+    for (k, h) in hists.iter().enumerate() {
+        for (b, &c) in h.iter().enumerate() {
+            assert!(
+                c < usize::MAX,
+                "MR54 region {k} bin {b} count overflow = {c}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR55 — find_objects returns Some(bbox) for every present label and
+// each bounding box lies within the image shape.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_find_objects_bounds_within_shape() {
+    let labels = arr_2d(5, 7, |i, j| {
+        if i < 2 && j < 2 {
+            1.0
+        } else if i >= 3 && j >= 5 {
+            2.0
+        } else {
+            0.0
+        }
+    });
+    let bboxes = find_objects(&labels, 2);
+    assert_eq!(bboxes.len(), 2, "MR55 find_objects length");
+    for (k, b) in bboxes.iter().enumerate() {
+        if let Some((mins, maxs)) = b {
+            assert!(mins.len() == 2 && maxs.len() == 2, "MR55 dim count");
+            assert!(
+                mins[0] < labels.shape[0] && maxs[0] <= labels.shape[0],
+                "MR55 region {k} row bounds out of range"
+            );
+            assert!(
+                mins[1] < labels.shape[1] && maxs[1] <= labels.shape[1],
+                "MR55 region {k} col bounds out of range"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR56 — center_of_mass on uniform image with single label = exact
+// pixel-center centroid.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_center_of_mass_uniform_centroid() {
+    // 5×5 uniform image, single label across whole image.
+    let img = arr_2d(5, 5, |_, _| 1.0);
+    let labels = arr_2d(5, 5, |_, _| 1.0);
+    let coms = center_of_mass(&img, &labels, 1).unwrap();
+    assert_eq!(coms.len(), 1, "MR56 single label");
+    let com = &coms[0];
+    assert_eq!(com.len(), 2, "MR56 com dim");
+    // Image is 5×5; centroid should be at (2, 2).
+    assert!(
+        (com[0] - 2.0).abs() < 1e-9,
+        "MR56 com[0] = {} expected 2.0",
+        com[0]
+    );
+    assert!(
+        (com[1] - 2.0).abs() < 1e-9,
+        "MR56 com[1] = {} expected 2.0",
+        com[1]
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR57 — cumprod_array final entry equals the product of all input
+// elements.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cumprod_final_equals_product() {
+    let img = arr_2d(2, 4, |i, j| 1.0 + (i * 4 + j) as f64 * 0.5);
+    let cum = cumprod_array(&img);
+    let total: f64 = img.data.iter().product();
+    assert!(
+        (cum.data[img.size() - 1] - total).abs() < 1e-9 * total.abs().max(1.0),
+        "MR57 cumprod last = {} vs product = {total}",
+        cum.data[img.size() - 1]
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR58 — diff_array(x) length is x.size() - 1; diff of a constant is 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_diff_array_length_and_constant() {
+    let img = arr_2d(2, 4, |_, _| 3.5);
+    let d = diff_array(&img);
+    assert_eq!(d.size(), img.size() - 1, "MR58 diff_array length");
+    for &v in &d.data {
+        assert!(v.abs() < 1e-12, "MR58 diff_array(const)[{v}] != 0");
+    }
 }
 
 
