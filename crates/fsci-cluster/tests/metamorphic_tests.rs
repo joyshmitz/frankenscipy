@@ -1011,6 +1011,122 @@ fn mr_is_valid_linkage_returns_true_on_linkage_output() {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — kmeans on three tight, well-separated clusters partitions
+// the data into 3 clusters of size 4 (correct cluster sizes).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kmeans_recovers_3_clusters_of_4() {
+    let data = small_dataset();
+    let res = kmeans(&data, 3, 100, 17).unwrap();
+    let mut counts = vec![0usize; 3];
+    for &lbl in &res.labels {
+        counts[lbl] += 1;
+    }
+    counts.sort();
+    assert_eq!(
+        counts,
+        vec![4, 4, 4],
+        "MR49 kmeans cluster sizes = {:?}, expected [4, 4, 4]",
+        counts
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — dbscan with smaller eps results in more clusters or more
+// noise points (monotonicity of partition coarseness).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dbscan_smaller_eps_more_noise_or_clusters() {
+    let data = small_dataset();
+    let r_loose = dbscan(&data, 5.0, 2).unwrap();
+    let r_tight = dbscan(&data, 0.5, 2).unwrap();
+    // Tight eps should produce more noise or more clusters (or both).
+    let noise_loose = r_loose.labels.iter().filter(|&&l| l == -1).count();
+    let noise_tight = r_tight.labels.iter().filter(|&&l| l == -1).count();
+    assert!(
+        noise_tight >= noise_loose,
+        "MR50 dbscan tighter eps did not increase noise: tight={noise_tight}, loose={noise_loose}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — whiten preserves shape (rows × dims) of the input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_whiten_preserves_shape() {
+    let data = small_dataset();
+    let w = whiten(&data).unwrap();
+    assert_eq!(w.len(), data.len(), "MR51 whiten row count");
+    for (i, (a, b)) in data.iter().zip(&w).enumerate() {
+        assert_eq!(a.len(), b.len(), "MR51 whiten row {i} dim");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — mini_batch_kmeans returns labels in [0, k).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_mini_batch_kmeans_label_range() {
+    let data = small_dataset();
+    for k in [1usize, 2, 3] {
+        let res = mini_batch_kmeans(&data, k, 50, 4, 13).unwrap();
+        for &lbl in &res.labels {
+            assert!(
+                lbl < k,
+                "MR52 mini_batch_kmeans label {lbl} ≥ k = {k}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — cophenet entries are non-negative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cophenet_nonneg_entries() {
+    let data = small_dataset();
+    let z = linkage(&data, LinkageMethod::Average).unwrap();
+    let c = cophenet(&z);
+    for (i, &v) in c.iter().enumerate() {
+        assert!(v >= -1e-12, "MR53 cophenet[{i}] = {v} < 0");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — linkage_from_distances using single/complete/average all
+// produce the same number of merges (n - 1) for the same input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_linkage_from_distances_consistent_merge_count() {
+    let n = 6;
+    let condensed: Vec<f64> = (0..n * (n - 1) / 2).map(|i| (i as f64) + 1.0).collect();
+    let mut counts = Vec::new();
+    for &method in &[
+        LinkageMethod::Single,
+        LinkageMethod::Complete,
+        LinkageMethod::Average,
+    ] {
+        let z = linkage_from_distances(&condensed, n, method).unwrap();
+        counts.push(z.len());
+    }
+    let first = counts[0];
+    for c in &counts[1..] {
+        assert_eq!(
+            *c, first,
+            "MR54 linkage merge counts differ: {:?}",
+            counts
+        );
+    }
+    assert_eq!(first, n - 1, "MR54 expected {} merges", n - 1);
+}
+
 
 
 
