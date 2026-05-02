@@ -8,8 +8,8 @@
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
     CooMatrix, CsrMatrix, EigsOptions, IterativeSolveOptions, Shape2D, SolveOptions, add_csr, bicg,
-    bicgstab, cg, coo_to_csr_with_mode, csr_to_csc_with_mode, eigsh, eye, gmres, scale_csr,
-    sparse_transpose, spmv, spmv_csc, spmv_csr, spsolve, sub_csr, svds, tril, triu,
+    bicgstab, block_diag, cg, coo_to_csr_with_mode, csr_to_csc_with_mode, diags, eigsh, eye, gmres,
+    kron, scale_csr, sparse_transpose, spmv, spmv_csc, spmv_csr, spsolve, sub_csr, svds, tril, triu,
 };
 
 const ATOL: f64 = 1e-9;
@@ -566,4 +566,116 @@ fn mr_double_transpose_dense_identity() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — kron(I_m, I_n) is the (m·n) × (m·n) identity matrix.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kron_of_identities_is_identity() {
+    for m in [1usize, 2, 3] {
+        for n in [1usize, 2, 4] {
+            let im = eye(m).unwrap();
+            let in_mat = eye(n).unwrap();
+            let k = kron(&im, &in_mat).unwrap();
+            let total = m * n;
+            assert_eq!(k.shape().rows, total, "MR21 kron rows m={m} n={n}");
+            assert_eq!(k.shape().cols, total, "MR21 kron cols m={m} n={n}");
+            let dense = csr_to_dense(&k);
+            for i in 0..total {
+                for j in 0..total {
+                    let expected = if i == j { 1.0 } else { 0.0 };
+                    assert!(
+                        close(dense[i][j], expected),
+                        "MR21 kron(I_{m}, I_{n})[{i}, {j}] = {} vs {expected}",
+                        dense[i][j]
+                    );
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — kron output shape: (m1·m2, n1·n2) for inputs of shapes
+// (m1, n1) and (m2, n2).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kron_output_shape() {
+    let a = build_spd_csr(); // 5×5
+    let b = eye(3).unwrap();  // 3×3
+    let k = kron(&a, &b).unwrap();
+    assert_eq!(k.shape().rows, 5 * 3, "MR22 kron rows");
+    assert_eq!(k.shape().cols, 5 * 3, "MR22 kron cols");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — diags with main diagonal of all 1s and shape (n, n) yields
+// the same dense matrix as eye(n).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_diags_main_diag_ones_is_eye() {
+    for n in [1usize, 3, 5, 8] {
+        let main = vec![1.0_f64; n];
+        let d = diags(&[main], &[0_isize], Some(Shape2D::new(n, n))).unwrap();
+        let i = eye(n).unwrap();
+        let dd = csr_to_dense(&d);
+        let di = csr_to_dense(&i);
+        for r in 0..n {
+            for c in 0..n {
+                assert!(
+                    close(dd[r][c], di[r][c]),
+                    "MR23 diags vs eye at ({r}, {c}) for n={n}: {} vs {}",
+                    dd[r][c],
+                    di[r][c]
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — block_diag of [A, B] has shape (rows_A + rows_B, cols_A + cols_B).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_block_diag_shape() {
+    let a = build_spd_csr(); // 5×5
+    let b = eye(3).unwrap();  // 3×3
+    let bd = block_diag(&[&a, &b]).unwrap();
+    assert_eq!(
+        bd.shape().rows,
+        a.shape().rows + b.shape().rows,
+        "MR24 block_diag rows"
+    );
+    assert_eq!(
+        bd.shape().cols,
+        a.shape().cols + b.shape().cols,
+        "MR24 block_diag cols"
+    );
+    // Top-left block must equal A; bottom-right block must equal B.
+    let dense = csr_to_dense(&bd);
+    let da = csr_to_dense(&a);
+    for i in 0..a.shape().rows {
+        for j in 0..a.shape().cols {
+            assert!(
+                close(dense[i][j], da[i][j]),
+                "MR24 block_diag top-left at ({i}, {j})"
+            );
+        }
+    }
+    let db = csr_to_dense(&b);
+    let off = a.shape().rows;
+    for i in 0..b.shape().rows {
+        for j in 0..b.shape().cols {
+            assert!(
+                close(dense[off + i][off + j], db[i][j]),
+                "MR24 block_diag bottom-right at ({i}, {j})"
+            );
+        }
+    }
+}
+
 
