@@ -8,10 +8,12 @@
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
     CooMatrix, CsrMatrix, EigsOptions, IterativeSolveOptions, LuOptions, Shape2D, SolveOptions,
-    add_csr, bicg, bicgstab, block_diag, cg, coo_to_csr_with_mode, csr_to_csc_with_mode, diags,
-    eigsh, eye, floyd_warshall, gmres, kron, scale_csr, sparse_diagonal, sparse_nnz, sparse_norm,
-    sparse_trace, sparse_transpose, spmv, spmv_csc, spmv_csr, splu, splu_solve, spsolve, sub_csr,
-    svds, tril, triu,
+    add_csr, bicg, bicgstab, block_diag, breadth_first_order, cg, connected_components,
+    coo_to_csr_with_mode, csr_to_csc_with_mode, diags, dijkstra, eigsh, eye, floyd_warshall,
+    gmres, kron, matrix_power as sparse_matrix_power, scale_csr, sparse_diagonal,
+    sparse_eliminate_zeros, sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_trace,
+    sparse_transpose, spmv, spmv_csc, spmv_csr, splu, splu_solve, spsolve, sub_csr, svds, tril,
+    triu,
 };
 
 const ATOL: f64 = 1e-9;
@@ -771,6 +773,159 @@ fn mr_sparse_norm_zero_matrix() {
             "MR30 sparse_norm({kind}) of zero = {v}"
         );
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — sparse matrix_power(I, n) = I for any n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_matrix_power_of_identity() {
+    let n = 5;
+    let i = eye(n).unwrap();
+    for k in [1usize, 2, 3, 5] {
+        let p = sparse_matrix_power(&i, k).unwrap();
+        let dense = csr_to_dense(&p);
+        for r in 0..n {
+            for c in 0..n {
+                let expected = if r == c { 1.0 } else { 0.0 };
+                assert!(
+                    close(dense[r][c], expected),
+                    "MR31 sparse_matrix_power(I, {k})[{r}, {c}] = {}",
+                    dense[r][c]
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — sparse_eliminate_zeros leaves the dense matrix unchanged.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_eliminate_zeros_preserves_dense() {
+    let a = build_spd_csr();
+    let stripped = sparse_eliminate_zeros(&a);
+    let dense_a = csr_to_dense(&a);
+    let dense_b = csr_to_dense(&stripped);
+    for (r1, r2) in dense_a.iter().zip(&dense_b) {
+        for (x, y) in r1.iter().zip(r2) {
+            assert!(
+                close(*x, *y),
+                "MR32 eliminate_zeros changed entry: {x} vs {y}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — After sparse_eliminate_zeros, sparse_has_explicit_zeros
+// returns false (no remaining stored zeros).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_has_explicit_zeros_after_elimination() {
+    // Construct a CSR with explicit zeros via diags including 0 entries.
+    let n = 5;
+    let zero_diag = vec![0.0_f64; n];
+    let a = diags(&[zero_diag], &[0_isize], Some(Shape2D::new(n, n))).unwrap();
+    let stripped = sparse_eliminate_zeros(&a);
+    assert!(
+        !sparse_has_explicit_zeros(&stripped),
+        "MR33 stripped CSR still has explicit zeros"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — Dijkstra from source returns distance 0 for source itself
+// and is non-negative for all reachable nodes.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dijkstra_source_distance_zero() {
+    let n = 4;
+    let coo = CooMatrix::from_triplets(
+        Shape2D { rows: n, cols: n },
+        vec![1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+        vec![0, 1, 1, 2, 2, 3],
+        vec![1, 0, 2, 1, 3, 2],
+        true,
+    )
+    .unwrap();
+    let g = coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "test_dijkstra")
+        .unwrap()
+        .0;
+    let r = dijkstra(&g, 0).unwrap();
+    assert!(
+        r.distances[0].abs() < 1e-12,
+        "MR34 dijkstra distances[0] = {}",
+        r.distances[0]
+    );
+    for (i, &d) in r.distances.iter().enumerate() {
+        if d.is_finite() {
+            assert!(
+                d >= -1e-12,
+                "MR34 dijkstra distances[{i}] = {d} < 0"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — breadth_first_order from source visits the source first.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bfs_starts_at_source() {
+    let n = 5;
+    let coo = CooMatrix::from_triplets(
+        Shape2D { rows: n, cols: n },
+        vec![1.0; 8],
+        vec![0, 1, 0, 2, 1, 3, 2, 4],
+        vec![1, 0, 2, 0, 3, 1, 4, 2],
+        true,
+    )
+    .unwrap();
+    let g = coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "test_bfs")
+        .unwrap()
+        .0;
+    let (order, _preds) = breadth_first_order(&g, 0).unwrap();
+    assert!(!order.is_empty(), "MR35 bfs order empty");
+    assert_eq!(order[0], 0, "MR35 bfs first = {}, expected 0", order[0]);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — connected_components on a fully connected graph returns 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_connected_components_fully_connected() {
+    let n = 4;
+    // Complete graph on 4 nodes: 6 undirected edges (12 entries).
+    let mut data = Vec::new();
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                data.push(1.0);
+                rows.push(i);
+                cols.push(j);
+            }
+        }
+    }
+    let coo =
+        CooMatrix::from_triplets(Shape2D { rows: n, cols: n }, data, rows, cols, true).unwrap();
+    let g = coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "test_cc")
+        .unwrap()
+        .0;
+    let r = connected_components(&g).unwrap();
+    assert_eq!(
+        r.n_components, 1,
+        "MR36 connected_components = {} on fully connected, expected 1",
+        r.n_components
+    );
 }
 
 #[test]
