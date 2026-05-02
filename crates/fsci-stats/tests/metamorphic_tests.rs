@@ -7,9 +7,10 @@
 
 use fsci_stats::{
     Bernoulli, BetaDist, Binomial, ChiSquared, ContinuousDistribution, DiscreteDistribution,
-    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, energy_distance,
-    f_oneway, gmean, hmean, ks_2samp, kurtosis, mannwhitneyu, pearsonr, pmean, quantile, skew,
-    spearmanr, ttest_1samp, ttest_ind, ttest_rel, wasserstein_distance, wilcoxon,
+    Exponential, GammaDist, Geometric, Normal, Poisson, StudentT, Uniform, diff, ecdf,
+    energy_distance, f_oneway, gmean, histogram, hmean, ks_2samp, kurtosis, mannwhitneyu, pacf,
+    pearsonr, pmean, quantile, ridge_regression, skew, spearmanr, theil_sen, ttest_1samp,
+    ttest_ind, ttest_rel, wasserstein_distance, wilcoxon,
 };
 
 const ATOL: f64 = 1e-8;
@@ -681,4 +682,143 @@ fn mr_gmean_hmean_pmean_constant() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — diff(x) has length n - 1; diff of an arithmetic progression
+// is a constant equal to the step.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_diff_length_and_arithmetic_progression() {
+    let x: Vec<f64> = (0..16).map(|i| 2.5 * i as f64 + 1.0).collect();
+    let d = diff(&x);
+    assert_eq!(d.len(), x.len() - 1, "MR30 diff length");
+    for (i, &v) in d.iter().enumerate() {
+        assert!(
+            (v - 2.5).abs() < 1e-12,
+            "MR30 diff[{i}] = {v}, expected 2.5"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — histogram counts sum to n (every input lands in some bin
+// when the bin range covers [min, max]).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_histogram_counts_sum_to_n() {
+    let data = vec![1.0_f64, 2.5, 3.0, 4.5, 5.0, 6.0, 7.5, 8.0, 9.5, 10.0, -1.0, -3.0];
+    for &bins in &[3usize, 5, 8, 12] {
+        let (counts, _edges) = histogram(&data, bins);
+        let total: usize = counts.iter().sum();
+        assert_eq!(total, data.len(), "MR31 histogram(bins={bins}) total");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — ecdf is monotonic non-decreasing in x_eval and lies in [0, 1].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ecdf_monotonic_in_unit_interval() {
+    let data = vec![1.0_f64, 2.0, 3.5, 5.0, 6.5, 8.0, 9.0, 10.0];
+    let mut x_eval: Vec<f64> = (0..21).map(|i| i as f64 * 0.5).collect();
+    x_eval.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let cdf = ecdf(&data, &x_eval);
+    for w in cdf.windows(2) {
+        assert!(
+            w[0] <= w[1] + 1e-12,
+            "MR32 ecdf not monotone: {} > {}",
+            w[0],
+            w[1]
+        );
+    }
+    for &v in &cdf {
+        assert!(
+            v >= -1e-12 && v <= 1.0 + 1e-12,
+            "MR32 ecdf value = {v} outside [0, 1]"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — Theil-Sen recovers slope and intercept of a linear model
+// y = a·x + b within tolerance.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_theil_sen_recovers_linear_params() {
+    let a = 2.5_f64;
+    let b = -1.0_f64;
+    let x: Vec<f64> = (0..40).map(|i| 0.25 * i as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| a * xi + b).collect();
+    let (slope, intercept) = theil_sen(&x, &y);
+    assert!(
+        (slope - a).abs() < 1e-9,
+        "MR33 theil_sen slope = {slope} vs {a}"
+    );
+    assert!(
+        (intercept - b).abs() < 1e-9,
+        "MR33 theil_sen intercept = {intercept} vs {b}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — Ridge regression with α = 0 produces a coefficient vector
+// that satisfies the linear system within the OLS tolerance for a
+// well-conditioned design.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ridge_zero_alpha_recovers_known_signal() {
+    // y = 0.5 + 1.5·x1 + 0.5·x2 (with intercept — ridge_regression
+    // includes an intercept column at coeffs[0]).
+    let x: Vec<Vec<f64>> = vec![
+        vec![1.0, 2.0],
+        vec![2.0, 1.0],
+        vec![3.0, 4.0],
+        vec![4.0, 5.0],
+        vec![5.0, 1.0],
+        vec![6.0, 3.0],
+    ];
+    let y: Vec<f64> = x
+        .iter()
+        .map(|r| 0.5 + 1.5 * r[0] + 0.5 * r[1])
+        .collect();
+    let coeffs = ridge_regression(&x, &y, 0.0);
+    // coeffs is [intercept, β1, β2]. Predictions follow that layout.
+    let residual: f64 = x
+        .iter()
+        .zip(&y)
+        .map(|(row, &yi)| {
+            let pred = coeffs[0] + row[0] * coeffs[1] + row[1] * coeffs[2];
+            (pred - yi).powi(2)
+        })
+        .sum::<f64>()
+        .sqrt();
+    assert!(
+        residual < 1e-6,
+        "MR34 ridge(α=0) residual = {residual}, expected ≈ 0"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — pacf[0] is 1 by definition (lag-zero partial autocorrelation).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_pacf_at_lag_zero_is_one() {
+    let x: Vec<f64> = (0..32)
+        .map(|i| (i as f64 * 0.4).cos() + 0.5 * (i as f64 * 0.7).sin())
+        .collect();
+    let p = pacf(&x, 6);
+    assert!(!p.is_empty(), "MR35 pacf empty");
+    assert!(
+        (p[0] - 1.0).abs() < 1e-9,
+        "MR35 pacf[0] = {}, expected 1",
+        p[0]
+    );
+}
+
 
