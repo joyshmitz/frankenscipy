@@ -6,8 +6,9 @@
 //! Run with: `cargo test -p fsci-signal --test metamorphic_tests`
 
 use fsci_signal::{
-    ConvolveMode, FindPeaksOptions, blackman, convolve, correlate, fftconvolve, filtfilt,
-    find_peaks, hamming, hann, hilbert, kaiser, lfilter, sosfilt, tf2sos,
+    ConvolveMode, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, blackman, convolve,
+    correlate, deconvolve, fftconvolve, filtfilt, find_peaks, hamming, hann, hilbert, kaiser,
+    lfilter, rms, sosfilt, spectral_centroid, tf2sos, zero_crossing_rate,
 };
 
 const ATOL: f64 = 1e-9;
@@ -386,3 +387,146 @@ fn mr_lfilter_first_difference_on_ramp() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — zero_crossing_rate of a constant non-zero signal is 0; of a
+// strict alternator [+1, -1, +1, -1, ...] is positive.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_zero_crossing_rate_constant_vs_alternator() {
+    let constant = vec![3.0_f64; 32];
+    let zcr_const = zero_crossing_rate(&constant);
+    assert!(
+        zcr_const.abs() < 1e-12,
+        "MR18 zcr(constant) = {zcr_const}, expected 0"
+    );
+    let alt: Vec<f64> = (0..32).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
+    let zcr_alt = zero_crossing_rate(&alt);
+    assert!(
+        zcr_alt > 0.0,
+        "MR18 zcr(alternator) = {zcr_alt}, expected > 0"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — rms(x) = √(mean(x²)) for any signal; equals |c| for a
+// constant signal of value c.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rms_definition_and_constant() {
+    let xs: [Vec<f64>; 3] = [
+        vec![3.0_f64; 16],
+        (0..32).map(|i| (i as f64).sin()).collect(),
+        vec![1.0_f64, -1.0, 2.0, -2.0, 0.5, -0.5, 3.0, -3.0],
+    ];
+    for x in &xs {
+        let r = rms(x);
+        let mean_sq: f64 = x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64;
+        assert!(
+            (r - mean_sq.sqrt()).abs() < 1e-12,
+            "MR19 rms = {r}, expected √mean(x²) = {}",
+            mean_sq.sqrt()
+        );
+    }
+    let c = vec![-2.5_f64; 10];
+    let r = rms(&c);
+    assert!((r - 2.5).abs() < 1e-12, "MR19 rms(const -2.5) = {r}");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — Autocorrelation has its maximum at lag 0 and equals Σx_i² there.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_autocorrelation_peak_at_zero_lag() {
+    // Sample autocorrelation here is mean-centred and normalised so
+    // ac[0] = 1 and |ac[k]| ≤ 1 for k ≥ 1.
+    let x: Vec<f64> = (0..32).map(|i| (i as f64 * 0.4).cos()).collect();
+    let max_lag = 8;
+    let ac = autocorrelation(&x, max_lag);
+    assert!(
+        (ac[0] - 1.0).abs() < 1e-9,
+        "MR20 ac[0] = {}, expected 1.0",
+        ac[0]
+    );
+    for (k, &v) in ac.iter().enumerate().skip(1) {
+        assert!(
+            v.abs() <= ac[0] + 1e-9,
+            "MR20 |ac[{k}]| = {} > ac[0] = {}",
+            v.abs(),
+            ac[0]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — argrelmax and argrelmin produce disjoint index sets.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_argrelmax_argrelmin_disjoint() {
+    let x: Vec<f64> = (0..40)
+        .map(|i| (i as f64 * 0.6).sin() + 0.5 * (i as f64 * 0.13).cos())
+        .collect();
+    let maxs = argrelmax(&x, 1);
+    let mins = argrelmin(&x, 1);
+    for &m in &maxs {
+        assert!(
+            !mins.contains(&m),
+            "MR21 index {m} appears in both argrelmax and argrelmin"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — deconvolve(convolve(x, h), h) recovers x (within numerical
+// noise) when the divisor leading coefficient is non-zero.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_deconvolve_inverts_convolve() {
+    let x = vec![1.0_f64, 2.0, 3.0, 1.0, -1.0, 0.5];
+    let h = vec![1.0_f64, 0.5, -0.25];
+    let y = convolve(&x, &h, ConvolveMode::Full).unwrap();
+    let (q, _r) = deconvolve(&y, &h).unwrap();
+    assert_eq!(
+        q.len(),
+        x.len(),
+        "MR22 deconvolve quotient length = {} vs x length = {}",
+        q.len(),
+        x.len()
+    );
+    for (i, (qi, xi)) in q.iter().zip(&x).enumerate() {
+        assert!(
+            (qi - xi).abs() < 1e-9,
+            "MR22 deconvolve at i={i}: q = {qi}, x = {xi}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — spectral_centroid lies between the smallest and largest
+// frequency bins for any non-negative magnitude spectrum.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_spectral_centroid_in_freq_range() {
+    let mags = [
+        vec![1.0_f64, 2.0, 3.0, 1.0, 0.5, 0.25, 0.1],
+        vec![0.0_f64, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+        vec![1.0_f64; 7],
+    ];
+    let freqs: Vec<f64> = (0..7).map(|k| k as f64 * 100.0).collect();
+    for m in &mags {
+        let c = spectral_centroid(m, &freqs);
+        let fmin = *freqs.first().unwrap();
+        let fmax = *freqs.last().unwrap();
+        assert!(
+            c >= fmin - 1e-9 && c <= fmax + 1e-9,
+            "MR23 centroid = {c} outside [{fmin}, {fmax}]"
+        );
+    }
+}
+
