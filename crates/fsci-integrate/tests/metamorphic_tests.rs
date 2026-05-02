@@ -13,8 +13,9 @@
 
 use fsci_integrate::{
     DblquadOptions, QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue, cumulative_simpson,
-    cumulative_trapezoid, dblquad, fixed_quad, quad, romb, romberg, simpson, simpson_uniform,
-    solve_ivp, trapezoid, tplquad,
+    cumulative_trapezoid, cumulative_trapezoid_initial, dblquad, fixed_quad, gauss_legendre,
+    monte_carlo_integrate, quad, quad_full_inf, romb, romberg, simpson, simpson_uniform, solve_ivp,
+    trapezoid, tplquad, trapezoid_richardson,
 };
 
 /// Tolerance for metamorphic relation comparisons.
@@ -619,4 +620,115 @@ fn mr_tplquad_constant_one_unit_cube() {
         res.integral
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — gauss_legendre with n nodes is exact on polynomials of
+// degree ≤ 2n - 1 (textbook degree-of-precision).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gauss_legendre_exact_on_degree_2n_minus_1() {
+    // Test n = 4 → exact on degree 7.
+    // p(x) = 4x⁷ - 2x⁵ + x³ - x + 1; ∫₀^1 p dx = 4/8 - 2/6 + 1/4 - 1/2 + 1 = 0.916666…
+    let p = |x: f64| 4.0 * x.powi(7) - 2.0 * x.powi(5) + x.powi(3) - x + 1.0;
+    let exact = 4.0 / 8.0 - 2.0 / 6.0 + 1.0 / 4.0 - 1.0 / 2.0 + 1.0;
+    let val = gauss_legendre(p, 0.0, 1.0, 4);
+    assert!(
+        (val - exact).abs() < 1e-12,
+        "MR25 gauss_legendre n=4 on deg 7 = {val} vs {exact}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — cumulative_trapezoid_initial(y, x, c)[0] = c (the initial
+// value sets the first sample).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cumulative_trapezoid_initial_first_entry() {
+    let x: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+    let y: Vec<f64> = x.iter().map(|&xi| xi * xi).collect();
+    for &c in &[0.0_f64, 1.5, -3.0, 100.0] {
+        let cum = cumulative_trapezoid_initial(&y, &x, c);
+        assert!(
+            (cum[0] - c).abs() < 1e-12,
+            "MR26 cumulative_trapezoid_initial[0] = {} vs initial = {c}",
+            cum[0]
+        );
+        assert_eq!(
+            cum.len(),
+            x.len(),
+            "MR26 length should equal input"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — Monte Carlo integration of constant 1 over a box returns the
+// box volume (within stochastic tolerance).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_monte_carlo_constant_returns_volume() {
+    let bounds = vec![(0.0_f64, 2.0), (0.0, 3.0), (0.0, 4.0)]; // volume 24
+    let (val, _stderr) = monte_carlo_integrate(|_x| 1.0, &bounds, 10_000, 7);
+    assert!(
+        (val - 24.0).abs() < 0.5,
+        "MR27 MC constant volume = {val}, expected 24"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — quad_full_inf computes ∫_{-∞}^{∞} e^(-x²) dx = √π.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quad_full_inf_gaussian_integral() {
+    let opts = QuadOptions::default();
+    let r = quad_full_inf(|x: f64| (-x * x).exp(), opts).unwrap();
+    let expected = std::f64::consts::PI.sqrt();
+    assert!(
+        (r.integral - expected).abs() < 1e-6,
+        "MR28 ∫_{{-∞}}^{{∞}} e^(-x²) dx = {} vs √π = {expected}",
+        r.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — trapezoid_richardson on a smooth function approximates the
+// true integral better than (or as well as) plain trapezoid.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_trapezoid_richardson_improves_smooth_integral() {
+    let n = 64;
+    let h = std::f64::consts::PI / n as f64;
+    let x: Vec<f64> = (0..=n).map(|i| i as f64 * h).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
+    let exact = 2.0_f64; // ∫₀^π sin x dx = 2
+    let plain = trapezoid(&y, &x).unwrap().integral;
+    let rich = trapezoid_richardson(&y, &x);
+    let err_plain = (plain - exact).abs();
+    let err_rich = (rich - exact).abs();
+    // Richardson should be at least as accurate.
+    assert!(
+        err_rich <= err_plain + 1e-15,
+        "MR29 richardson err = {err_rich} > plain err = {err_plain}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — Composite: MC integral of x² over [0, 1] approximates 1/3.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_monte_carlo_x_squared() {
+    let bounds = vec![(0.0_f64, 1.0)];
+    let (val, _stderr) = monte_carlo_integrate(|x| x[0] * x[0], &bounds, 50_000, 13);
+    assert!(
+        (val - 1.0 / 3.0).abs() < 0.02,
+        "MR30 MC ∫₀^1 x² ≈ {val}, expected 1/3"
+    );
+}
+
 
