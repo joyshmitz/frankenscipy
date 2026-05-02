@@ -8,9 +8,9 @@
 
 use fsci_opt::{
     BasinhoppingOptions, CurveFitOptions, DifferentialEvolutionOptions, LeastSquaresOptions,
-    MinimizeOptions, MinimizeScalarOptions, RootOptions, basinhopping, bisect, brenth, brentq,
-    curve_fit, differential_evolution, fsolve, least_squares, minimize, minimize_scalar, ridder,
-    toms748,
+    MinimizeOptions, MinimizeScalarOptions, RootOptions, approx_fprime, basinhopping, bisect,
+    brenth, brentq, curve_fit, differential_evolution, fsolve, halley, least_squares, minimize,
+    minimize_scalar, newton_scalar, ridder, rosen, rosen_der, secant, toms748,
 };
 
 const ATOL: f64 = 1e-6;
@@ -527,4 +527,122 @@ fn mr_de_bimodal_finds_a_minimum() {
         "MR20 DE bimodal x = {x}, expected ±2"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — Rosenbrock function value at (1, 1, …, 1) is 0; gradient
+// vanishes there.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rosen_at_global_minimum() {
+    for n in [2usize, 3, 5, 10] {
+        let x = vec![1.0_f64; n];
+        let f = rosen(&x);
+        assert!(
+            f.abs() < 1e-12,
+            "MR21 rosen(1, …, 1) (n={n}) = {f}, expected 0"
+        );
+        let g = rosen_der(&x);
+        for (i, &gi) in g.iter().enumerate() {
+            assert!(
+                gi.abs() < 1e-12,
+                "MR21 rosen_der at minimum: g[{i}] = {gi}, expected 0"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — approx_fprime matches the analytical derivative on quadratic
+// f(x, y) = x² + y² ⇒ ∇f = (2x, 2y).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_approx_fprime_matches_analytical_quadratic() {
+    let f = |x: &[f64]| x[0].powi(2) + x[1].powi(2);
+    for &(x, y) in &[(1.0_f64, 2.0), (-3.0, 0.5), (0.0, 4.0), (-1.5, -2.5)] {
+        let g = approx_fprime(&[x, y], f, 1e-6).unwrap();
+        let expected = [2.0 * x, 2.0 * y];
+        for k in 0..2 {
+            assert!(
+                (g[k] - expected[k]).abs() < 1e-3,
+                "MR22 approx_fprime[{k}] at ({x}, {y}) = {} vs {}",
+                g[k],
+                expected[k]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — newton_scalar converges to a root: solve x² - 2 = 0 from
+// x0 = 1, expect x = √2.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_newton_scalar_finds_sqrt_two() {
+    let f = |x: f64| x * x - 2.0;
+    let fp = |x: f64| 2.0 * x;
+    let opts = RootOptions::default();
+    let res = newton_scalar(f, fp, 1.0, opts).unwrap();
+    assert!(
+        (res.root - 2.0_f64.sqrt()).abs() < 1e-9,
+        "MR23 newton_scalar root = {} vs √2 = {}",
+        res.root,
+        2.0_f64.sqrt()
+    );
+    assert!(res.converged, "MR23 newton not converged");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — secant method finds the root of x³ - 27 from x0 = 4 (root x = 3).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_secant_finds_cube_root() {
+    let f = |x: f64| x * x * x - 27.0;
+    let opts = RootOptions::default();
+    let res = secant(f, 4.0, Some(3.5), opts).unwrap();
+    assert!(
+        (res.root - 3.0).abs() < 1e-9,
+        "MR24 secant root = {} vs 3",
+        res.root
+    );
+    assert!(res.converged, "MR24 secant not converged");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — Halley's method on x² - 9 from x0 = 4 (root x = 3) converges.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_halley_finds_root_of_quadratic() {
+    let f = |x: f64| x * x - 9.0;
+    let fp = |x: f64| 2.0 * x;
+    let fpp = |_x: f64| 2.0;
+    let opts = RootOptions::default();
+    let res = halley(f, fp, fpp, 4.0, opts).unwrap();
+    assert!(
+        (res.root - 3.0).abs() < 1e-10,
+        "MR25 halley root = {} vs 3",
+        res.root
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — approx_fprime at a critical point of a quadratic returns ≈ 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_approx_fprime_zero_at_critical_point() {
+    let f = |x: &[f64]| (x[0] - 2.5).powi(2) + (x[1] + 1.0).powi(2) + 7.0;
+    let g = approx_fprime(&[2.5_f64, -1.0], f, 1e-6).unwrap();
+    for (i, &gi) in g.iter().enumerate() {
+        assert!(
+            gi.abs() < 1e-3,
+            "MR26 approx_fprime[{i}] at critical point = {gi}"
+        );
+    }
+}
+
 
