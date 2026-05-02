@@ -9,11 +9,12 @@
 //! Run with: `cargo test -p fsci-linalg --test metamorphic_tests`
 
 use fsci_linalg::{
-    DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, cholesky,
-    circulant, cosm, det, diag, diagm, eigh, eigvalsh, expm, hadamard, hadamard_product,
-    hessenberg, hilbert as linalg_hilbert, inv, ishermitian, issymmetric, logm, lstsq, lu,
-    matrix_power, matrix_rank, norm, outer, pascal, pinv, polar, qr, schur, sinm, solve, sqrtm,
-    svd, toeplitz, trace, vdot, vnorm,
+    DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, bandwidth,
+    block_diag as linalg_block_diag, cholesky, circulant, companion, cosm, det, diag, diagm,
+    dft_matrix, eigh, eigvalsh, expm, hadamard, hadamard_product, hessenberg,
+    hilbert as linalg_hilbert, inv, ishermitian, issymmetric, logm, lstsq, lu, matrix_power,
+    matrix_rank, norm, null_space, orth, outer, pascal, pinv, polar, qr, schur, sinm, solve,
+    sqrtm, svd, toeplitz, trace, tri, vdot, vnorm,
 };
 
 const RTOL: f64 = 1e-9;
@@ -1218,6 +1219,148 @@ fn mr_polar_decomposition_reconstructs_a() {
                 a[i][j]
             );
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — orth(A) returns columns whose pairwise dot products give the
+// identity (orthonormal columns).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_orth_columns_orthonormal() {
+    let a = vec![
+        vec![1.0_f64, 2.0, 0.0],
+        vec![3.0, 4.0, 0.0],
+        vec![5.0, 6.0, 0.0],
+    ];
+    let q = orth(&a, None, DecompOptions::default()).unwrap();
+    let n_rows = q.len();
+    if n_rows == 0 {
+        return;
+    }
+    let n_cols = q[0].len();
+    // Q^T Q = I_{n_cols}.
+    for i in 0..n_cols {
+        for j in 0..n_cols {
+            let mut s = 0.0;
+            for r in 0..n_rows {
+                s += q[r][i] * q[r][j];
+            }
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (s - expected).abs() < 1e-9,
+                "MR41 Q^T Q [{i}, {j}] = {s} vs {expected}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — null_space columns are orthonormal (when non-empty).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_null_space_columns_orthonormal() {
+    // A rank-2 3x3 matrix → null space dimension 1.
+    let a = vec![
+        vec![1.0_f64, 2.0, 3.0],
+        vec![2.0, 4.0, 6.0],
+        vec![3.0, 6.0, 9.0],
+    ];
+    let n = null_space(&a, None, DecompOptions::default()).unwrap();
+    if n.is_empty() {
+        return;
+    }
+    let n_rows = n.len();
+    let n_cols = n[0].len();
+    for i in 0..n_cols {
+        for j in 0..n_cols {
+            let mut s = 0.0;
+            for r in 0..n_rows {
+                s += n[r][i] * n[r][j];
+            }
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (s - expected).abs() < 1e-9,
+                "MR42 N^T N [{i}, {j}] = {s} vs {expected}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — dft_matrix(n) is n × n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dft_matrix_shape() {
+    for n in [2usize, 4, 8, 16] {
+        let m = dft_matrix(n);
+        assert_eq!(m.len(), n, "MR43 dft_matrix rows");
+        for row in &m {
+            assert_eq!(row.len(), n, "MR43 dft_matrix cols");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — companion matrix has shape (n-1) × (n-1) for a length-n
+// coefficient vector.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_companion_shape() {
+    let a = vec![1.0_f64, -3.0, 2.0, -5.0];
+    let c = companion(&a).unwrap();
+    let expected = a.len() - 1;
+    assert_eq!(c.len(), expected, "MR44 companion rows");
+    for row in &c {
+        assert_eq!(row.len(), expected, "MR44 companion cols");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — tri(n, m, k=0) is an n×m lower-triangular indicator (1s on/below
+// the main diagonal, 0s above).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_tri_lower_triangular_indicator() {
+    let n = 5;
+    let m = 5;
+    let t = tri(n, m, 0);
+    assert_eq!(t.len(), n, "MR45 tri rows");
+    for i in 0..n {
+        for j in 0..m {
+            let expected = if j <= i { 1.0 } else { 0.0 };
+            assert!(
+                (t[i][j] - expected).abs() < 1e-12,
+                "MR45 tri[{i}, {j}] = {} vs {expected}",
+                t[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — bandwidth of a diagonal matrix is (0, 0).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bandwidth_of_diagonal() {
+    for n in [3usize, 5, 8] {
+        let mut d = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            d[i][i] = 2.0 + i as f64;
+        }
+        let bw = bandwidth(&d);
+        assert_eq!(
+            bw,
+            (0, 0),
+            "MR46 bandwidth(diag, n={n}) = {:?} expected (0, 0)",
+            bw
+        );
     }
 }
 
