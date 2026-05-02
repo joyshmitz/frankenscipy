@@ -9,11 +9,12 @@ use fsci_ndimage::{
     BoundaryMode, NdArray, argmax, argmin, array_max, array_min, binary_closing, binary_dilation,
     binary_erosion, binary_fill_holes, binary_opening, black_tophat, convolve, correlate,
     cumsum_array, distance_transform_edt, equal_within, flatten, full, gaussian_filter,
-    gradient_magnitude, grey_dilation, grey_erosion, label, laplace, masked_select, maximum_filter,
-    mean_labels, median_filter, minimum_filter, morphological_gradient, ones, otsu_threshold,
-    percentile_filter, prewitt, range_filter, reshape, rotate, shift, sobel, std_filter,
-    sum_labels, threshold, uniform_filter, variance_filter, variance_labels, where_cond,
-    white_tophat, zoom,
+    gaussian_filter_multi_sigma, gaussian_laplace, generate_binary_structure, gradient_magnitude,
+    grey_dilation, grey_erosion, label, laplace, masked_select, maximum_filter, maximum_filter1d,
+    mean_labels, median_filter, minimum_filter, minimum_filter1d, morphological_gradient, ones,
+    otsu_threshold, percentile_filter, prewitt, range_filter, reshape, rotate, shift, sobel,
+    std_filter, sum_labels, threshold, uniform_filter, uniform_filter1d, variance_filter,
+    variance_labels, where_cond, white_tophat, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -929,6 +930,110 @@ fn mr_std_filter_matches_sqrt_variance() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — uniform_filter1d preserves shape and constant images.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_uniform_filter1d_preserves_constant() {
+    let img = arr_2d(5, 7, |_, _| 4.5);
+    for axis in 0..2 {
+        let f = uniform_filter1d(&img, 3, axis, BoundaryMode::Reflect, 0.0).unwrap();
+        assert_eq!(f.shape, img.shape, "MR47 uniform_filter1d shape");
+        for (i, &v) in f.data.iter().enumerate() {
+            assert!(
+                (v - 4.5).abs() < 1e-12,
+                "MR47 uniform_filter1d(const)[{i}] = {v}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — maximum_filter1d dominates input pointwise.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_maximum_filter1d_dominates_input() {
+    let img = arr_2d(5, 7, |i, j| ((i * 7 + j * 11) % 13) as f64);
+    let f = maximum_filter1d(&img, 3, 1, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, (x, y)) in img.data.iter().zip(&f.data).enumerate() {
+        assert!(
+            *y + 1e-12 >= *x,
+            "MR48 maximum_filter1d at i={i}: {y} < input {x}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — minimum_filter1d is dominated by input pointwise.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimum_filter1d_dominated_by_input() {
+    let img = arr_2d(5, 7, |i, j| ((i * 7 + j * 11) % 13) as f64);
+    let f = minimum_filter1d(&img, 3, 0, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, (x, y)) in img.data.iter().zip(&f.data).enumerate() {
+        assert!(
+            *y <= *x + 1e-12,
+            "MR49 minimum_filter1d at i={i}: {y} > input {x}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — generate_binary_structure has shape 3^ndim and central element
+// equal to 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_generate_binary_structure_shape_and_center() {
+    for ndim in [2usize, 3] {
+        let s = generate_binary_structure(ndim, 1);
+        let total: usize = 3_usize.pow(ndim as u32);
+        assert_eq!(s.size(), total, "MR50 structure size for ndim={ndim}");
+        // All entries should be 0 or 1.
+        for (i, &v) in s.data.iter().enumerate() {
+            assert!(
+                v == 0.0 || v == 1.0,
+                "MR50 structure[{i}] = {v}, expected 0 or 1"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — gaussian_laplace of a constant image is zero (interior).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gaussian_laplace_constant_zero() {
+    let img = arr_2d(8, 10, |_, _| 7.5);
+    let g = gaussian_laplace(&img, 1.5, BoundaryMode::Reflect, 0.0).unwrap();
+    let cols = 10;
+    for i in 2..6 {
+        for j in 2..8 {
+            let v = g.data[i * cols + j];
+            assert!(
+                v.abs() < 1e-9,
+                "MR51 gaussian_laplace(const) interior at ({i}, {j}) = {v}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — gaussian_filter_multi_sigma preserves the input shape.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gaussian_filter_multi_sigma_preserves_shape() {
+    let img = arr_2d(6, 8, |i, j| (i * j) as f64);
+    let f = gaussian_filter_multi_sigma(&img, &[1.0, 0.5], BoundaryMode::Reflect, 0.0).unwrap();
+    assert_eq!(f.shape, img.shape, "MR52 multi-sigma shape");
+}
+
 
 
 
