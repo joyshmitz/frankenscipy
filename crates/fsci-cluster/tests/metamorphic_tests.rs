@@ -894,6 +894,123 @@ fn mr_mean_shift_at_least_one_center() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — DBSCAN labels are either -1 (noise) or a non-negative cluster
+// id strictly less than n_clusters.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dbscan_label_convention() {
+    let data = small_dataset();
+    let r = dbscan(&data, 2.0, 2).unwrap();
+    assert_eq!(r.labels.len(), data.len(), "MR43 dbscan label count");
+    for &l in &r.labels {
+        assert!(
+            l == -1 || (l >= 0 && (l as usize) < r.n_clusters),
+            "MR43 dbscan label = {l} (n_clusters = {})",
+            r.n_clusters
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — kmeans inertia is non-negative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kmeans_inertia_nonneg() {
+    let data = small_dataset();
+    for k in [1usize, 2, 3] {
+        let res = kmeans(&data, k, 100, 11).unwrap();
+        assert!(
+            res.inertia >= -1e-9,
+            "MR44 kmeans(k={k}) inertia = {} < 0",
+            res.inertia
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — fclusterdata returns labels of length n with values in [1, k].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fclusterdata_label_range() {
+    let data = small_dataset();
+    for k in [1usize, 2, 3] {
+        let labels = fclusterdata(&data, k, LinkageMethod::Ward).unwrap();
+        assert_eq!(labels.len(), data.len(), "MR45 fclusterdata length");
+        for (i, &lbl) in labels.iter().enumerate() {
+            assert!(
+                lbl >= 1 && lbl <= k,
+                "MR45 fclusterdata label[{i}] = {lbl} outside [1, {k}]"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — num_obs_linkage equals the number of leaves of the tree:
+// for a linkage with m merges, n_obs = m + 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_num_obs_linkage_matches_size() {
+    let data = small_dataset();
+    let z = linkage(&data, LinkageMethod::Average).unwrap();
+    let n_obs = num_obs_linkage(&z);
+    assert_eq!(
+        n_obs,
+        z.len() + 1,
+        "MR46 num_obs_linkage = {} expected {} = merges + 1",
+        n_obs,
+        z.len() + 1
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — leaves_list returns a permutation of 0..n (single linkage).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_leaves_list_single_linkage_permutation() {
+    let data = small_dataset();
+    let z = linkage(&data, LinkageMethod::Single).unwrap();
+    let leaves = leaves_list(&z);
+    let n = data.len();
+    assert_eq!(leaves.len(), n, "MR47 leaves length");
+    let mut seen = vec![false; n];
+    for &l in &leaves {
+        assert!(l < n, "MR47 leaf index {l} ≥ n = {n}");
+        seen[l] = true;
+    }
+    for (i, ok) in seen.iter().enumerate() {
+        assert!(*ok, "MR47 leaves missed index {i}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — is_valid_linkage on a linkage produced by linkage() returns
+// true.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_is_valid_linkage_returns_true_on_linkage_output() {
+    let data = small_dataset();
+    for &method in &[
+        LinkageMethod::Single,
+        LinkageMethod::Complete,
+        LinkageMethod::Average,
+        LinkageMethod::Ward,
+    ] {
+        let z = linkage(&data, method).unwrap();
+        assert!(
+            is_valid_linkage(&z),
+            "MR48 is_valid_linkage(linkage({method:?})) returned false"
+        );
+    }
+}
+
 
 
 
