@@ -12,7 +12,8 @@ use fsci_opt::{
     bracket, brent_minimize, brenth, brentq, brute, curve_fit, differential_evolution, fixed_point,
     fsolve, golden, gradient_descent, halley, isotonic_regression, least_squares, minimize,
     minimize_scalar, minimize_scalar_bounded, minimize_trisection, newton_scalar, nnls,
-    numerical_gradient, numerical_hessian, ridder, rosen, rosen_der, secant, toms748,
+    numerical_gradient, numerical_hessian, numerical_jacobian, projected_gradient_descent, pso,
+    ridder, rosen, rosen_der, secant, toms748,
 };
 
 const ATOL: f64 = 1e-6;
@@ -874,6 +875,141 @@ fn mr_minimize_trisection_parabola() {
         "MR38 minimize_trisection x = {xmin}, expected 4"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — numerical_jacobian on a linear map f(x) = A·x recovers A.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_numerical_jacobian_linear_map() {
+    // A = [[2, -1, 0], [1, 3, -2]] is 2×3.
+    let a = vec![
+        vec![2.0_f64, -1.0, 0.0],
+        vec![1.0, 3.0, -2.0],
+    ];
+    let f = {
+        let a = a.clone();
+        move |x: &[f64]| {
+            a.iter()
+                .map(|row| row.iter().zip(x).map(|(&aij, &xj)| aij * xj).sum::<f64>())
+                .collect::<Vec<f64>>()
+        }
+    };
+    let jac = numerical_jacobian(f, &[1.0_f64, 2.0, -1.0], 1e-5);
+    assert_eq!(jac.len(), a.len(), "MR39 jacobian rows");
+    assert_eq!(jac[0].len(), a[0].len(), "MR39 jacobian cols");
+    for i in 0..a.len() {
+        for j in 0..a[0].len() {
+            assert!(
+                (jac[i][j] - a[i][j]).abs() < 1e-3,
+                "MR39 jac[{i}, {j}] = {} vs a = {}",
+                jac[i][j],
+                a[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — projected_gradient_descent stays inside the supplied bounds.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_projected_gradient_descent_respects_bounds() {
+    // Minimise f(x) = (x[0] - 100)² + (x[1] + 50)² subject to box bounds.
+    let f = |x: &[f64]| (x[0] - 100.0).powi(2) + (x[1] + 50.0).powi(2);
+    let grad = |x: &[f64]| vec![2.0 * (x[0] - 100.0), 2.0 * (x[1] + 50.0)];
+    let lb = vec![-1.0_f64, -2.0_f64];
+    let ub = vec![1.0_f64, 2.0_f64];
+    let res = projected_gradient_descent(f, grad, &[0.0, 0.0], &lb, &ub, 1e-6, 500, 0.05);
+    for (i, &xi) in res.x.iter().enumerate() {
+        assert!(
+            xi >= lb[i] - 1e-9 && xi <= ub[i] + 1e-9,
+            "MR40 projected x[{i}] = {xi} outside [{}, {}]",
+            lb[i],
+            ub[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — isotonic_regression with weights returns a monotone fit.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_isotonic_with_weights_monotone() {
+    let y = vec![1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0];
+    let w = vec![1.0_f64, 0.5, 2.0, 1.0, 1.5, 0.8];
+    let yhat = isotonic_regression(&y, Some(&w));
+    for window in yhat.windows(2) {
+        assert!(
+            window[0] <= window[1] + 1e-12,
+            "MR41 isotonic with weights not monotone: {} > {}",
+            window[0],
+            window[1]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — pso (particle swarm) finds the parabola minimum near 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_pso_finds_parabola_minimum() {
+    let f = |x: &[f64]| x[0].powi(2) + x[1].powi(2);
+    let lb = vec![-5.0_f64, -5.0];
+    let ub = vec![5.0_f64, 5.0];
+    let (x, fmin) = pso(f, &lb, &ub, 30, 100, 7);
+    assert!(
+        fmin < 0.5,
+        "MR42 pso fmin = {fmin}, expected ≈ 0"
+    );
+    assert!(
+        x.iter().all(|&v| v.abs() < 1.0),
+        "MR42 pso x = {x:?} far from origin"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — least_squares minimises the sum of squared residuals: returned
+// solution achieves residual norm not greater than at the initial point.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_least_squares_reduces_residual_norm() {
+    // Residual function: r(x) = [x[0] - 1, x[1] - 2, x[0] + x[1] - 4].
+    let r = |x: &[f64]| vec![x[0] - 1.0, x[1] - 2.0, x[0] + x[1] - 4.0];
+    let res = least_squares(&r, &[0.0, 0.0], LeastSquaresOptions::default()).unwrap();
+    let r0 = r(&[0.0_f64, 0.0]);
+    let n0: f64 = r0.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let r_final = r(&res.x);
+    let nf: f64 = r_final.iter().map(|v| v * v).sum::<f64>().sqrt();
+    assert!(
+        nf <= n0 + 1e-9,
+        "MR43 least_squares residual norm = {nf} > initial = {n0}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — basinhopping on a strictly convex objective converges to the
+// global minimum (test with a scaled paraboloid).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_basinhopping_convex_objective() {
+    let f = |x: &[f64]| (x[0] - 2.0).powi(2) + (x[1] + 3.0).powi(2);
+    let mut opts = BasinhoppingOptions::default();
+    opts.seed = Some(42);
+    opts.niter = 5;
+    let res = basinhopping(f, &[10.0, -10.0], opts).unwrap();
+    assert!(
+        (res.x[0] - 2.0).abs() < 0.5 && (res.x[1] + 3.0).abs() < 0.5,
+        "MR44 basinhopping x = {:?}, expected near (2, -3)",
+        res.x
+    );
+}
+
 
 
 
