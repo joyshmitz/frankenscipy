@@ -6,13 +6,14 @@
 //! Run with: `cargo test -p fsci-interpolate --test metamorphic_tests`
 
 use fsci_interpolate::{
-    Akima1DInterpolator, BarycentricInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions,
-    InterpKind, KroghInterpolator, NearestNDInterpolator, PchipInterpolator, RbfInterpolator,
-    RbfKernel, RegularGridInterpolator, SplineBc, barycentric_eval, barycentric_weights,
-    chebyshev_nodes, chebyshev_nodes2, hermite_interp, interp1d_linear, lagrange,
-    make_interp_spline, make_lsq_spline, neville, pade, polyadd, polyder, polyfit, polyint,
-    polyint_definite, polymul, polyroots, polysub, polyval, polyval_with_error, ratval,
-    splantider, splder, splev, splev_with_derivative, splint, splrep, sproot,
+    Akima1DInterpolator, BarycentricInterpolator, CubicSplineStandalone, GriddataMethod, Interp1d,
+    Interp1dOptions, InterpKind, KroghInterpolator, LinearNDInterpolator, NearestNDInterpolator,
+    PchipInterpolator, RbfInterpolator, RbfKernel, RegularGridInterpolator, RegularGridMethod,
+    SplineBc, barycentric_eval, barycentric_weights, chebyshev_nodes, chebyshev_nodes2, griddata,
+    hermite_interp, interp1d_linear, interp2d, interpn, lagrange, make_interp_spline,
+    make_lsq_spline, neville, pade, polyadd, polyder, polyfit, polyint, polyint_definite,
+    polymul, polyroots, polysub, polyval, polyval_with_error, ratval, splantider, splder, splev,
+    splev_with_derivative, splint, splrep, sproot,
 };
 
 const ATOL: f64 = 1e-10;
@@ -1086,6 +1087,135 @@ fn mr_interp1d_linear_in_range_finite() {
             (a - b).abs() < 1e-12,
             "MR50 linear interp at x_query[{i}] = {}: got {b}, expected {a}",
             x_query[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — NearestNDInterpolator at a training point returns the exact
+// training value.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_nearest_nd_at_training_point() {
+    let pts = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
+    let vals = vec![1.0_f64, 2.0, 3.0, 4.0];
+    let interp = NearestNDInterpolator::new(&pts, &vals).unwrap();
+    for (i, p) in pts.iter().enumerate() {
+        let v = interp.eval(p).unwrap();
+        assert!(
+            (v - vals[i]).abs() < 1e-12,
+            "MR51 nearest_nd at point {i}: {v} vs {}",
+            vals[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — griddata with Nearest method on training points returns the
+// training values.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_griddata_nearest_at_training_points() {
+    let pts = vec![vec![0.0_f64, 0.0], vec![1.0, 0.0], vec![0.5, 1.0]];
+    let vals = vec![10.0_f64, 20.0, 30.0];
+    let result = griddata(&pts, &vals, &pts, GriddataMethod::Nearest).unwrap();
+    for (i, (got, want)) in result.iter().zip(&vals).enumerate() {
+        assert!(
+            (got - want).abs() < 1e-9,
+            "MR52 griddata(nearest)[{i}] = {got} vs {want}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — interpn at a grid corner (e.g., the lower-left grid point)
+// returns the corresponding value.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_interpn_at_grid_corner() {
+    let xs: Vec<f64> = vec![0.0, 1.0, 2.0];
+    let ys: Vec<f64> = vec![0.0, 1.0];
+    // Values stored row-major along (x, y): 3 × 2 = 6.
+    let vals: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let xi = vec![vec![0.0_f64, 0.0]];
+    let result = interpn(
+        vec![xs, ys],
+        vals,
+        &xi,
+        RegularGridMethod::Linear,
+        true,
+        None,
+    )
+    .unwrap();
+    assert!(
+        (result[0] - 1.0).abs() < 1e-9,
+        "MR53 interpn at (0, 0) = {} vs 1",
+        result[0]
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — interp2d at a grid corner returns the corresponding value.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_interp2d_at_corner() {
+    let x = vec![0.0_f64, 1.0, 2.0];
+    let y = vec![0.0_f64, 1.0];
+    let z = vec![vec![1.0_f64, 2.0, 3.0], vec![4.0_f64, 5.0, 6.0]];
+    let v = interp2d(&x, &y, &z, 0.0, 0.0).unwrap();
+    assert!((v - 1.0).abs() < 1e-9, "MR54 interp2d(0, 0) = {v}");
+    let v22 = interp2d(&x, &y, &z, 2.0, 1.0).unwrap();
+    assert!((v22 - 6.0).abs() < 1e-9, "MR54 interp2d(2, 1) = {v22}");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR55 — LinearNDInterpolator at a training vertex returns the vertex
+// value.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_linear_nd_at_training_vertex() {
+    let pts = vec![
+        vec![0.0_f64, 0.0],
+        vec![1.0, 0.0],
+        vec![0.0, 1.0],
+        vec![1.0, 1.0],
+        vec![0.5, 0.5],
+    ];
+    let vals = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+    let interp = LinearNDInterpolator::new(&pts, &vals).unwrap();
+    for (i, p) in pts.iter().enumerate() {
+        let v = interp.eval(p).unwrap();
+        assert!(
+            v.is_finite() && (v - vals[i]).abs() < 1e-7,
+            "MR55 LinearND at vertex {i}: got {v} vs {}",
+            vals[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR56 — PCHIP on monotone-increasing y produces a monotone-increasing
+// interpolant on a fine evaluation grid.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_pchip_monotone_on_increasing_data() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64).collect();
+    let y: Vec<f64> = vec![1.0, 2.0, 3.5, 4.0, 6.0, 7.5, 8.0, 9.0, 11.0, 12.0];
+    let interp = PchipInterpolator::new(&x, &y).unwrap();
+    let grid: Vec<f64> = (0..91).map(|i| i as f64 * 0.1).collect();
+    let yhat: Vec<f64> = grid.iter().map(|&t| interp.eval(t)).collect();
+    for w in yhat.windows(2) {
+        assert!(
+            w[0] <= w[1] + 1e-9,
+            "MR56 PCHIP not monotone increasing: {} > {}",
+            w[0],
+            w[1]
         );
     }
 }
