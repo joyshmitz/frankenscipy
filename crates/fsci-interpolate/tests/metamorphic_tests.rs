@@ -8,8 +8,8 @@
 use fsci_interpolate::{
     Akima1DInterpolator, BarycentricInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions,
     InterpKind, KroghInterpolator, NearestNDInterpolator, PchipInterpolator,
-    RegularGridInterpolator, SplineBc, lagrange, make_interp_spline, polyadd, polyfit, polymul,
-    polyval,
+    RegularGridInterpolator, SplineBc, lagrange, make_interp_spline, neville, polyadd, polyder,
+    polyfit, polyint, polymul, polyroots, polysub, polyval, ratval,
 };
 
 const ATOL: f64 = 1e-10;
@@ -476,4 +476,138 @@ fn mr_krogh_passes_through_data() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — polyder of a constant polynomial is zero (the constant
+// polynomial differentiates to []).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polyder_of_constant_is_zero() {
+    for &c in &[-1.5_f64, 0.0, 3.0, 100.0] {
+        let d = polyder(&[c], 1);
+        for (i, &v) in d.iter().enumerate() {
+            assert!(
+                v.abs() < 1e-15,
+                "MR21 polyder([{c}], 1)[{i}] = {v}, expected 0"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — polyint then polyder is the identity (mod the integration
+// constant): polyder(polyint(p, 1, 0), 1) ≡ p.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polyint_polyder_inverse() {
+    let polys = [
+        vec![3.0_f64, 2.0, 1.0],          // 3x² + 2x + 1
+        vec![1.0_f64, -2.0, 0.5, 4.0],    // cubic
+        vec![5.0_f64, 0.0, -3.0, 1.0, 2.0], // quartic
+    ];
+    for p in &polys {
+        let pi = polyint(p, 1, 0.0);
+        let pd = polyder(&pi, 1);
+        assert_eq!(pd.len(), p.len(), "MR22 polyder(polyint(p)) length");
+        for (i, (a, b)) in pd.iter().zip(p).enumerate() {
+            assert!(
+                close(*a, *b),
+                "MR22 polyint∘polyder mismatch at {i}: {a} vs {b}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — polysub(a, a) = 0 (zero polynomial: every coefficient is 0).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polysub_self_is_zero() {
+    let polys = [
+        vec![1.0_f64, 2.0, 3.0],
+        vec![5.0_f64, -1.0, 4.0, 7.0, 2.0],
+        vec![0.0_f64],
+    ];
+    for p in &polys {
+        let r = polysub(p, p);
+        for (i, &v) in r.iter().enumerate() {
+            assert!(
+                v.abs() < 1e-15,
+                "MR23 polysub({p:?}, self)[{i}] = {v}, expected 0"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — polyroots of (x - r1)(x - r2) recovers {r1, r2}.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polyroots_quadratic() {
+    let r1 = 2.0_f64;
+    let r2 = -3.0_f64;
+    // (x - r1)(x - r2) = x² - (r1+r2)x + r1·r2
+    // numpy convention has highest-degree first.
+    let coeffs = vec![1.0_f64, -(r1 + r2), r1 * r2];
+    let mut roots = polyroots(&coeffs);
+    roots.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mut expected = vec![r1, r2];
+    expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(roots.len(), 2, "MR24 polyroots length");
+    for (i, (got, want)) in roots.iter().zip(&expected).enumerate() {
+        assert!(
+            (got - want).abs() < 1e-9,
+            "MR24 root[{i}] = {got} vs {want}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — Neville's algorithm interpolant condition: neville passes
+// through all (xi, yi).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_neville_interpolant_condition() {
+    let xi = vec![-2.0_f64, -1.0, 0.5, 2.0, 3.5];
+    let yi = vec![5.0_f64, -1.0, 2.0, 3.5, 7.0];
+    for (i, &x) in xi.iter().enumerate() {
+        let v = neville(&xi, &yi, x);
+        assert!(
+            (v - yi[i]).abs() < 1e-10,
+            "MR25 neville at {x}: got {v} vs {}",
+            yi[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — ratval(p, q, x) = polyval(p, x) / polyval(q, x) when
+// polyval(q, x) is bounded away from zero.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ratval_matches_polyval_ratio() {
+    // ratval uses ascending coefficient order (c[0] + c[1]·x + ...);
+    // polyval uses descending order. Reverse to bridge conventions.
+    let p_asc = vec![1.0_f64, 3.0, -1.0, 2.0]; // 1 + 3x - x² + 2x³
+    let q_asc = vec![2.0_f64, 0.5, 1.0];       // 2 + 0.5x + x²
+    let p_desc: Vec<f64> = p_asc.iter().rev().copied().collect();
+    let q_desc: Vec<f64> = q_asc.iter().rev().copied().collect();
+    for &x in &[-2.0_f64, -0.5, 0.0, 1.0, 2.5, 4.0] {
+        let r = ratval(&p_asc, &q_asc, x);
+        let pv = polyval(&p_desc, x);
+        let qv = polyval(&q_desc, x);
+        let expected = pv / qv;
+        assert!(
+            (r - expected).abs() < 1e-9 * expected.abs().max(1.0),
+            "MR26 ratval at {x}: got {r} vs polyval(p)/polyval(q) = {expected}"
+        );
+    }
+}
+
 
