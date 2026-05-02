@@ -10,9 +10,10 @@ use std::f64::consts::PI;
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialResult, SpecialTensor, agm, ai, arctanh, beta, betaln, bi, boxcox_transform_scalar,
-    digamma_scalar, ellipe, ellipeinc, ellipk, ellipkinc, entr, erf_scalar, expit, factorial,
-    gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar, inv_boxcox_scalar, j0, jn,
-    jv, lambertw_scalar, logit, xlog1py, xlogy, zeta_scalar,
+    chdtr, chdtrc, comb, digamma_scalar, ellipe, ellipeinc, ellipk, ellipkinc, entr, erf_scalar,
+    expit, factorial, factorial2, gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0,
+    i0_scalar, inv_boxcox_scalar, j0, jn, jv, lambertw_scalar, logit, perm, rgamma, xlog1py, xlogy,
+    zeta_scalar,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite,
         eval_hermitenorm, eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt,
@@ -1048,6 +1049,131 @@ fn mr_sph_harm_m0_is_real() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — comb(n, 0) = 1 and comb(n, n) = 1 for any n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_comb_endpoints_one() {
+    for n in 0u64..=15 {
+        assert!(
+            (comb(n, 0) - 1.0).abs() < 1e-12,
+            "MR49 comb({n}, 0) = {}",
+            comb(n, 0)
+        );
+        assert!(
+            (comb(n, n) - 1.0).abs() < 1e-12,
+            "MR49 comb({n}, {n}) = {}",
+            comb(n, n)
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — comb is symmetric: comb(n, k) = comb(n, n - k).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_comb_symmetric_in_k() {
+    for n in 0u64..=12 {
+        for k in 0..=n {
+            let lhs = comb(n, k);
+            let rhs = comb(n, n - k);
+            assert!(
+                (lhs - rhs).abs() < 1e-9 * lhs.abs().max(1.0),
+                "MR50 comb({n}, {k}) = {lhs} vs comb({n}, {}) = {rhs}",
+                n - k
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — perm(n, 0) = 1 and perm(n, 1) = n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_perm_basics() {
+    for n in 1u64..=15 {
+        assert!(
+            (perm(n, 0) - 1.0).abs() < 1e-12,
+            "MR51 perm({n}, 0) = {}",
+            perm(n, 0)
+        );
+        assert!(
+            (perm(n, 1) - n as f64).abs() < 1e-12,
+            "MR51 perm({n}, 1) = {} vs {n}",
+            perm(n, 1)
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — factorial2 of small odd integers matches the textbook double
+// factorial formula: 5!! = 15, 7!! = 105, 9!! = 945.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_factorial2_known_values() {
+    let cases: &[(i64, f64)] = &[
+        (0, 1.0),
+        (1, 1.0),
+        (2, 2.0),
+        (3, 3.0),
+        (4, 8.0),
+        (5, 15.0),
+        (6, 48.0),
+        (7, 105.0),
+        (8, 384.0),
+        (9, 945.0),
+    ];
+    for &(n, expected) in cases {
+        let v = factorial2(n);
+        assert!(
+            (v - expected).abs() < 1e-9 * expected.max(1.0),
+            "MR52 factorial2({n}) = {v}, expected {expected}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — rgamma(1) = 1 and rgamma(2) = 1 (1/Γ at positive integers ≤ 2).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rgamma_at_small_integers() {
+    let r1 = unwrap_real(rgamma(&real(1.0), RuntimeMode::Strict));
+    let r2 = unwrap_real(rgamma(&real(2.0), RuntimeMode::Strict));
+    assert!(
+        (r1 - 1.0).abs() < 1e-12,
+        "MR53 rgamma(1) = {r1}, expected 1"
+    );
+    assert!(
+        (r2 - 1.0).abs() < 1e-12,
+        "MR53 rgamma(2) = {r2}, expected 1"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — Chi-squared CDF + complement: chdtr(v, x) + chdtrc(v, x) = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_chdtr_complement_sums_to_one() {
+    for &v in &[1.0_f64, 2.0, 5.0, 10.0] {
+        for &x in &[0.5_f64, 1.0, 3.0, 5.0, 10.0, 20.0] {
+            let cdf = chdtr(v, x);
+            let sf = chdtrc(v, x);
+            assert!(
+                (cdf + sf - 1.0).abs() < 1e-9,
+                "MR54 chdtr({v}, {x}) + chdtrc = {} expected 1",
+                cdf + sf
+            );
+        }
+    }
+}
+
 
 
 
