@@ -13,9 +13,10 @@
 
 use fsci_integrate::{
     DblquadOptions, QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue, cumulative_simpson,
-    cumulative_trapezoid, cumulative_trapezoid_initial, dblquad, fixed_quad, gauss_legendre,
-    monte_carlo_integrate, quad, quad_full_inf, romb, romberg, simpson, simpson_uniform, solve_ivp,
-    trapezoid, tplquad, trapezoid_richardson,
+    cumulative_trapezoid, cumulative_trapezoid_initial, dblquad, fixed_quad, gauss_kronrod_quad,
+    gauss_legendre, monte_carlo_integrate, newton_cotes, quad, quad_full_inf, quad_inf, romb,
+    romb_func, romberg, simpson, simpson_irregular, simpson_uniform, solve_ivp, trapezoid,
+    trapezoid_irregular, tplquad, trapezoid_richardson,
 };
 
 /// Tolerance for metamorphic relation comparisons.
@@ -730,5 +731,112 @@ fn mr_monte_carlo_x_squared() {
         "MR30 MC ∫₀^1 x² ≈ {val}, expected 1/3"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — quad_inf computes ∫₀^∞ e^(-x) dx = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quad_inf_exp_decay() {
+    let opts = QuadOptions::default();
+    let r = quad_inf(|x: f64| (-x).exp(), 0.0, opts).unwrap();
+    assert!(
+        (r.integral - 1.0).abs() < 1e-6,
+        "MR31 ∫₀^∞ e^(-x) dx = {} vs 1",
+        r.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — newton_cotes weights sum to 1 (closed Newton-Cotes formulas
+// integrate the constant 1 over a unit interval to 1).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_newton_cotes_weights_sum_to_one() {
+    for n in [1usize, 2, 3, 4] {
+        let w = newton_cotes(n).unwrap();
+        let s: f64 = w.iter().sum();
+        assert!(
+            (s - 1.0).abs() < 1e-12,
+            "MR32 newton_cotes(n={n}) Σw = {s}, expected 1"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — gauss_kronrod_quad and quad agree on a smooth function.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gauss_kronrod_matches_quad() {
+    let opts = QuadOptions::default();
+    let f = |x: f64| (x * x).exp() * x.cos();
+    let gk = gauss_kronrod_quad(f, -1.0, 1.0, opts);
+    let q = quad(f, -1.0, 1.0, opts).unwrap();
+    assert!(
+        (gk.integral - q.integral).abs() < 1e-7,
+        "MR33 GK = {} vs quad = {}",
+        gk.integral,
+        q.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — trapezoid_irregular agrees with trapezoid on a uniform grid.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_trapezoid_irregular_matches_uniform_trapezoid() {
+    let n = 16;
+    let h = std::f64::consts::PI / n as f64;
+    let x: Vec<f64> = (0..=n).map(|i| i as f64 * h).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
+    let irregular = trapezoid_irregular(&y, &x);
+    let uniform = trapezoid(&y, &x).unwrap().integral;
+    assert!(
+        (irregular - uniform).abs() < 1e-12,
+        "MR34 trapezoid_irregular = {irregular} vs trapezoid = {uniform}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — simpson_irregular ≈ simpson on a uniform grid for a smooth
+// function. (Both should integrate sin x on [0, π] to ≈ 2.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_simpson_irregular_close_to_uniform_simpson() {
+    let n = 16;
+    let h = std::f64::consts::PI / n as f64;
+    let x: Vec<f64> = (0..=n).map(|i| i as f64 * h).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
+    let irregular = simpson_irregular(&y, &x);
+    let uniform = simpson(&y, &x).unwrap().integral;
+    assert!(
+        (irregular - uniform).abs() < 1e-9,
+        "MR35 simpson_irregular = {irregular} vs simpson = {uniform}"
+    );
+    assert!(
+        (irregular - 2.0).abs() < 1e-3,
+        "MR35 ∫sin on [0, π] ≈ {irregular}, expected 2"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — romb_func on sin x over [0, π] yields ≈ 2.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_romb_func_sin_over_pi() {
+    let f = |x: f64| x.sin();
+    let r = romb_func(f, 0.0, std::f64::consts::PI, Some(8), None).unwrap();
+    assert!(
+        (r.integral - 2.0).abs() < 1e-9,
+        "MR36 romb_func(sin) = {} vs 2",
+        r.integral
+    );
+}
+
 
 
