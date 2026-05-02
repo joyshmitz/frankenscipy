@@ -6,8 +6,10 @@
 //! Run with: `cargo test -p fsci-interpolate --test metamorphic_tests`
 
 use fsci_interpolate::{
-    Akima1DInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions, InterpKind,
-    NearestNDInterpolator, PchipInterpolator, RegularGridInterpolator, SplineBc, make_interp_spline,
+    Akima1DInterpolator, BarycentricInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions,
+    InterpKind, KroghInterpolator, NearestNDInterpolator, PchipInterpolator,
+    RegularGridInterpolator, SplineBc, lagrange, make_interp_spline, polyadd, polyfit, polymul,
+    polyval,
 };
 
 const ATOL: f64 = 1e-10;
@@ -340,3 +342,138 @@ fn mr_bspline_integrate_antisymmetric() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR14 — polyval of a constant polynomial returns that constant.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polyval_constant_polynomial() {
+    for &c in &[-7.5_f64, 0.0, 1.0, 42.0] {
+        for &x in &[-3.0_f64, -1.0, 0.0, 0.5, 2.0, 100.0] {
+            let v = polyval(&[c], x);
+            assert!(close(v, c), "MR14 polyval([{c}], {x}) = {v}, expected {c}");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — polyfit roundtrip: fitting a polynomial of the data's true
+// degree should reproduce y at the original x within numerical noise.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polyfit_roundtrip_on_polynomial_data() {
+    // y = 2x³ - x² + 3x + 5 sampled at non-uniform xs.
+    let x: Vec<f64> = vec![-2.0, -1.5, -0.5, 0.0, 0.7, 1.3, 2.5, 3.4];
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| 2.0 * xi.powi(3) - xi.powi(2) + 3.0 * xi + 5.0)
+        .collect();
+    let coeffs = polyfit(&x, &y, 3).expect("polyfit deg 3");
+    for (i, &xi) in x.iter().enumerate() {
+        let yhat = polyval(&coeffs, xi);
+        assert!(
+            (yhat - y[i]).abs() < 1e-7,
+            "MR15 polyfit(deg=3) yhat({xi}) = {yhat} vs y = {}",
+            y[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — Lagrange interpolant condition: lagrange(xi, yi) is a
+// polynomial of degree n-1 that exactly reproduces yi at xi.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lagrange_passes_through_data() {
+    let xi = vec![-2.0_f64, -0.5, 0.5, 1.5, 3.0];
+    let yi = vec![3.0_f64, 1.0, 2.5, -1.0, 4.5];
+    let coeffs = lagrange(&xi, &yi).expect("lagrange");
+    for (i, &x) in xi.iter().enumerate() {
+        let v = polyval(&coeffs, x);
+        assert!(
+            (v - yi[i]).abs() < 1e-9,
+            "MR16 lagrange at {x}: got {v}, expected {}",
+            yi[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — polyadd is commutative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polyadd_is_commutative() {
+    let a = vec![2.0_f64, -1.0, 3.0, 5.0];
+    let b = vec![1.0_f64, 4.0];
+    let ab = polyadd(&a, &b);
+    let ba = polyadd(&b, &a);
+    assert_eq!(ab.len(), ba.len(), "MR17 polyadd length mismatch");
+    for (i, (&x, &y)) in ab.iter().zip(ba.iter()).enumerate() {
+        assert!(
+            close(x, y),
+            "MR17 polyadd commutativity at coeff {i}: {x} vs {y}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — polymul is commutative.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polymul_is_commutative() {
+    let a = vec![2.0_f64, -1.0, 3.0];
+    let b = vec![1.0_f64, 4.0, -2.0, 0.5];
+    let ab = polymul(&a, &b);
+    let ba = polymul(&b, &a);
+    assert_eq!(ab.len(), ba.len(), "MR18 polymul length mismatch");
+    for (i, (&x, &y)) in ab.iter().zip(ba.iter()).enumerate() {
+        assert!(
+            close(x, y),
+            "MR18 polymul commutativity at coeff {i}: {x} vs {y}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — Barycentric interpolant passes through its data.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_barycentric_passes_through_data() {
+    let xi = vec![-2.0_f64, -1.0, 0.0, 1.5, 3.0];
+    let yi = vec![5.0_f64, -1.0, 2.0, 3.5, 7.0];
+    let interp = BarycentricInterpolator::new(&xi, &yi).expect("barycentric");
+    for (i, &x) in xi.iter().enumerate() {
+        let v = interp.eval(x);
+        assert!(
+            (v - yi[i]).abs() < 1e-9,
+            "MR19 barycentric at {x}: got {v}, expected {}",
+            yi[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — Krogh interpolant passes through its data.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_krogh_passes_through_data() {
+    let xi = vec![0.0_f64, 0.5, 1.5, 2.0, 4.0];
+    let yi = vec![1.0_f64, 2.5, 0.0, -1.5, 3.0];
+    let interp = KroghInterpolator::new(&xi, &yi).expect("krogh");
+    for (i, &x) in xi.iter().enumerate() {
+        let v = interp.evaluate(x);
+        assert!(
+            (v - yi[i]).abs() < 1e-9,
+            "MR20 krogh at {x}: got {v}, expected {}",
+            yi[i]
+        );
+    }
+}
+
