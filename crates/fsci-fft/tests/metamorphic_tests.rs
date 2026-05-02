@@ -7,9 +7,9 @@
 //! Run with: `cargo test -p fsci-fft --test metamorphic_tests`
 
 use fsci_fft::{
-    Complex64, FftOptions, Normalization, dct, dctn, dst_ii, dst_iii, dstn, fft, fft2, fftfreq,
-    fftshift_1d, hfft, hilbert, idct, idctn, idstn, ifft, ifft2, ifftshift_1d, ihfft, irfft, irfft2,
-    rfft, rfft2,
+    Complex64, FftOptions, Normalization, dct, dct_i, dct_iv, dctn, dst_ii, dst_iii, dstn, fft,
+    fft2, fftfreq, fftshift_1d, fht, fhtoffset, hfft, hilbert, idct, idctn, idstn, ifft, ifft2,
+    ifftshift_1d, ifht, ihfft, irfft, irfft2, next_fast_len, rfft, rfft2,
 };
 
 const RTOL: f64 = 1e-9;
@@ -593,4 +593,144 @@ fn mr_fft_zero_input_zero_spectrum() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — next_fast_len(n) is at least n for any n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_next_fast_len_dominates_input() {
+    for n in [0usize, 1, 2, 3, 5, 7, 11, 13, 17, 23, 100, 1000] {
+        let m = next_fast_len(n);
+        assert!(
+            m >= n,
+            "MR22 next_fast_len({n}) = {m} < {n}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — DCT-I is its own inverse up to a scale factor of 2(N-1):
+// dct_i(dct_i(x)) ≈ 2(N-1) · x for N ≥ 2.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dct_i_self_inverse_with_scale() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16] {
+        let mut rng = prng((n * 31) as u64);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let y = dct_i(&x, &opts).unwrap();
+        let z = dct_i(&y, &opts).unwrap();
+        let scale = 2.0 * (n - 1) as f64;
+        for (i, (zi, xi)) in z.iter().zip(&x).enumerate() {
+            let recovered = zi / scale;
+            assert!(
+                close(recovered, *xi),
+                "MR23 dct_i self-inverse n={n} i={i}: {recovered} vs {xi}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — DCT-IV is its own inverse up to a scale of 2N:
+// dct_iv(dct_iv(x)) ≈ 2N · x.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dct_iv_self_inverse_with_scale() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16] {
+        let mut rng = prng((n * 17) as u64);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let y = dct_iv(&x, &opts).unwrap();
+        let z = dct_iv(&y, &opts).unwrap();
+        let scale = 2.0 * n as f64;
+        for (i, (zi, xi)) in z.iter().zip(&x).enumerate() {
+            let recovered = zi / scale;
+            assert!(
+                close(recovered, *xi),
+                "MR24 dct_iv self-inverse n={n} i={i}: {recovered} vs {xi}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — fht then ifht with matching offset round-trips a smooth
+// positive input within tolerance.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fht_ifht_roundtrip() {
+    let opts = FftOptions::default();
+    let n = 32;
+    let dln = 0.05_f64;
+    let mu = 0.0_f64;
+    let bias = 0.0_f64;
+    let offset = fhtoffset(dln, mu, 0.0, bias);
+    // Smooth positive input (Gaussian-like).
+    let x: Vec<f64> = (0..n)
+        .map(|i| {
+            let t = ((i as f64) - (n as f64) / 2.0) * 0.2;
+            (-t * t).exp()
+        })
+        .collect();
+    let y = fht(&x, dln, mu, offset, bias, &opts).unwrap();
+    let z = ifht(&y, dln, mu, offset, bias, &opts).unwrap();
+    for (i, (zi, xi)) in z.iter().zip(&x).enumerate() {
+        assert!(
+            (zi - xi).abs() < 1e-6,
+            "MR25 fht roundtrip at i={i}: {zi} vs {xi}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — Length of rfft(x) for real input of length N is ⌊N/2⌋ + 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rfft_output_length() {
+    let opts = FftOptions::default();
+    for n in [4usize, 5, 8, 9, 16, 17, 32] {
+        let mut rng = prng(n as u64 + 1);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let y = rfft(&x, &opts).unwrap();
+        assert_eq!(
+            y.len(),
+            n / 2 + 1,
+            "MR26 rfft length n={n}: got {} expected {}",
+            y.len(),
+            n / 2 + 1
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — fft is invertible: ifft(fft(x)) = x for any complex input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fft_ifft_inverse_complex_input() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16, 32] {
+        let mut rng = prng(n as u64 + 99);
+        let x: Vec<Complex64> = (0..n).map(|_| (rng(), rng())).collect();
+        let xf = fft(&x, &opts).unwrap();
+        let xb = ifft(&xf, &opts).unwrap();
+        for (i, (a, b)) in x.iter().zip(&xb).enumerate() {
+            assert!(
+                close_complex(*a, *b),
+                "MR27 ifft(fft(x)) at i={i}: ({},{}) vs ({},{})",
+                a.0,
+                a.1,
+                b.0,
+                b.1
+            );
+        }
+    }
+}
+
 
