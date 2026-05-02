@@ -7,7 +7,8 @@
 
 use fsci_ndimage::{
     BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_opening,
-    convolve, correlate, gaussian_filter, label, median_filter, rotate, shift, sobel, zoom,
+    convolve, correlate, distance_transform_edt, gaussian_filter, label, laplace, maximum_filter,
+    median_filter, minimum_filter, prewitt, rotate, shift, sobel, uniform_filter, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -379,3 +380,127 @@ fn mr_binary_opening_idempotent() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — maximum_filter dominates the input pointwise.
+// (For each pixel, the local max ≥ the pixel itself.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_maximum_filter_dominates_input() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
+    let m = maximum_filter(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, (x, mx)) in img.data.iter().zip(&m.data).enumerate() {
+        assert!(
+            *mx + 1e-12 >= *x,
+            "MR17 maximum_filter at i={i}: max = {mx} < input = {x}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — minimum_filter is dominated by input pointwise.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimum_filter_dominated_by_input() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
+    let m = minimum_filter(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, (x, mn)) in img.data.iter().zip(&m.data).enumerate() {
+        assert!(
+            *mn <= *x + 1e-12,
+            "MR18 minimum_filter at i={i}: min = {mn} > input = {x}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — prewitt of a constant image is zero (no gradient).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_prewitt_constant_image_is_zero() {
+    let img = arr_2d(8, 10, |_, _| 7.5);
+    for axis in 0..2 {
+        let g = prewitt(&img, axis, BoundaryMode::Reflect, 0.0).unwrap();
+        for (i, &v) in g.data.iter().enumerate() {
+            assert!(
+                v.abs() < 1e-9,
+                "MR19 prewitt(axis={axis}) at i={i}: {v} != 0"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — laplace of a linear image is zero (∂²/∂x² + ∂²/∂y² = 0 for
+// f(x, y) = ax + by + c).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_laplace_linear_image_is_zero() {
+    // f(i, j) = 2*i + 3*j + 1
+    let img = arr_2d(8, 10, |i, j| 2.0 * i as f64 + 3.0 * j as f64 + 1.0);
+    let lap = laplace(&img, BoundaryMode::Reflect, 0.0).unwrap();
+    // Check the strict interior to avoid boundary mode artefacts.
+    let cols = 10;
+    for i in 1..7 {
+        for j in 1..9 {
+            let v = lap.data[i * cols + j];
+            assert!(
+                v.abs() < 1e-9,
+                "MR20 laplace(linear)[{i}, {j}] = {v}, expected 0"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — uniform_filter preserves a constant image.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_uniform_filter_preserves_constant() {
+    let img = arr_2d(6, 8, |_, _| 3.25);
+    for &size in &[1usize, 3, 5] {
+        let f = uniform_filter(&img, size, BoundaryMode::Reflect, 0.0).unwrap();
+        for (i, &v) in f.data.iter().enumerate() {
+            assert!(
+                close(v, 3.25),
+                "MR21 uniform_filter(size={size}) at i={i}: {v} != 3.25"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — distance_transform_edt is non-negative, and is exactly 0 on
+// every background pixel (input == 0).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_distance_transform_edt_zero_on_background() {
+    // Build a 7×7 image with a 3×3 foreground cluster near the centre.
+    let img = arr_2d(7, 7, |i, j| {
+        if (2..=4).contains(&i) && (2..=4).contains(&j) {
+            1.0
+        } else {
+            0.0
+        }
+    });
+    let dt = distance_transform_edt(&img, None).unwrap();
+    let cols = 7;
+    for i in 0..7 {
+        for j in 0..7 {
+            let d = dt.data[i * cols + j];
+            assert!(d >= -1e-12, "MR22 EDT[{i}, {j}] = {d} < 0");
+            if img.data[i * cols + j] == 0.0 {
+                assert!(
+                    d.abs() < 1e-12,
+                    "MR22 EDT[{i}, {j}] = {d}, expected 0 on background"
+                );
+            }
+        }
+    }
+}
+
