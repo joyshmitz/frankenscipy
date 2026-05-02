@@ -9,8 +9,8 @@ use std::f64::consts::PI;
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialResult, SpecialTensor, beta, ellipe, ellipk, erf_scalar, factorial, gamma, gammainc,
-    gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar, j0, jn, jv,
+    SpecialResult, SpecialTensor, ai, beta, bi, ellipe, ellipeinc, ellipk, ellipkinc, erf_scalar,
+    factorial, gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar, j0, jn, jv,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_hermite, eval_hermitenorm, eval_laguerre, eval_legendre,
         roots_chebyt, roots_legendre,
@@ -609,6 +609,77 @@ fn mr_hyp2f1_at_zero_is_one() {
         assert!(
             (v - 1.0).abs() < 1e-12,
             "MR27 hyp2f1({a}, {b}; {c}; 0) = {v}, expected 1"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — Airy function values at the origin:
+//   ai(0) = 1 / (3^(2/3) · Γ(2/3)) ≈ 0.355028053887817...
+//   bi(0) = 1 / (3^(1/6) · Γ(2/3)) ≈ 0.614926627446001...
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_airy_at_zero() {
+    let ai0 = unwrap_real(ai(&real(0.0), RuntimeMode::Strict));
+    let bi0 = unwrap_real(bi(&real(0.0), RuntimeMode::Strict));
+    let expected_ai0 = 0.355_028_053_887_817_2;
+    let expected_bi0 = 0.614_926_627_446_001;
+    assert!(
+        (ai0 - expected_ai0).abs() < 1e-9,
+        "MR28 ai(0) = {ai0}, expected {expected_ai0}"
+    );
+    assert!(
+        (bi0 - expected_bi0).abs() < 1e-9,
+        "MR28 bi(0) = {bi0}, expected {expected_bi0}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — Incomplete elliptic integrals at φ = 0 are 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ellipinc_at_zero_phi() {
+    for &m in &[0.0_f64, 0.25, 0.5, 0.75] {
+        let f = unwrap_real(ellipkinc(
+            &real(0.0),
+            &real(m),
+            RuntimeMode::Strict,
+        ));
+        assert!(
+            f.abs() < 1e-12,
+            "MR29 ellipkinc(0, {m}) = {f}, expected 0"
+        );
+        let e = unwrap_real(ellipeinc(
+            &real(0.0),
+            &real(m),
+            RuntimeMode::Strict,
+        ));
+        assert!(
+            e.abs() < 1e-12,
+            "MR29 ellipeinc(0, {m}) = {e}, expected 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — ellipkinc(π/2, m) = ellipk(m): the incomplete integral
+// becomes the complete one at the upper limit π/2.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ellipkinc_at_half_pi_matches_complete() {
+    for &m in &[0.0_f64, 0.1, 0.3, 0.5, 0.7, 0.9] {
+        let inc = unwrap_real(ellipkinc(
+            &real(PI / 2.0),
+            &real(m),
+            RuntimeMode::Strict,
+        ));
+        let comp = unwrap_real(ellipk(&real(m), RuntimeMode::Strict));
+        assert!(
+            (inc - comp).abs() < 1e-9,
+            "MR30 ellipkinc(π/2, {m}) = {inc} vs ellipk({m}) = {comp}"
         );
     }
 }
