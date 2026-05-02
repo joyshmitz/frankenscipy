@@ -7,15 +7,16 @@
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    CooMatrix, CsrMatrix, EigsOptions, ExpmOptions, IterativeSolveOptions, LuOptions, Shape2D,
-    SolveOptions, add_csr, bicg, bicgstab, block_diag, breadth_first_order, cg, cgs,
-    connected_components, coo_to_csr_with_mode, csr_to_csc_with_mode, diags, dijkstra, eigsh,
-    expm as sparse_expm, eye, floyd_warshall, gmres, kron, laplacian, lsmr, lsqr,
-    matrix_power as sparse_matrix_power, minimum_spanning_tree, minres, qmr,
-    reverse_cuthill_mckee, scale_csr, sparse_diagonal, sparse_eliminate_zeros,
-    sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_row_min, sparse_trace,
-    sparse_transpose, spmv, spmv_csc, spmv_csr, splu, splu_solve, spsolve, structural_rank,
-    sub_csr, svds, tril, triu,
+    CooMatrix, CsrMatrix, EigsOptions, ExpmOptions, IluOptions, IterativeSolveOptions,
+    LgmresOptions, LuOptions, Shape2D, SolveOptions, add_csr, bicg, bicgstab, block_diag,
+    breadth_first_order, cg, cgs, connected_components, coo_to_csr_with_mode,
+    csr_to_csc_with_mode, diags, dijkstra, eigsh, expm as sparse_expm, eye, floyd_warshall, gmres,
+    kron, laplacian, lgmres, lsmr, lsqr, matrix_power as sparse_matrix_power,
+    minimum_spanning_tree, minres, pcg, qmr, reverse_cuthill_mckee, scale_csr, sparse_diagonal,
+    sparse_eliminate_zeros, sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_row_min,
+    sparse_sum, sparse_trace, sparse_transpose, spilu, spmv, spmv_csc, spmv_csr, splu, splu_solve,
+    spsolve, spsolve_triangular, strongly_connected_components, structural_rank, sub_csr, svds,
+    tril, triu,
 };
 
 const ATOL: f64 = 1e-9;
@@ -1171,6 +1172,136 @@ fn mr_sparse_norm_frobenius_matches_definition() {
     assert!(
         (n - direct).abs() < 1e-9 * direct.abs().max(1.0),
         "MR48 sparse_norm(fro) = {n} vs direct = {direct}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — pcg with ILU preconditioner has small residual on SPD.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_pcg_residual_small_on_spd() {
+    let a = build_spd_csr();
+    let (csc, _) =
+        csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_pcg_pre").unwrap();
+    let pre = spilu(&csc, IluOptions::default()).unwrap();
+    let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
+    let mut opts = IterativeSolveOptions::default();
+    opts.max_iter = Some(200);
+    let res = pcg(&a, &b, &pre, None, opts).unwrap();
+    let ax = spmv_csr(&a, &res.solution).unwrap();
+    let mut residual_sq = 0.0;
+    for (axi, bi) in ax.iter().zip(&b) {
+        residual_sq += (axi - bi).powi(2);
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-5,
+        "MR49 pcg residual = {}",
+        residual_sq.sqrt()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — lgmres has small residual on SPD.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lgmres_residual_small_on_spd() {
+    let a = build_spd_csr();
+    let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
+    let opts = LgmresOptions::default();
+    let res = lgmres(&a, &b, None, opts).unwrap();
+    let ax = spmv_csr(&a, &res.solution).unwrap();
+    let mut residual_sq = 0.0;
+    for (axi, bi) in ax.iter().zip(&b) {
+        residual_sq += (axi - bi).powi(2);
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-3,
+        "MR50 lgmres residual = {}",
+        residual_sq.sqrt()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — spsolve_triangular on the identity matrix returns rhs.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_spsolve_triangular_identity_returns_rhs() {
+    for n in [3usize, 5, 8] {
+        let i = eye(n).unwrap();
+        let b: Vec<f64> = (0..n).map(|k| 1.0 + k as f64 * 0.5).collect();
+        let x = spsolve_triangular(&i, &b, true).unwrap();
+        assert_eq!(x.len(), n, "MR51 spsolve_triangular length");
+        for (k, (xi, bi)) in x.iter().zip(&b).enumerate() {
+            assert!(
+                (xi - bi).abs() < 1e-12,
+                "MR51 spsolve_triangular(I, b)[{k}] = {xi} vs {bi}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — sparse_sum equals the sum of all dense entries.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_sum_matches_dense_sum() {
+    let a = build_spd_csr();
+    let dense_sum: f64 = csr_to_dense(&a).iter().flatten().sum();
+    let s = sparse_sum(&a);
+    assert!(
+        (s - dense_sum).abs() < 1e-12,
+        "MR52 sparse_sum = {s} vs dense sum = {dense_sum}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — strongly_connected_components on a path graph (undirected) has
+// one component when treated as undirected (note: SCC in directed
+// representation may give different counts).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_strongly_connected_path_graph() {
+    let n = 4;
+    let coo = CooMatrix::from_triplets(
+        Shape2D { rows: n, cols: n },
+        vec![1.0; 6],
+        vec![0, 1, 1, 2, 2, 3],
+        vec![1, 0, 2, 1, 3, 2],
+        true,
+    )
+    .unwrap();
+    let g = coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "test_scc")
+        .unwrap()
+        .0;
+    let labels = strongly_connected_components(&g);
+    assert_eq!(labels.len(), n, "MR53 SCC labels length");
+    // For a connected undirected graph, all nodes share the same SCC.
+    let first = labels[0];
+    for (i, &l) in labels.iter().enumerate() {
+        assert_eq!(
+            l, first,
+            "MR53 SCC label[{i}] = {l} vs first = {first}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — sparse_nnz equals number of stored entries in CSR data.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sparse_nnz_matches_data_len() {
+    let a = build_spd_csr();
+    let n = sparse_nnz(&a);
+    let stored_nonzero = a.data().iter().filter(|v| **v != 0.0).count();
+    assert_eq!(
+        n, stored_nonzero,
+        "MR54 sparse_nnz = {n} vs stored nonzero = {stored_nonzero}"
     );
 }
 
