@@ -12,12 +12,13 @@
 //! Run with: `cargo test -p fsci-integrate --test metamorphic_tests`
 
 use fsci_integrate::{
-    DblquadOptions, QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue,
-    cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_initial,
-    cumulative_trapezoid_uniform, dblquad, fixed_quad, gauss_kronrod_quad, gauss_legendre,
-    monte_carlo_integrate, newton_cotes, nquad, odeint, quad, quad_full_inf, quad_inf, quad_vec,
-    romb, romb_func, romberg, simpson, simpson_irregular, simpson_uniform, solve_ivp, trapezoid,
-    trapezoid_irregular, trapezoid_uniform, tplquad, trapezoid_richardson,
+    CubatureOptions, DblquadOptions, QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue,
+    cubature_scalar, cumulative_simpson, cumulative_trapezoid, cumulative_trapezoid_initial,
+    cumulative_trapezoid_uniform, dblquad, dblquad_rect, fixed_quad, gauss_kronrod_quad,
+    gauss_legendre, line_integral, monte_carlo_integrate, newton_cotes, nquad, odeint, qmc_quad,
+    quad, quad_full_inf, quad_inf, quad_neg_inf, quad_vec, romb, romb_func, romberg, simpson,
+    simpson_irregular, simpson_uniform, solve_ivp, trapezoid, trapezoid_irregular,
+    trapezoid_uniform, tplquad, trapezoid_richardson,
 };
 
 /// Tolerance for metamorphic relation comparisons.
@@ -1100,6 +1101,102 @@ fn mr_solve_ivp_t_eval_length() {
 // ─────────────────────────────────────────────────────────────────────
 // MR48 — solve_ivp on y'(t) = 0 keeps y(t) = y0 constant for any t.
 // ─────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — cubature_scalar of constant 1 on [0, 1]^2 returns 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cubature_scalar_constant_unit_square() {
+    let f = |_x: &[f64]| 1.0_f64;
+    let a = vec![0.0_f64, 0.0];
+    let b = vec![1.0_f64, 1.0];
+    let res = cubature_scalar(f, &a, &b, CubatureOptions::default()).unwrap();
+    assert!(
+        (res.estimate - 1.0).abs() < 1e-9,
+        "MR49 cubature_scalar(1, unit square) = {} expected 1",
+        res.estimate
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — line_integral of constant 1 along a unit circle gives the
+// arc length (≈ 2π for full circle).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_line_integral_constant_unit_circle_arc_length() {
+    let f = |_x: f64, _y: f64| 1.0_f64;
+    let cx = |t: f64| t.cos();
+    let cy = |t: f64| t.sin();
+    let result = line_integral(f, cx, cy, 0.0, 2.0 * std::f64::consts::PI, 201);
+    let expected = 2.0 * std::f64::consts::PI;
+    assert!(
+        (result - expected).abs() < 1e-3,
+        "MR50 line_integral(1, unit circle) = {result} vs 2π = {expected}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — dblquad_rect of constant 1 on a unit square returns 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dblquad_rect_constant_unit_square() {
+    let f = |_x: f64, _y: f64| 1.0_f64;
+    let result = dblquad_rect(f, 0.0, 1.0, 0.0, 1.0, 16, 16);
+    assert!(
+        (result - 1.0).abs() < 1e-9,
+        "MR51 dblquad_rect(1, unit square) = {result} expected 1"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — qmc_quad of constant 1 on a unit cube returns ≈ 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_qmc_quad_constant_unit_cube() {
+    let f = |_x: &[f64]| 1.0_f64;
+    let lb = vec![0.0_f64, 0.0, 0.0];
+    let ub = vec![1.0_f64, 1.0, 1.0];
+    let res = qmc_quad(f, &lb, &ub, 4, 1024).unwrap();
+    assert!(
+        (res.integral - 1.0).abs() < 0.05,
+        "MR52 qmc_quad(1, unit cube) = {} expected ≈ 1",
+        res.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — quad_neg_inf of e^x from -∞ to 0 = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quad_neg_inf_exp() {
+    let opts = QuadOptions::default();
+    let r = quad_neg_inf(|x: f64| x.exp(), 0.0, opts).unwrap();
+    assert!(
+        (r.integral - 1.0).abs() < 1e-6,
+        "MR53 ∫_{{-∞}}^0 e^x dx = {} vs 1",
+        r.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — quad_neg_inf of x·e^x from -∞ to 0 = -1 (integration by parts).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quad_neg_inf_x_exp() {
+    let opts = QuadOptions::default();
+    let r = quad_neg_inf(|x: f64| x * x.exp(), 0.0, opts).unwrap();
+    assert!(
+        (r.integral + 1.0).abs() < 1e-5,
+        "MR54 ∫_{{-∞}}^0 x·e^x dx = {} vs -1",
+        r.integral
+    );
+}
 
 #[test]
 fn mr_solve_ivp_zero_rhs_preserves_state() {
