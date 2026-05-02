@@ -9,12 +9,12 @@
 use fsci_opt::{
     BasinhoppingOptions, CurveFitOptions, DifferentialEvolutionOptions, LeastSquaresOptions,
     MinimizeOptions, MinimizeScalarOptions, RootOptions, approx_fprime, basinhopping, bisect,
-    bracket, brent_minimize, brenth, brentq, brute, check_grad, curve_fit, differential_evolution,
-    dual_annealing, fixed_point, fsolve, golden, gradient_descent, halley, isotonic_regression,
-    least_squares, linear_sum_assignment, minimize, minimize_scalar, minimize_scalar_bounded,
-    minimize_trisection, newton_scalar, nnls, numerical_gradient, numerical_hessian,
-    numerical_jacobian, projected_gradient_descent, pso, ridder, rosen, rosen_der, secant, shgo,
-    toms748,
+    bracket, brent_minimize, brenth, brentq, brute, check_grad, cobyla, curve_fit,
+    differential_evolution, dual_annealing, fixed_point, fsolve, golden, gradient_descent, halley,
+    isotonic_regression, least_squares, linear_sum_assignment, linprog, minimize, minimize_scalar,
+    minimize_scalar_bounded, minimize_trisection, newton_scalar, nnls, numerical_gradient,
+    numerical_hessian, numerical_jacobian, projected_gradient_descent, pso, ridder, rosen,
+    rosen_der, rosen_hess, rosen_hess_prod, secant, shgo, toms748,
 };
 
 const ATOL: f64 = 1e-6;
@@ -1119,6 +1119,127 @@ fn mr_minimize_rosenbrock_finds_global() {
         (res.x[0] - 1.0).abs() < 0.1 && (res.x[1] - 1.0).abs() < 0.1,
         "MR50 minimize rosen → x = {:?}, expected ≈ (1, 1)",
         res.x
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — rosen_hess at (1, …, 1) is symmetric.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rosen_hess_symmetric_at_minimum() {
+    for n in [2usize, 3, 5] {
+        let x = vec![1.0_f64; n];
+        let h = rosen_hess(&x);
+        for i in 0..n {
+            for j in 0..n {
+                assert!(
+                    (h[i][j] - h[j][i]).abs() < 1e-9,
+                    "MR51 rosen_hess[{i}, {j}] = {} vs [{j}, {i}] = {}",
+                    h[i][j],
+                    h[j][i]
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR52 — rosen_hess_prod(x, p) = rosen_hess(x) · p (matrix-vector
+// product equivalence).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rosen_hess_prod_matches_dense() {
+    let x = vec![0.5_f64, -0.5, 0.7, 1.0];
+    let p = vec![1.0_f64, 2.0, -0.5, 0.8];
+    let h = rosen_hess(&x);
+    let hp = rosen_hess_prod(&x, &p);
+    let expected: Vec<f64> = h
+        .iter()
+        .map(|row| row.iter().zip(&p).map(|(&hij, &pj)| hij * pj).sum())
+        .collect();
+    for (i, (a, b)) in expected.iter().zip(&hp).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-9 * a.abs().max(1.0),
+            "MR52 rosen_hess_prod[{i}] = {b} vs (H·p)[{i}] = {a}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — linprog: minimise c·x subject to bounds. For c = [1, 1] with
+// x ≥ 0 and no upper bound, linprog should find x = (0, 0) when
+// feasible.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_linprog_simple_bounded() {
+    // Minimise 2x + 3y subject to x + y >= 1 (i.e., -x - y <= -1), x,y >= 0.
+    let c = vec![2.0_f64, 3.0];
+    let a_ub = vec![vec![-1.0_f64, -1.0]];
+    let b_ub = vec![-1.0_f64];
+    let a_eq: Vec<Vec<f64>> = vec![];
+    let b_eq: Vec<f64> = vec![];
+    let bounds = vec![(Some(0.0), None), (Some(0.0), None)];
+    let res = linprog(&c, &a_ub, &b_ub, &a_eq, &b_eq, &bounds, Some(100)).unwrap();
+    // Optimal: x = 1, y = 0; objective = 2.
+    assert!(
+        (res.fun - 2.0).abs() < 1e-3,
+        "MR53 linprog objective = {} vs expected 2",
+        res.fun
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — cobyla on a strictly convex unconstrained-feasible problem
+// converges towards the minimum.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cobyla_convex_makes_progress() {
+    let f = |x: &[f64]| (x[0] - 2.0).powi(2) + (x[1] + 1.0).powi(2);
+    let constraints: Vec<fn(&[f64]) -> f64> = Vec::new();
+    let res = cobyla(f, &[5.0_f64, 5.0], &constraints, 200, 0.5).unwrap();
+    let f_init = (5.0_f64 - 2.0).powi(2) + (5.0_f64 + 1.0).powi(2);
+    let f_final = res.fun.unwrap();
+    assert!(
+        f_final < f_init,
+        "MR54 cobyla did not improve: f_final = {f_final} >= f_init = {f_init}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR55 — fsolve on a 2x2 nonlinear system finds a root.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fsolve_2d_nonlinear() {
+    // x² + y² = 25 ; x + y = 7 ⇒ (x, y) ∈ {(4, 3), (3, 4)}.
+    // Start from (5, 2) to avoid singular Jacobian at x = y.
+    let f = |z: &[f64]| vec![z[0].powi(2) + z[1].powi(2) - 25.0, z[0] + z[1] - 7.0];
+    let res = fsolve(f, &[5.0_f64, 2.0]).unwrap();
+    let (x, y) = (res.x[0], res.x[1]);
+    assert!(
+        (((x - 4.0).abs() < 1e-3 && (y - 3.0).abs() < 1e-3)
+            || ((x - 3.0).abs() < 1e-3 && (y - 4.0).abs() < 1e-3)),
+        "MR55 fsolve 2D found ({x}, {y}), expected (4, 3) or (3, 4)"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR56 — minimize converges from origin on shifted parabola.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimize_origin_to_shifted() {
+    let f = |x: &[f64]| (x[0] - 4.0).powi(2) + (x[1] - 5.0).powi(2);
+    let res = minimize(f, &[0.0_f64, 0.0], MinimizeOptions::default()).unwrap();
+    assert!(
+        (res.x[0] - 4.0).abs() < 0.05 && (res.x[1] - 5.0).abs() < 0.05,
+        "MR56 minimize from origin → ({}, {}), expected (4, 5)",
+        res.x[0],
+        res.x[1]
     );
 }
 
