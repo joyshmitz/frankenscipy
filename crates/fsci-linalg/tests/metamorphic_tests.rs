@@ -9,8 +9,9 @@
 //! Run with: `cargo test -p fsci-linalg --test metamorphic_tests`
 
 use fsci_linalg::{
-    DecompOptions, InvOptions, NormKind, SolveOptions, cholesky, det, eigh, eigvalsh, expm,
-    hessenberg, inv, logm, lu, norm, qr, schur, solve, sqrtm, svd,
+    DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, cholesky, det,
+    eigh, eigvalsh, expm, hessenberg, inv, logm, lstsq, lu, norm, pinv, qr, schur, solve, sqrtm,
+    svd,
 };
 
 const RTOL: f64 = 1e-9;
@@ -635,3 +636,175 @@ fn mr_eigvalsh_ascending() {
         trace
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — Moore-Penrose condition 1: A · A⁺ · A = A.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_pinv_satisfies_penrose_one() {
+    // Tall, full column-rank matrix.
+    let a = vec![
+        vec![1.0_f64, 2.0],
+        vec![3.0, 4.0],
+        vec![5.0, 0.5],
+        vec![-1.0, 1.5],
+    ];
+    let pinv_a = pinv(&a, PinvOptions::default()).unwrap().pseudo_inverse;
+    let aap = matmul(&a, &pinv_a);
+    let aapa = matmul(&aap, &a);
+    for i in 0..a.len() {
+        for j in 0..a[0].len() {
+            assert!(
+                close(aapa[i][j], a[i][j]),
+                "MR17 (A·A⁺·A)[{i}, {j}] = {} vs A[{i}, {j}] = {}",
+                aapa[i][j],
+                a[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — lstsq returns the least-squares minimiser: AᵀA·x = Aᵀb
+// (the normal equations). Holds when A has full column rank.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lstsq_satisfies_normal_equations() {
+    let a = vec![
+        vec![1.0_f64, 2.0],
+        vec![3.0, 4.0],
+        vec![5.0, 0.5],
+        vec![-1.0, 1.5],
+    ];
+    let b = vec![1.0_f64, 2.0, 3.0, 4.0];
+    let res = lstsq(&a, &b, LstsqOptions::default()).unwrap();
+    // Build Aᵀ.
+    let m = a.len();
+    let n = a[0].len();
+    let mut at = vec![vec![0.0; m]; n];
+    for i in 0..m {
+        for j in 0..n {
+            at[j][i] = a[i][j];
+        }
+    }
+    let ata = matmul(&at, &a);
+    let lhs = matvec(&ata, &res.x);
+    let atb = matvec(&at, &b);
+    for k in 0..n {
+        assert!(
+            (lhs[k] - atb[k]).abs() < 1e-7,
+            "MR18 normal eq at {k}: AᵀA·x = {} vs Aᵀb = {}",
+            lhs[k],
+            atb[k]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — det(I_n) = 1 for any size n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_det_of_identity_is_one() {
+    use fsci_runtime::RuntimeMode;
+    for n in [1usize, 2, 3, 5, 8] {
+        let mut id = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            id[i][i] = 1.0;
+        }
+        let d = det(&id, RuntimeMode::Strict, true).unwrap();
+        assert!(
+            (d - 1.0).abs() < 1e-12,
+            "MR19 det(I_{n}) = {d}, expected 1"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — det((Aᵀ)ᵀ) = det(A) — verified via determinant of A and Aᵀᵀ
+// computed by transposing twice. (Numerical stability of two transposes.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_det_double_transpose() {
+    use fsci_runtime::RuntimeMode;
+    let a = vec![
+        vec![2.0_f64, 0.5, -1.0],
+        vec![1.0, 3.0, 0.25],
+        vec![0.0, -0.7, 2.5],
+    ];
+    let n = a.len();
+    let mut at = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            at[j][i] = a[i][j];
+        }
+    }
+    let mut att = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            att[j][i] = at[i][j];
+        }
+    }
+    let da = det(&a, RuntimeMode::Strict, true).unwrap();
+    let datt = det(&att, RuntimeMode::Strict, true).unwrap();
+    assert!(
+        (da - datt).abs() < 1e-12,
+        "MR20 det(A) = {da}, det((Aᵀ)ᵀ) = {datt}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — Frobenius norm of A equals Frobenius norm of Aᵀ.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_frobenius_norm_transpose_invariant() {
+    let a = vec![
+        vec![1.0_f64, -2.0, 3.0],
+        vec![0.5, 1.5, -0.25],
+        vec![-1.0, 0.0, 2.0],
+        vec![3.5, -0.5, 1.0],
+    ];
+    let m = a.len();
+    let n = a[0].len();
+    let mut at = vec![vec![0.0; m]; n];
+    for i in 0..m {
+        for j in 0..n {
+            at[j][i] = a[i][j];
+        }
+    }
+    let na = norm(&a, NormKind::Fro, DecompOptions::default()).unwrap();
+    let nat = norm(&at, NormKind::Fro, DecompOptions::default()).unwrap();
+    assert!(
+        (na - nat).abs() < 1e-12,
+        "MR21 ‖A‖_F = {na}, ‖Aᵀ‖_F = {nat}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — solve(I, b) = b: identity matrix solve returns the rhs.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_with_identity_returns_rhs() {
+    for n in [1usize, 3, 5, 7] {
+        let mut id = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            id[i][i] = 1.0;
+        }
+        let b: Vec<f64> = (0..n).map(|i| (i as f64) * 1.5 - 2.0).collect();
+        let res = solve(&id, &b, SolveOptions::default()).unwrap();
+        for i in 0..n {
+            assert!(
+                (res.x[i] - b[i]).abs() < 1e-12,
+                "MR22 solve(I, b)[{i}] = {} vs b = {}",
+                res.x[i],
+                b[i]
+            );
+        }
+    }
+}
+
