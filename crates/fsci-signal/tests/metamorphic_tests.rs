@@ -6,9 +6,10 @@
 //! Run with: `cargo test -p fsci-signal --test metamorphic_tests`
 
 use fsci_signal::{
-    ConvolveMode, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, blackman, convolve,
-    correlate, deconvolve, fftconvolve, filtfilt, find_peaks, hamming, hann, hilbert, kaiser,
-    lfilter, rms, sosfilt, spectral_centroid, tf2sos, zero_crossing_rate,
+    ConvolveMode, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, bartlett, blackman,
+    boxcar, convolve, correlate, deconvolve, fftconvolve, filtfilt, find_peaks, gaussian, hamming,
+    hann, hilbert, hilbert_envelope, kaiser, lanczos, lfilter, parzen, resample, rms, sosfilt,
+    spectral_centroid, tf2sos, triang, zero_crossing_rate,
 };
 
 const ATOL: f64 = 1e-9;
@@ -529,4 +530,144 @@ fn mr_spectral_centroid_in_freq_range() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — bartlett, hann, hamming, parzen, triang windows of odd length
+// are symmetric: w[i] = w[n-1-i] for 0 ≤ i < n/2.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_classic_windows_are_symmetric() {
+    let n = 31; // odd
+    let windows: Vec<(&str, Vec<f64>)> = vec![
+        ("bartlett", bartlett(n)),
+        ("hann", hann(n)),
+        ("hamming", hamming(n)),
+        ("parzen", parzen(n)),
+        ("triang", triang(n)),
+        ("blackman", blackman(n)),
+    ];
+    for (name, w) in &windows {
+        for i in 0..n / 2 {
+            assert!(
+                (w[i] - w[n - 1 - i]).abs() < 1e-12,
+                "MR24 {name} not symmetric at i={i}: {} vs {}",
+                w[i],
+                w[n - 1 - i]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — boxcar window is all ones; lanczos values are in [0, 1].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_boxcar_ones_lanczos_bounded() {
+    for n in [4usize, 7, 16, 31] {
+        let b = boxcar(n, true);
+        for (i, &v) in b.iter().enumerate() {
+            assert!(
+                (v - 1.0).abs() < 1e-15,
+                "MR25 boxcar(n={n})[{i}] = {v}, expected 1"
+            );
+        }
+        let l = lanczos(n);
+        for (i, &v) in l.iter().enumerate() {
+            assert!(
+                v >= -1e-12 && v <= 1.0 + 1e-12,
+                "MR25 lanczos(n={n})[{i}] = {v} outside [0, 1]"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — Gaussian window of odd length has its peak at the midpoint
+// equal to 1.0 (un-normalised).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gaussian_window_peak_at_midpoint() {
+    let n = 31;
+    let mid = n / 2;
+    for &std in &[1.0_f64, 2.5, 5.0] {
+        let w = gaussian(n, std, true);
+        assert!(
+            (w[mid] - 1.0).abs() < 1e-12,
+            "MR26 gaussian(n={n}, std={std})[{mid}] = {}, expected 1",
+            w[mid]
+        );
+        // Window is monotonically non-increasing from midpoint outwards.
+        for k in 1..=mid {
+            assert!(
+                w[mid - k] <= w[mid - k + 1] + 1e-12,
+                "MR26 gaussian non-monotone left at offset {k}"
+            );
+            assert!(
+                w[mid + k] <= w[mid + k - 1] + 1e-12,
+                "MR26 gaussian non-monotone right at offset {k}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — resample preserves the requested output length.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_resample_output_length() {
+    let x: Vec<f64> = (0..32).map(|i| (i as f64 * 0.4).sin()).collect();
+    for &num in &[8usize, 16, 32, 48, 64] {
+        let y = resample(&x, num).unwrap();
+        assert_eq!(
+            y.len(),
+            num,
+            "MR27 resample length: got {} expected {num}",
+            y.len()
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — hilbert_envelope dominates |x| pointwise on smooth signals
+// (envelope is the magnitude of the analytic signal, ≥ |x|).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hilbert_envelope_dominates_abs_input() {
+    let x: Vec<f64> = (0..64)
+        .map(|i| (2.0 * std::f64::consts::PI * i as f64 / 8.0).sin())
+        .collect();
+    let env = hilbert_envelope(&x).unwrap();
+    for (i, (xi, ei)) in x.iter().zip(&env).enumerate() {
+        assert!(
+            *ei + 1e-9 >= xi.abs(),
+            "MR28 envelope[{i}] = {ei} < |x| = {}",
+            xi.abs()
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — Hilbert transform: real part of the analytic signal equals the
+// original signal (Re(H[x]) = x).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hilbert_real_part_equals_input() {
+    let x: Vec<f64> = (0..32)
+        .map(|i| 1.0 + 0.5 * (i as f64 * 0.3).cos() + 0.2 * (i as f64 * 0.7).sin())
+        .collect();
+    let h = hilbert(&x).unwrap();
+    for (i, (xi, &(re, _im))) in x.iter().zip(&h).enumerate() {
+        assert!(
+            (xi - re).abs() < 1e-9,
+            "MR29 Re(H[x])[{i}] = {re} vs x = {xi}"
+        );
+    }
+}
+
 
