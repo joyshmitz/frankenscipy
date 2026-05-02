@@ -9,11 +9,11 @@ use std::f64::consts::PI;
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialResult, SpecialTensor, agm, ai, arctanh, beta, betaln, bi, boxcox_transform_scalar,
-    chdtr, chdtrc, comb, digamma_scalar, ellipe, ellipeinc, ellipk, ellipkinc, entr, erf_scalar,
-    expit, factorial, factorial2, gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0,
-    i0_scalar, inv_boxcox_scalar, j0, jn, jv, lambertw_scalar, logit, perm, rgamma, xlog1py, xlogy,
-    zeta_scalar,
+    SpecialResult, SpecialTensor, agm, ai, arctanh, bei, ber, bernoulli, beta, betaln, bi,
+    boxcox_transform_scalar, chdtr, chdtrc, comb, digamma_scalar, ellipe, ellipeinc, ellipk,
+    ellipkinc, entr, erf_scalar, expit, factorial, factorial2, fresnel, gamma, gammainc, gammaincc,
+    gammaln, hyp1f1, hyp2f1, i0, i0_scalar, inv_boxcox_scalar, j0, jn, jv, kei, ker,
+    lambertw_scalar, logit, perm, rgamma, shichi, sici, struve, xlog1py, xlogy, zeta_scalar,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite,
         eval_hermitenorm, eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt,
@@ -1173,6 +1173,100 @@ fn mr_chdtr_complement_sums_to_one() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR55 — fresnel(0) = (0, 0): the Fresnel integrals vanish at the origin.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fresnel_at_zero() {
+    let (s, c) = fresnel(0.0);
+    assert!(s.abs() < 1e-12, "MR55 S(0) = {s}, expected 0");
+    assert!(c.abs() < 1e-12, "MR55 C(0) = {c}, expected 0");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR56 — sici(0) = (0, -∞): Si(0) = 0, Ci(0) = -∞.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sici_at_zero() {
+    let (si, ci) = sici(0.0);
+    assert!(si.abs() < 1e-12, "MR56 Si(0) = {si}, expected 0");
+    assert!(
+        ci.is_infinite() && ci < 0.0,
+        "MR56 Ci(0) = {ci}, expected -∞"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR57 — shichi(0) = (0, -∞): Shi(0) = 0, Chi(0) = -∞.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_shichi_at_zero() {
+    let (shi, chi) = shichi(0.0);
+    assert!(shi.abs() < 1e-12, "MR57 Shi(0) = {shi}, expected 0");
+    assert!(
+        chi.is_infinite() && chi < 0.0,
+        "MR57 Chi(0) = {chi}, expected -∞"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR58 — Kelvin functions at zero: ber(0) = 1, bei(0) = 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kelvin_at_zero() {
+    let b = ber(0.0);
+    let bi_v = bei(0.0);
+    assert!(
+        (b - 1.0).abs() < 1e-12,
+        "MR58 ber(0) = {b}, expected 1"
+    );
+    assert!(
+        bi_v.abs() < 1e-12,
+        "MR58 bei(0) = {bi_v}, expected 0"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR59 — struve(v, 0) = 0 for v > -1. Test on small non-negative orders.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_struve_at_zero() {
+    for &v in &[0.0_f64, 0.5, 1.0, 1.5, 2.0] {
+        let s = struve(v, 0.0);
+        assert!(
+            s.abs() < 1e-9,
+            "MR59 struve({v}, 0) = {s}, expected 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR60 — Bernoulli numbers: B_0 = 1, B_2 = 1/6, B_4 = -1/30.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bernoulli_known_values() {
+    let cases: &[(u32, f64)] = &[
+        (0, 1.0),
+        (2, 1.0 / 6.0),
+        (4, -1.0 / 30.0),
+        (6, 1.0 / 42.0),
+    ];
+    for &(n, expected) in cases {
+        let v = bernoulli(n);
+        assert!(
+            (v - expected).abs() < 1e-9,
+            "MR60 bernoulli({n}) = {v}, expected {expected}"
+        );
+    }
+}
+
 
 
 
