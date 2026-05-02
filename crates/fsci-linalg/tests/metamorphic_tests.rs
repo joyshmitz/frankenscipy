@@ -9,13 +9,14 @@
 //! Run with: `cargo test -p fsci-linalg --test metamorphic_tests`
 
 use fsci_linalg::{
-    DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, bandwidth,
-    block_diag as linalg_block_diag, cholesky, circulant, companion, convolution_matrix, cosm,
-    coshm, det, diag, diagm, dft_matrix, eigh, eigvalsh, expm, fiedler, hadamard,
-    hadamard_product, hessenberg, hilbert as linalg_hilbert, inv, ishermitian, issymmetric,
-    leslie, logm, lstsq, lu, matrix_power, matrix_rank, norm, null_space, orth, outer, pascal,
-    pinv, polar, qr, schur, signm, sinhm, sinm, solve, sqrtm, svd, tanhm, tanm, toeplitz, trace,
-    tri, vdot, vnorm,
+    DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions,
+    TriangularSolveOptions, bandwidth, block_diag as linalg_block_diag, cho_factor, cho_solve,
+    cholesky, circulant, companion, convolution_matrix, cosm, coshm, det, diag, diagm, dft_matrix,
+    eigh, eigvalsh, expm, fiedler, hadamard, hadamard_product, hessenberg,
+    hilbert as linalg_hilbert, inv, ishermitian, issymmetric, leslie, logm, lstsq, lu, lu_factor,
+    lu_solve, matrix_power, matrix_rank, norm, null_space, orth, outer, pascal, pinv, polar, qr,
+    schur, signm, sinhm, sinm, solve, solve_continuous_lyapunov, solve_triangular, sqrtm, svd,
+    tanhm, tanm, toeplitz, trace, tri, vdot, vnorm,
 };
 
 const RTOL: f64 = 1e-9;
@@ -1486,6 +1487,175 @@ fn mr_convolution_matrix_full_shape() {
     for row in &m {
         assert_eq!(row.len(), n, "MR52 conv matrix cols");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR53 — lu_factor / lu_solve roundtrip: lu_solve(lu_factor(A), b)
+// gives the same result as solve(A, b).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lu_factor_solve_matches_solve() {
+    let a = vec![
+        vec![3.0_f64, 1.0, 0.5],
+        vec![1.0, 4.0, 0.7],
+        vec![0.5, 0.7, 5.0],
+    ];
+    let b = vec![1.0_f64, -0.5, 2.0];
+    let lu_f = lu_factor(&a, DecompOptions::default()).unwrap();
+    let res_via_lu = lu_solve(&lu_f, &b).unwrap();
+    let res_direct = solve(&a, &b, SolveOptions::default()).unwrap();
+    for (i, (x, y)) in res_via_lu.x.iter().zip(&res_direct.x).enumerate() {
+        assert!(
+            (x - y).abs() < 1e-9 * x.abs().max(1.0),
+            "MR53 lu_solve vs solve at {i}: {x} vs {y}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — cho_factor / cho_solve on SPD matrix yields small residual.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cho_factor_solve_small_residual() {
+    let a = vec![
+        vec![4.0_f64, 1.0, 0.5],
+        vec![1.0, 3.0, 0.7],
+        vec![0.5, 0.7, 5.0],
+    ];
+    let b = vec![1.0_f64, 2.0, -0.5];
+    let cho = cho_factor(&a, DecompOptions::default()).unwrap();
+    let res = cho_solve(&cho, &b).unwrap();
+    // Verify A·x ≈ b.
+    let n = a.len();
+    let mut residual_sq = 0.0;
+    for i in 0..n {
+        let mut ax_i = 0.0;
+        for j in 0..n {
+            ax_i += a[i][j] * res.x[j];
+        }
+        residual_sq += (ax_i - b[i]).powi(2);
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-9,
+        "MR54 cho_solve residual = {}",
+        residual_sq.sqrt()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR55 — solve_triangular on the identity matrix (lower-triangular)
+// returns the rhs.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_triangular_identity_returns_rhs() {
+    let n = 4;
+    let mut id = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        id[i][i] = 1.0;
+    }
+    let b = vec![1.0_f64, 2.0, -0.5, 3.0];
+    let mut opts = TriangularSolveOptions::default();
+    opts.lower = true;
+    let res = solve_triangular(&id, &b, opts).unwrap();
+    for (i, (x, y)) in res.x.iter().zip(&b).enumerate() {
+        assert!(
+            (x - y).abs() < 1e-12,
+            "MR55 solve_triangular(I, b)[{i}] = {x} vs {y}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR56 — solve_continuous_lyapunov returns a matrix of the same shape
+// as A and Q, with finite entries.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_continuous_lyapunov_shape_and_finite() {
+    let a = vec![
+        vec![-2.0_f64, 0.5],
+        vec![0.5, -3.0],
+    ];
+    let q = vec![
+        vec![1.0_f64, 0.0],
+        vec![0.0, 1.0],
+    ];
+    let p = solve_continuous_lyapunov(&a, &q, DecompOptions::default()).unwrap();
+    assert_eq!(p.len(), a.len(), "MR56 lyap rows");
+    for row in &p {
+        assert_eq!(row.len(), a.len(), "MR56 lyap cols");
+        for &v in row {
+            assert!(v.is_finite(), "MR56 lyap entry non-finite: {v}");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR57 — lu_factor / lu_solve recovers x from b on a tridiagonal SPD
+// system; verify by re-multiplying A·x ≈ b.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lu_factor_solve_roundtrip_residual() {
+    let n = 5;
+    let mut a = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        a[i][i] = 4.0;
+        if i + 1 < n {
+            a[i][i + 1] = 1.0;
+            a[i + 1][i] = 1.0;
+        }
+    }
+    let b = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+    let lu_f = lu_factor(&a, DecompOptions::default()).unwrap();
+    let res = lu_solve(&lu_f, &b).unwrap();
+    let mut residual_sq = 0.0;
+    for i in 0..n {
+        let mut ax_i = 0.0;
+        for j in 0..n {
+            ax_i += a[i][j] * res.x[j];
+        }
+        residual_sq += (ax_i - b[i]).powi(2);
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-9,
+        "MR57 lu_factor/solve residual = {}",
+        residual_sq.sqrt()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR58 — solve(A, B·v) = solve(A, B)·v if SolveOptions matches: simpler
+// metamorphic version — solve(A, b) then A·x ≈ b for any A, b on SPD.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_solve_residual_check_on_random_spd() {
+    let a = vec![
+        vec![5.0_f64, 1.0, 0.5, 0.0],
+        vec![1.0, 4.0, 0.7, 0.2],
+        vec![0.5, 0.7, 6.0, 0.1],
+        vec![0.0, 0.2, 0.1, 7.0],
+    ];
+    let b = vec![1.0_f64, -0.5, 2.0, 0.25];
+    let res = solve(&a, &b, SolveOptions::default()).unwrap();
+    let n = a.len();
+    let mut residual_sq = 0.0;
+    for i in 0..n {
+        let mut ax_i = 0.0;
+        for j in 0..n {
+            ax_i += a[i][j] * res.x[j];
+        }
+        residual_sq += (ax_i - b[i]).powi(2);
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-9,
+        "MR58 solve residual = {}",
+        residual_sq.sqrt()
+    );
 }
 
 
