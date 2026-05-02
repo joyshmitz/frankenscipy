@@ -1193,6 +1193,126 @@ fn mr_fft_constant_input_only_dc_nonzero() {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — rfft of all-ones input has DC bin equal to N.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rfft_all_ones_dc_bin_is_n() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16, 32] {
+        let x: Vec<f64> = vec![1.0; n];
+        let y = rfft(&x, &opts).unwrap();
+        assert!(
+            (y[0].0 - n as f64).abs() < 1e-9,
+            "MR46 rfft(ones) DC = {} expected {}",
+            y[0].0,
+            n as f64
+        );
+        for k in 1..y.len() {
+            assert!(
+                y[k].0.abs() < 1e-9 && y[k].1.abs() < 1e-9,
+                "MR46 rfft(ones)[{k}] = ({}, {})",
+                y[k].0,
+                y[k].1
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — fft2 of all-zero 2D input is all zero.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fft2_zero_input_zero_spectrum() {
+    let opts = FftOptions::default();
+    let rows = 4;
+    let cols = 4;
+    let x: Vec<Complex64> = vec![(0.0, 0.0); rows * cols];
+    let y = fft2(&x, (rows, cols), &opts).unwrap();
+    for &(re, im) in &y {
+        assert!(re.abs() < 1e-12 && im.abs() < 1e-12, "MR47 fft2(0) ≠ 0");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — ifft2 of all-zero input is all zero.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ifft2_zero_input_zero_spectrum() {
+    let opts = FftOptions::default();
+    let rows = 4;
+    let cols = 4;
+    let x: Vec<Complex64> = vec![(0.0, 0.0); rows * cols];
+    let y = ifft2(&x, (rows, cols), &opts).unwrap();
+    for &(re, im) in &y {
+        assert!(re.abs() < 1e-12 && im.abs() < 1e-12, "MR48 ifft2(0) ≠ 0");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — rfft2 returns expected output length: rows × (cols/2 + 1).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rfft2_output_length() {
+    let opts = FftOptions::default();
+    for &(r, c) in &[(4usize, 4usize), (4, 8), (8, 4), (16, 16)] {
+        let mut rng = prng((r * c) as u64);
+        let x: Vec<f64> = (0..r * c).map(|_| rng()).collect();
+        let y = rfft2(&x, (r, c), &opts).unwrap();
+        let expected = r * (c / 2 + 1);
+        assert_eq!(
+            y.len(),
+            expected,
+            "MR49 rfft2(r={r}, c={c}) length = {} expected {expected}",
+            y.len()
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — irfft of length-(N/2 + 1) output has length N (with explicit
+// n parameter).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_irfft_explicit_length() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16, 32] {
+        let mut rng = prng(n as u64 + 13);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let y = rfft(&x, &opts).unwrap();
+        let xb = irfft(&y, Some(n), &opts).unwrap();
+        assert_eq!(xb.len(), n, "MR50 irfft length");
+        for (i, (a, b)) in x.iter().zip(&xb).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "MR50 irfft round-trip n={n} at {i}: {a} vs {b}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR51 — dctn shape mismatch returns an error (input length must match
+// product of shape).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dctn_shape_mismatch_errors() {
+    let opts = FftOptions::default();
+    let x: Vec<f64> = vec![1.0; 10];
+    let result = dctn(&x, &[4, 4], &opts); // 16 expected, 10 supplied
+    assert!(
+        result.is_err(),
+        "MR51 dctn(input_len=10, shape=[4,4]) should error"
+    );
+}
+
+
 
 
 
