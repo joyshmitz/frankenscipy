@@ -7,8 +7,9 @@
 //! Run with: `cargo test -p fsci-cluster --test metamorphic_tests`
 
 use fsci_cluster::{
-    LinkageMethod, adjusted_rand_score, calinski_harabasz_score, davies_bouldin_score, dbscan,
-    fcluster, fclusterdata, is_valid_linkage, kmeans, leaves_list, linkage, mini_batch_kmeans,
+    LinkageMethod, adjusted_rand_score, calinski_harabasz_score, completeness_score, cophenet,
+    davies_bouldin_score, dbscan, fcluster, fclusterdata, fowlkes_mallows_score, homogeneity_score,
+    is_monotonic, is_valid_linkage, kmeans, leaves_list, linkage, mini_batch_kmeans,
     normalized_mutual_info, num_obs_linkage, silhouette_score, vq,
 };
 
@@ -429,3 +430,137 @@ fn mr_fclusterdata_matches_fcluster_pipeline() {
         "MR20 fclusterdata should equal fcluster(linkage(X))"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — cophenet returns a condensed distance vector of length
+// n*(n-1)/2 for an n-leaf linkage tree.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cophenet_condensed_length() {
+    let data = small_dataset();
+    let n = data.len();
+    let z = linkage(&data, LinkageMethod::Average).unwrap();
+    let c = cophenet(&z);
+    let expected = n * (n - 1) / 2;
+    assert_eq!(
+        c.len(),
+        expected,
+        "MR21 cophenet length = {} vs expected n*(n-1)/2 = {expected}",
+        c.len()
+    );
+    for (i, &v) in c.iter().enumerate() {
+        assert!(v >= 0.0, "MR21 cophenet[{i}] = {v} < 0");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — Linkage matrices produced by ward/single/average are
+// monotonic — merge distances are non-decreasing along the tree.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_linkage_is_monotonic_for_classic_methods() {
+    let data = small_dataset();
+    for &method in &[
+        LinkageMethod::Ward,
+        LinkageMethod::Single,
+        LinkageMethod::Average,
+    ] {
+        let z = linkage(&data, method).unwrap();
+        assert!(
+            is_monotonic(&z),
+            "MR22 linkage(method = {method:?}) is not monotonic"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — Normalized mutual information is symmetric: NMI(a, b) = NMI(b, a).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_normalized_mutual_info_symmetric() {
+    let a = vec![0_usize, 0, 1, 1, 2, 2, 0, 1, 2, 0];
+    let b = vec![1_usize, 1, 0, 0, 2, 2, 1, 0, 2, 1];
+    let nmi_ab = normalized_mutual_info(&a, &b).unwrap();
+    let nmi_ba = normalized_mutual_info(&b, &a).unwrap();
+    assert!(
+        (nmi_ab - nmi_ba).abs() < 1e-10,
+        "MR23 NMI(a, b) = {nmi_ab}, NMI(b, a) = {nmi_ba}"
+    );
+    assert!(nmi_ab >= -1e-10 && nmi_ab <= 1.0 + 1e-10, "MR23 NMI not in [0, 1]");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — Fowlkes-Mallows score on a perfect labeling equals 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fowlkes_mallows_perfect_labeling_one() {
+    let labels = vec![0_usize, 0, 1, 1, 2, 2, 0, 1, 2, 0, 1, 2];
+    let s = fowlkes_mallows_score(&labels, &labels).unwrap();
+    assert!(
+        (s - 1.0).abs() < 1e-12,
+        "MR24 FM(self, self) = {s}, expected 1.0"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — Homogeneity score is in [0, 1].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_homogeneity_in_unit_interval() {
+    let cases: &[(Vec<usize>, Vec<usize>)] = &[
+        (
+            vec![0, 0, 0, 1, 1, 1, 2, 2, 2],
+            vec![0, 0, 0, 1, 1, 1, 2, 2, 2],
+        ),
+        (
+            vec![0, 0, 1, 1, 2, 2, 0, 1, 2],
+            vec![1, 1, 0, 0, 2, 2, 1, 0, 2],
+        ),
+        (
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![0, 1, 0, 1, 0, 1, 0, 1, 0],
+        ),
+    ];
+    for (i, (t, p)) in cases.iter().enumerate() {
+        let h = homogeneity_score(t, p).unwrap();
+        assert!(
+            h >= -1e-10 && h <= 1.0 + 1e-10,
+            "MR25 homogeneity[{i}] = {h} outside [0, 1]"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — Completeness score is in [0, 1].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_completeness_in_unit_interval() {
+    let cases: &[(Vec<usize>, Vec<usize>)] = &[
+        (
+            vec![0, 0, 0, 1, 1, 1, 2, 2, 2],
+            vec![0, 0, 0, 1, 1, 1, 2, 2, 2],
+        ),
+        (
+            vec![0, 0, 1, 1, 2, 2, 0, 1, 2],
+            vec![1, 1, 0, 0, 2, 2, 1, 0, 2],
+        ),
+        (
+            vec![0, 1, 0, 1, 0, 1, 0, 1, 0],
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+    ];
+    for (i, (t, p)) in cases.iter().enumerate() {
+        let c = completeness_score(t, p).unwrap();
+        assert!(
+            c >= -1e-10 && c <= 1.0 + 1e-10,
+            "MR26 completeness[{i}] = {c} outside [0, 1]"
+        );
+    }
+}
+
