@@ -9,9 +9,10 @@
 //! Run with: `cargo test -p fsci-linalg --test metamorphic_tests`
 
 use fsci_linalg::{
-    DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, cholesky, det,
-    diag, diagm, eigh, eigvalsh, expm, hadamard_product, hessenberg, inv, logm, lstsq, lu, norm,
-    outer, pinv, qr, schur, solve, sqrtm, svd, trace, vdot, vnorm,
+    DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, cholesky, cosm,
+    det, diag, diagm, eigh, eigvalsh, expm, hadamard_product, hessenberg, inv, ishermitian,
+    issymmetric, logm, lstsq, lu, matrix_power, matrix_rank, norm, outer, pinv, qr, schur, sinm,
+    solve, sqrtm, svd, trace, vdot, vnorm,
 };
 
 const RTOL: f64 = 1e-9;
@@ -938,5 +939,141 @@ fn mr_trace_equals_sum_of_diagonal() {
         "MR28 trace = {t} vs Σdiag = {manual}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — sinm(0) = 0 and cosm(0) = I_n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sinm_cosm_at_zero() {
+    let n = 4;
+    let zero = vec![vec![0.0; n]; n];
+    let s = sinm(&zero, DecompOptions::default()).unwrap();
+    for row in &s {
+        for &v in row {
+            assert!(
+                v.abs() < 1e-12,
+                "MR29 sinm(0) entry = {v}, expected 0"
+            );
+        }
+    }
+    let c = cosm(&zero, DecompOptions::default()).unwrap();
+    for i in 0..n {
+        for j in 0..n {
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (c[i][j] - expected).abs() < 1e-9,
+                "MR29 cosm(0)[{i}, {j}] = {} vs {expected}",
+                c[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — matrix_power(I_n, k) = I_n for any non-negative k.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_matrix_power_of_identity_is_identity() {
+    let n = 4;
+    let mut id = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        id[i][i] = 1.0;
+    }
+    for k in [0i32, 1, 2, 5, 10] {
+        let p = matrix_power(&id, k, DecompOptions::default()).unwrap();
+        for i in 0..n {
+            for j in 0..n {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (p[i][j] - expected).abs() < 1e-12,
+                    "MR30 matrix_power(I, {k})[{i}, {j}] = {} vs {expected}",
+                    p[i][j]
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — issymmetric of (A + Aᵀ) is true for any square A.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_issymmetric_after_symmetrization() {
+    let a = vec![
+        vec![1.0_f64, 2.0, -1.0],
+        vec![3.0, 4.0, 0.5],
+        vec![-2.0, 1.5, 5.0],
+    ];
+    let n = a.len();
+    let mut sym = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            sym[i][j] = a[i][j] + a[j][i];
+        }
+    }
+    let result = issymmetric(&sym, 1e-12, 1e-9).unwrap();
+    assert!(result, "MR31 issymmetric(A + Aᵀ) returned false");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — matrix_rank(I_n) = n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_matrix_rank_identity() {
+    for n in [1usize, 3, 5, 8] {
+        let mut id = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            id[i][i] = 1.0;
+        }
+        let r = matrix_rank(&id, None, DecompOptions::default()).unwrap();
+        assert_eq!(r, n, "MR32 matrix_rank(I_{n}) = {r}, expected {n}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — ishermitian(A) = issymmetric(A) for real symmetric matrices.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ishermitian_matches_issymmetric_real() {
+    let a = vec![
+        vec![1.0_f64, 2.0, 3.0],
+        vec![2.0, 4.0, 5.0],
+        vec![3.0, 5.0, 6.0],
+    ];
+    let h = ishermitian(&a, 1e-12, 1e-9).unwrap();
+    let s = issymmetric(&a, 1e-12, 1e-9).unwrap();
+    assert_eq!(h, s, "MR33 ishermitian = {h} vs issymmetric = {s}");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — matrix_power(A, 0) = I_n for any square A.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_matrix_power_zero_is_identity() {
+    let a = vec![
+        vec![2.0_f64, 0.5, -1.0],
+        vec![1.5, 3.0, 0.25],
+        vec![0.0, -0.7, 2.5],
+    ];
+    let n = a.len();
+    let p = matrix_power(&a, 0, DecompOptions::default()).unwrap();
+    for i in 0..n {
+        for j in 0..n {
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (p[i][j] - expected).abs() < 1e-12,
+                "MR34 matrix_power(A, 0)[{i}, {j}] = {} vs {expected}",
+                p[i][j]
+            );
+        }
+    }
+}
+
 
 
