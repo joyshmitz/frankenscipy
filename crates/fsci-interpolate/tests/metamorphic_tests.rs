@@ -8,8 +8,10 @@
 use fsci_interpolate::{
     Akima1DInterpolator, BarycentricInterpolator, CubicSplineStandalone, Interp1d, Interp1dOptions,
     InterpKind, KroghInterpolator, NearestNDInterpolator, PchipInterpolator,
-    RegularGridInterpolator, SplineBc, lagrange, make_interp_spline, neville, polyadd, polyder,
-    polyfit, polyint, polymul, polyroots, polysub, polyval, ratval,
+    RegularGridInterpolator, SplineBc, barycentric_eval, barycentric_weights, chebyshev_nodes,
+    chebyshev_nodes2, hermite_interp, lagrange, make_interp_spline, neville, polyadd, polyder,
+    polyfit, polyint, polyint_definite, polymul, polyroots, polysub, polyval, polyval_with_error,
+    ratval,
 };
 
 const ATOL: f64 = 1e-10;
@@ -609,5 +611,127 @@ fn mr_ratval_matches_polyval_ratio() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — chebyshev_nodes(n, a, b) returns n nodes, all strictly inside
+// (a, b).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_chebyshev_nodes_count_and_range() {
+    for n in [1usize, 4, 7, 10] {
+        for &(a, b) in &[(-1.0_f64, 1.0), (0.0, 5.0), (-3.0, 2.0)] {
+            let nodes = chebyshev_nodes(n, a, b);
+            assert_eq!(nodes.len(), n, "MR27 nodes count");
+            for (k, &x) in nodes.iter().enumerate() {
+                assert!(
+                    x >= a - 1e-12 && x <= b + 1e-12,
+                    "MR27 chebyshev_nodes(n={n}, a={a}, b={b})[{k}] = {x} outside"
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — chebyshev_nodes2 (Chebyshev points of the second kind)
+// includes both endpoints when n ≥ 2.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_chebyshev_nodes2_endpoints() {
+    for n in [2usize, 4, 8, 16] {
+        let nodes = chebyshev_nodes2(n, -1.0, 1.0);
+        // Sort to be safe — nodes are returned ordered but defensive.
+        let mut sorted = nodes.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(
+            (sorted[0] - (-1.0)).abs() < 1e-12,
+            "MR28 chebyshev_nodes2(n={n}) min = {} expected -1",
+            sorted[0]
+        );
+        assert!(
+            (sorted[n - 1] - 1.0).abs() < 1e-12,
+            "MR28 chebyshev_nodes2(n={n}) max = {} expected 1",
+            sorted[n - 1]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR29 — barycentric_eval at a node returns the corresponding value.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_barycentric_eval_at_nodes() {
+    let nodes = vec![-2.0_f64, -0.5, 0.5, 1.5, 3.0];
+    let values = vec![3.0_f64, 1.0, 2.5, -1.0, 4.5];
+    let weights = barycentric_weights(&nodes);
+    for (i, &x) in nodes.iter().enumerate() {
+        let v = barycentric_eval(&nodes, &values, &weights, x);
+        assert!(
+            (v - values[i]).abs() < 1e-9,
+            "MR29 barycentric_eval at node {x}: {v} vs {}",
+            values[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR30 — Hermite interpolation passes through the nodes (zero-th
+// derivative condition); a constant-valued, zero-derivative input
+// produces a constant output.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hermite_interp_constant_input() {
+    let nodes = vec![0.0_f64, 1.0, 2.5, 4.0];
+    let values = vec![5.0_f64; 4];
+    let derivs = vec![0.0_f64; 4];
+    for &x in &[-1.0_f64, 0.0, 1.5, 3.0, 5.0] {
+        let v = hermite_interp(&nodes, &values, &derivs, x);
+        assert!(
+            (v - 5.0).abs() < 1e-9,
+            "MR30 hermite_interp(constant 5) at {x} = {v}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — polyint_definite computes ∫_a^b p(x) dx = P(b) - P(a),
+// where P = polyint(p). Verify on p(x) = 2x + 1 ⇒ ∫₀^3 = 9 + 3 = 12.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polyint_definite_polynomial() {
+    let p = vec![2.0_f64, 1.0]; // ascending: 2 + x ... actually polyint here uses ?
+    // polyint uses descending; double-check by anti-derivative.
+    // p in descending: [2, 1] = 2x + 1; ∫(2x+1)dx = x² + x
+    // From 0 to 3: 9 + 3 - 0 = 12.
+    let val = polyint_definite(&p, 0.0, 3.0);
+    assert!(
+        (val - 12.0).abs() < 1e-9,
+        "MR31 ∫₀^3 (2x+1) dx = {val}, expected 12"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — polyval_with_error returns the same value as polyval for
+// well-conditioned inputs.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_polyval_with_error_matches_polyval() {
+    let p = vec![1.0_f64, -2.0, 3.0, -1.0, 0.5];
+    for &x in &[-2.0_f64, 0.0, 1.5, 3.0] {
+        let plain = polyval(&p, x);
+        let (val, _err) = polyval_with_error(&p, x);
+        assert!(
+            (plain - val).abs() < 1e-12 * plain.abs().max(1.0),
+            "MR32 polyval_with_error at {x}: {val} vs polyval {plain}"
+        );
+    }
+}
+
 
 
