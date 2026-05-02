@@ -6,9 +6,10 @@
 //! Run with: `cargo test -p fsci-ndimage --test metamorphic_tests`
 
 use fsci_ndimage::{
-    BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_opening,
-    convolve, correlate, distance_transform_edt, gaussian_filter, label, laplace, maximum_filter,
-    median_filter, minimum_filter, prewitt, rotate, shift, sobel, uniform_filter, zoom,
+    BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_fill_holes,
+    binary_opening, convolve, correlate, distance_transform_edt, gaussian_filter, grey_dilation,
+    grey_erosion, label, laplace, maximum_filter, mean_labels, median_filter, minimum_filter,
+    prewitt, rotate, shift, sobel, sum_labels, uniform_filter, variance_labels, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -503,4 +504,123 @@ fn mr_distance_transform_edt_zero_on_background() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — sum_labels of a constant 1 image with k disjoint regions
+// returns the area of each region.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sum_labels_counts_pixels() {
+    // 6×6 image, region 1 occupies top-left 2×2; region 2 occupies
+    // bottom-right 3×3.
+    let img = arr_2d(6, 6, |_, _| 1.0);
+    let labels = arr_2d(6, 6, |i, j| {
+        if i < 2 && j < 2 {
+            1.0
+        } else if i >= 3 && j >= 3 {
+            2.0
+        } else {
+            0.0
+        }
+    });
+    let sums = sum_labels(&img, &labels, 2).unwrap();
+    assert_eq!(sums.len(), 2, "MR23 sum_labels length");
+    assert!((sums[0] - 4.0).abs() < 1e-12, "MR23 region 1 area = {}", sums[0]);
+    assert!((sums[1] - 9.0).abs() < 1e-12, "MR23 region 2 area = {}", sums[1]);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — mean_labels of a constant value c yields c for every region.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_mean_labels_constant_input() {
+    let c = 5.5_f64;
+    let img = arr_2d(5, 5, |_, _| c);
+    let labels = arr_2d(5, 5, |i, j| {
+        if (i + j) % 2 == 0 { 1.0 } else { 2.0 }
+    });
+    let means = mean_labels(&img, &labels, 2).unwrap();
+    for (k, &m) in means.iter().enumerate() {
+        assert!(
+            (m - c).abs() < 1e-12,
+            "MR24 mean_labels region {k} = {m}, expected {c}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — variance_labels is non-negative for every region.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_variance_labels_nonneg() {
+    let img = arr_2d(5, 5, |i, j| (i * 5 + j) as f64);
+    let labels = arr_2d(5, 5, |i, j| if (i + j) % 3 == 0 { 1.0 } else { 2.0 });
+    let v = variance_labels(&img, &labels, 2).unwrap();
+    for (k, &val) in v.iter().enumerate() {
+        assert!(
+            val >= -1e-12,
+            "MR25 variance_labels region {k} = {val} < 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — binary_fill_holes never removes foreground pixels: result ≥
+// input pointwise.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_binary_fill_holes_dominates_input() {
+    // Donut shape: outer ring at radius ≤ 4, hole at radius ≤ 2.
+    let img = arr_2d(9, 9, |i, j| {
+        let di = i as i32 - 4;
+        let dj = j as i32 - 4;
+        let r2 = di * di + dj * dj;
+        if r2 <= 16 && r2 > 4 { 1.0 } else { 0.0 }
+    });
+    let filled = binary_fill_holes(&img).unwrap();
+    for (i, (x, y)) in img.data.iter().zip(&filled.data).enumerate() {
+        assert!(
+            *y + 1e-12 >= *x,
+            "MR26 fill_holes lost foreground at i={i}: {y} < {x}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — grey_dilation dominates input pointwise (analogous to maximum
+// filter for continuous values).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_grey_dilation_dominates_input() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64 - 5.0);
+    let g = grey_dilation(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, (x, y)) in img.data.iter().zip(&g.data).enumerate() {
+        assert!(
+            *y + 1e-12 >= *x,
+            "MR27 grey_dilation at i={i}: {y} < input {x}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — grey_erosion is dominated by input pointwise.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_grey_erosion_dominated_by_input() {
+    let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64 - 5.0);
+    let g = grey_erosion(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
+    for (i, (x, y)) in img.data.iter().zip(&g.data).enumerate() {
+        assert!(
+            *y <= *x + 1e-12,
+            "MR28 grey_erosion at i={i}: {y} > input {x}"
+        );
+    }
+}
+
 
