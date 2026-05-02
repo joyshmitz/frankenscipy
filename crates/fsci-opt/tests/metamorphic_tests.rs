@@ -9,11 +9,12 @@
 use fsci_opt::{
     BasinhoppingOptions, CurveFitOptions, DifferentialEvolutionOptions, LeastSquaresOptions,
     MinimizeOptions, MinimizeScalarOptions, RootOptions, approx_fprime, basinhopping, bisect,
-    bracket, brent_minimize, brenth, brentq, brute, curve_fit, differential_evolution, fixed_point,
-    fsolve, golden, gradient_descent, halley, isotonic_regression, least_squares, minimize,
-    minimize_scalar, minimize_scalar_bounded, minimize_trisection, newton_scalar, nnls,
-    numerical_gradient, numerical_hessian, numerical_jacobian, projected_gradient_descent, pso,
-    ridder, rosen, rosen_der, secant, toms748,
+    bracket, brent_minimize, brenth, brentq, brute, check_grad, curve_fit, differential_evolution,
+    dual_annealing, fixed_point, fsolve, golden, gradient_descent, halley, isotonic_regression,
+    least_squares, linear_sum_assignment, minimize, minimize_scalar, minimize_scalar_bounded,
+    minimize_trisection, newton_scalar, nnls, numerical_gradient, numerical_hessian,
+    numerical_jacobian, projected_gradient_descent, pso, ridder, rosen, rosen_der, secant, shgo,
+    toms748,
 };
 
 const ATOL: f64 = 1e-6;
@@ -1009,6 +1010,118 @@ fn mr_basinhopping_convex_objective() {
         res.x
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — check_grad on a correct analytical gradient is small.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_check_grad_analytical_match() {
+    let f = |x: &[f64]| x[0].powi(2) + x[1].powi(2);
+    let g = |x: &[f64]| vec![2.0 * x[0], 2.0 * x[1]];
+    let err = check_grad(f, g, &[1.5_f64, -2.5]).unwrap();
+    assert!(
+        err < 1e-3,
+        "MR45 check_grad error = {err}, expected small"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — linear_sum_assignment returns row and column index vectors of
+// equal length; columns are a permutation (no duplicates).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_linear_sum_assignment_validity() {
+    let cost = vec![
+        vec![4.0_f64, 1.0, 3.0],
+        vec![2.0, 0.0, 5.0],
+        vec![3.0, 2.0, 2.0],
+    ];
+    let (row_ind, col_ind) = linear_sum_assignment(&cost).unwrap();
+    assert_eq!(row_ind.len(), col_ind.len(), "MR46 LAP lengths");
+    let mut col_seen = vec![false; cost.len()];
+    for &c in &col_ind {
+        assert!(c < cost.len(), "MR46 LAP col index out of range: {c}");
+        assert!(!col_seen[c], "MR46 LAP duplicate col index: {c}");
+        col_seen[c] = true;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — dual_annealing on f(x) = x² + y² finds the origin within
+// stochastic tolerance.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dual_annealing_sphere_makes_progress() {
+    // Dual annealing on a 2-D sphere with a small iteration budget
+    // should make progress: fmin much lower than the worst-case
+    // boundary value (5² + 5² = 50).
+    let f = |x: &[f64]| x[0].powi(2) + x[1].powi(2);
+    let bounds = vec![(-5.0_f64, 5.0_f64), (-5.0, 5.0)];
+    let res = dual_annealing(f, &bounds, 200, 7).unwrap();
+    let fmin = res.fun.unwrap();
+    assert!(
+        fmin < 50.0,
+        "MR47 dual_annealing fmin = {fmin} did not improve over corner"
+    );
+    assert!(
+        fmin >= 0.0,
+        "MR47 dual_annealing fmin = {fmin} < 0 on non-negative objective"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — SHGO (simplicial homology global) on a parabola finds a
+// minimum within tolerance.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_shgo_parabola_minimum() {
+    let f = |x: &[f64]| (x[0] - 1.0).powi(2) + (x[1] + 2.0).powi(2);
+    let bounds = vec![(-5.0_f64, 5.0_f64), (-5.0, 5.0)];
+    let res = shgo(f, &bounds).unwrap();
+    let fmin = res.fun.unwrap();
+    assert!(
+        fmin < 1.0,
+        "MR48 shgo fmin = {fmin} on parabola"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR49 — rosen gradient norm at the minimum (1, 1, ..., 1) is 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rosen_gradient_norm_at_min() {
+    for n in [2usize, 3, 5, 10] {
+        let x = vec![1.0_f64; n];
+        let g = rosen_der(&x);
+        let norm: f64 = g.iter().map(|v| v * v).sum::<f64>().sqrt();
+        assert!(
+            norm < 1e-12,
+            "MR49 ‖∇rosen(1, …, 1)‖ (n={n}) = {norm}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR50 — minimize on the (shifted) Rosenbrock function from a far
+// initial guess returns x close to (1, 1).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minimize_rosenbrock_finds_global() {
+    let f = |x: &[f64]| rosen(x);
+    let res = minimize(f, &[-1.5_f64, 2.5], MinimizeOptions::default()).unwrap();
+    assert!(
+        (res.x[0] - 1.0).abs() < 0.1 && (res.x[1] - 1.0).abs() < 0.1,
+        "MR50 minimize rosen → x = {:?}, expected ≈ (1, 1)",
+        res.x
+    );
+}
+
 
 
 
