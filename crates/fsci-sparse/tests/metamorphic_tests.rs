@@ -8,8 +8,8 @@
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
     CooMatrix, CsrMatrix, EigsOptions, IterativeSolveOptions, Shape2D, SolveOptions, add_csr, bicg,
-    bicgstab, cg, coo_to_csr_with_mode, csr_to_csc_with_mode, eigsh, gmres, sparse_transpose,
-    spmv, spsolve, svds,
+    bicgstab, cg, coo_to_csr_with_mode, csr_to_csc_with_mode, eigsh, eye, gmres, scale_csr,
+    sparse_transpose, spmv, spmv_csc, spmv_csr, spsolve, sub_csr, svds, tril, triu,
 };
 
 const ATOL: f64 = 1e-9;
@@ -439,3 +439,131 @@ fn mr_add_csr_commutative() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR15 — sub_csr(A, A) is the zero matrix.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sub_self_is_zero() {
+    let a = build_spd_csr();
+    let z = sub_csr(&a, &a).unwrap();
+    let dense = csr_to_dense(&z);
+    for row in &dense {
+        for &v in row {
+            assert!(v.abs() < 1e-15, "MR15 sub_csr(A, A) entry = {v}, expected 0");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR16 — scale_csr is multiplicative: scale by α then β = scale by α·β.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_scale_csr_composition() {
+    let a = build_spd_csr();
+    let alpha = 1.5_f64;
+    let beta = -2.0_f64;
+    let two_step = scale_csr(&scale_csr(&a, alpha).unwrap(), beta).unwrap();
+    let one_step = scale_csr(&a, alpha * beta).unwrap();
+    let d_two = csr_to_dense(&two_step);
+    let d_one = csr_to_dense(&one_step);
+    for (r1, r2) in d_two.iter().zip(&d_one) {
+        for (x, y) in r1.iter().zip(r2) {
+            assert!(close(*x, *y), "MR16 scale composition: {x} vs {y}");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR17 — eye(n) · v = v (identity matrix is the multiplicative neutral
+// for sparse matvec).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_eye_spmv_is_identity() {
+    let n = 6;
+    let i = eye(n).unwrap();
+    let v: Vec<f64> = (0..n).map(|k| 1.0 + k as f64 * 0.5).collect();
+    let w = spmv_csr(&i, &v).unwrap();
+    assert_eq!(v.len(), w.len(), "MR17 length");
+    for (a, b) in v.iter().zip(&w) {
+        assert!(close(*a, *b), "MR17 eye·v: {a} vs {b}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR18 — spmv via CSR and CSC representations agree on the same matrix.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_spmv_csr_csc_agree() {
+    let a = build_spd_csr();
+    let (csc, _) =
+        csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_csr_csc_agree").unwrap();
+    let v: Vec<f64> = vec![1.0, -0.5, 2.0, 0.25, -1.5];
+    let yr = spmv_csr(&a, &v).unwrap();
+    let yc = spmv_csc(&csc, &v).unwrap();
+    assert_eq!(yr.len(), yc.len(), "MR18 length");
+    for (r, c) in yr.iter().zip(&yc) {
+        assert!(close(*r, *c), "MR18 csr/csc spmv: {r} vs {c}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — For any A, dense(tril(A, 0)) + dense(triu(A, 0)) - diag(A) == A.
+// (Lower + upper - diagonal-counted-twice == original matrix.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_tril_triu_diag_reconstruction() {
+    let a = build_spd_csr();
+    let n = a.shape().rows;
+    let lower = tril(&a, 0).unwrap();
+    let upper = triu(&a, 0).unwrap();
+    let dense_a = csr_to_dense(&a);
+
+    // Build dense lower from coo lower; same for upper.
+    let mut dl = vec![vec![0.0; n]; n];
+    let (row_l, col_l) = (lower.row_indices().to_vec(), lower.col_indices().to_vec());
+    for ((r, c), v) in row_l.iter().zip(col_l.iter()).zip(lower.data().iter()) {
+        dl[*r][*c] += *v;
+    }
+    let mut du = vec![vec![0.0; n]; n];
+    let (row_u, col_u) = (upper.row_indices().to_vec(), upper.col_indices().to_vec());
+    for ((r, c), v) in row_u.iter().zip(col_u.iter()).zip(upper.data().iter()) {
+        du[*r][*c] += *v;
+    }
+
+    for i in 0..n {
+        for j in 0..n {
+            let recon = dl[i][j] + du[i][j] - if i == j { dense_a[i][j] } else { 0.0 };
+            assert!(
+                close(recon, dense_a[i][j]),
+                "MR19 ({i}, {j}): tril+triu-diag = {recon} vs A = {}",
+                dense_a[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — sparse_transpose then sparse_transpose returns to the original
+// dense form (involution at the dense level).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_double_transpose_dense_identity() {
+    let a = build_spd_csr();
+    let t = sparse_transpose(&a);
+    let tt = sparse_transpose(&t);
+    let da = csr_to_dense(&a);
+    let dtt = csr_to_dense(&tt);
+    for (r1, r2) in da.iter().zip(&dtt) {
+        for (x, y) in r1.iter().zip(r2) {
+            assert!(close(*x, *y), "MR20 (Aᵀ)ᵀ entry: {x} vs {y}");
+        }
+    }
+}
+
