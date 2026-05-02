@@ -7,11 +7,12 @@
 
 use fsci_signal::{
     ConvolveMode, FilterType, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, bartlett,
-    blackman, boxcar, butter, convolve, correlate, deconvolve, deemphasis, downsample, fftconvolve,
-    filtfilt, find_peaks, freqz, gaussian, hamming, hann, hilbert, hilbert_envelope, iirnotch,
-    iirpeak, kaiser, lanczos, lfilter, normalize_signal, parzen, peak_to_peak, preemphasis,
-    resample, rms, signal_energy, sos2tf, sosfilt, sosfiltfilt, spectral_centroid, tf2sos, tf2zpk,
-    triang, upsample, xcorr_coefficient, zero_crossing_rate, zpk2tf,
+    blackman, boxcar, butter, convolve, correlate, cwt, deconvolve, deemphasis, downsample,
+    fftconvolve, filtfilt, find_peaks, freqz, gaussian, hamming, hann, hilbert, hilbert_envelope,
+    iirnotch, iirpeak, kaiser, lanczos, lfilter, morlet, normalize_signal, parzen, peak_to_peak,
+    preemphasis, resample, ricker, rms, savgol_filter, signal_energy, sos2tf, sosfilt, sosfiltfilt,
+    spectral_centroid, sweep_poly, tf2sos, tf2zpk, triang, unwrap_phase, upsample,
+    xcorr_coefficient, zero_crossing_rate, zpk2tf,
 };
 
 const ATOL: f64 = 1e-9;
@@ -933,6 +934,116 @@ fn mr_iirnotch_iirpeak_finite() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — Savitzky-Golay filter on a perfectly polynomial input of
+// degree ≤ polyorder reproduces the input exactly (interior).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_savgol_filter_polynomial_exactness() {
+    // p(x) = 2x² - 0.5x + 1 sampled at uniform x.
+    let x: Vec<f64> = (0..32).map(|i| 2.0 * (i as f64).powi(2) - 0.5 * i as f64 + 1.0).collect();
+    let y = savgol_filter(&x, 7, 2).unwrap();
+    // Check interior (skip first/last few samples affected by boundary).
+    for i in 5..(x.len() - 5) {
+        assert!(
+            (y[i] - x[i]).abs() < 1e-7,
+            "MR42 savgol(p)[{i}] = {} vs {}",
+            y[i],
+            x[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — sweep_poly returns a vector of the same length as t.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sweep_poly_length_matches_t() {
+    let t: Vec<f64> = (0..50).map(|i| i as f64 * 0.01).collect();
+    let poly = vec![1.0_f64, -2.0, 0.5];
+    let s = sweep_poly(&t, &poly);
+    assert_eq!(s.len(), t.len(), "MR43 sweep_poly length");
+    for (i, &v) in s.iter().enumerate() {
+        assert!(
+            v.is_finite() && v.abs() <= 1.0 + 1e-12,
+            "MR43 sweep_poly[{i}] = {v} non-finite or |v|>1"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — ricker wavelet of odd length is symmetric.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_ricker_symmetric() {
+    for n in [11usize, 21, 41, 101] {
+        let r = ricker(n, 5.0);
+        for i in 0..n / 2 {
+            assert!(
+                (r[i] - r[n - 1 - i]).abs() < 1e-12,
+                "MR44 ricker n={n} not symmetric at {i}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — morlet returns m complex samples.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_morlet_length_matches_m() {
+    for m in [16usize, 32, 64] {
+        let w = morlet(m, 5.0, 1.0, true);
+        assert_eq!(w.len(), m, "MR45 morlet length");
+        for (i, &(re, im)) in w.iter().enumerate() {
+            assert!(
+                re.is_finite() && im.is_finite(),
+                "MR45 morlet[{i}] = ({re}, {im}) non-finite"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — unwrap_phase preserves the input length.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_unwrap_phase_preserves_length() {
+    let phase: Vec<f64> = (0..32)
+        .map(|i| ((i as f64 * 0.5).sin() * 4.0).rem_euclid(2.0 * std::f64::consts::PI))
+        .collect();
+    let unwrapped = unwrap_phase(&phase);
+    assert_eq!(
+        unwrapped.len(),
+        phase.len(),
+        "MR46 unwrap_phase length"
+    );
+    for &v in &unwrapped {
+        assert!(v.is_finite(), "MR46 unwrap_phase non-finite");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — cwt returns one row per requested width.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cwt_rows_match_widths() {
+    let data: Vec<f64> = (0..64).map(|i| (i as f64 * 0.4).sin()).collect();
+    let widths = vec![1.0_f64, 2.0, 4.0, 8.0];
+    let result = cwt(&data, |n, w| ricker(n, w), &widths).unwrap();
+    assert_eq!(result.len(), widths.len(), "MR47 cwt rows = widths");
+    for (i, row) in result.iter().enumerate() {
+        assert_eq!(row.len(), data.len(), "MR47 cwt row {i} length");
+    }
+}
+
 
 
 
