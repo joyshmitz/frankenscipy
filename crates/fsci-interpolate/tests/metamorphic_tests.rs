@@ -11,7 +11,7 @@ use fsci_interpolate::{
     RegularGridInterpolator, SplineBc, barycentric_eval, barycentric_weights, chebyshev_nodes,
     chebyshev_nodes2, hermite_interp, lagrange, make_interp_spline, neville, polyadd, polyder,
     polyfit, polyint, polyint_definite, polymul, polyroots, polysub, polyval, polyval_with_error,
-    ratval,
+    ratval, splev, splint, splrep,
 };
 
 const ATOL: f64 = 1e-10;
@@ -732,6 +732,131 @@ fn mr_polyval_with_error_matches_polyval() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — splev at the data points evaluates close to y for an
+// interpolating cubic spline (s = 0).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_splev_passes_through_data() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64 * 0.5).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin() + 0.5 * xi.cos()).collect();
+    let tck = splrep(&x, &y, 3, 0.0).unwrap();
+    let yhat = splev(&x, &tck).unwrap();
+    for (i, (a, b)) in y.iter().zip(&yhat).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-6,
+            "MR33 splev at x[{i}]={}: y = {a} vs ŷ = {b}",
+            x[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — splint(a, a, tck) = 0 (zero-width definite integral).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_splint_zero_width_zero() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64 * 0.5).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
+    let tck = splrep(&x, &y, 3, 0.0).unwrap();
+    for &a in &[0.0_f64, 1.5, 3.0, 4.5] {
+        let v = splint(a, a, &tck).unwrap();
+        assert!(
+            v.abs() < 1e-12,
+            "MR34 splint({a}, {a}) = {v}, expected 0"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — splint is antisymmetric in its bounds: splint(b, a) = -splint(a, b).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_splint_antisymmetric_bounds() {
+    let x: Vec<f64> = (0..10).map(|i| i as f64 * 0.5).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.cos()).collect();
+    let tck = splrep(&x, &y, 3, 0.0).unwrap();
+    for &(a, b) in &[(0.5_f64, 3.0), (1.0, 4.0), (0.0, 4.5)] {
+        let i_ab = splint(a, b, &tck).unwrap();
+        let i_ba = splint(b, a, &tck).unwrap();
+        assert!(
+            (i_ab + i_ba).abs() < 1e-9 * i_ab.abs().max(1.0),
+            "MR35 splint antisymmetric: ({a},{b}) = {i_ab} + ({b},{a}) = {i_ba}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — PchipInterpolator returns finite output across an evaluation
+// range that includes the data nodes.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_pchip_finite_output() {
+    let x: Vec<f64> = (0..8).map(|i| i as f64).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| if xi < 4.0 { xi } else { 4.0 + (xi - 4.0) * 0.5 })
+        .collect();
+    let interp = PchipInterpolator::new(&x, &y).unwrap();
+    for i in 0..70 {
+        let t = (i as f64) * 0.1;
+        let v = interp.eval(t);
+        assert!(
+            v.is_finite(),
+            "MR36 PchipInterpolator non-finite at t={t}: {v}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — CubicSplineStandalone passes through its data points (zero-th
+// derivative of the spline at xi equals yi).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cubic_spline_standalone_passes_through_data() {
+    let x: Vec<f64> = (0..7).map(|i| i as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| xi.sin() + 0.5 * xi.cos()).collect();
+    let spline = CubicSplineStandalone::new(&x, &y, SplineBc::NotAKnot).unwrap();
+    for (i, &xi) in x.iter().enumerate() {
+        let v = spline.eval(xi);
+        assert!(
+            (v - y[i]).abs() < 1e-9,
+            "MR37 cubic spline at x[{i}]={xi}: y = {} vs ŷ = {v}",
+            y[i]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — splev composed with splrep on a smooth function recovers the
+// data within tolerance.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_splrep_splev_smooth_recovery() {
+    let x: Vec<f64> = (0..21).map(|i| i as f64 * 0.25).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| (xi * 0.3).sin() + 0.4 * (xi * 0.7).cos()).collect();
+    let tck = splrep(&x, &y, 5, 0.0).unwrap();
+    let yhat = splev(&x, &tck).unwrap();
+    let mut max_err = 0.0_f64;
+    for (a, b) in y.iter().zip(&yhat) {
+        let e = (a - b).abs();
+        if e > max_err {
+            max_err = e;
+        }
+    }
+    assert!(
+        max_err < 1e-4,
+        "MR38 splrep/splev max error = {max_err}"
+    );
+}
+
 
 
 
