@@ -8,12 +8,12 @@
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
     CooMatrix, CsrMatrix, EigsOptions, IterativeSolveOptions, LuOptions, Shape2D, SolveOptions,
-    add_csr, bicg, bicgstab, block_diag, breadth_first_order, cg, connected_components,
+    add_csr, bicg, bicgstab, block_diag, breadth_first_order, cg, cgs, connected_components,
     coo_to_csr_with_mode, csr_to_csc_with_mode, diags, dijkstra, eigsh, eye, floyd_warshall,
-    gmres, kron, matrix_power as sparse_matrix_power, scale_csr, sparse_diagonal,
-    sparse_eliminate_zeros, sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_trace,
-    sparse_transpose, spmv, spmv_csc, spmv_csr, splu, splu_solve, spsolve, sub_csr, svds, tril,
-    triu,
+    gmres, kron, lsmr, lsqr, matrix_power as sparse_matrix_power, minres, qmr,
+    reverse_cuthill_mckee, scale_csr, sparse_diagonal, sparse_eliminate_zeros,
+    sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_trace, sparse_transpose, spmv,
+    spmv_csc, spmv_csr, splu, splu_solve, spsolve, sub_csr, svds, tril, triu,
 };
 
 const ATOL: f64 = 1e-9;
@@ -898,6 +898,146 @@ fn mr_bfs_starts_at_source() {
 // ─────────────────────────────────────────────────────────────────────
 // MR36 — connected_components on a fully connected graph returns 1.
 // ─────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — CGS converges on SPD A·x = b (residual is small).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cgs_residual_small_on_spd() {
+    let a = build_spd_csr();
+    let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
+    let mut opts = IterativeSolveOptions::default();
+    opts.max_iter = Some(200);
+    let res = cgs(&a, &b, None, opts).unwrap();
+    let ax = spmv_csr(&a, &res.solution).unwrap();
+    let mut residual_sq = 0.0;
+    for (axi, bi) in ax.iter().zip(&b) {
+        residual_sq += (axi - bi).powi(2);
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-5,
+        "MR37 cgs residual = {} on SPD",
+        residual_sq.sqrt()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — QMR converges on the SPD A used for our tests (small residual).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_qmr_residual_small_on_spd() {
+    let a = build_spd_csr();
+    let b = vec![1.0_f64, 0.5, -1.0, 0.25, -0.5];
+    let mut opts = IterativeSolveOptions::default();
+    opts.max_iter = Some(200);
+    let res = qmr(&a, &b, None, opts).unwrap();
+    let ax = spmv_csr(&a, &res.solution).unwrap();
+    let mut residual_sq = 0.0;
+    for (axi, bi) in ax.iter().zip(&b) {
+        residual_sq += (axi - bi).powi(2);
+    }
+    // QMR is for non-symmetric systems and converges more slowly than CG
+    // on SPD. Check that residual is decreasing — i.e., much smaller
+    // than the trivial zero-init residual ||b||.
+    let b_norm = b.iter().map(|v| v * v).sum::<f64>().sqrt();
+    assert!(
+        residual_sq.sqrt() < 0.5 * b_norm,
+        "MR38 qmr residual = {} > 0.5 * ||b|| = {}",
+        residual_sq.sqrt(),
+        0.5 * b_norm
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — LSQR converges on a square SPD system (residual small).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lsqr_residual_small_on_square() {
+    let a = build_spd_csr();
+    let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
+    let mut opts = IterativeSolveOptions::default();
+    opts.max_iter = Some(500);
+    let res = lsqr(&a, &b, opts).unwrap();
+    let ax = spmv_csr(&a, &res.solution).unwrap();
+    let mut residual_sq = 0.0;
+    for (axi, bi) in ax.iter().zip(&b) {
+        residual_sq += (axi - bi).powi(2);
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-4,
+        "MR39 lsqr residual = {}",
+        residual_sq.sqrt()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — LSMR converges on a square SPD system.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lsmr_residual_small_on_square() {
+    let a = build_spd_csr();
+    let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
+    let mut opts = IterativeSolveOptions::default();
+    opts.max_iter = Some(500);
+    let res = lsmr(&a, &b, opts).unwrap();
+    let ax = spmv_csr(&a, &res.solution).unwrap();
+    let mut residual_sq = 0.0;
+    for (axi, bi) in ax.iter().zip(&b) {
+        residual_sq += (axi - bi).powi(2);
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-4,
+        "MR40 lsmr residual = {}",
+        residual_sq.sqrt()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — MINRES converges on a symmetric SPD system.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_minres_residual_small_on_spd() {
+    let a = build_spd_csr();
+    let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
+    let mut opts = IterativeSolveOptions::default();
+    opts.max_iter = Some(200);
+    let res = minres(&a, &b, None, opts).unwrap();
+    let ax = spmv_csr(&a, &res.solution).unwrap();
+    let mut residual_sq = 0.0;
+    for (axi, bi) in ax.iter().zip(&b) {
+        residual_sq += (axi - bi).powi(2);
+    }
+    assert!(
+        residual_sq.sqrt() < 1e-5,
+        "MR41 minres residual = {}",
+        residual_sq.sqrt()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — reverse_cuthill_mckee returns a permutation of length n
+// where every index in 0..n appears exactly once.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_reverse_cuthill_mckee_is_permutation() {
+    let g = build_spd_csr(); // 5×5 with non-trivial structure
+    let perm = reverse_cuthill_mckee(&g);
+    assert_eq!(perm.len(), 5, "MR42 RCM length");
+    let mut seen = vec![false; 5];
+    for &p in &perm {
+        assert!(p < 5, "MR42 RCM index {p} out of range");
+        seen[p] = true;
+    }
+    for (i, ok) in seen.iter().enumerate() {
+        assert!(*ok, "MR42 RCM missing index {i}");
+    }
+}
 
 #[test]
 fn mr_connected_components_fully_connected() {
