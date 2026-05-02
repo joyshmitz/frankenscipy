@@ -10,8 +10,8 @@
 
 use fsci_linalg::{
     DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions, cholesky, det,
-    eigh, eigvalsh, expm, hessenberg, inv, logm, lstsq, lu, norm, pinv, qr, schur, solve, sqrtm,
-    svd,
+    diag, diagm, eigh, eigvalsh, expm, hadamard_product, hessenberg, inv, logm, lstsq, lu, norm,
+    outer, pinv, qr, schur, solve, sqrtm, svd, trace, vdot, vnorm,
 };
 
 const RTOL: f64 = 1e-9;
@@ -807,4 +807,136 @@ fn mr_solve_with_identity_returns_rhs() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — trace of I_n is n.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_trace_of_identity_is_n() {
+    for n in [1usize, 3, 5, 8, 16] {
+        let mut id = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            id[i][i] = 1.0;
+        }
+        let t = trace(&id);
+        assert!(
+            (t - n as f64).abs() < 1e-12,
+            "MR23 trace(I_{n}) = {t}, expected {n}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — diag(diagm(v)) = v: lifting a vector to a diagonal matrix and
+// projecting back recovers the input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_diag_diagm_roundtrip() {
+    let vs: &[Vec<f64>] = &[
+        vec![1.0, 2.0, 3.0, 4.0],
+        vec![-1.5, 0.0, 7.5, -2.5, 1.0],
+        vec![100.0],
+    ];
+    for v in vs {
+        let m = diagm(v);
+        let v2 = diag(&m);
+        assert_eq!(v.len(), v2.len(), "MR24 length mismatch");
+        for (i, (&a, &b)) in v.iter().zip(&v2).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-12,
+                "MR24 diag∘diagm at {i}: {a} vs {b}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — hadamard_product with the zero matrix is zero.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hadamard_with_zero_is_zero() {
+    let a = vec![
+        vec![1.0_f64, -2.0, 3.0],
+        vec![4.0, 5.0, -6.0],
+        vec![-7.0, 8.0, 9.0],
+    ];
+    let zeros = vec![vec![0.0; 3]; 3];
+    let h = hadamard_product(&a, &zeros);
+    for row in &h {
+        for &v in row {
+            assert!(v.abs() < 1e-15, "MR25 hadamard with 0 entry = {v}");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — outer(a, b) has shape (len(a), len(b)).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_outer_product_shape() {
+    let a = vec![1.0_f64, 2.0, 3.0];
+    let b = vec![4.0_f64, 5.0];
+    let o = outer(&a, &b);
+    assert_eq!(o.len(), a.len(), "MR26 outer rows");
+    for row in &o {
+        assert_eq!(row.len(), b.len(), "MR26 outer cols");
+    }
+    // Verify outer[i][j] = a[i] * b[j].
+    for (i, &ai) in a.iter().enumerate() {
+        for (j, &bj) in b.iter().enumerate() {
+            assert!(
+                (o[i][j] - ai * bj).abs() < 1e-12,
+                "MR26 outer[{i}, {j}] = {} vs {ai}*{bj}",
+                o[i][j]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — vnorm(v) = sqrt(vdot(v, v)).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_vnorm_matches_sqrt_vdot() {
+    let vs: &[Vec<f64>] = &[
+        vec![3.0_f64, 4.0],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0],
+        vec![-1.0, 0.0, 1.0],
+    ];
+    for v in vs {
+        let n = vnorm(v);
+        let d = vdot(v, v);
+        assert!(
+            (n - d.sqrt()).abs() < 1e-12,
+            "MR27 vnorm = {n} vs sqrt(vdot) = {}",
+            d.sqrt()
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — trace(A) equals sum of A's diagonal entries (definition check).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_trace_equals_sum_of_diagonal() {
+    let a = vec![
+        vec![2.0_f64, 1.0, 0.5],
+        vec![0.5, 3.5, -1.0],
+        vec![-0.7, 2.0, 4.0],
+    ];
+    let n = a.len();
+    let t = trace(&a);
+    let manual: f64 = (0..n).map(|i| a[i][i]).sum();
+    assert!(
+        (t - manual).abs() < 1e-12,
+        "MR28 trace = {t} vs Σdiag = {manual}"
+    );
+}
+
 
