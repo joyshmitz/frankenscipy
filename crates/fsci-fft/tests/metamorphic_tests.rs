@@ -10,7 +10,7 @@ use fsci_fft::{
     Complex64, FftOptions, Normalization, dct, dct_i, dct_iii, dct_iv, dctn, dst_i, dst_ii,
     dst_iii, dst_iv, dstn, fft, fft2, fftcorrelate, fftfreq, fftn, fftshift_1d, fht, fhtoffset,
     hamming_window, hann_window, hfft, hilbert, idct, idctn, idstn, ifft, ifft2, ifftn,
-    ifftshift_1d, ifht, ihfft, irfft, irfft2, next_fast_len, rfft, rfft2,
+    ifftshift_1d, ifht, ihfft, irfft, irfft2, irfftn, next_fast_len, rfft, rfft2, rfftn,
 };
 
 const RTOL: f64 = 1e-9;
@@ -1038,6 +1038,161 @@ fn mr_fftshift_odd_length_identity() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — irfftn(rfftn(x, shape), shape) = x for real-valued multi-D input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rfftn_irfftn_inverse() {
+    let opts = FftOptions::default();
+    let shape = [4usize, 4];
+    let total: usize = shape.iter().product();
+    let mut rng = prng(0x1234);
+    let x: Vec<f64> = (0..total).map(|_| rng()).collect();
+    let xf = rfftn(&x, &shape, &opts).unwrap();
+    let xb = irfftn(&xf, &shape, &opts).unwrap();
+    for (i, (a, b)) in x.iter().zip(&xb).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-9,
+            "MR40 irfftn∘rfftn at {i}: {a} vs {b}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — fft of unit impulse [1, 0, 0, …, 0] is the all-ones spectrum
+// (every bin gets equal contribution from the impulse).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fft_impulse_spectrum_all_ones() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16, 32] {
+        let mut x = vec![(0.0_f64, 0.0_f64); n];
+        x[0] = (1.0, 0.0);
+        let xf = fft(&x, &opts).unwrap();
+        for (k, &(re, im)) in xf.iter().enumerate() {
+            assert!(
+                (re - 1.0).abs() < 1e-12 && im.abs() < 1e-12,
+                "MR41 fft(impulse)[{k}] = ({re}, {im}), expected (1, 0)"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — Forward and Ortho normalisation roundtrips also yield x:
+// for any normalisation, ifft(fft(x)) = x.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fft_ifft_normalization_variants() {
+    for &norm in &[
+        Normalization::Backward,
+        Normalization::Forward,
+        Normalization::Ortho,
+    ] {
+        let opts = FftOptions {
+            normalization: norm,
+            ..Default::default()
+        };
+        let n = 16;
+        let mut rng = prng(0x4321);
+        let x: Vec<Complex64> = (0..n).map(|_| (rng(), rng())).collect();
+        let xf = fft(&x, &opts).unwrap();
+        let xb = ifft(&xf, &opts).unwrap();
+        for (i, (a, b)) in x.iter().zip(&xb).enumerate() {
+            assert!(
+                close_complex(*a, *b),
+                "MR42 norm={norm:?} ifft∘fft at {i}: ({}, {}) vs ({}, {})",
+                a.0,
+                a.1,
+                b.0,
+                b.1
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — ihfft is the inverse of hfft on real-symmetric (Hermitian)
+// input length n. (hfft(ihfft(x)) returns x within tolerance.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hfft_ihfft_normalisation_default() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16] {
+        let mut rng = prng((n * 71) as u64);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let xf = ihfft(&x, None, &opts).unwrap();
+        let xb = hfft(&xf, Some(n), &opts).unwrap();
+        for (i, (a, b)) in x.iter().zip(&xb).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "MR43 hfft∘ihfft n={n} at {i}: {a} vs {b}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — rfft of length-N input has output length ⌊N/2⌋ + 1 and
+// the DC bin is real-valued (imag = 0) for any real input.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rfft_dc_bin_real() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16, 32] {
+        let mut rng = prng((n * 19) as u64);
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let y = rfft(&x, &opts).unwrap();
+        assert_eq!(y.len(), n / 2 + 1, "MR44 rfft length");
+        let (_re, im) = y[0];
+        assert!(
+            im.abs() < 1e-12,
+            "MR44 rfft DC imag = {im} for real input"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — fft of constant input [c, c, c, …, c] has only the DC bin
+// non-zero: spectrum[0] = N · c, spectrum[k] = 0 for k > 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fft_constant_input_only_dc_nonzero() {
+    let opts = FftOptions::default();
+    for n in [4usize, 8, 16] {
+        let c = 2.5_f64;
+        let x: Vec<Complex64> = vec![(c, 0.0); n];
+        let xf = fft(&x, &opts).unwrap();
+        // DC bin should equal n*c.
+        assert!(
+            (xf[0].0 - (n as f64) * c).abs() < 1e-9,
+            "MR45 fft(const) DC = {} expected {}",
+            xf[0].0,
+            (n as f64) * c
+        );
+        assert!(
+            xf[0].1.abs() < 1e-9,
+            "MR45 fft(const) DC imag = {}",
+            xf[0].1
+        );
+        for k in 1..n {
+            assert!(
+                xf[k].0.abs() < 1e-9 && xf[k].1.abs() < 1e-9,
+                "MR45 fft(const)[{k}] = ({}, {}), expected (0, 0)",
+                xf[k].0,
+                xf[k].1
+            );
+        }
+    }
+}
+
 
 
 
