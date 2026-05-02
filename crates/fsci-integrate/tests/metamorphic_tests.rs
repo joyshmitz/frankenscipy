@@ -13,7 +13,8 @@
 
 use fsci_integrate::{
     DblquadOptions, QuadOptions, SolveIvpOptions, SolverKind, ToleranceValue, cumulative_simpson,
-    cumulative_trapezoid, dblquad, quad, romb, simpson, solve_ivp, trapezoid,
+    cumulative_trapezoid, dblquad, fixed_quad, quad, romb, romberg, simpson, simpson_uniform,
+    solve_ivp, trapezoid, tplquad,
 };
 
 /// Tolerance for metamorphic relation comparisons.
@@ -486,3 +487,136 @@ fn mr_quad_exp_decay_truncated() {
         result.integral
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR19 — fixed_quad with n = 5 nodes integrates polynomials of degree
+// ≤ 9 exactly (Gauss-Legendre). Verify on a degree-7 polynomial.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_fixed_quad_exact_on_degree_seven_polynomial() {
+    // p(x) = 3x⁷ + 2x⁵ - x³ + 4x + 1
+    // ∫₀^1 p(x) dx = 3/8 + 2/6 - 1/4 + 2 + 1 = 0.375 + 0.333... - 0.25 + 3 = 3.4583...
+    let p = |x: f64| 3.0 * x.powi(7) + 2.0 * x.powi(5) - x.powi(3) + 4.0 * x + 1.0;
+    let exact = 3.0 / 8.0 + 2.0 / 6.0 - 1.0 / 4.0 + 4.0 / 2.0 + 1.0;
+    let (val, _n) = fixed_quad(p, 0.0, 1.0, 5).unwrap();
+    assert!(
+        (val - exact).abs() < 1e-12,
+        "MR19 fixed_quad(p, n=5) = {val} vs exact = {exact}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR20 — romberg(f) and quad(f) agree on a smooth function.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_romberg_matches_quad() {
+    // f(x) = sin(x) on [0, π], exact value = 2.
+    let f = |x: f64| x.sin();
+    let r = romberg(f, 0.0, std::f64::consts::PI, 1e-10, 12);
+    let q = quad(f, 0.0, std::f64::consts::PI, QuadOptions::default()).unwrap();
+    assert!(
+        (r.integral - q.integral).abs() < 1e-7,
+        "MR20 romberg = {} vs quad = {}",
+        r.integral,
+        q.integral
+    );
+    assert!(
+        (q.integral - 2.0).abs() < 1e-9,
+        "MR20 quad(sin, 0, π) = {}, expected 2",
+        q.integral
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR21 — simpson_uniform with any subdivision is exact on cubics
+// (Simpson's rule has degree of precision 3).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_simpson_uniform_exact_on_cubic() {
+    // f(x) = 2x³ - x² + 3x + 5 on [0, 4]
+    // ∫ = (1/2)·256 - 64/3 + 24 + 20 = 128 - 21.333.. + 44 = 150.666...
+    let exact = 0.5 * 256.0 - 64.0 / 3.0 + 24.0 + 20.0;
+    for &n_intervals in &[4usize, 8, 16, 32] {
+        let h = 4.0 / n_intervals as f64;
+        let y: Vec<f64> = (0..=n_intervals)
+            .map(|i| {
+                let x = i as f64 * h;
+                2.0 * x.powi(3) - x.powi(2) + 3.0 * x + 5.0
+            })
+            .collect();
+        let res = simpson_uniform(&y, h).unwrap();
+        assert!(
+            (res.integral - exact).abs() < 1e-10,
+            "MR21 simpson_uniform n={n_intervals} got {} vs exact {exact}",
+            res.integral
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22 — cumulative_trapezoid is monotone non-decreasing for a non-
+// negative integrand.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cumulative_trapezoid_monotone_on_nonneg_integrand() {
+    // y(x) = x² + 1 on a non-uniform grid — strictly positive.
+    let x: Vec<f64> = vec![0.0, 0.3, 0.7, 1.4, 2.1, 3.0, 4.5];
+    let y: Vec<f64> = x.iter().map(|&xi| xi * xi + 1.0).collect();
+    let cum = cumulative_trapezoid(&y, &x).unwrap();
+    for w in cum.windows(2) {
+        assert!(
+            w[0] <= w[1] + 1e-12,
+            "MR22 cumulative_trapezoid not monotone: {} > {}",
+            w[0],
+            w[1]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — quad of an odd function over a symmetric interval is 0.
+// ∫_{-a}^{a} sin(x) dx = 0 for any a.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_quad_odd_function_symmetric_interval_zero() {
+    let opts = QuadOptions::default();
+    for &a in &[1.0_f64, std::f64::consts::PI, 2.5, 5.0, 10.0] {
+        let r = quad(|x: f64| x.sin(), -a, a, opts.clone()).unwrap();
+        assert!(
+            r.integral.abs() < 1e-9,
+            "MR23 ∫_{{-{a}}}^{{{a}}} sin(x) dx = {}, expected 0",
+            r.integral
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — Triple integral of a constant 1 over a unit cube equals 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_tplquad_constant_one_unit_cube() {
+    let opts = DblquadOptions::default();
+    let res = tplquad(
+        |_x, _y, _z| 1.0,
+        0.0,
+        1.0,
+        |_| 0.0,
+        |_| 1.0,
+        |_, _| 0.0,
+        |_, _| 1.0,
+        opts,
+    )
+    .unwrap();
+    assert!(
+        (res.integral - 1.0).abs() < 1e-9,
+        "MR24 tplquad(1, unit cube) = {}, expected 1",
+        res.integral
+    );
+}
+
