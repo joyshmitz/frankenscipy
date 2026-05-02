@@ -14,8 +14,9 @@ use fsci_special::{
     gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar, inv_boxcox_scalar, j0, jn,
     jv, lambertw_scalar, logit, xlog1py, xlogy, zeta_scalar,
     orthopoly::{
-        eval_chebyt, eval_chebyu, eval_hermite, eval_hermitenorm, eval_laguerre, eval_legendre,
-        roots_chebyt, roots_legendre,
+        eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite,
+        eval_hermitenorm, eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt,
+        eval_sh_chebyu, eval_sh_legendre, lpmv, roots_chebyt, roots_legendre, sph_harm,
     },
 };
 
@@ -938,5 +939,115 @@ fn mr_entr_at_one_is_zero() {
         "MR42 entr(0) = {v0}, expected 0"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR43 — Jacobi P_0^(α, β)(x) = 1 for any x and any (α, β).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_jacobi_zero_order_is_one() {
+    for &(a, b) in &[(0.0_f64, 0.0), (0.5, 1.5), (-0.3, 0.7), (2.0, 3.0)] {
+        for &x in &[-0.9_f64, -0.5, 0.0, 0.3, 0.7, 0.95] {
+            let v = eval_jacobi(0, a, b, x);
+            assert!(
+                (v - 1.0).abs() < 1e-12,
+                "MR43 jacobi(0, {a}, {b}, {x}) = {v}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR44 — Gegenbauer C_0^α(x) = 1 for any x and α.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gegenbauer_zero_order_is_one() {
+    for &alpha in &[0.5_f64, 1.0, 1.5, 2.5] {
+        for &x in &[-0.9_f64, -0.5, 0.0, 0.3, 0.7, 0.95] {
+            let v = eval_gegenbauer(0, alpha, x);
+            assert!(
+                (v - 1.0).abs() < 1e-12,
+                "MR44 gegenbauer(0, {alpha}, {x}) = {v}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR45 — Generalized Laguerre L_0^α(x) = 1 for any x, α.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_genlaguerre_zero_order_is_one() {
+    for &alpha in &[0.0_f64, 0.5, 1.0, 2.5] {
+        for &x in &[0.0_f64, 0.5, 1.0, 3.0, 10.0] {
+            let v = eval_genlaguerre(0, alpha, x);
+            assert!(
+                (v - 1.0).abs() < 1e-12,
+                "MR45 genlaguerre(0, {alpha}, {x}) = {v}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR46 — Shifted Legendre P*_n(t) = P_n(2t - 1) for t ∈ [0, 1].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sh_legendre_matches_shifted_legendre() {
+    for n in [0u32, 1, 2, 3, 4, 5] {
+        for &t in &[0.0_f64, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
+            let lhs = eval_sh_legendre(n, t);
+            let rhs = eval_legendre(n, 2.0 * t - 1.0);
+            assert!(
+                (lhs - rhs).abs() < 1e-9,
+                "MR46 sh_legendre(n={n}, t={t}) = {lhs} vs legendre(2t-1) = {rhs}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR47 — Associated Legendre lpmv with m = 0 reduces to standard
+// Legendre P_l(x): lpmv(0, l, x) = eval_legendre(l, x).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lpmv_zero_m_matches_legendre() {
+    for l in 0u32..=5 {
+        for &x in &[-0.9_f64, -0.5, 0.0, 0.3, 0.7, 0.95] {
+            let lhs = lpmv(0, l, x);
+            let rhs = eval_legendre(l, x);
+            assert!(
+                (lhs - rhs).abs() < 1e-9,
+                "MR47 lpmv(0, {l}, {x}) = {lhs} vs legendre({l}, {x}) = {rhs}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR48 — Spherical harmonics Y_l^0 are real (imaginary part vanishes)
+// for any θ, φ.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_sph_harm_m0_is_real() {
+    for l in 0u32..=4 {
+        for &theta in &[0.0_f64, PI / 4.0, PI / 2.0, 3.0 * PI / 4.0, PI] {
+            for &phi in &[0.0_f64, PI / 3.0, PI, 1.5 * PI] {
+                let y = sph_harm(0, l, theta, phi);
+                assert!(
+                    y.im.abs() < 1e-9,
+                    "MR48 imag(Y_{l}^0(θ={theta}, φ={phi})) = {}",
+                    y.im
+                );
+            }
+        }
+    }
+}
+
 
 
